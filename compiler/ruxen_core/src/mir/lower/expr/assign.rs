@@ -116,8 +116,40 @@ impl<'a> Lowerer<'a> {
                             });
                         }
                     }
+                    // `xs[i] = v` index assignment (Q9). Mirrors the read
+                    // path in `lower_index`: a fixed-array with a literal
+                    // index stores a slot directly; a backing-Vec receiver
+                    // calls the bounds-checked `ruxen_vec_set`. Previously
+                    // this fell to the no-op arm below and the write was
+                    // silently dropped (compiled, did nothing). Map (`m[k]
+                    // = v`) still goes through `.insert`; not handled here.
+                    HirExprKind::Index { object, index } => {
+                        if matches!(object.ty, Ty::FixedArray(_, _)) {
+                            if let HirExprKind::IntLiteral(n) = &index.kind {
+                                if let Some(base) = self.lower_expr(object)? {
+                                    self.emit(MirInst::SetField {
+                                        base,
+                                        field_index: *n as usize,
+                                        value: val,
+                                    });
+                                }
+                                return Ok(None);
+                            }
+                        }
+                        if super::index::is_indexable_vec_ty(&object.ty) {
+                            let base_local = self.lower_expr(object)?;
+                            let idx_local = self.lower_expr(index)?;
+                            if let (Some(base), Some(idx)) = (base_local, idx_local) {
+                                self.emit(MirInst::Call {
+                                    dest: None,
+                                    callee: "ruxen_vec_set".to_string(),
+                                    args: vec![MirValue::Use(base), MirValue::Use(idx), val],
+                                });
+                            }
+                        }
+                    }
                     _ => {
-                        // Other assignment targets (index, etc.) — skip for now
+                        // Other assignment targets — skip for now.
                     }
                 }
                 Ok(None)

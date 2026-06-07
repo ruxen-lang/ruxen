@@ -234,7 +234,17 @@ layout/size computation recursing without indirection through class
 references. Workaround (quiver): flat arena — parallel arrays indexed by
 Int node ids.
 
-## Q9 · S3 — `arr[identifier]` parses as a generic-argument list; no index assignment
+## Q9 · S3 — `arr[identifier]` parses as a generic-argument list; no index assignment  ✅ FIXED
+
+> **FIXED** (stdlib-rust-cleanup): the non-literal-index READ (`xs[i]`) was
+> already fixed on this branch; index ASSIGNMENT was compiling but silently
+> no-op'ing (it fell to the skip arm in `mir/lower/expr/assign.rs`). Now
+> `xs[i] = v` lowers to the bounds-checked `ruxen_vec_set` (and a
+> fixed-array literal index to a direct slot store), mirroring the read
+> path. Map `m[k] = v` still uses `.insert` (unchanged). Pin:
+> `tests/release-e2e/cases/637_array_index_assign` (read + write, literal +
+> non-literal index).
+
 
 ```ruxen
 def main

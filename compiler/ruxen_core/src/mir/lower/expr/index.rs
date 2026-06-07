@@ -7,7 +7,9 @@ use super::super::*;
 /// class, repr-identical to `RuxenVec*`). Without the latter, indexed
 /// reads inside `.rx` combinator bodies (`self[i]`) silently no-op.
 /// Mirrors `util::is_vec_or_iterator_type`'s receiver classification.
-fn is_indexable_vec_ty(ty: &Ty) -> bool {
+/// Shared with `assign.rs` (the `xs[i] = v` write path mirrors this read
+/// path), so it is `pub(super)`.
+pub(super) fn is_indexable_vec_ty(ty: &Ty) -> bool {
     match ty {
         Ty::Array(_) => true,
         Ty::Ref(inner) | Ty::RefMut(inner) => is_indexable_vec_ty(inner),
