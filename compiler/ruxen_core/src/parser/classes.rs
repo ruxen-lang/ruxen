@@ -715,6 +715,14 @@ impl Parser {
                 // unbodied method signature inside a mixin body must
                 // close the signature, not be consumed as its body.
                 | TokenKind::Lib
+                // Q10 (gui-stack-v1-issues): a `##` doc comment after a
+                // bodiless signature belongs to the NEXT item, so it
+                // terminates this signature too. Left unconsumed, the outer
+                // `parse_trait_def` loop's `collect_doc_comments()` floats
+                // it forward to the following `def`. Without this, the doc
+                // comment fell into the "default method body" branch below
+                // and the parser choked on the next `def`.
+                | TokenKind::DocComment(_)
         ) {
             // Case 3: Next declaration keyword → signature only, no body
             let span = self.span_from(&start);

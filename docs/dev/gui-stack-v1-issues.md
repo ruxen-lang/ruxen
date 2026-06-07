@@ -236,7 +236,13 @@ lowering; Array has no `set` FFI either). Workarounds: `.get(i)` (returns
 `Option[&T]`) for reads; push-only arrays or `Hash[Int, V].insert`
 (insert overwrites) for writes.
 
-## Q10 · S3 — doc comments between signature-only defs in a mixin break parsing
+## Q10 · S3 — doc comments between signature-only defs in a mixin break parsing  ✅ FIXED
+
+> **FIXED** (stdlib-rust-cleanup): `parser/classes.rs::parse_trait_item` now
+> treats a `DocComment` after a bodiless signature as a signature terminator
+> (it floats forward to the next item). Pin:
+> `parser::tests::mixin_doc_comment_between_signatures`.
+
 
 ```ruxen
 mixin Surface
