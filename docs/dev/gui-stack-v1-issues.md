@@ -313,7 +313,7 @@ The value binding stays an inference variable all the way into codegen
 (should also fail earlier, in typeck, with a real diagnostic). Workaround:
 `for sid in self.subs.keys` + `if let Some(scopes) = self.subs.get(sid)`.
 
-## Q12 · S3 — a closure passing its `&var T` param as an argument twice: false move error
+## Q12 · S3 — a closure passing its `&var T` param as an argument twice: false move error  ✅ FIXED
 
 ```ruxen
 # u: &var Ui closure param; flag/a: State handles whose .get takes &var Ui
