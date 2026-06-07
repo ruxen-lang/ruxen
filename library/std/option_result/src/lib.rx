@@ -68,8 +68,19 @@ class Option[T]
     def expect as "ruxen_option_expect"(msg: &String) -> T
     def present? as "ruxen_option_is_some" -> Bool
     def nil? as "ruxen_option_is_none" -> Bool
-    # `ok_or` residual: E is read from the arg, kept laundered Int.
-    def ok_or as "ruxen_option_ok_or"(err: Int) -> Int
+  end
+
+  # Ruby `Option#ok_or` — convert to a `Result`, using `err` as the `Err`
+  # payload when empty. MIGRATED (Task H) to a `.rx` body: the method-level
+  # generic `E` is harvested from the `err` argument by the bridge
+  # (`harvest_and_subst_generics`, the direct-arg path `zip[U]` also uses), so
+  # the surface return `Result[T, E]` resolves from here — no laundered FFI
+  # alias / resolver arm.
+  def ok_or[E](err: E) -> Result[T, E]
+    match self
+      Some(x) -> Result.Ok(x)
+      nil -> Result.Err(err)
+    end
   end
 
   # Ruby `Option#map` — apply `f` to the contained value, repackage as

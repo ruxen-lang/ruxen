@@ -121,9 +121,12 @@ fn migrated_string_methods_fall_through_runtime_table() {
 
 #[test]
 fn migrated_option_result_combinators_fall_through_runtime_table() {
-    // #06.8 T#17 moved `Option_{unwrap_or, present?, nil?,
-    // ok_or}` and `Result_{unwrap_or, ok?, err?, ok, err}`
-    // into library/std/option_result/src/lib.rx. The lookup site in
+    // #06.8 T#17 moved `Option_{unwrap_or, present?, nil?}` and
+    // `Result_{unwrap_or, ok?, err?, ok, err}`
+    // into library/std/option_result/src/lib.rx. (`ok_or` was later
+    // migrated again — Task H increment 2 — from an FFI alias to a `.rx`
+    // body, so it is no longer an alias-mapped symbol and is dropped from
+    // this list.) The lookup site in
     // `mir/lower/expr/method_call.rs` peels the surface
     // `[Int,Err]` generic args and consults `ffi_alias_map` with
     // the generic-stripped key, so the alias rewrite reaches the
@@ -133,7 +136,6 @@ fn migrated_option_result_combinators_fall_through_runtime_table() {
     // mask the alias path.
     for m in [
         "Result[Int,Err]_unwrap_or",
-        "Option[Int]_ok_or",
         "Option[String]_present?",
         "Option[String]_nil?",
         "Result[Int,IoError]_ok?",

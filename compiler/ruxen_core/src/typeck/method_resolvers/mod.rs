@@ -324,10 +324,12 @@ mod golden {
         // element). `map` MIGRATED (Task H) to method-level generic
         // harvesting through the bridge (`def map[U] -> Option[U]`, `U`
         // harvested from the closure return) — under the empty table it
-        // returns None, NOT pinned. Only the residual arms ARE pinned:
-        // `try_op` (`?`-operator intrinsic), `ok_or` (arg-derived err type).
+        // returns None, NOT pinned. `ok_or` MIGRATED (Task H increment 2) to
+        // a `.rx` body (`def ok_or[E](err: E) -> Result[T, E]`, `E` harvested
+        // from the arg) — bridge-resolved, None under the empty table. Only
+        // the residual arm is pinned: `try_op` (`?`-operator intrinsic).
         let opt = || Ty::Option(Box::new(Ty::Int));
-        for m in ["try_op", "ok_or"] {
+        for m in ["try_op"] {
             v.push(c(opt(), m));
         }
 

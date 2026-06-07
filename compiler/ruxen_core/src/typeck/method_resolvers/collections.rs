@@ -94,10 +94,8 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             // STAYS here, running AHEAD of the bridge:
             //   * `try_op` — the `?` operator desugaring (no surface
             //     method / C symbol; a compiler intrinsic).
-            //   * `ok_or` — the err type is read from the ARG (like
-            //     `Array.zip`), not expressible as a static `.rx` return.
             //
-            // `map` / `map_err` MIGRATED (Task H) to method-level generic
+            // `map` / `map_err` / `ok_or` MIGRATED (Task H) to method-level generic
             // harvesting through the bridge: the `.rx` decls
             // `def map[U](f: any Fn[Fn(T) -> U]) -> Option[U]` /
             // `-> Result[U, E]` and `def map_err[F](...) -> Result[T, F]`
@@ -109,7 +107,6 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             // to unify it are retired. `unwrap_or_else` likewise MIGRATED to
             // `.rx` bodies (its return is the static success element `T`).
             (Ty::Option(inner), "try_op") => Some(*inner.clone()),
-            (Ty::Option(inner), "ok_or") => Some(Ty::Result(inner.clone(), Box::new(Ty::Error))),
 
             (Ty::Result(ok, _), "try_op") => Some(*ok.clone()),
 
