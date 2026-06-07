@@ -1,0 +1,26 @@
+class Col
+  labels: Array[String]
+  computes: Array[any Fn[Fn() -> String]]
+  def init
+    self.labels = Array.new
+    self.computes = Array.new
+  end
+  def var text(label: &str) -> nil
+    self.labels.push(String.from(label))
+  end
+  def var text(f: any Fn[Fn() -> String]) -> nil
+    self.computes.push(f)
+  end
+end
+
+def main
+  var c = Col.new
+  c.text("Counter")
+  c.text do
+    String.from("computed")
+  end
+  puts "labels=#{c.labels.size} computes=#{c.computes.size}"
+  if let Some(f) = c.computes.get(0)
+    puts "c0=#{f.()}"
+  end
+end

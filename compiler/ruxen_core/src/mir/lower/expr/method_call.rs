@@ -930,8 +930,20 @@ impl<'a> Lowerer<'a> {
                 // `Outer_Inner_make`. The FFI alias map is keyed in
                 // the same shape by `register_class_lib_method`.
                 let resolved_class_cs = resolved_class.replace('.', "_");
+                // Q1 (do-block variant): include a trailing `do…end` block as
+                // the last argument for overload-symbol selection so the block
+                // (a closure) is matched against the callable parameter — i.e.
+                // `c.text do…end` selects the `any Fn` overload, not `&str`.
+                let args_for_select: Vec<HirExpr> = match block {
+                    Some(b) => {
+                        let mut v = args.to_vec();
+                        v.push((**b).clone());
+                        v
+                    }
+                    None => args.to_vec(),
+                };
                 let selected_method_name =
-                    self.select_method_symbol_name(&resolved_class, method_name, args);
+                    self.select_method_symbol_name(&resolved_class, method_name, &args_for_select);
                 let lowered_method_name = if let Some(selected) = selected_method_name.as_deref() {
                     selected
                 } else if *method != UNRESOLVED_DEF {

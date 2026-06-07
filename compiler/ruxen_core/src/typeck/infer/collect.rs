@@ -551,6 +551,20 @@ impl<'a> InferenceEngine<'a> {
         if !self.method_accepts_arg_count(method_id, Self::effective_argc(args, has_block)) {
             return false;
         }
+        // Q1 (do-block variant): a trailing `do…end` block fills the method's
+        // LAST (closure) parameter, so an overload accepts the block only when
+        // its final param is callable. Without this, `c.text do…end` (empty
+        // `args`) matched the first-declared `text(&str)` overload by arity.
+        if has_block {
+            let last_is_callable = signature
+                .params
+                .last()
+                .map(|p| Self::ty_is_callable(&self.ctx.resolve(&p.ty)))
+                .unwrap_or(false);
+            if !last_is_callable {
+                return false;
+            }
+        }
         args.iter()
             .zip(signature.params.iter())
             .all(|(arg, param)| {
