@@ -321,21 +321,27 @@ mod golden {
         // lib.rx) and resolve via the bridge; under the empty table they
         // return None and are NOT pinned. `unwrap_or_else` likewise
         // MIGRATED to a `.rx` body (its return is the static success
-        // element). Only the residual arms ARE pinned: `try_op`
-        // (`?`-operator intrinsic), `map` (closure combinator — return is
-        // a fresh var), `ok_or` (arg-derived err type).
+        // element). `map` MIGRATED (Task H) to method-level generic
+        // harvesting through the bridge (`def map[U] -> Option[U]`, `U`
+        // harvested from the closure return) — under the empty table it
+        // returns None, NOT pinned. Only the residual arms ARE pinned:
+        // `try_op` (`?`-operator intrinsic), `ok_or` (arg-derived err type).
         let opt = || Ty::Option(Box::new(Ty::Int));
-        for m in ["try_op", "map", "ok_or"] {
+        for m in ["try_op", "ok_or"] {
             v.push(c(opt(), m));
         }
 
         // ── Ty::Result residual (shadow the bridge) ────────────────
         // The non-closure Result methods (unwrap/expect/unwrap_or/ok?/
         // err?/ok/err) MIGRATED to `enum Result[T, E]`; `unwrap_or_else`
-        // likewise MIGRATED to a `.rx` body. Only the residual arms are
-        // pinned: `try_op`, `map`/`map_err`.
+        // likewise MIGRATED to a `.rx` body. `map`/`map_err` MIGRATED
+        // (Task H) to method-level generic harvesting through the bridge
+        // (`def map[U] -> Result[U, E]` / `def map_err[F] -> Result[T, F]`,
+        // the transformed var harvested from the closure return) — under
+        // the empty table they return None, NOT pinned. Only the residual
+        // arm is pinned: `try_op` (`?`-operator intrinsic).
         let res = || Ty::Result(Box::new(Ty::Int), Box::new(Ty::String));
-        for m in ["try_op", "map", "map_err"] {
+        for m in ["try_op"] {
             v.push(c(res(), m));
         }
 

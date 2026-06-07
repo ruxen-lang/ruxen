@@ -94,35 +94,24 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             // STAYS here, running AHEAD of the bridge:
             //   * `try_op` — the `?` operator desugaring (no surface
             //     method / C symbol; a compiler intrinsic).
-            //   * `map` / `map_err` — closure combinators; the result
-            //     element is the closure body's type (a fresh var unified
-            //     by `infer_combinator_block`), not a static return.
             //   * `ok_or` — the err type is read from the ARG (like
             //     `Array.zip`), not expressible as a static `.rx` return.
             //
-            // `unwrap_or_else` MIGRATED to `.rx` bodies (`Option_unwrap_or_else`
-            // / `Result_unwrap_or_else`, option_result/src/lib.rx): its return
-            // is the static success element `T`, substituted through the
-            // bridge — no resolver arm.
+            // `map` / `map_err` MIGRATED (Task H) to method-level generic
+            // harvesting through the bridge: the `.rx` decls
+            // `def map[U](f: any Fn[Fn(T) -> U]) -> Option[U]` /
+            // `-> Result[U, E]` and `def map_err[F](...) -> Result[T, F]`
+            // carry the transformed type as a method-level generic, and
+            // `bridge_builtin_method` → `harvest_and_subst_generics` binds
+            // it from the closure argument's inferred return type (the same
+            // path Array `map` and `zip[U]` already use). The arms below
+            // that minted a fresh type var + relied on `infer_combinator_block`
+            // to unify it are retired. `unwrap_or_else` likewise MIGRATED to
+            // `.rx` bodies (its return is the static success element `T`).
             (Ty::Option(inner), "try_op") => Some(*inner.clone()),
-            (Ty::Option(_), "map") => Some(Ty::Option(Box::new(eng.ctx.fresh_type_var()))),
             (Ty::Option(inner), "ok_or") => Some(Ty::Result(inner.clone(), Box::new(Ty::Error))),
 
             (Ty::Result(ok, _), "try_op") => Some(*ok.clone()),
-            // `map` transforms the Ok type (fresh `U`) and PRESERVES the
-            // err type `E`; `map_err` PRESERVES the Ok type `T` and
-            // transforms the err type (fresh `F`). The migrated `.rx`
-            // bodies (`Result_map` / `Result_map_err`) re-wrap the
-            // untouched arm's payload, so dropping the preserved type here
-            // (the previous `Ty::Error` placeholder) mis-typed the
-            // propagated `Err(e)` and formatted a `String` payload via
-            // `Int_fmt`.
-            (Ty::Result(_, err), "map") => {
-                Some(Ty::Result(Box::new(eng.ctx.fresh_type_var()), err.clone()))
-            }
-            (Ty::Result(ok, _), "map_err") => {
-                Some(Ty::Result(ok.clone(), Box::new(eng.ctx.fresh_type_var())))
-            }
 
             // Within-namespace fallthrough (not a cross-cutting catch-all).
             _ => None,

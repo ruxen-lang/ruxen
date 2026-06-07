@@ -635,8 +635,6 @@ impl<'a> InferenceEngine<'a> {
                     self.substitute_generics_in_return(&derefed, &raw)
                 };
 
-                self.infer_combinator_block(method_name, block, &ret_ty, &expr.span);
-
                 expr.ty = self.ctx.resolve(&ret_ty);
             }
 
@@ -1438,52 +1436,6 @@ impl<'a> InferenceEngine<'a> {
                 Some(name.clone())
             }
             _ => None,
-        }
-    }
-
-    /// For block-consuming combinators whose return type carries a fresh
-    /// inference variable (currently `map` on Option / Vec / Result / *Iter),
-    /// unify that element variable with the closure body's inferred type so
-    /// the container's element type becomes concrete. Unifies in place;
-    /// returns nothing.
-    fn infer_combinator_block(
-        &mut self,
-        method_name: &str,
-        block: &Option<Box<HirExpr>>,
-        ret_ty: &Ty,
-        span: &Span,
-    ) {
-        // `map` transforms the element / Ok type (first type arg);
-        // `map_err` transforms the Err type (the SECOND type arg of a
-        // Result). Both harvest the fresh transformed-type var from the
-        // closure body's inferred return so the result type is concrete.
-        // Without the `map_err` arm the fresh `F` in `Result[T, F]` stays
-        // unresolved and the propagated payload is mis-formatted (e.g. a
-        // `String` err displayed via `Int_fmt`).
-        if method_name != "map" && method_name != "map_err" {
-            return;
-        }
-        let Some(blk) = block else { return };
-        let HirExprKind::Closure { body, .. } = &blk.kind else {
-            return;
-        };
-        let body_ty = self.ctx.resolve(&body.ty);
-        if method_name == "map_err" {
-            if let Ty::Result(_, err) = ret_ty {
-                let _ = unify(err, &body_ty, self.ctx, span);
-            }
-            return;
-        }
-        match ret_ty {
-            Ty::Option(inner) | Ty::Array(inner) | Ty::Result(inner, _) => {
-                let _ = unify(inner, &body_ty, self.ctx, span);
-            }
-            Ty::Class { name, generic_args } if name.ends_with("Iter") => {
-                if let Some(inner) = generic_args.first() {
-                    let _ = unify(inner, &body_ty, self.ctx, span);
-                }
-            }
-            _ => {}
         }
     }
 }

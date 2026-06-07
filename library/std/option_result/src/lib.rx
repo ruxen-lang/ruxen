@@ -42,20 +42,25 @@
 ## `Bool` all cross the C ABI as I64, matching the int64_t-bit-cast
 ## results the `ruxen_option_*` / `ruxen_result_*` symbols return.
 ##
-## RESIDUAL (still typed by collections.rs arms ahead of the bridge):
-##   * `map` / `map_err` — MIGRATED to `.rx` bodies below (closure call in a
-##     match arm of the opaque body). Their RETURN TYPE is still served by the
-##     collections.rs arms: `map` preserves `E` (`Result[U, E]`), `map_err`
-##     preserves `T` (`Result[T, F]`); the transformed type var is harvested
-##     from the closure body by `infer_combinator_block`.
+## Fully bridge-resolved (zero collections.rs arms):
+##   * `map` / `map_err` — MIGRATED (Task H) to method-level generic
+##     harvesting through the bridge. The decls below carry the transformed
+##     type as a method-level generic (`map[U] -> Option[U]`/`Result[U, E]`,
+##     `map_err[F] -> Result[T, F]`); `bridge_builtin_method` →
+##     `harvest_and_subst_generics` binds it from the closure argument's
+##     inferred return type (the same direct path `Array.map`/`zip[U]` use).
+##     The collections.rs arms that minted a fresh type var (and the
+##     `infer_combinator_block` that unified it) are RETIRED.
 ##   * `unwrap_or_else` — MIGRATED to `.rx` bodies below: return the success
 ##     payload on the present arm, run the fallback closure otherwise
 ##     (`match self { Some(x) -> x; nil -> f.() }`; Result passes the err to
 ##     `f.(e)`). The return is the success element `T`, a static declared
 ##     return that substitutes through the bridge — no resolver arm needed.
-##   * `try_op` — the `?` operator desugaring.
+##
+## RESIDUAL (still typed by collections.rs arms ahead of the bridge):
+##   * `try_op` — the `?` operator desugaring (compiler intrinsic).
 ##   * `ok_or` — the err type comes from the ARG, not a static return
-##     (like `Array.zip`); kept laundered for the FFI alias.
+##     (like the pre-Task-H `map`); kept laundered for the FFI alias.
 class Option[T]
   lib "../core/runtime/alloc.c"
     def unwrap_or as "ruxen_option_unwrap_or"(default: T) -> T
