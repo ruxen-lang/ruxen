@@ -140,6 +140,14 @@ impl Resolver {
         // — FFI decls are no exception. Instance-method FFI decls take
         // an implicit `self` receiver as their first arg to the C
         // symbol; class methods do not.
+        // Receiver-element bound: a `where T: Bound` on a class FFI method
+        // whose `T` is the ENCLOSING class's generic (e.g. `class Array[T]`'s
+        // `def sum -> Int where T: Add`). Thread it into the signature as a
+        // synthetic bounded generic param so the call-site seam
+        // (`bridge_builtin_method`) can bind `{T → element}` and enforce it.
+        // Only predicates naming an actual class generic are kept; FFI defs
+        // have no own generics.
+        let generic_params = self.ffi_receiver_element_bounds(parent, ffi_fn);
         let signature = FnSignature {
             self_mode: if ffi_fn.is_class_method {
                 None
@@ -148,7 +156,7 @@ impl Resolver {
             },
             is_class_method: ffi_fn.is_class_method,
             is_async: false,
-            generic_params: vec![],
+            generic_params,
             params,
             return_ty,
             c_symbol: ffi_fn.c_symbol.clone(),
@@ -287,6 +295,70 @@ impl Resolver {
     /// `String.clone` / `Array.get_mut` / `Array.get_var` migrate to
     /// their `.rx` method-home (they no longer trip E0722); previously
     /// they were forced to stay as `lang_intrinsics` residual arms.
+    /// Build the synthetic generic-param list for an FFI class method from
+    /// its `where` clause: each predicate whose LHS names the ENCLOSING
+    /// class's own generic becomes a bounded `GenericParamInfo`. This is
+    /// the receiver-element bound seam (`def sum -> Int where T: Add` on
+    /// `class Array[T]`). Predicates on non-class-generic names are dropped
+    /// — an FFI def carries no own generics, so there is nothing else a
+    /// `where` could constrain. Returns an empty vec when there is no
+    /// `where` clause (the historical case), so every existing FFI decl is
+    /// byte-identical (`generic_params: vec![]`).
+    fn ffi_receiver_element_bounds(
+        &mut self,
+        parent: DefId,
+        ffi_fn: &ast::FfiFunction,
+    ) -> Vec<GenericParamInfo> {
+        let Some(wc) = ffi_fn.where_clause.as_ref() else {
+            return vec![];
+        };
+        // The enclosing class's declared generic-param names.
+        let class_param_names: Vec<String> = self
+            .symbols
+            .get(parent)
+            .map(|d| match &d.kind {
+                DefKind::Class { info } => {
+                    info.generic_params.iter().map(|g| g.name.clone()).collect()
+                }
+                DefKind::Struct { info } => {
+                    info.generic_params.iter().map(|g| g.name.clone()).collect()
+                }
+                DefKind::Enum { info } => {
+                    info.generic_params.iter().map(|g| g.name.clone()).collect()
+                }
+                _ => vec![],
+            })
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for pred in &wc.predicates {
+            let ast::TypeExpr::Named(path) = &pred.type_expr else {
+                continue;
+            };
+            if path.segments.len() != 1 || path.generic_args.is_some() {
+                continue;
+            }
+            let name = &path.segments[0];
+            if !class_param_names.contains(name) {
+                continue;
+            }
+            let refs: Vec<MixinRef> = pred
+                .bounds
+                .iter()
+                .map(|bound| MixinRef {
+                    name: bound.path.segments.join("."),
+                    generic_args: bound
+                        .path
+                        .generic_args
+                        .as_ref()
+                        .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
+                        .unwrap_or_default(),
+                })
+                .collect();
+            out.push(GenericParamInfo::type_param(name.clone(), refs));
+        }
+        out
+    }
+
     pub(super) fn check_ffi_signature_conflict(
         &mut self,
         link_symbol: &str,

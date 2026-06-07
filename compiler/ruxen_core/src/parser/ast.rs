@@ -974,6 +974,15 @@ pub struct FfiFunction {
     pub c_symbol: Option<String>,
     pub params: Vec<FfiParam>,
     pub return_type: Option<TypeExpr>,
+    /// Optional `where T: Bound` clause. The ONLY supported form today is a
+    /// receiver-element bound: a predicate on the ENCLOSING class's generic
+    /// (e.g. `class Array[T]`'s `def sum -> Int where T: Add`). The
+    /// resolver (`ffi_registration.rs`) threads such a predicate into the
+    /// registered signature's `generic_params` so the call-site bound seam
+    /// can enforce it against the receiver's concrete element. Predicates on
+    /// names that aren't a class generic are dropped (FFI defs have no own
+    /// generics).
+    pub where_clause: Option<WhereClause>,
     pub is_variadic: bool,
     pub span: Span,
 }

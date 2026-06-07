@@ -24,6 +24,19 @@ mixin Iterable
 
 end
 
+# `Add` — capability tag for "this element type can be summed". Used as a
+# receiver-element bound: `class Array[T]`'s `def sum -> Int where T: Add`
+# requires the element `T` to be `Add`, so `[1, 2].sum` is allowed but
+# `["a"].sum` is rejected (E0700). A MARKER mixin: satisfied only
+# NOMINALLY (an explicit `include Add`), because a zero-method contract
+# is satisfied structurally by *every* type, which is never what a
+# capability bound wants. The numeric scalar method-homes opt in via
+# `include Add` (see std/scalar). The compiler holds NO numeric-name
+# list for this — the bound check reads the `.rx` `include` set.
+mixin Add
+
+end
+
 # `Enumerable[T]` — the shared collection-combinator surface, defined
 # ONCE over a single required primitive `each`. Any collection that
 # yields its elements through `each` gets the whole combinator family

@@ -219,6 +219,16 @@ impl Parser {
             None
         };
 
+        // Optional `where T: Bound` — used for receiver-element bounds on
+        // a class FFI method (`def sum -> Int where T: Add`). Same surface
+        // as a regular `def`; the resolver threads a class-generic
+        // predicate into the signature's generic params.
+        let where_clause = if self.at(TokenKind::Where) {
+            Some(self.parse_where_clause())
+        } else {
+            None
+        };
+
         let span = self.span_from(&start);
         FfiFunction {
             name,
@@ -226,6 +236,7 @@ impl Parser {
             c_symbol,
             params,
             return_type,
+            where_clause,
             is_variadic,
             span,
         }

@@ -102,7 +102,7 @@ class Array[T]
     # ── residual: laundered `Int` decls kept ONLY for the FFI alias;
     #    the collections.rs resolver (ahead of the bridge) supplies the
     #    user-visible return type. See header.
-    def sum as "ruxen_vec_sum" -> Int
+    def sum as "ruxen_vec_sum" -> Int where T: Add
     def each as "ruxen_vec_each" -> Int
     def to_h as "ruxen_hash_from_iter" -> Int
   end

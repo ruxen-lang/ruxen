@@ -278,29 +278,6 @@ fn peel_refs(ty: &Ty) -> &Ty {
     }
 }
 
-pub(in crate::typeck) fn is_iter_sum_compatible(ty: &Ty) -> bool {
-    matches!(
-        ty,
-        Ty::Int
-            | Ty::Int8
-            | Ty::Int16
-            | Ty::Int32
-            | Ty::Int64
-            | Ty::ISize
-            | Ty::UInt
-            | Ty::UInt8
-            | Ty::UInt16
-            | Ty::UInt32
-            | Ty::UInt64
-            | Ty::USize
-            | Ty::Float
-            | Ty::Float32
-            | Ty::Float64
-            | Ty::Infer(_)
-            | Ty::Error
-    )
-}
-
 /// Infer the concrete `generic_args` for a user-defined enum variant
 /// constructor.  Builds a substitution from each declared generic param
 /// name to the concrete arg type observed at the matching payload slot,

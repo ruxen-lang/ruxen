@@ -28,7 +28,7 @@ use crate::hir::nodes::*;
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 
-use super::infer::{is_bufio_inner_supported, is_iter_sum_compatible, InferenceEngine};
+use super::infer::{is_bufio_inner_supported, InferenceEngine};
 
 mod builtin_bridge;
 mod collections;

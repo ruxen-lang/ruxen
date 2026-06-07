@@ -268,20 +268,50 @@ impl Resolver {
                 if let ast::TypeExpr::Named(path) = &pred.type_expr {
                     if path.segments.len() == 1 && path.generic_args.is_none() {
                         let name = &path.segments[0];
+                        let refs: Vec<MixinRef> = pred
+                            .bounds
+                            .iter()
+                            .map(|bound| MixinRef {
+                                name: bound.path.segments.join("."),
+                                generic_args: bound
+                                    .path
+                                    .generic_args
+                                    .as_ref()
+                                    .map(|args| {
+                                        args.iter().map(|a| self.resolve_type_expr(a)).collect()
+                                    })
+                                    .unwrap_or_default(),
+                            })
+                            .collect();
                         if let Some(gp) = generic_params.iter_mut().find(|g| &g.name == name) {
-                            for bound in &pred.bounds {
-                                gp.bounds.push(MixinRef {
-                                    name: bound.path.segments.join("."),
-                                    generic_args: bound
-                                        .path
-                                        .generic_args
-                                        .as_ref()
-                                        .map(|args| {
-                                            args.iter().map(|a| self.resolve_type_expr(a)).collect()
-                                        })
-                                        .unwrap_or_default(),
-                                });
-                            }
+                            // The predicate constrains one of THIS method's own
+                            // generic params — merge into its bounds.
+                            gp.bounds.extend(refs);
+                        } else if self
+                            .scopes
+                            .lookup_type(name)
+                            .and_then(|d| self.symbols.get(d))
+                            .map(|d| matches!(d.kind, DefKind::TypeParam { .. }))
+                            .unwrap_or(false)
+                        {
+                            // The predicate constrains an ENCLOSING (class /
+                            // struct / enum) generic — the receiver's element
+                            // type, e.g. `class Array[T]`'s `def sum where T:
+                            // Add`. The method's own generics are not yet in
+                            // scope at this point (inserted just below), so a
+                            // `lookup_type` hit here is necessarily a class
+                            // generic. Thread it into the signature as a
+                            // synthetic bounded param so the call-site
+                            // receiver-element seam (`bridge_builtin_method` /
+                            // `infer_selected_method`) can bind `{T → element}`
+                            // and run the SAME `check_generic_param_bounds`
+                            // enforcement. Without this the bound is silently
+                            // dropped (the historical `sum`/E0700 fork).
+                            generic_params.push(HirGenericParam {
+                                name: name.clone(),
+                                bounds: refs,
+                                span: pred.span.clone(),
+                            });
                         }
                     }
                 }

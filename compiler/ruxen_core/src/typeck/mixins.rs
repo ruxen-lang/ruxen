@@ -400,6 +400,22 @@ impl MixinResolver {
         // Check structural satisfaction: does the type have all required methods?
         let trait_info = self.find_trait_info(&trait_ref.name, symbols);
         if let Some(info) = trait_info {
+            // MARKER mixins (zero required methods) are NOT satisfied
+            // structurally: a zero-method contract is vacuously met by
+            // EVERY type, which is never what a marker used as a capability
+            // bound wants (`Add`, etc.). A marker is satisfied only
+            // nominally (the explicit-`include` check above) — so if we
+            // reached the structural fallback for a marker, it is
+            // unsatisfied. (Send/Sync are handled earlier by their own
+            // structural predicates and never reach here.)
+            if info.required_methods.is_empty() {
+                return MixinSatisfaction::Unsatisfied {
+                    missing_methods: vec![format!(
+                        "no explicit `include {}` in `{}`",
+                        trait_ref.name, type_name
+                    )],
+                };
+            }
             let type_meths = self.type_methods.get(&type_name);
             let mut missing = Vec::new();
 

@@ -48,7 +48,7 @@ mod ops;
 
 // Free-function helpers that need to be reachable from `super::infer::*`
 // (e.g. `typeck::method_resolvers` consumes them through that path).
-pub(super) use helpers::{is_bufio_inner_supported, is_iter_sum_compatible};
+pub(super) use helpers::is_bufio_inner_supported;
 
 /// The type inference engine — walks HIR and resolves all types.
 pub struct InferenceEngine<'a> {

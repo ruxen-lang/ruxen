@@ -355,10 +355,35 @@ impl<'a> InferenceEngine<'a> {
         ty: &Ty,
         method: &str,
         args: &[HirExpr],
+        span: &Span,
     ) -> Option<Ty> {
         let sig = self
             .traits
             .lookup_method_with_args(ty, method, args, self.symbols)?;
+
+        // Receiver-element bound seam: a `.rx` method whose `where` clause
+        // bounds the receiver class's OWN generic (`class Array[T]`'s
+        // `def sum -> Int where T: Add`) carries that bound as a synthetic
+        // generic param in its signature (threaded by `resolve/funcs.rs`).
+        // Bind those params to the receiver's concrete generic args
+        // (`{T → Int}`) and run the SAME declared-bound enforcement the
+        // construction / method-own-generic seams use. This is what closes
+        // the historical `sum`/E0700 fork — `[1,2].sum` is fine, `["a"].sum`
+        // emits E0700 (via `bound_diagnostic_code`'s `Add` arm). Only
+        // bounded params fire, and the receiver class is the owner so the
+        // preserved code is chosen correctly.
+        if sig.generic_params.iter().any(|gp| !gp.bounds.is_empty()) {
+            if let Some(bindings) = self.receiver_generic_bindings(ty) {
+                let owner = Self::bound_owner_name(ty);
+                self.check_generic_param_bounds(
+                    &sig.generic_params,
+                    &bindings,
+                    owner.as_deref(),
+                    span,
+                );
+            }
+        }
+
         let raw = self.wrap_async_return(&sig);
         // Receiver-generic substitution (`Array[Int].pop` → `Option[Int]`)
         // first, then METHOD-LEVEL generic harvesting from the args. The
@@ -827,6 +852,23 @@ impl<'a> InferenceEngine<'a> {
     /// corresponding generic argument from `obj_ty` (a `Ty::Class` or
     /// `Ty::Struct`).
     pub(super) fn substitute_generics_in_return(&self, obj_ty: &Ty, ret_ty: &Ty) -> Ty {
+        let Some(subst) = self.receiver_generic_bindings(obj_ty) else {
+            return ret_ty.clone();
+        };
+        Self::subst_ty(ret_ty, &subst)
+    }
+
+    /// Build the `{class-param-name → receiver-concrete-arg}` map for a
+    /// builtin/user generic receiver — e.g. `Array[Int]` → `{T: Int}`,
+    /// `Hash[K, V]` → `{K: …, V: …}`. Returns `None` when the receiver
+    /// is non-generic, or the declared arity doesn't match (caller falls
+    /// back to no substitution). This is the single mapping consumed by
+    /// both return-type substitution and the receiver-element bound seam
+    /// (`bridge_builtin_method`'s `where T: Add` check).
+    pub(super) fn receiver_generic_bindings(
+        &self,
+        obj_ty: &Ty,
+    ) -> Option<std::collections::HashMap<String, Ty>> {
         // Peel references so `(&Array[Int]).pop` substitutes like
         // `Array[Int].pop` (the receiver of a `&self` method is borrowed).
         let peeled = match obj_ty {
@@ -885,7 +927,7 @@ impl<'a> InferenceEngine<'a> {
                 );
                 (&owned_synthetic.0, &owned_synthetic.1)
             }
-            _ => return ret_ty.clone(),
+            _ => return None,
         };
 
         // Build a name→type map using the class's declared generic params.
@@ -926,13 +968,13 @@ impl<'a> InferenceEngine<'a> {
             out
         };
         if class_params.len() != generic_args.len() {
-            return ret_ty.clone();
+            return None;
         }
         let subst: std::collections::HashMap<String, Ty> = class_params
             .into_iter()
             .zip(generic_args.iter().cloned())
             .collect();
-        Self::subst_ty(ret_ty, &subst)
+        Some(subst)
     }
 
     /// Substitute every `TypeParam` named in `subst` with its bound type,

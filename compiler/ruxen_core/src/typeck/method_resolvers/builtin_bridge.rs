@@ -73,6 +73,6 @@ fn is_delegated_head(ty: &Ty) -> bool {
 pub(super) fn resolvers() -> Vec<MethodResolver> {
     vec![MethodResolver {
         matches: |ty, _method| is_delegated_head(ty),
-        resolve: |eng, ty, method, args, _span| eng.bridge_builtin_method(ty, method, args),
+        resolve: |eng, ty, method, args, span| eng.bridge_builtin_method(ty, method, args, span),
     }]
 }

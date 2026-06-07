@@ -36,6 +36,11 @@
 ## `USize.to_s` / `to_string` likewise stay residual — there is no
 ## `class USize` (it shares `ruxen_int_to_string` with Int).
 class Int
+  # `Add` capability: Int elements can be `sum`med (receiver-element
+  # bound on `Array[T].sum where T: Add`). Nominal opt-in — the bound
+  # check requires an explicit `include`.
+  include Add
+
   lib "../../string/runtime/string.c"
     def to_string as "ruxen_int_to_string" -> String
     def to_s as "ruxen_int_to_string" -> String
@@ -55,6 +60,9 @@ end
 ## The parity guard `tests/runtime_abi_derivation.rs` pins every derived
 ## width against the frozen `runtime_signature` table.
 class Float
+  # `Add` capability — see `class Int`.
+  include Add
+
   lib "../../string/runtime/string.c"
     def to_string as "ruxen_float_to_string" -> String
     def to_s as "ruxen_float_to_string" -> String
@@ -77,6 +85,9 @@ class Char
 end
 
 class USize
+  # `Add` capability — see `class Int`.
+  include Add
+
   lib "../../string/runtime/string.c"
     def to_string as "ruxen_int_to_string" -> String
     def to_s as "ruxen_int_to_string" -> String

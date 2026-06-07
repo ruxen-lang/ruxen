@@ -4,10 +4,8 @@
 //! method typing, carved verbatim out of the legacy match. The `map` /
 //! `map_err` arms mint a fresh type var via `eng`; the rest are pure.
 
-use crate::diagnostics::Diagnostic;
 use crate::hir::types::Ty;
 
-use super::is_iter_sum_compatible;
 use super::resolver::MethodResolver;
 use super::InferenceEngine;
 
@@ -65,20 +63,14 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
                     Box::new(eng.ctx.fresh_type_var()),
                 )),
             },
-            // `sum` integer-sums raw slots — reject non-numeric elements
-            // (Ruby's `["a"].sum` errors too) with a typeck-time E0700.
-            (Ty::Array(elem), "sum") => {
-                let resolved = eng.ctx.resolve(elem);
-                if !is_iter_sum_compatible(&resolved) {
-                    eng.diagnostics.push(Diagnostic::error_with_code(
-                        format!("`sum` requires numeric elements that implement `Add`; `{resolved}` is not numeric"),
-                        _span.clone(),
-                        "E0700",
-                    ));
-                    return Some(Ty::Error);
-                }
-                Some(Ty::Int)
-            }
+            // `sum` MIGRATED to the receiver-element bound seam (Task OP):
+            // its E0700 non-numeric-element check is now the `.rx` bound
+            // `class Array[T]`'s `def sum -> Int where T: Add`, enforced in
+            // `bridge_builtin_method` against the receiver's concrete
+            // element via `check_generic_param_bounds`. The return type
+            // (`Int`) comes from the laundered `.rx` decl through the
+            // bridge. No arm here.
+            //
             // `sort_by` MIGRATED to a real `.rx` body over `swap` + indexed
             // reads (Feature C); it resolves through the builtin bridge.
             (Ty::Array(_), "select!") => Some(Ty::Unit),

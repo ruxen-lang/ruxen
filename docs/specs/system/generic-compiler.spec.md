@@ -28,9 +28,17 @@ registers only `declared_method_resolvers` + `builtin_bridge`.
 ## Key architecture decisions (locked)
 1. **Method resolution from `.rx`** via `builtin_bridge` (done for most types).
 2. **Operators are overridable methods** named by the symbol: `a + b` → `a.+(b)`,
-   `a[i]` → `a.[](i)`, `a[i]=v` → `a.[]=(i,v)`. Desugar in parser→HIR so nothing
-   downstream special-cases operators. Delete `mir/lower/expr/binops.rs` +
-   `typeck/infer/ops.rs` operator arms.
+   `a[i]` → `a.[](i)`, `a[i]=v` → `a.[]=(i,v)`, `-a` → `a.-@()`, `!a` → `a.!()`.
+   **Desugar is POST-TYPECK, not in the parser** (corrected during Task OP, Fork 4):
+   the machine-primitive floor (`Int`/`Float`/`Bool` + op → direct instruction) vs.
+   real-method split needs `left.ty`, which the parser lacks. So `ExprKind::BinaryOp`
+   /`UnaryOp`/`Index` stay parser nodes; the desugar lives in `mir/lower/expr/binops.rs`
+   + `typeck/infer/ops.rs` (shrink to machine-primitive instruction selection;
+   non-primitive head → `def OP` method call; delete the migrated operator-synthesis
+   arms). The parser learns only operator-symbol method NAMES (`def +`, `a.+(b)`).
+   Comparison/equality (`==`/`<`/…) + `Comparable`/`<=>` are a SEPARATE later
+   increment — left on the existing `binops.rs` paths (PartialEq derive, Vec/Map/Set
+   `==`, Ord-derive) to avoid double-defining.
 3. **Shared methods via mixins with default bodies** (Ruby modules). The mixins
    already exist as markers in `library/std/core/src/lib.rx` — fill them:
    - **`Enumerable[T]` over required `each`**: `map`/`select`/`reject`/`reduce`/
@@ -149,14 +157,29 @@ behind.
       closed-set with no generic `BufReader[R]` param to bind `[R: Read]` to;
       migrating it would revert that reshape (regression). De-prim phase must
       re-examine whether per-variant constructors already enforce the inner
-      type. **STILL PENDING (fork):** `sum`'s **E0700** `Add` bound is an
-      argless method bound on the receiver's *element* (class generic in a
-      method where-clause) — neither the harvest seam (no args) nor the
-      `resolve/funcs.rs` where-clause merge (matches only a method's OWN
-      generics) can express it; needs a NEW receiver-element method-call bound
-      seam. `bound_diagnostic_code`'s `Add`→E0700 mapping is wired and ready.
-- [ ] Operator wave: `def +`/`[]`/`<=>` parser support; desugar; delete
-      binops/ops arms; `Comparable` mixin.
+      type. **`sum`/E0700 fork — CLOSED (Task OP Step 2):** the
+      receiver-element bound seam now exists. A `where T: Bound` on a class
+      method whose `T` is the receiver class's own generic is threaded into the
+      `FnSignature.generic_params` as a synthetic bounded param —
+      `resolve/funcs.rs` for regular `def`s, `resolve/ffi_registration.rs::
+      ffi_receiver_element_bounds` for FFI `lib`-block decls (which now parse an
+      optional `where`, `parser/ffi.rs`). `collect.rs::bridge_builtin_method`
+      binds `{T → element}` (`receiver_generic_bindings`) and runs
+      `check_generic_param_bounds` → E0700. `class Array[T]`'s
+      `def sum -> Int where T: Add` declares it; `mixin Add` (core) is a marker
+      satisfied only nominally (`check_satisfaction` zero-method-mixin rule);
+      `Int`/`Float`/`USize` `include Add`. `collections.rs` `sum` arm +
+      `is_iter_sum_compatible` DELETED.
+- [~] Operator wave (Task OP). **Step 1 DONE:** operator-symbol method-NAME
+      parsing — `def +`/`-`/`*`/`/`/`%`/`&`/`|`/`^`/`<<`/`>>`/`[]`/`[]=`/`-@`/
+      `+@`/`!` + the call form `a.+(b)`/`a.[](i)`/etc. (inert; `ExprKind` nodes
+      unchanged). `**` omitted (no operator exists). Pin
+      `631_operator_overload_explicit`. **Step 2 DONE:** receiver-element bound
+      seam + `sum`/E0700 closure (above). **Remaining:** desugar (post-typeck)
+      arithmetic/bitwise/index/unary → `def OP`, machine-primitive floor stays
+      direct, delete migrated binops/ops arms, Duration `.rx def +`/`-`; then the
+      SEPARATE comparison/equality + `Comparable` increment (deferred, `<=>` token
+      vs reuse-`cmp` TBD).
 - [ ] Literals→primitives + de-primitivize `Ty::String`/`Ty::Array`.
 - [ ] Generic small-method inliner (perf).
 

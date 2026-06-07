@@ -1357,7 +1357,7 @@ impl<'a> InferenceEngine<'a> {
     /// (so the preserved-code bridge can pick a class-appropriate
     /// diagnostic code). References are peeled. Builtin heads and bare
     /// type params have no owning declaration → `None`.
-    fn bound_owner_name(ty: &Ty) -> Option<String> {
+    pub(super) fn bound_owner_name(ty: &Ty) -> Option<String> {
         match ty {
             Ty::Ref(inner)
             | Ty::RefMut(inner)
