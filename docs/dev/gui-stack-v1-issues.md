@@ -207,6 +207,12 @@ Multi-statement arms need a real grammar decision (block arms vs mandatory
 `if let`/helper-fn). Until then: never write `-> { … }`; use `if let` or a
 named helper. Both quiver and canvas now carry comments warning about this.
 
+> **DECISION** (user, stdlib-rust-cleanup): `{ … }` stays the **single-line /
+> single-expression** arm form; **`-> do … end` is the multi-statement block
+> arm**. Plan: make `do … end` in arm-body position parse as a statement
+> block (leave `{` for the single-expression case so the closure ambiguity
+> never arises), and fix the stale-capture codegen bug for executed blocks.
+
 ## Q8 · S2 — recursive class types crash the compiler (stack overflow)  ✅ FIXED
 
 > **FIXED** (stdlib-rust-cleanup): two type-walks recursed through the
@@ -326,6 +332,10 @@ passing the reference **as an argument** moves it. Explicit reborrow works:
 params is intended (Rust's behavior); if yes fix borrowck, if not, keep the
 rule but make the diagnostic suggest `&var *x`.
 
+> **DECISION** (user, stdlib-rust-cleanup): **YES — implicit reborrow**
+> (Rust-like). A reference-typed param passed as an argument is reborrowed,
+> not moved. Fix borrowck so `flag.get(u)` then `a.get(u)` is clean.
+
 ## Q13 · S3 — zero-arg method + `?` parses as a field access
 
 ```ruxen
@@ -337,6 +347,13 @@ The lexer/parser folds `?` into the member name (Ruby-style predicate names
 like `empty?` exist, so this is ambiguous by design — but a `Result`-typed
 zero-arg method followed by `?` should try the try-operator parse too, or the
 error should hint at adding `()`).
+
+> **DECISION** (user, stdlib-rust-cleanup): keep the **Ruby-like rule** that
+> already exists (`?` = predicate-method name, `&.` = safe navigation,
+> `foo()?` = try-operator — `ruby-naming.spec.md` §"safe navigation"). No
+> operator change. Fix = **diagnostic only**: when `obj.foo?` resolves to
+> no field/method, hint "did you mean `obj.foo()?` (try-operator) or
+> `obj&.foo` (safe navigation)?".
 
 ## Q14 · S3/S1 — flat global symbol namespace: user classes collide with std
 
