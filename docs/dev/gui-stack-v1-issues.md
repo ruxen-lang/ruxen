@@ -515,7 +515,17 @@ the generic (quiver's own `RecordingSurface` links fine from an app).
 Consequence: apps cannot implement a dependency's mixin and pass it to the
 dependency's generics — tally/examples carry a duplicated paint loop instead.
 
-## Q18 · S4 — test-file synthesis gaps (`ruxen test`)
+## Q18 · S4 — test-file synthesis gaps (`ruxen test`)  ✅ FIXED
+
+> **FIXED** (stdlib-rust-cleanup): `synthesise_wrapper` wrapped the WHOLE test
+> file in `def main`, so top-level `def`s (their `end` closed `main` early),
+> `use` lines, and `##` doc comments broke. New `split_test_body` hoists
+> column-0 top-level items — `use`/`const`/`type` (single-line) and
+> `def`/`class`/`struct`/`enum`/`mixin`/`module`/`extension`/`impl` blocks
+> (through their column-0 `end`) — ABOVE the synthesised `def main`, keeps the
+> `Tester.describe …` statements inside it, and neutralises stray `##` docs to
+> `#`. Pin: `test_runner::tests::split_test_body_hoists_top_level_items`.
+
 
 The runner wraps each test file's body in a synthesized `def main`
 (`src/ruxenc/src/test_runner.rs::synthesise_wrapper`), so:
