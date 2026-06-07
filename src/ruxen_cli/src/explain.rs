@@ -15,98 +15,16 @@
 
 use ruxen_core::diagnostics::codes;
 
-/// Embedded long-form explanations, keyed by error code. The list must
-/// stay in sync with `ruxen_core::diagnostics::codes::REGISTRY`; the
-/// unit test below ensures coverage.
-static EXPLAINS: &[(&str, &str)] = &[
-    // ── Lexer ────────────────────────────────────────────────────────
-    ("E0001", include_str!("../../../docs/errors/E0001.md")),
-    ("E0002", include_str!("../../../docs/errors/E0002.md")),
-    ("E0003", include_str!("../../../docs/errors/E0003.md")),
-    ("E0004", include_str!("../../../docs/errors/E0004.md")),
-    ("E0005", include_str!("../../../docs/errors/E0005.md")),
-    ("E0006", include_str!("../../../docs/errors/E0006.md")),
-    ("E0007", include_str!("../../../docs/errors/E0007.md")),
-    // ── Test fixture sentinel ───────────────────────────────────────
-    ("E0042", include_str!("../../../docs/errors/E0042.md")),
-    // ── Derive macros ───────────────────────────────────────────────
-    ("E0601", include_str!("../../../docs/errors/E0601.md")),
-    ("E0602", include_str!("../../../docs/errors/E0602.md")),
-    ("E0603", include_str!("../../../docs/errors/E0603.md")),
-    ("E0604", include_str!("../../../docs/errors/E0604.md")),
-    ("E0605", include_str!("../../../docs/errors/E0605.md")),
-    ("E0606", include_str!("../../../docs/errors/E0606.md")),
-    ("E0608", include_str!("../../../docs/errors/E0608.md")),
-    ("E0609", include_str!("../../../docs/errors/E0609.md")),
-    ("E0610", include_str!("../../../docs/errors/E0610.md")),
-    ("E0611", include_str!("../../../docs/errors/E0611.md")),
-    ("E0613", include_str!("../../../docs/errors/E0613.md")),
-    ("E0615", include_str!("../../../docs/errors/E0615.md")),
-    ("E0616", include_str!("../../../docs/errors/E0616.md")),
-    ("E0617", include_str!("../../../docs/errors/E0617.md")),
-    ("E0618", include_str!("../../../docs/errors/E0618.md")),
-    // ── Tier-2 type system ──────────────────────────────────────────
-    ("E0700", include_str!("../../../docs/errors/E0700.md")),
-    ("E0701", include_str!("../../../docs/errors/E0701.md")),
-    ("E0702", include_str!("../../../docs/errors/E0702.md")),
-    ("E0703", include_str!("../../../docs/errors/E0703.md")),
-    ("E0704", include_str!("../../../docs/errors/E0704.md")),
-    ("E0705", include_str!("../../../docs/errors/E0705.md")),
-    ("E0706", include_str!("../../../docs/errors/E0706.md")),
-    ("E0707", include_str!("../../../docs/errors/E0707.md")),
-    // Phase 2 #06.5 T1: IoError variant constructor arity.
-    ("E0710", include_str!("../../../docs/errors/E0710.md")),
-    // Phase 2 #06.5 T2: File / OpenOptions / SeekFrom diagnostics.
-    ("E0711", include_str!("../../../docs/errors/E0711.md")),
-    ("E0712", include_str!("../../../docs/errors/E0712.md")),
-    // Phase 2 #06.5 T6: BufReader/BufWriter inner-type validation.
-    ("E0714", include_str!("../../../docs/errors/E0714.md")),
-    // Phase 2 #06.8: stdlib self-hosting (FFI conflict, tagged-enum
-    // duplicate, bootstrap parse failure).
-    ("E0722", include_str!("../../../docs/errors/E0722.md")),
-    ("E0723", include_str!("../../../docs/errors/E0723.md")),
-    ("E0725", include_str!("../../../docs/errors/E0725.md")),
-    // Type-directed auto-call (E0726): bare function references that
-    // need arguments cannot auto-call with zero args.
-    ("E0726", include_str!("../../../docs/errors/E0726.md")),
-    // ── Borrow checker / trait-impl ─────────────────────────────────
-    ("E1001", include_str!("../../../docs/errors/E1001.md")),
-    ("E1002", include_str!("../../../docs/errors/E1002.md")),
-    ("E1003", include_str!("../../../docs/errors/E1003.md")),
-    ("E1004", include_str!("../../../docs/errors/E1004.md")),
-    ("E1005", include_str!("../../../docs/errors/E1005.md")),
-    ("E1006", include_str!("../../../docs/errors/E1006.md")),
-    ("E1007", include_str!("../../../docs/errors/E1007.md")),
-    ("E1008", include_str!("../../../docs/errors/E1008.md")),
-    ("E1009", include_str!("../../../docs/errors/E1009.md")),
-    ("E1010", include_str!("../../../docs/errors/E1010.md")),
-    ("E1011", include_str!("../../../docs/errors/E1011.md")),
-    ("E1012", include_str!("../../../docs/errors/E1012.md")),
-    ("E1013", include_str!("../../../docs/errors/E1013.md")),
-    ("E1014", include_str!("../../../docs/errors/E1014.md")),
-    // Concurrency / Send-bound diagnostics (E1100-E1102).
-    ("E1100", include_str!("../../../docs/errors/E1100.md")),
-    ("E1101", include_str!("../../../docs/errors/E1101.md")),
-    ("E1102", include_str!("../../../docs/errors/E1102.md")),
-    // Async (E1110-E1118).
-    ("E1110", include_str!("../../../docs/errors/E1110.md")),
-    ("E1112", include_str!("../../../docs/errors/E1112.md")),
-    ("E1115", include_str!("../../../docs/errors/E1115.md")),
-    ("E1116", include_str!("../../../docs/errors/E1116.md")),
-    ("E1117", include_str!("../../../docs/errors/E1117.md")),
-    ("E1118", include_str!("../../../docs/errors/E1118.md")),
-    // Package manager (E1600-E1699).
-    ("E1600", include_str!("../../../docs/errors/E1600.md")),
-    ("E1601", include_str!("../../../docs/errors/E1601.md")),
-    ("E1602", include_str!("../../../docs/errors/E1602.md")),
-    // std.regex (E1700-E1704) — `/pat/flags` lexer + `~=` typeck
-    // diagnostics.
-    ("E1700", include_str!("../../../docs/errors/E1700.md")),
-    ("E1701", include_str!("../../../docs/errors/E1701.md")),
-    ("E1702", include_str!("../../../docs/errors/E1702.md")),
-    ("E1703", include_str!("../../../docs/errors/E1703.md")),
-    ("E1704", include_str!("../../../docs/errors/E1704.md")),
-];
+// Embedded long-form explanations, keyed by error code (`static EXPLAINS`).
+//
+// AUTO-GENERATED at build time by `build.rs`, which scans every
+// `docs/errors/*.md` and emits the `EXPLAINS` table (sorted by code) into
+// `$OUT_DIR/error_docs_table.rs`. Adding a new error explanation is just
+// dropping a `docs/errors/E####.md` file — it is embedded automatically, no
+// edit here (the old hand-maintained table drifted from the folder and broke
+// `every_registered_code_has_embedded_markdown`, which is why it's generated
+// now). That test still guards that every REGISTERED code has a `.md` file.
+include!(concat!(env!("OUT_DIR"), "/error_docs_table.rs"));
 
 /// Look up the embedded markdown explanation for `code`. Returns
 /// `None` when no markdown is registered for the code.
