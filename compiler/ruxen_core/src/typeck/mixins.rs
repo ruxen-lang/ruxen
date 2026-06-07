@@ -397,17 +397,62 @@ impl MixinResolver {
             };
         }
 
+        // Builtin marker FAMILIES are satisfied by their REAL semantics, not by
+        // a manual required-method set (their methods are auto-derived /
+        // intrinsic, so the structural "does the type define this method" check
+        // below would wrongly reject them). Handle them before that check:
+        //   * derive markers (`Hashable`/`Ord`/`Eq`/`Clone`/`Copy`/`Default`/
+        //     `Debug`/`PartialEq`/`PartialOrd` — the `SUPPORTED_DERIVES` set):
+        //     the ruby-naming §3.6 structural auto-derive (primitives +
+        //     containers trivially; structs/enums when every field supports it;
+        //     incl. the Hash↔Hashable / Eq↔PartialEq naming duality). Without
+        //     this a struct that auto-derives Hashable but never writes
+        //     `include Hashable` is wrongly rejected (E1015) — regressing every
+        //     Map-key / derived-Ord program.
+        //   * `Fn`/`FnMut`/`FnOnce`: any callable value (closure / `Ty::Fn`
+        //     family) satisfies it, regardless of the marker's `call` signature.
+        // Pure-capability markers with neither (e.g. `Add`, opted into only via
+        // `include`) fall through and are rejected unless explicitly included —
+        // so `["a"].sum` still emits E0700. (Send/Sync handled earlier.)
+        if crate::implicit_includes::is_supported_derive(&trait_ref.name) {
+            return if crate::implicit_includes::ty_satisfies_named_trait(
+                ty,
+                &trait_ref.name,
+                symbols,
+            ) {
+                MixinSatisfaction::Structural
+            } else {
+                MixinSatisfaction::Unsatisfied {
+                    missing_methods: vec![format!(
+                        "type `{}` does not auto-derive `{}`",
+                        ty, trait_ref.name
+                    )],
+                }
+            };
+        }
+        if matches!(trait_ref.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
+            return if Self::arg_is_callable(ty) {
+                MixinSatisfaction::Structural
+            } else {
+                MixinSatisfaction::Unsatisfied {
+                    missing_methods: vec![format!(
+                        "type `{}` is not callable, cannot satisfy `{}`",
+                        ty, trait_ref.name
+                    )],
+                }
+            };
+        }
+
         // Check structural satisfaction: does the type have all required methods?
         let trait_info = self.find_trait_info(&trait_ref.name, symbols);
         if let Some(info) = trait_info {
-            // MARKER mixins (zero required methods) are NOT satisfied
-            // structurally: a zero-method contract is vacuously met by
-            // EVERY type, which is never what a marker used as a capability
-            // bound wants (`Add`, etc.). A marker is satisfied only
-            // nominally (the explicit-`include` check above) — so if we
-            // reached the structural fallback for a marker, it is
-            // unsatisfied. (Send/Sync are handled earlier by their own
-            // structural predicates and never reach here.)
+            // MARKER mixins (zero required methods) that reach here are NEITHER
+            // derive markers nor the Fn-family (both returned above) — they are
+            // pure-capability bounds (e.g. `Add`) satisfiable ONLY by an
+            // explicit `include` (already checked above as nominal). A vacuous
+            // structural pass (every type trivially has zero methods) is
+            // meaningless for a capability bound, so reaching here means
+            // unsatisfied — which keeps `["a"].sum` → E0700.
             if info.required_methods.is_empty() {
                 return MixinSatisfaction::Unsatisfied {
                     missing_methods: vec![format!(
