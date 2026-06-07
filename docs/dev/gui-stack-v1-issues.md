@@ -160,7 +160,13 @@ lowering emits an i64→f32 conversion under a variable declared f32 without
 the convert instruction. Workaround (tally): unit-addition loop —
 `var f = 0.0f32; while i < n { f = f + 1.0f32; … }`.
 
-## Q6 · S1 — arithmetic inside string interpolation miscomputes
+## Q6 · S1 — arithmetic inside string interpolation miscomputes  ✅ FIXED (pinned)
+
+> **ALREADY FIXED** on this branch (master merge); was reproducing as a bug
+> on the released 0.1.0. Verified `#{w / 2} #{h / 2}` prints `56 84`. Added a
+> regression pin so it can't silently break again:
+> `tests/release-e2e/cases/636_interp_arithmetic`.
+
 
 ```ruxen
 def main
