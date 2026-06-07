@@ -686,6 +686,30 @@ impl Resolver {
                     None
                 };
 
+                // Q14: a USER (non-bootstrap) top-level class whose name is
+                // already a built-in / stdlib type in scope collides in the
+                // flat symbol namespace — both would emit the same mangled
+                // symbols (e.g. `Signal_clone`). Flag it now with a rename
+                // hint (E0727) instead of a late codegen `DuplicateDefinition`.
+                if !ctx.merging_bootstrap
+                    && module_path.is_empty()
+                    && anchor_id.is_none()
+                    && !is_anchor_only_builtin
+                    && self.scopes.lookup_type(&class.name).is_some()
+                {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "type `{}` collides with a built-in or standard-library type of \
+                             the same name. The symbol namespace is currently flat, so both \
+                             would emit the same mangled symbols (e.g. `{}_clone`). Rename \
+                             your type.",
+                            class.name, class.name
+                        ),
+                        class.span.clone(),
+                        "E0727",
+                    ));
+                }
+
                 let id = if let Some(existing) = anchor_id {
                     existing
                 } else if ctx.merging_bootstrap && is_anchor_only_builtin {

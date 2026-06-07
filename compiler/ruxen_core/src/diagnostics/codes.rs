@@ -266,6 +266,14 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0726",
         title: "function reference needs arguments; call it or annotate a `Fn` type",
     },
+    // A user-defined type's name collides with a built-in / stdlib type of
+    // the same name (the symbol namespace is currently flat). Emitted at
+    // resolve time so the user gets a clear rename hint instead of a later
+    // codegen `DuplicateDefinition` ("Failed to define function X_clone").
+    CodeInfo {
+        code: "E0727",
+        title: "type name collides with a built-in / stdlib type; rename it",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`

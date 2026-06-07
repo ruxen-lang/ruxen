@@ -427,7 +427,19 @@ error should hint at adding `()`).
 > no field/method, hint "did you mean `obj.foo()?` (try-operator) or
 > `obj&.foo` (safe navigation)?".
 
-## Q14 · S3/S1 — flat global symbol namespace: user classes collide with std
+## Q14 · S3/S1 — flat global symbol namespace: user classes collide with std  ✅ FIXED (diagnostic)
+
+> **FIXED (resolve-time diagnostic)** (stdlib-rust-cleanup): a user top-level
+> class whose name matches an auto-loaded built-in/stdlib type (e.g. `Signal`,
+> `Runner`) now emits a clear **E0727** at resolve time ("type `Signal`
+> collides … rename your type") instead of the late, cryptic codegen
+> `DuplicateDefinition("Signal_clone")`. Detected in
+> `resolve/ffi_registration.rs` when a non-bootstrap top-level class name is
+> already a type in scope (collection-builtin anchors and module-nested
+> classes excluded). Pin: `tests/type_name_collision.rs` + `docs/errors/E0727.md`.
+> NOTE: this is the "at minimum a diagnostic" fix; full per-package symbol
+> namespacing (so the names can coexist) remains the larger follow-up.
+
 
 ```ruxen
 use std.sync.{Mutex, SharedSync}
