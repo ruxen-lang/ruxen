@@ -1,0 +1,76 @@
+# Task OP — operator overload, EXPLICIT-call twin (Step 1, inert parser
+# support). Operator-symbol method NAMES parse, resolve, typecheck, and
+# run when called EXPLICITLY by symbol: `a.+(b)`, `v.[](i)`,
+# `v.[]=(i, x)`, `n.-@()`, `b.!()`. No operator desugar is wired here —
+# this fixture proves the syntactic half in isolation.
+#
+# Its twin `632_operator_overload_sugared.rx` defines the SAME `Vec2` and
+# drives it via the SUGARED forms (`a + b`, `c[0]`, `-a`, `m[0] = 99`,
+# `!origin`) and has a BYTE-IDENTICAL `.out`. The pair locks the
+# desugar↔explicit equivalence: `a + b` must lower to exactly `a.+(b)`
+# and dispatch to this user `def +` (non-primitive receiver → method).
+#
+# The method bodies use primitive Int arithmetic on fields, which is the
+# machine floor (NOT a recursive `+` method call), so there is no
+# infinite recursion.
+class Vec2
+  x: Int
+  y: Int
+
+  def init(x: Int, y: Int)
+    self.x = x
+    self.y = y
+  end
+
+  # Binary `+` as a method named "+".
+  def +(other: Vec2) -> Vec2
+    Vec2.new(self.x + other.x, self.y + other.y)
+  end
+
+  # Unary minus, named "-@".
+  def -@() -> Vec2
+    Vec2.new(0 - self.x, 0 - self.y)
+  end
+
+  # Index read, named "[]".
+  def [](i: Int) -> Int
+    if i == 0
+      self.x
+    else
+      self.y
+    end
+  end
+
+  # Index write, named "[]=".
+  def var []=(i: Int, value: Int)
+    if i == 0
+      self.x = value
+    else
+      self.y = value
+    end
+  end
+
+  # Logical not, named "!". True when the vector is the origin.
+  def !() -> Bool
+    self.x == 0 && self.y == 0
+  end
+end
+
+def main
+  let a = Vec2.new(1, 2)
+  let b = Vec2.new(10, 20)
+
+  let c = a.+(b)
+  puts "sum=#{c.[](0)},#{c.[](1)}"
+
+  let n = a.-@()
+  puts "neg=#{n.[](0)},#{n.[](1)}"
+
+  var m = Vec2.new(3, 4)
+  m.[]=(0, 99)
+  puts "set=#{m.[](0)},#{m.[](1)}"
+
+  let origin = Vec2.new(0, 0)
+  puts "origin_is_empty=#{origin.!()}"
+  puts "a_is_empty=#{a.!()}"
+end

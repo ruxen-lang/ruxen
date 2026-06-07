@@ -109,12 +109,19 @@ impl Parser {
         // Self mode: var (writing) or consume
         let self_mode = if self.at(TokenKind::Var) {
             let peek = self.peek_kind();
-            match peek {
-                TokenKind::Identifier(_) | TokenKind::Init | TokenKind::SelfValue => {
-                    self.advance();
-                    Some(SelfMode::Mutable)
-                }
-                _ => None,
+            // `def var name` / `def var init` / `def var self.m` is the
+            // mutable-self form; `def var []=(…)` is a mutable-self
+            // operator method (index-assign), so an operator name after
+            // `var` also signals self-mode.
+            if matches!(
+                peek,
+                TokenKind::Identifier(_) | TokenKind::Init | TokenKind::SelfValue
+            ) || Self::is_operator_name_start(&peek)
+            {
+                self.advance();
+                Some(SelfMode::Mutable)
+            } else {
+                None
             }
         } else if self.eat(TokenKind::Consume) {
             Some(SelfMode::Consuming)
@@ -132,7 +139,10 @@ impl Parser {
             self.advance();
             (false, "init".to_string())
         } else {
-            let name = self.expect_identifier();
+            // Operator-symbol method names (`def +`, `def []`, `def -@`)
+            // resolve here alongside plain identifiers. See
+            // `Parser::parse_def_name`.
+            let name = self.parse_def_name();
             (false, name)
         };
 
@@ -180,12 +190,19 @@ impl Parser {
             // Check if this is `def var name` (self mode) vs something else
             // It's a self mode if followed by an identifier or self.ident
             let peek = self.peek_kind();
-            match peek {
-                TokenKind::Identifier(_) | TokenKind::Init | TokenKind::SelfValue => {
-                    self.advance();
-                    Some(SelfMode::Mutable)
-                }
-                _ => None,
+            // `def var name` / `def var init` / `def var self.m` is the
+            // mutable-self form; `def var []=(…)` is a mutable-self
+            // operator method (index-assign), so an operator name after
+            // `var` also signals self-mode.
+            if matches!(
+                peek,
+                TokenKind::Identifier(_) | TokenKind::Init | TokenKind::SelfValue
+            ) || Self::is_operator_name_start(&peek)
+            {
+                self.advance();
+                Some(SelfMode::Mutable)
+            } else {
+                None
             }
         } else if self.eat(TokenKind::Consume) {
             Some(SelfMode::Consuming)
@@ -207,7 +224,10 @@ impl Parser {
             self.advance();
             (false, "init".to_string())
         } else {
-            let name = self.expect_identifier();
+            // Operator-symbol method names (`def +`, `def []`, `def -@`)
+            // resolve here alongside plain identifiers. See
+            // `Parser::parse_def_name`.
+            let name = self.parse_def_name();
             (false, name)
         };
 

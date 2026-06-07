@@ -95,7 +95,12 @@ impl Parser {
                         span,
                     };
                 } else {
-                    self.expect_any_identifier()
+                    // Operator-symbol method calls (`a.+(b)`, `a.[](i)`,
+                    // `a.-@()`) parse here. The desugar pass (Step 3)
+                    // produces these same `MethodCall` names, and a user
+                    // may also write the explicit form directly.
+                    self.try_parse_operator_name()
+                        .unwrap_or_else(|| self.expect_any_identifier())
                 };
 
                 let generic_args = if self.at(TokenKind::LBracket) {
