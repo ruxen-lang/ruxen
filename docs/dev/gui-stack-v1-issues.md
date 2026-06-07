@@ -192,7 +192,16 @@ Verified in tally's PPM header: `"#{cv.width / 2} #{height_px / 2}"` printed
 Suspect: interpolation segment parsing splits on `/` or the embedded
 expression lowering. (Method calls and plain idents in `#{}` work fine.)
 
-## Q7 · S1/S3 — brace-block match arms parse as closures; stale captures when executed
+## Q7 · S1/S3 — brace-block match arms parse as closures; stale captures when executed  ✅ FIXED
+
+> **FIXED** (stdlib-rust-cleanup): per the decision, `-> do … end` is now the
+> multi-statement block-arm form (`{ expr }` stays the single-expression arm).
+> `parse_match_arm` parses a `do` right after `->` as a statement block
+> (`parse_body` + `end`) instead of letting the expression parser take it as a
+> closure literal (the `Fn() -> T` type error). A block arm is not a closure,
+> so it sees surrounding bindings live — the stale-capture manifestation is
+> gone too. Pin: `tests/release-e2e/cases/641_match_block_arm`.
+
 
 Two manifestations:
 

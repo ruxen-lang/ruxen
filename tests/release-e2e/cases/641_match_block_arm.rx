@@ -1,0 +1,28 @@
+## Q7 (gui-stack-v1-issues) — `-> do … end` is a multi-statement match-arm
+## block (the decided form; `{ … }` stays the single-expression arm). Before
+## the fix `do … end` after `->` parsed as a CLOSURE (`Fn() -> String` type
+## error). A block arm also keeps captures live (no stale-capture bug, since
+## it is a block, not a closure).
+
+def describe(n: Int) -> String
+  match n
+    0 -> do
+      let label = String.from("zero")
+      let suffix = String.from("!")
+      String.from("#{label}#{suffix}")
+    end
+    _ -> "other"
+  end
+end
+
+def main
+  var total = 0
+  for i in 0..3
+    if i == 0
+      total = total + 1
+    end
+  end
+  puts describe(0)
+  puts describe(7)
+  puts "total=#{total}"
+end
