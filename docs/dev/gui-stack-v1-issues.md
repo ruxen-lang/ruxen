@@ -72,7 +72,16 @@ through a field. Suspect: enum payload layout/size for `any Fn` (vtable +
 env pair?) in MIR/codegen treats it as one word. Workaround: parallel arrays —
 `computes: Array[any Fn[...]]` + `compute_of: Array[Int]` with `-1` sentinel.
 
-## Q3 · S1 — `do…end` block to a FREE function with explicit closure param segfaults
+## Q3 · S1 — `do…end` block to a FREE function with explicit closure param segfaults  ✅ FIXED
+
+> **FIXED** (stdlib-rust-cleanup): in `resolve/exprs.rs`, a block-bearing free
+> call was lowered as `runit.call(block)` (treating the function as a closure
+> value) unless it was a yield-fn. Now a trailing block on ANY function callee
+> is forwarded as the last argument (block-as-arg sugar → `FnCall`); the
+> `.call` path is reserved for closure-typed VARIABLE identifiers. Subsumes the
+> old yield-fn special case. Pin: `tests/release-e2e/cases/642_free_fn_do_block`
+> (no-arg, plain `Fn`, and a block with params).
+
 
 ```ruxen
 def runit(f: any Fn[Fn() -> nil]) -> nil
