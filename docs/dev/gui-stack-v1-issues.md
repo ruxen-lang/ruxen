@@ -62,7 +62,28 @@ call lowering is the culprit. Suspect: typeck overload resolution for
 `&str` literals vs closure-typed args, or the arg coercion in MIR call
 lowering. Workaround in quiver: distinct method names (`text` / `dyn_text`).
 
-## Q2 · S1 — `Option[any Fn[...]]` class field returns garbage
+## Q2 · S1 — `Option[any Fn[...]]` class field returns garbage  ⏸ DEFERRED (closure redesign)
+
+> **DEFERRED** (stdlib-rust-cleanup): root cause is that `any Fn` is a 16-byte
+> fat value (data_ptr + vtable_ptr) but an enum payload slot is one 8-byte
+> word, so half the fat pointer is lost on the round-trip (`f.()` reads a
+> garbage pointer). Fixing it properly is entangled with the
+> **closure/block redesign** below — storing closures as first-class `any Fn`
+> VALUES is exactly the design being reworked toward Ruby semantics, so this is
+> deferred to that plan rather than patched against the current model.
+
+> ### DESIGN NOTE — closure/block model rework (draft-a-plan, another day)
+> The current model treats a block as a first-class closure value with a typed
+> `Fn() -> T` signature passed as an `any Fn` argument. Decision (user): move to
+> **exact Ruby semantics** —
+> - **exactly one** block per call, **implicit**, automatically the **last**
+>   argument (`&block`);
+> - the block is NOT a typed function value — it follows **`yield` / `block.call`**
+>   and is rendered in place (no return-type inference, no fat-pointer value);
+> - so blocks stop being stored/passed as `any Fn` values (which is what makes
+>   Q2 and the fat-pointer enum-payload issue exist in the first place).
+> This needs its own brainstorm + plan; not started.
+
 
 ```ruxen
 class Holder
