@@ -579,7 +579,28 @@ pub fn translate_terminator<M: Module>(
                         }
                     }
                     None => {
-                        builder.ins().return_(&[]);
+                        // A valueless return in a function whose signature
+                        // declares a return value can only arise from an
+                        // unreachable fallthrough block (e.g. the implicit
+                        // terminal block synthesised after an `if let` whose
+                        // arms all return). Cranelift's verifier still requires
+                        // the `return` arguments to match the signature, so
+                        // emit a placeholder of the declared return type rather
+                        // than a bare `return`.
+                        if let Some(ret_ty) = ty_to_cranelift(&func.return_ty) {
+                            let placeholder = if ret_ty.is_int() {
+                                builder.ins().iconst(ret_ty, 0)
+                            } else if ret_ty == types::F64 {
+                                builder.ins().f64const(0.0)
+                            } else if ret_ty == types::F32 {
+                                builder.ins().f32const(0.0)
+                            } else {
+                                builder.ins().iconst(types::I64, 0)
+                            };
+                            builder.ins().return_(&[placeholder]);
+                        } else {
+                            builder.ins().return_(&[]);
+                        }
                     }
                 }
             }

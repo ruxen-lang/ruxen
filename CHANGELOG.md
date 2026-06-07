@@ -8,6 +8,14 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- A value-returning function that ends in an `if let` whose arms all
+  `return` (e.g. `if let Some(f) = self.cb; return f.(); end; return 0`)
+  no longer fails Cranelift verification. The implicit fallthrough block
+  synthesised after the `if let` emitted a valueless `return` in a
+  function whose signature declares a return value, tripping the verifier
+  ("arguments of return must match function signature"). Codegen now emits
+  a placeholder of the declared return type for such (unreachable)
+  valueless returns.
 - Struct inline-method bodies are now type-checked. Previously `typeck::infer`
   skipped them (`HirItem::Struct(_)`), so a `self.<field>` read inside a struct
   `def` kept `field_idx = 0` and an unresolved (`Infer`) result type — codegen
