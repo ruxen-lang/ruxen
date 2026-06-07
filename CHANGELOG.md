@@ -8,6 +8,16 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- A same-name method overloaded on `&str` vs `any Fn[...]` now dispatches
+  to the overload whose parameter type matches the call-site argument,
+  independent of declaration order. The MIR symbol selector
+  (`method_signature_accepts_args`) was missing the by-value-arg →
+  `&T`-parameter coercion arm that the typeck selector already had, so a
+  `"static"` literal (`Ty::Str`) matched neither overload's strict check
+  and fell through to the arity-only fallback, binding the FIRST-declared
+  overload. With the closure overload declared first, `add("static")` was
+  mis-dispatched to it and `f.()` ran on a string pointer (crash / heap
+  corruption). The MIR selector now mirrors the typeck one.
 - A value-returning function that ends in an `if let` whose arms all
   `return` (e.g. `if let Some(f) = self.cb; return f.(); end; return 0`)
   no longer fails Cranelift verification. The implicit fallthrough block
