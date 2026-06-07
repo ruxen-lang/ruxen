@@ -121,7 +121,36 @@ impl<'a> Lowerer<'a> {
                 // Lower iterable expression (after iterator no-ops, this
                 // is typically a Vec pointer).
                 let iter_local = self.lower_expr(iterable)?;
-                let iter_id = iter_local.unwrap_or_else(|| self.new_temp(Ty::Int));
+                let mut iter_id = iter_local.unwrap_or_else(|| self.new_temp(Ty::Int));
+
+                // Q11: determine the element type, and for a Hash iterate its
+                // (K, V) entry pairs. The runtime has no Hash iterator, so
+                // convert to an `Array[(K, V)]` via `ruxen_hash_entries` and
+                // iterate that Vec — `for (k, v) in &map` then destructures
+                // each pair below. (Previously a Hash flowed straight into
+                // the Vec ops below and was read as a Vec → garbage / the
+                // value binding stayed unresolved into codegen.)
+                let mut iter_ty = iterable.ty.clone();
+                while let Ty::Ref(inner)
+                | Ty::RefMut(inner)
+                | Ty::RefLifetime(_, inner)
+                | Ty::RefMutLifetime(_, inner) = &iter_ty
+                {
+                    iter_ty = (**inner).clone();
+                }
+                let elem_ty = if let Ty::Map(k, v) = &iter_ty {
+                    let pair_ty = Ty::Tuple(vec![(**k).clone(), (**v).clone()]);
+                    let entries = self.new_temp(Ty::Array(Box::new(pair_ty.clone())));
+                    self.emit(MirInst::Call {
+                        dest: Some(entries),
+                        callee: "ruxen_hash_entries".to_string(),
+                        args: vec![MirValue::Use(iter_id)],
+                    });
+                    iter_id = entries;
+                    pair_ty
+                } else {
+                    element_type_of(&iterable.ty)
+                };
 
                 // Index counter: _i = 0
                 let idx = self.new_temp(Ty::Int);
@@ -168,13 +197,11 @@ impl<'a> Lowerer<'a> {
                 // Body: binding = vec_get(iter_id, idx)
                 self.current_block = body_block;
 
-                // Create the binding variable.
-                // Determine element type from the iterable's type.
-                let binding_ty = element_type_of(&iterable.ty);
+                // Create the binding variable, typed as the element type
+                // (a `(K, V)` pair for a Hash, see above).
                 let binding_local = {
                     let func = self.fn_mut();
-
-                    func.new_local(binding_name.clone(), binding_ty, false)
+                    func.new_local(binding_name.clone(), elem_ty.clone(), false)
                 };
                 self.def_to_local.insert(*binding, binding_local);
 
@@ -184,29 +211,29 @@ impl<'a> Lowerer<'a> {
                     args: vec![MirValue::Use(iter_id), MirValue::Use(idx)],
                 });
 
-                // For tuple destructuring patterns like (i, result) from
-                // .enumerate(), wire up the sub-bindings.
+                // Q11: a tuple-destructuring pattern (`for (k, v) in &map`,
+                // `for (a, b) in pairs`) binds each component of the element
+                // TUPLE — read field `i` out of the element (a heap tuple
+                // pointer) into each sub-binding. (The element type's tuple
+                // components give each sub-binding its real type so method
+                // calls on them resolve — fixing the `?T_<method>` mangling.)
                 if !tuple_bindings.is_empty() {
-                    for (tb_idx, (tb_def_id, tb_name)) in tuple_bindings.iter().enumerate() {
+                    let component_tys: Vec<Ty> = match &elem_ty {
+                        Ty::Tuple(components) => components.clone(),
+                        _ => Vec::new(),
+                    };
+                    for (i, (tb_def_id, tb_name)) in tuple_bindings.iter().enumerate() {
+                        let comp_ty = component_tys.get(i).cloned().unwrap_or(Ty::Int);
                         let tb_local = {
                             let func = self.fn_mut();
-                            func.new_local(tb_name.clone(), Ty::Int, false)
+                            func.new_local(tb_name.clone(), comp_ty, false)
                         };
                         self.def_to_local.insert(*tb_def_id, tb_local);
-
-                        if tb_idx == 0 {
-                            // First element of enumerate tuple = index
-                            self.emit(MirInst::Assign {
-                                dest: tb_local,
-                                value: MirValue::Use(idx),
-                            });
-                        } else {
-                            // Second element = the actual Vec element
-                            self.emit(MirInst::Assign {
-                                dest: tb_local,
-                                value: MirValue::Use(binding_local),
-                            });
-                        }
+                        self.emit(MirInst::GetField {
+                            dest: tb_local,
+                            base: binding_local,
+                            field_index: i,
+                        });
                     }
                 }
 

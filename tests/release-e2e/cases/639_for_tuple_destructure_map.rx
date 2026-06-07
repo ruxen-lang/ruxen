@@ -1,0 +1,22 @@
+## Q11 (gui-stack-v1-issues) — destructuring tuple bindings in a `for` over a
+## Hash (and an Array of pairs). The value binding (`scopes`) used to stay an
+## inference variable all the way into codegen (mangled `?T_remove`); now the
+## for-loop propagates the `(K, V)` element type to the sub-bindings so method
+## calls on them resolve.
+
+def main
+  var subs: Hash[Int, Set[Int]] = Hash.new
+  var s: Set[Int] = Set.new
+  s.insert(7)
+  s.insert(9)
+  subs.insert(1, s)
+  for (sid, scopes) in &subs
+    scopes.remove(7)
+    puts "sid=#{sid} size=#{scopes.size}"
+  end
+
+  let pairs: Array[(Int, Int)] = [(1, 10), (2, 20)]
+  for (n, m) in pairs
+    puts "#{n}:#{m}"
+  end
+end

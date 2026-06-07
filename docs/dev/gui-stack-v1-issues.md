@@ -309,7 +309,17 @@ end
 The parser starts parsing a *body* for the first bodiless `def` and chokes.
 Workaround: hoist all docs above the `mixin` keyword.
 
-## Q11 · S3 — Hash tuple-iteration values don't type-resolve for method calls
+## Q11 · S3 — Hash tuple-iteration values don't type-resolve for method calls  ✅ FIXED
+
+> **FIXED** (stdlib-rust-cleanup): two layers. (1) typeck — the for-loop now
+> propagates the `(K,V)` element-tuple component types to the destructured
+> sub-bindings (`infer/expr.rs`), so `scopes` is typed (no more `?T_remove`).
+> (2) MIR — `for_loop.rs` routed a `Hash` iterable through `ruxen_hash_entries`
+> (Array[(K,V)]) instead of mis-reading it as a Vec, and replaced the stale
+> `enumerate`-shaped sub-binding hack with real tuple-field extraction
+> (`GetField`), so `for (k,v) in &map` / `for (a,b) in pairs` both destructure
+> correctly. Pin: `tests/release-e2e/cases/639_for_tuple_destructure_map`.
+
 
 ```ruxen
 # self.subs: Hash[Int, Set[Int]]

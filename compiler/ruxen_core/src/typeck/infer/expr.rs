@@ -917,6 +917,7 @@ impl<'a> InferenceEngine<'a> {
                 binding,
                 iterable,
                 body,
+                tuple_bindings,
                 ..
             } => {
                 self.infer_expr(iterable);
@@ -939,6 +940,25 @@ impl<'a> InferenceEngine<'a> {
                 if let Some(elem_ty) = elem_ty {
                     if let Some(binding_ty) = self.symbols.def_ty(*binding) {
                         let _ = unify(&binding_ty, &elem_ty, self.ctx, &expr.span);
+                    }
+                    // Q11: a tuple-destructuring pattern (`for (k, v) in &map`,
+                    // `for (a, b) in pairs`) binds sub-DefIds in
+                    // `tuple_bindings`, not the single `binding`. Without
+                    // propagating the element tuple's component types to them,
+                    // each sub-binding stays `Infer` into codegen and a method
+                    // call on it mangles to `?T_<method>`. Push each tuple
+                    // component into its sub-binding's declared (fresh) type.
+                    if !tuple_bindings.is_empty() {
+                        let resolved_elem = self.ctx.resolve(&elem_ty);
+                        if let Ty::Tuple(components) = &resolved_elem {
+                            for ((sub_id, _), comp_ty) in
+                                tuple_bindings.iter().zip(components.iter())
+                            {
+                                if let Some(sub_ty) = self.symbols.def_ty(*sub_id) {
+                                    let _ = unify(&sub_ty, comp_ty, self.ctx, &expr.span);
+                                }
+                            }
+                        }
                     }
                 }
                 self.infer_expr(body);
