@@ -137,6 +137,22 @@ Migrate the last `strings.rs` arms whose `.rx`/C types diverge: `String.remove`,
 
 ---
 
+## Task H: method-level generic harvesting through the bridge  *(highest-leverage residual retirement)*
+
+**Goal:** the bridge resolves a `.rx` method's RETURN type when it uses a **method-level generic** bound from a closure-arg's return (`def map[U](f: any Fn[Fn(T)->U]) -> Option[U]`) or a direct arg (`ok_or(err: E) -> Result[T, E]`) — retiring the `collections.rs` Option/Result fresh-var arms and resolving those signatures from `.rx`. This is the single Rust change that retires the most remaining method-dispatch arms, and it **completes the "add a generic combinator with zero Rust" goal** (any future `flat_map`/`and_then`/`filter_map` then resolves from `.rx`).
+
+**Why it's needed (not pure-`.rx`):** `substitute_generics_in_return` (`infer/collect.rs:854`) binds RECEIVER generics only; `harvest_and_subst_generics` (`:1253`) only partially handles method-level/closure generics. So `collections.rs` mints fresh type vars per-method: `(Option,"map")=>Option[fresh]`, `(Result,"map_err")=>Result[ok,fresh]`, `(Option,"ok_or")=>Result[inner,Error]`. The `.rx` declares the true signatures but the bridge can't bind the method generic from the args.
+
+**The change (`infer/collect.rs` — `bridge_builtin_method` + `harvest_and_subst_generics`):**
+- [ ] Step 1: after receiver-generic subst, for each UNBOUND method generic `P` on the `.rx` method, find `P` in the declared param types and structurally unify with the actual arg's inferred type: closure-return slot `Fn(T)->U` → `U` = closure arg's inferred return; direct-arg slot `err: E` → `E` = arg type; else mint a fresh var (later unified — same as `collections.rs` does now, but generic). Substitute full σ into the return.
+- [ ] Step 2: ordering — harvest AFTER inferring the closure/arg exprs (closure-param seeding from Feature C seeds the closure params; its body yields the return). Pin: `xs.map{…}.map{…}` chains type correctly through `.rx`.
+- [ ] Step 3: delete `collections.rs` arms — Option `map`/`ok_or`, Result `map`/`map_err` (keep `try_op`/`?` — operator protocol). Declare the real signatures in `option_result/lib.rx`.
+- [ ] Step 4: gate — Option/Result fixtures (99/115/118/606) green; golden re-record (the `map`/`map_err`/`ok_or` rows move resolver→bridge, like `sum`); **full `cargo test -p ruxen_core`** (touches the generic-subst chain EVERY generic call uses — full-suite gate mandatory). Update `infer`/`method_resolvers` CLAUDE.md.
+
+**Does NOT retire (still floor/deferred):** String ABI-divergence (`remove`/`push`/`insert` family), `Thread.spawn` capture-Send (E1100), `.new`/`each`/operators, `BufReader` E0714 (→ DEPRIM), concurrency high-level API (needs `.rx` methods written + construction-time harvesting for `JoinHandle[T].join`).
+
+---
+
 ## Self-review
 
 - **Spec coverage:** every phase in `generic-compiler.spec.md`'s checklist maps to a Task here (D, E, B, OP, DEPRIM, INLINE) ✅. The done phases are recorded in the Status snapshot with SHAs ✅.
