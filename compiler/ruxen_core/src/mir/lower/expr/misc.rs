@@ -29,14 +29,15 @@ impl<'a> Lowerer<'a> {
                 // Types are already resolved by typeck's finalisation pass,
                 // so `target` and the inner's type are concrete here.
                 let resolved_target = target.clone();
-                // Re-materialise ONLY for integer→integer (incl. Bool/Char,
-                // which are integer-shaped) width changes — the case Bug B
-                // hits. The Assign codegen path coerces via `coerce_value`
-                // (`ireduce`/`uextend`), which only handles int↔int. Int↔float
-                // and float↔float casts are left as pass-through exactly as
-                // before (they already require dedicated fcvt handling that
-                // this pass does not add, and routing them through the
-                // integer-only `coerce_value` would mistype the SSA value).
+                // Re-materialise for any NUMERIC→NUMERIC cast — int↔int width
+                // changes (Bug B) and, since Q5, int↔float / float↔int /
+                // float↔float conversions too. Binding into a target-typed
+                // local routes the value through the Assign `coerce_value`
+                // path, which now emits the right instruction for each pair:
+                // `ireduce`/`extend` (int↔int), `fdemote`/`fpromote`
+                // (float↔float), and `fcvt_from_*`/`fcvt_to_*_sat` (int↔float,
+                // signedness-correct per direction). Non-numeric casts (e.g.
+                // reference reinterpret) stay pass-through.
                 let is_int_like = |ty: &Ty| {
                     matches!(
                         ty,
@@ -56,7 +57,9 @@ impl<'a> Lowerer<'a> {
                             | Ty::Char
                     )
                 };
-                if !is_int_like(&resolved_target) || !is_int_like(&inner.ty) {
+                let is_float_like = |ty: &Ty| matches!(ty, Ty::Float | Ty::Float32 | Ty::Float64);
+                let is_numeric = |ty: &Ty| is_int_like(ty) || is_float_like(ty);
+                if !is_numeric(&resolved_target) || !is_numeric(&inner.ty) {
                     return Ok(Some(src));
                 }
                 let dest = self.new_temp(resolved_target);

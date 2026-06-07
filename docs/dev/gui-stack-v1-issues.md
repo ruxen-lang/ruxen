@@ -122,7 +122,16 @@ covers only that). Borrowck models the move-capture then flags the body's use
 of the captured name. Non-`move` capture works (pointer-copy semantics) and is
 what quiver relies on — but that in turn depends on Q22 (drop semantics).
 
-## Q5 · S2 — every `as Float32` cast crashes the compiler
+## Q5 · S2 — every `as Float32` cast crashes the compiler  ✅ FIXED
+
+> **FIXED** (stdlib-rust-cleanup): `coerce_value_signed` (cranelift `emit.rs`)
+> now emits `fcvt_from_sint/uint` (int→float) and `fcvt_to_sint/uint_sat`
+> (float→int); the `MirInst::Assign` handler picks the signedness source by
+> direction (int→float = source operand, float→int = destination local) so
+> negatives are correct; `mir/lower/expr/misc.rs` re-materialises any
+> numeric↔numeric cast (not just int↔int) through that path. Pin:
+> `tests/release-e2e/cases/635_numeric_casts_float` (covers signedness).
+
 
 ```ruxen
 def takes_f32(x: Float32, y: Float32) -> nil

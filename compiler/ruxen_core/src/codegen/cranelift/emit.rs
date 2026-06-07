@@ -111,7 +111,22 @@ pub fn translate_instruction<M: Module>(
                 .get(*dest as usize)
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I64);
-            let val = coerce_value(val, dest_ty, builder);
+            let val_ty = builder.func.dfg.value_type(val);
+            // Q5 — numeric int↔float casts need a signedness-correct fcvt,
+            // and the signedness source differs by direction: int→float
+            // reads the SOURCE operand's signedness (fcvt_from_sint/uint),
+            // float→int reads the DESTINATION's (fcvt_to_sint/uint). Scope
+            // the signedness-aware path to those two cases only; every other
+            // coercion (int↔int width, float↔float) keeps the existing
+            // signedness-blind `coerce_value` behaviour unchanged.
+            let val = if val_ty.is_int() && dest_ty.is_float() {
+                coerce_value_signed(val, dest_ty, mir_arg_is_signed(value, func), builder)
+            } else if val_ty.is_float() && dest_ty.is_int() {
+                let dest_signed = mir_arg_is_signed(&MirValue::Use(*dest), func);
+                coerce_value_signed(val, dest_ty, dest_signed, builder)
+            } else {
+                coerce_value(val, dest_ty, builder)
+            };
             def_local(var_map, stack_slots, builder, *dest, val);
         }
 
@@ -759,8 +774,29 @@ pub fn coerce_value_signed(
             return builder.ins().fpromote(target_ty, val);
         }
     }
-    // Int → Float or Float → Int — just keep the value as-is for now
-    // (cast semantics would need explicit handling).
+    // Int → Float (Q5). `signed` selects the source interpretation: a
+    // signed source uses `fcvt_from_sint` so `-5 as Float` is `-5.0`, not
+    // the unsigned reinterpretation `1.8e19`. The Assign codegen passes the
+    // SOURCE operand's signedness for this direction.
+    if val_ty.is_int() && target_ty.is_float() {
+        return if signed {
+            builder.ins().fcvt_from_sint(target_ty, val)
+        } else {
+            builder.ins().fcvt_from_uint(target_ty, val)
+        };
+    }
+    // Float → Int (Q5). Saturating conversions (`_sat`) clamp out-of-range
+    // / NaN inputs to the type's bounds / 0 instead of trapping. `signed`
+    // selects the TARGET interpretation; the Assign codegen passes the
+    // DESTINATION local's signedness for this direction.
+    if val_ty.is_float() && target_ty.is_int() {
+        return if signed {
+            builder.ins().fcvt_to_sint_sat(target_ty, val)
+        } else {
+            builder.ins().fcvt_to_uint_sat(target_ty, val)
+        };
+    }
+    // No known conversion — keep the value as-is.
     val
 }
 
