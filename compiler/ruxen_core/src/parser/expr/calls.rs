@@ -123,6 +123,27 @@ impl Parser {
                         },
                         span,
                     }
+                } else if self.is_bare_call_arg_start(&field) {
+                    // Paren-less method call with a bare argument, Ruby
+                    // command-call style: `widget.text "Settings"`,
+                    // `box.button "Save" do … end`. `is_bare_call_arg_start`
+                    // restricts the bare arg to string / interpolated-string
+                    // literals here (the method name is never an IO builtin),
+                    // so `obj.field x` stays an unambiguous field access — only
+                    // the DSL-friendly `obj.method "literal"` form is a call.
+                    let arg = self.parse_expression();
+                    let block = self.maybe_parse_block_arg();
+                    let span = self.span_from(&start_span);
+                    Expr {
+                        kind: ExprKind::MethodCall {
+                            object: Box::new(lhs),
+                            method: field,
+                            generic_args,
+                            args: vec![arg],
+                            block: block.map(Box::new),
+                        },
+                        span,
+                    }
                 } else {
                     // Check for block arg after field access (method call with no parens but with block)
                     let block = self.maybe_parse_block_arg();

@@ -375,11 +375,41 @@ impl Resolver {
         // `__block: Fn(…) -> ()` parameter so `yield VALUE` can desugar
         // to `__block.(VALUE)` and callers can forward a trailing block.
         if let Some(&arity) = self.yield_fns.get(&f.name) {
+            // For each yield argument that is a bare `self`, type the matching
+            // block parameter as the enclosing class instead of a fresh type
+            // variable. A method's `yield self` then propagates a CONCRETE
+            // block-parameter type to the call site — the method-call path
+            // seeds the trailing block from a cloned signature, which loses
+            // the link to a fresh var the body would later resolve (free
+            // functions already resolve it). This is what makes the Ruby
+            // builder DSL `widget do |w| … end` infer `w` without annotation.
+            let self_ty_opt = self.current_self_ty.clone();
+            let self_mask = super::yield_scan::first_yield_self_mask_in_block(&f.body);
             let block_ty = Ty::Fn {
                 params: (0..arity)
-                    .map(|_| self.type_context.fresh_type_var())
+                    .map(|i| {
+                        let is_self = self_mask
+                            .as_ref()
+                            .and_then(|m| m.get(i))
+                            .copied()
+                            .unwrap_or(false);
+                        if is_self {
+                            if let Some(ref ty) = self_ty_opt {
+                                return ty.clone();
+                            }
+                        }
+                        self.type_context.fresh_type_var()
+                    })
                     .collect(),
-                ret: Box::new(self.type_context.fresh_type_var()),
+                // The block's return value is never consumed by the `yield`
+                // desugar in v1 (yield is statement-position). A fresh var is
+                // only ever constrained when `yield` happens to be the tail
+                // expression, so methods that `yield` mid-body left it
+                // unresolved and tripped `could not infer type for __block`.
+                // Fix it to Unit: every `.rx` block-method (each, builder
+                // DSLs) discards the block value; combinators that DO use it
+                // take explicit `f: any Fn[...]` params, not `yield`.
+                ret: Box::new(Ty::Unit),
             };
             let block_def_id = self.symbols.define(
                 "__block".to_string(),

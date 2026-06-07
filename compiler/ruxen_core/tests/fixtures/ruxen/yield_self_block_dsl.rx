@@ -1,0 +1,38 @@
+# Ruby-style block builder DSL over `yield self`.
+#
+# Pins three fixes that together make the DSL compile:
+#   1. `yield self` infers the trailing block's parameter as the enclosing
+#      class (so `s.line` / `t.line` resolve without an annotation).
+#   2. A method that `yield`s mid-body (not as its tail expression) no longer
+#      leaves the synthetic `__block` return type unresolved.
+#   3. Paren-less method calls with a string argument (`s.line "a"`) parse as
+#      a call, Ruby command-call style.
+class Doc
+  out: String
+  def init
+    self.out = String.from("")
+  end
+  def line(s: &str) -> nil
+    self.out = "#{self.out}#{s};"
+  end
+  def section -> nil
+    self.line "["
+    yield self
+    self.line "]"
+  end
+  def render -> String
+    self.out.clone
+  end
+end
+
+def main
+  var d = Doc.new
+  d.section do |s|
+    s.line "a"
+    s.section do |t|
+      t.line "b"
+    end
+    s.line "c"
+  end
+  print("#{d.render}")
+end
