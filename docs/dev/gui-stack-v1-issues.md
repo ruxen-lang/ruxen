@@ -93,7 +93,17 @@ free-function + explicit closure param + `do…end` is broken — the block
 sugar lowering for that path passes a bad closure value. Also broken with
 params (`withn do |n| … end`) and with plain `Fn() -> nil` (not just `any Fn`).
 
-## Q4 · S1 — `move` closures cannot capture non-Copy class values (false E1001)
+## Q4 · S1 — `move` closures cannot capture non-Copy class values (false E1001)  ✅ FIXED
+
+> **FIXED** (stdlib-rust-cleanup): `borrow_check/walk.rs::check_closure` recorded
+> the move-capture (correctly invalidating the outer binding) and then walked
+> the body — where the body's own use of the captured value tripped a false
+> E1001. The body owns the captured copy, so it must be live there. Fix:
+> snapshot the move state, reinitialize the move-captured bindings for the
+> body walk, then restore (so the outer binding stays moved after the
+> closure). Pins (`tests/borrow_check_reborrow.rs`): body-use OK + a negative
+> guard that using the value AFTER the closure still errors.
+
 
 ```ruxen
 use std.sync.{Mutex, SharedSync}

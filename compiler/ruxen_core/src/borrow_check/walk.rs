@@ -465,6 +465,7 @@ impl<'a> BorrowChecker<'a> {
         // post-typeck type lives in the symbol table and is what every
         // Copy/Send/mut-ref decision below MUST consult.
         // See `Capture::current_ty` docs.
+        let mut moved_captures: Vec<DefId> = Vec::new();
         for cap in captures {
             let live_ty = cap.current_ty(self.symbols);
             if cap.by_move || is_move {
@@ -481,6 +482,7 @@ impl<'a> BorrowChecker<'a> {
                         "closure".to_string(),
                         span.clone(),
                     );
+                    moved_captures.push(cap.def_id);
                 }
             } else {
                 // Borrow capture: create a borrow
@@ -502,8 +504,20 @@ impl<'a> BorrowChecker<'a> {
             self.register_binding(param.def_id, &param.ty, false, param.span.clone());
         }
 
+        // Q4: a move-captured value is owned by the closure, so the BODY may
+        // freely use it — the move only invalidates the OUTER binding (after
+        // the closure). Snapshot the post-capture move state, reinitialize
+        // the captured bindings so body uses don't trip a false
+        // use-after-move (E1001), walk the body, then restore so the outer
+        // move persists for code after the closure.
+        let moves_snapshot = self.moves.snapshot();
+        for def_id in &moved_captures {
+            self.moves.reinitialize(*def_id, span.clone());
+        }
+
         self.check_expr(body);
 
+        self.moves.restore(&moves_snapshot);
         self.borrows.kill_scope(scope_id);
         self.scopes.pop();
     }
