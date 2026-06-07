@@ -121,9 +121,14 @@ impl Resolver {
             self.type_registry.get(&name).copied()
         });
 
-        // Build the self type
+        // Build the self type. For a module-nested class the def was
+        // re-registered under its QUALIFIED name above (`Quiver.Signal`), so
+        // `self` must carry the same qualified name — otherwise `self.field`
+        // in a method body types `self` as the bare `Signal`, which no
+        // registered class matches, and field lookup fails with "no field x
+        // on type Signal" (Q15). Top-level classes keep their bare name.
         let self_ty = Ty::Class {
-            name: class.name.clone(),
+            name: qualified_key.clone(),
             generic_args: generic_params
                 .iter()
                 .map(|gp| Ty::TypeParam {

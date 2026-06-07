@@ -451,7 +451,23 @@ namespacing is the bigger fix (see the B12 note in
 `src/ruxen_cli/src/build.rs::compile_project`). At minimum: a resolve-time
 diagnostic instead of a codegen `DuplicateDefinition` panic.
 
-## Q15 · S3 — module-wrapped generic classes lose field resolution
+## Q15 · S3 — module-wrapped generic classes lose field resolution  ✅ FIXED (core)
+
+> **FIXED** (stdlib-rust-cleanup): a module-nested class is registered under
+> its QUALIFIED name (`Quiver.Signal`), but `self_ty` was built from the bare
+> `class.name`, so `self.value` in a method body typed `self` as `Signal` —
+> which no registered class matched ("no field value on type Signal").
+> `resolve_class` now builds `self_ty` from the same `qualified_key`. Generic
+> and non-generic module classes resolve their fields + methods. Pin:
+> `tests/release-e2e/cases/646_module_generic_class_field` (constructed via
+> `Quiver.Signal.new(42)`).
+>
+> Two NARROWER construction sub-gaps remain (separate from field resolution):
+> the module-qualified turbofish `Quiver.Signal[Int].new` ("undefined enum
+> variant") and `use Quiver.Signal; Signal.new` (the imported alias keeps the
+> bare name, so method lookup misses). Tracked; the documented field-resolution
+> failure is resolved.
+
 
 ```ruxen
 module Quiver

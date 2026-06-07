@@ -1,0 +1,33 @@
+## Q15 (gui-stack-v1-issues) — a class nested in a `module` must resolve its
+## own fields inside method bodies. Before the fix `self.value` failed with
+## "no field value on type Signal" because `self` was typed with the bare
+## class name while the class def was registered under its qualified name
+## (`Quiver.Signal`). Covers a generic module class constructed + a method
+## reading a field, plus a non-generic one.
+
+module Quiver
+  class Signal[T]
+    value: T
+    def init(@value: T)
+    end
+    def get -> T
+      self.value
+    end
+  end
+
+  class Counter
+    n: Int
+    def init(@n: Int)
+    end
+    def bump -> Int
+      self.n + 1
+    end
+  end
+end
+
+def main
+  let s = Quiver.Signal.new(42)
+  puts "v=#{s.get}"
+  let c = Quiver.Counter.new(10)
+  puts "c=#{c.bump}"
+end
