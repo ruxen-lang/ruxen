@@ -43,6 +43,7 @@ use crate::parser::ast::Program;
 use crate::parser::Parser;
 use crate::resolve::stdlib_embedded;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// The stdlib bootstrap file list. Wave 1.5 (#06.8 Phase 3) shipped one
 /// proof-of-life file — `_bootstrap_smoke.rx` — that declares a single
@@ -217,8 +218,31 @@ pub fn bootstrap_package_names() -> Vec<&'static str> {
 ///
 /// Wave 1: no-op (empty list). Wave 2+: this is how the prelude
 /// gains its self-hosted stdlib types.
+/// Process-wide memoized parse of the DEFAULT stdlib bootstrap.
+///
+/// `BOOTSTRAP_FILES` (and the resolved `RUXEN_STDLIB_PATH`, which no code
+/// mutates at runtime) are fixed for a process, so re-lexing + re-parsing ~30
+/// `.rx` files on every compile is pure waste — it was the dominant per-test
+/// cost (e.g. `std_use_resolution`: 20 tests × a full bootstrap parse). We
+/// parse once and clone the AST on each call (cloning a parsed `Program` is
+/// far cheaper than re-parsing it). Correctness is pinned by
+/// `bootstrap_cache_matches_fresh_parse`.
+///
+/// ONLY the default path is cached. `run_bootstrap_with_files` with an explicit
+/// `path_override` (tempdir loader tests) bypasses this entirely and re-parses,
+/// so cache validity never depends on a varying stdlib root.
+static BOOTSTRAP_CACHE: OnceLock<(Vec<Program>, Vec<Diagnostic>)> = OnceLock::new();
+
 pub fn run_bootstrap(diagnostics: &mut Vec<Diagnostic>) -> Vec<Program> {
-    run_bootstrap_with_files(BOOTSTRAP_FILES, None, diagnostics)
+    let (programs, diags) = BOOTSTRAP_CACHE.get_or_init(|| {
+        let mut d = Vec::new();
+        let p = run_bootstrap_with_files(BOOTSTRAP_FILES, None, &mut d);
+        (p, d)
+    });
+    // Replay any parse diagnostics so callers see them on every call, not just
+    // the one that populated the cache.
+    diagnostics.extend(diags.iter().cloned());
+    programs.clone()
 }
 
 /// Variant of [`run_bootstrap`] that returns each parsed program
@@ -644,4 +668,42 @@ fn first_error_line(diags: &[Diagnostic]) -> (u32, String) {
         .or_else(|| diags.first())
         .map(|d| (d.span.line, d.message.clone()))
         .unwrap_or((0, "unknown error".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Correctness pin for the `BOOTSTRAP_CACHE` fast-path: the memoized
+    /// `run_bootstrap()` must equal a fresh, un-cached parse of the same
+    /// default files. A stale or diverging cache would silently miscompile
+    /// every program, so this guards the optimization.
+    #[test]
+    fn bootstrap_cache_matches_fresh_parse() {
+        let mut cached_diags = Vec::new();
+        let cached = run_bootstrap(&mut cached_diags);
+
+        let mut fresh_diags = Vec::new();
+        let fresh = run_bootstrap_with_files(BOOTSTRAP_FILES, None, &mut fresh_diags);
+
+        assert_eq!(
+            cached, fresh,
+            "memoized bootstrap diverged from a fresh parse"
+        );
+        assert_eq!(
+            cached_diags, fresh_diags,
+            "memoized bootstrap diagnostics diverged from a fresh parse"
+        );
+    }
+
+    /// The cache returns the SAME result on repeated calls (idempotent), so
+    /// callers can rely on a stable bootstrap within a process.
+    #[test]
+    fn bootstrap_cache_is_stable_across_calls() {
+        let mut d1 = Vec::new();
+        let first = run_bootstrap(&mut d1);
+        let mut d2 = Vec::new();
+        let second = run_bootstrap(&mut d2);
+        assert_eq!(first, second, "repeated run_bootstrap calls differ");
+    }
 }
