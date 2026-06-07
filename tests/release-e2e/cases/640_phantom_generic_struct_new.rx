@@ -1,0 +1,21 @@
+## Q21 (gui-stack-v1-issues) — a generic struct/class whose type parameter is
+## "phantom" (not determined by any constructor argument) must still infer its
+## generic args from the call's expected type. Before the fix `Sig.new(id)`
+## produced the bare head `Sig` (no generic args) and failed to unify with the
+## declared return `Sig[T]`. Now un-inferable params become fresh inference
+## vars that the surrounding context binds.
+
+struct Sig[T]
+  id: Int
+end
+
+def make[T](id: Int) -> Sig[T]
+  Sig.new(id)
+end
+
+def main
+  let s: Sig[Int] = make(7)
+  puts "id=#{s.id}"
+  let t: Sig[String] = make(99)
+  puts "id=#{t.id}"
+end

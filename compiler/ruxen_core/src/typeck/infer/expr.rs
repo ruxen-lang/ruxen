@@ -1335,12 +1335,24 @@ impl<'a> InferenceEngine<'a> {
         args: &[HirExpr],
         span: &Span,
     ) -> Ty {
-        if let Ty::Class { name, generic_args } = derefed {
+        // A generic class OR struct constructor (`Pair.new(a, b)`,
+        // `Sig.new(id)`): infer the head's generic args from the constructor
+        // arguments, minting fresh vars for phantom params so the call's
+        // expected type can bind them (Q21). Build the result with the same
+        // head kind (Struct vs Class) so downstream typing stays correct.
+        if let Ty::Class { name, generic_args } | Ty::Struct { name, generic_args } = derefed {
             if generic_args.is_empty() {
                 if let Some(inferred) = self.infer_class_generics(name, args) {
-                    let result = Ty::Class {
-                        name: name.clone(),
-                        generic_args: inferred,
+                    let result = if matches!(derefed, Ty::Struct { .. }) {
+                        Ty::Struct {
+                            name: name.clone(),
+                            generic_args: inferred,
+                        }
+                    } else {
+                        Ty::Class {
+                            name: name.clone(),
+                            generic_args: inferred,
+                        }
                     };
                     self.check_constructor_generic_bounds(&result, span);
                     return result;

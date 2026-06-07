@@ -753,67 +753,103 @@ impl<'a> InferenceEngine<'a> {
     /// type. Returns `None` if the class has no generic params or if
     /// inference cannot cover every parameter.
     pub(super) fn infer_class_generics(
-        &self,
+        &mut self,
         class_name: &str,
         args: &[HirExpr],
     ) -> Option<Vec<Ty>> {
-        // Find the class definition.
-        let generic_params: Vec<String> = {
-            let mut result = None;
-            for def in self.symbols.iter() {
-                if def.name == class_name {
-                    if let DefKind::Class { info } = &def.kind {
-                        result = Some(
-                            info.generic_params
-                                .iter()
-                                .map(|gp| gp.name.clone())
-                                .collect(),
-                        );
-                        break;
-                    }
-                }
-            }
-            result?
-        };
+        // Declared generic params of the class OR struct.
+        let generic_params = self.type_generic_param_names(class_name);
         if generic_params.is_empty() {
             return None;
         }
 
-        // Find the init method's parameter types.
-        let init_params: Vec<Ty> = {
-            let mut result = None;
-            for def in self.symbols.iter() {
-                if def.name == "init" {
-                    if let DefKind::Method { parent, signature } = &def.kind {
-                        if let Some(parent_def) = self.symbols.get(*parent) {
-                            if parent_def.name == class_name {
-                                result =
-                                    Some(signature.params.iter().map(|p| p.ty.clone()).collect());
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            result?
-        };
+        // Constructor parameter types: the `init` method's params when one
+        // exists, otherwise the type's declared fields in order (the implicit
+        // positional `.new`). Structs typically take the field path.
+        let ctor_params = self.constructor_param_types(class_name);
 
         // Walk the parameters and capture TypeParam positions.
         let mut bindings: std::collections::HashMap<String, Ty> = std::collections::HashMap::new();
-        for (param_ty, arg) in init_params.iter().zip(args.iter()) {
-            Self::collect_typeparam_bindings(param_ty, &self.ctx.resolve(&arg.ty), &mut bindings);
+        for (param_ty, arg) in ctor_params.iter().zip(args.iter()) {
+            let actual = self.ctx.resolve(&arg.ty);
+            Self::collect_typeparam_bindings(param_ty, &actual, &mut bindings);
         }
 
-        // Assemble generic args in declaration order. If any is missing,
-        // fall back to Error so downstream substitution leaves it alone.
+        // Assemble generic args in declaration order. A param not determined
+        // by any constructor argument (a "phantom" param like `Sig[T]` with
+        // `T` unused in fields) becomes a FRESH inference var rather than
+        // collapsing the head to the bare `Sig` — the call's expected type
+        // (e.g. a declared `-> Sig[T]` return) then binds it via unification
+        // (Q21). Previously this returned `None`, yielding `Sig` with no
+        // generic args, which failed to unify with `Sig[T]`.
         let mut out = Vec::with_capacity(generic_params.len());
         for gp in &generic_params {
             match bindings.get(gp) {
                 Some(ty) => out.push(ty.clone()),
-                None => return None,
+                None => out.push(self.ctx.fresh_type_var()),
             }
         }
         Some(out)
+    }
+
+    /// Declared generic-parameter names of a class or struct by name, in
+    /// declaration order. Empty when the type is non-generic or unknown.
+    fn type_generic_param_names(&self, type_name: &str) -> Vec<String> {
+        for def in self.symbols.iter() {
+            if def.name == type_name {
+                let params = match &def.kind {
+                    DefKind::Class { info } => Some(&info.generic_params),
+                    DefKind::Struct { info } => Some(&info.generic_params),
+                    _ => None,
+                };
+                if let Some(params) = params {
+                    return params.iter().map(|gp| gp.name.clone()).collect();
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    /// The positional constructor parameter types for a class/struct: the
+    /// `init` method's params if declared, else the type's declared field
+    /// types (the implicit all-fields `.new`). Used to harvest generic-param
+    /// bindings from constructor arguments.
+    fn constructor_param_types(&self, type_name: &str) -> Vec<Ty> {
+        // Prefer an explicit `init` method's params.
+        for def in self.symbols.iter() {
+            if def.name == "init" {
+                if let DefKind::Method { parent, signature } = &def.kind {
+                    if self
+                        .symbols
+                        .get(*parent)
+                        .map(|p| p.name == type_name)
+                        .unwrap_or(false)
+                    {
+                        return signature.params.iter().map(|p| p.ty.clone()).collect();
+                    }
+                }
+            }
+        }
+        // Fall back to the declared fields (positional `.new`).
+        for def in self.symbols.iter() {
+            if def.name == type_name {
+                let field_ids = match &def.kind {
+                    DefKind::Class { info } => Some(info.fields.clone()),
+                    DefKind::Struct { info } => Some(info.fields.clone()),
+                    _ => None,
+                };
+                if let Some(field_ids) = field_ids {
+                    return field_ids
+                        .iter()
+                        .filter_map(|fid| match self.symbols.get(*fid).map(|d| &d.kind) {
+                            Some(DefKind::Field { ty, .. }) => Some(ty.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                }
+            }
+        }
+        Vec::new()
     }
 
     /// Walk a parameter type and an argument type in parallel, capturing

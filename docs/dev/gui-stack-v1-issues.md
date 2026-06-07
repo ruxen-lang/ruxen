@@ -477,7 +477,17 @@ class is declared `class Cell[T: Send]`. Probably by design — listed here
 because the diagnostic doesn't say *where* to add the bound (the error points
 at the construction site, not the class header).
 
-## Q21 · S3 — phantom-generic struct constructors don't infer
+## Q21 · S3 — phantom-generic struct constructors don't infer  ✅ FIXED
+
+> **FIXED** (stdlib-rust-cleanup): `infer_class_generics` now (a) handles
+> structs as well as classes, (b) falls back to the declared fields when there
+> is no `init`, and (c) mints a FRESH inference var for any generic param not
+> determined by a constructor argument (a phantom param) instead of collapsing
+> to the bare head — so the call's expected type (`-> Sig[T]`) binds it.
+> `infer_constructor_call` now dispatches on both `Ty::Class` and `Ty::Struct`.
+> Pin: `tests/release-e2e/cases/640_phantom_generic_struct_new`. (Full generic
+> *struct methods* remain a separate, larger item; this fixes `.new` inference.)
+
 
 ```ruxen
 struct Sig[T]
