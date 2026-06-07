@@ -94,6 +94,27 @@ pub(super) fn is_builtin_static_method(type_name: &str, method_name: &str) -> bo
 /// reference first. Falls back to `Ty::Int` for unrecognized types. (The
 /// former `*Iter` wrapper branch was removed with the orphaned iterator
 /// machinery — Phase B / Milestone 2.)
+/// True when `ty` is a callable shape — a bare `Ty::Fn`/`FnMut`/`FnOnce` or
+/// the surface `any Fn[…]` / `some Fn[…]` mixin spelling (peeling one
+/// reference layer). Used by MIR overload-symbol selection so a closure
+/// argument mangles to the closure overload, not a `&str` one (Q1).
+pub(super) fn ty_is_callable(ty: &Ty) -> bool {
+    let peeled = match ty {
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+        other => other,
+    };
+    match peeled {
+        Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => true,
+        Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => bounds
+            .iter()
+            .any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce")),
+        _ => false,
+    }
+}
+
 pub(super) fn element_type_of(ty: &Ty) -> Ty {
     match ty {
         Ty::Array(inner) => *inner.clone(),

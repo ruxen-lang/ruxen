@@ -13,7 +13,20 @@ Partial fixes already exist locally (see "Existing partial work" at the end).
 
 ---
 
-## Q1 · S1 — `&str`-vs-closure method overload misdispatches → heap corruption
+## Q1 · S1 — `&str`-vs-closure method overload misdispatches → heap corruption  ✅ FIXED
+
+> **FIXED** (stdlib-rust-cleanup): both overload selectors (typeck
+> `method_accepts_args` and MIR `method_signature_accepts_args`) now treat a
+> CALLABLE argument — a closure literal (whose type may still be `Infer` at
+> selection time) or a `Fn`/`any Fn`/`some Fn` value — as matching ONLY a
+> callable parameter, never `&str`. A closure argument therefore selects the
+> closure overload instead of the first-declared `&str` one (which stored the
+> closure pointer as a String → heap corruption). Pin:
+> `tests/release-e2e/cases/643_overload_str_vs_closure`. NOTE: testing this via
+> the `ruxen` CLI is unreliable — it caches compiled artifacts by SOURCE hash,
+> so a compiler-only change isn't re-lowered for an unchanged `.rx`; use the
+> in-process release-e2e harness.
+
 
 Two methods on one class sharing a name, one `&str` param, one `any Fn[...]`
 param: calls dispatch wrongly; the program corrupts the heap and crashes later

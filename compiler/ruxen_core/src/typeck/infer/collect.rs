@@ -556,6 +556,20 @@ impl<'a> InferenceEngine<'a> {
             .all(|(arg, param)| {
                 let arg_ty = self.ctx.resolve(&arg.ty);
                 let param_ty = self.ctx.resolve(&param.ty);
+                // Q1: a CALLABLE argument — a closure literal (whose type may
+                // still be `Infer` at overload-selection time), or any value
+                // of `Fn`/`any Fn`/`some Fn` type — matches ONLY a callable
+                // parameter, never a `&str`/other param. Without this, a
+                // closure argument fell through to the `is_infer()` arm below
+                // and the first-declared overload (`text(&str)`) was chosen,
+                // mis-storing the closure pointer as a `String` → heap
+                // corruption. Checking `arg.kind` (syntactic) makes selection
+                // correct even before the closure's type is inferred.
+                let arg_is_callable = matches!(arg.kind, HirExprKind::Closure { .. })
+                    || Self::ty_is_callable(&arg_ty);
+                if arg_is_callable {
+                    return Self::ty_is_callable(&param_ty);
+                }
                 arg_ty.is_infer()
                     || arg_ty.is_error()
                     || arg_ty == param_ty
@@ -566,6 +580,27 @@ impl<'a> InferenceEngine<'a> {
                     )
                     || matches!(&param_ty, Ty::Ref(inner) | Ty::RefMut(inner) if **inner == arg_ty)
             })
+    }
+
+    /// True when `ty` is a callable shape — a bare `Ty::Fn`/`FnMut`/`FnOnce`
+    /// or the surface `any Fn[…]` / `some Fn[…]` mixin spelling (peeling one
+    /// reference layer). Used by overload selection so a closure argument is
+    /// matched against a closure parameter, not a `&str` one (Q1).
+    fn ty_is_callable(ty: &Ty) -> bool {
+        let peeled = match ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
+            other => other,
+        };
+        match peeled {
+            Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => true,
+            Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => bounds
+                .iter()
+                .any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce")),
+            _ => false,
+        }
     }
 
     fn class_method_candidates(&self, type_name: &str, method_name: &str) -> Vec<DefId> {

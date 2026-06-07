@@ -321,6 +321,17 @@ impl<'a> Lowerer<'a> {
         args.iter()
             .zip(signature.params.iter())
             .all(|(arg, param)| {
+                // Q1: a CALLABLE argument (closure literal, or a value of
+                // `Fn`/`any Fn`/`some Fn` type) matches ONLY a callable
+                // parameter — never a `&str`/other one. Mirrors the typeck
+                // overload selector; without it the MIR symbol selection
+                // mangled `text(closure)` to the `text(&str)` overload and
+                // stored the closure pointer as a String (heap corruption).
+                let arg_is_callable =
+                    matches!(arg.kind, HirExprKind::Closure { .. }) || ty_is_callable(&arg.ty);
+                if arg_is_callable {
+                    return ty_is_callable(&param.ty);
+                }
                 arg.ty.is_infer()
                     || arg.ty.is_error()
                     || arg.ty == param.ty
