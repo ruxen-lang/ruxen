@@ -497,7 +497,21 @@ Known resolver gap (same note in build.rs: nested classes don't propagate
 field DefIds into method-body scope). Fixing this would also unlock module
 namespacing as a Q14 workaround.
 
-## Q16 · S4 — library builds, `ruxen check`, and `ruxen test` can't see dependency symbols
+## Q16 · S4 — library builds, `ruxen check`, and `ruxen test` can't see dependency symbols  ⏳ PLANNED (dedicated)
+
+> **STATUS** (stdlib-rust-cleanup): not yet fixed — needs a build-driver change
+> validated against multi-package fixtures (not single-file e2e cases), so it's
+> scoped to a dedicated pass rather than rushed here.
+> **Plan:** in `src/ruxen_cli/src/build.rs`, extract the dep-source flat-merge
+> (currently inline in `compile_project`, lines ~578-587) into a
+> `gather_dep_sources(&[PathBuf]) -> String` helper; thread the resolved dep
+> source dirs into `compile_piece` (the library-build path) and into `check`
+> (which today gathers only its own sources); and give the test runner a
+> path-dep source gatherer. **Acceptance:** lib A exporting `struct Color`; lib
+> B with `A = { path = "../A" }` using `Color` in `src/lib.rx` — `ruxen build`,
+> `ruxen check`, `ruxen test` all pass in B (add a `tests/dep_visibility.rs`
+> modeled on `package_manager.rs`).
+
 
 Only **binary** builds flat-merge dependency sources
 (`src/ruxen_cli/src/build.rs::compile_project`). The library path
@@ -512,7 +526,18 @@ Acceptance test for the fix: lib A exporting `struct Color`; lib B with
 `ruxen check`, and `ruxen test` must all pass in B.
 **Partial fix exists locally** — see "Existing partial work" below.
 
-## Q17 · S4 — cross-package generic monomorphization fails for consumer types
+## Q17 · S4 — cross-package generic monomorphization fails for consumer types  ⏳ PLANNED (dedicated)
+
+> **STATUS** (stdlib-rust-cleanup): not yet fixed — this is codegen-deep
+> (monomorphizing a dependency's generic body for a type defined in the
+> CONSUMING package) and is the hardest of the catalog; it needs the same
+> multi-package test scaffolding as Q16 and careful work on the
+> generic-instantiation collection across package boundaries
+> (`mir/lower/monomorphize.rs` + the build driver's per-piece compile). Scoped
+> to a dedicated pass with Q16 (they share the multi-package layering story and
+> Q14's "full namespacing" follow-up). Rushing it risks emitting bound-placeholder
+> symbols (`S: PaintSurface_fill_rect`) that link-fail — exactly the bug.
+
 
 A dependency's generic function (`def paint[S: PaintSurface](s: &var S)`)
 called with a type defined in the CONSUMING package fails to link:
