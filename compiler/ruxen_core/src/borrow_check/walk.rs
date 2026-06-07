@@ -4,7 +4,12 @@ impl<'a> BorrowChecker<'a> {
     // ─── Program / Item walking ────────────────────────────────────
 
     pub(super) fn check_program(&mut self, program: &HirProgram) {
-        for item in &program.items {
+        // Skip the prepended stdlib/prelude prefix (`prelude_item_count`): it is
+        // trusted + e2e-verified, and its generic combinator bodies (abstract
+        // `T`, e.g. `Enumerable#select`'s `pred.(x)` then `out.push(x)`) trip
+        // false-positive move/borrow errors that don't reflect the monomorphized
+        // reality. Only user-authored items get borrow-checked. (0 ⇒ check all.)
+        for item in program.items.iter().skip(program.prelude_item_count) {
             self.check_item(item);
         }
     }

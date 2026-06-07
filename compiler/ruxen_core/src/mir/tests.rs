@@ -77,6 +77,7 @@ mod lowering_tests {
             items: vec![HirItem::Function(func)],
             span: span(),
             ffi_libs: vec![],
+            prelude_item_count: 0,
         }
     }
 

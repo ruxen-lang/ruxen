@@ -34,6 +34,7 @@ fn make_program(body_stmts: Vec<HirStatement>) -> (HirProgram, SymbolTable) {
         items: vec![HirItem::Function(func)],
         span: span(1, 1),
         ffi_libs: vec![],
+        prelude_item_count: 0,
     };
     (program, symbols)
 }
@@ -138,6 +139,101 @@ fn detects_use_after_move() {
         ErrorCode::E1001,
         "expected E1001 (use after move), got {:?}",
         errors[0].code
+    );
+}
+
+/// Regression pin (Task WS): items in the bootstrap/prelude prefix
+/// (`HirProgram::prelude_item_count`) are NOT borrow-checked. The CLI merges
+/// the trusted, e2e-verified prelude in front of user code; its generic
+/// combinator bodies (`Enumerable#select`'s `pred.(x)` over abstract `T`,
+/// then `out.push(x)`) trip false-positive moves. The borrow checker must
+/// skip that prefix and check only user code — this is the "`ruxen compile`
+/// hello-world" fix. (The e2e harness skips borrow-check entirely, which is
+/// why this was a "green tests / broken CLI" gap.) Same body as
+/// `detects_use_after_move`, but marked as prelude ⇒ no error.
+#[test]
+fn prelude_prefix_items_are_skipped() {
+    let stmts = vec![
+        // let s = "hello"
+        HirStatement::Let {
+            def_id: 0,
+            pattern: HirPattern::Binding {
+                def_id: 0,
+                name: "s".to_string(),
+                mutable: false,
+                span: span(1, 5),
+            },
+            ty: Ty::String,
+            value: Some(HirExpr {
+                kind: HirExprKind::StringLiteral("hello".to_string()),
+                ty: Ty::String,
+                span: span(1, 9),
+            }),
+            mutable: false,
+            span: span(1, 1),
+        },
+        // let t = s  (move)
+        HirStatement::Let {
+            def_id: 1,
+            pattern: HirPattern::Binding {
+                def_id: 1,
+                name: "t".to_string(),
+                mutable: false,
+                span: span(2, 5),
+            },
+            ty: Ty::String,
+            value: Some(HirExpr {
+                kind: HirExprKind::VarRef(0),
+                ty: Ty::String,
+                span: span(2, 9),
+            }),
+            mutable: false,
+            span: span(2, 1),
+        },
+        // puts s  (would be use-after-move IF checked)
+        HirStatement::Expr(HirExpr {
+            kind: HirExprKind::FnCall {
+                callee: 99,
+                callee_name: "puts".to_string(),
+                args: vec![HirExpr {
+                    kind: HirExprKind::VarRef(0),
+                    ty: Ty::String,
+                    span: span(3, 6),
+                }],
+            },
+            ty: Ty::Unit,
+            span: span(3, 1),
+        }),
+    ];
+
+    let (mut program, mut symbols) = make_program(stmts);
+    symbols.define(
+        "s".to_string(),
+        DefKind::Variable {
+            mutable: false,
+            ty: Ty::String,
+        },
+        Visibility::Private,
+        span(1, 5),
+    );
+    symbols.define(
+        "t".to_string(),
+        DefKind::Variable {
+            mutable: false,
+            ty: Ty::String,
+        },
+        Visibility::Private,
+        span(2, 5),
+    );
+
+    // Mark the sole item as belonging to the prepended prelude prefix.
+    program.prelude_item_count = 1;
+
+    let errors = borrow_check(&program, &symbols);
+    assert!(
+        errors.is_empty(),
+        "prelude-prefix items must be skipped by the borrow checker, got {:?}",
+        errors
     );
 }
 

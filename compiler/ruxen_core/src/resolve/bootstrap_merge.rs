@@ -210,7 +210,10 @@ impl Resolver {
             }
         }
 
-        // Pass 2: Fully resolve all items.
+        // Pass 2: Fully resolve all items. Bootstrap (prelude) items are the
+        // prepended prefix; record its length so the borrow checker can skip
+        // the trusted prelude and check only user code (0 when no bootstrap).
+        let prelude_item_count = bootstrap_items.len();
         let mut items = bootstrap_items;
         for item in &program.items {
             if let Some(hir_item) = self.resolve_item(item) {
@@ -222,6 +225,7 @@ impl Resolver {
             items,
             span: program.span.clone(),
             ffi_libs,
+            prelude_item_count,
         };
 
         ResolveResult {
