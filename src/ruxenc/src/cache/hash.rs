@@ -63,6 +63,19 @@ pub struct CacheKey {
     pub target: String,
     /// Optimization level ("debug", "release").
     pub opt_level: String,
+    /// Free-form build-flags string folded into the key. Carries the
+    /// backend/opt overrides, the project `runtime/*.c` fingerprint, AND
+    /// the TOOLCHAIN-IDENTITY fingerprint (the running compiler binary's
+    /// mtime/size — see `compile.rs::toolchain_fingerprint`). Including it
+    /// here is load-bearing for Q24: `compiler_version` is derived only
+    /// from `CARGO_PKG_VERSION`, so rebuilding the toolchain FROM SOURCE
+    /// (same version — the `ruxen upgrade --from-source` dev loop) or
+    /// changing an embedded-stdlib `.rx`/`.c` leaves `compiler_version`
+    /// unchanged. Without the fingerprint, the old per-object key still
+    /// matches and a stale object — with the OLD compiler's move/borrow
+    /// behaviour — is replayed (`E1001`/`E1009` with bogus spans). The
+    /// fingerprint forces a miss so the new toolchain re-emits diagnostics.
+    pub flags: String,
 }
 
 impl CacheKey {
@@ -72,12 +85,14 @@ impl CacheKey {
         compiler_version: u64,
         target: impl Into<String>,
         opt_level: impl Into<String>,
+        flags: impl Into<String>,
     ) -> Self {
         Self {
             source_hash,
             compiler_version,
             target: target.into(),
             opt_level: opt_level.into(),
+            flags: flags.into(),
         }
     }
 
@@ -90,6 +105,8 @@ impl CacheKey {
         hasher.update(self.target.as_bytes());
         hasher.update([0u8]); // separator between variable-length fields
         hasher.update(self.opt_level.as_bytes());
+        hasher.update([0u8]); // separator
+        hasher.update(self.flags.as_bytes());
         let digest = hasher.finalize();
         let mut out = [0u8; 32];
         out.copy_from_slice(&digest);
@@ -132,45 +149,45 @@ mod tests {
     #[test]
     fn cache_key_hermetic() {
         let src_hash = hash_file("fn main() {}");
-        let k1 = CacheKey::new(src_hash, 1, "x86_64-linux", "debug");
-        let k2 = CacheKey::new(src_hash, 1, "x86_64-linux", "debug");
+        let k1 = CacheKey::new(src_hash, 1, "x86_64-linux", "debug", "flags");
+        let k2 = CacheKey::new(src_hash, 1, "x86_64-linux", "debug", "flags");
         assert_eq!(k1.to_hex(), k2.to_hex());
     }
 
     #[test]
     fn cache_key_differs_on_source_change() {
-        let a = CacheKey::new(hash_file("a"), 1, "t", "debug");
-        let b = CacheKey::new(hash_file("b"), 1, "t", "debug");
+        let a = CacheKey::new(hash_file("a"), 1, "t", "debug", "flags");
+        let b = CacheKey::new(hash_file("b"), 1, "t", "debug", "flags");
         assert_ne!(a.to_hex(), b.to_hex());
     }
 
     #[test]
     fn cache_key_differs_on_compiler_version() {
         let src = hash_file("x");
-        let a = CacheKey::new(src, 1, "t", "debug");
-        let b = CacheKey::new(src, 2, "t", "debug");
+        let a = CacheKey::new(src, 1, "t", "debug", "flags");
+        let b = CacheKey::new(src, 2, "t", "debug", "flags");
         assert_ne!(a.to_hex(), b.to_hex());
     }
 
     #[test]
     fn cache_key_differs_on_target() {
         let src = hash_file("x");
-        let a = CacheKey::new(src, 1, "x86_64-linux", "debug");
-        let b = CacheKey::new(src, 1, "aarch64-linux", "debug");
+        let a = CacheKey::new(src, 1, "x86_64-linux", "debug", "flags");
+        let b = CacheKey::new(src, 1, "aarch64-linux", "debug", "flags");
         assert_ne!(a.to_hex(), b.to_hex());
     }
 
     #[test]
     fn cache_key_differs_on_opt_level() {
         let src = hash_file("x");
-        let a = CacheKey::new(src, 1, "t", "debug");
-        let b = CacheKey::new(src, 1, "t", "release");
+        let a = CacheKey::new(src, 1, "t", "debug", "flags");
+        let b = CacheKey::new(src, 1, "t", "release", "flags");
         assert_ne!(a.to_hex(), b.to_hex());
     }
 
     #[test]
     fn cache_key_roundtrips_through_postcard() {
-        let key = CacheKey::new(hash_file("roundtrip"), 42, "x86_64-linux", "debug");
+        let key = CacheKey::new(hash_file("roundtrip"), 42, "x86_64-linux", "debug", "flags");
         let bytes = postcard::to_allocvec(&key).unwrap();
         let recovered: CacheKey = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(key, recovered);
@@ -178,12 +195,29 @@ mod tests {
 
     #[test]
     fn cache_key_hex_is_64_chars() {
-        let k = CacheKey::new(hash_file("x"), 1, "t", "debug");
+        let k = CacheKey::new(hash_file("x"), 1, "t", "debug", "flags");
         assert_eq!(k.to_hex().len(), 64);
     }
 
     #[test]
     fn compiler_version_is_stable_within_process() {
         assert_eq!(compiler_version(), compiler_version());
+    }
+
+    /// Q24: the per-object key must differ when only the flags string differs
+    /// (it carries the toolchain-identity fingerprint). Without this, a
+    /// toolchain rebuilt at the same `CARGO_PKG_VERSION` would keep the same
+    /// key and replay a stale object — surfacing false move/borrow
+    /// diagnostics from the OLD compiler.
+    #[test]
+    fn cache_key_differs_on_flags() {
+        let src = hash_file("x");
+        let a = CacheKey::new(src, 1, "t", "debug", "toolchain=aaaa");
+        let b = CacheKey::new(src, 1, "t", "debug", "toolchain=bbbb");
+        assert_ne!(
+            a.to_hex(),
+            b.to_hex(),
+            "a changed toolchain/flags fingerprint must invalidate the per-object key"
+        );
     }
 }

@@ -736,7 +736,7 @@ trailing `do…end` block at module top level).
 > formatter corpus round-trip (1), formatter unit (72), parser unit (79),
 > error-code registry (3), implicit-codes (3), all green.
 
-## Q24 · S4 — stale incremental cache replays false move/borrow diagnostics  ⏳ OPEN
+## Q24 · S4 — stale incremental cache replays false move/borrow diagnostics  ✅ FIXED
 
 Surfaced 2026-06-08 (canvas), and the same mechanism amplified the Q18 stale-
 toolchain confusion. `ruxen build`/`ruxen test` can replay **poisoned** move/borrow
@@ -747,6 +747,28 @@ Workaround: `rm -rf target/ruxen/incremental target/ruxen/test-build` clears it.
 Fix: key the incremental/diagnostic cache on the actual source+toolchain identity
 so a stale entry can't be replayed; never surface a cached diagnostic whose source
 span no longer matches.
+
+> **FIXED (2026-06-08).** Root cause: the cache key's toolchain component
+> (`compiler_version()`) is derived ONLY from `CARGO_PKG_VERSION` + a schema
+> tag, so it is INVARIANT across a `ruxen upgrade --from-source` rebuild at the
+> same version (the exact Q18 dev loop) and across embedded-stdlib `.rx`/`.c`
+> changes (those are baked into the binary, not bumped in the version string).
+> With an unchanged key, the per-object cache HIT replayed a stale object built
+> by the OLD compiler — whose move/borrow behaviour (and therefore its
+> diagnostics) differed — instead of recompiling. `ruxen check` was correct
+> because it never consults the object cache. Diagnostics are not persisted
+> separately: they are recomputed on every cache MISS, so the fix is to force a
+> miss when the toolchain changes. `compile.rs` now folds a `toolchain`
+> fingerprint (the running compiler binary's path + size + mtime) into the cache
+> `flags`, and `CacheKey` gained a `flags` component so the PER-OBJECT key — not
+> just the manifest header — reflects it (the per-object key previously ignored
+> backend / opt-override / runtime_c / toolchain entirely). A rebuilt toolchain
+> now invalidates both gates → recompile → fresh diagnostics with current spans.
+> `compiler_version()` stays hermetic (the ambient `current_exe` read lives in
+> `compile.rs`, where ambient reads — the project `runtime/*.c` fingerprint —
+> already happen). Pin: `cache_key_differs_on_flags` (`src/ruxenc/src/cache/
+> hash.rs`). Regression-checked: ruxenc cache unit (60) + `cache_integration`
+> (6), all green.
 
 ## Q25 · S1 — `Hash.key?`/`Hash.get` on an EMPTY hash SEGFAULTs; `&Hash`/`&Set` params unsound  ✅ FIXED
 

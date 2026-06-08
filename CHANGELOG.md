@@ -8,6 +8,20 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- (Q24) The incremental build cache (`ruxen build`/`test`) is now keyed on the
+  actual TOOLCHAIN IDENTITY, not just `CARGO_PKG_VERSION`, so a stale object can
+  no longer be replayed after the compiler changes — which had surfaced false
+  `E1001`/`E1009` move/borrow diagnostics with bogus spans (and masked correct
+  ones), most visibly after a `ruxen upgrade --from-source` rebuild at the same
+  version, or after an embedded-stdlib `.rx`/`.c` change. `compiler_version()`
+  is derived only from the crate version + schema tag, so neither of those
+  bumps it; the cache key (and the manifest's flags) now also fold a
+  `toolchain` fingerprint (the running compiler binary's path + size + mtime),
+  forcing a recompile that re-runs the new compiler's borrow/move analysis and
+  re-emits fresh diagnostics. `CacheKey` gained a `flags` component (it already
+  carried the backend / opt-override / project `runtime/*.c` fingerprint via the
+  manifest header, but the per-object key ignored it). `src/ruxenc/src/cache/
+  hash.rs`, `src/ruxenc/src/compile.rs`. Pin: `cache_key_differs_on_flags`.
 - (Q23a) `ruxen fmt` no longer STRIPS `##` doc comments from methods nested
   inside a class/struct/enum/impl/mixin body. `format_program` emitted leading
   comments only for TOP-LEVEL items; nested methods were formatted by direct

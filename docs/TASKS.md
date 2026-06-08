@@ -17,7 +17,7 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-21 of 26 fixed (Q23–Q26 surfaced 2026-06-08 building the GUI stack). Outstanding:
+22 of 26 fixed (Q23–Q26 surfaced 2026-06-08 building the GUI stack). Outstanding:
 
 - [ ] **Q16 · S4 — dependency symbols invisible to library/`check`/`test` builds.**
       `ruxen test` and `ruxen check` can't see dependency symbols; only binary
@@ -45,10 +45,13 @@ where each kind of work lives and what is open *right now*. Keep it current
       with the new E0728 (`ruxen test` wraps in `def main` and is unaffected).
       Pin: `compiler/ruxen_core/tests/q23_fmt_nondestructive.rs`; doc
       `docs/errors/E0728.md`.
-- [ ] **Q24 · S4 — stale incremental cache replays false move/borrow diagnostics**
-      with bogus line numbers across dirs (`ruxen build`/`test`; `check` is correct).
-      Workaround `rm -rf target/ruxen/{incremental,test-build}`. This amplified the
-      Q18 stale-toolchain confusion. Both detailed in `dev/gui-stack-v1-issues.md`.
+- [x] **Q24 · S4 — stale incremental cache replays false move/borrow diagnostics**
+      ✅ FIXED 2026-06-08. The cache key's toolchain component was just
+      `CARGO_PKG_VERSION`, invariant across a `--from-source` rebuild, so stale
+      objects (with the old compiler's borrow behaviour) were replayed. `compile.rs`
+      now folds a `toolchain` fingerprint (exe path + size + mtime) into the cache
+      flags, and `CacheKey` gained a `flags` component so the per-object key
+      reflects it. Pin: `cache_key_differs_on_flags`.
 - [x] **Q25 · S1 — `Hash.key?`/`get` on an EMPTY hash SEGFAULTS**; `&Hash`/`&Set`
       params unsound. ✅ FIXED 2026-06-08. (a) The `string_keys` tristate (-1 unset)
       was C-truthy, so empty-table lookups `strcmp`'d an int key as a `char*` —

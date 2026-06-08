@@ -120,11 +120,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
         h.finish()
     };
     let flags = format!(
-        "backend={} opt={} release={} runtime_c={:x}",
+        "backend={} opt={} release={} runtime_c={:x} toolchain={:x}",
         backend_override.as_deref().unwrap_or("default"),
         opt_level_override.as_deref().unwrap_or("default"),
         release_mode,
-        runtime_c_fingerprint
+        runtime_c_fingerprint,
+        toolchain_fingerprint()
     );
     let build_opts = BuildOptions {
         force,
@@ -594,4 +595,41 @@ pub(crate) fn project_target_ruxen() -> PathBuf {
         }
     }
     PathBuf::from("./target/ruxen")
+}
+
+/// Fingerprint of the running compiler binary, folded into the cache flags
+/// so the incremental cache is keyed on the ACTUAL toolchain identity, not
+/// just `CARGO_PKG_VERSION` (Q24).
+///
+/// `compiler_version()` is derived from the crate version + a schema tag, so
+/// it does NOT change when the toolchain is rebuilt from source at the same
+/// version (the `ruxen upgrade --from-source` dev loop) or when an embedded-
+/// stdlib `.rx`/`.c` body changes (those are baked into the binary). The
+/// binary's path + size + mtime DO change across any rebuild, so hashing them
+/// invalidates the cache and forces a recompile — which re-runs the new
+/// compiler's borrow/move analysis and re-emits fresh diagnostics, instead of
+/// replaying a stale object whose `E1001`/`E1009` spans no longer match the
+/// current source. Falls back to a constant when the exe path / metadata is
+/// unavailable (worst case: behaves like today, no regression).
+fn toolchain_fingerprint() -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::time::UNIX_EPOCH;
+
+    let mut h = DefaultHasher::new();
+    // Build-time version constant first, so a normal version bump still
+    // participates even if the exe metadata read fails.
+    env!("CARGO_PKG_VERSION").hash(&mut h);
+    if let Ok(exe) = env::current_exe() {
+        exe.hash(&mut h);
+        if let Ok(meta) = fs::metadata(&exe) {
+            meta.len().hash(&mut h);
+            if let Ok(modified) = meta.modified() {
+                if let Ok(dur) = modified.duration_since(UNIX_EPOCH) {
+                    dur.as_nanos().hash(&mut h);
+                }
+            }
+        }
+    }
+    h.finish()
 }
