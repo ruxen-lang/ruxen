@@ -8,6 +8,21 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- (Q26) A capturing closure nested inside another closure's body now keeps
+  its captures, including when stored through a `b.(&var *self)` reborrow.
+  The nested closure's free-variable analysis (`mir/lower/captures.rs`) only
+  consulted the enclosing frame's `def_to_local`, so a variable captured by
+  the OUTER block (which lives in `capture_map`, not a local) was never
+  re-captured: the nested closure got a NULL captures pointer and read the
+  value as slot garbage (`box.call0` printed 1 instead of 43; SIGSEGV for a
+  captured class handle). Closure lowering now treats `def_to_local ∪
+  capture_map` as the visible set and fills a re-capture slot by reading the
+  value out of the enclosing captures pointer (through the cell when the
+  enclosing capture is `ByRef`). The rare doubly-nested *mutate-an-outer-
+  by-value-capture* shape is rejected with a clear lowering error rather than
+  miscompiled. Unblocks reactive `dyn_text`/`button` children inside quiver
+  `Row`/`Col` containers. Pins: `tests/release-e2e/cases/615_*`, `616_*` +
+  `compiler/ruxen_core/tests/q26_nested_closure_capture.rs`.
 - A same-name method overloaded on `&str` vs `any Fn[...]` now dispatches
   to the overload whose parameter type matches the call-site argument,
   independent of declaration order. The MIR symbol selector

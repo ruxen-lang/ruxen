@@ -165,6 +165,22 @@ enum CaptureKind {
     ByRef,
 }
 
+/// Where a closure capture's value is read FROM, in the enclosing
+/// lowering frame, when the captures struct is filled. Mirrors the two
+/// resolution paths `lower_var_ref` uses for a `VarRef`.
+#[derive(Debug, Clone, Copy)]
+enum CaptureSource {
+    /// An outer-frame local (`def_to_local`). The value (or, post
+    /// cell-promotion, the cell pointer) lives directly in this LocalId.
+    Local(LocalId),
+    /// A capture of the ENCLOSING closure (`capture_map`): this closure
+    /// literal is nested inside another closure's body and re-captures one
+    /// of the outer block's captures. The value is read out of the
+    /// enclosing captures pointer at `slot_index` (through the cell when
+    /// the enclosing capture is `ByRef`). (Q26.)
+    Recapture(CaptureSlot),
+}
+
 /// Per-active-loop book-keeping: targets for `continue`/`break`, the
 /// optional result local that `break <value>` writes into, and the set
 /// of heap-owned locals declared inside the loop body that must be

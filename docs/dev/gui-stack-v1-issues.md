@@ -744,7 +744,7 @@ backing table in `key?`/`get` (return false/None, never deref a null bucket
 array), and either reject `&Hash`/`&Set` params on methods too (consistent with
 the free-fn `E1118`) or give the mixins runtime dispatch.
 
-## Q26 · S1 — a capturing closure STORED under a `&var *self` reborrow loses its captures  ⏳ OPEN — blocks reactive nested widgets
+## Q26 · S1 — a capturing closure STORED under a `&var *self` reborrow loses its captures  ✅ FIXED
 
 Surfaced 2026-06-08 (quiver `Row`/`Col` containers). A builder method runs a
 user block by reborrowing its own receiver (`build.(&var *self)`); a closure
@@ -781,6 +781,31 @@ segfaults on invocation. `tests/nesting.rx` keeps the reactive-child assertion
 as `xit` pending. This gates the widget library's whole point (reactive nested
 widgets), so it ranks with Q16/Q17 on the GUI critical path. `App.build` is
 unaffected (it passes `&var local.field`, not a self-reborrow).
+
+> **FIXED (2026-06-08, mir/lower closure path).** Root cause was NOT the
+> reborrow — it reproduces with ANY closure nested inside another closure's
+> body that re-captures an outer capture (the `&var *self` shape was just how
+> quiver hit it). The nested closure's free-variable analysis
+> (`mir/lower/captures.rs::collect_captures`) only consulted the enclosing
+> frame's `def_to_local`; a variable captured by the OUTER block lives in
+> `capture_map`, not a local, so it was never identified as capturable. The
+> nested closure got a NULL captures pointer and read the value as slot
+> garbage (0 → `box.call0` == 1; class handle → deref of garbage → SIGSEGV).
+> Fix: closure lowering now treats `def_to_local ∪ capture_map` as the visible
+> set, and fills a re-capture slot by reading the value out of the **enclosing
+> captures pointer** at the outer slot index (through the cell when the
+> enclosing capture is `ByRef`) instead of `def_to_local[def].unwrap()`. The
+> Q22 drop-taint story is unaffected: the original owning local is already
+> tainted out of the drop set by the OUTER closure's capture `SetField`; the
+> nested closure only copies a pointer value forward. The rare doubly-nested
+> *mutate-an-outer-by-value-capture* shape (would require retroactively
+> cell-promoting an enclosing by-value capture) is **rejected with a clear
+> lowering error**, not miscompiled. Pins:
+> `tests/release-e2e/cases/615_nested_closure_capture_reborrow.rx`
+> (asserts `call0 == 43`), `616_nested_closure_capture_class_handle.rx`
+> (class handle, asserts no segfault), and the cargo pin
+> `compiler/ruxen_core/tests/q26_nested_closure_capture.rs`. Regression-checked
+> against `closures_dyn_dispatch` (5) + `drop_fixtures` (18), all green.
 
 ---
 

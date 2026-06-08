@@ -17,7 +17,7 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-18 of 26 fixed (Q23–Q26 surfaced 2026-06-08 building the GUI stack). Outstanding:
+19 of 26 fixed (Q23–Q26 surfaced 2026-06-08 building the GUI stack). Outstanding:
 
 - [ ] **Q16 · S4 — dependency symbols invisible to library/`check`/`test` builds.**
       `ruxen test` and `ruxen check` can't see dependency symbols; only binary
@@ -48,10 +48,14 @@ where each kind of work lives and what is open *right now*. Keep it current
       params unsound (free fn → E1118, method → silent miscompile/segfault). quiver
       guards every lookup behind `size > 0` and inlines accessors. Bounds-check the
       empty backing table.
-- [ ] **Q26 · S1 — capturing closure stored under a `&var *self` reborrow loses its
-      captures** (wrong Int / segfault for a class handle). **Blocks reactive
-      `dyn_text`/`button` children inside quiver `Row`/`Col` containers** — see the
-      GUI critical path below; ranks with Q16/Q17.
+- [x] **Q26 · S1 — capturing closure stored under a `&var *self` reborrow loses its
+      captures** ✅ FIXED 2026-06-08. Root cause: a closure nested inside another
+      closure's body never re-captured a variable the OUTER block captured
+      (`capture_map` was excluded from the visible-defs set). Closure lowering now
+      treats `def_to_local ∪ capture_map` as visible and fills re-capture slots from
+      the enclosing captures pointer. Unblocks reactive `dyn_text`/`button` children
+      in quiver containers. Pins: `tests/release-e2e/cases/615_*`, `616_*` +
+      `compiler/ruxen_core/tests/q26_nested_closure_capture.rs`.
 
 ## Open now — pre-flight P0s (`requirements/ROADMAP.md`)
 
@@ -94,10 +98,10 @@ but its next cycles are gated here. Prioritized by blast radius:
 - [ ] **Q16 — dependency symbols in library/`check`/`test` builds.**
       **Unblocks:** quiver/rondo unit-testing their own public API instead of
       through a sibling binary.
-- [ ] **Q26 — closure capture lost under `&var *self` reborrow.** **Unblocks:**
-      reactive `dyn_text`/`button` children inside quiver `Row`/`Col` containers
-      (the widget library's core; today only static `text` children work in
-      containers). New 2026-06-08, S1.
+- [x] **Q26 — closure capture lost under `&var *self` reborrow.** ✅ FIXED
+      2026-06-08. **Unblocks:** reactive `dyn_text`/`button` children inside quiver
+      `Row`/`Col` containers (the widget library's core; previously only static
+      `text` children worked in containers). S1.
 - [ ] **Enum float payloads + FFI `&String` pointer bugs.** canvas works around
       both (pointer coords forced to `Int`; `measure_text` forwards a char count
       not the string). File/repro as `Q##` if not yet tracked, then canvas

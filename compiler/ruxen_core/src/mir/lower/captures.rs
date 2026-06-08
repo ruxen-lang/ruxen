@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn collect_captures(
     expr: &HirExpr,
     closure_params: &HashSet<DefId>,
-    outer_defs: &HashMap<DefId, LocalId>,
+    outer_defs: &HashSet<DefId>,
     out: &mut Vec<DefId>,
     seen: &mut HashSet<DefId>,
 ) {
@@ -21,7 +21,7 @@ pub(super) fn collect_captures(
 pub(super) fn collect_captures_inner(
     expr: &HirExpr,
     closure_params: &HashSet<DefId>,
-    outer_defs: &HashMap<DefId, LocalId>,
+    outer_defs: &HashSet<DefId>,
     locally_bound: &mut HashSet<DefId>,
     out: &mut Vec<DefId>,
     seen: &mut HashSet<DefId>,
@@ -30,7 +30,7 @@ pub(super) fn collect_captures_inner(
         HirExprKind::VarRef(def_id) => {
             if !closure_params.contains(def_id)
                 && !locally_bound.contains(def_id)
-                && outer_defs.contains_key(def_id)
+                && outer_defs.contains(def_id)
                 && !seen.contains(def_id)
             {
                 out.push(*def_id);
@@ -240,7 +240,7 @@ pub(super) fn collect_captures_inner(
 pub(super) fn collect_captures_in_stmt(
     stmt: &HirStatement,
     closure_params: &HashSet<DefId>,
-    outer_defs: &HashMap<DefId, LocalId>,
+    outer_defs: &HashSet<DefId>,
     locally_bound: &mut HashSet<DefId>,
     out: &mut Vec<DefId>,
     seen: &mut HashSet<DefId>,
