@@ -687,6 +687,39 @@ i.e. captured handles **leak** rather than dangle. No quiver code change is requ
 for safety; the open item is that escaped-into-closure handles are not yet
 deterministically freed (intentional leak), pending the owning-capture design.
 
+## Q23 · S4 — `ruxen fmt` strips `##` doc comments and cannot parse test files  ⏳ OPEN
+
+Surfaced 2026-06-08 building canvas `draw_path`. Two distinct `ruxen fmt` faults,
+both currently making the formatter **unsafe to run** — which matters because the
+project convention (and the app `.claude` Stop hooks) tell contributors to run it:
+
+1. **Doc-comment destruction.** A repo-wide `ruxen fmt` strips every `##` doc
+   comment and collapses methods to brace form. In canvas it wiped all 86 `##`
+   doc comments from `src/canvas.rx`. Round-trip is lossy.
+2. **Can't parse `Tester.describe` blocks.** `ruxen fmt` fails on any file whose
+   top level is a `Tester.describe(...) do ... end` block — i.e. every
+   `tests/*.rx`. Minimal repro: a file containing only
+   `Tester.describe("d") do |t: &var Tester| ... end` → `ruxen fmt` errors
+   `expected top-level declaration, found TypeIdentifier("Tester") (at 1:1)`,
+   while `ruxen check`/`ruxen test` accept the same file.
+
+Severity S4 (toolchain/DX), but high-friction: until fixed, format `.rx` by hand.
+The formatter's parser must round-trip `##` doc comments and accept the same
+top-level forms the main parser does (notably a method/`describe` call with a
+trailing `do…end` block at module top level).
+
+## Q24 · S4 — stale incremental cache replays false move/borrow diagnostics  ⏳ OPEN
+
+Surfaced 2026-06-08 (canvas), and the same mechanism amplified the Q18 stale-
+toolchain confusion. `ruxen build`/`ruxen test` can replay **poisoned** move/borrow
+errors (`E1001`/`E1009`) with bogus line numbers from a *prior* compile, even
+across unrelated directories — i.e. a cached diagnostic from one build surfaces in
+another. `ruxen check` is always correct (it doesn't hit the stale cache path).
+Workaround: `rm -rf target/ruxen/incremental target/ruxen/test-build` clears it.
+Fix: key the incremental/diagnostic cache on the actual source+toolchain identity
+so a stale entry can't be replayed; never surface a cached diagnostic whose source
+span no longer matches.
+
 ---
 
 ## Existing partial work on this machine (`~/Documents/ruxen-lang/`)
