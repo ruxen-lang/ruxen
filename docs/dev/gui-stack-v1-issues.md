@@ -896,6 +896,37 @@ unaffected (it passes `&var local.field`, not a self-reborrow).
 
 ---
 
+## Q27 · S4 — `any` is a reserved word, but as a local-variable name it gives a cryptic parse error
+
+Surfaced 2026-06-08 building canvas `draw_paragraph` pixel-readback tests. A
+local named `any` (`var any = false`) fails to parse with errors that name an
+internal token, not the real cause:
+
+```
+error: expected pattern, found AnyBound (at <line>)
+error: expected expression, found AnyBound (at <line>)
+```
+
+`any` is evidently a reserved keyword (the existential/`AnyBound` type form), so
+it cannot be used as an identifier. That's a legitimate reservation, but two
+things make it a DX trap:
+
+1. The diagnostic surfaces the internal token name `AnyBound` and a downstream
+   "expected pattern/expression" cascade, with no hint that the offending token
+   is the identifier `any` or that it is reserved. A user reads it as a parser
+   bug, not "rename your variable."
+2. `any` is an extremely common loop-flag name (`var any = false; … any = true`),
+   so it gets hit early and often in exactly the kind of pixel-scan loops GUI
+   tests are full of.
+
+Severity S4 (DX). Fix options: (a) emit a targeted diagnostic when a reserved
+word like `any` appears in identifier position ("`any` is a reserved keyword;
+choose another name"), and/or (b) list the reserved words in the tutorial.
+Workaround: rename (`inked`, `found`, …) — canvas `tests/canvas_paragraph.rx`
+uses `inked`.
+
+---
+
 ## Existing partial work on this machine (`~/Documents/ruxen-lang/`)
 
 Stopped mid-flight (resource limits) — useful starting points, all LOCAL:
