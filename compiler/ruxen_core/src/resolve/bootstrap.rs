@@ -601,7 +601,13 @@ fn item_load_priority(item: &ast::TopLevelItem) -> u8 {
         ast::TopLevelItem::Function(_)
         | ast::TopLevelItem::Lib(_)
         | ast::TopLevelItem::Extern(_)
-        | ast::TopLevelItem::Const(_) => 3,
+        | ast::TopLevelItem::Const(_)
+        // A top-level expression statement (Q23b) loads last, like a
+        // function body — it consumes already-registered names. It is only
+        // ever present in non-bootstrap user files compiled directly, where
+        // resolve rejects it (E0608); ordering it here just keeps the sort
+        // total.
+        | ast::TopLevelItem::Expr(_) => 3,
     }
 }
 

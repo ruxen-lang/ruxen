@@ -81,6 +81,38 @@ impl Parser {
                 }
             }
             _ => {
+                // A top-level EXPRESSION STATEMENT — e.g. a call with a
+                // trailing `do…end` at module scope (`Tester.describe("…")
+                // do … end`, the shape of every `tests/*.rx`). The compile
+                // path never reaches here for those files (`ruxen test`
+                // hoists items + wraps statements in a synthesised `def
+                // main` first); resolve rejects a `TopLevelItem::Expr` with
+                // E0608 if a raw file is compiled directly. Accepting it
+                // here lets the SHARED parser (and therefore `ruxen fmt`)
+                // round-trip test files instead of erroring at 1:1. (Q23b.)
+                if self.starts_top_level_expr_stmt() {
+                    let before_pos = self.pos;
+                    let before_diags = self.diagnostics.len();
+                    let expr = self.parse_expression();
+                    let consumed = self.pos > before_pos;
+                    let clean = self.diagnostics.len() == before_diags;
+                    let at_boundary = matches!(
+                        self.current_kind(),
+                        TokenKind::Newline | TokenKind::Eof | TokenKind::End
+                    );
+                    // Accept only a fully-clean expression that lands on a
+                    // statement boundary. Anything else falls through to the
+                    // standard error path so a real top-level-declaration typo
+                    // still gets the clear "expected top-level declaration"
+                    // diagnostic instead of being silently swallowed.
+                    if consumed && clean && at_boundary {
+                        return Some(TopLevelItem::Expr(expr));
+                    }
+                    // Reset cursor + drop any diagnostics the speculative
+                    // parse recorded, then fall through.
+                    self.pos = before_pos;
+                    self.diagnostics.truncate(before_diags);
+                }
                 self.error(&format!(
                     "expected top-level declaration, found {:?}",
                     self.current_kind()
@@ -88,6 +120,18 @@ impl Parser {
                 None
             }
         }
+    }
+
+    /// Heuristic: does the cursor begin a plausible top-level expression
+    /// statement (an identifier / type-identifier / `self` that starts a
+    /// call or method-call chain)? Deliberately narrow — we only want to
+    /// accept the `Recv.method(args) do…end` test-file shape, not arbitrary
+    /// expressions that would mask real top-level-declaration typos.
+    fn starts_top_level_expr_stmt(&self) -> bool {
+        matches!(
+            self.current_kind(),
+            TokenKind::Identifier(_) | TokenKind::TypeIdentifier(_) | TokenKind::SelfValue
+        )
     }
 
     pub(super) fn parse_visibility(&mut self) -> Visibility {

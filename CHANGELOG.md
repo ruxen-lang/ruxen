@@ -8,6 +8,24 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- (Q23a) `ruxen fmt` no longer STRIPS `##` doc comments from methods nested
+  inside a class/struct/enum/impl/mixin body. `format_program` emitted leading
+  comments only for TOP-LEVEL items; nested methods were formatted by direct
+  `format_func_def` calls that bypassed that path, silently dropping every
+  doc comment (e.g. all 86 `##` docs on `canvas/src/canvas.rx`). A new
+  `format_func_with_leading_comments` emits them at each nested method site,
+  mirroring the existing class-body `lib "..."` FFI-def doc handling. Idempotent.
+  `compiler/ruxen_core/src/formatter/format_items.rs`.
+- (Q23b) `ruxen fmt` no longer errors at `1:1` on a top-level
+  `Tester.describe(...) do … end` file (every `tests/*.rx`). The SHARED parser
+  (`parse_top_level_item`) now accepts a clean top-level expression statement as
+  a `TopLevelItem::Expr`, so the formatter round-trips test files instead of
+  refusing them. The DIRECT compile path still rejects a top-level statement
+  with the new E0728 ("wrap it in `def main`"); `ruxen test` is unaffected (it
+  hoists items + wraps statements in a synthesised `def main` before compiling).
+  New error doc `docs/errors/E0728.md`. Pins:
+  `compiler/ruxen_core/tests/q23_fmt_nondestructive.rs` (5 cases incl. an
+  idempotence check and a "top-level garbage still errors" negative).
 - (Q25a) `Hash.key?`/`Hash.get` and `Set.include?` on an EMPTY hash/set no
   longer SIGSEGV. The runtime keeps a tristate `string_keys` flag (-1 unset /
   0 int keys / 1 string keys) resolved on the first insert; the hash/equality

@@ -274,6 +274,10 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0727",
         title: "type name collides with a built-in / stdlib type; rename it",
     },
+    CodeInfo {
+        code: "E0728",
+        title: "top-level expression statement is not executable; wrap it in `def main`",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`

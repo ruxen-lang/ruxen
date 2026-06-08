@@ -41,6 +41,17 @@ pub enum TopLevelItem {
     Const(ConstDef),
     Lib(LibDecl),
     Extern(ExternBlock),
+    /// A top-level expression statement — e.g. a call with a trailing
+    /// `do…end` block at module scope (`Tester.describe("…") do … end`).
+    /// The compiler's normal pipeline does NOT execute top-level
+    /// statements directly: `ruxen test` HOISTS top-level items and wraps
+    /// the remaining statements in a synthesised `def main` before
+    /// compiling, so this variant only ever survives to `resolve` when a
+    /// raw file is compiled directly — where it is rejected with a clear
+    /// E0728. Its purpose is to let the SHARED parser (compiler + LSP +
+    /// `ruxen fmt`) ACCEPT the test-file surface so the formatter can
+    /// round-trip it instead of erroring at 1:1 (Q23b).
+    Expr(Expr),
 }
 
 // ─── Type Expressions ────────────────────────────────────────────────

@@ -82,9 +82,11 @@ fn run_case(name: &str, basename: &str) {
     let root = workspace_root();
     let src = std::fs::read_to_string(root.join("tests/release-e2e/cases").join(name))
         .unwrap_or_else(|e| panic!("read {name}: {e}"));
-    let expected =
-        std::fs::read_to_string(root.join("tests/release-e2e/expected").join(name.replace(".rx", ".out")))
-            .unwrap_or_else(|e| panic!("read expected {name}: {e}"));
+    let expected = std::fs::read_to_string(
+        root.join("tests/release-e2e/expected")
+            .join(name.replace(".rx", ".out")),
+    )
+    .unwrap_or_else(|e| panic!("read expected {name}: {e}"));
     let (stdout, ok) = compile_and_run(&src, basename);
     assert!(ok, "{name}: non-zero/segfault exit");
     assert_eq!(stdout, expected, "{name}: stdout was {stdout:?}");
@@ -113,11 +115,10 @@ fn hash_ref_param_consistent_and_sound() {
 /// dispatch) is STILL rejected with E1118 — both as a free fn …
 #[test]
 fn bare_hash_mixin_ref_rejected_free_fn() {
-    let errs = error_messages(
-        "def f(h: &Hash) -> Int\n  0\nend\ndef main\n  puts \"x\"\nend\n",
-    );
+    let errs = error_messages("def f(h: &Hash) -> Int\n  0\nend\ndef main\n  puts \"x\"\nend\n");
     assert!(
-        errs.iter().any(|m| m.contains("E1118") || m.contains("does not use runtime dispatch")),
+        errs.iter()
+            .any(|m| m.contains("E1118") || m.contains("does not use runtime dispatch")),
         "expected E1118 for bare `&Hash`; got {errs:?}"
     );
 }

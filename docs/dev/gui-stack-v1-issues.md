@@ -687,7 +687,7 @@ i.e. captured handles **leak** rather than dangle. No quiver code change is requ
 for safety; the open item is that escaped-into-closure handles are not yet
 deterministically freed (intentional leak), pending the owning-capture design.
 
-## Q23 · S4 — `ruxen fmt` strips `##` doc comments and cannot parse test files  ⏳ OPEN
+## Q23 · S4 — `ruxen fmt` strips `##` doc comments and cannot parse test files  ✅ FIXED
 
 Surfaced 2026-06-08 building canvas `draw_path`. Two distinct `ruxen fmt` faults,
 both currently making the formatter **unsafe to run** — which matters because the
@@ -707,6 +707,34 @@ Severity S4 (toolchain/DX), but high-friction: until fixed, format `.rx` by hand
 The formatter's parser must round-trip `##` doc comments and accept the same
 top-level forms the main parser does (notably a method/`describe` call with a
 trailing `do…end` block at module top level).
+
+> **FIXED (2026-06-08).**
+> **(a) Doc-comment stripping** — `compiler/ruxen_core/src/formatter/format_items.rs`.
+> The strip was NOT top-level docs (those round-tripped) — it was docs on a
+> method NESTED inside a class/struct/enum/impl/mixin body. `format_program`
+> emits leading comments only for top-level items; nested methods are formatted
+> by direct `format_func_def` calls that bypass that path. New
+> `format_func_with_leading_comments` emits the leading `##` (and plain)
+> comments at every nested method site (class/struct/enum/impl/mixin-default),
+> mirroring the existing class-body `lib "..."` FFI-def doc handling. Idempotent.
+> **(b) Top-level `Tester.describe`** — the main parser ALSO rejected it (not
+> just the formatter): `parse_top_level_item` had no top-level-expression-
+> statement arm. `ruxen test` only works because it HOISTS top-level items and
+> wraps the remaining statements in a synthesised `def main` before compiling
+> (`src/ruxenc/src/test_runner.rs::split_test_body`). Fix: the SHARED parser now
+> accepts a CLEAN top-level expression statement (identifier/type-ident/`self`
+> head, parses without error, lands on a newline/EOF/`end` boundary) as a new
+> `TopLevelItem::Expr`. The formatter formats it like an in-body statement expr,
+> so test files round-trip. The DIRECT compile path rejects it at resolve with
+> the new **E0728** ("wrap it in `def main`") — so direct-compile semantics stay
+> well-defined and unchanged; `ruxen test` never reaches resolve with an
+> unwrapped file. A genuine top-level typo (`foo bar baz`) still errors (the
+> accept guard requires a clean boundary-landing parse). Match-site ripple
+> (~8 exhaustive arms) handled; new error doc `docs/errors/E0728.md`. Pins:
+> `compiler/ruxen_core/tests/q23_fmt_nondestructive.rs` (5 cases incl.
+> idempotence + the garbage-still-errors negative). Regression-checked:
+> formatter corpus round-trip (1), formatter unit (72), parser unit (79),
+> error-code registry (3), implicit-codes (3), all green.
 
 ## Q24 · S4 — stale incremental cache replays false move/borrow diagnostics  ⏳ OPEN
 

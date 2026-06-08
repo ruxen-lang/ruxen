@@ -17,7 +17,7 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-20 of 26 fixed (Q23–Q26 surfaced 2026-06-08 building the GUI stack). Outstanding:
+21 of 26 fixed (Q23–Q26 surfaced 2026-06-08 building the GUI stack). Outstanding:
 
 - [ ] **Q16 · S4 — dependency symbols invisible to library/`check`/`test` builds.**
       `ruxen test` and `ruxen check` can't see dependency symbols; only binary
@@ -37,9 +37,14 @@ where each kind of work lives and what is open *right now*. Keep it current
       exit). Does NOT gate the next Drop increment. Open item is the owning-capture /
       keep-alive design (Q4 prerequisite) so escaped handles are freed deterministically
       instead of leaked. Verdict + mechanism in `dev/gui-stack-v1-issues.md` §Q22.
-- [ ] **Q23 · S4 — `ruxen fmt` is destructive** (strips `##` doc comments; can't
-      parse `Tester.describe` test files). High-friction: the project convention +
-      the app Stop hooks tell contributors to run it. Format by hand until fixed.
+- [x] **Q23 · S4 — `ruxen fmt` is destructive** ✅ FIXED 2026-06-08. (a) Nested
+      class/struct/enum/impl/mixin method `##` docs are now emitted
+      (`format_func_with_leading_comments`). (b) The shared parser accepts a clean
+      top-level expression statement (`TopLevelItem::Expr`) so `ruxen fmt`
+      round-trips `Tester.describe` test files; the direct compile path rejects it
+      with the new E0728 (`ruxen test` wraps in `def main` and is unaffected).
+      Pin: `compiler/ruxen_core/tests/q23_fmt_nondestructive.rs`; doc
+      `docs/errors/E0728.md`.
 - [ ] **Q24 · S4 — stale incremental cache replays false move/borrow diagnostics**
       with bogus line numbers across dirs (`ruxen build`/`test`; `check` is correct).
       Workaround `rm -rf target/ruxen/{incremental,test-build}`. This amplified the

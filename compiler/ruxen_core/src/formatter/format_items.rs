@@ -125,6 +125,7 @@ fn item_span(item: &TopLevelItem) -> &crate::lexer::token::Span {
         TopLevelItem::Const(c) => &c.span,
         TopLevelItem::Lib(l) => &l.span,
         TopLevelItem::Extern(e) => &e.span,
+        TopLevelItem::Expr(e) => &e.span,
     }
 }
 
@@ -145,6 +146,10 @@ fn format_top_level_item(item: &TopLevelItem, comments: &CommentMap) -> Doc {
         TopLevelItem::Const(c) => format_const(c, comments),
         TopLevelItem::Lib(l) => format_lib(l, comments),
         TopLevelItem::Extern(e) => format_extern(e, comments),
+        // A top-level expression statement (Q23b — test-file
+        // `Tester.describe(...) do … end`). Format it exactly like an
+        // in-body statement expression so the test file round-trips.
+        TopLevelItem::Expr(e) => format_expr(e, comments),
     }
 }
 
@@ -177,6 +182,23 @@ fn is_simple_expr(kind: &ExprKind) -> bool {
 }
 
 // ─── Functions ──────────────────────────────────────────────────────
+
+/// Format a method/function WITH any `##` doc comments (and plain leading
+/// comments) attached above it. Top-level items get their leading comments
+/// emitted by `format_program`; methods NESTED inside a class/struct/enum/
+/// impl/mixin body are formatted by direct `format_func_def` calls that
+/// bypass that path, so without this their leading docs were silently
+/// dropped (Q23a — `ruxen fmt` wiped every `##` doc on a class method).
+/// Mirrors the class-body `lib "..."` FFI-def doc handling in `format_lib`.
+pub fn format_func_with_leading_comments(func: &FuncDef, comments: &CommentMap) -> Doc {
+    let mut parts: Vec<Doc> = Vec::new();
+    for comment in comments.leading_comments(func.span.start) {
+        parts.push(format_comment(comment));
+        parts.push(hardline());
+    }
+    parts.push(format_func_def(func, comments));
+    concat(parts)
+}
 
 pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
     let mut sig_parts = Vec::new();
@@ -337,7 +359,7 @@ fn format_class(class: &ClassDef, comments: &CommentMap) -> Doc {
 
     // Methods — separated by blank lines
     for method in &class.methods {
-        body_parts.push(format_func_def(method, comments));
+        body_parts.push(format_func_with_leading_comments(method, comments));
     }
 
     // Inner impls
@@ -444,7 +466,7 @@ fn format_struct(s: &StructDef, comments: &CommentMap) -> Doc {
     }
 
     for method in &s.methods {
-        body_parts.push(format_func_def(method, comments));
+        body_parts.push(format_func_with_leading_comments(method, comments));
     }
 
     for imp in &s.inner_impls {
@@ -495,7 +517,7 @@ fn format_enum(e: &EnumDef, comments: &CommentMap) -> Doc {
     }
 
     for method in &e.methods {
-        body_parts.push(format_func_def(method, comments));
+        body_parts.push(format_func_with_leading_comments(method, comments));
     }
 
     for imp in &e.inner_impls {
@@ -625,7 +647,7 @@ fn format_trait_item(item: &MixinItem, comments: &CommentMap) -> Doc {
     match item {
         MixinItem::AssocType { name, .. } => text(format!("type {}", name)),
         MixinItem::MethodSig(sig) => format_method_sig(sig, comments),
-        MixinItem::DefaultMethod(func) => format_func_def(func, comments),
+        MixinItem::DefaultMethod(func) => format_func_with_leading_comments(func, comments),
     }
 }
 
@@ -730,7 +752,7 @@ fn format_impl_item(item: &ImplItem, comments: &CommentMap) -> Doc {
             text(" = "),
             format_type_expr(type_expr, comments),
         ]),
-        ImplItem::Method(func) => format_func_def(func, comments),
+        ImplItem::Method(func) => format_func_with_leading_comments(func, comments),
         ImplItem::Include {
             is_unsafe,
             negative_trait,

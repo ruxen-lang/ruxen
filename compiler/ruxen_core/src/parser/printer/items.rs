@@ -32,6 +32,12 @@ impl PrettyPrinter {
                     e.functions.len()
                 ));
             }
+            TopLevelItem::Expr(e) => {
+                self.line(&format!(
+                    "top-level expr stmt: {}",
+                    super::format::format_expr_short(e)
+                ));
+            }
         }
     }
 
