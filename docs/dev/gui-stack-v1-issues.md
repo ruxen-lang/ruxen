@@ -648,6 +648,45 @@ needs a language-level answer before Drop ships. This is the
 "signals + ownership ergonomics" risk DESIGN.md predicted; it is now
 concrete.
 
+### ✅ VERDICT (2026-06-08, post P0.2 audit): SOUND today — bounded leak, NOT a UAF. S4 (was framed as latent S1).
+
+Drop elaboration now runs (P0.2 resolved — see `docs/decisions/drop-elaboration.md`).
+I traced the exact interaction. A captured class local is **NOT freed** at the
+capturing frame's scope exit, so the stored closure's copied pointer does **not**
+dangle. Mechanism, end to end:
+
+- Closure lowering writes every capture (ByValue **and** ByRef, `move` and
+  non-`move`) with a single `MirInst::SetField { base: cap, value: Use(outer_local) }`
+  — `compiler/ruxen_core/src/mir/lower/expr/closure.rs:136-150`. There is no other
+  path into the captures block.
+- The drop-elaboration ownership analysis `compute_dealloc_safe_locals`
+  (`mir/lower/drops.rs:728-734`) treats `SetField { value: Use(l) }` as an ownership
+  transfer into the aggregate: it inserts `l` into `tainted_perm` and removes it from
+  `alloc_rooted`. `tainted_perm` is **append-only** (every reference is `.insert`;
+  there is no `.remove` anywhere in the file), so the taint is permanent.
+- A tainted local is excluded from `drop_locals`, so `insert_drops` emits neither
+  `ruxen_dealloc` nor a `{Class}_drop` for it. The capture outlives the frame.
+
+This reconciles with quiver's green suite (42/42, exercises capture + the counter
+handler): nothing crashes because the captured handle is never freed. The cost is a
+**leak** — the captured value lives until process exit, exactly as in pre-Drop v1.
+So the "deterministic teardown / no-GC" win does **not** yet extend to values that
+escape into stored closures; they are kept alive by omission, not by ownership.
+
+**Not the next Drop increment.** Because it is sound (no double-free / UAF), it does
+not gate the conditional-move drop-flags work. The real fix is the **owning-capture /
+keep-alive** story (Q4 prerequisite): give stored closures explicit ownership (move
+capture that actually transfers + frees on closure drop, or a shared/Rc handle) so
+captured values are freed deterministically instead of leaked. That is a
+language-design increment, tracked separately, not a soundness hotfix.
+
+**What quiver should change in its landmine note (a separate agent owns quiver/):**
+flip the "sound today *because drops don't run yet*" framing — it is now sound
+*because the capture's `SetField` permanently taints the local out of the drop set*,
+i.e. captured handles **leak** rather than dangle. No quiver code change is required
+for safety; the open item is that escaped-into-closure handles are not yet
+deterministically freed (intentional leak), pending the owning-capture design.
+
 ---
 
 ## Existing partial work on this machine (`~/Documents/ruxen-lang/`)
