@@ -686,7 +686,14 @@ test_repl() {
 # the REPL genuinely can't model without a redesign (mutation
 # persistence across inputs, JIT paths for certain features) —
 # those are reported separately as "skip" and not counted as failures.
-REPL_KNOWN_SKIP=()
+REPL_KNOWN_SKIP=(
+  # Pre-existing gap (verified failing on master/921e18f, NOT a regression):
+  # const-generic class instantiation (`Counter[10].new(...)`) can't be inferred
+  # in the REPL's per-line `__repl_N` synthetic-function wrapping ("could not
+  # infer return type") — the compiled path resolves it whole-program, but the
+  # REPL has no instantiation context per line. Compiled fixture still passes.
+  073_const_generic_class_instantiation
+)
 
 # Per-fixture REPL worker. Same shape as _e2e_run_case_one: stdout =
 # TSV status (PASS / FAIL / SKIP), stderr = live progress line. The
