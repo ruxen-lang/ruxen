@@ -128,17 +128,28 @@ fn main() {
             no_run,
             include_pending,
             format,
-        } => ruxenc::test_runner::run(ruxenc::test_runner::TestOptions {
-            filter,
-            release,
-            test_threads,
-            fail_fast,
-            nocapture,
-            list,
-            no_run,
-            include_pending,
-            format,
-        }),
+        } => {
+            // Q16: resolve the project's dependency source dirs here (the
+            // resolver + manifest live in `ruxen_cli`; the test runner lives
+            // in `ruxenc`, which only dev-depends on `ruxen_cli`, so it
+            // cannot resolve them itself). Flat-merged into each synthesised
+            // test wrapper so a `tests/**.rx` file can use dependency symbols.
+            let dep_source_dirs = build::find_project_root()
+                .and_then(|root| build::resolve_dep_source_dirs(&root))
+                .unwrap_or_default();
+            ruxenc::test_runner::run(ruxenc::test_runner::TestOptions {
+                filter,
+                release,
+                test_threads,
+                fail_fast,
+                nocapture,
+                list,
+                no_run,
+                include_pending,
+                format,
+                dep_source_dirs,
+            })
+        }
 
         // ── Editor / interactive subcommands ────────────────────────
         // Both crates expose a `run() -> Result<(), String>` library

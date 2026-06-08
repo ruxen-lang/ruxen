@@ -497,20 +497,35 @@ Known resolver gap (same note in build.rs: nested classes don't propagate
 field DefIds into method-body scope). Fixing this would also unlock module
 namespacing as a Q14 workaround.
 
-## Q16 · S4 — library builds, `ruxen check`, and `ruxen test` can't see dependency symbols  ⏳ PLANNED (dedicated)
+## Q16 · S4 — library builds, `ruxen check`, and `ruxen test` can't see dependency symbols  ✅ FIXED
 
-> **STATUS** (stdlib-rust-cleanup): not yet fixed — needs a build-driver change
-> validated against multi-package fixtures (not single-file e2e cases), so it's
-> scoped to a dedicated pass rather than rushed here.
-> **Plan:** in `src/ruxen_cli/src/build.rs`, extract the dep-source flat-merge
-> (currently inline in `compile_project`, lines ~578-587) into a
-> `gather_dep_sources(&[PathBuf]) -> String` helper; thread the resolved dep
-> source dirs into `compile_piece` (the library-build path) and into `check`
-> (which today gathers only its own sources); and give the test runner a
-> path-dep source gatherer. **Acceptance:** lib A exporting `struct Color`; lib
-> B with `A = { path = "../A" }` using `Color` in `src/lib.rx` — `ruxen build`,
-> `ruxen check`, `ruxen test` all pass in B (add a `tests/dep_visibility.rs`
-> modeled on `package_manager.rs`).
+> **FIXED** (feat/drop-elaboration, 2026-06-08): the dep-source flat-merge that
+> only the BINARY path performed (`compile_project`) is now a shared helper
+> `build::gather_dep_sources(&[PathBuf]) -> String`, reused by all four build
+> kinds:
+> - **library** (`compile_piece`) — flat-merges the project's full dependency
+>   closure ahead of its own source; a dependency's own (transitive) deps are
+>   flat-merged when building that dependency's rlib
+>   (`transitive_dep_source_dirs`).
+> - **`check`** — resolves deps via the new shared `build::resolve_dep_source_dirs`
+>   and prepends their sources before type-checking.
+> - **`ruxen test`** — `ruxen_cli`'s `main.rs` resolves the dep dirs (the
+>   resolver lives there; `ruxenc` only dev-depends on `ruxen_cli`) and threads
+>   them into `TestOptions::dep_source_dirs`; the runner flat-merges them ahead
+>   of the project's own lib source in each synthesised wrapper.
+>
+> **Soundness:** dependency symbols enter by SOURCE flat-merge (one object, one
+> definition per symbol), never by extern-rlib link, so there is no
+> duplicate-symbol / double-link risk and binary builds are byte-for-byte
+> unchanged (skip-extern-link when deps are merged is preserved). Design:
+> `docs/decisions/q16-dep-symbols-in-lib-check-test-builds.md`. Pins:
+> `src/ruxen_cli/tests/dep_visibility.rs` (two-package fixture: `dep-color`
+> exposing `struct Color`; `consumer` library `use`-ing it in `src/lib.rx` and
+> `tests/color_test.rx` — `build`/`check`/`test` all green) and
+> `test_runner::tests::synthesise_merges_dependency_source_before_project_and_main`.
+> Not covered (sound boundary): namespacing (`use <pkg>.X` is still flat — Q14);
+> a missing transitive symbol surfaces as a normal typeck error, never a
+> miscompile.
 
 
 Only **binary** builds flat-merge dependency sources

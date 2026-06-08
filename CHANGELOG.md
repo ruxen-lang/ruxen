@@ -8,6 +8,27 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- (Q16) Dependency package symbols are now visible to LIBRARY builds,
+  `ruxen check`, and `ruxen test` — not just binary builds. Previously only
+  the binary path (`compile_project`) flat-merged a dependency's `src/**.rx`
+  into the consuming compilation unit; library builds (`compile_piece`),
+  `check`, and the test runner saw none of a path-dependency's symbols, so a
+  library could not `use` a dependency type in `src/lib.rx` or in a
+  `tests/**.rx` file (the reason quiver/rondo had to test their public API
+  through sibling binary crates). The dep-source flat-merge is now a shared
+  helper (`build::gather_dep_sources`) reused by all four build kinds, with a
+  shared `build::resolve_dep_source_dirs` for `check`/`test`. Soundness:
+  dependency symbols still enter by SOURCE flat-merge (one object, one
+  definition of every symbol), never by extern-rlib link — so there is no
+  duplicate-symbol/double-link risk, and binary builds are byte-for-byte
+  unchanged. The test runner resolves deps in `ruxen_cli` (where the resolver
+  lives) and threads the dirs into `TestOptions::dep_source_dirs`, since
+  `ruxenc` only dev-depends on `ruxen_cli`. Design:
+  `docs/decisions/q16-dep-symbols-in-lib-check-test-builds.md`. Pins:
+  `src/ruxen_cli/tests/dep_visibility.rs` (two-package fixture — a `dep-color`
+  library exposing `struct Color`, a `consumer` library that `use`s it in
+  `src/lib.rx` and in `tests/color_test.rx`; `build`/`check`/`test` all green)
+  and `test_runner::tests::synthesise_merges_dependency_source_before_project_and_main`.
 - (Q24) The incremental build cache (`ruxen build`/`test`) is now keyed on the
   actual TOOLCHAIN IDENTITY, not just `CARGO_PKG_VERSION`, so a stale object can
   no longer be replayed after the compiler changes — which had surfaced false

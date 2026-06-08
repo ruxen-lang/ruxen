@@ -118,6 +118,10 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
         for dep in &resolve_result.deps {
             println!("  Compiling piece `{}` v{}", dep.name, dep.version);
             let rlib_path = target_dir.join("deps").join(format!("{}.rlib", dep.name));
+            // A dependency may itself depend on earlier-built packages —
+            // flat-merge ITS transitive deps so its `src/**.rx` can
+            // reference them (Q16).
+            let dep_deps = transitive_dep_source_dirs(dep, &resolve_result.deps);
             compile_piece(
                 &dep.source_dir,
                 &dep.name,
@@ -125,6 +129,7 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
                 &rlib_path,
                 release,
                 &extern_libs,
+                &dep_deps,
             )?;
             extern_libs.push((dep.name.clone(), rlib_path));
         }
@@ -134,8 +139,15 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
     println!("  Compiling piece `{}` v{}", package.name, package.version);
 
     if manifest.build_type() == "library" {
-        // Library: produce an .rlib
+        // Library: produce an .rlib. Flat-merge the full dependency
+        // closure ahead of the library's own source so `src/**.rx` can
+        // reference dependency symbols (Q16) — the same mechanism the
+        // binary path uses, never an extern-rlib link.
         let rlib_path = target_dir.join(format!("{}.rlib", package.name));
+        let dep_source_dirs: Vec<PathBuf> = resolved
+            .as_ref()
+            .map(|r| r.deps.iter().map(|d| d.source_dir.clone()).collect())
+            .unwrap_or_default();
         compile_piece(
             &project_dir,
             &package.name,
@@ -143,6 +155,7 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
             &rlib_path,
             release,
             &extern_libs,
+            &dep_source_dirs,
         )?;
     } else {
         // Binary: produce an executable
@@ -216,9 +229,13 @@ pub fn check() -> Result<(), String> {
         return Err(format!("entry point not found: {}", entry.display()));
     }
 
-    // Discover and gather all module sources
+    // Discover and gather all module sources. Flat-merge the project's
+    // dependency sources ahead of its own (Q16) so `ruxen check` sees
+    // dependency symbols — the same visibility a binary build gets.
     let tree = ModuleTree::discover(&project_dir)?;
-    let combined = gather_sources(&project_dir, &tree, &package.name)?;
+    let dep_source_dirs = resolve_dep_source_dirs(&project_dir)?;
+    let mut combined = gather_dep_sources(&dep_source_dirs)?;
+    combined.push_str(&gather_sources(&project_dir, &tree, &package.name)?);
 
     if let Err(e) = check_single_file(&combined, &entry) {
         eprintln!("{}", e);
@@ -520,7 +537,117 @@ fn extract_dep_object_code(name: &str, rlib_path: &Path) -> Result<Vec<u8>, Stri
     })
 }
 
+/// Flat-merge every dependency package's `src/**.rx` into a single source
+/// string, in the order given (callers pass topologically-sorted dep dirs).
+///
+/// This is the ONE mechanism by which a dependency's symbols enter a
+/// consuming compilation unit in v1: the dep's source is prepended ahead
+/// of the user source so the resolver sees its declarations during
+/// typecheck. v1 symbols are flat (no `use <pkg>.X` namespacing). The
+/// proper module-wrap (`module <pkg> ... end`) was attempted but exposes a
+/// deeper resolver gap: classes nested inside a `module` block don't
+/// propagate their field DefIds into method-body scope, so any dep with
+/// `self.<field>` access in its methods fails to typecheck. Until that's
+/// fixed, `use rondo.Foo` desugars to top-level `Foo`. Pin:
+/// `docs/rondo_v1_blockers.md` B12.
+///
+/// Because the dep is compiled INTO the consuming unit (one object, one
+/// definition of every symbol), there is no extern-rlib link and therefore
+/// no duplicate-symbol/double-link risk — see
+/// `docs/decisions/q16-dep-symbols-in-lib-check-test-builds.md`.
+pub fn gather_dep_sources(dep_source_dirs: &[PathBuf]) -> Result<String, String> {
+    let mut combined = String::new();
+    for dep_dir in dep_source_dirs {
+        let dep_tree = ModuleTree::discover(dep_dir)?;
+        let dep_name = dep_dir
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("dep");
+        let dep_source = gather_sources(dep_dir, &dep_tree, dep_name)?;
+        combined.push_str(&dep_source);
+        combined.push('\n');
+    }
+    Ok(combined)
+}
+
+/// Resolve a project's dependency source directories (topologically
+/// sorted, leaves first), so library / `check` / `test` builds can
+/// flat-merge them exactly as the binary path does.
+///
+/// Returns an empty vec when the project declares no `[dependencies]`.
+/// This is the workspace-aware resolution path shared with `build()`;
+/// it does NOT write the lock file or verify checksums (those side
+/// effects belong to a real build, not a `check`/`test` visibility pass).
+pub fn resolve_dep_source_dirs(project_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let manifest = Manifest::load(project_dir)?;
+    if manifest.dependencies.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let existing_lock = LockFile::load(project_dir).ok();
+
+    let mut workspace_members: std::collections::BTreeMap<String, PathBuf> = Default::default();
+    if let Some(ws_root) = crate::manifest::find_workspace_root(project_dir) {
+        let ws_manifest = Manifest::load(&ws_root)?;
+        if let Some(ws) = ws_manifest.workspace.as_ref() {
+            for (member_dir, member_name) in
+                crate::manifest::expand_workspace_members(&ws_root, &ws.members)?
+            {
+                if member_dir != project_dir {
+                    workspace_members.insert(member_name, member_dir);
+                }
+            }
+        }
+    }
+
+    let result = resolve_deps::resolve_with_workspace(
+        project_dir,
+        &manifest,
+        existing_lock.as_ref(),
+        &workspace_members,
+    )?;
+
+    Ok(result.deps.iter().map(|d| d.source_dir.clone()).collect())
+}
+
+/// Given the full topologically-sorted dep list and a target dep, return
+/// the source dirs of every package the target (transitively) depends on,
+/// preserving topo order. Used to flat-merge a dependency's OWN deps when
+/// building that dependency's rlib.
+fn transitive_dep_source_dirs(
+    target: &resolve_deps::ResolvedDep,
+    all_deps: &[resolve_deps::ResolvedDep],
+) -> Vec<PathBuf> {
+    use std::collections::BTreeMap;
+    let by_name: BTreeMap<&str, &resolve_deps::ResolvedDep> =
+        all_deps.iter().map(|d| (d.name.as_str(), d)).collect();
+
+    // Collect the transitive closure of names.
+    let mut needed: std::collections::BTreeSet<String> = Default::default();
+    let mut stack: Vec<String> = target.dependencies.clone();
+    while let Some(n) = stack.pop() {
+        if needed.insert(n.clone()) {
+            if let Some(d) = by_name.get(n.as_str()) {
+                stack.extend(d.dependencies.clone());
+            }
+        }
+    }
+
+    // Emit in the canonical topo order of `all_deps`.
+    all_deps
+        .iter()
+        .filter(|d| needed.contains(&d.name))
+        .map(|d| d.source_dir.clone())
+        .collect()
+}
+
 /// Compile a dependency piece into an .rlib file.
+///
+/// `dep_source_dirs` carries the (topologically-sorted) source dirs of
+/// every package this piece depends on, flat-merged ahead of its own
+/// source so its `src/**.rx` can reference dependency symbols (Q16). For
+/// a leaf dependency this is empty; for the consuming library it is the
+/// project's full dependency closure.
 fn compile_piece(
     source_dir: &Path,
     name: &str,
@@ -528,11 +655,15 @@ fn compile_piece(
     rlib_path: &Path,
     release: bool,
     _extern_libs: &[(String, PathBuf)],
+    dep_source_dirs: &[PathBuf],
 ) -> Result<(), String> {
     let tree = ModuleTree::discover(source_dir)?;
 
-    // Gather all source files: entry point first, then modules
-    let combined = gather_sources(source_dir, &tree, name)?;
+    // Gather all source files: dep sources first (Q16), then entry point
+    // + modules. Flat-merge (not extern-rlib link) keeps a single object
+    // per rlib — no duplicate symbols.
+    let mut combined = gather_dep_sources(dep_source_dirs)?;
+    combined.push_str(&gather_sources(source_dir, &tree, name)?);
 
     let entry_file = source_dir.join("src/lib.rx");
     let (object_bytes, mut metadata) = compile_single_file(&combined, &entry_file, release)?;
@@ -566,25 +697,8 @@ fn compile_project(
     let user_source = gather_sources(project_dir, &tree, &package_name)?;
 
     // Flat-merge dep sources ahead of user source so the resolver
-    // sees their declarations during typecheck. v1: symbols are flat
-    // (no `use <pkg>.X` namespacing). The proper module-wrap
-    // (`module <pkg> ... end`) was attempted but exposes a deeper
-    // resolver gap: classes nested inside a `module` block don't
-    // propagate their field DefIds into method-body scope, so any
-    // dep with `self.<field>` access in its methods fails to
-    // typecheck. Until that's fixed, `use rondo.Foo` desugars to
-    // top-level `Foo`. Pin: `docs/rondo_v1_blockers.md` B12.
-    let mut combined = String::new();
-    for dep_dir in dep_source_dirs {
-        let dep_tree = ModuleTree::discover(dep_dir)?;
-        let dep_name = dep_dir
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("dep");
-        let dep_source = gather_sources(dep_dir, &dep_tree, dep_name)?;
-        combined.push_str(&dep_source);
-        combined.push('\n');
-    }
+    // sees their declarations during typecheck (see `gather_dep_sources`).
+    let mut combined = gather_dep_sources(dep_source_dirs)?;
     combined.push_str(&user_source);
     let source = combined;
 

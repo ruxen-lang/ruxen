@@ -17,12 +17,15 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-22 of 26 fixed (Q23–Q26 surfaced 2026-06-08 building the GUI stack). Outstanding:
+23 of 27 fixed (Q23–Q26 surfaced 2026-06-08 building the GUI stack; Q16 fixed
+2026-06-08 on feat/drop-elaboration). Outstanding:
 
-- [ ] **Q16 · S4 — dependency symbols invisible to library/`check`/`test` builds.**
-      `ruxen test` and `ruxen check` can't see dependency symbols; only binary
-      builds merge dependency sources. This is why `rondo`/`quiver` can't unit-test
-      against their own public API and rely on sibling binary crates. **Dedicated effort.**
+- [x] **Q16 · S4 — dependency symbols invisible to library/`check`/`test` builds
+      (FIXED).** Library (`compile_piece`), `check`, and `ruxen test` now
+      flat-merge dependency `src/**.rx` via the shared `build::gather_dep_sources`
+      + `build::resolve_dep_source_dirs`, the same mechanism binary builds use.
+      `rondo`/`quiver` can now unit-test against their own public API directly.
+      Pin: `src/ruxen_cli/tests/dep_visibility.rs`.
 - [ ] **Q17 · S4 — cross-package generic monomorphization fails for consumer types.**
       A dependency's generic can't be monomorphized for a type defined in the
       consuming package (forces quiver's single-implementor `PaintSurface` shape).
@@ -108,7 +111,15 @@ but its next cycles are gated here. Prioritized by blast radius:
 - [ ] **Q17 — cross-package generic monomorphization.** Forces quiver's
       single-`PaintSurface` shape. **Unblocks:** multiple paint backends + clean
       L1/L2 generic seams.
-- [ ] **Q16 — dependency symbols in library/`check`/`test` builds.**
+- [x] **Q16 — dependency symbols in library/`check`/`test` builds (FIXED,
+      feat/drop-elaboration).** Dep `src/**.rx` is now flat-merged into library
+      (`compile_piece`), `check`, and `ruxen test` builds via the shared
+      `build::gather_dep_sources` + `build::resolve_dep_source_dirs` — not just
+      binary builds. Symbols enter by source flat-merge (one object, no
+      extern-rlib link), so binary builds are unchanged and there is no
+      duplicate-symbol risk. Pins: `src/ruxen_cli/tests/dep_visibility.rs`,
+      `test_runner` synth-order unit test. ADR:
+      `docs/decisions/q16-dep-symbols-in-lib-check-test-builds.md`.
       **Unblocks:** quiver/rondo unit-testing their own public API instead of
       through a sibling binary.
 - [x] **Q26 — closure capture lost under `&var *self` reborrow.** ✅ FIXED

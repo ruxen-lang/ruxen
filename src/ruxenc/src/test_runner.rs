@@ -29,6 +29,14 @@ pub struct TestOptions {
     pub no_run: bool,
     pub include_pending: bool,
     pub format: String,
+    /// Q16: source dirs of the project's path dependencies (topologically
+    /// sorted), resolved by the caller
+    /// (`ruxen_cli::build::resolve_dep_source_dirs`). Flat-merged ahead of
+    /// the project's own library source into each synthesised test wrapper
+    /// so a `tests/**.rx` file can reference dependency symbols. Empty when
+    /// the project has no dependencies, or when `ruxenc` drives the test
+    /// runner directly (single-file mode, no manifest resolution).
+    pub dep_source_dirs: Vec<PathBuf>,
 }
 
 /// Per-file execution result. Aggregated across files into the summary
@@ -80,7 +88,14 @@ pub fn run(opts: TestOptions) -> Result<(), String> {
     let mut built: Vec<(PathBuf, String, PathBuf)> = Vec::new(); // (user_file, test_path, bin_path)
     for f in &files {
         let tp = test_path_for(&project_dir, f);
-        match build_one(&project_dir, &tp, f, &out_dir, opts.release) {
+        match build_one(
+            &project_dir,
+            &tp,
+            f,
+            &out_dir,
+            opts.release,
+            &opts.dep_source_dirs,
+        ) {
             Ok(bin_path) => built.push((f.clone(), tp, bin_path)),
             Err(e) => {
                 // Surface build errors as failed-file results so the
@@ -290,7 +305,15 @@ fn test_path_for(project_dir: &Path, file: &Path) -> String {
 /// binary project would inject its own `def main`, clashing with the
 /// synthesised one, so we skip it and return `None`.
 fn gather_project_lib_sources(project_dir: &Path) -> Result<Option<String>, String> {
-    let lib = project_dir.join("src").join("lib.rx");
+    gather_package_lib_src(project_dir)
+}
+
+/// Gather one package's library source (`src/lib.rx` entry first, then the
+/// rest of `src/**.rx` sorted by path). Returns `None` for a package with
+/// no `src/lib.rx` (a binary package — merging it would inject a clashing
+/// `def main`). Shared by the project gatherer and the Q16 dep gatherer.
+fn gather_package_lib_src(package_dir: &Path) -> Result<Option<String>, String> {
+    let lib = package_dir.join("src").join("lib.rx");
     if !lib.is_file() {
         return Ok(None);
     }
@@ -299,7 +322,7 @@ fn gather_project_lib_sources(project_dir: &Path) -> Result<Option<String>, Stri
     combined.push('\n');
 
     let mut others = Vec::new();
-    collect_rx(&project_dir.join("src"), &lib, &mut others);
+    collect_rx(&package_dir.join("src"), &lib, &mut others);
     others.sort();
     for f in &others {
         let src = fs::read_to_string(f).map_err(|e| format!("read {}: {}", f.display(), e))?;
@@ -307,6 +330,22 @@ fn gather_project_lib_sources(project_dir: &Path) -> Result<Option<String>, Stri
         combined.push('\n');
     }
     Ok(Some(combined))
+}
+
+/// Q16: flat-merge every dependency package's library source ahead of the
+/// project's own source, so a `tests/**.rx` file can reference dependency
+/// symbols — the same flat-merge a binary/library build performs. `dep_dirs`
+/// is the caller-resolved, topologically-sorted dependency source-dir list
+/// (empty when there are no deps or when `ruxenc` runs single-file).
+fn gather_dep_lib_sources(dep_dirs: &[PathBuf]) -> Result<String, String> {
+    let mut combined = String::new();
+    for dir in dep_dirs {
+        if let Some(src) = gather_package_lib_src(dir)? {
+            combined.push_str(&src);
+            combined.push('\n');
+        }
+    }
+    Ok(combined)
 }
 
 /// Q18: split a test file into (top-level items to hoist ABOVE the
@@ -448,11 +487,16 @@ fn synthesise_wrapper(
     test_path: &str,
     user_file: &Path,
     out_dir: &Path,
+    dep_dirs: &[PathBuf],
 ) -> Result<PathBuf, String> {
     let body = fs::read_to_string(user_file)
         .map_err(|e| format!("read {}: {}", user_file.display(), e))?;
 
+    // Q16: dependency sources first, then the project's own library source,
+    // then (below) the test body. Same flat-merge order as a binary build.
+    let dep_src = gather_dep_lib_sources(dep_dirs)?;
     let project_src = gather_project_lib_sources(project_dir)?.unwrap_or_default();
+    let project_src = format!("{dep_src}{project_src}");
 
     // Q18: a test file mixes TOP-LEVEL items (helper `def`s, `use`s, type
     // defs, `##` docs) with TEST STATEMENTS (`Tester.describe …`). Wrapping
@@ -494,8 +538,9 @@ fn build_one(
     user_file: &Path,
     out_dir: &Path,
     release: bool,
+    dep_dirs: &[PathBuf],
 ) -> Result<PathBuf, String> {
-    let synth = synthesise_wrapper(project_dir, test_path, user_file, out_dir)?;
+    let synth = synthesise_wrapper(project_dir, test_path, user_file, out_dir, dep_dirs)?;
     let profile = if release { "release" } else { "debug" };
     let bin_dir = project_dir.join("target").join(profile).join("test");
     fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
@@ -649,7 +694,8 @@ end
             "Tester.describe(\"X\") do |t: &var Tester|\n  t.it(\"y\") do\n    t.expect(1).to_eq(1)\n  end\nend",
         )
         .unwrap();
-        let synth_path = synthesise_wrapper(&tmp, "foo.bar", &user_file, &tmp.join("out")).unwrap();
+        let synth_path =
+            synthesise_wrapper(&tmp, "foo.bar", &user_file, &tmp.join("out"), &[]).unwrap();
         let synth = fs::read_to_string(&synth_path).unwrap();
         assert!(synth.contains("def main"), "synth: {synth}");
         assert!(synth.contains("Runner.new(\"foo.bar\")"), "synth: {synth}");
@@ -675,12 +721,64 @@ end
         )
         .unwrap();
         let synth_path =
-            synthesise_wrapper(&tmp, "widget_test", &user_file, &tmp.join("out")).unwrap();
+            synthesise_wrapper(&tmp, "widget_test", &user_file, &tmp.join("out"), &[]).unwrap();
         let synth = fs::read_to_string(&synth_path).unwrap();
         // Library class must appear at top level, BEFORE the synthesised main.
         let class_at = synth.find("class Widget").expect("class merged");
         let main_at = synth.find("def main").expect("has main");
         assert!(class_at < main_at, "class must precede def main: {synth}");
+    }
+
+    // Q16: dependency library sources are flat-merged into the synthesised
+    // test wrapper, ahead of the project's own source and before `def main`,
+    // so a test file can reference a dependency symbol.
+    #[test]
+    fn synthesise_merges_dependency_source_before_project_and_main() {
+        let tmp = std::env::temp_dir().join("test-runner-synth-dep");
+        let _ = fs::remove_dir_all(&tmp);
+        // Dependency package laid out like a real path dep.
+        let dep_dir = tmp.join("dep-color");
+        fs::create_dir_all(dep_dir.join("src")).unwrap();
+        fs::write(
+            dep_dir.join("src/lib.rx"),
+            "pub struct Color\n  r: Int\nend\n",
+        )
+        .unwrap();
+
+        // Consumer project with its own lib source.
+        let proj = tmp.join("consumer");
+        fs::create_dir_all(proj.join("src")).unwrap();
+        fs::write(
+            proj.join("src/lib.rx"),
+            "pub def brightest -> Int\n  Color.new(255).r\nend\n",
+        )
+        .unwrap();
+
+        let user_file = proj.join("color_test.rx");
+        fs::write(
+            &user_file,
+            "Tester.describe(\"c\") do |t: &var Tester|\n  t.it(\"y\") do\n    t.expect(Color.new(255).r).to_eq(255)\n  end\nend",
+        )
+        .unwrap();
+
+        let synth_path = synthesise_wrapper(
+            &proj,
+            "color_test",
+            &user_file,
+            &proj.join("out"),
+            &[dep_dir.clone()],
+        )
+        .unwrap();
+        let synth = fs::read_to_string(&synth_path).unwrap();
+
+        let dep_at = synth.find("struct Color").expect("dep struct merged");
+        let proj_at = synth.find("def brightest").expect("project src merged");
+        let main_at = synth.find("def main").expect("has main");
+        // Order: dependency source → project source → def main.
+        assert!(
+            dep_at < proj_at && proj_at < main_at,
+            "expected dep < project < main; got dep={dep_at} proj={proj_at} main={main_at}:\n{synth}"
+        );
     }
 
     #[test]
