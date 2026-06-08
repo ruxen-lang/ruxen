@@ -73,7 +73,16 @@ uint64_t ruxen_hash_str(const char *s) {
 
 static int ruxen_hash_keys_equal(const RuxenHash *h, int64_t a, int64_t b) {
     if (a == b) return 1;
-    if (h && h->string_keys) {
+    /* `string_keys` is a TRISTATE int8: -1 unset, 0 int keys, 1 string
+       keys. It is resolved only on the first insert. Test `> 0`, NOT
+       plain truthiness — the unset sentinel -1 is C-truthy, so a lookup
+       on an empty hash (key kind never resolved) would otherwise take the
+       string path and `strcmp((char*)key)` an integer key, dereferencing a
+       small bogus address (e.g. (char*)9). That was the empty-hash
+       `key?`/`get` SIGSEGV (Q25). Raw-bits is the safe default; a string-
+       keyed hash always has `string_keys == 1` before any lookup because
+       the first insert sets it. */
+    if (h && h->string_keys > 0) {
         const char *sa = (const char *)a;
         const char *sb = (const char *)b;
         if (!sa || !sb) return 0;
@@ -83,7 +92,10 @@ static int ruxen_hash_keys_equal(const RuxenHash *h, int64_t a, int64_t b) {
 }
 
 static uint64_t ruxen_hash_key_hash(const RuxenHash *h, int64_t key) {
-    if (h && h->string_keys) {
+    /* See ruxen_hash_keys_equal: `> 0`, not truthiness, so the -1 unset
+       sentinel hashes by raw bits instead of FNV-1a over `(char*)key`
+       (the empty-hash lookup SIGSEGV, Q25). */
+    if (h && h->string_keys > 0) {
         return ruxen_hash_str((const char *)key);
     }
     return ruxen_hash_bits(key);

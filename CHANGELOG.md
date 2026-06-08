@@ -8,6 +8,28 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- (Q25a) `Hash.key?`/`Hash.get` and `Set.include?` on an EMPTY hash/set no
+  longer SIGSEGV. The runtime keeps a tristate `string_keys` flag (-1 unset /
+  0 int keys / 1 string keys) resolved on the first insert; the hash/equality
+  predicates tested it with plain C truthiness, and the unset sentinel -1 is
+  truthy — so a lookup before any insert took the string path and `strcmp`'d an
+  integer key as a `char*`, dereferencing a small bogus address (e.g.
+  `(char*)9`). The predicates now test `string_keys > 0`, defaulting an
+  unresolved table to raw-bits hashing (a string-keyed table always has the
+  flag set to 1 by its first insert before any lookup). `library/std/hash/
+  runtime/hash.c`. Pins: `tests/release-e2e/cases/617_*` (hash), `618_*` (set).
+- (Q25b) A `&Hash[K, V]` / `&Set[T]` by-ref parameter now resolves
+  consistently in free-fn and method position. Previously a free fn rejected
+  `&Hash[Int, Int]` with a false-positive E1118 (the TEC-13 `Hash → Hashable`
+  alias made the bare name resolve to the static-dispatch `Hashable` mixin),
+  while a method accepted it — and the empty-hash segfault above made that path
+  look like a miscompile. `&Hash[K,V]` is a sound pointer-to-struct param,
+  exactly like the widely-used `&Array[Int]`, so a generic-args-bearing
+  collection builtin in `&Name[..]` position now falls through to ordinary
+  collection-ref resolution in both positions. The bare `&Hash` / `&Set` (no
+  args = the `Hashable` mixin) is still rejected at compile time.
+  `compiler/ruxen_core/src/resolve/types.rs`. Pins:
+  `tests/release-e2e/cases/619_*` + `compiler/ruxen_core/tests/q25_hash_set_soundness.rs`.
 - (Q26) A capturing closure nested inside another closure's body now keeps
   its captures, including when stored through a `b.(&var *self)` reborrow.
   The nested closure's free-variable analysis (`mir/lower/captures.rs`) only

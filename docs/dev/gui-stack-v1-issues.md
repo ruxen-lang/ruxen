@@ -720,7 +720,7 @@ Fix: key the incremental/diagnostic cache on the actual source+toolchain identit
 so a stale entry can't be replayed; never surface a cached diagnostic whose source
 span no longer matches.
 
-## Q25 · S1 — `Hash.key?`/`Hash.get` on an EMPTY hash SEGFAULTs; `&Hash`/`&Set` params unsound  ⏳ OPEN
+## Q25 · S1 — `Hash.key?`/`Hash.get` on an EMPTY hash SEGFAULTs; `&Hash`/`&Set` params unsound  ✅ FIXED
 
 Surfaced 2026-06-08 building quiver's arena nesting. Two faults:
 
@@ -743,6 +743,43 @@ every lookup behind `if h.size as Int > 0`. Real fixes: bounds-check the empty
 backing table in `key?`/`get` (return false/None, never deref a null bucket
 array), and either reject `&Hash`/`&Set` params on methods too (consistent with
 the free-fn `E1118`) or give the mixins runtime dispatch.
+
+> **FIXED (2026-06-08).**
+> **(a) Empty-hash/set segfault — `library/std/hash/runtime/hash.c`.** The
+> backing table was NEVER null (`ruxen_hash_new` allocates 16 buckets); the
+> real cause was the tristate `string_keys` flag (-1 unset / 0 int / 1 string),
+> resolved only on the first insert. `ruxen_hash_key_hash` and
+> `ruxen_hash_keys_equal` tested it with plain C truthiness — and -1 is truthy —
+> so a lookup on an empty table took the STRING path and `strcmp`'d the integer
+> key as a `char*`, dereferencing a small bogus address (`(char*)9`). Changed
+> both predicates to `string_keys > 0`: an unresolved table hashes by raw bits
+> (safe), and a string-keyed table always has the flag set to 1 by its first
+> insert before any lookup. Fix covers Set too (it reuses the same predicates
+> via `ruxen_hash_contains_key`).
+> **(b) `&Hash`/`&Set` param "unsoundness" was an INCONSISTENCY, not a
+> miscompile.** Once (a) was fixed, a `&Hash[K,V]` method param works correctly
+> — it is a pointer to the hash struct, exactly like the widely-used (and
+> sound) `&Array[Int]` params in `std/bufio`/`net`/`io`. The real defect was a
+> free-fn **false-positive E1118** on `&Hash[Int,Int]`: the TEC-13
+> `Hash → Hashable` alias makes the bare name resolve to the static-dispatch
+> `Hashable` mixin, and `try_resolve_dyn_mixin_ref` rejected it ignoring the
+> generic args (which mean the COLLECTION type). The method path happened to
+> resolve `Hash[Int,Int]` to the collection and compiled. **Chosen resolution
+> (sound + minimal): make `&Hash[K,V]`/`&Set[T]` consistent — both positions
+> accept it.** A generic-args-bearing collection builtin in `&Name[..]` position
+> now falls through to ordinary collection-ref resolution
+> (`resolve/types.rs::try_resolve_dyn_mixin_ref`). The bare `&Hash`/`&Set` (no
+> args = the `Hashable` mixin) is still rejected at compile time in both
+> positions (free fn → E1118; method → "could not infer type for parameter" —
+> a less precise but still load-bearing rejection; unifying the two messages is
+> a DX follow-up, NOT a soundness gap). Did **not** pursue "reject `&Hash` on
+> methods too" because that would also wrongly reject the sound `&Hash[K,V]`
+> collection param and break parity with `&Array`. Pins:
+> `tests/release-e2e/cases/617_empty_hash_lookup.rx`,
+> `618_empty_set_contains.rx`, `619_hash_ref_param.rx` +
+> `compiler/ruxen_core/tests/q25_hash_set_soundness.rs` (5 cases). Regression-
+> checked: `stdlib_map` (7), `stdlib_set` (5), `stdlib_map_negatives` (8),
+> `mixin_vtables` (17), `runtime_safety` (6), all green.
 
 ## Q26 · S1 — a capturing closure STORED under a `&var *self` reborrow loses its captures  ✅ FIXED
 

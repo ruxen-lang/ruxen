@@ -17,7 +17,7 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-19 of 26 fixed (Q23–Q26 surfaced 2026-06-08 building the GUI stack). Outstanding:
+20 of 26 fixed (Q23–Q26 surfaced 2026-06-08 building the GUI stack). Outstanding:
 
 - [ ] **Q16 · S4 — dependency symbols invisible to library/`check`/`test` builds.**
       `ruxen test` and `ruxen check` can't see dependency symbols; only binary
@@ -44,10 +44,15 @@ where each kind of work lives and what is open *right now*. Keep it current
       with bogus line numbers across dirs (`ruxen build`/`test`; `check` is correct).
       Workaround `rm -rf target/ruxen/{incremental,test-build}`. This amplified the
       Q18 stale-toolchain confusion. Both detailed in `dev/gui-stack-v1-issues.md`.
-- [ ] **Q25 · S1 — `Hash.key?`/`get` on an EMPTY hash SEGFAULTS**; `&Hash`/`&Set`
-      params unsound (free fn → E1118, method → silent miscompile/segfault). quiver
-      guards every lookup behind `size > 0` and inlines accessors. Bounds-check the
-      empty backing table.
+- [x] **Q25 · S1 — `Hash.key?`/`get` on an EMPTY hash SEGFAULTS**; `&Hash`/`&Set`
+      params unsound. ✅ FIXED 2026-06-08. (a) The `string_keys` tristate (-1 unset)
+      was C-truthy, so empty-table lookups `strcmp`'d an int key as a `char*` —
+      `hash.c` now tests `> 0`. (b) The `&Hash`/`&Set` "unsoundness" was a free-fn
+      false-positive E1118 on `&Hash[K,V]` (the `Hash → Hashable` alias); now both
+      free fns and methods accept the sound `&Hash[K,V]` collection ref (like
+      `&Array[Int]`), and the bare `&Hash` mixin ref is still rejected. Pins:
+      `tests/release-e2e/cases/617_*`, `618_*`, `619_*` +
+      `compiler/ruxen_core/tests/q25_hash_set_soundness.rs`.
 - [x] **Q26 · S1 — capturing closure stored under a `&var *self` reborrow loses its
       captures** ✅ FIXED 2026-06-08. Root cause: a closure nested inside another
       closure's body never re-captured a variable the OUTER block captured

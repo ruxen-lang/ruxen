@@ -1,0 +1,19 @@
+# Q25(a): `key?`/`get` on an EMPTY hash must return cleanly, not SIGSEGV.
+# The runtime's `string_keys` tristate (-1 unset) was C-truthy, so an
+# empty-hash lookup took the string path and dereferenced an int key as a
+# char* (e.g. (char*)9). Now it hashes by raw bits until the first insert
+# resolves the key kind. Expected: false / none / true / some 99.
+def main
+  var h: Hash[Int, Int] = Hash.new
+  puts "#{h.key?(9)}"
+  match h.get(9)
+    Some(v) -> puts "some #{v}"
+    nil -> puts "none"
+  end
+  h.insert(9, 99)
+  puts "#{h.key?(9)}"
+  match h.get(9)
+    Some(v) -> puts "some #{v}"
+    nil -> puts "none"
+  end
+end

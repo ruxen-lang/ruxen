@@ -1,0 +1,8 @@
+# Q25(a): `contains` on an EMPTY set must return cleanly (Set reuses the
+# Hash runtime + the same `string_keys` tristate). Expected: false / true.
+def main
+  var s: Set[Int] = Set.new
+  puts "#{s.include?(7)}"
+  s.insert(7)
+  puts "#{s.include?(7)}"
+end

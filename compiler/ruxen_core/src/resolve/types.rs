@@ -706,6 +706,22 @@ impl Resolver {
             return None;
         }
         let name = &path.segments[0];
+        // A name carrying generic args in a `&Name[..]` position is the
+        // PARAMETERIZED COLLECTION type, not a bare mixin reference — even
+        // when the bare name also denotes a mixin. `Hash` is the canonical
+        // collision: the TEC-13 `Hash → Hashable` alias makes `Hash` resolve
+        // to the static-dispatch `Hashable` mixin, so `&Hash[Int, Int]` was
+        // mis-rejected with E1118 in free-fn position (a false positive),
+        // while the method path happened to resolve it to the `Hash[K,V]`
+        // collection and compiled. `&Hash[K,V]` / `&Set[T]` are sound by-ref
+        // collection params — exactly like the widely-used `&Array[Int]` —
+        // so a generic-args-bearing collection builtin must fall through to
+        // ordinary collection-ref resolution, making free fns and methods
+        // consistent. The bare `&Hash` (no args, = the `Hashable` mixin) is
+        // still correctly rejected below. (Q25b.)
+        if path.generic_args.is_some() && COLLECTION_BUILTINS.contains(&name.as_str()) {
+            return None;
+        }
         let def_id = *self.type_registry.get(name)?;
         let def = self.symbols.get(def_id)?;
         let DefKind::Trait { info } = &def.kind else {
