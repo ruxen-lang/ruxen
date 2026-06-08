@@ -720,6 +720,68 @@ Fix: key the incremental/diagnostic cache on the actual source+toolchain identit
 so a stale entry can't be replayed; never surface a cached diagnostic whose source
 span no longer matches.
 
+## Q25 · S1 — `Hash.key?`/`Hash.get` on an EMPTY hash SEGFAULTs; `&Hash`/`&Set` params unsound  ⏳ OPEN
+
+Surfaced 2026-06-08 building quiver's arena nesting. Two faults:
+
+1. **Empty-hash lookup segfaults.** `.key?`/`.get` on a `Hash` with zero entries
+   SIGSEGVs (any value type). `ruxen check` + `ruxen build` pass; the binary
+   exits 139 on the first lookup. `.size` is always safe (returns 0). Once the
+   hash has ≥1 entry, `.key?`/`.get` work, including for ABSENT keys. Repro:
+   ```ruxen
+   def main
+     var h: Hash[Int, Int] = Hash.new
+     let k = h.key?(9)   # SIGSEGV — hash is empty
+   end
+   ```
+2. **`&Hash[...]` / `&Set[...]` parameter types are unsound** — they're mixins
+   without runtime dispatch. A *free fn* errors `E1118`; a *method* with a
+   `&Hash` param **compiles then segfaults** (silent miscompile).
+
+Workaround in quiver: inline every hash accessor (no `&Hash` params) and guard
+every lookup behind `if h.size as Int > 0`. Real fixes: bounds-check the empty
+backing table in `key?`/`get` (return false/None, never deref a null bucket
+array), and either reject `&Hash`/`&Set` params on methods too (consistent with
+the free-fn `E1118`) or give the mixins runtime dispatch.
+
+## Q26 · S1 — a capturing closure STORED under a `&var *self` reborrow loses its captures  ⏳ OPEN — blocks reactive nested widgets
+
+Surfaced 2026-06-08 (quiver `Row`/`Col` containers). A builder method runs a
+user block by reborrowing its own receiver (`build.(&var *self)`); a closure
+that captures an outer value and is **stored** inside that block reads its
+capture as garbage when later invoked — wrong `Int`, or SIGSEGV for a captured
+class handle. `check`+`build` pass. Minimal repro:
+```ruxen
+class Box
+  fns: Array[any Fn[Fn() -> Int]]
+  def init; self.fns = Array.new; end
+  def var add(f: any Fn[Fn() -> Int]) -> nil; self.fns.push(f); end
+  def var build(b: any Fn[Fn(&var Box) -> nil]) -> nil; b.(&var *self); end  # self-reborrow
+  def call0 -> Int
+    match self.fns.get(0); Some(f) -> f.(); nil -> -1; end
+  end
+end
+def main
+  let v = 42
+  var box = Box.new
+  box.build({ |c: &var Box| c.add({ || v + 1 }) })   # through reborrow
+  puts "#{box.call0}"   # prints 1, expected 43 — capture v read as 0
+end
+```
+Calling `box.add({ || v + 1 })` directly (no reborrow) gives the correct 43.
+Related to Q12 (reborrow) and Q22 (capture is a pointer-copy), but the failure
+mode is distinct: captures are corrupted specifically when the storing closure
+is reached *through* a `&var *self` reborrow frame.
+
+**Impact (why this is high-priority for the GUI stack):** quiver's `row`/`col`
+containers build children via `build.(&var *self)`. Static `text` children
+(no capture) work, but **reactive `dyn_text`/`button` children inside a
+container are blocked** — the stored compute captures the `State` handle and
+segfaults on invocation. `tests/nesting.rx` keeps the reactive-child assertion
+as `xit` pending. This gates the widget library's whole point (reactive nested
+widgets), so it ranks with Q16/Q17 on the GUI critical path. `App.build` is
+unaffected (it passes `&var local.field`, not a self-reborrow).
+
 ---
 
 ## Existing partial work on this machine (`~/Documents/ruxen-lang/`)
