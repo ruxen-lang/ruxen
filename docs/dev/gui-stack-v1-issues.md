@@ -942,7 +942,43 @@ uses `inked`.
 
 ---
 
-## Q28 · S1 — `Float32` field/payload store-via-local miscompiles to 0 / crashes  ⚠️ REOPENED 2026-06-09 (real bug, partial fix only)
+## Q28 · S1 — `Float32` field/payload store-via-local miscompiles to 0 / crashes  ✅ FIXED 2026-06-09
+
+> **FIXED (2026-06-09, feat/drop-elaboration).** Root cause: the struct / enum /
+> tuple constructor lowering stored each field's value **width-blind** — it
+> emitted `SetField { value: Use(temp) }` and codegen stored `temp` at its OWN
+> SSA width into the field's fixed 8-byte slot, with NO coercion to the field's
+> declared type. So an f64 value (a bare `120.5` literal, or any `Float` local)
+> placed into a `Float32` field stored 8 bytes, and the later `GetField` (typed
+> by the f32 pattern binding / field) loaded 4 bytes → read 0. The inline
+> `120.5f32` literal and `expr as Float32` cast worked only because THOSE paths
+> already produced an f32-typed SSA value before the store (the `Assign` /
+> `Cast` `coerce_value` narrow), and a `Float32` fn-param coerced at the call
+> boundary — which is exactly why the inline-literal-only audit saw green.
+>
+> Fix: a new `coerce_to_field_ty(val_local, field_ty)` re-materialises the value
+> at the FIELD's declared width via a target-typed `Assign` (routing through the
+> shared codegen `coerce_value` — fdemote/fpromote/fcvt, the same path the
+> `as`-cast uses) BEFORE the width-blind `SetField`. Field types come from
+> `lookup_construct_field_types` (struct/class, parent-prepended) /
+> `lookup_variant_field_types` (enum) / the tuple's own `Ty::Tuple`. Applied in
+> `mir/lower/expr/constructors.rs` (Construct / EnumVariant / Tuple) and the
+> struct auto-constructor in `mir/lower/expr/method_call.rs` (the `Ty::Struct`
+> `.new` path, which builds Alloc+SetField directly and bypasses
+> `lower_constructors`). It is in SHARED MIR lowering, so the value is already
+> the field's width by the time either backend's (still width-blind, by design)
+> `SetField` runs — Cranelift and LLVM agree. A no-op when the value already
+> matches the field type (the inline-f32 path).
+>
+> All shapes from the matrix now compute 204.75 (the uncast f64 local
+> auto-narrows at the field, matching the existing fn-param-boundary UX —
+> nothing crashes). The pins COMPILE + RUN the binary and assert exact stdout
+> (the reopen's non-negotiable): `tests/release-e2e/cases/650_f32_field_store_via_local`
+> (struct, all four shapes), `651_enum_f32_payload_via_local` (enum payload,
+> load-from-local) + 647/648 + `compiler/ruxen_core/tests/q28_enum_float_payload.rs`.
+> NOTE: while pinning this, a SEPARATE drop-elaboration crash surfaced — see Q31.
+>
+> <details><summary>REOPENED (2026-06-09, coordinator) — kept for history</summary>
 
 > **REOPENED (2026-06-09, coordinator).** The earlier "already sound" verdict
 > below was tested ONLY against inline `f32`-suffixed literals via the release-e2e
@@ -971,6 +1007,8 @@ uses `inked`.
 > (not only an inline-narrowed arg), (b) reject-or-coerce an f64 local into an f32
 > field instead of crashing, and (c) the e2e pin must actually RUN the binary and
 > assert stdout (the prior 647/648 pins passed while real codegen was wrong).
+
+</details>
 
 <details><summary>Original (incomplete) 2026-06-09 verdict — kept for history</summary>
 
@@ -1073,7 +1111,31 @@ the legacy `measure_text_n_raw(n: Int)` char-count fallback).
 > can be reverted (canvas owner handles that repo); the legacy
 > `measure_text_n_raw` char-count fallback is now redundant.
 
-## Q30 · S4 — `ruxen fmt` rewrites builder-closure call shapes into a known segfault form  ⏳ OPEN
+## Q30 · S4 — `ruxen fmt` rewrites builder-closure call shapes into a known segfault form  ✅ FIXED 2026-06-09
+
+> **FIXED (2026-06-09, feat/drop-elaboration).** Two formatter defects in
+> `compiler/ruxen_core/src/formatter/format_expr.rs`:
+> - A zero-param closure dropped its `||` header. `format_closure_params`
+>   returned `nil()` for empty params, so `{ || expr }` formatted as `{  expr }`
+>   (double space, no header). The AST can't tell `{ || expr }` from a no-pipe
+>   `{ expr }` (both parse to a `ClosureExpr` with empty params via
+>   `parse_brace_closure`), and the bare-brace form re-parses ambiguously — a
+>   documented GUI-stack crash shape. Fix: a zero-param closure ALWAYS formats
+>   with an explicit `||` (it is always a legal, idempotent closure header).
+> - A zero-arg CALL lost its parens. The `ExprKind::Call` arm only emitted
+>   `(...)` when there were args/a block, so `row_height()` → `row_height` — a
+>   call→identifier semantic change. A `Call` node only exists when the source
+>   wrote `()` (a bare name parses as an identifier/path), so the arm now ALWAYS
+>   emits the parens.
+> The third claimed behaviour (brace block-arg → `do…end`) did NOT reproduce —
+> the inner `{ |ui, root| … }` single-expr closure body already formats as a
+> brace block and is preserved. Round-trip pins (closure header, brace block-arg
+> stays braces, zero-arg call parens, and the combined builder shape
+> byte-for-byte) added to `compiler/ruxen_core/tests/q23_fmt_nondestructive.rs`.
+> All 72 formatter `--lib` tests + the q23 pins stay green; the change is
+> idempotent.
+
+<details><summary>Original OPEN report — kept for history</summary>
 
 Surfaced 2026-06-09 independently by BOTH GUI agents (quiver + canvas) when a
 session touched `.rx` source. `ruxen fmt` is still destructive on the GUI
@@ -1115,6 +1177,55 @@ brace-delimited block argument as braces (never auto-convert `{…}` arg →
 `do…end`), and (c) parens on a zero-arg call expression. Pin with before/after
 round-trip cases over these three shapes. **No app workaround beyond "do not run
 `ruxen fmt` on these repos"** — recorded in both apps' notes.
+
+</details>
+
+---
+
+## Q31 · S1 — drop-elaboration crash on repeated `Float`-payload enum construction  ⏳ OPEN (NEW 2026-06-09)
+
+Surfaced while pinning the Q28 fix. Constructing a payload-carrying enum variant
+whose payload is `Float`/`Float32` **two or more times by value in a single
+function** crashes at runtime (SIGTRAP / 139 / 138). It is **independent of
+Q28**: it reproduces with purely-inline `f32` literals (zero coercion) and on
+the BASELINE compiler before the Q28 fix, so it is not the width defect.
+
+Boundary (each row a `match Ev.<variant>(…) … end` repeated N times in `main`):
+
+| payload type | N=1 | N=2 | N=3 |
+|---|---|---|---|
+| `Int`     | ok | ok | ok |
+| `Float32` | ok | **crash** | crash |
+| `Float`   | ok | **crash** | crash |
+
+Minimal repro (`/tmp/rxprobe/q31f2.rx`):
+```ruxen
+enum Ev
+  Move(Float32, Float32)
+  Tick
+end
+def main
+  match Ev.Move(1.0f32, 2.0f32)
+    Ev.Move(x, y) -> puts "#{x + y}"
+    Ev.Tick -> puts "t"
+  end
+  match Ev.Move(3.0f32, 4.0f32)   # second construction → SIGTRAP
+    Ev.Move(x, y) -> puts "#{x + y}"
+    Ev.Tick -> puts "t"
+  end
+end
+```
+
+The values are CORRECT when it doesn't crash, so this is a drop / dealloc memory
+bug specific to the float-payload enum layout under repeated allocate+drop, not a
+codegen-of-the-value bug. Likely in `mir/lower/drops.rs` / the enum-payload
+dealloc path (Float vs Int payload alignment/size at the dealloc site). The Q28
+e2e pins are deliberately kept under the crash threshold (struct case 650 carries
+the full four-shape matrix crash-free; enum case 651 uses a single construction)
+so they isolate the Q28 fix from this. Severity S1 (silent → crashing code) but
+narrow (needs 2+ float-payload enum constructions per function); the canvas event
+loop matches once per frame, so it is not immediately on the hot path. Filed for
+a dedicated drop-elaboration pass.
 
 ---
 

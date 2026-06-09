@@ -8,28 +8,55 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
-- (Q28) Verified + pinned: enum variant `Float`/`Float32` payloads round-trip
-  correctly through construction and `match` — the `canvas/src/event.rx`
-  deviation (pointer coordinates forced to `Int` logical pixels with a TODO,
-  "return to Float32 payloads once enum float payloads work") was STALE, like
-  Q22. A 2026-06-09 audit found no live bug: enum float payloads are exact for
-  named-field and positional-tuple variants, single and double payloads,
-  `Float32` and `Float`, MIXED with `Int` variants in one enum, passed through
-  function boundaries and stored in / iterated from an `Array`, with sub-pixel
-  values (120.5 / 84.25 / 0.125) and arithmetic on the extracted value. The
-  MIR-level typed `SetField`/`GetField` slot path stores and loads each float at
-  its own width, and an f32 literal is `coerce_value`-narrowed to f32 in the
-  `Assign` handler before the constructor ever stores it
-  (`mir/lower/expr/literals.rs`, `constructors.rs`,
-  `codegen/cranelift/emit.rs`); both backends share that path. Root cause of the
-  earlier breakage was the Q5 `as Float32` crash + the case-218 / `1b6ced0`
-  struct/enum inline-method float-codegen gap — fixing those incidentally fixed
-  enum float payloads, but nobody updated the canvas TODO. No compiler change;
-  pinned as a regression guard so the typed slot path can't silently revert.
-  Pins: `tests/release-e2e/cases/647_enum_float32_payload`,
-  `648_enum_float_mixed_payload` +
+- (Q28, REOPENED → real fix) `Float32` struct field / enum payload / tuple slot
+  stores from a non-inline value miscompiled to **0** (and an uncast f64 local
+  into an f32 payload could crash). The constructor lowering stored each field
+  width-blind — at the value's own SSA width — into the field's fixed 8-byte
+  slot, with no coercion to the field's declared type, so an f64 value (a bare
+  `120.5` literal or any `Float` local) stored 8 bytes and the f32 `GetField`
+  read 4 → 0. The inline `120.5f32` literal, `expr as Float32` cast, and a
+  `Float32` fn-param worked only because those paths already produced an
+  f32-typed SSA value before the store — which is why the earlier
+  inline-literal-only audit wrongly called it sound. Fix: coerce each
+  constructor arg to the FIELD's declared width via a target-typed `Assign`
+  (`coerce_to_field_ty` → the shared `coerce_value` fdemote/fpromote/fcvt path)
+  BEFORE the width-blind `SetField`, with field types from
+  `lookup_construct_field_types` (struct/class) / `lookup_variant_field_types`
+  (enum) / the tuple `Ty`. Applied in `mir/lower/expr/constructors.rs`
+  (Construct/EnumVariant/Tuple) and the struct auto-constructor in
+  `mir/lower/expr/method_call.rs`. Backend-agnostic (shared MIR lowering), so
+  Cranelift and LLVM agree. All shapes now compute 204.75; the uncast f64 local
+  auto-narrows at the field instead of crashing. The e2e pins now COMPILE + RUN
+  the binary and assert exact stdout (the prior 647/648 pins passed while real
+  codegen was wrong because they used only inline f32 literals and never RAN the
+  load-from-local shape). Pins: `tests/release-e2e/cases/650_f32_field_store_via_local`
+  (struct, all four shapes), `651_enum_f32_payload_via_local` (enum payload,
+  load-from-local) + `647`/`648` +
   `compiler/ruxen_core/tests/q28_enum_float_payload.rs`. `canvas/src/event.rx`
-  can now revert to `Float32` coordinates (canvas owner).
+  can now revert to `Float32` coordinates (canvas owner). Repro matrix:
+  `tmp/test-cache/q28-f32-field-store-matrix.md`.
+- (Q30) `ruxen fmt` no longer rewrites builder-closure call shapes into a
+  crashing form. It dropped a no-arg closure header (`{ || App.build(…) }` →
+  `{ App.build(…) }`, a brace block that re-parses ambiguously — a documented
+  GUI-stack crash shape) and stripped `()` off a zero-arg call (`row_height()` →
+  `row_height`, a call→identifier semantic change). Fix
+  (`formatter/format_expr.rs`): a zero-param `ClosureExpr` always formats with an
+  explicit `||` (the AST can't distinguish it from a no-pipe `{ … }`, and `||`
+  is always a legal idempotent header), and a `Call` node always emits its parens
+  (it only exists when the source wrote `()`). The inner brace block-arg is
+  already preserved as braces (the claimed `do…end` conversion did not
+  reproduce). Round-trip pins in
+  `compiler/ruxen_core/tests/q23_fmt_nondestructive.rs`; `ruxen fmt` is safe to
+  run on the GUI stack again.
+
+### Known issues
+- (Q31, NEW) Drop-elaboration crash: constructing a payload-carrying enum
+  variant whose payload is `Float`/`Float32` **two or more times by value in one
+  function** SIGTRAPs at runtime (`Ev.Move(1.0f32,2.0f32)` twice → 139). Int
+  payloads and a single Float construction are fine. Independent of Q28
+  (reproduces with inline f32 literals and on the pre-Q28-fix baseline). The Q28
+  pins are kept under the crash threshold so they isolate the width fix. Filed in
+  `docs/dev/gui-stack-v1-issues.md` §Q31 for a dedicated drop-elaboration pass.
 - (Q29) Verified NOT-A-BUG + pinned: a borrowed `&String` (owned by the caller)
   passed into a `lib "C"` FFI function forwards the correct data pointer and a
   recoverable length. A Ruxen `String` IS a bare NUL-terminated `char*` (no

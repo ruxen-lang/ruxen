@@ -17,26 +17,40 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-25 of 30 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
-feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned). **Q28
-REOPENED 2026-06-09** (was wrongly closed: `Float32` field/payload store-via-local
-miscompiles to 0 / crashes on the real compile path — the inline-literal-only
-audit missed it). **Q30 OPEN** (`ruxen fmt` rewrites builder-closure call shapes
-into a segfault form). Outstanding:
+27 of 31 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
+feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned; Q28 + Q30
+fixed 2026-06-09). **Q31 NEW 2026-06-09** (drop-elaboration crash: 2+ by-value
+constructions of a `Float`/`Float32`-payload enum variant in one function →
+SIGTRAP; surfaced while pinning the Q28 fix). Outstanding:
 
-- [ ] **Q28 · S1 — `Float32` field/payload store-via-local → 0 / crash (REOPENED).**
-      Typed `SetField`/`GetField` f32 slot path is width-correct only for an
-      inline-narrowed constructor arg (`120.5f32` / `expr as Float32`) or a
-      `Float32` fn-param boundary; a value bound to a LOCAL then placed into the
-      field reads 0, and an uncast f64 local into an f32 payload crashes (133).
-      Blocks canvas's `Int`→`Float32` coord revert. Repro matrix:
-      `tmp/test-cache/q28-f32-field-store-matrix.md`. The e2e pin must run+assert
-      stdout (647/648 passed while real codegen was wrong).
-- [ ] **Q30 · S4 — `ruxen fmt` rewrites `{ || App.build({…}) }` → `{ App.build(do…end) }`**
-      (drops the no-arg closure header + converts a brace builder block to a
-      `do…end` free-fn-call arg = a documented segfault shape) and strips
-      `row_height()` → `row_height`. Hit by both GUI agents 2026-06-09; produces
-      crashing code from working code (high-end S4). Related to Q23.
+- [x] **Q28 · S1 — `Float32` field/payload store-via-local → 0 / crash (FIXED 2026-06-09).**
+      The struct/enum/tuple constructor lowering stored each field value
+      width-blind (at the value's SSA width) into a fixed 8-byte slot; an f64
+      value into an f32 field stored 8 bytes, and the f32 `GetField` read 4 →
+      0. Fix: coerce each constructor arg to the FIELD's declared width via a
+      target-typed `Assign` (`coerce_to_field_ty` → shared `coerce_value`
+      fdemote/fpromote path) BEFORE the `SetField`, in
+      `mir/lower/expr/constructors.rs` (Construct/EnumVariant/Tuple) and the
+      struct auto-ctor in `method_call.rs`. Backend-agnostic (shared MIR). All
+      four shapes now print 204.75; the e2e pins RUN + assert stdout. Pins:
+      `tests/release-e2e/cases/650_f32_field_store_via_local`,
+      `651_enum_f32_payload_via_local` (+ 647/648) and
+      `compiler/ruxen_core/tests/q28_enum_float_payload.rs`.
+- [x] **Q30 · S4 — `ruxen fmt` rewrote builder-closure call shapes (FIXED 2026-06-09).**
+      `fmt` dropped a no-arg closure header (`{ || … }` → `{ … }`, a crash
+      shape) and stripped `()` off a zero-arg call (`row_height()` →
+      `row_height`, a call→identifier semantic change). Fix: a zero-param
+      `ClosureExpr` always formats with an explicit `||`, and a `Call` node
+      always emits its parens (it only exists when the source wrote `()`).
+      `formatter/format_expr.rs`. The brace block-arg is already preserved as
+      braces. Round-trip pins in `q23_fmt_nondestructive.rs`.
+- [ ] **Q31 · S1 — drop-elaboration crash on repeated `Float`-payload enum construction.**
+      Two or more by-value constructions of a payload-carrying enum variant
+      whose payload is `Float`/`Float32` in a single function SIGTRAP at runtime
+      (`Ev.Move(1.0f32,2.0f32)` twice → 139). Int payloads are fine at any
+      count; a single Float construction is fine. Pre-existing on
+      feat/drop-elaboration (reproduces on baseline before the Q28 fix; not the
+      Q28 width defect). Repro + matrix in `dev/gui-stack-v1-issues.md` §Q31.
 - [x] **Q16 · S4 — dependency symbols invisible to library/`check`/`test` builds
       (FIXED).** Library (`compile_piece`), `check`, and `ruxen test` now
       flat-merge dependency `src/**.rx` via the shared `build::gather_dep_sources`
