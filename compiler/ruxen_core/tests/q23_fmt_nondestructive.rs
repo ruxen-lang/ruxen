@@ -114,3 +114,78 @@ fn top_level_garbage_still_errors() {
         "top-level `foo bar baz` should still be a parse error"
     );
 }
+
+// ─── Q30 — `ruxen fmt` must not rewrite builder-closure call shapes into a
+//     crashing form. Both GUI agents hit this: `fmt` was dropping the no-arg
+//     `||` closure header and stripping `()` off a zero-arg call, turning
+//     compiling code into a documented segfault shape. These round-trip pins
+//     lock the three shapes the fix preserves.
+
+/// (Q30) A no-arg closure header `{ || … }` must survive formatting — the AST
+/// can't tell it from a no-pipe `{ … }` block, and emitting the bare-brace form
+/// is a documented GUI-stack crash shape (the closure re-parses ambiguously).
+#[test]
+fn q30_no_arg_closure_header_preserved() {
+    let src =
+        "def main\n  let app = { || App.build({ |ui, root| root.text(\"hi\") }) }\n  app\nend\n";
+    let r = fmt(src);
+    assert!(r.errors.is_empty(), "format errored: {:?}", r.errors);
+    assert!(
+        r.output.contains("{ || App.build"),
+        "no-arg closure header `||` dropped; output:\n{}",
+        r.output
+    );
+    // The inner builder block must stay a BRACE block, never auto-convert to
+    // `do…end` (a free-function `do…end` block-arg is a crash shape here).
+    assert!(
+        r.output.contains("App.build({ |ui, root|"),
+        "brace block-arg rewritten (do…end?); output:\n{}",
+        r.output
+    );
+    assert!(
+        !r.output.contains("do |ui, root|"),
+        "brace block-arg auto-converted to do…end; output:\n{}",
+        r.output
+    );
+    let r2 = fmt(&r.output);
+    assert_eq!(r.output, r2.output, "not idempotent");
+}
+
+/// (Q30) A zero-arg CALL expression keeps its parens: `row_height()` must not
+/// become a bare-name reference `row_height` (a call → identifier semantic
+/// change). A `Call` AST node only exists when the source wrote `()`.
+#[test]
+fn q30_zero_arg_call_keeps_parens() {
+    let src = "def main\n  let h = row_height()\n  h\nend\n";
+    let r = fmt(src);
+    assert!(r.errors.is_empty(), "format errored: {:?}", r.errors);
+    assert!(
+        r.output.contains("row_height()"),
+        "parens stripped off zero-arg call; output:\n{}",
+        r.output
+    );
+    let r2 = fmt(&r.output);
+    assert_eq!(r.output, r2.output, "not idempotent");
+}
+
+/// (Q30) The full builder shape both GUI agents wrote — closure header, brace
+/// block-arg, and zero-arg call together — round-trips byte-for-byte.
+#[test]
+fn q30_builder_shape_round_trips() {
+    let src = concat!(
+        "def main\n",
+        "  let app = { || App.build({ |ui, root| root.text(\"hi\") }) }\n",
+        "  let h = row_height()\n",
+        "  app\n",
+        "end\n",
+    );
+    let r = fmt(src);
+    assert!(r.errors.is_empty(), "format errored: {:?}", r.errors);
+    assert_eq!(
+        r.output, src,
+        "builder shape was rewritten by fmt; output:\n{}",
+        r.output
+    );
+    let r2 = fmt(&r.output);
+    assert_eq!(r.output, r2.output, "not idempotent");
+}

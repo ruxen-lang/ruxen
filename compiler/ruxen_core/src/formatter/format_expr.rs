@@ -93,11 +93,15 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         } => {
             let arg_docs: Vec<Doc> = args.iter().map(|a| format_expr(a, comments)).collect();
             let mut parts = vec![format_expr(callee, comments)];
-            // Emit parens if there are args, a block, or if the callee isn't
-            // a simple identifier (e.g., `Foo.new` with no args can omit parens).
-            if !arg_docs.is_empty() || block.is_some() {
-                parts.push(format_call_args(arg_docs));
-            }
+            // A `Call` node ONLY exists when the source wrote `(...)` — a bare
+            // `row_height` (no parens) parses as an identifier/path, never a
+            // Call. So ALWAYS emit the parens, even for a zero-arg call:
+            // stripping them (`row_height()` → `row_height`) turns a call
+            // expression into a bare-name reference — a semantic change and a
+            // documented GUI-stack crash shape (Q30). When a block arg is
+            // present but there are no positional args, emit `()` before it so
+            // `f()  do … end` stays a call with a trailing block.
+            parts.push(format_call_args(arg_docs));
             if let Some(blk) = block {
                 parts.push(text(" "));
                 parts.push(format_expr(blk, comments));
@@ -1120,7 +1124,16 @@ pub fn format_closure(closure: &ClosureExpr, comments: &CommentMap) -> Doc {
 
 fn format_closure_params(params: &[ClosureParam], comments: &CommentMap) -> Doc {
     if params.is_empty() {
-        return nil();
+        // A zero-param closure MUST keep an explicit `||` header. The AST does
+        // not distinguish `{ || expr }` from a no-pipe `{ expr }` (both parse
+        // to a `ClosureExpr` with empty params), and emitting the bare `{ expr }`
+        // form is destructive: a brace block with no `||` re-parses ambiguously
+        // (block vs. closure) and is a DOCUMENTED segfault shape on the GUI
+        // stack (Q30) — `{ || App.build(...) }` collapsing to `{ App.build(...) }`
+        // turns compiling code into crashing code. `||` is always a legal,
+        // idempotent closure header, so always emit it. Returning `nil()` here
+        // also left a `{  expr }` double-space.
+        return text("||");
     }
 
     let param_docs: Vec<Doc> = params
