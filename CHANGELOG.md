@@ -8,6 +8,43 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- (Q28) Verified + pinned: enum variant `Float`/`Float32` payloads round-trip
+  correctly through construction and `match` — the `canvas/src/event.rx`
+  deviation (pointer coordinates forced to `Int` logical pixels with a TODO,
+  "return to Float32 payloads once enum float payloads work") was STALE, like
+  Q22. A 2026-06-09 audit found no live bug: enum float payloads are exact for
+  named-field and positional-tuple variants, single and double payloads,
+  `Float32` and `Float`, MIXED with `Int` variants in one enum, passed through
+  function boundaries and stored in / iterated from an `Array`, with sub-pixel
+  values (120.5 / 84.25 / 0.125) and arithmetic on the extracted value. The
+  MIR-level typed `SetField`/`GetField` slot path stores and loads each float at
+  its own width, and an f32 literal is `coerce_value`-narrowed to f32 in the
+  `Assign` handler before the constructor ever stores it
+  (`mir/lower/expr/literals.rs`, `constructors.rs`,
+  `codegen/cranelift/emit.rs`); both backends share that path. Root cause of the
+  earlier breakage was the Q5 `as Float32` crash + the case-218 / `1b6ced0`
+  struct/enum inline-method float-codegen gap — fixing those incidentally fixed
+  enum float payloads, but nobody updated the canvas TODO. No compiler change;
+  pinned as a regression guard so the typed slot path can't silently revert.
+  Pins: `tests/release-e2e/cases/647_enum_float32_payload`,
+  `648_enum_float_mixed_payload` +
+  `compiler/ruxen_core/tests/q28_enum_float_payload.rs`. `canvas/src/event.rx`
+  can now revert to `Float32` coordinates (canvas owner).
+- (Q29) Verified NOT-A-BUG + pinned: a borrowed `&String` (owned by the caller)
+  passed into a `lib "C"` FFI function forwards the correct data pointer and a
+  recoverable length. A Ruxen `String` IS a bare NUL-terminated `char*` (no
+  length header; `library/std/string/runtime/string.c`), and `MirInst::Ref` is
+  by-value in both backends, so the `char*` passes through unchanged and the C
+  side recovers the length via `strlen`. The old ledger / canvas ROADMAP claim
+  ("forwards a char count, not the string; a borrowed `&String` passes the wrong
+  pointer") described the LEGACY `measure_text_n_raw(n: Int)` char-count
+  workaround, not `&String` itself. Evidence: a borrowed `&String` threaded
+  through pointer/length-sensitive `String` FFI (`include?`/`find`/`replace`/
+  `starts_with`) returns exact byte-offset and length results. Pins:
+  `tests/release-e2e/cases/649_ffi_borrowed_string_arg` +
+  `compiler/ruxen_core/tests/q29_ffi_borrowed_string.rs`. The canvas deviation
+  note and the now-redundant `measure_text_n_raw` fallback can be reverted
+  (canvas owner).
 - (Q16) Dependency package symbols are now visible to LIBRARY builds,
   `ruxen check`, and `ruxen test` — not just binary builds. Previously only
   the binary path (`compile_project`) flat-merged a dependency's `src/**.rx`

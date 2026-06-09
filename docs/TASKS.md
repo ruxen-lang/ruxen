@@ -17,8 +17,9 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-23 of 27 fixed (Q23–Q26 surfaced 2026-06-08 building the GUI stack; Q16 fixed
-2026-06-08 on feat/drop-elaboration). Outstanding:
+25 of 29 fixed (Q23–Q26 surfaced 2026-06-08 building the GUI stack; Q16 fixed
+2026-06-08 on feat/drop-elaboration; Q28/Q29 audited 2026-06-09 — both already
+sound, the canvas deviations were stale; pinned). Outstanding:
 
 - [x] **Q16 · S4 — dependency symbols invisible to library/`check`/`test` builds
       (FIXED).** Library (`compile_piece`), `check`, and `ruxen test` now
@@ -72,6 +73,30 @@ where each kind of work lives and what is open *right now*. Keep it current
       the enclosing captures pointer. Unblocks reactive `dyn_text`/`button` children
       in quiver containers. Pins: `tests/release-e2e/cases/615_*`, `616_*` +
       `compiler/ruxen_core/tests/q26_nested_closure_capture.rs`.
+- [x] **Q28 · S1 — enum variant `Float`/`Float32` payloads (claimed miscompile)**
+      ✅ FIXED / already sound 2026-06-09 (feat/drop-elaboration). The
+      `canvas/src/event.rx` `Int`-coordinate TODO ("return to Float32 payloads once
+      enum float payloads work") is STALE — like Q22, the note outlived the defect.
+      Enum `Float`/`Float32` payloads round-trip exactly (named + positional, single +
+      double, mixed with `Int` variants, through fns + Arrays, sub-pixel values). The
+      typed MIR `SetField`/`GetField` slot path stores/loads each float at its own
+      width; an f32 literal is `coerce_value`-narrowed to f32 in `Assign` before the
+      constructor. Fixed as a side effect of Q5 + the case-218 / `1b6ced0` float-codegen
+      work. No code change; pinned as a regression guard. Pins:
+      `tests/release-e2e/cases/647_enum_float32_payload`, `648_enum_float_mixed_payload`
+      + `compiler/ruxen_core/tests/q28_enum_float_payload.rs`. Affected site
+      `canvas/src/event.rx` can revert to `Float32` (canvas owner).
+- [x] **Q29 · S1 — borrowed `&String` into a `lib "C"` FFI call (claimed wrong
+      pointer)** ✅ FIXED / NOT-A-BUG 2026-06-09. A borrowed `&String` forwards the
+      correct data pointer + recoverable length today: a Ruxen `String` IS a bare
+      NUL-terminated `char*` (no length header), and `MirInst::Ref` is by-value, so the
+      `char*` passes through unchanged; C recovers length via `strlen`. The old "char
+      count / wrong pointer" claim described the legacy `measure_text_n_raw(n: Int)`
+      workaround, not `&String`. Evidence: a borrowed `&String` through `include?`/
+      `find`/`replace`/`starts_with` returns exact byte-offset/length-sensitive results.
+      Pins: `tests/release-e2e/cases/649_ffi_borrowed_string_arg` +
+      `compiler/ruxen_core/tests/q29_ffi_borrowed_string.rs`. Canvas deviation note +
+      redundant `measure_text_n_raw` fallback can be reverted (canvas owner).
 
 ## Open now — pre-flight P0s (`requirements/ROADMAP.md`)
 

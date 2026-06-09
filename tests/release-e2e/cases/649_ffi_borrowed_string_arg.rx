@@ -1,0 +1,26 @@
+# Q29 verification pin — a BORROWED `&String` (owned by the caller) passed into
+# a `lib "C"` FFI function must forward the correct data POINTER and the correct
+# LENGTH.
+#
+# Ruxen's String ABI is a bare NUL-terminated `char*` (no length header;
+# `library/std/string/runtime/string.c`), so the C side recovers length via
+# `strlen`. `include?`/`starts_with`/`find`/`replace`/`split` all take a
+# `needle: &String` and run pointer/length-sensitive byte ops (`strstr`,
+# `strncmp`) on it. If `&String` forwarded the wrong pointer or a char-count
+# instead of the data (the OLD ledger claim that forced canvas's
+# `measure_text_n_raw(n: Int)` fallback), these would mismatch. They don't — the
+# borrowed `&String` carries the real bytes + length across the boundary.
+def main
+  let s = String.from("hello, sub-pixel world")
+  let needle = String.from("sub-pixel")     # borrowed into include?/find/replace
+  puts "len=#{s.size}"
+  puts "has=#{s.include?(needle)}"           # strstr over the borrowed needle
+  puts "starts=#{s.starts_with(String.from("hello"))}"
+  puts "missing=#{s.include?(String.from("zzz"))}"
+  match s.find(needle)
+    Some(i) -> puts "at=#{i}"                # byte index — length/offset sensitive
+    nil     -> puts "at=none"
+  end
+  let r = s.replace(needle, String.from("WHOLE"))
+  puts "rep=#{r}"
+end

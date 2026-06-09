@@ -942,6 +942,107 @@ uses `inked`.
 
 ---
 
+## Q28 · S1 — enum variant `Float`/`Float32` payloads (claimed miscompile)  ✅ FIXED (already sound; pinned)
+
+Surfaced as a standing deviation in `canvas/src/event.rx`: the event enum carries
+pointer coordinates as `Int` logical pixels with a TODO — "return to Float32
+payloads once enum float payloads compile correctly" — costing sub-pixel
+precision on every pointer event, even though the C ABI already carries doubles.
+
+```ruxen
+enum Event
+  PointerMove(Float32, Float32)   # the shape canvas was forced AWAY from
+  Scroll(Float, Float)
+  KeyDown(Int)
+  CloseRequested
+end
+def main
+  match Event.PointerMove(120.5f32, 84.25f32)
+    Event.PointerMove(x, y) -> puts "move #{x},#{y}"   # want 120.5,84.25
+    _ -> nil
+  end
+end
+```
+
+> **VERDICT (2026-06-09, feat/drop-elaboration): NOT A LIVE BUG — already fixed,
+> the canvas TODO is STALE.** Like Q22, the deviation note outlived the defect.
+> Enum `Float`/`Float32` payloads round-trip correctly through construction +
+> `match` in every shape audited: named-field and positional-tuple variants,
+> single and double float payloads, `Float32` and `Float`, MIXED with `Int`
+> variants in the same enum, passed through function boundaries and stored in /
+> iterated from an `Array`, with sub-pixel arithmetic on the extracted value
+> (120.5 / 84.25 / 0.125 all exact).
+>
+> **Why it works now (mechanism, end to end):**
+> - A `Float32` literal (`3.5f32`) lowers to
+>   `Assign { dest: <f32 temp>, value: Literal::Float(_) }`
+>   (`mir/lower/expr/literals.rs`). The Cranelift/LLVM `Assign` handler emits an
+>   f64 const, then `coerce_value`-NARROWS it to the destination local's declared
+>   f32 — so the temp is a real f32 BEFORE the constructor ever sees it
+>   (`codegen/cranelift/emit.rs` `MirInst::Assign`).
+> - The constructor stores each payload field with
+>   `SetField { value: Use(temp) }` at slot `idx*8`
+>   (`mir/lower/expr/constructors.rs`); codegen stores the value at ITS OWN width
+>   (4 bytes for f32, 8 for f64) — no width-blind f64 store into an f32 slot.
+> - `match` payload extraction loads with `GetField`, whose load type is the
+>   PATTERN BINDING's declared type (f32 for an f32 field), reading the slot back
+>   at the same width — `codegen/cranelift/emit.rs` `MirInst::GetField`.
+> Both backends share this MIR-level typed `SetField`/`GetField` slot path, so
+> they behave identically (the drop/free concern is also MIR-level, per the
+> brief). Root cause of the prior breakage: the Q5 `as Float32` compiler crash +
+> the case-218 / commit `1b6ced0` struct/enum inline-method float-codegen gap.
+> Fixing THOSE incidentally fixed enum float payloads; nobody updated the canvas
+> TODO, which is why it lingered.
+>
+> **No code change required.** Pinned as a regression guard so the typed slot
+> path can't silently revert (which is what canvas relies on when it reverts the
+> TODO to `Float32`): `tests/release-e2e/cases/647_enum_float32_payload` (f32,
+> sub-pixel + extracted-value arithmetic), `648_enum_float_mixed_payload`
+> (f64 mixed with Int variants, through a fn + an Array) +
+> `compiler/ruxen_core/tests/q28_enum_float_payload.rs`. Affected site:
+> `canvas/src/event.rx` — the `Int`-coordinate deviation can now be reverted to
+> `Float32` (canvas owner handles that repo).
+
+## Q29 · S1 — borrowed `&String` into a `lib "C"` FFI call (claimed wrong pointer)  ✅ FIXED / NOT-A-BUG (pinned)
+
+The ledger and canvas ROADMAP claimed `measure_text` "forwards a char count, not
+the string, over the FFI — a borrowed `&String` into an FFI call passes the wrong
+pointer." But `canvas/src/raw_host.rx` now declares real `&String` FFI calls that
+work (draw_text renders correctly in the live window), e.g.
+`measure_text_raw as "ruxen_canvas_measure_text"(self, text: &String)` (alongside
+the legacy `measure_text_n_raw(n: Int)` char-count fallback).
+
+> **VERDICT (2026-06-09, feat/drop-elaboration): NOT A BUG — RESOLVED.** A
+> borrowed `&String` (owned by the caller) passed into a `lib "C"` FFI function
+> forwards the correct data POINTER and a recoverable LENGTH today.
+>
+> **Why (ABI mechanism):**
+> - Ruxen's `String` is a bare NUL-terminated `char*` — there is NO length
+>   header (`library/std/string/runtime/string.c`: `ruxen_string_from`,
+>   `ruxen_string_len`, `ruxen_string_eq` are all `(const char *)`). A `String`
+>   VALUE *is* the `char*`. Length is recovered C-side via `strlen`.
+> - `MirInst::Ref` (the `&` in `&String`) is by-VALUE in both backends
+>   (`codegen/cranelift/emit.rs` `MirInst::Ref`), so it forwards the `char*`
+>   unchanged. The canvas shim consumes exactly that:
+>   `ruxen_canvas_measure_text(int64_t self, int64_t text)` →
+>   `rx_measure_impl((const char *)text, …)` (`canvas/runtime/skia_shim.c`).
+> - The OLD "wrong pointer / char count" claim described the LEGACY
+>   `measure_text_n_raw(n: Int)` workaround — a precomputed char count that
+>   existed *because* `&String` FFI was distrusted, NOT a defect in `&String`
+>   itself.
+>
+> **Evidence (pin).** A borrowed `&String` threaded through pointer/length-
+> sensitive `String` stdlib FFI (`include?`→strstr, `find`→byte offset,
+> `replace`, `starts_with`) returns exact results — `find("sub-pixel")` in
+> `"hello, sub-pixel world"` yields byte index 7, `size` yields 22, `replace`
+> substitutes correctly. A wrong pointer or a char-count would corrupt all of
+> these. Pin: `tests/release-e2e/cases/649_ffi_borrowed_string_arg` +
+> `compiler/ruxen_core/tests/q29_ffi_borrowed_string.rs`. Canvas's deviation note
+> can be reverted (canvas owner handles that repo); the legacy
+> `measure_text_n_raw` char-count fallback is now redundant.
+
+---
+
 ## Existing partial work on this machine (`~/Documents/ruxen-lang/`)
 
 Stopped mid-flight (resource limits) — useful starting points, all LOCAL:
