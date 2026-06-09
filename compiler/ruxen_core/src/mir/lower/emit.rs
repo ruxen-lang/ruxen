@@ -217,9 +217,50 @@ impl<'a> Lowerer<'a> {
     /// a single class_info_ptr at offset 0). The allocation size
     /// grows by `header_slots * 8` to accommodate the header.
     pub(super) fn alloc_size(&self, ty: &Ty) -> usize {
-        use crate::resolve::symbols::DefKind;
+        use crate::resolve::symbols::{DefKind, VariantDefKind};
         let layout = crate::codegen::layout::layout_of(ty, self.symbols);
         let base = layout.size.max(8);
+        // Enums are stored with the SAME fixed 8-byte-slot addressing as
+        // classes/structs: codegen reads the payload at `GetPayload` = base+8
+        // (one slot covering tag + padding) and each payload field at
+        // `field_index * 8` (cranelift/emit.rs + llvm/emit/instructions.rs).
+        // The packed `layout.size` undersizes a variant whose payload fields
+        // are narrower than 8 bytes — e.g. `Move(Float32, Float32)` packs to
+        // 16, but codegen writes field 1 at offset 8 + 1*8 = 16, a 4-byte
+        // store 4 bytes PAST a 16-byte alloc → heap-metadata corruption
+        // (Q31). Size the allocation to the slot-addressed footprint the
+        // codegen actually uses: tag/payload-base slot (8) + the widest
+        // variant's field count * 8. The Int payload survived only because
+        // its packed size coincidentally already matched this.
+        if let Ty::Enum { name, .. } = ty {
+            let enum_def = self
+                .symbols
+                .iter()
+                .find(|d| d.name == *name && matches!(d.kind, DefKind::Enum { .. }));
+            let variant_ids: Vec<u32> = match enum_def {
+                Some(d) => match &d.kind {
+                    DefKind::Enum { info } => info.variants.clone(),
+                    _ => Vec::new(),
+                },
+                None => Vec::new(),
+            };
+            let max_fields = variant_ids
+                .iter()
+                .filter_map(|vid| self.symbols.get(*vid))
+                .filter_map(|vdef| match &vdef.kind {
+                    DefKind::EnumVariant { kind, .. } => Some(match kind {
+                        VariantDefKind::Unit => 0,
+                        VariantDefKind::Tuple(tys) => tys.len(),
+                        VariantDefKind::Struct(fields) => fields.len(),
+                    }),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(0);
+            // 8 = the tag/payload-base slot (GetPayload offsets by +8).
+            let needed = 8 + max_fields * 8;
+            return base.max(needed).max(8);
+        }
         if let Ty::Class { name, .. } | Ty::Struct { name, .. } = ty {
             let mut total_fields = 0usize;
             let mut cur = Some(name.clone());

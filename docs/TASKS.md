@@ -17,11 +17,14 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-27 of 31 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
-feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned; Q28 + Q30
-fixed 2026-06-09). **Q31 NEW 2026-06-09** (drop-elaboration crash: 2+ by-value
-constructions of a `Float`/`Float32`-payload enum variant in one function →
-SIGTRAP; surfaced while pinning the Q28 fix). Outstanding:
+28 of 31 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
+feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned; Q28, Q30,
+Q31 fixed 2026-06-09). **Q31 was an enum UNDER-ALLOCATION** (not a drop
+double-free): `alloc_size` sized enums to packed layout while codegen addresses
+payloads on a fixed 8-byte slot stride, so `Move(Float32,Float32)` stored field 1
+four bytes past the alloc → heap corruption → crash on the next float `malloc`.
+Fixed by slot-rounding enum allocations (`8 + widest_variant_field_count*8`).
+Unblocks canvas's `Int`→`Float32` event-coord revert. Outstanding:
 
 - [x] **Q28 · S1 — `Float32` field/payload store-via-local → 0 / crash (FIXED 2026-06-09).**
       The struct/enum/tuple constructor lowering stored each field value
@@ -44,13 +47,18 @@ SIGTRAP; surfaced while pinning the Q28 fix). Outstanding:
       always emits its parens (it only exists when the source wrote `()`).
       `formatter/format_expr.rs`. The brace block-arg is already preserved as
       braces. Round-trip pins in `q23_fmt_nondestructive.rs`.
-- [ ] **Q31 · S1 — drop-elaboration crash on repeated `Float`-payload enum construction.**
-      Two or more by-value constructions of a payload-carrying enum variant
-      whose payload is `Float`/`Float32` in a single function SIGTRAP at runtime
-      (`Ev.Move(1.0f32,2.0f32)` twice → 139). Int payloads are fine at any
-      count; a single Float construction is fine. Pre-existing on
-      feat/drop-elaboration (reproduces on baseline before the Q28 fix; not the
-      Q28 width defect). Repro + matrix in `dev/gui-stack-v1-issues.md` §Q31.
+- [x] **Q31 · S1 — repeated `Float`-payload enum construction crashed: enum
+      UNDER-ALLOCATION (FIXED 2026-06-09).** `alloc_size` sized enums to packed
+      `layout.size` while codegen addresses payloads on a fixed 8-byte slot
+      stride (`GetPayload` = base+8, field N at N*8), so `Move(Float32,Float32)`
+      stored field 1 four bytes past the 16-byte alloc → heap-metadata
+      corruption → crash on the next float `malloc` (hence ≥2 constructions; Int
+      payloads on 8-byte slots survived). Fix: slot-round enum allocations to
+      `8 + widest_variant_field_count*8` in `mir/lower/emit.rs` (no drops/codegen
+      change; enum dealloc was already sound — 3 allocs/3 frees). Pins run+assert
+      stdout: `tests/release-e2e/cases/652_enum_float_payload_double_construct`,
+      `compiler/ruxen_core/tests/q31_float_enum_payload_drop.rs`,
+      `drop_fixtures.rs::q31_…_no_leak`. Unblocks canvas `Int`→`Float32` coords.
 - [x] **Q16 · S4 — dependency symbols invisible to library/`check`/`test` builds
       (FIXED).** Library (`compile_piece`), `check`, and `ruxen test` now
       flat-merge dependency `src/**.rx` via the shared `build::gather_dep_sources`

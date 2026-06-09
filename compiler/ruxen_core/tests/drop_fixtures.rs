@@ -1004,6 +1004,49 @@ fn p04_hashset_string_releases_every_element() {
     );
 }
 
+/* ──────────────────────────────────────────────────────────────────
+ * Q31 (S1 memory-safety): a Float32-payload enum variant constructed
+ * BY VALUE two or more times in one function must be sound — no
+ * double-free, no leak.
+ *
+ * Root cause was an under-allocation in `alloc_size` (mir/lower/emit.rs):
+ * enums were sized to their PACKED layout, but codegen addresses payload
+ * fields on a fixed 8-byte slot stride. For `Move(Float32, Float32)` the
+ * payload-field-1 store landed 4 bytes past the allocation, corrupting
+ * adjacent heap-chunk metadata — which crashed the program (not a clean
+ * leak). A regressed compiler therefore fails this fixture by exiting
+ * non-zero / crashing inside the next malloc, well before the
+ * `outstanding == 0` assertion runs; a sound compiler frees each enum
+ * allocation exactly once.
+ * ────────────────────────────────────────────────────────────────── */
+
+/// Three inline Float32-payload enum constructions, each bound to a
+/// local and matched. Each ruxen-managed allocation must be freed exactly
+/// once at scope exit (no double-free, no leak): the THREE enum allocs
+/// balance the THREE frees → `ruxen_alloc_outstanding == 0`. A revert of
+/// the alloc_size slot-rounding fix corrupts the heap on the second
+/// construction and the binary crashes before clean exit (the harness
+/// reports the crash as a failure before this assertion).
+///
+/// We assert on `ruxen_alloc_outstanding` (the enum allocations under
+/// audit), NOT `outstanding_allocations` (which also counts `raw_*`
+/// mallocs): the fixture's final `puts "total=#{total}"` interpolates an
+/// Int into a String, and that formatter temporary is a SEPARATE,
+/// pre-existing, non-enum raw-heap leak the drop pass does not yet collect
+/// (documented in the fixture + the Drop ADR's open items). Folding it
+/// into the Q31 enum-soundness assertion would conflate two unrelated
+/// subsystems. The enum drop itself is sound: 3 allocs, 3 frees.
+#[test]
+fn q31_float_payload_enum_double_construct_no_leak() {
+    let source = rx("q31_float_enum_payload_no_leak_source");
+    let report = run_fixture_inline("q31_float_enum_no_leak", &source);
+    assert_eq!(
+        report.ruxen_alloc_outstanding, 0,
+        "leak (or double-free) on float-payload enum drop: {:#?}",
+        report
+    );
+}
+
 fn ruxen_unique_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);

@@ -1,0 +1,45 @@
+# Q31 leak/soundness fixture: constructing a Float32-payload enum variant
+# multiple times BY VALUE in one function, binding each to a local, must be
+# sound — each backing allocation freed exactly once (no double-free) and none
+# leaked. The locals are inline `Ev.Move(..)` / `Ev.Scroll(..)` constructions
+# (alloc-rooted), so drop-elaboration emits a scope-exit `ruxen_dealloc` for
+# each; the dealloc now operates on a correctly slot-rounded allocation.
+#
+# Before the alloc_size fix the second construction's payload store overran
+# the 16-byte allocation by 4 bytes and corrupted the heap, which surfaced as
+# a crash (non-zero exit), so a regressed compiler fails this fixture by
+# crashing before the leak assertion runs.
+#
+# Deliberately NO float interpolation: `"#{f32}"` routes through
+# Formatter/Float_to_string_prec, whose temporaries are a separate
+# (pre-existing, non-enum) raw-heap leak the drop pass doesn't yet collect.
+# This fixture extracts the payloads and folds them into an Int total so the
+# only heap under audit is the three enum allocations themselves.
+enum Ev
+  Move(Float32, Float32)
+  Scroll(Float32, Float32)
+  Key(Int)
+end
+
+def main
+  let a = Ev.Move(1.5f32, 2.5f32)
+  let b = Ev.Move(3.5f32, 4.5f32)
+  let c = Ev.Scroll(5.5f32, 6.5f32)
+  var total = 0
+  match a
+    Ev.Move(x, y)   -> total = total + (x + y) as Int
+    Ev.Scroll(x, y) -> nil
+    Ev.Key(k)       -> nil
+  end
+  match b
+    Ev.Move(x, y)   -> total = total + (x + y) as Int
+    Ev.Scroll(x, y) -> nil
+    Ev.Key(k)       -> nil
+  end
+  match c
+    Ev.Scroll(x, y) -> total = total + (x + y) as Int
+    Ev.Move(x, y)   -> nil
+    Ev.Key(k)       -> nil
+  end
+  puts "total=#{total}"
+end

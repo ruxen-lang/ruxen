@@ -48,15 +48,20 @@ once 1.0.0 ships.
   reproduce). Round-trip pins in
   `compiler/ruxen_core/tests/q23_fmt_nondestructive.rs`; `ruxen fmt` is safe to
   run on the GUI stack again.
-
-### Known issues
-- (Q31, NEW) Drop-elaboration crash: constructing a payload-carrying enum
-  variant whose payload is `Float`/`Float32` **two or more times by value in one
-  function** SIGTRAPs at runtime (`Ev.Move(1.0f32,2.0f32)` twice → 139). Int
-  payloads and a single Float construction are fine. Independent of Q28
-  (reproduces with inline f32 literals and on the pre-Q28-fix baseline). The Q28
-  pins are kept under the crash threshold so they isolate the width fix. Filed in
-  `docs/dev/gui-stack-v1-issues.md` §Q31 for a dedicated drop-elaboration pass.
+- (Q31) Constructing a `Float`/`Float32`-payload enum variant **two or more times
+  by value in one function** no longer crashes. Root cause was an enum
+  **under-allocation**, not a drop double-free: `alloc_size` (`mir/lower/emit.rs`)
+  sized an enum to its packed `layout.size`, but codegen addresses an enum payload
+  on a fixed 8-byte slot stride (`GetPayload` = base+8, field N at N*8), so
+  `Move(Float32,Float32)` stored field 1 four bytes past the 16-byte allocation →
+  heap-metadata corruption → fault on the next float `malloc` (which is why it
+  needed ≥2 float constructions and Int payloads survived). Fix: slot-round enum
+  allocations to `8 + widest_variant_field_count*8`. The enum dealloc path was
+  already sound (3 allocs / 3 frees). Pins RUN + assert stdout / clean exit:
+  `tests/release-e2e/cases/652_enum_float_payload_double_construct`,
+  `compiler/ruxen_core/tests/q31_float_enum_payload_drop.rs`, and
+  `drop_fixtures.rs::q31_…_no_leak` (asserts `ruxen_alloc_outstanding == 0`).
+  Unblocks canvas reverting event coordinates to `Float32`.
 - (Q29) Verified NOT-A-BUG + pinned: a borrowed `&String` (owned by the caller)
   passed into a `lib "C"` FFI function forwards the correct data pointer and a
   recoverable length. A Ruxen `String` IS a bare NUL-terminated `char*` (no

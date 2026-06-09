@@ -1182,7 +1182,41 @@ round-trip cases over these three shapes. **No app workaround beyond "do not run
 
 ---
 
-## Q31 · S1 — drop-elaboration crash on repeated `Float`-payload enum construction  ⏳ OPEN (NEW 2026-06-09)
+## Q31 · S1 — repeated `Float`-payload enum construction crashes (enum UNDER-ALLOCATION)  ✅ FIXED 2026-06-09
+
+> **ROOT CAUSE (not a drop double-free — an under-allocation).** `alloc_size`
+> (`mir/lower/emit.rs`) sized an enum allocation to its PACKED `layout.size`, but
+> codegen addresses an enum's payload on a FIXED 8-byte slot stride: `GetPayload`
+> reads at `base + 8` and payload field *N* at `N * 8` (cranelift `emit.rs` +
+> llvm `emit/instructions.rs`). For `Move(Float32, Float32)` the packed size is
+> 16, yet codegen stores field 1 at offset `8 + 1*8 = 16` — a 4-byte write **4
+> bytes past the 16-byte allocation**, corrupting the adjacent heap chunk's
+> metadata. The FIRST construction corrupted silently; the SECOND float-format
+> `malloc` (inside dtoa) then faulted — which is exactly why it needed ≥2
+> float-payload constructions and why `Int` payloads (already on 8-byte slots)
+> survived. Not a drop bug at all; the enum dealloc was sound (the leak audit
+> shows 3 enum allocs / 3 frees, `ruxen_alloc_outstanding == 0`).
+>
+> **FIX.** `alloc_size` now slot-rounds an enum to the footprint codegen actually
+> addresses: `8` (tag / payload-base slot) + `widest_variant_field_count * 8`,
+> for any payload width. Both backends share the slot addressing, so both honour
+> it. ~40 lines in `mir/lower/emit.rs`, no codegen/drops change.
+>
+> **PINS (run + assert stdout / clean exit — a revert crashes them at runtime).**
+> `tests/release-e2e/cases/652_enum_float_payload_double_construct` (decodes a
+> `Float32` payload TWICE, asserts `frame1=204.75`/`frame2=204.75`);
+> `compiler/ruxen_core/tests/q31_float_enum_payload_drop.rs` (double-construct,
+> loop, Int-unaffected); `drop_fixtures.rs::q31_float_payload_enum_double_construct_no_leak`
+> asserts the enum allocations balance (`ruxen_alloc_outstanding == 0`). Full
+> workspace **1940 passed / 0 failed** with the fix. **Unblocks** canvas reverting
+> event coords to `Float32` (a poll loop constructs many `Event`s per frame).
+>
+> *Note:* the leak-audit fixture's `puts "#{int}"` interpolation leaks one raw
+> string-formatter temporary (`raw_outstanding == 1`) — a SEPARATE, pre-existing,
+> non-enum leak the drop pass doesn't yet collect (tracked under the Drop ADR's
+> open items), deliberately out of Q31's scope.
+
+<details><summary>Original OPEN report (2026-06-09) — kept for history</summary>
 
 Surfaced while pinning the Q28 fix. Constructing a payload-carrying enum variant
 whose payload is `Float`/`Float32` **two or more times by value in a single
@@ -1226,6 +1260,8 @@ so they isolate the Q28 fix from this. Severity S1 (silent → crashing code) bu
 narrow (needs 2+ float-payload enum constructions per function); the canvas event
 loop matches once per frame, so it is not immediately on the hot path. Filed for
 a dedicated drop-elaboration pass.
+
+</details>
 
 ---
 
