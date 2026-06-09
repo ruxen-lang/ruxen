@@ -1003,6 +1003,62 @@ impl<'a> Lowerer<'a> {
         vec![]
     }
 
+    /// Declared field types of a struct/class, in layout order (parent class
+    /// fields prepended, mirroring `get_class_field_names`). Used by the
+    /// constructor lowering to coerce each field's initializer value to the
+    /// field's declared width BEFORE the width-blind `SetField` store — e.g.
+    /// a bare `Float` (f64) literal/local placed into a `Float32` field must
+    /// be narrowed to f32 first, or the 8-byte store / 4-byte load disagree
+    /// and the slot reads garbage (Q28). Returns an empty Vec for unknown /
+    /// non-struct-class type_defs (callers fall back to no coercion).
+    fn lookup_construct_field_types(&self, ty: &Ty) -> Vec<Ty> {
+        let name = match ty {
+            Ty::Struct { name, .. } | Ty::Class { name, .. } => name.clone(),
+            _ => return Vec::new(),
+        };
+        self.construct_field_types_by_name(&name)
+    }
+
+    /// Name-keyed field-type walk (mirrors `get_class_field_names`): own field
+    /// types in declaration order, with any parent class's fields prepended so
+    /// the result is in layout order. Keyed by name rather than DefId because
+    /// the same name-based `self.symbols.iter()` walk is how `get_class_field_names`
+    /// / `alloc_size` already locate the struct/class definition.
+    fn construct_field_types_by_name(&self, name: &str) -> Vec<Ty> {
+        use crate::resolve::symbols::DefKind;
+        for def in self.symbols.iter() {
+            if def.name != name {
+                continue;
+            }
+            match &def.kind {
+                DefKind::Struct { info } => {
+                    return info
+                        .fields
+                        .iter()
+                        .filter_map(|&fid| self.symbols.def_ty(fid))
+                        .collect();
+                }
+                DefKind::Class { info } => {
+                    let mut own: Vec<Ty> = info
+                        .fields
+                        .iter()
+                        .filter_map(|&fid| self.symbols.def_ty(fid))
+                        .collect();
+                    if let Some(parent_id) = info.parent {
+                        if let Some(parent_def) = self.symbols.get(parent_id) {
+                            let mut tys = self.construct_field_types_by_name(&parent_def.name);
+                            tys.append(&mut own);
+                            return tys;
+                        }
+                    }
+                    return own;
+                }
+                _ => {}
+            }
+        }
+        Vec::new()
+    }
+
     /// Find the parent class name of the function currently being lowered, if
     /// that function belongs to a class (its mangled name is `Class_method`)
     /// and the class has a `< Parent` clause. Used to lower `super(...)` calls

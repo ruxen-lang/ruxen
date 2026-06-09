@@ -458,8 +458,18 @@ impl<'a> Lowerer<'a> {
                             ty: expr.ty.clone(),
                             size: self.alloc_size(&expr.ty),
                         });
+                        // Coerce each positional arg to the declared field
+                        // width before the width-blind SetField store, so a
+                        // bare `Float` (f64) value placed into a `Float32`
+                        // field is narrowed to f32 first (Q28). Without this,
+                        // an 8-byte f64 store into a 4-byte f32 slot makes the
+                        // later f32 GetField read garbage (0).
+                        let field_tys = self.lookup_construct_field_types(&expr.ty);
                         for (idx, arg) in args.iter().enumerate() {
-                            let local = self.lower_expr(arg)?;
+                            let mut local = self.lower_expr(arg)?;
+                            if let Some(field_ty) = field_tys.get(idx).cloned() {
+                                local = self.coerce_to_field_ty(local, &field_ty);
+                            }
                             self.emit(MirInst::SetField {
                                 base: obj,
                                 field_index: idx,

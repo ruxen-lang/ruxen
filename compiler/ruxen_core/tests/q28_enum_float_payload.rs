@@ -1,31 +1,36 @@
-//! Q28 — an enum VARIANT carrying a `Float32`/`Float` payload must round-trip
-//! through construction and `match` with no precision loss.
+//! Q28 — a `Float32` struct field / enum VARIANT payload must round-trip
+//! through construction and field-read / `match` with no precision loss.
 //!
 //! Context: `canvas/src/event.rx` was forced to carry pointer coordinates as
 //! `Int` logical pixels with a TODO ("return to Float32 payloads once enum
 //! float payloads work"), costing sub-pixel precision on every pointer event.
-//! A 2026-06-09 audit (feat/drop-elaboration) found the deviation is STALE: the
-//! Q5 numeric-cast fix and the case-218 / 1b6ced0 struct/enum inline-method
-//! float-codegen work incidentally made enum float payloads correct. The
-//! mechanism, end to end:
 //!
-//!   - A `Float32` literal (`3.5f32`) lowers to `Assign { dest: <f32 temp>,
-//!     value: Literal::Float(_) }`. The Cranelift/LLVM `Assign` handler emits an
-//!     f64 const and then `coerce_value`-narrows it to the dest's declared f32,
-//!     so the temp local is a real f32 BEFORE it ever reaches the constructor.
-//!   - The constructor (`mir/lower/expr/constructors.rs`) stores each payload
-//!     field with `SetField { value: Use(temp) }` at slot `idx*8`; codegen
-//!     stores the value at its own width (4 bytes for f32, 8 for f64).
-//!   - `match` payload extraction loads with `GetField`, whose load type is the
-//!     PATTERN BINDING's declared type — f32 for an f32 field — so the slot is
-//!     read back at the same width. No bit-pattern mismatch, no truncation.
+//! REOPENED 2026-06-09: the earlier "already sound" verdict was WRONG. It was
+//! tested only against INLINE `f32`-suffixed literals (`120.5f32`), which the
+//! lowering narrows in place — that path always worked. On the real shapes the
+//! `SetField`/`GetField` slot path was width-BLIND:
+//!   - a bare `Float` (f64) literal/local placed into a `Float32` field stored
+//!     8 bytes into a 4-byte slot, and the later f32 `GetField` read 0;
+//!   - an uncast f64 local placed into the payload could even crash.
+//! Only the inline `120.5f32` literal and the `expr as Float32` cast (and a
+//! `Float32` fn-param coercion) produced an f32-typed SSA value before the
+//! store, which is why those worked and masked the bug.
+//!
+//! FIX (`mir/lower/expr/constructors.rs` + `method_call.rs`): before each
+//! width-blind `SetField` in a struct/enum/tuple constructor, the value is
+//! coerced to the FIELD's declared width via a target-typed `Assign`
+//! (`coerce_to_field_ty` → the shared `coerce_value` fdemote/fpromote/fcvt
+//! path the `as`-cast already used). The store now happens at the slot width,
+//! and `GetField` reads it back at the same width. Backend-agnostic — the
+//! coercion is in shared MIR lowering, so Cranelift and LLVM agree.
 //!
 //! These pins read the SAME fixtures the release-e2e harness runs
-//! (`tests/release-e2e/cases/647_*`, `648_*`) so the cargo pin and the e2e case
-//! can never drift apart (the `dyn_fn_e2e_600` convention). They are regression
-//! guards: if the typed slot path ever regresses to a width-blind store/load
-//! (e.g. storing an f64 const directly into an f32 field), the sub-pixel value
-//! corrupts and these fail.
+//! (`tests/release-e2e/cases/647_*`, `648_*`, `650_*`, `651_*`) and — the
+//! non-negotiable part of the reopen — they COMPILE + RUN the binary and assert
+//! its exact stdout. 647/648 cover the inline-literal path; 650/651 cover the
+//! LOAD-FROM-LOCAL and BARE-f64-LITERAL shapes that actually regressed, so the
+//! real codegen path (not just compile success) is guarded and cannot silently
+//! revert to a width-blind store again.
 
 use ruxen_core::codegen;
 use ruxen_core::lexer::Lexer;
@@ -107,6 +112,29 @@ fn float32_payload_round_trips() {
 fn float64_mixed_payload_round_trips() {
     let (src, expected) = case("648_enum_float_mixed_payload.rx");
     let (stdout, stderr, ok) = compile_and_run(&src, "q28_648");
+    assert!(ok, "non-zero exit; stderr: {stderr}");
+    assert_eq!(stdout, expected, "stdout was {stdout:?}");
+}
+
+/// REOPEN pin — a `Float32` STRUCT field stored from a value bound to a LOCAL
+/// (the canvas `let ia = event_a() as Float32; P.new(ia, ib)` shape), a bare
+/// f64 literal into an f32 field, and an uncast f64 local — all must read the
+/// field back as 204.75, not 0 (and must not crash). RUNS + asserts stdout.
+#[test]
+fn f32_field_store_via_local_round_trips() {
+    let (src, expected) = case("650_f32_field_store_via_local.rx");
+    let (stdout, stderr, ok) = compile_and_run(&src, "q28_650");
+    assert!(ok, "non-zero exit; stderr: {stderr}");
+    assert_eq!(stdout, expected, "stdout was {stdout:?}");
+}
+
+/// REOPEN pin — same load-from-local / bare-f64 / uncast-f64 shapes but for an
+/// enum `Float32` PAYLOAD (the `GetPayload` + SetField path). RUNS + asserts
+/// stdout (every line 204.75).
+#[test]
+fn f32_payload_store_via_local_round_trips() {
+    let (src, expected) = case("651_enum_f32_payload_via_local.rx");
+    let (stdout, stderr, ok) = compile_and_run(&src, "q28_651");
     assert!(ok, "non-zero exit; stderr: {stderr}");
     assert_eq!(stdout, expected, "stdout was {stdout:?}");
 }

@@ -1,0 +1,38 @@
+# Q28 regression pin (REOPENED) — an enum `Float32` PAYLOAD stored from an
+# f64 LOCAL must narrow to the payload width, not read 0.
+#
+# This is the exact shape canvas's event decode needs and the one that
+# miscompiled to 0: `let fa = event_a(); Ev.Move(fa, fb)` where the payload is
+# `Float32` but the value is a bare `Float` (f64) local. Before the Q28 fix the
+# f64 value was stored width-blind (8 bytes) into the 4-byte f32 payload slot,
+# and the `GetField` in the match read 0. Now the value is coerced to the
+# payload's declared width before the store. RUNS + asserts stdout (204.75).
+#
+# NOTE: deliberately ONE enum construction. Two or more by-value enum
+# constructions of a payload-carrying variant in a single function trip an
+# UNRELATED drop-elaboration UAF crash on this branch (filed as Q31; it
+# reproduces with purely-inline f32 payloads and zero coercion, so it is not the
+# Q28 width defect). The struct pin 650 carries the full four-shape matrix
+# (inline f32 / bare f64 / f32 local / f64 local) crash-free; this case isolates
+# the enum-payload load-from-local path that canvas depends on.
+enum Ev
+  Move(Float32, Float32)
+  Tick
+end
+
+def f64_a -> Float
+  120.5
+end
+
+def f64_b -> Float
+  84.25
+end
+
+def main
+  let fa = f64_a()
+  let fb = f64_b()
+  match Ev.Move(fa, fb)
+    Ev.Move(x, y) -> puts "#{x + y}"
+    Ev.Tick       -> puts "tick"
+  end
+end
