@@ -942,7 +942,37 @@ uses `inked`.
 
 ---
 
-## Q28 · S1 — enum variant `Float`/`Float32` payloads (claimed miscompile)  ✅ FIXED (already sound; pinned)
+## Q28 · S1 — `Float32` field/payload store-via-local miscompiles to 0 / crashes  ⚠️ REOPENED 2026-06-09 (real bug, partial fix only)
+
+> **REOPENED (2026-06-09, coordinator).** The earlier "already sound" verdict
+> below was tested ONLY against inline `f32`-suffixed literals via the release-e2e
+> harness, which did not assert runtime stdout. On the REAL `ruxen compile` path
+> (installed feat/drop-elaboration HEAD), `Float32` struct/enum field stores are
+> only correct when the value reaches the constructor as an INLINE expression
+> (`120.5f32`, or `expr as Float32`) or narrows at a `Float32` fn-param boundary.
+> When the f32 value is first bound to a LOCAL and then placed into the field by
+> the constructor, the slot reads **0**; an UNcast f64 local into an f32 payload
+> **crashes (SIGTRAP/133)**. Full repro matrix:
+> `tmp/test-cache/q28-f32-field-store-matrix.md`.
+>
+> | shape into a `Float32` field/payload | result |
+> |---|---|
+> | inline `120.5f32` literal | ✓ 204.75 |
+> | inline `expr as Float32` constructor arg | ✓ 204.75 |
+> | f64 value through a `Float32` fn-param | ✓ 204.75 |
+> | bare `120.5` (f64) literal constructor arg | ✗ **0** |
+> | `let ia = … as Float32` (f32 LOCAL) then construct | ✗ **0** |
+> | f64 local into payload, no cast | ✗ **crash 133** |
+>
+> Canvas's event decode is the `let ia = event_a() as Float32; Ev.Move(ia, ib)`
+> shape → 0, so the `Int`→`Float32` coord revert stays BLOCKED until the
+> load-from-local → f32-slot store path is fixed. The fix must (a) make the typed
+> `SetField`/`GetField` f32 path width-correct for a value loaded from a local
+> (not only an inline-narrowed arg), (b) reject-or-coerce an f64 local into an f32
+> field instead of crashing, and (c) the e2e pin must actually RUN the binary and
+> assert stdout (the prior 647/648 pins passed while real codegen was wrong).
+
+<details><summary>Original (incomplete) 2026-06-09 verdict — kept for history</summary>
 
 Surfaced as a standing deviation in `canvas/src/event.rx`: the event enum carries
 pointer coordinates as `Int` logical pixels with a TODO — "return to Float32
@@ -1003,6 +1033,8 @@ end
 > `canvas/src/event.rx` — the `Int`-coordinate deviation can now be reverted to
 > `Float32` (canvas owner handles that repo).
 
+</details>
+
 ## Q29 · S1 — borrowed `&String` into a `lib "C"` FFI call (claimed wrong pointer)  ✅ FIXED / NOT-A-BUG (pinned)
 
 The ledger and canvas ROADMAP claimed `measure_text` "forwards a char count, not
@@ -1040,6 +1072,49 @@ the legacy `measure_text_n_raw(n: Int)` char-count fallback).
 > `compiler/ruxen_core/tests/q29_ffi_borrowed_string.rs`. Canvas's deviation note
 > can be reverted (canvas owner handles that repo); the legacy
 > `measure_text_n_raw` char-count fallback is now redundant.
+
+## Q30 · S4 — `ruxen fmt` rewrites builder-closure call shapes into a known segfault form  ⏳ OPEN
+
+Surfaced 2026-06-09 independently by BOTH GUI agents (quiver + canvas) when a
+session touched `.rx` source. `ruxen fmt` is still destructive on the GUI
+stack's idioms despite Q23 — it does not just reflow whitespace, it REWRITES the
+call shape:
+
+- **Drops a no-arg closure header and converts a brace builder block to a
+  `do…end` passed to a free-function-style call.** quiver's example/test entry
+  shape `{ || App.build({ |ui, root| … }) }` is rewritten to
+  `{ App.build(do |ui, root| … end) }` — both the outer `||` is dropped AND the
+  builder closure becomes a `do…end` argument. That `do…end`-to-a-call form is a
+  DOCUMENTED segfault shape on this stack (a `do…end` block passed to a
+  free-function with an explicit closure param — see the quiver landmines), so
+  `fmt` turns compiling code into crashing code.
+- **Strips parens off a zero-arg call used as a value:** `row_height()` →
+  `row_height` (changes a call into a bare-name expression).
+- **Blast radius is the whole tree:** the canvas agent reported `ruxen fmt`
+  reformatting 43 files in one run; the quiver agent had 3 fresh test files
+  corrupted (6/2/1 failures) before restoring them. Both agents had to hand-revert
+  fmt's output and commit unformatted-by-fmt (matching the repo's actual hand
+  convention: every existing test uses `{ || … }` and `row_height()` with parens).
+
+Repro (minimal):
+```ruxen
+# before fmt (compiles):
+let app = { || App.build({ |ui, root| root.text("hi") }) }
+let h = row_height()
+# after `ruxen fmt` (segfault shape + semantic change):
+let app = { App.build(do |ui, root| root.text("hi") end) }
+let h = row_height
+```
+
+Severity S4 (tooling/DX, but it produces CRASHING code from working code, so it
+is the high end of S4 — it is unsafe to run `ruxen fmt` on the GUI stack today).
+Related to Q23 (the prior `fmt` non-destructiveness fix, which covered doc-comment
+stripping + test-file parsing but NOT call-shape rewriting). Fix should make
+`fmt` preserve: (a) an explicit no-arg closure header `{ || … }`, (b) a
+brace-delimited block argument as braces (never auto-convert `{…}` arg →
+`do…end`), and (c) parens on a zero-arg call expression. Pin with before/after
+round-trip cases over these three shapes. **No app workaround beyond "do not run
+`ruxen fmt` on these repos"** — recorded in both apps' notes.
 
 ---
 
