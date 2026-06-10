@@ -278,6 +278,10 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0728",
         title: "top-level expression statement is not executable; wrap it in `def main`",
     },
+    CodeInfo {
+        code: "E0729",
+        title: "a closure / `Fn` value cannot be formatted into a string (no Display)",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`

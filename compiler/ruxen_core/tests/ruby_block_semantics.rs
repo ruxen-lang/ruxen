@@ -303,3 +303,47 @@ end
     assert_eq!(code, Some(0), "stderr={stderr:?}");
     assert_eq!(stdout, "yes\nnone\n", "stdout was {stdout:?}");
 }
+
+/// E0729: interpolating a closure / `Fn` value is a clean compile error, not a
+/// silent pointer print. A bare `do … end` is a closure literal (never an
+/// expression block), so `let v = do … end; puts "#{v}"` binds the un-invoked
+/// closure; without this check MIR interpolation's "unknown type → Int_fmt"
+/// fallback prints a raw pointer (silent garbage). Reported live against the
+/// `docs/tutorial/05-control-flow.md` "Blocks as expressions" section.
+#[test]
+fn interpolating_a_closure_is_e0729() {
+    let source = r##"
+def main
+  let v = do
+    1 + 2
+  end
+  puts "#{v}"
+end
+"##;
+    let errors = typecheck_errors(source);
+    assert!(
+        errors
+            .iter()
+            .any(|(code, msg)| code == "E0729" && msg.contains("no `Display`")),
+        "expected E0729 on closure interpolation, got {errors:?}"
+    );
+}
+
+/// Negative half of E0729: invoking the closure and interpolating its (Int)
+/// RESULT is fine — only formatting the closure VALUE itself is rejected.
+#[test]
+fn interpolating_an_invoked_closure_result_is_ok() {
+    let source = r##"
+def main
+  let f = do
+    1 + 2
+  end
+  puts "#{f.()}"
+end
+"##;
+    let errors = typecheck_errors(source);
+    assert!(
+        !errors.iter().any(|(code, _)| code == "E0729"),
+        "E0729 must not fire on an invoked closure's result, got {errors:?}"
+    );
+}

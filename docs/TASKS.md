@@ -118,6 +118,28 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       Ruby `break`-exits-yielder, `redo`, lenient arity, `instance_eval`
       self-rebinding. Nested `yield` inside a closure body errors cleanly in
       Tier 1.
+- [x] **Interpolating a closure prints silent pointer garbage → now E0729
+      (FIXED 2026-06-10, `feat/drop-elaboration`).** A bare `do … end` is a
+      closure literal, NEVER an expression block (parser `atoms.rs`: "do…end is
+      always a closure"), so `let v = do … end; puts "#{v}"` bound the
+      un-invoked closure and MIR interpolation's "unknown type → Int_fmt
+      (pointer-as-int)" fallback printed a raw pointer — silent garbage, and the
+      `docs/tutorial/05-control-flow.md` "Blocks as expressions" section taught
+      exactly this broken form. Fixed: typeck (`infer/expr.rs` Interpolation arm)
+      now rejects a `Fn`/`FnMut`/`FnOnce`-typed interpolated part with **E0729**
+      (`docs/errors/E0729.md`); an invoked closure's result (`#{f.()}`) and all
+      ordinary values are unaffected. Tutorial section rewritten (helper-fn /
+      invoke-and-format alternatives; the match-arm `-> do … end` value form is
+      real and kept). Pins: `ruby_block_semantics.rs::interpolating_a_closure_
+      is_e0729` + `..._invoked_closure_result_is_ok`.
+- [ ] **PARKED design question — Ruby-style expression blocks.** If a block that
+      is itself a *value* (multi-statement expression producing its last value)
+      is ever wanted, the unambiguous spelling is **`begin … end`**, NOT
+      `do … end` — `do … end` now firmly means "a block attached to a call"
+      (enforced by E0729 on the silent-pointer path). Today the value-producing
+      multi-statement need is met by a helper function or an `if`/`match`
+      expression. No work scheduled; recorded so the spelling decision is not
+      re-litigated ad hoc.
 
 - [x] **Q34 · S2 — `ruxen fmt` drops grouping parentheses (FIXED 2026-06-10,
       `feat/drop-elaboration`).** `(rel*span + track_w/2)/track_w` →

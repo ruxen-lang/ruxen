@@ -74,6 +74,18 @@ once 1.0.0 ships.
     `tests/ruby_block_semantics.rs`, `drop_fixtures.rs::block_capturing_heap_value_runs_soundly`.
 
 ### Fixed
+- **Interpolating a closure / `Fn` value printed a silent pointer instead of
+  erroring → new diagnostic E0729.** A bare `do … end` is a closure literal,
+  never an expression block (parser rule: "do…end is always a closure"), so
+  `let v = do … end; puts "#{v}"` bound the un-invoked closure and MIR
+  interpolation's "unknown type → `Int_fmt` (pointer-as-int)" fallback printed a
+  raw pointer address — silent garbage that shipped teaching material
+  (`docs/tutorial/05-control-flow.md`) actually taught. Typeck now rejects a
+  `Fn`/`FnMut`/`FnOnce`-typed interpolated part with **E0729**
+  (`docs/errors/E0729.md`, registered); an invoked closure's result (`#{f.()}`)
+  and all ordinary values are unaffected. The tutorial section was rewritten.
+  Pins: `ruby_block_semantics.rs::interpolating_a_closure_is_e0729`,
+  `..._invoked_closure_result_is_ok`.
 - **MIR: a paren-less, blockless call to an optional-`&block` METHOD crashed
   the arity verifier** (Ruby-block-semantics ADR D1/D5; the blocks feature's
   filed Tier-1 known limitation). `w.frame` (no parens, no block) on a method

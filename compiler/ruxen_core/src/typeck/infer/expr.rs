@@ -1284,6 +1284,34 @@ impl<'a> InferenceEngine<'a> {
                     } = part
                     {
                         self.infer_expr(e);
+                        // E0729: a closure / `Fn` value has no Display. Without
+                        // this check it falls through MIR interpolation's
+                        // "unknown type → Int_fmt (pointer-as-int)" fallback and
+                        // SILENTLY prints a raw pointer — the exact garbage a
+                        // bare `do…end` (which parses as a closure literal, never
+                        // an expression block) bound to a local produces when
+                        // interpolated (`let v = do … end; puts "#{v}"`). Catch
+                        // it at typeck so the user gets a clear error instead of
+                        // a pointer. Stored/invoked closures are unaffected —
+                        // only formatting one is rejected.
+                        let part_ty = self.ctx.resolve(&e.ty);
+                        if matches!(
+                            part_ty,
+                            Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. }
+                        ) {
+                            self.diagnostics.push(
+                                crate::diagnostics::Diagnostic::error_with_code(
+                                    "a closure / `Fn` value cannot be formatted into a string: \
+                                     it has no `Display`. (A bare `do … end` is a block/closure, \
+                                     never an expression value — to compute a value from several \
+                                     statements use a helper function, or invoke the closure with \
+                                     `.()` and interpolate its result.)"
+                                        .to_string(),
+                                    e.span.clone(),
+                                    "E0729",
+                                ),
+                            );
+                        }
                     }
                 }
                 expr.ty = Ty::String;
