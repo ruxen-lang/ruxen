@@ -163,8 +163,14 @@ fn fmt_preserves_both_block_type_spellings_and_block_forms() {
     assert_eq!(once, twice, "fmt not idempotent on block program:\n{once}");
     // A multi-statement block keeps `do…end` (content-driven), and the
     // `&block` decl keeps its canonical type spelling.
-    assert!(once.contains("do |n|"), "multi-stmt do…end not kept:\n{once}");
-    assert!(once.contains("&block: Fn[(Int) -> nil]"), "type spelling lost:\n{once}");
+    assert!(
+        once.contains("do |n|"),
+        "multi-stmt do…end not kept:\n{once}"
+    );
+    assert!(
+        once.contains("&block: Fn[(Int) -> nil]"),
+        "type spelling lost:\n{once}"
+    );
 }
 
 fn concat_src() -> String {
@@ -189,7 +195,10 @@ end
 "##;
     let (stdout, stderr, code) = compile_and_run(source, "autocall_real_default");
     assert_eq!(code, Some(0), "stderr={stderr:?}");
-    assert_eq!(stdout, "5\n", "auto-call must use the real default; got {stdout:?}");
+    assert_eq!(
+        stdout, "5\n",
+        "auto-call must use the real default; got {stdout:?}"
+    );
 }
 
 /// Pin (c2): an explicit `&block` parameter works on a METHOD — block-bearing

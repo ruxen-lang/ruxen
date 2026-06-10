@@ -647,7 +647,8 @@ fn block_capturing_heap_value_runs_soundly() {
         "double-free suspected: allocs={allocs} frees={frees}\nstderr:\n{stderr}"
     );
     assert_eq!(
-        outstanding, allocs - frees,
+        outstanding,
+        allocs - frees,
         "leak accounting inconsistent: allocs={allocs} frees={frees} outstanding={outstanding}"
     );
 }
