@@ -66,6 +66,7 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
         TypeExpr::Function {
             params,
             return_type,
+            bracketed,
             ..
         } => {
             let param_docs: Vec<Doc> = params
@@ -88,12 +89,19 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
                     text(")"),
                 ]))
             };
-            concat(vec![
-                text("Fn"),
+            let sig = concat(vec![
                 params_doc,
                 text(" -> "),
                 format_type_expr(return_type, _comments),
-            ])
+            ]);
+            if *bracketed {
+                // Canonical block signature `Fn[(T…) -> R]` — preserve the
+                // square-bracket spelling the author wrote (ADR D8). Never
+                // rewrite it to the paren form.
+                concat(vec![text("Fn["), sig, text("]")])
+            } else {
+                concat(vec![text("Fn"), sig])
+            }
         }
 
         TypeExpr::SomeMixin { bounds, .. } => {

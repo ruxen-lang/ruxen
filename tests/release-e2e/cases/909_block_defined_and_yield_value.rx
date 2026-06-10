@@ -1,0 +1,27 @@
+# Ruby-block-semantics ADR, pins (d)/(e). `block_defined?` true/false paths
+# (the user's conditional-render pattern) and `yield`'s VALUE typed as the
+# block's declared `R` (`let r = yield(4)`), usable in an expression.
+
+def render(&block: Fn[() -> nil])
+  if block_defined?
+    yield
+  else
+    puts "default"
+  end
+end
+
+def doubler(&block: Fn[(Int) -> Int]) -> Int
+  let r = yield(4)
+  r + 1
+end
+
+def main
+  render do
+    puts "custom"
+  end
+  render
+  let v = doubler do |n|
+    n * 10
+  end
+  puts "#{v}"
+end

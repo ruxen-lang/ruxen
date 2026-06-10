@@ -123,6 +123,62 @@ impl Resolver {
             })
     }
 
+    /// True if `p` is the explicit `&block:` parameter (parser stores its
+    /// name as `&block`). Ruby-block-semantics ADR D1/D4.
+    pub(super) fn is_explicit_block_param(p: &ast::Param) -> bool {
+        p.name == "&block"
+    }
+
+    /// Synthesize and register the `__block` slot for an explicit
+    /// `&block: Fn[(T…) -> R]` parameter (Ruby-block-semantics ADR).
+    ///
+    /// Reuses the exact representation the implicit-`yield` path uses (a
+    /// trailing `__block` param holding the closure-pair-pointer) so `yield`,
+    /// `block.(…)`, and call-site trailing-block forwarding all work
+    /// unchanged. Differences from the implicit path:
+    ///   - the block's `Ty::Fn` params/return come from the DECLARED
+    ///     annotation, so `yield`'s value is the declared `R` (ADR D2);
+    ///   - the param carries a `nil` DEFAULT, making the block OPTIONAL at
+    ///     call sites (ADR D5) — `append_default_args` fills a null sentinel
+    ///     (ADR D1) when no block is passed;
+    ///   - the slot is bound under `__block` (yield desugar), `&block` (the
+    ///     yield fallback lookup), and `block` (so `block.(…)` resolves).
+    ///
+    /// Returns the synthesized `HirParam` to push onto the function's param
+    /// list (last position is enforced separately, E1119).
+    pub(super) fn register_explicit_block_param(&mut self, p: &ast::Param) -> HirParam {
+        // `parse_block_type` produces a `TypeExpr::Function`, so this resolves
+        // to a concrete `Ty::Fn { params, ret }` — its `ret` is what makes
+        // `yield`'s value typed `R` (ADR D2). A stray non-Function annotation
+        // resolves as-is and the typeck `.call` path handles it.
+        let block_ty = self.resolve_type_expr(&p.type_expr);
+        let block_def_id = self.symbols.define(
+            "__block".to_string(),
+            DefKind::Param {
+                ty: block_ty.clone(),
+                auto_assign: false,
+            },
+            Visibility::Private,
+            p.span.clone(),
+        );
+        // Bind every name the body / desugar might use for the slot.
+        self.scopes.insert("__block".to_string(), block_def_id);
+        self.scopes.insert("&block".to_string(), block_def_id);
+        self.scopes.insert("block".to_string(), block_def_id);
+        HirParam {
+            def_id: block_def_id,
+            name: "__block".to_string(),
+            ty: block_ty,
+            auto_assign: false,
+            // `nil` → NullLiteral → null closure-pair-pointer sentinel.
+            default: Some(ast::Expr {
+                kind: ast::ExprKind::NullLiteral,
+                span: p.span.clone(),
+            }),
+            span: p.span.clone(),
+        }
+    }
+
     pub(super) fn append_default_args(&mut self, def_id: DefId, args: &mut Vec<HirExpr>) {
         let defaults: Vec<crate::parser::ast::Expr> = self
             .symbols
@@ -368,13 +424,51 @@ impl Resolver {
             }
         }
 
-        // Resolve parameters
-        let mut params = self.resolve_and_register_params(&f.params);
+        // Separate the explicit `&block:` parameter (Ruby-block-semantics
+        // ADR) from the ordinary positional parameters. It MUST be last
+        // (ADR D4 → E1119): any positional parameter after it is an error.
+        let block_param_pos = f.params.iter().position(Self::is_explicit_block_param);
+        let mut explicit_block_param: Option<&ast::Param> = None;
+        let ordinary_params: Vec<ast::Param> = if let Some(pos) = block_param_pos {
+            explicit_block_param = Some(&f.params[pos]);
+            // Enforce last-position: nothing may follow the block param.
+            if pos != f.params.len() - 1 {
+                let offender = &f.params[pos + 1];
+                self.diagnostics.push(Diagnostic::error_with_code(
+                    format!(
+                        "block parameter `&block` must be the last parameter, but `{}` follows it",
+                        offender.name
+                    ),
+                    offender.span.clone(),
+                    "E1119",
+                ));
+            }
+            f.params
+                .iter()
+                .filter(|p| !Self::is_explicit_block_param(p))
+                .cloned()
+                .collect()
+        } else {
+            f.params.clone()
+        };
+
+        // Resolve parameters (ordinary positional params only).
+        let mut params = self.resolve_and_register_params(&ordinary_params);
+
+        // Register the explicit `&block` slot, if any. This supersedes the
+        // implicit yield-scan synthesis below (the slot already exists).
+        if let Some(bp) = explicit_block_param {
+            let hir_block = self.register_explicit_block_param(bp);
+            params.push(hir_block);
+        }
+        let has_explicit_block = explicit_block_param.is_some();
 
         // If this function's body contains `yield`, append a synthetic
         // `__block: Fn(…) -> ()` parameter so `yield VALUE` can desugar
         // to `__block.(VALUE)` and callers can forward a trailing block.
-        if let Some(&arity) = self.yield_fns.get(&f.name) {
+        // Skipped when an explicit `&block` already provided the slot —
+        // the explicit annotation is authoritative (typed `R`, optional).
+        if let Some(&arity) = self.yield_fns.get(&f.name).filter(|_| !has_explicit_block) {
             // For each yield argument that is a bare `self`, type the matching
             // block parameter as the enclosing class instead of a fresh type
             // variable. A method's `yield self` then propagates a CONCRETE

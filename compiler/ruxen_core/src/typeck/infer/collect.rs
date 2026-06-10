@@ -749,7 +749,21 @@ impl<'a> InferenceEngine<'a> {
         self.select_class_method_arity(&parent, method_name, args, has_block)
     }
 
-    fn default_ast_to_hir(&mut self, default: &ast::Expr) -> Option<HirExpr> {
+    pub(super) fn default_ast_to_hir(
+        &mut self,
+        default: &ast::Expr,
+        param_ty: &Ty,
+    ) -> Option<HirExpr> {
+        // A `nil` default — used by the optional `&block` slot (ADR D5) — is a
+        // null value typed as the parameter's own type (a `Ty::Fn`), so the
+        // block slot receives the null closure-pair-pointer sentinel (ADR D1).
+        if matches!(default.kind, ast::ExprKind::NullLiteral) {
+            return Some(HirExpr {
+                kind: HirExprKind::NullLiteral,
+                ty: param_ty.clone(),
+                span: default.span.clone(),
+            });
+        }
         let ty = match &default.kind {
             ast::ExprKind::IntLiteral(_, _) => Ty::Int,
             ast::ExprKind::FloatLiteral(_, _) => Ty::Float,
@@ -775,8 +789,13 @@ impl<'a> InferenceEngine<'a> {
         })
     }
 
-    pub(super) fn append_method_default_args(&mut self, method_id: DefId, args: &mut Vec<HirExpr>) {
-        let defaults: Vec<ast::Expr> = self
+    pub(super) fn append_method_default_args(
+        &mut self,
+        method_id: DefId,
+        args: &mut Vec<HirExpr>,
+        has_trailing_block: bool,
+    ) {
+        let defaults: Vec<(ast::Expr, Ty)> = self
             .symbols
             .get(method_id)
             .and_then(|def| match &def.kind {
@@ -784,16 +803,26 @@ impl<'a> InferenceEngine<'a> {
                 _ => None,
             })
             .map(|signature| {
+                // A trailing block fills the LAST parameter slot; reserve it so
+                // its `nil` default is not also emitted (Ruby-block ADR D5).
+                let take = signature
+                    .params
+                    .len()
+                    .saturating_sub(usize::from(has_trailing_block));
                 signature
                     .params
                     .iter()
+                    .take(take)
                     .skip(args.len())
-                    .filter_map(|p| p.default.clone())
-                    .collect()
+                    // Pair each default with its param type so a `nil` default
+                    // (the optional `&block` slot, Ruby-block-semantics ADR D5)
+                    // is materialized as a null value of the param's `Ty::Fn`.
+                    .filter_map(|p| p.default.clone().map(|d| (d, p.ty.clone())))
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        for default in defaults {
-            if let Some(hir) = self.default_ast_to_hir(&default) {
+        for (default, param_ty) in defaults {
+            if let Some(hir) = self.default_ast_to_hir(&default, &param_ty) {
                 args.push(hir);
             }
         }

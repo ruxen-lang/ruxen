@@ -432,6 +432,14 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1118",
         title: "`&Mixin` references a non-`dispatch runtime` mixin",
     },
+    // Ruby-block-semantics (docs/decisions/ruby-block-semantics.md). E1119
+    // fires when a `&block:` parameter is not the LAST parameter of a
+    // function/method — Ruby blocks are always the implicit trailing
+    // argument, so anything after `&block` is rejected (ADR D4).
+    CodeInfo {
+        code: "E1119",
+        title: "block parameter `&block` must be the last parameter",
+    },
     // ── Package manager (E1600-E1699) ────────────────────────────────
     // Emitted from `ruxen_cli`. Spans don't apply (these are toolchain
     // errors, not compile errors), but the codes follow the same

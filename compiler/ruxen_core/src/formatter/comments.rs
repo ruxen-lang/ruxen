@@ -850,6 +850,7 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                     span,
                     params,
                     return_type,
+                    ..
                 } => {
                     self.add(span);
                     for p in params {

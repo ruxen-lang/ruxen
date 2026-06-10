@@ -1,0 +1,25 @@
+# Ruby-block-semantics ADR, pins (d)/(h). The block is a normal callable value
+# inside the body (`block.(args)`), and a block that CAPTURES + MUTATES an outer
+# `var` runs soundly across multiple invocations (capture soundness under drop
+# elaboration — the captured cell is neither lost nor double-applied).
+
+def apply(&block: Fn[(Int) -> nil])
+  block.(99)
+end
+
+def each3(&block: Fn[(Int) -> nil])
+  yield 1
+  yield 2
+  yield 3
+end
+
+def main
+  apply do |n|
+    puts "got:#{n}"
+  end
+  var sum = 0
+  each3 do |x|
+    sum = sum + x
+  end
+  puts "sum=#{sum}"
+end

@@ -174,6 +174,52 @@ impl<'a> Lowerer<'a> {
         owned
     }
 
+    /// Ruby-block-semantics ADR D5: guard a block-slot indirect call against
+    /// an absent (optional) block. `pair` is the closure-pair-pointer of the
+    /// `__block` slot; when it is the null sentinel (ADR D1) the caller passed
+    /// no block, so a `yield` / `block.(…)` here is a runtime error rather
+    /// than a null-deref segfault.
+    ///
+    /// Emits `if pair == 0 { ruxen_panic("yield called without a block in
+    /// `<fn>`") }`, then continues lowering in the non-null block. The panic
+    /// block is terminated `Unreachable` (after `ruxen_panic`, which does not
+    /// return).
+    pub(super) fn emit_block_presence_guard(&mut self, pair: LocalId) {
+        let fn_name = self.fn_ref().name.clone();
+        let is_null = self.new_temp(Ty::Bool);
+        self.emit(MirInst::Compare {
+            dest: is_null,
+            op: CmpOp::Eq,
+            lhs: MirValue::Use(pair),
+            rhs: MirValue::Literal(Literal::Int(0)),
+        });
+        let panic_block = self.new_block();
+        let cont_block = self.new_block();
+        self.set_terminator(Terminator::Branch {
+            cond: MirValue::Use(is_null),
+            then_block: panic_block,
+            else_block: cont_block,
+        });
+        // Panic block: ruxen_panic(msg); unreachable. `ruxen_panic` takes a
+        // raw `const char*` — use `MirInst::StringLiteral` (the raw .rodata
+        // pointer form) rather than an owned Ruxen String, matching the C
+        // signature.
+        self.current_block = panic_block;
+        let msg = self.new_temp(Ty::Int);
+        self.emit(MirInst::StringLiteral {
+            dest: msg,
+            value: format!("yield called without a block in `{fn_name}`"),
+        });
+        self.emit(MirInst::Call {
+            dest: None,
+            callee: "ruxen_panic".to_string(),
+            args: vec![MirValue::Use(msg)],
+        });
+        self.set_terminator(Terminator::Unreachable);
+        // Continue in the non-null block.
+        self.current_block = cont_block;
+    }
+
     /// Set the terminator of the current basic block.
     pub(super) fn set_terminator(&mut self, term: Terminator) {
         let block_id = self.current_block;

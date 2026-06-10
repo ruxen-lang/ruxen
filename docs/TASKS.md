@@ -23,6 +23,45 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
 canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
 (canvas 143 green, sub-pixel pinned, live windowed loop verified).
 
+### Language features
+
+- [x] **Ruby-block semantics — explicit `&block` / `yield` / `block_defined?`
+      (DONE 2026-06-10, `feat/drop-elaboration`).** ADR
+      `docs/decisions/ruby-block-semantics.md`. Explicit optional
+      `&block: Fn[(T…) -> R]` (canonical square-bracket spelling; paren form kept
+      for back-compat; `fmt` preserves both), `yield`/`yield(args)` with the
+      block's value typed `R`, `block_defined?` + `block_given?` alias, optional
+      blocks with a clean runtime panic on blockless `yield` (E-free, exit 101),
+      single `do…end`/`{ }` attachment rule for free fns and methods, new
+      diagnostic **E1119** (`&block` not last). Block slot = 8-byte
+      closure-pair-pointer + null sentinel, independent of Q2. Pins: release-e2e
+      908–912, `tests/ruby_block_semantics.rs`, drop-leak soundness pin.
+- [ ] **Block follow-up · S3 — closure/block captures are not freed at
+      closure-drop.** A closure (`{ }` OR `do…end`) that captures a heap value
+      leaks that capture: `allocs=3, frees=0` for both forms (verified — this is
+      a PRE-EXISTING closure-capture-drop gap, NOT a block regression; the block
+      surface reuses the same machinery). Drop elaboration over a closure's
+      captures struct (free each owned capture, then the captures block and the
+      pair) is unimplemented. No double-free, no segfault — purely a leak.
+      Repro: `tests/fixtures/ruxen/block_capture_heap_no_leak.rx` (soundness
+      pinned; leak-freedom is this follow-up).
+- [ ] **Block follow-up · S3 — paren-less blockless call to an optional-block
+      METHOD doesn't fill the block slot.** `w.build` (no parens, no block) on a
+      method declaring `&block` parses as a `FieldAccess`; that no-arg method
+      path (`typeck/infer/expr.rs`) does not append the `nil` block default, so
+      MIR emits one too few args (Cranelift arity verifier error). Workaround:
+      write `w.build()` with parens (works). FREE functions have no gap (the
+      blockless `render` in pin 909 works). Fix: rewrite the FieldAccess no-arg
+      method path into a `MethodCall` (or fill defaults at MIR) when the method
+      has trailing default params — deferred to avoid touching the broad
+      paren-less-call corpus this pass.
+- [ ] **Block follow-up · Tier-2 (staged, per ADR).** `&` block-forwarding
+      (`g(&block)` / anonymous `&`), `next` as block-value, `&:symbol` to-proc
+      sugar, numbered params / `it`. Rejected (see ADR): non-local `return` /
+      Ruby `break`-exits-yielder, `redo`, lenient arity, `instance_eval`
+      self-rebinding. Nested `yield` inside a closure body errors cleanly in
+      Tier 1.
+
 - [ ] **Q34 · S2 — `ruxen fmt` drops grouping parentheses, silently changing
       arithmetic.** `(rel*span + track_w/2)/track_w` →
       `rel*span + track_w/2/track_w` (division now binds first) — broke quiver's

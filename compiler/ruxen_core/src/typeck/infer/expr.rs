@@ -594,7 +594,14 @@ impl<'a> InferenceEngine<'a> {
                     _ => None,
                 };
                 if let Some(selected) = selected_method {
-                    self.append_method_default_args(selected, args);
+                    // A trailing `do…end` / `{ }` block fills the method's final
+                    // (block) parameter slot separately (appended below as
+                    // `args_with_block`). Reserve that slot so the default-arg
+                    // pass does NOT also emit a `nil` for it (Ruby-block ADR:
+                    // present block → no nil default; absent block → nil fills
+                    // the optional `&block`). Without the reservation a
+                    // block-bearing call doubles the final argument.
+                    self.append_method_default_args(selected, args, block.is_some());
                     let signature = self.symbols.get(selected).and_then(|def| match &def.kind {
                         DefKind::Method { signature, .. } => Some(signature.clone()),
                         _ => None,

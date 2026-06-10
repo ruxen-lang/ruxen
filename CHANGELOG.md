@@ -7,6 +7,29 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Added
+- **Ruby-block semantics** (ADR `docs/decisions/ruby-block-semantics.md`).
+  A function/method may declare an explicit, optional trailing block parameter
+  with the `&` sigil and the canonical square-bracket signature spelling:
+  `def render(x: Int, &block: Fn[(Int) -> nil])`. The paren spelling
+  `Fn(T…) -> R` is also accepted; `ruxen fmt` preserves whichever was written
+  (carried by a semantically-inert `bracketed` flag on `TypeExpr::Function`).
+  - `yield` / `yield(args)` invokes the block; for an explicit `&block` decl
+    `yield`'s value IS the block's declared return type `R` (`let r = yield(4)`).
+    The block is also a normal callable value in the body (`block.(args)`).
+  - `block_defined?` (and the alias `block_given?`) is a `Bool` builtin, true
+    iff the caller passed a block — the user's conditional-render pattern.
+  - Every `&block` is OPTIONAL: calling without a block is legal; the slot is a
+    null closure-pair-pointer sentinel; reaching a `yield` with no block is a
+    clean runtime panic naming the function (exit 101), never a segfault.
+  - Trailing `do…end` and `{ }` blocks attach identically as the implicit last
+    argument, the SAME rule for free functions and methods.
+  - **New diagnostic E1119**: `&block` must be the last parameter
+    (`docs/errors/E1119.md`).
+  - Representation is independent of the broken `any Fn` enum-payload path
+    (Q2 stays open and untouched). Pins: `tests/release-e2e/cases/908–912`,
+    `tests/ruby_block_semantics.rs`, `drop_fixtures.rs::block_capturing_heap_value_runs_soundly`.
+
 ### Fixed
 - (Q17) A generic **free function bound by a mixin** (`def paint_all[T:
   Paintable](s: &var T, …)`) could not be monomorphized for a SECOND mixin

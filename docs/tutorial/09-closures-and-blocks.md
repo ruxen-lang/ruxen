@@ -183,6 +183,101 @@ with_timing do
 end
 ```
 
+## Declaring the block explicitly: `&block`
+
+The examples above let `yield` discover the block implicitly. You can also
+declare the block as an explicit, named parameter using the `&` sigil. The
+block parameter is always **last**, and its type is written with the canonical
+square-bracket signature `Fn[(Args…) -> Return]`:
+
+```ruxen
+def each_twice(x: Int, &block: Fn[(Int) -> nil])
+  yield x
+  yield x
+end
+
+def main
+  each_twice(7) do |n|
+    puts "#{n}"     # prints 7 twice
+  end
+end
+```
+
+Inside the body the block is also an ordinary callable value — you can invoke
+it directly with `block.(args)` instead of `yield`:
+
+```ruxen
+def run_it(&block: Fn[() -> nil])
+  block.()
+end
+```
+
+A `&block` parameter **must be the last** parameter (anything after it is error
+`E1119`). The paren spelling `Fn(Int) -> nil` is also accepted for the type, and
+`ruxen fmt` keeps whichever form you wrote.
+
+## `yield`'s value
+
+When you declare the block's return type, `yield` is an expression whose value
+**is** the block's return value. So you can use it directly:
+
+```ruxen
+def doubled(&block: Fn[(Int) -> Int]) -> Int
+  let r = yield(4)
+  r + 1
+end
+
+def main
+  let v = doubled do |n|
+    n * 10
+  end
+  puts "#{v}"          # 41
+end
+```
+
+## Optional blocks and `block_defined?`
+
+Every `&block` is **optional** — calling the function without a block is legal.
+Test whether the caller passed one with `block_defined?` (the alias
+`block_given?` works too), and pick a fallback:
+
+```ruxen
+def render(&block: Fn[() -> nil])
+  if block_defined?
+    yield
+  else
+    puts "default"
+  end
+end
+
+def main
+  render do
+    puts "custom"
+  end
+  render                 # no block → prints "default"
+end
+```
+
+If you `yield` without a block having been passed, the program stops with a
+clear runtime error naming the function — it never silently misbehaves:
+
+```
+ruxen panic: yield called without a block in `render`
+```
+
+## `do…end` vs `{ }`
+
+Both forms attach a trailing block as the implicit last argument, identically
+for free functions and methods:
+
+```ruxen
+each_twice(7) do |n| puts "#{n}" end
+each_twice(7) { |n| puts "#{n}" }
+```
+
+Use `do…end` for multi-line blocks and `{ }` for short one-liners — they mean
+the same thing.
+
 ## Common mistakes
 
 **Forgetting the dot in the call.** Closures are called with `.(args)`, not `(args)`:
@@ -220,5 +315,9 @@ let doubled = nums.map { |n| n * 2 }
 - Use `move { ... }` when the closure needs to own its captures (typically when returned or sent away).
 - Function-typed parameters are `Fn(...)`, `FnVar(...)`, or `FnOnce(...)`.
 - `yield` lets a method run an implicit `do ... end` block from its caller.
+- Declare a block explicitly as the last parameter with `&block: Fn[(Args…) -> R]`; invoke it with `yield` or `block.(args)`.
+- `yield`'s value is the block's return value (`let r = yield(4)`).
+- Every `&block` is optional — test for one with `block_defined?` (alias `block_given?`); `yield` without a block panics cleanly, naming the function.
+- `do…end` and `{ }` blocks attach identically as the trailing argument, for both free functions and methods.
 
 **Next:** [Modules and Imports](10-modules-and-imports.md) — organizing code across files.

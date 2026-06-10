@@ -402,6 +402,15 @@ impl<'a> InferenceEngine<'a> {
             }
             HirStatement::Expr(expr) => {
                 self.infer_expr(expr);
+                // Statement-position auto-call: a bare reference to a
+                // function with no required arguments, used as a statement
+                // (its value discarded), is a Ruby-style paren-less call —
+                // e.g. `render` (whose only parameter is its optional
+                // `&block`). The expected type is irrelevant here (the result
+                // is discarded), so pass `Unit`, which never suppresses the
+                // rewrite. Pin: 909_block_defined_and_yield_value (the
+                // blockless `render` call between other statements).
+                self.auto_call_fn_reference(&Ty::Unit, expr);
             }
         }
     }
@@ -524,14 +533,47 @@ impl<'a> InferenceEngine<'a> {
             }
             None => return,
         };
-        if signature.params.is_empty() {
-            // Nullary: rewrite into a zero-argument call so the value takes
-            // the function's return type.
+        // Parameters with a default value are optional and need not be
+        // supplied at a zero-argument auto-call. This includes the
+        // optional `&block` slot (Ruby-block-semantics ADR D5: a `nil`
+        // default makes the block optional), so `render` — whose only
+        // parameter is its block — auto-calls blocklessly.
+        let required_params = signature
+            .params
+            .iter()
+            .filter(|p| p.default.is_none())
+            .count();
+        if required_params == 0 {
+            // No required args: rewrite into a call so the value takes the
+            // function's return type. The resolver's `append_default_args`
+            // only runs on explicit `Call` AST nodes — a bare-identifier
+            // auto-call never went through it — so materialize each param's
+            // DEFAULT value here (each param is optional, since required==0):
+            // the optional `&block` slot's `nil` becomes a null sentinel
+            // (ADR D1), and an ordinary `x: Int = 5` default becomes `5` —
+            // NOT a blanket null. A default that can't be lowered yields a
+            // null fallback of the param type.
+            let param_specs: Vec<(Option<crate::parser::ast::Expr>, Ty)> = signature
+                .params
+                .iter()
+                .map(|p| (p.default.clone(), self.ctx.resolve(&p.ty)))
+                .collect();
+            let mut args: Vec<HirExpr> = Vec::with_capacity(param_specs.len());
+            for (default, param_ty) in param_specs {
+                let hir = default
+                    .and_then(|d| self.default_ast_to_hir(&d, &param_ty))
+                    .unwrap_or_else(|| HirExpr {
+                        kind: HirExprKind::NullLiteral,
+                        ty: param_ty.clone(),
+                        span: val.span.clone(),
+                    });
+                args.push(hir);
+            }
             let ret = self.wrap_async_return(&signature);
             val.kind = HirExprKind::FnCall {
                 callee: def_id,
                 callee_name: name,
-                args: Vec::new(),
+                args,
             };
             val.ty = ret;
         } else {
@@ -539,8 +581,8 @@ impl<'a> InferenceEngine<'a> {
             self.diagnostics.push(crate::diagnostics::Diagnostic::error_with_code(
                 format!(
                     "`{name}` is a function that needs {} argument{}; call it like `{name}(...)`, or annotate a `Fn` type to reference it without calling (e.g. `let f: Fn(...) -> ... = {name}`)",
-                    signature.params.len(),
-                    if signature.params.len() == 1 { "" } else { "s" },
+                    required_params,
+                    if required_params == 1 { "" } else { "s" },
                 ),
                 val.span.clone(),
                 "E0726",

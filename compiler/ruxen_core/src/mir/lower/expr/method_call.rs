@@ -1385,6 +1385,26 @@ impl<'a> Lowerer<'a> {
                     // Load both, then call indirectly with captures_ptr
                     // prepended to the user-visible arg list.
                     let pair = obj_local.unwrap_or_else(|| self.new_temp(Ty::Int));
+
+                    // Ruby-block-semantics ADR D5: an OPTIONAL `&block` slot is
+                    // a null closure-pair-pointer (ADR D1) when the caller
+                    // passed no block. Calling it (`yield` / `block.(…)`) would
+                    // dereference null and segfault. Guard the dispatch: when
+                    // the receiver is the block slot (`__block`), branch on
+                    // `pair == 0` and `ruxen_panic` with a LocalJumpError-style
+                    // message naming the enclosing function, instead of
+                    // crashing. Non-block closure receivers (map/each/stored
+                    // closures) skip the guard — they are never optional, so
+                    // this adds zero overhead to hot closure paths.
+                    let is_block_slot = matches!(
+                        &object.kind,
+                        HirExprKind::VarRef(def_id)
+                            if self.symbols.get(*def_id).map(|d| d.name == "__block").unwrap_or(false)
+                    );
+                    if is_block_slot {
+                        self.emit_block_presence_guard(pair);
+                    }
+
                     let fn_ptr = self.new_temp(Ty::Int);
                     self.emit(MirInst::GetField {
                         dest: fn_ptr,

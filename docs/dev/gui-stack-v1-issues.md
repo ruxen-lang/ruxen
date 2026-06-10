@@ -62,27 +62,30 @@ call lowering is the culprit. Suspect: typeck overload resolution for
 `&str` literals vs closure-typed args, or the arg coercion in MIR call
 lowering. Workaround in quiver: distinct method names (`text` / `dyn_text`).
 
-## Q2 · S1 — `Option[any Fn[...]]` class field returns garbage  ⏸ DEFERRED (closure redesign)
+## Q2 · S1 — `Option[any Fn[...]]` class field returns garbage  ⏸ STILL OPEN (scoped, independent of blocks)
 
-> **DEFERRED** (stdlib-rust-cleanup): root cause is that `any Fn` is a 16-byte
-> fat value (data_ptr + vtable_ptr) but an enum payload slot is one 8-byte
-> word, so half the fat pointer is lost on the round-trip (`f.()` reads a
-> garbage pointer). Fixing it properly is entangled with the
-> **closure/block redesign** below — storing closures as first-class `any Fn`
-> VALUES is exactly the design being reworked toward Ruby semantics, so this is
-> deferred to that plan rather than patched against the current model.
+> **STILL OPEN — and explicitly NOT fixed by the Ruby-block work** (2026-06-10).
+> Root cause is that `any Fn` is a 16-byte fat value (data_ptr + vtable_ptr) but
+> an enum payload slot is one 8-byte word, so half the fat pointer is lost on the
+> round-trip (`f.()` reads a garbage pointer). The Ruby-block-semantics ADR
+> (`docs/decisions/ruby-block-semantics.md`) was the redesign this was deferred
+> behind — but the ADR's block slot uses the **8-byte closure-pair-pointer +
+> null sentinel** representation (ADR D1), which sidesteps the fat-value enum
+> payload entirely and so does NOT touch this path. Q2 is therefore independent:
+> it is the residual `any Fn`-in-enum-payload LAYOUT bug, to be fixed on its own
+> (widen the enum payload slot to 16 bytes for fat-pointer payloads, or box the
+> `any Fn`). Blocks no longer depend on it.
 
-> ### DESIGN NOTE — closure/block model rework (draft-a-plan, another day)
-> The current model treats a block as a first-class closure value with a typed
-> `Fn() -> T` signature passed as an `any Fn` argument. Decision (user): move to
-> **exact Ruby semantics** —
-> - **exactly one** block per call, **implicit**, automatically the **last**
->   argument (`&block`);
-> - the block is NOT a typed function value — it follows **`yield` / `block.call`**
->   and is rendered in place (no return-type inference, no fat-pointer value);
-> - so blocks stop being stored/passed as `any Fn` values (which is what makes
->   Q2 and the fat-pointer enum-payload issue exist in the first place).
-> This needs its own brainstorm + plan; not started.
+> ### DESIGN NOTE — closure/block model rework  ✅ DONE (Ruby-block-semantics ADR)
+> The block redesign that this note sketched has LANDED — see
+> `docs/decisions/ruby-block-semantics.md`. Delivered: explicit optional
+> `&block: Fn[(T…) -> R]` (canonical square-bracket spelling, paren form kept for
+> back-compat), `yield` / `yield(args)` with the block's value typed `R`,
+> `block_defined?` / `block_given?`, optionality with a clean LocalJumpError-style
+> runtime panic on blockless `yield`, and a single `do…end`/`{ }` attachment rule
+> for free fns and methods. The block is the 8-byte closure-pair-pointer (NOT an
+> `any Fn` value), so the fat-pointer enum-payload issue that motivated this is no
+> longer in the block path.
 
 
 ```ruxen
@@ -115,6 +118,12 @@ env pair?) in MIR/codegen treats it as one word. Workaround: parallel arrays —
 > `.call` path is reserved for closure-typed VARIABLE identifiers. Subsumes the
 > old yield-fn special case. Pin: `tests/release-e2e/cases/642_free_fn_do_block`
 > (no-arg, plain `Fn`, and a block with params).
+>
+> **Migration-wave follow-up (2026-06-10):** quiver's `CLAUDE.md` landmine list
+> still warns "do…end blocks segfault when passed to free functions with explicit
+> closure params". That landmine is FIXED (this Q3 + pin 642) and re-confirmed
+> green against a fresh build during the Ruby-block-semantics work. The migration
+> wave should DELETE that landmine entry from `quiver/CLAUDE.md` — it is stale.
 
 
 ```ruxen

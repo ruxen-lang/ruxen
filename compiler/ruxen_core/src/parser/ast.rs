@@ -94,6 +94,12 @@ pub enum TypeExpr {
     Function {
         params: Vec<TypeExpr>,
         return_type: Box<TypeExpr>,
+        /// Surface spelling: `true` for the canonical square-bracket block
+        /// signature `Fn[(T…) -> R]` (Ruby-block-semantics ADR D8), `false`
+        /// for the paren form `Fn(T…) -> R`. Carried so `ruxen fmt` preserves
+        /// whichever the author wrote rather than normalizing one to the other
+        /// (the fmt-destructiveness class — Q23/Q30/Q34). Semantically inert.
+        bracketed: bool,
         span: Span,
     },
     /// `some M` — static-dispatch mixin reference (was `impl Trait`
