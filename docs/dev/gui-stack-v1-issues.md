@@ -1263,6 +1263,72 @@ a dedicated drop-elaboration pass.
 
 </details>
 
+## Q32 · S3 — Q16's flat-merge pulls an FFI dependency's bodies into a test/binary build without linking its C runtime  ⏳ OPEN (NEW 2026-06-09)
+
+Surfaced 2026-06-09 by quiver after Q16 landed. A package that declares a
+path/git dependency on an **FFI-backed** library (one with `lib "C"` bindings +
+its own `runtime/*.c` + `[system_libs]`) gets that dependency's full `src/**.rx`
+flat-merged into its `ruxen test` EXECUTABLE — including the FFI-calling method
+bodies — but the dependency's C shim objects / system libs are **not** compiled
+or linked into that executable. Result: `Undefined symbols for architecture
+arm64: "_ruxen_canvas_begin_frame", …` (every `ruxen_canvas_*` symbol) at link.
+
+Repro: quiver with `canvas = { path = ... }` in `[dependencies]` →
+`ruxen test` fails at link with all `ruxen_canvas_*` undefined. `ruxen check`
+passes (no codegen) and `ruxen build` (library rlib) passes (symbols stay
+deferred); only executable-producing builds (test, binary) hit it — and binary
+builds only worked so far because the app packages ALSO declare canvas directly,
+which brings its `runtime/` + `[system_libs]` into the link.
+
+quiver's workaround is actually the better architecture for ITS case (the L2
+library is platform-agnostic and never referenced canvas symbols, so the
+dependency was dropped — see `quiver/Ruxen.toml`'s comment + CHANGELOG). But the
+gap is real for any consumer that legitimately `use`s an FFI dependency in its
+own `src/` and wants `ruxen test`: rondo-style stacks will hit it. Fix options
+(architectural choice): (a) demand-driven merge — only flat-merge dependency
+sources actually referenced; (b) when flat-merging a dep, also compile+link its
+`runtime/**.c` and propagate its `[system_libs]` into the link line (the same
+thing binary builds get when the dep is declared directly). (b) matches Q16's
+"same mechanism as binaries" story.
+
+## Q33 · S2 — `Float32 == <negative Int literal>` comparison miscompiles to false  ⏳ OPEN (NEW 2026-06-09)
+
+Surfaced 2026-06-09 by canvas's `Scroll(-1, 3)` round-trip pin while reverting
+event coords to `Float32`. Comparing a `Float32` value against a **negative**
+Int literal evaluates false even when the value is exactly equal; the stored
+value itself is CORRECT, and every other shape agrees:
+
+```ruxen
+let f: Float32 = -1 as Float32
+puts "#{f == -1}"          # false  ← BUG (plain local, no enum involved)
+puts "#{(f as Int) == -1}" # true
+puts "#{f < 0}"            # true
+let m1: Float32 = -1 as Float32
+puts "#{f == m1}"          # true   (Float32 == Float32 fine)
+# positive literals are fine: a Float32 holding 3 == 3 → true
+```
+
+Full repro: `tmp/test-cache/q33-negative-literal-f32-compare-repro.rx`. Likely
+the comparison-position literal is narrowed to f32 through a path that
+mishandles the sign (or compares at mismatched widths only when the literal is
+negative — the unary-minus lowering of the literal is the prime suspect, since
+`-1` is plausibly lowered as `neg(1)` AFTER a width decision). S2: silent wrong
+answer in ordinary numeric code, but narrow trigger (equality against a negative
+literal specifically; `<`/`>`/cast-compare all fine). Workaround in canvas
+`tests/scroll_resize.rx`: compare through `as Int`.
+
+## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
+
+Documented at their source, listed here so they aren't lost:
+
+- **DSL P2** — top-level closure-literal param inference (`App.build({ |ui, root| … })`
+  params stay `?T`); **P3** — auto-reborrow a `&var` used more than once;
+  **P4** — non-Copy class call-result as by-value method arg segfaults (also a
+  landmine). → `quiver/docs/decisions/dsl-ergonomics.md`.
+- **GPU multi-window** — `gl_get_proc` is per-process/current-context; concurrent
+  multi-GL-context windows need explicit make-current per window per frame.
+  → `canvas/docs/MULTIWINDOW.md` ("Language gap").
+
 ---
 
 ## Existing partial work on this machine (`~/Documents/ruxen-lang/`)
