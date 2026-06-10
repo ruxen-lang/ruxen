@@ -1420,7 +1420,7 @@ extra instructions on the hot matched-width path). Pins (RUN + assert stdout):
 `654_enum_f32_payload_negative_compare`, and
 `compiler/ruxen_core/tests/q33_negative_literal_float_compare.rs`.
 
-## Q34 · S2 — `ruxen fmt` drops grouping parentheses, silently changing arithmetic  ⏳ OPEN (NEW 2026-06-10)
+## Q34 · S2 — `ruxen fmt` drops grouping parentheses, silently changing arithmetic  ✅ FIXED 2026-06-10
 
 Surfaced 2026-06-10 by the quiver text-metrics work. `ruxen fmt` removed the
 grouping parentheses from a rounding expression, changing its meaning:
@@ -1440,13 +1440,28 @@ here the precedence of `/` over `+` makes the parens load-bearing.
 Third formatter-destructiveness facet: Q23 covered doc-comment stripping +
 test-file parsing, Q30 covered closure-header/call-paren rewriting, Q34 is
 expression-grouping. The recurring root cause is that fmt re-emits from an AST
-shape that doesn't preserve (or re-derive) grouping. Fix: either record
-explicit-parens nodes in the AST, or have fmt parenthesize any subexpression
-whose operator precedence is lower than its parent context requires. Pin with
-round-trip cases over mixed +/− and ×/÷ groupings AND an idempotence check
-(`fmt(fmt(x)) == fmt(x)` with identical re-parsed AST). Until fixed, the
-standing guidance holds: **do not bulk-run `ruxen fmt` on the GUI repos** —
-both 2026-06-09 agents and the 2026-06-10 one were bitten.
+shape that doesn't preserve (or re-derive) grouping.
+
+**FIX (2026-06-10, `feat/drop-elaboration`, ADR
+`docs/decisions/syntax-parity-harness.md`).** Taken the re-parenthesize-by-
+precedence route. `formatter/prec.rs` mirrors `parser::expr::infix_binding_power`
+(the single precedence source) as AST-node tiers; `format_binary_op` /
+`format_unary_op` / the `Range` + `Cast` arms wrap any operand whose precedence
+is looser than its position requires (`needs_parens`, with the standard
+left-assoc rule: left child wraps on strictly-lower precedence, right child on
+lower-or-equal). All Ruxen binary operators are left-associative (verified
+against the parser). Pinned by `tests/q34_fmt_grouping_parens.rs`
+(reparse-identity over mixed +/−, ×/÷, logical, comparison, bitwise/shift,
+unary, cast groupings + idempotence) AND the new syntax-parity harness, whose
+fmt axis asserts reparse-identity over the WHOLE stdlib + sibling corpus.
+
+The harness surfaced **four** more fmt-destructiveness bugs in the same class,
+all fixed alongside Q34: zero-arg `MethodCall` → field access (`s.bytes()` →
+`s.bytes`); method visibility-section drop (`private` method round-tripped
+public); `async` modifier drop (`async def` → `def`); plus the catalogued
+(non-bug) import-member reordering. With these fixed the standing "do not
+bulk-run `ruxen fmt`" caution is LIFTED — `ruxen fmt` is now reparse-faithful
+over the entire corpus (491 files, binary + in-process, green).
 
 ## Q35 · S3 — a STRUCT's `include <Mixin>` does not satisfy a generic's mixin bound  ⏳ OPEN (NEW 2026-06-10)
 
@@ -1488,6 +1503,89 @@ satisfaction path). S3: clean diagnostic, no silent miscompile, and no GUI-stack
 code is blocked (quiver's PaintSurface implementors are classes). Fix when
 touching typeck satisfaction next; pin with struct-implementor variants of the
 655/658 e2e cases.
+
+## Q36 · S2 — `yield` with TWO `&var` reference args miscompiles (block sees empty target)  ⏳ OPEN (NEW 2026-06-10)
+
+Found 2026-06-10 migrating quiver's builder DSL to `&block`/`yield` (after the
+block-semantics feature `8a783f9`). A function declaring
+`&block: Fn[(&var Ui, &var Col) -> nil]` and invoking it with
+`yield(&var app.ui, &var app.root)` — TWO `&var` references to fields of the same
+object in one `yield` — COMPILES but the block's `&var` params do not bind: the
+block runs against an empty/wrong target.
+
+```ruxen
+def self.build_blk(&block: Fn[(&var Ui, &var Col) -> nil]) -> App
+  var app = App.new
+  yield(&var app.ui, &var app.root)   # block sees an EMPTY Col
+  app.mount
+  app.arrange
+  app
+end
+# var app = App.build_blk do |ui: &var Ui, root: &var Col| root.text("a"); root.text("b") end
+# EXPECTED app.root.size == 2 ; ACTUAL 0
+```
+
+A single-`&var`-arg `yield(&var *self)` works (quiver's `row`/`col`/`list`/
+`row_styled`/`col_styled` converted fine). The ordinary closure-call form
+`f.(&var app.ui, &var app.root)` works (it's what `App.build` keeps). So the bug
+is specifically **N≥2 `&var` reference arguments through the `yield` ABI**.
+
+Repro: `quiver/tmp/test-cache/ruxen-two-var-yield.md`. S2 (silent wrong build,
+not a crash). Workaround in quiver: `App.build` stays an explicit closure param.
+Likely the synthetic-`__block` call ABI mishandles multiple by-reference args.
+
+**Related (same pass, smaller):** a `&block` parameter's TYPE does not infer
+through the yield seam — an untyped `do |c| … end` against
+`&block: Fn[(&var Col) -> nil]` leaves `c` as `?T` (surfaces at codegen as
+`no runtime symbol for ?T::text`). Typed `do |c: &var Col| … end` works. quiver
+types all builder block params; document as a `&block` ergonomics gap.
+
+## Q37 · S1 — a yielding/`&block` METHOD poisons an unrelated same-named free fn with a phantom `__block`  ✅ FIXED 2026-06-10
+
+Found 2026-06-10: all three quiver examples fail `ruxen build` on the installed
+toolchain (reproduces at pristine quiver HEAD, clean rebuild — NOT introduced by
+the block migration):
+
+```
+Error: error: could not infer type for parameter `__block` in function `frame` (at ####:1)
+```
+
+`frame[S: PaintSurface]` / `first_frame[S: PaintSurface]` (`quiver/src/run.rx`)
+have NO `yield` and NO block, yet the binary-consuming build synthesizes a
+`__block` parameter onto `frame` and then fails to infer its type. The quiver
+**library** builds clean (`ruxen build` in quiver/); the 157-test headless suite
+is green (so `frame`/`first_frame` are fine in test mode — `tests/counter.rx`
+exercises them). The failure is specific to **binary-consumes-library** builds
+after the block-semantics feature landed.
+
+**ROOT CAUSE (confirmed in code 2026-06-10).** `resolve/yield_scan.rs::
+collect_yield_fns` recorded yielding functions into `Resolver::yield_fns`, a
+`HashMap<String, usize>` keyed by **bare function name**. The synthetic-`__block`
+decision in `funcs.rs::resolve_function` looked the function name up in that map
+(`self.yield_fns.get(&f.name)`). In the flat-merged binary build, canvas's
+newly-added block-taking METHODS `Window#frame` / `Canvas#frame` (which `yield`
+their surface) registered `frame` in the map → quiver's unrelated generic free
+fn `frame[S: PaintSurface]` (no `yield`, no `&block`) then matched the same key
+and was handed a phantom `__block` it never uses → `could not infer type for
+parameter __block` + an inflated arity. The minimal earlier repro missed it
+because the colliding definition must be a *yielding/block-taking method* with
+the *same bare name* as the free fn — exactly the quiver↔canvas `frame` clash
+introduced when canvas gained its `frame` methods (after the examples last built
+green). This is **S1**: ANY user name collision between a block-taking method
+and a same-named free fn breaks compilation.
+
+**FIX (`feat/drop-elaboration`).** The synthetic-`__block` decision is now made
+**locally** from the function's OWN body
+(`super::yield_scan::find_first_yield_arity_in_block(&f.body)`), not from a
+name-keyed map — a function gets a `__block` iff it itself yields. The buggy
+`yield_fns` map, its `collect_yield_fns` populator, and the two
+`bootstrap_merge.rs` pre-scan calls are deleted (the local check is strictly
+more correct and collision-free). `find_first_yield_arity_in_block` /
+`first_yield_self_mask_in_block` stay (they drive the arity + `yield self`
+typing). Pin: release-e2e **920** (a block-taking method `Canvas#frame` + an
+unrelated generic free fn `frame`, both called, compiled + run). Verified: the
+quiver counter example builds again (`canvas`/`quiver`/`counter` pieces compile
+clean) with the fixed compiler.
 
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 

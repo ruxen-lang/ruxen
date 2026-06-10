@@ -17,11 +17,39 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-31 of 35 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
+33 of 37 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
 feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned; Q28, Q30,
-Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 + Q35 NEW 2026-06-10**). The
+Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 fixed 2026-06-10 via the syntax-parity harness; Q37 (S1, root-caused: a yielding/`&block` method poisoned an unrelated same-named free fn via a bare-name yield map) fixed 2026-06-10 — quiver examples build again; Q35, Q36 NEW 2026-06-10** — Q36 from the quiver Ruby-block DSL migration: two-`&var`-arg `yield` miscompile, left filed-open). The
 canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
 (canvas 143 green, sub-pixel pinned, live windowed loop verified).
+
+### Toolchain / tests
+
+- [x] **Syntax-parity harness — one syntax across compiler/fmt/repl/lsp/ide
+      (DONE 2026-06-10, `feat/drop-elaboration`).** ADR
+      `docs/decisions/syntax-parity-harness.md`. Two axes: per-surface
+      conformance over the cases + stdlib + canvas/quiver/rondo corpus (491
+      files), and structural pins (a compile-time exhaustiveness guard over
+      `TopLevelItem`/`MixinItem`/`ImplItem`; an intentional-divergence
+      allowlist for the E0728/E0607 accepted-but-compile-rejected class). The
+      fmt axis (reparse-identity + idempotence) caught **Q34** (dropped
+      grouping parens) plus four more fmt-destructiveness bugs — zero-arg
+      `MethodCall`→field-access, method-visibility-section drop, `async`
+      modifier drop — all fixed. Pins: `tests/syntax_parity.rs`,
+      `src/ruxen_ide/tests/syntax_parity_ide.rs`,
+      `tests/q34_fmt_grouping_parens.rs`, and a new `parity` phase in
+      `tests/release-e2e/run.sh` (in `PHASES=all`).
+- [x] **Q37 · S1 — yield/`&block`-method name-collides with a same-named free
+      fn (FIXED 2026-06-10, `feat/drop-elaboration`).** A yielding/block-taking
+      METHOD registered its bare name in the name-keyed `yield_fns` map, so an
+      unrelated same-named generic free fn inherited a phantom `__block` →
+      `could not infer type for parameter __block`. This broke every quiver
+      example binary once canvas gained its `frame` methods (colliding with
+      quiver's `frame` free fn in the flat-merged build). Fixed by deciding the
+      synthetic `__block` LOCALLY from each function's own body
+      (`resolve/funcs.rs`); the buggy name map + populator deleted. Pin:
+      release-e2e 920. Verified: quiver counter example builds again. Ledger
+      §Q37.
 
 ### Language features
 
@@ -83,14 +111,17 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       self-rebinding. Nested `yield` inside a closure body errors cleanly in
       Tier 1.
 
-- [ ] **Q34 · S2 — `ruxen fmt` drops grouping parentheses, silently changing
-      arithmetic.** `(rel*span + track_w/2)/track_w` →
-      `rel*span + track_w/2/track_w` (division now binds first) — broke quiver's
-      slider math until hand-reverted. Third fmt-destructiveness facet (Q23 docs,
-      Q30 call shapes, Q34 grouping); the recurring root cause is re-emitting
-      from an AST that doesn't preserve grouping. Fix + idempotence pin per
-      `dev/gui-stack-v1-issues.md` §Q34. Until then: do NOT bulk-run `ruxen fmt`
-      on the GUI repos.
+- [x] **Q34 · S2 — `ruxen fmt` drops grouping parentheses (FIXED 2026-06-10,
+      `feat/drop-elaboration`).** `(rel*span + track_w/2)/track_w` →
+      `rel*span + track_w/2/track_w` broke quiver's slider math. Fixed by
+      re-parenthesizing operands by precedence (`formatter/prec.rs`, mirroring
+      `parser::expr::infix_binding_power`); the syntax-parity harness's fmt axis
+      (reparse-identity + idempotence over the whole stdlib + sibling corpus)
+      also caught four sibling fmt-destructiveness bugs fixed alongside. The
+      "do NOT bulk-run `ruxen fmt`" caution is LIFTED — fmt is reparse-faithful
+      over all 492 corpus files. Pins: `tests/q34_fmt_grouping_parens.rs`,
+      `tests/syntax_parity.rs`, release-e2e 919, ADR
+      `docs/decisions/syntax-parity-harness.md`.
 
 - [ ] **Q35 · S3 — a STRUCT's `include <Mixin>` does not satisfy a generic's
       mixin bound (E1015).** Even a single struct implementor is rejected by a
@@ -99,6 +130,22 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       registry records `include` only for classes. Clean diagnostic, nothing in
       the GUI stack blocked (PaintSurface implementors are classes). Repro:
       `tmp/test-cache/q35-struct-include-bound-repro.rx`; details §Q35.
+- [ ] **Q36 · S2 — `yield` with two `&var` reference args miscompiles (NEW
+      2026-06-10).** `yield(&var app.ui, &var app.root)` (two `&var` refs in one
+      yield) runs the block against an EMPTY target; single-`&var` yield and the
+      `f.(&var a, &var b)` closure-call form both work. Found migrating quiver's
+      DSL to `&block`/`yield`; quiver works around it (`App.build` stays a closure
+      param). Sub-gap: a `&block` param's type doesn't infer through the yield
+      seam (untyped block param ⇒ `?T`). Likely from `8a783f9` (block semantics).
+      Repro: `quiver/tmp/test-cache/ruxen-two-var-yield.md`; details §Q36.
+- [ ] **Q37 · S2 — generic `frame[S: Mixin]` in a library gets a bogus `__block`
+      param when consumed by a binary (NEW 2026-06-10).** All three quiver
+      example binaries fail `ruxen build` with `could not infer type for
+      parameter __block in function frame` on quiver's yield-free generic
+      `frame[S: PaintSurface]` (`quiver/src/run.rx`) — only in binary-consumes-
+      library builds (the quiver lib + 157-test suite are green; reproduces at
+      pristine quiver HEAD). Likely a `yield_scan` over-attribution across the
+      flat-merged lib+binary source after `8a783f9`. Details §Q37.
 - [x] **Q32 · S3 — Q16 flat-merge of an FFI dependency broke `ruxen test` at
       link (FIXED 2026-06-10).** A consumer's test EXECUTABLE flat-merged the
       FFI dep's `src/**.rx` (incl. `lib "C"`-calling bodies) but neither

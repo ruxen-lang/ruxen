@@ -225,6 +225,13 @@ pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
         Visibility::Private => {}
     }
 
+    // `async def` — the async modifier precedes `def` (surface spelling
+    // `async def name`). Dropping it silently rewrites an async function into
+    // a synchronous one (a semantic change + reparse-identity break).
+    if func.is_async {
+        sig_parts.push(text("async "));
+    }
+
     sig_parts.push(text("def "));
 
     // Self mode
@@ -366,9 +373,13 @@ fn format_class(class: &ClassDef, comments: &CommentMap) -> Doc {
         body_parts.push(join(hardline(), field_docs));
     }
 
-    // Methods — separated by blank lines
-    for method in &class.methods {
-        body_parts.push(format_func_with_leading_comments(method, comments));
+    // Methods — separated by blank lines, with visibility SECTION MARKERS
+    // (ruby-naming.spec.md §3.2) so a `private`/`protected` method round-trips
+    // with its visibility intact instead of silently re-parsing as public.
+    let mut running = Visibility::Public;
+    body_parts.extend(format_method_section(&class.methods, comments, &mut running));
+    if running != Visibility::Public {
+        body_parts.push(text("public"));
     }
 
     // Inner impls
@@ -446,6 +457,34 @@ fn visibility_marker(v: Visibility) -> &'static str {
     }
 }
 
+/// Render a type's methods as body-parts (each is its own block, blank-line
+/// separated by the caller), inserting a `private` / `protected` / `public`
+/// SECTION MARKER (ruby-naming.spec.md §3.2) as a standalone part whenever the
+/// running visibility changes.
+///
+/// Per-`def` visibility is NOT valid surface syntax — `format_func_def`
+/// deliberately emits no inline `private`/`protected` keyword. Without these
+/// markers the reformatted source would re-parse every method as `public`,
+/// silently widening a `private` method's visibility (a cross-surface
+/// divergence: the compiler/IDE see `private`, `ruxen fmt` rewrites it
+/// public). The body default is `public`, so leading public methods emit no
+/// marker; the field section already resets to `public` before methods begin.
+fn format_method_section(
+    methods: &[FuncDef],
+    comments: &CommentMap,
+    running: &mut Visibility,
+) -> Vec<Doc> {
+    let mut parts: Vec<Doc> = Vec::new();
+    for method in methods {
+        if method.visibility != *running {
+            parts.push(text(visibility_marker(method.visibility)));
+            *running = method.visibility;
+        }
+        parts.push(format_func_with_leading_comments(method, comments));
+    }
+    parts
+}
+
 // ─── Structs ────────────────────────────────────────────────────────
 
 fn format_struct(s: &StructDef, comments: &CommentMap) -> Doc {
@@ -482,8 +521,10 @@ fn format_struct(s: &StructDef, comments: &CommentMap) -> Doc {
         ]));
     }
 
-    for method in &s.methods {
-        body_parts.push(format_func_with_leading_comments(method, comments));
+    let mut running = Visibility::Public;
+    body_parts.extend(format_method_section(&s.methods, comments, &mut running));
+    if running != Visibility::Public {
+        body_parts.push(text("public"));
     }
 
     for imp in &s.inner_impls {
@@ -540,8 +581,10 @@ fn format_enum(e: &EnumDef, comments: &CommentMap) -> Doc {
         ]));
     }
 
-    for method in &e.methods {
-        body_parts.push(format_func_with_leading_comments(method, comments));
+    let mut running = Visibility::Public;
+    body_parts.extend(format_method_section(&e.methods, comments, &mut running));
+    if running != Visibility::Public {
+        body_parts.push(text("public"));
     }
 
     for imp in &e.inner_impls {

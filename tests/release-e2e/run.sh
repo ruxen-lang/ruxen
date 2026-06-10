@@ -17,10 +17,11 @@
 #                  Example: CASE_FILTER='01_*.rx' to debug one fixture.
 #   PHASES=...     Comma-separated allow-list. Default: 'all'.
 #                  Recognised: binaries, compile, compile-flags, cli,
-#                  repl, lsp, all.
+#                  repl, lsp, parity, all.
 #                  Examples:
 #                    PHASES=compile         # just the 310 compile fixtures
 #                    PHASES=repl            # just the REPL parity sweep
+#                    PHASES=parity          # just the fmt-binary syntax parity
 #                    PHASES=compile,cli     # both, skip repl/lsp/flags
 #
 #   RUXEN_RUNTIME_AR=<archive>
@@ -72,7 +73,7 @@ CASE_FILTER="${CASE_FILTER:-*.rx}"
 #   PHASES=compile,cli      ./run.sh   # both, skip repl/lsp/flags
 #   PHASES=binaries,lsp     ./run.sh   # smoke + LSP only
 #
-# Recognised values: binaries, compile, compile-flags, cli, repl, lsp, all.
+# Recognised values: binaries, compile, compile-flags, cli, repl, lsp, parity, all.
 # Unknown phases are flagged so typos don't silently skip everything.
 PHASES="${PHASES:-all}"
 _e2e_phase_enabled() {
@@ -84,13 +85,13 @@ _e2e_phase_enabled() {
   esac
 }
 _e2e_validate_phases() {
-  local known=",binaries,compile,compile-flags,cli,repl,lsp,all,"
+  local known=",binaries,compile,compile-flags,cli,repl,lsp,parity,all,"
   local IFS=,
   for p in $PHASES; do
     [ -z "$p" ] && continue
     case "$known" in
       *,"$p",*) : ;;
-      *) printf "run.sh: unknown phase '%s' (known: binaries, compile, compile-flags, cli, repl, lsp, all)\n" "$p" >&2
+      *) printf "run.sh: unknown phase '%s' (known: binaries, compile, compile-flags, cli, repl, lsp, parity, all)\n" "$p" >&2
          exit 2 ;;
     esac
   done
@@ -868,6 +869,86 @@ test_lsp_features() {
   fi
 }
 
+# ── 6. syntax parity: the BINARY-level `ruxen fmt` non-destructiveness ─
+#
+# USER REQUIREMENT: "none of the lsp/ide/fmt/compiler/repl may diverge on
+# any syntax of ruxen; ruxen syntax must be 100% available on every package
+# we deliver." The in-process axes live in
+# `compiler/ruxen_core/tests/syntax_parity.rs` (compiler/fmt/repl) and
+# `src/ruxen_ide/tests/syntax_parity_ide.rs` (lsp/ide). This phase pins the
+# axis the library tests CANNOT: the SHIPPED `ruxen fmt` binary, driven over
+# every deliverable package's real `.rx` source — the compiler's own cases +
+# the stdlib + the three sibling repos (canvas/quiver/rondo).
+#
+# For each corpus file the binary asserts:
+#   * `ruxen fmt --stdin` succeeds (the binary parses the syntax), AND
+#   * a second `ruxen fmt --stdin` over the output is BYTE-IDENTICAL
+#     (binary-level idempotence — the strongest non-destructiveness proof
+#     a black-box `fmt` can give).
+#
+# ADR: docs/decisions/syntax-parity-harness.md. This is what would have
+# caught Q34 (dropped grouping parens) at the binary boundary.
+test_parity() {
+  banner "syntax parity: ruxen fmt binary over every deliverable package"
+
+  # Corpus roots. The compiler tree is rooted two levels up from this
+  # script (tests/release-e2e/run.sh → ruxen). The sibling repos sit
+  # alongside ruxen in the ~/.projects workspace.
+  local ruxen_root projects_root
+  ruxen_root="$(cd "$HERE/../.." && pwd)"
+  projects_root="$(cd "$ruxen_root/.." && pwd)"
+
+  local roots=(
+    "$ruxen_root/tests/release-e2e/cases"
+    "$ruxen_root/library/std"
+    "$ruxen_root/examples"
+    "$projects_root/canvas/src"
+    "$projects_root/quiver/src"
+    "$projects_root/rondo/src"
+  )
+
+  local tmp
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/ruxen-parity.XXXXXX")"
+
+  local checked=0 idem_fail=0 fmt_fail=0
+  local f f1 f2
+  for root in "${roots[@]}"; do
+    [ -d "$root" ] || continue
+    # NUL-delimited to be safe with odd paths.
+    while IFS= read -r -d '' f; do
+      f1="$tmp/f1.rx"
+      f2="$tmp/f2.rx"
+      # First format pass via the SHIPPED binary.
+      if ! ruxen fmt --stdin <"$f" >"$f1" 2>"$tmp/err1"; then
+        fmt_fail=$((fmt_fail + 1))
+        record_fail "parity/fmt $(basename "$f")" "ruxen fmt --stdin failed (see $tmp/err1)"
+        cp "$tmp/err1" "$RESULTS/parity_$(basename "$f").err" 2>/dev/null
+        continue
+      fi
+      # Second pass — must be byte-identical (idempotence).
+      if ! ruxen fmt --stdin <"$f1" >"$f2" 2>"$tmp/err2"; then
+        fmt_fail=$((fmt_fail + 1))
+        record_fail "parity/refmt $(basename "$f")" "second ruxen fmt --stdin failed"
+        continue
+      fi
+      checked=$((checked + 1))
+      if ! cmp -s "$f1" "$f2"; then
+        idem_fail=$((idem_fail + 1))
+        diff -u "$f1" "$f2" >"$RESULTS/parity_$(basename "$f").idem.diff" 2>/dev/null
+        record_fail "parity/idempotent $(basename "$f")" "fmt(fmt(x)) != fmt(x)"
+      fi
+    done < <(find "$root" -type f -name '*.rx' -print0)
+  done
+
+  rm -rf "$tmp"
+
+  if [ "$fmt_fail" -eq 0 ] && [ "$idem_fail" -eq 0 ]; then
+    record_pass "parity/fmt-binary ($checked files: parse + idempotent)"
+  fi
+  printf "  %s%d files checked, %d fmt failures, %d idempotence failures%s\n" \
+    "$DIM" "$checked" "$fmt_fail" "$idem_fail" "$RESET"
+}
+
 # ── main ──────────────────────────────────────────────────────────────
 # Each phase is gated by PHASES (see header). The grouping is
 # coarser than the function list — `compile-flags` rolls together
@@ -883,6 +964,7 @@ _e2e_phase_enabled repl          && test_repl
 _e2e_phase_enabled repl          && test_repl_cases
 _e2e_phase_enabled lsp           && test_lsp
 _e2e_phase_enabled lsp           && test_lsp_features
+_e2e_phase_enabled parity        && test_parity
 
 TOTAL=$((PASS + FAIL))
 printf "\n%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n" "$BOLD" "$RESET"

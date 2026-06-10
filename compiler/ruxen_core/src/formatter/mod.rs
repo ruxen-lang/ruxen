@@ -17,6 +17,7 @@ pub mod format_imports;
 pub mod format_items;
 pub mod format_pattern;
 pub mod format_type;
+pub mod prec;
 
 #[cfg(test)]
 mod tests;

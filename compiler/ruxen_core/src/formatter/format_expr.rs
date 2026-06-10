@@ -6,6 +6,25 @@ use super::comments::CommentMap;
 use super::doc::*;
 use super::format_pattern::{format_match_pattern, format_pattern};
 use super::format_type::format_type_expr;
+use super::prec::{binop_prec, needs_parens, Side};
+
+/// Format `child` as an operand of a parent operator, wrapping it in
+/// grouping parentheses iff dropping them would re-associate or change
+/// precedence on re-parse (Q34). `parent_prec` is the parent's tier
+/// (`super::prec`); `side` selects the left/right associativity rule.
+fn format_operand(
+    child: &Expr,
+    parent_prec: u8,
+    side: Side,
+    comments: &CommentMap,
+) -> Doc {
+    let inner = format_expr(child, comments);
+    if needs_parens(child, parent_prec, side) {
+        concat(vec![text("("), inner, text(")")])
+    } else {
+        inner
+    }
+}
 
 pub fn format_expr(expr: &Expr, comments: &CommentMap) -> Doc {
     format_expr_kind(&expr.kind, comments)
@@ -167,13 +186,16 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
             // `..` is INCLUSIVE, `...` is EXCLUSIVE. The `..=` spelling is
             // not valid Ruxen syntax and fails to re-lex (E0009).
             let op = if *inclusive { ".." } else { "..." };
+            // Range is tier 9, non-associative. Wrap an endpoint that is a
+            // looser (or, on either side, equal-tier) operator so a nested
+            // range keeps its grouping on re-parse.
             let mut parts = Vec::new();
             if let Some(s) = start {
-                parts.push(format_expr(s, comments));
+                parts.push(format_operand(s, 9, Side::Left, comments));
             }
             parts.push(text(op));
             if let Some(e) = end {
-                parts.push(format_expr(e, comments));
+                parts.push(format_operand(e, 9, Side::Right, comments));
             }
             concat(parts)
         }
@@ -324,8 +346,11 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         }
 
         // ── Cast ──
+        // `as` is tier 23. The cast subject is its left operand: wrap it
+        // when it is a looser operator so `(a + b) as Int` does not collapse
+        // to `a + b as Int` = `a + (b as Int)` (Q34).
         ExprKind::Cast { expr, target_type } => concat(vec![
-            format_expr(expr, comments),
+            format_operand(expr, 23, Side::Left, comments),
             text(" as "),
             format_type_expr(target_type, comments),
         ]),
@@ -665,12 +690,17 @@ fn compound_assign_op_str(op: BinOp) -> &'static str {
 }
 
 fn format_binary_op(left: &Expr, op: BinOp, right: &Expr, comments: &CommentMap) -> Doc {
+    // Re-parenthesise operands whose precedence is looser than this
+    // operator's (or equal, on the right) so the formatted output re-parses
+    // to the SAME tree — the parser discards grouping parens, so the
+    // formatter must re-derive them from tree shape (Q34).
+    let p = binop_prec(op);
     group(concat(vec![
-        format_expr(left, comments),
+        format_operand(left, p, Side::Left, comments),
         text(" "),
         text(bin_op_str(op)),
         line(),
-        format_expr(right, comments),
+        format_operand(right, p, Side::Right, comments),
     ]))
 }
 
@@ -680,7 +710,14 @@ fn format_unary_op(op: UnaryOp, operand: &Expr, comments: &CommentMap) -> Doc {
         UnaryOp::Not => "!",
         UnaryOp::Deref => "*",
     };
-    concat(vec![text(op_str), format_expr(operand, comments)])
+    // A prefix unary binds at tier 25 — tighter than every binary/range/cast
+    // operator — so its operand must be parenthesised when it is a looser (or
+    // equal-tier) operator: `-(a + b)`, `-(a as Int)`, `!(a && b)`. Without
+    // this, `-(a + b)` would reformat to `-a + b` = `(-a) + b` (Q34).
+    concat(vec![
+        text(op_str),
+        format_operand(operand, 25, Side::Right, comments),
+    ])
 }
 
 /// Format function call arguments with line-breaking.
@@ -744,9 +781,13 @@ fn collect_chain(kind: &ExprKind) -> (Doc, Vec<Doc>) {
             } => {
                 let arg_docs: Vec<Doc> = args.iter().map(|a| format_expr(a, &comments)).collect();
                 let mut parts = vec![text("."), text(method.clone())];
-                if !arg_docs.is_empty() || block.is_some() {
-                    parts.push(format_call_args(arg_docs));
-                }
+                // ALWAYS emit `()` — a `MethodCall` link is a call, never a
+                // field access (which is a separate `FieldAccess` link).
+                // Dropping the parens on a zero-arg call in a chain
+                // (`s.bytes().size()` → `s.bytes.size`) silently turns calls
+                // into field accesses (reparse-identity break; cf.
+                // `format_single_method_call`).
+                parts.push(format_call_args(arg_docs));
                 if let Some(blk) = block {
                     parts.push(text(" "));
                     parts.push(format_expr(blk, &comments));
@@ -796,10 +837,13 @@ fn format_single_method_call(
         text("."),
         text(method.to_string()),
     ];
-    // Only emit parens if there are args or a block (no-arg method calls don't need parens)
-    if !arg_docs.is_empty() || block.is_some() {
-        parts.push(format_call_args(arg_docs));
-    }
+    // ALWAYS emit the call parens, even for a zero-arg call. A `MethodCall`
+    // node only exists when the source wrote `x.foo()`; a bare `x.foo`
+    // parses as a `FieldAccess`, a DIFFERENT node. Dropping the parens
+    // (`x.foo()` → `x.foo`) silently rewrites a call into a field access — a
+    // semantic change that breaks reparse-identity (same fmt-destructiveness
+    // class as Q30's `Call`/closure shapes). The empty `()` is canonical.
+    parts.push(format_call_args(arg_docs));
     if let Some(blk) = block {
         parts.push(text(" "));
         parts.push(format_expr(blk, comments));

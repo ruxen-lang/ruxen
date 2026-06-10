@@ -8,6 +8,25 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Syntax-parity harness** (ADR `docs/decisions/syntax-parity-harness.md`).
+  Enforces the USER invariant that the compiler, `ruxen fmt`, the REPL, the
+  LSP, and the IDE never diverge on Ruxen syntax — *"ruxen syntax must be 100%
+  available on every package we deliver."* Two axes:
+  - **Per-surface conformance** over a single auto-discovered corpus (the
+    compiler's `tests/release-e2e/cases/` + `library/std/` + `examples/` + the
+    read-only sibling repos `canvas/quiver/rondo` `src/`, 491 files): the
+    compiler lexes+parses each; `ruxen fmt` re-parses to a structurally
+    identical AST (span-blind, import-order-tolerant) and is idempotent; the
+    REPL's `parse_repl_input` accepts every batch-accepted top-level item kind;
+    the LSP/IDE `analyze` parses everything the compiler does.
+  - **Structural pins**: a compile-time exhaustiveness guard that breaks the
+    build when a new `TopLevelItem`/`MixinItem`/`ImplItem` variant lands without
+    a parity decision, and an explicit intentional-divergence allowlist (the
+    parser-accepts-but-compile-rejects E0728/E0607 class).
+  - Delivery: `compiler/ruxen_core/tests/syntax_parity.rs`,
+    `src/ruxen_ide/tests/syntax_parity_ide.rs`, and a new `parity` phase in
+    `tests/release-e2e/run.sh` (driving the shipped `ruxen fmt` binary; wired
+    into `PHASES=all`).
 - **Ruby-style `alias` keyword** (ADR `docs/decisions/alias-keyword.md`).
   `alias new_name old_name` (space form, Ruby keyword style) gives an existing
   method or free function a second name as a **pure resolver synonym** — both
@@ -55,6 +74,30 @@ once 1.0.0 ships.
     `tests/ruby_block_semantics.rs`, `drop_fixtures.rs::block_capturing_heap_value_runs_soundly`.
 
 ### Fixed
+- **Resolve: a yielding/`&block` method poisoned an unrelated same-named free
+  function with a phantom `__block`** (ledger Q37, S1). The synthetic-`__block`
+  decision keyed off a bare-function-name map (`yield_fns`), so a block-taking
+  method `frame` made an unrelated generic free fn `frame` inherit a `__block`
+  it could never infer (`could not infer type for parameter __block`) — which
+  broke every quiver example binary once canvas gained its `frame` methods. The
+  decision is now made LOCALLY from each function's own body
+  (`resolve/funcs.rs`); the name-keyed map + its populator are removed. Pin:
+  release-e2e 920.
+- **`ruxen fmt` was destructive in four ways** (all surfaced by the new
+  syntax-parity harness; ADR `docs/decisions/syntax-parity-harness.md`, ledger
+  Q34):
+  - **Q34 — dropped grouping parentheses**, silently changing arithmetic
+    (`(a + b) / c` → `a + b / c`). The parser keeps no paren node, so the
+    formatter now RE-DERIVES grouping by operator precedence
+    (`formatter/prec.rs`, mirroring `parser::expr::infix_binding_power` as the
+    single precedence source). Pin: `tests/q34_fmt_grouping_parens.rs`.
+  - **Zero-arg method call → field access** (`s.bytes()` → `s.bytes`). A
+    `MethodCall` and a `FieldAccess` are distinct AST nodes; the formatter now
+    always emits the call `()`.
+  - **Method visibility section dropped** — a `private`/`protected` method
+    round-tripped as `public`. Class/struct/enum bodies now emit
+    `private`/`protected`/`public` section markers as visibility changes.
+  - **`async` modifier dropped** (`async def f` → `def f`). Now emitted.
 - **Borrow checker: false `value used after move` (E1001) on an owned value
   passed to a `&T` / `&var T` parameter.** `check_method_call` / `check_fn_call`
   decided move-vs-borrow purely from the ARGUMENT's own type, so an owned value
