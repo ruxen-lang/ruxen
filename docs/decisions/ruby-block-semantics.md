@@ -153,12 +153,28 @@ as block-value, `&:symbol` to-proc sugar, numbered params / `it`.
 - The Tester framework (`do…end` on methods everywhere) is the strongest existing
   regression net and must stay green unchanged.
 
-### Known Tier-1 limitation (filed in docs/TASKS.md)
-A **paren-less, blockless** call to an optional-block **method** (`w.build`, no
-parens and no block) does not fill the block slot: it parses as a `FieldAccess`
-whose no-arg method path does not append the `nil` block default, so MIR emits
-one too few arguments. Workaround: `w.build()` (parens) works, and any
-block-bearing form works. Free functions have no such gap (a blockless `render`
-works). The fix (rewrite the FieldAccess no-arg method path into a `MethodCall`,
-or fill defaults at MIR) is deferred to avoid touching the broad
-paren-less-call corpus in this pass.
+### Known Tier-1 limitation — RESOLVED (2026-06-10)
+A **paren-less, blockless** call to an optional-block **method** (`w.frame`, no
+parens and no block) previously did not fill the block slot: it parses as a
+`FieldAccess` whose no-arg method path did not append the `nil` block default,
+so MIR emitted one too few arguments and **crashed the arity verifier**
+(`__closure_*: got 1, expected 2`). `w.frame()` (parens) and any block-bearing
+form worked, and free functions had no such gap (a blockless `render` works).
+
+**Fix (the "fill defaults at MIR" option):** the no-arg method route in
+`mir/lower/expr/field_access.rs` now appends the resolved method's trailing
+default arguments — the MIR mirror of typeck's `append_method_default_args`,
+which the parens `MethodCall` path already runs. The new helper
+`Lowerer::method_trailing_default_sentinels` (`mir/lower/mod.rs`) looks up the
+resolved method's signature and materializes a null closure-pair-pointer
+sentinel (`Literal::Int(0)`, the same value `NullLiteral` lowers to for a
+non-`Option` type) for each defaulted trailing param the call did not supply.
+So `w.frame` and `w.frame()` now lower **identically**, consistent with the
+earlier paren-less auto-call fix for regular defaults
+(`autocall_uses_real_default_not_null`). We chose the MIR default-fill over the
+"rewrite FieldAccess into MethodCall" option to keep the change off the broad
+paren-less-call corpus. Pins: release-e2e `921_block_optional_method_parenless`
+(RUN + assert stdout; a revert CRASHES at MIR, not merely a stdout mismatch),
+`compiler/ruxen_core/tests/ruby_block_semantics.rs`
+(`parenless_blockless_method_call_fills_block_slot` +
+`explicit_block_param_on_method` extended with `w.build`).

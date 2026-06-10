@@ -74,6 +74,23 @@ once 1.0.0 ships.
     `tests/ruby_block_semantics.rs`, `drop_fixtures.rs::block_capturing_heap_value_runs_soundly`.
 
 ### Fixed
+- **MIR: a paren-less, blockless call to an optional-`&block` METHOD crashed
+  the arity verifier** (Ruby-block-semantics ADR D1/D5; the blocks feature's
+  filed Tier-1 known limitation). `w.frame` (no parens, no block) on a method
+  declaring `&block` parses as a `FieldAccess` whose no-arg method route did not
+  append the `nil` block default, so MIR emitted one too few args and crashed
+  (`__closure_*: got 1, expected 2`); `w.frame()` (parens) worked because the
+  parens `MethodCall` path gets typeck's `append_method_default_args`. Fixed by
+  the MIR mirror: the no-arg method route in `mir/lower/expr/field_access.rs`
+  now appends the resolved method's trailing default sentinels via the new
+  `Lowerer::method_trailing_default_sentinels` (`mir/lower/mod.rs`) — a null
+  closure-pair-pointer (`Literal::Int(0)`) per unsupplied defaulted trailing
+  param — so `w.frame` and `w.frame()` lower IDENTICALLY (consistent with the
+  earlier regular-default fix `autocall_uses_real_default_not_null`). Pins:
+  release-e2e `921_block_optional_method_parenless` (RUN+stdout; a revert
+  CRASHES at MIR, not just an assert miss), `ruby_block_semantics.rs`
+  (`parenless_blockless_method_call_fills_block_slot`,
+  `explicit_block_param_on_method` extended with `w.build`).
 - **Resolve: a yielding/`&block` method poisoned an unrelated same-named free
   function with a phantom `__block`** (ledger Q37, S1). The synthetic-`__block`
   decision keyed off a bare-function-name map (`yield_fns`), so a block-taking

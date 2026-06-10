@@ -202,13 +202,12 @@ end
 }
 
 /// Pin (c2): an explicit `&block` parameter works on a METHOD — block-bearing
-/// call (`do…end`) and the optional/blockless path with `block_defined?` inside
-/// a class. NOTE the blockless call uses explicit parens `w.build()`: a
-/// PAREN-LESS blockless call to an optional-block method (`w.build`) is a known
-/// Tier-1 limitation — it parses as a `FieldAccess` whose no-arg method path
-/// does not append the block default. `w.build()` and any block-bearing form
-/// work; free functions have no such gap (pin 909's blockless `render`). Filed
-/// in docs/TASKS.md as the block-method paren-less follow-up.
+/// call (`do…end`), the parens blockless form (`w.build()`), AND the paren-less
+/// blockless form (`w.build`). All three reach `block_defined?` correctly. The
+/// paren-less blockless form previously CRASHED the MIR arity verifier (it
+/// parses as a `FieldAccess` whose no-arg method path did not append the block
+/// `nil` default → one too few args); it is now fixed (block-slot consistency,
+/// ADR D1/D5) so `w.build` and `w.build()` lower identically.
 #[test]
 fn explicit_block_param_on_method() {
     let source = r##"
@@ -231,11 +230,55 @@ def main
     puts "tag=#{t}"
   end
   w.build()
+  w.build
 end
 "##;
     let (stdout, stderr, code) = compile_and_run(source, "block_on_method");
     assert_eq!(code, Some(0), "stderr={stderr:?}");
-    assert_eq!(stdout, "tag=5\nno-block\n", "stdout was {stdout:?}");
+    assert_eq!(stdout, "tag=5\nno-block\nno-block\n", "stdout was {stdout:?}");
+}
+
+/// Item-1 dedicated pin: a PAREN-LESS, blockless call to an optional-`&block`
+/// METHOD (`w.frame`) must fill the block slot with the null sentinel exactly
+/// like the parens form (`w.frame()`), reaching `block_defined?` = false
+/// cleanly. Before the fix this lowered as a `FieldAccess` that omitted the
+/// trailing block default, emitting one too few MIR args and CRASHING the
+/// arity verifier (`__closure_*: got 1, expected 2`) — so a revert of the
+/// `mir/lower/expr/field_access.rs` default-fill makes THIS test fail at MIR
+/// lowering / codegen, not merely on a stdout mismatch. Mirrors release-e2e
+/// case 921. (ADR D1/D5; closes the blocks-feature paren-less-method gap.)
+#[test]
+fn parenless_blockless_method_call_fills_block_slot() {
+    let source = r##"
+class Widget
+  label: String
+  def init
+    self.label = "w"
+  end
+  def frame(&block: Fn[() -> nil]) -> nil
+    if block_defined?
+      puts "with-block"
+      yield
+    else
+      puts "no-block"
+    end
+  end
+end
+def main
+  var w = Widget.new
+  w.frame
+  w.frame()
+  w.frame do
+    puts "inner"
+  end
+end
+"##;
+    let (stdout, stderr, code) = compile_and_run(source, "parenless_block_method");
+    assert_eq!(code, Some(0), "stderr={stderr:?}");
+    assert_eq!(
+        stdout, "no-block\nno-block\nwith-block\ninner\n",
+        "paren-less `w.frame` must lower identically to `w.frame()`; stdout was {stdout:?}"
+    );
 }
 
 /// Pin (e2): `block_given?` is accepted as an alias of `block_defined?`.

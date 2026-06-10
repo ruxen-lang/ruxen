@@ -94,16 +94,24 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       pair) is unimplemented. No double-free, no segfault — purely a leak.
       Repro: `tests/fixtures/ruxen/block_capture_heap_no_leak.rx` (soundness
       pinned; leak-freedom is this follow-up).
-- [ ] **Block follow-up · S3 — paren-less blockless call to an optional-block
-      METHOD doesn't fill the block slot.** `w.build` (no parens, no block) on a
-      method declaring `&block` parses as a `FieldAccess`; that no-arg method
-      path (`typeck/infer/expr.rs`) does not append the `nil` block default, so
-      MIR emits one too few args (Cranelift arity verifier error). Workaround:
-      write `w.build()` with parens (works). FREE functions have no gap (the
-      blockless `render` in pin 909 works). Fix: rewrite the FieldAccess no-arg
-      method path into a `MethodCall` (or fill defaults at MIR) when the method
-      has trailing default params — deferred to avoid touching the broad
-      paren-less-call corpus this pass.
+- [x] **Block follow-up · S3 — paren-less blockless call to an optional-block
+      METHOD doesn't fill the block slot (FIXED 2026-06-10,
+      `feat/drop-elaboration`).** `w.frame` (no parens, no block) on a method
+      declaring `&block` parsed as a `FieldAccess`; that no-arg method path
+      (`mir/lower/expr/field_access.rs`) did not append the `nil` block default,
+      so MIR emitted one too few args and CRASHED the arity verifier
+      (`__closure_*: got 1, expected 2`). FREE functions had no gap (the
+      blockless `render` in pin 909 works). Fixed via the "fill defaults at MIR"
+      option: the no-arg method route now appends the resolved method's trailing
+      default sentinels via `Lowerer::method_trailing_default_sentinels`
+      (`mir/lower/mod.rs`) — the MIR mirror of typeck's
+      `append_method_default_args` the parens path already runs — so `w.frame`
+      and `w.frame()` lower identically (consistent with the regular-default
+      fix `autocall_uses_real_default_not_null`). Pins: release-e2e
+      `921_block_optional_method_parenless` (RUN+stdout; revert CRASHES, not
+      just asserts), `ruby_block_semantics.rs`
+      (`parenless_blockless_method_call_fills_block_slot`,
+      `explicit_block_param_on_method` extended). ADR known-limitations updated.
 - [ ] **Block follow-up · Tier-2 (staged, per ADR).** `&` block-forwarding
       (`g(&block)` / anonymous `&`), `next` as block-value, `&:symbol` to-proc
       sugar, numbered params / `it`. Rejected (see ADR): non-local `return` /

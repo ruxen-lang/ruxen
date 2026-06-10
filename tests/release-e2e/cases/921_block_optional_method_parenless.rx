@@ -1,0 +1,33 @@
+# Ruby-block-semantics ADR D1/D5, block-slot consistency. A paren-LESS,
+# blockless call to an optional-`&block` METHOD (`w.frame`) must fill the
+# block slot with the `nil` null-sentinel exactly like the parens form
+# (`w.frame()`) and the block form (`w.frame do…end`). Before the fix this
+# paren-less path lowered as a FieldAccess that omitted the trailing block
+# default, emitting one too few MIR args and CRASHING the arity verifier
+# (`__closure_*: got 1, expected 2`). All three forms below must print and
+# the `block_defined?`-false branch must be reached cleanly.
+
+class Widget
+  label: String
+  def init
+    self.label = "w"
+  end
+
+  def frame(&block: Fn[() -> nil]) -> nil
+    if block_defined?
+      puts "with-block"
+      yield
+    else
+      puts "no-block"
+    end
+  end
+end
+
+def main
+  var w = Widget.new
+  w.frame            # paren-less, blockless — the crash shape; block_defined? = false
+  w.frame()          # parens, blockless — already worked; block_defined? = false
+  w.frame do         # trailing block — block_defined? = true
+    puts "inner"
+  end
+end

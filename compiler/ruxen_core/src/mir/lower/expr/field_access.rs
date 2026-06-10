@@ -417,6 +417,24 @@ impl<'a> Lowerer<'a> {
                         ));
                     }
 
+                    // Ruby-block-semantics ADR D1/D5: a paren-less no-arg
+                    // method call (`w.frame`) lowers here as a FieldAccess and,
+                    // unlike the parens path (`w.frame()`, a `MethodCall` HIR
+                    // node that gets `append_method_default_args` at typeck),
+                    // never fills the resolved method's trailing default
+                    // parameters. For a method declaring an optional
+                    // `&block: Fn[…]` the missing trailing arg is the `nil`
+                    // block default → null closure-pair-pointer sentinel; omit
+                    // it and the call emits one too few args, crashing the
+                    // MIR/Cranelift arity verifier. Append the trailing default
+                    // sentinels so `w.frame` and `w.frame()` lower identically.
+                    // (`field_name` here is already the alias-canonical name;
+                    // this path supplies zero user positional args.)
+                    let mut arg_values = arg_values;
+                    arg_values.extend(
+                        self.method_trailing_default_sentinels(&resolved_class, field_name, 0),
+                    );
+
                     let dest = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
                         Some(self.new_temp(expr.ty.clone()))
                     } else {

@@ -481,6 +481,84 @@ impl<'a> Lowerer<'a> {
             .map(|(name, _)| name.clone())
     }
 
+    /// Trailing default arguments the resolved method declares that a call
+    /// supplying `supplied_user_args` positional arguments (NOT counting the
+    /// receiver) did not fill — each materialized as the param's lowered
+    /// `default` literal value.
+    ///
+    /// This is the MIR-side mirror of typeck's `append_method_default_args`
+    /// (`infer/collect.rs`). The PARENS method-call path (`MethodCall` HIR
+    /// node) gets its trailing defaults appended at typeck, so by the time it
+    /// reaches MIR the args vector already carries them. The PAREN-LESS no-arg
+    /// method-call path lowers as a `FieldAccess` (no args vector), so typeck
+    /// never runs the default-arg pass on it — without this, an optional
+    /// `&block` slot (which carries a `nil` default → null closure-pair-pointer
+    /// sentinel, Ruby-block-semantics ADR D1/D5) is left unfilled and the call
+    /// emits one too few arguments, crashing the MIR/Cranelift arity verifier
+    /// (`__closure_*: got 1, expected 2`). Filling it here makes `w.frame` and
+    /// `w.frame()` lower IDENTICALLY (the block-slot consistency the blocks
+    /// feature filed as a known limitation).
+    ///
+    /// Each default param's `nil`/`null` lowers to `Literal::Int(0)` — the same
+    /// value the `NullLiteral` HIR expr lowers to for a non-`Option` type
+    /// (`expr/literals.rs`); for the block slot that is the null
+    /// closure-pair-pointer the `emit_block_presence_guard` then tests.
+    fn method_trailing_default_sentinels(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        supplied_user_args: usize,
+    ) -> Vec<MirValue> {
+        let method_name = self.symbols.canonical_method_name(class_name, method_name);
+        // Find the resolved method's signature, walking parents for inherited
+        // methods (mirrors `resolve_method_class`'s ancestor search via the
+        // already-resolved `class_name`).
+        let signature = self.symbols.iter().find_map(|def| {
+            let crate::resolve::symbols::DefKind::Method { parent, signature } = &def.kind else {
+                return None;
+            };
+            let parent_name = self.symbols.get(*parent).map(|p| p.name.as_str())?;
+            (parent_name == class_name
+                && (def.name == method_name
+                    || def.name.starts_with(&format!("{}__overload", method_name))))
+            .then(|| signature.clone())
+        });
+        let Some(signature) = signature else {
+            return Vec::new();
+        };
+        // Skip the params already covered by the supplied user args, then
+        // materialize each remaining param that carries a default. Only `nil`
+        // / `null` defaults arise on this path (the optional `&block` slot);
+        // a non-null literal default on a paren-less-reachable param is also
+        // honoured for parity with the parens path.
+        signature
+            .params
+            .iter()
+            .skip(supplied_user_args)
+            .filter_map(|p| p.default.as_ref().map(|d| Self::default_expr_to_sentinel(d)))
+            .collect()
+    }
+
+    /// Lower a param `default` AST expr to the MIR value the no-arg
+    /// field-access path appends. `nil`/`null` → `Literal::Int(0)` (the null
+    /// closure-pair-pointer for a `&block` slot, matching `NullLiteral`'s
+    /// non-`Option` lowering). Other literal defaults map to their value.
+    fn default_expr_to_sentinel(default: &crate::parser::ast::Expr) -> MirValue {
+        use crate::parser::ast::ExprKind;
+        match &default.kind {
+            ExprKind::NullLiteral | ExprKind::UnitLiteral => {
+                MirValue::Literal(Literal::Int(0))
+            }
+            ExprKind::IntLiteral(v, _) => MirValue::Literal(Literal::Int(*v)),
+            ExprKind::BoolLiteral(v) => MirValue::Literal(Literal::Bool(*v)),
+            ExprKind::FloatLiteral(v, _) => MirValue::Literal(Literal::Float(*v)),
+            // Any other default shape falls back to the null sentinel; the
+            // only paren-less-reachable trailing default in practice is the
+            // optional `&block` (`nil`), so this is conservative parity.
+            _ => MirValue::Literal(Literal::Int(0)),
+        }
+    }
+
     fn lower_items(
         &mut self,
         items: &[HirItem],
