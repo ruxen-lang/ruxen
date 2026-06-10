@@ -1,9 +1,21 @@
+# NOTE: `ok_or(...)` DELIBERATELY keeps `String.from("missing")` rather than a
+# bare literal. `ok_or(s: E)` binds the Result's error type `E` from the arg, so
+# `ok_or("missing")` yields `Result[Int, &str]`, which does not coerce into the
+# annotated `Result[Int, String]` — the `&str → String` coercion NESTED inside a
+# `Result`/`Option` payload is a known-deferred gap (see the TODO in
+# `typeck/infer/mod.rs::unify_or_coerce`; rewriting the inner expr's `.ty` to
+# `String` while storage stays `Str` risks a payload drop double-free). This is
+# the one place the `String.from("literal")` sweep keeps `String.from` — it is a
+# load-bearing workaround, not the dead idiom. The DIRECT `Err("msg")`
+# constructor form IS fixed (it coerces; pin 24_result/922) because the payload
+# expr's type is set to match storage at construction; the generic method-return
+# path here is the unsolved remainder, tracked by the `&str`-removal task.
 def main
   let some_v: Int? = 5
   let none_v: Int? = nil
 
-  let r1: Result[Int, String] = some_v.ok_or("missing")
-  let r2: Result[Int, String] = none_v.ok_or("missing")
+  let r1: Result[Int, String] = some_v.ok_or(String.from("missing"))
+  let r2: Result[Int, String] = none_v.ok_or(String.from("missing"))
 
   match r1
     Ok(v)  -> puts "ok #{v}"

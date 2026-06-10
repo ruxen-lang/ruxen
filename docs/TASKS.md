@@ -229,7 +229,16 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       representation at the boundary — the collapse is representationally free,
       it's a type-system + method-home consolidation. (5) sweep `let x: &str`
       annotations + `&"lit"` idioms; update tutorial 29's `String` vs `&str` box.
-      Sizeable but mechanical; pin the parity + full corpus. Design doc first.
+      (6) the NESTED-PAYLOAD coercion remainder: a `&str` literal does not coerce
+      into a `String` slot nested inside a generic payload —
+      `opt.ok_or("missing")` builds `Result[Int, &str]` and won't coerce to
+      `Result[Int, String]` (TODO in `infer/mod.rs::unify_or_coerce`; naively
+      rewriting the inner `.ty` to `String` while storage stays `Str` risks a
+      payload drop double-free). Workaround today: `ok_or(String.from("missing"))`
+      (release-e2e 116 keeps it — the one load-bearing `String.from` left). The
+      DIRECT `Err("msg")` constructor IS fixed (payload `.ty` set at construction).
+      Collapsing `&str` dissolves this class. Sizeable but mechanical; pin parity
+      + full corpus. Design doc first.
 - [x] **Q32 · S3 — Q16 flat-merge of an FFI dependency broke `ruxen test` at
       link (FIXED 2026-06-10).** A consumer's test EXECUTABLE flat-merged the
       FFI dep's `src/**.rx` (incl. `lib "C"`-calling bodies) but neither
