@@ -28,7 +28,7 @@ PROGRAM_OK = """def greet(name: String) -> String
 end
 
 def main
-  let msg = greet(String.from("world"))
+  let msg = greet("world")
   puts msg
 end
 """
