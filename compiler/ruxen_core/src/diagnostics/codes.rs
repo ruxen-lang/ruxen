@@ -440,6 +440,32 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1119",
         title: "block parameter `&block` must be the last parameter",
     },
+    // ── Ruby `alias` keyword (docs/decisions/alias-keyword.md) ───────
+    // E1120 fires when `alias new old` names a target `old` that is not a
+    // visible method (of the enclosing type, incl. included mixins) or a
+    // visible free function.
+    CodeInfo {
+        code: "E1120",
+        title: "alias target not found",
+    },
+    // E1121 fires when `alias` declarations form a cycle (e.g. `alias a b`
+    // plus `alias b a`), so no canonical target can be determined.
+    CodeInfo {
+        code: "E1121",
+        title: "alias forms a cycle",
+    },
+    // E1122 fires when an alias's NEW name collides with an existing
+    // definition in the same scope, or aliases a name to itself.
+    CodeInfo {
+        code: "E1122",
+        title: "alias name collides with an existing definition",
+    },
+    // E1123 fires for an operator-spelled alias new-name or target
+    // (`alias << push`, `alias [] get`) — staged for Tier 2 (ADR D6).
+    CodeInfo {
+        code: "E1123",
+        title: "operator aliases are not yet supported",
+    },
     // ── Package manager (E1600-E1699) ────────────────────────────────
     // Emitted from `ruxen_cli`. Spans don't apply (these are toolchain
     // errors, not compile errors), but the codes follow the same

@@ -2050,6 +2050,7 @@ fn get_item_span(item: &TopLevelItem) -> ruxen_core::lexer::token::Span {
         TopLevelItem::Lib(l) => l.span.clone(),
         TopLevelItem::Extern(e) => e.span.clone(),
         TopLevelItem::Expr(e) => e.span.clone(),
+        TopLevelItem::Alias(a) => a.span.clone(),
     }
 }
 

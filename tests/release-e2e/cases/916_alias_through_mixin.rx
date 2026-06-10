@@ -1,0 +1,33 @@
+# alias-keyword ADR (docs/decisions/alias-keyword.md), pin (e).
+# An alias on a class method that SATISFIES a mixin requirement: `Box` includes
+# `Shape` (which requires `area`), defines `area`, and aliases it as `surface`.
+# Both the canonical and the alias resolve to the one body, and the mixin
+# contract is still satisfied (the alias is a pure synonym, not a new method).
+#
+# NOTE (ADR D7, Tier-1 boundary): aliasing a method a type gets ONLY via a mixin
+# DEFAULT body (not defined in the type itself) is staged for Tier 2 — the
+# default's signature lives in the mixin's sig table, not the type's method
+# table, so the synonym can't yet bind it. Aliasing a type's OWN method (incl.
+# one satisfying a requirement, as here) works.
+
+mixin Shape
+  def area -> Int
+end
+
+class Box
+  side: Int
+  include Shape
+  def init
+    self.side = 4
+  end
+  def area -> Int
+    self.side * self.side
+  end
+  alias surface area
+end
+
+def main
+  let b = Box.new
+  puts "area=#{b.area}"
+  puts "surface=#{b.surface}"
+end

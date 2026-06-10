@@ -68,6 +68,12 @@ impl Parser {
             TokenKind::Def => Some(TopLevelItem::Function(
                 self.parse_func_def(Visibility::Private),
             )),
+            // `alias new old` at top level (contextual keyword — `alias`
+            // lexes as an Identifier; it only starts an alias item when an
+            // identifier follows). docs/decisions/alias-keyword.md.
+            TokenKind::Identifier(_) if self.is_alias_item_start() => {
+                Some(TopLevelItem::Alias(self.parse_alias_item()))
+            }
             TokenKind::Protected => {
                 let vis = self.parse_visibility();
                 match self.current_kind() {
@@ -132,6 +138,52 @@ impl Parser {
             self.current_kind(),
             TokenKind::Identifier(_) | TokenKind::TypeIdentifier(_) | TokenKind::SelfValue
         )
+    }
+
+    /// True if the cursor begins a Ruby `alias new_name old_name` item:
+    /// the contextual keyword `alias` (an Identifier) followed immediately
+    /// by another identifier (the new name) — and crucially NOT by a colon,
+    /// which would make `alias` an ordinary field/binding name
+    /// (`alias: String`). The disambiguation is sound because a field decl
+    /// is always `name: Type`. docs/decisions/alias-keyword.md (D1).
+    pub(super) fn is_alias_item_start(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Identifier(s) if s == "alias")
+            && (matches!(self.peek_kind(), TokenKind::Identifier(_))
+                // An operator-spelled new name (`alias << push`) is parsed
+                // too, so resolve can emit the staged E1123 rather than the
+                // parser tripping a generic error (ADR D6).
+                || Self::is_operator_name_start(&self.peek_kind()))
+    }
+
+    /// Parse `alias new_name old_name`. The cursor sits on the `alias`
+    /// contextual keyword. Both names are bare identifiers (incl. `?`/`!`
+    /// names, which the lexer absorbs into the identifier). The comma form
+    /// `alias new, old` is rejected (D1) — a comma after the new name is a
+    /// clean parse error here.
+    pub(super) fn parse_alias_item(&mut self) -> AliasDef {
+        let start = self.current_span();
+        self.advance(); // consume the `alias` contextual keyword
+                        // `parse_def_name` accepts both plain/`?`/`!` identifiers and
+                        // operator-symbol names (`<<`, `[]`); operator names are caught at
+                        // resolve with E1123 (ADR D6), so they parse cleanly here.
+        let new_name = self.parse_def_name();
+        // Ruby's `alias` takes NO comma. Reject the comma form explicitly so
+        // the diagnostic is actionable instead of a generic "expected
+        // identifier" further along.
+        if self.at(TokenKind::Comma) {
+            self.error(
+                "`alias` uses the space form `alias new_name old_name` (no comma); \
+                 the comma form is not supported",
+            );
+            self.eat(TokenKind::Comma);
+        }
+        let old_name = self.parse_def_name();
+        let span = self.span_from(&start);
+        AliasDef {
+            new_name,
+            old_name,
+            span,
+        }
     }
 
     pub(super) fn parse_visibility(&mut self) -> Visibility {

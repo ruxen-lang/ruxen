@@ -126,6 +126,7 @@ fn item_span(item: &TopLevelItem) -> &crate::lexer::token::Span {
         TopLevelItem::Lib(l) => &l.span,
         TopLevelItem::Extern(e) => &e.span,
         TopLevelItem::Expr(e) => &e.span,
+        TopLevelItem::Alias(a) => &a.span,
     }
 }
 
@@ -150,7 +151,15 @@ fn format_top_level_item(item: &TopLevelItem, comments: &CommentMap) -> Doc {
         // `Tester.describe(...) do … end`). Format it exactly like an
         // in-body statement expression so the test file round-trips.
         TopLevelItem::Expr(e) => format_expr(e, comments),
+        TopLevelItem::Alias(a) => format_alias(a),
     }
+}
+
+/// Format a Ruby `alias new_name old_name` item byte-stably: the keyword, the
+/// new name, the old name, single-spaced, no normalization
+/// (docs/decisions/alias-keyword.md, D10).
+fn format_alias(a: &crate::parser::ast::AliasDef) -> Doc {
+    text(format!("alias {} {}", a.new_name, a.old_name))
 }
 
 /// Check if a single-statement function body is simple enough for inline `{ }` form.
@@ -374,6 +383,14 @@ fn format_class(class: &ClassDef, comments: &CommentMap) -> Doc {
         body_parts.push(format_lib(lib, comments));
     }
 
+    // Ruby `alias new old` synonyms (docs/decisions/alias-keyword.md, D10).
+    if !class.aliases.is_empty() {
+        body_parts.push(join(
+            hardline(),
+            class.aliases.iter().map(format_alias).collect::<Vec<_>>(),
+        ));
+    }
+
     // Join sections with blank lines (hardline + hardline = one blank line)
     let body = join(concat(vec![hardline(), hardline()]), body_parts);
 
@@ -473,6 +490,13 @@ fn format_struct(s: &StructDef, comments: &CommentMap) -> Doc {
         body_parts.push(format_inner_impl(imp, comments));
     }
 
+    if !s.aliases.is_empty() {
+        body_parts.push(join(
+            hardline(),
+            s.aliases.iter().map(format_alias).collect::<Vec<_>>(),
+        ));
+    }
+
     let body = join(concat(vec![hardline(), hardline()]), body_parts);
 
     concat(vec![
@@ -522,6 +546,13 @@ fn format_enum(e: &EnumDef, comments: &CommentMap) -> Doc {
 
     for imp in &e.inner_impls {
         body_parts.push(format_inner_impl(imp, comments));
+    }
+
+    if !e.aliases.is_empty() {
+        body_parts.push(join(
+            hardline(),
+            e.aliases.iter().map(format_alias).collect::<Vec<_>>(),
+        ));
     }
 
     let body = join(concat(vec![hardline(), hardline()]), body_parts);
@@ -648,6 +679,7 @@ fn format_trait_item(item: &MixinItem, comments: &CommentMap) -> Doc {
         MixinItem::AssocType { name, .. } => text(format!("type {}", name)),
         MixinItem::MethodSig(sig) => format_method_sig(sig, comments),
         MixinItem::DefaultMethod(func) => format_func_with_leading_comments(func, comments),
+        MixinItem::Alias(a) => format_alias(a),
     }
 }
 
@@ -770,6 +802,7 @@ fn format_impl_item(item: &ImplItem, comments: &CommentMap) -> Doc {
             parts.push(format_type_path(trait_name));
             concat(parts)
         }
+        ImplItem::Alias(a) => format_alias(a),
     }
 }
 

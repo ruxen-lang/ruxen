@@ -1066,12 +1066,25 @@ impl Resolver {
                 let mut required = vec![];
                 let mut defaults = vec![];
                 let mut assoc = vec![];
+                let mut mixin_aliases: Vec<ast::AliasDef> = vec![];
                 for ti in &t.items {
                     match ti {
                         ast::MixinItem::MethodSig(sig) => required.push(sig.name.clone()),
                         ast::MixinItem::DefaultMethod(f) => defaults.push(f.name.clone()),
                         ast::MixinItem::AssocType { name, .. } => assoc.push(name.clone()),
+                        // Ruby `alias new old` inside a mixin body
+                        // (docs/decisions/alias-keyword.md). Collected here and
+                        // recorded against the mixin's method surface below.
+                        ast::MixinItem::Alias(a) => mixin_aliases.push(a.clone()),
                     }
+                }
+                // Record mixin aliases as synonyms over the mixin's own method
+                // surface (required + default method names). Implementors that
+                // include the mixin inherit both names.
+                if !mixin_aliases.is_empty() {
+                    let mut method_names = required.clone();
+                    method_names.extend(defaults.iter().cloned());
+                    self.record_method_aliases(&t.name, &mixin_aliases, &method_names);
                 }
 
                 let id = self.symbols.define(

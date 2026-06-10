@@ -113,6 +113,13 @@ impl<'a> Lowerer<'a> {
                     // (literal dot in symbol) and link-fail because the
                     // alias map only carries `BufReader_File_read_line`.
                     let resolved_class_cs = resolved_class.replace('.', "_");
+                    // Ruby `alias new old` (docs/decisions/alias-keyword.md): a
+                    // paren-less method call (`b.length`) lowers here; rewrite an
+                    // alias method name to its canonical so it mangles to the
+                    // real body (`Bag_size`), not a bodiless `Bag_length`.
+                    let field_name = self
+                        .symbols
+                        .canonical_method_name(&resolved_class, field_name);
                     let mangled = format!("{}_{}", resolved_class_cs, field_name);
                     // Use the inner type of the result Option for the method result.
                     let inner_result_ty = match &expr.ty {
@@ -362,6 +369,11 @@ impl<'a> Lowerer<'a> {
                     // (literal dot in symbol) and link-fail because the
                     // alias map only carries `BufReader_File_read_line`.
                     let resolved_class_cs = resolved_class.replace('.', "_");
+                    // Ruby `alias new old` (see the other site in this file):
+                    // rewrite a paren-less alias method call to its canonical.
+                    let field_name = self
+                        .symbols
+                        .canonical_method_name(&resolved_class, field_name);
                     let mangled = format!("{}_{}", resolved_class_cs, field_name);
 
                     // Generic-class monomorphization: a paren-less method

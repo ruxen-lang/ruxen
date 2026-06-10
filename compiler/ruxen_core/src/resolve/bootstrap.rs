@@ -607,7 +607,10 @@ fn item_load_priority(item: &ast::TopLevelItem) -> u8 {
         // ever present in non-bootstrap user files compiled directly, where
         // resolve rejects it (E0608); ordering it here just keeps the sort
         // total.
-        | ast::TopLevelItem::Expr(_) => 3,
+        | ast::TopLevelItem::Expr(_)
+        // A free-fn `alias new old` consumes an already-registered callable
+        // name (docs/decisions/alias-keyword.md), so it loads last.
+        | ast::TopLevelItem::Alias(_) => 3,
     }
 }
 

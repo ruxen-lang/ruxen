@@ -1,0 +1,17 @@
+# alias-keyword ADR (docs/decisions/alias-keyword.md), pin (j).
+# A REAL stdlib conversion exercised end-to-end: `Array#to_a` is now a pure
+# `alias to_a clone` in `library/std/array/src/lib.rx` (was a duplicate FFI
+# decl). Calling BOTH names yields identical shallow copies through the one body.
+
+def main
+  var xs: Array[Int] = Array.new
+  xs.push(1)
+  xs.push(2)
+  xs.push(3)
+  let a = xs.clone
+  let b = xs.to_a
+  puts "clone_len=#{a.size}"
+  puts "to_a_len=#{b.size}"
+  puts "clone0=#{a[0]} to_a0=#{b[0]}"
+  puts "clone2=#{a[2]} to_a2=#{b[2]}"
+end

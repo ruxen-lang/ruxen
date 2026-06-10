@@ -1,0 +1,31 @@
+# alias-keyword ADR (docs/decisions/alias-keyword.md), pin (f).
+# A generic free function bound by a mixin, aliased, and called via the ALIAS
+# name — it monomorphizes IDENTICALLY (ADR D8), because the alias resolves to
+# the canonical callee DefId before the Q17 monomorphization worklist runs.
+
+mixin Paintable
+  def fill(w: Int) -> Int
+end
+
+def paint_all[T: Paintable](s: &var T, w: Int) -> Int
+  s.fill(w)
+end
+
+alias render_all paint_all
+
+class Surface
+  tag: Int
+  include Paintable
+  def init
+    self.tag = 10
+  end
+  def fill(w: Int) -> Int
+    w + self.tag
+  end
+end
+
+def main
+  var s = Surface.new
+  puts "paint=#{paint_all(&var s, 5)}"
+  puts "render=#{render_all(&var s, 7)}"
+end

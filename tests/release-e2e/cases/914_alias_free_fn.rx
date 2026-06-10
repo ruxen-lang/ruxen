@@ -1,0 +1,14 @@
+# alias-keyword ADR (docs/decisions/alias-keyword.md), pin (b).
+# A free-function aliased via top-level `alias new old` — both names resolve to
+# the SAME callable DefId (value-scope rebind), one body.
+
+def greet(name: String) -> String
+  "hi #{name}"
+end
+
+alias hail greet
+
+def main
+  puts greet(String.from("a"))
+  puts hail(String.from("b"))
+end

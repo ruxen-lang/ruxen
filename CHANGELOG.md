@@ -8,6 +8,30 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Ruby-style `alias` keyword** (ADR `docs/decisions/alias-keyword.md`).
+  `alias new_name old_name` (space form, Ruby keyword style) gives an existing
+  method or free function a second name as a **pure resolver synonym** — both
+  names resolve to ONE body, with zero duplicated codegen and zero extra call
+  frame.
+  - Valid as an item in `class` / `struct` / `enum` / `mixin` / `extension`
+    bodies (a method synonym scoped to the type) and at top level / in a
+    `module` (a free-function synonym). `alias` is a CONTEXTUAL keyword (not
+    reserved) — existing identifiers named `alias` keep working.
+  - Plain names AND `?`/`!` names work (`alias member? include?`). Operator
+    aliases (`alias << push`) are staged for Tier 2 with a clear **E1123**.
+  - Diagnostics: **E1120** (unknown target), **E1121** (alias cycle), **E1122**
+    (name collides with an existing def / self-alias), **E1123** (operator alias
+    staged). Each registered + documented under `docs/errors/`.
+  - Accepted on every toolchain surface: compiler, `ruxen fmt` (byte-stable
+    round-trip), the REPL (`parse_repl_input` routes the contextual keyword),
+    and the LSP/IDE (no spurious diagnostics).
+  - **stdlib sweep:** `Array#to_a` is now `alias to_a clone` (was a duplicate
+    FFI decl binding the same C symbol) — one fewer method body. The
+    return-type-differing families (`get`/`get_mut`/`get_var`) and the
+    `&str`-bridge-entangled `to_s`/`to_string` were deliberately left as FFI
+    decls (a pure synonym cannot express a differing signature or the dual
+    method-home routing). Pins: `tests/release-e2e/cases/913–918`,
+    `compiler/ruxen_core/tests/alias_keyword.rs`.
 - **Ruby-block semantics** (ADR `docs/decisions/ruby-block-semantics.md`).
   A function/method may declare an explicit, optional trailing block parameter
   with the `&` sigil and the canonical square-bracket signature spelling:

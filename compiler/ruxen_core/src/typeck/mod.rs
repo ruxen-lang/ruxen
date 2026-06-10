@@ -112,6 +112,7 @@ pub fn type_check_with_bootstrap_packages(
         mut type_context,
         mut diagnostics,
         type_registry,
+        method_aliases,
     } = resolver.resolve_with_bootstrap_packages(program, bootstrap_packages);
 
     diagnostics.extend(crate::implicit_includes::validate_program(
@@ -127,6 +128,10 @@ pub fn type_check_with_bootstrap_packages(
     // user's AST; bootstrap items live in the symbol table but not
     // in `program.items`, so they'd otherwise be invisible.
     trait_resolver.register_classes_from_registry(&type_registry, &symbols);
+    // Ruby `alias new old` method synonyms (docs/decisions/alias-keyword.md):
+    // register each alias name with the canonical method's signature so a call
+    // via the alias type-checks. Run AFTER the canonical methods are present.
+    trait_resolver.register_method_aliases(&method_aliases);
 
     let mut engine = InferenceEngine::new(&mut type_context, &mut symbols, &trait_resolver);
     engine.infer_program(&mut program);
@@ -181,6 +186,7 @@ pub fn type_check_with_bootstrap(
         mut type_context,
         mut diagnostics,
         type_registry,
+        method_aliases,
     } = resolver.resolve_with_bootstrap(&lowered_user, bootstrap_programs);
     diagnostics.extend(e1112_diags);
     diagnostics.extend(e1116_diags);
@@ -194,6 +200,8 @@ pub fn type_check_with_bootstrap(
     let mut trait_resolver = MixinResolver::new();
     trait_resolver.collect_impls(&program, &symbols);
     trait_resolver.register_classes_from_registry(&type_registry, &symbols);
+    // Ruby `alias new old` method synonyms (docs/decisions/alias-keyword.md).
+    trait_resolver.register_method_aliases(&method_aliases);
 
     // Phase 3: Type inference
     let mut engine = InferenceEngine::new(&mut type_context, &mut symbols, &trait_resolver);

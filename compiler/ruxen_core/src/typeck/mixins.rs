@@ -351,6 +351,46 @@ impl MixinResolver {
         }
     }
 
+    /// Register Ruby `alias new old` method synonyms (resolver
+    /// `method_aliases`: type → {alias → canonical}). For each alias, clone the
+    /// canonical method's already-registered signature under the alias NAME so
+    /// a call via the alias type-checks identically (same arity/params/return).
+    /// MIR separately rewrites the alias name to the canonical at symbol-mangle
+    /// time, so this adds NO method body — it is a pure synonym
+    /// (docs/decisions/alias-keyword.md, D2). Run AFTER
+    /// `register_classes_from_registry` / `collect_impls` so the canonical
+    /// signatures are present.
+    pub fn register_method_aliases(
+        &mut self,
+        method_aliases: &HashMap<String, HashMap<String, String>>,
+    ) {
+        for (type_name, aliases) in method_aliases {
+            // Resolve each alias against the canonical signatures CURRENTLY
+            // registered for the type, collecting synonym entries first so we
+            // don't borrow `type_methods` mutably while reading it.
+            let mut synonyms: Vec<(String, FnSignature)> = Vec::new();
+            if let Some(meths) = self.type_methods.get(type_name) {
+                for (alias, canonical) in aliases {
+                    if let Some(m) = meths.iter().find(|m| &m.name == canonical) {
+                        synonyms.push((alias.clone(), m.signature.clone()));
+                    }
+                }
+            }
+            if synonyms.is_empty() {
+                continue;
+            }
+            let meths = self.type_methods.entry(type_name.clone()).or_default();
+            for (alias, signature) in synonyms {
+                if !meths.iter().any(|m| m.name == alias) {
+                    meths.push(TypeMethod {
+                        name: alias,
+                        signature,
+                    });
+                }
+            }
+        }
+    }
+
     /// Check if a type satisfies a trait.
     ///
     /// For `impl Trait` (static dispatch): structural satisfaction is accepted.

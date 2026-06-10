@@ -1,0 +1,20 @@
+# alias-keyword ADR (docs/decisions/alias-keyword.md), pin (a).
+# A class method aliased via `alias new old` — BOTH names resolve to the ONE
+# method body (pure synonym, zero duplicated codegen) and print identical results.
+
+class Bag
+  count: Int
+  def init
+    self.count = 3
+  end
+  def size -> Int
+    self.count
+  end
+  alias length size
+end
+
+def main
+  let b = Bag.new
+  puts "size=#{b.size}"
+  puts "length=#{b.length}"
+end

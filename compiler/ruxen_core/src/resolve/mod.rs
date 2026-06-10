@@ -12,6 +12,7 @@ pub mod stdlib_embedded;
 pub mod symbols;
 mod yield_scan;
 
+mod aliases;
 mod bootstrap_merge;
 mod control_flow;
 mod exprs;
@@ -46,6 +47,13 @@ pub struct ResolveResult {
     /// receivers typed `BufReader.File` fall through to the fresh-
     /// inference-var fallback (the `?T37_read_to_string` symptom).
     pub type_registry: HashMap<String, DefId>,
+    /// Ruby `alias new old` method synonyms (docs/decisions/alias-keyword.md).
+    /// Keyed by the home type's (possibly qualified) name → `{alias → canonical}`.
+    /// Threaded to typeck (`type_methods` lookup resolves the alias name to the
+    /// canonical signature) and to MIR (`select_method_symbol_name` falls
+    /// through here so `set.member?(x)` emits `Set_include?`). A pure synonym —
+    /// no method body is created for the alias.
+    pub method_aliases: HashMap<String, HashMap<String, String>>,
 }
 
 /// The name resolver walks the AST and produces HIR with resolved names.
@@ -183,6 +191,11 @@ pub struct Resolver {
     /// `register_top_level_type_with_ffi_in` + the main pass-2
     /// `resolve_func_def` walk).
     pub(super) emitted_e1118_spans: std::collections::HashSet<(usize, usize)>,
+
+    /// Ruby `alias new old` method synonyms accumulated while resolving each
+    /// type body (docs/decisions/alias-keyword.md). Type name → `{alias →
+    /// canonical}`. Moved into `ResolveResult.method_aliases` at the end.
+    pub(super) method_aliases: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug)]
@@ -216,6 +229,7 @@ impl Resolver {
             bootstrap_auto_packages: Vec::new(),
             bootstrap_package_item_ids: HashMap::new(),
             emitted_e1118_spans: std::collections::HashSet::new(),
+            method_aliases: HashMap::new(),
         }
     }
 

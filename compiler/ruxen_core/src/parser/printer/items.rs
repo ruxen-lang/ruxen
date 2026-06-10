@@ -38,6 +38,9 @@ impl PrettyPrinter {
                     super::format::format_expr_short(e)
                 ));
             }
+            TopLevelItem::Alias(a) => {
+                self.line(&format!("alias {} {}", a.new_name, a.old_name));
+            }
         }
     }
 
@@ -178,6 +181,9 @@ impl PrettyPrinter {
             MixinItem::DefaultMethod(f) => {
                 self.print_func(f);
             }
+            MixinItem::Alias(a) => {
+                self.line(&format!("alias {} {}", a.new_name, a.old_name));
+            }
         }
     }
 
@@ -230,6 +236,9 @@ impl PrettyPrinter {
                     bang,
                     format_type_path(trait_name)
                 ));
+            }
+            ImplItem::Alias(a) => {
+                self.line(&format!("alias {} {}", a.new_name, a.old_name));
             }
         }
     }

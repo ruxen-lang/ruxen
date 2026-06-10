@@ -442,6 +442,11 @@ impl<'a> Lowerer<'a> {
         method_name: &str,
         args: &[HirExpr],
     ) -> Option<String> {
+        // Ruby `alias new old` (docs/decisions/alias-keyword.md): rewrite an
+        // alias method name to its canonical BEFORE scanning for the emitted
+        // symbol, so a call via the alias mangles to the real method's body
+        // (`set.member?(x)` → `Set_include?`), never a bodiless `Set_member?`.
+        let method_name = self.symbols.canonical_method_name(class_name, method_name);
         let mut candidates = Vec::new();
         for def in self.symbols.iter() {
             let crate::resolve::symbols::DefKind::Method { parent, signature } = &def.kind else {

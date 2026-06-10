@@ -178,6 +178,18 @@ impl Resolver {
             super::yield_scan::collect_yield_fns(item, &mut self.yield_fns);
         }
 
+        // Bind top-level `alias new old` free-function synonyms BEFORE Pass 2
+        // resolves bodies — a `new(...)` call in a body resolves its callee
+        // DefId during Pass 2, so the alias must already be in scope. Runs
+        // after Pass 1b so the target's DefId exists regardless of textual
+        // order (docs/decisions/alias-keyword.md, D2). Module-nested free-fn
+        // aliases are bound inside `resolve_module`'s pass.
+        for item in &program.items {
+            if let ast::TopLevelItem::Alias(a) = item {
+                self.bind_free_fn_alias(a);
+            }
+        }
+
         // B1 of `docs/specs/system/zero_rust_stdlib_classes.spec.md`:
         // resolve bootstrap class bodies / free-fn bodies so user-side
         // methods (`def init`, `def poll`, `def drop`) declared on a
@@ -228,12 +240,19 @@ impl Resolver {
             prelude_item_count,
         };
 
+        // Stamp the method-alias map onto the symbol table so the MIR lowerer
+        // (which only holds `&SymbolTable`) can rewrite alias method names to
+        // their canonical at mangle time (docs/decisions/alias-keyword.md).
+        let mut symbols = self.symbols;
+        symbols.set_method_aliases(self.method_aliases.clone());
+
         ResolveResult {
             program: hir_program,
-            symbols: self.symbols,
+            symbols,
             type_context: self.type_context,
             diagnostics: self.diagnostics,
             type_registry: self.type_registry,
+            method_aliases: self.method_aliases,
         }
     }
 

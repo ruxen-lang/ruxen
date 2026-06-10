@@ -281,13 +281,47 @@ pub struct Definition {
 #[derive(Debug)]
 pub struct SymbolTable {
     definitions: Vec<Definition>,
+    /// Ruby `alias new old` method synonyms (docs/decisions/alias-keyword.md):
+    /// home-type name → `{alias → canonical}`. Populated by the resolver,
+    /// consumed by MIR's `select_method_symbol_name` to rewrite an alias method
+    /// name to its canonical before symbol mangling (so `set.member?(x)` emits
+    /// `Set_include?`, not a bodiless `Set_member?`). A pure synonym — no extra
+    /// method body exists.
+    method_aliases: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 }
 
 impl SymbolTable {
     pub fn new() -> Self {
         Self {
             definitions: Vec::new(),
+            method_aliases: std::collections::HashMap::new(),
         }
+    }
+
+    /// Record the resolver's method-alias map onto the symbol table so the MIR
+    /// lowerer (which only holds `&SymbolTable`) can rewrite alias method names
+    /// to their canonical at mangle time.
+    pub fn set_method_aliases(
+        &mut self,
+        aliases: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    ) {
+        self.method_aliases = aliases;
+    }
+
+    /// Resolve a method name on `type_name` through the alias map, returning the
+    /// canonical method name if `method_name` is a registered alias, else the
+    /// name unchanged (docs/decisions/alias-keyword.md). The lookup tries the
+    /// full `type_name` first, then its generic-free base (`Array[Int]` →
+    /// `Array`) — the alias map is keyed by the generic-free class name, while
+    /// MIR call sites carry the suffixed receiver type.
+    pub fn canonical_method_name<'a>(&'a self, type_name: &str, method_name: &'a str) -> &'a str {
+        let base = type_name.split('[').next().unwrap_or(type_name);
+        self.method_aliases
+            .get(type_name)
+            .or_else(|| self.method_aliases.get(base))
+            .and_then(|m| m.get(method_name))
+            .map(|s| s.as_str())
+            .unwrap_or(method_name)
     }
 
     /// Allocate a new definition and return its DefId.
