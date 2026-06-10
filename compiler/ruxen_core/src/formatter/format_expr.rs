@@ -12,12 +12,7 @@ use super::prec::{binop_prec, needs_parens, Side};
 /// grouping parentheses iff dropping them would re-associate or change
 /// precedence on re-parse (Q34). `parent_prec` is the parent's tier
 /// (`super::prec`); `side` selects the left/right associativity rule.
-fn format_operand(
-    child: &Expr,
-    parent_prec: u8,
-    side: Side,
-    comments: &CommentMap,
-) -> Doc {
+fn format_operand(child: &Expr, parent_prec: u8, side: Side, comments: &CommentMap) -> Doc {
     let inner = format_expr(child, comments);
     if needs_parens(child, parent_prec, side) {
         concat(vec![text("("), inner, text(")")])

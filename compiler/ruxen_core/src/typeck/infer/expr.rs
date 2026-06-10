@@ -1192,8 +1192,7 @@ impl<'a> InferenceEngine<'a> {
                                     }
                                 }
                             }
-                            let ok_ty = expected_ok
-                                .unwrap_or_else(|| self.ctx.fresh_type_var());
+                            let ok_ty = expected_ok.unwrap_or_else(|| self.ctx.fresh_type_var());
                             expr.ty = Ty::Result(Box::new(ok_ty), Box::new(err_ty));
                         }
                         _ => {
@@ -1324,8 +1323,8 @@ impl<'a> InferenceEngine<'a> {
                             part_ty,
                             Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. }
                         ) {
-                            self.diagnostics.push(
-                                crate::diagnostics::Diagnostic::error_with_code(
+                            self.diagnostics
+                                .push(crate::diagnostics::Diagnostic::error_with_code(
                                     "a closure / `Fn` value cannot be formatted into a string: \
                                      it has no `Display`. (A bare `do … end` is a block/closure, \
                                      never an expression value — to compute a value from several \
@@ -1334,8 +1333,7 @@ impl<'a> InferenceEngine<'a> {
                                         .to_string(),
                                     e.span.clone(),
                                     "E0729",
-                                ),
-                            );
+                                ));
                         }
                     }
                 }

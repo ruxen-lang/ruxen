@@ -377,7 +377,11 @@ fn format_class(class: &ClassDef, comments: &CommentMap) -> Doc {
     // (ruby-naming.spec.md §3.2) so a `private`/`protected` method round-trips
     // with its visibility intact instead of silently re-parsing as public.
     let mut running = Visibility::Public;
-    body_parts.extend(format_method_section(&class.methods, comments, &mut running));
+    body_parts.extend(format_method_section(
+        &class.methods,
+        comments,
+        &mut running,
+    ));
     if running != Visibility::Public {
         body_parts.push(text("public"));
     }

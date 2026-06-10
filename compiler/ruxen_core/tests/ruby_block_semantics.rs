@@ -235,7 +235,10 @@ end
 "##;
     let (stdout, stderr, code) = compile_and_run(source, "block_on_method");
     assert_eq!(code, Some(0), "stderr={stderr:?}");
-    assert_eq!(stdout, "tag=5\nno-block\nno-block\n", "stdout was {stdout:?}");
+    assert_eq!(
+        stdout, "tag=5\nno-block\nno-block\n",
+        "stdout was {stdout:?}"
+    );
 }
 
 /// Item-1 dedicated pin: a PAREN-LESS, blockless call to an optional-`&block`

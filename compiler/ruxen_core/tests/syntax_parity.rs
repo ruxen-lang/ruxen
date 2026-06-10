@@ -138,7 +138,11 @@ fn fingerprint(prog: &Program) -> String {
 #[test]
 fn axis_compiler_corpus_parses() {
     let files = corpus();
-    assert!(files.len() > 100, "corpus suspiciously small: {}", files.len());
+    assert!(
+        files.len() > 100,
+        "corpus suspiciously small: {}",
+        files.len()
+    );
     let mut failures = Vec::new();
     let mut tested = 0usize;
     for f in &files {
@@ -185,7 +189,10 @@ fn axis_fmt_reparse_identity_and_idempotent() {
         let reparsed = match parse(&r.output) {
             Ok(p) => p,
             Err(e) => {
-                failures.push(format!("{}: formatted output no longer parses: {e}", rel(f)));
+                failures.push(format!(
+                    "{}: formatted output no longer parses: {e}",
+                    rel(f)
+                ));
                 continue;
             }
         };
@@ -231,7 +238,10 @@ fn repl_exemplars() -> Vec<(&'static str, &'static str)> {
         ("Const", "const K: Int = 1"),
         ("TypeAlias", "type Ints = Array[Int]"),
         ("Newtype", "newtype Meters(Float)"),
-        ("Extension", "extension Int\n  def double -> Int\n    self\n  end\nend"),
+        (
+            "Extension",
+            "extension Int\n  def double -> Int\n    self\n  end\nend",
+        ),
         ("Lib", "lib \"c\"\n  def puts(s: &str) -> Int\nend"),
         // Contextual-keyword item (locus #1): `alias` lexes as Identifier.
         ("Alias", "alias new_name old_name"),
@@ -267,9 +277,9 @@ fn axis_repl_accepts_all_item_kinds() {
         let mut p = Parser::new(tokens);
         match p.parse_repl_input() {
             ReplParseResult::Complete(_) => {}
-            ReplParseResult::Incomplete => {
-                failures.push(format!("{label}: repl reports Incomplete on a complete input"))
-            }
+            ReplParseResult::Incomplete => failures.push(format!(
+                "{label}: repl reports Incomplete on a complete input"
+            )),
             ReplParseResult::Error(diags) => failures.push(format!(
                 "{label}: repl REJECTS a batch-accepted construct: {}",
                 fmt_diags(&diags)
@@ -285,7 +295,10 @@ fn axis_repl_accepts_all_item_kinds() {
 }
 
 fn fmt_diags(d: &[Diagnostic]) -> String {
-    d.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")
+    d.iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 // ─── Axis 4: exhaustiveness guard ────────────────────────────────────
@@ -355,15 +368,13 @@ fn guard_impl_item(it: &ImplItem) {
 // rejection half is owned by the resolve-phase tests that emit the code.
 
 /// (source, diagnostic-code, why the compile path rejects it)
-const INTENTIONAL_DIVERGENCES: &[(&str, &str, &str)] = &[
-    (
-        "Tester.describe(\"x\") do\n  1\nend\n",
-        "E0728",
-        "top-level expression statement: parser accepts so `ruxen fmt` \
+const INTENTIONAL_DIVERGENCES: &[(&str, &str, &str)] = &[(
+    "Tester.describe(\"x\") do\n  1\nend\n",
+    "E0728",
+    "top-level expression statement: parser accepts so `ruxen fmt` \
          round-trips test files; direct compile rejects (ruxen test hoists \
          into a synthesised `def main` first)",
-    ),
-];
+)];
 
 #[test]
 fn axis_intentional_divergences_still_parse() {

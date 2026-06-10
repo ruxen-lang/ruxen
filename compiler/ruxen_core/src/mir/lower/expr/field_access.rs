@@ -431,9 +431,11 @@ impl<'a> Lowerer<'a> {
                     // (`field_name` here is already the alias-canonical name;
                     // this path supplies zero user positional args.)
                     let mut arg_values = arg_values;
-                    arg_values.extend(
-                        self.method_trailing_default_sentinels(&resolved_class, field_name, 0),
-                    );
+                    arg_values.extend(self.method_trailing_default_sentinels(
+                        &resolved_class,
+                        field_name,
+                        0,
+                    ));
 
                     let dest = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
                         Some(self.new_temp(expr.ty.clone()))

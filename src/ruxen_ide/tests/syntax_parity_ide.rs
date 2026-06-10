@@ -86,7 +86,11 @@ fn core_parses(src: &str) -> bool {
 #[test]
 fn ide_lsp_parse_matches_compiler_on_corpus() {
     let files = corpus();
-    assert!(files.len() > 100, "corpus suspiciously small: {}", files.len());
+    assert!(
+        files.len() > 100,
+        "corpus suspiciously small: {}",
+        files.len()
+    );
 
     let mut failures = Vec::new();
     let mut tested = 0usize;
@@ -103,11 +107,8 @@ fn ide_lsp_parse_matches_compiler_on_corpus() {
         let result = analyze(&src);
         if result.program.is_none() {
             // The IDE/LSP failed to parse syntax the compiler accepted.
-            let parse_diags: Vec<String> = result
-                .diagnostics
-                .iter()
-                .map(|d| d.to_string())
-                .collect();
+            let parse_diags: Vec<String> =
+                result.diagnostics.iter().map(|d| d.to_string()).collect();
             failures.push(format!(
                 "{}: IDE/LSP `analyze` did not produce an AST for compiler-accepted syntax \
                  (spurious LSP syntax error):\n    {}",

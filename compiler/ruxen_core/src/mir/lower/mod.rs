@@ -535,7 +535,11 @@ impl<'a> Lowerer<'a> {
             .params
             .iter()
             .skip(supplied_user_args)
-            .filter_map(|p| p.default.as_ref().map(|d| Self::default_expr_to_sentinel(d)))
+            .filter_map(|p| {
+                p.default
+                    .as_ref()
+                    .map(|d| Self::default_expr_to_sentinel(d))
+            })
             .collect()
     }
 
@@ -546,9 +550,7 @@ impl<'a> Lowerer<'a> {
     fn default_expr_to_sentinel(default: &crate::parser::ast::Expr) -> MirValue {
         use crate::parser::ast::ExprKind;
         match &default.kind {
-            ExprKind::NullLiteral | ExprKind::UnitLiteral => {
-                MirValue::Literal(Literal::Int(0))
-            }
+            ExprKind::NullLiteral | ExprKind::UnitLiteral => MirValue::Literal(Literal::Int(0)),
             ExprKind::IntLiteral(v, _) => MirValue::Literal(Literal::Int(*v)),
             ExprKind::BoolLiteral(v) => MirValue::Literal(Literal::Bool(*v)),
             ExprKind::FloatLiteral(v, _) => MirValue::Literal(Literal::Float(*v)),

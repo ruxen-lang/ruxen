@@ -19,7 +19,11 @@ fn s_local_ty(source: &str) -> Ty {
     let result = typeck::type_check(&program);
     let mut lowerer = Lowerer::new(&result.symbols);
     let mir = lowerer.lower_program(&result.program).expect("lower");
-    let main = mir.functions.iter().find(|f| f.name == "main").expect("main");
+    let main = mir
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main");
     main.locals
         .iter()
         .find(|l| l.name == "s")
