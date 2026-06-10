@@ -1154,6 +1154,19 @@ the legacy `measure_text_n_raw(n: Int)` char-count fallback).
 > `compiler/ruxen_core/tests/q29_ffi_borrowed_string.rs`. Canvas's deviation note
 > can be reverted (canvas owner handles that repo); the legacy
 > `measure_text_n_raw` char-count fallback is now redundant.
+>
+> **Addendum (2026-06-10, release gate): the ABI was sound but the BORROW
+> CHECKER was not.** The release-e2e harness (which runs the full CLI pipeline
+> incl. `borrow_check`) tripped on 649 with a false `value used after move`
+> (E1001): passing the owned `needle: String` value to the `&String` parameter
+> of `include?` / `find` / `replace` was recorded as a MOVE, so the second use
+> was rejected. The Q29 in-process pin had been BLIND to this because it skipped
+> `borrow_check`. Root-caused + fixed in `borrow_check/checks.rs`
+> (`check_method_call` / `check_fn_call` now treat an owned value passed to a
+> `&T`/`&var T` parameter as an auto-borrow, resolving the param type by name);
+> added a full-pipeline borrow-check pin
+> (`borrowed_string_arg_passes_borrow_check_with_no_false_move`). See CHANGELOG
+> `[Unreleased] › Fixed`.
 
 ## Q30 · S4 — `ruxen fmt` rewrites builder-closure call shapes into a known segfault form  ✅ FIXED 2026-06-09
 
