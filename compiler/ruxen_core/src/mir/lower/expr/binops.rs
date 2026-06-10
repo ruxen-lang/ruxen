@@ -1,6 +1,109 @@
 use super::super::*;
 
+/// Numeric-type classification used by the comparison-operand re-materializer.
+fn numeric_kind(ty: &Ty) -> Option<NumKind> {
+    match ty {
+        Ty::Float | Ty::Float32 | Ty::Float64 => Some(NumKind::Float),
+        Ty::Int | Ty::Int8 | Ty::Int16 | Ty::Int32 | Ty::Int64 | Ty::ISize => {
+            Some(NumKind::SignedInt)
+        }
+        Ty::UInt | Ty::UInt8 | Ty::UInt16 | Ty::UInt32 | Ty::UInt64 | Ty::USize => {
+            Some(NumKind::UnsignedInt)
+        }
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NumKind {
+    Float,
+    SignedInt,
+    UnsignedInt,
+}
+
 impl<'a> Lowerer<'a> {
+    /// Q33: re-materialize a mismatched numeric operand pair to a common type
+    /// before a `Compare`, so the comparison happens at one width with a
+    /// signedness-correct int↔float conversion.
+    ///
+    /// The `Compare` instruction (like `SetField` in Q28) is width-blind:
+    /// codegen coerces the rhs to the lhs's SSA type with the signedness-BLIND
+    /// `coerce_value`, which uses `fcvt_from_uint` for an int→float crossing.
+    /// That turns a signed `Int(-1)` (i64 `0xFFFF…`) into `1.8e19` instead of
+    /// `-1.0`, so `f32_val == -1` is false. Routing the int operand through a
+    /// target-typed `Assign` to the float type invokes codegen's Q5
+    /// signedness-aware path (`fcvt_from_sint` for a signed source), exactly as
+    /// a `let`-bound `as Float32` cast does, so both operands reach `Compare`
+    /// at the same float width with the right sign. Mirrors `coerce_to_field_ty`.
+    ///
+    /// Common-type rule: if exactly one side is float, coerce the other side to
+    /// the float side. If both are float but differ in width, coerce the
+    /// narrower to the wider. Int-only and equal-type pairs are left untouched
+    /// (the existing int Compare path is correct).
+    fn coerce_compare_operands(
+        &mut self,
+        lhs_local: Option<LocalId>,
+        rhs_local: Option<LocalId>,
+    ) -> (Option<LocalId>, Option<LocalId>) {
+        let (Some(l), Some(r)) = (lhs_local, rhs_local) else {
+            return (lhs_local, rhs_local);
+        };
+        let Some(lty) = self.fn_ref().locals.get(l as usize).map(|x| x.ty.clone()) else {
+            return (lhs_local, rhs_local);
+        };
+        let Some(rty) = self.fn_ref().locals.get(r as usize).map(|x| x.ty.clone()) else {
+            return (lhs_local, rhs_local);
+        };
+        let (Some(lk), Some(rk)) = (numeric_kind(&lty), numeric_kind(&rty)) else {
+            return (lhs_local, rhs_local);
+        };
+        if lty == rty {
+            return (lhs_local, rhs_local);
+        }
+        // Pick the common type. Float dominates int; the wider float wins.
+        let float_rank = |ty: &Ty| match ty {
+            Ty::Float | Ty::Float64 => 2u8,
+            Ty::Float32 => 1u8,
+            _ => 0u8,
+        };
+        let common = match (lk, rk) {
+            (NumKind::Float, NumKind::Float) => {
+                if float_rank(&lty) >= float_rank(&rty) {
+                    lty.clone()
+                } else {
+                    rty.clone()
+                }
+            }
+            (NumKind::Float, _) => lty.clone(),
+            (_, NumKind::Float) => rty.clone(),
+            // Both integral but differing kinds/widths: leave for the existing
+            // int Compare path (codegen coerces rhs→lhs width via ireduce/
+            // extend; the Q33 sign hazard only bites the int↔float crossing).
+            _ => return (lhs_local, rhs_local),
+        };
+        let new_l = if lty == common {
+            Some(l)
+        } else {
+            let d = self.new_temp(common.clone());
+            self.emit(MirInst::Assign {
+                dest: d,
+                value: MirValue::Use(l),
+            });
+            Some(d)
+        };
+        let new_r = if rty == common {
+            Some(r)
+        } else {
+            let d = self.new_temp(common.clone());
+            self.emit(MirInst::Assign {
+                dest: d,
+                value: MirValue::Use(r),
+            });
+            Some(d)
+        };
+        (new_l, new_r)
+    }
+
     pub(super) fn lower_binops(&mut self, expr: &HirExpr) -> Result<Option<LocalId>, String> {
         match &expr.kind {
             // ── Binary operations ───────────────────────────────────
@@ -221,6 +324,14 @@ impl<'a> Lowerer<'a> {
                 let dest = self.new_temp(expr.ty.clone());
 
                 if is_comparison(*op) {
+                    // Q33: re-materialize a mismatched numeric operand pair to a
+                    // common float width with a signedness-correct conversion
+                    // before the width-blind `Compare` (e.g. `f32 == -1`, where
+                    // the `-1` rhs is Int-typed in MIR). Equal-type and int-only
+                    // pairs pass through unchanged.
+                    let (lhs_local, rhs_local) = self.coerce_compare_operands(lhs_local, rhs_local);
+                    let lhs_val = local_to_value(lhs_local);
+                    let rhs_val = local_to_value(rhs_local);
                     let cmp_op = binop_to_cmpop(*op);
                     self.emit(MirInst::Compare {
                         dest,

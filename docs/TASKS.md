@@ -17,32 +17,46 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-28 of 33 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
+30 of 33 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
 feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned; Q28, Q30,
-Q31 fixed 2026-06-09). **Q31 was an enum UNDER-ALLOCATION** (not a drop
-double-free): `alloc_size` sized enums to packed layout while codegen addresses
-payloads on a fixed 8-byte slot stride, so `Move(Float32,Float32)` stored field 1
-four bytes past the alloc → heap corruption → crash on the next float `malloc`.
-Fixed by slot-rounding enum allocations (`8 + widest_variant_field_count*8`).
-The canvas `Int`→`Float32` event-coord revert it unblocked has now LANDED
-(canvas 143 green, sub-pixel pinned, live windowed loop verified). **Q32 + Q33
-NEW 2026-06-09** (filed during that revert). Outstanding:
+Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10). **Q31 was an enum
+UNDER-ALLOCATION** (not a drop double-free): `alloc_size` sized enums to packed
+layout while codegen addresses payloads on a fixed 8-byte slot stride, so
+`Move(Float32,Float32)` stored field 1 four bytes past the alloc → heap
+corruption → crash on the next float `malloc`. Fixed by slot-rounding enum
+allocations (`8 + widest_variant_field_count*8`). The canvas `Int`→`Float32`
+event-coord revert it unblocked has now LANDED (canvas 143 green, sub-pixel
+pinned, live windowed loop verified).
 
-- [ ] **Q32 · S3 — Q16 flat-merge of an FFI dependency breaks `ruxen test` at
-      link.** A consumer's test EXECUTABLE flat-merges the FFI dep's `src/**.rx`
-      (incl. `lib "C"`-calling bodies) but neither compiles its `runtime/**.c`
-      nor propagates its `[system_libs]` → every `ruxen_canvas_*` symbol
-      undefined. quiver dodged it by dropping its (genuinely unused) canvas dep;
-      any consumer that really `use`s an FFI dep will hit it. Preferred fix:
-      when flat-merging a dep, also link its C runtime + system libs (what
-      binary builds already get when the dep is declared directly). Details in
-      `dev/gui-stack-v1-issues.md` §Q32.
-- [ ] **Q33 · S2 — `Float32 == <negative Int literal>` evaluates false.** The
-      value is correct; positive literals, `<`/`>`, as-Int compares, and
-      f32==f32 all fine — only equality against a NEGATIVE Int literal
-      miscompares (unary-minus literal lowering is the prime suspect). Repro:
-      `tmp/test-cache/q33-negative-literal-f32-compare-repro.rx`; canvas works
-      around in `tests/scroll_resize.rx`. Details §Q33.
+- [x] **Q32 · S3 — Q16 flat-merge of an FFI dependency broke `ruxen test` at
+      link (FIXED 2026-06-10).** A consumer's test EXECUTABLE flat-merged the
+      FFI dep's `src/**.rx` (incl. `lib "C"`-calling bodies) but neither
+      compiled its `runtime/**.c` nor propagated its `[system_libs]` → every
+      `ruxen_*` symbol undefined at link. Fix (option (b)): the test runner now
+      gathers each flat-merged dep's `runtime/**.c`
+      (`codegen::find_runtime_sources_in_dir`) and forwards each dep's
+      `[system_libs]` (`codegen::parse_system_libs`) as `--link-arg=-l<lib>`
+      (new repeatable `ruxenc` flag), mirroring exactly what `compile_project`
+      gathers for a directly-declared dep; `compile_project` also gained the
+      dep `[system_libs]` propagation it was missing. `src/ruxenc/test_runner.rs`,
+      `src/ruxenc/compile.rs`, `src/ruxen_cli/build.rs`. Pins (staged install,
+      RUN + assert): `src/ruxen_cli/tests/ffi_dep_link.rs` (FFI-dep test links +
+      passes; binary declaring the dep directly has no dup-symbol; non-FFI dep
+      still links). Details in `dev/gui-stack-v1-issues.md` §Q32.
+- [x] **Q33 · S2 — `Float32 == <negative Int literal>` evaluated false (FIXED
+      2026-06-10).** The `Compare` MIR instruction is width-blind; codegen
+      coerced the rhs to the lhs's SSA type with the signedness-BLIND
+      `coerce_value` (`fcvt_from_uint`), so a signed `Int(-1)` (i64 `0xFFFF…`)
+      became `1.8e19` and `f == -1` was false. The ordering ops (`>=`/`<`) and
+      the literal-on-the-left shape broke too; positive literals and f32==f32
+      were accidentally fine. Fix: re-materialize a mismatched numeric operand
+      pair to a common float width via a target-typed `Assign` before the
+      `Compare` (`coerce_compare_operands` in `mir/lower/expr/binops.rs`),
+      invoking codegen's Q5 signedness-aware int→float path. Backend-agnostic
+      (shared MIR); mirrors Q28's `coerce_to_field_ty`. Pins (RUN + assert
+      stdout): `tests/release-e2e/cases/653_f32_negative_int_literal_compare`,
+      `654_enum_f32_payload_negative_compare` +
+      `compiler/ruxen_core/tests/q33_negative_literal_float_compare.rs`.
 
 - [x] **Q28 · S1 — `Float32` field/payload store-via-local → 0 / crash (FIXED 2026-06-09).**
       The struct/enum/tuple constructor lowering stored each field value

@@ -1,0 +1,14 @@
+eq=true
+ne=false
+le=true
+ge=true
+lt=false
+gt=false
+eqf=true
+pos=true
+f64eq=true
+f64ge=true
+lefteq=true
+leftge=true
+leftlt=false
+f32vsf64=true

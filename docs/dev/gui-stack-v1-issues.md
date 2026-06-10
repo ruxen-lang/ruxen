@@ -1263,7 +1263,7 @@ a dedicated drop-elaboration pass.
 
 </details>
 
-## Q32 · S3 — Q16's flat-merge pulls an FFI dependency's bodies into a test/binary build without linking its C runtime  ⏳ OPEN (NEW 2026-06-09)
+## Q32 · S3 — Q16's flat-merge pulls an FFI dependency's bodies into a test/binary build without linking its C runtime  ✅ FIXED 2026-06-10
 
 Surfaced 2026-06-09 by quiver after Q16 landed. A package that declares a
 path/git dependency on an **FFI-backed** library (one with `lib "C"` bindings +
@@ -1291,7 +1291,32 @@ sources actually referenced; (b) when flat-merging a dep, also compile+link its
 thing binary builds get when the dep is declared directly). (b) matches Q16's
 "same mechanism as binaries" story.
 
-## Q33 · S2 — `Float32 == <negative Int literal>` comparison miscompiles to false  ⏳ OPEN (NEW 2026-06-09)
+**FIXED 2026-06-10 — option (b).** The break was real and reproduced with a
+minimal FFI dep (a `lib "C"` fn backed by a 5-line `runtime/shim.c`): `ruxen
+test` failed with `Undefined symbols: _ruxen_shim_answer`. The test runner
+(`src/ruxenc/src/test_runner.rs`) only gathered the consuming project's OWN
+`runtime/*.c`; it never looped over the flat-merged dep dirs the way
+`compile_project` (the `ruxen build` binary path) already did. Fix:
+1. `test_runner::build_one` now, for each flat-merged `dep_dir`, adds
+   `--runtime-c=<dep>/runtime/*.c` (`codegen::find_runtime_sources_in_dir`) and
+   forwards each dep's `[system_libs]` (`codegen::parse_system_libs`) as
+   `--link-arg=-l<lib>`.
+2. `src/ruxenc/src/compile.rs` gained a repeatable `--link-arg=` flag (mirroring
+   `--runtime-c=`) that appends raw linker flags into the executable's link line
+   (and folds them into the compile cache fingerprint).
+3. `compile_project` (`src/ruxen_cli/src/build.rs`) also gained the dep
+   `[system_libs]` propagation it was silently missing — `collect_system_lib_flags`
+   only walks the STDLIB root, so a user dep's link needs were dropped on binary
+   builds too (latent; canvas's `[system_libs]` is empty so it never bit).
+The actual canvas break was purely the missing dep `runtime/*.c` (it dlopens
+SDL2/Skia, so its `[system_libs]` is `[]`); the system-libs half is the
+completeness fix for rondo-style stacks with non-empty `[system_libs]`.
+Pins (`src/ruxen_cli/tests/ffi_dep_link.rs`, staged-install + RUN + assert):
+FFI-dep `ruxen test` links + the test passes (4*10+1 == 41); a binary that ALSO
+declares the dep directly builds + runs with NO duplicate-symbol; a non-FFI dep
+still links. The Q16 `dep_visibility.rs` suite stays green.
+
+## Q33 · S2 — `Float32 == <negative Int literal>` comparison miscompiles to false  ✅ FIXED 2026-06-10
 
 Surfaced 2026-06-09 by canvas's `Scroll(-1, 3)` round-trip pin while reverting
 event coords to `Float32`. Comparing a `Float32` value against a **negative**
@@ -1316,6 +1341,27 @@ negative — the unary-minus lowering of the literal is the prime suspect, since
 answer in ordinary numeric code, but narrow trigger (equality against a negative
 literal specifically; `<`/`>`/cast-compare all fine). Workaround in canvas
 `tests/scroll_resize.rx`: compare through `as Int`.
+
+**FIXED 2026-06-10.** Root cause was NOT the unary-minus lowering per se but the
+width-blind `Compare` codegen: `codegen/cranelift/emit.rs` coerced the rhs to
+the lhs's SSA type with the signedness-BLIND `coerce_value` (defaults
+`signed=false`). For an `Int(-1)` operand (i64 `0xFFFF_FFFF_FFFF_FFFF`) coerced
+to f32 that selects `fcvt_from_uint` → `1.84e19`, so `f32 == -1` `fcmp`'d false.
+The bug was WIDER than the filing's "`<`/`>` all fine" note: `>= -1` was false
+and `< -1` true (the bogus huge value only accidentally satisfied `<=`/`>`),
+`Float` (f64) vs negative Int broke identically, and the literal-on-the-LEFT
+shape (`-1 == f`) broke symmetrically through `fcvt_to_uint_sat` clamping `-1.0`
+to `0`. Positive literals and f32==f32 were accidentally correct. Fix (shared
+MIR, both backends agree): `coerce_compare_operands` in
+`mir/lower/expr/binops.rs` re-materializes a mismatched numeric operand pair to a
+common float width via a target-typed `Assign` BEFORE the `Compare`, invoking
+codegen's Q5 signedness-aware int→float path (`fcvt_from_sint` for a signed
+source) — exactly as a `let`-bound `as Float32` cast already does. Mirrors Q28's
+`coerce_to_field_ty`. Int-only and equal-type pairs pass through untouched (zero
+extra instructions on the hot matched-width path). Pins (RUN + assert stdout):
+`tests/release-e2e/cases/653_f32_negative_int_literal_compare`,
+`654_enum_f32_payload_negative_compare`, and
+`compiler/ruxen_core/tests/q33_negative_literal_float_compare.rs`.
 
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 

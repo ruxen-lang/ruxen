@@ -561,6 +561,26 @@ fn build_one(
     for c in ruxen_core::codegen::find_runtime_sources_in_dir(project_dir)? {
         compile_args.push(format!("--runtime-c={}", c.display()));
     }
+    // Q32: a flat-merged FFI dependency's `.rx` bodies are compiled INTO this
+    // test binary (Q16), so its C runtime symbols (`ruxen_*` from
+    // `runtime/**.c`) and its `[system_libs]` link needs must reach this
+    // executable's link line too — they aren't in any rlib. Mirror exactly
+    // what `compile_project` (the `ruxen build` binary path) gathers for a
+    // dependency: each dep's `runtime/**.c` plus each dep's declared
+    // `[system_libs]` as `-l<lib>` link args. Without this, a consumer whose
+    // `tests/**.rx` calls through an FFI dep fails at link with undefined
+    // `ruxen_*` symbols (the canvas `ruxen_canvas_*` shape).
+    for dep_dir in dep_dirs {
+        for c in ruxen_core::codegen::find_runtime_sources_in_dir(dep_dir)? {
+            compile_args.push(format!("--runtime-c={}", c.display()));
+        }
+        let dep_toml = dep_dir.join("Ruxen.toml");
+        if let Ok(contents) = fs::read_to_string(&dep_toml) {
+            for lib in ruxen_core::codegen::parse_system_libs(&contents) {
+                compile_args.push(format!("--link-arg=-l{}", lib));
+            }
+        }
+    }
     crate::compile::run(&compile_args).map_err(|e| format!("compile of {test_path}: {e}"))?;
     Ok(bin_path)
 }

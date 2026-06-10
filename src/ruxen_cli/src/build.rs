@@ -805,6 +805,23 @@ fn compile_project(
         user_runtime.extend(codegen::find_runtime_sources_in_dir(dep_dir)?);
     }
 
+    // Q32: a flat-merged FFI dependency's `[system_libs]` (e.g. `-lpthread`)
+    // must also reach this binary's link line, the same way its `runtime/*.c`
+    // does above. `collect_system_lib_flags` only walks the STDLIB root, so a
+    // user dep's link needs would otherwise be dropped. Mirrors the test
+    // runner's dep `[system_libs]` forwarding.
+    for dep_dir in dep_source_dirs {
+        let dep_toml = dep_dir.join("Ruxen.toml");
+        if let Ok(contents) = fs::read_to_string(&dep_toml) {
+            for lib in codegen::parse_system_libs(&contents) {
+                let flag = format!("-l{}", lib);
+                if !extra_link_flags.contains(&flag) {
+                    extra_link_flags.push(flag);
+                }
+            }
+        }
+    }
+
     let output_str = output_path.to_string_lossy().to_string();
     codegen::compile_with_options(
         &mir_program,

@@ -8,6 +8,43 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- (Q33) Comparing a float value against a **negative Int literal** miscompiled.
+  `f32 == -1` evaluated **false** even when the value was exactly `-1.0`, and the
+  breakage extended past equality: `f >= -1` was false, `f < -1` was true,
+  `Float` (f64) vs a negative Int broke identically, and the literal-on-the-LEFT
+  shape (`-1 == f`) broke symmetrically. Root cause: the `Compare` MIR
+  instruction is width-blind, and codegen coerced the rhs to the lhs's SSA type
+  with the signedness-BLIND `coerce_value` (`fcvt_from_uint`), so a signed
+  `Int(-1)` (i64 `0xFFFF_FFFF_FFFF_FFFF`) became `1.84e19` and the `fcmp` was
+  false; positive literals and f32==f32 were accidentally correct. Fix:
+  re-materialize a mismatched numeric operand pair to a common float width via a
+  target-typed `Assign` BEFORE the `Compare` (`coerce_compare_operands` in
+  `mir/lower/expr/binops.rs`), invoking codegen's Q5 signedness-aware int→float
+  path (`fcvt_from_sint` for a signed source) — exactly as a `let`-bound `as
+  Float32` cast already does. Mirrors Q28's `coerce_to_field_ty`. Backend-agnostic
+  (shared MIR), so Cranelift and LLVM agree; int-only and equal-type pairs pass
+  through untouched (zero extra instructions on the hot matched-width path). Pins
+  (COMPILE + RUN + assert stdout): `tests/release-e2e/cases/653_f32_negative_int_literal_compare`,
+  `654_enum_f32_payload_negative_compare` (the canvas `Scroll(-1, 3)` shape), and
+  `compiler/ruxen_core/tests/q33_negative_literal_float_compare.rs`.
+- (Q32) A flat-merged FFI dependency's C runtime is now linked into
+  executable-producing builds. Q16 flat-merges a path-dependency's `src/**.rx`
+  (incl. `lib "C"`-calling bodies) into the consumer's `ruxen test` executable,
+  but neither its `runtime/**.c` objects nor its `[system_libs]` reached the link
+  line → `Undefined symbols: _ruxen_*` at link (the `ruxen_canvas_*` shape quiver
+  hit). Fix (option (b) from the filing): the test runner now compiles each
+  flat-merged dep's `runtime/**.c` (`codegen::find_runtime_sources_in_dir`) and
+  forwards each dep's `[system_libs]` (`codegen::parse_system_libs`) as
+  `--link-arg=-l<lib>` — a new repeatable `ruxenc` flag mirroring `--runtime-c=`
+  — exactly mirroring what `compile_project` gathers for a directly-declared
+  dep. `compile_project` (the `ruxen build` binary path) also gained the dep
+  `[system_libs]` propagation it was silently missing (`collect_system_lib_flags`
+  only walks the stdlib root). `src/ruxenc/src/test_runner.rs`,
+  `src/ruxenc/src/compile.rs`, `src/ruxen_cli/src/build.rs`. Pins (staged install,
+  real compile + link + RUN): `src/ruxen_cli/tests/ffi_dep_link.rs` — an FFI dep
+  used only through `tests/**.rx` links + passes (4*10+1 == 41); a binary
+  declaring the same dep directly builds + runs with no duplicate-symbol; a
+  non-FFI dep still links. The Q16 `dep_visibility.rs` suite stays green.
 - (Q28, REOPENED → real fix) `Float32` struct field / enum payload / tuple slot
   stores from a non-inline value miscompiled to **0** (and an uncast f64 local
   into an f32 payload could crash). The constructor lowering stored each field

@@ -45,6 +45,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let mut force = false;
     let mut verbose = false;
     let mut extra_runtime_c: Vec<String> = Vec::new();
+    let mut extra_link_args: Vec<String> = Vec::new();
     let mut i = 2;
     while i < args.len() {
         if args[i] == "-o" && i + 1 < args.len() {
@@ -57,6 +58,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
             // library code resolve inside test binaries, mirroring what
             // `ruxen build` does via `find_runtime_sources_in_dir`.
             extra_runtime_c.push(args[i]["--runtime-c=".len()..].to_string());
+            i += 1;
+        } else if args[i].starts_with("--link-arg=") {
+            // Additional raw linker flag (e.g. `-lpthread` from a
+            // dependency's `[system_libs]`). Repeatable. `ruxen test`
+            // passes one per `-l<lib>` entry of each flat-merged FFI
+            // dependency, mirroring the `[system_libs]` aggregation
+            // `ruxen build` performs for a directly-declared dep (Q32).
+            extra_link_args.push(args[i]["--link-arg=".len()..].to_string());
             i += 1;
         } else if args[i].starts_with("--emit=") {
             emit_mode = Some(args[i][7..].to_string());
@@ -120,11 +129,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
         h.finish()
     };
     let flags = format!(
-        "backend={} opt={} release={} runtime_c={:x} toolchain={:x}",
+        "backend={} opt={} release={} runtime_c={:x} link_args={} toolchain={:x}",
         backend_override.as_deref().unwrap_or("default"),
         opt_level_override.as_deref().unwrap_or("default"),
         release_mode,
         runtime_c_fingerprint,
+        extra_link_args.join(","),
         toolchain_fingerprint()
     );
     let build_opts = BuildOptions {
@@ -234,6 +244,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 
     let mut link_flags: Vec<String> = Vec::new();
+    // Dependency `[system_libs]` flags (`-l<lib>`), forwarded by `ruxen test`
+    // so a flat-merged FFI dependency's link needs are satisfied (Q32).
+    link_flags.extend(extra_link_args.iter().cloned());
     if let Some(ar) = &prebuilt_archive {
         let ar_str = ar.to_string_lossy().to_string();
         if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
