@@ -541,17 +541,52 @@ Acceptance test for the fix: lib A exporting `struct Color`; lib B with
 `ruxen check`, and `ruxen test` must all pass in B.
 **Partial fix exists locally** — see "Existing partial work" below.
 
-## Q17 · S4 — cross-package generic monomorphization fails for consumer types  ⏳ PLANNED (dedicated)
+## Q17 · S4 — generic-free-function / mixin-bound monomorphization for consumer types  ✅ FIXED (free fns + generic-calling-generic) · generic METHODS staged
 
-> **STATUS** (stdlib-rust-cleanup): not yet fixed — this is codegen-deep
-> (monomorphizing a dependency's generic body for a type defined in the
-> CONSUMING package) and is the hardest of the catalog; it needs the same
-> multi-package test scaffolding as Q16 and careful work on the
-> generic-instantiation collection across package boundaries
-> (`mir/lower/monomorphize.rs` + the build driver's per-piece compile). Scoped
-> to a dedicated pass with Q16 (they share the multi-package layering story and
-> Q14's "full namespacing" follow-up). Rushing it risks emitting bound-placeholder
-> symbols (`S: PaintSurface_fill_rect`) that link-fail — exactly the bug.
+> **FIXED for generic FREE FUNCTIONS** (feat/drop-elaboration, 2026-06-10).
+> **Empirical re-scope first:** after Q16 flat-merged dep `src/**.rx` into the
+> consuming unit, this is NO LONGER a cross-PACKAGE problem — it reproduces in a
+> SINGLE FILE. The real defect is in MIR lowering: a generic free function bound
+> by a mixin (`def paint_all[T: Paintable](s: &var T, …)`) was lowered ONCE with
+> `T` abstract, so the bound method call inside it (`s.fill_rect(…)`) mangled to
+> the bound-placeholder callee `T: Paintable_fill_rect`, which link-failed. The
+> single-implementor case was masked because mixin dispatch devirtualized
+> (`unique_bound_impl`) to the sole impl — exactly why quiver was capped at ONE
+> `PaintSurface` implementor.
+>
+> **Design** (`docs/decisions/q17-cross-package-monomorphization.md`): a new
+> demand-driven pass in `mir/lower/monomorphize.rs` collects every concrete
+> instantiation of an eligible generic free fn (recovered by unifying declared
+> param types against the call's actual arg types), emits one specialized body
+> per instantiation (`paint_all__mono__TallySurface`) via the existing
+> `subst_type_params_in_func`, and redirects call sites (`fn_call.rs::
+> fn_mono_callee`). Generic-CALLING-generic is handled by a WORKLIST FIXPOINT
+> that re-scans each substituted body for further generic calls. The opaque
+> (un-monomorphized) body of every eligible generic free fn is suppressed (it
+> could only emit placeholders); the single-implementor case monomorphizes to
+> one concrete copy (byte-equivalent to the old devirtualize path). Both
+> backends consume the same MIR — no backend-specific work.
+>
+> **Acceptance** (quiver's exact blocker): a consumer binary defines a SECOND
+> `Paintable` implementor and runs the dep's generic against BOTH the dep's
+> `RecordingSurface` and the consumer's type in one program, printing distinct
+> correct values from each. Pins:
+> `src/ruxen_cli/tests/cross_package_mono.rs` (staged-install, two-package:
+> binary AND `ruxen test`, compile+run+assert stdout `dep=20 mine=9`),
+> `compiler/ruxen_core/tests/q17_generic_fn_mixin_mono.rs`, and release-e2e
+> cases `655` (two implementors) / `656` (generic-calling-generic) / `657`
+> (mixin default body) / `658` (single-implementor regression bar).
+>
+> **STAGED REMAINDER — generic METHODS over a mixin.** A generic `def` INSIDE a
+> class (`def measure[T: Sized](item: &var T)`) is NOT yet monomorphized: it
+> still resolves the bound method to a placeholder. This is now a CLEAR lowering
+> ERROR (`method_call.rs` / `field_access.rs` guard: "cannot monomorphize
+> generic method … move the generic into a free function"), NOT a placeholder
+> symbol / link failure. Quiver's entire paint pass is generic FREE functions
+> (`paint_all`/`paint_node`/`frame`/… in `src/paint.rx`, `src/run.rx`), so the
+> framework is fully unblocked; generic methods are tracked in `docs/TASKS.md`
+> as a follow-up. Also out of scope: true separate-compilation/rlib generics
+> (Q16's flat-merge is the compilation model).
 
 
 A dependency's generic function (`def paint[S: PaintSurface](s: &var S)`)

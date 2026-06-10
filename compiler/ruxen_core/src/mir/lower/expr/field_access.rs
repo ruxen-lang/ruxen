@@ -382,6 +382,29 @@ impl<'a> Lowerer<'a> {
                         mangled
                     };
 
+                    // Q17 (staged boundary): a paren-less method call whose
+                    // RECEIVER is itself a still-abstract, mixin-bound type
+                    // parameter (`item.width` where `item: &var T, T: Sized`)
+                    // with NO unique implementor mangles to a bound-PLACEHOLDER
+                    // callee (`T: Sized_width`) that link-fails — the generic
+                    // METHOD over a mixin case (a generic `def` INSIDE a class),
+                    // not yet monomorphized (generic FREE functions ARE — see
+                    // the Q17 ADR). Detected STRUCTURALLY on the peeled receiver
+                    // type (not by string-matching the mangled callee, which a
+                    // sound `Array[T: Showable]`-style builtin would also trip).
+                    // Surface a clear error instead of the placeholder symbol.
+                    if self.receiver_is_unresolved_bound(&object.ty) {
+                        return Err(format!(
+                            "cannot monomorphize generic method `{field_name}` over the \
+                             mixin-bound type parameter `{resolved_class}`: a generic METHOD \
+                             over a mixin with ≥2 implementors is not yet supported (generic \
+                             free functions are — see docs/decisions/\
+                             q17-cross-package-monomorphization.md). Move the generic over \
+                             the mixin into a free function \
+                             `def {field_name}[T: <bound>](recv: &var T, …)`."
+                        ));
+                    }
+
                     let dest = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
                         Some(self.new_temp(expr.ty.clone()))
                     } else {

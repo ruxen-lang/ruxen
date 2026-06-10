@@ -1,0 +1,40 @@
+# Q17 regression pin — a mixin method with a DEFAULT body, dispatched through a
+# generic free function over the mixin bound, must resolve `self.<other>` to the
+# concrete implementor's body in each monomorphic copy. `greeting`'s default
+# body calls `self.name`; the two implementors define `name` differently, so the
+# asserted stdout proves the default body was monomorphized per implementor.
+mixin Greeter
+  def name -> Int
+  def greeting -> Int
+    self.name + 1000
+  end
+end
+
+def announce[T: Greeter](g: &var T) -> Int
+  g.greeting
+end
+
+class En
+  include Greeter
+  v: Int
+  def init(@v: Int) end
+  def name -> Int
+    self.v
+  end
+end
+
+class Fr
+  include Greeter
+  v: Int
+  def init(@v: Int) end
+  def name -> Int
+    self.v * 2
+  end
+end
+
+def main
+  var a = En.new(5)
+  var b = Fr.new(5)
+  puts "en=#{announce(&var a)}"
+  puts "fr=#{announce(&var b)}"
+end

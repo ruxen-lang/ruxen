@@ -1,0 +1,42 @@
+# Q17 regression pin — generic-CALLING-generic over a mixin bound. A generic
+# fn whose argument is itself a still-abstract type parameter
+# (`render_twice[T] { render(d) + render(d) }`) must transitively monomorphize
+# `render` per the concrete leaf type reached through the specialized
+# `render_twice` copies. The instantiation-collection worklist re-scans each
+# substituted body to a fixpoint; without it `render`'s placeholder leaks.
+mixin Drawable
+  def pixels -> Int
+end
+
+def render[T: Drawable](d: &var T) -> Int
+  d.pixels * 2
+end
+
+def render_twice[T: Drawable](d: &var T) -> Int
+  render(d) + render(d)
+end
+
+class Logo
+  include Drawable
+  base: Int
+  def init(@base: Int) end
+  def pixels -> Int
+    self.base
+  end
+end
+
+class Icon
+  include Drawable
+  px: Int
+  def init(@px: Int) end
+  def pixels -> Int
+    self.px + 1
+  end
+end
+
+def main
+  var a = Logo.new(10)
+  var b = Icon.new(20)
+  puts "logo=#{render_twice(&var a)}"
+  puts "icon=#{render_twice(&var b)}"
+end

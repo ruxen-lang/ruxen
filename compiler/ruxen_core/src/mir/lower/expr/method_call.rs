@@ -994,6 +994,31 @@ impl<'a> Lowerer<'a> {
                     mangled
                 };
 
+                // Q17 (staged boundary): a method call whose RECEIVER itself is
+                // a still-abstract, mixin-bound type parameter (`item.width`
+                // where `item: &var T, T: Sized`) with NO unique implementor
+                // would mangle to a bound-PLACEHOLDER callee (`T: Sized_width`)
+                // that link-fails. This is the generic METHOD over a mixin case
+                // (a generic `def` inside a class), which this pass does NOT yet
+                // monomorphize (generic FREE functions ARE — see Q17 ADR). We
+                // detect it STRUCTURALLY on the peeled receiver type, NOT by
+                // string-matching the mangled callee: a concrete receiver with a
+                // bounded generic ARG (`Array[T: Showable]`) also stringifies
+                // with `": "` but is a sound builtin call, so it must not trip
+                // this guard. Surface a clear error instead of the placeholder
+                // symbol. The single-implementor case never reaches here:
+                // `unique_bound_impl` already resolved a concrete `resolved_class`.
+                if self.receiver_is_unresolved_bound(&object.ty) {
+                    return Err(format!(
+                        "cannot monomorphize generic method `{method_name}` over the \
+                         mixin-bound type parameter `{resolved_class}`: a generic METHOD \
+                         over a mixin with ≥2 implementors is not yet supported (generic \
+                         free functions are — see docs/decisions/q17-cross-package-\
+                         monomorphization.md). Move the generic over the mixin into a \
+                         free function `def {method_name}[T: <bound>](recv: &var T, …)`."
+                    ));
+                }
+
                 // `&mut String` detection: when the receiver is a local
                 // of type `&mut String` (i.e. the caller passed `&mut s`
                 // into a parameter typed `&mut String`), the local holds

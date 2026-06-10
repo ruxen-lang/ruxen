@@ -101,10 +101,26 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       + `build::resolve_dep_source_dirs`, the same mechanism binary builds use.
       `rondo`/`quiver` can now unit-test against their own public API directly.
       Pin: `src/ruxen_cli/tests/dep_visibility.rs`.
-- [ ] **Q17 · S4 — cross-package generic monomorphization fails for consumer types.**
-      A dependency's generic can't be monomorphized for a type defined in the
-      consuming package (forces quiver's single-implementor `PaintSurface` shape).
-      **Dedicated effort.** (Q16 + Q17 together unblock real multi-package testing.)
+- [x] **Q17 · S4 — generic-free-fn / mixin-bound monomorphization for consumer types.**
+      ✅ FIXED for generic FREE FUNCTIONS (feat/drop-elaboration, 2026-06-10).
+      Re-scoped empirically: post-Q16 this is a single-unit MIR-lowering gap, not
+      cross-package. A generic free fn over a mixin now monomorphizes per concrete
+      implementor (incl. generic-calling-generic via a worklist fixpoint), so a
+      consumer binary can define a SECOND `PaintSurface` implementor and call the
+      dep's generic against both — quiver's framework cap is lifted. Design:
+      `docs/decisions/q17-cross-package-monomorphization.md`. **STAGED REMAINDER:**
+      generic METHODS over a mixin (a generic `def` inside a class) are not yet
+      monomorphized — now a clear lowering error, never a placeholder symbol (see
+      below). Also out of scope: true rlib/separate-compilation generics (Q16's
+      flat-merge is the model).
+- [ ] **Q17b · S4 — generic METHOD over a mixin (staged remainder).** A generic
+      `def measure[T: Sized](item: &var T)` INSIDE a class still resolves the bound
+      method to a placeholder; lowering rejects it with a clear diagnostic
+      ("move the generic into a free function"). Extend the Q17 free-fn
+      monomorphization to class/struct/enum methods: collect generic-method
+      instantiations, emit specialized method bodies (`Frame_measure__mono__Wide`),
+      redirect the method/field-access call sites. Not on quiver's critical path
+      (its paint pass is all free functions).
 - [ ] **Q2 · S1 — `Option[any Fn[...]]` class field returns garbage.** ⏸ Deferred
       pending the closure representation redesign; apps work around with index-into-pool arrays.
 - [ ] **Q22 — closure captures are pointer-copies.** ✅ Audited 2026-06-08 post-P0.2:
@@ -207,9 +223,13 @@ but its next cycles are gated here. Prioritized by blast radius:
       19 cases. ADR: `docs/decisions/drop-elaboration.md`. **Still open:** drop flags
       for conditionally-moved locals, drop-on-unwind (panic=abort only today),
       Copy/Clone mixins.
-- [ ] **Q17 — cross-package generic monomorphization.** Forces quiver's
-      single-`PaintSurface` shape. **Unblocks:** multiple paint backends + clean
-      L1/L2 generic seams.
+- [x] **Q17 — generic-free-fn / mixin-bound monomorphization (FIXED for free
+      fns, feat/drop-elaboration).** A generic free function over a mixin now
+      monomorphizes per consumer-defined implementor, so quiver's
+      single-`PaintSurface` cap is lifted — multiple paint backends now compile +
+      run. Generic-calling-generic handled via a worklist fixpoint. **Unblocks:**
+      multiple paint backends + clean L1/L2 generic seams. Generic METHODS over a
+      mixin remain staged (Q17b above; clear diagnostic, no placeholder symbol).
 - [x] **Q16 — dependency symbols in library/`check`/`test` builds (FIXED,
       feat/drop-elaboration).** Dep `src/**.rx` is now flat-merged into library
       (`compile_piece`), `check`, and `ruxen test` builds via the shared

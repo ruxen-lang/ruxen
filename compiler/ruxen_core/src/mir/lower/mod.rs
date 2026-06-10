@@ -141,6 +141,23 @@ pub struct Lowerer<'a> {
     /// `Array[Int]_map`; `resolve_ffi_alias_callee` strips the generic
     /// suffix to reach the opaque body when the stripped name is in here.
     lib_body_methods: HashSet<String>,
+    /// Q17: eligible generic FREE functions (≥1 mixin-bounded type param),
+    /// keyed by function name. Populated by `collect_generic_fn_instances`.
+    mono_fns: HashMap<String, crate::hir::nodes::HirFuncDef>,
+    /// Q17: function name → distinct fully-concrete generic-arg vectors
+    /// recovered at call sites (e.g. `paint_all` → `[[RecordingSurface],
+    /// [TallySurface]]`).
+    fn_mono_instances: HashMap<String, Vec<monomorphize::MonoKey>>,
+    /// Q17: function name → emitted `(concrete-args, mangled-base)` pairs. A
+    /// free-fn call site is redirected to the mangled monomorphic callee only
+    /// when its recovered type-args match an entry here.
+    fn_mono_emitted: HashMap<String, Vec<(monomorphize::MonoKey, String)>>,
+    /// Q17: generic fns that saw at least one call we could NOT monomorphize
+    /// (a generic-through-generic shape with a non-concrete leaf). Their
+    /// opaque abstract body must still be emitted by the normal `lower_item`
+    /// path so that call resolves (and devirtualizes via `unique_bound_impl`,
+    /// or surfaces a clear error).
+    fn_mono_needs_opaque: HashSet<String>,
 }
 
 /// A captured variable's storage inside the captures struct.
@@ -227,6 +244,10 @@ impl<'a> Lowerer<'a> {
             mono_classes: HashMap::new(),
             mono_instances: HashMap::new(),
             mono_emitted: HashSet::new(),
+            mono_fns: HashMap::new(),
+            fn_mono_instances: HashMap::new(),
+            fn_mono_emitted: HashMap::new(),
+            fn_mono_needs_opaque: HashSet::new(),
         }
     }
 
@@ -266,6 +287,46 @@ impl<'a> Lowerer<'a> {
             Some(candidates.remove(0))
         } else {
             None
+        }
+    }
+
+    /// Q17 (staged boundary): true when the receiver type (after peeling refs)
+    /// is ITSELF a still-abstract, mixin-bound type parameter
+    /// (`TypeParam`/`SomeMixin`/`AnyMixin`) with bounds but NO unique
+    /// implementor — so a method call on it would mangle to a
+    /// bound-placeholder callee (`T: Sized_width`) that link-fails. This is the
+    /// generic-METHOD-over-mixin case (not yet monomorphized; generic free
+    /// functions ARE handled). Detected on the receiver SHAPE, not on the
+    /// stringified callee: a concrete receiver carrying a bounded generic ARG
+    /// (`Array[T: Showable]`) is a sound builtin call and must return false.
+    fn receiver_is_unresolved_bound(&self, ty: &Ty) -> bool {
+        let mut cur = ty;
+        loop {
+            match cur {
+                Ty::Ref(inner)
+                | Ty::RefMut(inner)
+                | Ty::RefLifetime(_, inner)
+                | Ty::RefMutLifetime(_, inner) => cur = inner,
+                Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
+                    // Unbounded `[T]` is never dispatched on (a bare type param
+                    // with no bounds never names a bound method). A callable
+                    // bound (`Fn`/`FnMut`/`FnOnce`, e.g. `any Fn[Fn(T) -> U]`)
+                    // is dispatched by the closure `.call` mechanism, not by a
+                    // nominal `{Type}_{method}` mangle, so it never produces a
+                    // bound-placeholder callee — exclude it. Only a genuine
+                    // user-mixin bound with no unique implementor yields the
+                    // placeholder this guard rejects.
+                    if bounds.is_empty()
+                        || bounds
+                            .iter()
+                            .any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce"))
+                    {
+                        return false;
+                    }
+                    return self.unique_bound_impl(bounds).is_none();
+                }
+                _ => return false,
+            }
         }
     }
 
@@ -440,6 +501,19 @@ impl<'a> Lowerer<'a> {
                     lowered.name =
                         Self::symbol_name(&Self::qualified_item_name(module_path, &lowered.name));
                 }
+                // Q17: suppress the opaque (un-monomorphized) body of EVERY
+                // eligible generic free fn — instantiated or not. Its abstract
+                // body can only ever emit bound-placeholder callees
+                // (`T: Paintable_fill_rect`) that link-fail, and no valid call
+                // resolves to it: a concrete call is redirected to a monomorphic
+                // copy (or errors at the call site), and an abstract call lives
+                // only inside another generic body that is itself suppressed.
+                // A NON-eligible fn (`generic_fn_keeps_opaque` → true) is
+                // unaffected. Matched on the un-qualified key the collector
+                // recorded (module-qualified names share it).
+                if !self.generic_fn_keeps_opaque(&func.name) {
+                    return Ok(());
+                }
                 let mir_fn = self.lower_function(&lowered)?;
                 if mir_fn.name == "main" {
                     mir.entry = Some("main".to_string());
@@ -578,6 +652,14 @@ impl<'a> Lowerer<'a> {
         // FFI-shell generic classes (`Mutex[T]`, …) are excluded here.
         self.collect_mono_instances(program);
 
+        // Q17: record every concrete instantiation of an eligible generic
+        // FREE function (mixin-bounded type param) seen at a call site, so a
+        // dependency's generic (`paint_all[T: Paintable]`) can be specialized
+        // per CONSUMER implementor instead of emitting the bound-placeholder
+        // callee (`T: Paintable_fill_rect`) that link-fails. Runs after
+        // `collect_mono_instances` (the trait-impl table is already built).
+        self.collect_generic_fn_instances(program);
+
         // Collect `const` initializer expressions so references are
         // substituted with the RHS value at every use site.
         self.collect_const_values(program);
@@ -628,6 +710,13 @@ impl<'a> Lowerer<'a> {
         // table are already in place. Call sites are redirected to these
         // specialized callees in `method_call.rs` via `mono_base_for_ty`.
         self.emit_mono_instances(&mut mir)?;
+
+        // Q17: emit one specialized MIR copy of every eligible generic free
+        // function, per recorded concrete instantiation, and record the
+        // `(fn, args) → mangled` redirects consulted by `fn_call.rs`. Same
+        // ordering rationale as `emit_mono_instances` (opaque fallback bodies
+        // and symbols already in place).
+        self.emit_generic_fn_instances(&mut mir)?;
 
         // Emit the primitive Display::fmt synth functions unconditionally
         // (Phase 2 #06.D2.S1). These are program-level, not per-use.

@@ -8,6 +8,33 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- (Q17) A generic **free function bound by a mixin** (`def paint_all[T:
+  Paintable](s: &var T, …)`) could not be monomorphized for a SECOND mixin
+  implementor: the bound method call inside its body (`s.fill_rect(…)`) mangled
+  to the bound-placeholder callee `T: Paintable_fill_rect`, which link-failed.
+  The single-implementor case was masked because mixin dispatch devirtualized to
+  the sole impl — exactly why quiver's framework was capped at ONE `PaintSurface`
+  backend (`RecordingSurface`). **Empirical re-scope:** after Q16's dep-source
+  flat-merge this is NOT a cross-package problem (it reproduces in a single
+  file); it is a MIR-lowering gap. Fix (`mir/lower/monomorphize.rs`): a new
+  demand-driven pass collects each concrete instantiation of an eligible generic
+  free fn (recovered by unifying declared param types against the call's actual
+  arg types), emits one specialized body per instantiation
+  (`paint_all__mono__TallySurface`) via the existing `subst_type_params_in_func`,
+  and redirects call sites (`fn_call.rs::fn_mono_callee`). Generic-CALLING-generic
+  is handled by a worklist FIXPOINT that re-scans each substituted body. The
+  opaque body of every eligible generic free fn is suppressed (it could only emit
+  placeholders); the single-implementor case monomorphizes to one concrete copy,
+  byte-equivalent to the old devirtualize path. Backend-agnostic (shared MIR).
+  **Staged remainder:** a generic METHOD over a mixin (a generic `def` inside a
+  class) is not yet monomorphized — it now produces a CLEAR lowering error, never
+  a placeholder symbol. Quiver's paint pass is entirely generic FREE functions,
+  so the framework is unblocked. Design:
+  `docs/decisions/q17-cross-package-monomorphization.md`. Pins (COMPILE + RUN +
+  assert stdout): `src/ruxen_cli/tests/cross_package_mono.rs` (staged-install,
+  two-package, binary + `ruxen test`, asserts `dep=20 mine=9` per-implementor),
+  `compiler/ruxen_core/tests/q17_generic_fn_mixin_mono.rs`, and release-e2e cases
+  `655`–`658`.
 - (Q33) Comparing a float value against a **negative Int literal** miscompiled.
   `f32 == -1` evaluated **false** even when the value was exactly `-1.0`, and the
   breakage extended past equality: `f >= -1` was false, `f < -1` was true,
