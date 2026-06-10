@@ -1,0 +1,31 @@
+# Q37 pin (docs/dev/gui-stack-v1-issues.md §Q37). A block-taking METHOD and an
+# unrelated generic FREE FUNCTION sharing a name (`frame`) must NOT collide.
+# The yielding method registered `frame` in a bare-NAME-keyed yield map, so the
+# free fn `frame` (no yield, no &block) inherited a phantom `__block` it could
+# never infer → `could not infer type for parameter __block` + an inflated
+# arity. Fixed by deciding the synthetic `__block` from each function's OWN
+# body (resolve/funcs.rs), not a name match. Both callables run here.
+class Canvas
+  tag: Int
+
+  def init(@tag: Int)
+  end
+
+  def frame(&block: Fn[(&var Canvas) -> nil]) -> Int
+    yield(self)
+    self.tag
+  end
+end
+
+def frame[S](app: S, surface: Int) -> Int
+  surface + 1
+end
+
+def main
+  var c = Canvas.new(7)
+  let from_method = c.frame do |cv|
+    cv.tag = 99
+  end
+  puts "method=#{from_method}"
+  puts "free=#{frame(0, 41)}"
+end

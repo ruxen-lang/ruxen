@@ -468,7 +468,20 @@ impl Resolver {
         // to `__block.(VALUE)` and callers can forward a trailing block.
         // Skipped when an explicit `&block` already provided the slot —
         // the explicit annotation is authoritative (typed `R`, optional).
-        if let Some(&arity) = self.yield_fns.get(&f.name).filter(|_| !has_explicit_block) {
+        //
+        // Q37: the signal MUST be THIS function's OWN body yielding, not a
+        // name match in `yield_fns`. That map is keyed by bare function name
+        // (`HashMap<String, usize>`), so a yielding METHOD named `frame`
+        // would otherwise poison an unrelated same-named free fn `frame` with
+        // a phantom `__block` it never uses → `could not infer type for
+        // __block` + an inflated arity. A function gets a `__block` iff it
+        // itself yields; recompute the arity locally from its body.
+        let own_yield_arity = if has_explicit_block {
+            None
+        } else {
+            super::yield_scan::find_first_yield_arity_in_block(&f.body)
+        };
+        if let Some(arity) = own_yield_arity {
             // For each yield argument that is a bare `self`, type the matching
             // block parameter as the enclosing class instead of a fresh type
             // variable. A method's `yield self` then propagates a CONCRETE

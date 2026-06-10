@@ -94,12 +94,6 @@ pub struct Resolver {
     /// Pin: `docs/rondo_v1_blockers.md` B12.
     pub(super) current_module_path: Vec<String>,
 
-    /// Functions whose body contains `yield` — these take a synthetic
-    /// `__block: Closure` trailing parameter.  Maps function name to the
-    /// arity of the first observed `yield` (used to pre-shape the block's
-    /// `Ty::Fn` parameter list so inference can unify with caller blocks).
-    pub(super) yield_fns: HashMap<String, usize>,
-
     /// Nesting depth of async functions/closures currently being resolved.
     pub(super) async_scope_depth: usize,
 
@@ -219,7 +213,6 @@ impl Resolver {
             current_impl_assoc_types: HashMap::new(),
             current_trait_context: None,
             current_module_path: Vec::new(),
-            yield_fns: HashMap::new(),
             async_scope_depth: 0,
             closure_stack: Vec::new(),
             tagged_enums_in_scope: HashMap::new(),

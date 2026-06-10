@@ -1,57 +1,18 @@
 //! Free helper functions extracted from `resolve/mod.rs` to keep the
 //! file under 5K lines.
 //!
-//! `yield VALUE` inside a function body implicitly introduces a
-//! trailing `__block: Closure` parameter.  Before the main resolution
-//! pass, walk the AST and record every function whose body contains a
-//! `yield`, along with the arity of the first `yield` found.  The
-//! arity is used to pre-shape the synthetic block's `Ty::Fn` parameter
-//! list so that caller-side unification on the trailing closure
-//! produces a concrete type.
+//! `yield VALUE` inside a function body implicitly introduces a trailing
+//! `__block: Closure` parameter. Whether a function gets that slot is
+//! decided LOCALLY in `funcs.rs::resolve_function` from the function's own
+//! body (`find_first_yield_arity_in_block`) — NOT from a name-keyed pre-scan
+//! (Q37: a name map collided a yielding method with an unrelated same-named
+//! free fn, giving the latter a phantom `__block` it couldn't infer). The
+//! arity of the first `yield` pre-shapes the synthetic block's `Ty::Fn`
+//! parameter list so caller-side unification on the trailing closure
+//! produces a concrete type; `first_yield_self_mask_in_block` marks `self`
+//! arguments so a method's `yield self` propagates a concrete block type.
 
 use crate::parser::ast;
-use std::collections::HashMap;
-
-// ─── Yield Pre-Scan ────────────────────────────────────────────────────
-//
-// `yield VALUE` inside a function body implicitly introduces a trailing
-// `__block: Closure` parameter.  Before the main resolution pass, walk
-// the AST and record every function whose body contains a `yield`, along
-// with the arity of the first `yield` found.  The arity is used to
-// pre-shape the synthetic block's `Ty::Fn` parameter list so that
-// caller-side unification on the trailing closure produces a concrete type.
-
-pub(super) fn collect_yield_fns(item: &ast::TopLevelItem, out: &mut HashMap<String, usize>) {
-    match item {
-        ast::TopLevelItem::Function(f) => {
-            if let Some(arity) = find_first_yield_arity_in_block(&f.body) {
-                out.insert(f.name.clone(), arity);
-            }
-        }
-        ast::TopLevelItem::Module(m) => {
-            for sub in &m.items {
-                collect_yield_fns(sub, out);
-            }
-        }
-        ast::TopLevelItem::Class(c) => {
-            for m in &c.methods {
-                if let Some(arity) = find_first_yield_arity_in_block(&m.body) {
-                    out.insert(m.name.clone(), arity);
-                }
-            }
-        }
-        ast::TopLevelItem::Impl(b) => {
-            for it in &b.items {
-                if let ast::ImplItem::Method(m) = it {
-                    if let Some(arity) = find_first_yield_arity_in_block(&m.body) {
-                        out.insert(m.name.clone(), arity);
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
-}
 
 pub(super) fn find_first_yield_arity_in_block(block: &ast::Block) -> Option<usize> {
     find_first_yield_args_in_block(block).map(<[ast::Expr]>::len)
