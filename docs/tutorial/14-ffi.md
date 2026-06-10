@@ -68,7 +68,7 @@ end
 # Safe wrapper — shadow the raw FFI name.
 def sqrt(x: Float) -> Result[Float, String]
   if x < 0.0
-    Err(String.from("sqrt of negative number"))
+    Err("sqrt of negative number")
   else
     Ok(unsafe { sqrt(x) })
   end

@@ -142,7 +142,7 @@ class Animal
   end
 
   def speak -> String
-    String.from("...")
+    "..."
   end
 end
 
@@ -157,7 +157,7 @@ class Cat < Animal
 end
 
 def main
-  let c = Cat.new(String.from("Whiskers"))
+  let c = Cat.new("Whiskers")
   puts c.speak
 end
 ```
@@ -281,7 +281,7 @@ class Dog
 end
 
 def main
-  let d = Dog.new(String.from("Rex"))
+  let d = Dog.new("Rex")
   puts d.hello
 end
 ```

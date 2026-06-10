@@ -7,7 +7,7 @@ Ruxen has no exceptions. Errors are values — your code receives them, inspects
 ```ruxen
 def divide(a: Int, b: Int) -> Result[Int, String]
   if b == 0
-    Err(String.from("divide by zero"))
+    Err("divide by zero")
   else
     Ok(a / b)
   end

@@ -418,6 +418,33 @@ once 1.0.0 ships.
   value at the target width (matching the existing let-bound coercion), so
   inline bit-packing (`(a << 24) | (b << 16) | …`) produces the correct result.
 
+### Changed
+- **Dropped `String.from("literal")` from everything we ship; documented the
+  string-literal model.** A bare string literal is already an owned `String`
+  (lowered through `ruxen_string_from`), and at a call site it coerces to a
+  `String`, `&String`, or `&str` parameter as the position needs — so
+  `String.from` on a literal was pure noise. Swept **78** tutorial sites
+  (`docs/tutorial/**`) and the **2** stdlib sites
+  (`library/std/test/src/runner.rx`: `get(&String.from(&"…"))` → `get("…")`,
+  `Err(_) -> String.from(&"…")` → `Err(_) -> "…"`) to bare literals. Left every
+  `String.from(<runtime value>)` (the genuine borrow→owned copy) and the
+  distinct `String.from_utf8`/`from_bytes`. The verified model is now taught in
+  `docs/tutorial/29` (and cross-linked from `02`): `""` = owned `String`;
+  `&""` = `&&str` (NOT `&String` when annotated — write the bare literal);
+  `&String` and `&str` are distinct borrow types the unifier bridges as
+  equivalent; `String.from(x)` is only for copying a runtime borrow. Regression
+  pins (so the swept corpus across four repos can't silently break): release-e2e
+  `922_string_literal_coercion_all_positions` (RUN+stdout, owned + borrow
+  directions), `string_literal_wrap.rs::bare_string_literal_coerces_to_string_
+  in_all_positions`.
+- **Tutorial 05 "Blocks as expressions" rewritten.** It taught
+  `let v = do … end` as producing a value — but a bare `do … end` is a closure
+  literal, so that printed a pointer (now caught by E0729, see Fixed). The
+  section is now "Multi-statement `match` arms" built around the working
+  `-> do … end` arm form (verified to run), with the broken pattern shown only
+  as a labeled error and a helper-fn alternative; the `begin … end` future
+  spelling is parked in TASKS.
+
 ## [0.1.0] - 2026-05-30
 
 ### Fixed

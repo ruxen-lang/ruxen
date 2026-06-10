@@ -184,7 +184,7 @@ class User
 
   # Class method — no receiver, called on the type itself
   def self.anonymous -> User
-    User.new(String.from("Anonymous"))
+    User.new("Anonymous")
   end
 end
 ```

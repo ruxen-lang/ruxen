@@ -14,7 +14,7 @@ def print_name(name: &String)
 end
 
 def main
-  let s = String.from("Ruxen")
+  let s = "Ruxen"
   print_name(&s)
   puts "#{s}"
 end
@@ -36,7 +36,7 @@ We made a string, lent it to `print_name`, and then printed it again ourselves. 
 
 ## Rule 1: every value has exactly one owner
 
-When you write `let s = String.from("Ruxen")`, the variable `s` **owns** the string. When `s` goes out of scope (the function ends, the block closes), the string's memory is freed. That's it — no garbage collector running in the background, no double-free, no leak.
+When you write `let s = "Ruxen"`, the variable `s` **owns** the string. When `s` goes out of scope (the function ends, the block closes), the string's memory is freed. That's it — no garbage collector running in the background, no double-free, no leak.
 
 ## Rule 2: assigning a non-Copy value moves it
 
@@ -44,7 +44,7 @@ What happens when you assign one owning binding to another?
 
 ```ruxen
 def main
-  let greeting = String.from("hello")
+  let greeting = "hello"
   let moved = greeting              # ownership moves to `moved`
   puts moved                        # OK
   # puts greeting                   # ERROR: `greeting` was moved
@@ -61,7 +61,7 @@ def consume_string(s: String)
 end
 
 def main
-  let name = String.from("Ruxen")
+  let name = "Ruxen"
   consume_string(name)              # `name` moved into the function
   # puts name                       # ERROR: `name` was moved
 end
@@ -93,7 +93,7 @@ def print_name(name: &String)         # borrows, doesn't own
 end
 
 def main
-  let s = String.from("Ruxen")
+  let s = "Ruxen"
   print_name(&s)                       # pass a borrow with &
   puts "#{s}"                          # still valid — we never gave it away
 end
@@ -103,7 +103,7 @@ You can hand out as many read-only borrows as you like, all at the same time:
 
 ```ruxen
 def main
-  let data = String.from("hello")
+  let data = "hello"
   let r1 = &data
   let r2 = &data                      # OK — multiple read-only borrows
   puts "#{r1} / #{r2}"
@@ -122,7 +122,7 @@ def append_bang(s: &var String)
 end
 
 def main
-  var greeting = String.from("hello")
+  var greeting = "hello"
   append_bang(&var greeting)
   puts "#{greeting}"                  # hello!
 end
@@ -135,7 +135,7 @@ Two important details:
 
 ```ruxen
 # This won't compile:
-var data = String.from("hi")
+var data = "hi"
 let view = &data            # read-only borrow
 data.push('!')              # ERROR: tried to mutate while `view` is alive
 puts view
@@ -144,7 +144,7 @@ puts view
 Fix: let the read-only borrow finish first. The compiler is smart about lifetimes — a borrow ends at its last use, not at the end of the block:
 
 ```ruxen
-var data = String.from("hi")
+var data = "hi"
 let view = &data
 puts view                   # last use of view — borrow ends here
 data.push('!')              # OK
@@ -156,7 +156,7 @@ The compiler refuses to let a borrow outlive the value it borrows from. This mak
 
 ```ruxen
 def dangling -> &String
-  let local = String.from("hello")
+  let local = "hello"
   &local                  # ERROR: `local` dies when the function returns
 end
 ```
@@ -169,7 +169,7 @@ For non-Copy types, ask for an explicit duplicate with `.clone`:
 
 ```ruxen
 def main
-  let original = String.from("hello")
+  let original = "hello"
   let copy = original.clone           # explicit duplication
   puts original                        # still valid
   puts copy
@@ -196,7 +196,7 @@ You met these in Chapter 3; they're the same rules from this chapter applied to 
 **Using a value after passing it to a function.**
 
 ```ruxen
-let s = String.from("x")
+let s = "x"
 consume(s)
 puts s         # ERROR: moved
 ```
@@ -217,7 +217,7 @@ Fix: print `first` before the push, or read the value into a local (`let first =
 **Forgetting `var` on the owner.** You can't take a writable borrow of an immutable binding:
 
 ```ruxen
-let s = String.from("x")
+let s = "x"
 append_bang(&var s)    # ERROR: s is let, not var
 ```
 
@@ -230,7 +230,7 @@ Fix: change `let` to `var`.
 Take the writable-borrow example and try to print `greeting` *before* calling `append_bang`:
 
 ```ruxen
-var greeting = String.from("hello")
+var greeting = "hello"
 puts greeting                # OK — no borrow active yet
 append_bang(&var greeting)
 puts greeting                # OK — borrow ended at function return

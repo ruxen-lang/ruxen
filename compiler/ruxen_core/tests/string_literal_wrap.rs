@@ -72,3 +72,78 @@ fn string_literal_lowers_through_string_from_wrapper() {
          Without the wrap, String::drop -> free() on the literal pointer would double-free."
     );
 }
+
+/// Coercion guard (typeck half of release-e2e case 922): a BARE string literal
+/// coerces to the right string type in every position we rely on after dropping
+/// `String.from("literal")` everywhere. OWNED direction — function param,
+/// struct field, static-method arg, `Err(...)` into `Result[T, String]`,
+/// `Array[String].push`, var reassignment + interpolation, return. BORROW
+/// direction — a bare literal into a `&String` param, into a `&str` param, and
+/// as the borrowed `&String` needle of `include?` (`""` is owned `String`; at a
+/// call site it also satisfies `&String`/`&str` — the two are distinct types
+/// the unifier bridges as equivalent). Zero typeck errors is the invariant; a
+/// regression would break the whole swept corpus across the four repos (docs +
+/// stdlib). The run+stdout half is pinned by release-e2e
+/// `922_string_literal_coercion_all_positions`.
+#[test]
+fn bare_string_literal_coerces_to_string_in_all_positions() {
+    let source = r##"
+class Person
+  name: String
+  def init(n: String)
+    self.name = n
+  end
+  def greeting -> String
+    "hi #{self.name}"
+  end
+end
+def label(s: String) -> String
+  s
+end
+def borrow_string(s: &String) -> USize
+  s.size
+end
+def borrow_str(s: &str) -> USize
+  s.size
+end
+def check(ok: Bool) -> Result[Int, String]
+  if ok
+    Ok(1)
+  else
+    Err("nope")
+  end
+end
+def main
+  let p = Person.new("Ada")
+  puts p.greeting
+  puts label("badge")
+  var xs: Array[String] = []
+  xs.push("one")
+  var msg = "start"
+  msg = "now #{label("end")}"
+  puts msg
+  let _ = check(false)
+  # BORROW direction: a bare literal also coerces into &String and &str params,
+  # and to the borrowed `&String` needle of `include?` (no leading `&` needed).
+  let _b1 = borrow_string("abcd")
+  let _b2 = borrow_str("abc")
+  let _b3 = "haystack".include?("st")
+end
+"##;
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize().expect("lex");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("parse");
+    let result = typeck::type_check(&program);
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error)
+        .map(|d| d.message.clone())
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "bare string literal must coerce to String in every position; \
+         got typeck errors: {errors:?}"
+    );
+}

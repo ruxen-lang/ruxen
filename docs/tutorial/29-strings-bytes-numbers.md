@@ -10,7 +10,7 @@ Save as `strings.rx`:
 
 ```ruxen
 def main
-  let name = String.from("Ruxen")
+  let name = "Ruxen"
   let greeting = "hello, #{name}!"
   puts greeting
   puts "bytes = #{greeting.size}"
@@ -30,7 +30,7 @@ hello, Ruxen!
 bytes = 13
 ```
 
-Notice three things: `String.from` to create an owned string from a literal, `"#{...}"` interpolation to build a new owned string, and `.size` returning the byte count.
+Notice three things: a bare string literal (`"Ruxen"`) is already an owned `String` here (no wrapper needed), `"#{...}"` interpolation builds a new owned string, and `.size` returns the byte count.
 
 ---
 
@@ -47,10 +47,27 @@ Two text types — pick by ownership:
 
 ```ruxen
 let greeting: &str = "hello"              # static literal, borrowed
-let owned: String  = String.from("hello") # owned, heap-allocated
+let owned: String  = "hello"              # owned, heap-allocated
 ```
 
 Interpolation (`"hi #{name}"`) always allocates a `String` — the result is owned, not a slice into the source code.
+
+> **The string-literal model — write the bare literal, let it coerce.**
+>
+> - **`"text"`** is an **owned `String`** (heap-allocated, dropped at end of
+>   scope). In a *value* position that's exactly what you get; at a *call site*
+>   the same bare literal also coerces to a `&String` or `&str` parameter, so
+>   you write `"text"` everywhere and the position decides.
+> - **`&"text"`** is a **borrow of the literal** — its type is `&&str`, *not*
+>   `&String`. It works at a call site through the same coercion, but
+>   `let s: &String = &"text"` is rejected. So **prefer the bare `"text"`**; the
+>   leading `&` buys you nothing and is the wrong type when annotated.
+> - **`&String` and `&str`** are two distinct borrow types the compiler treats
+>   as interchangeable (it bridges them in unification), so a `&String`
+>   argument satisfies a `&str` parameter and vice-versa.
+> - **`String.from(x)`** is *only* for copying a **runtime** `&String`/`&str`
+>   value `x` into a fresh owned `String` (when you need to keep it past the
+>   borrow). It is never needed on a literal — `"text"` is already owned.
 
 ## 3. Building a `String`
 
@@ -59,7 +76,7 @@ Five common starting points:
 ```ruxen
 let a = String.new                     # empty, no allocation
 let b = String.with_capacity(64)       # empty, capacity reserved
-let c = String.from("hello")           # from a &str
+let c = "hello"                        # a bare literal is already an owned String
 let d = "hi #{name}"                   # from interpolation (owned)
 let e = "abc".repeat(3)                # "abcabcabc"
 ```
@@ -70,17 +87,17 @@ let e = "abc".repeat(3)                # "abcabcabc"
 
 ```ruxen
 var s = String.with_capacity(32)
-s.push_str(&"hello, ")
-s.push_str(&"world")
+s.push_str("hello, ")
+s.push_str("world")
 puts s                                  # hello, world
 ```
 
-`push_str` takes a `&String` (borrowed). Pass a literal with a leading `&` to borrow it.
+`push_str` takes a `&String` (borrowed). A bare string literal coerces to that borrow at the call site — no leading `&` needed (in fact `&"..."` is `&&str`, which only works through the same call-site coercion, so the bare form is the idiom).
 
 ## 5. Inspecting
 
 ```ruxen
-let s = String.from("hello world")
+let s = "hello world"
 
 s.size                       # byte length (Int)
 s.empty?                  # Bool
@@ -99,7 +116,7 @@ for piece in csv.split(",")
   puts piece                # alpha, then beta, then gamma
 end
 
-let block = String.from("line one\nline two\nline three")
+let block = "line one\nline two\nline three"
 for line in block.lines
   puts line
 end
@@ -118,7 +135,7 @@ puts raw.trim                 # Hello World
 puts raw.trim.to_upper        # HELLO WORLD
 puts raw.trim.to_lower        # hello world
 
-let s = String.from("hello world hello")
+let s = "hello world hello"
 puts s.replace("hello", "bye")    # bye world bye
 ```
 
@@ -177,7 +194,7 @@ puts s         # Hi
 ## 11. String <-> byte conversion
 
 ```ruxen
-let s   = String.from("hi")
+let s   = "hi"
 let bs  = s.into_bytes        # Array[UInt8], consumes s
 let dup = bs.clone             # if you need to keep them around
 
@@ -258,7 +275,7 @@ A cast that doesn't fit (e.g. `300 as UInt8`) truncates by masking — it never 
 ## Recap
 
 - **`String`** owns its memory and is mutable; **`&str`** is a cheap borrow you can pass around.
-- Build with `String.new`, `String.with_capacity`, `String.from`, interpolation, or `.repeat`.
+- A bare literal `"text"` is already an owned `String`; build also with `String.new`, `String.with_capacity`, interpolation, or `.repeat`. `String.from(x)` is only for copying a *runtime* `&String`/`&str` into an owned `String`.
 - Bytes live in `Array[UInt8]`; convert with `.into_bytes` and `String.from_utf8`.
 - Numbers come in sized signed / unsigned integers, two float widths, and pointer-width `USize` / `ISize`.
 - `as` is the only numeric conversion form — no implicit coercion.

@@ -53,6 +53,22 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
 
 ### Language features
 
+- [x] **String-literal coercion model — `String.from("literal")` removed
+      everywhere we ship (DONE 2026-06-10, `feat/drop-elaboration`).** Verified
+      model: `""` is an owned `String` (lowered via `ruxen_string_from`); at a
+      call site a bare literal also coerces to a `&String`/`&str` param; `&""`
+      is `&&str` (NOT `&String` when annotated — bare is the idiom); `&String`
+      and `&str` are distinct borrow types the unifier bridges as equivalent
+      (`unify.rs:380`); `String.from(x)` is ONLY for copying a runtime borrow.
+      Swept 78 tutorial sites + 2 stdlib (`test/src/runner.rx`) to bare literals;
+      left every `String.from(<runtime>)` and the distinct `from_utf8`/
+      `from_bytes`. Model taught in tutorial 29 (+ 02 cross-link). Pins:
+      release-e2e `922_string_literal_coercion_all_positions` (RUN+stdout, owned
+      + borrow), `string_literal_wrap.rs::bare_string_literal_coerces_..._all_
+      positions`. DEFERRED (public-API, separate decision): whether to rename/
+      retire the `String.from` method for the borrow→owned case — note that
+      `String.from` and `clone` bind the SAME C symbol (`ruxen_string_from`); a
+      future call could spell the copy `s.clone()`. Not now.
 - [x] **Ruby-block semantics — explicit `&block` / `yield` / `block_defined?`
       (DONE 2026-06-10, `feat/drop-elaboration`).** ADR
       `docs/decisions/ruby-block-semantics.md`. Explicit optional

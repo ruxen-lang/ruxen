@@ -164,7 +164,7 @@ For strings, `.N` means "show at most N characters":
 
 ```ruxen
 def main
-  let s: String = String.from("hello world")
+  let s: String = "hello world"
   puts "[#{s:.5}]"
 end
 ```

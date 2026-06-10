@@ -7,9 +7,9 @@ This chapter is about how programs make decisions and how they repeat work. The 
 ```ruxen
 def label(n: Int) -> String
   match n
-    1 -> String.from("one")
-    2 -> String.from("two")
-    _ -> String.from("many")
+    1 -> "one"
+    2 -> "two"
+    _ -> "many"
   end
 end
 
@@ -88,9 +88,9 @@ end
 
 def describe(c: Color) -> String
   match c
-    Color.Red   -> String.from("red")
-    Color.Green -> String.from("green")
-    Color.Blue  -> String.from("blue")
+    Color.Red   -> "red"
+    Color.Green -> "green"
+    Color.Blue  -> "blue"
   end
 end
 
@@ -139,7 +139,7 @@ You can take apart structured values right in the pattern:
 def main
   let point = (3, 4)
   let label = match point
-    (0, 0) -> String.from("origin")
+    (0, 0) -> "origin"
     (x, 0) -> "on x-axis at #{x}"
     (0, y) -> "on y-axis at #{y}"
     (x, y) -> "at (#{x}, #{y})"
@@ -276,25 +276,12 @@ def main
 end
 ```
 
-## Blocks as expressions
+## Multi-statement `match` arms
 
-A `do ... end` block lets you stash a few statements and produce a value. The last expression is the result:
-
-```ruxen
-def main
-  let v = do
-    let a = 1
-    let b = 2
-    a + b
-  end
-  puts "#{v}"      # 3
-end
-```
-
-This is handy inside `match` arms when you need more than one expression:
+A `match` arm that needs more than one statement uses `-> do ... end`. The arm runs the statements and the **last expression** is the arm's value:
 
 ```ruxen
-match shape
+let area = match shape
   Shape.Triangle(a, b, c) -> do
     let s = (a + b + c) / 2.0
     s * (s - a)
@@ -302,6 +289,31 @@ match shape
   _ -> 0.0
 end
 ```
+
+Here the `do ... end` is the **block attached to the arm** — it is evaluated in place and yields its last expression as the arm result.
+
+> **`do ... end` is always a block attached to something — never a standalone value.** A bare `do ... end` is a *closure literal*, so this does **not** work:
+>
+> ```ruxen
+> let v = do          # error[E0729] if you then format v
+>   let a = 1
+>   let a + 1
+> end                 # v is an UN-invoked closure, not a number
+> ```
+>
+> To compute a value from several statements outside a `match` arm, use a helper function (or an `if`/`match` expression, both of which *are* values):
+>
+> ```ruxen
+> def sum_two -> Int
+>   let a = 1
+>   let b = 2
+>   a + b
+> end
+>
+> let v = sum_two   # 3
+> ```
+>
+> (If Ruby-style standalone *expression blocks* are ever added to Ruxen, the unambiguous spelling will be `begin ... end` — `do ... end` stays reserved for blocks attached to a call or arm.)
 
 ## Common mistakes
 

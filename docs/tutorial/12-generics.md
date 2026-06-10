@@ -142,7 +142,7 @@ struct Pair[A, B]
 end
 
 def main
-  let p = Pair.new(42, String.from("hello"))
+  let p = Pair.new(42, "hello")
   puts "#{p.first}"
   puts "#{p.second}"
 end

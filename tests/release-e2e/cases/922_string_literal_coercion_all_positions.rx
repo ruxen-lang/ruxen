@@ -1,0 +1,97 @@
+# Bare string literals coerce to `String` in EVERY position — the invariant
+# that lets us drop `String.from("literal")` everywhere we ship (docs +
+# stdlib). A bare `"x"` coerces to an owned `String` in owned positions and to
+# `&String` in borrow positions; `String.from` is then only for converting a
+# runtime `&String`/`&str` value, never a literal. This pin RUNS and asserts
+# stdout so the coercion can never silently regress (a regression would break
+# the whole swept corpus across the four repos).
+#
+# Positions covered (OWNED direction): function param, struct/class field,
+# static-method arg, Err(...) into Result[T, String], Array[String].push, var
+# reassignment + interpolation, function return, heap String dropped at scope
+# exit. (BORROW direction): bare literal into a `&String` param, into a `&str`
+# param, and as the borrowed `&String` needle of `include?`. The bare literal
+# coerces to whichever the position needs — `""` is owned `String`, and at a
+# call site it also satisfies `&String`/`&str`; `&""` is `&&str` and only the
+# bare form is the idiom for borrow positions.
+
+class Person
+  name: String              # field holds an owned String
+  def init(n: String)       # param is an owned String
+    self.name = n
+  end
+  def greeting -> String    # return position
+    "hi #{self.name}"
+  end
+end
+
+# static method taking a String arg
+def label(s: String) -> String
+  s
+end
+
+# BORROW direction: a bare literal also coerces into a `&String` param and a
+# `&str` param at the call site (`&String` and `&str` are distinct types the
+# compiler bridges as equivalent). Write the BARE literal — `&"lit"` is `&&str`
+# and only works by call-site coercion, so the bare form is the idiom.
+def borrow_string(s: &String) -> USize
+  s.size
+end
+
+def borrow_str(s: &str) -> USize
+  s.size
+end
+
+# Err(literal) into Result[T, String]
+def check(ok: Bool) -> Result[Int, String]
+  if ok
+    Ok(1)
+  else
+    Err("nope")
+  end
+end
+
+def main
+  # param + field (constructor)
+  let p = Person.new("Ada")
+  puts p.greeting
+
+  # static-method arg + return
+  puts label("badge")
+
+  # Array[String].push — a literal lands as a real owned String element.
+  # `.get` returns `Option[&String]`; match it out so we print the String
+  # content (interpolating the Option wrapper itself would print a pointer).
+  var xs: Array[String] = []
+  xs.push("one")
+  xs.push("two")
+  match xs.get(0)
+    Some(a) -> puts "#{a}"
+    nil     -> puts "none"
+  end
+
+  # var reassignment + interpolation
+  var msg = "start"
+  msg = "now #{label("end")}"
+  puts msg
+
+  # Err(literal) into Result[T, String]
+  let r = check(false)
+  match r
+    Ok(n)  -> puts "ok #{n}"
+    Err(e) -> puts "err #{e}"
+  end
+
+  # borrow direction: bare literal into a &String param and a &str param
+  puts "#{borrow_string("abcd")}"
+  puts "#{borrow_str("abc")}"
+
+  # borrowed needle arg: a bare literal coerces to the `&String` needle of
+  # `include?` (the idiom — no leading `&` needed)
+  let hay = "haystack"
+  puts "#{hay.include?("st")}"
+
+  # a heap String local, dropped at scope exit (no leak, no double-free)
+  let owned = "scoped"
+  puts owned
+end

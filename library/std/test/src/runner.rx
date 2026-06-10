@@ -30,9 +30,9 @@ class Runner
     self.pending = 0
     self.name = test_path.clone
     self.report = ""
-    let fmt = match get(&String.from(&"RUXEN_TEST_FORMAT"))
+    let fmt = match get("RUXEN_TEST_FORMAT")
       Ok(v)  -> v
-      Err(_) -> String.from(&"progress")
+      Err(_) -> "progress"
     end
     self.report_mode = match fmt
       "documentation" -> 2

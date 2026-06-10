@@ -28,7 +28,7 @@ class Dog
 end
 
 def main
-  let d = Dog.new(String.from("Rex"))
+  let d = Dog.new("Rex")
   puts d.hello
 end
 ```
@@ -82,7 +82,7 @@ class Bot
 end
 
 def main
-  let b = Bot.new(String.from("Riv"))
+  let b = Bot.new("Riv")
   puts "#{b.greet}"        # Hello, Riv!
 end
 ```
@@ -122,7 +122,7 @@ class Thing
 end
 
 def main
-  let t = Thing.new(String.from("x"))
+  let t = Thing.new("x")
   puts "#{t.a_msg}"
   puts "#{t.b_msg}"
 end
