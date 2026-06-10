@@ -91,3 +91,39 @@ fn borrowed_string_arg_forwards_pointer_and_length() {
     assert!(ok, "non-zero exit; stderr: {stderr}");
     assert_eq!(stdout, expected, "stdout was {stdout:?}");
 }
+
+/// Coverage-gap pin: the `compile_and_run` helper above does NOT run the
+/// borrow checker (Lexer → Parser → typeck → MIR → codegen), so it was blind to
+/// a false-positive E1001 the CLI `ruxen compile` path (which DOES run
+/// `borrow_check`) reported: an owned `String` value passed to a `&String`
+/// parameter (`s.include?(needle)`, `s.find(needle)`, `s.replace(needle, …)`)
+/// is auto-borrowed, not moved — but `check_method_call` only consulted the
+/// argument's own type, treating the owned value as moved and rejecting the
+/// SECOND use of `needle`. This pin runs the full pipeline INCLUDING
+/// `borrow_check` and asserts zero borrow errors, so the gate's CLI path and
+/// the in-process pin can never diverge on this case again.
+#[test]
+fn borrowed_string_arg_passes_borrow_check_with_no_false_move() {
+    let (src, _expected) = case("649_ffi_borrowed_string_arg.rx");
+    let mut lexer = Lexer::new(&src);
+    let tokens = lexer.tokenize().expect("lex");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("parse");
+    let result = typeck::type_check(&program);
+    let type_errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error)
+        .collect();
+    assert!(type_errors.is_empty(), "typecheck errors: {type_errors:?}");
+    let borrow_errors = ruxen_core::borrow_check::borrow_check(&result.program, &result.symbols);
+    assert!(
+        borrow_errors.is_empty(),
+        "borrow checker reported a false move on a borrowed `&String` arg: {}",
+        borrow_errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+}

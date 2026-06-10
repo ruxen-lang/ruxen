@@ -257,6 +257,9 @@ impl<'a> BorrowChecker<'a> {
         // Checkpoint: borrows created for function args are temporary
         let checkpoint = self.borrows.checkpoint();
         let send_required_params = self.lookup_send_required_params(callee_name, args.len());
+        // A value passed to a `&T` / `&var T` parameter is auto-borrowed, not
+        // moved — same reborrow rule as the method-call path.
+        let param_is_ref = self.lookup_param_is_ref(callee_name, args.len());
 
         for (idx, arg) in args.iter().enumerate() {
             self.check_expr(arg);
@@ -271,10 +274,14 @@ impl<'a> BorrowChecker<'a> {
             // If arg is a VarRef and type is Move, record the move.
             // Structs that `derive Copy` are treated as Copy here. A
             // reference-typed arg (`&T`/`&var T`) is an implicit REBORROW,
-            // not a move (Q12) — skip it so the same reference can be passed
-            // to several calls without a false E1001.
+            // not a move (Q12) — checked on both the argument type AND the
+            // declared parameter type (an owned value auto-borrowed into a
+            // `&T` param), so the same value can be passed without a false E1001.
             if let HirExprKind::VarRef(source_id) = &arg.kind {
-                if !self.ty_is_effectively_copy(&arg.ty) && !arg_is_reborrowed_reference(&arg.ty) {
+                if !self.ty_is_effectively_copy(&arg.ty)
+                    && !arg_is_reborrowed_reference(&arg.ty)
+                    && !param_is_ref.get(idx).copied().unwrap_or(false)
+                {
                     self.moves.process_call_move(
                         *source_id,
                         callee_name.to_string(),
@@ -314,6 +321,29 @@ impl<'a> BorrowChecker<'a> {
             required[idx] = ty_has_bound(&param.ty, "Send");
         }
         required
+    }
+
+    /// For each of the callee's first `arg_len` parameters, whether its declared
+    /// type is a reference (`&T` / `&var T`). A value passed to a reference
+    /// parameter is AUTO-BORROWED, not moved, so the borrow checker must not
+    /// flag it as a move (false E1001). Resolved by callee name, like
+    /// `lookup_send_required_params`. (Pin: release-e2e 649_ffi_borrowed_string_arg.)
+    pub(super) fn lookup_param_is_ref(&self, callee_name: &str, arg_len: usize) -> Vec<bool> {
+        let mut is_ref = vec![false; arg_len];
+        let Some(def) = self.symbols.iter().find(|def| {
+            def.name == callee_name
+                && matches!(def.kind, DefKind::Function { .. } | DefKind::Method { .. })
+        }) else {
+            return is_ref;
+        };
+        let signature = match &def.kind {
+            DefKind::Function { signature } | DefKind::Method { signature, .. } => signature,
+            _ => return is_ref,
+        };
+        for (idx, param) in signature.params.iter().enumerate().take(arg_len) {
+            is_ref[idx] = arg_is_reborrowed_reference(&param.ty);
+        }
+        is_ref
     }
 
     pub(super) fn check_send_required_closure(
@@ -381,12 +411,31 @@ impl<'a> BorrowChecker<'a> {
         // Check the object expression
         self.check_expr(object);
 
+        // Whether each of the callee method's parameters is a reference type, so
+        // a value passed to a `&T` / `&var T` parameter is treated as an
+        // AUTO-BORROW, not a move. Resolved by NAME, not by `method_def_id`:
+        // for `lib`-declared / builtin methods the HIR `method` DefId can still
+        // be `UNRESOLVED_DEF` at borrow-check time (it is selected during
+        // typeck without being written back into the node), so a by-DefId
+        // lookup would miss. Without this, `s.include?(needle)` where
+        // `include?(needle: &String)` borrows but `needle` is an owned `String`
+        // value falsely reports `value used after move` (E1001) — the owned
+        // value is auto-referenced to `&String` at the call site, never
+        // consumed. (Pin: release-e2e 649_ffi_borrowed_string_arg + the
+        // borrow-check pin in tests/q29_ffi_borrowed_string.rs.)
+        let param_is_ref = self.lookup_param_is_ref(method_name, args.len());
+
         // Check args
-        for arg in args {
+        for (idx, arg) in args.iter().enumerate() {
             self.check_expr(arg);
-            // Reference-typed args reborrow rather than move (Q12).
+            // Reference-typed args reborrow rather than move (Q12) — checked on
+            // both the ARGUMENT type (`&x` passed directly) and the declared
+            // PARAMETER type (an owned value auto-borrowed into a `&T` param).
             if let HirExprKind::VarRef(source_id) = &arg.kind {
-                if !self.ty_is_effectively_copy(&arg.ty) && !arg_is_reborrowed_reference(&arg.ty) {
+                if !self.ty_is_effectively_copy(&arg.ty)
+                    && !arg_is_reborrowed_reference(&arg.ty)
+                    && !param_is_ref.get(idx).copied().unwrap_or(false)
+                {
                     self.moves.process_call_move(
                         *source_id,
                         method_name.to_string(),

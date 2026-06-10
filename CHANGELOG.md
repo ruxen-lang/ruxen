@@ -31,6 +31,22 @@ once 1.0.0 ships.
     `tests/ruby_block_semantics.rs`, `drop_fixtures.rs::block_capturing_heap_value_runs_soundly`.
 
 ### Fixed
+- **Borrow checker: false `value used after move` (E1001) on an owned value
+  passed to a `&T` / `&var T` parameter.** `check_method_call` / `check_fn_call`
+  decided move-vs-borrow purely from the ARGUMENT's own type, so an owned value
+  auto-borrowed into a reference parameter — `s.include?(needle)` where
+  `include?(needle: &String)` and `needle` is an owned `String` — was recorded as
+  a MOVE, and a second use of the value (`s.find(needle)`) was rejected. The fix
+  also consults the callee's declared PARAMETER type (resolved by name, since the
+  `lib`-declared method's HIR DefId can still be `UNRESOLVED_DEF` at borrow-check
+  time): a value passed to a reference parameter is an auto-borrow, never a move.
+  This was latent — the existing Q29 pin (`tests/q29_ffi_borrowed_string.rs`)
+  validated the fixture through Lexer→Parser→typeck→MIR→codegen but **skipped
+  `borrow_check`**, so it never saw the false positive; the full-pipeline CLI
+  (`ruxen compile`) and the release-e2e harness did. Added a borrow-check pin that
+  runs the full pipeline including `borrow_check` and asserts zero errors, closing
+  the coverage gap. Pin: `tests/release-e2e/cases/649_ffi_borrowed_string_arg` +
+  `borrowed_string_arg_passes_borrow_check_with_no_false_move`.
 - (Q17) A generic **free function bound by a mixin** (`def paint_all[T:
   Paintable](s: &var T, …)`) could not be monomorphized for a SECOND mixin
   implementor: the bound method call inside its body (`s.fill_rect(…)`) mangled
