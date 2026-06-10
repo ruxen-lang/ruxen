@@ -17,9 +17,9 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-30 of 34 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
+31 of 35 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
 feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned; Q28, Q30,
-Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; **Q34 NEW 2026-06-10**). The
+Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 + Q35 NEW 2026-06-10**). The
 canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
 (canvas 143 green, sub-pixel pinned, live windowed loop verified).
 
@@ -32,6 +32,13 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       `dev/gui-stack-v1-issues.md` §Q34. Until then: do NOT bulk-run `ruxen fmt`
       on the GUI repos.
 
+- [ ] **Q35 · S3 — a STRUCT's `include <Mixin>` does not satisfy a generic's
+      mixin bound (E1015).** Even a single struct implementor is rejected by a
+      mixin-bounded generic; the identical class works (Q17's 655 fixture runs
+      on the installed CLI). Orthogonal to Q17 — typeck's bound-satisfaction
+      registry records `include` only for classes. Clean diagnostic, nothing in
+      the GUI stack blocked (PaintSurface implementors are classes). Repro:
+      `tmp/test-cache/q35-struct-include-bound-repro.rx`; details §Q35.
 - [x] **Q32 · S3 — Q16 flat-merge of an FFI dependency broke `ruxen test` at
       link (FIXED 2026-06-10).** A consumer's test EXECUTABLE flat-merged the
       FFI dep's `src/**.rx` (incl. `lib "C"`-calling bodies) but neither

@@ -1426,6 +1426,47 @@ round-trip cases over mixed +/− and ×/÷ groupings AND an idempotence check
 standing guidance holds: **do not bulk-run `ruxen fmt` on the GUI repos** —
 both 2026-06-09 agents and the 2026-06-10 one were bitten.
 
+## Q35 · S3 — a STRUCT's `include <Mixin>` does not satisfy a generic's mixin bound  ⏳ OPEN (NEW 2026-06-10)
+
+Found 2026-06-10 while independently verifying Q17 on the installed toolchain.
+A struct that `include`s a mixin is rejected by the generic bound-satisfaction
+check (E1015) when passed to a mixin-bounded generic — even as the ONLY
+implementor, so this is orthogonal to Q17's per-implementor monomorphization
+(which is class-proven: the 655 fixture runs `dep=20 mine=9` on the installed
+CLI). Classes with the identical `include` + method bodies work.
+
+```ruxen
+mixin Paintable
+  def fill_rect(w: Int, h: Int) -> Int
+end
+
+def paint_all[T: Paintable](s: &var T, w: Int, h: Int) -> Int
+  s.fill_rect(w, h)
+end
+
+struct OnlyOne          # ← struct, not class
+  include Paintable
+  tag: Int
+  def fill_rect(w: Int, h: Int) -> Int
+    w * h + self.tag
+  end
+end
+
+def main
+  var s = OnlyOne.new(1)
+  puts "one=#{paint_all(&var s, 4, 5)}"   # E1015: `OnlyOne` does not satisfy `Paintable`
+end
+```
+
+Repro: `tmp/test-cache/q35-struct-include-bound-repro.rx`. Likely typeck's
+implementor registry records `include` only for classes (struct includes DO
+work for direct method calls and for `Send`-style marker mixins — quiver's
+ListModel relies on that — so the gap is specifically the generic-bound
+satisfaction path). S3: clean diagnostic, no silent miscompile, and no GUI-stack
+code is blocked (quiver's PaintSurface implementors are classes). Fix when
+touching typeck satisfaction next; pin with struct-implementor variants of the
+655/658 e2e cases.
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:
