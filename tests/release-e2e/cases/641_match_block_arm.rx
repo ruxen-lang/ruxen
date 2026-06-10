@@ -7,9 +7,9 @@
 def describe(n: Int) -> String
   match n
     0 -> do
-      let label = String.from("zero")
-      let suffix = String.from("!")
-      String.from("#{label}#{suffix}")
+      let label = "zero"
+      let suffix = "!"
+      "#{label}#{suffix}"
     end
     _ -> "other"
   end

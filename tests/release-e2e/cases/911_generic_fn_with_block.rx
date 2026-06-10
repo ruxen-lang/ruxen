@@ -9,11 +9,11 @@ end
 class Dog
   name: String
   def init
-    self.name = String.from("rex")
+    self.name = "rex"
   end
   include Speak
   def speak -> String
-    String.from("woof")
+    "woof"
   end
 end
 

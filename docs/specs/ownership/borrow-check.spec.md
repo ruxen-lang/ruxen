@@ -26,7 +26,7 @@ must keep this program accepted.
 ## B2 — Use-after-move on `String` argument is rejected
 
 **Given** a function `f(s: String)` that takes ownership of `s`, and
-a caller `let x = String.from("hi"); f(x); f(x);`
+a caller `let x = "hi"; f(x); f(x);`
 **Then** the second `f(x)` is rejected as use-after-move.
 
 (Same behaviour applies to any non-`Copy` owned type — `Array`,

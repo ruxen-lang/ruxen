@@ -2,8 +2,8 @@
 def main
   let err = stderr()
   let tag = match err.write_str("oops")
-    Ok(_)  -> String.from("!")
-    Err(_) -> String.from("?")
+    Ok(_)  -> "!"
+    Err(_) -> "?"
   end
   err.eprint(tag)
 end

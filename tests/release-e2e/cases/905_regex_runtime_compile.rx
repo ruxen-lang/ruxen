@@ -1,5 +1,5 @@
 def main
-  match Regex.new(String.from("\\d+"), String.from(""))
+  match Regex.new("\\d+", "")
     Ok(_)  -> puts "ok"
     Err(_) -> puts "err"
   end

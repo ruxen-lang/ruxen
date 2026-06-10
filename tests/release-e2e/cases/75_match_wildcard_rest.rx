@@ -9,6 +9,6 @@ def just_name(u: User) -> String
 end
 
 def main
-  let u = User.Person(name: String.from("Alice"), age: 30, city: String.from("NYC"))
+  let u = User.Person(name: "Alice", age: 30, city: "NYC")
   puts "#{just_name(u)}"
 end

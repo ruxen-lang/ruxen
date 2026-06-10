@@ -26,7 +26,7 @@ class Thing
 end
 
 def main
-  let t = Thing.new(String.from("x"))
+  let t = Thing.new("x")
   puts "#{t.a_msg}"
   puts "#{t.b_msg}"
 end

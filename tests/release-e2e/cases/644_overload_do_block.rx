@@ -17,7 +17,7 @@ def main
   var c = Col.new
   c.text("Counter")
   c.text do
-    String.from("computed")
+    "computed"
   end
   puts "labels=#{c.labels.size} computes=#{c.computes.size}"
   if let Some(f) = c.computes.get(0)

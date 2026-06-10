@@ -1,5 +1,5 @@
 def main
-  var s = String.from("hi")
+  var s = "hi"
   s.push('!')
   let _len = s.size
 end

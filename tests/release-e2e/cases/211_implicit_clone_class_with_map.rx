@@ -15,8 +15,8 @@ end
 
 def main
   var b1 = Box.new
-  b1.data.insert(String.from("alpha"), 10)
-  b1.data.insert(String.from("beta"), 20)
+  b1.data.insert("alpha", 10)
+  b1.data.insert("beta", 20)
 
   let b2 = b1.clone
 
@@ -26,11 +26,11 @@ def main
   # produces a working Hash (right len, lookups succeed) — not deep-
   # clone semantics, which Vec / Hash share as a v1 ceiling.
   puts "clone_len=#{b2.data.size}"
-  match b2.data.get(String.from("alpha"))
+  match b2.data.get("alpha")
     Some(v) -> puts "alpha=#{v}"
     nil     -> puts "alpha=MISSING"
   end
-  match b2.data.get(String.from("beta"))
+  match b2.data.get("beta")
     Some(v) -> puts "beta=#{v}"
     nil     -> puts "beta=MISSING"
   end

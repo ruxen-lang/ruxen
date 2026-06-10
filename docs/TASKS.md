@@ -195,6 +195,41 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       Fixed by deciding the synthetic `__block` LOCALLY from each function's own
       body (`resolve/funcs.rs`; the name map deleted). Not a distinct open issue.
       Pin: release-e2e 920. Verified: quiver examples build again.
+- [x] **Q38 · S4 — a `String` local from a BARE LITERAL was not freed at scope
+      exit (leaked); `String.from("x")` was freed (FIXED 2026-06-10).** Surfaced
+      sweeping `String.from("literal")` → `"literal"`; the user requires `""` to
+      behave identically to `String.from`. ROOT CAUSE was type inference, not
+      drop analysis: an un-annotated `let s = "x"` adopted the literal's resolver
+      type `Ty::Str` (`&str`), so the local was `&str`-typed even though MIR
+      lowers the literal to an owned `String` via `ruxen_string_from` — and the
+      drop filter only frees `Ty::String`, so the heap copy leaked. FIXED in
+      typeck (`infer/mod.rs::promote_bare_string_literal_binding`): an
+      unconstrained `let` bound to a bare `StringLiteral` now binds `Ty::String`.
+      Narrow (explicit `let s: &str = "x"` and call-site coercions untouched).
+      The whole `.rx` corpus's `String.from("literal")` (incl. the `drop_fixtures`
+      String pins) is now swept to bare literals. Pins:
+      `drop_fixtures.rs::string_local_is_freed_on_scope_exit`,
+      `string_literal_wrap.rs::bare_string_literal_let_binds_owned_string`.
+      Details §Q38.
+- [ ] **`&str` removal — collapse the string-borrow type to `&String` only
+      (NEW 2026-06-10, user-requested; take after the Q38 leak fix).** The user
+      asks: why two string types (`String` owned + `Str`/`&str` borrow)? Target
+      model — ONE owned type `String`, and its borrow `&String`; remove the
+      distinct `Ty::Str` (`&str`) primitive. Today `Ty::Str` is a separate
+      variant (`hir/types.rs:280`) that the unifier already bridges to `&String`
+      (`unify.rs:380`: `(Ref(String), Str)` equal); string literals are born
+      `Ty::Str` (`resolve/exprs.rs:39`); `&str`-headed methods mangle
+      `&str_<m>`. Scope to map before doing: (1) resolver — literals born as
+      owned `String` (the Q38 promotion already does this for un-annotated
+      `let`); (2) `resolve_type_expr` — accept `&str` spelling as sugar for
+      `&String` (back-compat) or migrate annotations; (3) method homes — fold
+      `&str`/`Str` method set into `String`/`&String` (`mixins.rs::method_home_key`
+      maps `Str→…`); (4) FFI ABI — a Ruxen `String` is a bare `char*` (no length
+      header, `ruby-block`/Q29 facts), so `&str` and `&String` are the SAME
+      representation at the boundary — the collapse is representationally free,
+      it's a type-system + method-home consolidation. (5) sweep `let x: &str`
+      annotations + `&"lit"` idioms; update tutorial 29's `String` vs `&str` box.
+      Sizeable but mechanical; pin the parity + full corpus. Design doc first.
 - [x] **Q32 · S3 — Q16 flat-merge of an FFI dependency broke `ruxen test` at
       link (FIXED 2026-06-10).** A consumer's test EXECUTABLE flat-merged the
       FFI dep's `src/**.rx` (incl. `lib "C"`-calling bodies) but neither

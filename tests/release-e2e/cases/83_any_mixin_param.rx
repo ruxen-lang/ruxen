@@ -20,6 +20,6 @@ def print_any(x: &any Showable)
 end
 
 def main
-  let t = Tag.new(String.from("any"))
+  let t = Tag.new("any")
   print_any(&t)
 end

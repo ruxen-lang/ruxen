@@ -753,10 +753,12 @@ fn tracker_reports_balanced_allocs_for_dropped_locals() {
  * Either failure mode is a valid red.
  * ────────────────────────────────────────────────────────────────── */
 
-/// A `String` local bound from `String.from(...)` must be freed by
-/// scope-exit drop. Currently the drop-elaboration filter excludes
-/// `Ty::String` so the underlying `malloc` from `ruxen_string_from`
-/// leaks through to process exit. (P0.7)
+/// A `String` local bound from a BARE STRING LITERAL must be freed by
+/// scope-exit drop, identically to one bound from `String.from(...)`. The
+/// fixture is `let s = "hello"` (no `String.from`): an un-annotated `let` on a
+/// bare literal now binds an owned `String` (typeck `promote_bare_string_
+/// literal_binding`), so the implicit `ruxen_string_from` heap copy is
+/// drop-elaborated instead of leaking (ledger Q38). (P0.7)
 #[test]
 fn string_local_is_freed_on_scope_exit() {
     let source = rx("p07_string_local_drop_source");

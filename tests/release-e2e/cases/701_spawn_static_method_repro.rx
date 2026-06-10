@@ -13,11 +13,14 @@
 ## verifier mismatched-argument-count error.
 ##
 ## We exercise the static-method-with-args path twice:
-##   1. `Thread.spawn_raw(closure)` — Int  → Int
-##   2. `String.from("42")`         — &str → String
-## Both `def self.X(arg)` shapes; the first is the actual repro
-## subject, the second is the print payload (also a stdlib static
-## method with one arg, kept for redundant coverage).
+##   1. `Thread.spawn_raw(closure)` — Int      → Int
+##   2. `String.from(&owned)`       — &String  → String
+## Both are `def self.X(arg)` shapes; the first is the actual repro subject, the
+## second is redundant coverage. Note `String.from` takes a `&String` BORROW and
+## returns a fresh owned `String` — that is its only job (copying a borrow). A
+## bare literal `"42"` is ALREADY an owned `String`, so it never needs
+## `String.from`; here `owned` is a real `String` value and we pass a borrow of
+## it (`&owned`).
 
 def main
   let closure = { || 42 }
@@ -25,6 +28,7 @@ def main
   if handle == 0
     puts "spawn returned null"
   else
-    puts String.from("42")
+    let owned = "42"
+    puts String.from(&owned)
   end
 end

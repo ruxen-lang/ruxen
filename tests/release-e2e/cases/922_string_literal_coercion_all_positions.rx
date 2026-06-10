@@ -42,12 +42,16 @@ def borrow_str(s: &str) -> USize
   s.size
 end
 
-# Err(literal) into Result[T, String]
-def check(ok: Bool) -> Result[Int, String]
-  if ok
-    Ok(1)
-  else
+# Err(literal) into Result[T, String]. The Ok branch is `Ok(a / b)` (NOT a
+# concrete `Ok(1)`) on purpose: that inference order is what exposes the
+# `Err("literal")` → `Result[_, String]` payload-coercion gap — without the
+# typeck fix, `Err("nope")` builds `Result[Int, &str]` and fails to unify with
+# the declared `Result[Int, String]`.
+def check(a: Int, b: Int) -> Result[Int, String]
+  if b == 0
     Err("nope")
+  else
+    Ok(a / b)
   end
 end
 
@@ -76,7 +80,7 @@ def main
   puts msg
 
   # Err(literal) into Result[T, String]
-  let r = check(false)
+  let r = check(1, 0)
   match r
     Ok(n)  -> puts "ok #{n}"
     Err(e) -> puts "err #{e}"

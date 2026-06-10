@@ -52,22 +52,26 @@ let owned: String  = "hello"              # owned, heap-allocated
 
 Interpolation (`"hi #{name}"`) always allocates a `String` — the result is owned, not a slice into the source code.
 
-> **The string-literal model — write the bare literal, let it coerce.**
+> **The string model — one owned type, one borrow.**
 >
 > - **`"text"`** is an **owned `String`** (heap-allocated, dropped at end of
->   scope). In a *value* position that's exactly what you get; at a *call site*
->   the same bare literal also coerces to a `&String` or `&str` parameter, so
->   you write `"text"` everywhere and the position decides.
-> - **`&"text"`** is a **borrow of the literal** — its type is `&&str`, *not*
->   `&String`. It works at a call site through the same coercion, but
->   `let s: &String = &"text"` is rejected. So **prefer the bare `"text"`**; the
->   leading `&` buys you nothing and is the wrong type when annotated.
-> - **`&String` and `&str`** are two distinct borrow types the compiler treats
->   as interchangeable (it bridges them in unification), so a `&String`
->   argument satisfies a `&str` parameter and vice-versa.
-> - **`String.from(x)`** is *only* for copying a **runtime** `&String`/`&str`
->   value `x` into a fresh owned `String` (when you need to keep it past the
->   borrow). It is never needed on a literal — `"text"` is already owned.
+>   scope) — not a borrow. Bind it (`let s = "text"`) and you own a `String`; at
+>   a *call site* it also coerces to a `&String` parameter, so you write
+>   `"text"` everywhere and the position decides whether it's the owned value or
+>   a borrow of it.
+> - **`&someString`** is the **borrow**: `&String`. That is the borrowed form of
+>   a string — a reference to a `String` you (or someone) owns.
+> - **Don't write `&"text"`.** A leading `&` on a literal does not give you a
+>   nice `&String`; prefer the bare `"text"` (owned) and let the call site
+>   borrow it, or take `&someString` of a named value.
+> - **`String.from(b)`** copies a **runtime `&String` borrow** `b` into a fresh
+>   owned `String` (when you need to keep it past the borrow). That is its only
+>   job — it is **never** needed on a literal, because `"text"` is already an
+>   owned `String`.
+>
+> *(Historical note: an older `&str` borrowed-slice type still exists and the
+> compiler treats it as interchangeable with `&String`; it is being folded into
+> `&String` so there is just one owned `String` and one borrow `&String`.)*
 
 ## 3. Building a `String`
 
@@ -275,7 +279,7 @@ A cast that doesn't fit (e.g. `300 as UInt8`) truncates by masking — it never 
 ## Recap
 
 - **`String`** owns its memory and is mutable; **`&str`** is a cheap borrow you can pass around.
-- A bare literal `"text"` is already an owned `String`; build also with `String.new`, `String.with_capacity`, interpolation, or `.repeat`. `String.from(x)` is only for copying a *runtime* `&String`/`&str` into an owned `String`.
+- A bare literal `"text"` is already an owned `String`; build also with `String.new`, `String.with_capacity`, interpolation, or `.repeat`. `String.from(b)` is only for copying a *runtime* `&String` borrow `b` into a fresh owned `String` — never needed on a literal (a literal is already owned).
 - Bytes live in `Array[UInt8]`; convert with `.into_bytes` and `String.from_utf8`.
 - Numbers come in sized signed / unsigned integers, two float widths, and pointer-width `USize` / `ISize`.
 - `as` is the only numeric conversion form — no implicit coercion.

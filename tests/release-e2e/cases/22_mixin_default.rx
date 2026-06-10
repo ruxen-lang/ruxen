@@ -19,6 +19,6 @@ class Person
 end
 
 def main
-  let p = Person.new(String.from("Alice"))
+  let p = Person.new("Alice")
   puts p.greet
 end

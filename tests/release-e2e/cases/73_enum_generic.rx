@@ -6,7 +6,7 @@ end
 def describe(o: MyOpt[Int]) -> String
   match o
     MyOpt.Has(n)  -> "some #{n}"
-    MyOpt.Empty   -> String.from("none")
+    MyOpt.Empty   -> "none"
   end
 end
 

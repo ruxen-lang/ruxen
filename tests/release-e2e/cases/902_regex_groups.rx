@@ -1,5 +1,5 @@
 def main
-  let line = String.from("code=42 name=ok")
+  let line = "code=42 name=ok"
   match /code=(\d+) name=(\w+)/.find(line)
     Some(m) ->
       match m.group(1)

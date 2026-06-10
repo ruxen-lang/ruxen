@@ -3,11 +3,54 @@
 //! later `String::drop` -> `free()` cannot double-free a pointer into
 //! `.rodata`. The wrap lives in `mir/lower.rs::emit_owned_string_literal`.
 
+use ruxen_core::hir::types::Ty;
 use ruxen_core::lexer::Lexer;
 use ruxen_core::mir::lower::Lowerer;
 use ruxen_core::mir::nodes::MirInst;
 use ruxen_core::parser::Parser;
 use ruxen_core::typeck;
+
+/// The MIR-local type of the `let s = …` binding named `s` in `main`.
+fn s_local_ty(source: &str) -> Ty {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize().expect("lex");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("parse");
+    let result = typeck::type_check(&program);
+    let mut lowerer = Lowerer::new(&result.symbols);
+    let mir = lowerer.lower_program(&result.program).expect("lower");
+    let main = mir.functions.iter().find(|f| f.name == "main").expect("main");
+    main.locals
+        .iter()
+        .find(|l| l.name == "s")
+        .map(|l| l.ty.clone())
+        .expect("local s")
+}
+
+/// An UN-annotated `let s = "x"` binds an OWNED `String` (so it drops at scope
+/// exit, no leak — ledger Q38), identical to `let s = String.from("x")`. An
+/// explicit `let s: &str = "x"` keeps the borrow type untouched.
+#[test]
+fn bare_string_literal_let_binds_owned_string() {
+    assert_eq!(
+        s_local_ty("def main\n  let s = \"hello\"\n  let _l = s.size\nend\n"),
+        Ty::String,
+        "an un-annotated `let s = \"...\"` must bind an owned String (else it leaks)"
+    );
+    assert_eq!(
+        s_local_ty("def main\n  let s = String.from(\"hello\")\n  let _l = s.size\nend\n"),
+        Ty::String,
+        "String.from binding stays String (control)"
+    );
+    // Explicit &str annotation is left as a borrow (not promoted).
+    assert!(
+        !matches!(
+            s_local_ty("def main\n  let s: &str = \"hello\"\n  let _l = s.size\nend\n"),
+            Ty::String
+        ),
+        "an explicit `let s: &str` annotation must NOT be promoted to String"
+    );
+}
 
 fn rx(name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -106,11 +149,11 @@ end
 def borrow_str(s: &str) -> USize
   s.size
 end
-def check(ok: Bool) -> Result[Int, String]
-  if ok
-    Ok(1)
-  else
+def check(a: Int, b: Int) -> Result[Int, String]
+  if b == 0
     Err("nope")
+  else
+    Ok(a / b)
   end
 end
 def main
@@ -122,7 +165,7 @@ def main
   var msg = "start"
   msg = "now #{label("end")}"
   puts msg
-  let _ = check(false)
+  let _ = check(1, 0)
   # BORROW direction: a bare literal also coerces into &String and &str params,
   # and to the borrowed `&String` needle of `include?` (no leading `&` needed).
   let _b1 = borrow_string("abcd")

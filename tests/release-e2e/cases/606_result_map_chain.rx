@@ -1,6 +1,6 @@
 def divide(a: Int, b: Int) -> Result[Int, String]
   if b == 0
-    Err(String.from("divide by zero"))
+    Err("divide by zero")
   else
     Ok(a / b)
   end
@@ -17,7 +17,7 @@ def main
     Ok(v)  -> puts "ok #{v}"
     Err(e) -> puts "err #{e}"
   end
-  let m = divide(5, 0).map_err { |e| String.from("wrapped") }
+  let m = divide(5, 0).map_err { |e| "wrapped" }
   match m
     Ok(v)  -> puts "ok #{v}"
     Err(e) -> puts "err #{e}"

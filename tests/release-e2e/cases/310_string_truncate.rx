@@ -1,5 +1,5 @@
 def main
-  var s = String.from("hello world")
+  var s = "hello world"
   s.truncate(5)
   puts "len=#{s.size}"
   puts s

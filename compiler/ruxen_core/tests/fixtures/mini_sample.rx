@@ -40,7 +40,7 @@ def create_task_from_input(
   priority_str: &str
 ) -> Result[Int, TodoError]
   if title == ""
-    return Err(TodoError.MissingField(name: String.from("title")))
+    return Err(TodoError.MissingField(name: "title"))
   end
   let id = 1
   Ok(id)

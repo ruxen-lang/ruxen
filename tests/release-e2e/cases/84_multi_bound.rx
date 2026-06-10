@@ -31,6 +31,6 @@ def show[T: Showable + Tagged](x: &T)
 end
 
 def main
-  let i = Item.new(String.from("one"))
+  let i = Item.new("one")
   show(&i)
 end

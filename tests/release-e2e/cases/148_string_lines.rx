@@ -1,5 +1,5 @@
 def main
-  let s = String.from("alpha\nbeta\ngamma")
+  let s = "alpha\nbeta\ngamma"
   for line in s.lines
     puts line
   end

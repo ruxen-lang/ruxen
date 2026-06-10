@@ -9,6 +9,6 @@ end
 alias hail greet
 
 def main
-  puts greet(String.from("a"))
-  puts hail(String.from("b"))
+  puts greet("a")
+  puts hail("b")
 end

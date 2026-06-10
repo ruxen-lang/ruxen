@@ -341,7 +341,7 @@ def consume(s: String)
 end
 
 def main()
-  let name = String.from("Ruxen")
+  let name = "Ruxen"
   consume(name)   # `name` moved into `consume`
   puts name        # ERROR: `name` was moved on the previous line
 end
@@ -364,7 +364,7 @@ def consume(s: &String)     # borrow, not own
   puts s
 end
 
-let name = String.from("Ruxen")
+let name = "Ruxen"
 consume(&name)               # pass a borrow
 puts name                    # still valid
 ```
@@ -379,9 +379,9 @@ puts name
 ### 3. Reinitialize the binding
 
 ```rx
-var name = String.from("Ruxen")
+var name = "Ruxen"
 consume(name)
-name = String.from("reused")  # new value in the same variable
+name = "reused"  # new value in the same variable
 puts name
 ```
 
@@ -442,7 +442,7 @@ mod.rs:58-70`). Upgrade to a rustc-alike multi-line format:
 error[E1001]: value used after move
   --> src/main.rx:9:8
    |
- 7 | let name = String.from("Ruxen")
+ 7 | let name = "Ruxen"
    |     ---- value created here
  8 | consume(name)
    |         ---- value given to `consume()` here

@@ -10,17 +10,21 @@
 # instead of the data (the OLD ledger claim that forced canvas's
 # `measure_text_n_raw(n: Int)` fallback), these would mismatch. They don't — the
 # borrowed `&String` carries the real bytes + length across the boundary.
+#
+# The locals + needle arguments are BARE string literals (no `String.from`): a
+# bare literal is an owned `String`, and coerces to the `&String` needle at the
+# call site — which is exactly the borrowed-`&String` path under test.
 def main
-  let s = String.from("hello, sub-pixel world")
-  let needle = String.from("sub-pixel")     # borrowed into include?/find/replace
+  let s = "hello, sub-pixel world"
+  let needle = "sub-pixel"     # borrowed into include?/find/replace
   puts "len=#{s.size}"
   puts "has=#{s.include?(needle)}"           # strstr over the borrowed needle
-  puts "starts=#{s.starts_with(String.from("hello"))}"
-  puts "missing=#{s.include?(String.from("zzz"))}"
+  puts "starts=#{s.starts_with("hello")}"
+  puts "missing=#{s.include?("zzz")}"
   match s.find(needle)
     Some(i) -> puts "at=#{i}"                # byte index — length/offset sensitive
     nil     -> puts "at=none"
   end
-  let r = s.replace(needle, String.from("WHOLE"))
+  let r = s.replace(needle, "WHOLE")
   puts "rep=#{r}"
 end

@@ -10,7 +10,7 @@
 class Doc
   out: String
   def init
-    self.out = String.from("")
+    self.out = ""
   end
   def line(s: &str) -> nil
     self.out = "#{self.out}#{s};"

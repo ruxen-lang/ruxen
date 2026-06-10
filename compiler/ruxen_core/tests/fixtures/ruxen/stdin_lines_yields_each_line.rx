@@ -2,7 +2,7 @@
 def unwrap_line(r: Result[String, IoError]) -> String
   match r
     Ok(line) -> line
-    Err(_)   -> String.from("ERR")
+    Err(_)   -> "ERR"
   end
 end
 

@@ -1,5 +1,5 @@
 def main
-  let s = String.from("error: 42")
+  let s = "error: 42"
   if s ~= /error/
     puts "matched"
   else

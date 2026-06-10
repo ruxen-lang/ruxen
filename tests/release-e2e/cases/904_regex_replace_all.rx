@@ -1,5 +1,5 @@
 def main
-  let text = String.from("foo bar baz")
-  let out = /\w+/.replace_all(text, String.from("***"))
+  let text = "foo bar baz"
+  let out = /\w+/.replace_all(text, "***")
   puts out
 end

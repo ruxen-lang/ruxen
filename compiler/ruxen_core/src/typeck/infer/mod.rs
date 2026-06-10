@@ -389,6 +389,19 @@ impl<'a> InferenceEngine<'a> {
                     // the RHS in `Option::Some` automatically. Pin:
                     // docs/specs/syntax/option-no-some.spec.md.
                     self.auto_wrap_option_some(ty, val);
+                    // Owned-string-literal binding: an UN-annotated `let` bound
+                    // to a bare string literal must bind an owned `String`, not
+                    // `&str`. The resolver types a literal `Ty::Str`, but MIR
+                    // lowers it through `ruxen_string_from` to a heap-owned
+                    // `String` (P0.7 wrap); leaving the binding `&str` excludes
+                    // it from drop elaboration (drop filter only frees
+                    // `Ty::String`), so the heap copy LEAKS. Binding it `String`
+                    // makes `let s = "x"` behave identically to
+                    // `let s = String.from("x")` / `let s: String = "x"` (owned,
+                    // dropped at scope exit). Only fires when the slot is
+                    // unconstrained (no annotation) so `let s: &str = "x"` and
+                    // every coercion-at-call-site path are untouched.
+                    self.promote_bare_string_literal_binding(ty, val);
                     let val_ty = self.ctx.resolve(&val.ty);
                     if let Err(e) = self.unify_or_coerce(ty, &val_ty, &val.span) {
                         self.type_error(e);
@@ -606,6 +619,27 @@ impl<'a> InferenceEngine<'a> {
     /// Function arguments are NOT yet rewritten here — callers
     /// should write `Some(x)` explicitly at call sites for now;
     /// sweep planned.
+    /// Promote an un-annotated `let` bound to a bare string literal to an owned
+    /// `String` binding. The resolver types a string literal `Ty::Str`; MIR
+    /// then lowers it through `ruxen_string_from` to a heap-owned `String`. If
+    /// the binding keeps the `&str` type, drop elaboration (which only frees
+    /// `Ty::String`) skips it and the heap copy leaks. Binding `String` makes
+    /// `let s = "x"` own + drop exactly like `let s = String.from("x")`.
+    ///
+    /// Fires ONLY when the binding slot is unconstrained — `expected` is an
+    /// unresolved `Infer` var (no annotation, nothing else has pinned it) — and
+    /// `val` is a bare `StringLiteral`. An explicit `let s: &str = "x"` keeps
+    /// `expected = Ty::Str` (not Infer) and is left alone, as is every
+    /// call-site/argument coercion path (those don't run through here).
+    pub(super) fn promote_bare_string_literal_binding(&mut self, expected: &Ty, val: &mut HirExpr) {
+        if !self.ctx.resolve(expected).is_infer() {
+            return;
+        }
+        if matches!(val.kind, HirExprKind::StringLiteral(_)) {
+            val.ty = Ty::String;
+        }
+    }
+
     pub(super) fn auto_wrap_option_some(&mut self, expected: &Ty, val: &mut HirExpr) {
         let expected_resolved = self.ctx.resolve(expected);
         let inner = match &expected_resolved {

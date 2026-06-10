@@ -3,8 +3,8 @@ struct Tag
 end
 
 def main
-  var a = Tag.new(String.from("first"))
+  var a = Tag.new("first")
   let b = a.clone
-  a = Tag.new(String.from("second"))
+  a = Tag.new("second")
   puts "a=#{a.name};b=#{b.name}"
 end

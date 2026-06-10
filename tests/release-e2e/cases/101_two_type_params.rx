@@ -15,7 +15,7 @@ class Pair[A, B]
 end
 
 def main
-  let p = Pair[Int, String].new(42, String.from("hi"))
+  let p = Pair[Int, String].new(42, "hi")
   puts "#{p.first_ref}"
   puts "#{p.second_ref}"
 end

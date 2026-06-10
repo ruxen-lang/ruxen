@@ -1156,18 +1156,43 @@ impl<'a> InferenceEngine<'a> {
                             expr.ty = Ty::Result(Box::new(ok_ty), Box::new(err_ty));
                         }
                         "Err" => {
-                            let err_ty = fields
-                                .first()
-                                .map(|(_, e)| self.ctx.resolve(&e.ty))
-                                .unwrap_or(Ty::Error);
-                            // Try to get the ok type from the function return type
-                            let ok_ty = self
+                            // The expected (Ok, Err) types from the enclosing
+                            // function's `-> Result[O, E]` return, when present.
+                            let (expected_ok, expected_err) = self
                                 .current_return_ty
                                 .as_ref()
                                 .and_then(|ret| match ret {
-                                    Ty::Result(ok, _) => Some(*ok.clone()),
+                                    Ty::Result(ok, err) => {
+                                        Some((Some(*ok.clone()), Some(*err.clone())))
+                                    }
                                     _ => None,
                                 })
+                                .unwrap_or((None, None));
+                            let mut err_ty = fields
+                                .first()
+                                .map(|(_, e)| self.ctx.resolve(&e.ty))
+                                .unwrap_or(Ty::Error);
+                            // Coerce a bare string-literal error payload (`&str`)
+                            // to the expected `String` error type: `Err("msg")`
+                            // in a `-> Result[T, String]` fn must build
+                            // `Result[T, String]`, not `Result[T, &str]` (which
+                            // then fails to unify with the declared return). The
+                            // literal lowers through `ruxen_string_from` to an
+                            // owned String anyway, so this matches codegen and
+                            // makes `Err("msg")` work without `String.from`.
+                            // Mirror the field expr's type so the constructor
+                            // arg lowers as a String.
+                            if matches!(expected_err, Some(Ty::String))
+                                && matches!(err_ty, Ty::Str | Ty::Ref(_))
+                            {
+                                if let Some((_, e)) = fields.first_mut() {
+                                    if matches!(e.kind, HirExprKind::StringLiteral(_)) {
+                                        e.ty = Ty::String;
+                                        err_ty = Ty::String;
+                                    }
+                                }
+                            }
+                            let ok_ty = expected_ok
                                 .unwrap_or_else(|| self.ctx.fresh_type_var());
                             expr.ty = Ty::Result(Box::new(ok_ty), Box::new(err_ty));
                         }

@@ -20,6 +20,6 @@ def print_it(x: &some Showable)
 end
 
 def main
-  let t = Tag.new(String.from("hi"))
+  let t = Tag.new("hi")
   print_it(&t)
 end

@@ -1587,6 +1587,50 @@ unrelated generic free fn `frame`, both called, compiled + run). Verified: the
 quiver counter example builds again (`canvas`/`quiver`/`counter` pieces compile
 clean) with the fixed compiler.
 
+## Q38 · S4 — a `String` local bound from a BARE LITERAL was not freed at scope exit (leaked)  ✅ FIXED 2026-06-10
+
+Found 2026-06-10 while sweeping `String.from("literal")` → `"literal"` across all
+shipped `.rx`. A `String` local bound from `String.from("x")` was drop-elaborated
+and freed at scope exit, but the SAME local bound from a bare literal `"x"` was
+NOT — it leaked to process exit.
+
+```ruxen
+def main
+  let s = "hello"      # bare literal: WAS &str-typed → not dropped → leak
+  let _len = s.size
+end
+# before: string_frees=0, raw_outstanding=1
+# after : string_frees>=1, outstanding=0  (identical to String.from("hello"))
+```
+
+**ROOT CAUSE (confirmed in MIR).** Not a drop-analysis bug — a TYPE-INFERENCE
+one. The resolver types a string literal `Ty::Str` (`resolve/exprs.rs`), and an
+un-annotated `let s = "x"` adopted that, so the local `s` was typed `&str`. MIR
+still lowers the literal through `ruxen_string_from` to a heap-owned `String`
+(the P0.7 owned-literal wrap), but the drop filter (`drops.rs`) only frees
+`Ty::String` locals — a `&str`-typed local holding an owned heap copy is skipped
+→ leak. (`s.size` also dispatched to `&str_size` instead of `String_size`.)
+`String.from("x")` and `let s: String = "x"` both forced `s: String`, so they
+were freed; the bare un-annotated form was the gap. S4 (leak only; no
+double-free / UAF / wrong value). Pre-existing; surfaced by the sweep.
+
+**FIX (`feat/drop-elaboration`).** Typeck `infer/mod.rs::
+promote_bare_string_literal_binding` (run in the `HirStatement::Let` arm, next
+to the `auto_wrap_option_some` / `auto_call_fn_reference` sugar): when the
+binding slot is unconstrained (annotation is an unresolved `Infer` var) and the
+initializer is a bare `StringLiteral`, bind the local `Ty::String` (owned). So
+`let s = "x"` now owns + drops exactly like `let s = String.from("x")`. Narrowly
+scoped: an explicit `let s: &str = "x"` keeps the borrow (slot not `Infer`), and
+every call-site/argument coercion path is untouched (literals still coerce to
+`&str`/`&String` params). All `String.from("literal")` across the shipped `.rx`
+corpus (tutorials, stdlib, release-e2e cases, fixtures, src fixtures) are now
+swept to bare literals — including the `drop_fixtures.rs` String drop pins, which
+this fix lets stay green on the bare form. Pins:
+`drop_fixtures.rs::string_local_is_freed_on_scope_exit` (fixture is now
+`let s = "hello"`, asserts `outstanding==0`, `string_frees>=1`),
+`string_literal_wrap.rs::bare_string_literal_let_binds_owned_string` (type
+promotion + the `&str`-annotation-untouched negative).
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:

@@ -27,10 +27,10 @@ enum Priority
 
   def to_display -> String
     match self
-      Priority.Low      -> String.from("LOW")
-      Priority.Medium   -> String.from("MEDIUM")
-      Priority.High     -> String.from("HIGH")
-      Priority.Critical -> String.from("CRITICAL")
+      Priority.Low      -> "LOW"
+      Priority.Medium   -> "MEDIUM"
+      Priority.High     -> "HIGH"
+      Priority.Critical -> "CRITICAL"
     end
   end
 end
@@ -45,7 +45,7 @@ enum Status
 
   def to_display -> String
     match self
-      Status.Pending              -> String.from("Pending")
+      Status.Pending              -> "Pending"
       Status.InProgress(who)      -> "In Progress (#{who})"
       Status.Completed(date)      -> "Completed on #{date}"
       Status.Cancelled(reason)    -> "Cancelled: #{reason}"
@@ -152,7 +152,7 @@ class Todo
     let parts: Array[String] = data.split("|")
     if parts.size < 4
       return Err(TodoError.ParseFailed(
-        message: String.from("expected 4 fields, got #{parts.size}")
+        message: "expected 4 fields, got #{parts.size}"
       ))
     end
 
@@ -160,7 +160,7 @@ class Todo
     # &str and String receivers — pin B13). Convert each element back
     # to &str at the call boundary.
     let id = parts[0].as_str.parse_uint
-      .map_err { |_| TodoError.ParseFailed(message: String.from("invalid id")) }?
+      .map_err { |_| TodoError.ParseFailed(message: "invalid id") }?
 
     let priority = parse_priority(parts[3].as_str)?
 
@@ -331,7 +331,7 @@ end
 
 # Accepts borrowed tasks, returns a formatted report — no ownership taken
 def generate_report(tasks: &Array[&Todo]) -> String
-  var report = String.from("=== Todo Report ===\n")
+  var report = "=== Todo Report ===\n"
 
   let (done, active): (Array[&&Todo], Array[&&Todo]) = tasks
     .partition { |t| t.is_done }
@@ -374,10 +374,10 @@ def create_task_from_input(
   priority_str: &str
 ) -> Result[USize, TodoError]
   if title.empty?
-    return Err(TodoError.MissingField(name: String.from("title")))
+    return Err(TodoError.MissingField(name: "title"))
   end
   if desc.empty?
-    return Err(TodoError.MissingField(name: String.from("description")))
+    return Err(TodoError.MissingField(name: "description"))
   end
 
   let priority = parse_priority(priority_str)?  # ? propagates TodoError
@@ -423,13 +423,13 @@ def main
 
   # ── Update statuses (demonstrates writing methods and pattern matching) ──
   puts "Updating statuses..."
-  list.update_status(0, Status.InProgress(assignee: String.from("Alaric")))
+  list.update_status(0, Status.InProgress(assignee: "Alaric"))
     .unwrap_or_else { |e| eputs "  #{e.message}" }
 
-  list.update_status(0, Status.Completed(completed_at: String.from("2026-04-11")))
+  list.update_status(0, Status.Completed(completed_at: "2026-04-11"))
     .unwrap_or_else { |e| eputs "  #{e.message}" }
 
-  list.update_status(1, Status.InProgress(assignee: String.from("Dana")))
+  list.update_status(1, Status.InProgress(assignee: "Dana"))
     .unwrap_or_else { |e| eputs "  #{e.message}" }
 
   # Try updating a non-existent task (demonstrates error handling)
@@ -466,14 +466,14 @@ def main
   # ── Find by ID (demonstrates Option) ──
   let task_name = list.find_by_id(1)
     .map { |t| t.title_ref.clone }
-    .unwrap_or(String.from("Unknown"))
+    .unwrap_or("Unknown")
   puts "Todo #1: #{task_name}"
 
   # Safe navigation chain
   let deadline_info = list.find_by_id(0)
     &.title_ref
     .map { |title| "Found: #{title}" }
-    .unwrap_or(String.from("Not found"))
+    .unwrap_or("Not found")
   puts deadline_info
 
   puts ""

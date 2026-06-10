@@ -16,6 +16,6 @@ class Dog
 end
 
 def main
-  let d = Dog.new(String.from("Rex"))
+  let d = Dog.new("Rex")
   puts d.hello
 end

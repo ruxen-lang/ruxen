@@ -1,5 +1,5 @@
 def main
-  let s = String.from("hi")
+  let s = "hi"
   let bs = s.into_bytes
   puts "len=#{bs.size}"
 end

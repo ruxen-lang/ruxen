@@ -8,7 +8,7 @@
 # `Ok(rx)` binding stays an unresolved inference var, and `rx.is_match`
 # mangles to `?T<n>_is_match` with no runtime symbol (codegen failure).
 def matches(pat: &String, text: &String) -> Bool
-  let flags = String.from("")
+  let flags = ""
   match Regex.new(pat, &flags)
     Ok(rx)  -> rx.is_match(text)
     Err(_) -> false
@@ -16,13 +16,13 @@ def matches(pat: &String, text: &String) -> Bool
 end
 
 def main
-  let digits = String.from("^\\d+$")
-  if matches(&digits, &String.from("42"))
+  let digits = "^\\d+$"
+  if matches(&digits, &"42")
     puts "match"
   else
     puts "no"
   end
-  if matches(&digits, &String.from("4a2"))
+  if matches(&digits, &"4a2")
     puts "match"
   else
     puts "no"

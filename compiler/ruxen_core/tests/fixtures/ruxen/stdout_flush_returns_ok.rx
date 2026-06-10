@@ -3,8 +3,8 @@ def main
   let out = stdout()
   out.print("before")
   let tag = match out.flush()
-    Ok(_)  -> String.from(" flushed")
-    Err(_) -> String.from(" failed")
+    Ok(_)  -> " flushed"
+    Err(_) -> " failed"
   end
   out.println(tag)
 end

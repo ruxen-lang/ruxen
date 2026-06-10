@@ -22,7 +22,7 @@ end
 def main
   var c = Col.new
   c.text("Counter")
-  c.text({ || String.from("computed") })
+  c.text({ || "computed" })
   c.text("Second")
   puts "labels=#{c.labels.size} computes=#{c.computes.size}"
   if let Some(s) = c.labels.get(0)

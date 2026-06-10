@@ -5,9 +5,9 @@ enum Light
 
   def describe -> String
     match self
-      Light.Red    -> String.from("stop")
-      Light.Yellow -> String.from("slow")
-      Light.Green  -> String.from("go")
+      Light.Red    -> "stop"
+      Light.Yellow -> "slow"
+      Light.Green  -> "go"
     end
   end
 end

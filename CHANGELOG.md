@@ -74,6 +74,35 @@ once 1.0.0 ships.
     `tests/ruby_block_semantics.rs`, `drop_fixtures.rs::block_capturing_heap_value_runs_soundly`.
 
 ### Fixed
+- **A `String` local bound from a BARE LITERAL leaked (not freed at scope
+  exit); now owns + drops like `String.from`** (ledger Q38). An un-annotated
+  `let s = "hello"` adopted the literal's resolver type `Ty::Str` (`&str`), so
+  the local was `&str`-typed even though MIR lowers the literal to a heap-owned
+  `String` via `ruxen_string_from` — and drop elaboration only frees
+  `Ty::String`, so the heap copy leaked (`let s = String.from("hello")` was
+  freed because it forced `s: String`). Fixed in typeck
+  (`infer/mod.rs::promote_bare_string_literal_binding`): an unconstrained `let`
+  bound to a bare `StringLiteral` now binds an owned `String`. Narrowly scoped —
+  an explicit `let s: &str = "x"` keeps the borrow, and call-site/argument
+  coercions are untouched (a bare literal still coerces to a `&str`/`&String`
+  parameter). This is what makes the `String.from("literal")` → `"literal"`
+  corpus sweep leak-free. Pins:
+  `drop_fixtures.rs::string_local_is_freed_on_scope_exit` (fixture is now
+  `let s = "hello"`), `string_literal_wrap.rs::bare_string_literal_let_binds_
+  owned_string`. (Follow-up filed in TASKS: collapse `&str` into `&String` so
+  there is one owned string type + its borrow.)
+- **`Err("literal")` in a `-> Result[T, String]` function now coerces the
+  payload to `String`** instead of building `Result[T, &str]` and failing to
+  typecheck. The `Err` constructor took its payload type straight from the
+  argument (`&str` for a literal) and never coerced against the enclosing
+  return's error type, so `Err("msg")` only worked when the `Ok` branch pinned
+  the Result concretely; with an inferred `Ok(a / b)` branch it failed. Typeck
+  (`infer/expr.rs` Result `Err` arm) now coerces a bare string-literal error
+  payload to the expected `String`. PRE-EXISTING gap exposed by the
+  `String.from("literal")` sweep (the old `Err(String.from("msg"))` papered over
+  it) — fixed forward, not reverted. Pin: release-e2e
+  `922_string_literal_coercion_all_positions` (uses the inference-order-sensitive
+  `Ok(a / b)` shape).
 - **Interpolating a closure / `Fn` value printed a silent pointer instead of
   erroring → new diagnostic E0729.** A bare `do … end` is a closure literal,
   never an expression block (parser rule: "do…end is always a closure"), so
