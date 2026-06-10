@@ -17,16 +17,20 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-30 of 33 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
+30 of 34 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
 feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned; Q28, Q30,
-Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10). **Q31 was an enum
-UNDER-ALLOCATION** (not a drop double-free): `alloc_size` sized enums to packed
-layout while codegen addresses payloads on a fixed 8-byte slot stride, so
-`Move(Float32,Float32)` stored field 1 four bytes past the alloc → heap
-corruption → crash on the next float `malloc`. Fixed by slot-rounding enum
-allocations (`8 + widest_variant_field_count*8`). The canvas `Int`→`Float32`
-event-coord revert it unblocked has now LANDED (canvas 143 green, sub-pixel
-pinned, live windowed loop verified).
+Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; **Q34 NEW 2026-06-10**). The
+canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
+(canvas 143 green, sub-pixel pinned, live windowed loop verified).
+
+- [ ] **Q34 · S2 — `ruxen fmt` drops grouping parentheses, silently changing
+      arithmetic.** `(rel*span + track_w/2)/track_w` →
+      `rel*span + track_w/2/track_w` (division now binds first) — broke quiver's
+      slider math until hand-reverted. Third fmt-destructiveness facet (Q23 docs,
+      Q30 call shapes, Q34 grouping); the recurring root cause is re-emitting
+      from an AST that doesn't preserve grouping. Fix + idempotence pin per
+      `dev/gui-stack-v1-issues.md` §Q34. Until then: do NOT bulk-run `ruxen fmt`
+      on the GUI repos.
 
 - [x] **Q32 · S3 — Q16 flat-merge of an FFI dependency broke `ruxen test` at
       link (FIXED 2026-06-10).** A consumer's test EXECUTABLE flat-merged the

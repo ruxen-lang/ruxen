@@ -1363,6 +1363,34 @@ extra instructions on the hot matched-width path). Pins (RUN + assert stdout):
 `654_enum_f32_payload_negative_compare`, and
 `compiler/ruxen_core/tests/q33_negative_literal_float_compare.rs`.
 
+## Q34 · S2 — `ruxen fmt` drops grouping parentheses, silently changing arithmetic  ⏳ OPEN (NEW 2026-06-10)
+
+Surfaced 2026-06-10 by the quiver text-metrics work. `ruxen fmt` removed the
+grouping parentheses from a rounding expression, changing its meaning:
+
+```ruxen
+# before fmt (correct: add half the divisor, THEN divide — round-to-nearest):
+let v = (rel * span + track_w / 2) / track_w
+# after fmt (WRONG: division binds first; the parenthesized sum is gone):
+let v = rel * span + track_w / 2 / track_w
+```
+
+This silently broke quiver's slider screen-x→value math (3 slider tests failed)
+until the fmt churn was hand-reverted. A formatter must NEVER drop parentheses
+unless the re-parse of its output is structurally identical to the input AST —
+here the precedence of `/` over `+` makes the parens load-bearing.
+
+Third formatter-destructiveness facet: Q23 covered doc-comment stripping +
+test-file parsing, Q30 covered closure-header/call-paren rewriting, Q34 is
+expression-grouping. The recurring root cause is that fmt re-emits from an AST
+shape that doesn't preserve (or re-derive) grouping. Fix: either record
+explicit-parens nodes in the AST, or have fmt parenthesize any subexpression
+whose operator precedence is lower than its parent context requires. Pin with
+round-trip cases over mixed +/− and ×/÷ groupings AND an idempotence check
+(`fmt(fmt(x)) == fmt(x)` with identical re-parsed AST). Until fixed, the
+standing guidance holds: **do not bulk-run `ruxen fmt` on the GUI repos** —
+both 2026-06-09 agents and the 2026-06-10 one were bitten.
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:
