@@ -246,8 +246,10 @@ def main() -> int:
 
         # ── Case 4: hover request — cover at least one identifier ────────────
         hover_text = PROGRAM_OK
-        # Find the position of "greet" in the `greet(` call within main.
-        offset = hover_text.index("greet(String.from")
+        # Find the position of "greet" in the `greet(...)` CALL within main
+        # (not the `def greet` declaration on line 1). The call site is
+        # `greet("world")`, which is unique to main.
+        offset = hover_text.index('greet("world")')
         # Compute (line, col) from offset.
         line = hover_text.count("\n", 0, offset)
         last_nl = hover_text.rfind("\n", 0, offset)
