@@ -19,7 +19,7 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 33 of 37 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
 feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned; Q28, Q30,
-Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 fixed 2026-06-10 via the syntax-parity harness; Q37 (S1, root-caused: a yielding/`&block` method poisoned an unrelated same-named free fn via a bare-name yield map) fixed 2026-06-10 — quiver examples build again; Q35, Q36 NEW 2026-06-10** — Q36 from the quiver Ruby-block DSL migration: two-`&var`-arg `yield` miscompile, left filed-open). The
+Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 fixed 2026-06-10 via the syntax-parity harness; Q37 fixed 2026-06-10 (root cause: a yielding/`&block` method poisoned an unrelated same-named free fn via a bare-name yield map — this covers BOTH the S1 name-collision symptom AND the S2 "generic `frame[S: PaintSurface]` gets a bogus `__block` in binary-consumes-library builds" symptom; they were the same bug) — quiver examples build again; Q35, Q36 NEW 2026-06-10, both OPEN** — Q36 from the quiver Ruby-block DSL migration: two-`&var`-arg `yield` miscompile, left filed-open; Q35 a struct `include` not satisfying a generic mixin bound). The
 canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
 (canvas 143 green, sub-pixel pinned, live windowed loop verified).
 
@@ -184,14 +184,17 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       param). Sub-gap: a `&block` param's type doesn't infer through the yield
       seam (untyped block param ⇒ `?T`). Likely from `8a783f9` (block semantics).
       Repro: `quiver/tmp/test-cache/ruxen-two-var-yield.md`; details §Q36.
-- [ ] **Q37 · S2 — generic `frame[S: Mixin]` in a library gets a bogus `__block`
-      param when consumed by a binary (NEW 2026-06-10).** All three quiver
-      example binaries fail `ruxen build` with `could not infer type for
-      parameter __block in function frame` on quiver's yield-free generic
-      `frame[S: PaintSurface]` (`quiver/src/run.rx`) — only in binary-consumes-
-      library builds (the quiver lib + 157-test suite are green; reproduces at
-      pristine quiver HEAD). Likely a `yield_scan` over-attribution across the
-      flat-merged lib+binary source after `8a783f9`. Details §Q37.
+- [x] **Q37 · S2 — generic `frame[S: Mixin]` gets a bogus `__block` when
+      consumed by a binary — SAME BUG AS Q37·S1, FIXED 2026-06-10.** This was
+      filed separately as the "binary-consumes-library" symptom (`could not infer
+      type for parameter __block in function frame` on quiver's yield-free
+      `frame[S: PaintSurface]`), but the root-cause analysis (ledger §Q37)
+      confirmed it is the SAME name-keyed `yield_fns` over-attribution as S1:
+      canvas's block-taking `frame` METHODS registered the bare name `frame`, so
+      quiver's unrelated generic free fn `frame` inherited a phantom `__block`.
+      Fixed by deciding the synthetic `__block` LOCALLY from each function's own
+      body (`resolve/funcs.rs`; the name map deleted). Not a distinct open issue.
+      Pin: release-e2e 920. Verified: quiver examples build again.
 - [x] **Q32 · S3 — Q16 flat-merge of an FFI dependency broke `ruxen test` at
       link (FIXED 2026-06-10).** A consumer's test EXECUTABLE flat-merged the
       FFI dep's `src/**.rx` (incl. `lib "C"`-calling bodies) but neither
