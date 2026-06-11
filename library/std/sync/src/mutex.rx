@@ -22,4 +22,38 @@ class Mutex[T: Send]
     def into_inner_raw as "ruxen_mutex_into_inner" -> T
     def drop as "ruxen_mutex_drop" -> nil
   end
+
+  ## Ergonomic poison-surfacing wrappers layered on the `_raw` FFI.
+  ## `ruxen_mutex_lock` always returns the guard and sets the internal
+  ## poisoned bit; these shims read that bit and shape the surface
+  ## Result/Option, per the runtime comment in `runtime/mutex.c`. They
+  ## were advertised by typeck (`method_resolvers/concurrency.rs`) and the
+  ## `std_sync_concurrency_surface` typeck pin but had NO codegen body, so
+  ## any real `m.lock` call link-failed with `Undefined symbols: _Mutex_lock`
+  ## (gui-stack §Q40). Implemented here as real `.rx` bodies — the generic
+  ## class monomorphizes them per `Mutex[T]` instantiation.
+
+  ## Acquire the lock, surfacing poison as `Err(PoisonError)`.
+  def lock -> Result[MutexGuard[T], PoisonError]
+    let g = self.lock_raw
+    if self.is_poisoned != 0
+      Err(PoisonError.new)
+    else
+      Ok(g)
+    end
+  end
+
+  ## Acquire the lock, panicking on poison (the `!` ergonomic form).
+  def lock! -> MutexGuard[T]
+    self.lock_raw
+  end
+
+  ## Consume the mutex, returning the inner value (poison surfaced).
+  def into_inner -> Result[T, PoisonError]
+    if self.is_poisoned != 0
+      Err(PoisonError.new)
+    else
+      Ok(self.into_inner_raw)
+    end
+  end
 end

@@ -8,6 +8,25 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- **`Mutex.lock` / `lock!` / `into_inner` now LINK and run (Q40).** typeck
+  advertised the ergonomic poison-surfacing `Mutex.lock ->
+  Result[MutexGuard[T], PoisonError]` (and siblings) via a hardcoded
+  `method_resolvers/concurrency.rs` arm, but `library/std/sync/src/mutex.rx` only
+  implemented the `_raw` FFI — so any real `m.lock` typechecked then emitted an
+  undefined `_Mutex_lock` symbol and link-failed, for EVERY `Mutex[T]` (not just
+  `Mutex[String]`; the original report's "direct links" was `lock_raw`). The
+  wrappers are now real `.rx` bodies layered on `lock_raw` + `is_poisoned`;
+  `PoisonError` gained an `init` so the `Err(PoisonError.new)` arm constructs.
+  Proven RUN-correct for `&Mutex[String]` borrow, captured-closure, and the
+  `SharedSync`-owning-`Mutex[String]` round-trip (quiver's `ClipboardCell`
+  shape). Pins: release-e2e 925/926/927.
+  - Two deeper, pre-existing drop-timing issues the link fix surfaced are FILED,
+    not fixed (gui-stack §Q40): (1) `MutexGuard` drops at function exit, not
+    lexical block exit, so two locks in one scope deadlock (general RAII gap);
+    (2) a heap value stored through the generic `ruxen_mutex_guard_set` FFI is
+    freed by the caller → dangling read across a closure (the i64-stripped
+    generic-payload ownership gap). `Mutex[String]` is sound for the
+    single-lock-per-scope / SharedSync shapes quiver actually uses.
 - **Drop elaboration: a heap value passed to a USER function/method's `&T`
   borrow param no longer leaks.** A `String` (or `Array`/`Hash`/`Set`/class)
   passed to `def f(s: &String)` was tainted by the conservative user-callee

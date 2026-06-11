@@ -1685,34 +1685,63 @@ still errors. Pin: `924_tuple_element_string_literal_coercion` (rondo's exact
 `(String, Bool)` shape, return-position + let-annotation; RUNS + asserts stdout).
 rondo can drop W21's `("".to_string(), false)` workaround for bare `("", false)`.
 
-## Q40 · S2 — `Mutex[String]` misbehaves across closure/borrow boundaries (corruption reported; link failure reproduced)  ⏳ OPEN (NEW 2026-06-11)
+## Q40 · S2 — `Mutex.lock` link failure FIXED; bare-`Mutex[String]` set/get drop-timing edge filed separately  ✅ (a) FIXED 2026-06-11 · ⏳ (b) FILED
 
-Two related data points, likely one root (the parameterized-generic method
-story on `Mutex[String]` — same family as the `State[Array]`/`Mutex[Array]`
-Send-propagation issues and the historical W6 `Option[&T]` link gaps):
+ROOT CAUSE of the link failure was NOT a `Mutex[String]`-specific
+monomorphization gap — it is the **ergonomic `lock` wrapper having no codegen
+body, for EVERY `Mutex[T]` (Int included)**:
 
-1. **Reported by quiver F3 (verified in isolation by that agent, 2026-06-11):**
-   `Mutex[String]` set/get THROUGH A CLOSURE boundary returns garbage — the
-   String payload is corrupted crossing the capture. quiver's clipboard seam
-   works around it with `ClipboardCell` (a `Send` class owning the `String`
-   directly, shared via `SharedSync` — the established TodoData pattern).
-   The minimal corruption repro still needs to be pinned (the agent verified
-   but did not leave the fixture).
-2. **Reproduced by the coordinator (this entry's fixture):** the same shapes
-   fail EARLIER on the current toolchain — `Mutex_lock` does not LINK when
-   `lock` is called on a `&Mutex[String]` function param or on a captured
-   `Mutex[String]` inside a closure (`Undefined symbols: _Mutex_lock` from
-   both `read_direct` and `__closure_20`). Direct local usage links. Repro:
-   `tmp/test-cache/q40-mutex-string-closure-repro.rx`.
+- typeck (`method_resolvers/concurrency.rs:162`) advertised `Mutex.lock` →
+  `Result[MutexGuard[T], PoisonError]` (and `lock!`/`try_lock`/`into_inner`),
+  but `library/std/sync/src/mutex.rx` only implemented the `_raw` FFI
+  (`lock_raw`). So `m.lock` typechecked then emitted an undefined `Mutex_lock`
+  symbol → `Undefined symbols: _Mutex_lock` at link. The coordinator's repro
+  used `m.lock` (the wrapper), not `m.lock_raw`; that is why "direct" appeared
+  to link in the original note — `lock_raw` always linked, `lock` never did, for
+  any payload type. (Bisected: `Mutex[Int].lock` link-fails identically.)
 
-So depending on shape, `Mutex[String]`-through-indirection either fails to
-link (loud) or corrupts (silent — the dangerous half). Fix should make the
-monomorphized `Mutex[String]` methods resolve for borrow/capture receivers
-and pin BOTH shapes (run+stdout for the value round-trip; the link shape as
-a compile-success pin). Until then: the `Send`-class-owning-the-String
-pattern (quiver `ClipboardCell`) is the documented workaround. Also noted by
-the same report: the non-Copy-call-result-as-method-arg landmine reconfirmed
-at a fresh site (quiver `cut`/`clip_write` — let-bind first, as documented).
+**FIX (a):** implemented the wrappers as real `.rx` bodies in `mutex.rx`,
+layered on `lock_raw` + `is_poisoned` (`lock` → `Result`, `lock!` → guard,
+`into_inner` → `Result`); `PoisonError` (an empty marker) gained an `init` so
+the `Err(PoisonError.new)` arm constructs. Proven RUN+stdout-correct for: a
+`&Mutex[String]` borrow param, a captured `Mutex[String]` closure, and quiver's
+real **`SharedSync`-owns-a-`Send`-class-owning-`Mutex[String]`** write→read
+round-trip (the `ClipboardCell` shape — `got=payload-xyz`). Pins: release-e2e
+`925_mutex_string_lock_borrow`, `926_mutex_string_lock_capture`,
+`927_mutex_string_sharedsync_roundtrip`. quiver's `ClipboardCell` workaround
+note can add a "can now revert (optional)" line — but it ALSO works as-is.
+
+**(b) FILED — two SEPARATE, pre-existing, deeper drop-timing issues the link
+fix surfaced (NOT fixed here; `Mutex[String]` is sound for the realistic
+single-lock-per-scope / SharedSync shapes above, which is what quiver uses):**
+
+1. **`MutexGuard` drops at FUNCTION exit, not lexical BLOCK exit.** Drop
+   elaboration inserts drops before `Terminator::Return`, not at block end, so a
+   `MutexGuard` bound in a nested block (or two sequential `match m.lock` in one
+   function scope) holds the pthread lock until the function returns → the
+   second `lock` DEADLOCKS. Reproduces with bare `lock_raw` twice in one scope
+   (independent of `lock`/String). General block-scoped-drop limitation; affects
+   any RAII guard, not just Mutex. Fix needs block-scope drop elaboration.
+
+2. **A heap value stored through a generic FFI setter is freed by the caller →
+   dangling read.** `g.set("x")` (`ruxen_mutex_guard_set`, classified a borrow
+   helper by its `ruxen_` prefix) stores the `char*` into the Mutex payload, but
+   the caller's `"x"` String temp is freed at the writer scope exit (the C
+   `ruxen_mutex_drop` never frees the i64 payload — the generic-stripping ABI
+   doesn't know it's heap). Read-back THROUGH A CLOSURE then returns empty
+   (`read=`). A targeted classification (mark `ruxen_mutex_guard_set` arg1
+   transferred) would convert the UAF into a *leak* (Mutex never frees the
+   String) — a net safety improvement but not soundness; the real fix is
+   generic-heap-payload ownership on the i64-stripped Mutex/SharedSync ABI
+   (the `State[Array]`/`Mutex[Array]` family). Deferred — quiver's SharedSync
+   pattern (each `lock` in its own method frame, value flows through a param
+   hop) round-trips correctly and is the recommended shape.
+
+Repros: `tmp/test-cache/q40-mutex-string-closure-repro.rx` (link, now passes);
+the (b) shapes in `compiler/ruxen_core/tests/q40_mutex_string_repro.rs` during
+investigation. Also reconfirmed by the same quiver report: the
+non-Copy-call-result-as-method-arg landmine at a fresh site (quiver
+`cut`/`clip_write` — let-bind first, as documented).
 
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 

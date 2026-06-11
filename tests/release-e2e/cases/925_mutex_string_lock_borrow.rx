@@ -1,0 +1,19 @@
+# Q40 — `Mutex[String].lock` resolves and links through a `&Mutex[String]`
+# borrow parameter. Before the fix `m.lock` typechecked (typeck advertised the
+# ergonomic poison-surfacing `lock` wrapper) but had NO codegen body, so any
+# real call emitted an undefined `_Mutex_lock` symbol and link-failed. The
+# wrapper is now a real `.rx` body in `library/std/sync/src/mutex.rx` layered on
+# `lock_raw` + `is_poisoned`; `PoisonError` gained an `init` so the `Err`
+# construction compiles. This pin RUNS and asserts the guarded String reads back
+# correctly across the borrow boundary.
+def read_locked(m: &Mutex[String]) -> String
+  match m.lock
+    Ok(g)  -> g.get.clone
+    Err(_) -> "poisoned"
+  end
+end
+
+def main
+  let m = Mutex.new("hello world")
+  puts "v=#{read_locked(&m)}"
+end

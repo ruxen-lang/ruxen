@@ -189,16 +189,27 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       `tests/syntax_parity.rs`, release-e2e 919, ADR
       `docs/decisions/syntax-parity-harness.md`.
 
-- [ ] **Q40 · S2 — `Mutex[String]` misbehaves across closure/borrow boundaries
-      (NEW 2026-06-11).** Two shapes, likely one root: (a) reported by quiver
-      F3 (verified in isolation) — set/get through a CLOSURE returns garbage
-      (silent corruption); (b) reproduced by the coordinator — `Mutex_lock`
-      doesn't LINK for a `&Mutex[String]` param or captured Mutex
-      (`Undefined symbols: _Mutex_lock`). Same family as the
-      `Mutex[Array]`/`State[Array]` Send-propagation issues. Workaround: a
-      `Send` class owning the String, shared via SharedSync (quiver
-      `ClipboardCell`). Repro: `tmp/test-cache/q40-mutex-string-closure-repro.rx`;
-      details §Q40. Fix must pin BOTH shapes.
+- [x] **Q40 · S2 — `Mutex.lock` link failure FIXED; bare-`Mutex[String]`
+      set/get drop-timing edge filed separately (2026-06-11,
+      `feat/drop-elaboration`).** ROOT CAUSE of the link failure was NOT a
+      `Mutex[String]` mono gap — the ergonomic `lock` wrapper had NO codegen body
+      for ANY `Mutex[T]` (Int link-failed identically): typeck advertised
+      `Mutex.lock -> Result[MutexGuard[T], PoisonError]`
+      (`method_resolvers/concurrency.rs`) but `mutex.rx` only implemented
+      `lock_raw`, so `m.lock` emitted an undefined `_Mutex_lock` symbol. FIXED by
+      implementing `lock`/`lock!`/`into_inner` as real `.rx` bodies in `mutex.rx`
+      (layered on `lock_raw` + `is_poisoned`); `PoisonError` gained an `init` so
+      `Err(PoisonError.new)` constructs. Proven RUN+stdout-correct for `&Mutex[
+      String]` borrow, captured-closure, and quiver's `SharedSync`-owns-class-
+      owning-`Mutex[String]` round-trip (the `ClipboardCell` shape). Pins:
+      release-e2e 925/926/927. **Filed (NOT fixed here, deeper pre-existing):**
+      (1) `MutexGuard` drops at FUNCTION exit not lexical BLOCK exit → two locks
+      in one scope DEADLOCK (general RAII block-drop gap); (2) a heap value stored
+      through a generic FFI setter (`ruxen_mutex_guard_set`) is freed by the
+      caller → dangling read through a closure (the i64-stripped generic payload
+      ownership gap, `State[Array]`/`Mutex[Array]` family). `Mutex[String]` is
+      sound for the single-lock-per-scope / SharedSync shapes quiver uses; details
+      §Q40.
 - [ ] **Q35 · S3 — a STRUCT's `include <Mixin>` does not satisfy a generic's
       mixin bound (E1015).** Even a single struct implementor is rejected by a
       mixin-bounded generic; the identical class works (Q17's 655 fixture runs
