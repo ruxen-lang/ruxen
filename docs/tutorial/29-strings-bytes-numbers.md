@@ -36,42 +36,41 @@ Notice three things: a bare string literal (`"Ruxen"`) is already an owned `Stri
 
 # Part 1: Strings
 
-## 2. `String` vs `&str`
+## 2. `String` and `&String`
 
-Two text types — pick by ownership:
+Ruxen has exactly **one** string type pair — pick by ownership:
 
-| Type     | Owns memory? | Growable? | Cheap to copy? | When                               |
-|----------|--------------|-----------|----------------|------------------------------------|
-| `String` | Yes (heap)   | Yes       | No (move)      | You own it, build it, or mutate it |
-| `&str`   | No           | No        | Yes            | You're just reading                |
+| Type      | Owns memory? | Growable? | Cheap to copy? | When                               |
+|-----------|--------------|-----------|----------------|------------------------------------|
+| `String`  | Yes (heap)   | Yes       | No (move)      | You own it, build it, or mutate it |
+| `&String` | No (borrow)  | No        | Yes (a ref)    | You're just reading                |
 
 ```ruxen
-let greeting: &str = "hello"              # static literal, borrowed
-let owned: String  = "hello"              # owned, heap-allocated
+let owned: String = "hello"               # owned, heap-allocated
+
+def shout(s: &String) -> String           # borrows — the caller keeps ownership
+  "#{s}!"
+end
+puts shout("hi")                           # bare literal satisfies the &String param
 ```
 
 Interpolation (`"hi #{name}"`) always allocates a `String` — the result is owned, not a slice into the source code.
 
-> **The string model — one owned type, one borrow.**
+> **The string model — one owned type, one borrow. There is no `str`/`&str`.**
 >
 > - **`"text"`** is an **owned `String`** (heap-allocated, dropped at end of
 >   scope) — not a borrow. Bind it (`let s = "text"`) and you own a `String`; at
->   a *call site* it also coerces to a `&String` parameter, so you write
->   `"text"` everywhere and the position decides whether it's the owned value or
->   a borrow of it.
-> - **`&someString`** is the **borrow**: `&String`. That is the borrowed form of
->   a string — a reference to a `String` you (or someone) owns.
-> - **Don't write `&"text"`.** A leading `&` on a literal does not give you a
->   nice `&String`; prefer the bare `"text"` (owned) and let the call site
->   borrow it, or take `&someString` of a named value.
-> - **`b.clone`** copies a **runtime `String`/`&String` borrow** `b` into a fresh
->   owned `String` (when you need to keep it past the borrow). It is **never**
->   needed on a literal, because `"text"` is already an owned `String`. (For a
->   `&str` value specifically, the owned-copy spelling is `s.to_string`.)
->
-> *(Historical note: an older `&str` borrowed-slice type still exists and the
-> compiler treats it as interchangeable with `&String`; it is being folded into
-> `&String` so there is just one owned `String` and one borrow `&String`.)*
+>   a *call site* it also satisfies a `&String` parameter (the call site borrows
+>   it), so you write `"text"` everywhere and the position decides whether it's
+>   the owned value or a borrow of it.
+> - **`&someString`** is the **borrow**: `&String` — a reference to a `String`
+>   you (or someone) owns. This is the *only* string borrow type.
+> - **`str` / `&str` is not a type.** Writing `str` in an annotation is an error
+>   (E0730) with a hint pointing at `String` / `&String`. `&"text"` is a
+>   `&String` borrow of an owned literal — prefer the bare `"text"`.
+> - **`b.clone`** copies a **runtime `String` / `&String` borrow** `b` into a
+>   fresh owned `String` (when you need to keep it past the borrow). It is
+>   **never** needed on a literal, because `"text"` is already an owned `String`.
 
 ## 3. Building a `String`
 
@@ -96,7 +95,7 @@ s.push_str("world")
 puts s                                  # hello, world
 ```
 
-`push_str` takes a `&String` (borrowed). A bare string literal coerces to that borrow at the call site — no leading `&` needed (in fact `&"..."` is `&&str`, which only works through the same call-site coercion, so the bare form is the idiom).
+`push_str` takes a `&String` (borrowed). A bare string literal satisfies that borrow at the call site — no leading `&` needed (the bare form is the idiom; `&"..."` is also a `&String` borrow of the literal).
 
 ## 5. Inspecting
 
@@ -143,7 +142,7 @@ let s = "hello world hello"
 puts s.replace("hello", "bye")    # bye world bye
 ```
 
-`trim` returns a `&str`; further string methods on it implicitly allocate as needed.
+`trim` returns a fresh owned `String` (it allocates a trimmed copy).
 
 ## 8. Parsing numbers from strings
 
@@ -172,7 +171,7 @@ puts "#{count}"        # 3
 
 - `.chars` yields `Char` values (Unicode scalars).
 - `.bytes` yields `UInt8` values (raw bytes).
-- `.lines` yields `&str` slices.
+- `.lines` yields owned `String` values (one per line).
 
 > **Try it:** loop over `"café".chars` and print each character with its `:?` debug form. Notice that 'é' is one character but two bytes.
 
@@ -267,7 +266,7 @@ A cast that doesn't fit (e.g. `300 as UInt8`) truncates by masking — it never 
 ## 15. Common mistakes
 
 - **Treating `size` as character count.** `s.size` is bytes; "café" has 5 bytes but 4 characters. Use `.char_count` for the Unicode count.
-- **Forgetting `&` on `push_str`.** `s.push_str("hi")` won't compile — `push_str` takes `&String`. Write `s.push_str(&"hi")`.
+- **`push_str` takes a `&String`.** A bare literal works — `s.push_str("hi")` — because the call site borrows the owned literal; no leading `&` needed.
 - **Expecting `+` on strings.** Ruxen has no `+` for `String`. Use interpolation: `"#{a}#{b}"`.
 - **Implicit numeric promotion.** Adding `Int` and `Int32` is a type error — cast one side explicitly with `as`.
 - **Assuming `into_bytes` is borrowing.** It's consuming; the source string is moved out. Use `.bytes` (iterator) or `.clone().into_bytes()` to keep the original around.
@@ -278,8 +277,8 @@ A cast that doesn't fit (e.g. `300 as UInt8`) truncates by masking — it never 
 
 ## Recap
 
-- **`String`** owns its memory and is mutable; **`&str`** is a cheap borrow you can pass around.
-- A bare literal `"text"` is already an owned `String`; build also with `String.new`, `String.with_capacity`, interpolation, or `.repeat`. To copy a *runtime* `String`/`&String` borrow `b` into a fresh owned `String`, use `b.clone` (or `s.to_string` for a `&str`) — never needed on a literal (a literal is already owned).
+- **`String`** owns its memory and is mutable; **`&String`** is a cheap borrow (a reference) you can pass around. There is no `str`/`&str` — one owned type, one borrow.
+- A bare literal `"text"` is already an owned `String`; build also with `String.new`, `String.with_capacity`, interpolation, or `.repeat`. To copy a *runtime* `String` / `&String` borrow `b` into a fresh owned `String`, use `b.clone` (or `b.to_string`) — never needed on a literal (a literal is already owned).
 - Bytes live in `Array[UInt8]`; convert with `.into_bytes` and `String.from_utf8`.
 - Numbers come in sized signed / unsigned integers, two float widths, and pointer-width `USize` / `ISize`.
 - `as` is the only numeric conversion form — no implicit coercion.

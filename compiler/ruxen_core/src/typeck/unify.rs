@@ -376,8 +376,8 @@ pub fn can_coerce(from: &Ty, to: &Ty, ctx: &TypeContext) -> bool {
         // &mut T → &T (always allowed)
         (Ty::RefMut(inner_from), Ty::Ref(inner_to)) => can_coerce(inner_from, inner_to, ctx),
 
-        // &String → &str (string deref coercion)
-        (Ty::Ref(inner), Ty::Str) => matches!(&**inner, Ty::String),
+        // (The `&String → &str` deref-coercion arm was removed with the `&str`
+        // type — there is one string borrow type now, `&String`.)
 
         // Integer widening: smaller → larger
         (from_ty, to_ty) if from_ty.is_integer() && to_ty.is_integer() => {

@@ -22,20 +22,27 @@ class String
     def starts_with as "ruxen_string_starts_with"(needle: &String) -> Bool
     def ends_with as "ruxen_string_ends_with"(needle: &String) -> Bool
     def find as "ruxen_string_find"(needle: &String) -> Option[USize]
-    def trim as "ruxen_string_trim" -> str
-    def trim_start as "ruxen_string_trim_start" -> str
-    def trim_end as "ruxen_string_trim_end" -> str
+    # trim/trim_start/trim_end `malloc` a fresh owned buffer (see
+    # runtime/string.c), so the surface is an owned `String` (drop-safe).
+    def trim as "ruxen_string_trim" -> String
+    def trim_start as "ruxen_string_trim_start" -> String
+    def trim_end as "ruxen_string_trim_end" -> String
     def to_lower as "ruxen_string_to_lower" -> String
     def to_upper as "ruxen_string_to_upper" -> String
     def repeat as "ruxen_string_repeat"(n: Int) -> String
     def replace as "ruxen_string_replace"(from: &String, to: &String) -> String
-    def as_str as "ruxen_string_as_str" -> str
+    # as_str returns the receiver's own buffer pointer (a BORROW — see
+    # runtime/string.c `ruxen_string_as_str`), NOT a fresh allocation, so its
+    # surface is `&String`: a borrow never flows through drop elaboration, so
+    # no free is emitted on the receiver's pointer (declaring `-> String` here
+    # would double-free the receiver). Wire-identical (`const char*` = i64).
+    def as_str as "ruxen_string_as_str" -> &String
     def to_string as "ruxen_string_to_string" -> String
     # `to_s` is the Ruby spelling of `to_string` — same C symbol, same
     # wire shape `(I64) -> I64`, admitted as a second alias by the
-    # wire-level E0722 check. Homing it here lets BOTH `String.to_s` and
-    # (via `method_home_key: Ty::Str → "String"`) `&str.to_s` resolve
-    # through the bridge, retiring their strings.rs residual arms.
+    # wire-level E0722 check. Homing it here lets `String.to_s` (and a
+    # `&String` borrow, which peels to `String` in `method_home_key`)
+    # resolve through the bridge, retiring its strings.rs residual arm.
     def to_s as "ruxen_string_to_string" -> String
     def chars as "ruxen_string_chars" -> Array[Char]
     def lines as "ruxen_string_lines" -> Array[String]
@@ -45,10 +52,11 @@ class String
     def into_bytes as "ruxen_string_into_bytes" -> Array[UInt8]
     def parse_int as "ruxen_string_parse_int" -> Result[Int, ParseIntError]
     def parse_float as "ruxen_string_parse_float" -> Result[Float, ParseFloatError]
-    # `parse_uint` shares the `&str` C symbol `ruxen_str_parse_uint` (a
-    # tagged Result-like `void*`, I64). Homed here so BOTH `String.parse_uint`
-    # and (via `method_home_key: Ty::Str → "String"`) `&str.parse_uint`
-    # resolve through the bridge, retiring the strings.rs residual arm.
+    # `parse_uint` binds the C symbol `ruxen_str_parse_uint` (a tagged
+    # Result-like `void*`, I64; the `str` in the symbol name is historical —
+    # one string type now). Homed here so `String.parse_uint` (and a
+    # `&String` borrow) resolve through the bridge, retiring the strings.rs
+    # residual arm.
     def parse_uint as "ruxen_str_parse_uint" -> Result[USize, Error]
     def push_str as "ruxen_string_push_str"(other: &String) -> String
     def push as "ruxen_string_push"(c: Char) -> String

@@ -1,0 +1,17 @@
+# One-string-type ADR drop-safety pin: a bare string literal is born owned
+# `String` (heap-copied via ruxen_string_from) and freed once at scope exit;
+# `.clone` allocates a SECOND independent owned `String` that is ALSO freed
+# once. Both owned Strings are dropped exactly once — no leak, no double-free.
+# The leak counters must balance (outstanding=0) and BOTH owned frees must fire
+# (string_frees >= 2). This is the core guarantee of birthing literals as owned
+# `String` (one-string-type ADR / Q38): with the old `&str` type a literal-typed
+# local was excluded from drop elaboration (the leak), and an owned-typed view
+# of a borrow double-freed the source.
+def main
+  # owned literal local — heap copy, freed at scope exit
+  let owned = "needle in a haystack"
+  let _l0 = owned.size
+  # clone allocates a SECOND owned String, independently freed at scope exit
+  let copy = owned.clone
+  let _l1 = copy.size
+end

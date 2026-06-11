@@ -130,8 +130,8 @@ impl<'a> InferenceEngine<'a> {
         // user methods on generic classes like `Repository[Todo]`), which
         // the lenient fresh-var fallback below still feeds.
         let resolved = self.ctx.resolve(obj_ty);
-        let is_str_head = matches!(resolved, Ty::String | Ty::Str)
-            || matches!(&resolved, Ty::Ref(inner) if matches!(**inner, Ty::String | Ty::Str));
+        let is_str_head = matches!(resolved, Ty::String)
+            || matches!(&resolved, Ty::Ref(inner) if matches!(**inner, Ty::String));
         if resolved.is_numeric() || matches!(resolved, Ty::Bool | Ty::Char) || is_str_head {
             self.error(
                 format!(
@@ -215,13 +215,13 @@ impl<'a> InferenceEngine<'a> {
                 }
                 ok
             }
-            Ty::String | Ty::Str => {
+            Ty::String => {
                 let resolved = self.ctx.resolve(item_ty);
-                let ok = matches!(resolved, Ty::String | Ty::Str);
+                let ok = matches!(resolved, Ty::String);
                 if !ok {
                     self.diagnostics.push(Diagnostic::error_with_code(
                         format!(
-                            "`collect[String]` expects iterator items of type `String` or `&str`; got `{}`",
+                            "`collect[String]` expects iterator items of type `String`; got `{}`",
                             resolved
                         ),
                         span.clone(),
@@ -441,7 +441,7 @@ impl<'a> InferenceEngine<'a> {
                     elems[0].clone()
                 }
             }
-            Ty::String | Ty::Str => Ty::Char,
+            Ty::String => Ty::Char,
             _ => Ty::Error,
         }
     }
@@ -595,11 +595,10 @@ impl<'a> InferenceEngine<'a> {
                 arg_ty.is_infer()
                     || arg_ty.is_error()
                     || arg_ty == param_ty
-                    || matches!((&arg_ty, &param_ty), (Ty::Str, Ty::String))
-                    || matches!(
-                        (&arg_ty, &param_ty),
-                        (Ty::Ref(a), Ty::Ref(b)) if matches!((&**a, &**b), (Ty::Str, Ty::String))
-                    )
+                    // Owned arg vs borrowing param (`&T` param, `T` arg) — a
+                    // bare `String` literal/value (now owned) satisfies a
+                    // `&String` param via the call site's auto-ref. The old
+                    // `&str`↔`String` arms are gone with the `&str` type.
                     || matches!(&param_ty, Ty::Ref(inner) | Ty::RefMut(inner) if **inner == arg_ty)
             })
     }

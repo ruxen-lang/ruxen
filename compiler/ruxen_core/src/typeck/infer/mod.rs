@@ -92,10 +92,8 @@ impl<'a> InferenceEngine<'a> {
                 let exp = self.ctx.resolve(expected);
                 let fnd = self.ctx.resolve(found);
 
-                // &str → String (string literal in String context)
-                if exp == Ty::String && fnd == Ty::Str {
-                    return Ok(Ty::String);
-                }
+                // (The `&str → String` coercion is gone: a string literal is
+                // born `Ty::String`, so there is nothing to coerce.)
                 // Int → Float (integer literal in Float context)
                 if exp.is_float() && fnd == Ty::Int {
                     return Ok(exp);
@@ -106,26 +104,14 @@ impl<'a> InferenceEngine<'a> {
                         return Ok(exp);
                     }
                 }
-                // TODO (rondo_v1_blockers.md B14): `Option[A]` /
-                // `Result[A, E]` payload coercion. A typeck-only retry
-                // (Option(inner) ↔ Option(inner) → unify_or_coerce)
-                // lands the surface acceptance for `Some("ada")` into
-                // `Option[String]`, but the HIR sub-expression's
-                // `.ty` field remains `Ty::Str` — MIR then emits
-                // `Alloc { ty: Option(Str), size: 24 }` with payload
-                // slot zero set to a heap String pointer. The mismatch
-                // between the storage type (Str) and the actual payload
-                // type (String) causes the SCOPE-EXIT drop on the
-                // outer `Option` to interpret slot zero as `&str`
-                // (no free) while the CALLER reads it as `String`
-                // (frees twice / wrong path). The proper landing
-                // requires rewriting field_expr.ty during coercion
-                // OR threading the coerced container type into MIR
-                // lowering so `Alloc` uses the post-coercion shape.
-                // Both attempted this session, both surface a tangled
-                // drop interaction. Workaround for users: bind an owned
-                // `let s: String = "ada"` first and write `Some(s)` (or
-                // `Some(s.clone)`) explicitly.
+                // (One-string-type ADR: the old `Option`/`Result` String
+                // payload drop hazard — a `Some("ada")` whose HIR `.ty` stayed
+                // `Ty::Str` while storage held a heap `String`, causing a
+                // storage-vs-payload drop mismatch / double-free — is dissolved.
+                // A string literal is born `Ty::String`, so `Some("ada")`
+                // builds `Option[String]` directly with no `&str` payload to
+                // mistype. The case-116 nested-payload `ok_or` caution dies with
+                // it: `opt.ok_or("missing")` now produces `Result[_, String]`.)
                 // General coercion check
                 if can_coerce(&fnd, &exp, self.ctx) {
                     return Ok(exp);
@@ -324,10 +310,9 @@ impl<'a> InferenceEngine<'a> {
         // hook as let-binding RHS auto-wrap — see infer_statement.
         self.auto_wrap_option_some(&func.return_ty, &mut func.body);
 
-        // Q39 (rondo W21): promote a bare `&str` literal in a tuple-element
-        // position to owned `String` when the declared return's tuple slot
-        // is `String` (`-> (String, Bool)` returning `("", false)`).
-        self.coerce_tuple_literal_elements(&func.return_ty, &mut func.body);
+        // (One-string-type ADR: the Q39 tuple-element `&str`→`String`
+        // promotion is gone — a string literal is born `Ty::String`, so a
+        // `("", false)` tuple is already `(String, Bool)`. No coercion needed.)
 
         // Check function body type against declared return type (with coercion)
         let body_ty = self.ctx.resolve(&func.body.ty);
@@ -395,23 +380,12 @@ impl<'a> InferenceEngine<'a> {
                     // the RHS in `Option::Some` automatically. Pin:
                     // docs/specs/syntax/option-no-some.spec.md.
                     self.auto_wrap_option_some(ty, val);
-                    // Owned-string-literal binding: an UN-annotated `let` bound
-                    // to a bare string literal must bind an owned `String`, not
-                    // `&str`. The resolver types a literal `Ty::Str`, but MIR
-                    // lowers it through `ruxen_string_from` to a heap-owned
-                    // `String` (P0.7 wrap); leaving the binding `&str` excludes
-                    // it from drop elaboration (drop filter only frees
-                    // `Ty::String`), so the heap copy LEAKS. Binding it `String`
-                    // makes `let s = "x"` behave identically to
-                    // `let s: String = "x"` (owned, dropped at scope
-                    // exit). Only fires when the slot is
-                    // unconstrained (no annotation) so `let s: &str = "x"` and
-                    // every coercion-at-call-site path are untouched.
-                    self.promote_bare_string_literal_binding(ty, val);
-                    // Q39 (rondo W21): a tuple-literal binding with an explicit
-                    // `(String, …)` annotation promotes bare `&str` elements to
-                    // owned `String` (mirrors the return-position coercion).
-                    self.coerce_tuple_literal_elements(ty, val);
+                    // (One-string-type ADR: the Q38 owned-string-literal
+                    // binding promotion and the Q39 tuple-element promotion are
+                    // gone. A string literal is born `Ty::String`, so
+                    // `let s = "x"` already binds an owned, drop-safe `String`
+                    // identical to `let s: String = "x"`. There is no `&str`
+                    // binding to promote, and no leak.)
                     let val_ty = self.ctx.resolve(&val.ty);
                     if let Err(e) = self.unify_or_coerce(ty, &val_ty, &val.span) {
                         self.type_error(e);
@@ -471,100 +445,6 @@ impl<'a> InferenceEngine<'a> {
                 Box::new(elem_ty),
                 crate::hir::types::ConstExpr::Lit(expected_len as u64),
             );
-        }
-    }
-
-    /// Q39 (rondo W21): a bare string literal in a TUPLE-ELEMENT position
-    /// whose expected slot is `String` must coerce to an owned `String`,
-    /// not stay `&str`. Without this, `def f -> (String, Bool); ("", false);`
-    /// types the tuple as `(&str, Bool)`, which fails to unify with the
-    /// declared `(String, Bool)` return — the all-positions literal-coercion
-    /// work (pin 922) covered owned/borrow/field/`Err()` positions but not
-    /// tuple constructor elements.
-    ///
-    /// Mirrors the `Err("msg")` precedent in `expr.rs` (the literal lowers
-    /// through `ruxen_string_from` to an owned String regardless, so setting
-    /// the element's `.ty = String` matches codegen and introduces no drop
-    /// hazard — the storage is already a heap-owned copy). Only a bare
-    /// `StringLiteral` element typed `&str`/`str` against a `String` expected
-    /// slot is rewritten; every other slot is left untouched, so a genuine
-    /// `(Int, Bool)` vs `(String, Bool)` mismatch still errors downstream.
-    fn coerce_tuple_literal_elements(&mut self, expected: &Ty, val: &mut HirExpr) {
-        let expected_resolved = self.ctx.resolve(expected);
-        let Ty::Tuple(expected_slots) = &expected_resolved else {
-            return;
-        };
-        // Descend into structural expressions whose tail values are what
-        // actually flow into the tuple slot — `if/else` branches, block
-        // tails, and match arms — so a `-> (String, Bool)` body spelled
-        // `if c then ("a", true) else ("", false) end` coerces each branch's
-        // own tuple literal. Mirrors `auto_wrap_option_some`'s descent.
-        match &mut val.kind {
-            HirExprKind::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                self.coerce_tuple_literal_elements(&expected_resolved, then_branch);
-                if let Some(e) = else_branch {
-                    self.coerce_tuple_literal_elements(&expected_resolved, e);
-                    // Re-pin the `If`'s own (now-stale) type to a branch's
-                    // coerced tuple type so `body_ty` at the return seam
-                    // reflects the element rewrite. Use the THEN branch's type
-                    // (only its String-literal-in-String-slot elements were
-                    // rewritten — every other slot is untouched), so a genuine
-                    // mismatch in a non-coerced slot still surfaces in the
-                    // later `unify_or_coerce`.
-                    if matches!(self.ctx.resolve(&then_branch.ty), Ty::Tuple(_))
-                        && matches!(self.ctx.resolve(&e.ty), Ty::Tuple(_))
-                    {
-                        val.ty = self.ctx.resolve(&then_branch.ty);
-                    }
-                }
-                return;
-            }
-            HirExprKind::Block(_, Some(tail)) => {
-                self.coerce_tuple_literal_elements(&expected_resolved, tail);
-                if matches!(self.ctx.resolve(&tail.ty), Ty::Tuple(_)) {
-                    val.ty = self.ctx.resolve(&tail.ty);
-                }
-                return;
-            }
-            HirExprKind::Match { arms, .. } => {
-                for arm in arms.iter_mut() {
-                    self.coerce_tuple_literal_elements(&expected_resolved, &mut arm.body);
-                }
-                if let Some(first) = arms.first() {
-                    if matches!(self.ctx.resolve(&first.body.ty), Ty::Tuple(_)) {
-                        val.ty = self.ctx.resolve(&first.body.ty);
-                    }
-                }
-                return;
-            }
-            _ => {}
-        }
-        let HirExprKind::Tuple(elems) = &mut val.kind else {
-            return;
-        };
-        if elems.len() != expected_slots.len() {
-            return;
-        }
-        let mut changed = false;
-        for (elem, slot_ty) in elems.iter_mut().zip(expected_slots.iter()) {
-            if !matches!(self.ctx.resolve(slot_ty), Ty::String) {
-                continue;
-            }
-            let elem_ty = self.ctx.resolve(&elem.ty);
-            if matches!(elem.kind, HirExprKind::StringLiteral(_))
-                && matches!(elem_ty, Ty::Str | Ty::Ref(_))
-            {
-                elem.ty = Ty::String;
-                changed = true;
-            }
-        }
-        if changed {
-            let tys: Vec<Ty> = elems.iter().map(|e| self.ctx.resolve(&e.ty)).collect();
-            val.ty = Ty::Tuple(tys);
         }
     }
 
@@ -723,27 +603,6 @@ impl<'a> InferenceEngine<'a> {
     /// Function arguments are NOT yet rewritten here — callers
     /// should write `Some(x)` explicitly at call sites for now;
     /// sweep planned.
-    /// Promote an un-annotated `let` bound to a bare string literal to an owned
-    /// `String` binding. The resolver types a string literal `Ty::Str`; MIR
-    /// then lowers it through `ruxen_string_from` to a heap-owned `String`. If
-    /// the binding keeps the `&str` type, drop elaboration (which only frees
-    /// `Ty::String`) skips it and the heap copy leaks. Binding `String` makes
-    /// `let s = "x"` own + drop exactly like `let s: String = "x"`.
-    ///
-    /// Fires ONLY when the binding slot is unconstrained — `expected` is an
-    /// unresolved `Infer` var (no annotation, nothing else has pinned it) — and
-    /// `val` is a bare `StringLiteral`. An explicit `let s: &str = "x"` keeps
-    /// `expected = Ty::Str` (not Infer) and is left alone, as is every
-    /// call-site/argument coercion path (those don't run through here).
-    pub(super) fn promote_bare_string_literal_binding(&mut self, expected: &Ty, val: &mut HirExpr) {
-        if !self.ctx.resolve(expected).is_infer() {
-            return;
-        }
-        if matches!(val.kind, HirExprKind::StringLiteral(_)) {
-            val.ty = Ty::String;
-        }
-    }
-
     pub(super) fn auto_wrap_option_some(&mut self, expected: &Ty, val: &mut HirExpr) {
         let expected_resolved = self.ctx.resolve(expected);
         let inner = match &expected_resolved {
@@ -857,13 +716,13 @@ impl<'a> InferenceEngine<'a> {
     }
 
     /// Returns `true` if the type is acceptable as an argument to `puts`,
-    /// `eputs`, or `print`.  Strings in any common form (`String`, `&str`,
-    /// `&String`, `&&str`) qualify, as do zero-arg functions that return
-    /// such a type (MIR auto-invokes them). `Infer`, `Error`, and `Never`
-    /// are permitted to avoid cascading diagnostics.
+    /// `eputs`, or `print`.  Strings in any common form (`String`,
+    /// `&String`) qualify, as do zero-arg functions that return such a type
+    /// (MIR auto-invokes them). `Infer`, `Error`, and `Never` are permitted
+    /// to avoid cascading diagnostics.
     pub(super) fn is_puts_compatible(ty: &Ty) -> bool {
         match ty {
-            Ty::String | Ty::Str | Ty::Infer(_) | Ty::Error | Ty::Never => true,
+            Ty::String | Ty::Infer(_) | Ty::Error | Ty::Never => true,
             Ty::Ref(inner)
             | Ty::RefMut(inner)
             | Ty::RefLifetime(_, inner)

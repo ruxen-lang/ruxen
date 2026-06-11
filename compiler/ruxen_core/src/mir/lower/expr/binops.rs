@@ -210,8 +210,8 @@ impl<'a> Lowerer<'a> {
                 // instead. Matches the existing string-interpolation
                 // lowering, which already calls the same runtime fn.
                 if matches!(op, BinOp::Add)
-                    && matches!(left.ty, Ty::String | Ty::Str)
-                    && matches!(right.ty, Ty::String | Ty::Str)
+                    && matches!(left.ty, Ty::String)
+                    && matches!(right.ty, Ty::String)
                 {
                     let dest = self.new_temp(Ty::String);
                     self.emit(MirInst::Call {

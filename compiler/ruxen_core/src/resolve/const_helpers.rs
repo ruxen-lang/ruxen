@@ -133,10 +133,7 @@ pub(super) fn ty_is_valid_hash_key(
     if ty.is_integer() || ty.is_float() {
         return true;
     }
-    if matches!(
-        ty,
-        Ty::Bool | Ty::Char | Ty::Unit | Ty::String | Ty::Str | Ty::Never
-    ) {
+    if matches!(ty, Ty::Bool | Ty::Char | Ty::Unit | Ty::String | Ty::Never) {
         return true;
     }
     match ty {

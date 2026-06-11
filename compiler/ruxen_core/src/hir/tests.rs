@@ -63,7 +63,9 @@ mod tests {
     #[test]
     fn immutable_ref_is_copy() {
         assert!(Ty::Ref(Box::new(Ty::String)).is_copy());
-        assert!(Ty::Str.is_copy());
+        // A `&String` borrow is Copy; an owned `String` is Move (the old
+        // Copy `&str` type was removed — one-string-type ADR).
+        assert!(!Ty::String.is_copy());
     }
 
     #[test]
@@ -465,7 +467,6 @@ mod tests {
         assert_eq!(format!("{}", Ty::Unit), "()");
         assert_eq!(format!("{}", Ty::Never), "Never");
         assert_eq!(format!("{}", Ty::String), "String");
-        assert_eq!(format!("{}", Ty::Str), "&str");
     }
 
     #[test]

@@ -1,20 +1,19 @@
-# Bare string literals coerce to `String` in EVERY position — the invariant
-# that let us DELETE `String.from` from the language entirely (the old
-# `String.from("literal")` idiom across docs + stdlib + the four repos). A bare
-# `"x"` coerces to an owned `String` in owned positions and to `&String` in
-# borrow positions; converting a runtime `&String`/`&str` value to owned is now
+# Bare string literals are born owned `String` and work in EVERY position — the
+# invariant that let us DELETE `String.from` from the language entirely (the old
+# `String.from("literal")` idiom across docs + stdlib + the four repos), and
+# that lets a bare literal satisfy a `&String` borrow param at the call site
+# (the call site auto-refs). One string type only: `&str` is removed
+# (one-string-type ADR). Converting a runtime `&String` value to owned is
 # spelled `x.clone` / `x.to_string`, never a literal. This pin RUNS and asserts
-# stdout so the coercion can never silently regress (a regression would break
-# the whole swept corpus across the four repos).
+# stdout so the model can never silently regress (a regression would break the
+# whole swept corpus across the four repos).
 #
 # Positions covered (OWNED direction): function param, struct/class field,
 # static-method arg, Err(...) into Result[T, String], Array[String].push, var
 # reassignment + interpolation, function return, heap String dropped at scope
-# exit. (BORROW direction): bare literal into a `&String` param, into a `&str`
-# param, and as the borrowed `&String` needle of `include?`. The bare literal
-# coerces to whichever the position needs — `""` is owned `String`, and at a
-# call site it also satisfies `&String`/`&str`; `&""` is `&&str` and only the
-# bare form is the idiom for borrow positions.
+# exit. (BORROW direction): bare literal into a `&String` param, and as the
+# borrowed `&String` needle of `include?` — the bare form is the idiom (the
+# call site borrows the owned literal; no leading `&` needed).
 
 class Person
   name: String              # field holds an owned String
@@ -31,15 +30,10 @@ def label(s: String) -> String
   s
 end
 
-# BORROW direction: a bare literal also coerces into a `&String` param and a
-# `&str` param at the call site (`&String` and `&str` are distinct types the
-# compiler bridges as equivalent). Write the BARE literal — `&"lit"` is `&&str`
-# and only works by call-site coercion, so the bare form is the idiom.
+# BORROW direction: a bare (owned `String`) literal satisfies a `&String` param
+# at the call site (the call site auto-refs). Write the BARE literal — the bare
+# form is the idiom for borrow positions.
 def borrow_string(s: &String) -> USize
-  s.size
-end
-
-def borrow_str(s: &str) -> USize
   s.size
 end
 
@@ -87,9 +81,8 @@ def main
     Err(e) -> puts "err #{e}"
   end
 
-  # borrow direction: bare literal into a &String param and a &str param
+  # borrow direction: bare literal into a &String param (call site auto-refs)
   puts "#{borrow_string("abcd")}"
-  puts "#{borrow_str("abc")}"
 
   # borrowed needle arg: a bare literal coerces to the `&String` needle of
   # `include?` (the idiom — no leading `&` needed)

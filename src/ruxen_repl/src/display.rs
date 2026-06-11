@@ -66,7 +66,7 @@ pub fn format_value(raw: i64, ty: &Ty) -> String {
                 format!("'\\u{{{:x}}}'", raw)
             }
         }
-        Ty::String | Ty::Str => {
+        Ty::String => {
             if raw == 0 {
                 "\"\"".to_string()
             } else {
@@ -119,7 +119,6 @@ pub fn format_type(ty: &Ty) -> String {
         Ty::Unit => "Unit".to_string(),
         Ty::Never => "Never".to_string(),
         Ty::String => "String".to_string(),
-        Ty::Str => "&str".to_string(),
         Ty::Array(inner) => format!("Array[{}]", format_type(inner)),
         Ty::Map(k, v) => format!("Hash[{}, {}]", format_type(k), format_type(v)),
         Ty::Set(inner) => format!("Set[{}]", format_type(inner)),
@@ -239,7 +238,6 @@ mod tests {
         assert_eq!(format_type(&Ty::Unit), "Unit");
         assert_eq!(format_type(&Ty::Never), "Never");
         assert_eq!(format_type(&Ty::String), "String");
-        assert_eq!(format_type(&Ty::Str), "&str");
     }
 
     #[test]
@@ -369,7 +367,6 @@ mod tests {
     #[test]
     fn format_value_string_null_pointer_is_empty_quotes() {
         assert_eq!(format_value(0, &Ty::String), "\"\"");
-        assert_eq!(format_value(0, &Ty::Str), "\"\"");
     }
 
     #[test]
@@ -379,7 +376,6 @@ mod tests {
         let cstr = b"hello\0";
         let ptr = cstr.as_ptr() as usize as i64;
         assert_eq!(format_value(ptr, &Ty::String), "\"hello\"");
-        assert_eq!(format_value(ptr, &Ty::Str), "\"hello\"");
     }
 
     #[test]

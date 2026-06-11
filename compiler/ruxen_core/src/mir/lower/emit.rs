@@ -160,7 +160,12 @@ impl<'a> Lowerer<'a> {
     /// `ruxen_string_from` copies it to the heap so `String::drop` is
     /// safe on the result. (P0.7)
     pub(super) fn emit_owned_string_literal(&mut self, value: &str) -> LocalId {
-        let raw = self.new_temp(Ty::Str);
+        // `raw` is the `.rodata const char*` (`*Char` / `Ty::RawPtr(Char)`) —
+        // an un-owned, never-dropped pointer. `ruxen_string_from` heap-copies
+        // it into an owned `Ty::String`, which IS drop-safe. Typing `raw` as a
+        // raw pointer (not `Ty::String`) keeps the drop elaborator from ever
+        // freeing the static `.rodata` address.
+        let raw = self.new_temp(Ty::RawPtr(Box::new(Ty::Char)));
         self.emit(MirInst::StringLiteral {
             dest: raw,
             value: value.to_string(),

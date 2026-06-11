@@ -12,7 +12,7 @@ class Doc
   def init
     self.out = ""
   end
-  def line(s: &str) -> nil
+  def line(s: &String) -> nil
     self.out = "#{self.out}#{s};"
   end
   def section -> nil

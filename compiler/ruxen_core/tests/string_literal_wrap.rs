@@ -129,12 +129,12 @@ fn string_literal_lowers_through_string_from_wrapper() {
 /// `String.from("literal")` everywhere. OWNED direction — function param,
 /// struct field, static-method arg, `Err(...)` into `Result[T, String]`,
 /// `Array[String].push`, var reassignment + interpolation, return. BORROW
-/// direction — a bare literal into a `&String` param, into a `&str` param, and
-/// as the borrowed `&String` needle of `include?` (`""` is owned `String`; at a
-/// call site it also satisfies `&String`/`&str` — the two are distinct types
-/// the unifier bridges as equivalent). Zero typeck errors is the invariant; a
-/// regression would break the whole swept corpus across the four repos (docs +
-/// stdlib). The run+stdout half is pinned by release-e2e
+/// direction — a bare literal into a `&String` param and as the borrowed
+/// `&String` needle of `include?` (`""` is born owned `String`; at a call site
+/// it also satisfies a `&String` param — the call site auto-refs). One string
+/// type only: `&str` is gone (one-string-type ADR). Zero typeck errors is the
+/// invariant; a regression would break the whole swept corpus across the four
+/// repos (docs + stdlib). The run+stdout half is pinned by release-e2e
 /// `922_string_literal_coercion_all_positions`.
 #[test]
 fn bare_string_literal_coerces_to_string_in_all_positions() {
@@ -154,9 +154,6 @@ end
 def borrow_string(s: &String) -> USize
   s.size
 end
-def borrow_str(s: &str) -> USize
-  s.size
-end
 def check(a: Int, b: Int) -> Result[Int, String]
   if b == 0
     Err("nope")
@@ -174,10 +171,10 @@ def main
   msg = "now #{label("end")}"
   puts msg
   let _ = check(1, 0)
-  # BORROW direction: a bare literal also coerces into &String and &str params,
-  # and to the borrowed `&String` needle of `include?` (no leading `&` needed).
+  # BORROW direction: a bare (owned `String`) literal also satisfies a
+  # `&String` param, and the borrowed `&String` needle of `include?` (no
+  # leading `&` needed — the call site borrows the owned literal).
   let _b1 = borrow_string("abcd")
-  let _b2 = borrow_str("abc")
   let _b3 = "haystack".include?("st")
 end
 "##;

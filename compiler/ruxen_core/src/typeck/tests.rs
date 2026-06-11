@@ -223,12 +223,9 @@ mod tests {
         assert!(can_coerce(&from, &to, &ctx));
     }
 
-    #[test]
-    fn coerce_ref_string_to_str() {
-        let ctx = TypeContext::new();
-        let from = Ty::Ref(Box::new(Ty::String));
-        assert!(can_coerce(&from, &Ty::Str, &ctx));
-    }
+    // (The `coerce_ref_string_to_str` test was removed with the `&str` type —
+    // `&String` is the only string borrow type now, so there is no
+    // `&String → &str` coercion to exercise. one-string-type ADR.)
 
     #[test]
     fn coerce_int_to_float() {

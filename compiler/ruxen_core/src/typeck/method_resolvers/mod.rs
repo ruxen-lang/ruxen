@@ -252,14 +252,14 @@ mod golden {
             v.push(c(Ty::String, m));
         }
 
-        // ── Ty::Str — fully migrated to `class String` via the bridge ──
-        // The exact-match `&str` surfaces, AND (Feature E) `to_lower`/
-        // `to_upper`/`parse_uint`, now resolve from `class String` via the
-        // bridge (`method_home_key: Ty::Str → "String"`); under the
-        // golden's EMPTY symbol table they return None, so there is NOTHING
-        // to pin here. `to_lower`/`to_upper` yield `String` (the C symbols
-        // `malloc` an owned buffer — the old `-> str` arm wrongly claimed a
-        // borrowed slice); `parse_uint` is now declared on `class String`
+        // ── String surface — fully resolves from `class String` ──
+        // One-string-type ADR: there is one string type. All string methods
+        // (incl. Feature E's `to_lower`/`to_upper`/`parse_uint`) resolve from
+        // `class String` via the bridge; a `&String` borrow peels to `String`
+        // in `method_home_key`. Under the golden's EMPTY symbol table they
+        // return None, so there is NOTHING to pin here. `to_lower`/`to_upper`
+        // yield `String` (the C symbols `malloc` an owned buffer);
+        // `parse_uint` is declared on `class String`
         // (`def parse_uint -> Result[USize, Error]`). End-to-end coverage:
         // `45_string_methods`, `113_string_methods_chain`,
         // `632_str_to_lower_upper`, `633_str_parse_uint`.

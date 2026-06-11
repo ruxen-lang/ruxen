@@ -771,6 +771,33 @@ fn string_local_is_freed_on_scope_exit() {
     );
 }
 
+/// One-string-type ADR drop-safety pin: a bare string literal is born owned
+/// `String` (heap-copied via `ruxen_string_from`) and freed once at scope exit;
+/// `.clone` allocates a SECOND independent owned `String` that is also freed
+/// once. The counters must balance (`outstanding=0`) and BOTH the owned literal
+/// local and the clone must fire a string free (>=2) — no leak, no double-free.
+/// This is the regression pin for the `&str` removal: with the old `&str` type,
+/// a literal-typed local was excluded from drop elaboration (it leaked), and an
+/// owned-typed view of a borrow double-freed the source. (The bare-literal-into-
+/// `&String`-param zero-copy borrow provenance is a separate filed follow-up;
+/// see `docs/decisions/one-string-type.md`.)
+#[test]
+fn string_literal_and_clone_are_drop_safe() {
+    let source = rx("string_literal_borrow_clone_matrix");
+    let report = run_fixture_inline("string_literal_borrow_clone_matrix", &source);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "leak or double-free: {:#?}",
+        report
+    );
+    assert!(
+        report.string_frees >= 2,
+        "expected the owned literal local AND the clone to each free a String \
+         (>=2): {:#?}",
+        report
+    );
+}
+
 /// An `Array[_]` local bound from `Array.new` (with at least one push) must
 /// have both its struct slot and its `data` buffer freed by scope-exit
 /// drop. (P0.7)

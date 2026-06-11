@@ -35,8 +35,14 @@ impl Resolver {
                 }
             }
             ast::ExprKind::StringLiteral(s) => HirExpr {
+                // One-string-type ADR (docs/decisions/one-string-type.md): a
+                // string literal is born `Ty::String` (owned). MIR's
+                // `emit_owned_string_literal` heap-copies the `.rodata` pointer
+                // through `ruxen_string_from`, so scope-exit drop is safe. The
+                // old `Ty::Str` (`&str`) birth + the Q38/Q39 owned-position
+                // promotion patches are gone — there is no `&str` to promote.
                 kind: HirExprKind::StringLiteral(s.clone()),
-                ty: Ty::Str,
+                ty: Ty::String,
                 span,
             },
             ast::ExprKind::InterpolatedString(parts) => {

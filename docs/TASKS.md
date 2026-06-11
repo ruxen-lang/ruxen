@@ -247,37 +247,51 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       release-e2e `924_tuple_element_string_literal_coercion` (rondo's exact
       `(String, Bool)` shape, RUN+stdout). rondo can drop the W21 workaround.
       Details §Q39.
-- [ ] **`&str` removal — collapse the string-borrow type to `&String` only
-      (NEW 2026-06-10, user-requested; take after the Q38 leak fix).** The user
-      asks: why two string types (`String` owned + `Str`/`&str` borrow)? Target
-      model — ONE owned type `String`, and its borrow `&String`; remove the
-      distinct `Ty::Str` (`&str`) primitive. Today `Ty::Str` is a separate
-      variant (`hir/types.rs:280`) that the unifier already bridges to `&String`
-      (`unify.rs:380`: `(Ref(String), Str)` equal); string literals are born
-      `Ty::Str` (`resolve/exprs.rs:39`); `&str`-headed methods mangle
-      `&str_<m>`. Scope to map before doing: (1) resolver — literals born as
-      owned `String` (the Q38 promotion already does this for un-annotated
-      `let`); (2) `resolve_type_expr` — accept `&str` spelling as sugar for
-      `&String` (back-compat) or migrate annotations; (3) method homes — fold
-      `&str`/`Str` method set into `String`/`&String` (`mixins.rs::method_home_key`
-      maps `Str→…`); (4) FFI ABI — a Ruxen `String` is a bare `char*` (no length
-      header, `ruby-block`/Q29 facts), so `&str` and `&String` are the SAME
-      representation at the boundary — the collapse is representationally free,
-      it's a type-system + method-home consolidation. (5) sweep `let x: &str`
-      annotations + `&"lit"` idioms; update tutorial 29's `String` vs `&str` box.
-      (6) the NESTED-PAYLOAD coercion remainder: a `&str` literal does not coerce
-      into a `String` slot nested inside a generic payload —
-      `opt.ok_or("missing")` builds `Result[Int, &str]` and won't coerce to
-      `Result[Int, String]` (TODO in `infer/mod.rs::unify_or_coerce`; naively
-      rewriting the inner `.ty` to `String` while storage stays `Str` risks a
-      payload drop double-free). Workaround today: bind an owned `let miss:
-      String = "missing"` and pass `miss.clone` (release-e2e 116 uses this since
-      `String.from` was deleted 2026-06-11). The DIRECT `Err("msg")` constructor
-      IS fixed (payload `.ty` set at construction); the tuple-element position is
-      now fixed too (Q39). The remaining gap is ONLY the generic-method-return
-      payload (`ok_or`).
-      Collapsing `&str` dissolves this class. Sizeable but mechanical; pin parity
-      + full corpus. Design doc first.
+- [x] **`&str` removal — collapse the string-borrow type to `&String` only
+      (DONE 2026-06-11, user-requested; ADR `docs/decisions/one-string-type.md`).**
+      Ruxen now has exactly `String` (owned) + `&String` (borrowed). The
+      `Ty::Str` variant is ELIMINATED (`hir/types.rs`), the unify bridge
+      (`unify.rs:380`) and `&str→String` coerce arm deleted, the `method_home_key`
+      Str arm and `&str` Display arms gone. A string literal is BORN owned
+      `Ty::String` (`resolve/exprs.rs`); the Q38/Q39 owned-position promotion
+      patches and the `Err("msg")` payload rewrite were removed (subsumed). The
+      raw `.rodata`/FFI `char*` temps that used `Ty::Str` are now
+      `Ty::RawPtr(Char)`. `str`/`&str` in a type annotation errors with new
+      **E0730** (`docs/errors/E0730.md`; hint → `String`/`&String`). Stdlib swept
+      (`as_str -> &String` — a borrow, drop-safe; `trim*/-> String` — owned).
+      What died: the `&str`-vs-closure overload heap-corruption landmine
+      (gui-stack Q1), the `&"literal"`-is-`&&str` oddity (now a clean `&String`),
+      and the nested-payload double-free caution (case 116 — `ok_or("missing")`
+      now builds `Result[_, String]` directly). Diagnostics/REPL `:type`/LSP/fmt
+      never print `str`. Pins: `string_literal_wrap.rs`, e2e 116/643/922/923/924,
+      REPL session, `drop_fixtures.rs::string_literal_and_clone_are_drop_safe`.
+      Gate: `cargo test --workspace` 1983 pass; `release-e2e/run.sh` 832/832
+      (parity + LSP + REPL); clippy/fmt clean. Apps to sweep post-install
+      (coordinator): canvas 4 `&str` sites (`examples/demo.rx:3`,
+      `src/canvas.rx:662,681`, `src/path.rx:101`); quiver 1 comment
+      (`src/dsl.rx:25` — the dead landmine note); rondo 0.
+- [ ] **Follow-up (one-string-type ADR): zero-copy `&String` borrow of a literal.**
+      A bare string literal passed DIRECTLY to a `&String` param currently
+      heap-copies (copy-everywhere) and the copy lands in a borrow-typed slot
+      that nobody frees → it LEAKS (pre-existing; see next item for the root
+      cause — it leaked identically under the old `&str` model). The sound fix:
+      when a `StringLiteral` is lowered in a borrow-param position, emit the raw
+      `.rodata` pointer (`Ty::RawPtr(Char)`, an immortal borrow) instead of
+      heap-copying — zero-copy AND leak-free. Needs param-target-type-aware arg
+      lowering (the "deep provenance plumbing" the ADR flagged). Pin: extend the
+      drop matrix with `borrow_len("transient")` once landed.
+- [ ] **Discovered drop-elaboration gap: a `String` passed to a USER function's
+      `&String` param suppresses the source's scope-exit free → LEAK.**
+      `let owned = "x"; user_fn(owned)` where `user_fn(s: &String)` taints `owned`
+      in `compute_dealloc_safe_locals` (`mir/lower/drops.rs` / `runtime_abi.rs`):
+      the default `callee_ownership` for a user fn treats the arg as consumed,
+      so `owned`'s `ruxen_string_free` is dropped. PRE-EXISTING (orthogonal to
+      `&str` removal — affects any heap type passed to a user borrow param);
+      surfaced by the one-string-type drop-matrix pin. Fix: thread the user fn's
+      declared param borrow-ness (`self_mode`/`Ty::Ref` param) into
+      `callee_ownership` so a `&T` param marks the arg borrowed, not consumed.
+      Repro: `def f(s: &String) -> USize; s.size; end; def main; let o = "x";
+      let _ = f(o); end` leaks 1 string (drop_fixtures harness, raw_outstanding=1).
 - [x] **Q32 · S3 — Q16 flat-merge of an FFI dependency broke `ruxen test` at
       link (FIXED 2026-06-10).** A consumer's test EXECUTABLE flat-merged the
       FFI dep's `src/**.rx` (incl. `lib "C"`-calling bodies) but neither

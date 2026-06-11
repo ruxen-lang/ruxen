@@ -665,9 +665,19 @@ impl Resolver {
             }
         }
 
-        // Special case: &str
+        // One-string-type ADR (docs/decisions/one-string-type.md): `str` is
+        // not a type in Ruxen. There is exactly one string pair — `String`
+        // (owned) and `&String` (borrowed). Reject the `str` / `&str` spelling
+        // with a clear hint instead of minting a now-deleted `Ty::Str`.
         if name == "str" {
-            return Ty::Str;
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "`str` is not a type in Ruxen — use `String` for an owned \
+                 string or `&String` for a borrowed reference"
+                    .to_string(),
+                path.span.clone(),
+                "E0730",
+            ));
+            return Ty::Error;
         }
 
         self.error(format!("undefined type `{}`", name), &path.span);

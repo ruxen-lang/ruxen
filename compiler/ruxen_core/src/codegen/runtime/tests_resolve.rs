@@ -1,6 +1,6 @@
 //! Tests for `runtime_name` resolution behaviour: rejection of unknown
 //! generic methods, identity passthrough for user-defined methods, and
-//! the small `super` / `yield` / `&str_as_str` / `Thread_*` arms.
+//! the small `super` / `yield` / `Thread_*` arms.
 
 use super::*;
 
@@ -81,13 +81,12 @@ fn user_defined_methods_forward() {
 }
 
 #[test]
-fn yield_super_and_str_identity_still_resolve() {
+fn yield_and_super_still_resolve() {
     assert_eq!(runtime_name("super").unwrap(), "ruxen_noop");
     assert_eq!(runtime_name("yield").unwrap(), "ruxen_noop_passthrough");
-    assert_eq!(
-        runtime_name("&str_as_str").unwrap(),
-        "ruxen_noop_passthrough"
-    );
+    // (One-string-type ADR: the `&str_as_str` compiler-internal arm was
+    // removed with the `&str` type. `as_str` is now an ordinary `class String`
+    // FFI decl — `String_as_str` resolves through the alias map, not here.)
 }
 
 #[test]

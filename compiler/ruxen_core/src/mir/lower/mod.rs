@@ -412,26 +412,19 @@ impl<'a> Lowerer<'a> {
                 arg.ty.is_infer()
                     || arg.ty.is_error()
                     || arg.ty == param.ty
-                    || matches!((&arg.ty, &param.ty), (Ty::Str, Ty::String))
-                    || matches!((&arg.ty, &param.ty), (Ty::String, Ty::Str))
-                    || matches!(
-                        (&arg.ty, &param.ty),
-                        (Ty::Ref(a), Ty::Ref(b)) if matches!((&**a, &**b), (Ty::Str, Ty::String))
-                    )
                     // A by-value argument satisfies a `&T`/`&mut T` parameter
-                    // of the same underlying type (the call site auto-refs).
-                    // `Str` and `String` are unified here so a `"..."` literal
-                    // (`Ty::Str`) matches a `&str`/`&String` parameter — the
-                    // missing arm that let an `add("static")` call fall through
-                    // to the arity-only fallback and bind the FIRST-declared
-                    // overload (a closure one), mismatching the symbol name.
-                    // Mirrors the typeck selector in
+                    // of the same underlying type (the call site auto-refs), so
+                    // a `String` literal/value matches a `&String` parameter —
+                    // the arm that lets an `add("static")` call bind the right
+                    // overload instead of falling through to the arity-only
+                    // fallback and binding the FIRST-declared (closure) overload
+                    // (the old `&str`-vs-closure heap-corruption landmine, now
+                    // dissolved — there is no `&str` arm to collide). Mirrors
+                    // the typeck selector in
                     // `typeck/infer/collect.rs::method_accepts_args`.
                     || matches!(
                         &param.ty,
-                        Ty::Ref(inner) | Ty::RefMut(inner)
-                            if **inner == arg.ty
-                                || matches!((&arg.ty, &**inner), (Ty::Str, Ty::String) | (Ty::String, Ty::Str))
+                        Ty::Ref(inner) | Ty::RefMut(inner) if **inner == arg.ty
                     )
             })
     }

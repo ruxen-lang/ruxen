@@ -325,7 +325,7 @@ impl<'a> Lowerer<'a> {
                         args: vec![MirValue::Use(lhs), MirValue::Use(rhs)],
                     });
                     dest
-                } else if matches!(field_ty, Ty::String | Ty::Str) {
+                } else if matches!(field_ty, Ty::String) {
                     let dest = mir_fn.new_temp(Ty::Bool);
                     mir_fn.blocks[entry].instructions.push(MirInst::Call {
                         dest: Some(dest),
@@ -396,7 +396,7 @@ impl<'a> Lowerer<'a> {
                         args: vec![MirValue::Use(field_local)],
                     });
                     dest
-                } else if matches!(field_ty, Ty::String | Ty::Str) {
+                } else if matches!(field_ty, Ty::String) {
                     let dest = mir_fn.new_temp(Ty::Int);
                     mir_fn.blocks[entry].instructions.push(MirInst::Call {
                         dest: Some(dest),
@@ -546,7 +546,7 @@ impl<'a> Lowerer<'a> {
                 continue;
             }
 
-            if matches!(field.ty, Ty::String | Ty::Str) {
+            if matches!(field.ty, Ty::String) {
                 let cmp = mir_fn.new_temp(Ty::Int);
                 mir_fn.blocks[current_block]
                     .instructions
@@ -648,7 +648,7 @@ impl<'a> Lowerer<'a> {
         if ty_is_effectively_copy(field_ty, self.symbols) {
             return src;
         }
-        if matches!(field_ty, Ty::String | Ty::Str) {
+        if matches!(field_ty, Ty::String) {
             let dest = mir_fn.new_temp(field_ty.clone());
             mir_fn.blocks[block].instructions.push(MirInst::Call {
                 dest: Some(dest),
@@ -1176,7 +1176,7 @@ impl<'a> Lowerer<'a> {
             });
             return dest;
         }
-        if matches!(field_ty, Ty::String | Ty::Str) {
+        if matches!(field_ty, Ty::String) {
             return field_local;
         }
         if let Some(inner_struct_name) = self.struct_with_derive_debug(field_ty) {
@@ -1246,7 +1246,10 @@ impl<'a> Lowerer<'a> {
             return dest;
         }
         if matches!(ty, Ty::String) {
-            let raw = mir_fn.new_temp(Ty::Str);
+            // The default `String` is an owned, heap-copied empty string. The
+            // `raw` temp is the `.rodata const char*` (`*Char`); only the
+            // `ruxen_string_from` result is the drop-safe owned `Ty::String`.
+            let raw = mir_fn.new_temp(Ty::RawPtr(Box::new(Ty::Char)));
             mir_fn.blocks[block]
                 .instructions
                 .push(MirInst::StringLiteral {
@@ -1259,16 +1262,6 @@ impl<'a> Lowerer<'a> {
                 callee: "ruxen_string_from".to_string(),
                 args: vec![MirValue::Use(raw)],
             });
-            return dest;
-        }
-        if matches!(ty, Ty::Str) {
-            let dest = mir_fn.new_temp(Ty::Str);
-            mir_fn.blocks[block]
-                .instructions
-                .push(MirInst::StringLiteral {
-                    dest,
-                    value: String::new(),
-                });
             return dest;
         }
         if let Some(inner_name) = self.struct_with_derive_trait(ty, "Default") {

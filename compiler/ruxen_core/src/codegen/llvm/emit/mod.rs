@@ -408,7 +408,7 @@ pub(super) fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool 
 /// code.
 fn is_string_mir_ty(ty: &Ty) -> bool {
     match ty {
-        Ty::String | Ty::Str => true,
+        Ty::String => true,
         Ty::Class { name, .. } if name == "String" => true,
         Ty::Ref(inner)
         | Ty::RefMut(inner)
@@ -433,7 +433,6 @@ pub(super) fn simple_type_size(ty: &Ty) -> usize {
         | Ty::Float
         | Ty::Float64 => 8,
         Ty::String => 24,
-        Ty::Str => 16,
         Ty::Array(_) => 24,
         Ty::Map(_, _) | Ty::Set(_) => 48,
         Ty::Ref(_)

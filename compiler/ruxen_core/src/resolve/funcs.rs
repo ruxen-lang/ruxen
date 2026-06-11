@@ -44,12 +44,7 @@ impl Resolver {
         }
         args.iter()
             .zip(signature.params.iter())
-            .all(|(arg, param)| {
-                arg.ty.is_infer()
-                    || arg.ty.is_error()
-                    || arg.ty == param.ty
-                    || matches!((&arg.ty, &param.ty), (Ty::Str, Ty::String))
-            })
+            .all(|(arg, param)| arg.ty.is_infer() || arg.ty.is_error() || arg.ty == param.ty)
     }
 
     pub(super) fn select_overload_by_args(&self, def_id: DefId, args: &[HirExpr]) -> DefId {

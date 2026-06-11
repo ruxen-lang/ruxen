@@ -75,7 +75,7 @@ end
 
 mixin Serializable
   def serialize -> String
-  def self.deserialize(data: &str) -> Result[Self, TodoError]
+  def self.deserialize(data: &String) -> Result[Self, TodoError]
 end
 
 mixin Summarizable
@@ -148,7 +148,7 @@ class Todo
     "#{self.id}|#{self.title}|#{self.description}|#{self.priority.to_display}"
   end
 
-  def self.deserialize(data: &str) -> Result[Todo, TodoError]
+  def self.deserialize(data: &String) -> Result[Todo, TodoError]
     let parts: Array[String] = data.split("|")
     if parts.size < 4
       return Err(TodoError.ParseFailed(
@@ -157,8 +157,8 @@ class Todo
     end
 
     # parts is now Array[String] (split returns Array[String] for both
-    # &str and String receivers — pin B13). Convert each element back
-    # to &str at the call boundary.
+    # &String and String receivers — pin B13). Convert each element back
+    # to &String at the call boundary.
     let id = parts[0].as_str.parse_uint
       .map_err { |_| TodoError.ParseFailed(message: "invalid id") }?
 
@@ -188,7 +188,7 @@ class TimedTodo < Todo
     super(id, title, description, priority)
   end
 
-  def is_overdue(current_date: &str) -> Bool
+  def is_overdue(current_date: &String) -> Bool
     # Simple string comparison — a real app would use proper date types
     !self.is_done && current_date > &self.deadline
   end
@@ -319,7 +319,7 @@ end
 
 # --- Helper Functions ---
 
-def parse_priority(input: &str) -> Result[Priority, TodoError]
+def parse_priority(input: &String) -> Result[Priority, TodoError]
   match input.trim.to_lower.as_str
     "low"      -> Ok(Priority.Low)
     "medium"   -> Ok(Priority.Medium)
@@ -350,7 +350,7 @@ def generate_report(tasks: &Array[&Todo]) -> String
 end
 
 # Demonstrates generic function with mixin bounds
-def print_items[T: Showable + Summarizable](items: &Array[T], label: &str)
+def print_items[T: Showable + Summarizable](items: &Array[T], label: &String)
   puts "--- #{label} ---"
   items.each do |item|
     if item.is_actionable
@@ -369,9 +369,9 @@ end
 # Demonstrates error propagation with ?
 def create_task_from_input(
   list: &var TodoList,
-  title: &str,
-  desc: &str,
-  priority_str: &str
+  title: &String,
+  desc: &String,
+  priority_str: &String
 ) -> Result[USize, TodoError]
   if title.empty?
     return Err(TodoError.MissingField(name: "title"))

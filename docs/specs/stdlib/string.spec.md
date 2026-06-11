@@ -1,16 +1,19 @@
-# Spec — `String` / `&str`
+# Spec — `String` / `&String` (one string type)
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §5.6](../../requirements/tier1_01_stdlib.md).
+ADR: [docs/decisions/one-string-type.md](../../decisions/one-string-type.md).
 
 **Status:** shipped Phase 2 #03-#04; ownership negatives Phase 2 #02;
 method surface self-hosted in `library/std/src/string.rx` since
-#06.8 T#13.
+#06.8 T#13. `&str` removed 2026-06-11 (one-string-type ADR).
 
-Ruxen's `String` is a heap-owned UTF-8 buffer; `&str` is a borrowed
-view.  Both share the same runtime representation at the FFI layer
-(`char*`).  Ownership and use-after-move are enforced statically by
-the borrow checker.
+Ruxen has exactly **one** string type pair: `String` (heap-owned UTF-8 buffer)
+and `&String` (a borrowed reference to one). There is no separate `str`/`&str`
+type — it was a parallel spelling of the same wire value (both are a bare
+`char*` at the FFI layer) and was removed. A type annotation that spells `str`
+is rejected with **E0730** (hint: use `String` or `&String`). Ownership and
+use-after-move are enforced statically by the borrow checker.
 
 ---
 
@@ -23,10 +26,10 @@ constructor:
 - a string literal is already an **owned `String`** (`let s = "x"`);
 - **`b.clone`** copies a runtime `String`/`&String` borrow `b` to a fresh owned
   `String` — the borrow→owned spelling that `String.from` used to serve;
-- **`s.to_string`** copies a `&str` value to an owned `String`.
+- **`b.to_string`** likewise copies a `&String` borrow to an owned `String`.
 
-**Given** `s: &str`
-**Then** `s.to_string` returns an owned `String`.
+**Given** `b: &String`
+**Then** `b.to_string` returns an owned `String`.
 
 **Given** `String.from(...)` (the deleted method)
 **Then** typeck rejects it with a clean `no method `from` on type `String``
@@ -77,9 +80,11 @@ Pin tests for these live in the E2E fixture set
 
 ## Out of scope (v2)
 
-- `String` interning / `&'static str` literal table.
+- `String` interning / static-literal borrow table (the zero-copy
+  `&String`-of-`.rodata` optimization for a literal in a borrow position — see
+  the one-string-type ADR follow-up).
 - Grapheme clusters (`chars()` returns Unicode scalar values, not
   grapheme clusters).
 - Regex (separate `std.regex` module, deferred).
-- `Cow[str]` — v1 chooses between `String` and `&str` at the source
-  level; no copy-on-write wrapper.
+- Copy-on-write strings — v1 chooses between an owned `String` and a `&String`
+  borrow at the source level; no copy-on-write wrapper.

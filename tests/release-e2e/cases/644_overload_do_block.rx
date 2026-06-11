@@ -5,7 +5,7 @@ class Col
     self.labels = Array.new
     self.computes = Array.new
   end
-  def var text(label: &str) -> nil
+  def var text(label: &String) -> nil
     self.labels.push(label.to_string)
   end
   def var text(f: any Fn[Fn() -> String]) -> nil

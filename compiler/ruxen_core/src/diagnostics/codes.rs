@@ -282,6 +282,14 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0729",
         title: "a closure / `Fn` value cannot be formatted into a string (no Display)",
     },
+    // One-string-type ADR (docs/decisions/one-string-type.md): `str` / `&str`
+    // is not a type in Ruxen. There is exactly one string pair — `String`
+    // (owned) and `&String` (borrowed). Emitted at resolve time when a type
+    // annotation spells `str`, with a hint pointing at `String` / `&String`.
+    CodeInfo {
+        code: "E0730",
+        title: "`str` is not a type; use `String` (owned) or `&String` (borrowed)",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`

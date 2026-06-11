@@ -97,9 +97,10 @@ end
     let tys = let_types_in(src, "main");
     assert_eq!(
         tys,
-        vec!["Pair[Int, &str]".to_string()],
+        vec!["Pair[Int, String]".to_string()],
         "Pair.new(42, \"hi\") should infer the constructor's generic args \
-         from the argument types (String literals carry &str)"
+         from the argument types (a string literal is born owned `String` — \
+         one-string-type ADR)"
     );
 }
 
@@ -132,9 +133,10 @@ end
     let tys = let_types_in(src, "main");
     assert_eq!(
         tys,
-        vec!["Asserter".to_string(), "Holder[&str]".to_string()],
-        "wrap(\"hello\") should harvest T -> &str from the argument, \
-         yielding Holder[&str] (without the harvest it stays Holder[T])"
+        vec!["Asserter".to_string(), "Holder[String]".to_string()],
+        "wrap(\"hello\") should harvest T -> String from the argument \
+         (a string literal is born owned `String` — one-string-type ADR), \
+         yielding Holder[String] (without the harvest it stays Holder[T])"
     );
 }
 

@@ -34,15 +34,17 @@
 //!     report `Unit` and shadow the ABI-faithful `.rx` `-> String` decls.
 //!
 //! MIGRATED to `string.rx` (Feature E) — these arms were deleted:
-//!   * `&str.to_lower`/`to_upper` — resolve via the bridge
-//!     (`method_home_key: Ty::Str → "String"`) to `class String`'s
+//!   * `to_lower`/`to_upper` — resolve via the bridge to `class String`'s
 //!     `-> String`. The C symbols `malloc` a fresh owned buffer, so
-//!     `String` is the CORRECT surface (the old `-> str` arm wrongly
-//!     claimed a borrowed slice). These use the normal call path (a real
-//!     dest), so unlike the mutation methods there is no Unit conflict.
-//!   * `&str.parse_uint` — now declared on `class String`
+//!     `String` is the CORRECT surface. These use the normal call path (a
+//!     real dest), so unlike the mutation methods there is no Unit conflict.
+//!   * `parse_uint` — declared on `class String`
 //!     (`def parse_uint as "ruxen_str_parse_uint" -> Result[USize, Error]`)
 //!     and resolves via the bridge.
+//!
+//! (One-string-type ADR: there is one string type, `String`; a `&String`
+//! borrow peels to `String` in `method_home_key`. The old separate `&str`
+//! surface — wire-identical at the C ABI — is gone.)
 
 use crate::hir::types::Ty;
 

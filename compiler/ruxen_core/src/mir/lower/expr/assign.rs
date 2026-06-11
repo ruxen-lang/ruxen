@@ -173,8 +173,8 @@ impl<'a> Lowerer<'a> {
                 // String redesign; closing it here would diverge from
                 // push_str semantics and confuse the leak-tracker tests.
                 if matches!(op, BinOp::Add)
-                    && matches!(target.ty, Ty::String | Ty::Str)
-                    && matches!(value.ty, Ty::String | Ty::Str)
+                    && matches!(target.ty, Ty::String)
+                    && matches!(value.ty, Ty::String)
                 {
                     if let HirExprKind::VarRef(def_id) = &target.kind {
                         if let Some(&dest) = self.def_to_local.get(def_id) {

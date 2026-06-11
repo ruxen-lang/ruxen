@@ -423,10 +423,7 @@ fn ty_is_effectively_clone(ty: &Ty, symbols: &SymbolTable) -> bool {
     if ty.is_integer() || ty.is_float() {
         return true;
     }
-    if matches!(
-        ty,
-        Ty::Bool | Ty::Char | Ty::Unit | Ty::String | Ty::Str | Ty::Never
-    ) {
+    if matches!(ty, Ty::Bool | Ty::Char | Ty::Unit | Ty::String | Ty::Never) {
         return true;
     }
     if ty_is_effectively_copy(ty, symbols) {
@@ -554,10 +551,7 @@ pub(crate) fn ty_satisfies_named_trait(ty: &Ty, trait_name: &str, symbols: &Symb
         // an IEEE-754 compare.
         return true;
     }
-    if matches!(
-        ty,
-        Ty::Bool | Ty::Char | Ty::Unit | Ty::String | Ty::Str | Ty::Never
-    ) {
+    if matches!(ty, Ty::Bool | Ty::Char | Ty::Unit | Ty::String | Ty::Never) {
         return true;
     }
 

@@ -6,7 +6,7 @@ class Sink
   def add(f: any Fn[Fn() -> String]) -> nil
     self.out.push(f.())
   end
-  def add(s: &str) -> nil
+  def add(s: &String) -> nil
     self.out.push(s.to_s)
   end
 end

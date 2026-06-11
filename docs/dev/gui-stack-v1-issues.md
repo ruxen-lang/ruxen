@@ -13,8 +13,15 @@ Partial fixes already exist locally (see "Existing partial work" at the end).
 
 ---
 
-## Q1 · S1 — `&str`-vs-closure method overload misdispatches → heap corruption  ✅ FIXED
+## Q1 · S1 — `&str`-vs-closure method overload misdispatches → heap corruption  ✅ FIXED (and DISSOLVED 2026-06-11)
 
+> **DISSOLVED by the `&str` removal (2026-06-11, one-string-type ADR).** With
+> exactly one string borrow type (`&String`), there is no `&str` arm left to
+> collide with a closure arm in overload selection — the entire class of bug is
+> structurally impossible now. The overload fixture `643_overload_str_vs_closure`
+> was swept to `&String` and still pins the sound behavior. The original fix
+> (below) remains the defensive backstop.
+>
 > **FIXED** (stdlib-rust-cleanup): both overload selectors (typeck
 > `method_accepts_args` and MIR `method_signature_accepts_args`) now treat a
 > CALLABLE argument — a closure literal (whose type may still be `Infer` at

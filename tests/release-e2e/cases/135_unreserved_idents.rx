@@ -1,4 +1,4 @@
-def send(msg: &str)
+def send(msg: &String)
   puts msg
 end
 

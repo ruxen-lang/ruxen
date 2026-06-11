@@ -563,7 +563,7 @@ impl<'a> Lowerer<'a> {
                     let dest = self.new_temp(expr.ty.clone());
                     let callee = match &expr.ty {
                         Ty::Array(_) => "ruxen_vec_from_iter",
-                        Ty::String | Ty::Str => "ruxen_string_from_iter",
+                        Ty::String => "ruxen_string_from_iter",
                         Ty::Map(_, _) => "ruxen_hash_from_iter",
                         Ty::Set(_) => "ruxen_set_from_iter",
                         other => {
@@ -1029,7 +1029,7 @@ impl<'a> Lowerer<'a> {
                 let receiver_is_mut_string_ref = matches!(
                     &object.ty,
                     Ty::RefMut(inner) | Ty::RefMutLifetime(_, inner)
-                        if matches!(inner.as_ref(), Ty::String | Ty::Str)
+                        if matches!(inner.as_ref(), Ty::String)
                 );
 
                 // Special handling for push_str on String variables:

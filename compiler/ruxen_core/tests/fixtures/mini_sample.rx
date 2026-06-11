@@ -31,13 +31,13 @@ class Todo
   def id -> Int { self.id }
 end
 
-def parse_priority(input: &str) -> Result[Priority, TodoError]
+def parse_priority(input: &String) -> Result[Priority, TodoError]
   Ok(Priority.High)
 end
 
 def create_task_from_input(
-  title: &str,
-  priority_str: &str
+  title: &String,
+  priority_str: &String
 ) -> Result[Int, TodoError]
   if title == ""
     return Err(TodoError.MissingField(name: "title"))

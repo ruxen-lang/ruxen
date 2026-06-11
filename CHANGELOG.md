@@ -8,22 +8,56 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Removed
+- **`&str` — removed from the language; one string type pair only.** Ruxen now
+  has exactly `String` (owned) and `&String` (borrowed). The distinct `Ty::Str`
+  (`&str`) primitive is gone (ADR: `docs/decisions/one-string-type.md`). It was
+  a parallel spelling of the same wire value — at the C ABI a `String` and the
+  old `&str` are the *same* representation (a bare null-terminated `char*`, no
+  length header) — so the second type added only confusion and drop-safety
+  hazards.
+  - **A string literal is born owned `Ty::String`.** Into an owned slot it
+    heap-copies (`ruxen_string_from`, already drop-safe); a literal also
+    satisfies a `&String` param (the call site borrows it). The Q38/Q39
+    owned-position promotion patches (`promote_bare_string_literal_binding`,
+    `coerce_tuple_literal_elements`) and the `Err("msg")` payload rewrite are
+    deleted — there is no `&str` to promote.
+  - **`str` / `&str` in a type annotation is an error — new code E0730** (hint:
+    "use `String` (owned) or `&String` (borrowed)"). `docs/errors/E0730.md`.
+  - **The `&str`-vs-closure overload heap-corruption landmine is dissolved**
+    (gui-stack Q1): with one string borrow type there is no `&str` arm to
+    collide with a closure arm in overload selection.
+  - **The nested-payload double-free caution dies** (release-e2e case 116):
+    `opt.ok_or("missing")` now builds `Result[_, String]` directly — no `&str`
+    payload over `String` storage, no storage-vs-payload drop mismatch.
+  - The raw `.rodata`/FFI `char*` temporaries that `Ty::Str` used to type are
+    now `Ty::RawPtr(Char)` (`*Char`) — `Copy`, never dropped, the correct type
+    for an un-owned C string pointer.
+  - Stdlib swept: `as_str` is now `-> &String` (it returns the receiver's own
+    buffer — a borrow, never freed; declaring `-> String` would double-free the
+    source); `trim`/`trim_start`/`trim_end` are `-> String` (they `malloc` a
+    fresh owned buffer). No C runtime change. Diagnostics / REPL `:type` / LSP
+    hover / `ruxen fmt` never print `str` — they say `String` / `&String`.
+  - Pins: `string_literal_wrap.rs` (all-positions, typeck), release-e2e `116`,
+    `643`, `922`, `923`, `924`, the REPL `:type "hi" => String` session, and the
+    new `drop_fixtures.rs::string_literal_and_clone_are_drop_safe` leak/double-
+    free pin. Full `cargo test --workspace` (1983 pass) + `release-e2e/run.sh`
+    (832/832 incl. parity + LSP + REPL) + clippy/fmt clean.
 - **`String.from` — deleted from the language.** The `String.from(s: &String)
   -> String` static method is gone. The string model is now uniform and needs
   no conversion constructor:
   - a string literal is an **owned `String`** (`let s = "x"` owns + drops; a
-    bare literal also coerces to a `&String`/`&str` parameter at a call site);
+    bare literal also satisfies a `&String` parameter at a call site);
   - **`&x`** borrows;
   - **`x.clone`** copies a borrow (or any `String`) to a fresh owned `String`
     — this is the sole borrow→owned spelling that `String.from` used to serve.
-    (`&str.to_string` is the `&str`→owned spelling.)
+    (`b.to_string` is the equivalent `&String`→owned spelling.)
 
   `clone` keeps backing onto the SAME C runtime symbol `ruxen_string_from`,
   which also drives the string-literal heap-copy machinery — the **C runtime is
   unchanged**; only the surface method spelling was removed. Calling the deleted
   `String.from(...)` now produces a clean `no method `from` on type `String``
-  diagnostic (typeck now treats an unknown method on a `String`/`&str` head as a
-  hard error, since their entire surface is the `.rx` `class String`) rather
+  diagnostic (typeck now treats an unknown method on a `String` head as a
+  hard error, since its entire surface is the `.rx` `class String`) rather
   than silently resolving or leaking a `?T…` symbol into codegen. All in-repo
   call sites were swept to `.clone` / `.to_string` / owned let-bindings; the
   four sibling repos were already `String.from`-free. Pins:

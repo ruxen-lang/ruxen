@@ -133,7 +133,7 @@ class Sink
   def init
     self.acc = ""
   end
-  def put(s: &str) -> nil
+  def put(s: &String) -> nil
     self.acc = "#{self.acc}#{s}"
   end
   def show -> nil
