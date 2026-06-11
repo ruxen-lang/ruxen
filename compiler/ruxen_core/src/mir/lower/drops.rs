@@ -205,7 +205,7 @@ pub(super) fn insert_drops(
     // `drop_locals` because String / Vec / HashMap intermediates that are
     // technically compiler temporaries (`_t…` names) can still own heap
     // (e.g. the implicit `ruxen_string_from` wrap inserted around a string
-    // literal whose owner is an outer `String.from(_)` call). Without
+    // literal, or the owned `String` a `.clone` produces). Without
     // dropping such intermediates, every interpolated literal leaks the
     // owned-string copy of itself.
     let dealloc_safe = compute_dealloc_safe_locals(func);

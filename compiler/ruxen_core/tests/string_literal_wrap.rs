@@ -32,7 +32,7 @@ fn s_local_ty(source: &str) -> Ty {
 }
 
 /// An UN-annotated `let s = "x"` binds an OWNED `String` (so it drops at scope
-/// exit, no leak — ledger Q38), identical to `let s = String.from("x")`. An
+/// exit, no leak — ledger Q38), identical to an explicitly-owned binding. An
 /// explicit `let s: &str = "x"` keeps the borrow type untouched.
 #[test]
 fn bare_string_literal_let_binds_owned_string() {
@@ -41,10 +41,14 @@ fn bare_string_literal_let_binds_owned_string() {
         Ty::String,
         "an un-annotated `let s = \"...\"` must bind an owned String (else it leaks)"
     );
+    // Control: the borrow→owned spelling `.clone` (which replaced the removed
+    // `String.from`) also yields an owned `String` binding.
     assert_eq!(
-        s_local_ty("def main\n  let s = String.from(\"hello\")\n  let _l = s.size\nend\n"),
+        s_local_ty(
+            "def main\n  let owned = \"hello\"\n  let s = owned.clone\n  let _l = s.size\nend\n"
+        ),
         Ty::String,
-        "String.from binding stays String (control)"
+        "`.clone` binding stays String (control)"
     );
     // Explicit &str annotation is left as a borrow (not promoted).
     assert!(

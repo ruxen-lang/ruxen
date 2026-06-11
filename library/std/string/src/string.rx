@@ -1,12 +1,13 @@
 class String
   lib "runtime/string.c"
-    def self.from as "ruxen_string_from"(s: &String) -> String
-    # `clone` deep-copies via the SAME C symbol as `from`
-    # (`ruxen_string_from`): the implicit `&self` receiver is the single
-    # pointer arg `ruxen_string_from` takes. Both decls' WIRE shapes are
-    # `(I64) -> I64`, so the E0722 conflict check (relaxed to compare
-    # post-self-prepend wire widths, `resolve/ffi_registration.rs`)
-    # admits this second alias.
+    # `clone` is the borrow→owned spelling: it deep-copies the receiver
+    # via the C symbol `ruxen_string_from`, whose single pointer arg is
+    # `clone`'s implicit `&self` receiver. (The runtime symbol is also the
+    # literal-coercion machinery's heap-copy helper — a bare `"lit"` lowers
+    # through `ruxen_string_from` to an owned `String`; see P0.7 / Q38.)
+    # The surface `String.from(&String) -> String` static method was
+    # REMOVED — there is no longer a method named `from` on `String`; the
+    # one borrow→owned spelling is `x.clone`.
     def clone as "ruxen_string_from" -> String
     def self.new as "ruxen_string_new" -> String
     def self.with_capacity as "ruxen_string_with_capacity"(cap: Int) -> String

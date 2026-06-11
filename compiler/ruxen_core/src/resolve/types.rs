@@ -584,7 +584,7 @@ impl Resolver {
                         // memory). Normalising at the resolve layer keeps
                         // the typeck representation aligned with the
                         // builtin primitive while leaving the class
-                        // surface intact for `String.from(...)`-style
+                        // surface intact for `String.new`-style
                         // class-method dispatch (those go through the
                         // AST path / type-registry lookup, not the
                         // returned `Ty`). Method dispatch on receivers

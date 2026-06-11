@@ -14,25 +14,35 @@ the borrow checker.
 
 ---
 
-## B1 — `String.from(s)` accepts `&str`
+## B1 — borrow→owned is `clone` / `to_string` (the `String.from` static method was REMOVED)
+
+The `String.from(s: &String) -> String` static method was **deleted** from the
+language (2026-06-11). The string model is uniform and needs no conversion
+constructor:
+
+- a string literal is already an **owned `String`** (`let s = "x"`);
+- **`b.clone`** copies a runtime `String`/`&String` borrow `b` to a fresh owned
+  `String` — the borrow→owned spelling that `String.from` used to serve;
+- **`s.to_string`** copies a `&str` value to an owned `String`.
 
 **Given** `s: &str`
-**Then** `String.from(s)` returns an owned `String`.
+**Then** `s.to_string` returns an owned `String`.
 
-**Given** `String.from(1)` (Int arg, not a string)
-**Then** typeck handles it via the int-to-string convenience path
-(documented as "currently lenient" — v2 may tighten).
+**Given** `String.from(...)` (the deleted method)
+**Then** typeck rejects it with a clean `no method `from` on type `String``
+diagnostic (pin: `stdlib_string_negatives.rs::
+string_dot_from_is_now_an_unknown_method`).
 
 ## B2 — Use-after-move on `String` argument is rejected
 
 **Given** a function `f(s: String)` that takes ownership and a caller
-`let x = String.from("hi"); f(x); f(x);`
+`let x: String = "hi"; f(x); f(x);`
 **Then** the second `f(x)` emits a use-after-move diagnostic from the
 borrow checker.
 
 ## B3 — `into_bytes()` consumes the receiver
 
-**Given** `let s = String.from("hi"); let _ = s.into_bytes(); let _ = s;`
+**Given** `let s: String = "hi"; let _ = s.into_bytes(); let _ = s;`
 **Then** the final `s` use is rejected: `into_bytes` consumed it.
 
 ## B4 — Existing method surface (pre-#06)

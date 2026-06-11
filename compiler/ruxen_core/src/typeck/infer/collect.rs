@@ -109,14 +109,20 @@ impl<'a> InferenceEngine<'a> {
         }
 
         // Method not found. For a scalar value-primitive receiver
-        // (numeric, Bool, Char) an unknown method is definitively an
-        // error: these types have no class shell and no user-defined
-        // method surface, so the call would mangle to `<Type>_<method>`
-        // (e.g. `Int_to_f`) with no matching runtime symbol — a link
-        // error in AOT builds and a hard JIT panic in the REPL
-        // (`can't resolve symbol Int_to_f`). Emit a clean, source-spanned
-        // diagnostic instead, mirroring the field-access path in
-        // `infer/expr.rs` so `a.bogus` and `a.bogus()` fail identically.
+        // (numeric, Bool, Char) — and for `String` / `&str`, whose entire
+        // method surface is the `.rx` `class String` (already consulted via
+        // `builtin_method_type` + `lookup_method_with_args` above) plus the
+        // MIR-only mutation/`remove` residuals (resolved by the `strings.rs`
+        // arms inside `builtin_method_type`) — an unknown method is
+        // definitively an error: these types have no further class shell and
+        // no later-phase method surface, so the call would mangle to
+        // `<Type>_<method>` (e.g. `Int_to_f`, `String_from`) with no matching
+        // runtime symbol — a link error in AOT builds and a hard JIT panic in
+        // the REPL. Emit a clean, source-spanned diagnostic instead, mirroring
+        // the field-access path in `infer/expr.rs` so `a.bogus` and `a.bogus()`
+        // fail identically. This is the seam that makes the DELETED
+        // `String.from(...)` produce a clean "no method `from` on type
+        // `String`" error rather than leaking a `?T…` symbol into codegen.
         //
         // We deliberately do NOT error for class / struct / enum /
         // collection / generic receivers: methods on those are resolved
@@ -124,7 +130,9 @@ impl<'a> InferenceEngine<'a> {
         // user methods on generic classes like `Repository[Todo]`), which
         // the lenient fresh-var fallback below still feeds.
         let resolved = self.ctx.resolve(obj_ty);
-        if resolved.is_numeric() || matches!(resolved, Ty::Bool | Ty::Char) {
+        let is_str_head = matches!(resolved, Ty::String | Ty::Str)
+            || matches!(&resolved, Ty::Ref(inner) if matches!(**inner, Ty::String | Ty::Str));
+        if resolved.is_numeric() || matches!(resolved, Ty::Bool | Ty::Char) || is_str_head {
             self.error(
                 format!(
                     "no method `{method_name}` on type `{resolved}`{}",

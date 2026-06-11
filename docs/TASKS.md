@@ -17,9 +17,9 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-33 of 37 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
+35 of 39 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
 feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned; Q28, Q30,
-Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 fixed 2026-06-10 via the syntax-parity harness; Q37 fixed 2026-06-10 (root cause: a yielding/`&block` method poisoned an unrelated same-named free fn via a bare-name yield map — this covers BOTH the S1 name-collision symptom AND the S2 "generic `frame[S: PaintSurface]` gets a bogus `__block` in binary-consumes-library builds" symptom; they were the same bug) — quiver examples build again; Q35, Q36 NEW 2026-06-10, both OPEN** — Q36 from the quiver Ruby-block DSL migration: two-`&var`-arg `yield` miscompile, left filed-open; Q35 a struct `include` not satisfying a generic mixin bound). The
+Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 fixed 2026-06-10 via the syntax-parity harness; Q37 fixed 2026-06-10 (root cause: a yielding/`&block` method poisoned an unrelated same-named free fn via a bare-name yield map — this covers BOTH the S1 name-collision symptom AND the S2 "generic `frame[S: PaintSurface]` gets a bogus `__block` in binary-consumes-library builds" symptom; they were the same bug) — quiver examples build again; Q38 fixed 2026-06-10 (bare-literal `String` local leaked); Q39 fixed 2026-06-11 (bare `""` in a tuple-element position expecting `String` stayed `&str` — rondo W21; fixed via `coerce_tuple_literal_elements`, pin `924`); Q35, Q36 NEW 2026-06-10, both OPEN** — Q36 from the quiver Ruby-block DSL migration: two-`&var`-arg `yield` miscompile, left filed-open; Q35 a struct `include` not satisfying a generic mixin bound). The
 canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
 (canvas 143 green, sub-pixel pinned, live windowed loop verified).
 
@@ -65,10 +65,30 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       `from_bytes`. Model taught in tutorial 29 (+ 02 cross-link). Pins:
       release-e2e `922_string_literal_coercion_all_positions` (RUN+stdout, owned
       + borrow), `string_literal_wrap.rs::bare_string_literal_coerces_..._all_
-      positions`. DEFERRED (public-API, separate decision): whether to rename/
-      retire the `String.from` method for the borrow→owned case — note that
-      `String.from` and `clone` bind the SAME C symbol (`ruxen_string_from`); a
-      future call could spell the copy `s.clone()`. Not now.
+      positions`.
+- [x] **`String.from` DELETED from the language (DONE 2026-06-11,
+      `feat/drop-elaboration`).** The follow-on to the DEFERRED public-API
+      decision above. The `def self.from as "ruxen_string_from"(s: &String) ->
+      String` decl was removed from `library/std/string/src/string.rx`; `clone`
+      is now the sole borrow→owned spelling (it shares the SAME C symbol
+      `ruxen_string_from`, which also still backs the literal heap-copy
+      machinery — the C runtime is untouched). Swept the remaining in-repo call
+      sites (`.clone` for a `String` borrow, `.to_string` for `&str`); rewrote
+      the one deliberate hold-out `116_option_ok_or` via an owned `let miss:
+      String = "missing"` + `miss.clone` (still pins `ok_or`, no longer needs
+      `String.from`). Dead special-cases removed: the `"from"` arm of
+      `STATIC_CTORS` (`runtime_abi.rs`) and the `"from" => ruxen_string_from`
+      arm of the `?T` inferred block (`lang_intrinsics.rs`). NEW seam: typeck's
+      method-not-found gate (`infer/collect.rs`) now errors for `Ty::String`/
+      `&str` heads (their whole surface is the `.rx` class, already consulted),
+      so a `String.from(...)` call produces a clean `no method `from` on type
+      `String`` diagnostic instead of leaking a `?T…` symbol. Pins:
+      `stdlib_string_negatives.rs::string_dot_from_is_now_an_unknown_method`
+      (clean no-such-method error), `923_clone_on_borrow_owns` (RUN+stdout
+      borrow→owned `.clone`). (The mangled `String_from` entries in the
+      `FRESH_ALLOC_CALLEES` ownership oracle stay — they are a defensive
+      double-free-sensitive characterization table, now unreachable but harmless;
+      the C symbol they co-list is load-bearing.)
 - [x] **Ruby-block semantics — explicit `&block` / `yield` / `block_defined?`
       (DONE 2026-06-10, `feat/drop-elaboration`).** ADR
       `docs/decisions/ruby-block-semantics.md`. Explicit optional
@@ -211,6 +231,22 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       `drop_fixtures.rs::string_local_is_freed_on_scope_exit`,
       `string_literal_wrap.rs::bare_string_literal_let_binds_owned_string`.
       Details §Q38.
+- [x] **Q39 · S3 — a bare `""` in a TUPLE-ELEMENT position expecting `String`
+      was not coerced (stayed `&str`); broke a `(String, Bool)` return (FIXED
+      2026-06-11).** Filed from rondo W21 while finishing the `String.from`
+      deletion arc. The all-positions literal-coercion pin (`922`) covered
+      owned/borrow/field/`Err()` slots but NOT a tuple constructor element, so
+      `def f -> (String, Bool); ("", false)` typed `(&str, Bool)` and failed to
+      unify; rondo spelled it `("".to_string(), false)`. ROOT CAUSE: tuple-literal
+      synthesis (`infer/expr.rs`) types elements bottom-up with no expected-type
+      context. FIXED via `infer/mod.rs::coerce_tuple_literal_elements` (wired at
+      the return + let seams, descends if/else/block/match tails), promoting a
+      bare String-literal element to owned `String` against a `String` slot —
+      mirrors the `Err("msg")` precedent, no drop hazard. Narrow (only
+      String-literal-in-String-slot; genuine mismatches still error). Pin:
+      release-e2e `924_tuple_element_string_literal_coercion` (rondo's exact
+      `(String, Bool)` shape, RUN+stdout). rondo can drop the W21 workaround.
+      Details §Q39.
 - [ ] **`&str` removal — collapse the string-borrow type to `&String` only
       (NEW 2026-06-10, user-requested; take after the Q38 leak fix).** The user
       asks: why two string types (`String` owned + `Str`/`&str` borrow)? Target
@@ -234,9 +270,12 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       `opt.ok_or("missing")` builds `Result[Int, &str]` and won't coerce to
       `Result[Int, String]` (TODO in `infer/mod.rs::unify_or_coerce`; naively
       rewriting the inner `.ty` to `String` while storage stays `Str` risks a
-      payload drop double-free). Workaround today: `ok_or(String.from("missing"))`
-      (release-e2e 116 keeps it — the one load-bearing `String.from` left). The
-      DIRECT `Err("msg")` constructor IS fixed (payload `.ty` set at construction).
+      payload drop double-free). Workaround today: bind an owned `let miss:
+      String = "missing"` and pass `miss.clone` (release-e2e 116 uses this since
+      `String.from` was deleted 2026-06-11). The DIRECT `Err("msg")` constructor
+      IS fixed (payload `.ty` set at construction); the tuple-element position is
+      now fixed too (Q39). The remaining gap is ONLY the generic-method-return
+      payload (`ok_or`).
       Collapsing `&str` dissolves this class. Sizeable but mechanical; pin parity
       + full corpus. Design doc first.
 - [x] **Q32 · S3 — Q16 flat-merge of an FFI dependency broke `ruxen test` at

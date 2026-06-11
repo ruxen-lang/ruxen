@@ -166,8 +166,8 @@ class Todo
 
     Ok(Todo.new(
       id,
-      String.from(parts[1]),
-      String.from(parts[2]),
+      parts[1].clone,
+      parts[2].clone,
       priority
     ))
   end
@@ -325,7 +325,7 @@ def parse_priority(input: &str) -> Result[Priority, TodoError]
     "medium"   -> Ok(Priority.Medium)
     "high"     -> Ok(Priority.High)
     "critical" -> Ok(Priority.Critical)
-    other      -> Err(TodoError.InvalidPriority(value: String.from(other)))
+    other      -> Err(TodoError.InvalidPriority(value: other.to_string))
   end
 end
 
@@ -382,8 +382,8 @@ def create_task_from_input(
 
   let priority = parse_priority(priority_str)?  # ? propagates TodoError
   let id = list.add_task(
-    String.from(title),
-    String.from(desc),
+    title.to_string,
+    desc.to_string,
     priority
   )
   Ok(id)

@@ -114,11 +114,11 @@ pub fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool {
 /// inserts `String` as `DefKind::TypeAlias { target: Ty::String }`. The
 /// bootstrap merge then anchors the user-side `class String` declaration
 /// (`library/std/string/src/lib.rx`) onto the same DefId so FFI methods
-/// (`String.from`, `String.new`, …) hang off it. The class-resolution pass
+/// (`String.new`, `clone`, …) hang off it. The class-resolution pass
 /// in `resolve/items.rs::resolve_class` rewrites that DefId's `DefKind` from
 /// `TypeAlias` to `Class`, after which `resolve_type_expr` returns the
 /// `Ty::Class { name: "String", .. }` form for any `s: String` annotation.
-/// Inferred locals (`let x = String.from(...)`) still get `Ty::String` from
+/// Inferred locals (`let x = "lit"` / `let x = y.clone`) still get `Ty::String` from
 /// the inference rules; only the annotation path hits the Class form.
 ///
 /// This helper is the codegen-side normalisation: any consumer asking "is

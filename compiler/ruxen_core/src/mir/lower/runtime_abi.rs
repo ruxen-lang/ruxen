@@ -134,7 +134,7 @@ pub fn callee_ownership(callee: &str) -> CalleeOwnership {
 ///     downstream, and the field_access/method_call `is_static` checks OR in
 ///     `is_user_static_method`, so a user `.new` with an init still resolves
 ///     correctly).
-///  2. `String.from/from_bytes/from_iter`, `Thread.*`, `Mutex/Arc/SharedSync.new`
+///  2. `String.from_bytes/from_iter`, `Thread.*`, `Mutex/Arc/SharedSync.new`
 ///     came from util.rs; `File.*`, `Duration.*`, `Instant.now`, `Tcp*`,
 ///     `BufReader/BufWriter` came from method_call.rs. The union is the set both
 ///     sites now read. Widening each site to the union is behaviour-preserving
@@ -161,10 +161,12 @@ pub fn is_static_constructor(type_name: &str, method_name: &str) -> bool {
 /// `new` is handled by the universal rule in `is_static_constructor`, so it is
 /// omitted here.
 const STATIC_CTORS: &[(&str, &[&str])] = &[
-    (
-        "String",
-        &["from", "with_capacity", "from_iter", "from_bytes"],
-    ),
+    // `from` REMOVED — the surface `String.from` static method was deleted
+    // (the borrow→owned spelling is `x.clone`). `with_capacity`/`from_iter`/
+    // `from_bytes` remain real static constructors. (The C symbol
+    // `ruxen_string_from` is unaffected — it still backs `clone` and the
+    // string-literal heap-copy machinery.)
+    ("String", &["with_capacity", "from_iter", "from_bytes"]),
     ("Vec", &["with_capacity", "from_iter"]),
     ("Array", &["with_capacity", "from_iter"]),
     ("Hash", &["with_capacity", "from_iter"]),
@@ -586,7 +588,10 @@ mod tests {
         assert!(is_static_constructor("BufReader", "new"));
         assert!(is_static_constructor("BufWriter", "with_capacity"));
         // From util.rs::is_builtin_static_method (the diverged sibling):
-        assert!(is_static_constructor("String", "from"));
+        // `String.from` was DELETED from the language — it is no longer a
+        // static constructor (borrow→owned is `x.clone`); the negative below
+        // pins that.
+        assert!(!is_static_constructor("String", "from"));
         assert!(is_static_constructor("String", "from_bytes"));
         assert!(is_static_constructor("Thread", "spawn"));
         assert!(is_static_constructor("Mutex", "new"));

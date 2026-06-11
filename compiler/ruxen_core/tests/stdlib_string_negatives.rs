@@ -46,42 +46,48 @@ fn errors(diags: &[Diagnostic]) -> Vec<&Diagnostic> {
         .collect()
 }
 
-/// `String.from(123)` — passing an integer to a `&str`-typed parameter
-/// is a type mismatch. The current typeck wires
-/// `(Ty::String, "from") -> Some(Ty::String)` without validating arg
-/// types, so this case lands in the codegen layer rather than the
-/// typechecker. We assert the program is rejected somewhere along the
-/// pipeline (typecheck error OR a clearly-coerced-to-str cast) so a
-/// future tightening of `String.from` argument typing has a regression
-/// pin to update.
+/// `String.from(...)` was REMOVED from the language (the borrow→owned
+/// spelling is `x.clone`; bare literals are already owned `String`s). A
+/// call to the deleted method must now produce a CLEAN "no such method"
+/// diagnostic — not silently resolve to `ruxen_string_from`, and not
+/// degrade to an unresolvable `?T…` symbol at codegen. This pins the
+/// deletion: were the `def self.from` decl ever re-added, or a dead
+/// special-case left routing `from`, this test would stop seeing the
+/// unknown-method error and fail.
 #[test]
-fn string_from_with_int_arg_is_handled() {
-    let source = rx("string_from_with_int_arg_is_handled");
+fn string_dot_from_is_now_an_unknown_method() {
+    let source = rx("string_from_is_no_such_method");
     let diags = typecheck_diagnostics_from_source(&source);
     let errs = errors(&diags);
-    if errs.is_empty() {
-        // v1 known gap: typeck does not yet validate stdlib static-method
-        // arg types. Document and pin so a future tightening picks up.
-        eprintln!(
-            "note: String.from(Int) is silently accepted by v1 typeck — \
-             argument-type validation for stdlib static methods is \
-             tracked as a follow-up. diags={:#?}",
-            diags
-        );
-        return;
-    }
-    let any_mentions_mismatch = errs.iter().any(|d| {
+    assert!(
+        !errs.is_empty(),
+        "calling the deleted `String.from` must be REJECTED, not silently \
+         accepted. diags={:#?}",
+        diags
+    );
+    // The diagnostic must name the missing method `from` on `String` — i.e.
+    // a clean unknown/no-such-method error, not an arg-type mismatch or a
+    // leaked `?T…` inference symbol.
+    let names_unknown_from = errs.iter().any(|d| {
         let m = &d.message;
-        m.contains("String")
-            || m.contains("&str")
-            || m.contains("Int")
-            || m.contains("expected")
-            || m.contains("mismatched")
-            || m.contains("type")
+        (m.contains("from"))
+            && (m.contains("no method")
+                || m.contains("not found")
+                || m.contains("no such")
+                || m.contains("unknown"))
     });
     assert!(
-        any_mentions_mismatch,
-        "expected an error mentioning a type mismatch around String.from. errs={:#?}",
+        names_unknown_from,
+        "expected a clean unknown-method diagnostic naming `from` on `String`. \
+         errs={:#?}",
+        errs
+    );
+    // Guard against regression to a leaked inference symbol: no diagnostic
+    // should reference the `?T…` mangling that a missed resolution produces.
+    assert!(
+        !errs.iter().any(|d| d.message.contains("?T")),
+        "the deleted `String.from` must error cleanly, not leak a `?T…` \
+         symbol. errs={:#?}",
         errs
     );
 }

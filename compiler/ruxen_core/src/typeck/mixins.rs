@@ -98,13 +98,14 @@ impl MixinResolver {
     /// the general `lookup_method_with_args` path (now the source of truth
     /// for builtin-head method resolution via the zero-Rust-stdlib bridge)
     /// is as permissive as the old hardcoded resolver arms were:
-    ///   * `&str` literal ↔ `String` / `&String` param (the common
-    ///     `String.from("lit")` shape — the arg is `Ty::Str`, the `.rx`
-    ///     param is `&String`);
+    ///   * `&str` literal ↔ `String` / `&String` param (a bare `"lit"`
+    ///     passed where a method declares a `&String` param — e.g.
+    ///     `s.include?("needle")` / `s.replace("a", "b")`; the arg is
+    ///     `Ty::Str`, the `.rx` param is `&String`);
     ///   * an owned arg passed where the param borrows (`&T` param, `T`
     ///     arg) — callers commonly pass an owned value to a `&self`-style
     ///     borrow.
-    /// Without these, delegating `String.from`/etc. to `.rx` would reject
+    /// Without these, delegating the string methods to `.rx` would reject
     /// the string-literal arg that the arg-ignoring arms accepted.
     fn arg_coerces_to_param(arg_ty: &Ty, param_ty: &Ty) -> bool {
         if arg_ty.is_infer() || arg_ty.is_error() || arg_ty == param_ty {

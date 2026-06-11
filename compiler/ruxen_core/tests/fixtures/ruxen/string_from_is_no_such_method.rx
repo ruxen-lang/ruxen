@@ -1,0 +1,5 @@
+def main
+  # `String.from` was REMOVED from the language. Calling it must now produce
+  # a clean "no such method" / unknown-method diagnostic, not silently resolve.
+  let _s = String.from("missing")
+end

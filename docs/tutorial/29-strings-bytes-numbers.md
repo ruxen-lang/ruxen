@@ -64,10 +64,10 @@ Interpolation (`"hi #{name}"`) always allocates a `String` — the result is own
 > - **Don't write `&"text"`.** A leading `&` on a literal does not give you a
 >   nice `&String`; prefer the bare `"text"` (owned) and let the call site
 >   borrow it, or take `&someString` of a named value.
-> - **`String.from(b)`** copies a **runtime `&String` borrow** `b` into a fresh
->   owned `String` (when you need to keep it past the borrow). That is its only
->   job — it is **never** needed on a literal, because `"text"` is already an
->   owned `String`.
+> - **`b.clone`** copies a **runtime `String`/`&String` borrow** `b` into a fresh
+>   owned `String` (when you need to keep it past the borrow). It is **never**
+>   needed on a literal, because `"text"` is already an owned `String`. (For a
+>   `&str` value specifically, the owned-copy spelling is `s.to_string`.)
 >
 > *(Historical note: an older `&str` borrowed-slice type still exists and the
 > compiler treats it as interchangeable with `&String`; it is being folded into
@@ -279,7 +279,7 @@ A cast that doesn't fit (e.g. `300 as UInt8`) truncates by masking — it never 
 ## Recap
 
 - **`String`** owns its memory and is mutable; **`&str`** is a cheap borrow you can pass around.
-- A bare literal `"text"` is already an owned `String`; build also with `String.new`, `String.with_capacity`, interpolation, or `.repeat`. `String.from(b)` is only for copying a *runtime* `&String` borrow `b` into a fresh owned `String` — never needed on a literal (a literal is already owned).
+- A bare literal `"text"` is already an owned `String`; build also with `String.new`, `String.with_capacity`, interpolation, or `.repeat`. To copy a *runtime* `String`/`&String` borrow `b` into a fresh owned `String`, use `b.clone` (or `s.to_string` for a `&str`) — never needed on a literal (a literal is already owned).
 - Bytes live in `Array[UInt8]`; convert with `.into_bytes` and `String.from_utf8`.
 - Numbers come in sized signed / unsigned integers, two float widths, and pointer-width `USize` / `ISize`.
 - `as` is the only numeric conversion form — no implicit coercion.

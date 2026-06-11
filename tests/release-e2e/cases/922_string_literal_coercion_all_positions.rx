@@ -1,8 +1,9 @@
 # Bare string literals coerce to `String` in EVERY position — the invariant
-# that lets us drop `String.from("literal")` everywhere we ship (docs +
-# stdlib). A bare `"x"` coerces to an owned `String` in owned positions and to
-# `&String` in borrow positions; `String.from` is then only for converting a
-# runtime `&String`/`&str` value, never a literal. This pin RUNS and asserts
+# that let us DELETE `String.from` from the language entirely (the old
+# `String.from("literal")` idiom across docs + stdlib + the four repos). A bare
+# `"x"` coerces to an owned `String` in owned positions and to `&String` in
+# borrow positions; converting a runtime `&String`/`&str` value to owned is now
+# spelled `x.clone` / `x.to_string`, never a literal. This pin RUNS and asserts
 # stdout so the coercion can never silently regress (a regression would break
 # the whole swept corpus across the four repos).
 #

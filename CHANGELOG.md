@@ -7,6 +7,30 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Removed
+- **`String.from` — deleted from the language.** The `String.from(s: &String)
+  -> String` static method is gone. The string model is now uniform and needs
+  no conversion constructor:
+  - a string literal is an **owned `String`** (`let s = "x"` owns + drops; a
+    bare literal also coerces to a `&String`/`&str` parameter at a call site);
+  - **`&x`** borrows;
+  - **`x.clone`** copies a borrow (or any `String`) to a fresh owned `String`
+    — this is the sole borrow→owned spelling that `String.from` used to serve.
+    (`&str.to_string` is the `&str`→owned spelling.)
+
+  `clone` keeps backing onto the SAME C runtime symbol `ruxen_string_from`,
+  which also drives the string-literal heap-copy machinery — the **C runtime is
+  unchanged**; only the surface method spelling was removed. Calling the deleted
+  `String.from(...)` now produces a clean `no method `from` on type `String``
+  diagnostic (typeck now treats an unknown method on a `String`/`&str` head as a
+  hard error, since their entire surface is the `.rx` `class String`) rather
+  than silently resolving or leaking a `?T…` symbol into codegen. All in-repo
+  call sites were swept to `.clone` / `.to_string` / owned let-bindings; the
+  four sibling repos were already `String.from`-free. Pins:
+  `stdlib_string_negatives.rs::string_dot_from_is_now_an_unknown_method`,
+  release-e2e `923_clone_on_borrow_owns` (RUN+stdout). Ledger: gui-stack §Q38
+  (the bare-literal model this completes).
+
 ### Added
 - **Syntax-parity harness** (ADR `docs/decisions/syntax-parity-harness.md`).
   Enforces the USER invariant that the compiler, `ruxen fmt`, the REPL, the
@@ -74,19 +98,34 @@ once 1.0.0 ships.
     `tests/ruby_block_semantics.rs`, `drop_fixtures.rs::block_capturing_heap_value_runs_soundly`.
 
 ### Fixed
+- **A bare `""` in a TUPLE-ELEMENT position expecting `String` now coerces to an
+  owned `String`** (ledger Q39; rondo W21). The all-positions literal-coercion
+  work covered owned/borrow/struct-field/`Err(...)`-payload positions, but a
+  bare string literal in a tuple constructor stayed `&str` — so a `def f ->
+  (String, Bool); ("", false)` typed `(&str, Bool)` and failed to unify with the
+  declared return. Fixed in typeck (`infer/mod.rs::coerce_tuple_literal_elements`,
+  wired at the return + `let` seams, descending if/else/block/match tails): a
+  bare `StringLiteral` element against a `String` tuple slot is re-typed
+  `Ty::String` (the literal already lowers through `ruxen_string_from` to an
+  owned heap copy, matching codegen — same precedent as the `Err("msg")`
+  payload coercion). Narrow: only a String-literal in a String slot is rewritten,
+  so a genuine `(Int, Bool)` vs `(String, Bool)` mismatch still errors. Pin:
+  release-e2e `924_tuple_element_string_literal_coercion` (rondo's exact
+  `(String, Bool)` shape, RUN+stdout). Lets rondo drop the `("".to_string(),
+  false)` workaround for bare `("", false)`.
 - **A `String` local bound from a BARE LITERAL leaked (not freed at scope
-  exit); now owns + drops like `String.from`** (ledger Q38). An un-annotated
+  exit); now owns + drops like an explicitly-owned binding** (ledger Q38). An un-annotated
   `let s = "hello"` adopted the literal's resolver type `Ty::Str` (`&str`), so
   the local was `&str`-typed even though MIR lowers the literal to a heap-owned
   `String` via `ruxen_string_from` — and drop elaboration only frees
-  `Ty::String`, so the heap copy leaked (`let s = String.from("hello")` was
+  `Ty::String`, so the heap copy leaked (`let s: String = "hello"` was
   freed because it forced `s: String`). Fixed in typeck
   (`infer/mod.rs::promote_bare_string_literal_binding`): an unconstrained `let`
   bound to a bare `StringLiteral` now binds an owned `String`. Narrowly scoped —
   an explicit `let s: &str = "x"` keeps the borrow, and call-site/argument
   coercions are untouched (a bare literal still coerces to a `&str`/`&String`
-  parameter). This is what makes the `String.from("literal")` → `"literal"`
-  corpus sweep leak-free. Pins:
+  parameter). This is what made the bare-literal corpus sweep (and the later
+  `String.from` deletion, see Removed) leak-free. Pins:
   `drop_fixtures.rs::string_local_is_freed_on_scope_exit` (fixture is now
   `let s = "hello"`), `string_literal_wrap.rs::bare_string_literal_let_binds_
   owned_string`. (Follow-up filed in TASKS: collapse `&str` into `&String` so

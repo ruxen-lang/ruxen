@@ -277,10 +277,13 @@ impl Resolver {
     /// over-approximation that rejected two BENIGN alias families whose
     /// wire shapes are identical:
     ///
-    ///   * `String.from(s: &String) -> String` vs the receiver-style
-    ///     `String.clone(&self) -> String`: the explicit `&String` param
-    ///     and the implicit `&self` receiver are BOTH pointer-sized
-    ///     (I64), so post-prepend both are `(I64) -> I64`.
+    ///   * `String.to_s(&self) -> String` vs `String.to_string(&self) ->
+    ///     String`: two Ruby spellings aliasing the SAME C symbol
+    ///     (`ruxen_string_to_string`); both post-prepend to `(I64) -> I64`.
+    ///     (Historically `from`/`clone` were the canonical example here, but
+    ///     the surface `String.from` method was REMOVED — `clone` now shares
+    ///     `ruxen_string_from` with the literal-coercion machinery, not with a
+    ///     sibling `from` decl.)
     ///   * `Array.get(i) -> Option[&T]` vs
     ///     `Array.get_mut(i) -> Option[&var T]`: `&T` and `&var T` differ
     ///     only in surface mutability; both lower to a pointer, and the

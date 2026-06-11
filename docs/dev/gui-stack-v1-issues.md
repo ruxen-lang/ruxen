@@ -1631,6 +1631,53 @@ this fix lets stay green on the bare form. Pins:
 `string_literal_wrap.rs::bare_string_literal_let_binds_owned_string` (type
 promotion + the `&str`-annotation-untouched negative).
 
+## Q39 · S3 — a bare string literal in a TUPLE-ELEMENT position expecting `String` was not coerced (stayed `&str`)  ✅ FIXED 2026-06-11
+
+Found 2026-06-11 in rondo (workaround W21) while finishing the `String.from`
+deletion arc. The literal-coercion work (Q38 + the "all positions" pin
+`922_string_literal_coercion_all_positions`) promoted a bare `"x"` to owned
+`String` in owned/borrow/struct-field/`Err(...)`-payload positions — but NOT in
+a TUPLE constructor element. So a helper returning `(String, Bool)` with a bare
+`""` first element typed as `(&str, Bool)`, which then failed to unify with the
+declared `(String, Bool)` return. rondo hit this on its `(String, Bool)`-shaped
+returns and worked around it by spelling `("".to_string(), false)`.
+
+```ruxen
+def split_pair(found: Bool) -> (String, Bool)
+  if found
+    ("hello", true)
+  else
+    ("", false)        # before: tuple typed (&str, Bool) → E: expected (String, Bool)
+  end
+end
+# workaround was ("".to_string(), false); now ("", false) typechecks + runs.
+```
+
+**ROOT CAUSE.** A type-inference gap, not a drop bug. Tuple-literal synthesis
+(`typeck/infer/expr.rs`, `HirExprKind::Tuple`) types each element bottom-up with
+NO expected-type context, so a bare `StringLiteral` element stays `Ty::Str`. The
+expected-type-directed coercion seams that fire at the return/let positions
+(`coerce_array_literal_to_fixed`, `promote_bare_string_literal_binding`,
+`auto_wrap_option_some`) had no tuple sibling. The all-positions pin missed
+tuple elements because it tested owned/borrow/field/`Err()` positions, not a
+tuple constructor. S3 — clean error, one-line workaround (`.to_string()`).
+
+**FIX (`feat/drop-elaboration`).** New `infer/mod.rs::
+coerce_tuple_literal_elements`, wired at BOTH the return seam (after
+`auto_wrap_option_some`) and the `let`-binding seam (after
+`promote_bare_string_literal_binding`). When the expected type is a `Ty::Tuple`
+and the value is a `Tuple` literal, each element that is a bare `StringLiteral`
+typed `&str`/`str` against a `String` expected slot is re-typed `Ty::String`
+(the literal already lowers through `ruxen_string_from` to an owned heap copy,
+so this matches codegen with no drop hazard — same precedent as the `Err("msg")`
+payload coercion). Descends into `if/else`/`block`-tail/`match`-arm tails (like
+`auto_wrap_option_some`) so a branchy return body is covered, re-pinning the
+structural node's type to the coerced tuple. Narrow: only a String-literal in a
+String slot is rewritten — a genuine `(Int, Bool)` vs `(String, Bool)` mismatch
+still errors. Pin: `924_tuple_element_string_literal_coercion` (rondo's exact
+`(String, Bool)` shape, return-position + let-annotation; RUNS + asserts stdout).
+rondo can drop W21's `("".to_string(), false)` workaround for bare `("", false)`.
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:

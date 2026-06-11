@@ -1179,7 +1179,8 @@ impl<'a> InferenceEngine<'a> {
                             // then fails to unify with the declared return). The
                             // literal lowers through `ruxen_string_from` to an
                             // owned String anyway, so this matches codegen and
-                            // makes `Err("msg")` work without `String.from`.
+                            // makes `Err("msg")` work with a bare literal (no
+                            // explicit owned-conversion call needed).
                             // Mirror the field expr's type so the constructor
                             // arg lowers as a String.
                             if matches!(expected_err, Some(Ty::String))

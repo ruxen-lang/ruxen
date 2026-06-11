@@ -1,21 +1,25 @@
-# NOTE: `ok_or(...)` DELIBERATELY keeps `String.from("missing")` rather than a
-# bare literal. `ok_or(s: E)` binds the Result's error type `E` from the arg, so
-# `ok_or("missing")` yields `Result[Int, &str]`, which does not coerce into the
-# annotated `Result[Int, String]` — the `&str → String` coercion NESTED inside a
-# `Result`/`Option` payload is a known-deferred gap (see the TODO in
-# `typeck/infer/mod.rs::unify_or_coerce`; rewriting the inner expr's `.ty` to
-# `String` while storage stays `Str` risks a payload drop double-free). This is
-# the one place the `String.from("literal")` sweep keeps `String.from` — it is a
-# load-bearing workaround, not the dead idiom. The DIRECT `Err("msg")`
-# constructor form IS fixed (it coerces; pin 24_result/922) because the payload
-# expr's type is set to match storage at construction; the generic method-return
-# path here is the unsolved remainder, tracked by the `&str`-removal task.
+# NOTE: `ok_or(...)` binds the Result's error type `E` from its argument, so
+# `ok_or("missing")` would yield `Result[Int, &str]`, which does NOT coerce into
+# the annotated `Result[Int, String]` — the `&str → String` coercion NESTED
+# inside a `Result`/`Option` method-return payload is a known-deferred gap (see
+# the TODO in `typeck/infer/mod.rs::unify_or_coerce`; rewriting the inner expr's
+# `.ty` to `String` while storage stays `Str` risks a payload drop double-free).
+#
+# The workaround is to bind an OWNED `String` first (`let miss: String =
+# "missing"` — a bare literal in an annotated `String` slot is owned, Q38) and
+# pass it. `ok_or` consumes its arg, so each call gets its own owned copy via
+# `.clone`. The DIRECT `Err("msg")` constructor form IS already fixed (it coerces
+# the literal at construction; pin 24_result/922) — this generic-method-return
+# path is the unsolved remainder, tracked by the `&str`-removal task. (Previously
+# this case used `String.from("missing")`, which has since been removed from the
+# language; the owned-let-binding spelling replaces it.)
 def main
   let some_v: Int? = 5
   let none_v: Int? = nil
 
-  let r1: Result[Int, String] = some_v.ok_or(String.from("missing"))
-  let r2: Result[Int, String] = none_v.ok_or(String.from("missing"))
+  let miss: String = "missing"
+  let r1: Result[Int, String] = some_v.ok_or(miss.clone)
+  let r2: Result[Int, String] = none_v.ok_or(miss.clone)
 
   match r1
     Ok(v)  -> puts "ok #{v}"

@@ -166,7 +166,7 @@ impl<'a> Lowerer<'a> {
                 // method set here behaviourally narrower than
                 // `runtime_abi::is_static_constructor` (the reconciled union).
                 // Routing this gate through the union would reroute
-                // `String.from` / `String.with_capacity` / collection
+                // `String.with_capacity` / `String.from_bytes` / collection
                 // `from_iter` into the `String_new` / `Class_init` fast path —
                 // a silent dispatch change. Per the Phase 2 plan obligation
                 // ("do not silently widen the fast path"), the per-type cascade

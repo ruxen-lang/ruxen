@@ -4,7 +4,7 @@
 //! type_constructors table (~175 LOC, one tuple per type) into a
 //! small data-druxen structure. The table registers each type
 //! NAME in the value scope as a `DefKind::Variable` so call sites
-//! like `Array.new(...)` / `String.from(...)` / `Command.new(...)`
+//! like `Array.new(...)` / `String.new` / `Command.new(...)`
 //! resolve the receiver to a class-id-like sentinel value. The
 //! typeck path then promotes the Variable to the corresponding
 //! `Ty::Class` / `Ty::Array` / … and the static-ctor fast path in

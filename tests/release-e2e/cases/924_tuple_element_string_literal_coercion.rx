@@ -1,0 +1,31 @@
+# Q39 (rondo W21): a bare string literal in a TUPLE-ELEMENT position whose
+# expected slot is `String` coerces to an owned `String` — it does NOT stay
+# `&str`. This was the one literal-coercion gap the all-positions pin (922)
+# missed: the typeck literal→String promotion covered owned/borrow/field/`Err()`
+# positions but not tuple constructor elements, so rondo's `(String, Bool)`
+# returns had to be spelled `("".to_string(), false)`. Now `("", false)` works.
+#
+# This is rondo's exact broken shape: a helper returning `(String, Bool)` with a
+# bare `""` first element. The pin RUNS and asserts stdout so the coercion can
+# never silently regress back to forcing `.to_string()`.
+
+# Return-position coercion: bare `""` first slot.
+def split_pair(found: Bool) -> (String, Bool)
+  if found
+    ("hello", true)
+  else
+    ("", false)
+  end
+end
+
+# Let-binding coercion: explicit `(String, Bool)` annotation, bare-literal slot.
+def main
+  let a: (String, Bool) = ("annotated", false)
+  puts "a0=#{a.0} a1=#{a.1}"
+
+  let hit = split_pair(true)
+  puts "hit0=#{hit.0} hit1=#{hit.1}"
+
+  let miss = split_pair(false)
+  puts "miss0=[#{miss.0}] miss1=#{miss.1}"
+end

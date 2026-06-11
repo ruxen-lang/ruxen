@@ -78,7 +78,7 @@ pub(super) fn is_vec_or_iterator_type(ty: &Ty) -> bool {
 }
 
 /// Check if a method on a built-in type is a static/class method
-/// (no `self` argument). These are methods like `String.from(...)`,
+/// (no `self` argument). These are methods like `String.with_capacity(...)`,
 /// `Vec.new()`, etc. that are called on the type itself.
 ///
 /// Single source: delegates to `runtime_abi::is_static_constructor`, the

@@ -112,7 +112,7 @@ class Url
   end
 
   def self.from(s: &str) -> Url
-    Url.new(String.from(s))
+    Url.new(s.to_string)
   end
 end
 

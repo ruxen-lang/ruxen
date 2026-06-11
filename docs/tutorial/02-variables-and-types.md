@@ -118,7 +118,7 @@ Ruxen has two string flavours:
 | `String` | Yes — owns its memory | Yes | You need to keep the text around or change it |
 | `&str` | No — borrows from someone else | No | You just need to read existing text |
 
-The `&` in `&str` means **borrow** — you're reading data that someone else owns. Borrowing is covered in detail in [Chapter 4](04-ownership-and-borrowing.md); for now, just know that a bare string literal like `"hello"` is an owned `String`, and it coerces to a `&str` (or `&String`) borrow wherever a function only needs to read it. (The full string-literal model — `""` owned vs `&""` borrowed, and when you'd reach for `String.from` — is in [Chapter 29](29-strings-bytes-numbers.md).)
+The `&` in `&str` means **borrow** — you're reading data that someone else owns. Borrowing is covered in detail in [Chapter 4](04-ownership-and-borrowing.md); for now, just know that a bare string literal like `"hello"` is an owned `String`, and it coerces to a `&str` (or `&String`) borrow wherever a function only needs to read it. (The full string-literal model — `""` owned vs `&""` borrowed, and when you'd reach for `.clone` to copy a borrow — is in [Chapter 29](29-strings-bytes-numbers.md).)
 
 ```ruxen
 def main

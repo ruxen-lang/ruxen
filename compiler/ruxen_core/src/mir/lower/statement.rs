@@ -66,7 +66,7 @@ impl<'a> Lowerer<'a> {
                 // Refine unresolved Infer types: if the initializer is a
                 // method call known to return a string, use Ty::String
                 // instead.  This ensures correct string interpolation for
-                // variables like `let task_name = ... .unwrap_or(String.from(...))`.
+                // variables like `let task_name = ... .unwrap_or(other.clone)`.
                 let refined_ty = if matches!(ty, Ty::Infer(_)) {
                     if let Some(init_expr) = value {
                         if is_inferred_string_expr(init_expr) {

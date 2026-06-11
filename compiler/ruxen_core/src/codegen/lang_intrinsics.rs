@@ -313,9 +313,10 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
             "try_op" => Ok("ruxen_result_try_op"),
             "unwrap_or" => Ok("ruxen_option_unwrap_or"),
             "unwrap_or_else" => Ok("ruxen_result_unwrap_or_else"),
-            // String operations.
+            // String operations. (`from` REMOVED — the surface `String.from`
+            // static method was deleted; the borrow→owned spelling is `clone`,
+            // which still backs onto the `ruxen_string_from` C symbol.)
             "clone" => Ok("ruxen_string_from"),
-            "from" => Ok("ruxen_string_from"),
             "push_str" => Ok("ruxen_string_push_str"),
             "trim" => Ok("ruxen_string_trim"),
             "to_lower" => Ok("ruxen_string_to_lower"),
