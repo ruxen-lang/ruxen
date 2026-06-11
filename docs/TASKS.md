@@ -189,6 +189,16 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       `tests/syntax_parity.rs`, release-e2e 919, ADR
       `docs/decisions/syntax-parity-harness.md`.
 
+- [ ] **Q40 · S2 — `Mutex[String]` misbehaves across closure/borrow boundaries
+      (NEW 2026-06-11).** Two shapes, likely one root: (a) reported by quiver
+      F3 (verified in isolation) — set/get through a CLOSURE returns garbage
+      (silent corruption); (b) reproduced by the coordinator — `Mutex_lock`
+      doesn't LINK for a `&Mutex[String]` param or captured Mutex
+      (`Undefined symbols: _Mutex_lock`). Same family as the
+      `Mutex[Array]`/`State[Array]` Send-propagation issues. Workaround: a
+      `Send` class owning the String, shared via SharedSync (quiver
+      `ClipboardCell`). Repro: `tmp/test-cache/q40-mutex-string-closure-repro.rx`;
+      details §Q40. Fix must pin BOTH shapes.
 - [ ] **Q35 · S3 — a STRUCT's `include <Mixin>` does not satisfy a generic's
       mixin bound (E1015).** Even a single struct implementor is rejected by a
       mixin-bounded generic; the identical class works (Q17's 655 fixture runs

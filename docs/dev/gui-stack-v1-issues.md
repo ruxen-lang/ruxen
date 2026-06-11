@@ -1685,6 +1685,35 @@ still errors. Pin: `924_tuple_element_string_literal_coercion` (rondo's exact
 `(String, Bool)` shape, return-position + let-annotation; RUNS + asserts stdout).
 rondo can drop W21's `("".to_string(), false)` workaround for bare `("", false)`.
 
+## Q40 · S2 — `Mutex[String]` misbehaves across closure/borrow boundaries (corruption reported; link failure reproduced)  ⏳ OPEN (NEW 2026-06-11)
+
+Two related data points, likely one root (the parameterized-generic method
+story on `Mutex[String]` — same family as the `State[Array]`/`Mutex[Array]`
+Send-propagation issues and the historical W6 `Option[&T]` link gaps):
+
+1. **Reported by quiver F3 (verified in isolation by that agent, 2026-06-11):**
+   `Mutex[String]` set/get THROUGH A CLOSURE boundary returns garbage — the
+   String payload is corrupted crossing the capture. quiver's clipboard seam
+   works around it with `ClipboardCell` (a `Send` class owning the `String`
+   directly, shared via `SharedSync` — the established TodoData pattern).
+   The minimal corruption repro still needs to be pinned (the agent verified
+   but did not leave the fixture).
+2. **Reproduced by the coordinator (this entry's fixture):** the same shapes
+   fail EARLIER on the current toolchain — `Mutex_lock` does not LINK when
+   `lock` is called on a `&Mutex[String]` function param or on a captured
+   `Mutex[String]` inside a closure (`Undefined symbols: _Mutex_lock` from
+   both `read_direct` and `__closure_20`). Direct local usage links. Repro:
+   `tmp/test-cache/q40-mutex-string-closure-repro.rx`.
+
+So depending on shape, `Mutex[String]`-through-indirection either fails to
+link (loud) or corrupts (silent — the dangerous half). Fix should make the
+monomorphized `Mutex[String]` methods resolve for borrow/capture receivers
+and pin BOTH shapes (run+stdout for the value round-trip; the link shape as
+a compile-success pin). Until then: the `Send`-class-owning-the-String
+pattern (quiver `ClipboardCell`) is the documented workaround. Also noted by
+the same report: the non-Copy-call-result-as-method-arg landmine reconfirmed
+at a fresh site (quiver `cut`/`clip_write` — let-bind first, as documented).
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:
