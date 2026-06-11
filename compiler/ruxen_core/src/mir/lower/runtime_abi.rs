@@ -118,6 +118,226 @@ pub fn callee_ownership(callee: &str) -> CalleeOwnership {
     }
 }
 
+/// For a USER callee (a function/method NOT classified by the runtime-ABI
+/// tables above), resolve which of its first `arg_count` *value-carrying*
+/// parameters are declared as a reference (`&T` / `&var T`).
+///
+/// A value passed to a reference parameter is AUTO-BORROWED, not consumed: the
+/// callee never owns it (drop elaboration unconditionally skips a function's
+/// own params — the caller owns the argument allocation for the call's
+/// duration). So the drop pass must NOT taint such an argument's source local;
+/// the source stays drop-eligible and is freed exactly once at the CALLER's
+/// scope exit. Without this, a `String` passed to `def f(s: &String)` was
+/// tainted by the conservative user-callee default and LEAKED (TASKS.md
+/// "Discovered drop-elaboration gap").
+///
+/// Resolution is by callee NAME (not DefId), mirroring the borrow_check
+/// precedent (`checks.rs::lookup_param_is_ref`, fix `fbe65da`): the HIR call's
+/// method DefId can be `UNRESOLVED_DEF` for `lib`-declared / builtin methods,
+/// so a by-DefId lookup would miss. The mangled MIR callee is reduced to its
+/// resolver name:
+///   * free fn  → the whole callee string (overload/mono suffixes stripped),
+///   * method   → the bare method name via [`extract_method_name`].
+///
+/// SAFETY / no-double-free guard: this is consulted ONLY for callees the
+/// runtime-ABI tables did not classify, and ONLY to UNTAINT a borrow param.
+/// A by-value (consuming) param keeps its taint (returned `false`). When the
+/// name resolves to MULTIPLE candidate signatures (same method name across
+/// classes / an overload set) that DISAGREE on a slot's ref-ness, we
+/// conservatively report `false` for that slot — never untaint on ambiguity.
+/// An unresolved name reports all-`false` (unchanged, fully conservative).
+///
+/// `self` offset: an instance method's MIR call passes the receiver as arg0,
+/// but the resolver signature's `params` do NOT include `self` (it lives in
+/// `self_mode`). We therefore align the signature against args[1..] when the
+/// signature is a `self`-taking method, and against args[0..] for a free fn /
+/// static method.
+///
+/// Receiver (arg0 of a method): reported a borrow ONLY when EVERY candidate's
+/// `self_mode` is the immutable `Ref` (`&self`). A read-only method borrows its
+/// receiver — the caller owns the instance and must free it at scope exit;
+/// tainting it (the old default) leaked the receiver. `RefMut` (`var self`) and
+/// `Consuming` (`consume self`) keep the receiver TAINTED: a `var self` method
+/// can be an in-place builder whose returns-self rebind is governed by
+/// `elide_returns_self_realloc`, and a consuming receiver is genuinely moved —
+/// untainting either risks a double-free. This is the provably-safe subset.
+pub fn user_callee_param_is_ref(
+    symbols: &crate::resolve::symbols::SymbolTable,
+    mangled_callee: &str,
+    arg_count: usize,
+) -> Vec<bool> {
+    use crate::resolve::symbols::DefKind;
+
+    let mut result = vec![false; arg_count];
+    if arg_count == 0 {
+        return result;
+    }
+
+    // Strip generic-class mono + overload suffixes so the name matches the
+    // resolver's stored def name. `__mono__` and `__overload` are the two
+    // synthetic separators MIR appends; `mono_base` / the overload mangler are
+    // their producers. We only need the textual base for the name compare.
+    let base = strip_call_suffixes(mangled_callee);
+
+    // Collect every candidate signature this name could resolve to, paired with
+    // whether it is a `self`-taking method (so we know the arg/param offset).
+    let mut candidates: Vec<(&crate::resolve::symbols::FnSignature, bool)> = Vec::new();
+
+    // (1) CLASS-QUALIFIED method: a method callee mangles `Class_method`, so the
+    // base splits into the longest prefix that NAMES a Class/Struct/Enum and the
+    // remaining method name. Resolving on the SPECIFIC parent class (by DefId)
+    // is load-bearing: a bare method name like `read` / `init` collides across
+    // dozens of stdlib classes (File.read, BufReader.read, async readers, …)
+    // whose `self_mode` and param shapes differ, so an unqualified by-name match
+    // would see a mass of contradictory candidates and conservatively untaint
+    // NOTHING. Class-qualification narrows to exactly the parent class's
+    // overload set.
+    if let Some((parent_id, method_name)) = split_class_qualified_method(symbols, base) {
+        for def in symbols.iter() {
+            if let DefKind::Method { parent, signature } = &def.kind {
+                if *parent != parent_id {
+                    continue;
+                }
+                let name_matches = def.name == method_name
+                    || def.name.starts_with(&format!("{}__overload", method_name));
+                if name_matches {
+                    let takes_self = signature.self_mode.is_some();
+                    candidates.push((signature, takes_self));
+                }
+            }
+        }
+    }
+
+    // (2) FREE FUNCTION: no class prefix — match the whole base name. Free-fn
+    // overloads (`name__overload…`) collapse onto the same base; the
+    // all-candidates-agree rule below keeps a disagreeing overload set
+    // conservative.
+    if candidates.is_empty() {
+        for def in symbols.iter() {
+            let name_matches =
+                def.name == base || def.name.starts_with(&format!("{}__overload", base));
+            if name_matches {
+                if let DefKind::Function { signature } = &def.kind {
+                    let takes_self = signature.self_mode.is_some();
+                    candidates.push((signature, takes_self));
+                }
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        return result;
+    }
+
+    // For each value-carrying arg slot, decide ref-ness. A slot is BORROWED
+    // only when EVERY candidate that maps a parameter to that slot agrees it is
+    // a reference. Any disagreement (or a candidate with no param at that slot)
+    // makes the slot conservatively non-borrowed.
+    for (slot, slot_is_ref) in result.iter_mut().enumerate() {
+        let mut all_ref = true;
+        let mut saw_any = false;
+        for (sig, takes_self) in &candidates {
+            // Map the MIR arg slot to the signature param index. A self-taking
+            // method's arg0 is the receiver (no signature param); its declared
+            // params line up with args[1..].
+            let param_idx = if *takes_self {
+                if slot == 0 {
+                    // Receiver slot: a borrow only when this candidate's
+                    // `self_mode` is the immutable `Ref` (`&self`). `RefMut`
+                    // and `Consuming` keep the taint (see doc above).
+                    saw_any = true;
+                    if !matches!(sig.self_mode, Some(crate::hir::nodes::HirSelfMode::Ref)) {
+                        all_ref = false;
+                        break;
+                    }
+                    continue;
+                }
+                slot - 1
+            } else {
+                slot
+            };
+            match sig.params.get(param_idx) {
+                Some(p) => {
+                    saw_any = true;
+                    if !ty_is_reference(&p.ty) {
+                        all_ref = false;
+                        break;
+                    }
+                }
+                None => {
+                    // Variadic / default-filled / arity mismatch — be
+                    // conservative for this candidate's view of the slot.
+                    saw_any = true;
+                    all_ref = false;
+                    break;
+                }
+            }
+        }
+        *slot_is_ref = saw_any && all_ref;
+    }
+
+    result
+}
+
+/// A declared parameter type that auto-borrows its argument: `&T` / `&var T`
+/// (with or without an explicit lifetime). Mirrors
+/// `borrow_check::checks::arg_is_reborrowed_reference` — kept in lockstep.
+fn ty_is_reference(ty: &crate::hir::types::Ty) -> bool {
+    use crate::hir::types::Ty;
+    matches!(
+        ty,
+        Ty::Ref(_) | Ty::RefMut(_) | Ty::RefLifetime(_, _) | Ty::RefMutLifetime(_, _)
+    )
+}
+
+/// Split a mangled method callee `Class_method` into `(parent_class_def_id,
+/// method_name)` by finding the LONGEST prefix that names a Class/Struct/Enum
+/// in `symbols`. Returns `None` for a name with no such prefix (a free fn).
+///
+/// Mirrors `Lowerer::class_name_from_mangled`'s right-to-left longest-prefix
+/// walk — class names contain underscores (`__HandlerFuture`) and method names
+/// contain underscores (`read_to_string`), so a naive `split('_')` is wrong.
+/// We additionally return the parent's `DefId` so the caller can scope the
+/// method lookup to exactly that class's methods.
+fn split_class_qualified_method<'s>(
+    symbols: &'s crate::resolve::symbols::SymbolTable,
+    base: &'s str,
+) -> Option<(crate::hir::nodes::DefId, &'s str)> {
+    use crate::resolve::symbols::DefKind;
+    let is_type_def = |d: &crate::resolve::symbols::Definition, cand: &str| {
+        matches!(
+            &d.kind,
+            DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. }
+        ) && (d.name == cand || d.name.replace('.', "_") == cand)
+    };
+    let mut end = base.len();
+    while let Some(pos) = base[..end].rfind('_') {
+        let candidate = &base[..pos];
+        if !candidate.is_empty() {
+            if let Some(def) = symbols.iter().find(|d| is_type_def(d, candidate)) {
+                return Some((def.id, &base[pos + 1..]));
+            }
+        }
+        end = pos;
+    }
+    None
+}
+
+/// Strip the synthetic `__mono__…` and `__overload…` suffixes a mangled MIR
+/// callee may carry, leaving the textual base the resolver stored as a def
+/// name. Order: trim `__mono__` first (generic-class instantiation), then
+/// `__overload` (arity/type overload disambiguation).
+fn strip_call_suffixes(callee: &str) -> &str {
+    let base = match callee.find("__mono__") {
+        Some(pos) => &callee[..pos],
+        None => callee,
+    };
+    match base.find("__overload") {
+        Some(pos) => &base[..pos],
+        None => base,
+    }
+}
+
 /// Is `type_name::method_name` a static (no-`self`) constructor that dispatches
 /// directly to a runtime symbol? Single source for the static-vs-instance
 /// decision shared by `util.rs::is_builtin_static_method` and the

@@ -7,6 +7,39 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Fixed
+- **Drop elaboration: a heap value passed to a USER function/method's `&T`
+  borrow param no longer leaks.** A `String` (or `Array`/`Hash`/`Set`/class)
+  passed to `def f(s: &String)` was tainted by the conservative user-callee
+  default in `compute_dealloc_safe_locals` (every arg of an unknown callee
+  treated as consumed), so the source local's scope-exit `ruxen_string_free` was
+  suppressed and the source LEAKED. Pre-existing; it leaked identically under
+  the old `&str` model and was surfaced by the one-string-type drop matrix.
+  - **Fix:** `mir/lower/runtime_abi.rs::user_callee_param_is_ref` resolves the
+    callee's declared param ref-ness by NAME (class-qualified for methods,
+    mirroring the `fbe65da` borrow_check precedent — the HIR method DefId can be
+    `UNRESOLVED_DEF`). For a user callee the drop pass now skips tainting any arg
+    whose declared param is `&T`/`&var T`; a read-only (`&self`/`Ref`) method
+    receiver is likewise treated as a borrow (the receiver instance no longer
+    leaks). By-value (consuming) params and `var self`/`consume self` receivers
+    KEEP their taint — no double-free. Runtime callees are untouched (the
+    classified `callee_ownership` tables are unchanged; the parity oracle is
+    byte-identical).
+  - **Loop bodies:** a built-in heap local (`String`/`Array`/`Hash`/`Set`)
+    declared inside a `while`/`loop`/`for` body is now freed at the loop
+    back-edge / `break` / `continue` via the type-correct helper (extracted
+    `drops::heap_free_callee`, shared with scope-exit drop), not only at function
+    scope exit — each iteration's allocation is reclaimed instead of leaking
+    iterations 1..n-1.
+  - **Aliasing invariant hardened:** `compute_dealloc_safe_locals` now strips a
+    copied-from alloc-rooted `src`'s ownership unconditionally (even when the
+    `dest` is already tainted, e.g. a loop body-local pre-zeroed by
+    `prepend_zero_init`), preventing a double-free where the producing
+    `ruxen_string_from` temp and the loop-freed local aliased the same pointer.
+  - Pins: `drop_fixtures.rs` borrow-call matrix (9 cases — borrow→source freed
+    once; by-value→kept tainted/no double-free; multiple borrow args;
+    borrow-then-use-after; borrow-in-loop; `&Array`/`&self`-class; mixed args).
+
 ### Removed
 - **`&str` — removed from the language; one string type pair only.** Ruxen now
   has exactly `String` (owned) and `&String` (borrowed). The distinct `Ty::Str`

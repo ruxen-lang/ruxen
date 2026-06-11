@@ -290,18 +290,28 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       heap-copying — zero-copy AND leak-free. Needs param-target-type-aware arg
       lowering (the "deep provenance plumbing" the ADR flagged). Pin: extend the
       drop matrix with `borrow_len("transient")` once landed.
-- [ ] **Discovered drop-elaboration gap: a `String` passed to a USER function's
-      `&String` param suppresses the source's scope-exit free → LEAK.**
-      `let owned = "x"; user_fn(owned)` where `user_fn(s: &String)` taints `owned`
-      in `compute_dealloc_safe_locals` (`mir/lower/drops.rs` / `runtime_abi.rs`):
-      the default `callee_ownership` for a user fn treats the arg as consumed,
-      so `owned`'s `ruxen_string_free` is dropped. PRE-EXISTING (orthogonal to
-      `&str` removal — affects any heap type passed to a user borrow param);
-      surfaced by the one-string-type drop-matrix pin. Fix: thread the user fn's
-      declared param borrow-ness (`self_mode`/`Ty::Ref` param) into
-      `callee_ownership` so a `&T` param marks the arg borrowed, not consumed.
-      Repro: `def f(s: &String) -> USize; s.size; end; def main; let o = "x";
-      let _ = f(o); end` leaks 1 string (drop_fixtures harness, raw_outstanding=1).
+- [x] **Discovered drop-elaboration gap: a `String` passed to a USER function's
+      `&String` param suppressed the source's scope-exit free → LEAK (FIXED
+      2026-06-11, `feat/drop-elaboration`).** `let owned = "x"; user_fn(owned)`
+      where `user_fn(s: &String)` tainted `owned` in
+      `compute_dealloc_safe_locals` because the default `callee_ownership` for a
+      user fn treated every arg as consumed, dropping `owned`'s
+      `ruxen_string_free`. PRE-EXISTING (it leaked identically under `&str`),
+      affected every heap type through a user borrow param. FIXED by
+      `mir/lower/runtime_abi.rs::user_callee_param_is_ref`: the drop pass resolves
+      the callee's declared param ref-ness by NAME (class-qualified for methods,
+      free-fn by base name; `fbe65da` borrow_check precedent) and skips tainting
+      `&T`/`&var T` arg slots; a read-only `&self` (`Ref`) receiver is also
+      untainted (the class instance no longer leaks). By-value params and
+      `var self`/`consume self` receivers keep their taint (no double-free). Also
+      fixed: loop-body built-in heap locals now free at the back-edge via the
+      shared `drops::heap_free_callee` (was leaking iterations 1..n-1), and the
+      `compute_dealloc_safe_locals` Assign/Copy aliasing invariant was hardened to
+      strip a copied-from src's ownership even when the dest is pre-tainted
+      (prevents a loop double-free). Runtime callees untouched (parity oracle
+      byte-identical). Pins: `drop_fixtures.rs` borrow-call matrix (9 cases). The
+      sibling **zero-copy `&String` borrow of a literal** follow-up above remains
+      open (an optimization; copy-everywhere is still correct & now leak-free).
 - [x] **Q32 · S3 — Q16 flat-merge of an FFI dependency broke `ruxen test` at
       link (FIXED 2026-06-10).** A consumer's test EXECUTABLE flat-merged the
       FFI dep's `src/**.rx` (incl. `lib "C"`-calling bodies) but neither

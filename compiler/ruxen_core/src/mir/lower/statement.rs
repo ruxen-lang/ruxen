@@ -105,6 +105,25 @@ impl<'a> Lowerer<'a> {
                         if let Some(frame) = self.loop_stack.last_mut() {
                             frame.body_locals.push(local);
                         }
+                    } else if matches!(
+                        refined_ty,
+                        Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_)
+                    ) {
+                        // Built-in heap-owning locals declared in a loop body
+                        // must ALSO be freed at the loop back-edge / break /
+                        // continue, not only at function scope exit — otherwise
+                        // each iteration's allocation leaks and only the final
+                        // iteration's value is reclaimed by the scope-exit drop.
+                        // `emit_dealloc_loop_locals` selects the type-correct
+                        // free callee (`ruxen_string_free` / `ruxen_vec_free` /
+                        // …). Class/Struct/Enum are registered above (they use
+                        // `ruxen_dealloc`); these built-ins need their dedicated
+                        // helpers. Surfaced by the borrow-in-loop drop-matrix
+                        // pin (a `String` borrowed into a user `&String` fn
+                        // inside a `while` leaked iterations 1..n-1).
+                        if let Some(frame) = self.loop_stack.last_mut() {
+                            frame.body_locals.push(local);
+                        }
                     }
                 }
                 Ok(())

@@ -53,9 +53,24 @@ impl<'a> Lowerer<'a> {
                     args: vec![MirValue::Use(local)],
                 });
             }
+            // Select the type-correct free helper (shared with scope-exit drop
+            // elaboration via `drops::heap_free_callee`). A loop-body
+            // `String`/`Vec`/`Hash`/`Set` MUST use its element-aware helper, not
+            // a bare `ruxen_dealloc`: passing a `Vec` spine pointer to
+            // `ruxen_dealloc` frees the struct but leaks the data buffer. Falls
+            // back to `ruxen_dealloc` for any local whose type is not a
+            // recognized heap-owning built-in (Class/Struct/Enum and the
+            // pre-existing behavior for anything else).
+            let free_callee = self
+                .fn_ref()
+                .locals
+                .iter()
+                .find(|l| l.id == local)
+                .and_then(|l| crate::mir::lower::drops::heap_free_callee(&l.ty))
+                .unwrap_or("ruxen_dealloc");
             self.emit(MirInst::Call {
                 dest: None,
-                callee: "ruxen_dealloc".to_string(),
+                callee: free_callee.to_string(),
                 args: vec![MirValue::Use(local)],
             });
             self.emit(MirInst::Assign {
