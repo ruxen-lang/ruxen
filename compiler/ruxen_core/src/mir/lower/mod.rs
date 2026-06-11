@@ -535,11 +535,7 @@ impl<'a> Lowerer<'a> {
             .params
             .iter()
             .skip(supplied_user_args)
-            .filter_map(|p| {
-                p.default
-                    .as_ref()
-                    .map(|d| Self::default_expr_to_sentinel(d))
-            })
+            .filter_map(|p| p.default.as_ref().map(Self::default_expr_to_sentinel))
             .collect()
     }
 

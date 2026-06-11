@@ -786,7 +786,7 @@ end
             "color_test",
             &user_file,
             &proj.join("out"),
-            &[dep_dir.clone()],
+            std::slice::from_ref(&dep_dir),
         )
         .unwrap();
         let synth = fs::read_to_string(&synth_path).unwrap();

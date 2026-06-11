@@ -64,14 +64,12 @@ impl<'a> Lowerer<'a> {
         // combinators routed through `Enumerable[T]` "yield nothing".
         {
             let mut recv = &object.ty;
-            loop {
-                match recv {
-                    Ty::Ref(inner)
-                    | Ty::RefMut(inner)
-                    | Ty::RefLifetime(_, inner)
-                    | Ty::RefMutLifetime(_, inner) => recv = inner,
-                    _ => break,
-                }
+            while let Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) = recv
+            {
+                recv = inner;
             }
             let is_builtin_non_vec_collection = match recv {
                 Ty::Map(_, _) | Ty::Set(_) => true,

@@ -1,3 +1,6 @@
+// Doc style: aligned tables / hanging bullets (see ruxen_core lib.rs note).
+#![allow(clippy::doc_overindented_list_items)]
+#![allow(clippy::doc_lazy_continuation)]
 //! Syntax-parity harness (ADR `docs/decisions/syntax-parity-harness.md`).
 //!
 //! USER REQUIREMENT: "none of the lsp/ide/fmt/compiler/repl may diverge on any

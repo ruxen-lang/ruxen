@@ -28,7 +28,8 @@ fn unimplemented_vec_combinators_are_rejected() {
     // MIR functions — see `migrated_vec_combinators_forward`. The list
     // here is limited to combinators that still have no MIR inliner and
     // no runtime symbol (`collect` is unimplemented).
-    for m in ["Vec[Int]_collect"] {
+    {
+        let m = "Vec[Int]_collect";
         assert!(
             runtime_name(m).is_err(),
             "expected `{m}` to be rejected (was {:?})",

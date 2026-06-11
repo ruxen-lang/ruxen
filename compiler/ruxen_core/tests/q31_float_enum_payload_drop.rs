@@ -1,3 +1,6 @@
+// Doc style: aligned tables / hanging bullets (see ruxen_core lib.rs note).
+#![allow(clippy::doc_overindented_list_items)]
+#![allow(clippy::doc_lazy_continuation)]
 //! Q31 (S1 memory-safety) — constructing a `Float32`-payload enum variant two
 //! or more times BY VALUE in one function must not crash.
 //!

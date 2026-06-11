@@ -329,7 +329,8 @@ mod golden {
         // from the arg) — bridge-resolved, None under the empty table. Only
         // the residual arm is pinned: `try_op` (`?`-operator intrinsic).
         let opt = || Ty::Option(Box::new(Ty::Int));
-        for m in ["try_op"] {
+        {
+            let m = "try_op";
             v.push(c(opt(), m));
         }
 
@@ -343,7 +344,8 @@ mod golden {
         // the empty table they return None, NOT pinned. Only the residual
         // arm is pinned: `try_op` (`?`-operator intrinsic).
         let res = || Ty::Result(Box::new(Ty::Int), Box::new(Ty::String));
-        for m in ["try_op"] {
+        {
+            let m = "try_op";
             v.push(c(res(), m));
         }
 

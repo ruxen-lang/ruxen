@@ -1,3 +1,6 @@
+// Doc style: aligned tables / hanging bullets (see ruxen_core lib.rs note).
+#![allow(clippy::doc_overindented_list_items)]
+#![allow(clippy::doc_lazy_continuation)]
 //! Q28 — a `Float32` struct field / enum VARIANT payload must round-trip
 //! through construction and field-read / `match` with no precision loss.
 //!

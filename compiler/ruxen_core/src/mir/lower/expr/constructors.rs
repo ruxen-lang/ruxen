@@ -19,9 +19,7 @@ impl<'a> Lowerer<'a> {
         val_local: Option<LocalId>,
         field_ty: &Ty,
     ) -> Option<LocalId> {
-        let Some(val_local) = val_local else {
-            return None;
-        };
+        let val_local = val_local?;
         let is_numeric = |ty: &Ty| {
             matches!(
                 ty,
