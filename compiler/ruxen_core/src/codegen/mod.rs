@@ -754,6 +754,47 @@ fn compile_cross(
     )
 }
 
+/// Compile a MIR program to a `no_std` host executable (tier 4.04).
+///
+/// A no_std build links **without the stdlib C runtime and without the
+/// per-package `[system_libs]`** (no `-lc -lm`, no `runtime/*.c`): the user's
+/// object is the whole program. This is the honest no-stdlib build — the
+/// caller has already (a) skipped the stdlib bootstrap and (b) run the E1400
+/// heap-allocation check, so the MIR references no `ruxen_*` runtime symbol.
+///
+/// Platform note: on macOS, `cc` still implicitly links `libSystem` (the OS
+/// mandates it for any dynamic executable — a truly libc-free binary is not
+/// possible there), but NO Ruxen stdlib runtime is linked. The strict
+/// `-nostdlib`, zero-libc-imports variant is a Linux target (verified in a
+/// container) and is the staged remainder for embedded triples. See
+/// `docs/decisions/phase4-no-std-wasm.md`.
+pub fn compile_no_std(
+    program: &MirProgram,
+    output_path: &str,
+    backend: Backend,
+) -> Result<(), String> {
+    // Object code via the selected backend (host triple).
+    let object_bytes = match backend {
+        Backend::Cranelift => {
+            let mut codegen = cranelift::CodeGen::new_for_target(None)?;
+            codegen.compile_program(program)?;
+            codegen.finish()?
+        }
+        #[cfg(feature = "llvm")]
+        Backend::Llvm { opt_level } => {
+            let mut codegen = llvm::CodeGen::new_for_target(opt_level, None)?;
+            codegen.compile_program(program)?;
+            codegen.finish()?
+        }
+    };
+
+    // Link the user object alone — no stdlib runtime objects, no
+    // `[system_libs]` aggregation, no FFI flags. `emit_executable` with empty
+    // runtime objects + empty link flags is exactly "bare `cc <obj> -o <out>`"
+    // (plus the macOS deployment-target pin, which is harmless).
+    object::emit_executable(&object_bytes, &[], output_path, false, &[])
+}
+
 /// Minimal `which`: is `name` an executable on `$PATH`? Used to detect an
 /// installed cross gcc (e.g. `aarch64-linux-gnu-gcc`) before falling back to
 /// the container link path.

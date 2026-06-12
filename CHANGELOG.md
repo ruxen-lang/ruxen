@@ -8,6 +8,28 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **no_std mode (tier 4.04): `ruxen compile --no-std` + E1400.** A no_std host
+  build skips the stdlib bootstrap and links WITHOUT the Ruxen C runtime or
+  per-package `[system_libs]` — the user object is the whole program (zero
+  `ruxen_*` symbols in the binary). The hosted-only entry plumbing is
+  suppressed in no_std: the `ruxen_env_init(argc,argv)` injection into `main`
+  (cranelift) and the synthesized primitive `*_fmt` Display helpers (which
+  reference `ruxen_int_to_string`/`Formatter_write_str`). **E1400** rejects heap
+  allocation (`String`/`Array`/`Map`/`Set` construction, interpolation,
+  collection macros) in a no_std unit at compile time — there is no allocator in
+  a no_std build (registered in the code registry; `docs/errors/E1400.md`).
+  **Bar passes:** `examples/06-no-std/exit42.rx` builds + runs (exit 42, no
+  stdlib symbols); `examples/06-no-std/heap_rejected.rx` is rejected with E1400
+  (`scripts/no_std_verify.sh`, pins `tests/no_std_e1400.rs`). New
+  `ruxen_core::no_std` validator, `Lowerer::new_no_std`, `MirProgram::no_std`,
+  `codegen::compile_no_std`. **Platform note:** on macOS `libSystem` is still
+  linked (OS mandate) but no Ruxen stdlib is; the strict `-nostdlib`,
+  zero-libc-imports binary is a Linux/embedded target, filed. "core" = the
+  existing `library/std/core` package (ADR decision #1). Staged remainder
+  (`docs/decisions/phase4-no-std-wasm.md`): the
+  `no_std`/`panic_handler`/`global_allocator`/`no_mangle` source directives, the
+  `core`/`std`/`alloc` re-export surface, the manifest `[package] no-std` key,
+  thumbv7em, and `panic = "unwind"`.
 - **WASM target (tier 4.03): `ruxen compile --target wasm32-unknown-unknown`.**
   Produces a valid `.wasm` module via the LLVM backend + `wasm-ld` (no libc,
   no C runtime — a reactor module). Every top-level free `def` becomes a

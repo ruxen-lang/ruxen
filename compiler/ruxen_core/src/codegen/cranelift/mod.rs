@@ -87,6 +87,12 @@ pub struct CodeGen {
     /// `Bool_fmt` would be unconditionally widened to `i64` by the
     /// fallback widening rule and fail Cranelift IR verification.
     user_fn_param_tys: HashMap<String, Vec<Type>>,
+    /// Tier 4.04: lowered in no_std mode. When `true`, `translate_into_ctx`
+    /// SKIPS the `ruxen_env_init(argc, argv)` injection into `main` — a no_std
+    /// build has no `std.env` and no `ruxen_env_init` runtime symbol to call.
+    /// Set from `MirProgram::no_std` at the top of `compile_program`; `false`
+    /// on every hosted build (unchanged).
+    no_std: bool,
 }
 
 impl CodeGen {
@@ -167,6 +173,7 @@ impl CodeGen {
             declared_fns: HashMap::new(),
             vtable_data: HashMap::new(),
             user_fn_param_tys: HashMap::new(),
+            no_std: false,
         })
     }
 
@@ -176,6 +183,9 @@ impl CodeGen {
     /// FFI declarations from `lib` and `extern "C"` blocks are declared
     /// as imported functions so they can be called from user code.
     pub fn compile_program(&mut self, program: &MirProgram) -> Result<(), String> {
+        // Tier 4.04: carry no_std through to the entry-point lowering, which
+        // skips the `ruxen_env_init` injection into `main`.
+        self.no_std = program.no_std;
         // ── Pass 0: declare FFI functions ────────────────────────────────
         for lib in &program.ffi_libs {
             for ffi_fn in &lib.functions {
@@ -514,7 +524,10 @@ impl CodeGen {
             builder.switch_to_block(entry_cl_block);
             builder.append_block_params_for_function_params(entry_cl_block);
 
-            if func.name == "main" {
+            // Inject `ruxen_env_init(argc, argv)` at the top of `main` so
+            // `std.env` sees the process args — EXCEPT in a no_std build, which
+            // has no `std.env` and no `ruxen_env_init` runtime symbol.
+            if func.name == "main" && !self.no_std {
                 let params_vals = builder.block_params(entry_cl_block).to_vec();
                 let argc = params_vals
                     .first()

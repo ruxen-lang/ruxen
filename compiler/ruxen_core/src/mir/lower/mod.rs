@@ -158,6 +158,14 @@ pub struct Lowerer<'a> {
     /// path so that call resolves (and devirtualizes via `unique_bound_impl`,
     /// or surfaces a clear error).
     fn_mono_needs_opaque: HashSet<String>,
+    /// Tier 4.04: no_std mode. Suppresses the synthesized primitive `*_fmt`
+    /// Display helpers (`Int_fmt`/`Char_fmt`/…), which reference hosted runtime
+    /// symbols (`ruxen_int_to_string`, `Formatter_write_str`) absent in a
+    /// no_std build. Set via [`Lowerer::new_no_std`]; the default `new` leaves
+    /// it `false` so every existing caller is unchanged. Also surfaced on
+    /// `MirProgram::no_std` so the cranelift backend skips the `ruxen_env_init`
+    /// injection into `main`.
+    no_std: bool,
 }
 
 /// A captured variable's storage inside the captures struct.
@@ -248,7 +256,16 @@ impl<'a> Lowerer<'a> {
             fn_mono_instances: HashMap::new(),
             fn_mono_emitted: HashMap::new(),
             fn_mono_needs_opaque: HashSet::new(),
+            no_std: false,
         }
+    }
+
+    /// Construct a no_std lowerer (tier 4.04): suppresses the synthesized
+    /// primitive `*_fmt` Display helpers and marks `MirProgram::no_std`.
+    pub fn new_no_std(symbols: &'a SymbolTable) -> Self {
+        let mut lo = Self::new(symbols);
+        lo.no_std = true;
+        lo
     }
 
     /// Given a generic type parameter's bounds, return the unique concrete
@@ -727,6 +744,7 @@ impl<'a> Lowerer<'a> {
 
     pub fn lower_program(&mut self, program: &HirProgram) -> Result<MirProgram, String> {
         let mut mir = MirProgram::new();
+        mir.no_std = self.no_std;
 
         // Gather `impl Trait for Type` edges so method calls on generic
         // type parameters can dispatch to the unique implementor.
@@ -808,12 +826,17 @@ impl<'a> Lowerer<'a> {
         // and symbols already in place).
         self.emit_generic_fn_instances(&mut mir)?;
 
-        // Emit the primitive Display::fmt synth functions unconditionally
-        // (Phase 2 #06.D2.S1). These are program-level, not per-use.
-        // Stage 3 (D2) `lower_interpolation` rewrite assumes these are always
-        // present; conditional emission would require a two-pass approach.
-        for f in self.synthesize_primitive_fmt_displays() {
-            mir.functions.push(f);
+        // Emit the primitive Display::fmt synth functions (Phase 2 #06.D2.S1).
+        // These are program-level, not per-use. Stage 3 (D2)
+        // `lower_interpolation` rewrite assumes they're present in a hosted
+        // build. SUPPRESSED in no_std (tier 4.04): each one references hosted
+        // runtime (`ruxen_int_to_string`, `Formatter_write_str`) absent in a
+        // no_std link, and a no_std unit cannot interpolate anyway (E1400
+        // rejects the `String` an interpolation would build).
+        if !self.no_std {
+            for f in self.synthesize_primitive_fmt_displays() {
+                mir.functions.push(f);
+            }
         }
 
         // Append any closure functions generated during lowering,

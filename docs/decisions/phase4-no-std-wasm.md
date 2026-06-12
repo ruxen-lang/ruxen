@@ -133,3 +133,30 @@ env-gated verification lane.
 - (Stage B) **Linker = `wasm-ld`**, discovered via `RUXEN_WASM_LD` → LLVM-18
   prefix → PATH; `--no-entry --export-dynamic --allow-undefined`; no C runtime,
   no `[system_libs]`. Missing linker → actionable error.
+- (Stage A) **no_std surface = a `--no-std` CLI flag**, not the source directive
+  or manifest key (both filed). Lowest-churn for the single-file `compile` path
+  and directly testable; the directive parser is the staged remainder.
+- (Stage A) **Two hosted-only injections had to be suppressed for no_std to
+  link+run:** (1) the cranelift `ruxen_env_init(argc,argv)` call injected into
+  `main` (gated on `!program.no_std` via a `CodeGen.no_std` field set from
+  `MirProgram::no_std`), and (2) `synthesize_primitive_fmt_displays`
+  (`Int_fmt`/`Char_fmt`/… reference `ruxen_int_to_string`/`Formatter_write_str`)
+  — gated on `!self.no_std` via `Lowerer::new_no_std`. Both default false, so
+  every hosted build is byte-unchanged.
+- (Stage A) **macOS cannot produce a libc-free executable** (`ld: dynamic
+  executables must link libSystem.dylib` — verified). So the macOS no_std bar is
+  "no Ruxen stdlib + runs + signals a value via a minimal libc `exit` FFI"
+  (exit 42, zero `ruxen_*` symbols). The strict `-nostdlib`, zero-undefined
+  binary is a Linux target — verified standalone in a `linux/arm64` container
+  (`-nostdlib -static` + a `_start` shim + raw `SYS_exit` → exit 42, zero
+  undefined symbols) — and is FILED as the embedded/Linux remainder.
+- (Stage A) **E1400 detection altitude = typed HIR** (`src/no_std.rs`): a
+  recursive expr walk flags the unambiguous allocation kinds (string/array/map
+  literals, interpolation, array-fill, collection macros) plus any call whose
+  result type is a heap collection. Borrows/reads/pass-throughs are allowed.
+  E1400 sits in a new E1400-E1499 namespace (the prompt reserved it); E1401/
+  E1402 reserved (not registered until consumed, per the registry rule).
+- (Stage A) **`compile_no_std` links the user object alone** (empty runtime
+  objects, empty link flags) = bare `cc <obj> -o <out>`. The macOS `-framework
+  Security` from `linker_args` remains (harmless — not libc; the binary never
+  calls it); dropping it cleanly is a trivial follow-up, filed.

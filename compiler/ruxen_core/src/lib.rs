@@ -13,6 +13,7 @@ pub mod hir;
 pub mod implicit_includes;
 pub mod lexer;
 pub mod mir;
+pub mod no_std;
 pub mod parser;
 pub mod resolve;
 pub mod typeck;

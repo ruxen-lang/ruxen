@@ -45,6 +45,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let mut force = false;
     let mut verbose = false;
     let mut target_flag: Option<String> = None;
+    let mut no_std = false;
     let mut extra_runtime_c: Vec<String> = Vec::new();
     let mut extra_link_args: Vec<String> = Vec::new();
     let mut i = 2;
@@ -78,6 +79,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
             i += 1;
         } else if args[i].starts_with("--emit=") {
             emit_mode = Some(args[i][7..].to_string());
+            i += 1;
+        } else if args[i] == "--no-std" || args[i] == "--no_std" {
+            // tier 4.04: no_std mode — don't bootstrap the hosted stdlib,
+            // reject heap allocation (E1400), and link without the stdlib
+            // C runtime / `[system_libs]`.
+            no_std = true;
             i += 1;
         } else if args[i] == "--release" {
             release_mode = true;
@@ -144,6 +151,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
             &extra_runtime_c,
             &extra_link_args,
         );
+    }
+
+    // ─── no_std path (tier 4.04) ─────────────────────────────────────
+    // A no_std host build bypasses the incremental cache (it's a distinct,
+    // infrequent build with no stdlib runtime) and runs a dedicated pipeline:
+    // skip the stdlib bootstrap, enforce E1400 (no heap allocation), and link
+    // WITHOUT the stdlib C runtime / `[system_libs]`.
+    if no_std {
+        return run_no_std_compile(&source, path, &output_path, release_mode);
     }
 
     // ─── Cached compile path ─────────────────────────────────────
@@ -577,6 +593,69 @@ fn run_cross_compile(
         output_path,
         target.canonical()
     );
+    Ok(())
+}
+
+/// no_std host compile (tier 4.04). Skips the stdlib bootstrap, enforces E1400
+/// (no heap allocation), and links without the stdlib C runtime /
+/// `[system_libs]`. See `ruxen_core::codegen::compile_no_std` and
+/// `docs/decisions/phase4-no-std-wasm.md`.
+fn run_no_std_compile(
+    source: &str,
+    path: &str,
+    output_path: &str,
+    release_mode: bool,
+) -> Result<(), String> {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize().map_err(|ds| {
+        ds.iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().map_err(|ds| {
+        ds.iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+
+    // no_std: empty bootstrap — the hosted stdlib is not available.
+    let type_result = type_check_with_package_bootstrap(&program, &[]);
+    let mut errors: Vec<String> = type_result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error)
+        .map(|d| d.to_string())
+        .collect();
+
+    // E1400: reject heap allocation in the no_std unit.
+    for d in ruxen_core::no_std::validate(&type_result.program) {
+        errors.push(d.to_string());
+    }
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+
+    let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
+    if !borrow_errors.is_empty() {
+        return Err(borrow_errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+
+    let mut lowerer = ruxen_core::mir::lower::Lowerer::new_no_std(&type_result.symbols);
+    let mir_program = lowerer
+        .lower_program(&type_result.program)
+        .map_err(|e| format!("MIR lowering error: {}", e))?;
+
+    let backend = resolve_backend(release_mode, None, None)?;
+    ruxen_core::codegen::compile_no_std(&mir_program, output_path, backend)?;
+
+    println!("Compiled {} → {} (no_std)", path, output_path);
     Ok(())
 }
 

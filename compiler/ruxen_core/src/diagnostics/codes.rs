@@ -13,6 +13,7 @@
 //! | E0601-E0618   | implicit-include / auto-synth |
 //! | E0700-E0799   | tier-2 type system            |
 //! | E1011-E1099   | mixin / include checking      |
+//! | E1400-E1499   | no_std / embedded (tier 4.04) |
 //! | E1600-E1699   | package manager               |
 //! | E1700-E1799   | std.regex                     |
 
@@ -477,6 +478,17 @@ pub const REGISTRY: &[CodeInfo] = &[
     CodeInfo {
         code: "E1123",
         title: "operator aliases are not yet supported",
+    },
+    // ── no_std / embedded (E1400-E1499) ──────────────────────────────
+    // Tier 4.04. E1400 fires when a no_std compilation unit constructs a
+    // heap-allocated value (String/Array/Map/Set) — there is no global
+    // allocator in a no_std build. E1401 (`std.*` import in no_std) and
+    // E1402 (unsupported target triple) are RESERVED for the staged
+    // core/std resolver split; not yet emitted, so not registered (the
+    // registry forbids unconsumed rows). ADR phase4-no-std-wasm.
+    CodeInfo {
+        code: "E1400",
+        title: "heap allocation in a no_std unit",
     },
     // ── Package manager (E1600-E1699) ────────────────────────────────
     // Emitted from `ruxen_cli`. Spans don't apply (these are toolchain

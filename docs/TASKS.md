@@ -39,14 +39,20 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       build unchanged (Cranelift). **Staged remainder** (ADR): wasm32-wasi,
       bundled allocator (String/Array exports), `wasm_import`/host imports,
       `std.wasm`, the `wasm_export "custom"` rename directive, browser harness.
-- [ ] **no_std / embedded (tier 4.04) — IN PROGRESS (`feat/drop-elaboration`).**
-      Spec `requirements/tier4_04_no_std_embedded.md`, ADR
-      `decisions/phase4-no-std-wasm.md`. Non-slip bar: a no_std host binary
-      builds+runs with E1400 (heap-alloc-in-no_std) enforced. "core" = the
-      existing `library/std/core` package set (decision #1). The full
-      core/std re-export elegance, the `alloc` package, the
-      `global_allocator`/`panic_handler`/`no_std` directive machinery, the
-      thumbv7em fixture, and `panic = "unwind"` are the staged remainder.
+- [x] **no_std / embedded (tier 4.04) — non-slip bar DONE (2026-06-12,
+      `feat/drop-elaboration`).** Spec `requirements/tier4_04_no_std_embedded.md`
+      (path-fixed + checklist annotated), ADR `decisions/phase4-no-std-wasm.md`.
+      `ruxen compile --no-std`: skips stdlib bootstrap, links without the Ruxen
+      C runtime / `[system_libs]` (zero `ruxen_*` symbols), suppresses
+      `ruxen_env_init` + primitive `*_fmt` synthesis. **E1400** rejects heap
+      allocation in a no_std unit (`src/no_std.rs`, `docs/errors/E1400.md`,
+      `tests/no_std_e1400.rs`). Bars: `examples/06-no-std/`,
+      `scripts/no_std_verify.sh` (exit 42 + E1400). "core" = existing
+      `library/std/core` package (decision #1). **Staged remainder:** the
+      `no_std`/`panic_handler`/`global_allocator`/`no_mangle` source directives,
+      the `core`/`std`/`alloc` re-export surface, the manifest `[package]
+      no-std` key, the strict `-nostdlib` zero-libc Linux binary, thumbv7em, and
+      `panic = "unwind"`.
 - [x] **Cross-compilation (tier 4.02) — `--target <triple>` (DONE 2026-06-12,
       `feat/drop-elaboration`).** Spec `requirements/tier4_02_cross_compilation.md`,
       ADR `decisions/cross-compilation-linker-matrix.md`, guide

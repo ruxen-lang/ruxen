@@ -53,6 +53,12 @@ pub struct MirProgram {
     /// `wasm_export "custom"` rename directive is the staged remainder
     /// (`docs/decisions/phase4-no-std-wasm.md`).
     pub wasm_exports: Vec<String>,
+    /// Tier 4.04: this program was lowered in no_std mode. The cranelift
+    /// backend reads this to SKIP the `ruxen_env_init(argc, argv)` injection
+    /// into `main` — a no_std build has no `std.env` and no `ruxen_env_init`
+    /// runtime symbol. Set by `Lowerer::new_no_std`; `false` on every hosted
+    /// build (unchanged behaviour).
+    pub no_std: bool,
 }
 
 /// Phase B-2: one static vtable struct per `(class, mixin)` pair.
@@ -139,6 +145,7 @@ impl MirProgram {
             vtables: Vec::new(),
             class_infos: Vec::new(),
             wasm_exports: Vec::new(),
+            no_std: false,
         }
     }
 }
