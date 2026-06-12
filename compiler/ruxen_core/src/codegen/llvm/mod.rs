@@ -19,15 +19,29 @@ pub mod types;
 pub struct CodeGen {
     context: Context,
     opt_level: u8,
+    /// Canonical target triple string, or `None` for the host. When set, the
+    /// target machine is built for this triple instead of
+    /// `TargetMachine::get_default_triple()` (tier 4.02). LLVM 18's
+    /// `initialize_all` already registers every target, so this is a
+    /// one-string change with no feature-gate impact.
+    target_triple: Option<String>,
     object_bytes: Option<Vec<u8>>,
 }
 
 impl CodeGen {
-    /// Create a new LLVM code generator.
+    /// Create a new LLVM code generator targeting the host.
     pub fn new(opt_level: u8) -> Result<Self, String> {
+        Self::new_for_target(opt_level, None)
+    }
+
+    /// Create a new LLVM code generator for an optional cross target
+    /// (tier 4.02). `target` is the canonical triple string (e.g.
+    /// `"aarch64-unknown-linux-gnu"`), or `None` for the host.
+    pub fn new_for_target(opt_level: u8, target: Option<String>) -> Result<Self, String> {
         Ok(CodeGen {
             context: Context::create(),
             opt_level,
+            target_triple: target,
             object_bytes: None,
         })
     }
@@ -39,7 +53,11 @@ impl CodeGen {
 
         // Initialize LLVM targets
         Target::initialize_all(&InitializationConfig::default());
-        let target_triple = TargetMachine::get_default_triple();
+        // Tier 4.02: honour an explicit cross target; default to host.
+        let target_triple = match &self.target_triple {
+            Some(t) => TargetTriple::create(t),
+            None => TargetMachine::get_default_triple(),
+        };
         module.set_triple(&target_triple);
 
         let target =

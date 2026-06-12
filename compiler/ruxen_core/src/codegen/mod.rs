@@ -7,6 +7,7 @@ pub mod lang_intrinsics;
 pub mod layout;
 pub mod object;
 pub mod runtime;
+pub mod target;
 // `runtime_table` deleted in #06.95 Phase E-rest FINAL — every
 // dispatch arm migrated to either per-package .rx class lib decls
 // (the FFI alias map handles them) or to
@@ -436,6 +437,9 @@ pub fn compile(program: &MirProgram, output_path: &str) -> Result<(), String> {
 ///   to symbols defined in a sibling-of-`src/` C file. Discovery is the
 ///   caller's responsibility — see [`find_runtime_sources_in_dir`].
 /// - `backend`: which code-generation backend to use.
+///
+/// Host-target entry point — byte-identical to the pre-4.02 behaviour.
+/// Delegates to [`compile_with_options_for_target`] with `None`.
 pub fn compile_with_options(
     program: &MirProgram,
     output_path: &str,
@@ -444,16 +448,68 @@ pub fn compile_with_options(
     extra_runtime_sources: &[PathBuf],
     backend: Backend,
 ) -> Result<(), String> {
+    compile_with_options_for_target(
+        program,
+        output_path,
+        sanitize,
+        extra_link_flags,
+        extra_runtime_sources,
+        backend,
+        None,
+    )
+}
+
+/// Compile a MIR program to a native executable for an optional
+/// cross-compilation target (tier 4.02).
+///
+/// `target = None` (or a resolved host target) takes the byte-identical host
+/// path: `cranelift_native::builder()`, plain `cc`, the prebuilt-archive fast
+/// path. A non-host target routes object generation through `isa::lookup` /
+/// `TargetTriple::create`, compiles the stdlib runtime *for the target*, and
+/// links via the resolved [`target::LinkerSpec`] — local `cc -arch` for a
+/// Darwin cross, or the two-stage Docker flow for a Linux target on a host
+/// without a cross toolchain.
+///
+/// The prebuilt-archive fast path is host-only: a host `libruxenrt.a` is the
+/// wrong ABI for a cross target, so cross builds always compile the runtime
+/// from source for the target (no host-object poisoning the target cache).
+#[allow(clippy::too_many_arguments)]
+pub fn compile_with_options_for_target(
+    program: &MirProgram,
+    output_path: &str,
+    sanitize: bool,
+    extra_link_flags: &[String],
+    extra_runtime_sources: &[PathBuf],
+    backend: Backend,
+    target: Option<&target::ResolvedTarget>,
+) -> Result<(), String> {
+    // A non-host target takes the dedicated cross path.
+    let is_cross = matches!(target, Some(t) if !t.is_host());
+    if is_cross {
+        return compile_cross(
+            program,
+            output_path,
+            extra_link_flags,
+            extra_runtime_sources,
+            backend,
+            target.expect("is_cross implies Some"),
+        );
+    }
+
+    // ── Host path (byte-identical to pre-4.02) ───────────────────────────
     // Step 1: Generate object code via the selected backend
     let object_bytes = match backend {
         Backend::Cranelift => {
-            let mut codegen = cranelift::CodeGen::new()?;
+            let mut codegen = cranelift::CodeGen::new_for_target(target)?;
             codegen.compile_program(program)?;
             codegen.finish()?
         }
         #[cfg(feature = "llvm")]
         Backend::Llvm { opt_level } => {
-            let mut codegen = llvm::CodeGen::new(opt_level)?;
+            let mut codegen = llvm::CodeGen::new_for_target(
+                opt_level,
+                target.map(|t| t.canonical().to_string()),
+            )?;
             codegen.compile_program(program)?;
             codegen.finish()?
         }
@@ -584,6 +640,120 @@ pub fn compile_with_options(
     }
 
     Ok(())
+}
+
+/// The cross-compilation path (tier 4.02): non-host target.
+///
+/// Always compiles the stdlib runtime from source FOR THE TARGET (the host
+/// `libruxenrt.a` fast path is skipped — wrong ABI), then links via the
+/// resolved [`target::LinkerSpec`]. Sanitizer builds are not supported on the
+/// cross path (the runtime is compiled plainly).
+fn compile_cross(
+    program: &MirProgram,
+    output_path: &str,
+    extra_link_flags: &[String],
+    extra_runtime_sources: &[PathBuf],
+    backend: Backend,
+    target: &target::ResolvedTarget,
+) -> Result<(), String> {
+    // §5.8 backend compatibility: Cranelift can't emit wasm/embedded.
+    if target.requires_llvm_backend() && matches!(backend, Backend::Cranelift) {
+        return Err(format!(
+            "target '{}' requires the LLVM backend. \
+             Build with --release or pass --backend=llvm.",
+            target.canonical()
+        ));
+    }
+
+    // Step 1: object code for the target.
+    let object_bytes = match backend {
+        Backend::Cranelift => {
+            let mut codegen = cranelift::CodeGen::new_for_target(Some(target))?;
+            codegen.compile_program(program)?;
+            codegen.finish()?
+        }
+        #[cfg(feature = "llvm")]
+        Backend::Llvm { opt_level } => {
+            let mut codegen =
+                llvm::CodeGen::new_for_target(opt_level, Some(target.canonical().to_string()))?;
+            codegen.compile_program(program)?;
+            codegen.finish()?
+        }
+    };
+
+    // Step 2: resolve the linker strategy for this target on this host.
+    let spec = target::linker_for(
+        target,
+        target::HostOs::current(),
+        target::HostArch::current(),
+        which_on_path,
+    )?;
+
+    // Step 3: runtime sources for the target. The container path compiles
+    // them inside the container; the local path compiles them here with the
+    // target-aware `cc` so the runtime object matches the target ABI.
+    let runtime_sources = find_runtime_sources()?;
+    let mut all_runtime_sources = runtime_sources.clone();
+    all_runtime_sources.extend_from_slice(extra_runtime_sources);
+
+    let runtime_objects: Vec<PathBuf> = if spec.needs_container {
+        // Compiled inside the container; nothing to compile locally.
+        Vec::new()
+    } else {
+        let mut objs = Vec::with_capacity(all_runtime_sources.len());
+        for src in &all_runtime_sources {
+            match object::compile_runtime_for_target(src, target, &spec.target_args) {
+                Ok(o) => objs.push(o),
+                Err(e) => {
+                    for o in &objs {
+                        let _ = std::fs::remove_file(o);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        objs
+    };
+
+    // Step 4: link flags — `[system_libs]` + FFI, same aggregation as host.
+    let mut all_link_flags: Vec<String> = extra_link_flags.to_vec();
+    if let Ok(system_flags) = collect_system_lib_flags() {
+        for flag in system_flags {
+            if !all_link_flags.contains(&flag) {
+                all_link_flags.push(flag);
+            }
+        }
+    }
+    for lib in &program.ffi_libs {
+        for flag in &lib.link_flags {
+            if !all_link_flags.contains(flag) {
+                all_link_flags.push(flag.clone());
+            }
+        }
+    }
+
+    object::emit_executable_for_target(
+        &object_bytes,
+        &runtime_objects,
+        &all_runtime_sources,
+        output_path,
+        target,
+        &spec,
+        &all_link_flags,
+    )
+}
+
+/// Minimal `which`: is `name` an executable on `$PATH`? Used to detect an
+/// installed cross gcc (e.g. `aarch64-linux-gnu-gcc`) before falling back to
+/// the container link path.
+fn which_on_path(name: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| {
+        let candidate = dir.join(name);
+        candidate.is_file()
+    })
 }
 
 #[cfg(test)]

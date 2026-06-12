@@ -187,6 +187,296 @@ pub fn emit_executable(
     Ok(())
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Cross-compilation linking (tier 4.02)
+// ─────────────────────────────────────────────────────────────────────────
+
+use crate::codegen::target::{LinkerSpec, ResolvedTarget};
+
+/// Compile one runtime `.c` for a cross target using a target-aware `cc`.
+///
+/// `target_args` are the leading flags from the resolved [`LinkerSpec`]
+/// (e.g. `-arch x86_64` for a Darwin cross). The same `cc` driver that links
+/// also compiles the runtime, so the runtime object matches the target ABI.
+/// Only used on the *local* cross path (Darwin→Darwin); the container path
+/// compiles the runtime inside the container instead (see
+/// [`emit_executable_in_container`]).
+pub fn compile_runtime_for_target(
+    runtime_c_path: &Path,
+    target: &ResolvedTarget,
+    target_args: &[String],
+) -> Result<PathBuf, String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let stem = runtime_c_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("runtime");
+    let runtime_o = std::env::temp_dir().join(format!(
+        "ruxen_{}_{}_{}_{}.o",
+        stem,
+        target.canonical().replace('-', "_"),
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed),
+    ));
+
+    let mut cmd = Command::new("cc");
+    for a in target_args {
+        cmd.arg(a);
+    }
+    cmd.arg("-c").arg(runtime_c_path).arg("-o").arg(&runtime_o);
+    // Darwin cross still pins the deployment floor so ld doesn't complain.
+    if target.is_darwin() {
+        cmd.arg("-mmacosx-version-min=11.0");
+    }
+    cmd.arg("-O2");
+
+    let status = cmd
+        .status()
+        .map_err(|e| format!("Failed to invoke cc for {}: {}", runtime_c_path.display(), e))?;
+    if !status.success() {
+        return Err(format!(
+            "Failed to compile runtime {} for target {}",
+            runtime_c_path.display(),
+            target.canonical()
+        ));
+    }
+    Ok(runtime_o)
+}
+
+/// Link a cross-compiled executable using a resolved [`LinkerSpec`].
+///
+/// Dispatches on `spec.needs_container`:
+/// - local link → spawn `spec.program` with `spec.target_args` (Darwin cross
+///   via `cc -arch`, or a host-arch Linux `cc`, or an on-PATH cross gcc).
+/// - container link → the two-stage Docker flow ([`emit_executable_in_container`]).
+///
+/// `runtime_sources` are the stdlib `.c` paths; on the local path they must
+/// already be compiled to `runtime_objects`. On the container path they are
+/// compiled *inside* the container (the host has no target cc), so the caller
+/// passes the source paths and an empty `runtime_objects`.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_executable_for_target(
+    object_bytes: &[u8],
+    runtime_objects: &[PathBuf],
+    runtime_sources: &[PathBuf],
+    output_path: &str,
+    target: &ResolvedTarget,
+    spec: &LinkerSpec,
+    extra_link_flags: &[String],
+) -> Result<(), String> {
+    if spec.needs_container {
+        return emit_executable_in_container(
+            object_bytes,
+            runtime_sources,
+            output_path,
+            target,
+            extra_link_flags,
+        );
+    }
+
+    // Local cross link (Darwin→Darwin, native Linux, or on-PATH cross gcc).
+    let obj_path = format!("{}.o", output_path);
+    std::fs::write(&obj_path, object_bytes)
+        .map_err(|e| format!("Failed to write object file: {}", e))?;
+
+    let mut cmd = Command::new(&spec.program);
+    for a in &spec.target_args {
+        cmd.arg(a);
+    }
+    cmd.arg(&obj_path);
+    for runtime_o in runtime_objects {
+        cmd.arg(runtime_o);
+    }
+    cmd.arg("-o").arg(output_path);
+    if target.is_darwin() {
+        cmd.arg("-mmacosx-version-min=11.0");
+        // std::rand uses SecRandomCopyBytes; the Security framework must be
+        // linked. (Cross-platform Linux targets don't link this.)
+        cmd.arg("-framework").arg("Security");
+    }
+    for flag in extra_link_flags {
+        cmd.arg(flag);
+    }
+
+    let status = cmd.status().map_err(|e| {
+        format!(
+            "Failed to invoke cross linker '{}' for {}: {}",
+            spec.program,
+            target.canonical(),
+            e
+        )
+    })?;
+    if !status.success() {
+        return Err(format!(
+            "Cross-linking failed for '{}' (target {})",
+            output_path,
+            target.canonical()
+        ));
+    }
+
+    let _ = std::fs::remove_file(&obj_path);
+    for runtime_o in runtime_objects {
+        let _ = std::fs::remove_file(runtime_o);
+    }
+    Ok(())
+}
+
+/// Two-stage Docker link: emit the target object locally, then compile the
+/// stdlib runtime `.c` *and* link inside a target-native container.
+///
+/// This is the honest fallback for Linux targets from a macOS host with no
+/// cross toolchain installed (`zig`/`aarch64-linux-gnu-gcc` absent). The
+/// container's native `cc` + libc compile the runtime for the target and link
+/// the final binary — no host cross-cc required. The repo's stdlib runtime
+/// tree is mounted read-only; the output dir is mounted read-write.
+///
+/// Requires Docker. The caller (CLI) gates this on docker availability and
+/// surfaces a clear error when it's missing — never a silent failure.
+fn emit_executable_in_container(
+    object_bytes: &[u8],
+    runtime_sources: &[PathBuf],
+    output_path: &str,
+    target: &ResolvedTarget,
+    extra_link_flags: &[String],
+) -> Result<(), String> {
+    use crate::codegen::target::docker_platform;
+
+    let platform = docker_platform(target);
+
+    // Stage the object + runtime sources into a single scratch dir we mount.
+    let scratch = std::env::temp_dir().join(format!(
+        "ruxen_xlink_{}_{}",
+        std::process::id(),
+        target.canonical().replace('-', "_")
+    ));
+    std::fs::create_dir_all(&scratch)
+        .map_err(|e| format!("Failed to create cross-link scratch dir: {}", e))?;
+    let guard = ScratchGuard(scratch.clone());
+
+    let obj_name = "ruxen_main.o";
+    std::fs::write(scratch.join(obj_name), object_bytes)
+        .map_err(|e| format!("Failed to stage object: {}", e))?;
+
+    // Copy runtime sources into scratch, preserving a flat name set. Track a
+    // include dir for the shared runtime.h.
+    let mut staged_runtime: Vec<String> = Vec::new();
+    let mut include_dirs: Vec<PathBuf> = Vec::new();
+    for src in runtime_sources {
+        let fname = src
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| format!("bad runtime source path {}", src.display()))?;
+        std::fs::copy(src, scratch.join(fname))
+            .map_err(|e| format!("Failed to stage runtime {}: {}", src.display(), e))?;
+        staged_runtime.push(fname.to_string());
+        if let Some(parent) = src.parent() {
+            if !include_dirs.contains(&parent.to_path_buf()) {
+                include_dirs.push(parent.to_path_buf());
+            }
+        }
+    }
+    // Copy any headers (runtime.h and siblings) from each runtime source dir
+    // so the in-container compile resolves `#include "runtime.h"`.
+    for dir in &include_dirs {
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|s| s.to_str()) == Some("h") {
+                    if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
+                        let _ = std::fs::copy(&p, scratch.join(fname));
+                    }
+                }
+            }
+        }
+    }
+
+    // Build the in-container compile+link command. All inputs live in /work.
+    let out_name = Path::new(output_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("a.out");
+    let mut script = String::from("set -e; cd /work; cc -O2 ");
+    script.push_str(obj_name);
+    script.push(' ');
+    for r in &staged_runtime {
+        script.push_str(r);
+        script.push(' ');
+    }
+    script.push_str("-o ");
+    script.push_str(out_name);
+    for flag in extra_link_flags {
+        // Drop macOS-only framework flags that don't exist on Linux.
+        if flag == "-framework" || flag == "Security" {
+            continue;
+        }
+        script.push(' ');
+        script.push_str(flag);
+    }
+
+    let mount = format!("{}:/work", scratch.display());
+    let mut cmd = Command::new("docker");
+    cmd.arg("run")
+        .arg("--rm")
+        .arg("--platform")
+        .arg(platform)
+        .arg("-v")
+        .arg(&mount)
+        .arg("-w")
+        .arg("/work")
+        // A small image with a C toolchain. gcc:13 ships cc + glibc + libm.
+        .arg("gcc:13")
+        .arg("bash")
+        .arg("-c")
+        .arg(&script);
+
+    let output = cmd.output().map_err(|e| {
+        format!(
+            "Failed to invoke docker for container cross-link of '{}': {}. \
+             Install Docker or set [target.{}].linker in Ruxen.toml.",
+            target.canonical(),
+            e,
+            target.canonical()
+        )
+    })?;
+    if !output.status.success() {
+        return Err(format!(
+            "Container cross-link failed for '{}' (target {}):\n{}",
+            output_path,
+            target.canonical(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    // Copy the produced binary out of the scratch mount to the final path.
+    std::fs::copy(scratch.join(out_name), output_path).map_err(|e| {
+        format!(
+            "Cross-link produced no binary for '{}': {}",
+            output_path, e
+        )
+    })?;
+    // Preserve the executable bit.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(output_path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o755);
+            let _ = std::fs::set_permissions(output_path, perms);
+        }
+    }
+    drop(guard);
+    Ok(())
+}
+
+/// RAII cleanup for the container-link scratch directory.
+struct ScratchGuard(PathBuf);
+impl Drop for ScratchGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::linker_args;
