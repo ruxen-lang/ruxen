@@ -1,0 +1,51 @@
+# Q33 regression pin — comparing a float value against a NEGATIVE Int literal
+# must use a signedness-correct int->float conversion, not the unsigned default.
+#
+# Root cause: the `Compare` MIR instruction is width-blind (like SetField in
+# Q28). Codegen coerced the rhs to the lhs's SSA type with the signedness-BLIND
+# `coerce_value`, which uses `fcvt_from_uint` for an int->float crossing — so a
+# signed `Int(-1)` (i64 0xFFFF…) became 1.8e19, and `f32 == -1` was false. The
+# ordering operators broke too (`>= -1` false, `< -1` true) because the bogus
+# huge value only accidentally satisfied `<=`/`>`.
+#
+# Fix (`mir/lower/expr/binops.rs`, `coerce_compare_operands`): before the
+# width-blind `Compare`, a mismatched numeric operand pair is re-materialized to
+# a common float width via a target-typed `Assign`, invoking codegen's Q5
+# signedness-aware path. Backend-agnostic (shared MIR).
+#
+# This case RUNS the binary and asserts exact stdout across the full matrix:
+# eq / ne / le / ge / lt / gt against a negative Int literal, both Float32 and
+# Float (f64), AND the literal-on-the-LEFT shape (`-1 == f`).
+def main
+  let f: Float32 = -1 as Float32
+
+  # equality / inequality against a negative Int literal (the core bug)
+  puts "eq=#{f == -1}"        # true
+  puts "ne=#{f != -1}"        # false
+
+  # ordering operators against a negative Int literal
+  puts "le=#{f <= -1}"        # true
+  puts "ge=#{f >= -1}"        # true
+  puts "lt=#{f < -1}"         # false
+  puts "gt=#{f > -1}"         # false
+
+  # negative FLOAT literal (already worked via fdemote — guard it stays so)
+  puts "eqf=#{f == -1.0}"     # true
+
+  # positive Int literal against a matching f32 (must stay correct)
+  let p: Float32 = 3 as Float32
+  puts "pos=#{p == 3}"        # true
+
+  # Float (f64) vs negative Int literal
+  let g: Float = -1 as Float
+  puts "f64eq=#{g == -1}"     # true
+  puts "f64ge=#{g >= -1}"     # true
+
+  # literal on the LEFT: `-1 == f`
+  puts "lefteq=#{-1 == f}"    # true
+  puts "leftge=#{-1 >= f}"    # true (-1 >= -1)
+  puts "leftlt=#{-1 < f}"     # false (-1 < -1 is false)
+
+  # f32 value vs f64 literal (wider-float common type)
+  puts "f32vsf64=#{p == 2.0 + 1.0}"  # true (3.0)
+end

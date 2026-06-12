@@ -66,7 +66,7 @@ impl<'a> Lowerer<'a> {
                 // Refine unresolved Infer types: if the initializer is a
                 // method call known to return a string, use Ty::String
                 // instead.  This ensures correct string interpolation for
-                // variables like `let task_name = ... .unwrap_or(String.from(...))`.
+                // variables like `let task_name = ... .unwrap_or(other.clone)`.
                 let refined_ty = if matches!(ty, Ty::Infer(_)) {
                     if let Some(init_expr) = value {
                         if is_inferred_string_expr(init_expr) {
@@ -106,6 +106,31 @@ impl<'a> Lowerer<'a> {
                             frame.body_locals.push(local);
                         }
                     }
+                    // NOTE (soundness, 2026-06-11): `0741468` ALSO registered
+                    // built-in heap loop-body locals (`String`/`Array`/`Map`/
+                    // `Set`) here for a loop-back-edge free, to stop a fresh
+                    // per-iteration allocation leaking iterations 1..n-1. That
+                    // free is emitted UNCONDITIONALLY at lower time
+                    // (`emit_dealloc_loop_locals`) and does NOT see whether the
+                    // local was MOVED OUT during the iteration — into an
+                    // escaping collection (`captures.insert(name, …)`), a
+                    // returned value, or a stored field. When it was, the
+                    // back-edge frees an allocation the collection/return now
+                    // owns → dangling pointer → use-after-free (rondo's
+                    // path-param `<none>` reads; nondeterministic heap
+                    // corruption across the whole dispatch path). The scope-exit
+                    // drop pass (`compute_dealloc_safe_locals`) tracks those
+                    // moves correctly via the `arg_transfer` taint, so freeing
+                    // built-in heap loop-body locals ONLY at scope exit is
+                    // sound. Reverted to that behavior: a genuinely-owned
+                    // per-iteration built-in heap local LEAKS until scope exit
+                    // (the accepted leak class filed in TASKS.md) rather than
+                    // dangling. Soundness strictly beats leak-fixing; the
+                    // move-aware back-edge free needs the dealloc-safe analysis
+                    // run BEFORE the loop edge is emitted, which is the filed
+                    // follow-up. (Class/Struct/Enum loop locals stay registered
+                    // above — they use `ruxen_dealloc` and the W15 user-`def
+                    // drop` path depends on the back-edge call.)
                 }
                 Ok(())
             }

@@ -22,8 +22,8 @@ def longest[a](x: &a String, y: &a String) -> &a String
 end
 
 def main
-  let a = String.from("hello")
-  let b = String.from("hi")
+  let a = "hello"
+  let b = "hi"
   let r = longest(&a, &b)
   puts "#{r}"
 end
@@ -142,7 +142,7 @@ end
 
 def main
   let dict = ["apple", "banana", "cherry"]
-  let needle = String.from("banana")
+  let needle = "banana"
   match find(&dict, &needle)
     Some(found) -> puts "got #{found}"
     nil        -> puts "missing"

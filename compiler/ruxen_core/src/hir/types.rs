@@ -273,11 +273,14 @@ pub enum Ty {
     /// `!` — the never/bottom type (subtype of everything)
     Never,
 
-    // String types
-    /// Owned `String` (heap-allocated, growable)
+    // String type
+    /// Owned `String` (heap-allocated, a bare null-terminated `char*` at the
+    /// C ABI). The ONLY string type — a borrowed string is `&String`
+    /// (`Ty::Ref(String)`). The old `&str` (`Ty::Str`) primitive was removed
+    /// (docs/decisions/one-string-type.md): it was a parallel spelling of the
+    /// same wire value with no distinct representation. A raw, un-owned
+    /// `.rodata`/FFI `char*` pointer is `Ty::RawPtr(Char)`, never a `String`.
     String,
-    /// `&str` — borrowed string slice
-    Str,
 
     // Composite types
     /// `(T, U, V)` — fixed-size heterogeneous tuple
@@ -444,10 +447,9 @@ impl Ty {
             // Never is Copy (vacuously — you can never have a Never value)
             Ty::Never => true,
 
-            // Immutable references are Copy
+            // Immutable references are Copy (a `&String` borrow is Copy; an
+            // owned `String` is Move — there is no longer a Copy `&str`).
             Ty::Ref(_) | Ty::RefLifetime(_, _) => true,
-            // &str is Copy (it's a borrowed reference)
-            Ty::Str => true,
 
             // Tuples are Copy if all elements are Copy
             Ty::Tuple(elems) => elems.iter().all(|e| e.is_copy()),
@@ -505,8 +507,7 @@ impl Ty {
             | Ty::Char
             | Ty::Unit
             | Ty::Never
-            | Ty::String
-            | Ty::Str => true,
+            | Ty::String => true,
             Ty::Ref(inner) | Ty::RefLifetime(_, inner) => inner.is_sync(),
             Ty::RefMut(inner) | Ty::RefMutLifetime(_, inner) => inner.is_send(),
             Ty::Tuple(elems) => elems.iter().all(|elem| elem.is_send()),
@@ -589,8 +590,7 @@ impl Ty {
             | Ty::Char
             | Ty::Unit
             | Ty::Never
-            | Ty::String
-            | Ty::Str => true,
+            | Ty::String => true,
             Ty::Ref(inner)
             | Ty::RefMut(inner)
             | Ty::RefLifetime(_, inner)
@@ -650,7 +650,7 @@ impl Ty {
     pub fn is_ref(&self) -> bool {
         matches!(
             self,
-            Ty::Ref(_) | Ty::RefMut(_) | Ty::RefLifetime(_, _) | Ty::RefMutLifetime(_, _) | Ty::Str
+            Ty::Ref(_) | Ty::RefMut(_) | Ty::RefLifetime(_, _) | Ty::RefMutLifetime(_, _)
         )
     }
 
@@ -661,7 +661,7 @@ impl Ty {
 
     /// Returns true if this is an immutable reference.
     pub fn is_immut_ref(&self) -> bool {
-        matches!(self, Ty::Ref(_) | Ty::RefLifetime(_, _) | Ty::Str)
+        matches!(self, Ty::Ref(_) | Ty::RefLifetime(_, _))
     }
 
     /// Returns the inner type if this is a reference, otherwise None.
@@ -1033,7 +1033,6 @@ impl fmt::Display for Ty {
             Ty::Unit => write!(f, "()"),
             Ty::Never => write!(f, "Never"),
             Ty::String => write!(f, "String"),
-            Ty::Str => write!(f, "&str"),
             Ty::Tuple(elems) => {
                 write!(f, "(")?;
                 for (i, e) in elems.iter().enumerate() {
@@ -1180,7 +1179,6 @@ impl Ty {
             | Ty::Unit
             | Ty::Never
             | Ty::String
-            | Ty::Str
             | Ty::ConstArg(_)
             | Ty::SomeMixin(_)
             | Ty::AnyMixin(_)

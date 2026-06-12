@@ -1,6 +1,6 @@
 def main
-  let a = String.from("foo")
-  let b = String.from("bar")
+  let a = "foo"
+  let b = "bar"
   let c = a + b
   let _len = c.size
 end

@@ -54,6 +54,10 @@ pub enum Command {
         /// Build a specific binary
         #[arg(long)]
         bin: Option<String>,
+        /// Cross-compile for a target triple (e.g. aarch64-unknown-linux-gnu).
+        /// Default: the host. See docs/CROSS_COMPILE.md.
+        #[arg(long, value_name = "TRIPLE")]
+        target: Option<String>,
     },
 
     /// Build and run the project
@@ -61,13 +65,22 @@ pub enum Command {
         /// Run the release build
         #[arg(long)]
         release: bool,
+        /// Cross-compile for a target triple. `ruxen run` errors when the
+        /// target is not the host (no emulator is launched).
+        #[arg(long, value_name = "TRIPLE")]
+        target: Option<String>,
         /// Arguments passed to the program
         #[arg(last = true)]
         args: Vec<String>,
     },
 
     /// Type-check without generating code
-    Check,
+    Check {
+        /// Type-check as if compiling for a target triple. Codegen is not run;
+        /// reserved for cfg(...) gating (tier 4.01).
+        #[arg(long, value_name = "TRIPLE")]
+        target: Option<String>,
+    },
 
     /// Remove the target/ directory
     Clean,
@@ -145,6 +158,12 @@ pub enum Command {
     Explain {
         /// Error code to look up (e.g. `E0001`)
         code: String,
+    },
+
+    /// Manage installed cross-compilation target runtimes (tier 4.02).
+    Target {
+        #[command(subcommand)]
+        action: TargetAction,
     },
 
     /// Compile a single .rx file directly (low-level driver — like rustc).
@@ -241,6 +260,29 @@ pub enum Command {
         /// Git remote to push the tag to (default: `origin`).
         #[arg(long)]
         registry: Option<String>,
+    },
+}
+
+/// `ruxen target <action>` — manage installed per-target runtimes.
+#[derive(Subcommand)]
+pub enum TargetAction {
+    /// List installed target runtimes (under ~/.ruxen/lib/runtime/*/).
+    List {
+        /// List all known/supported targets, not just installed ones.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Download + install a prebuilt runtime for a target triple.
+    /// Not yet implemented — runtimes are compiled from source by
+    /// `ruxen compile/build --target <triple>` in this release.
+    Add {
+        /// Target triple (e.g. aarch64-unknown-linux-gnu).
+        triple: String,
+    },
+    /// Remove an installed target runtime.
+    Remove {
+        /// Target triple.
+        triple: String,
     },
 }
 

@@ -1,0 +1,50 @@
+# Soundness regression pin (2026-06-11): a built-in heap local declared in a
+# loop body and MOVED OUT into an escaping collection (`captures.insert(name,
+# …)`) must NOT be freed at the loop back-edge. `0741468` registered such
+# locals for an unconditional back-edge free that ignored the move, so the
+# collection ended up holding a freed key pointer → use-after-free → a `<none>`
+# read of the stored value (rondo's path-param capture, OPTIONS/HEAD dispatch,
+# cookies, and Response.to_http all dangled on this shape; nondeterministic).
+#
+# This is the minimal reduction of rondo's `Route.matches`: a fresh per-iteration
+# `String` is inserted as a Hash key and the Hash is returned. The fix freed
+# built-in heap loop-body locals only at scope exit (where the move is tracked),
+# so the returned Hash holds live keys. Reading the stored value must yield the
+# real value, never `<none>`.
+def seg_at(segs: &Array[String], i: Int) -> String
+  match segs.get(i)
+    Some(s) -> s.clone
+    nil    -> ""
+  end
+end
+
+def build_map(names: &Array[String], values: &Array[String]) -> Hash[String, String]
+  var captures: Hash[String, String] = Hash.new
+  let n: Int = names.size() as Int
+  var i: Int = 0
+  while i < n
+    let name = seg_at(names, i)
+    let val = seg_at(values, i)
+    captures.insert(name, val.clone)
+    i = i + 1
+  end
+  captures
+end
+
+def main
+  var names: Array[String] = Array.new
+  names.push("id")
+  names.push("name")
+  var values: Array[String] = Array.new
+  values.push("42")
+  values.push("ada")
+  let m = build_map(&names, &values)
+  match m.get(&"name")
+    Some(v) -> puts v
+    nil    -> puts "<none>"
+  end
+  match m.get(&"id")
+    Some(v) -> puts v
+    nil    -> puts "<none>"
+  end
+end

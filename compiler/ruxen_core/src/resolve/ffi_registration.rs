@@ -277,10 +277,13 @@ impl Resolver {
     /// over-approximation that rejected two BENIGN alias families whose
     /// wire shapes are identical:
     ///
-    ///   * `String.from(s: &String) -> String` vs the receiver-style
-    ///     `String.clone(&self) -> String`: the explicit `&String` param
-    ///     and the implicit `&self` receiver are BOTH pointer-sized
-    ///     (I64), so post-prepend both are `(I64) -> I64`.
+    ///   * `String.to_s(&self) -> String` vs `String.to_string(&self) ->
+    ///     String`: two Ruby spellings aliasing the SAME C symbol
+    ///     (`ruxen_string_to_string`); both post-prepend to `(I64) -> I64`.
+    ///     (Historically `from`/`clone` were the canonical example here, but
+    ///     the surface `String.from` method was REMOVED — `clone` now shares
+    ///     `ruxen_string_from` with the literal-coercion machinery, not with a
+    ///     sibling `from` decl.)
     ///   * `Array.get(i) -> Option[&T]` vs
     ///     `Array.get_mut(i) -> Option[&var T]`: `&T` and `&var T` differ
     ///     only in surface mutability; both lower to a pointer, and the
@@ -1066,12 +1069,25 @@ impl Resolver {
                 let mut required = vec![];
                 let mut defaults = vec![];
                 let mut assoc = vec![];
+                let mut mixin_aliases: Vec<ast::AliasDef> = vec![];
                 for ti in &t.items {
                     match ti {
                         ast::MixinItem::MethodSig(sig) => required.push(sig.name.clone()),
                         ast::MixinItem::DefaultMethod(f) => defaults.push(f.name.clone()),
                         ast::MixinItem::AssocType { name, .. } => assoc.push(name.clone()),
+                        // Ruby `alias new old` inside a mixin body
+                        // (docs/decisions/alias-keyword.md). Collected here and
+                        // recorded against the mixin's method surface below.
+                        ast::MixinItem::Alias(a) => mixin_aliases.push(a.clone()),
                     }
+                }
+                // Record mixin aliases as synonyms over the mixin's own method
+                // surface (required + default method names). Implementors that
+                // include the mixin inherit both names.
+                if !mixin_aliases.is_empty() {
+                    let mut method_names = required.clone();
+                    method_names.extend(defaults.iter().cloned());
+                    self.record_method_aliases(&t.name, &mixin_aliases, &method_names);
                 }
 
                 let id = self.symbols.define(

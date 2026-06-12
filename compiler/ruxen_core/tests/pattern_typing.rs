@@ -7,12 +7,12 @@
 //! `String` as `DefKind::TypeAlias { target: Ty::String }`. The
 //! bootstrap merge anchors the user-side `class String`
 //! (`library/std/string/src/lib.rx`) onto the same DefId so the FFI
-//! method decls (`String.from`, `String.new`, …) hang off it. The
+//! method decls (`String.new`, `clone`, …) hang off it. The
 //! class-resolution pass in `resolve/items.rs::resolve_class` then
 //! rewrites that DefId's `DefKind` from `TypeAlias` to `Class` —
 //! after which `resolve_type_expr` returns
 //! `Ty::Class { name: "String", .. }` for any annotated `s: String`
-//! parameter. Inferred locals (`let x = String.from(…)`) still get
+//! parameter. Inferred locals (`let x = "lit"`) still get
 //! `Ty::String` from the inference rules; only the annotation path
 //! produces the Class form.
 //!

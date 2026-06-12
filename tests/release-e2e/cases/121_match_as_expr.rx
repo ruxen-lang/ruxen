@@ -1,8 +1,8 @@
 def label(n: Int) -> String
   match n
-    1 -> String.from("one")
-    2 -> String.from("two")
-    _ -> String.from("many")
+    1 -> "one"
+    2 -> "two"
+    _ -> "many"
   end
 end
 

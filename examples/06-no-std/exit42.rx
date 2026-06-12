@@ -1,0 +1,29 @@
+# Ruxen no_std (tier 4.04).
+#
+# A no_std build does NOT link the Ruxen standard library or its C runtime:
+# no allocator, no I/O, no `std.*`. Heap construction (String/Array/Map/Set)
+# is rejected at compile time with E1400.
+#
+# Build:  ruxen compile exit42.rx --no-std -o exit42
+# Run:    ./exit42 ; echo $?    # → 42
+#
+# This unit computes a value and signals it via the process exit code through a
+# minimal libc `exit` FFI (the only undefined symbol in the binary is `exit` —
+# no `ruxen_*` stdlib symbol is present). A richer no_std I/O story (a raw
+# write-syscall shim, a user `global_allocator` for heap types) is the staged
+# remainder — see docs/decisions/phase4-no-std-wasm.md.
+
+lib "c"
+  def exit(code: Int32)
+end
+
+# Pure scalar arithmetic — no heap, so E1400 stays quiet.
+def compute -> Int32
+  let a = 40i32
+  let b = 2i32
+  a + b
+end
+
+def main
+  exit(compute)
+end

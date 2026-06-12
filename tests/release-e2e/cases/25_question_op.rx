@@ -1,6 +1,6 @@
 def checked(n: Int) -> Result[Int, String]
   if n < 0
-    Err(String.from("negative"))
+    Err("negative")
   else
     Ok(n + 1)
   end

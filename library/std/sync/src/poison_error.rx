@@ -1,3 +1,9 @@
+## A lock's `Mutex`/`SharedSync` poison marker. Carries no data — its
+## presence in an `Err(PoisonError)` is the whole signal. The explicit
+## `init` lets the ergonomic `lock`/`into_inner` wrappers in `mutex.rx`
+## construct one via `PoisonError.new` (an empty class body declares no
+## constructor, so `.new` would otherwise be rejected).
 class PoisonError
-
+  def init
+  end
 end

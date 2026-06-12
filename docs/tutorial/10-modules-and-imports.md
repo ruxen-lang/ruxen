@@ -7,17 +7,17 @@ As programs grow, you want to put related things together and keep unrelated thi
 ```ruxen
 module Tools
   def pick(value: Int) -> String
-    String.from("module-int")
+    "module-int"
   end
 
   def pick(value: String) -> String
-    String.from("module-string")
+    "module-string"
   end
 end
 
 def main
   puts Tools.pick(7)
-  puts Tools.pick(String.from("seven"))
+  puts Tools.pick("seven")
 end
 ```
 
@@ -103,7 +103,7 @@ use Http.Request
 use Http.Response
 
 def main
-  let req = Request.new(String.from("https://example.com"), String.from("GET"))
+  let req = Request.new("https://example.com", "GET")
 end
 ```
 

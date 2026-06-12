@@ -130,7 +130,7 @@ fn all_opt_levels_correct() {
 fn llvm_ir_verifies_all_fixtures() {
     for fixture in std::fs::read_dir("tests/fixtures").unwrap() {
         let path = fixture.unwrap().path();
-        if path.extension().map_or(false, |e| e == "rx") {
+        if path.extension().is_some_and(|e| e == "rx") {
             let source = std::fs::read_to_string(&path).unwrap();
             // If compile_to_exe succeeds, verification passed (it's called inside)
             let exe = compile_to_exe(&source, Backend::Llvm { opt_level: 0 });

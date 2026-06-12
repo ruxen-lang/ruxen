@@ -1,0 +1,14 @@
+# Ruxen no_std — the E1400 negative case (tier 4.04).
+#
+# Building this with `--no-std` FAILS: a string literal is a heap allocation,
+# and a no_std build has no allocator.
+#
+#   ruxen compile heap_rejected.rx --no-std -o /tmp/x
+#   → error[E1400]: heap allocation (string literal) is not allowed in a
+#                   no_std unit ...
+#
+# Drop `--no-std` and it compiles fine (the hosted build links the allocator).
+
+def main
+  let greeting = "hello, no_std"   # error[E1400] under --no-std
+end

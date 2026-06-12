@@ -164,6 +164,25 @@ impl Parser {
                     }
                 }
             }
+            // A contextual-keyword `alias new old` item (top-level free-fn
+            // synonym). `alias` lexes as an Identifier, so it would otherwise
+            // fall into the expression arm and fail to parse; route it to the
+            // top-level item parser like `def`/`class` so the REPL accepts the
+            // same grammar the compiler does (docs/decisions/alias-keyword.md).
+            TokenKind::Identifier(_) if self.is_alias_item_start() => {
+                let result = self.parse_top_level_item();
+                if self.diagnostics.len() > saved_diags {
+                    let diags = self.diagnostics[saved_diags..].to_vec();
+                    return ReplParseResult::Error(diags);
+                }
+                match result {
+                    Some(item) => ReplParseResult::Complete(ReplInput::TopLevel(item)),
+                    None => ReplParseResult::Error(vec![Diagnostic::error(
+                        "failed to parse alias item",
+                        self.current_span(),
+                    )]),
+                }
+            }
             // Let / var binding → Statement
             TokenKind::Let | TokenKind::Var => {
                 let stmt = self.parse_statement();

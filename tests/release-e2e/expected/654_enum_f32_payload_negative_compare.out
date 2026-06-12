@@ -1,0 +1,6 @@
+pos_cmp=true
+neg_cmp=true
+neg_via_int=true
+neg_lt0=true
+neg_vs_local=true
+plain_neg_cmp=true

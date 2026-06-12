@@ -27,10 +27,10 @@ enum Priority
 
   def to_display -> String
     match self
-      Priority.Low      -> String.from("LOW")
-      Priority.Medium   -> String.from("MEDIUM")
-      Priority.High     -> String.from("HIGH")
-      Priority.Critical -> String.from("CRITICAL")
+      Priority.Low      -> "LOW"
+      Priority.Medium   -> "MEDIUM"
+      Priority.High     -> "HIGH"
+      Priority.Critical -> "CRITICAL"
     end
   end
 end
@@ -45,7 +45,7 @@ enum Status
 
   def to_display -> String
     match self
-      Status.Pending              -> String.from("Pending")
+      Status.Pending              -> "Pending"
       Status.InProgress(who)      -> "In Progress (#{who})"
       Status.Completed(date)      -> "Completed on #{date}"
       Status.Cancelled(reason)    -> "Cancelled: #{reason}"
@@ -75,7 +75,7 @@ end
 
 mixin Serializable
   def serialize -> String
-  def self.deserialize(data: &str) -> Result[Self, TodoError]
+  def self.deserialize(data: &String) -> Result[Self, TodoError]
 end
 
 mixin Summarizable
@@ -148,26 +148,26 @@ class Todo
     "#{self.id}|#{self.title}|#{self.description}|#{self.priority.to_display}"
   end
 
-  def self.deserialize(data: &str) -> Result[Todo, TodoError]
+  def self.deserialize(data: &String) -> Result[Todo, TodoError]
     let parts: Array[String] = data.split("|")
     if parts.size < 4
       return Err(TodoError.ParseFailed(
-        message: String.from("expected 4 fields, got #{parts.size}")
+        message: "expected 4 fields, got #{parts.size}"
       ))
     end
 
     # parts is now Array[String] (split returns Array[String] for both
-    # &str and String receivers — pin B13). Convert each element back
-    # to &str at the call boundary.
+    # &String and String receivers — pin B13). Convert each element back
+    # to &String at the call boundary.
     let id = parts[0].as_str.parse_uint
-      .map_err { |_| TodoError.ParseFailed(message: String.from("invalid id")) }?
+      .map_err { |_| TodoError.ParseFailed(message: "invalid id") }?
 
     let priority = parse_priority(parts[3].as_str)?
 
     Ok(Todo.new(
       id,
-      String.from(parts[1]),
-      String.from(parts[2]),
+      parts[1].clone,
+      parts[2].clone,
       priority
     ))
   end
@@ -188,7 +188,7 @@ class TimedTodo < Todo
     super(id, title, description, priority)
   end
 
-  def is_overdue(current_date: &str) -> Bool
+  def is_overdue(current_date: &String) -> Bool
     # Simple string comparison — a real app would use proper date types
     !self.is_done && current_date > &self.deadline
   end
@@ -319,19 +319,19 @@ end
 
 # --- Helper Functions ---
 
-def parse_priority(input: &str) -> Result[Priority, TodoError]
+def parse_priority(input: &String) -> Result[Priority, TodoError]
   match input.trim.to_lower.as_str
     "low"      -> Ok(Priority.Low)
     "medium"   -> Ok(Priority.Medium)
     "high"     -> Ok(Priority.High)
     "critical" -> Ok(Priority.Critical)
-    other      -> Err(TodoError.InvalidPriority(value: String.from(other)))
+    other      -> Err(TodoError.InvalidPriority(value: other.to_string))
   end
 end
 
 # Accepts borrowed tasks, returns a formatted report — no ownership taken
 def generate_report(tasks: &Array[&Todo]) -> String
-  var report = String.from("=== Todo Report ===\n")
+  var report = "=== Todo Report ===\n"
 
   let (done, active): (Array[&&Todo], Array[&&Todo]) = tasks
     .partition { |t| t.is_done }
@@ -350,7 +350,7 @@ def generate_report(tasks: &Array[&Todo]) -> String
 end
 
 # Demonstrates generic function with mixin bounds
-def print_items[T: Showable + Summarizable](items: &Array[T], label: &str)
+def print_items[T: Showable + Summarizable](items: &Array[T], label: &String)
   puts "--- #{label} ---"
   items.each do |item|
     if item.is_actionable
@@ -369,21 +369,21 @@ end
 # Demonstrates error propagation with ?
 def create_task_from_input(
   list: &var TodoList,
-  title: &str,
-  desc: &str,
-  priority_str: &str
+  title: &String,
+  desc: &String,
+  priority_str: &String
 ) -> Result[USize, TodoError]
   if title.empty?
-    return Err(TodoError.MissingField(name: String.from("title")))
+    return Err(TodoError.MissingField(name: "title"))
   end
   if desc.empty?
-    return Err(TodoError.MissingField(name: String.from("description")))
+    return Err(TodoError.MissingField(name: "description"))
   end
 
   let priority = parse_priority(priority_str)?  # ? propagates TodoError
   let id = list.add_task(
-    String.from(title),
-    String.from(desc),
+    title.to_string,
+    desc.to_string,
     priority
   )
   Ok(id)
@@ -423,13 +423,13 @@ def main
 
   # ── Update statuses (demonstrates writing methods and pattern matching) ──
   puts "Updating statuses..."
-  list.update_status(0, Status.InProgress(assignee: String.from("Alaric")))
+  list.update_status(0, Status.InProgress(assignee: "Alaric"))
     .unwrap_or_else { |e| eputs "  #{e.message}" }
 
-  list.update_status(0, Status.Completed(completed_at: String.from("2026-04-11")))
+  list.update_status(0, Status.Completed(completed_at: "2026-04-11"))
     .unwrap_or_else { |e| eputs "  #{e.message}" }
 
-  list.update_status(1, Status.InProgress(assignee: String.from("Dana")))
+  list.update_status(1, Status.InProgress(assignee: "Dana"))
     .unwrap_or_else { |e| eputs "  #{e.message}" }
 
   # Try updating a non-existent task (demonstrates error handling)
@@ -466,14 +466,14 @@ def main
   # ── Find by ID (demonstrates Option) ──
   let task_name = list.find_by_id(1)
     .map { |t| t.title_ref.clone }
-    .unwrap_or(String.from("Unknown"))
+    .unwrap_or("Unknown")
   puts "Todo #1: #{task_name}"
 
   # Safe navigation chain
   let deadline_info = list.find_by_id(0)
     &.title_ref
     .map { |title| "Found: #{title}" }
-    .unwrap_or(String.from("Not found"))
+    .unwrap_or("Not found")
   puts deadline_info
 
   puts ""

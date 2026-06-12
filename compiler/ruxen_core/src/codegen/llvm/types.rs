@@ -29,7 +29,6 @@ pub fn ty_to_llvm<'ctx>(ty: &Ty, context: &'ctx Context) -> Option<BasicTypeEnum
 
         // All pointer/heap-allocated types -> opaque ptr
         Ty::String
-        | Ty::Str
         | Ty::Array(_)
         | Ty::Map(_, _)
         | Ty::Set(_)

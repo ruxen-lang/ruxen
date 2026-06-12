@@ -1,0 +1,27 @@
+# Q17 regression pin — the single-implementor shape (quiver's CURRENT paint
+# pass) must keep working under the new per-instantiation monomorphization. A
+# generic free function over a mixin with exactly ONE implementor links and runs
+# (it monomorphizes to the one concrete copy, equivalent to the old devirtualize
+# fast path). Guards against regressing quiver's existing `RecordingSurface`.
+mixin Paintable
+  def fill_rect(w: Int, h: Int) -> Int
+end
+
+def paint_all[T: Paintable](s: &var T, w: Int, h: Int) -> Int
+  s.fill_rect(w, h)
+end
+
+class RecordingSurface
+  include Paintable
+  area: Int
+  def init; self.area = 0; end
+  def var fill_rect(w: Int, h: Int) -> Int
+    self.area = w * h
+    self.area
+  end
+end
+
+def main
+  var s = RecordingSurface.new
+  puts "area=#{paint_all(&var s, 6, 7)}"
+end

@@ -18,15 +18,15 @@ class Node
 end
 
 def main
-  var root = Node.new(String.from("root"))
-  root.children.push(Node.new(String.from("kid1")))
-  root.children.push(Node.new(String.from("kid2")))
+  var root = Node.new("root")
+  root.children.push(Node.new("kid1"))
+  root.children.push(Node.new("kid2"))
   puts "kids: #{root.children.size}"
   if let Some(first) = root.children.get(0)
     puts "first: #{first.label}"
   end
 
-  root.next = Some(Node.new(String.from("sibling")))
+  root.next = Some(Node.new("sibling"))
   match root.next
     Some(n) -> puts "next: #{n.label}"
     nil     -> puts "next: none"

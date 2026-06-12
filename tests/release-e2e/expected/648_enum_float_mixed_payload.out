@@ -1,0 +1,6 @@
+scroll 1.5,-2.25
+key 13
+resize 800x600
+scroll 0.25,0.75
+key 27
+close

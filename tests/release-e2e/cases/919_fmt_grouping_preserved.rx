@@ -1,0 +1,19 @@
+# Syntax-parity harness / Q34 pin (docs/decisions/syntax-parity-harness.md).
+# The exact round-to-nearest shape that `ruxen fmt` silently broke: adding
+# half the divisor BEFORE dividing. Grouping parens are load-bearing — `/`
+# binds tighter than `+`, so dropping `(...)` changes the value. The
+# syntax-parity harness proves `ruxen fmt` re-parses this to the SAME tree;
+# this case proves the arithmetic the parens encode is what runs.
+def round_div(rel: Int, span: Int, track_w: Int) -> Int
+  (rel * span + track_w / 2) / track_w
+end
+
+def main
+  # rel=3 span=100 track_w=8 → (300 + 4) / 8 = 304/8 = 38
+  puts "v=#{round_div(3, 100, 8)}"
+  # Precedence witnesses: each pair differs ONLY by grouping.
+  puts "a=#{(2 + 3) * 4}"        # 20, not 14
+  puts "b=#{2 + 3 * 4}"          # 14
+  puts "c=#{(10 - 2) - 3}"       # 5
+  puts "d=#{10 - (2 - 3)}"       # 11
+end

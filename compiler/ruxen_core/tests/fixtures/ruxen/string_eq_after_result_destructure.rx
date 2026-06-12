@@ -8,7 +8,7 @@ def make_result(payload: String) -> Result[String, Int]
 end
 
 def compare_with(needle: String) -> Int
-  match make_result(String.from("hello"))
+  match make_result("hello")
     Ok(s)  -> if s == needle
                 1
               else
@@ -19,7 +19,7 @@ def compare_with(needle: String) -> Int
 end
 
 def main
-  let needle = String.from("hello")
+  let needle = "hello"
   if compare_with(needle) == 1
     puts "match"
   else

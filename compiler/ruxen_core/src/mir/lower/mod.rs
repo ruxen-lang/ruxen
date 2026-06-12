@@ -141,6 +141,31 @@ pub struct Lowerer<'a> {
     /// `Array[Int]_map`; `resolve_ffi_alias_callee` strips the generic
     /// suffix to reach the opaque body when the stripped name is in here.
     lib_body_methods: HashSet<String>,
+    /// Q17: eligible generic FREE functions (≥1 mixin-bounded type param),
+    /// keyed by function name. Populated by `collect_generic_fn_instances`.
+    mono_fns: HashMap<String, crate::hir::nodes::HirFuncDef>,
+    /// Q17: function name → distinct fully-concrete generic-arg vectors
+    /// recovered at call sites (e.g. `paint_all` → `[[RecordingSurface],
+    /// [TallySurface]]`).
+    fn_mono_instances: HashMap<String, Vec<monomorphize::MonoKey>>,
+    /// Q17: function name → emitted `(concrete-args, mangled-base)` pairs. A
+    /// free-fn call site is redirected to the mangled monomorphic callee only
+    /// when its recovered type-args match an entry here.
+    fn_mono_emitted: HashMap<String, Vec<(monomorphize::MonoKey, String)>>,
+    /// Q17: generic fns that saw at least one call we could NOT monomorphize
+    /// (a generic-through-generic shape with a non-concrete leaf). Their
+    /// opaque abstract body must still be emitted by the normal `lower_item`
+    /// path so that call resolves (and devirtualizes via `unique_bound_impl`,
+    /// or surfaces a clear error).
+    fn_mono_needs_opaque: HashSet<String>,
+    /// Tier 4.04: no_std mode. Suppresses the synthesized primitive `*_fmt`
+    /// Display helpers (`Int_fmt`/`Char_fmt`/…), which reference hosted runtime
+    /// symbols (`ruxen_int_to_string`, `Formatter_write_str`) absent in a
+    /// no_std build. Set via [`Lowerer::new_no_std`]; the default `new` leaves
+    /// it `false` so every existing caller is unchanged. Also surfaced on
+    /// `MirProgram::no_std` so the cranelift backend skips the `ruxen_env_init`
+    /// injection into `main`.
+    no_std: bool,
 }
 
 /// A captured variable's storage inside the captures struct.
@@ -163,6 +188,22 @@ enum CaptureKind {
     /// The slot stores a pointer to an 8-byte heap cell shared with the
     /// enclosing frame (for non-`move` closures over mutable locals).
     ByRef,
+}
+
+/// Where a closure capture's value is read FROM, in the enclosing
+/// lowering frame, when the captures struct is filled. Mirrors the two
+/// resolution paths `lower_var_ref` uses for a `VarRef`.
+#[derive(Debug, Clone, Copy)]
+enum CaptureSource {
+    /// An outer-frame local (`def_to_local`). The value (or, post
+    /// cell-promotion, the cell pointer) lives directly in this LocalId.
+    Local(LocalId),
+    /// A capture of the ENCLOSING closure (`capture_map`): this closure
+    /// literal is nested inside another closure's body and re-captures one
+    /// of the outer block's captures. The value is read out of the
+    /// enclosing captures pointer at `slot_index` (through the cell when
+    /// the enclosing capture is `ByRef`). (Q26.)
+    Recapture(CaptureSlot),
 }
 
 /// Per-active-loop book-keeping: targets for `continue`/`break`, the
@@ -211,7 +252,20 @@ impl<'a> Lowerer<'a> {
             mono_classes: HashMap::new(),
             mono_instances: HashMap::new(),
             mono_emitted: HashSet::new(),
+            mono_fns: HashMap::new(),
+            fn_mono_instances: HashMap::new(),
+            fn_mono_emitted: HashMap::new(),
+            fn_mono_needs_opaque: HashSet::new(),
+            no_std: false,
         }
+    }
+
+    /// Construct a no_std lowerer (tier 4.04): suppresses the synthesized
+    /// primitive `*_fmt` Display helpers and marks `MirProgram::no_std`.
+    pub fn new_no_std(symbols: &'a SymbolTable) -> Self {
+        let mut lo = Self::new(symbols);
+        lo.no_std = true;
+        lo
     }
 
     /// Given a generic type parameter's bounds, return the unique concrete
@@ -250,6 +304,46 @@ impl<'a> Lowerer<'a> {
             Some(candidates.remove(0))
         } else {
             None
+        }
+    }
+
+    /// Q17 (staged boundary): true when the receiver type (after peeling refs)
+    /// is ITSELF a still-abstract, mixin-bound type parameter
+    /// (`TypeParam`/`SomeMixin`/`AnyMixin`) with bounds but NO unique
+    /// implementor — so a method call on it would mangle to a
+    /// bound-placeholder callee (`T: Sized_width`) that link-fails. This is the
+    /// generic-METHOD-over-mixin case (not yet monomorphized; generic free
+    /// functions ARE handled). Detected on the receiver SHAPE, not on the
+    /// stringified callee: a concrete receiver carrying a bounded generic ARG
+    /// (`Array[T: Showable]`) is a sound builtin call and must return false.
+    fn receiver_is_unresolved_bound(&self, ty: &Ty) -> bool {
+        let mut cur = ty;
+        loop {
+            match cur {
+                Ty::Ref(inner)
+                | Ty::RefMut(inner)
+                | Ty::RefLifetime(_, inner)
+                | Ty::RefMutLifetime(_, inner) => cur = inner,
+                Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
+                    // Unbounded `[T]` is never dispatched on (a bare type param
+                    // with no bounds never names a bound method). A callable
+                    // bound (`Fn`/`FnMut`/`FnOnce`, e.g. `any Fn[Fn(T) -> U]`)
+                    // is dispatched by the closure `.call` mechanism, not by a
+                    // nominal `{Type}_{method}` mangle, so it never produces a
+                    // bound-placeholder callee — exclude it. Only a genuine
+                    // user-mixin bound with no unique implementor yields the
+                    // placeholder this guard rejects.
+                    if bounds.is_empty()
+                        || bounds
+                            .iter()
+                            .any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce"))
+                    {
+                        return false;
+                    }
+                    return self.unique_bound_impl(bounds).is_none();
+                }
+                _ => return false,
+            }
         }
     }
 
@@ -335,26 +429,19 @@ impl<'a> Lowerer<'a> {
                 arg.ty.is_infer()
                     || arg.ty.is_error()
                     || arg.ty == param.ty
-                    || matches!((&arg.ty, &param.ty), (Ty::Str, Ty::String))
-                    || matches!((&arg.ty, &param.ty), (Ty::String, Ty::Str))
-                    || matches!(
-                        (&arg.ty, &param.ty),
-                        (Ty::Ref(a), Ty::Ref(b)) if matches!((&**a, &**b), (Ty::Str, Ty::String))
-                    )
                     // A by-value argument satisfies a `&T`/`&mut T` parameter
-                    // of the same underlying type (the call site auto-refs).
-                    // `Str` and `String` are unified here so a `"..."` literal
-                    // (`Ty::Str`) matches a `&str`/`&String` parameter — the
-                    // missing arm that let an `add("static")` call fall through
-                    // to the arity-only fallback and bind the FIRST-declared
-                    // overload (a closure one), mismatching the symbol name.
-                    // Mirrors the typeck selector in
+                    // of the same underlying type (the call site auto-refs), so
+                    // a `String` literal/value matches a `&String` parameter —
+                    // the arm that lets an `add("static")` call bind the right
+                    // overload instead of falling through to the arity-only
+                    // fallback and binding the FIRST-declared (closure) overload
+                    // (the old `&str`-vs-closure heap-corruption landmine, now
+                    // dissolved — there is no `&str` arm to collide). Mirrors
+                    // the typeck selector in
                     // `typeck/infer/collect.rs::method_accepts_args`.
                     || matches!(
                         &param.ty,
-                        Ty::Ref(inner) | Ty::RefMut(inner)
-                            if **inner == arg.ty
-                                || matches!((&arg.ty, &**inner), (Ty::Str, Ty::String) | (Ty::String, Ty::Str))
+                        Ty::Ref(inner) | Ty::RefMut(inner) if **inner == arg.ty
                     )
             })
     }
@@ -365,6 +452,11 @@ impl<'a> Lowerer<'a> {
         method_name: &str,
         args: &[HirExpr],
     ) -> Option<String> {
+        // Ruby `alias new old` (docs/decisions/alias-keyword.md): rewrite an
+        // alias method name to its canonical BEFORE scanning for the emitted
+        // symbol, so a call via the alias mangles to the real method's body
+        // (`set.member?(x)` → `Set_include?`), never a bodiless `Set_member?`.
+        let method_name = self.symbols.canonical_method_name(class_name, method_name);
         let mut candidates = Vec::new();
         for def in self.symbols.iter() {
             let crate::resolve::symbols::DefKind::Method { parent, signature } = &def.kind else {
@@ -399,6 +491,82 @@ impl<'a> Lowerer<'a> {
             .map(|(name, _)| name.clone())
     }
 
+    /// Trailing default arguments the resolved method declares that a call
+    /// supplying `supplied_user_args` positional arguments (NOT counting the
+    /// receiver) did not fill — each materialized as the param's lowered
+    /// `default` literal value.
+    ///
+    /// This is the MIR-side mirror of typeck's `append_method_default_args`
+    /// (`infer/collect.rs`). The PARENS method-call path (`MethodCall` HIR
+    /// node) gets its trailing defaults appended at typeck, so by the time it
+    /// reaches MIR the args vector already carries them. The PAREN-LESS no-arg
+    /// method-call path lowers as a `FieldAccess` (no args vector), so typeck
+    /// never runs the default-arg pass on it — without this, an optional
+    /// `&block` slot (which carries a `nil` default → null closure-pair-pointer
+    /// sentinel, Ruby-block-semantics ADR D1/D5) is left unfilled and the call
+    /// emits one too few arguments, crashing the MIR/Cranelift arity verifier
+    /// (`__closure_*: got 1, expected 2`). Filling it here makes `w.frame` and
+    /// `w.frame()` lower IDENTICALLY (the block-slot consistency the blocks
+    /// feature filed as a known limitation).
+    ///
+    /// Each default param's `nil`/`null` lowers to `Literal::Int(0)` — the same
+    /// value the `NullLiteral` HIR expr lowers to for a non-`Option` type
+    /// (`expr/literals.rs`); for the block slot that is the null
+    /// closure-pair-pointer the `emit_block_presence_guard` then tests.
+    fn method_trailing_default_sentinels(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        supplied_user_args: usize,
+    ) -> Vec<MirValue> {
+        let method_name = self.symbols.canonical_method_name(class_name, method_name);
+        // Find the resolved method's signature, walking parents for inherited
+        // methods (mirrors `resolve_method_class`'s ancestor search via the
+        // already-resolved `class_name`).
+        let signature = self.symbols.iter().find_map(|def| {
+            let crate::resolve::symbols::DefKind::Method { parent, signature } = &def.kind else {
+                return None;
+            };
+            let parent_name = self.symbols.get(*parent).map(|p| p.name.as_str())?;
+            (parent_name == class_name
+                && (def.name == method_name
+                    || def.name.starts_with(&format!("{}__overload", method_name))))
+            .then(|| signature.clone())
+        });
+        let Some(signature) = signature else {
+            return Vec::new();
+        };
+        // Skip the params already covered by the supplied user args, then
+        // materialize each remaining param that carries a default. Only `nil`
+        // / `null` defaults arise on this path (the optional `&block` slot);
+        // a non-null literal default on a paren-less-reachable param is also
+        // honoured for parity with the parens path.
+        signature
+            .params
+            .iter()
+            .skip(supplied_user_args)
+            .filter_map(|p| p.default.as_ref().map(Self::default_expr_to_sentinel))
+            .collect()
+    }
+
+    /// Lower a param `default` AST expr to the MIR value the no-arg
+    /// field-access path appends. `nil`/`null` → `Literal::Int(0)` (the null
+    /// closure-pair-pointer for a `&block` slot, matching `NullLiteral`'s
+    /// non-`Option` lowering). Other literal defaults map to their value.
+    fn default_expr_to_sentinel(default: &crate::parser::ast::Expr) -> MirValue {
+        use crate::parser::ast::ExprKind;
+        match &default.kind {
+            ExprKind::NullLiteral | ExprKind::UnitLiteral => MirValue::Literal(Literal::Int(0)),
+            ExprKind::IntLiteral(v, _) => MirValue::Literal(Literal::Int(*v)),
+            ExprKind::BoolLiteral(v) => MirValue::Literal(Literal::Bool(*v)),
+            ExprKind::FloatLiteral(v, _) => MirValue::Literal(Literal::Float(*v)),
+            // Any other default shape falls back to the null sentinel; the
+            // only paren-less-reachable trailing default in practice is the
+            // optional `&block` (`nil`), so this is conservative parity.
+            _ => MirValue::Literal(Literal::Int(0)),
+        }
+    }
+
     fn lower_items(
         &mut self,
         items: &[HirItem],
@@ -424,9 +592,38 @@ impl<'a> Lowerer<'a> {
                     lowered.name =
                         Self::symbol_name(&Self::qualified_item_name(module_path, &lowered.name));
                 }
+                // Q17: suppress the opaque (un-monomorphized) body of EVERY
+                // eligible generic free fn — instantiated or not. Its abstract
+                // body can only ever emit bound-placeholder callees
+                // (`T: Paintable_fill_rect`) that link-fail, and no valid call
+                // resolves to it: a concrete call is redirected to a monomorphic
+                // copy (or errors at the call site), and an abstract call lives
+                // only inside another generic body that is itself suppressed.
+                // A NON-eligible fn (`generic_fn_keeps_opaque` → true) is
+                // unaffected. Matched on the un-qualified key the collector
+                // recorded (module-qualified names share it).
+                if !self.generic_fn_keeps_opaque(&func.name) {
+                    return Ok(());
+                }
                 let mir_fn = self.lower_function(&lowered)?;
                 if mir_fn.name == "main" {
                     mir.entry = Some("main".to_string());
+                } else if !func.is_class_method && module_path.is_empty() {
+                    // Tier 4.03 (WASM): record top-level free defs as wasm
+                    // export candidates. A `wasm32-unknown-unknown` module is
+                    // a *reactor* (spec §5.3) — it has no `main`; its top-level
+                    // free functions ARE the host-callable API surface, so we
+                    // export them by source name. The LLVM backend sets the
+                    // `export_name` attribute on these ONLY when targeting
+                    // wasm32; every other codegen path ignores the field. (Top-
+                    // level `def` is `Private` by default in Ruxen and there is
+                    // no `pub` at file scope, so a visibility gate would export
+                    // nothing — the reactor surface is the whole free-fn set.
+                    // A `wasm_export "custom"` rename/opt-in directive is the
+                    // staged remainder — see docs/decisions/phase4-no-std-wasm.md.)
+                    // Generic free fns are suppressed above (opaque body never
+                    // reaches here), so only concrete callables are recorded.
+                    mir.wasm_exports.push(mir_fn.name.clone());
                 }
                 mir.functions.push(mir_fn);
             }
@@ -547,6 +744,7 @@ impl<'a> Lowerer<'a> {
 
     pub fn lower_program(&mut self, program: &HirProgram) -> Result<MirProgram, String> {
         let mut mir = MirProgram::new();
+        mir.no_std = self.no_std;
 
         // Gather `impl Trait for Type` edges so method calls on generic
         // type parameters can dispatch to the unique implementor.
@@ -561,6 +759,14 @@ impl<'a> Lowerer<'a> {
         // lowering over a type parameter resolves to the concrete type.
         // FFI-shell generic classes (`Mutex[T]`, …) are excluded here.
         self.collect_mono_instances(program);
+
+        // Q17: record every concrete instantiation of an eligible generic
+        // FREE function (mixin-bounded type param) seen at a call site, so a
+        // dependency's generic (`paint_all[T: Paintable]`) can be specialized
+        // per CONSUMER implementor instead of emitting the bound-placeholder
+        // callee (`T: Paintable_fill_rect`) that link-fails. Runs after
+        // `collect_mono_instances` (the trait-impl table is already built).
+        self.collect_generic_fn_instances(program);
 
         // Collect `const` initializer expressions so references are
         // substituted with the RHS value at every use site.
@@ -613,12 +819,24 @@ impl<'a> Lowerer<'a> {
         // specialized callees in `method_call.rs` via `mono_base_for_ty`.
         self.emit_mono_instances(&mut mir)?;
 
-        // Emit the primitive Display::fmt synth functions unconditionally
-        // (Phase 2 #06.D2.S1). These are program-level, not per-use.
-        // Stage 3 (D2) `lower_interpolation` rewrite assumes these are always
-        // present; conditional emission would require a two-pass approach.
-        for f in self.synthesize_primitive_fmt_displays() {
-            mir.functions.push(f);
+        // Q17: emit one specialized MIR copy of every eligible generic free
+        // function, per recorded concrete instantiation, and record the
+        // `(fn, args) → mangled` redirects consulted by `fn_call.rs`. Same
+        // ordering rationale as `emit_mono_instances` (opaque fallback bodies
+        // and symbols already in place).
+        self.emit_generic_fn_instances(&mut mir)?;
+
+        // Emit the primitive Display::fmt synth functions (Phase 2 #06.D2.S1).
+        // These are program-level, not per-use. Stage 3 (D2)
+        // `lower_interpolation` rewrite assumes they're present in a hosted
+        // build. SUPPRESSED in no_std (tier 4.04): each one references hosted
+        // runtime (`ruxen_int_to_string`, `Formatter_write_str`) absent in a
+        // no_std link, and a no_std unit cannot interpolate anyway (E1400
+        // rejects the `String` an interpolation would build).
+        if !self.no_std {
+            for f in self.synthesize_primitive_fmt_displays() {
+                mir.functions.push(f);
+            }
         }
 
         // Append any closure functions generated during lowering,
@@ -985,6 +1203,62 @@ impl<'a> Lowerer<'a> {
             }
         }
         vec![]
+    }
+
+    /// Declared field types of a struct/class, in layout order (parent class
+    /// fields prepended, mirroring `get_class_field_names`). Used by the
+    /// constructor lowering to coerce each field's initializer value to the
+    /// field's declared width BEFORE the width-blind `SetField` store — e.g.
+    /// a bare `Float` (f64) literal/local placed into a `Float32` field must
+    /// be narrowed to f32 first, or the 8-byte store / 4-byte load disagree
+    /// and the slot reads garbage (Q28). Returns an empty Vec for unknown /
+    /// non-struct-class type_defs (callers fall back to no coercion).
+    fn lookup_construct_field_types(&self, ty: &Ty) -> Vec<Ty> {
+        let name = match ty {
+            Ty::Struct { name, .. } | Ty::Class { name, .. } => name.clone(),
+            _ => return Vec::new(),
+        };
+        self.construct_field_types_by_name(&name)
+    }
+
+    /// Name-keyed field-type walk (mirrors `get_class_field_names`): own field
+    /// types in declaration order, with any parent class's fields prepended so
+    /// the result is in layout order. Keyed by name rather than DefId because
+    /// the same name-based `self.symbols.iter()` walk is how `get_class_field_names`
+    /// / `alloc_size` already locate the struct/class definition.
+    fn construct_field_types_by_name(&self, name: &str) -> Vec<Ty> {
+        use crate::resolve::symbols::DefKind;
+        for def in self.symbols.iter() {
+            if def.name != name {
+                continue;
+            }
+            match &def.kind {
+                DefKind::Struct { info } => {
+                    return info
+                        .fields
+                        .iter()
+                        .filter_map(|&fid| self.symbols.def_ty(fid))
+                        .collect();
+                }
+                DefKind::Class { info } => {
+                    let mut own: Vec<Ty> = info
+                        .fields
+                        .iter()
+                        .filter_map(|&fid| self.symbols.def_ty(fid))
+                        .collect();
+                    if let Some(parent_id) = info.parent {
+                        if let Some(parent_def) = self.symbols.get(parent_id) {
+                            let mut tys = self.construct_field_types_by_name(&parent_def.name);
+                            tys.append(&mut own);
+                            return tys;
+                        }
+                    }
+                    return own;
+                }
+                _ => {}
+            }
+        }
+        Vec::new()
     }
 
     /// Find the parent class name of the function currently being lowered, if

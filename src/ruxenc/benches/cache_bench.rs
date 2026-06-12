@@ -94,8 +94,14 @@ fn bench_signature_comparison(c: &mut Criterion) {
 
 fn bench_cache_key(c: &mut Criterion) {
     let sh = hash_file("fn main() {}");
+    // A representative flags component (Q24 added it to the key: toolchain
+    // fingerprint + per-build flags like --link-arg), so the bench hashes a
+    // realistic key shape rather than the empty string.
+    let flags = "toolchain=deadbeef;link=-lSDL2";
     c.bench_function("cache_key/to_hex", |b| {
-        b.iter(|| CacheKey::new(black_box(sh), 1, "x86_64-linux", "debug").to_hex())
+        b.iter(|| {
+            CacheKey::new(black_box(sh), 1, "x86_64-linux", "debug", black_box(flags)).to_hex()
+        })
     });
 }
 

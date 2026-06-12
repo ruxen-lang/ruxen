@@ -12,12 +12,14 @@
 ## next regression of that codepath fails here with a Cranelift
 ## verifier mismatched-argument-count error.
 ##
-## We exercise the static-method-with-args path twice:
-##   1. `Thread.spawn_raw(closure)` — Int  → Int
-##   2. `String.from("42")`         — &str → String
-## Both `def self.X(arg)` shapes; the first is the actual repro
-## subject, the second is the print payload (also a stdlib static
-## method with one arg, kept for redundant coverage).
+## The repro subject is `Thread.spawn_raw(closure)` — Int → Int, a
+## `def self.X(arg)` shape that must dispatch WITHOUT a phantom `self` prepended.
+##
+## We round-trip a `String` through `.clone` afterwards as incidental coverage of
+## the borrow→owned spelling: a bare literal `"42"` is ALREADY an owned `String`,
+## and `owned.clone` deep-copies a borrow of it to a fresh owned `String`. (This
+## used to be spelled `String.from(&owned)`, but the surface `String.from` static
+## method was removed from the language — `clone` is the borrow→owned spelling.)
 
 def main
   let closure = { || 42 }
@@ -25,6 +27,7 @@ def main
   if handle == 0
     puts "spawn returned null"
   else
-    puts String.from("42")
+    let owned = "42"
+    puts owned.clone
   end
 end

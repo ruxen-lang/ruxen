@@ -166,7 +166,7 @@ impl<'a> Lowerer<'a> {
                 // method set here behaviourally narrower than
                 // `runtime_abi::is_static_constructor` (the reconciled union).
                 // Routing this gate through the union would reroute
-                // `String.from` / `String.with_capacity` / collection
+                // `String.with_capacity` / `String.from_bytes` / collection
                 // `from_iter` into the `String_new` / `Class_init` fast path —
                 // a silent dispatch change. Per the Phase 2 plan obligation
                 // ("do not silently widen the fast path"), the per-type cascade
@@ -458,8 +458,18 @@ impl<'a> Lowerer<'a> {
                             ty: expr.ty.clone(),
                             size: self.alloc_size(&expr.ty),
                         });
+                        // Coerce each positional arg to the declared field
+                        // width before the width-blind SetField store, so a
+                        // bare `Float` (f64) value placed into a `Float32`
+                        // field is narrowed to f32 first (Q28). Without this,
+                        // an 8-byte f64 store into a 4-byte f32 slot makes the
+                        // later f32 GetField read garbage (0).
+                        let field_tys = self.lookup_construct_field_types(&expr.ty);
                         for (idx, arg) in args.iter().enumerate() {
-                            let local = self.lower_expr(arg)?;
+                            let mut local = self.lower_expr(arg)?;
+                            if let Some(field_ty) = field_tys.get(idx).cloned() {
+                                local = self.coerce_to_field_ty(local, &field_ty);
+                            }
                             self.emit(MirInst::SetField {
                                 base: obj,
                                 field_index: idx,
@@ -553,7 +563,7 @@ impl<'a> Lowerer<'a> {
                     let dest = self.new_temp(expr.ty.clone());
                     let callee = match &expr.ty {
                         Ty::Array(_) => "ruxen_vec_from_iter",
-                        Ty::String | Ty::Str => "ruxen_string_from_iter",
+                        Ty::String => "ruxen_string_from_iter",
                         Ty::Map(_, _) => "ruxen_hash_from_iter",
                         Ty::Set(_) => "ruxen_set_from_iter",
                         other => {
@@ -984,6 +994,31 @@ impl<'a> Lowerer<'a> {
                     mangled
                 };
 
+                // Q17 (staged boundary): a method call whose RECEIVER itself is
+                // a still-abstract, mixin-bound type parameter (`item.width`
+                // where `item: &var T, T: Sized`) with NO unique implementor
+                // would mangle to a bound-PLACEHOLDER callee (`T: Sized_width`)
+                // that link-fails. This is the generic METHOD over a mixin case
+                // (a generic `def` inside a class), which this pass does NOT yet
+                // monomorphize (generic FREE functions ARE — see Q17 ADR). We
+                // detect it STRUCTURALLY on the peeled receiver type, NOT by
+                // string-matching the mangled callee: a concrete receiver with a
+                // bounded generic ARG (`Array[T: Showable]`) also stringifies
+                // with `": "` but is a sound builtin call, so it must not trip
+                // this guard. Surface a clear error instead of the placeholder
+                // symbol. The single-implementor case never reaches here:
+                // `unique_bound_impl` already resolved a concrete `resolved_class`.
+                if self.receiver_is_unresolved_bound(&object.ty) {
+                    return Err(format!(
+                        "cannot monomorphize generic method `{method_name}` over the \
+                         mixin-bound type parameter `{resolved_class}`: a generic METHOD \
+                         over a mixin with ≥2 implementors is not yet supported (generic \
+                         free functions are — see docs/decisions/q17-cross-package-\
+                         monomorphization.md). Move the generic over the mixin into a \
+                         free function `def {method_name}[T: <bound>](recv: &var T, …)`."
+                    ));
+                }
+
                 // `&mut String` detection: when the receiver is a local
                 // of type `&mut String` (i.e. the caller passed `&mut s`
                 // into a parameter typed `&mut String`), the local holds
@@ -994,7 +1029,7 @@ impl<'a> Lowerer<'a> {
                 let receiver_is_mut_string_ref = matches!(
                     &object.ty,
                     Ty::RefMut(inner) | Ty::RefMutLifetime(_, inner)
-                        if matches!(inner.as_ref(), Ty::String | Ty::Str)
+                        if matches!(inner.as_ref(), Ty::String)
                 );
 
                 // Special handling for push_str on String variables:
@@ -1350,6 +1385,26 @@ impl<'a> Lowerer<'a> {
                     // Load both, then call indirectly with captures_ptr
                     // prepended to the user-visible arg list.
                     let pair = obj_local.unwrap_or_else(|| self.new_temp(Ty::Int));
+
+                    // Ruby-block-semantics ADR D5: an OPTIONAL `&block` slot is
+                    // a null closure-pair-pointer (ADR D1) when the caller
+                    // passed no block. Calling it (`yield` / `block.(…)`) would
+                    // dereference null and segfault. Guard the dispatch: when
+                    // the receiver is the block slot (`__block`), branch on
+                    // `pair == 0` and `ruxen_panic` with a LocalJumpError-style
+                    // message naming the enclosing function, instead of
+                    // crashing. Non-block closure receivers (map/each/stored
+                    // closures) skip the guard — they are never optional, so
+                    // this adds zero overhead to hot closure paths.
+                    let is_block_slot = matches!(
+                        &object.kind,
+                        HirExprKind::VarRef(def_id)
+                            if self.symbols.get(*def_id).map(|d| d.name == "__block").unwrap_or(false)
+                    );
+                    if is_block_slot {
+                        self.emit_block_presence_guard(pair);
+                    }
+
                     let fn_ptr = self.new_temp(Ty::Int);
                     self.emit(MirInst::GetField {
                         dest: fn_ptr,

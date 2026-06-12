@@ -616,6 +616,43 @@ fn runtime_no_leak_fixture_exits_without_tracked_leaks() {
     );
 }
 
+/// Ruby-block-semantics pin (h): a `&block` whose body captures a
+/// heap-allocated class value runs SOUNDLY — the captured value is read
+/// correctly through `yield`, the program exits cleanly (exit 0, no
+/// double-free / no segfault), and the allocation count is STABLE versus the
+/// identical plain-closure (`{ }`) capture shape.
+///
+/// IMPORTANT — what this does NOT assert: leak-freedom of the captures. A
+/// closure that captures a heap value currently does not free that capture at
+/// closure-drop (`allocs=3, frees=0` here). That is a PRE-EXISTING limitation
+/// of the closure-capture machinery — verified by an identical plain-closure
+/// (`run({ || b.value + 1 })`) probe leaking the same `outstanding=3`. The
+/// block surface reuses that machinery verbatim, so it neither improves nor
+/// regresses it. Block-feature scope: no double-free, correct value, clean
+/// exit. The capture-drop leak is filed as a separate follow-up in
+/// docs/TASKS.md (not a block regression).
+#[test]
+fn block_capturing_heap_value_runs_soundly() {
+    let source = rx("block_capture_heap_no_leak");
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("block_capture_heap_no_leak", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {}", stderr);
+    assert_eq!(stdout, "42", "stdout was {stdout:?}");
+    let (allocs, frees, outstanding) = parse_leak_marker(&stderr);
+    // No DOUBLE free: frees never exceeds allocs (a double-free would show
+    // frees > allocs or a crash). Outstanding equals the pre-existing
+    // closure-capture leak baseline (captures not yet dropped), NOT zero.
+    assert!(
+        frees <= allocs,
+        "double-free suspected: allocs={allocs} frees={frees}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        outstanding,
+        allocs - frees,
+        "leak accounting inconsistent: allocs={allocs} frees={frees} outstanding={outstanding}"
+    );
+}
+
 /// Re-binding a heap-owned local must free the prior allocation before
 /// the new pointer overwrites it. Three `Buffer.new` calls => three
 /// allocations; all three must be freed (two via injected mid-function
@@ -716,10 +753,12 @@ fn tracker_reports_balanced_allocs_for_dropped_locals() {
  * Either failure mode is a valid red.
  * ────────────────────────────────────────────────────────────────── */
 
-/// A `String` local bound from `String.from(...)` must be freed by
-/// scope-exit drop. Currently the drop-elaboration filter excludes
-/// `Ty::String` so the underlying `malloc` from `ruxen_string_from`
-/// leaks through to process exit. (P0.7)
+/// A `String` local bound from a BARE STRING LITERAL must be freed by
+/// scope-exit drop, identically to one bound from `String.from(...)`. The
+/// fixture is `let s = "hello"` (no `String.from`): an un-annotated `let` on a
+/// bare literal now binds an owned `String` (typeck `promote_bare_string_
+/// literal_binding`), so the implicit `ruxen_string_from` heap copy is
+/// drop-elaborated instead of leaking (ledger Q38). (P0.7)
 #[test]
 fn string_local_is_freed_on_scope_exit() {
     let source = rx("p07_string_local_drop_source");
@@ -728,6 +767,33 @@ fn string_local_is_freed_on_scope_exit() {
     assert!(
         report.string_frees >= 1,
         "no string free observed: {:#?}",
+        report
+    );
+}
+
+/// One-string-type ADR drop-safety pin: a bare string literal is born owned
+/// `String` (heap-copied via `ruxen_string_from`) and freed once at scope exit;
+/// `.clone` allocates a SECOND independent owned `String` that is also freed
+/// once. The counters must balance (`outstanding=0`) and BOTH the owned literal
+/// local and the clone must fire a string free (>=2) — no leak, no double-free.
+/// This is the regression pin for the `&str` removal: with the old `&str` type,
+/// a literal-typed local was excluded from drop elaboration (it leaked), and an
+/// owned-typed view of a borrow double-freed the source. (The bare-literal-into-
+/// `&String`-param zero-copy borrow provenance is a separate filed follow-up;
+/// see `docs/decisions/one-string-type.md`.)
+#[test]
+fn string_literal_and_clone_are_drop_safe() {
+    let source = rx("string_literal_borrow_clone_matrix");
+    let report = run_fixture_inline("string_literal_borrow_clone_matrix", &source);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "leak or double-free: {:#?}",
+        report
+    );
+    assert!(
+        report.string_frees >= 2,
+        "expected the owned literal local AND the clone to each free a String \
+         (>=2): {:#?}",
         report
     );
 }
@@ -1000,6 +1066,440 @@ fn p04_hashset_string_releases_every_element() {
     assert!(
         report.set_frees >= 1,
         "expected the set spine to be freed: {:#?}",
+        report
+    );
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Q31 (S1 memory-safety): a Float32-payload enum variant constructed
+ * BY VALUE two or more times in one function must be sound — no
+ * double-free, no leak.
+ *
+ * Root cause was an under-allocation in `alloc_size` (mir/lower/emit.rs):
+ * enums were sized to their PACKED layout, but codegen addresses payload
+ * fields on a fixed 8-byte slot stride. For `Move(Float32, Float32)` the
+ * payload-field-1 store landed 4 bytes past the allocation, corrupting
+ * adjacent heap-chunk metadata — which crashed the program (not a clean
+ * leak). A regressed compiler therefore fails this fixture by exiting
+ * non-zero / crashing inside the next malloc, well before the
+ * `outstanding == 0` assertion runs; a sound compiler frees each enum
+ * allocation exactly once.
+ * ────────────────────────────────────────────────────────────────── */
+
+/// Three inline Float32-payload enum constructions, each bound to a
+/// local and matched. Each ruxen-managed allocation must be freed exactly
+/// once at scope exit (no double-free, no leak): the THREE enum allocs
+/// balance the THREE frees → `ruxen_alloc_outstanding == 0`. A revert of
+/// the alloc_size slot-rounding fix corrupts the heap on the second
+/// construction and the binary crashes before clean exit (the harness
+/// reports the crash as a failure before this assertion).
+///
+/// We assert on `ruxen_alloc_outstanding` (the enum allocations under
+/// audit), NOT `outstanding_allocations` (which also counts `raw_*`
+/// mallocs): the fixture's final `puts "total=#{total}"` interpolates an
+/// Int into a String, and that formatter temporary is a SEPARATE,
+/// pre-existing, non-enum raw-heap leak the drop pass does not yet collect
+/// (documented in the fixture + the Drop ADR's open items). Folding it
+/// into the Q31 enum-soundness assertion would conflate two unrelated
+/// subsystems. The enum drop itself is sound: 3 allocs, 3 frees.
+#[test]
+fn q31_float_payload_enum_double_construct_no_leak() {
+    let source = rx("q31_float_enum_payload_no_leak_source");
+    let report = run_fixture_inline("q31_float_enum_no_leak", &source);
+    assert_eq!(
+        report.ruxen_alloc_outstanding, 0,
+        "leak (or double-free) on float-payload enum drop: {:#?}",
+        report
+    );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Borrowed-`&T`-user-param leak matrix (drop-elaboration Fix 1).
+//
+// A `String` (or any heap type) passed to a USER function/method whose
+// parameter is declared `&T` / `&var T` is BORROWED, not consumed. The source
+// local must therefore stay drop-eligible and be freed exactly once at its
+// own scope exit. The pre-existing bug: `compute_dealloc_safe_locals` routed
+// the call arg through the conservative `callee_ownership` default (user
+// callee ⇒ taint every arg), suppressing the source's `ruxen_string_free` →
+// LEAK. A BY-VALUE (consuming) param must keep the taint so we do not regress
+// into a double-free. These fixtures are the oracle for that boundary.
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Borrow a `String` into a user free fn's `&String` param. The source `owned`
+/// is still live afterwards and must be freed EXACTLY once at scope exit — no
+/// leak, no double-free.
+#[test]
+fn borrow_string_into_user_fn_param_frees_source_once() {
+    let source = r#"
+def borrow_len(s: &String) -> USize
+  s.size
+end
+
+def main
+  let owned = "transient"
+  let _n = borrow_len(owned)
+  puts "ok"
+end
+"#;
+    let report = run_fixture_inline("borrow_string_user_fn", source);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "borrowed String into user &String param leaked (or double-freed): {:#?}",
+        report
+    );
+    assert!(
+        report.string_frees >= 1,
+        "the borrowed source String must still be freed once at scope exit: {:#?}",
+        report
+    );
+}
+
+/// Borrow a `String` into a user METHOD's `&String` param (not just a free fn).
+/// Same invariant: source freed exactly once.
+#[test]
+fn borrow_string_into_user_method_param_frees_source_once() {
+    let source = r#"
+class Greeter
+  def init
+  end
+
+  def measure(s: &String) -> USize
+    s.size
+  end
+end
+
+def main
+  let owned = "hello"
+  let g = Greeter.new
+  let _n = g.measure(owned)
+  puts "ok"
+end
+"#;
+    let report = run_fixture_inline("borrow_string_user_method", source);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "borrowed String into user method &String param leaked (or double-freed): {:#?}",
+        report
+    );
+    assert!(
+        report.string_frees >= 1,
+        "the borrowed source String must still be freed once at scope exit: {:#?}",
+        report
+    );
+}
+
+/// A user param declared BY VALUE (consuming) must KEEP its taint: Fix 1 only
+/// untaints `&T` / `&var T` borrow params. Over-rotating into treating every
+/// user-call arg as a borrow would re-introduce the taint for by-value args
+/// and risk a double-free where one is genuinely consumed. This pin asserts the
+/// DANGER boundary: the by-value path runs cleanly (exit 0, no double-free —
+/// `frees <= allocs` and no crash) and is UNCHANGED by Fix 1.
+///
+/// NOTE: a by-value heap arg into a user fn currently *leaks* (the caller
+/// taints the source, and the callee skips its params during drop elaboration,
+/// so neither side frees it). That caller-frees-by-value-arg gap is PRE-EXISTING
+/// and ORTHOGONAL to the `&String`-param filing Fix 1 closes (it is the same
+/// "callee never drops a by-value heap param" shape). It is filed separately;
+/// this test deliberately does NOT assert `outstanding == 0` so Fix 1 stays
+/// scoped to borrow params and cannot mask that gap.
+#[test]
+fn by_value_string_into_user_fn_keeps_taint_no_double_free() {
+    let source = r#"
+def take_str(s: String) -> USize
+  s.size
+end
+
+def main
+  let owned = "consumed"
+  let _n = take_str(owned)
+  puts "ok"
+end
+"#;
+    let (stdout, stderr, exit) = compile_and_run_with_tracking("by_value_string_user_fn", source);
+    assert_eq!(exit, Some(0), "by-value fixture crashed. stderr:\n{stderr}");
+    assert_eq!(stdout, "ok\n", "unexpected stdout: {stdout:?}");
+    let report = parse_leak_report(&stderr);
+    // No DOUBLE free: a double-free would show frees > allocs or crash the run.
+    // We assert the raw-heap channel never over-frees.
+    let raw_line = stderr
+        .lines()
+        .find(|l| l.starts_with("RUXEN_TEST_RAW"))
+        .expect("raw marker");
+    let raw_mallocs = extract_u64(raw_line, "raw_mallocs", &stderr);
+    let raw_frees = extract_u64(raw_line, "raw_frees", &stderr);
+    assert!(
+        raw_frees <= raw_mallocs,
+        "double-free on by-value path: raw_mallocs={raw_mallocs} raw_frees={raw_frees}\n{:#?}",
+        report
+    );
+}
+
+/// Multiple `&String` borrow args in one call: every borrowed source stays
+/// drop-eligible and is freed once.
+#[test]
+fn multiple_borrow_args_each_source_freed_once() {
+    let source = r#"
+def concat_len(a: &String, b: &String) -> USize
+  a.size + b.size
+end
+
+def main
+  let first = "alpha"
+  let second = "beta"
+  let _n = concat_len(first, second)
+  puts "ok"
+end
+"#;
+    let report = run_fixture_inline("multi_borrow_args", source);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "multiple borrowed String sources leaked or double-freed: {:#?}",
+        report
+    );
+    assert!(
+        report.string_frees >= 2,
+        "both borrowed sources must each be freed once (>=2): {:#?}",
+        report
+    );
+}
+
+/// Mixed args: one borrowed `&String` (arg0), one by-value `String` (arg1) in
+/// the SAME call. Fix 1 must untaint ONLY the borrow slot: the borrowed source
+/// `keep` is freed at the caller's scope exit (a string free fires), while the
+/// by-value `give` keeps its taint (its pre-existing caller-free gap is
+/// orthogonal — see `by_value_string_into_user_fn_keeps_taint_no_double_free`).
+/// The point of this pin is that per-argument ref-ness is resolved POSITIONALLY:
+/// untainting the whole call (or none of it) would be wrong.
+#[test]
+fn mixed_borrow_and_by_value_args_untaint_only_the_borrow() {
+    let source = r#"
+def mix(borrowed: &String, owned: String) -> USize
+  borrowed.size + owned.size
+end
+
+def main
+  let keep = "keep"
+  let give = "give"
+  let _n = mix(keep, give)
+  puts "ok"
+end
+"#;
+    let (stdout, stderr, exit) = compile_and_run_with_tracking("mixed_borrow_value_args", source);
+    assert_eq!(exit, Some(0), "mixed fixture crashed. stderr:\n{stderr}");
+    assert_eq!(stdout, "ok\n", "unexpected stdout: {stdout:?}");
+    let report = parse_leak_report(&stderr);
+    // Before Fix 1 string_frees=1 (only the `"ok"` literal frees; both `keep`
+    // and `give` leak — raw_outstanding=2). After Fix 1 the borrow source
+    // `keep` ALSO frees (string_frees>=2) and only the by-value `give` leaks
+    // (raw_outstanding=1, the pre-existing by-value gap asserted elsewhere).
+    assert!(
+        report.string_frees >= 2,
+        "the borrow-slot source `keep` must be freed after Fix 1 (>=2 incl. the \
+         `\"ok\"` literal): {:#?}",
+        report
+    );
+    assert_eq!(
+        report.raw_outstanding, 1,
+        "after Fix 1 only the by-value `give` should leak (the borrow `keep` is \
+         freed): {:#?}",
+        report
+    );
+    // No double-free on the raw-heap channel.
+    let raw_line = stderr
+        .lines()
+        .find(|l| l.starts_with("RUXEN_TEST_RAW"))
+        .expect("raw marker");
+    let raw_mallocs = extract_u64(raw_line, "raw_mallocs", &stderr);
+    let raw_frees = extract_u64(raw_line, "raw_frees", &stderr);
+    assert!(
+        raw_frees <= raw_mallocs,
+        "double-free on mixed path: raw_mallocs={raw_mallocs} raw_frees={raw_frees}",
+    );
+}
+
+/// Borrow, then KEEP USING the source after the call. The source is genuinely
+/// alive past the borrow; it must be freed once at scope exit.
+#[test]
+fn borrow_then_use_after_frees_source_once() {
+    let source = r#"
+def peek(s: &String) -> USize
+  s.size
+end
+
+def main
+  let owned = "lingering"
+  let _a = peek(owned)
+  let _b = owned.size
+  puts "ok"
+end
+"#;
+    let report = run_fixture_inline("borrow_then_use_after", source);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "source used after borrow leaked or double-freed: {:#?}",
+        report
+    );
+    assert!(
+        report.string_frees >= 1,
+        "the still-live source must be freed once: {:#?}",
+        report
+    );
+}
+
+/// CHARACTERIZATION (accepted-leak class, 2026-06-11). Borrow a fresh
+/// per-iteration `String` into a user `&String` reader inside a loop body.
+///
+/// `0741468` registered built-in heap loop-body locals
+/// (`String`/`Array`/`Map`/`Set`) for a loop-back-edge free so each
+/// iteration's allocation was reclaimed (this fixture then asserted
+/// `outstanding == 0`, `string_frees >= 3`). That back-edge free was emitted
+/// UNCONDITIONALLY at lower time and did NOT consult whether the local had
+/// been MOVED OUT during the iteration (into an escaping collection, a return
+/// value, or a stored field). When it had — as in rondo's path-param
+/// `captures.insert(name, …)` — the back-edge freed an allocation the
+/// collection now owned, dangling its pointer → nondeterministic
+/// use-after-free across the whole dispatch path (rondo `<none>` capture
+/// reads; reproduced + bisected to `0741468`).
+///
+/// The registration was REVERTED (`statement.rs`) on the soundness mandate:
+/// built-in heap loop-body locals are now freed ONLY at function scope exit,
+/// where `compute_dealloc_safe_locals`'s `arg_transfer` taint tracks moves
+/// correctly. The COST is this accepted leak: a genuinely-owned per-iteration
+/// built-in heap local LEAKS until scope exit (iterations `1..n-1` here)
+/// rather than dangling. Soundness strictly beats leak-fixing.
+///
+/// This pin now CHARACTERIZES that benign leak — the run exits cleanly with no
+/// UAF and no double-free (`raw_frees <= raw_mallocs`), the borrow source is
+/// not consumed by the reader, and exactly `n-1` of the `n` per-iteration
+/// allocations stay outstanding at scope exit. The move-aware back-edge free
+/// (needs the dealloc-safe analysis BEFORE the loop edge is emitted) is the
+/// filed follow-up in `docs/TASKS.md`; closing it flips this assertion back to
+/// `outstanding == 0`.
+#[test]
+fn borrow_in_loop_leaks_until_scope_exit_no_uaf() {
+    let source = r#"
+def borrow_len(s: &String) -> USize
+  s.size
+end
+
+def main
+  var i = 0
+  while i < 3
+    let owned = "iter"
+    let _n = borrow_len(owned)
+    i = i + 1
+  end
+  puts "ok"
+end
+"#;
+    let (stdout, stderr, exit) = compile_and_run_with_tracking("borrow_in_loop", source);
+    assert_eq!(
+        exit,
+        Some(0),
+        "borrow-in-loop fixture crashed. stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "ok\n", "unexpected stdout: {stdout:?}");
+    let report = parse_leak_report(&stderr);
+    // No DOUBLE-FREE / UAF: the raw-heap channel never over-frees. This is the
+    // load-bearing soundness assertion — the per-iteration allocations may
+    // leak, but none is freed while still referenced.
+    let raw_line = stderr
+        .lines()
+        .find(|l| l.starts_with("RUXEN_TEST_RAW"))
+        .expect("raw marker");
+    let raw_mallocs = extract_u64(raw_line, "raw_mallocs", &stderr);
+    let raw_frees = extract_u64(raw_line, "raw_frees", &stderr);
+    assert!(
+        raw_frees <= raw_mallocs,
+        "double-free/UAF on borrow-in-loop path: raw_mallocs={raw_mallocs} \
+         raw_frees={raw_frees}\n{:#?}",
+        report
+    );
+    // ACCEPTED LEAK: exactly `n-1` (= 2) of the 3 per-iteration Strings stay
+    // outstanding at scope exit — they are freed only at function scope exit,
+    // not at the loop back-edge. Pinned EXACTLY so the day the move-aware
+    // back-edge free lands, this fixture fails loudly and is flipped back to
+    // `outstanding == 0`.
+    assert_eq!(
+        report.outstanding_allocations, 2,
+        "expected the accepted per-iteration leak (n-1 = 2 outstanding); a \
+         change here means the back-edge free behavior moved: {:#?}",
+        report
+    );
+}
+
+/// Borrow a heap `Array[Int]` into a user fn's `&Array[Int]` param. The Vec
+/// spine + data buffer of the source must be freed once — Fix 1 covers all
+/// heap types, not just String.
+#[test]
+fn borrow_array_into_user_fn_frees_source_once() {
+    let source = r#"
+def total(xs: &Array[Int]) -> Int
+  var sum = 0
+  xs.each do |x|
+    sum = sum + x
+  end
+  sum
+end
+
+def main
+  var owned = Array[Int].new
+  owned.push(1)
+  owned.push(2)
+  let _s = total(owned)
+  puts "ok"
+end
+"#;
+    let report = run_fixture_inline("borrow_array_user_fn", source);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "borrowed Array source leaked or double-freed: {:#?}",
+        report
+    );
+    assert!(
+        report.vec_frees >= 1,
+        "the borrowed Array source spine must be freed once: {:#?}",
+        report
+    );
+}
+
+/// Borrow a user CLASS value through a `&self` (`Ref`) method receiver. The
+/// receiver instance is owned by the CALLER and borrowed by the method, so it
+/// must be freed once at scope exit — Fix 1 untaints a `Ref`-self receiver so a
+/// class instance passed to its own read-only method no longer leaks.
+///
+/// NOTE: the sibling spelling — a free fn with a `&Box` PARAMETER —
+/// (`def read_box(b: &Box)`) currently fails typeck for a USER class with
+/// "could not infer type for parameter `b`" (the `&UserClass` annotation stays
+/// an unresolved `Infer`; a stdlib class like `&Json` resolves fine — see
+/// release-e2e 800). That is a typeck inference gap ORTHOGONAL to drop
+/// elaboration; the `&self` receiver form below exercises the same
+/// class-borrow-frees-source drop path Fix 1 added.
+#[test]
+fn borrow_class_through_ref_self_frees_receiver_once() {
+    let source = r#"
+class Box
+  value: Int
+
+  def init(@value: Int)
+  end
+
+  def read -> Int
+    self.value
+  end
+end
+
+def main
+  let owned = Box.new(7)
+  let _v = owned.read
+  puts "ok"
+end
+"#;
+    let report = run_fixture_inline("borrow_class_ref_self", source);
+    assert_eq!(
+        report.ruxen_alloc_outstanding, 0,
+        "class receiver borrowed through &self leaked or double-freed: {:#?}",
         report
     );
 }

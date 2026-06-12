@@ -1,0 +1,21 @@
+# Q26: a capturing closure STORED under a `&var *self` reborrow keeps its
+# captures. The nested `{ || v + 1 }` re-captures `v` (captured by the OUTER
+# `{ |c| ... }` block) and must read 42, not slot garbage. Expected: 43.
+class Box
+  fns: Array[any Fn[Fn() -> Int]]
+  def init; self.fns = Array.new; end
+  def var add(f: any Fn[Fn() -> Int]) -> nil; self.fns.push(f); end
+  def var build(b: any Fn[Fn(&var Box) -> nil]) -> nil; b.(&var *self); end
+  def call0 -> Int
+    match self.fns.get(0)
+      Some(f) -> f.()
+      nil -> -1
+    end
+  end
+end
+def main
+  let v = 42
+  var box = Box.new
+  box.build({ |c: &var Box| c.add({ || v + 1 }) })
+  puts "#{box.call0}"
+end

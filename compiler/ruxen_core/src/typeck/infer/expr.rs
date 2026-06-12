@@ -594,7 +594,14 @@ impl<'a> InferenceEngine<'a> {
                     _ => None,
                 };
                 if let Some(selected) = selected_method {
-                    self.append_method_default_args(selected, args);
+                    // A trailing `do…end` / `{ }` block fills the method's final
+                    // (block) parameter slot separately (appended below as
+                    // `args_with_block`). Reserve that slot so the default-arg
+                    // pass does NOT also emit a `nil` for it (Ruby-block ADR:
+                    // present block → no nil default; absent block → nil fills
+                    // the optional `&block`). Without the reservation a
+                    // block-bearing call doubles the final argument.
+                    self.append_method_default_args(selected, args, block.is_some());
                     let signature = self.symbols.get(selected).and_then(|def| match &def.kind {
                         DefKind::Method { signature, .. } => Some(signature.clone()),
                         _ => None,
@@ -1149,19 +1156,23 @@ impl<'a> InferenceEngine<'a> {
                             expr.ty = Ty::Result(Box::new(ok_ty), Box::new(err_ty));
                         }
                         "Err" => {
+                            // The expected (Ok, Err) types from the enclosing
+                            // function's `-> Result[O, E]` return, when present.
+                            let expected_ok =
+                                self.current_return_ty.as_ref().and_then(|ret| match ret {
+                                    Ty::Result(ok, _err) => Some(*ok.clone()),
+                                    _ => None,
+                                });
                             let err_ty = fields
                                 .first()
                                 .map(|(_, e)| self.ctx.resolve(&e.ty))
                                 .unwrap_or(Ty::Error);
-                            // Try to get the ok type from the function return type
-                            let ok_ty = self
-                                .current_return_ty
-                                .as_ref()
-                                .and_then(|ret| match ret {
-                                    Ty::Result(ok, _) => Some(*ok.clone()),
-                                    _ => None,
-                                })
-                                .unwrap_or_else(|| self.ctx.fresh_type_var());
+                            // (One-string-type ADR: the Q38 `Err("msg")` payload
+                            // `&str`→`String` rewrite is gone — a string literal
+                            // is born `Ty::String`, so `Err("msg")` in a
+                            // `-> Result[T, String]` fn already builds
+                            // `Result[T, String]` with no `&str` payload.)
+                            let ok_ty = expected_ok.unwrap_or_else(|| self.ctx.fresh_type_var());
                             expr.ty = Ty::Result(Box::new(ok_ty), Box::new(err_ty));
                         }
                         _ => {
@@ -1277,6 +1288,33 @@ impl<'a> InferenceEngine<'a> {
                     } = part
                     {
                         self.infer_expr(e);
+                        // E0729: a closure / `Fn` value has no Display. Without
+                        // this check it falls through MIR interpolation's
+                        // "unknown type → Int_fmt (pointer-as-int)" fallback and
+                        // SILENTLY prints a raw pointer — the exact garbage a
+                        // bare `do…end` (which parses as a closure literal, never
+                        // an expression block) bound to a local produces when
+                        // interpolated (`let v = do … end; puts "#{v}"`). Catch
+                        // it at typeck so the user gets a clear error instead of
+                        // a pointer. Stored/invoked closures are unaffected —
+                        // only formatting one is rejected.
+                        let part_ty = self.ctx.resolve(&e.ty);
+                        if matches!(
+                            part_ty,
+                            Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. }
+                        ) {
+                            self.diagnostics
+                                .push(crate::diagnostics::Diagnostic::error_with_code(
+                                    "a closure / `Fn` value cannot be formatted into a string: \
+                                     it has no `Display`. (A bare `do … end` is a block/closure, \
+                                     never an expression value — to compute a value from several \
+                                     statements use a helper function, or invoke the closure with \
+                                     `.()` and interpolate its result.)"
+                                        .to_string(),
+                                    e.span.clone(),
+                                    "E0729",
+                                ));
+                        }
                     }
                 }
                 expr.ty = Ty::String;

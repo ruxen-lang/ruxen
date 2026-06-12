@@ -16,6 +16,6 @@ class User
 end
 
 def main
-  let u = User.new(String.from("Alice"))
+  let u = User.new("Alice")
   puts "#{u.to_display}"
 end

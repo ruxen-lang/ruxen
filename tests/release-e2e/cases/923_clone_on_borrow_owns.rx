@@ -1,0 +1,23 @@
+# Borrow→owned spelling: `.clone` on an explicit `&String` borrow yields an
+# OWNED `String` that outlives the borrow's scope. This is the spelling that
+# REPLACED the removed `String.from(&owned)` static method — copying a borrow to
+# an owned value is now `borrow.clone`. Companion to 49_clone_explicit (which
+# clones an owned binding) and 922 (literal coercion). The pin RUNS and asserts
+# stdout: the original and the clone are independent owned strings, and mutating
+# through the clone path does not disturb the source.
+def take_borrow(b: &String) -> String
+  # `b` is a borrow; `.clone` deep-copies it into a fresh owned String the
+  # caller owns and drops.
+  b.clone
+end
+
+def main
+  let original = "borrowed-and-cloned"
+  let copy = take_borrow(&original)
+  # Both bindings are live and independently owned.
+  puts "orig=#{original}"
+  puts "copy=#{copy}"
+  # A second clone, directly off an inline borrow expression.
+  let again = (&original).clone
+  puts "again=#{again}"
+end

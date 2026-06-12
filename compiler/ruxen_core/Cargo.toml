@@ -18,7 +18,11 @@ proptest = "1"
 libc = "0.2"
 
 [dependencies]
-cranelift-codegen = "0.130"
+# `all-native-arch` enables ISA lookup for x86_64 / aarch64 / s390x / riscv64
+# (on top of the default `host-arch`), so `isa::lookup(triple)` can build a
+# non-host TargetIsa for cross-compilation (tier 4.02). Without it,
+# `isa::lookup` returns `SupportDisabled` for any non-host architecture.
+cranelift-codegen = { version = "0.130", features = ["all-native-arch"] }
 cranelift-frontend = "0.130"
 cranelift-module = "0.130"
 cranelift-object = "0.130"

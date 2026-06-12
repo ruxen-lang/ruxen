@@ -135,7 +135,7 @@ impl<'a> Lowerer<'a> {
 /// is already a `char*` and needs no conversion for string interpolation.
 pub(super) fn is_string_like(ty: &Ty) -> bool {
     match ty {
-        Ty::String | Ty::Str => true,
+        Ty::String => true,
         Ty::Ref(inner)
         | Ty::RefMut(inner)
         | Ty::RefLifetime(_, inner)

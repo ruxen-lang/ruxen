@@ -1,5 +1,5 @@
 def main
-  let s = String.from("a;b;c")
+  let s = "a;b;c"
   let parts = s.split(";")
   puts "len=#{parts.size}"
 end

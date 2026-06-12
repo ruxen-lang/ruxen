@@ -28,7 +28,6 @@ pub fn ty_to_cranelift(ty: &Ty) -> Option<Type> {
 
         // All pointer-like / heap types -> I64.
         Ty::String
-        | Ty::Str
         | Ty::Array(_)
         | Ty::Map(_, _)
         | Ty::Set(_)
@@ -105,7 +104,7 @@ pub fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool {
 
 /// Check if a MIR type is a string-like type.
 ///
-/// Recognises the canonical primitive forms `Ty::String` / `Ty::Str` AND the
+/// Recognises the canonical primitive form `Ty::String` AND the
 /// bootstrap-class form `Ty::Class { name: "String", .. }` that the resolve
 /// pass produces for function parameters / fields whose annotation is
 /// `String`.
@@ -114,11 +113,11 @@ pub fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool {
 /// inserts `String` as `DefKind::TypeAlias { target: Ty::String }`. The
 /// bootstrap merge then anchors the user-side `class String` declaration
 /// (`library/std/string/src/lib.rx`) onto the same DefId so FFI methods
-/// (`String.from`, `String.new`, …) hang off it. The class-resolution pass
+/// (`String.new`, `clone`, …) hang off it. The class-resolution pass
 /// in `resolve/items.rs::resolve_class` rewrites that DefId's `DefKind` from
 /// `TypeAlias` to `Class`, after which `resolve_type_expr` returns the
 /// `Ty::Class { name: "String", .. }` form for any `s: String` annotation.
-/// Inferred locals (`let x = String.from(...)`) still get `Ty::String` from
+/// Inferred locals (`let x = "lit"` / `let x = y.clone`) still get `Ty::String` from
 /// the inference rules; only the annotation path hits the Class form.
 ///
 /// This helper is the codegen-side normalisation: any consumer asking "is
@@ -129,7 +128,7 @@ pub fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool {
 /// match / header lookup / response comparison in real server code.
 pub fn is_string_mir_ty(ty: &Ty) -> bool {
     match ty {
-        Ty::String | Ty::Str => true,
+        Ty::String => true,
         Ty::Class { name, .. } if name == "String" => true,
         Ty::Ref(inner)
         | Ty::RefMut(inner)
@@ -159,7 +158,6 @@ pub fn simple_type_size(ty: &Ty) -> usize {
         | Ty::Float
         | Ty::Float64 => 8,
         Ty::String => 24,
-        Ty::Str => 16,
         Ty::Array(_) => 24,
         Ty::Map(_, _) | Ty::Set(_) => 48,
         Ty::Ref(_)

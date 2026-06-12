@@ -1,0 +1,26 @@
+# Ruxen → WebAssembly (tier 4.03).
+#
+# Every top-level free `def` in a `wasm32-unknown-unknown` build becomes a
+# host-callable wasm export under its source name (the module is a *reactor* —
+# no `main`, no entry point; its functions ARE the API surface).
+#
+# Build:   ruxen compile add.rx --target wasm32-unknown-unknown -o add.wasm
+# Run:     node run.mjs
+#
+# This is the no_std / pure-computation path: no libc, no C runtime, no
+# allocator — just integer math exported to JS. A bundled allocator (for
+# String/Array exports) and host imports (console_log) are the staged
+# remainder; see docs/decisions/phase4-no-std-wasm.md.
+
+def add(a: Int32, b: Int32) -> Int32
+  a + b
+end
+
+def mul(a: Int32, b: Int32) -> Int32
+  a * b
+end
+
+# A slightly less trivial export: integer square (no loops/heap needed).
+def square(n: Int32) -> Int32
+  n * n
+end

@@ -20,6 +20,6 @@ class Cat < Animal
 end
 
 def main
-  let c = Cat.new(String.from("Whiskers"))
+  let c = Cat.new("Whiskers")
   puts c.speak
 end

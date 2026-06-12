@@ -139,11 +139,7 @@ impl LifetimeChecker {
     /// Check if a type contains any reference.
     fn contains_ref(ty: &Ty) -> bool {
         match ty {
-            Ty::Ref(_)
-            | Ty::RefMut(_)
-            | Ty::RefLifetime(_, _)
-            | Ty::RefMutLifetime(_, _)
-            | Ty::Str => true,
+            Ty::Ref(_) | Ty::RefMut(_) | Ty::RefLifetime(_, _) | Ty::RefMutLifetime(_, _) => true,
             Ty::Tuple(elems) => elems.iter().any(Self::contains_ref),
             Ty::Option(inner) | Ty::Array(inner) => Self::contains_ref(inner),
             Ty::Result(a, b) => Self::contains_ref(a) || Self::contains_ref(b),
@@ -165,7 +161,7 @@ mod tests {
     #[test]
     fn elision_rule_2_single_input_ref() {
         let params = vec![Ty::Ref(Box::new(Ty::String))];
-        let ret = Ty::Ref(Box::new(Ty::Str));
+        let ret = Ty::Ref(Box::new(Ty::String));
         let result = LifetimeChecker::check_elision(&params, &ret, None);
         assert!(
             result.is_ok(),

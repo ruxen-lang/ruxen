@@ -1,0 +1,38 @@
+# Q40 — quiver's real concurrency shape: a `Send` class owning a
+# `Mutex[String]`, shared via `SharedSync`, written through one closure and read
+# back through another. This is the `ClipboardCell` pattern quiver used as a
+# workaround for the (now-fixed) `Mutex[String]` link failure. With the
+# ergonomic `lock` wrapper implemented, the whole round-trip links AND the
+# guarded String value crosses the closure / SharedSync boundary intact (each
+# `self.m.lock` lives in its own method frame, so the guard drops at method
+# return and the payload survives). RUN + stdout pin proving the value is sound.
+class Cell
+  m: Mutex[String]
+  include Send
+  include Sync
+
+  def init(@m: Mutex[String])
+  end
+
+  def write(s: String) -> nil
+    match self.m.lock
+      Ok(g)  -> g.set(s)
+      Err(_) -> puts "poisoned-write"
+    end
+  end
+
+  def read -> String
+    match self.m.lock
+      Ok(g)  -> g.get.clone
+      Err(_) -> "poisoned-read"
+    end
+  end
+end
+
+def main
+  let cell = SharedSync.new(Cell.new(Mutex.new("init")))
+  let writer = { || cell.get.write("payload-xyz") }
+  let reader = { || cell.get.read }
+  writer.()
+  puts "got=#{reader.()}"
+end

@@ -1,0 +1,21 @@
+# Ruby-block-semantics ADR, pin (h). A `&block` whose body CAPTURES a
+# heap-allocated class value and reads it through `yield`. The captured
+# allocation must be freed exactly once — neither leaked nor double-freed —
+# when the block (and its captures) are dropped. Exercises drop elaboration
+# over the block's captures struct.
+
+struct Buffer
+  value: Int
+end
+
+def run(&block: Fn[() -> Int]) -> Int
+  yield
+end
+
+def main
+  let b = Buffer.new(41)
+  let r = run do
+    b.value + 1
+  end
+  print("#{r}")
+end

@@ -1,0 +1,15 @@
+# Ruby-block-semantics ADR (docs/decisions/ruby-block-semantics.md), pins (a)/(b).
+# Explicit `&block: Fn[(T…) -> R]` declaration with the CANONICAL square-bracket
+# spelling, invoked via `yield x`, passed BOTH a `do…end` block (free fn — the
+# old Q3 segfault shape, now sound) AND a `{ }` block — identical attachment rule.
+
+def emit(x: Int, &block: Fn[(Int) -> nil])
+  yield x
+end
+
+def main
+  emit(7) do |n|
+    puts "do:#{n}"
+  end
+  emit(9) { |n| puts "brace:#{n}" }
+end

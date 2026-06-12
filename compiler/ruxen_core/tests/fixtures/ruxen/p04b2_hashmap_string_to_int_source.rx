@@ -1,7 +1,7 @@
 def main
   var m: Hash[String, Int] = Hash.new
-  m.insert(String.from("alpha"), 1)
-  m.insert(String.from("beta"), 2)
-  m.insert(String.from("gamma"), 3)
+  m.insert("alpha", 1)
+  m.insert("beta", 2)
+  m.insert("gamma", 3)
   let _len = m.size
 end

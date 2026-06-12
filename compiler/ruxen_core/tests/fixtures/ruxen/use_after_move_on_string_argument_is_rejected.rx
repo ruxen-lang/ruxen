@@ -3,7 +3,7 @@ def take_owned(s: String) -> USize
 end
 
 def main
-  let s = String.from("hello")
+  let s = "hello"
   let _a = take_owned(s)
   let _b = s.size
 end

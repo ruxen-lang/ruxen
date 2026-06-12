@@ -17,8 +17,8 @@ def check_strings(s: String, needle: String) -> Int
 end
 
 def main
-  let a = String.from("hello")
-  let b = String.from("hello")
+  let a = "hello"
+  let b = "hello"
   let r = check_strings(a, b)
   if r == 1
     puts "match"

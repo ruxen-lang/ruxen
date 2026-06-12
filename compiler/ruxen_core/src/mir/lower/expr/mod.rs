@@ -92,9 +92,10 @@ impl<'a> Lowerer<'a> {
     ///
     /// v1 compiles the pattern once per evaluation (no module-init
     /// hoisting yet — see the spec's risk register R4). Both args
-    /// cross the FFI as raw `const char *` (`Ty::Str` — the same
-    /// shape produced by `MirInst::StringLiteral` for any string
-    /// literal). The returned handle is typed as
+    /// cross the FFI as raw `const char *` (`Ty::RawPtr(Char)`, i.e.
+    /// `*Char` — the raw `.rodata` pointer `MirInst::StringLiteral`
+    /// produces, which is NEVER owned and NEVER dropped, distinct from
+    /// an owned `Ty::String`). The returned handle is typed as
     /// `Ty::Class { name: "Regex" }`, matching the HIR-level typeck
     /// assignment from Phase 4.
     pub(super) fn lower_regex_literal(
@@ -106,12 +107,12 @@ impl<'a> Lowerer<'a> {
             _ => unreachable!("lower_regex_literal: dispatched to wrong helper"),
         };
 
-        let pat_raw = self.new_temp(Ty::Str);
+        let pat_raw = self.new_temp(Ty::RawPtr(Box::new(Ty::Char)));
         self.emit(MirInst::StringLiteral {
             dest: pat_raw,
             value: pattern.clone(),
         });
-        let flag_raw = self.new_temp(Ty::Str);
+        let flag_raw = self.new_temp(Ty::RawPtr(Box::new(Ty::Char)));
         self.emit(MirInst::StringLiteral {
             dest: flag_raw,
             value: flags.clone(),

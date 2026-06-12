@@ -1,5 +1,5 @@
 use clap::Parser;
-use ruxen_cli::{build, cli, deps, explain, publish, scaffold, self_update};
+use ruxen_cli::{build, cli, deps, explain, publish, scaffold, self_update, target};
 
 fn main() {
     let args = cli::Cli::parse();
@@ -11,9 +11,14 @@ fn main() {
             release,
             locked,
             bin,
-        } => build::build(release, locked, bin.as_deref()),
-        cli::Command::Run { release, args } => build::run(release, args),
-        cli::Command::Check => build::check(),
+            target,
+        } => build::build(release, locked, bin.as_deref(), target.as_deref()),
+        cli::Command::Run {
+            release,
+            target,
+            args,
+        } => build::run(release, target.as_deref(), args),
+        cli::Command::Check { target } => build::check(target.as_deref()),
         // `ruxen clean` delegates to the ruxenc library so there is a single
         // source of truth for cache cleanup. `ruxenc::clean::run(&[])` clears
         // `target/ruxen/incremental/` for the current project; pass
@@ -60,6 +65,7 @@ fn main() {
         cli::Command::Tree => deps::tree(),
         cli::Command::Verify => deps::verify(),
         cli::Command::Explain { code } => explain::explain(&code),
+        cli::Command::Target { action } => target::run(action),
 
         // ── Low-level compiler subcommands ──────────────────────────
         // Each builds the legacy positional-args vector that the ruxenc
@@ -128,17 +134,28 @@ fn main() {
             no_run,
             include_pending,
             format,
-        } => ruxenc::test_runner::run(ruxenc::test_runner::TestOptions {
-            filter,
-            release,
-            test_threads,
-            fail_fast,
-            nocapture,
-            list,
-            no_run,
-            include_pending,
-            format,
-        }),
+        } => {
+            // Q16: resolve the project's dependency source dirs here (the
+            // resolver + manifest live in `ruxen_cli`; the test runner lives
+            // in `ruxenc`, which only dev-depends on `ruxen_cli`, so it
+            // cannot resolve them itself). Flat-merged into each synthesised
+            // test wrapper so a `tests/**.rx` file can use dependency symbols.
+            let dep_source_dirs = build::find_project_root()
+                .and_then(|root| build::resolve_dep_source_dirs(&root))
+                .unwrap_or_default();
+            ruxenc::test_runner::run(ruxenc::test_runner::TestOptions {
+                filter,
+                release,
+                test_threads,
+                fail_fast,
+                nocapture,
+                list,
+                no_run,
+                include_pending,
+                format,
+                dep_source_dirs,
+            })
+        }
 
         // ── Editor / interactive subcommands ────────────────────────
         // Both crates expose a `run() -> Result<(), String>` library

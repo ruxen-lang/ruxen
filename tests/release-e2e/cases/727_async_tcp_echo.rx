@@ -25,7 +25,7 @@ use std.time.Duration
 ## return value is read by the main thread via JoinHandle.join_raw
 ## (also a usable sanity check).
 def server_loop -> Int
-  let addr = String.from("127.0.0.1:31729")
+  let addr = "127.0.0.1:31729"
   let bound = block_on(AsyncTcpListener.bind(addr))
   match bound
     Ok(listener) -> server_run(listener)
@@ -68,7 +68,7 @@ end
 
 ## Client-thread entry — runs on the main thread.
 def client_flow -> Int
-  let addr = String.from("127.0.0.1:31729")
+  let addr = "127.0.0.1:31729"
   let connected = block_on(AsyncTcpStream.connect(addr))
   match connected
     Ok(stream) -> client_run(stream)
@@ -78,7 +78,7 @@ end
 
 def client_run(stream: AsyncTcpStream) -> Int
   var s = stream
-  let payload = String.from("hello")
+  let payload = "hello"
   let wrote = block_on(s.write(payload.clone))
   match wrote
     Ok(_)  -> client_read_echo(s, payload)

@@ -1,0 +1,50 @@
+# Q28 regression pin (REOPENED) — a `Float32` struct field stored from a
+# value bound to a LOCAL first must round-trip, not read 0.
+#
+# This is the shape canvas's event decode needs:
+#   `let ia = event_a() as Float32; P.new(ia, ib)`.
+# The earlier 647/648 pins used only INLINE `120.5f32` literals, which the
+# lowering narrows in place — they never exercised the load-from-local store
+# path, so the real miscompile (an 8-byte f64 / 4-byte f32 width disagreement
+# at the SetField slot) regressed undetected. This case RUNS the binary and
+# asserts the exact stdout, covering every shape from the repro matrix:
+#   1. inline f32 literal           (already worked)
+#   2. bare f64 literal -> f32 field (was 0)
+#   3. f32 local       -> f32 field (was 0)
+#   4. f64 local       -> f32 field (was 0 / crash, must auto-narrow)
+# Backend-agnostic: the coercion is inserted in shared MIR lowering before the
+# width-blind SetField, so Cranelift and LLVM agree.
+struct P
+  x: Float32
+  y: Float32
+end
+
+def f64_a -> Float
+  120.5
+end
+
+def f64_b -> Float
+  84.25
+end
+
+def main
+  # 1. inline f32 literals
+  let p1 = P.new(120.5f32, 84.25f32)
+  puts "inline=#{p1.x + p1.y}"
+
+  # 2. bare f64 literals into f32 fields (narrow-on-store)
+  let p2 = P.new(120.5, 84.25)
+  puts "bare=#{p2.x + p2.y}"
+
+  # 3. f32 locals (value cast to Float32 first, then bound)
+  let ia = f64_a() as Float32
+  let ib = f64_b() as Float32
+  let p3 = P.new(ia, ib)
+  puts "castlocal=#{p3.x + p3.y}"
+
+  # 4. f64 locals, no cast — must auto-narrow at the field, not crash
+  let fa = f64_a()
+  let fb = f64_b()
+  let p4 = P.new(fa, fb)
+  puts "f64local=#{p4.x + p4.y}"
+end

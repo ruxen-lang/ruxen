@@ -79,7 +79,6 @@ class Array[T]
     def last as "ruxen_vec_last" -> Option[T]
     def include? as "ruxen_vec_contains_int"(x: T) -> Bool
     def clone as "ruxen_vec_clone" -> Array[T]
-    def to_a as "ruxen_vec_clone" -> Array[T]
     def reverse as "ruxen_vec_reverse" -> Array[T]
     def sort as "ruxen_vec_sort" -> Array[T]
     def join as "ruxen_vec_join"(sep: &String) -> String
@@ -168,4 +167,10 @@ class Array[T]
     end
     out
   end
+
+  # Ruby `to_a` is a synonym of `clone` (both shallow-copy via
+  # `ruxen_vec_clone`). Declared as a pure `alias` instead of a second
+  # FFI decl — both names resolve to the ONE `Array_clone` body, no
+  # duplicated codegen (docs/decisions/alias-keyword.md).
+  alias to_a clone
 end

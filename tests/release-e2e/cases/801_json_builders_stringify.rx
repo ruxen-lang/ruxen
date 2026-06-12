@@ -44,8 +44,8 @@ def main
   end
 
   var fields: Hash[String, Json] = Hash.new
-  fields.insert(String.from("title"), s)
-  fields.insert(String.from("items"), arr)
+  fields.insert("title", s)
+  fields.insert("items", arr)
   let obj = JSON.object(fields)
   puts "object=#{JSON.is_object(&obj)}"
   match JSON.object_len(&obj)

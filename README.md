@@ -147,7 +147,7 @@ let name = "Ruxen"               # immutable
 var counter = 0                  # mutable
 counter += 1
 
-let a = String.from("hello")
+let a = "hello"                  # a bare literal is an owned String
 let b = a                        # move — `a` is now invalid
 # puts a                         # COMPILE ERROR: use after move
 ```

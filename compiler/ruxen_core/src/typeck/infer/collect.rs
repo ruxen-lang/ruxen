@@ -109,14 +109,20 @@ impl<'a> InferenceEngine<'a> {
         }
 
         // Method not found. For a scalar value-primitive receiver
-        // (numeric, Bool, Char) an unknown method is definitively an
-        // error: these types have no class shell and no user-defined
-        // method surface, so the call would mangle to `<Type>_<method>`
-        // (e.g. `Int_to_f`) with no matching runtime symbol — a link
-        // error in AOT builds and a hard JIT panic in the REPL
-        // (`can't resolve symbol Int_to_f`). Emit a clean, source-spanned
-        // diagnostic instead, mirroring the field-access path in
-        // `infer/expr.rs` so `a.bogus` and `a.bogus()` fail identically.
+        // (numeric, Bool, Char) — and for `String` / `&str`, whose entire
+        // method surface is the `.rx` `class String` (already consulted via
+        // `builtin_method_type` + `lookup_method_with_args` above) plus the
+        // MIR-only mutation/`remove` residuals (resolved by the `strings.rs`
+        // arms inside `builtin_method_type`) — an unknown method is
+        // definitively an error: these types have no further class shell and
+        // no later-phase method surface, so the call would mangle to
+        // `<Type>_<method>` (e.g. `Int_to_f`, `String_from`) with no matching
+        // runtime symbol — a link error in AOT builds and a hard JIT panic in
+        // the REPL. Emit a clean, source-spanned diagnostic instead, mirroring
+        // the field-access path in `infer/expr.rs` so `a.bogus` and `a.bogus()`
+        // fail identically. This is the seam that makes the DELETED
+        // `String.from(...)` produce a clean "no method `from` on type
+        // `String`" error rather than leaking a `?T…` symbol into codegen.
         //
         // We deliberately do NOT error for class / struct / enum /
         // collection / generic receivers: methods on those are resolved
@@ -124,7 +130,9 @@ impl<'a> InferenceEngine<'a> {
         // user methods on generic classes like `Repository[Todo]`), which
         // the lenient fresh-var fallback below still feeds.
         let resolved = self.ctx.resolve(obj_ty);
-        if resolved.is_numeric() || matches!(resolved, Ty::Bool | Ty::Char) {
+        let is_str_head = matches!(resolved, Ty::String)
+            || matches!(&resolved, Ty::Ref(inner) if matches!(**inner, Ty::String));
+        if resolved.is_numeric() || matches!(resolved, Ty::Bool | Ty::Char) || is_str_head {
             self.error(
                 format!(
                     "no method `{method_name}` on type `{resolved}`{}",
@@ -207,13 +215,13 @@ impl<'a> InferenceEngine<'a> {
                 }
                 ok
             }
-            Ty::String | Ty::Str => {
+            Ty::String => {
                 let resolved = self.ctx.resolve(item_ty);
-                let ok = matches!(resolved, Ty::String | Ty::Str);
+                let ok = matches!(resolved, Ty::String);
                 if !ok {
                     self.diagnostics.push(Diagnostic::error_with_code(
                         format!(
-                            "`collect[String]` expects iterator items of type `String` or `&str`; got `{}`",
+                            "`collect[String]` expects iterator items of type `String`; got `{}`",
                             resolved
                         ),
                         span.clone(),
@@ -433,7 +441,7 @@ impl<'a> InferenceEngine<'a> {
                     elems[0].clone()
                 }
             }
-            Ty::String | Ty::Str => Ty::Char,
+            Ty::String => Ty::Char,
             _ => Ty::Error,
         }
     }
@@ -587,11 +595,10 @@ impl<'a> InferenceEngine<'a> {
                 arg_ty.is_infer()
                     || arg_ty.is_error()
                     || arg_ty == param_ty
-                    || matches!((&arg_ty, &param_ty), (Ty::Str, Ty::String))
-                    || matches!(
-                        (&arg_ty, &param_ty),
-                        (Ty::Ref(a), Ty::Ref(b)) if matches!((&**a, &**b), (Ty::Str, Ty::String))
-                    )
+                    // Owned arg vs borrowing param (`&T` param, `T` arg) — a
+                    // bare `String` literal/value (now owned) satisfies a
+                    // `&String` param via the call site's auto-ref. The old
+                    // `&str`↔`String` arms are gone with the `&str` type.
                     || matches!(&param_ty, Ty::Ref(inner) | Ty::RefMut(inner) if **inner == arg_ty)
             })
     }
@@ -749,7 +756,21 @@ impl<'a> InferenceEngine<'a> {
         self.select_class_method_arity(&parent, method_name, args, has_block)
     }
 
-    fn default_ast_to_hir(&mut self, default: &ast::Expr) -> Option<HirExpr> {
+    pub(super) fn default_ast_to_hir(
+        &mut self,
+        default: &ast::Expr,
+        param_ty: &Ty,
+    ) -> Option<HirExpr> {
+        // A `nil` default — used by the optional `&block` slot (ADR D5) — is a
+        // null value typed as the parameter's own type (a `Ty::Fn`), so the
+        // block slot receives the null closure-pair-pointer sentinel (ADR D1).
+        if matches!(default.kind, ast::ExprKind::NullLiteral) {
+            return Some(HirExpr {
+                kind: HirExprKind::NullLiteral,
+                ty: param_ty.clone(),
+                span: default.span.clone(),
+            });
+        }
         let ty = match &default.kind {
             ast::ExprKind::IntLiteral(_, _) => Ty::Int,
             ast::ExprKind::FloatLiteral(_, _) => Ty::Float,
@@ -775,8 +796,13 @@ impl<'a> InferenceEngine<'a> {
         })
     }
 
-    pub(super) fn append_method_default_args(&mut self, method_id: DefId, args: &mut Vec<HirExpr>) {
-        let defaults: Vec<ast::Expr> = self
+    pub(super) fn append_method_default_args(
+        &mut self,
+        method_id: DefId,
+        args: &mut Vec<HirExpr>,
+        has_trailing_block: bool,
+    ) {
+        let defaults: Vec<(ast::Expr, Ty)> = self
             .symbols
             .get(method_id)
             .and_then(|def| match &def.kind {
@@ -784,16 +810,26 @@ impl<'a> InferenceEngine<'a> {
                 _ => None,
             })
             .map(|signature| {
+                // A trailing block fills the LAST parameter slot; reserve it so
+                // its `nil` default is not also emitted (Ruby-block ADR D5).
+                let take = signature
+                    .params
+                    .len()
+                    .saturating_sub(usize::from(has_trailing_block));
                 signature
                     .params
                     .iter()
+                    .take(take)
                     .skip(args.len())
-                    .filter_map(|p| p.default.clone())
-                    .collect()
+                    // Pair each default with its param type so a `nil` default
+                    // (the optional `&block` slot, Ruby-block-semantics ADR D5)
+                    // is materialized as a null value of the param's `Ty::Fn`.
+                    .filter_map(|p| p.default.clone().map(|d| (d, p.ty.clone())))
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        for default in defaults {
-            if let Some(hir) = self.default_ast_to_hir(&default) {
+        for (default, param_ty) in defaults {
+            if let Some(hir) = self.default_ast_to_hir(&default, &param_ty) {
                 args.push(hir);
             }
         }

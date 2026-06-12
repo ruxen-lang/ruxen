@@ -15,7 +15,11 @@ name = "ruxen"
 path = "src/main.rs"
 
 [features]
-llvm = ["ruxen_core/llvm"]
+# Propagate to `ruxenc` too: `ruxenc`'s compile path has its own
+# `#[cfg(feature = "llvm")]` match arm for `Backend::Llvm`, so enabling the
+# variant via `ruxen_core/llvm` without also enabling `ruxenc/llvm` would
+# leave that arm cfg'd out and the match non-exhaustive (E0004).
+llvm = ["ruxen_core/llvm", "ruxenc/llvm"]
 
 [dependencies]
 ruxen_core = { path = "../../compiler/ruxen_core" }

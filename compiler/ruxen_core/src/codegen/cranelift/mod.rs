@@ -87,11 +87,36 @@ pub struct CodeGen {
     /// `Bool_fmt` would be unconditionally widened to `i64` by the
     /// fallback widening rule and fail Cranelift IR verification.
     user_fn_param_tys: HashMap<String, Vec<Type>>,
+    /// Tier 4.04: lowered in no_std mode. When `true`, `translate_into_ctx`
+    /// SKIPS the `ruxen_env_init(argc, argv)` injection into `main` — a no_std
+    /// build has no `std.env` and no `ruxen_env_init` runtime symbol to call.
+    /// Set from `MirProgram::no_std` at the top of `compile_program`; `false`
+    /// on every hosted build (unchanged).
+    no_std: bool,
 }
 
 impl CodeGen {
     /// Create a new code generator targeting the host machine.
+    ///
+    /// Back-compat shim: equivalent to `new_for_target(None)`. Existing host
+    /// callers keep the byte-identical `cranelift_native::builder()` path.
     pub fn new() -> Result<Self, String> {
+        Self::new_for_target(None)
+    }
+
+    /// Create a code generator for an optional cross-compilation target
+    /// (tier 4.02).
+    ///
+    /// `None` or a host target uses `cranelift_native::builder()` — the
+    /// pre-4.02 path, which detects the running CPU and emits an identical
+    /// object to the old `new()`. A non-host target routes through
+    /// `cranelift_codegen::isa::lookup(triple)`, which picks the ISA and (via
+    /// the triple's binary format) the ELF-vs-Mach-O object encoding. The
+    /// `is_pic`/`opt_level` flags are the same on both paths so a host triple
+    /// passed explicitly is still byte-identical to the implicit-host path.
+    pub fn new_for_target(
+        target: Option<&crate::codegen::target::ResolvedTarget>,
+    ) -> Result<Self, String> {
         let mut flag_builder = settings::builder();
         flag_builder
             .set("opt_level", "none")
@@ -100,12 +125,34 @@ impl CodeGen {
             .set("is_pic", "true")
             .map_err(|e| format!("Failed to set is_pic: {}", e))?;
 
-        let isa_builder = cranelift_native::builder()
-            .map_err(|e| format!("Failed to create native ISA builder: {}", e))?;
+        // Host path (no target, or the resolved host) → native builder, which
+        // reads the running CPU. Cross path → ISA lookup by triple.
+        let use_native = match target {
+            None => true,
+            Some(t) => t.is_host(),
+        };
 
-        let isa = isa_builder
-            .finish(settings::Flags::new(flag_builder))
-            .map_err(|e| format!("Failed to finish ISA: {}", e))?;
+        let isa = if use_native {
+            let isa_builder = cranelift_native::builder()
+                .map_err(|e| format!("Failed to create native ISA builder: {}", e))?;
+            isa_builder
+                .finish(settings::Flags::new(flag_builder))
+                .map_err(|e| format!("Failed to finish ISA: {}", e))?
+        } else {
+            // Safe: matched `Some` non-host above.
+            let t = target.expect("cross path implies a target");
+            let isa_builder = cranelift_codegen::isa::lookup(t.triple().clone()).map_err(|e| {
+                format!(
+                    "unsupported Cranelift target '{}': {}. \
+                     wasm/embedded targets require the LLVM backend (--release / --backend=llvm).",
+                    t.canonical(),
+                    e
+                )
+            })?;
+            isa_builder
+                .finish(settings::Flags::new(flag_builder))
+                .map_err(|e| format!("Failed to finish ISA for '{}': {}", t.canonical(), e))?
+        };
 
         let obj_builder = ObjectBuilder::new(
             isa,
@@ -126,6 +173,7 @@ impl CodeGen {
             declared_fns: HashMap::new(),
             vtable_data: HashMap::new(),
             user_fn_param_tys: HashMap::new(),
+            no_std: false,
         })
     }
 
@@ -135,6 +183,9 @@ impl CodeGen {
     /// FFI declarations from `lib` and `extern "C"` blocks are declared
     /// as imported functions so they can be called from user code.
     pub fn compile_program(&mut self, program: &MirProgram) -> Result<(), String> {
+        // Tier 4.04: carry no_std through to the entry-point lowering, which
+        // skips the `ruxen_env_init` injection into `main`.
+        self.no_std = program.no_std;
         // ── Pass 0: declare FFI functions ────────────────────────────────
         for lib in &program.ffi_libs {
             for ffi_fn in &lib.functions {
@@ -473,7 +524,10 @@ impl CodeGen {
             builder.switch_to_block(entry_cl_block);
             builder.append_block_params_for_function_params(entry_cl_block);
 
-            if func.name == "main" {
+            // Inject `ruxen_env_init(argc, argv)` at the top of `main` so
+            // `std.env` sees the process args — EXCEPT in a no_std build, which
+            // has no `std.env` and no `ruxen_env_init` runtime symbol.
+            if func.name == "main" && !self.no_std {
                 let params_vals = builder.block_params(entry_cl_block).to_vec();
                 let argc = params_vals
                     .first()

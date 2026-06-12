@@ -41,6 +41,21 @@ pub enum TopLevelItem {
     Const(ConstDef),
     Lib(LibDecl),
     Extern(ExternBlock),
+    /// `alias new_name old_name` at top level / module scope — a Ruby-style
+    /// free-function synonym. Both names resolve to ONE callable DefId; no
+    /// new body is emitted (ADR: docs/decisions/alias-keyword.md, D2).
+    Alias(AliasDef),
+    /// A top-level expression statement — e.g. a call with a trailing
+    /// `do…end` block at module scope (`Tester.describe("…") do … end`).
+    /// The compiler's normal pipeline does NOT execute top-level
+    /// statements directly: `ruxen test` HOISTS top-level items and wraps
+    /// the remaining statements in a synthesised `def main` before
+    /// compiling, so this variant only ever survives to `resolve` when a
+    /// raw file is compiled directly — where it is rejected with a clear
+    /// E0728. Its purpose is to let the SHARED parser (compiler + LSP +
+    /// `ruxen fmt`) ACCEPT the test-file surface so the formatter can
+    /// round-trip it instead of erroring at 1:1 (Q23b).
+    Expr(Expr),
 }
 
 // ─── Type Expressions ────────────────────────────────────────────────
@@ -83,6 +98,12 @@ pub enum TypeExpr {
     Function {
         params: Vec<TypeExpr>,
         return_type: Box<TypeExpr>,
+        /// Surface spelling: `true` for the canonical square-bracket block
+        /// signature `Fn[(T…) -> R]` (Ruby-block-semantics ADR D8), `false`
+        /// for the paren form `Fn(T…) -> R`. Carried so `ruxen fmt` preserves
+        /// whichever the author wrote rather than normalizing one to the other
+        /// (the fmt-destructiveness class — Q23/Q30/Q34). Semantically inert.
+        bracketed: bool,
         span: Span,
     },
     /// `some M` — static-dispatch mixin reference (was `impl Trait`
@@ -692,6 +713,18 @@ pub struct FuncDef {
     pub span: Span,
 }
 
+/// A Ruby-style `alias new_name old_name` item. Carried in the enclosing
+/// container (`ClassDef::aliases`, top-level `TopLevelItem::Alias`, etc.).
+/// A pure resolver synonym — see `docs/decisions/alias-keyword.md`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AliasDef {
+    /// The new spelling being introduced.
+    pub new_name: String,
+    /// The existing method / free-fn name it aliases.
+    pub old_name: String,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub auto_assign: bool,
@@ -748,6 +781,9 @@ pub struct ClassDef {
     /// const predicates land on `ClassInfo::const_predicates` and are
     /// evaluated at every `Ty::Class` instantiation.
     pub where_clause: Option<WhereClause>,
+    /// Ruby-style `alias new old` items declared in the class body
+    /// (docs/decisions/alias-keyword.md). Pure synonyms — no method body.
+    pub aliases: Vec<AliasDef>,
     pub span: Span,
 }
 
@@ -778,6 +814,8 @@ pub struct StructDef {
     pub doc_comments: Vec<String>,
     /// T2.02 S9: see `ClassDef::where_clause`.
     pub where_clause: Option<WhereClause>,
+    /// See `ClassDef::aliases`.
+    pub aliases: Vec<AliasDef>,
     pub span: Span,
 }
 
@@ -806,6 +844,8 @@ pub struct EnumDef {
     pub doc_comments: Vec<String>,
     /// T2.02 S9: see `ClassDef::where_clause`.
     pub where_clause: Option<WhereClause>,
+    /// See `ClassDef::aliases`.
+    pub aliases: Vec<AliasDef>,
     pub span: Span,
 }
 
@@ -870,9 +910,14 @@ pub enum DispatchMode {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MixinItem {
-    AssocType { name: String, span: Span },
+    AssocType {
+        name: String,
+        span: Span,
+    },
     MethodSig(MethodSig),
     DefaultMethod(FuncDef),
+    /// `alias new old` inside a mixin body (docs/decisions/alias-keyword.md).
+    Alias(AliasDef),
 }
 
 // ─── Impl Blocks ─────────────────────────────────────────────────────
@@ -904,6 +949,9 @@ pub enum ImplItem {
         trait_name: TypePath,
         span: Span,
     },
+    /// `alias new old` inside an `extension` impl body
+    /// (docs/decisions/alias-keyword.md).
+    Alias(AliasDef),
 }
 
 #[derive(Debug, Clone, PartialEq)]

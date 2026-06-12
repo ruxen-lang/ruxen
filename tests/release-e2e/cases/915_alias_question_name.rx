@@ -1,0 +1,21 @@
+# alias-keyword ADR (docs/decisions/alias-keyword.md), pin (c).
+# A `?`-name method aliased to another `?`-name (`alias member? has?`). The
+# lexer absorbs trailing `?` into the identifier, so these are ordinary names
+# (NOT operators) and ARE supported in Tier 1.
+
+class Bits
+  on: Bool
+  def init
+    self.on = true
+  end
+  def has? -> Bool
+    self.on
+  end
+  alias member? has?
+end
+
+def main
+  let b = Bits.new
+  puts "has=#{b.has?}"
+  puts "member=#{b.member?}"
+end

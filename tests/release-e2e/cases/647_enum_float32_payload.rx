@@ -1,0 +1,36 @@
+# Q28 regression pin — an enum VARIANT carrying `Float32` payloads must
+# round-trip through construction and `match` with no precision loss, and
+# arithmetic on the extracted f32 (`x + 0.5f32`) must be exact.
+#
+# This is the exact shape `canvas/src/event.rx` was forced AWAY from (its
+# `PointerMove(Int, Int)` carries a TODO: "return to Float32 payloads once
+# enum float payloads work"). Sub-pixel values (120.5, 84.25) would be
+# truncated if the payload were Int, and read as garbage if the f32 were
+# stored as 8 bytes but loaded as 4. Both backends share the MIR
+# `SetField`/`GetField` typed slot path, so this is backend-agnostic.
+#
+# The load-from-local / bare-f64-literal shapes (which DID miscompile to 0
+# before the Q28 fix) are pinned with their own RUN+stdout assertions in
+# 650_f32_field_store_via_local and 651_enum_f32_payload_via_local.
+#
+# NOTE: deliberately ONE payload-carrying construction. Three or more by-value
+# constructions of a Float-payload enum variant in one function trip an
+# UNRELATED drop-elaboration crash (Q31; reproduces with inline f32 payloads
+# and zero coercion), so an e2e pin must not depend on that.
+enum Event
+  PointerMove(Float32, Float32)
+  CloseRequested
+end
+
+def handle(e: Event) -> nil
+  match e
+    Event.PointerMove(x, y) ->
+      let sx = x + 0.5f32
+      puts "move #{x},#{y} sx=#{sx}"
+    Event.CloseRequested -> puts "close"
+  end
+end
+
+def main
+  handle(Event.PointerMove(120.5f32, 84.25f32))
+end

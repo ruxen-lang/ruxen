@@ -13,6 +13,6 @@ def main
   puts "pi=#{pi:.2}"
   puts "[#{pi:>8.2}]"
 
-  let s: String = String.from("hello world")
+  let s: String = "hello world"
   puts "[#{s:.5}]"
 end

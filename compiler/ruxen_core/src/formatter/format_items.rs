@@ -125,6 +125,8 @@ fn item_span(item: &TopLevelItem) -> &crate::lexer::token::Span {
         TopLevelItem::Const(c) => &c.span,
         TopLevelItem::Lib(l) => &l.span,
         TopLevelItem::Extern(e) => &e.span,
+        TopLevelItem::Expr(e) => &e.span,
+        TopLevelItem::Alias(a) => &a.span,
     }
 }
 
@@ -145,7 +147,19 @@ fn format_top_level_item(item: &TopLevelItem, comments: &CommentMap) -> Doc {
         TopLevelItem::Const(c) => format_const(c, comments),
         TopLevelItem::Lib(l) => format_lib(l, comments),
         TopLevelItem::Extern(e) => format_extern(e, comments),
+        // A top-level expression statement (Q23b — test-file
+        // `Tester.describe(...) do … end`). Format it exactly like an
+        // in-body statement expression so the test file round-trips.
+        TopLevelItem::Expr(e) => format_expr(e, comments),
+        TopLevelItem::Alias(a) => format_alias(a),
     }
+}
+
+/// Format a Ruby `alias new_name old_name` item byte-stably: the keyword, the
+/// new name, the old name, single-spaced, no normalization
+/// (docs/decisions/alias-keyword.md, D10).
+fn format_alias(a: &crate::parser::ast::AliasDef) -> Doc {
+    text(format!("alias {} {}", a.new_name, a.old_name))
 }
 
 /// Check if a single-statement function body is simple enough for inline `{ }` form.
@@ -178,6 +192,23 @@ fn is_simple_expr(kind: &ExprKind) -> bool {
 
 // ─── Functions ──────────────────────────────────────────────────────
 
+/// Format a method/function WITH any `##` doc comments (and plain leading
+/// comments) attached above it. Top-level items get their leading comments
+/// emitted by `format_program`; methods NESTED inside a class/struct/enum/
+/// impl/mixin body are formatted by direct `format_func_def` calls that
+/// bypass that path, so without this their leading docs were silently
+/// dropped (Q23a — `ruxen fmt` wiped every `##` doc on a class method).
+/// Mirrors the class-body `lib "..."` FFI-def doc handling in `format_lib`.
+pub fn format_func_with_leading_comments(func: &FuncDef, comments: &CommentMap) -> Doc {
+    let mut parts: Vec<Doc> = Vec::new();
+    for comment in comments.leading_comments(func.span.start) {
+        parts.push(format_comment(comment));
+        parts.push(hardline());
+    }
+    parts.push(format_func_def(func, comments));
+    concat(parts)
+}
+
 pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
     let mut sig_parts = Vec::new();
 
@@ -192,6 +223,13 @@ pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
         Visibility::Public => {}
         Visibility::Protected => sig_parts.push(text("protected ")),
         Visibility::Private => {}
+    }
+
+    // `async def` — the async modifier precedes `def` (surface spelling
+    // `async def name`). Dropping it silently rewrites an async function into
+    // a synchronous one (a semantic change + reparse-identity break).
+    if func.is_async {
+        sig_parts.push(text("async "));
     }
 
     sig_parts.push(text("def "));
@@ -335,9 +373,17 @@ fn format_class(class: &ClassDef, comments: &CommentMap) -> Doc {
         body_parts.push(join(hardline(), field_docs));
     }
 
-    // Methods — separated by blank lines
-    for method in &class.methods {
-        body_parts.push(format_func_def(method, comments));
+    // Methods — separated by blank lines, with visibility SECTION MARKERS
+    // (ruby-naming.spec.md §3.2) so a `private`/`protected` method round-trips
+    // with its visibility intact instead of silently re-parsing as public.
+    let mut running = Visibility::Public;
+    body_parts.extend(format_method_section(
+        &class.methods,
+        comments,
+        &mut running,
+    ));
+    if running != Visibility::Public {
+        body_parts.push(text("public"));
     }
 
     // Inner impls
@@ -350,6 +396,14 @@ fn format_class(class: &ClassDef, comments: &CommentMap) -> Doc {
     // to a top-level one.
     for lib in &class.lib_decls {
         body_parts.push(format_lib(lib, comments));
+    }
+
+    // Ruby `alias new old` synonyms (docs/decisions/alias-keyword.md, D10).
+    if !class.aliases.is_empty() {
+        body_parts.push(join(
+            hardline(),
+            class.aliases.iter().map(format_alias).collect::<Vec<_>>(),
+        ));
     }
 
     // Join sections with blank lines (hardline + hardline = one blank line)
@@ -407,6 +461,34 @@ fn visibility_marker(v: Visibility) -> &'static str {
     }
 }
 
+/// Render a type's methods as body-parts (each is its own block, blank-line
+/// separated by the caller), inserting a `private` / `protected` / `public`
+/// SECTION MARKER (ruby-naming.spec.md §3.2) as a standalone part whenever the
+/// running visibility changes.
+///
+/// Per-`def` visibility is NOT valid surface syntax — `format_func_def`
+/// deliberately emits no inline `private`/`protected` keyword. Without these
+/// markers the reformatted source would re-parse every method as `public`,
+/// silently widening a `private` method's visibility (a cross-surface
+/// divergence: the compiler/IDE see `private`, `ruxen fmt` rewrites it
+/// public). The body default is `public`, so leading public methods emit no
+/// marker; the field section already resets to `public` before methods begin.
+fn format_method_section(
+    methods: &[FuncDef],
+    comments: &CommentMap,
+    running: &mut Visibility,
+) -> Vec<Doc> {
+    let mut parts: Vec<Doc> = Vec::new();
+    for method in methods {
+        if method.visibility != *running {
+            parts.push(text(visibility_marker(method.visibility)));
+            *running = method.visibility;
+        }
+        parts.push(format_func_with_leading_comments(method, comments));
+    }
+    parts
+}
+
 // ─── Structs ────────────────────────────────────────────────────────
 
 fn format_struct(s: &StructDef, comments: &CommentMap) -> Doc {
@@ -443,12 +525,21 @@ fn format_struct(s: &StructDef, comments: &CommentMap) -> Doc {
         ]));
     }
 
-    for method in &s.methods {
-        body_parts.push(format_func_def(method, comments));
+    let mut running = Visibility::Public;
+    body_parts.extend(format_method_section(&s.methods, comments, &mut running));
+    if running != Visibility::Public {
+        body_parts.push(text("public"));
     }
 
     for imp in &s.inner_impls {
         body_parts.push(format_inner_impl(imp, comments));
+    }
+
+    if !s.aliases.is_empty() {
+        body_parts.push(join(
+            hardline(),
+            s.aliases.iter().map(format_alias).collect::<Vec<_>>(),
+        ));
     }
 
     let body = join(concat(vec![hardline(), hardline()]), body_parts);
@@ -494,12 +585,21 @@ fn format_enum(e: &EnumDef, comments: &CommentMap) -> Doc {
         ]));
     }
 
-    for method in &e.methods {
-        body_parts.push(format_func_def(method, comments));
+    let mut running = Visibility::Public;
+    body_parts.extend(format_method_section(&e.methods, comments, &mut running));
+    if running != Visibility::Public {
+        body_parts.push(text("public"));
     }
 
     for imp in &e.inner_impls {
         body_parts.push(format_inner_impl(imp, comments));
+    }
+
+    if !e.aliases.is_empty() {
+        body_parts.push(join(
+            hardline(),
+            e.aliases.iter().map(format_alias).collect::<Vec<_>>(),
+        ));
     }
 
     let body = join(concat(vec![hardline(), hardline()]), body_parts);
@@ -625,7 +725,8 @@ fn format_trait_item(item: &MixinItem, comments: &CommentMap) -> Doc {
     match item {
         MixinItem::AssocType { name, .. } => text(format!("type {}", name)),
         MixinItem::MethodSig(sig) => format_method_sig(sig, comments),
-        MixinItem::DefaultMethod(func) => format_func_def(func, comments),
+        MixinItem::DefaultMethod(func) => format_func_with_leading_comments(func, comments),
+        MixinItem::Alias(a) => format_alias(a),
     }
 }
 
@@ -730,7 +831,7 @@ fn format_impl_item(item: &ImplItem, comments: &CommentMap) -> Doc {
             text(" = "),
             format_type_expr(type_expr, comments),
         ]),
-        ImplItem::Method(func) => format_func_def(func, comments),
+        ImplItem::Method(func) => format_func_with_leading_comments(func, comments),
         ImplItem::Include {
             is_unsafe,
             negative_trait,
@@ -748,6 +849,7 @@ fn format_impl_item(item: &ImplItem, comments: &CommentMap) -> Doc {
             parts.push(format_type_path(trait_name));
             concat(parts)
         }
+        ImplItem::Alias(a) => format_alias(a),
     }
 }
 

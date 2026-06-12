@@ -283,16 +283,11 @@ impl<'a> InferenceEngine<'a> {
         match op {
             // Arithmetic: both sides must be numeric, result is same type
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                // String concatenation: any combination of `String`/`&str`
-                // on both sides produces a newly-allocated `String`. This
-                // has to be checked before the numeric path because `&str`
-                // (Ty::Str) is not numeric but will happily unify with
-                // itself in the generic fallback below, yielding the wrong
-                // type.
-                if op == BinOp::Add
-                    && matches!(*left, Ty::String | Ty::Str)
-                    && matches!(*right, Ty::String | Ty::Str)
-                {
+                // String concatenation: `String + String` produces a
+                // newly-allocated `String`. Checked before the numeric path
+                // because a string is not numeric but would otherwise unify
+                // with itself in the generic fallback, yielding the wrong type.
+                if op == BinOp::Add && matches!(*left, Ty::String) && matches!(*right, Ty::String) {
                     return Ty::String;
                 }
 
@@ -372,7 +367,7 @@ impl<'a> InferenceEngine<'a> {
             BinOp::MatchOp => {
                 fn is_string_like(ty: &Ty) -> bool {
                     match ty {
-                        Ty::String | Ty::Str => true,
+                        Ty::String => true,
                         Ty::Ref(inner)
                         | Ty::RefMut(inner)
                         | Ty::RefLifetime(_, inner)

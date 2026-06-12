@@ -1,0 +1,52 @@
+# Q31 regression pin (S1 memory-safety) — constructing a Float32-payload enum
+# variant TWO OR MORE times by value in one function must be sound.
+#
+# Root cause was an UNDER-ALLOCATION, not a drop double-free: `alloc_size`
+# (mir/lower/emit.rs) sized an enum to its PACKED layout, but codegen addresses
+# every payload field on a fixed 8-byte slot stride (GetPayload = base+8,
+# field N at N*8). For `Move(Float32, Float32)` the packed size is 16, yet
+# codegen writes field 1 at offset 8 + 1*8 = 16 — a 4-byte store 4 bytes PAST
+# the 16-byte allocation, corrupting the next heap chunk's metadata. The first
+# construction corrupted the heap silently; the SECOND float-format `malloc`
+# (inside dtoa) then crashed (EXC_BAD_ACCESS) — which is why it needed >= 2
+# float-payload constructions and Int payloads (already 8-byte slots) survived.
+#
+# Fix: `alloc_size` now slot-rounds enums (8 tag/payload-base slot + widest
+# variant field count * 8), matching codegen's field addressing for any
+# payload width. Both backends share the addressing, so both honor it.
+#
+# This case decodes a Float32-payload event TWICE per `main` and matches each;
+# it MUST print frame1=204.75 / frame2=204.75 and exit 0. A revert of the
+# alloc_size fix makes this crash at runtime.
+enum Ev
+  Move(Float32, Float32)
+  Scroll(Float32, Float32)
+  Key(Int)
+end
+
+def ea -> Float
+  120.5
+end
+
+def eb -> Float
+  84.25
+end
+
+def decode -> Ev
+  let ia = ea() as Float32
+  let ib = eb() as Float32
+  Ev.Move(ia, ib)
+end
+
+def main
+  match decode()
+    Ev.Move(x, y)   -> puts "frame1=#{x + y}"
+    Ev.Scroll(x, y) -> nil
+    Ev.Key(k)       -> nil
+  end
+  match decode()
+    Ev.Move(x, y)   -> puts "frame2=#{x + y}"
+    Ev.Scroll(x, y) -> nil
+    Ev.Key(k)       -> nil
+  end
+end

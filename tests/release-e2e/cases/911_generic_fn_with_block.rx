@@ -1,0 +1,29 @@
+# Ruby-block-semantics ADR, pin (i). A GENERIC free function `[T: Mixin]` that
+# ALSO takes a `&block` — exercises the Q17 monomorphization path with a block
+# slot present (the block param must survive per-consumer-type specialization).
+
+mixin Speak
+  def speak -> String
+end
+
+class Dog
+  name: String
+  def init
+    self.name = "rex"
+  end
+  include Speak
+  def speak -> String
+    "woof"
+  end
+end
+
+def announce[T: Speak](item: T, &block: Fn[(String) -> nil])
+  yield item.speak
+end
+
+def main
+  let d = Dog.new
+  announce(d) do |s|
+    puts "#{s}"
+  end
+end

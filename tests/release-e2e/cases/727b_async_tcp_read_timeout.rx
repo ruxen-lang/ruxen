@@ -12,7 +12,7 @@
 use std.time.Duration
 
 def server_loop -> Int
-  let addr = String.from("127.0.0.1:31730")
+  let addr = "127.0.0.1:31730"
   let bound = block_on(AsyncTcpListener.bind(addr))
   match bound
     Ok(listener) -> server_run(listener)
@@ -41,7 +41,7 @@ def server_hold(pair: (AsyncTcpStream, String)) -> Int
 end
 
 def client_flow -> Int
-  let addr = String.from("127.0.0.1:31730")
+  let addr = "127.0.0.1:31730"
   let connected = block_on(AsyncTcpStream.connect(addr))
   match connected
     Ok(stream) -> client_read_timeout(stream)

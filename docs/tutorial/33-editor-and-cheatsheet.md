@@ -130,7 +130,7 @@ Bool Char nil
 
 ```ruxen
 "plain &str literal"
-String.from("owned string")
+"owned string"
 "hi #{name}"                          # interpolation -> String
 'no \escape \here'                    # raw (single quotes, verbatim)
 'can have "quotes" inside'            # raw can hold double quotes

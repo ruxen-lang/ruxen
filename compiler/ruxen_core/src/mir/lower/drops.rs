@@ -205,10 +205,10 @@ pub(super) fn insert_drops(
     // `drop_locals` because String / Vec / HashMap intermediates that are
     // technically compiler temporaries (`_t…` names) can still own heap
     // (e.g. the implicit `ruxen_string_from` wrap inserted around a string
-    // literal whose owner is an outer `String.from(_)` call). Without
+    // literal, or the owned `String` a `.clone` produces). Without
     // dropping such intermediates, every interpolated literal leaks the
     // owned-string copy of itself.
-    let dealloc_safe = compute_dealloc_safe_locals(func);
+    let dealloc_safe = compute_dealloc_safe_locals(func, symbols);
 
     // Locals handed to FFI calls that take ownership must not be
     // dropped at scope exit even when they are constructor temps rather
@@ -447,64 +447,13 @@ pub(super) fn insert_drops(
                         .iter()
                         .find(|l| l.id == local_id)
                         .expect("drop_locals references a missing local");
-                    let drop_callee = match &local.ty {
-                        Ty::String => "ruxen_string_free",
-                        // Phase 2 stdlib batch 2 (#03): pick the
-                        // element-aware drop helper for Vec types whose
-                        // element owns heap. `ruxen_vec_drop_string`
-                        // walks slots as `char*` and frees each before
-                        // releasing the spine; `ruxen_vec_drop_vec`
-                        // walks slots as `RuxenVec*` and recurses one
-                        // level. Anything else (primitive elements,
-                        // HashMap-of-Vec, deeper nesting) falls back to
-                        // the spine-only `ruxen_vec_free`. The deeper
-                        // shapes will land alongside the trait-druxen
-                        // drop dispatch in #05.
-                        Ty::Array(elem) => match elem.as_ref() {
-                            Ty::String => "ruxen_vec_drop_string",
-                            Ty::Array(_) => "ruxen_vec_drop_vec",
-                            _ => "ruxen_vec_free",
-                        },
-                        // Phase 2 stdlib batch 2 (#04): pick the
-                        // element-aware drop helper for HashMap types
-                        // whose key and/or value owns heap. The selector
-                        // mirrors the Vec one above: a four-way table
-                        // over `(K is heap, V is heap)`. Heap-owned in
-                        // v1 means String or Vec[_]; the deeper Trie of
-                        // nested heap (HashMap-in-HashMap, Set-in-V) is
-                        // a follow-up alongside the trait-druxen drop
-                        // dispatch in #05 and is documented in
-                        // CHANGELOG known limitations.
-                        Ty::Map(k, v) => {
-                            let k_string = matches!(k.as_ref(), Ty::String);
-                            let v_string = matches!(v.as_ref(), Ty::String);
-                            let v_vec = matches!(v.as_ref(), Ty::Array(_));
-                            match (k_string, v_string, v_vec) {
-                                (true, true, _) => "ruxen_hash_drop_string_string",
-                                (true, false, _) => "ruxen_hash_drop_string_v",
-                                (false, true, _) => "ruxen_hash_drop_v_string",
-                                (false, false, true) => "ruxen_hash_drop_v_vec",
-                                _ => "ruxen_hash_free",
-                            }
-                        }
-                        // Phase 2 stdlib batch 2 (#04): HashSet[T] —
-                        // spine free is `ruxen_set_free`; if T is a
-                        // String the per-element drop selector walks
-                        // slots before delegating.
-                        Ty::Set(elem) => match elem.as_ref() {
-                            Ty::String => "ruxen_set_drop_string",
-                            _ => "ruxen_set_free",
-                        },
-                        Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => "ruxen_dealloc",
-                        // Unreachable: the drop_locals filter above
-                        // restricts to exactly the variants matched here.
-                        // We use unimplemented! rather than a silent
-                        // fallback so a future widening of the filter
-                        // surfaces immediately.
-                        other => {
-                            unimplemented!("insert_drops: no drop callee for type {:?}", other)
-                        }
-                    };
+                    let drop_callee = heap_free_callee(&local.ty).unwrap_or_else(|| {
+                        // Unreachable: the drop_locals filter above restricts to
+                        // exactly the variants `heap_free_callee` handles. Panic
+                        // rather than silently mis-free so a future widening of
+                        // the filter surfaces immediately.
+                        unimplemented!("insert_drops: no drop callee for type {:?}", local.ty)
+                    });
                     block.instructions.push(MirInst::Call {
                         dest: None,
                         callee: drop_callee.to_string(),
@@ -515,6 +464,57 @@ pub(super) fn insert_drops(
             }
         }
     }
+}
+
+/// The type-correct heap-free runtime callee for a drop-eligible local.
+///
+/// SINGLE SOURCE for the drop-callee selection consumed by BOTH scope-exit
+/// drop elaboration (`insert_drops`) AND loop back-edge / break / continue
+/// dealloc (`emit::emit_dealloc_loop_locals`). Before extraction the scope-exit
+/// table lived inline in `insert_drops` and the loop path used a bare
+/// `ruxen_dealloc` for every body-local — which silently leaked a loop-body
+/// `Vec`/`Hash`'s data buffer (only the spine pointer was passed to
+/// `ruxen_dealloc`, never the element-aware drop helper). Keeping the two in
+/// lockstep means a loop-body `String`/`Vec`/`Hash`/`Set` is freed by the same
+/// helper a function-scope one is.
+///
+/// Returns `None` for a type that is not heap-owning (the caller decides
+/// whether that is a bug or a no-op).
+pub(super) fn heap_free_callee(ty: &Ty) -> Option<&'static str> {
+    Some(match ty {
+        Ty::String => "ruxen_string_free",
+        // Element-aware Vec helpers (Phase 2 stdlib batch 2 #03):
+        // `ruxen_vec_drop_string` frees each `char*` slot before the spine;
+        // `ruxen_vec_drop_vec` recurses one level; anything else is spine-only.
+        Ty::Array(elem) => match elem.as_ref() {
+            Ty::String => "ruxen_vec_drop_string",
+            Ty::Array(_) => "ruxen_vec_drop_vec",
+            _ => "ruxen_vec_free",
+        },
+        // Element-aware HashMap helpers (Phase 2 stdlib batch 2 #04): a 4-way
+        // table over `(K is heap, V is heap)`; deeper nesting falls back to the
+        // spine-only `ruxen_hash_free` (documented CHANGELOG limitation).
+        Ty::Map(k, v) => {
+            let k_string = matches!(k.as_ref(), Ty::String);
+            let v_string = matches!(v.as_ref(), Ty::String);
+            let v_vec = matches!(v.as_ref(), Ty::Array(_));
+            match (k_string, v_string, v_vec) {
+                (true, true, _) => "ruxen_hash_drop_string_string",
+                (true, false, _) => "ruxen_hash_drop_string_v",
+                (false, true, _) => "ruxen_hash_drop_v_string",
+                (false, false, true) => "ruxen_hash_drop_v_vec",
+                _ => "ruxen_hash_free",
+            }
+        }
+        // HashSet[T] (Phase 2 stdlib batch 2 #04): String element walks slots
+        // before the spine; everything else is spine-only.
+        Ty::Set(elem) => match elem.as_ref() {
+            Ty::String => "ruxen_set_drop_string",
+            _ => "ruxen_set_free",
+        },
+        Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => "ruxen_dealloc",
+        _ => return None,
+    })
 }
 
 /// Compute the set of locals whose value provenance is a fresh
@@ -541,7 +541,10 @@ pub(super) fn insert_drops(
 ///     the destination receives the same pointer — so dealloc'ing both
 ///     would double-free the shared allocation. We move the dealloc
 ///     responsibility to the last local in each propagation chain.
-fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<LocalId> {
+fn compute_dealloc_safe_locals(
+    func: &MirFunction,
+    symbols: &SymbolTable,
+) -> std::collections::HashSet<LocalId> {
     use std::collections::HashSet;
 
     // `alloc_rooted`: locals whose value currently traces back to a fresh
@@ -584,13 +587,27 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                 }
                 MirInst::Assign { dest, value } => {
                     if let MirValue::Use(src) = value {
-                        if alloc_rooted.contains(src) && !tainted_perm.contains(dest) {
-                            // Pointer-copy: dest now aliases src's
-                            // allocation. Hand dealloc responsibility to
-                            // dest by tainting src permanently.
+                        if alloc_rooted.contains(src) {
+                            // Pointer-copy: `dest` now ALIASES `src`'s
+                            // allocation. `src` must ALWAYS lose its
+                            // alloc-rooted status — the pointer now lives in
+                            // `dest`, so freeing `src` independently at scope
+                            // exit would double-free. This holds even when
+                            // `dest` is already `tainted_perm` (e.g. a loop
+                            // body-local pre-zeroed by `prepend_zero_init`
+                            // *then* assigned the `ruxen_string_from` temp):
+                            // the back-edge frees `dest`, so the producing temp
+                            // `src` must NOT also be scope-exit freed. We hand
+                            // dealloc responsibility to `dest` ONLY if `dest`
+                            // is still eligible (not permanently tainted);
+                            // otherwise the allocation is owned by whatever
+                            // frees `dest` (the loop back-edge), and neither
+                            // `src` nor `dest` is scope-exit dropped.
                             tainted_perm.insert(*src);
                             alloc_rooted.remove(src);
-                            alloc_rooted.insert(*dest);
+                            if !tainted_perm.contains(dest) {
+                                alloc_rooted.insert(*dest);
+                            }
                             continue;
                         }
                     }
@@ -601,10 +618,16 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                     alloc_rooted.remove(dest);
                 }
                 MirInst::Copy { dest, src } | MirInst::Move { dest, src } => {
-                    if alloc_rooted.contains(src) && !tainted_perm.contains(dest) {
+                    if alloc_rooted.contains(src) {
+                        // Same aliasing rule as the `Assign` arm above: a
+                        // copy/move out of an alloc-rooted `src` always strips
+                        // `src`'s ownership (the pointer now lives in `dest`);
+                        // `dest` inherits it only if still eligible.
                         tainted_perm.insert(*src);
                         alloc_rooted.remove(src);
-                        alloc_rooted.insert(*dest);
+                        if !tainted_perm.contains(dest) {
+                            alloc_rooted.insert(*dest);
+                        }
                     } else {
                         tainted_perm.insert(*dest);
                         alloc_rooted.remove(dest);
@@ -680,7 +703,9 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                     // rebinds, is_move_by_ffi_callee, is_pointer_store_helper,
                     // borrows_first_arg) + transfer_indices now live there,
                     // classified once by `callee_ownership`.
-                    use crate::mir::lower::runtime_abi::{callee_ownership, ResultOwnership};
+                    use crate::mir::lower::runtime_abi::{
+                        callee_ownership, user_callee_param_is_ref, ResultOwnership,
+                    };
                     let abi = callee_ownership(callee.as_str());
 
                     if let Some(d) = dest {
@@ -691,10 +716,27 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                             alloc_rooted.remove(d);
                         }
                     }
+                    // A USER callee (not classified by the runtime-ABI tables)
+                    // hits the conservative default: `args_are_borrowed == false`
+                    // taints EVERY arg. That is wrong for a `&T` / `&var T`
+                    // parameter — the value is auto-borrowed, the callee never
+                    // owns it (drop elaboration skips a function's own params),
+                    // so the source must stay drop-eligible and be freed at the
+                    // CALLER's scope exit. Resolve per-param ref-ness by callee
+                    // NAME and skip tainting the borrow slots. By-value params
+                    // keep their taint (no double-free regression). Only computed
+                    // when the ABI would otherwise default-taint, so runtime
+                    // callees are byte-for-byte unaffected (parity oracle).
+                    let param_is_ref: Vec<bool> = if !abi.args_are_borrowed {
+                        user_callee_param_is_ref(symbols, callee.as_str(), args.len())
+                    } else {
+                        Vec::new()
+                    };
                     // Reproduces the old arg loop precedence exactly:
                     // arg0-borrow continue, then explicit transfer (folds in
                     // the old pointer-store idx==1 case via the ArgMask), then
-                    // borrow continue, then default taint.
+                    // borrow continue, then the user-`&T`-param borrow, then
+                    // default taint.
                     for (idx, arg) in args.iter().enumerate() {
                         if let MirValue::Use(l) = arg {
                             if abi.borrows_first_arg && idx == 0 {
@@ -706,6 +748,11 @@ fn compute_dealloc_safe_locals(func: &MirFunction) -> std::collections::HashSet<
                                 continue;
                             }
                             if abi.args_are_borrowed {
+                                continue;
+                            }
+                            // User callee with a declared `&T` param at this
+                            // slot: auto-borrow, do not taint.
+                            if param_is_ref.get(idx).copied().unwrap_or(false) {
                                 continue;
                             }
                             tainted_perm.insert(*l);

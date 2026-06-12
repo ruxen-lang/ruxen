@@ -1,0 +1,43 @@
+# Q17 regression pin — a generic FREE FUNCTION bound by a mixin must
+# monomorphize per concrete implementor, not devirtualize to the single impl.
+#
+# Before Q17 a `def paint_all[T: Paintable](s: &var T, …)` called with two
+# different implementors emitted the bound-placeholder callee
+# `T: Paintable_fill_rect`, which link-failed. The single-implementor case was
+# masked because mixin dispatch devirtualized to the sole impl. This case has
+# TWO implementors with DIFFERENT bodies (w*h vs w+h), so the asserted stdout
+# proves the generic was specialized per concrete type.
+mixin Paintable
+  def fill_rect(w: Int, h: Int) -> Int
+end
+
+def paint_all[T: Paintable](s: &var T, w: Int, h: Int) -> Int
+  s.fill_rect(w, h)
+end
+
+class RecordingSurface
+  include Paintable
+  area: Int
+  def init; self.area = 0; end
+  def var fill_rect(w: Int, h: Int) -> Int
+    self.area = w * h
+    self.area
+  end
+end
+
+class TallySurface
+  include Paintable
+  total: Int
+  def init; self.total = 0; end
+  def var fill_rect(w: Int, h: Int) -> Int
+    self.total = w + h
+    self.total
+  end
+end
+
+def main
+  var dep = RecordingSurface.new
+  var mine = TallySurface.new
+  puts "dep=#{paint_all(&var dep, 4, 5)}"
+  puts "mine=#{paint_all(&var mine, 4, 5)}"
+end

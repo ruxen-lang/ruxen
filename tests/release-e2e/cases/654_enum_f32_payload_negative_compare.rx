@@ -1,0 +1,26 @@
+# Q33 regression pin — the EXACT shape that surfaced the bug: a Float32 carried
+# as an enum payload, extracted in a `match`, then compared against a negative
+# Int literal. This is canvas's `Scroll(-1, 3)` round-trip pin.
+#
+# Mirrors the filed repro `tmp/test-cache/q33-negative-literal-f32-compare-repro.rx`.
+# RUNS the binary and asserts exact stdout. Covers: payload compare vs negative
+# literal, cast-compare (`as Int`), `< 0`, and Float32-vs-Float32-local compare.
+enum Ev
+  Scroll(Float32, Float32)
+  Key(Int)
+end
+
+def main
+  match Ev.Scroll(-1, 3)
+    Ev.Scroll(dx, dy) ->
+      puts "pos_cmp=#{dy == 3}"           # true
+      puts "neg_cmp=#{dx == -1}"          # true  (was false — the bug)
+      puts "neg_via_int=#{(dx as Int) == -1}"  # true
+      puts "neg_lt0=#{dx < 0}"            # true
+      let m1: Float32 = -1 as Float32
+      puts "neg_vs_local=#{dx == m1}"     # true
+    Ev.Key(k) -> nil
+  end
+  let f: Float32 = -1 as Float32
+  puts "plain_neg_cmp=#{f == -1}"         # true  (was false — the bug)
+end

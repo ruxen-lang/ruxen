@@ -110,8 +110,8 @@ z=missing
 
 ```ruxen
 var h: Hash[String, Int] = Hash.new
-h.insert(String.from("a"), 1)
-h.insert(String.from("b"), 2)
+h.insert("a", 1)
+h.insert("b", 2)
 ```
 
 The literal form `{ "a" => 1, "b" => 2 }` is shorthand for the same thing.
@@ -202,7 +202,7 @@ Collections are normal owned values. The same ownership and borrowing rules from
 
 ```ruxen
 def main
-  let names = [String.from("Alice"), String.from("Bob"), String.from("Charlie")]
+  let names = ["Alice", "Bob", "Charlie"]
 
   # Iterate by reference — names still valid after
   for name in &names

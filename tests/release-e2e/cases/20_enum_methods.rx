@@ -5,9 +5,9 @@ enum Priority
 
   def label -> String
     match self
-      Priority.Low    -> String.from("low")
-      Priority.Medium -> String.from("medium")
-      Priority.High   -> String.from("high")
+      Priority.Low    -> "low"
+      Priority.Medium -> "medium"
+      Priority.High   -> "high"
     end
   end
 end

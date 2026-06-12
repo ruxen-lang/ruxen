@@ -170,12 +170,21 @@ impl Resolver {
             self.register_top_level_type_with_ffi(item, &mut ffi_libs, user_ctx);
         }
 
-        // Scan for functions that contain `yield` — these receive a
-        // synthetic `__block` parameter, and callers with a trailing block
-        // forward it as the last argument. (Bootstrap programs were
-        // already scanned by `merge_bootstrap_programs` above.)
+        // (Q37: the old name-keyed `yield_fns` pre-scan was removed — a
+        // function gets its synthetic `__block` from its OWN body yielding,
+        // decided locally in `funcs.rs::resolve_function`, so a yielding
+        // method can no longer poison an unrelated same-named free fn.)
+
+        // Bind top-level `alias new old` free-function synonyms BEFORE Pass 2
+        // resolves bodies — a `new(...)` call in a body resolves its callee
+        // DefId during Pass 2, so the alias must already be in scope. Runs
+        // after Pass 1b so the target's DefId exists regardless of textual
+        // order (docs/decisions/alias-keyword.md, D2). Module-nested free-fn
+        // aliases are bound inside `resolve_module`'s pass.
         for item in &program.items {
-            super::yield_scan::collect_yield_fns(item, &mut self.yield_fns);
+            if let ast::TopLevelItem::Alias(a) = item {
+                self.bind_free_fn_alias(a);
+            }
         }
 
         // B1 of `docs/specs/system/zero_rust_stdlib_classes.spec.md`:
@@ -228,12 +237,19 @@ impl Resolver {
             prelude_item_count,
         };
 
+        // Stamp the method-alias map onto the symbol table so the MIR lowerer
+        // (which only holds `&SymbolTable`) can rewrite alias method names to
+        // their canonical at mangle time (docs/decisions/alias-keyword.md).
+        let mut symbols = self.symbols;
+        symbols.set_method_aliases(self.method_aliases.clone());
+
         ResolveResult {
             program: hir_program,
-            symbols: self.symbols,
+            symbols,
             type_context: self.type_context,
             diagnostics: self.diagnostics,
             type_registry: self.type_registry,
+            method_aliases: self.method_aliases,
         }
     }
 
@@ -289,15 +305,9 @@ impl Resolver {
                     self.register_top_level_type_with_ffi(item, ffi_libs, first_walk_ctx);
                 }
             }
-            // Bootstrap files are part of the prelude, so yield scanning
-            // applies to them too — a stdlib helper that uses `yield`
-            // needs its `__block` parameter wired up the same way a
-            // user function does.
-            for item in &program.items {
-                if Self::is_bootstrap_supported_item(item) {
-                    super::yield_scan::collect_yield_fns(item, &mut self.yield_fns);
-                }
-            }
+            // (Q37: stdlib `yield` helpers get their `__block` from their own
+            // body in `funcs.rs::resolve_function`, the same as user code —
+            // no name-keyed pre-scan, so no cross-function collision.)
 
             // Snapshot per-package DefIds while THIS program's
             // registrations are still the most recent in scope.

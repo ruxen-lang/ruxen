@@ -44,12 +44,23 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let mut opt_level_override: Option<String> = None;
     let mut force = false;
     let mut verbose = false;
+    let mut target_flag: Option<String> = None;
+    let mut no_std = false;
     let mut extra_runtime_c: Vec<String> = Vec::new();
+    let mut extra_link_args: Vec<String> = Vec::new();
     let mut i = 2;
     while i < args.len() {
         if args[i] == "-o" && i + 1 < args.len() {
             output_path = Some(args[i + 1].clone());
             i += 2;
+        } else if args[i] == "--target" && i + 1 < args.len() {
+            // tier 4.02: cross-compilation target triple. `--target <triple>`
+            // (space-separated, matching rustc/cargo) OR `--target=<triple>`.
+            target_flag = Some(args[i + 1].clone());
+            i += 2;
+        } else if args[i].starts_with("--target=") {
+            target_flag = Some(args[i]["--target=".len()..].to_string());
+            i += 1;
         } else if args[i].starts_with("--runtime-c=") {
             // Additional user C source to compile and link alongside the
             // stdlib runtime (a project's `runtime/*.c`). Repeatable.
@@ -58,8 +69,22 @@ pub fn run(args: &[String]) -> Result<(), String> {
             // `ruxen build` does via `find_runtime_sources_in_dir`.
             extra_runtime_c.push(args[i]["--runtime-c=".len()..].to_string());
             i += 1;
+        } else if args[i].starts_with("--link-arg=") {
+            // Additional raw linker flag (e.g. `-lpthread` from a
+            // dependency's `[system_libs]`). Repeatable. `ruxen test`
+            // passes one per `-l<lib>` entry of each flat-merged FFI
+            // dependency, mirroring the `[system_libs]` aggregation
+            // `ruxen build` performs for a directly-declared dep (Q32).
+            extra_link_args.push(args[i]["--link-arg=".len()..].to_string());
+            i += 1;
         } else if args[i].starts_with("--emit=") {
             emit_mode = Some(args[i][7..].to_string());
+            i += 1;
+        } else if args[i] == "--no-std" || args[i] == "--no_std" {
+            // tier 4.04: no_std mode — don't bootstrap the hosted stdlib,
+            // reject heap allocation (E1400), and link without the stdlib
+            // C runtime / `[system_libs]`.
+            no_std = true;
             i += 1;
         } else if args[i] == "--release" {
             release_mode = true;
@@ -86,6 +111,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let source =
         fs::read_to_string(path).map_err(|e| format!("Error reading '{}': {}", path, e))?;
 
+    // Resolve the cross-compilation target (tier 4.02). `None`/host keeps the
+    // byte-identical cached host path below; a non-host target takes the
+    // dedicated cross path (no incremental cache — one-shot compile + cross
+    // link), so the host cache key is never perturbed by this feature.
+    let resolved_target =
+        ruxen_core::codegen::target::ResolvedTarget::resolve(target_flag.as_deref())?;
+
     // Emit modes short-circuit the cache: they don't produce a binary, so
     // caching them is meaningless and would add complexity. Run the
     // classic single-shot pipeline for these.
@@ -99,6 +131,35 @@ pub fn run(args: &[String]) -> Result<(), String> {
             backend_override.as_deref(),
             opt_level_override.as_deref(),
         );
+    }
+
+    // ─── Cross-compilation path (tier 4.02) ──────────────────────────────
+    // A non-host target bypasses the incremental object cache: cross builds
+    // are infrequent and the cross link (local `cc -arch` or two-stage
+    // Docker) is one-shot. The full pipeline runs once and hands the MIR to
+    // `compile_with_options_for_target`, which selects the ISA, compiles the
+    // stdlib runtime FOR THE TARGET, and links via the resolved LinkerSpec.
+    if !resolved_target.is_host() {
+        return run_cross_compile(
+            &source,
+            path,
+            &output_path,
+            release_mode,
+            backend_override.as_deref(),
+            opt_level_override.as_deref(),
+            &resolved_target,
+            &extra_runtime_c,
+            &extra_link_args,
+        );
+    }
+
+    // ─── no_std path (tier 4.04) ─────────────────────────────────────
+    // A no_std host build bypasses the incremental cache (it's a distinct,
+    // infrequent build with no stdlib runtime) and runs a dedicated pipeline:
+    // skip the stdlib bootstrap, enforce E1400 (no heap allocation), and link
+    // WITHOUT the stdlib C runtime / `[system_libs]`.
+    if no_std {
+        return run_no_std_compile(&source, path, &output_path, release_mode);
     }
 
     // ─── Cached compile path ─────────────────────────────────────
@@ -120,11 +181,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
         h.finish()
     };
     let flags = format!(
-        "backend={} opt={} release={} runtime_c={:x}",
+        "backend={} opt={} release={} runtime_c={:x} link_args={} toolchain={:x}",
         backend_override.as_deref().unwrap_or("default"),
         opt_level_override.as_deref().unwrap_or("default"),
         release_mode,
-        runtime_c_fingerprint
+        runtime_c_fingerprint,
+        extra_link_args.join(","),
+        toolchain_fingerprint()
     );
     let build_opts = BuildOptions {
         force,
@@ -233,6 +296,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 
     let mut link_flags: Vec<String> = Vec::new();
+    // Dependency `[system_libs]` flags (`-l<lib>`), forwarded by `ruxen test`
+    // so a flat-merged FFI dependency's link needs are satisfied (Q32).
+    link_flags.extend(extra_link_args.iter().cloned());
     if let Some(ar) = &prebuilt_archive {
         let ar_str = ar.to_string_lossy().to_string();
         if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
@@ -411,6 +477,186 @@ fn compile_to_object(
         signature,
         dependencies: Vec::new(),
     })
+}
+
+/// Cross-compilation path (tier 4.02): runs the full front end once, selects a
+/// target-compatible backend, and links via `compile_with_options_for_target`.
+///
+/// Bypasses the incremental object cache (cross builds are infrequent and the
+/// cross link is one-shot), so the host cache key is never perturbed by a
+/// `--target`. The backend is forced to LLVM when the target requires it
+/// (`wasm`/embedded) regardless of `--release`, mirroring spec §5.8.
+#[allow(clippy::too_many_arguments)]
+fn run_cross_compile(
+    source: &str,
+    _path: &str,
+    output_path: &str,
+    release_mode: bool,
+    backend_override: Option<&str>,
+    opt_level_override: Option<&str>,
+    target: &ruxen_core::codegen::target::ResolvedTarget,
+    extra_runtime_c: &[String],
+    extra_link_args: &[String],
+) -> Result<(), String> {
+    // Tier 4.03/4.04: a wasm32 target is a no_std reactor — it does NOT
+    // bootstrap the hosted stdlib. Bootstrapping would pull in
+    // `dispatch runtime` stdlib classes (e.g. `TimeSleepFuture`), whose
+    // vtable/class_info globals the LLVM backend does not yet emit, and would
+    // also pull libc-dependent runtime the wasm link has no allocator for.
+    // The no_std core surface (primitive ops) needs no bootstrap for the
+    // math-export v1 path. (Loading `library/std/core` alone is the staged
+    // remainder — ADR phase4-no-std-wasm decision #1.)
+    let bootstrap_programs: Vec<(String, Program)> = if target.is_wasm() {
+        Vec::new()
+    } else {
+        load_bootstrap_or_err()?
+    };
+
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize().map_err(|ds| {
+        ds.iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().map_err(|ds| {
+        ds.iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+
+    let type_result = type_check_with_package_bootstrap(&program, &bootstrap_programs);
+    let has_errors = type_result
+        .diagnostics
+        .iter()
+        .any(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error);
+    if has_errors {
+        return Err(type_result
+            .diagnostics
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+
+    let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
+    if !borrow_errors.is_empty() {
+        return Err(borrow_errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+
+    let mut lowerer = ruxen_core::mir::lower::Lowerer::new(&type_result.symbols);
+    let mir_program = lowerer
+        .lower_program(&type_result.program)
+        .map_err(|e| format!("MIR lowering error: {}", e))?;
+
+    // Backend: a target that can't run on Cranelift (wasm/embedded) forces
+    // LLVM, regardless of --release. Otherwise honour the same default/override
+    // logic as the host path.
+    let backend = if target.requires_llvm_backend() {
+        if matches!(backend_override, Some("cranelift")) {
+            return Err(format!(
+                "target '{}' requires the LLVM backend. \
+                 Build with --release or pass --backend=llvm.",
+                target.canonical()
+            ));
+        }
+        // Force LLVM (silent auto-switch per §5.8).
+        resolve_backend(true, Some("llvm"), opt_level_override)?
+    } else {
+        resolve_backend(release_mode, backend_override, opt_level_override)?
+    };
+
+    let extra_runtime_paths: Vec<std::path::PathBuf> = extra_runtime_c
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+
+    ruxen_core::codegen::compile_with_options_for_target(
+        &mir_program,
+        output_path,
+        false, // no sanitizer on the cross path
+        extra_link_args,
+        &extra_runtime_paths,
+        backend,
+        Some(target),
+    )?;
+
+    println!(
+        "Cross-compiled {} → {} (target {})",
+        _path,
+        output_path,
+        target.canonical()
+    );
+    Ok(())
+}
+
+/// no_std host compile (tier 4.04). Skips the stdlib bootstrap, enforces E1400
+/// (no heap allocation), and links without the stdlib C runtime /
+/// `[system_libs]`. See `ruxen_core::codegen::compile_no_std` and
+/// `docs/decisions/phase4-no-std-wasm.md`.
+fn run_no_std_compile(
+    source: &str,
+    path: &str,
+    output_path: &str,
+    release_mode: bool,
+) -> Result<(), String> {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize().map_err(|ds| {
+        ds.iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().map_err(|ds| {
+        ds.iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+
+    // no_std: empty bootstrap — the hosted stdlib is not available.
+    let type_result = type_check_with_package_bootstrap(&program, &[]);
+    let mut errors: Vec<String> = type_result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error)
+        .map(|d| d.to_string())
+        .collect();
+
+    // E1400: reject heap allocation in the no_std unit.
+    for d in ruxen_core::no_std::validate(&type_result.program) {
+        errors.push(d.to_string());
+    }
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+
+    let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
+    if !borrow_errors.is_empty() {
+        return Err(borrow_errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+
+    let mut lowerer = ruxen_core::mir::lower::Lowerer::new_no_std(&type_result.symbols);
+    let mir_program = lowerer
+        .lower_program(&type_result.program)
+        .map_err(|e| format!("MIR lowering error: {}", e))?;
+
+    let backend = resolve_backend(release_mode, None, None)?;
+    ruxen_core::codegen::compile_no_std(&mir_program, output_path, backend)?;
+
+    println!("Compiled {} → {} (no_std)", path, output_path);
+    Ok(())
 }
 
 /// Fallback pipeline used when the user passes an --emit flag. Doesn't touch
@@ -594,4 +840,41 @@ pub(crate) fn project_target_ruxen() -> PathBuf {
         }
     }
     PathBuf::from("./target/ruxen")
+}
+
+/// Fingerprint of the running compiler binary, folded into the cache flags
+/// so the incremental cache is keyed on the ACTUAL toolchain identity, not
+/// just `CARGO_PKG_VERSION` (Q24).
+///
+/// `compiler_version()` is derived from the crate version + a schema tag, so
+/// it does NOT change when the toolchain is rebuilt from source at the same
+/// version (the `ruxen upgrade --from-source` dev loop) or when an embedded-
+/// stdlib `.rx`/`.c` body changes (those are baked into the binary). The
+/// binary's path + size + mtime DO change across any rebuild, so hashing them
+/// invalidates the cache and forces a recompile — which re-runs the new
+/// compiler's borrow/move analysis and re-emits fresh diagnostics, instead of
+/// replaying a stale object whose `E1001`/`E1009` spans no longer match the
+/// current source. Falls back to a constant when the exe path / metadata is
+/// unavailable (worst case: behaves like today, no regression).
+fn toolchain_fingerprint() -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::time::UNIX_EPOCH;
+
+    let mut h = DefaultHasher::new();
+    // Build-time version constant first, so a normal version bump still
+    // participates even if the exe metadata read fails.
+    env!("CARGO_PKG_VERSION").hash(&mut h);
+    if let Ok(exe) = env::current_exe() {
+        exe.hash(&mut h);
+        if let Ok(meta) = fs::metadata(&exe) {
+            meta.len().hash(&mut h);
+            if let Ok(modified) = meta.modified() {
+                if let Ok(dur) = modified.duration_since(UNIX_EPOCH) {
+                    dur.as_nanos().hash(&mut h);
+                }
+            }
+        }
+    }
+    h.finish()
 }

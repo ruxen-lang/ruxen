@@ -663,17 +663,26 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                             self.add(&f.span);
                         }
                     }
+                    for a in &c.aliases {
+                        self.add(&a.span);
+                    }
                 }
                 TopLevelItem::Struct(s) => {
                     self.add(&s.span);
                     for f in &s.fields {
                         self.add(&f.span);
                     }
+                    for a in &s.aliases {
+                        self.add(&a.span);
+                    }
                 }
                 TopLevelItem::Enum(e) => {
                     self.add(&e.span);
                     for v in &e.variants {
                         self.add(&v.span);
+                    }
+                    for a in &e.aliases {
+                        self.add(&a.span);
                     }
                 }
                 TopLevelItem::Mixin(t) => {
@@ -683,6 +692,7 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                             MixinItem::AssocType { span, .. } => self.add(span),
                             MixinItem::MethodSig(ms) => self.add(&ms.span),
                             MixinItem::DefaultMethod(f) => self.visit_func(f),
+                            MixinItem::Alias(a) => self.add(&a.span),
                         }
                     }
                 }
@@ -693,6 +703,7 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                             ImplItem::AssocType { span, .. } => self.add(span),
                             ImplItem::Method(f) => self.visit_func(f),
                             ImplItem::Include { span, .. } => self.add(span),
+                            ImplItem::Alias(a) => self.add(&a.span),
                         }
                     }
                 }
@@ -723,6 +734,14 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                         self.add(&f.span);
                     }
                 }
+                // Q23b: a top-level expression statement. Register its span
+                // (and recurse into the expression) so comments attach to it
+                // correctly, the same way an in-body statement expr does.
+                TopLevelItem::Expr(e) => {
+                    self.add(&e.span);
+                    self.visit_expr(e);
+                }
+                TopLevelItem::Alias(a) => self.add(&a.span),
             }
         }
     }
@@ -843,6 +862,7 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                     span,
                     params,
                     return_type,
+                    ..
                 } => {
                     self.add(span);
                     for p in params {

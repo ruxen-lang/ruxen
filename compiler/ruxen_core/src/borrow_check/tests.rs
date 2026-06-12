@@ -42,14 +42,14 @@ fn make_program(body_stmts: Vec<HirStatement>) -> (HirProgram, SymbolTable) {
 /// Test 1: Use-after-move is detected.
 ///
 /// ```ruxen
-/// let s = String.from("hello")   // def_id 0, Ty::String
+/// let s = "hello"   // def_id 0, Ty::String
 /// let t = s                      // def_id 1, moves from 0
 /// puts s                          // ERROR E1001
 /// ```
 #[test]
 fn detects_use_after_move() {
     let stmts = vec![
-        // let s = String.from("hello")
+        // let s = "hello"
         HirStatement::Let {
             def_id: 0,
             pattern: HirPattern::Binding {
@@ -420,9 +420,9 @@ fn detects_mut_borrow_of_immutable() {
 /// Test 5: Move while borrowed is detected (E1009).
 ///
 /// ```ruxen
-/// let mut s = String.from("hello")  // def_id 0, mutable, Ty::String
+/// let mut s = "hello"  // def_id 0, mutable, Ty::String
 /// let r = &s                         // def_id 1, shared borrow of s
-/// s = String.from("world")           // ERROR E1009 — can't mutate s while borrowed
+/// s = "world"           // ERROR E1009 — can't mutate s while borrowed
 /// ```
 ///
 /// This uses an assignment to `s` (which calls `check_mutation`) while the

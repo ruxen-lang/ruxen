@@ -83,7 +83,7 @@ exposes `.message() -> String`.
 **Then** the result is a stable human-readable string (currently
 `"entity not found"`).
 
-**Given** `let e = IoError.Other(String.from("disk full"))`
+**Given** `let e = IoError.Other("disk full")`
 **Then** `e.message()` is `"disk full"`.
 
 ## B12 — `IoError.message()` is reachable through `Result.Err` payloads

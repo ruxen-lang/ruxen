@@ -655,6 +655,7 @@ fn lower_async_fn_via_cfg(
             func.name
         )],
         where_clause: None,
+        aliases: Vec::new(),
         span: span.clone(),
     };
 
@@ -1160,6 +1161,7 @@ fn lower_loop_via_cfg(
             subs.len(),
         )],
         where_clause: None,
+        aliases: Vec::new(),
         span: span.clone(),
     };
 

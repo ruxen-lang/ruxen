@@ -35,8 +35,14 @@ impl Resolver {
                 }
             }
             ast::ExprKind::StringLiteral(s) => HirExpr {
+                // One-string-type ADR (docs/decisions/one-string-type.md): a
+                // string literal is born `Ty::String` (owned). MIR's
+                // `emit_owned_string_literal` heap-copies the `.rodata` pointer
+                // through `ruxen_string_from`, so scope-exit drop is safe. The
+                // old `Ty::Str` (`&str`) birth + the Q38/Q39 owned-position
+                // promotion patches are gone — there is no `&str` to promote.
                 kind: HirExprKind::StringLiteral(s.clone()),
-                ty: Ty::Str,
+                ty: Ty::String,
                 span,
             },
             ast::ExprKind::InterpolatedString(parts) => {
@@ -97,6 +103,38 @@ impl Resolver {
                 span,
             },
             ast::ExprKind::Identifier(name) => {
+                // `block_defined?` / `block_given?` (alias) — Ruby-block-semantics
+                // ADR D6. A no-receiver builtin predicate that is `true` iff the
+                // caller passed a block. Desugars to `__block != nil` (the null
+                // closure-pair-pointer sentinel, ADR D1) using existing nodes —
+                // no new HIR variant. Only meaningful inside a function that
+                // declares a block slot; outside one it falls through to the
+                // ordinary undefined-variable path.
+                if let Some(block_def) = (name == "block_defined?" || name == "block_given?")
+                    .then(|| self.scopes.lookup("__block"))
+                    .flatten()
+                {
+                    let block_ty = self.symbols.def_ty(block_def).unwrap_or(Ty::Error);
+                    let lhs = HirExpr {
+                        kind: HirExprKind::VarRef(block_def),
+                        ty: block_ty,
+                        span: span.clone(),
+                    };
+                    let rhs = HirExpr {
+                        kind: HirExprKind::NullLiteral,
+                        ty: Ty::Int,
+                        span: span.clone(),
+                    };
+                    return HirExpr {
+                        kind: HirExprKind::BinaryOp {
+                            op: ast::BinOp::NotEq,
+                            left: Box::new(lhs),
+                            right: Box::new(rhs),
+                        },
+                        ty: Ty::Bool,
+                        span,
+                    };
+                }
                 if let Some((def_id, def_scope_id)) = self.scopes.lookup_with_scope(name) {
                     // If the identifier resolves to an enum variant (e.g.
                     // bare `None`, `Color.Red`), lower it as an

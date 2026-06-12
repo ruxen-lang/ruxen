@@ -30,13 +30,21 @@ mod control_flow;
 mod instructions;
 
 use control_flow::translate_terminator;
-use instructions::{cmpop_to_intpred, emit_binop, translate_instruction};
+use instructions::translate_instruction;
 
 /// Compile all functions in a MIR program into LLVM IR.
+///
+/// `is_wasm` is `true` when the target machine is `wasm32-*`/`wasm64-*`; in
+/// that case every `program.wasm_exports` function gets the LLVM `export_name`
+/// string attribute so `wasm-ld` emits it as a host-callable wasm export under
+/// its source name, decoupled from any Ruxen name mangling (tier 4.03; ADR
+/// `docs/decisions/phase4-no-std-wasm.md`, spec §9 Q6). On non-wasm targets the
+/// flag is `false` and `wasm_exports` is ignored.
 pub fn compile_program<'ctx>(
     program: &MirProgram,
     module: &Module<'ctx>,
     context: &'ctx Context,
+    is_wasm: bool,
 ) -> Result<(), String> {
     // Declare the DERIVED FFI imports FIRST so every `.rx`-declared
     // `ruxen_*` symbol is created from its lib-decl-derived signature
@@ -64,14 +72,28 @@ pub fn compile_program<'ctx>(
         // dispatch through the helper by symbol. Mirrors the cranelift
         // backend's logic — see codegen/cranelift/mod.rs::
         // is_dynamic_dispatch_helper for the naming pattern.
+        // Tier 4.03 (WASM): a wasm-exported function needs External linkage
+        // (Internal would be invisible to `wasm-ld`) plus the `export_name`
+        // attribute set below.
+        let is_wasm_export = is_wasm && program.wasm_exports.iter().any(|n| n == &func.name);
         let linkage = if func.name == "main"
             || super::super::cranelift::is_dynamic_dispatch_helper(&func.name)
+            || is_wasm_export
         {
             Some(inkwell::module::Linkage::External)
         } else {
             Some(inkwell::module::Linkage::Internal)
         };
-        module.add_function(&func.name, fn_type, linkage);
+        let llvm_fn = module.add_function(&func.name, fn_type, linkage);
+        if is_wasm_export {
+            // `export_name` is the LLVM/clang mechanism that emits a wasm
+            // export under an exact ASCII name, independent of the LLVM symbol
+            // name — so the export survives `--gc-sections` and carries no
+            // mangling. Equivalent to C's
+            // `__attribute__((export_name("<name>")))`.
+            let attr = context.create_string_attribute("wasm-export-name", &func.name);
+            llvm_fn.add_attribute(inkwell::attributes::AttributeLoc::Function, attr);
+        }
     }
 
     // Pass 2: define all user functions
@@ -408,7 +430,7 @@ pub(super) fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool 
 /// code.
 fn is_string_mir_ty(ty: &Ty) -> bool {
     match ty {
-        Ty::String | Ty::Str => true,
+        Ty::String => true,
         Ty::Class { name, .. } if name == "String" => true,
         Ty::Ref(inner)
         | Ty::RefMut(inner)
@@ -433,7 +455,6 @@ pub(super) fn simple_type_size(ty: &Ty) -> usize {
         | Ty::Float
         | Ty::Float64 => 8,
         Ty::String => 24,
-        Ty::Str => 16,
         Ty::Array(_) => 24,
         Ty::Map(_, _) | Ty::Set(_) => 48,
         Ty::Ref(_)

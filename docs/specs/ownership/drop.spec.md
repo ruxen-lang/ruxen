@@ -26,8 +26,8 @@ allocation is freed.
 
 ## B2 — Reassignment frees the prior value
 
-**Given** `var s = String.from("a")` followed by
-`s = String.from("b")`
+**Given** `var s = "a"` followed by
+`s = "b"`
 **Then** the heap buffer for `"a"` is freed at the assignment, not
 leaked.
 

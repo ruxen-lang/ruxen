@@ -142,7 +142,7 @@ class Animal
   end
 
   def speak -> String
-    String.from("...")
+    "..."
   end
 end
 
@@ -157,7 +157,7 @@ class Cat < Animal
 end
 
 def main
-  let c = Cat.new(String.from("Whiskers"))
+  let c = Cat.new("Whiskers")
   puts c.speak
 end
 ```
@@ -281,7 +281,7 @@ class Dog
 end
 
 def main
-  let d = Dog.new(String.from("Rex"))
+  let d = Dog.new("Rex")
   puts d.hello
 end
 ```
@@ -302,6 +302,49 @@ Change `let` to `var`.
 **Trying to use a value after a `def consume` method.** Consuming methods (often named `into_*` or `close`) take ownership. After the call, the binding is gone — that's the whole point.
 
 **Inheritance for code reuse.** If two classes don't have a real "is-a" relationship, use a mixin instead. Inheritance is for genuine specialization.
+
+## Giving a method a second name: `alias`
+
+Sometimes a method deserves two names — a Ruby spelling and a longer one, or a `?`-predicate and a plain verb. Rather than writing the method twice, use `alias`:
+
+```rx
+class Bag
+  count: Int
+  def init(@count: Int); end
+
+  def size -> Int
+    self.count
+  end
+
+  alias length size   # `length` is now a second name for `size`
+end
+
+let b = Bag.new(3)
+puts "#{b.size}"      # 3
+puts "#{b.length}"    # 3 — same method, no extra code
+```
+
+`alias new_name old_name` is a **pure synonym**: both names resolve to the *one* method body. There is no second function, no extra call frame, and no duplicated machine code — `length` simply *is* `size`.
+
+It works at the top level for free functions, too:
+
+```rx
+def greet(name: String) -> String
+  "hi #{name}"
+end
+
+alias hail greet   # both call the same function
+
+puts greet("Ada")  # hi Ada
+puts hail("Ada")   # hi Ada
+```
+
+A few rules:
+
+- The form is the Ruby space form — `alias new old`, **no comma**.
+- `?` and `!` names work: `alias member? include?`, `alias save! commit`.
+- The target must already exist; aliasing an unknown name is an error (E1120), and a name that collides with an existing method is an error (E1122).
+- **Operator** aliases (`alias << push`) are not supported yet (E1123) — define the operator method directly instead.
 
 ## Try it
 

@@ -1,0 +1,16 @@
+# Q40 — `Mutex[String].lock` resolves and links through a CLOSURE CAPTURE.
+# Companion to 925 (borrow param): the same ergonomic `lock` wrapper is reached
+# when the `Mutex[String]` is captured into a `do …end` closure rather than
+# passed by reference. Each closure invocation acquires and releases the guard
+# within its own frame (the guard drops at the closure's return), so the read
+# round-trips correctly. RUN + stdout pin.
+def main
+  let m = Mutex.new("captured world")
+  let reader = { ||
+    match m.lock
+      Ok(g)  -> g.get.clone
+      Err(_) -> "poisoned"
+    end
+  }
+  puts "v=#{reader.()}"
+end

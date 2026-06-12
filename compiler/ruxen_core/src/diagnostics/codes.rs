@@ -13,6 +13,7 @@
 //! | E0601-E0618   | implicit-include / auto-synth |
 //! | E0700-E0799   | tier-2 type system            |
 //! | E1011-E1099   | mixin / include checking      |
+//! | E1400-E1499   | no_std / embedded (tier 4.04) |
 //! | E1600-E1699   | package manager               |
 //! | E1700-E1799   | std.regex                     |
 
@@ -274,6 +275,22 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0727",
         title: "type name collides with a built-in / stdlib type; rename it",
     },
+    CodeInfo {
+        code: "E0728",
+        title: "top-level expression statement is not executable; wrap it in `def main`",
+    },
+    CodeInfo {
+        code: "E0729",
+        title: "a closure / `Fn` value cannot be formatted into a string (no Display)",
+    },
+    // One-string-type ADR (docs/decisions/one-string-type.md): `str` / `&str`
+    // is not a type in Ruxen. There is exactly one string pair — `String`
+    // (owned) and `&String` (borrowed). Emitted at resolve time when a type
+    // annotation spells `str`, with a hint pointing at `String` / `&String`.
+    CodeInfo {
+        code: "E0730",
+        title: "`str` is not a type; use `String` (owned) or `&String` (borrowed)",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`
@@ -427,6 +444,51 @@ pub const REGISTRY: &[CodeInfo] = &[
     CodeInfo {
         code: "E1118",
         title: "`&Mixin` references a non-`dispatch runtime` mixin",
+    },
+    // Ruby-block-semantics (docs/decisions/ruby-block-semantics.md). E1119
+    // fires when a `&block:` parameter is not the LAST parameter of a
+    // function/method — Ruby blocks are always the implicit trailing
+    // argument, so anything after `&block` is rejected (ADR D4).
+    CodeInfo {
+        code: "E1119",
+        title: "block parameter `&block` must be the last parameter",
+    },
+    // ── Ruby `alias` keyword (docs/decisions/alias-keyword.md) ───────
+    // E1120 fires when `alias new old` names a target `old` that is not a
+    // visible method (of the enclosing type, incl. included mixins) or a
+    // visible free function.
+    CodeInfo {
+        code: "E1120",
+        title: "alias target not found",
+    },
+    // E1121 fires when `alias` declarations form a cycle (e.g. `alias a b`
+    // plus `alias b a`), so no canonical target can be determined.
+    CodeInfo {
+        code: "E1121",
+        title: "alias forms a cycle",
+    },
+    // E1122 fires when an alias's NEW name collides with an existing
+    // definition in the same scope, or aliases a name to itself.
+    CodeInfo {
+        code: "E1122",
+        title: "alias name collides with an existing definition",
+    },
+    // E1123 fires for an operator-spelled alias new-name or target
+    // (`alias << push`, `alias [] get`) — staged for Tier 2 (ADR D6).
+    CodeInfo {
+        code: "E1123",
+        title: "operator aliases are not yet supported",
+    },
+    // ── no_std / embedded (E1400-E1499) ──────────────────────────────
+    // Tier 4.04. E1400 fires when a no_std compilation unit constructs a
+    // heap-allocated value (String/Array/Map/Set) — there is no global
+    // allocator in a no_std build. E1401 (`std.*` import in no_std) and
+    // E1402 (unsupported target triple) are RESERVED for the staged
+    // core/std resolver split; not yet emitted, so not registered (the
+    // registry forbids unconsumed rows). ADR phase4-no-std-wasm.
+    CodeInfo {
+        code: "E1400",
+        title: "heap allocation in a no_std unit",
     },
     // ── Package manager (E1600-E1699) ────────────────────────────────
     // Emitted from `ruxen_cli`. Spans don't apply (these are toolchain

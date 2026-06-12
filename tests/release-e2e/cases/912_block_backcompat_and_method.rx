@@ -1,0 +1,31 @@
+# Ruby-block-semantics ADR, pins (c) + back-compat (D8). A `&block` declared
+# with the legacy `Fn(...) -> R` spelling still works (no grammar fork), and a
+# trailing block on a METHOD is unchanged by the new free-fn path.
+
+def legacy(&block: Fn() -> nil)
+  yield
+end
+
+class Counter
+  n: Int
+  def init
+    self.n = 0
+  end
+  def with_self -> nil
+    yield self
+  end
+  def bump -> nil
+    self.n = self.n + 1
+    puts "#{self.n}"
+  end
+end
+
+def main
+  legacy do
+    puts "legacy"
+  end
+  var c = Counter.new
+  c.with_self do |it|
+    it.bump
+  end
+end

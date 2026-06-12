@@ -219,6 +219,11 @@ pub fn build(
                 super::hash::compiler_version(),
                 &options.target,
                 &options.opt_level,
+                // Fold the full flags string (backend + opt overrides +
+                // runtime_c fingerprint + TOOLCHAIN-IDENTITY fingerprint)
+                // into the per-object key so a stale object from a different
+                // toolchain build cannot be replayed (Q24).
+                &options.flags,
             );
             let prior_entry = prior.as_ref().and_then(|m| m.find(&src.path).cloned());
             let prior_sig = prior_entry.as_ref().and_then(|e| {

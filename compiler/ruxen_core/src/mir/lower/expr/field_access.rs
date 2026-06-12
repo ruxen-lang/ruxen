@@ -113,6 +113,13 @@ impl<'a> Lowerer<'a> {
                     // (literal dot in symbol) and link-fail because the
                     // alias map only carries `BufReader_File_read_line`.
                     let resolved_class_cs = resolved_class.replace('.', "_");
+                    // Ruby `alias new old` (docs/decisions/alias-keyword.md): a
+                    // paren-less method call (`b.length`) lowers here; rewrite an
+                    // alias method name to its canonical so it mangles to the
+                    // real body (`Bag_size`), not a bodiless `Bag_length`.
+                    let field_name = self
+                        .symbols
+                        .canonical_method_name(&resolved_class, field_name);
                     let mangled = format!("{}_{}", resolved_class_cs, field_name);
                     // Use the inner type of the result Option for the method result.
                     let inner_result_ty = match &expr.ty {
@@ -362,6 +369,11 @@ impl<'a> Lowerer<'a> {
                     // (literal dot in symbol) and link-fail because the
                     // alias map only carries `BufReader_File_read_line`.
                     let resolved_class_cs = resolved_class.replace('.', "_");
+                    // Ruby `alias new old` (see the other site in this file):
+                    // rewrite a paren-less alias method call to its canonical.
+                    let field_name = self
+                        .symbols
+                        .canonical_method_name(&resolved_class, field_name);
                     let mangled = format!("{}_{}", resolved_class_cs, field_name);
 
                     // Generic-class monomorphization: a paren-less method
@@ -381,6 +393,49 @@ impl<'a> Lowerer<'a> {
                     } else {
                         mangled
                     };
+
+                    // Q17 (staged boundary): a paren-less method call whose
+                    // RECEIVER is itself a still-abstract, mixin-bound type
+                    // parameter (`item.width` where `item: &var T, T: Sized`)
+                    // with NO unique implementor mangles to a bound-PLACEHOLDER
+                    // callee (`T: Sized_width`) that link-fails — the generic
+                    // METHOD over a mixin case (a generic `def` INSIDE a class),
+                    // not yet monomorphized (generic FREE functions ARE — see
+                    // the Q17 ADR). Detected STRUCTURALLY on the peeled receiver
+                    // type (not by string-matching the mangled callee, which a
+                    // sound `Array[T: Showable]`-style builtin would also trip).
+                    // Surface a clear error instead of the placeholder symbol.
+                    if self.receiver_is_unresolved_bound(&object.ty) {
+                        return Err(format!(
+                            "cannot monomorphize generic method `{field_name}` over the \
+                             mixin-bound type parameter `{resolved_class}`: a generic METHOD \
+                             over a mixin with ≥2 implementors is not yet supported (generic \
+                             free functions are — see docs/decisions/\
+                             q17-cross-package-monomorphization.md). Move the generic over \
+                             the mixin into a free function \
+                             `def {field_name}[T: <bound>](recv: &var T, …)`."
+                        ));
+                    }
+
+                    // Ruby-block-semantics ADR D1/D5: a paren-less no-arg
+                    // method call (`w.frame`) lowers here as a FieldAccess and,
+                    // unlike the parens path (`w.frame()`, a `MethodCall` HIR
+                    // node that gets `append_method_default_args` at typeck),
+                    // never fills the resolved method's trailing default
+                    // parameters. For a method declaring an optional
+                    // `&block: Fn[…]` the missing trailing arg is the `nil`
+                    // block default → null closure-pair-pointer sentinel; omit
+                    // it and the call emits one too few args, crashing the
+                    // MIR/Cranelift arity verifier. Append the trailing default
+                    // sentinels so `w.frame` and `w.frame()` lower identically.
+                    // (`field_name` here is already the alias-canonical name;
+                    // this path supplies zero user positional args.)
+                    let mut arg_values = arg_values;
+                    arg_values.extend(self.method_trailing_default_sentinels(
+                        &resolved_class,
+                        field_name,
+                        0,
+                    ));
 
                     let dest = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
                         Some(self.new_temp(expr.ty.clone()))

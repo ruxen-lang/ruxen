@@ -1,5 +1,5 @@
 def main
-  var s = String.from("foo")
+  var s = "foo"
   s.push_str("bar")
   puts "len=#{s.size}"
   puts s

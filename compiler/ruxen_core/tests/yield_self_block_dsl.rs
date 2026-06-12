@@ -131,9 +131,9 @@ fn paren_less_method_call_with_string_arg() {
 class Sink
   acc: String
   def init
-    self.acc = String.from("")
+    self.acc = ""
   end
-  def put(s: &str) -> nil
+  def put(s: &String) -> nil
     self.acc = "#{self.acc}#{s}"
   end
   def show -> nil

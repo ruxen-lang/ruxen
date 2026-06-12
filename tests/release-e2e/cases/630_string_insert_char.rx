@@ -1,5 +1,5 @@
 def main
-  var s = String.from("ac")
+  var s = "ac"
   s.insert(1, 98)
   puts s
 end

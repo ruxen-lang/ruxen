@@ -60,8 +60,8 @@ pub fn try_coerce(
             Ok(Ty::Ref(Box::new(coerced_inner)))
         }
 
-        // &String → &str
-        (Ty::Ref(inner), Ty::Str) if **inner == Ty::String => Ok(Ty::Str),
+        // (The `&String → &str` coercion arm was removed with the `&str`
+        // type — `&String` is the only string borrow type now.)
 
         // Auto-deref: &&T → &T (for method calls and field access)
         (Ty::Ref(inner), target) if inner.is_ref() => {

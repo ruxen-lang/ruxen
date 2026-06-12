@@ -35,6 +35,6 @@ class Bot
 end
 
 def main
-  let b = Bot.new(String.from("Riv"))
+  let b = Bot.new("Riv")
   puts "#{b.greet}"
 end

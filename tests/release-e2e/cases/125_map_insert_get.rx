@@ -1,14 +1,14 @@
 def main
   var h: Hash[String, Int] = Hash.new
-  h.insert(String.from("alpha"), 10)
-  h.insert(String.from("beta"), 20)
-  h.insert(String.from("gamma"), 30)
+  h.insert("alpha", 10)
+  h.insert("beta", 20)
+  h.insert("gamma", 30)
   puts "len=#{h.size}"
-  match h.get(String.from("alpha"))
+  match h.get("alpha")
     Some(v) -> puts "alpha=#{v}"
     nil     -> puts "alpha=missing"
   end
-  match h.get(String.from("missing"))
+  match h.get("missing")
     Some(v) -> puts "missing=#{v}"
     nil     -> puts "missing=missing"
   end

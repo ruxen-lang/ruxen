@@ -802,7 +802,7 @@ Place in `crates/ruxen-core/tests/fixtures/concurrency/`:
 **Must compile (positive):**
 
 - `spawn_send_primitive.rx` — `Thread.spawn do let x = 42; puts x end`.
-- `spawn_move_string.rx` — `let s = String.from("x"); Thread.spawn do puts s end`.
+- `spawn_move_string.rx` — `let s = "x"; Thread.spawn do puts s end`.
 - `arc_mutex_counter.rx` — classic shared counter with `SharedSync[Mutex[Int]]` over
   N threads, joins, asserts total.
 - `channel_ping_pong.rx` — two threads exchanging `Int` through a bounded

@@ -15,3 +15,13 @@ module_inception = "allow"
 too_many_arguments = "allow"
 should_implement_trait = "allow"
 only_used_in_recursion = "allow"
+
+# Build-speed: the compiler binaries (ruxen_cli/ruxenc) statically link the whole
+# compiler + cranelift; full debuginfo made the link slow and memory-heavy enough
+# to OOM under concurrent builds. Drop debuginfo in dev/test for fast, light builds.
+# (Set debug = 1 if you need line-table backtraces.)
+[profile.dev]
+debug = false
+
+[profile.test]
+debug = false

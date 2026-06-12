@@ -62,8 +62,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     match name {
         "super" => return Ok("ruxen_noop"),
         "yield" => return Ok("ruxen_noop_passthrough"),
-        // `&str → &str` is a true semantic identity, not a stub.
-        "&str_as_str" => return Ok("ruxen_noop_passthrough"),
         // Compiler-internal MIR-synthesised callees emitted by the
         // derive-Display lowering in `mir/lower/derive.rs:85-106`.
         // These are NOT surface methods — they are precision /
@@ -94,15 +92,11 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         "Float_to_s" => return Ok("ruxen_float_to_string"),
         "Bool_to_s" => return Ok("ruxen_bool_to_string"),
         "Char_to_s" => return Ok("ruxen_char_to_string"),
-        // `&str_to_s`: the `&str` primitive has no `.rx` class shell, so
-        // its mangled `&str_to_s` callee resolves here (same category as
-        // the other `&str_*` codegen arms below). `String_to_s` is now
-        // ALSO homed in string.rx (`def to_s as "ruxen_string_to_string"`)
-        // and the MIR `ffi_alias_map` rewrites `String_to_s` before
-        // codegen reaches here; this arm stays as a belt-and-suspenders
-        // fallback for the `String` spelling and the authoritative path
-        // for `&str`. Both clone to an owned `String`.
-        "String_to_s" | "&str_to_s" => return Ok("ruxen_string_to_string"),
+        // `String_to_s` is homed in string.rx (`def to_s as
+        // "ruxen_string_to_string"`) and the MIR `ffi_alias_map` rewrites it
+        // before codegen reaches here; this arm stays as a belt-and-suspenders
+        // fallback for the `String` spelling. Clones to an owned `String`.
+        "String_to_s" => return Ok("ruxen_string_to_string"),
         "String_truncate_chars" => return Ok("ruxen_string_truncate_chars"),
         // Phase E-rest 3 of #06.95: MIR-synthesised Formatter callees
         // from `mir/lower/interpolation.rs::emit_display_dispatch`.
@@ -130,34 +124,13 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // `ffi_alias_map` rewrites `String_clone → ruxen_string_from`
         // before codegen consults `runtime_name`, so the explicit arm
         // here is no longer needed.
-        // Phase E-rest 5 of #06.95: `&str_*` instance-method aliases.
-        // The `&str` type is a Ruxen primitive (not a class shell),
-        // so there's no .rx surface for these — the C runtime
-        // shares the `ruxen_string_*` byte-string helpers, and the
-        // MIR call-site mangling for `&str` receivers emits keys
-        // with a literal `&str_` prefix. Same compiler-internal
-        // category as the `String_*` MIR-synthesised callees above.
-        "&str_split" => return Ok("ruxen_str_split"),
-        "&str_parse_uint" => return Ok("ruxen_str_parse_uint"),
-        "&str_size" => return Ok("ruxen_string_len"),
-        "&str_empty?" => return Ok("ruxen_string_is_empty"),
-        "&str_trim" => return Ok("ruxen_string_trim"),
-        "&str_to_lower" => return Ok("ruxen_string_to_lower"),
-        "&str_to_upper" => return Ok("ruxen_string_to_upper"),
-        "&str_chars" => return Ok("ruxen_string_chars"),
-        "&str_include?" => return Ok("ruxen_string_contains"),
-        "&str_starts_with" => return Ok("ruxen_string_starts_with"),
-        "&str_ends_with" => return Ok("ruxen_string_ends_with"),
-        "&str_lines" => return Ok("ruxen_string_lines"),
-        "&str_replace" => return Ok("ruxen_string_replace"),
-        "&str_bytes" => return Ok("ruxen_string_bytes"),
-        "&str_trim_start" => return Ok("ruxen_string_trim_start"),
-        "&str_trim_end" => return Ok("ruxen_string_trim_end"),
-        "&str_find" => return Ok("ruxen_string_find"),
-        "&str_splitn" => return Ok("ruxen_string_splitn"),
-        "&str_parse_int" => return Ok("ruxen_string_parse_int"),
-        "&str_parse_float" => return Ok("ruxen_string_parse_float"),
-        "&str_to_string" => return Ok("ruxen_string_to_string"),
+        // (One-string-type ADR: the `&str_*` mangled-callee aliases were
+        // removed. There is one string type — a `&String` receiver peels to
+        // `String` in `method_home_key`/`type_name`, so string method calls
+        // mangle to `String_<m>` and resolve through string.rx's FFI alias
+        // map, never a `&str_` prefix. The C runtime symbols themselves
+        // (`ruxen_str_parse_uint`, …) are unchanged; only the dead dispatch
+        // keys are gone.)
         _ => {}
     }
 
@@ -313,9 +286,10 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
             "try_op" => Ok("ruxen_result_try_op"),
             "unwrap_or" => Ok("ruxen_option_unwrap_or"),
             "unwrap_or_else" => Ok("ruxen_result_unwrap_or_else"),
-            // String operations.
+            // String operations. (`from` REMOVED — the surface `String.from`
+            // static method was deleted; the borrow→owned spelling is `clone`,
+            // which still backs onto the `ruxen_string_from` C symbol.)
             "clone" => Ok("ruxen_string_from"),
-            "from" => Ok("ruxen_string_from"),
             "push_str" => Ok("ruxen_string_push_str"),
             "trim" => Ok("ruxen_string_trim"),
             "to_lower" => Ok("ruxen_string_to_lower"),

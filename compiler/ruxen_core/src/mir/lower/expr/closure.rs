@@ -27,13 +27,30 @@ impl<'a> Lowerer<'a> {
                 // Collect captured def_ids by walking the body.  A def is
                 // captured when it is referenced but not defined inside
                 // the closure body or declared as a closure parameter.
+                //
+                // The set of defs VISIBLE in the enclosing frame is every
+                // def `lower_var_ref` could resolve there: an outer-frame
+                // local (`def_to_local`) OR — when this closure literal is
+                // itself nested inside another closure's body — a capture of
+                // that enclosing closure (`capture_map`). Without the
+                // `capture_map` half, a closure nested inside a closure body
+                // (e.g. `outer.build({ |c| c.add({ || v + 1 }) })`, where
+                // `v` is captured by the OUTER block) would not re-capture
+                // `v`; the nested closure would read `v` as slot garbage.
+                // (Q26.)
                 let param_def_ids: HashSet<DefId> = params.iter().map(|p| p.def_id).collect();
+                let visible_defs: HashSet<DefId> = self
+                    .def_to_local
+                    .keys()
+                    .copied()
+                    .chain(self.capture_map.keys().copied())
+                    .collect();
                 let mut captured_def_ids: Vec<DefId> = Vec::new();
                 let mut seen: HashSet<DefId> = HashSet::new();
                 collect_captures(
                     body,
                     &param_def_ids,
-                    &self.def_to_local,
+                    &visible_defs,
                     &mut captured_def_ids,
                     &mut seen,
                 );
@@ -42,18 +59,64 @@ impl<'a> Lowerer<'a> {
                 // can always be captured by value; moved/Copy values go
                 // inline; non-move captures of a mutable local that is
                 // assigned inside the closure body go through a cell.
-                let mut slots: Vec<(DefId, LocalId, Ty, CaptureKind)> =
+                //
+                // A capture resolves through one of two enclosing-frame
+                // mechanisms — exactly the two `lower_var_ref` consults:
+                //   • `Local`     — an outer-frame local (`def_to_local`).
+                //   • `Recapture` — a capture of the ENCLOSING closure
+                //                   (`capture_map`), i.e. this closure
+                //                   literal is nested inside another
+                //                   closure's body and re-captures one of
+                //                   the outer block's captures (Q26).
+                let mut slots: Vec<(DefId, CaptureSource, Ty, CaptureKind)> =
                     Vec::with_capacity(captured_def_ids.len());
                 for def in &captured_def_ids {
-                    let outer_local = *self.def_to_local.get(def).unwrap();
-                    let ty = self.fn_mut().locals[outer_local as usize].ty.clone();
                     let mutates = closure_body_mutates(body, *def);
-                    let kind = if *is_move || !mutates {
-                        CaptureKind::ByValue
+                    let want_byref = !*is_move && mutates;
+
+                    if let Some(&local) = self.def_to_local.get(def) {
+                        let ty = self.fn_mut().locals[local as usize].ty.clone();
+                        let kind = if want_byref {
+                            CaptureKind::ByRef
+                        } else {
+                            CaptureKind::ByValue
+                        };
+                        slots.push((*def, CaptureSource::Local(local), ty, kind));
+                    } else if let Some(enclosing) = self.capture_map.get(def).copied() {
+                        // Re-capture from the enclosing closure's captures.
+                        // Every capture slot is an 8-byte word (value, or a
+                        // cell pointer for ByRef); the recorded `ty` is unused
+                        // downstream, so `Ty::Int` (pointer width) suffices.
+                        let ty = Ty::Int;
+                        // A nested closure that MUTATES an outer-captured
+                        // value needs a shared cell. We can only propagate a
+                        // cell that already exists (the enclosing capture was
+                        // itself ByRef). Mutating a ByValue outer capture from
+                        // a doubly-nested closure would require promoting the
+                        // enclosing capture to a cell after the fact, which is
+                        // not supported — reject rather than miscompile.
+                        let kind = if want_byref {
+                            if enclosing.kind == CaptureKind::ByRef {
+                                CaptureKind::ByRef
+                            } else {
+                                return Err(format!(
+                                    "closure nested inside another closure mutates an \
+                                     outer-captured value `{}` that is captured by value; \
+                                     this re-capture-and-mutate shape is not supported",
+                                    def_id_name(*def, self.symbols)
+                                ));
+                            }
+                        } else {
+                            CaptureKind::ByValue
+                        };
+                        slots.push((*def, CaptureSource::Recapture(enclosing), ty, kind));
                     } else {
-                        CaptureKind::ByRef
-                    };
-                    slots.push((*def, outer_local, ty, kind));
+                        return Err(format!(
+                            "closure captures `{}` which is not resolvable in the \
+                             enclosing frame (neither a local nor an outer capture)",
+                            def_id_name(*def, self.symbols)
+                        ));
+                    }
                 }
 
                 // Cell-promote any captured `let mut` that will be shared
@@ -63,7 +126,13 @@ impl<'a> Lowerer<'a> {
                 // through the cell (see `cell_promoted`).  We only do
                 // this once per local — if it's already been promoted by
                 // a previous closure in the same function, reuse it.
-                for (def, outer_local, _ty, kind) in &slots {
+                // (Recapture sources reuse the enclosing closure's existing
+                // cell, so they need no promotion here.)
+                for (def, source, _ty, kind) in &slots {
+                    let outer_local = match source {
+                        CaptureSource::Local(l) => *l,
+                        CaptureSource::Recapture(_) => continue,
+                    };
                     if *kind == CaptureKind::ByRef && !self.cell_promoted.contains(def) {
                         let cell = self.new_temp(Ty::Int);
                         self.emit(MirInst::Alloc {
@@ -75,11 +144,11 @@ impl<'a> Lowerer<'a> {
                         self.emit(MirInst::SetField {
                             base: cell,
                             field_index: 0,
-                            value: MirValue::Use(*outer_local),
+                            value: MirValue::Use(outer_local),
                         });
                         // Rewrite the outer local to hold the cell pointer.
                         self.emit(MirInst::Assign {
-                            dest: *outer_local,
+                            dest: outer_local,
                             value: MirValue::Use(cell),
                         });
                         // The local now holds an 8-byte cell POINTER, not the
@@ -95,7 +164,7 @@ impl<'a> Lowerer<'a> {
                         // combinator path never promotes, which is why it
                         // surfaced only with Set/Hash `include Enumerable`.
                         if let Some(f) = self.current_fn.as_mut() {
-                            if let Some(slot) = f.locals.get_mut(*outer_local as usize) {
+                            if let Some(slot) = f.locals.get_mut(outer_local as usize) {
                                 slot.ty = Ty::Int;
                             }
                         }
@@ -114,42 +183,95 @@ impl<'a> Lowerer<'a> {
                         ty: Ty::Int,
                         size,
                     });
-                    for (slot_idx, (_def, outer_local, _ty, kind)) in slots.iter().enumerate() {
-                        match kind {
-                            CaptureKind::ByValue => {
+                    // Snapshot (source, kind, def) so the borrow of `slots`
+                    // ends before we emit (emit takes `&mut self`).
+                    let fill: Vec<(usize, DefId, CaptureSource, CaptureKind)> = slots
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (d, src, _ty, k))| (i, *d, *src, *k))
+                        .collect();
+                    for (slot_idx, def, source, kind) in fill {
+                        let src_val = match (source, kind) {
+                            // ── Outer-frame local ──────────────────────
+                            (CaptureSource::Local(outer_local), CaptureKind::ByValue) => {
                                 // For already-cell-promoted defs, the outer
                                 // local is a cell pointer — load the value
-                                // out of the cell before storing.  (This
-                                // covers the niche case of a ByValue capture
-                                // of a local promoted by an earlier closure.)
-                                let src_val = if self.cell_promoted.contains(&slots[slot_idx].0) {
+                                // out of the cell before storing.  (Niche:
+                                // a ByValue capture of a local promoted by an
+                                // earlier closure in this frame.)
+                                if self.cell_promoted.contains(&def) {
                                     let tmp = self.new_temp(Ty::Int);
                                     self.emit(MirInst::GetField {
                                         dest: tmp,
-                                        base: *outer_local,
+                                        base: outer_local,
                                         field_index: 0,
                                     });
                                     MirValue::Use(tmp)
                                 } else {
-                                    MirValue::Use(*outer_local)
-                                };
-                                self.emit(MirInst::SetField {
-                                    base: cap,
-                                    field_index: slot_idx,
-                                    value: src_val,
-                                });
+                                    MirValue::Use(outer_local)
+                                }
                             }
-                            CaptureKind::ByRef => {
+                            (CaptureSource::Local(outer_local), CaptureKind::ByRef) => {
                                 // Outer local already holds the cell pointer
-                                // (we promoted it above).  Just copy the
-                                // pointer into the captures slot.
-                                self.emit(MirInst::SetField {
-                                    base: cap,
-                                    field_index: slot_idx,
-                                    value: MirValue::Use(*outer_local),
-                                });
+                                // (promoted above). Copy the pointer through.
+                                MirValue::Use(outer_local)
                             }
-                        }
+                            // ── Re-capture from the enclosing closure ───
+                            // We are still lowering inside the enclosing
+                            // closure, so `self.captures_ptr_local` is the
+                            // ENCLOSING captures pointer. (Q26.)
+                            (CaptureSource::Recapture(encl), nested_kind) => {
+                                let encl_cap = self.captures_ptr_local.expect(
+                                    "re-capture implies the enclosing closure has a captures ptr",
+                                );
+                                match (encl.kind, nested_kind) {
+                                    // Enclosing ByValue → its slot holds the
+                                    // value directly; copy it forward.
+                                    (CaptureKind::ByValue, _) => {
+                                        let tmp = self.new_temp(Ty::Int);
+                                        self.emit(MirInst::GetField {
+                                            dest: tmp,
+                                            base: encl_cap,
+                                            field_index: encl.slot_index,
+                                        });
+                                        MirValue::Use(tmp)
+                                    }
+                                    // Enclosing ByRef, nested ByRef → share
+                                    // the same cell: propagate the cell ptr.
+                                    (CaptureKind::ByRef, CaptureKind::ByRef) => {
+                                        let cell = self.new_temp(Ty::Int);
+                                        self.emit(MirInst::GetField {
+                                            dest: cell,
+                                            base: encl_cap,
+                                            field_index: encl.slot_index,
+                                        });
+                                        MirValue::Use(cell)
+                                    }
+                                    // Enclosing ByRef, nested ByValue → read
+                                    // the current value through the cell.
+                                    (CaptureKind::ByRef, CaptureKind::ByValue) => {
+                                        let cell = self.new_temp(Ty::Int);
+                                        self.emit(MirInst::GetField {
+                                            dest: cell,
+                                            base: encl_cap,
+                                            field_index: encl.slot_index,
+                                        });
+                                        let tmp = self.new_temp(Ty::Int);
+                                        self.emit(MirInst::GetField {
+                                            dest: tmp,
+                                            base: cell,
+                                            field_index: 0,
+                                        });
+                                        MirValue::Use(tmp)
+                                    }
+                                }
+                            }
+                        };
+                        self.emit(MirInst::SetField {
+                            base: cap,
+                            field_index: slot_idx,
+                            value: src_val,
+                        });
                     }
                     Some(cap)
                 };

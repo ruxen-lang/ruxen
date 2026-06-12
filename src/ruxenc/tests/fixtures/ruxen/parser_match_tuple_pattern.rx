@@ -1,6 +1,6 @@
 def describe(p: (Int, Int)) -> String
   match p
-    (0, 0) -> String.from("origin")
+    (0, 0) -> "origin"
     (x, 0) -> "on x-axis at #{x}"
     (0, y) -> "on y-axis at #{y}"
     (x, y) -> "at (#{x}, #{y})"

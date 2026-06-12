@@ -1,0 +1,31 @@
+# Q28 regression pin (companion to 647) — `Float` (f64) variant payloads,
+# MIXED with `Int` variants in the same enum, passed THROUGH a function
+# boundary and stored/iterated in an Array. Exercises the second payload slot
+# (offset > 0) and the Int/Float variant interleave that a realistic event
+# enum has, so a slot-width or bit-pattern regression in either backend's
+# `SetField`/`GetField` is caught.
+enum Event
+  Scroll(Float, Float)
+  KeyDown(Int)
+  Resize(Int, Int)
+  CloseRequested
+end
+
+def handle(e: Event) -> nil
+  match e
+    Event.Scroll(dx, dy) -> puts "scroll #{dx},#{dy}"
+    Event.KeyDown(k)     -> puts "key #{k}"
+    Event.Resize(w, h)   -> puts "resize #{w}x#{h}"
+    Event.CloseRequested -> puts "close"
+  end
+end
+
+def main
+  handle(Event.Scroll(1.5, -2.25))
+  handle(Event.KeyDown(13))
+  handle(Event.Resize(800, 600))
+  let arr = [Event.Scroll(0.25, 0.75), Event.KeyDown(27), Event.CloseRequested]
+  for e in arr
+    handle(e)
+  end
+end

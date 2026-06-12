@@ -98,13 +98,14 @@ impl MixinResolver {
     /// the general `lookup_method_with_args` path (now the source of truth
     /// for builtin-head method resolution via the zero-Rust-stdlib bridge)
     /// is as permissive as the old hardcoded resolver arms were:
-    ///   * `&str` literal ↔ `String` / `&String` param (the common
-    ///     `String.from("lit")` shape — the arg is `Ty::Str`, the `.rx`
-    ///     param is `&String`);
+    ///   * a bare `String` literal passed where a method declares a `&String`
+    ///     param — e.g. `s.include?("needle")` / `s.replace("a", "b")`; the
+    ///     arg is `Ty::String` (literals are owned), the `.rx` param is
+    ///     `&String`, and the call site auto-refs;
     ///   * an owned arg passed where the param borrows (`&T` param, `T`
     ///     arg) — callers commonly pass an owned value to a `&self`-style
     ///     borrow.
-    /// Without these, delegating `String.from`/etc. to `.rx` would reject
+    /// Without these, delegating the string methods to `.rx` would reject
     /// the string-literal arg that the arg-ignoring arms accepted.
     fn arg_coerces_to_param(arg_ty: &Ty, param_ty: &Ty) -> bool {
         if arg_ty.is_infer() || arg_ty.is_error() || arg_ty == param_ty {
@@ -142,8 +143,8 @@ impl MixinResolver {
         if Self::param_is_callable(param_ty) && Self::arg_is_callable(arg_ty) {
             return true;
         }
-        // Peel a single reference layer on the param so `&String` / `&str`
-        // params accept the corresponding value/str args.
+        // Peel a single reference layer on the param so a `&String` param
+        // accepts the corresponding owned value arg (the call site auto-refs).
         let param_inner = match param_ty {
             Ty::Ref(inner)
             | Ty::RefMut(inner)
@@ -151,28 +152,13 @@ impl MixinResolver {
             | Ty::RefMutLifetime(_, inner) => Some(inner.as_ref()),
             _ => None,
         };
-        // `&str` literal ↔ `String` (owned or behind one ref layer).
-        let str_to_string = |a: &Ty, p: &Ty| matches!((a, p), (Ty::Str, Ty::String));
-        if str_to_string(arg_ty, param_ty) {
-            return true;
-        }
         if let Some(inner) = param_inner {
-            // `&String` param accepting a `String` / `&str` / `str` arg.
-            if arg_ty == inner || str_to_string(arg_ty, inner) {
-                return true;
-            }
-            // `&str` arg vs `&String` param (peel both).
-            if matches!((arg_ty, inner), (Ty::Str, Ty::String)) {
-                return true;
-            }
-            // Owned arg vs borrowing param (`&T` param, `T` arg).
+            // Owned arg vs borrowing param (`&T` param, `T` arg) — covers a
+            // bare `String` literal/value passed where a method declares a
+            // `&String` param (`s.include?("needle")` / `s.replace("a","b")`).
+            // The old `&str`↔`String` arms are gone: a literal is now born
+            // `Ty::String`, so `arg_ty == inner` (String == String) handles it.
             if arg_ty == inner {
-                return true;
-            }
-        }
-        // `&str` arg (`Ty::Ref(Str)`) vs `&String` param.
-        if let (Ty::Ref(a), Ty::Ref(p)) = (arg_ty, param_ty) {
-            if matches!((a.as_ref(), p.as_ref()), (Ty::Str, Ty::String)) {
                 return true;
             }
         }
@@ -348,6 +334,46 @@ impl MixinResolver {
                 name,
                 signature: sig,
             });
+        }
+    }
+
+    /// Register Ruby `alias new old` method synonyms (resolver
+    /// `method_aliases`: type → {alias → canonical}). For each alias, clone the
+    /// canonical method's already-registered signature under the alias NAME so
+    /// a call via the alias type-checks identically (same arity/params/return).
+    /// MIR separately rewrites the alias name to the canonical at symbol-mangle
+    /// time, so this adds NO method body — it is a pure synonym
+    /// (docs/decisions/alias-keyword.md, D2). Run AFTER
+    /// `register_classes_from_registry` / `collect_impls` so the canonical
+    /// signatures are present.
+    pub fn register_method_aliases(
+        &mut self,
+        method_aliases: &HashMap<String, HashMap<String, String>>,
+    ) {
+        for (type_name, aliases) in method_aliases {
+            // Resolve each alias against the canonical signatures CURRENTLY
+            // registered for the type, collecting synonym entries first so we
+            // don't borrow `type_methods` mutably while reading it.
+            let mut synonyms: Vec<(String, FnSignature)> = Vec::new();
+            if let Some(meths) = self.type_methods.get(type_name) {
+                for (alias, canonical) in aliases {
+                    if let Some(m) = meths.iter().find(|m| &m.name == canonical) {
+                        synonyms.push((alias.clone(), m.signature.clone()));
+                    }
+                }
+            }
+            if synonyms.is_empty() {
+                continue;
+            }
+            let meths = self.type_methods.entry(type_name.clone()).or_default();
+            for (alias, signature) in synonyms {
+                if !meths.iter().any(|m| m.name == alias) {
+                    meths.push(TypeMethod {
+                        name: alias,
+                        signature,
+                    });
+                }
+            }
         }
     }
 
@@ -1085,7 +1111,6 @@ impl MixinResolver {
             Ty::Float => "Float".to_string(),
             Ty::Bool => "Bool".to_string(),
             Ty::String => "String".to_string(),
-            Ty::Str => "&str".to_string(),
             Ty::USize => "USize".to_string(),
             Ty::Char => "Char".to_string(),
             Ty::Unit => "()".to_string(),
@@ -1105,8 +1130,8 @@ impl MixinResolver {
     ///                                   its method-home class is `class
     ///                                   Hash[K, V]` in `map/src/lib.rx`,
     ///                                   keyed in `type_methods` by `"Hash"`)
-    ///   * `Ty::Str`      → `"String"`  (`&str` shares `class String`'s
-    ///                                   surface; there is no `class str`)
+    /// (`Ty::String` keys directly as `"String"` — there is no separate
+    /// `&str` head anymore; a `&String` borrow peels to `String` above.)
     /// References are peeled first. Element-type substitution into the
     /// looked-up signature's return is handled downstream by
     /// `InferenceEngine::substitute_generics_in_return`, which carries the
@@ -1120,7 +1145,6 @@ impl MixinResolver {
             Ty::Array(_) => "Array".to_string(),
             Ty::Set(_) => "Set".to_string(),
             Ty::Map(_, _) => "Hash".to_string(),
-            Ty::Str => "String".to_string(),
             // `Option[T]` / `Result[T, E]` home their methods on the
             // builtin `enum Option` / `enum Result` (option_result/src/
             // lib.rx). Element substitution into the looked-up signature's

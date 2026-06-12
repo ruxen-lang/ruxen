@@ -1,5 +1,5 @@
 def main
-  var s = String.from("hello")
+  var s = "hello"
   puts "before len=#{s.size}"
   s.clear
   puts "after len=#{s.size}"

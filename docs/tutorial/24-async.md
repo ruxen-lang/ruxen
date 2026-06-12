@@ -131,8 +131,8 @@ def finish_write(f: AsyncFile, contents: &String) -> Int
 end
 
 def main
-  let p = String.from("/tmp/demo.txt")
-  let c = String.from("hello async file\n")
+  let p = "/tmp/demo.txt"
+  let c = "hello async file\n"
   if write_payload(&p, &c) == 1
     puts "ok"
   end
@@ -156,7 +156,7 @@ All return `Result[T, IoError]`.
 use std.async_net.{AsyncTcpListener, AsyncTcpStream}
 
 def server_run -> Int
-  let addr  = String.from("127.0.0.1:31729")
+  let addr  = "127.0.0.1:31729"
   let bound = block_on(AsyncTcpListener.bind(addr))
   match bound
     Ok(listener) -> accept_one(listener)

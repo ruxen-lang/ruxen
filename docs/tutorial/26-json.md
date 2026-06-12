@@ -22,7 +22,7 @@ Save as `round_trip.rx`:
 use std.json.{JSON, Json}
 
 def main
-  let source = String.from("{\"name\": \"ruxen\", \"version\": 1}")
+  let source = "{\"name\": \"ruxen\", \"version\": 1}"
   let root = JSON.parse(&source).expect!("parse")
 
   match JSON.object_get(&root, "name")
@@ -59,7 +59,7 @@ Two parser entry points:
 
 ```ruxen
 def main
-  let source = String.from("{\"name\": \"ruxen\", \"answer\": 42}")
+  let source = "{\"name\": \"ruxen\", \"answer\": 42}"
   match JSON.parse(&source)
     Ok(root) -> puts "parsed"
     Err(_)   -> puts "fail"
@@ -78,7 +78,7 @@ Every accessor takes a borrowed `&Json`. To find out what kind a node is, use `J
 
 ```ruxen
 def main
-  let source = String.from("{\"items\": [1, 2, 3]}")
+  let source = "{\"items\": [1, 2, 3]}"
   let root = JSON.parse(&source).expect!("parse")
 
   puts "is_object=#{JSON.is_object(&root)}"
@@ -142,8 +142,8 @@ items.push(JSON.int(2))
 let arr = JSON.array(items)
 
 var fields: Hash[String, Json] = Hash.new
-fields.insert(String.from("name"), JSON.string("ruxen"))
-fields.insert(String.from("items"), arr)
+fields.insert("name", JSON.string("ruxen"))
+fields.insert("items", arr)
 let obj = JSON.object(fields)
 ```
 
@@ -187,8 +187,8 @@ def main
   let arr = JSON.array(items)
 
   var fields: Hash[String, Json] = Hash.new
-  fields.insert(String.from("title"), JSON.string("demo"))
-  fields.insert(String.from("items"), arr)
+  fields.insert("title", JSON.string("demo"))
+  fields.insert("items", arr)
   let obj = JSON.object(fields)
 
   let text = JSON.stringify(&obj).expect!("stringify")

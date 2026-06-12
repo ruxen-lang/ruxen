@@ -92,10 +92,8 @@ impl<'a> InferenceEngine<'a> {
                 let exp = self.ctx.resolve(expected);
                 let fnd = self.ctx.resolve(found);
 
-                // &str → String (string literal in String context)
-                if exp == Ty::String && fnd == Ty::Str {
-                    return Ok(Ty::String);
-                }
+                // (The `&str → String` coercion is gone: a string literal is
+                // born `Ty::String`, so there is nothing to coerce.)
                 // Int → Float (integer literal in Float context)
                 if exp.is_float() && fnd == Ty::Int {
                     return Ok(exp);
@@ -106,25 +104,14 @@ impl<'a> InferenceEngine<'a> {
                         return Ok(exp);
                     }
                 }
-                // TODO (rondo_v1_blockers.md B14): `Option[A]` /
-                // `Result[A, E]` payload coercion. A typeck-only retry
-                // (Option(inner) ↔ Option(inner) → unify_or_coerce)
-                // lands the surface acceptance for `Some("ada")` into
-                // `Option[String]`, but the HIR sub-expression's
-                // `.ty` field remains `Ty::Str` — MIR then emits
-                // `Alloc { ty: Option(Str), size: 24 }` with payload
-                // slot zero set to a heap String pointer. The mismatch
-                // between the storage type (Str) and the actual payload
-                // type (String) causes the SCOPE-EXIT drop on the
-                // outer `Option` to interpret slot zero as `&str`
-                // (no free) while the CALLER reads it as `String`
-                // (frees twice / wrong path). The proper landing
-                // requires rewriting field_expr.ty during coercion
-                // OR threading the coerced container type into MIR
-                // lowering so `Alloc` uses the post-coercion shape.
-                // Both attempted this session, both surface a tangled
-                // drop interaction. Workaround for users: write
-                // `Some(String.from(&"ada"))` explicitly.
+                // (One-string-type ADR: the old `Option`/`Result` String
+                // payload drop hazard — a `Some("ada")` whose HIR `.ty` stayed
+                // `Ty::Str` while storage held a heap `String`, causing a
+                // storage-vs-payload drop mismatch / double-free — is dissolved.
+                // A string literal is born `Ty::String`, so `Some("ada")`
+                // builds `Option[String]` directly with no `&str` payload to
+                // mistype. The case-116 nested-payload `ok_or` caution dies with
+                // it: `opt.ok_or("missing")` now produces `Result[_, String]`.)
                 // General coercion check
                 if can_coerce(&fnd, &exp, self.ctx) {
                     return Ok(exp);
@@ -323,6 +310,10 @@ impl<'a> InferenceEngine<'a> {
         // hook as let-binding RHS auto-wrap — see infer_statement.
         self.auto_wrap_option_some(&func.return_ty, &mut func.body);
 
+        // (One-string-type ADR: the Q39 tuple-element `&str`→`String`
+        // promotion is gone — a string literal is born `Ty::String`, so a
+        // `("", false)` tuple is already `(String, Bool)`. No coercion needed.)
+
         // Check function body type against declared return type (with coercion)
         let body_ty = self.ctx.resolve(&func.body.ty);
         // Auto-ref for fluent/builder methods: a body whose tail expression
@@ -389,6 +380,12 @@ impl<'a> InferenceEngine<'a> {
                     // the RHS in `Option::Some` automatically. Pin:
                     // docs/specs/syntax/option-no-some.spec.md.
                     self.auto_wrap_option_some(ty, val);
+                    // (One-string-type ADR: the Q38 owned-string-literal
+                    // binding promotion and the Q39 tuple-element promotion are
+                    // gone. A string literal is born `Ty::String`, so
+                    // `let s = "x"` already binds an owned, drop-safe `String`
+                    // identical to `let s: String = "x"`. There is no `&str`
+                    // binding to promote, and no leak.)
                     let val_ty = self.ctx.resolve(&val.ty);
                     if let Err(e) = self.unify_or_coerce(ty, &val_ty, &val.span) {
                         self.type_error(e);
@@ -402,6 +399,15 @@ impl<'a> InferenceEngine<'a> {
             }
             HirStatement::Expr(expr) => {
                 self.infer_expr(expr);
+                // Statement-position auto-call: a bare reference to a
+                // function with no required arguments, used as a statement
+                // (its value discarded), is a Ruby-style paren-less call —
+                // e.g. `render` (whose only parameter is its optional
+                // `&block`). The expected type is irrelevant here (the result
+                // is discarded), so pass `Unit`, which never suppresses the
+                // rewrite. Pin: 909_block_defined_and_yield_value (the
+                // blockless `render` call between other statements).
+                self.auto_call_fn_reference(&Ty::Unit, expr);
             }
         }
     }
@@ -524,14 +530,47 @@ impl<'a> InferenceEngine<'a> {
             }
             None => return,
         };
-        if signature.params.is_empty() {
-            // Nullary: rewrite into a zero-argument call so the value takes
-            // the function's return type.
+        // Parameters with a default value are optional and need not be
+        // supplied at a zero-argument auto-call. This includes the
+        // optional `&block` slot (Ruby-block-semantics ADR D5: a `nil`
+        // default makes the block optional), so `render` — whose only
+        // parameter is its block — auto-calls blocklessly.
+        let required_params = signature
+            .params
+            .iter()
+            .filter(|p| p.default.is_none())
+            .count();
+        if required_params == 0 {
+            // No required args: rewrite into a call so the value takes the
+            // function's return type. The resolver's `append_default_args`
+            // only runs on explicit `Call` AST nodes — a bare-identifier
+            // auto-call never went through it — so materialize each param's
+            // DEFAULT value here (each param is optional, since required==0):
+            // the optional `&block` slot's `nil` becomes a null sentinel
+            // (ADR D1), and an ordinary `x: Int = 5` default becomes `5` —
+            // NOT a blanket null. A default that can't be lowered yields a
+            // null fallback of the param type.
+            let param_specs: Vec<(Option<crate::parser::ast::Expr>, Ty)> = signature
+                .params
+                .iter()
+                .map(|p| (p.default.clone(), self.ctx.resolve(&p.ty)))
+                .collect();
+            let mut args: Vec<HirExpr> = Vec::with_capacity(param_specs.len());
+            for (default, param_ty) in param_specs {
+                let hir = default
+                    .and_then(|d| self.default_ast_to_hir(&d, &param_ty))
+                    .unwrap_or_else(|| HirExpr {
+                        kind: HirExprKind::NullLiteral,
+                        ty: param_ty.clone(),
+                        span: val.span.clone(),
+                    });
+                args.push(hir);
+            }
             let ret = self.wrap_async_return(&signature);
             val.kind = HirExprKind::FnCall {
                 callee: def_id,
                 callee_name: name,
-                args: Vec::new(),
+                args,
             };
             val.ty = ret;
         } else {
@@ -539,8 +578,8 @@ impl<'a> InferenceEngine<'a> {
             self.diagnostics.push(crate::diagnostics::Diagnostic::error_with_code(
                 format!(
                     "`{name}` is a function that needs {} argument{}; call it like `{name}(...)`, or annotate a `Fn` type to reference it without calling (e.g. `let f: Fn(...) -> ... = {name}`)",
-                    signature.params.len(),
-                    if signature.params.len() == 1 { "" } else { "s" },
+                    required_params,
+                    if required_params == 1 { "" } else { "s" },
                 ),
                 val.span.clone(),
                 "E0726",
@@ -677,13 +716,13 @@ impl<'a> InferenceEngine<'a> {
     }
 
     /// Returns `true` if the type is acceptable as an argument to `puts`,
-    /// `eputs`, or `print`.  Strings in any common form (`String`, `&str`,
-    /// `&String`, `&&str`) qualify, as do zero-arg functions that return
-    /// such a type (MIR auto-invokes them). `Infer`, `Error`, and `Never`
-    /// are permitted to avoid cascading diagnostics.
+    /// `eputs`, or `print`.  Strings in any common form (`String`,
+    /// `&String`) qualify, as do zero-arg functions that return such a type
+    /// (MIR auto-invokes them). `Infer`, `Error`, and `Never` are permitted
+    /// to avoid cascading diagnostics.
     pub(super) fn is_puts_compatible(ty: &Ty) -> bool {
         match ty {
-            Ty::String | Ty::Str | Ty::Infer(_) | Ty::Error | Ty::Never => true,
+            Ty::String | Ty::Infer(_) | Ty::Error | Ty::Never => true,
             Ty::Ref(inner)
             | Ty::RefMut(inner)
             | Ty::RefLifetime(_, inner)

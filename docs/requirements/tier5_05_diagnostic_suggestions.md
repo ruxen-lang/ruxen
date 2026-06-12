@@ -277,7 +277,7 @@ Example output:
 error[E1001]: value used after move
   --> src/main.rx:9:8
    |
- 7 | let name = String.from("Ruxen")
+ 7 | let name = "Ruxen"
    |     ---- value created here
  8 | consume(name)
    |         ---- value given to `consume()` here

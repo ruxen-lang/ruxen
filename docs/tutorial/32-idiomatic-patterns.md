@@ -15,7 +15,7 @@ class Request
   timeout_ms: Int
 
   def init(@url: String)
-    self.method = String.from("GET")
+    self.method = "GET"
     self.timeout_ms = 30_000
   end
 
@@ -31,8 +31,8 @@ class Request
 end
 
 def main
-  let r = Request.new(String.from("https://example.com"))
-    .with_method(String.from("POST"))
+  let r = Request.new("https://example.com")
+    .with_method("POST")
     .with_timeout(5_000)
   puts "#{r.method} #{r.url} timeout=#{r.timeout_ms}"
 end
@@ -112,7 +112,7 @@ class Url
   end
 
   def self.from(s: &str) -> Url
-    Url.new(String.from(s))
+    Url.new(s.to_string)
   end
 end
 
@@ -132,11 +132,11 @@ class Port
   end
 
   def self.out_of_range -> Result[Port, String]
-    Err(String.from("port out of range"))
+    Err("port out of range")
   end
 
   def self.not_a_number -> Result[Port, String]
-    Err(String.from("not a number"))
+    Err("not a number")
   end
 
   def self.from_str(s: &str) -> Result[Port, String]
@@ -235,7 +235,7 @@ class Timer
 end
 
 def main
-  let _t = Timer.new(String.from("hot loop"))
+  let _t = Timer.new("hot loop")
   # ... work ...
   # `drop` runs at end of main: prints "hot loop: ... ns"
 end

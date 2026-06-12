@@ -380,13 +380,43 @@ impl Parser {
         }
     }
 
-    /// Parse a Block type: Block(T1, T2) -> R or Block -> R or Block
+    /// Parse the type annotation of a `&block:` parameter.
+    ///
+    /// Per the Ruby-block-semantics ADR (`docs/decisions/ruby-block-semantics.md`)
+    /// the CANONICAL spelling is the square-bracket generic form
+    /// `Fn[(T1, T2) -> R]` / `Fn[() -> R]` / `Fn[-> R]`, matching Ruxen's
+    /// `Array[Int]` / `State[T]` convention. The following back-compat
+    /// spellings are also accepted (and `ruxen fmt` preserves whichever
+    /// was written — no normalization):
+    ///   - `Fn(T1, T2) -> R`              (the existing closure-param spelling)
+    ///   - `Block(T1, T2) -> R` / `Block` (the legacy `&block: Block(...)` form)
+    ///   - any other `parse_type` shape (`any Fn[...]`, etc.) as a fallback.
+    ///
+    /// All of these normalize to a single `TypeExpr::Function { params, return_type }`
+    /// so resolve/typeck see one shape regardless of surface spelling.
     fn parse_block_type(&mut self) -> TypeExpr {
         let start = self.current_span();
-        // Expect "Block" type identifier
         if let TokenKind::TypeIdentifier(ref name) = self.current_kind().clone() {
+            // Canonical: `Fn[(T…) -> R]`. Only treat `Fn[` as the block
+            // signature form — `Fn(...)` falls through to `parse_fn_type`.
+            if name == "Fn" && self.peek_kind() == TokenKind::LBracket {
+                self.advance(); // consume `Fn`
+                self.advance(); // consume `[`
+                self.skip_newlines();
+                let (params, return_type) = self.parse_block_sig_inner();
+                self.skip_newlines();
+                self.expect(TokenKind::RBracket);
+                let span = self.span_from(&start);
+                return TypeExpr::Function {
+                    params,
+                    return_type: Box::new(return_type),
+                    bracketed: true, // canonical `Fn[(T…) -> R]`
+                    span,
+                };
+            }
+            // Legacy: `Block(T…) -> R` / `Block`.
             if name == "Block" {
-                self.advance();
+                self.advance(); // consume `Block`
                 let params = if self.at(TokenKind::LParen) {
                     self.advance();
                     self.skip_newlines();
@@ -403,7 +433,6 @@ impl Parser {
                 } else {
                     vec![]
                 };
-
                 let return_type = if self.eat(TokenKind::Arrow) {
                     self.skip_newlines();
                     self.parse_type()
@@ -413,18 +442,57 @@ impl Parser {
                         span: self.current_span(),
                     }
                 };
-
                 let span = self.span_from(&start);
                 return TypeExpr::Function {
                     params,
                     return_type: Box::new(return_type),
+                    bracketed: false, // legacy `Block(...)` form
                     span,
                 };
             }
         }
 
-        // Fallback to regular type parsing
+        // Back-compat `Fn(...) -> R` and every other shape (`any Fn[...]`,
+        // a bare named type, …) go through ordinary type parsing.
         self.parse_type()
+    }
+
+    /// Parse the inside of a canonical `Fn[...]` block signature: an optional
+    /// parenthesised parameter list, then an optional `-> R`. Accepts
+    /// `(T1, T2) -> R`, `() -> R`, and a bare `-> R`. The unit return is `nil`.
+    fn parse_block_sig_inner(&mut self) -> (Vec<TypeExpr>, TypeExpr) {
+        let params = if self.at(TokenKind::LParen) {
+            self.advance();
+            self.skip_newlines();
+            let mut params = Vec::new();
+            if !self.at(TokenKind::RParen) {
+                params.push(self.parse_type());
+                while self.eat(TokenKind::Comma) {
+                    self.skip_newlines();
+                    if self.at(TokenKind::RParen) {
+                        break;
+                    }
+                    params.push(self.parse_type());
+                }
+            }
+            self.skip_newlines();
+            self.expect(TokenKind::RParen);
+            params
+        } else {
+            vec![]
+        };
+
+        let return_type = if self.eat(TokenKind::Arrow) {
+            self.skip_newlines();
+            self.parse_type()
+        } else {
+            TypeExpr::Tuple {
+                elements: vec![],
+                span: self.current_span(),
+            }
+        };
+
+        (params, return_type)
     }
 
     // ─── Statement & Block Parsing ──────────────────────────────────

@@ -66,13 +66,22 @@ fn string_methods_resolve_via_general_path() {
 }
 
 #[test]
-fn str_methods_route_to_string_class() {
+fn string_methods_route_to_string_class() {
     let (traits, symbols) = bootstrap_resolver();
-    // `Ty::Str` (&str) has no `class str`; method_home_key routes it to
-    // `class String`, so String's methods resolve for a `&str` receiver.
+    // One-string-type ADR: there is one string type, `Ty::String`. A
+    // `&String` borrow peels to `Ty::String` in `method_home_key`, so String's
+    // methods resolve for both the owned value and a borrowed reference.
     assert!(
-        traits.lookup_method(&Ty::Str, "size", &symbols).is_some(),
-        "&str.size must route to class String via method_home_key"
+        traits
+            .lookup_method(&Ty::String, "size", &symbols)
+            .is_some(),
+        "String.size must resolve from class String"
+    );
+    assert!(
+        traits
+            .lookup_method(&Ty::Ref(Box::new(Ty::String)), "size", &symbols)
+            .is_some(),
+        "&String.size must peel to String and resolve from class String"
     );
 }
 

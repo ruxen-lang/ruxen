@@ -42,6 +42,23 @@ pub struct MirProgram {
     /// to this struct at offset 0 of every instance.
     /// Spec: §B8.
     pub class_infos: Vec<MirClassInfo>,
+    /// Public, top-level free function names (not class methods, not
+    /// `main`). Tier 4.03 (WASM): the LLVM backend, when targeting
+    /// `wasm32-*`, sets the LLVM `export_name` attribute on each of
+    /// these so the function is callable from a JS host (a wasm export)
+    /// without name mangling. The Cranelift backend ignores this field
+    /// entirely — it is wasm-only metadata, populated unconditionally at
+    /// lower time and consumed only on the wasm codegen path. v1 exports
+    /// every public top-level `def` by its source name; a per-function
+    /// `wasm_export "custom"` rename directive is the staged remainder
+    /// (`docs/decisions/phase4-no-std-wasm.md`).
+    pub wasm_exports: Vec<String>,
+    /// Tier 4.04: this program was lowered in no_std mode. The cranelift
+    /// backend reads this to SKIP the `ruxen_env_init(argc, argv)` injection
+    /// into `main` — a no_std build has no `std.env` and no `ruxen_env_init`
+    /// runtime symbol. Set by `Lowerer::new_no_std`; `false` on every hosted
+    /// build (unchanged behaviour).
+    pub no_std: bool,
 }
 
 /// Phase B-2: one static vtable struct per `(class, mixin)` pair.
@@ -127,6 +144,8 @@ impl MirProgram {
             ffi_libs: Vec::new(),
             vtables: Vec::new(),
             class_infos: Vec::new(),
+            wasm_exports: Vec::new(),
+            no_std: false,
         }
     }
 }

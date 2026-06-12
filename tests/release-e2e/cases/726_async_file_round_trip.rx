@@ -104,8 +104,8 @@ def compare_strings(a: String, b: String) -> Int
 end
 
 def main
-  let path = String.from("/tmp/ruxen_async_file_test_726.txt")
-  let contents = String.from("async file round trip\n")
+  let path = "/tmp/ruxen_async_file_test_726.txt"
+  let contents = "async file round trip\n"
 
   let wrote = write_payload(path.clone, contents.clone)
   if wrote == 1

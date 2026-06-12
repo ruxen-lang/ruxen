@@ -77,10 +77,34 @@ impl Resolver {
                 self.resolve_use_decl(use_decl);
                 None
             }
+            // A free-fn `alias new old` was bound into scope in Pass-1b
+            // (`bind_free_fn_alias`) so call sites resolve during body
+            // resolution; it produces no HIR item (docs/decisions/alias-keyword.md).
+            ast::TopLevelItem::Alias(_) => None,
             ast::TopLevelItem::Lib(_) | ast::TopLevelItem::Extern(_) => {
                 // FFI declarations are handled during codegen — they don't produce
                 // HIR items. The functions they declare are resolved by name at
                 // call sites during codegen (via runtime_name / get_or_declare_func).
+                None
+            }
+            ast::TopLevelItem::Expr(e) => {
+                // A top-level expression statement (Q23b). The parser accepts
+                // this so the SHARED parser surface (and therefore `ruxen
+                // fmt`) round-trips test files shaped like
+                // `Tester.describe("…") do … end`. The COMPILE path never
+                // executes a top-level statement directly: `ruxen test`
+                // hoists items + wraps the statements in a synthesised `def
+                // main` first. So reaching resolve with one means a raw file
+                // with top-level statements was compiled directly — reject it
+                // clearly rather than silently dropping it.
+                self.diagnostics.push(Diagnostic::error_with_code(
+                    "top-level expression statements are not executable on the \
+                     direct compile path — wrap them in `def main` (or run the \
+                     file through `ruxen test`, which does this for you)"
+                        .to_string(),
+                    e.span.clone(),
+                    "E0728",
+                ));
                 None
             }
         }
@@ -266,6 +290,10 @@ impl Resolver {
                             span: span.clone(),
                         });
                     }
+                    // `alias` inside a class-body inner `include`/impl block is
+                    // not a Tier-1 surface (aliases live at the class-body level);
+                    // ignore it here (docs/decisions/alias-keyword.md).
+                    ast::ImplItem::Alias(_) => {}
                 }
             }
             self.current_impl_assoc_types = old_assoc;
@@ -388,6 +416,19 @@ impl Resolver {
             };
         }
 
+        // Ruby `alias new old` method synonyms (docs/decisions/alias-keyword.md).
+        // Visible canonical method names = in-body `def`s + included-mixin
+        // methods (ADR D7). Recorded under BOTH the qualified key (matching the
+        // typeck/MIR class-name lookup) and the bare name for top-level classes.
+        if !class.aliases.is_empty() {
+            let method_names =
+                self.visible_method_names(&methods, &class.inner_impls, &class.lib_decls);
+            self.record_method_aliases(&qualified_key, &class.aliases, &method_names);
+            if qualified_key != class.name {
+                self.record_method_aliases(&class.name, &class.aliases, &method_names);
+            }
+        }
+
         HirClassDef {
             def_id,
             name: class.name.clone(),
@@ -400,6 +441,45 @@ impl Resolver {
             doc_comments: class.doc_comments.clone(),
             span: class.span.clone(),
         }
+    }
+
+    /// Collect the canonical method names visible on a type for alias-target
+    /// resolution: in-body `def` names, the method names of every included
+    /// mixin (ADR D7), and the class-body `lib "..."` FFI method names (so an
+    /// alias may target a stdlib FFI-bound method, e.g. `alias to_s to_string`
+    /// on `class String` where `to_string` is `def to_string as "..."`).
+    pub(super) fn visible_method_names(
+        &self,
+        methods: &[HirFuncDef],
+        inner_impls: &[ast::InnerImpl],
+        lib_decls: &[ast::LibDecl],
+    ) -> Vec<String> {
+        let mut names: Vec<String> = methods.iter().map(|m| m.name.clone()).collect();
+        for lib in lib_decls {
+            for f in &lib.functions {
+                names.push(f.name.clone());
+            }
+        }
+        for inner in inner_impls {
+            if inner.negative_trait {
+                continue;
+            }
+            let mixin_name = inner.trait_name.segments.join(".");
+            // A mixin's method surface is its required + default method NAMES,
+            // recorded on `MixinInfo` (ADR D7 — an alias may target a method the
+            // type gets only via `include`).
+            if let Some(mixin_def) = self
+                .symbols
+                .iter()
+                .find(|d| d.name == mixin_name && matches!(d.kind, DefKind::Trait { .. }))
+            {
+                if let DefKind::Trait { info } = &mixin_def.kind {
+                    names.extend(info.required_methods.iter().cloned());
+                    names.extend(info.default_methods.iter().cloned());
+                }
+            }
+        }
+        names
     }
 
     // ─── Struct Resolution ──────────────────────────────────────────
@@ -483,6 +563,12 @@ impl Resolver {
         let impl_blocks = self.lower_inner_impls(&s.inner_impls, &self_ty, Some(def_id));
         self.current_self_ty = old_self_ty;
 
+        // Ruby `alias new old` method synonyms (docs/decisions/alias-keyword.md).
+        if !s.aliases.is_empty() {
+            let method_names = self.visible_method_names(&methods, &s.inner_impls, &[]);
+            self.record_method_aliases(&s.name, &s.aliases, &method_names);
+        }
+
         HirStructDef {
             def_id,
             name: s.name.clone(),
@@ -563,6 +649,10 @@ impl Resolver {
                             span: span.clone(),
                         });
                     }
+                    // `alias` inside a class-body inner `include`/impl block is
+                    // not a Tier-1 surface (aliases live at the class-body level);
+                    // ignore it here (docs/decisions/alias-keyword.md).
+                    ast::ImplItem::Alias(_) => {}
                 }
             }
             self.current_impl_assoc_types = old_assoc;
@@ -694,6 +784,12 @@ impl Resolver {
         let impl_blocks = self.lower_inner_impls(&e.inner_impls, &self_ty, Some(def_id));
         self.current_self_ty = old_self_ty;
 
+        // Ruby `alias new old` method synonyms (docs/decisions/alias-keyword.md).
+        if !e.aliases.is_empty() {
+            let method_names = self.visible_method_names(&methods, &e.inner_impls, &[]);
+            self.record_method_aliases(&e.name, &e.aliases, &method_names);
+        }
+
         self.scopes.pop();
 
         HirEnumDef {
@@ -821,6 +917,10 @@ impl Resolver {
                 ast::MixinItem::DefaultMethod(f) => {
                     items.push(HirMixinItem::DefaultMethod(self.resolve_func_def(f, None)));
                 }
+                // Ruby `alias new old` in a mixin body — recorded as a synonym
+                // in Pass-1 (`ffi_registration.rs`); produces no HIR mixin item
+                // (docs/decisions/alias-keyword.md).
+                ast::MixinItem::Alias(_) => {}
             }
         }
 
@@ -937,6 +1037,34 @@ impl Resolver {
                         span: span.clone(),
                     });
                 }
+                // Ruby `alias new old` inside an `extension` body — a method
+                // synonym scoped to the target type (docs/decisions/alias-keyword.md).
+                ast::ImplItem::Alias(_) => {}
+            }
+        }
+
+        // Record `extension`-body aliases against the target type. The visible
+        // method set is the methods this impl resolved (HIR `Method` items).
+        let impl_aliases: Vec<ast::AliasDef> = imp
+            .items
+            .iter()
+            .filter_map(|ii| match ii {
+                ast::ImplItem::Alias(a) => Some(a.clone()),
+                _ => None,
+            })
+            .collect();
+        if !impl_aliases.is_empty() {
+            if let Ty::Class { name, .. } | Ty::Enum { name, .. } | Ty::Struct { name, .. } =
+                &target_ty
+            {
+                let method_names: Vec<String> = items
+                    .iter()
+                    .filter_map(|it| match it {
+                        HirImplItem::Method(m) => Some(m.name.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                self.record_method_aliases(name, &impl_aliases, &method_names);
             }
         }
 

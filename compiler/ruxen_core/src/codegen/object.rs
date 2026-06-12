@@ -29,6 +29,33 @@ fn linker_args(sanitize: bool, extra_link_flags: &[String]) -> Vec<String> {
     args
 }
 
+/// Apply the vendored-PCRE2 include path + width defines to a `cc -c`
+/// invocation when `runtime_c_path` is a PCRE2 vendor source.
+///
+/// PCRE2's `.c` files `#include "config.h"`, `"pcre2.h"`,
+/// `"pcre2_internal.h"`, etc. via bare filenames, so the vendor dir goes on
+/// the include path. `HAVE_CONFIG_H` selects our hand-authored config.h;
+/// `PCRE2_CODE_UNIT_WIDTH=8` selects the 8-bit build (matches the REPL JIT
+/// build in `src/ruxen_repl/build.rs`). The detection key is a path component
+/// literally named `pcre2` — covers the vendor tree, never the user-authored
+/// `library/std/regex/runtime/regex.c`. Shared by the host and cross runtime
+/// compile paths so they stay in lockstep.
+fn apply_pcre2_flags(cmd: &mut Command, runtime_c_path: &Path) {
+    if runtime_c_path
+        .components()
+        .any(|c| c.as_os_str() == "pcre2")
+    {
+        if let Some(parent) = runtime_c_path.parent() {
+            cmd.arg("-I").arg(parent);
+        }
+        cmd.arg("-DHAVE_CONFIG_H=1")
+            .arg("-DPCRE2_CODE_UNIT_WIDTH=8")
+            .arg("-Wno-sign-compare")
+            .arg("-Wno-unused-parameter")
+            .arg("-Wno-implicit-fallthrough");
+    }
+}
+
 /// Compile a single C runtime source to an object file.
 ///
 /// When `sanitize` is true, the file is compiled with AddressSanitizer
@@ -67,31 +94,7 @@ pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf,
         cmd.arg("-O2");
     }
 
-    // Vendored PCRE2 lives at `library/std/regex/runtime/pcre2/`. Its
-    // `.c` files `#include "config.h"`, `"pcre2.h"`,
-    // `"pcre2_internal.h"`, etc. via bare filenames, so we add the
-    // vendor dir to the include path here. `HAVE_CONFIG_H` tells PCRE2
-    // to consult our hand-authored config.h; `PCRE2_CODE_UNIT_WIDTH=8`
-    // selects the 8-bit single-width build (matches the REPL JIT build
-    // in `src/ruxen_repl/build.rs`). The detection key is whether the
-    // source file path goes through a directory literally named `pcre2`,
-    // which covers the vendor-tree itself but never matches the
-    // user-authored `library/std/regex/runtime/regex.c`.
-    if runtime_c_path
-        .components()
-        .any(|c| c.as_os_str() == "pcre2")
-    {
-        if let Some(parent) = runtime_c_path.parent() {
-            cmd.arg("-I").arg(parent);
-        }
-        cmd.arg("-DHAVE_CONFIG_H=1")
-            .arg("-DPCRE2_CODE_UNIT_WIDTH=8")
-            // Suppress noisy warnings from vendored upstream code we
-            // don't want to patch.
-            .arg("-Wno-sign-compare")
-            .arg("-Wno-unused-parameter")
-            .arg("-Wno-implicit-fallthrough");
-    }
+    apply_pcre2_flags(&mut cmd, runtime_c_path);
 
     let status = cmd.status().map_err(|e| {
         format!(
@@ -185,6 +188,442 @@ pub fn emit_executable(
     }
 
     Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cross-compilation linking (tier 4.02)
+// ─────────────────────────────────────────────────────────────────────────
+
+use crate::codegen::target::{LinkerSpec, ResolvedTarget};
+
+/// Compile one runtime `.c` for a cross target using a target-aware `cc`.
+///
+/// `target_args` are the leading flags from the resolved [`LinkerSpec`]
+/// (e.g. `-arch x86_64` for a Darwin cross). The same `cc` driver that links
+/// also compiles the runtime, so the runtime object matches the target ABI.
+/// Only used on the *local* cross path (Darwin→Darwin); the container path
+/// compiles the runtime inside the container instead (see
+/// [`emit_executable_in_container`]).
+pub fn compile_runtime_for_target(
+    runtime_c_path: &Path,
+    target: &ResolvedTarget,
+    target_args: &[String],
+) -> Result<PathBuf, String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let stem = runtime_c_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("runtime");
+    let runtime_o = std::env::temp_dir().join(format!(
+        "ruxen_{}_{}_{}_{}.o",
+        stem,
+        target.canonical().replace('-', "_"),
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed),
+    ));
+
+    let mut cmd = Command::new("cc");
+    for a in target_args {
+        cmd.arg(a);
+    }
+    cmd.arg("-c").arg(runtime_c_path).arg("-o").arg(&runtime_o);
+    // Darwin cross still pins the deployment floor so ld doesn't complain.
+    if target.is_darwin() {
+        cmd.arg("-mmacosx-version-min=11.0");
+    }
+    cmd.arg("-O2");
+    // Vendored PCRE2 needs the same include path + width defines the host
+    // `compile_runtime` applies; without them `pcre2_internal.h` aborts the
+    // compile ("PCRE2_CODE_UNIT_WIDTH must be defined").
+    apply_pcre2_flags(&mut cmd, runtime_c_path);
+
+    let status = cmd.status().map_err(|e| {
+        format!(
+            "Failed to invoke cc for {}: {}",
+            runtime_c_path.display(),
+            e
+        )
+    })?;
+    if !status.success() {
+        return Err(format!(
+            "Failed to compile runtime {} for target {}",
+            runtime_c_path.display(),
+            target.canonical()
+        ));
+    }
+    Ok(runtime_o)
+}
+
+/// Link a cross-compiled executable using a resolved [`LinkerSpec`].
+///
+/// Dispatches on `spec.needs_container`:
+/// - local link → spawn `spec.program` with `spec.target_args` (Darwin cross
+///   via `cc -arch`, or a host-arch Linux `cc`, or an on-PATH cross gcc).
+/// - container link → the two-stage Docker flow ([`emit_executable_in_container`]).
+///
+/// `runtime_sources` are the stdlib `.c` paths; on the local path they must
+/// already be compiled to `runtime_objects`. On the container path they are
+/// compiled *inside* the container (the host has no target cc), so the caller
+/// passes the source paths and an empty `runtime_objects`.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_executable_for_target(
+    object_bytes: &[u8],
+    runtime_objects: &[PathBuf],
+    runtime_sources: &[PathBuf],
+    output_path: &str,
+    target: &ResolvedTarget,
+    spec: &LinkerSpec,
+    extra_link_flags: &[String],
+) -> Result<(), String> {
+    if spec.needs_container {
+        return emit_executable_in_container(
+            object_bytes,
+            runtime_sources,
+            output_path,
+            target,
+            extra_link_flags,
+        );
+    }
+
+    // Local cross link (Darwin→Darwin, native Linux, or on-PATH cross gcc).
+    let obj_path = format!("{}.o", output_path);
+    std::fs::write(&obj_path, object_bytes)
+        .map_err(|e| format!("Failed to write object file: {}", e))?;
+
+    let mut cmd = Command::new(&spec.program);
+    for a in &spec.target_args {
+        cmd.arg(a);
+    }
+    cmd.arg(&obj_path);
+    for runtime_o in runtime_objects {
+        cmd.arg(runtime_o);
+    }
+    cmd.arg("-o").arg(output_path);
+    if target.is_darwin() {
+        cmd.arg("-mmacosx-version-min=11.0");
+        // std::rand uses SecRandomCopyBytes; the Security framework must be
+        // linked. (Cross-platform Linux targets don't link this.)
+        cmd.arg("-framework").arg("Security");
+    }
+    for flag in extra_link_flags {
+        cmd.arg(flag);
+    }
+
+    let status = cmd.status().map_err(|e| {
+        format!(
+            "Failed to invoke cross linker '{}' for {}: {}",
+            spec.program,
+            target.canonical(),
+            e
+        )
+    })?;
+    if !status.success() {
+        return Err(format!(
+            "Cross-linking failed for '{}' (target {})",
+            output_path,
+            target.canonical()
+        ));
+    }
+
+    let _ = std::fs::remove_file(&obj_path);
+    for runtime_o in runtime_objects {
+        let _ = std::fs::remove_file(runtime_o);
+    }
+    Ok(())
+}
+
+/// Tier 4.03 (WASM): link a WebAssembly object into a final `.wasm` module
+/// with `wasm-ld`.
+///
+/// A `wasm32-unknown-unknown` module is a *reactor* (spec §5.3): no `_start`,
+/// no libc, no C runtime — its exports are the host-callable API. The LLVM
+/// backend already emitted the object with `export_name` attributes on every
+/// `program.wasm_exports` entry, so `--export-dynamic` keeps them live through
+/// `wasm-ld`'s default `--gc-sections`. `--allow-undefined` tolerates host
+/// imports (none in the math-export v1 path, but harmless and forward-looking).
+///
+/// `wasm-ld` discovery order: `RUXEN_WASM_LD` env override → the LLVM-18 prefix
+/// (`/opt/homebrew/opt/llvm@18/bin/wasm-ld`, where the cross-compile work
+/// already assumes LLVM 18 lives) → bare `wasm-ld` on `PATH`. A missing linker
+/// errors with an actionable install hint rather than a raw spawn failure.
+fn find_wasm_ld() -> Result<String, String> {
+    if let Some(p) = std::env::var_os("RUXEN_WASM_LD") {
+        let s = p.to_string_lossy().to_string();
+        if Path::new(&s).is_file() {
+            return Ok(s);
+        }
+    }
+    let prefixed = "/opt/homebrew/opt/llvm@18/bin/wasm-ld";
+    if Path::new(prefixed).is_file() {
+        return Ok(prefixed.to_string());
+    }
+    // Fall back to PATH (Linux distros ship `wasm-ld` via the `lld` package;
+    // rustup's `rust-lld` is `wasm-ld` under the hood).
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let cand = dir.join("wasm-ld");
+            if cand.is_file() {
+                return Ok(cand.to_string_lossy().to_string());
+            }
+        }
+    }
+    Err(
+        "wasm-ld not found. Install LLVM's lld (`brew install llvm@18` or \
+         `apt install lld`) or set RUXEN_WASM_LD to its path."
+            .to_string(),
+    )
+}
+
+/// Link a WebAssembly object into a `.wasm` module. See [`find_wasm_ld`].
+pub fn emit_wasm_module(
+    object_bytes: &[u8],
+    output_path: &str,
+    target: &ResolvedTarget,
+) -> Result<(), String> {
+    let wasm_ld = find_wasm_ld()?;
+    let obj_path = format!("{}.o", output_path);
+    std::fs::write(&obj_path, object_bytes)
+        .map_err(|e| format!("Failed to write wasm object file: {}", e))?;
+
+    let mut cmd = Command::new(&wasm_ld);
+    cmd.arg("--no-entry")
+        .arg("--export-dynamic")
+        .arg("--allow-undefined")
+        .arg(&obj_path)
+        .arg("-o")
+        .arg(output_path);
+
+    let status = cmd.status().map_err(|e| {
+        format!(
+            "Failed to invoke wasm-ld '{}' for {}: {}",
+            wasm_ld,
+            target.canonical(),
+            e
+        )
+    })?;
+    if !status.success() {
+        return Err(format!(
+            "wasm-ld failed for '{}' (target {})",
+            output_path,
+            target.canonical()
+        ));
+    }
+    let _ = std::fs::remove_file(&obj_path);
+    Ok(())
+}
+
+/// Two-stage Docker link: emit the target object locally, then compile the
+/// stdlib runtime `.c` *and* link inside a target-native container.
+///
+/// This is the honest fallback for Linux targets from a macOS host with no
+/// cross toolchain installed (`zig`/`aarch64-linux-gnu-gcc` absent). The
+/// container's native `cc` + libc compile the runtime for the target and link
+/// the final binary — no host cross-cc required.
+///
+/// Mounting strategy: the stdlib root (`library/std`) is mounted read-only at
+/// `/std` **preserving directory structure**, so each runtime `.c`'s relative
+/// `#include "../../core/runtime/runtime.h"` resolves exactly as it does on
+/// the host. A writable scratch dir is mounted at `/work` for the staged
+/// object, per-source `.o`s, and the final binary. PCRE2 vendor sources get
+/// the same include/width flags as the host (`apply_pcre2_flags` analogue,
+/// inlined into the in-container shell). User-supplied runtime sources (which
+/// live outside the stdlib tree) are staged flat into `/work` — they are
+/// standalone TUs by the project convention.
+///
+/// Requires Docker. The error when Docker is missing is actionable (points at
+/// the manifest linker override) — never a silent failure.
+fn emit_executable_in_container(
+    object_bytes: &[u8],
+    runtime_sources: &[PathBuf],
+    output_path: &str,
+    target: &ResolvedTarget,
+    extra_link_flags: &[String],
+) -> Result<(), String> {
+    use crate::codegen::target::docker_platform;
+
+    let platform = docker_platform(target);
+    let stdlib_root = super::find_stdlib_root()?;
+    let stdlib_root = stdlib_root
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize stdlib root: {}", e))?;
+
+    let scratch = std::env::temp_dir().join(format!(
+        "ruxen_xlink_{}_{}",
+        std::process::id(),
+        target.canonical().replace('-', "_")
+    ));
+    std::fs::create_dir_all(&scratch)
+        .map_err(|e| format!("Failed to create cross-link scratch dir: {}", e))?;
+    let guard = ScratchGuard(scratch.clone());
+
+    let obj_name = "ruxen_main.o";
+    std::fs::write(scratch.join(obj_name), object_bytes)
+        .map_err(|e| format!("Failed to stage object: {}", e))?;
+
+    // Partition runtime sources: stdlib (under stdlib_root → compiled in place
+    // at /std/<rel>) vs. user (outside → staged flat into /work).
+    let mut compile_lines: Vec<String> = Vec::new();
+    let mut object_names: Vec<String> = Vec::new();
+    let mut user_staged = 0usize;
+    for src in runtime_sources {
+        let canon = src
+            .canonicalize()
+            .map_err(|e| format!("runtime source {} missing: {}", src.display(), e))?;
+        let is_pcre2 = canon.components().any(|c| c.as_os_str() == "pcre2");
+        let pcre2_flags = if is_pcre2 {
+            // Vendor dir is the .c's own parent inside the container.
+            "-I\"$(dirname \"$SRC\")\" -DHAVE_CONFIG_H=1 -DPCRE2_CODE_UNIT_WIDTH=8 \
+             -Wno-sign-compare -Wno-unused-parameter -Wno-implicit-fallthrough"
+        } else {
+            ""
+        };
+
+        let (container_src, obj) = if let Ok(rel) = canon.strip_prefix(&stdlib_root) {
+            // Stdlib source: compiled in place under the read-only /std mount.
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            let obj = format!("/work/std_{}.o", user_obj_safe(&rel_str));
+            (format!("/std/{}", rel_str), obj)
+        } else {
+            // User source: stage flat into scratch.
+            let fname = canon
+                .file_name()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| format!("bad runtime source path {}", canon.display()))?;
+            std::fs::copy(&canon, scratch.join(fname))
+                .map_err(|e| format!("Failed to stage user runtime {}: {}", canon.display(), e))?;
+            user_staged += 1;
+            let obj = format!("/work/user_{}.o", user_obj_safe(fname));
+            (format!("/work/{}", fname), obj)
+        };
+
+        // `SRC=...; cc -c "$SRC" ...` so the PCRE2 `-I$(dirname $SRC)` resolves.
+        compile_lines.push(format!(
+            "SRC={}; cc -O2 {} -c \"$SRC\" -o {}",
+            shell_quote(&container_src),
+            pcre2_flags,
+            shell_quote(&obj)
+        ));
+        object_names.push(obj);
+    }
+    let _ = user_staged;
+
+    let out_name = Path::new(output_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("a.out");
+
+    // Build the in-container script: compile each runtime source, then link
+    // the staged main object + every runtime object into the final binary.
+    let mut script = String::from("set -e\n");
+    for line in &compile_lines {
+        script.push_str(line);
+        script.push('\n');
+    }
+    script.push_str("cc -O2 /work/");
+    script.push_str(obj_name);
+    for obj in &object_names {
+        script.push(' ');
+        script.push_str(&shell_quote(obj));
+    }
+    script.push_str(" -o /work/");
+    script.push_str(out_name);
+    for flag in extra_link_flags {
+        // Drop macOS-only framework flags that don't exist on Linux.
+        if flag == "-framework" || flag == "Security" {
+            continue;
+        }
+        script.push(' ');
+        script.push_str(&shell_quote(flag));
+    }
+    script.push('\n');
+
+    let work_mount = format!("{}:/work", scratch.display());
+    let std_mount = format!("{}:/std:ro", stdlib_root.display());
+    let mut cmd = Command::new("docker");
+    cmd.arg("run")
+        .arg("--rm")
+        .arg("--platform")
+        .arg(platform)
+        .arg("-v")
+        .arg(&work_mount)
+        .arg("-v")
+        .arg(&std_mount)
+        .arg("-w")
+        .arg("/work")
+        // A small image with a C toolchain. gcc:13 ships cc + glibc + libm.
+        .arg("gcc:13")
+        .arg("bash")
+        .arg("-c")
+        .arg(&script);
+
+    let output = cmd.output().map_err(|e| {
+        format!(
+            "Failed to invoke docker for container cross-link of '{}': {}. \
+             Install Docker or set [target.{}].linker in Ruxen.toml.",
+            target.canonical(),
+            e,
+            target.canonical()
+        )
+    })?;
+    if !output.status.success() {
+        return Err(format!(
+            "Container cross-link failed for '{}' (target {}):\n{}",
+            output_path,
+            target.canonical(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    // Copy the produced binary out of the scratch mount to the final path.
+    std::fs::copy(scratch.join(out_name), output_path)
+        .map_err(|e| format!("Cross-link produced no binary for '{}': {}", output_path, e))?;
+    // Preserve the executable bit.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(output_path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o755);
+            let _ = std::fs::set_permissions(output_path, perms);
+        }
+    }
+    drop(guard);
+    Ok(())
+}
+
+/// RAII cleanup for the container-link scratch directory.
+struct ScratchGuard(PathBuf);
+impl Drop for ScratchGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Turn an arbitrary path-ish string into a flat, filesystem-safe object stem
+/// (so two runtime sources with the same basename in different package dirs
+/// don't collide in `/work`).
+fn user_obj_safe(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+/// Single-quote a string for a POSIX `bash -c` script (closes/reopens around
+/// embedded single quotes). Inputs here are paths/flags we control, but
+/// quoting keeps spaces and shell metacharacters inert.
+fn shell_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        if c == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 #[cfg(test)]

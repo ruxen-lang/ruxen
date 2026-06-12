@@ -30,8 +30,8 @@ def check_strings(s: String, needle: String) -> Int
 end
 
 def main
-  let want = String.from("hello")
-  let needle = String.from("hello")
+  let want = "hello"
+  let needle = "hello"
   let r = match make_result(want)
     Ok(s)  -> check_strings(s, needle)
     Err(_) -> 0

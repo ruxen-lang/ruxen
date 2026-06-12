@@ -1,7 +1,7 @@
 def main
   var s: Set[String] = Set.new
-  s.insert(String.from("alpha"))
-  s.insert(String.from("beta"))
-  s.insert(String.from("gamma"))
+  s.insert("alpha")
+  s.insert("beta")
+  s.insert("gamma")
   let _len = s.size
 end

@@ -1,12 +1,12 @@
 def describe(a: Int, b: Int) -> String
   match a
     0 -> match b
-      0 -> String.from("both zero")
-      _ -> String.from("a zero")
+      0 -> "both zero"
+      _ -> "a zero"
     end
     _ -> match b
-      0 -> String.from("b zero")
-      _ -> String.from("neither zero")
+      0 -> "b zero"
+      _ -> "neither zero"
     end
   end
 end

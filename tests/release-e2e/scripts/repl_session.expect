@@ -16,7 +16,7 @@ Available commands:
 => false : Bool
 Int
 Float
-&str
+String
 Bool
 Char
 => 10 : Int

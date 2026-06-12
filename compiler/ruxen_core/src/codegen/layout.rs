@@ -408,10 +408,13 @@ fn layout_of_inner(
         | Ty::Float64 => TypeLayout::primitive(8, 8),
         Ty::Unit | Ty::Never => TypeLayout::primitive(0, 1),
 
-        // ── Strings ─────────────────────────────────────────────────────────
-        // &str — fat pointer: (ptr, len) = 16 bytes, align 8
-        Ty::Str => TypeLayout::primitive(16, 8),
-        // String — (ptr, len, cap) = 24 bytes, align 8
+        // ── String ──────────────────────────────────────────────────────────
+        // The only string type. At the C ABI a `String` is a bare
+        // null-terminated `char*` (one machine word); the 24-byte figure here
+        // is a historical (ptr,len,cap) shape that no path actually reads —
+        // string values flow as i64 pointers in both backends. Reconciling to
+        // 8 is a filed follow-up (docs/decisions/one-string-type.md). The old
+        // `Ty::Str` (`&str`) 16-byte fat-pointer arm was removed.
         Ty::String => TypeLayout::primitive(24, 8),
 
         // ── References ──────────────────────────────────────────────────────

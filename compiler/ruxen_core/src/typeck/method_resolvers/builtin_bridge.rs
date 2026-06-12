@@ -38,15 +38,12 @@ fn is_delegated_head(ty: &Ty) -> bool {
     // →I64), so the derived FFI width matches the C symbol and the parity
     // guard passes. Their numeric.rs residual arms are removed.
     //
-    // `Ty::Str` (`&str`) IS delegated: `method_home_key` routes it to
-    // `class String` (there is no `class str`), and a `&str` receiver is
-    // a pointer-sized I64 — wire-compatible with the `ruxen_string_*`
-    // symbols those decls bind. Both `&str` and `&String` cross the C ABI
-    // as one pointer, so the receiver-prepend is ABI-faithful. The few
-    // `&str` surfaces that genuinely DIFFER from `class String`'s return
-    // (`to_lower`/`to_upper` yield `str` not `String`, `parse_uint` has
-    // no `String` counterpart, `to_s`) stay as residual arms in
-    // `strings.rs`, which run AHEAD of this bridge and shadow it.
+    // (One-string-type ADR: there is one string type, `Ty::String`. A
+    // `&String` borrow peels to `Ty::String` in `method_home_key`, so all
+    // string methods delegate to `class String`. The old separate `&str`
+    // (`Ty::Str`) receiver — wire-identical to `String` at the C ABI — is
+    // gone; `strings.rs`'s irreducible residual arms (`remove`, the mutation
+    // methods) run AHEAD of this bridge and shadow it where surface ≠ ABI.)
     // `Option`/`Result` delegate their NON-closure methods (unwrap/
     // expect/unwrap_or/nil?/present?/ok_or/ok?/err?/ok/err) to their
     // builtin enums (option_result/src/lib.rx). Their closure /
@@ -56,7 +53,6 @@ fn is_delegated_head(ty: &Ty) -> bool {
     matches!(
         ty,
         Ty::String
-            | Ty::Str
             | Ty::Array(_)
             | Ty::Set(_)
             | Ty::Map(_, _)

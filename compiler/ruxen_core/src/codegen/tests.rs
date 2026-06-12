@@ -121,13 +121,9 @@ mod tests {
         assert_eq!(layout.alignment, 8);
     }
 
-    #[test]
-    fn str_layout() {
-        // &str = ptr + len → 16 bytes, align 8
-        let layout = layout_of(&Ty::Str, &symbols());
-        assert_eq!(layout.size, 16);
-        assert_eq!(layout.alignment, 8);
-    }
+    // (The `str_layout` test was removed with the `&str` type — there is one
+    // string type, `String`, exercised by `string_layout` above.
+    // one-string-type ADR.)
 
     // ─── Collection types ────────────────────────────────────────────────────
 
@@ -350,6 +346,8 @@ mod tests {
             ffi_libs: vec![],
             vtables: Vec::new(),
             class_infos: Vec::new(),
+            wasm_exports: Vec::new(),
+            no_std: false,
         }
     }
 

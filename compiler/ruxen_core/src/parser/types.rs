@@ -351,6 +351,7 @@ impl Parser {
         TypeExpr::Function {
             params,
             return_type: Box::new(return_type),
+            bracketed: false, // paren form `Fn(...) -> R`
             span,
         }
     }
@@ -633,6 +634,7 @@ impl Parser {
             let fn_ty = TypeExpr::Function {
                 params,
                 return_type: Box::new(return_type),
+                bracketed: false, // `Fn(...)` sugar inside a mixin bound
                 span: fn_span,
             };
             path.generic_args = Some(vec![fn_ty]);

@@ -1,0 +1,26 @@
+# Q25(b): a `&Hash[K, V]` by-ref param is sound (a pointer to the hash
+# struct, exactly like the widely-used `&Array[Int]`), and now resolves
+# CONSISTENTLY in both free-fn and method position. Before the fix the free
+# fn wrongly rejected `&Hash[Int, Int]` with E1118 (the `Hash → Hashable`
+# mixin-alias collision), while the method accepted it. Both accept it now.
+# Expected: 1 / 99.
+def count(h: &Hash[Int, Int]) -> Int
+  h.size as Int
+end
+class Reader
+  tag: Int
+  def init; self.tag = 0; end
+  def look(h: &Hash[Int, Int]) -> Int
+    match h.get(1)
+      Some(v) -> v
+      nil -> -1
+    end
+  end
+end
+def main
+  var m: Hash[Int, Int] = Hash.new
+  m.insert(1, 99)
+  puts "#{count(&m)}"
+  var r = Reader.new
+  puts "#{r.look(&m)}"
+end

@@ -12,6 +12,7 @@ pub mod stdlib_embedded;
 pub mod symbols;
 mod yield_scan;
 
+mod aliases;
 mod bootstrap_merge;
 mod control_flow;
 mod exprs;
@@ -46,6 +47,13 @@ pub struct ResolveResult {
     /// receivers typed `BufReader.File` fall through to the fresh-
     /// inference-var fallback (the `?T37_read_to_string` symptom).
     pub type_registry: HashMap<String, DefId>,
+    /// Ruby `alias new old` method synonyms (docs/decisions/alias-keyword.md).
+    /// Keyed by the home type's (possibly qualified) name → `{alias → canonical}`.
+    /// Threaded to typeck (`type_methods` lookup resolves the alias name to the
+    /// canonical signature) and to MIR (`select_method_symbol_name` falls
+    /// through here so `set.member?(x)` emits `Set_include?`). A pure synonym —
+    /// no method body is created for the alias.
+    pub method_aliases: HashMap<String, HashMap<String, String>>,
 }
 
 /// The name resolver walks the AST and produces HIR with resolved names.
@@ -85,12 +93,6 @@ pub struct Resolver {
     /// the class's fields/methods land on a dangling DefId.
     /// Pin: `docs/rondo_v1_blockers.md` B12.
     pub(super) current_module_path: Vec<String>,
-
-    /// Functions whose body contains `yield` — these take a synthetic
-    /// `__block: Closure` trailing parameter.  Maps function name to the
-    /// arity of the first observed `yield` (used to pre-shape the block's
-    /// `Ty::Fn` parameter list so inference can unify with caller blocks).
-    pub(super) yield_fns: HashMap<String, usize>,
 
     /// Nesting depth of async functions/closures currently being resolved.
     pub(super) async_scope_depth: usize,
@@ -183,6 +185,11 @@ pub struct Resolver {
     /// `register_top_level_type_with_ffi_in` + the main pass-2
     /// `resolve_func_def` walk).
     pub(super) emitted_e1118_spans: std::collections::HashSet<(usize, usize)>,
+
+    /// Ruby `alias new old` method synonyms accumulated while resolving each
+    /// type body (docs/decisions/alias-keyword.md). Type name → `{alias →
+    /// canonical}`. Moved into `ResolveResult.method_aliases` at the end.
+    pub(super) method_aliases: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug)]
@@ -206,7 +213,6 @@ impl Resolver {
             current_impl_assoc_types: HashMap::new(),
             current_trait_context: None,
             current_module_path: Vec::new(),
-            yield_fns: HashMap::new(),
             async_scope_depth: 0,
             closure_stack: Vec::new(),
             tagged_enums_in_scope: HashMap::new(),
@@ -216,6 +222,7 @@ impl Resolver {
             bootstrap_auto_packages: Vec::new(),
             bootstrap_package_item_ids: HashMap::new(),
             emitted_e1118_spans: std::collections::HashSet::new(),
+            method_aliases: HashMap::new(),
         }
     }
 

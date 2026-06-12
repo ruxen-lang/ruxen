@@ -178,7 +178,7 @@ fn rewrite_for_replay(
 /// This is narrower than "any side effect": we deliberately leave
 /// out free-function calls and method calls on non-session
 /// receivers (class statics like `Thread.spawn_raw`,
-/// `AtomicI64.new`, `String.from`). Those create or touch resources
+/// `AtomicI64.new`, `String.new`). Those create or touch resources
 /// outside the cumulative session-state model — replaying them would
 /// either re-allocate (harmless leak) or, for `Thread.spawn_raw`,
 /// spawn a second OS thread that races with the original on a bound
@@ -2049,6 +2049,8 @@ fn get_item_span(item: &TopLevelItem) -> ruxen_core::lexer::token::Span {
         TopLevelItem::Const(c) => c.span.clone(),
         TopLevelItem::Lib(l) => l.span.clone(),
         TopLevelItem::Extern(e) => e.span.clone(),
+        TopLevelItem::Expr(e) => e.span.clone(),
+        TopLevelItem::Alias(a) => a.span.clone(),
     }
 }
 

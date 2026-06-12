@@ -123,6 +123,10 @@ pub struct BuildConfig {
     /// Library search paths (-L flags)
     #[serde(default, rename = "link-search")]
     pub link_search: Vec<String>,
+    /// Default cross-compilation target triple (tier 4.02). A `--target` CLI
+    /// flag overrides this. Absent → host. See docs/CROSS_COMPILE.md.
+    #[serde(default)]
+    pub target: Option<String>,
 }
 
 /// [[bin]] target.

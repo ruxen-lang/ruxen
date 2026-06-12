@@ -1,5 +1,5 @@
 def main
-  let s = String.from("hello")
+  let s = "hello"
   let view = s.as_str
   puts "len=#{view.size}"
   puts view

@@ -1,5 +1,31 @@
 # Tier 4.04 — no_std / Embedded Mode
 
+> **Implementation note (2026-06-12, tier 4.04 pass).** This spec predates the
+> `crates/ruxen-core/` → `compiler/ruxen_core/` move, the per-package stdlib
+> split (`library/std/<pkg>/`, with a `library/std/core` package already
+> present), and the move of `-lc -lm` out of `codegen/object.rs` into
+> per-package `[system_libs]` tables. The spec's central premise — "the link
+> line is unconditionally `-lc -lm` and you can't drop it" — is therefore
+> already OBSOLETE: dropping libc is a data/aggregation decision, not a
+> compiler-branch edit. What landed in this pass (the non-slip bar): a
+> `--no-std` host build skips the stdlib bootstrap, links WITHOUT the Ruxen C
+> runtime / `[system_libs]` (no `ruxen_*` symbol in the binary), suppresses the
+> hosted-only entry plumbing (the `ruxen_env_init` injection + synthesized
+> primitive `*_fmt` Display helpers), and **E1400** rejects heap allocation
+> (String/Array/Map/Set) in a no_std unit. Bars: `examples/06-no-std/`,
+> `scripts/no_std_verify.sh`, pins `tests/no_std_e1400.rs` (+ the registry).
+> **"core" = the existing `library/std/core` package set** (ADR decision #1),
+> not a new `library/core/` tree. **Platform reality:** on macOS a truly
+> libc-free binary is impossible (the OS mandates `libSystem` for any dynamic
+> executable); the macOS bar links no Ruxen stdlib and runs, signalling a
+> computed value via a minimal libc `exit` FFI. The strict `-nostdlib`,
+> zero-libc-imports binary is a Linux/embedded target (a `_start` shim + raw
+> exit syscall) and is the **staged remainder** — along with the `core`/`std`
+> re-export surface, the `alloc` tier (heap types with a user
+> `global_allocator`), the `panic_handler`/`global_allocator`/`no_std` source
+> directives, the thumbv7em fixture, and `panic = "unwind"`. See
+> `docs/decisions/phase4-no-std-wasm.md`.
+
 ## 1. Summary & Motivation
 
 Every Ruxen program today links against a C runtime (`crates/ruxen-core/runtime/runtime.c`, 426 lines) that pulls in libc (`stdio.h`, `stdlib.h`, `string.h`) and assumes a hosted environment. The final binary always links `-lc -lm` (`crates/ruxen-core/src/codegen/object.rs:64-70`). There is no way to turn this off. That eliminates Ruxen from:
@@ -543,34 +569,33 @@ Landing-pad emission, DWARF CFI, libunwind integration. Months of work. Out of v
 
 ## 10. Acceptance Criteria
 
+> **Pass status (2026-06-12).** The non-slip bar — a no_std host binary
+> builds+runs with E1400 enforced — is met (see the items marked below). The
+> `no_std`/`panic_handler`/`global_allocator`/`no_mangle` **source directives**,
+> the runtime `.c` split, and the `core`/`std`/`alloc` re-export surface are the
+> **staged remainder** (ADR `phase4-no-std-wasm`). They are marked FILED.
+
 Phase 4a — directives parse:
 
-- [ ] Package-level `no_std` directive parses; emitted in `HirCrate`.
-- [ ] In-body `panic_handler` directive on a function with signature `&PanicInfo -> !` type-checks; any other signature errors.
-- [ ] Two `panic_handler`-marked functions in one crate errors: "duplicate panic handler".
-- [ ] `global_allocator` directive on a const value of a type that includes `Allocator` type-checks.
-- [ ] `no_mangle` directive on a function emits the function symbol verbatim (verified via `nm`).
+- [ ] **FILED** — the in-body directive parser (`no_std`/`panic_handler`/`global_allocator`/`no_mangle`) is the staged remainder. v1 uses a `--no-std` CLI flag instead of the source directive.
 
 Phase 4b — runtime split:
 
-- [ ] Host build links `runtime_core.o` + `runtime_std.o` (two object files, visible in `cc -v` output).
-- [ ] All current tests pass.
-- [ ] Binary size change < 1%.
+- [ ] **FILED / OBSOLETE PREMISE** — there is no single `runtime.c` to split: the stdlib runtime is already per-package (`library/std/<pkg>/runtime/*.c`), and a no_std build links NONE of them. A `runtime_core.c` carve is unnecessary for the v1 bar (a pure-scalar no_std unit needs no runtime).
 
 Phase 4c — no_std linker:
 
-- [ ] `[package] no-std = true` + a trivial `loop; end` main + in-body `panic_handler` directive builds on Linux.
-- [ ] Output has no libc imports: `nm --undefined-only output` lists only user-defined / `runtime_core` symbols.
-- [ ] `-nostdlib` appears in the linker invocation (verified with `RUXEN_VERBOSE=1 ruxen build`).
-- [ ] A public C-ABI `def app_main` with in-body `no_mangle` appears as `app_main` (not `ruxen_app_main`) in `nm`.
+- [x] A no_std `--no-std` build links WITHOUT the Ruxen stdlib runtime / `[system_libs]`, and a pure-arithmetic main RUNS (`examples/06-no-std/exit42.rx` → exit 42; `scripts/no_std_verify.sh`). **DELTA:** `--no-std` CLI flag, not `[package] no-std = true` (manifest key is filed). Built on macOS, not Linux.
+- [x] Output has no Ruxen stdlib symbols: `nm` shows zero `ruxen_*` (asserted by `no_std_verify.sh`). **DELTA:** on macOS, `libSystem` is still linked (OS mandate) — the strict zero-libc-imports binary is a Linux/embedded target (`_start` shim + raw syscall), FILED.
+- [ ] `-nostdlib` in the linker invocation — **FILED** (the macOS bar cannot use `-nostdlib`; the Linux strict variant will).
+- [ ] `no_mangle` directive — **FILED** (directive parser is staged remainder).
 
 Phase 4d — core vs std split:
 
-- [ ] `use std.io` in a no_std crate errors at resolve time: "`std.io` is not available in no-std builds".
-- [ ] `use core.alloc.Array` in a no_std crate without a `global_allocator` directive errors at link time with a friendly message (or at resolve time, see §9 Q13).
-- [ ] A no_std crate with a simple bump allocator marked `global_allocator` builds and runs `var v = Array.new; v.push(1); v.push(2); assert!(v.len == 2); v.drop` correctly (tier-1 B1 fixed, no leaks).
-- [ ] `panic!("literal")` in no_std links and runs.
-- [ ] `panic!("{}", x)` in no_std formats into a 256-byte buffer and calls the handler.
+- [x] **E1400 enforced:** heap allocation (`String`/`Array`/`Map`/`Set` construction) in a no_std unit is rejected with a clean, located diagnostic (`compiler/ruxen_core/src/no_std.rs`, `tests/no_std_e1400.rs`, `docs/errors/E1400.md`). This is the spec's "`use core.alloc.Array` without an allocator errors" criterion, enforced at COMPILE time (§9 Q13's preferred outcome) rather than link time.
+- [ ] `use std.io` errors at resolve time — **FILED** (needs the core/std resolver split).
+- [ ] `global_allocator` + heap types build+run — **FILED** (the `alloc` tier + allocator dispatch).
+- [ ] `panic!` in no_std — **FILED** (panic strategy is abort-only per Open Decision #5; the no-alloc formatter is staged).
 
 Phase 4e — embedded target (if prioritized):
 

@@ -40,6 +40,7 @@ impl Parser {
         // method declarations. Default public, mirrors `parse_class_def`.
         let mut current_vis = Visibility::Public;
         let mut name_list_overrides: Vec<(Visibility, Vec<String>)> = Vec::new();
+        let mut aliases: Vec<AliasDef> = Vec::new();
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
             let __progress = self.pos;
             self.skip_newlines();
@@ -160,6 +161,12 @@ impl Parser {
                         }
                     }
                 }
+                // `alias new old` synonym — checked before the variant
+                // default arm (variants are TypeIdentifiers; `alias` is a
+                // lowercase Identifier, so this never shadows a variant).
+                TokenKind::Identifier(_) if self.is_alias_item_start() => {
+                    aliases.push(self.parse_alias_item());
+                }
                 // ── Default: variant declaration ────────────────────
                 _ => {
                     variants.push(self.parse_variant());
@@ -188,6 +195,7 @@ impl Parser {
             layout,
             doc_comments,
             where_clause,
+            aliases,
             span,
         }
     }
@@ -331,6 +339,7 @@ impl Parser {
         // ruby-naming.spec.md §3.2: section-marker visibility, public default.
         let mut current_vis = Visibility::Public;
         let mut name_list_overrides: Vec<(Visibility, Vec<String>)> = Vec::new();
+        let mut aliases: Vec<AliasDef> = Vec::new();
 
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
             let __progress = self.pos;
@@ -440,6 +449,9 @@ impl Parser {
                         self.synchronize();
                     }
                 }
+                TokenKind::Identifier(_) if self.is_alias_item_start() => {
+                    aliases.push(self.parse_alias_item());
+                }
                 TokenKind::Identifier(_) => {
                     fields.push(self.parse_field_decl_with_vis(current_vis));
                 }
@@ -480,6 +492,7 @@ impl Parser {
             layout,
             doc_comments,
             where_clause,
+            aliases,
             span,
         }
     }
@@ -590,6 +603,12 @@ impl Parser {
                 // Mirrors the class-body arm. Reuses `parse_lib_decl`.
                 TokenKind::Lib => {
                     lib_decls.push(self.parse_lib_decl(vec![]));
+                }
+                // `alias new old` synonym inside a mixin body. Checked
+                // before the catch-all `parse_trait_item` so `alias` is not
+                // misread as a method-sig name.
+                TokenKind::Identifier(_) if self.is_alias_item_start() => {
+                    items.push(MixinItem::Alias(self.parse_alias_item()));
                 }
                 _ => {
                     let mut item = self.parse_trait_item();
@@ -868,6 +887,12 @@ impl Parser {
             };
         }
 
+        // `alias new old` inside an `extension` body — checked before the
+        // method parse (docs/decisions/alias-keyword.md).
+        if self.is_alias_item_start() {
+            return ImplItem::Alias(self.parse_alias_item());
+        }
+
         let vis = self.parse_visibility();
         let func = self.parse_func_def(vis);
         ImplItem::Method(func)
@@ -925,6 +950,8 @@ impl Parser {
         // `private :method_a, :method_b` re-marks — collected here and
         // applied as a final pass after the body is parsed.
         let mut name_list_overrides: Vec<(Visibility, Vec<String>)> = Vec::new();
+        // Ruby `alias new old` synonyms (docs/decisions/alias-keyword.md).
+        let mut aliases: Vec<AliasDef> = Vec::new();
 
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
             let __progress = self.pos;
@@ -1022,6 +1049,13 @@ impl Parser {
                 // commit, not here.
                 TokenKind::Lib => {
                     lib_decls.push(self.parse_lib_decl(vec![]));
+                }
+                // `alias new old` synonym — must be checked before the field
+                // arm, since `alias` lexes as an Identifier. A real field
+                // named `alias` is `alias: Type` (colon), so `is_alias_item_start`
+                // (identifier/operator after `alias`, no colon) disambiguates.
+                TokenKind::Identifier(_) if self.is_alias_item_start() => {
+                    aliases.push(self.parse_alias_item());
                 }
                 TokenKind::Identifier(_) => {
                     // Field declaration — picks up current section visibility.
@@ -1129,6 +1163,7 @@ impl Parser {
             lib_decls,
             doc_comments,
             where_clause,
+            aliases,
             span,
         }
     }

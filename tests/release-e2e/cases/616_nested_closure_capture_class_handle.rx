@@ -1,0 +1,26 @@
+# Q26 variant: the re-captured value is a CLASS HANDLE (was a SIGSEGV).
+# `{ || h.get + 1 }` is stored through the `&var *self` reborrow and reads a
+# field through the captured `Cell` on invocation. Expected: 43, no segfault.
+class Cell
+  v: Int
+  def init(x: Int); self.v = x; end
+  def get -> Int; self.v; end
+end
+class Box
+  fns: Array[any Fn[Fn() -> Int]]
+  def init; self.fns = Array.new; end
+  def var add(f: any Fn[Fn() -> Int]) -> nil; self.fns.push(f); end
+  def var build(b: any Fn[Fn(&var Box) -> nil]) -> nil; b.(&var *self); end
+  def call0 -> Int
+    match self.fns.get(0)
+      Some(f) -> f.()
+      nil -> -1
+    end
+  end
+end
+def main
+  let h = Cell.new(42)
+  var box = Box.new
+  box.build({ |c: &var Box| c.add({ || h.get + 1 }) })
+  puts "#{box.call0}"
+end

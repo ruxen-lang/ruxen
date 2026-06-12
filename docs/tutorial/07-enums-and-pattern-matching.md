@@ -15,9 +15,9 @@ end
 
 def describe(c: Color) -> String
   match c
-    Color.Red   -> String.from("red")
-    Color.Green -> String.from("green")
-    Color.Blue  -> String.from("blue")
+    Color.Red   -> "red"
+    Color.Green -> "green"
+    Color.Blue  -> "blue"
   end
 end
 
@@ -82,9 +82,9 @@ enum Priority
 
   def label -> String
     match self
-      Priority.Low    -> String.from("low")
-      Priority.Medium -> String.from("medium")
-      Priority.High   -> String.from("high")
+      Priority.Low    -> "low"
+      Priority.Medium -> "medium"
+      Priority.High   -> "high"
     end
   end
 end
@@ -156,7 +156,7 @@ Fallible operations return `Result[T, E]` — either an `Ok` carrying the succes
 ```ruxen
 def divide(a: Int, b: Int) -> Result[Int, String]
   if b == 0
-    Err(String.from("divide by zero"))
+    Err("divide by zero")
   else
     Ok(a / b)
   end
@@ -196,7 +196,7 @@ end
 def describe(o: MyOpt[Int]) -> String
   match o
     MyOpt.Has(n) -> "some #{n}"
-    MyOpt.Empty  -> String.from("none")
+    MyOpt.Empty  -> "none"
   end
 end
 

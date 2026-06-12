@@ -10,4 +10,5 @@ pub mod resolve_deps;
 pub mod rlib;
 pub mod scaffold;
 pub mod self_update;
+pub mod target;
 pub mod version;

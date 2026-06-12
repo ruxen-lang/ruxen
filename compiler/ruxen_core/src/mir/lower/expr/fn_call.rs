@@ -57,9 +57,38 @@ impl<'a> Lowerer<'a> {
                 // §B1 — every FFI-alias lookup routes through the
                 // single entry `lookup_ffi_alias` (see
                 // `mir/lower/mod.rs::lookup_ffi_alias`).
-                let callee = self
-                    .lookup_ffi_alias(callee_name)
-                    .unwrap_or_else(|| callee_name.clone());
+                // Q17: redirect a call to an eligible generic free function
+                // to its monomorphic copy specialized for this call's
+                // concrete type arguments (`paint_all` → `paint_all__mono__
+                // TallySurface`), so a mixin-bound method inside the body
+                // dispatches on the concrete type instead of emitting the
+                // bound-placeholder callee (`T: Paintable_fill_rect`). Falls
+                // through to the FFI-alias / opaque path when no specialization
+                // was emitted for these type args (the single-implementor
+                // devirtualize case, or a non-generic callee). Checked before
+                // the FFI alias because a monomorphized user fn is never an
+                // FFI symbol.
+                let arg_tys: Vec<Ty> = args.iter().map(|a| a.ty.clone()).collect();
+                let callee = if let Some(mangled) = self.fn_mono_callee(callee_name, &arg_tys) {
+                    mangled
+                } else if self.generic_fn_unmonomorphizable(callee_name) {
+                    // An eligible generic fn whose opaque body is suppressed
+                    // (it could only emit bound-placeholder callees) was called
+                    // from a concrete context but its type args did not resolve
+                    // to a fully-concrete vector — so there is no monomorphic
+                    // copy to dispatch to and no opaque body to fall back on.
+                    // Surface a clear error rather than emit a dangling callee.
+                    return Err(format!(
+                        "cannot monomorphize generic function `{callee_name}`: its \
+                         mixin-bound type argument did not resolve to a concrete type at \
+                         this call site (a generic argument cannot itself be a type \
+                         parameter with no concrete leaf — see \
+                         docs/decisions/q17-cross-package-monomorphization.md)."
+                    ));
+                } else {
+                    self.lookup_ffi_alias(callee_name)
+                        .unwrap_or_else(|| callee_name.clone())
+                };
                 self.emit(MirInst::Call {
                     dest,
                     callee,

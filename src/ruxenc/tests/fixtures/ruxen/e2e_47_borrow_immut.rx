@@ -3,7 +3,7 @@ def print_name(name: &String)
 end
 
 def main
-  let s = String.from("Ruxen")
+  let s = "Ruxen"
   print_name(&s)
   puts "#{s}"
 end

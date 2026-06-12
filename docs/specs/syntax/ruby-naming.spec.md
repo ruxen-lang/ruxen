@@ -940,8 +940,10 @@ The canonical constructor convention:
 - `.new(args)` — no-conversion constructor; arguments are stored as-is
   (`Array.new`, `Hash.new`, `User.new("alice")`).
 - `.from(value)` — conversion constructor; takes a value of a related
-  type and converts it (`String.from(&str)`, `Box.new(point)` —
-  note: `Box` uses `.new` because no conversion is implied).
+  type and converts it (`String.from_bytes(&Array[Int])`, `Box.new(point)`
+  — note: `Box` uses `.new` because no conversion is implied). (The bare
+  `String.from(&String)` static method was REMOVED — a string literal is
+  already owned, and `b.clone` / `s.to_string` cover borrow→owned.)
 - Ruby `to_*` conversions build one collection from another — there is
   no `.from_iter` (the iterator layer is gone): `[1, 2, 3].to_set`,
   `pairs.to_h`, `chars.join("")`.
@@ -1709,7 +1711,7 @@ mention of the prior forms.
 | `Hash` (as a derivable-trait / mixin noun) | `Hashable` — the bare word `Hash` now names the **map type** `Hash[K, V]` (Ruby's `Hash`); the hashing mixin is `Hashable` |
 | `HashSet[T]` / `HashMap[K, V]` / `Map[K, V]` | `Set[T]` / `Hash[K, V]` (the public names; internal compiler type names like `Ty::Map` are unchanged) |
 | `File.read_string(path)`            | `fs.read_to_string(path)` (canonical stdlib spelling)     |
-| `String.new(s)` (for converting from `&str`) | `String.from(s)` — `.new` is reserved for the no-arg / pre-allocated constructor |
+| `String.new(s)` (for converting from `&str`) | `s.to_string` (`&str`→owned) / `b.clone` (`String`/`&String`→owned). `String.new` is the no-arg / pre-allocated constructor; the old `String.from(s)` static method was REMOVED (a bare literal is already owned). |
 | `def mut foo`                       | `def var foo` — method's receiver is writable                |
 | `&mut T` (reference type)           | `&var T`                                                  |
 | `*mut T` (raw pointer)              | `*var T`                                                  |

@@ -584,7 +584,7 @@ impl Resolver {
                         // memory). Normalising at the resolve layer keeps
                         // the typeck representation aligned with the
                         // builtin primitive while leaving the class
-                        // surface intact for `String.from(...)`-style
+                        // surface intact for `String.new`-style
                         // class-method dispatch (those go through the
                         // AST path / type-registry lookup, not the
                         // returned `Ty`). Method dispatch on receivers
@@ -665,9 +665,19 @@ impl Resolver {
             }
         }
 
-        // Special case: &str
+        // One-string-type ADR (docs/decisions/one-string-type.md): `str` is
+        // not a type in Ruxen. There is exactly one string pair — `String`
+        // (owned) and `&String` (borrowed). Reject the `str` / `&str` spelling
+        // with a clear hint instead of minting a now-deleted `Ty::Str`.
         if name == "str" {
-            return Ty::Str;
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "`str` is not a type in Ruxen — use `String` for an owned \
+                 string or `&String` for a borrowed reference"
+                    .to_string(),
+                path.span.clone(),
+                "E0730",
+            ));
+            return Ty::Error;
         }
 
         self.error(format!("undefined type `{}`", name), &path.span);
@@ -706,6 +716,22 @@ impl Resolver {
             return None;
         }
         let name = &path.segments[0];
+        // A name carrying generic args in a `&Name[..]` position is the
+        // PARAMETERIZED COLLECTION type, not a bare mixin reference — even
+        // when the bare name also denotes a mixin. `Hash` is the canonical
+        // collision: the TEC-13 `Hash → Hashable` alias makes `Hash` resolve
+        // to the static-dispatch `Hashable` mixin, so `&Hash[Int, Int]` was
+        // mis-rejected with E1118 in free-fn position (a false positive),
+        // while the method path happened to resolve it to the `Hash[K,V]`
+        // collection and compiled. `&Hash[K,V]` / `&Set[T]` are sound by-ref
+        // collection params — exactly like the widely-used `&Array[Int]` —
+        // so a generic-args-bearing collection builtin must fall through to
+        // ordinary collection-ref resolution, making free fns and methods
+        // consistent. The bare `&Hash` (no args, = the `Hashable` mixin) is
+        // still correctly rejected below. (Q25b.)
+        if path.generic_args.is_some() && COLLECTION_BUILTINS.contains(&name.as_str()) {
+            return None;
+        }
         let def_id = *self.type_registry.get(name)?;
         let def = self.symbols.get(def_id)?;
         let DefKind::Trait { info } = &def.kind else {

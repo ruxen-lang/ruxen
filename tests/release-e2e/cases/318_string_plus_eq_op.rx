@@ -1,6 +1,6 @@
 def main
-  var s = String.from("foo")
-  s += String.from("bar")
+  var s = "foo"
+  s += "bar"
   puts "len=#{s.size}"
   puts s
 end

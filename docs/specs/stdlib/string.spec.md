@@ -1,38 +1,51 @@
-# Spec — `String` / `&str`
+# Spec — `String` / `&String` (one string type)
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §5.6](../../requirements/tier1_01_stdlib.md).
+ADR: [docs/decisions/one-string-type.md](../../decisions/one-string-type.md).
 
 **Status:** shipped Phase 2 #03-#04; ownership negatives Phase 2 #02;
 method surface self-hosted in `library/std/src/string.rx` since
-#06.8 T#13.
+#06.8 T#13. `&str` removed 2026-06-11 (one-string-type ADR).
 
-Ruxen's `String` is a heap-owned UTF-8 buffer; `&str` is a borrowed
-view.  Both share the same runtime representation at the FFI layer
-(`char*`).  Ownership and use-after-move are enforced statically by
-the borrow checker.
+Ruxen has exactly **one** string type pair: `String` (heap-owned UTF-8 buffer)
+and `&String` (a borrowed reference to one). There is no separate `str`/`&str`
+type — it was a parallel spelling of the same wire value (both are a bare
+`char*` at the FFI layer) and was removed. A type annotation that spells `str`
+is rejected with **E0730** (hint: use `String` or `&String`). Ownership and
+use-after-move are enforced statically by the borrow checker.
 
 ---
 
-## B1 — `String.from(s)` accepts `&str`
+## B1 — borrow→owned is `clone` / `to_string` (the `String.from` static method was REMOVED)
 
-**Given** `s: &str`
-**Then** `String.from(s)` returns an owned `String`.
+The `String.from(s: &String) -> String` static method was **deleted** from the
+language (2026-06-11). The string model is uniform and needs no conversion
+constructor:
 
-**Given** `String.from(1)` (Int arg, not a string)
-**Then** typeck handles it via the int-to-string convenience path
-(documented as "currently lenient" — v2 may tighten).
+- a string literal is already an **owned `String`** (`let s = "x"`);
+- **`b.clone`** copies a runtime `String`/`&String` borrow `b` to a fresh owned
+  `String` — the borrow→owned spelling that `String.from` used to serve;
+- **`b.to_string`** likewise copies a `&String` borrow to an owned `String`.
+
+**Given** `b: &String`
+**Then** `b.to_string` returns an owned `String`.
+
+**Given** `String.from(...)` (the deleted method)
+**Then** typeck rejects it with a clean `no method `from` on type `String``
+diagnostic (pin: `stdlib_string_negatives.rs::
+string_dot_from_is_now_an_unknown_method`).
 
 ## B2 — Use-after-move on `String` argument is rejected
 
 **Given** a function `f(s: String)` that takes ownership and a caller
-`let x = String.from("hi"); f(x); f(x);`
+`let x: String = "hi"; f(x); f(x);`
 **Then** the second `f(x)` emits a use-after-move diagnostic from the
 borrow checker.
 
 ## B3 — `into_bytes()` consumes the receiver
 
-**Given** `let s = String.from("hi"); let _ = s.into_bytes(); let _ = s;`
+**Given** `let s: String = "hi"; let _ = s.into_bytes(); let _ = s;`
 **Then** the final `s` use is rejected: `into_bytes` consumed it.
 
 ## B4 — Existing method surface (pre-#06)
@@ -67,9 +80,11 @@ Pin tests for these live in the E2E fixture set
 
 ## Out of scope (v2)
 
-- `String` interning / `&'static str` literal table.
+- `String` interning / static-literal borrow table (the zero-copy
+  `&String`-of-`.rodata` optimization for a literal in a borrow position — see
+  the one-string-type ADR follow-up).
 - Grapheme clusters (`chars()` returns Unicode scalar values, not
   grapheme clusters).
 - Regex (separate `std.regex` module, deferred).
-- `Cow[str]` — v1 chooses between `String` and `&str` at the source
-  level; no copy-on-write wrapper.
+- Copy-on-write strings — v1 chooses between an owned `String` and a `&String`
+  borrow at the source level; no copy-on-write wrapper.
