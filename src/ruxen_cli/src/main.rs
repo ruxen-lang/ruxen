@@ -1,5 +1,5 @@
 use clap::Parser;
-use ruxen_cli::{build, cli, deps, explain, publish, scaffold, self_update};
+use ruxen_cli::{build, cli, deps, explain, publish, scaffold, self_update, target};
 
 fn main() {
     let args = cli::Cli::parse();
@@ -65,6 +65,7 @@ fn main() {
         cli::Command::Tree => deps::tree(),
         cli::Command::Verify => deps::verify(),
         cli::Command::Explain { code } => explain::explain(&code),
+        cli::Command::Target { action } => target::run(action),
 
         // ── Low-level compiler subcommands ──────────────────────────
         // Each builds the legacy positional-args vector that the ruxenc

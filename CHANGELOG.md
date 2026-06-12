@@ -7,6 +7,26 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Added
+- **Cross-compilation (tier 4.02): `--target <triple>`.** `ruxen compile`
+  (ruxenc) and `ruxen build/run/check` accept a target triple; default = host
+  (byte-identical to before — no `--target` changes nothing). New
+  `codegen::target` module: alias-normalize + parse triples (explicit alias
+  table — `target-lexicon` 0.13 parses `x86_64-macos` lossily, contra the
+  spec), Cranelift `isa::lookup` (enabled `all-native-arch`), LLVM
+  `TargetTriple::create`, and a linker matrix: host→`cc`; Darwin→Darwin →
+  `cc -arch`; Linux w/ cross-gcc → that gcc; Linux w/o → a **two-stage Docker
+  link** (object emitted locally, stdlib runtime compiled + linked in a
+  target-native container). Per-target output dir `target/<triple>/<profile>/`;
+  per-target runtime compiled FOR THE TARGET (no host/cross cache poisoning,
+  pinned). `ruxen target list/add/remove` (add/remove = loud `Err`, not a
+  silent no-op — prebuilt-fetch deferred). `ruxen run --target <non-host>`
+  errors (no emulator). §5.8 backend-compat error for wasm-on-cranelift.
+  **Both acceptance bars pass:** `aarch64-unknown-linux-gnu` runs in a
+  `linux/arm64` container; `x86_64-apple-darwin` runs under Rosetta
+  (`scripts/cross_verify.sh`). Docs: `docs/CROSS_COMPILE.md`, ADR
+  `docs/decisions/cross-compilation-linker-matrix.md`.
+
 ### Fixed
 - **`Mutex.lock` / `lock!` / `into_inner` now LINK and run (Q40).** typeck
   advertised the ergonomic poison-surfacing `Mutex.lock ->

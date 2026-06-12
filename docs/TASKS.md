@@ -25,6 +25,21 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
 
 ### Toolchain / tests
 
+- [x] **Cross-compilation (tier 4.02) — `--target <triple>` (DONE 2026-06-12,
+      `feat/drop-elaboration`).** Spec `requirements/tier4_02_cross_compilation.md`,
+      ADR `decisions/cross-compilation-linker-matrix.md`, guide
+      `CROSS_COMPILE.md`. `ruxen compile/build/run/check --target`; host path
+      byte-identical. Cranelift `isa::lookup` (`all-native-arch`), LLVM
+      `TargetTriple::create`; linker matrix incl. two-stage Docker for Linux.
+      Per-target `target/<triple>/<profile>/` + per-target runtime (no cache
+      poisoning, pinned). `ruxen target list/add/remove` (add/remove = loud
+      Err). **Both bars pass:** aarch64-linux in a `linux/arm64` container,
+      x86_64-darwin under Rosetta (`scripts/cross_verify.sh`). Deferred to later
+      tiers (recorded in §10 of the spec): wasm/no_std (4.03/4.04), the
+      cfg-expr evaluator + `[target.<triple>.dependencies]` (4.01), the
+      prebuilt-runtime HTTP fetch + CI matrix (4.06). Android = config-ready,
+      NDK-gated (untested). Tests: `tests/cross_compile_triples.rs`,
+      ruxenc `cache_integration::target_cache_isolation`.
 - [x] **Syntax-parity harness — one syntax across compiler/fmt/repl/lsp/ide
       (DONE 2026-06-10, `feat/drop-elaboration`).** ADR
       `docs/decisions/syntax-parity-harness.md`. Two axes: per-surface

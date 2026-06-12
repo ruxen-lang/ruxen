@@ -160,6 +160,12 @@ pub enum Command {
         code: String,
     },
 
+    /// Manage installed cross-compilation target runtimes (tier 4.02).
+    Target {
+        #[command(subcommand)]
+        action: TargetAction,
+    },
+
     /// Compile a single .rx file directly (low-level driver — like rustc).
     /// For project-level builds use `ruxen build`.
     Compile {
@@ -254,6 +260,29 @@ pub enum Command {
         /// Git remote to push the tag to (default: `origin`).
         #[arg(long)]
         registry: Option<String>,
+    },
+}
+
+/// `ruxen target <action>` — manage installed per-target runtimes.
+#[derive(Subcommand)]
+pub enum TargetAction {
+    /// List installed target runtimes (under ~/.ruxen/lib/runtime/*/).
+    List {
+        /// List all known/supported targets, not just installed ones.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Download + install a prebuilt runtime for a target triple.
+    /// Not yet implemented — runtimes are compiled from source by
+    /// `ruxen compile/build --target <triple>` in this release.
+    Add {
+        /// Target triple (e.g. aarch64-unknown-linux-gnu).
+        triple: String,
+    },
+    /// Remove an installed target runtime.
+    Remove {
+        /// Target triple.
+        triple: String,
     },
 }
 
