@@ -19,7 +19,7 @@ No `--target` → the host, byte-identical to the pre-4.02 behaviour.
 | `aarch64-unknown-linux-gnu` | `aarch64-linux` | cross-OS, **two-stage Docker** link — **verified** (runs in a `linux/arm64` container) |
 | `x86_64-unknown-linux-gnu` | `x86_64-linux` | cross-OS+arch — **config-ready, CI-proven-at-push** (the sibling repos' ubuntu-latest x64 CI exercises this triple natively at push time) |
 | `aarch64-linux-android` | `android`, `aarch64-android` | **config-ready, NDK-gated** — linker logic wired, untested (no NDK on this host) |
-| `wasm32-unknown-unknown` | `wasm32`, `wasm` | **next phase** (LLVM backend, prompt 16). Cranelift can't emit wasm; building one errors with a pointer to `--backend=llvm`. |
+| `wasm32-unknown-unknown` | `wasm32`, `wasm` | **verified** (tier 4.03, LLVM backend). `ruxen compile --target wasm32-unknown-unknown` emits a `.wasm` (no libc, no C runtime); top-level `def`s become host-callable exports. Runs in node — see `examples/05-wasm/` + `scripts/wasm_verify.sh`. Needs a toolchain built with `--features llvm`. |
 
 Short aliases are normalized to the canonical triple before parsing.
 (Note: `target-lexicon` 0.13 does *not* canonicalize these itself — it parses

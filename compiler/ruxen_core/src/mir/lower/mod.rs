@@ -591,6 +591,22 @@ impl<'a> Lowerer<'a> {
                 let mir_fn = self.lower_function(&lowered)?;
                 if mir_fn.name == "main" {
                     mir.entry = Some("main".to_string());
+                } else if !func.is_class_method && module_path.is_empty() {
+                    // Tier 4.03 (WASM): record top-level free defs as wasm
+                    // export candidates. A `wasm32-unknown-unknown` module is
+                    // a *reactor* (spec §5.3) — it has no `main`; its top-level
+                    // free functions ARE the host-callable API surface, so we
+                    // export them by source name. The LLVM backend sets the
+                    // `export_name` attribute on these ONLY when targeting
+                    // wasm32; every other codegen path ignores the field. (Top-
+                    // level `def` is `Private` by default in Ruxen and there is
+                    // no `pub` at file scope, so a visibility gate would export
+                    // nothing — the reactor surface is the whole free-fn set.
+                    // A `wasm_export "custom"` rename/opt-in directive is the
+                    // staged remainder — see docs/decisions/phase4-no-std-wasm.md.)
+                    // Generic free fns are suppressed above (opaque body never
+                    // reaches here), so only concrete callables are recorded.
+                    mir.wasm_exports.push(mir_fn.name.clone());
                 }
                 mir.functions.push(mir_fn);
             }

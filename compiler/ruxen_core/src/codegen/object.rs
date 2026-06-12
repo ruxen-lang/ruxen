@@ -333,6 +333,86 @@ pub fn emit_executable_for_target(
     Ok(())
 }
 
+/// Tier 4.03 (WASM): link a WebAssembly object into a final `.wasm` module
+/// with `wasm-ld`.
+///
+/// A `wasm32-unknown-unknown` module is a *reactor* (spec §5.3): no `_start`,
+/// no libc, no C runtime — its exports are the host-callable API. The LLVM
+/// backend already emitted the object with `export_name` attributes on every
+/// `program.wasm_exports` entry, so `--export-dynamic` keeps them live through
+/// `wasm-ld`'s default `--gc-sections`. `--allow-undefined` tolerates host
+/// imports (none in the math-export v1 path, but harmless and forward-looking).
+///
+/// `wasm-ld` discovery order: `RUXEN_WASM_LD` env override → the LLVM-18 prefix
+/// (`/opt/homebrew/opt/llvm@18/bin/wasm-ld`, where the cross-compile work
+/// already assumes LLVM 18 lives) → bare `wasm-ld` on `PATH`. A missing linker
+/// errors with an actionable install hint rather than a raw spawn failure.
+fn find_wasm_ld() -> Result<String, String> {
+    if let Some(p) = std::env::var_os("RUXEN_WASM_LD") {
+        let s = p.to_string_lossy().to_string();
+        if Path::new(&s).is_file() {
+            return Ok(s);
+        }
+    }
+    let prefixed = "/opt/homebrew/opt/llvm@18/bin/wasm-ld";
+    if Path::new(prefixed).is_file() {
+        return Ok(prefixed.to_string());
+    }
+    // Fall back to PATH (Linux distros ship `wasm-ld` via the `lld` package;
+    // rustup's `rust-lld` is `wasm-ld` under the hood).
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let cand = dir.join("wasm-ld");
+            if cand.is_file() {
+                return Ok(cand.to_string_lossy().to_string());
+            }
+        }
+    }
+    Err(
+        "wasm-ld not found. Install LLVM's lld (`brew install llvm@18` or \
+         `apt install lld`) or set RUXEN_WASM_LD to its path."
+            .to_string(),
+    )
+}
+
+/// Link a WebAssembly object into a `.wasm` module. See [`find_wasm_ld`].
+pub fn emit_wasm_module(
+    object_bytes: &[u8],
+    output_path: &str,
+    target: &ResolvedTarget,
+) -> Result<(), String> {
+    let wasm_ld = find_wasm_ld()?;
+    let obj_path = format!("{}.o", output_path);
+    std::fs::write(&obj_path, object_bytes)
+        .map_err(|e| format!("Failed to write wasm object file: {}", e))?;
+
+    let mut cmd = Command::new(&wasm_ld);
+    cmd.arg("--no-entry")
+        .arg("--export-dynamic")
+        .arg("--allow-undefined")
+        .arg(&obj_path)
+        .arg("-o")
+        .arg(output_path);
+
+    let status = cmd.status().map_err(|e| {
+        format!(
+            "Failed to invoke wasm-ld '{}' for {}: {}",
+            wasm_ld,
+            target.canonical(),
+            e
+        )
+    })?;
+    if !status.success() {
+        return Err(format!(
+            "wasm-ld failed for '{}' (target {})",
+            output_path,
+            target.canonical()
+        ));
+    }
+    let _ = std::fs::remove_file(&obj_path);
+    Ok(())
+}
+
 /// Two-stage Docker link: emit the target object locally, then compile the
 /// stdlib runtime `.c` *and* link inside a target-native container.
 ///

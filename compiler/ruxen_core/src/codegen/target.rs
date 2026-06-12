@@ -139,6 +139,18 @@ impl ResolvedTarget {
         )
     }
 
+    /// `true` when this is a WebAssembly target (tier 4.03). Drives the
+    /// `wasm-ld` linker branch: no C runtime, no libc, `--no-entry
+    /// --export-dynamic`. Distinct from [`requires_llvm_backend`] only in
+    /// intent — they coincide today, but the linker path keys on *wasm*
+    /// specifically, not "needs LLVM".
+    pub fn is_wasm(&self) -> bool {
+        matches!(
+            self.triple.architecture,
+            Architecture::Wasm32 | Architecture::Wasm64
+        )
+    }
+
     /// `true` when the target OS is Linux (drives the two-stage Docker link
     /// flow on a macOS host and the per-target runtime compile).
     pub fn is_linux(&self) -> bool {

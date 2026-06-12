@@ -681,6 +681,17 @@ fn compile_cross(
         }
     };
 
+    // Tier 4.03 (WASM): a wasm target is a no-libc, no-C-runtime, reactor
+    // module. The §5.8 guard above already forced the LLVM backend, which
+    // emitted a WebAssembly object (with `export_name` attributes on every
+    // `program.wasm_exports` entry). Link it with `wasm-ld` into a `.wasm` —
+    // no stdlib runtime `.c`, no `[system_libs]`, no `cc`. The user object
+    // alone is the module (math exports; a bundled allocator + import-based
+    // I/O are the staged remainder, ADR phase4-no-std-wasm).
+    if target.is_wasm() {
+        return object::emit_wasm_module(&object_bytes, output_path, target);
+    }
+
     // Step 2: resolve the linker strategy for this target on this host.
     let spec = target::linker_for(
         target,

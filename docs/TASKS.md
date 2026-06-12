@@ -25,6 +25,28 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
 
 ### Toolchain / tests
 
+- [x] **WASM target (tier 4.03) — `ruxen compile --target wasm32-unknown-unknown`
+      (DONE 2026-06-12, `feat/drop-elaboration`).** Spec
+      `requirements/tier4_03_wasm_target.md` (path-fixed + checklist annotated),
+      ADR `decisions/phase4-no-std-wasm.md`. LLVM backend → `wasm-ld` → `.wasm`
+      (no libc/C runtime — reactor module). Top-level `def`s export by source
+      name via the LLVM `export_name` attribute. No stdlib bootstrap (no_std
+      reality → sidesteps the LLVM vtable-globals gap). **Headline bar passes:**
+      `def add` → `.wasm` runs in node, `add(2,3)===5` asserted
+      (`examples/05-wasm/`, `scripts/wasm_verify.sh`, pin
+      `tests/wasm_codegen.rs`). LLVM lane brought up
+      (`LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 --features llvm`); default
+      build unchanged (Cranelift). **Staged remainder** (ADR): wasm32-wasi,
+      bundled allocator (String/Array exports), `wasm_import`/host imports,
+      `std.wasm`, the `wasm_export "custom"` rename directive, browser harness.
+- [ ] **no_std / embedded (tier 4.04) — IN PROGRESS (`feat/drop-elaboration`).**
+      Spec `requirements/tier4_04_no_std_embedded.md`, ADR
+      `decisions/phase4-no-std-wasm.md`. Non-slip bar: a no_std host binary
+      builds+runs with E1400 (heap-alloc-in-no_std) enforced. "core" = the
+      existing `library/std/core` package set (decision #1). The full
+      core/std re-export elegance, the `alloc` package, the
+      `global_allocator`/`panic_handler`/`no_std` directive machinery, the
+      thumbv7em fixture, and `panic = "unwind"` are the staged remainder.
 - [x] **Cross-compilation (tier 4.02) — `--target <triple>` (DONE 2026-06-12,
       `feat/drop-elaboration`).** Spec `requirements/tier4_02_cross_compilation.md`,
       ADR `decisions/cross-compilation-linker-matrix.md`, guide

@@ -482,7 +482,19 @@ fn run_cross_compile(
     extra_runtime_c: &[String],
     extra_link_args: &[String],
 ) -> Result<(), String> {
-    let bootstrap_programs = load_bootstrap_or_err()?;
+    // Tier 4.03/4.04: a wasm32 target is a no_std reactor — it does NOT
+    // bootstrap the hosted stdlib. Bootstrapping would pull in
+    // `dispatch runtime` stdlib classes (e.g. `TimeSleepFuture`), whose
+    // vtable/class_info globals the LLVM backend does not yet emit, and would
+    // also pull libc-dependent runtime the wasm link has no allocator for.
+    // The no_std core surface (primitive ops) needs no bootstrap for the
+    // math-export v1 path. (Loading `library/std/core` alone is the staged
+    // remainder — ADR phase4-no-std-wasm decision #1.)
+    let bootstrap_programs: Vec<(String, Program)> = if target.is_wasm() {
+        Vec::new()
+    } else {
+        load_bootstrap_or_err()?
+    };
 
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().map_err(|ds| {

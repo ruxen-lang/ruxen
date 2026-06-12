@@ -78,8 +78,15 @@ impl CodeGen {
             )
             .ok_or("Failed to create target machine")?;
 
-        // Compile MIR → LLVM IR
-        emit::compile_program(program, &module, &self.context)?;
+        // Compile MIR → LLVM IR. On a wasm32 target, the emitter sets the
+        // `export_name` attribute on each `program.wasm_exports` entry so the
+        // function is a host-callable wasm export (tier 4.03). The triple is
+        // already resolved into `target_triple` for the cross path.
+        let is_wasm = self
+            .target_triple
+            .as_deref()
+            .is_some_and(|t| t.starts_with("wasm32") || t.starts_with("wasm64"));
+        emit::compile_program(program, &module, &self.context, is_wasm)?;
 
         // TODO(mixin-vtables): emit `program.vtables` and
         // `program.class_infos` as LLVM global variables with

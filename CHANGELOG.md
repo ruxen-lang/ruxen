@@ -8,6 +8,30 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **WASM target (tier 4.03): `ruxen compile --target wasm32-unknown-unknown`.**
+  Produces a valid `.wasm` module via the LLVM backend + `wasm-ld` (no libc,
+  no C runtime — a reactor module). Every top-level free `def` becomes a
+  host-callable wasm **export** under its source name, via the LLVM
+  `export_name` function attribute (decouples the export from Ruxen name
+  mangling — spec §9 Q6's preference). A wasm build does NOT bootstrap the
+  hosted stdlib (the no_std reality), which also sidesteps the LLVM backend's
+  not-yet-emitted vtable/class_info globals. **Headline bar passes:** a Ruxen
+  `def add` compiles to a `.wasm` that runs in Node.js with `add(2,3)===5`
+  asserted (`examples/05-wasm/`, `scripts/wasm_verify.sh`, pin
+  `tests/wasm_codegen.rs`). New `MirProgram::wasm_exports`, `ResolvedTarget::
+  is_wasm`, `object::emit_wasm_module`. Needs a toolchain built with
+  `--features llvm` (`LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18`); the
+  default build stays Cranelift. Staged remainder (filed in
+  `docs/decisions/phase4-no-std-wasm.md`): `wasm32-wasi`, a bundled allocator
+  for String/Array exports, `wasm_import`/host imports, `std.wasm`, the
+  per-function `wasm_export "custom"` rename directive, and a browser harness.
+- **LLVM verification lane brought up (tier 4.03 prereq).** The codegen module
+  CLAUDE.md's "never built / no llvm-config" notes were stale: LLVM 18.1.8 is
+  installed; `LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 cargo build
+  --features llvm` builds (the only bit-rot was one dead import, removed).
+  `ruxen_cli`'s `llvm` feature now propagates to `ruxenc/llvm` (a latent
+  non-exhaustive-match bug that only surfaced when the variant was enabled
+  without the arm). The default toolchain build is unchanged (Cranelift).
 - **Cross-compilation (tier 4.02): `--target <triple>`.** `ruxen compile`
   (ruxenc) and `ruxen build/run/check` accept a target triple; default = host
   (byte-identical to before — no `--target` changes nothing). New

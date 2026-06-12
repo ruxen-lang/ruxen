@@ -109,3 +109,27 @@ env-gated verification lane.
 - (Stage 0) Stale "no llvm-config / never built" notes corrected in
   `codegen/CLAUDE.md`, `codegen/llvm/CLAUDE.md`, `codegen/llvm/emit/CLAUDE.md`
   to document the `LLVM_SYS_180_PREFIX` lane.
+- (Stage B) **Env gap, not bit-rot:** linking the `--features llvm` *test*
+  binary needs `-L /opt/homebrew/opt/zstd/lib` on `RUSTFLAGS` — llvm-sys emits
+  `-lzstd` (LLVM 18 was built against zstd) without adding the search path.
+  Recorded in the gate invocation; not a code change.
+- (Stage B) **Export surface = every top-level free `def`, by source name**
+  (not visibility-gated). Ruxen has no `pub` at file scope (top-level `def` is
+  `Private`; `main` is special-cased by name), so a visibility gate would
+  export nothing. A wasm32 reactor's free-fn set IS its API. The per-function
+  `wasm_export "custom"` opt-in/rename directive is filed.
+- (Stage B) **Export attribute key = `"wasm-export-name"`** (the LLVM-IR
+  spelling clang's `__attribute__((export_name))` lowers to), set via
+  `context.create_string_attribute(...)` + `AttributeLoc::Function`. Verified
+  end-to-end (node sees the export, returns the right value).
+- (Stage B) **wasm build skips the stdlib bootstrap** in `ruxenc::compile`'s
+  cross path (`target.is_wasm()` → empty bootstrap). This is the no_std
+  reality and the reason the LLVM backend's vtable-globals gap doesn't bite.
+- (Stage B) **Latent bug fixed:** `ruxen_cli`'s `llvm` feature now also
+  enables `ruxenc/llvm` — otherwise the `Backend::Llvm` variant exists (via
+  `ruxen_core/llvm`) while `ruxenc`'s `#[cfg(feature="llvm")]` match arm is
+  cfg'd out → E0004 non-exhaustive. Only surfaced now because the wasm bar is
+  the first time the CLI is built with llvm.
+- (Stage B) **Linker = `wasm-ld`**, discovered via `RUXEN_WASM_LD` → LLVM-18
+  prefix → PATH; `--no-entry --export-dynamic --allow-undefined`; no C runtime,
+  no `[system_libs]`. Missing linker → actionable error.

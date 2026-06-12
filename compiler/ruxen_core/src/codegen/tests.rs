@@ -346,6 +346,7 @@ mod tests {
             ffi_libs: vec![],
             vtables: Vec::new(),
             class_infos: Vec::new(),
+            wasm_exports: Vec::new(),
         }
     }
 
