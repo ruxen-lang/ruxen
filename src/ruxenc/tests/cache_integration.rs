@@ -283,3 +283,60 @@ fn corrupt_object_causes_recompile_without_panic() {
     );
     assert_eq!(r2.objects.len(), 3);
 }
+
+// ─── tier 4.02: per-target cache isolation ──────────────────────────────
+//
+// The cache key already carries a `target` component; making it the real
+// triple means the same source compiled for two targets produces two distinct
+// cache entries. This pins that the `target` field is load-bearing in the
+// content hash — a host object can never be replayed for a cross target (or
+// vice versa).
+mod target_cache_isolation {
+    use ruxenc::cache::{hash_file, CacheKey};
+
+    fn key_for(source: &str, target: &str) -> CacheKey {
+        CacheKey::new(
+            hash_file(source),
+            /* compiler_version */ 42,
+            target,
+            "debug",
+            "backend=default",
+        )
+    }
+
+    #[test]
+    fn same_source_two_targets_distinct_keys() {
+        let src = "def main\n  println(\"hi\")\nend\n";
+        let host = key_for(src, "aarch64-apple-darwin");
+        let linux = key_for(src, "aarch64-unknown-linux-gnu");
+        let x64 = key_for(src, "x86_64-apple-darwin");
+
+        // Same source, different targets → different content hashes.
+        assert_ne!(
+            host.to_hex(),
+            linux.to_hex(),
+            "host and linux targets must not share a cache entry"
+        );
+        assert_ne!(host.to_hex(), x64.to_hex());
+        assert_ne!(linux.to_hex(), x64.to_hex());
+    }
+
+    #[test]
+    fn same_source_same_target_stable_key() {
+        let src = "def main\n  0\nend\n";
+        let a = key_for(src, "x86_64-unknown-linux-gnu");
+        let b = key_for(src, "x86_64-unknown-linux-gnu");
+        assert_eq!(a.to_hex(), b.to_hex(), "key must be deterministic");
+    }
+
+    #[test]
+    fn target_only_difference_flips_the_hash() {
+        // Hold everything else constant; only the target differs. Proves the
+        // target field participates in `content_hash` (no cross-pollution).
+        let src = "def main\n  1\nend\n";
+        let a = key_for(src, "aarch64-unknown-linux-gnu");
+        let b = key_for(src, "x86_64-unknown-linux-gnu");
+        assert_ne!(a.to_hex(), b.to_hex());
+        assert_eq!(a.source_hash, b.source_hash, "same source bytes");
+    }
+}

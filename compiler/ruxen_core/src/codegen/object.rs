@@ -335,11 +335,20 @@ pub fn emit_executable_for_target(
 /// This is the honest fallback for Linux targets from a macOS host with no
 /// cross toolchain installed (`zig`/`aarch64-linux-gnu-gcc` absent). The
 /// container's native `cc` + libc compile the runtime for the target and link
-/// the final binary — no host cross-cc required. The repo's stdlib runtime
-/// tree is mounted read-only; the output dir is mounted read-write.
+/// the final binary — no host cross-cc required.
 ///
-/// Requires Docker. The caller (CLI) gates this on docker availability and
-/// surfaces a clear error when it's missing — never a silent failure.
+/// Mounting strategy: the stdlib root (`library/std`) is mounted read-only at
+/// `/std` **preserving directory structure**, so each runtime `.c`'s relative
+/// `#include "../../core/runtime/runtime.h"` resolves exactly as it does on
+/// the host. A writable scratch dir is mounted at `/work` for the staged
+/// object, per-source `.o`s, and the final binary. PCRE2 vendor sources get
+/// the same include/width flags as the host (`apply_pcre2_flags` analogue,
+/// inlined into the in-container shell). User-supplied runtime sources (which
+/// live outside the stdlib tree) are staged flat into `/work` — they are
+/// standalone TUs by the project convention.
+///
+/// Requires Docker. The error when Docker is missing is actionable (points at
+/// the manifest linker override) — never a silent failure.
 fn emit_executable_in_container(
     object_bytes: &[u8],
     runtime_sources: &[PathBuf],
@@ -350,8 +359,11 @@ fn emit_executable_in_container(
     use crate::codegen::target::docker_platform;
 
     let platform = docker_platform(target);
+    let stdlib_root = super::find_stdlib_root()?;
+    let stdlib_root = stdlib_root
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize stdlib root: {}", e))?;
 
-    // Stage the object + runtime sources into a single scratch dir we mount.
     let scratch = std::env::temp_dir().join(format!(
         "ruxen_xlink_{}_{}",
         std::process::id(),
@@ -365,52 +377,72 @@ fn emit_executable_in_container(
     std::fs::write(scratch.join(obj_name), object_bytes)
         .map_err(|e| format!("Failed to stage object: {}", e))?;
 
-    // Copy runtime sources into scratch, preserving a flat name set. Track a
-    // include dir for the shared runtime.h.
-    let mut staged_runtime: Vec<String> = Vec::new();
-    let mut include_dirs: Vec<PathBuf> = Vec::new();
+    // Partition runtime sources: stdlib (under stdlib_root → compiled in place
+    // at /std/<rel>) vs. user (outside → staged flat into /work).
+    let mut compile_lines: Vec<String> = Vec::new();
+    let mut object_names: Vec<String> = Vec::new();
+    let mut user_staged = 0usize;
     for src in runtime_sources {
-        let fname = src
-            .file_name()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| format!("bad runtime source path {}", src.display()))?;
-        std::fs::copy(src, scratch.join(fname))
-            .map_err(|e| format!("Failed to stage runtime {}: {}", src.display(), e))?;
-        staged_runtime.push(fname.to_string());
-        if let Some(parent) = src.parent() {
-            if !include_dirs.contains(&parent.to_path_buf()) {
-                include_dirs.push(parent.to_path_buf());
-            }
-        }
-    }
-    // Copy any headers (runtime.h and siblings) from each runtime source dir
-    // so the in-container compile resolves `#include "runtime.h"`.
-    for dir in &include_dirs {
-        if let Ok(rd) = std::fs::read_dir(dir) {
-            for e in rd.flatten() {
-                let p = e.path();
-                if p.extension().and_then(|s| s.to_str()) == Some("h") {
-                    if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
-                        let _ = std::fs::copy(&p, scratch.join(fname));
-                    }
-                }
-            }
-        }
-    }
+        let canon = src
+            .canonicalize()
+            .map_err(|e| format!("runtime source {} missing: {}", src.display(), e))?;
+        let is_pcre2 = canon.components().any(|c| c.as_os_str() == "pcre2");
+        let pcre2_flags = if is_pcre2 {
+            // Vendor dir is the .c's own parent inside the container.
+            "-I\"$(dirname \"$SRC\")\" -DHAVE_CONFIG_H=1 -DPCRE2_CODE_UNIT_WIDTH=8 \
+             -Wno-sign-compare -Wno-unused-parameter -Wno-implicit-fallthrough"
+        } else {
+            ""
+        };
 
-    // Build the in-container compile+link command. All inputs live in /work.
+        let (container_src, obj) = if let Ok(rel) = canon.strip_prefix(&stdlib_root) {
+            // Stdlib source: compiled in place under the read-only /std mount.
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            let obj = format!("/work/std_{}.o", user_obj_safe(&rel_str));
+            (format!("/std/{}", rel_str), obj)
+        } else {
+            // User source: stage flat into scratch.
+            let fname = canon
+                .file_name()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| format!("bad runtime source path {}", canon.display()))?;
+            std::fs::copy(&canon, scratch.join(fname))
+                .map_err(|e| format!("Failed to stage user runtime {}: {}", canon.display(), e))?;
+            user_staged += 1;
+            let obj = format!("/work/user_{}.o", user_obj_safe(fname));
+            (format!("/work/{}", fname), obj)
+        };
+
+        // `SRC=...; cc -c "$SRC" ...` so the PCRE2 `-I$(dirname $SRC)` resolves.
+        compile_lines.push(format!(
+            "SRC={}; cc -O2 {} -c \"$SRC\" -o {}",
+            shell_quote(&container_src),
+            pcre2_flags,
+            shell_quote(&obj)
+        ));
+        object_names.push(obj);
+    }
+    let _ = user_staged;
+
     let out_name = Path::new(output_path)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("a.out");
-    let mut script = String::from("set -e; cd /work; cc -O2 ");
-    script.push_str(obj_name);
-    script.push(' ');
-    for r in &staged_runtime {
-        script.push_str(r);
-        script.push(' ');
+
+    // Build the in-container script: compile each runtime source, then link
+    // the staged main object + every runtime object into the final binary.
+    let mut script = String::from("set -e\n");
+    for line in &compile_lines {
+        script.push_str(line);
+        script.push('\n');
     }
-    script.push_str("-o ");
+    script.push_str("cc -O2 /work/");
+    script.push_str(obj_name);
+    for obj in &object_names {
+        script.push(' ');
+        script.push_str(&shell_quote(obj));
+    }
+    script.push_str(" -o /work/");
     script.push_str(out_name);
     for flag in extra_link_flags {
         // Drop macOS-only framework flags that don't exist on Linux.
@@ -418,17 +450,21 @@ fn emit_executable_in_container(
             continue;
         }
         script.push(' ');
-        script.push_str(flag);
+        script.push_str(&shell_quote(flag));
     }
+    script.push('\n');
 
-    let mount = format!("{}:/work", scratch.display());
+    let work_mount = format!("{}:/work", scratch.display());
+    let std_mount = format!("{}:/std:ro", stdlib_root.display());
     let mut cmd = Command::new("docker");
     cmd.arg("run")
         .arg("--rm")
         .arg("--platform")
         .arg(platform)
         .arg("-v")
-        .arg(&mount)
+        .arg(&work_mount)
+        .arg("-v")
+        .arg(&std_mount)
         .arg("-w")
         .arg("/work")
         // A small image with a C toolchain. gcc:13 ships cc + glibc + libm.
@@ -482,6 +518,32 @@ impl Drop for ScratchGuard {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+/// Turn an arbitrary path-ish string into a flat, filesystem-safe object stem
+/// (so two runtime sources with the same basename in different package dirs
+/// don't collide in `/work`).
+fn user_obj_safe(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+/// Single-quote a string for a POSIX `bash -c` script (closes/reopens around
+/// embedded single quotes). Inputs here are paths/flags we control, but
+/// quoting keeps spaces and shell metacharacters inert.
+fn shell_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        if c == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 #[cfg(test)]
