@@ -29,6 +29,33 @@ fn linker_args(sanitize: bool, extra_link_flags: &[String]) -> Vec<String> {
     args
 }
 
+/// Apply the vendored-PCRE2 include path + width defines to a `cc -c`
+/// invocation when `runtime_c_path` is a PCRE2 vendor source.
+///
+/// PCRE2's `.c` files `#include "config.h"`, `"pcre2.h"`,
+/// `"pcre2_internal.h"`, etc. via bare filenames, so the vendor dir goes on
+/// the include path. `HAVE_CONFIG_H` selects our hand-authored config.h;
+/// `PCRE2_CODE_UNIT_WIDTH=8` selects the 8-bit build (matches the REPL JIT
+/// build in `src/ruxen_repl/build.rs`). The detection key is a path component
+/// literally named `pcre2` — covers the vendor tree, never the user-authored
+/// `library/std/regex/runtime/regex.c`. Shared by the host and cross runtime
+/// compile paths so they stay in lockstep.
+fn apply_pcre2_flags(cmd: &mut Command, runtime_c_path: &Path) {
+    if runtime_c_path
+        .components()
+        .any(|c| c.as_os_str() == "pcre2")
+    {
+        if let Some(parent) = runtime_c_path.parent() {
+            cmd.arg("-I").arg(parent);
+        }
+        cmd.arg("-DHAVE_CONFIG_H=1")
+            .arg("-DPCRE2_CODE_UNIT_WIDTH=8")
+            .arg("-Wno-sign-compare")
+            .arg("-Wno-unused-parameter")
+            .arg("-Wno-implicit-fallthrough");
+    }
+}
+
 /// Compile a single C runtime source to an object file.
 ///
 /// When `sanitize` is true, the file is compiled with AddressSanitizer
@@ -67,31 +94,7 @@ pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf,
         cmd.arg("-O2");
     }
 
-    // Vendored PCRE2 lives at `library/std/regex/runtime/pcre2/`. Its
-    // `.c` files `#include "config.h"`, `"pcre2.h"`,
-    // `"pcre2_internal.h"`, etc. via bare filenames, so we add the
-    // vendor dir to the include path here. `HAVE_CONFIG_H` tells PCRE2
-    // to consult our hand-authored config.h; `PCRE2_CODE_UNIT_WIDTH=8`
-    // selects the 8-bit single-width build (matches the REPL JIT build
-    // in `src/ruxen_repl/build.rs`). The detection key is whether the
-    // source file path goes through a directory literally named `pcre2`,
-    // which covers the vendor-tree itself but never matches the
-    // user-authored `library/std/regex/runtime/regex.c`.
-    if runtime_c_path
-        .components()
-        .any(|c| c.as_os_str() == "pcre2")
-    {
-        if let Some(parent) = runtime_c_path.parent() {
-            cmd.arg("-I").arg(parent);
-        }
-        cmd.arg("-DHAVE_CONFIG_H=1")
-            .arg("-DPCRE2_CODE_UNIT_WIDTH=8")
-            // Suppress noisy warnings from vendored upstream code we
-            // don't want to patch.
-            .arg("-Wno-sign-compare")
-            .arg("-Wno-unused-parameter")
-            .arg("-Wno-implicit-fallthrough");
-    }
+    apply_pcre2_flags(&mut cmd, runtime_c_path);
 
     let status = cmd.status().map_err(|e| {
         format!(
@@ -230,6 +233,10 @@ pub fn compile_runtime_for_target(
         cmd.arg("-mmacosx-version-min=11.0");
     }
     cmd.arg("-O2");
+    // Vendored PCRE2 needs the same include path + width defines the host
+    // `compile_runtime` applies; without them `pcre2_internal.h` aborts the
+    // compile ("PCRE2_CODE_UNIT_WIDTH must be defined").
+    apply_pcre2_flags(&mut cmd, runtime_c_path);
 
     let status = cmd
         .status()

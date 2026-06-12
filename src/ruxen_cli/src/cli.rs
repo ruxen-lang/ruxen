@@ -54,6 +54,10 @@ pub enum Command {
         /// Build a specific binary
         #[arg(long)]
         bin: Option<String>,
+        /// Cross-compile for a target triple (e.g. aarch64-unknown-linux-gnu).
+        /// Default: the host. See docs/CROSS_COMPILE.md.
+        #[arg(long, value_name = "TRIPLE")]
+        target: Option<String>,
     },
 
     /// Build and run the project
@@ -61,13 +65,22 @@ pub enum Command {
         /// Run the release build
         #[arg(long)]
         release: bool,
+        /// Cross-compile for a target triple. `ruxen run` errors when the
+        /// target is not the host (no emulator is launched).
+        #[arg(long, value_name = "TRIPLE")]
+        target: Option<String>,
         /// Arguments passed to the program
         #[arg(last = true)]
         args: Vec<String>,
     },
 
     /// Type-check without generating code
-    Check,
+    Check {
+        /// Type-check as if compiling for a target triple. Codegen is not run;
+        /// reserved for cfg(...) gating (tier 4.01).
+        #[arg(long, value_name = "TRIPLE")]
+        target: Option<String>,
+    },
 
     /// Remove the target/ directory
     Clean,

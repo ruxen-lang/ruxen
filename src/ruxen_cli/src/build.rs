@@ -17,13 +17,26 @@ use crate::module_discovery::ModuleTree;
 use crate::resolve_deps;
 use crate::rlib::{self, Exports, TypeMetadata};
 
-/// `ruxen build [--release] [--locked] [--bin <name>]`
-pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), String> {
+/// `ruxen build [--release] [--locked] [--bin <name>] [--target <triple>]`
+pub fn build(
+    release: bool,
+    locked: bool,
+    bin_name: Option<&str>,
+    target: Option<&str>,
+) -> Result<(), String> {
     let start = Instant::now();
     let project_dir = find_project_root()?;
     let manifest = Manifest::load(&project_dir)?;
     manifest.validate()?;
     let package = manifest.require_package()?.clone();
+
+    // tier 4.02: resolve the cross-compilation target. CLI `--target` wins;
+    // otherwise fall back to `[build] target` in the manifest; otherwise host.
+    let target_str: Option<String> = target
+        .map(|s| s.to_string())
+        .or_else(|| manifest.build.as_ref().and_then(|b| b.target.clone()));
+    let resolved_target =
+        ruxen_core::codegen::target::ResolvedTarget::resolve(target_str.as_deref())?;
 
     // Advisory: dev-dependencies are parsed + survive `ruxen add --dev`
     // / `ruxen remove`, but `ruxen build` does not yet compile them
@@ -50,7 +63,17 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
     // shared deps are built once. Falls back to the project's own
     // `target/` for standalone projects.
     let target_root = find_target_root(&project_dir);
-    let target_dir = target_root.join("target").join(profile);
+    // Per-target output dir (spec §5.7): `target/<triple>/<profile>/` for a
+    // cross target; host stays `target/<profile>/` (back-compat — no triple
+    // prefix), matching Cargo.
+    let target_dir = if resolved_target.is_host() {
+        target_root.join("target").join(profile)
+    } else {
+        target_root
+            .join("target")
+            .join(resolved_target.canonical())
+            .join(profile)
+    };
     fs::create_dir_all(&target_dir)
         .map_err(|e| format!("failed to create target directory: {}", e))?;
     fs::create_dir_all(target_dir.join("deps"))
@@ -172,6 +195,7 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
             release,
             &extern_libs,
             &dep_source_dirs,
+            &resolved_target,
         )?;
     }
 
@@ -185,8 +209,8 @@ pub fn build(release: bool, locked: bool, bin_name: Option<&str>) -> Result<(), 
     Ok(())
 }
 
-/// `ruxen run [--release] [-- <args>]`
-pub fn run(release: bool, args: Vec<String>) -> Result<(), String> {
+/// `ruxen run [--release] [--target <triple>] [-- <args>]`
+pub fn run(release: bool, target: Option<&str>, args: Vec<String>) -> Result<(), String> {
     let project_dir = find_project_root()?;
     let manifest = Manifest::load(&project_dir)?;
     let package = manifest.require_package()?;
@@ -195,7 +219,21 @@ pub fn run(release: bool, args: Vec<String>) -> Result<(), String> {
         return Err("cannot run a library project. Use `ruxen build` instead.".to_string());
     }
 
-    build(release, false, None)?;
+    // §3 non-goal: `ruxen run --target <non-host>` does not launch an emulator.
+    // Resolve and reject up front with an actionable message rather than
+    // building a binary the host can't execute.
+    let resolved_target = ruxen_core::codegen::target::ResolvedTarget::resolve(target)?;
+    if !resolved_target.is_host() {
+        return Err(format!(
+            "cannot run a binary cross-compiled for '{}' on the host. \
+             Build it with `ruxen build --target {}` and run it on the target \
+             (or in a container — see docs/CROSS_COMPILE.md).",
+            resolved_target.canonical(),
+            resolved_target.canonical()
+        ));
+    }
+
+    build(release, false, None, target)?;
     let profile = if release { "release" } else { "debug" };
     let target_root = find_target_root(&project_dir);
     let binary = target_root.join("target").join(profile).join(&package.name);
@@ -216,13 +254,22 @@ pub fn run(release: bool, args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-/// `ruxen check` — type-check without codegen.
-pub fn check() -> Result<(), String> {
+/// `ruxen check [--target <triple>]` — type-check without codegen.
+pub fn check(target: Option<&str>) -> Result<(), String> {
     let start = Instant::now();
     let project_dir = find_project_root()?;
     let manifest = Manifest::load(&project_dir)?;
     manifest.validate()?;
     let package = manifest.require_package()?;
+
+    // Validate the triple up front (an invalid `--target` is a hard error even
+    // in `check`). Codegen is not run; the resolved target is reserved for
+    // cfg(...) gating (tier 4.01).
+    let target_str: Option<String> = target
+        .map(|s| s.to_string())
+        .or_else(|| manifest.build.as_ref().and_then(|b| b.target.clone()));
+    let _resolved_target =
+        ruxen_core::codegen::target::ResolvedTarget::resolve(target_str.as_deref())?;
 
     let entry = project_dir.join(manifest.entry_point());
     if !entry.exists() {
@@ -679,6 +726,7 @@ fn compile_piece(
 }
 
 /// Compile the main project into an executable.
+#[allow(clippy::too_many_arguments)]
 fn compile_project(
     project_dir: &Path,
     manifest: &Manifest,
@@ -686,6 +734,7 @@ fn compile_project(
     release: bool,
     extern_libs: &[(String, PathBuf)],
     dep_source_dirs: &[PathBuf],
+    target: &ruxen_core::codegen::target::ResolvedTarget,
 ) -> Result<(), String> {
     let entry = project_dir.join(manifest.entry_point());
     if !entry.exists() {
@@ -752,13 +801,23 @@ fn compile_project(
         .map_err(|e| format!("MIR lowering error: {}", e))?;
 
     // Phase 6: Code generation → link → executable
-    let backend = if release {
+    // §5.8: a target Cranelift can't emit (wasm/embedded) forces LLVM even in
+    // debug. Otherwise: LLVM for --release (when built), Cranelift for debug.
+    let force_llvm = target.requires_llvm_backend();
+    let backend = if release || force_llvm {
         #[cfg(feature = "llvm")]
         {
             codegen::Backend::Llvm { opt_level: 2 }
         }
         #[cfg(not(feature = "llvm"))]
         {
+            if force_llvm {
+                return Err(format!(
+                    "target '{}' requires the LLVM backend, which this build of \
+                     ruxen was not compiled with (rebuild with --features llvm).",
+                    target.canonical()
+                ));
+            }
             codegen::Backend::Cranelift
         }
     } else {
@@ -823,13 +882,16 @@ fn compile_project(
     }
 
     let output_str = output_path.to_string_lossy().to_string();
-    codegen::compile_with_options(
+    // Host → None (byte-identical path); cross → the resolved target.
+    let target_opt = if target.is_host() { None } else { Some(target) };
+    codegen::compile_with_options_for_target(
         &mir_program,
         &output_str,
         false,
         &extra_link_flags,
         &user_runtime,
         backend,
+        target_opt,
     )?;
 
     Ok(())

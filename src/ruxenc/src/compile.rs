@@ -44,6 +44,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let mut opt_level_override: Option<String> = None;
     let mut force = false;
     let mut verbose = false;
+    let mut target_flag: Option<String> = None;
     let mut extra_runtime_c: Vec<String> = Vec::new();
     let mut extra_link_args: Vec<String> = Vec::new();
     let mut i = 2;
@@ -51,6 +52,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
         if args[i] == "-o" && i + 1 < args.len() {
             output_path = Some(args[i + 1].clone());
             i += 2;
+        } else if args[i] == "--target" && i + 1 < args.len() {
+            // tier 4.02: cross-compilation target triple. `--target <triple>`
+            // (space-separated, matching rustc/cargo) OR `--target=<triple>`.
+            target_flag = Some(args[i + 1].clone());
+            i += 2;
+        } else if args[i].starts_with("--target=") {
+            target_flag = Some(args[i]["--target=".len()..].to_string());
+            i += 1;
         } else if args[i].starts_with("--runtime-c=") {
             // Additional user C source to compile and link alongside the
             // stdlib runtime (a project's `runtime/*.c`). Repeatable.
@@ -95,6 +104,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let source =
         fs::read_to_string(path).map_err(|e| format!("Error reading '{}': {}", path, e))?;
 
+    // Resolve the cross-compilation target (tier 4.02). `None`/host keeps the
+    // byte-identical cached host path below; a non-host target takes the
+    // dedicated cross path (no incremental cache — one-shot compile + cross
+    // link), so the host cache key is never perturbed by this feature.
+    let resolved_target = ruxen_core::codegen::target::ResolvedTarget::resolve(
+        target_flag.as_deref(),
+    )?;
+
     // Emit modes short-circuit the cache: they don't produce a binary, so
     // caching them is meaningless and would add complexity. Run the
     // classic single-shot pipeline for these.
@@ -107,6 +124,26 @@ pub fn run(args: &[String]) -> Result<(), String> {
             release_mode,
             backend_override.as_deref(),
             opt_level_override.as_deref(),
+        );
+    }
+
+    // ─── Cross-compilation path (tier 4.02) ──────────────────────────────
+    // A non-host target bypasses the incremental object cache: cross builds
+    // are infrequent and the cross link (local `cc -arch` or two-stage
+    // Docker) is one-shot. The full pipeline runs once and hands the MIR to
+    // `compile_with_options_for_target`, which selects the ISA, compiles the
+    // stdlib runtime FOR THE TARGET, and links via the resolved LinkerSpec.
+    if !resolved_target.is_host() {
+        return run_cross_compile(
+            &source,
+            path,
+            &output_path,
+            release_mode,
+            backend_override.as_deref(),
+            opt_level_override.as_deref(),
+            &resolved_target,
+            &extra_runtime_c,
+            &extra_link_args,
         );
     }
 
@@ -425,6 +462,109 @@ fn compile_to_object(
         signature,
         dependencies: Vec::new(),
     })
+}
+
+/// Cross-compilation path (tier 4.02): runs the full front end once, selects a
+/// target-compatible backend, and links via `compile_with_options_for_target`.
+///
+/// Bypasses the incremental object cache (cross builds are infrequent and the
+/// cross link is one-shot), so the host cache key is never perturbed by a
+/// `--target`. The backend is forced to LLVM when the target requires it
+/// (`wasm`/embedded) regardless of `--release`, mirroring spec §5.8.
+#[allow(clippy::too_many_arguments)]
+fn run_cross_compile(
+    source: &str,
+    _path: &str,
+    output_path: &str,
+    release_mode: bool,
+    backend_override: Option<&str>,
+    opt_level_override: Option<&str>,
+    target: &ruxen_core::codegen::target::ResolvedTarget,
+    extra_runtime_c: &[String],
+    extra_link_args: &[String],
+) -> Result<(), String> {
+    let bootstrap_programs = load_bootstrap_or_err()?;
+
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize().map_err(|ds| {
+        ds.iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().map_err(|ds| {
+        ds.iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+
+    let type_result = type_check_with_package_bootstrap(&program, &bootstrap_programs);
+    let has_errors = type_result
+        .diagnostics
+        .iter()
+        .any(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error);
+    if has_errors {
+        return Err(type_result
+            .diagnostics
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+
+    let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
+    if !borrow_errors.is_empty() {
+        return Err(borrow_errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+
+    let mut lowerer = ruxen_core::mir::lower::Lowerer::new(&type_result.symbols);
+    let mir_program = lowerer
+        .lower_program(&type_result.program)
+        .map_err(|e| format!("MIR lowering error: {}", e))?;
+
+    // Backend: a target that can't run on Cranelift (wasm/embedded) forces
+    // LLVM, regardless of --release. Otherwise honour the same default/override
+    // logic as the host path.
+    let backend = if target.requires_llvm_backend() {
+        if matches!(backend_override, Some("cranelift")) {
+            return Err(format!(
+                "target '{}' requires the LLVM backend. \
+                 Build with --release or pass --backend=llvm.",
+                target.canonical()
+            ));
+        }
+        // Force LLVM (silent auto-switch per §5.8).
+        resolve_backend(true, Some("llvm"), opt_level_override)?
+    } else {
+        resolve_backend(release_mode, backend_override, opt_level_override)?
+    };
+
+    let extra_runtime_paths: Vec<std::path::PathBuf> =
+        extra_runtime_c.iter().map(std::path::PathBuf::from).collect();
+
+    ruxen_core::codegen::compile_with_options_for_target(
+        &mir_program,
+        output_path,
+        false, // no sanitizer on the cross path
+        extra_link_args,
+        &extra_runtime_paths,
+        backend,
+        Some(target),
+    )?;
+
+    println!(
+        "Cross-compiled {} → {} (target {})",
+        _path,
+        output_path,
+        target.canonical()
+    );
+    Ok(())
 }
 
 /// Fallback pipeline used when the user passes an --emit flag. Doesn't touch

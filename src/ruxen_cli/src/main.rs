@@ -11,9 +11,14 @@ fn main() {
             release,
             locked,
             bin,
-        } => build::build(release, locked, bin.as_deref()),
-        cli::Command::Run { release, args } => build::run(release, args),
-        cli::Command::Check => build::check(),
+            target,
+        } => build::build(release, locked, bin.as_deref(), target.as_deref()),
+        cli::Command::Run {
+            release,
+            target,
+            args,
+        } => build::run(release, target.as_deref(), args),
+        cli::Command::Check { target } => build::check(target.as_deref()),
         // `ruxen clean` delegates to the ruxenc library so there is a single
         // source of truth for cache cleanup. `ruxenc::clean::run(&[])` clears
         // `target/ruxen/incremental/` for the current project; pass
