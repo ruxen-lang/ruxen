@@ -51,8 +51,8 @@ COMPILE_OUT="$("$RUXEN" compile "$EXAMPLE/add.rx" \
 COMPILE_RC=$?
 if [ $COMPILE_RC -ne 0 ]; then
   case "$COMPILE_OUT" in
-    *"requires the LLVM backend"*|*"wasm-ld not found"*)
-      miss "wasm toolchain unavailable: $COMPILE_OUT" ;;
+    *"requires the LLVM backend"*|*"LLVM backend not available"*|*"wasm-ld not found"*)
+      miss "wasm toolchain unavailable (rebuild with --features llvm): $COMPILE_OUT" ;;
     *)
       say "FAIL: ruxen compile --target wasm32-unknown-unknown errored:"
       say "$COMPILE_OUT"
