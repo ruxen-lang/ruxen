@@ -30,7 +30,7 @@ mod control_flow;
 mod instructions;
 
 use control_flow::translate_terminator;
-use instructions::{cmpop_to_intpred, emit_binop, translate_instruction};
+use instructions::translate_instruction;
 
 /// Compile all functions in a MIR program into LLVM IR.
 pub fn compile_program<'ctx>(
