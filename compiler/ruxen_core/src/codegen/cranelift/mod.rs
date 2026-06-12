@@ -145,9 +145,7 @@ impl CodeGen {
             })?;
             isa_builder
                 .finish(settings::Flags::new(flag_builder))
-                .map_err(|e| {
-                    format!("Failed to finish ISA for '{}': {}", t.canonical(), e)
-                })?
+                .map_err(|e| format!("Failed to finish ISA for '{}': {}", t.canonical(), e))?
         };
 
         let obj_builder = ObjectBuilder::new(

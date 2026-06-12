@@ -233,9 +233,9 @@ impl CfgContext {
             _ => "",
         };
         let target_vendor = match triple.operating_system {
-            OperatingSystem::Darwin(_)
-            | OperatingSystem::MacOSX(_)
-            | OperatingSystem::IOS(_) => "apple",
+            OperatingSystem::Darwin(_) | OperatingSystem::MacOSX(_) | OperatingSystem::IOS(_) => {
+                "apple"
+            }
             _ => "unknown",
         };
         let target_pointer_width = match triple.pointer_width() {

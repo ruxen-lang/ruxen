@@ -56,24 +56,23 @@ fn wasm_target_rejects_cranelift() {
 fn linker_strategy_matches_host_capabilities() {
     // aarch64 Linux from this host with no cross gcc → container.
     let linux = ResolvedTarget::resolve(Some("aarch64-unknown-linux-gnu")).unwrap();
-    let spec = ruxen_core::codegen::target::linker_for(
-        &linux,
-        HostOs::Darwin,
-        HostArch::Aarch64,
-        |_| false,
-    )
-    .unwrap();
-    assert!(spec.needs_container, "linux target w/o cross gcc → container");
+    let spec =
+        ruxen_core::codegen::target::linker_for(&linux, HostOs::Darwin, HostArch::Aarch64, |_| {
+            false
+        })
+        .unwrap();
+    assert!(
+        spec.needs_container,
+        "linux target w/o cross gcc → container"
+    );
 
     // x86_64 darwin from an arm64 darwin host → local `cc -arch x86_64`.
     let darwin = ResolvedTarget::resolve(Some("x86_64-apple-darwin")).unwrap();
-    let spec = ruxen_core::codegen::target::linker_for(
-        &darwin,
-        HostOs::Darwin,
-        HostArch::Aarch64,
-        |_| false,
-    )
-    .unwrap();
+    let spec =
+        ruxen_core::codegen::target::linker_for(&darwin, HostOs::Darwin, HostArch::Aarch64, |_| {
+            false
+        })
+        .unwrap();
     assert_eq!(spec.program, "cc");
     assert_eq!(spec.target_args, vec!["-arch", "x86_64"]);
     assert!(!spec.needs_container);
@@ -84,13 +83,9 @@ fn android_is_config_ready() {
     // Android resolves and selects an NDK clang (untested — no NDK on host).
     let t = ResolvedTarget::resolve(Some("aarch64-linux-android")).unwrap();
     assert!(t.is_android());
-    let spec = ruxen_core::codegen::target::linker_for(
-        &t,
-        HostOs::Darwin,
-        HostArch::Aarch64,
-        |_| false,
-    )
-    .unwrap();
+    let spec =
+        ruxen_core::codegen::target::linker_for(&t, HostOs::Darwin, HostArch::Aarch64, |_| false)
+            .unwrap();
     assert!(
         spec.program.contains("android") && spec.program.contains("clang"),
         "android linker should be an NDK clang, got {}",

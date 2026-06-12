@@ -30,7 +30,10 @@ const KNOWN_TARGETS: &[(&str, &str)] = &[
         "x86_64-unknown-linux-gnu",
         "config-ready, CI-proven-at-push",
     ),
-    ("aarch64-linux-android", "config-ready, NDK-gated (untested)"),
+    (
+        "aarch64-linux-android",
+        "config-ready, NDK-gated (untested)",
+    ),
     ("wasm32-unknown-unknown", "next phase (LLVM backend)"),
 ];
 
@@ -49,7 +52,12 @@ fn runtime_root() -> Option<PathBuf> {
         return Some(PathBuf::from(home).join("lib").join("runtime"));
     }
     let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".ruxen").join("lib").join("runtime"))
+    Some(
+        PathBuf::from(home)
+            .join(".ruxen")
+            .join("lib")
+            .join("runtime"),
+    )
 }
 
 fn list(all: bool) -> Result<(), String> {

@@ -238,9 +238,13 @@ pub fn compile_runtime_for_target(
     // compile ("PCRE2_CODE_UNIT_WIDTH must be defined").
     apply_pcre2_flags(&mut cmd, runtime_c_path);
 
-    let status = cmd
-        .status()
-        .map_err(|e| format!("Failed to invoke cc for {}: {}", runtime_c_path.display(), e))?;
+    let status = cmd.status().map_err(|e| {
+        format!(
+            "Failed to invoke cc for {}: {}",
+            runtime_c_path.display(),
+            e
+        )
+    })?;
     if !status.success() {
         return Err(format!(
             "Failed to compile runtime {} for target {}",
@@ -492,12 +496,8 @@ fn emit_executable_in_container(
     }
 
     // Copy the produced binary out of the scratch mount to the final path.
-    std::fs::copy(scratch.join(out_name), output_path).map_err(|e| {
-        format!(
-            "Cross-link produced no binary for '{}': {}",
-            output_path, e
-        )
-    })?;
+    std::fs::copy(scratch.join(out_name), output_path)
+        .map_err(|e| format!("Cross-link produced no binary for '{}': {}", output_path, e))?;
     // Preserve the executable bit.
     #[cfg(unix)]
     {

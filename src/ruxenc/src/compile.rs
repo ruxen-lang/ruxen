@@ -108,9 +108,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // byte-identical cached host path below; a non-host target takes the
     // dedicated cross path (no incremental cache — one-shot compile + cross
     // link), so the host cache key is never perturbed by this feature.
-    let resolved_target = ruxen_core::codegen::target::ResolvedTarget::resolve(
-        target_flag.as_deref(),
-    )?;
+    let resolved_target =
+        ruxen_core::codegen::target::ResolvedTarget::resolve(target_flag.as_deref())?;
 
     // Emit modes short-circuit the cache: they don't produce a binary, so
     // caching them is meaningless and would add complexity. Run the
@@ -545,8 +544,10 @@ fn run_cross_compile(
         resolve_backend(release_mode, backend_override, opt_level_override)?
     };
 
-    let extra_runtime_paths: Vec<std::path::PathBuf> =
-        extra_runtime_c.iter().map(std::path::PathBuf::from).collect();
+    let extra_runtime_paths: Vec<std::path::PathBuf> = extra_runtime_c
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
 
     ruxen_core::codegen::compile_with_options_for_target(
         &mir_program,
