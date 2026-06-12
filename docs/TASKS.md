@@ -315,8 +315,15 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       `&T`/`&var T` arg slots; a read-only `&self` (`Ref`) receiver is also
       untainted (the class instance no longer leaks). By-value params and
       `var self`/`consume self` receivers keep their taint (no double-free). Also
-      fixed: loop-body built-in heap locals now free at the back-edge via the
-      shared `drops::heap_free_callee` (was leaking iterations 1..n-1), and the
+      fixed: loop-body built-in heap locals free via the shared
+      `drops::heap_free_callee` — **scope-exit only, NOT at the back-edge**
+      (the first cut freed at the back-edge ignoring moves: a per-iteration
+      local moved OUT into an escaping collection was freed while the
+      collection still held it → UAF — rondo's router read `<none>` from its
+      params map, 12 failures. Corrected 2026-06-12; pin: release-e2e
+      `928_loop_collection_insert_no_uaf`, the minimal reduction of rondo's
+      `Route.matches`. The per-iteration leak for NON-moved loop locals is the
+      accepted residual until move-aware back-edge tracking exists), and the
       `compute_dealloc_safe_locals` Assign/Copy aliasing invariant was hardened to
       strip a copied-from src's ownership even when the dest is pre-tainted
       (prevents a loop double-free). Runtime callees untouched (parity oracle

@@ -1347,11 +1347,37 @@ end
     );
 }
 
-/// Borrow inside a LOOP body: each iteration allocates a fresh `String`,
-/// borrows it into the user fn, and must free it at the loop back-edge — no
-/// per-iteration leak.
+/// CHARACTERIZATION (accepted-leak class, 2026-06-11). Borrow a fresh
+/// per-iteration `String` into a user `&String` reader inside a loop body.
+///
+/// `0741468` registered built-in heap loop-body locals
+/// (`String`/`Array`/`Map`/`Set`) for a loop-back-edge free so each
+/// iteration's allocation was reclaimed (this fixture then asserted
+/// `outstanding == 0`, `string_frees >= 3`). That back-edge free was emitted
+/// UNCONDITIONALLY at lower time and did NOT consult whether the local had
+/// been MOVED OUT during the iteration (into an escaping collection, a return
+/// value, or a stored field). When it had — as in rondo's path-param
+/// `captures.insert(name, …)` — the back-edge freed an allocation the
+/// collection now owned, dangling its pointer → nondeterministic
+/// use-after-free across the whole dispatch path (rondo `<none>` capture
+/// reads; reproduced + bisected to `0741468`).
+///
+/// The registration was REVERTED (`statement.rs`) on the soundness mandate:
+/// built-in heap loop-body locals are now freed ONLY at function scope exit,
+/// where `compute_dealloc_safe_locals`'s `arg_transfer` taint tracks moves
+/// correctly. The COST is this accepted leak: a genuinely-owned per-iteration
+/// built-in heap local LEAKS until scope exit (iterations `1..n-1` here)
+/// rather than dangling. Soundness strictly beats leak-fixing.
+///
+/// This pin now CHARACTERIZES that benign leak — the run exits cleanly with no
+/// UAF and no double-free (`raw_frees <= raw_mallocs`), the borrow source is
+/// not consumed by the reader, and exactly `n-1` of the `n` per-iteration
+/// allocations stay outstanding at scope exit. The move-aware back-edge free
+/// (needs the dealloc-safe analysis BEFORE the loop edge is emitted) is the
+/// filed follow-up in `docs/TASKS.md`; closing it flips this assertion back to
+/// `outstanding == 0`.
 #[test]
-fn borrow_in_loop_frees_each_iteration() {
+fn borrow_in_loop_leaks_until_scope_exit_no_uaf() {
     let source = r#"
 def borrow_len(s: &String) -> USize
   s.size
@@ -1367,15 +1393,38 @@ def main
   puts "ok"
 end
 "#;
-    let report = run_fixture_inline("borrow_in_loop", source);
+    let (stdout, stderr, exit) = compile_and_run_with_tracking("borrow_in_loop", source);
     assert_eq!(
-        report.outstanding_allocations, 0,
-        "borrowed String in loop body leaked across iterations: {:#?}",
+        exit,
+        Some(0),
+        "borrow-in-loop fixture crashed. stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "ok\n", "unexpected stdout: {stdout:?}");
+    let report = parse_leak_report(&stderr);
+    // No DOUBLE-FREE / UAF: the raw-heap channel never over-frees. This is the
+    // load-bearing soundness assertion — the per-iteration allocations may
+    // leak, but none is freed while still referenced.
+    let raw_line = stderr
+        .lines()
+        .find(|l| l.starts_with("RUXEN_TEST_RAW"))
+        .expect("raw marker");
+    let raw_mallocs = extract_u64(raw_line, "raw_mallocs", &stderr);
+    let raw_frees = extract_u64(raw_line, "raw_frees", &stderr);
+    assert!(
+        raw_frees <= raw_mallocs,
+        "double-free/UAF on borrow-in-loop path: raw_mallocs={raw_mallocs} \
+         raw_frees={raw_frees}\n{:#?}",
         report
     );
-    assert!(
-        report.string_frees >= 3,
-        "each of the 3 loop-body Strings must be freed (>=3): {:#?}",
+    // ACCEPTED LEAK: exactly `n-1` (= 2) of the 3 per-iteration Strings stay
+    // outstanding at scope exit — they are freed only at function scope exit,
+    // not at the loop back-edge. Pinned EXACTLY so the day the move-aware
+    // back-edge free lands, this fixture fails loudly and is flipped back to
+    // `outstanding == 0`.
+    assert_eq!(
+        report.outstanding_allocations, 2,
+        "expected the accepted per-iteration leak (n-1 = 2 outstanding); a \
+         change here means the back-edge free behavior moved: {:#?}",
         report
     );
 }

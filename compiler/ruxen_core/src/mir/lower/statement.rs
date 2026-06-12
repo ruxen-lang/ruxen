@@ -105,26 +105,32 @@ impl<'a> Lowerer<'a> {
                         if let Some(frame) = self.loop_stack.last_mut() {
                             frame.body_locals.push(local);
                         }
-                    } else if matches!(
-                        refined_ty,
-                        Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_)
-                    ) {
-                        // Built-in heap-owning locals declared in a loop body
-                        // must ALSO be freed at the loop back-edge / break /
-                        // continue, not only at function scope exit — otherwise
-                        // each iteration's allocation leaks and only the final
-                        // iteration's value is reclaimed by the scope-exit drop.
-                        // `emit_dealloc_loop_locals` selects the type-correct
-                        // free callee (`ruxen_string_free` / `ruxen_vec_free` /
-                        // …). Class/Struct/Enum are registered above (they use
-                        // `ruxen_dealloc`); these built-ins need their dedicated
-                        // helpers. Surfaced by the borrow-in-loop drop-matrix
-                        // pin (a `String` borrowed into a user `&String` fn
-                        // inside a `while` leaked iterations 1..n-1).
-                        if let Some(frame) = self.loop_stack.last_mut() {
-                            frame.body_locals.push(local);
-                        }
                     }
+                    // NOTE (soundness, 2026-06-11): `0741468` ALSO registered
+                    // built-in heap loop-body locals (`String`/`Array`/`Map`/
+                    // `Set`) here for a loop-back-edge free, to stop a fresh
+                    // per-iteration allocation leaking iterations 1..n-1. That
+                    // free is emitted UNCONDITIONALLY at lower time
+                    // (`emit_dealloc_loop_locals`) and does NOT see whether the
+                    // local was MOVED OUT during the iteration — into an
+                    // escaping collection (`captures.insert(name, …)`), a
+                    // returned value, or a stored field. When it was, the
+                    // back-edge frees an allocation the collection/return now
+                    // owns → dangling pointer → use-after-free (rondo's
+                    // path-param `<none>` reads; nondeterministic heap
+                    // corruption across the whole dispatch path). The scope-exit
+                    // drop pass (`compute_dealloc_safe_locals`) tracks those
+                    // moves correctly via the `arg_transfer` taint, so freeing
+                    // built-in heap loop-body locals ONLY at scope exit is
+                    // sound. Reverted to that behavior: a genuinely-owned
+                    // per-iteration built-in heap local LEAKS until scope exit
+                    // (the accepted leak class filed in TASKS.md) rather than
+                    // dangling. Soundness strictly beats leak-fixing; the
+                    // move-aware back-edge free needs the dealloc-safe analysis
+                    // run BEFORE the loop edge is emitted, which is the filed
+                    // follow-up. (Class/Struct/Enum loop locals stay registered
+                    // above — they use `ruxen_dealloc` and the W15 user-`def
+                    // drop` path depends on the back-edge call.)
                 }
                 Ok(())
             }

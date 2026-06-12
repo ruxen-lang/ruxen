@@ -100,6 +100,19 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// A heap local whose ownership was just moved out (into a constructor,
+    /// a MOVE_BY_FFI callee, or a collection-insert transfer slot) must not be
+    /// freed by EITHER the scope-exit drop (`initialized_heap_locals`) or the
+    /// loop back-edge / break / continue dealloc (`LoopFrame::body_locals`).
+    /// Both paths would otherwise double-free / dangle the now-collection-owned
+    /// allocation. Single removal point keeps the two free lists in lockstep.
+    fn remove_moved_loop_local(&mut self, local: LocalId) {
+        self.initialized_heap_locals.remove(&local);
+        for frame in &mut self.loop_stack {
+            frame.body_locals.retain(|candidate| *candidate != local);
+        }
+    }
+
     /// Push an instruction onto the current basic block.
     pub(super) fn emit(&mut self, inst: MirInst) {
         if let MirInst::Call { callee, args, .. } = &inst {
@@ -108,6 +121,24 @@ impl<'a> Lowerer<'a> {
             // underscore-mangled, so it was unreachable).
             let moves_args = crate::mir::lower::runtime_abi::is_move_by_ffi(callee.as_str());
             let init_moves_non_self_args = callee.ends_with("_init");
+            // A collection-insert family callee (`ruxen_hash_insert` key+value,
+            // `ruxen_vec_push`/`ruxen_vec_insert`/`ruxen_set_insert` element)
+            // TRANSFERS ownership of its key/value/element slots into the
+            // collection — the SAME single-source mask `compute_dealloc_safe_locals`
+            // taints for scope-exit drop. A loop-body local moved into a
+            // collection this way must therefore ALSO be pulled off the loop's
+            // back-edge free list AND the scope-exit `initialized_heap_locals`
+            // set: the collection now owns the allocation, so freeing the source
+            // local at the loop edge would dangle the stored entry's pointer.
+            // This mirrors the `is_move_by_ffi` / `_init` removals above for the
+            // insert family. (Built-in heap loop-body locals are currently NOT
+            // back-edge-registered — see the soundness note in `statement.rs` —
+            // so today this guards a CLASS local inserted into a collection
+            // inside a loop, AND keeps the loop-free list move-aware so the
+            // built-in registration can be safely re-enabled once the dealloc-
+            // safe analysis runs before the loop edge is emitted.)
+            let transfer_mask =
+                crate::mir::lower::runtime_abi::callee_ownership(callee.as_str()).arg_transfer;
             if moves_args || init_moves_non_self_args {
                 for (idx, arg) in args.iter().enumerate() {
                     if init_moves_non_self_args && idx == 0 {
@@ -131,10 +162,16 @@ impl<'a> Lowerer<'a> {
                                 continue;
                             }
                         }
-                        self.initialized_heap_locals.remove(local);
-                        for frame in &mut self.loop_stack {
-                            frame.body_locals.retain(|candidate| candidate != local);
-                        }
+                        self.remove_moved_loop_local(*local);
+                    }
+                }
+            }
+            // Independently of the move-by-FFI / `_init` paths above, a
+            // collection-insert transfer slot is moved out — remove it.
+            for (idx, arg) in args.iter().enumerate() {
+                if transfer_mask.contains(idx) {
+                    if let MirValue::Use(local) = arg {
+                        self.remove_moved_loop_local(*local);
                     }
                 }
             }

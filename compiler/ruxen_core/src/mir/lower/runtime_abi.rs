@@ -229,6 +229,36 @@ pub fn user_callee_param_is_ref(
         return result;
     }
 
+    // ESCAPE GATE (soundness). Untainting a borrow arg is only safe when the
+    // borrowed value CANNOT escape the call into a location that outlives it.
+    // A callee with a `&var T` OUT-PARAM (or a `&var self` / `consume self`
+    // receiver) is a mutable out-channel: it can store a value DERIVED FROM —
+    // or aliasing — a borrowed arg into a collection / field the caller still
+    // owns after the call returns (rondo's `split_path_query_into(p: &String,
+    // request: &var Request)` writes `request.path = …(p)`; `Request.parse`
+    // then RETURNS `request`). If we untaint the borrow args of such a callee,
+    // the caller frees the borrowed source at scope exit while the out-channel
+    // still references it → use-after-free (rondo's `<none>` capture reads).
+    //
+    // Full escape analysis is out of scope at this layer. The cheap, sound,
+    // conservative rule: if ANY candidate signature carries a mutable
+    // out-channel — a `&var T` param, or a `RefMut`/`Consuming` self — keep the
+    // CONSERVATIVE taint for EVERY arg of this callee (report all-`false`). A
+    // genuinely-borrowed source then leaks rather than dangles; soundness
+    // strictly beats leak-fixing. Pure readers (no `&var` out-param, `&self`
+    // or no self) still get their borrow args untainted — the common
+    // `include?`/`find`/measure/`to_eq` shapes that motivated the leak fix.
+    let has_mut_out_channel = candidates.iter().any(|(sig, _)| {
+        matches!(
+            sig.self_mode,
+            Some(crate::hir::nodes::HirSelfMode::RefMut)
+                | Some(crate::hir::nodes::HirSelfMode::Consuming)
+        ) || sig.params.iter().any(|p| ty_is_mut_reference(&p.ty))
+    });
+    if has_mut_out_channel {
+        return result;
+    }
+
     // For each value-carrying arg slot, decide ref-ness. A slot is BORROWED
     // only when EVERY candidate that maps a parameter to that slot agrees it is
     // a reference. Any disagreement (or a candidate with no param at that slot)
@@ -288,6 +318,17 @@ fn ty_is_reference(ty: &crate::hir::types::Ty) -> bool {
         ty,
         Ty::Ref(_) | Ty::RefMut(_) | Ty::RefLifetime(_, _) | Ty::RefMutLifetime(_, _)
     )
+}
+
+/// A declared parameter type that is a MUTABLE borrow: `&var T` (with or
+/// without an explicit lifetime). A `&var T` param is an OUT-CHANNEL — the
+/// callee can store into the location the caller still owns after the call —
+/// so its presence in a signature gates off the borrow-arg untaint (see the
+/// escape gate in `user_callee_param_is_ref`). The immutable `&T` is excluded:
+/// a read-only borrow cannot escape a value the way a `&var` write can.
+fn ty_is_mut_reference(ty: &crate::hir::types::Ty) -> bool {
+    use crate::hir::types::Ty;
+    matches!(ty, Ty::RefMut(_) | Ty::RefMutLifetime(_, _))
 }
 
 /// Split a mangled method callee `Class_method` into `(parent_class_def_id,

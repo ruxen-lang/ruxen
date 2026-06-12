@@ -45,11 +45,16 @@ once 1.0.0 ships.
     classified `callee_ownership` tables are unchanged; the parity oracle is
     byte-identical).
   - **Loop bodies:** a built-in heap local (`String`/`Array`/`Hash`/`Set`)
-    declared inside a `while`/`loop`/`for` body is now freed at the loop
-    back-edge / `break` / `continue` via the type-correct helper (extracted
-    `drops::heap_free_callee`, shared with scope-exit drop), not only at function
-    scope exit — each iteration's allocation is reclaimed instead of leaking
-    iterations 1..n-1.
+    declared inside a `while`/`loop`/`for` body frees via the type-correct
+    helper (extracted `drops::heap_free_callee`, shared with scope-exit drop)
+    at SCOPE EXIT only. (The first cut additionally freed at the loop
+    back-edge, which was UNSOUND — it ignored moves, so a per-iteration local
+    moved out into an escaping collection (rondo's `Route.matches` inserting
+    path-param keys into its captures Hash) was freed while the collection
+    held it: a use-after-free reading back `<none>`, 12 rondo test failures.
+    Corrected; pinned by release-e2e `928_loop_collection_insert_no_uaf`. The
+    per-iteration leak for non-moved loop locals is the documented residual
+    until move-aware back-edge tracking exists.)
   - **Aliasing invariant hardened:** `compute_dealloc_safe_locals` now strips a
     copied-from alloc-rooted `src`'s ownership unconditionally (even when the
     `dest` is already tainted, e.g. a loop body-local pre-zeroed by
