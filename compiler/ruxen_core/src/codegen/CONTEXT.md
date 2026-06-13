@@ -34,6 +34,11 @@ the platform linker), and the C runtime in `library/`. No upward edges.
   `char*`. Changing a runtime signature means editing BOTH ABI tables + the C side.
 - Cranelift is hard-blocked for wasm/embedded (`requires_llvm_backend()`); those
   targets force LLVM (`mod.rs` guard).
-- The wasm path (`compile_cross` → `target.is_wasm()`) historically emitted a bare
-  reactor module (no runtime). Tier 4.09 changes this to link a core runtime subset
-  + bundled allocator — see `docs/requirements/tier4_09_wasm_heap_and_host_imports.md`.
+- The wasm path (`compile_cross` → `target.is_wasm()`) now compiles a curated
+  runtime subset (`object::WASM_RUNTIME_CORE`: alloc.c, vec.c) + a bundled
+  allocator/libc shim (`object::WASM_RT_C`) via clang `--target=wasm32` and links
+  them (`emit_wasm_module` takes runtime objects). `runtime_decl.rs` declares the
+  vec ABI with int64 slots. Tier 4.09 (WIP) — see
+  `docs/requirements/tier4_09_wasm_heap_and_host_imports.md`. KNOWN-OPEN: on wasm32
+  the call-site arg lowering passes an `Int` to `ruxen_vec_push` as i32 instead of
+  i64 (slot-width bug) → traps; fix is in `llvm/emit` arg lowering, not the decl table.
