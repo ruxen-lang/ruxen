@@ -139,6 +139,50 @@ a clear compile error, not a link failure).
    **import round-trip pin** green.
 8. **Examples + `wasm_verify.sh` + docs/CHANGELOG**; flip status to landed.
 
+## 10. Implementation findings (2026-06-13) — revises §5/§8
+
+TDD against the real compiler surfaced that the heap blocker is **not** "the
+runtime isn't linked" but "**wasm bootstraps no stdlib at all**":
+
+- `src/ruxenc/src/compile.rs:509` — `if target.is_wasm() { Vec::new() }` — the wasm
+  cross path passes an **empty** bootstrap, so `Array`, `String`, `sum`, `puts`
+  don't resolve (confirmed: `no field sum on type Array[Int]` when compiling a
+  heap program to wasm).
+- *Why* the full bootstrap can't just be enabled: it pulls in `dispatch runtime`
+  mixin classes whose `__rx_classinfo_*` globals **the LLVM backend cannot lower**
+  (confirmed: a native `--backend=llvm` build of an Array program fails with
+  `LLVM backend cannot lower DataAddr { __rx_classinfo_TimeSleepFuture }`). Since
+  wasm *must* use LLVM, the full bootstrap is impossible until that gap is closed.
+- **Good news:** `grep "dispatch runtime"` across the stdlib hits **only**
+  `future/src/lib.rx`. `core`, `array`, `string`, `option_result`, `fmt`, `hash`
+  are clean — so a curated subset can bootstrap on LLVM/wasm.
+
+**Revised heap architecture — three parts (was "link the runtime"):**
+1. **Curated wasm bootstrap** — a target-aware bootstrap that loads the transitive
+   closure of `{core, array, string, option_result}` **minus** the dispatch-runtime
+   / libc-heavy modules (`future`, `async_*`, `executor`, `time`, `net`, `fs`,
+   `sync`, `process`, and `io`'s host-IO surface). Replaces the `Vec::new()` at
+   `compile.rs:509`. Requires resolving the stdlib dep graph (the BOOTSTRAP_FILES
+   order is not a safe prefix — `array`/`string` load late but must not drag in the
+   excluded modules; this needs verifying, not assuming).
+2. **Link the subset's C runtime + bundled allocator** — the `mod.rs:691` change
+   (compile `WASM_RUNTIME_CORE` via `clang --target=wasm32`, extend `emit_wasm_module`).
+3. **Confirm LLVM emits the subset's class machinery** — `Array[T]`/`String` are
+   classes; LLVM choked only on `dispatch runtime` class_info, so plain class
+   class_info/vtables are *expected* to work, but this is the open risk to verify
+   first (cheapest next experiment: enable the curated bootstrap and see what LLVM
+   does before touching the allocator).
+
+**Revised increment order:**
+- ✅ **Incr 1 (done, committed `b897c13`)** — gate 64-bit asserts for wasm32.
+- **Incr 2 (next, de-risk):** make `compile.rs` bootstrap the curated subset for
+  wasm and attempt a native `--backend=llvm` build of an Array program → find out
+  exactly what LLVM can/can't lower for the subset. *Cheapest way to retire the
+  biggest unknown.*
+- **Incr 3:** wasm C-compile path (`compile_runtime_for_wasm`) + allocator/libc shim.
+- **Incr 4:** link the curated runtime on the wasm path → first heap pin green.
+- (then Array/String pins, feature-gate diagnostics for excluded modules, host imports.)
+
 ## 9. Open questions / staged remainder
 
 - `snprintf`/`strtod` fidelity: vendor full single-header vs. minimal; revisit if a
