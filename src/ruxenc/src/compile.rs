@@ -368,6 +368,56 @@ fn load_bootstrap_or_err() -> Result<Vec<(String, Program)>, String> {
     Ok(programs)
 }
 
+/// Curated stdlib bootstrap for the wasm (LLVM) target — tier 4.09.
+///
+/// The *full* bootstrap can't run on wasm: it pulls in `dispatch runtime` mixin
+/// classes (only `future` uses the feature) whose `__rx_classinfo_*` globals the
+/// LLVM backend can't lower, plus libc/host-heavy modules the wasm link has no
+/// allocator for. So load only the heap-core subset. The selection is
+/// overridable via `RUXEN_WASM_BOOTSTRAP` (comma-separated package names) so the
+/// viable set can be tuned without recompiling the toolchain as the wasm runtime
+/// grows. Load order follows `BOOTSTRAP_FILES` (types-before-use), filtered to
+/// the selected packages.
+fn load_wasm_bootstrap_or_err() -> Result<Vec<(String, Program)>, String> {
+    const DEFAULT_WASM_PACKAGES: &str = "core,option_result,scalar,string,array,fmt,hash";
+    let want = std::env::var("RUXEN_WASM_BOOTSTRAP")
+        .unwrap_or_else(|_| DEFAULT_WASM_PACKAGES.to_string());
+    let selected: Vec<&str> = want
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let files: Vec<&str> = stdlib_bootstrap::BOOTSTRAP_FILES
+        .iter()
+        .copied()
+        .filter(|rel| {
+            let pkg = rel.split('/').next().unwrap_or("");
+            selected.contains(&pkg)
+        })
+        .collect();
+
+    let mut diags: Vec<Diagnostic> = Vec::new();
+    let programs = stdlib_bootstrap::run_bootstrap_with_files(&files, None, &mut diags);
+    if !diags.is_empty() {
+        let mut msg = String::from("wasm stdlib bootstrap failed:");
+        for d in &diags {
+            msg.push_str("\n  ");
+            msg.push_str(&d.to_string());
+        }
+        return Err(msg);
+    }
+
+    Ok(files
+        .iter()
+        .zip(programs)
+        .filter_map(|(rel, p)| {
+            let pkg = rel.split('/').next()?.to_string();
+            Some((pkg, p))
+        })
+        .collect())
+}
+
 fn type_check_with_package_bootstrap(
     program: &Program,
     bootstrap_packages: &[(String, Program)],
@@ -506,8 +556,12 @@ fn run_cross_compile(
     // The no_std core surface (primitive ops) needs no bootstrap for the
     // math-export v1 path. (Loading `library/std/core` alone is the staged
     // remainder — ADR phase4-no-std-wasm decision #1.)
+    // Tier 4.09: wasm bootstraps a CURATED stdlib subset (heap-core: core,
+    // array, string, …) — not the empty set (which left `Array`/`String`
+    // unresolvable) nor the full bootstrap (which drags in `dispatch runtime`
+    // class_info the LLVM backend can't lower). See `load_wasm_bootstrap_or_err`.
     let bootstrap_programs: Vec<(String, Program)> = if target.is_wasm() {
-        Vec::new()
+        load_wasm_bootstrap_or_err()?
     } else {
         load_bootstrap_or_err()?
     };
