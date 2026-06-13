@@ -412,16 +412,18 @@ pub fn emit_wasm_module(
             e
         )
     })?;
-    let _ = std::fs::remove_file(&obj_path);
-    for ro in runtime_objects {
-        let _ = std::fs::remove_file(ro);
-    }
     if !status.success() {
         return Err(format!(
             "wasm-ld failed for '{}' (target {})",
             output_path,
             target.canonical()
         ));
+    }
+    // Clean temp objects only after a successful link (a failed link leaves the
+    // inputs in place for inspection / retry — matches `emit_executable`).
+    let _ = std::fs::remove_file(&obj_path);
+    for ro in runtime_objects {
+        let _ = std::fs::remove_file(ro);
     }
     Ok(())
 }
@@ -484,7 +486,7 @@ void *malloc(size_t n) {
     if (payload == 0) payload = 16;
     uintptr_t base = rx_bump(payload + 16); /* 16-byte header keeps payload aligned */
     if (!base) return (void *)0;
-    *(size_t *)base = n;
+    *(size_t *)base = payload; /* store the rounded size: realloc copies the full live payload */
     return (void *)(base + 16);
 }
 
@@ -537,6 +539,38 @@ int memcmp(const void *a, const void *b, size_t n) {
 }
 
 size_t strlen(const char *s) { size_t n = 0; while (s[n]) n++; return n; }
+
+int strcmp(const char *a, const char *b) {
+    while (*a && *a == *b) { a++; b++; }
+    return (int)(unsigned char)*a - (int)(unsigned char)*b;
+}
+
+int strncmp(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char ca = (unsigned char)a[i], cb = (unsigned char)b[i];
+        if (ca != cb) return (int)ca - (int)cb;
+        if (ca == 0) break;
+    }
+    return 0;
+}
+
+char *strchr(const char *s, int c) {
+    char ch = (char)c;
+    for (;; s++) {
+        if (*s == ch) return (char *)s;
+        if (!*s) return (char *)0;
+    }
+}
+
+char *strstr(const char *hay, const char *needle) {
+    if (!*needle) return (char *)hay;
+    for (; *hay; hay++) {
+        const char *a = hay, *b = needle;
+        while (*a && *b && *a == *b) { a++; b++; }
+        if (!*b) return (char *)hay;
+    }
+    return (char *)0;
+}
 
 static void rx_byteswap(unsigned char *a, unsigned char *b, size_t n) {
     for (size_t i = 0; i < n; i++) { unsigned char t = a[i]; a[i] = b[i]; b[i] = t; }
