@@ -65,11 +65,20 @@
 
 /* ── Platform Assertions ──────────────────────────────────────────── */
 
+/* The runtime stores pointers in `int64_t` slots (see RuxenVec below), which
+ * requires 64-bit pointers on native targets. wasm32 is the deliberate
+ * exception (tier 4.09): pointers are 32-bit there, but wasm is always
+ * little-endian, so a 32-bit pointer reinterpret-cast into a 64-bit slot lives
+ * in the low bytes and round-trips back losslessly. Gate the 64-bit assertions
+ * out for wasm32 so the core runtime subset compiles for the browser-GUI target.
+ * (A proper `slot_t`→`intptr_t` pass is tracked separately; cosmetic on LE wasm.) */
+#if !defined(__wasm32__)
 _Static_assert(sizeof(void *) == sizeof(int64_t),
     "Ruxen requires a 64-bit platform (sizeof(void*) must equal sizeof(int64_t))");
 
 _Static_assert(sizeof(void *) == 8,
     "Ruxen requires 64-bit pointers");
+#endif
 
 /* `_ORIG_FREE`-style asm-label trick: the drop_fixtures textual
  * splice rewrites every `free(` callsite to `ruxen_test_free(`. To
