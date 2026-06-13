@@ -8,6 +8,19 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Heap types on wasm (tier 4.09): `String`/`Array` now work on
+  `wasm32-unknown-unknown`.** Previously wasm was a pure-computation reactor (no
+  heap). Now the wasm path bootstraps a curated heap-core stdlib subset (`core`,
+  `array`, `string`, … — overridable via `RUXEN_WASM_BOOTSTRAP`; excludes the
+  `dispatch runtime` / libc-heavy host modules the LLVM backend or a no-libc
+  target can't handle) and links the heap-core C runtime (`alloc.c`, `vec.c`)
+  plus a bundled allocator/libc shim compiled with `clang --target=wasm32`. The
+  resulting `.wasm` instantiates with no imports (it carries its own allocator).
+  `TypeParam` now lowers to i64 in the LLVM backend (the int64-slot ABI, matching
+  Cranelift) so generic FFI args don't mismatch the runtime on wasm32. New
+  `examples/07-wasm-heap` + a second `scripts/wasm_verify.sh` bar prove a
+  heap-allocated `Array` runs in Node. Host imports (`wasm_import`) are the next
+  step. See `docs/requirements/tier4_09_wasm_heap_and_host_imports.md`.
 - **no_std mode (tier 4.04): `ruxen compile --no-std` + E1400.** A no_std host
   build skips the stdlib bootstrap and links WITHOUT the Ruxen C runtime or
   per-package `[system_libs]` — the user object is the whole program (zero

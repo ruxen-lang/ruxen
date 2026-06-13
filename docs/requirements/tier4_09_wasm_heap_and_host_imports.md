@@ -1,6 +1,9 @@
 # Tier 4.09 — WASM heap + host imports (browser-GUI foundations)
 
-Status: **in progress** (started 2026-06-13)
+Status: **heap landed** (2026-06-13) — a heap-allocated `Array` compiles to
+`wasm32-unknown-unknown` and runs in Node returning the correct result
+(`examples/07-wasm-heap`, `scripts/wasm_verify.sh`). Host imports (`wasm_import`)
+still pending. See §11 for what landed.
 Extends: [`tier4_03_wasm_target.md`](tier4_03_wasm_target.md) (which landed pure-computation
 `wasm32-unknown-unknown`: LLVM backend, `wasm-ld`, automatic exports, no runtime).
 
