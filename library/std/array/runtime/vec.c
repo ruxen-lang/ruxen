@@ -527,11 +527,17 @@ void ruxen_vec_extend(RuxenVec *v, RuxenVec *other) {
    message including both `i` and `len`. */
 int64_t ruxen_vec_get_or_panic(RuxenVec *v, uint64_t i) {
     if (!v || i >= (v ? v->len : 0)) {
+#if defined(__wasm32__)
+        /* wasm has no snprintf and panic ignores the message (it traps), so a
+         * static string suffices (tier 4.09). */
+        ruxen_panic("Vec index out of range");
+#else
         char buf[96];
         uint64_t len = v ? v->len : 0;
         snprintf(buf, sizeof(buf), "index %llu out of range, len %llu",
                  (unsigned long long)i, (unsigned long long)len);
         ruxen_panic(buf);
+#endif
     }
     return v->data[i];
 }
@@ -597,6 +603,11 @@ void ruxen_vec_drop_vec(RuxenVec *v) {
     ruxen_vec_ORIG_FREE(v);
 }
 
+/* ruxen_process_run uses fork/execvp/waitpid/_exit/fprintf — POSIX process
+ * spawning that doesn't exist on wasm32. It's host-only (the `process` stdlib
+ * module isn't bootstrapped for wasm), so gate it out of the wasm runtime build
+ * (tier 4.09). */
+#if !defined(__wasm32__)
 /* ---------------------------------------------------------------------
  * std::process::run (Phase 3)
  *
@@ -696,6 +707,7 @@ int64_t ruxen_process_run(const char *cmd, RuxenVec *args) {
        options. Treat as a generic failure. */
     return 127;
 }
+#endif /* !__wasm32__ — ruxen_process_run */
 
 /* ── Vec[T] surface — Phase 2 stdlib batch 2 (#03) ──────────────────
  * `from_iter`, `dedup`, plus the consume-style `into_iter` whose

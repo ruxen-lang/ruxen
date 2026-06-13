@@ -103,6 +103,18 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("ruxen_vec_set", void, [ptr_ty, i64_ty, i64_ty]);
     decl!("ruxen_vec_from_iter", ptr_ty, [ptr_ty]);
 
+    // ── Vec constructors / iteration emitted by Array methods. These MUST
+    //    be declared: without an explicit signature the call-site fallback
+    //    (calls.rs) infers arg widths from values, which matches the C
+    //    int64-slot ABI on 64-bit targets but passes a pointer-width (i32)
+    //    item on wasm32 — an ABI mismatch with the runtime's int64_t
+    //    parameters (tier 4.09). ──────────────────────────────────────────
+    decl!("ruxen_vec_new", ptr_ty, []);
+    decl!("ruxen_vec_push", void, [ptr_ty, i64_ty]);
+    decl!("ruxen_vec_pop", ptr_ty, [ptr_ty]);
+    decl!("ruxen_vec_len", i64_ty, [ptr_ty]);
+    decl!("ruxen_vec_sum", i64_ty, [ptr_ty]);
+
     // ── Pointer indirection helpers (`&mut T` mutation lowering) ────
     decl!("ruxen_deref_ptr", ptr_ty, [ptr_ty]);
     decl!("ruxen_store_ptr", void, [ptr_ty, ptr_ty]);

@@ -681,15 +681,41 @@ fn compile_cross(
         }
     };
 
-    // Tier 4.03 (WASM): a wasm target is a no-libc, no-C-runtime, reactor
-    // module. The §5.8 guard above already forced the LLVM backend, which
-    // emitted a WebAssembly object (with `export_name` attributes on every
-    // `program.wasm_exports` entry). Link it with `wasm-ld` into a `.wasm` —
-    // no stdlib runtime `.c`, no `[system_libs]`, no `cc`. The user object
-    // alone is the module (math exports; a bundled allocator + import-based
-    // I/O are the staged remainder, ADR phase4-no-std-wasm).
+    // Tier 4.09 (WASM): link the curated heap-core runtime + bundled allocator/
+    // libc shim so `String`/`Array` work. The §5.8 guard above forced the LLVM
+    // backend, which emitted the user's WebAssembly object (with `export_name`
+    // attrs on every `program.wasm_exports` entry). Compile the curated runtime
+    // `.c` subset (WASM_RUNTIME_CORE) + the wasm shim to wasm objects with clang,
+    // then link everything with `wasm-ld`. (Tier 4.03 originally linked the user
+    // object alone — a bare reactor with no heap.)
     if target.is_wasm() {
-        return object::emit_wasm_module(&object_bytes, output_path, target);
+        let all_sources = find_runtime_sources()?;
+        let mut runtime_objects: Vec<PathBuf> = Vec::new();
+        let cleanup = |objs: &[PathBuf]| {
+            for o in objs {
+                let _ = std::fs::remove_file(o);
+            }
+        };
+        for src in &all_sources {
+            let base = src.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if object::WASM_RUNTIME_CORE.contains(&base) {
+                match object::compile_runtime_for_wasm(src) {
+                    Ok(o) => runtime_objects.push(o),
+                    Err(e) => {
+                        cleanup(&runtime_objects);
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        match object::compile_wasm_shim() {
+            Ok(o) => runtime_objects.push(o),
+            Err(e) => {
+                cleanup(&runtime_objects);
+                return Err(e);
+            }
+        }
+        return object::emit_wasm_module(&object_bytes, &runtime_objects, output_path, target);
     }
 
     // Step 2: resolve the linker strategy for this target on this host.

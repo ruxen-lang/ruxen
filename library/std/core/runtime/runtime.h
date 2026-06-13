@@ -25,6 +25,31 @@
 #ifndef RUXEN_RUNTIME_H
 #define RUXEN_RUNTIME_H
 
+#if defined(__wasm32__)
+/* wasm32-unknown-unknown has no sysroot — the POSIX headers below don't exist
+ * there (tier 4.09). Pull only the freestanding headers clang ships, and declare
+ * the small libc surface the heap-core runtime (alloc.c, vec.c, string.c, …) uses;
+ * their definitions come from the bundled wasm runtime shim
+ * (library/runtime/wasm/wasm_rt.c). The full POSIX set in the #else is for the
+ * host-only modules (io/net/fs/process/time), which are never compiled for wasm. */
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+void *malloc(size_t);
+void free(void *);
+void *realloc(void *, size_t);
+void *calloc(size_t, size_t);
+void *memcpy(void *, const void *, size_t);
+void *memmove(void *, const void *, size_t);
+void *memset(void *, int, size_t);
+int memcmp(const void *, const void *, size_t);
+size_t strlen(const char *);
+int strcmp(const char *, const char *);
+int strncmp(const char *, const char *, size_t);
+char *strchr(const char *, int);
+char *strstr(const char *, const char *);
+void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
+#else
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +70,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <sys/types.h>
+#endif
 
 /* Secure-entropy headers (<sys/random.h>, <Security/Security.h>) are
  * intentionally NOT included here. This header is pulled into every
@@ -242,11 +268,13 @@ void *ruxen_io_error_struct(int32_t tag, const char *message);
 void *ruxen_io_error_from_errno(int err);
 
 /* Stream helpers (defined in io/runtime/io_error.c, called from io/stdio.c
- * and fs.c). */
+ * and fs.c). FILE-typed → host-only; the io module isn't built for wasm. */
+#if !defined(__wasm32__)
 void *ruxen_stream_handle(FILE *stream);
 FILE *ruxen_stream_from_handle(void *handle, FILE *fallback);
 void *ruxen_stream_read_line(FILE *stream);
 void *ruxen_stream_read_to_string(FILE *stream);
+#endif
 
 /* String helpers cross-package (defined in string/string.c, hash/hash.c). */
 char *ruxen_string_concat(const char *a, const char *b);
