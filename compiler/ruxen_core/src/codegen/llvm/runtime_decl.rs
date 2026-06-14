@@ -88,6 +88,12 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     // ── Equality / ordering / hashing lowering (`==`, `<=>`) ────────
     decl!("ruxen_string_concat", ptr_ty, [ptr_ty, ptr_ty]);
     decl!("ruxen_string_cmp", i64_ty, [ptr_ty, ptr_ty]);
+    // String equality (string.c: `int64_t ruxen_string_eq(const char*, const
+    // char*)`). MUST be declared with 2 params: the call-site fallback in
+    // `get_or_declare_runtime` declares an unknown runtime fn as `ptr -> i64`
+    // (1 param), which the string `==` lowering then calls with 2 args → an
+    // "incorrect number of arguments" broken-module error (tier 4.09).
+    decl!("ruxen_string_eq", i64_ty, [ptr_ty, ptr_ty]);
     decl!("ruxen_string_hash", i64_ty, [ptr_ty]);
     decl!("ruxen_string_from_iter", ptr_ty, [ptr_ty]);
     decl!("ruxen_str_split", ptr_ty, [ptr_ty, ptr_ty]);

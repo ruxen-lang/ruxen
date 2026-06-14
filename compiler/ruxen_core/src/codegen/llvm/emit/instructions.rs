@@ -131,12 +131,44 @@ pub(super) fn translate_instruction<'ctx>(
                     .build_int_z_extend(cmp_i1, context.i8_type(), "zext")
                     .unwrap()
                     .into()
-            } else {
-                // Integer/pointer comparison
+            } else if l.is_float_value() || r.is_float_value() {
+                // Float comparison (e.g. layout coords). `MirInst::Compare` does
+                // NOT route through `emit_binop`'s float path, so handle it here —
+                // otherwise the int/pointer branch's `into_int_value()` panics on
+                // a FloatValue. (tier 4.09)
                 let r = coerce_value(r, l.get_type(), builder);
+                let fpred = match op {
+                    CmpOp::Eq => inkwell::FloatPredicate::OEQ,
+                    CmpOp::NotEq => inkwell::FloatPredicate::ONE,
+                    CmpOp::Lt => inkwell::FloatPredicate::OLT,
+                    CmpOp::LtEq => inkwell::FloatPredicate::OLE,
+                    CmpOp::Gt => inkwell::FloatPredicate::OGT,
+                    CmpOp::GtEq => inkwell::FloatPredicate::OGE,
+                };
+                let cmp_i1 = builder
+                    .build_float_compare(fpred, l.into_float_value(), r.into_float_value(), "fcmp")
+                    .unwrap();
+                builder
+                    .build_int_z_extend(cmp_i1, context.i8_type(), "zext")
+                    .unwrap()
+                    .into()
+            } else {
+                // Integer/pointer comparison. Coerce r to l's type so both sides
+                // match, then compare as integers. A POINTER operand (closure /
+                // heap-handle identity, or comparing against nil) is `ptrtoint`'d
+                // — on wasm32 a pointer is i32 and the raw `into_int_value()`
+                // panicked (`Found PointerValue but expected IntValue`); address
+                // comparison is the correct semantics. (tier 4.09)
+                let r = coerce_value(r, l.get_type(), builder);
+                let to_int = |v: BasicValueEnum<'ctx>| match v {
+                    BasicValueEnum::PointerValue(p) => builder
+                        .build_ptr_to_int(p, context.i64_type(), "p2i")
+                        .unwrap(),
+                    other => other.into_int_value(),
+                };
                 let pred = cmpop_to_intpred(*op);
                 let cmp_i1 = builder
-                    .build_int_compare(pred, l.into_int_value(), r.into_int_value(), "cmp")
+                    .build_int_compare(pred, to_int(l), to_int(r), "cmp")
                     .unwrap();
                 // zext i1 -> i8
                 builder
@@ -665,9 +697,21 @@ pub(super) fn emit_binop<'ctx>(
         });
     }
 
-    // Integer operations
-    let l = lhs.into_int_value();
-    let r = rhs.into_int_value();
+    // Integer operations. An operand may be a POINTER (e.g. comparing closures
+    // or heap handles for identity, or a type-erased value) — `ptrtoint` it to an
+    // integer first. On 64-bit this was a no-op coincidence (ptr width == i64),
+    // but on wasm32 a pointer is i32 and the raw `into_int_value()` panicked
+    // (`Found PointerValue but expected IntValue`); widen through i64 so both
+    // operands share a width. Address comparison is the correct semantics for
+    // pointer `==`/`!=` (tier 4.09).
+    let to_int = |v: BasicValueEnum<'ctx>| match v {
+        BasicValueEnum::PointerValue(p) => builder
+            .build_ptr_to_int(p, context.i64_type(), "p2i")
+            .unwrap(),
+        other => other.into_int_value(),
+    };
+    let l = to_int(lhs);
+    let r = to_int(rhs);
     Ok(match op {
         BinOp::Add => builder.build_int_add(l, r, "add").unwrap().into(),
         BinOp::Sub => builder.build_int_sub(l, r, "sub").unwrap().into(),

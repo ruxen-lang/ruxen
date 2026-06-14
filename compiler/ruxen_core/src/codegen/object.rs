@@ -588,6 +588,11 @@ void qsort(void *base, size_t n, size_t sz, int (*cmp)(const void *, const void 
 /// Heap-core runtime `.c` files (by basename) compiled for the wasm target. A
 /// curated subset of the per-package `runtime/*.c` — matches the curated wasm
 /// stdlib bootstrap (tier 4.09). Grows as more heap surface is wired (string, fmt).
+// alloc.c + vec.c link cleanly today (the libc they need is in the shim).
+// Adding string.c/fmt.c/hash.c is the next step but needs the shim to grow:
+// fmt.c uses fprintf/exit (error paths — stub to trap/no-op), and string.c uses
+// snprintf/strtod (real number formatting/parsing — vendor a small printf). See
+// docs/requirements/tier4_09_wasm_heap_and_host_imports.md §9.
 pub const WASM_RUNTIME_CORE: &[&str] = &["alloc.c", "vec.c"];
 
 /// Discover the C compiler used to build the wasm runtime: `RUXEN_WASM_CLANG`
