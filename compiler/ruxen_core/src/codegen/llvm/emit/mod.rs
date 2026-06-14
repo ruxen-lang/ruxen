@@ -56,7 +56,7 @@ pub fn compile_program<'ctx>(
     // zero_rust_stdlib_classes.spec.md ABI-derivation migration.
     for lib in &program.ffi_libs {
         for ffi_fn in &lib.functions {
-            declare_ffi_function(module, context, ffi_fn, &lib.name);
+            declare_ffi_function(module, context, ffi_fn, &lib.name, is_wasm);
         }
     }
 
@@ -107,11 +107,21 @@ pub fn compile_program<'ctx>(
 }
 
 /// Declare an FFI function in the LLVM module.
+///
+/// Tier 4.09 (wasm host imports): on the wasm target a top-level `lib "<module>"`
+/// block declares functions the HOST supplies — there is no native linking. Each
+/// gets `wasm-import-module = "<module>"` + `wasm-import-name = "<symbol>"` so
+/// `wasm-ld` emits a precise, intentional import (`<module>.<symbol>`) instead of
+/// relying on `--allow-undefined`'s implicit `env` default. The stdlib's
+/// `ruxen_*` runtime bindings are class-body FFI (declared in Pass 1), NOT
+/// top-level libs, so they are unaffected and still resolve to the linked
+/// runtime objects.
 fn declare_ffi_function<'ctx>(
     module: &Module<'ctx>,
     context: &'ctx Context,
     ffi_fn: &FfiFuncDecl,
     lib_name: &str,
+    is_wasm: bool,
 ) {
     if module.get_function(&ffi_fn.name).is_some() {
         return;
@@ -140,6 +150,15 @@ fn declare_ffi_function<'ctx>(
         fn_type,
         Some(inkwell::module::Linkage::External),
     );
+
+    // On wasm, a top-level `lib "<module>"` function is a host import: pin its
+    // import module + name so wasm-ld emits `<module>.<symbol>` deterministically.
+    if is_wasm && !lib_name.is_empty() {
+        let module_attr = context.create_string_attribute("wasm-import-module", lib_name);
+        let name_attr = context.create_string_attribute("wasm-import-name", &ffi_fn.name);
+        llvm_fn.add_attribute(inkwell::attributes::AttributeLoc::Function, module_attr);
+        llvm_fn.add_attribute(inkwell::attributes::AttributeLoc::Function, name_attr);
+    }
 
     // Also register with lib-qualified name
     if !lib_name.is_empty() {

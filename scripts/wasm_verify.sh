@@ -68,12 +68,14 @@ verify_example() {
 }
 
 # Bar 1: pure-math reactor (tier 4.03). Bar 2: heap Array (tier 4.09).
+# Bar 3: host import (tier 4.09) — its run.mjs supplies the imported function.
 verify_example "$EXAMPLE" "add" "05-wasm (math)"; rc1=$?
 [ $rc1 -eq 2 ] && miss "math bar skipped — wasm toolchain unavailable"
 verify_example "$REPO_ROOT/examples/07-wasm-heap" "heap" "07-wasm-heap (heap Array)"; rc2=$?
+verify_example "$REPO_ROOT/examples/08-wasm-import" "import" "08-wasm-import (host import)"; rc3=$?
 
-# A skipped heap bar is not a failure; a real FAIL is.
-if [ $rc1 -eq 1 ] || [ $rc2 -eq 1 ]; then
+# A skipped bar is not a failure; a real FAIL is.
+if [ $rc1 -eq 1 ] || [ $rc2 -eq 1 ] || [ $rc3 -eq 1 ]; then
   exit 1
 fi
 exit 0
