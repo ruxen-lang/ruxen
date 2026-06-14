@@ -197,3 +197,38 @@ runtime isn't linked" but "**wasm bootstraps no stdlib at all**":
   fmt pin needs more than the vendored subset covers.
 - Proper tier-1 `slot_t`→`intptr_t` correctness pass (cosmetic on LE wasm) — defer.
 - Host-import ergonomics (a `std.wasm` module wrapping common imports) — later.
+
+## 10. Progress update — 2026-06-13/14
+
+All four increments above LANDED, plus host imports and a web rendering slice:
+
+- **Heap (Incr 2–4):** curated wasm bootstrap so `wasm32-unknown-unknown` links
+  without the full stdlib; LLVM codegen fixes — `TypeParam`→i64 (was i32 on
+  wasm32, mismatching the i64-slot runtime), `ArgMask` `1<<i` guard for >8-arg
+  FFI, pointer `ptrtoint` coercion in `emit_binop` + the `Compare` handler, and
+  a float branch in `Compare`. wasm libc shim in `codegen/object.rs` (`WASM_RT_C`:
+  bump allocator + memcpy/memset/strlen/strcmp/strncmp/strchr/strstr/qsort/
+  snprintf/strtod/strtoll/strtoul/round/errno/fprintf/stderr/exit) +
+  `runtime.h` `#if defined(__wasm32__)` freestanding block. `WASM_RUNTIME_CORE =
+  [alloc,vec,string,fmt,hash].c`. **String + Array verified** —
+  `scripts/wasm_verify.sh` 05/07/08 green.
+- **Host imports:** `lib "C"` FFI calls lower as wasm imports (default module
+  `env`); `runtime_decl.rs` i64-slot sigs (ruxen_vec_*, ruxen_string_eq). Dropped
+  forced wasm-import-module attrs (linked symbols must resolve, not be imports).
+- **Web rendering:** `canvas/web` (CanvasKit / Skia-in-wasm) `runtime.mjs` maps
+  `ruxen_canvas_*` draw calls to host imports; a real **quiver counter
+  compiles + links + executes pure on wasm** and paints pixels (headless harness
+  `canvas/web/verify_counter.mjs`).
+- **`call_indirect` fix (UNCOMMITTED):** `MirInst::CallIndirect` built the call
+  sig with a hardcoded i64 return; closures returning non-i64 (e.g. String→ptr→
+  i32 on wasm) trapped. Fixed: return type = the dest local's type
+  (`codegen/llvm/emit/instructions.rs`). Pending commit.
+
+**Open blocker:** the quiver counter's `render()` traps on a **genuine LLVM
+`unreachable`** — confirmed NOT `ruxen_panic` and NOT `exit()` (a host
+panic-hook surfaced neither, and the hook itself broke 07-wasm-heap by importing
+`ruxen_wasm_panic`, so it was reverted). Likely a match/exhaustiveness path hit
+by stub-returned values (the JS `Formatter` stub returns 0n). Debug next.
+
+Branch: `feat/wasm-heap-and-host-imports`. Flukebase: ruxen task
+`dbe3a861-c0c6-4e96-8496-c86dec613efd` (Tier 4 — Ecosystem/WASM).

@@ -1743,6 +1743,57 @@ investigation. Also reconfirmed by the same quiver report: the
 non-Copy-call-result-as-method-arg landmine at a fresh site (quiver
 `cut`/`clip_write` — let-bind first, as documented).
 
+## Q41 · S2 — LLVM backend can't lower a `DataAddr` class-info ref for a `dispatch runtime` mixin type → `ruxen build --release` blocked for async projects  ⏳ OPEN (NEW 2026-06-14)
+
+Found 2026-06-14 in rondo (workaround **W22**, `rondo/docs/ruxen-issues.md`)
+while benchmarking the framework against a Go `net/http` baseline. `ruxen build`
+(default Cranelift) compiles and runs; `ruxen build --release` (LLVM backend)
+aborts in codegen:
+
+```
+$ ruxen build --release
+  Compiling piece `rondo` v0.1.0
+Error: mixin-vtables: LLVM backend cannot lower DataAddr { data_sym:
+'__rx_classinfo_TimeSleepFuture' } — use the Cranelift backend (default)
+for code that includes a `dispatch runtime` mixin.
+```
+
+**Trigger.** Any type that participates in a `dispatch runtime` mixin and whose
+`__rx_classinfo_<T>` symbol is referenced as a `DataAddr` operand. Here it is
+`TimeSleepFuture`, pulled in transitively by `AsyncTcpStream.read_with_timeout`
+(the per-poll idle-timeout timer — rondo F9), so the whole async server depends
+on it. The error fires while compiling the `rondo` library piece itself, so it
+is **not** specific to one binary: every release build of any rondo-dependent
+program hits it, and more generally any project using the async timer / a
+runtime mixin.
+
+**Repro (minimal):**
+
+```
+# any binary depending on rondo (e.g. the rondo-smoke bench crate)
+ruxen build              # OK   (Cranelift)
+ruxen build --release    # FAIL (LLVM, error above)
+```
+
+`RUXEN_BACKEND=cranelift ruxen build --release` does NOT help — `--release`
+still routes to LLVM and fails. There is no flag to get Cranelift *with*
+optimizations, so async projects currently have **no optimized build path**.
+
+**Why it matters.** Severity **S2**: no crash/corruption and a working debug
+path exists, but there is no release/optimized build for async code, which
+distorts every performance number. In a like-for-like HTTP bench (single
+plaintext route, keep-alive, CPU-pinned 8-core server / 8-core load generator on
+a 16-core Linux box), debug-Cranelift rondo peaked ~113k RPS and cliffed past
+c≈200, versus optimized Go `net/http` ~164k RPS stable through c=400 — the
+debug-build handicap is a real confound.
+
+**Fix direction.** Cranelift already lowers this correctly, so the gap is on the
+LLVM backend: it needs to emit the `DataAddr` reference to a `__rx_classinfo_*`
+class-info symbol for runtime-mixin types (see the `mixin-vtables` lowering path
+referenced in the error). Cross-linked from rondo W22.
+
+Toolchain: `ruxen 0.1.0`.
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:

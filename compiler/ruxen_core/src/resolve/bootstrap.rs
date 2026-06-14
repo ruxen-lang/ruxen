@@ -272,7 +272,8 @@ pub fn run_bootstrap_with_package_names(
 /// Overridable via `RUXEN_WASM_BOOTSTRAP` (comma-separated package names) so the
 /// viable set can be tuned without recompiling the toolchain as the wasm runtime
 /// grows.
-pub const WASM_BOOTSTRAP_DEFAULT: &str = "core,option_result,scalar,string,array,fmt,hash";
+pub const WASM_BOOTSTRAP_DEFAULT: &str =
+    "core,option_result,scalar,string,array,fmt,hash,map,set,sync,io,time";
 
 /// Like [`run_bootstrap_with_package_names`] but only the curated wasm subset
 /// (see [`WASM_BOOTSTRAP_DEFAULT`]). Both the single-file `ruxen compile` path

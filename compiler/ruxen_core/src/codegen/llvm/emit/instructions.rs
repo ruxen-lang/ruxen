@@ -21,7 +21,18 @@ pub(super) fn translate_instruction<'ctx>(
             let val = gen_value(value, func, local_allocas, builder, context)?;
             let dest_ty = ty_to_llvm(&func.locals[*dest as usize].ty, context)
                 .unwrap_or(context.i64_type().into());
-            let val = coerce_value(val, dest_ty, builder);
+            // A Ruxen numeric `as` cast lowers to an Assign across types; the
+            // int↔float direction needs a signedness-correct conversion (mirrors
+            // the Cranelift `Assign` path). int→float reads the SOURCE operand's
+            // signedness; float→int reads the DESTINATION local's.
+            let val = if val.is_int_value() && dest_ty.is_float_type() {
+                coerce_value_signed(val, dest_ty, mir_arg_is_signed(value, func), builder)
+            } else if val.is_float_value() && dest_ty.is_int_type() {
+                let dest_signed = mir_arg_is_signed(&MirValue::Use(*dest), func);
+                coerce_value_signed(val, dest_ty, dest_signed, builder)
+            } else {
+                coerce_value(val, dest_ty, builder)
+            };
             builder
                 .build_store(local_allocas[dest], val)
                 .map_err(|e| format!("Failed to store assign: {:?}", e))?;
@@ -579,10 +590,16 @@ pub(super) fn translate_instruction<'ctx>(
                 })
                 .collect();
 
-            let fn_type = if dest.is_some() {
-                context.i64_type().fn_type(&param_types, false)
-            } else {
-                context.void_type().fn_type(&param_types, false)
+            // The call-site signature must match the closure's ACTUAL type, or
+            // wasm `call_indirect` traps ("function signature mismatch"). The
+            // return type is the dest local's type (the closure returns into it)
+            // — NOT a hardcoded i64: a closure returning e.g. `String` is a
+            // pointer (i32 on wasm32), and i64-expected-vs-i32-actual traps.
+            let ret_ty: Option<BasicTypeEnum> =
+                dest.and_then(|d| ty_to_llvm(&func.locals[d as usize].ty, context));
+            let fn_type = match ret_ty {
+                Some(t) => t.fn_type(&param_types, false),
+                None => context.void_type().fn_type(&param_types, false),
             };
 
             let call = builder

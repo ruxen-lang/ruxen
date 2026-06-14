@@ -124,6 +124,96 @@ fn lower_records_top_level_defs_as_wasm_exports() {
     assert!(mir.wasm_exports.contains(&"mul".to_string()));
 }
 
+/// Regression: a 9-arg FFI/host-import call (4 Float + 4 Int after the
+/// receiver) must pass ALL its arguments on wasm — and the integer→float `as`
+/// cast that feeds the Float args must produce a real `sitofp`, not a
+/// type-punned int store into a narrower (f32) struct slot. That punned store
+/// was folded by the LLVM optimizer to `undef`, silently dropping the 4th
+/// float arg (the canvas `ruxen_canvas_draw_rect` blank-frame bug on wasm).
+#[test]
+fn ffi_call_passes_all_nine_mixed_width_args() {
+    // Mirror the canvas draw_rect shape: a class-body `lib` method with
+    // `self` + 4 Float + 4 Int. The Float args originate as `Int` params cast
+    // `as Float32`, stored into a struct, reloaded, and widened to Float —
+    // exactly the path that lost the 4th float pre-fix.
+    let src = "\
+struct Box\n\
+  x: Float32\n\
+  y: Float32\n\
+  w: Float32\n\
+  h: Float32\n\
+end\n\
+\n\
+class Sink\n\
+  lib \"env\"\n\
+    def draw9 as \"host_draw9\"(self, x: Float, y: Float, w: Float, h: Float, r: Int, g: Int, b: Int, a: Int) -> Int\n\
+  end\n\
+end\n\
+\n\
+def run(s: Sink, ix: Int, iy: Int, iw: Int, ih: Int) -> Int\n\
+  let b = Box.new(ix as Float32, iy as Float32, iw as Float32, ih as Float32)\n\
+  s.draw9(b.x as Float, b.y as Float, b.w as Float, b.h as Float, 200, 30, 30, 255)\n\
+end\n";
+
+    let obj = compile_wasm_object(src);
+    assert!(!obj.is_empty(), "empty wasm object");
+
+    let Some(wasm_path) = link_wasm(&obj) else {
+        eprintln!("SKIP: wasm-ld not available");
+        return;
+    };
+    if !node_available() {
+        eprintln!("SKIP: node not available");
+        let _ = std::fs::remove_dir_all(wasm_path.parent().unwrap());
+        return;
+    }
+
+    // The JS host records every arg `host_draw9` receives. `run` passes a null
+    // receiver (we never deref it) plus 11, 22, 33, 44 for the four floats.
+    // Assert all four floats arrive (the 4th — h=44 — is the regression) and
+    // the four trailing ints are intact.
+    // The module exports its own linear memory and imports ruxen_alloc /
+    // ruxen_dealloc (Box.new heap-allocates) plus host_draw9. A trivial bump
+    // allocator hands out offsets into the module's own (exported) memory,
+    // starting high enough to avoid the wasm data/stack region.
+    let script = format!(
+        "const b=require('fs').readFileSync({:?});\
+         let got=null;\
+         let bump=65536;\
+         const env={{ \
+           ruxen_alloc:(n)=>{{const p=bump; bump+=Number(n); return p;}},\
+           ruxen_dealloc:(_p)=>{{}},\
+           host_draw9:(...a)=>{{got=a.map(Number);return 0n;}} \
+         }};\
+         WebAssembly.instantiate(b,{{env}}).then(r=>{{\
+           const e=r.instance.exports;\
+           e.run(0,11n,22n,33n,44n);\
+           const want=[0,11,22,33,44,200,30,30,255];\
+           const ok = got && got.length===9 && want.every((v,i)=>got[i]===v);\
+           if(!ok){{console.error('WRONG',JSON.stringify(got));process.exit(3)}}\
+           console.log('OK');\
+         }}).catch(err=>{{console.error(err);process.exit(4)}});",
+        wasm_path.to_string_lossy()
+    );
+    let out = Command::new("node")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .expect("spawn node");
+    let _ = std::fs::remove_dir_all(wasm_path.parent().unwrap());
+    assert!(
+        out.status.success(),
+        "9-arg FFI call dropped/garbled an argument on wasm: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("OK"),
+        "expected OK from node, got: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
 #[test]
 fn wasm_target_resolves_to_llvm_backend() {
     let t = ResolvedTarget::resolve(Some("wasm32-unknown-unknown")).unwrap();

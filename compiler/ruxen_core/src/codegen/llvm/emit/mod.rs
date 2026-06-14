@@ -288,6 +288,27 @@ fn compile_function<'ctx>(
 //  Value generation
 // ═══════════════════════════════════════════════════════════════════════
 
+/// Whether a MIR operand is a signed numeric value (for `sitofp`/`fptosi`
+/// selection on numeric `as` casts). Mirrors
+/// `cranelift::emit::mir_arg_is_signed`.
+pub(super) fn mir_arg_is_signed(arg: &MirValue, func: &MirFunction) -> bool {
+    let ty = match arg {
+        MirValue::Literal(Literal::Int(_)) | MirValue::Literal(Literal::Char(_)) => return true,
+        MirValue::Literal(Literal::Bool(_))
+        | MirValue::Literal(Literal::Float(_))
+        | MirValue::Literal(Literal::String(_))
+        | MirValue::Unit => return false,
+        MirValue::Use(local_id) => match func.locals.get(*local_id as usize) {
+            Some(local) => &local.ty,
+            None => return false,
+        },
+    };
+    matches!(
+        ty,
+        Ty::Int8 | Ty::Int16 | Ty::Int32 | Ty::Int | Ty::Int64 | Ty::ISize | Ty::Char
+    )
+}
+
 /// Convert a MirValue to an LLVM BasicValueEnum.
 pub(super) fn gen_value<'ctx>(
     mir_val: &MirValue,
@@ -327,16 +348,79 @@ pub(super) fn gen_value<'ctx>(
 // ═══════════════════════════════════════════════════════════════════════
 
 /// Coerce a value to a target type if they differ.
+///
+/// Signedness-blind convenience wrapper. For numeric int↔float casts the
+/// signedness matters (`-5 as Float` must be `-5.0`, not `1.8e19`), so the
+/// `Assign` codegen — the one place a Ruxen `as` numeric cast is lowered —
+/// calls [`coerce_value_signed`] with the correct signedness instead. Mirrors
+/// the Cranelift backend's `coerce_value` / `coerce_value_signed` split
+/// (`codegen/cranelift/emit.rs`).
 pub(super) fn coerce_value<'ctx>(
     val: BasicValueEnum<'ctx>,
     target_ty: BasicTypeEnum<'ctx>,
+    builder: &Builder<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    coerce_value_signed(val, target_ty, false, builder)
+}
+
+/// Signedness-aware coercion (mirrors `cranelift::emit::coerce_value_signed`).
+///
+/// `signed` only affects numeric int↔float conversions: for int→float it
+/// selects the SOURCE interpretation (`sitofp` vs `uitofp`); for float→int it
+/// selects the TARGET interpretation (`fptosi` vs `fptoui`). Int↔int and
+/// float↔float widening/narrowing ignore it.
+pub(super) fn coerce_value_signed<'ctx>(
+    val: BasicValueEnum<'ctx>,
+    target_ty: BasicTypeEnum<'ctx>,
+    signed: bool,
     builder: &Builder<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     if val.get_type() == target_ty {
         return val;
     }
 
-    // Integer <-> Integer: truncate or zero-extend
+    // Int -> Float (numeric cast, e.g. `n as Float`). Without this an integer
+    // value stored into a float-typed slot was left as an int bit-pattern in a
+    // narrower (f32) alloca — a type-punned, out-of-bounds store the LLVM
+    // optimizer folds to `undef` (a 9-arg FFI's 4th f64 arg vanished on wasm).
+    if let (BasicValueEnum::IntValue(int_val), BasicTypeEnum::FloatType(target_float)) =
+        (val, target_ty)
+    {
+        return if signed {
+            builder
+                .build_signed_int_to_float(int_val, target_float, "sitofp")
+                .unwrap()
+                .into()
+        } else {
+            builder
+                .build_unsigned_int_to_float(int_val, target_float, "uitofp")
+                .unwrap()
+                .into()
+        };
+    }
+
+    // Float -> Int (numeric cast, e.g. `f as Int`).
+    if let (BasicValueEnum::FloatValue(float_val), BasicTypeEnum::IntType(target_int)) =
+        (val, target_ty)
+    {
+        return if signed {
+            builder
+                .build_float_to_signed_int(float_val, target_int, "fptosi")
+                .unwrap()
+                .into()
+        } else {
+            builder
+                .build_float_to_unsigned_int(float_val, target_int, "fptoui")
+                .unwrap()
+                .into()
+        };
+    }
+
+    // Integer <-> Integer: truncate, or extend honoring `signed` (sext for a
+    // signed source so `-1i32 as Int` is `-1`, not `0x0000_0000_FFFF_FFFF`).
+    // The default wrapper passes `signed = false` → zext, preserving the prior
+    // behaviour at every non-cast call site. Mirrors Cranelift's
+    // `coerce_value_signed` int↔int branch.
     if let (BasicValueEnum::IntValue(int_val), BasicTypeEnum::IntType(target_int)) =
         (val, target_ty)
     {
@@ -345,6 +429,11 @@ pub(super) fn coerce_value<'ctx>(
         return if src_bits > dst_bits {
             builder
                 .build_int_truncate(int_val, target_int, "trunc")
+                .unwrap()
+                .into()
+        } else if signed {
+            builder
+                .build_int_s_extend(int_val, target_int, "sext")
                 .unwrap()
                 .into()
         } else {

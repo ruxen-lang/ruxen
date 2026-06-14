@@ -8,6 +8,36 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- **LLVM backend: an `Int as Float` / `Float as Int` numeric cast no longer
+  silently produces garbage (and the optimizer no longer folds it to `undef`).**
+  The LLVM `coerce_value` lacked any int↔float case, so an integer value cast to
+  a float (a Ruxen `as Float`/`as Float32`, which lowers to a typed `Assign`) was
+  stored, unconverted, as an int bit-pattern into a float-typed — and on
+  `Float32` *narrower* — alloca. That type-punned, out-of-bounds store limped
+  along at `-O0`, but `-O2`'s SROA/mem2reg saw the `store i64` into a `float` slot
+  followed by `load float` and replaced the load with `undef`. The visible
+  symptom was a 9-argument canvas FFI call (`ruxen_canvas_draw_rect`: receiver +
+  4 `Float` + 4 `Int`) whose 4th float argument vanished on wasm — every quiver
+  widget drew a zero-size rect, so the GUI counter painted a blank frame on the
+  wasm backend while rendering correctly on Cranelift desktop. Added
+  signedness-aware `sitofp`/`uitofp`/`fptosi`/`fptoui` conversions to
+  `coerce_value` (now `coerce_value_signed`) and routed the `Assign` cast through
+  them with the operand's signedness — mirroring the Cranelift backend's existing
+  `coerce_value_signed` / `mir_arg_is_signed` (Q5) handling, which is why desktop
+  was unaffected. Regression test:
+  `tests/wasm_codegen.rs::ffi_call_passes_all_nine_mixed_width_args`.
+- **wasm32: `Int`/`USize`/`Bool`/`Char` `.to_s`/`to_string` no longer trap.** The
+  scalar method-home FFI decls prepended the receiver as `Ty::Class { name }`,
+  which the LLVM backend lowers to a real `ptr` — i64 on 64-bit targets (so it
+  matched) but **i32 on wasm32**. That made the `.rx`-derived decl come out
+  `(i32) -> i32` for `ruxen_int_to_string` / `ruxen_char_to_string` /
+  `ruxen_bool_to_string`, clashing with the canonical `(i64) -> ptr` runtime
+  decl; `wasm-ld` resolves a signature mismatch by splicing a trapping stub,
+  so any wasm program that interpolated an int/char/bool (e.g. quiver's
+  `dyn_text("count: #{n}")`) hit `unreachable` at runtime. `primitive_ffi_receiver_ty`
+  now prepends an explicit `Ty::Int64` for these int-slot homes — i64 on every
+  backend/target, matching the C `int64_t`. Cranelift width is unchanged (it
+  already lowered both `Ty::Class` and `Ty::Int64` to I64).
 - **MIR lowering no longer panics on FFI/runtime calls with >8 arguments.** The
   per-call ownership analysis (`runtime_abi::ArgMask`, a u8 bitset) queried
   `contains(i)` for every arg index; `1u8 << i` overflowed for `i >= 8` (debug
@@ -37,7 +67,10 @@ once 1.0.0 ships.
   Cranelift) so generic FFI args don't mismatch the runtime on wasm32. New
   `examples/07-wasm-heap` + a second `scripts/wasm_verify.sh` bar prove a
   heap-allocated `Array` runs in Node. Host imports (`wasm_import`) are the next
-  step. See `docs/requirements/tier4_09_wasm_heap_and_host_imports.md`.
+  step. See `docs/requirements/tier4_09_wasm_heap_and_host_imports.md`. The
+  default wasm bootstrap set now also includes `map`, `set`, `sync`, `io`, and
+  `time` (was `core,option_result,scalar,string,array,fmt,hash`), so a quiver
+  app builds to `.wasm` without a `RUXEN_WASM_BOOTSTRAP` override.
 - **no_std mode (tier 4.04): `ruxen compile --no-std` + E1400.** A no_std host
   build skips the stdlib bootstrap and links WITHOUT the Ruxen C runtime or
   per-package `[system_libs]` — the user object is the whole program (zero

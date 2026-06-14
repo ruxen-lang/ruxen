@@ -268,6 +268,18 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       param). Sub-gap: a `&block` param's type doesn't infer through the yield
       seam (untyped block param ⇒ `?T`). Likely from `8a783f9` (block semantics).
       Repro: `quiver/tmp/test-cache/ruxen-two-var-yield.md`; details §Q36.
+- [ ] **Q41 · S2 — LLVM backend can't lower a `DataAddr` class-info ref for a
+      `dispatch runtime` mixin type ⇒ `ruxen build --release` blocked for async
+      projects (NEW 2026-06-14).** `ruxen build` (Cranelift) is fine; `--release`
+      (LLVM) aborts: `mixin-vtables: LLVM backend cannot lower DataAddr { data_sym:
+      '__rx_classinfo_TimeSleepFuture' }`. Fires compiling the `rondo` library
+      itself (its async server pulls `TimeSleepFuture` via `read_with_timeout`), so
+      every release build of any rondo/async-using project hits it — there is no
+      optimized build path (no flag for Cranelift+opt; `RUXEN_BACKEND=cranelift`
+      doesn't override `--release`). Cranelift already lowers this, so the fix is
+      LLVM-side. Found benchmarking rondo vs Go `net/http` (debug-Cranelift rondo
+      ~113k RPS vs optimized Go ~164k — the debug handicap confounds the number).
+      rondo workaround W22; details §Q41.
 - [x] **Q37 · S2 — generic `frame[S: Mixin]` gets a bogus `__block` when
       consumed by a binary — SAME BUG AS Q37·S1, FIXED 2026-06-10.** This was
       filed separately as the "binary-consumes-library" symptom (`could not infer

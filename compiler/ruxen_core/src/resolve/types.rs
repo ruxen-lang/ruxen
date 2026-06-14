@@ -52,8 +52,10 @@ fn primitive_class_ty(name: &str) -> Option<Ty> {
         // stay unchanged — only METHOD dispatch is homed on the class.
         // The receiver WIDTH for their FFI decls is handled separately by
         // `primitive_ffi_receiver_ty` (`Float`→F64 for `double` symbols;
-        // `Bool`/`Char`/`USize`→I64 for their `int64_t` symbols), so each
-        // method-home anchors here regardless of its C receiver register.
+        // `Int`/`USize`/`Bool`/`Char`→explicit `Ty::Int64` for their
+        // `int64_t` symbols, so the derived param is i64 on every
+        // backend/target incl. wasm32), so each method-home anchors here
+        // regardless of its C receiver register.
         "Float" => Some(Ty::Float),
         "Bool" => Some(Ty::Bool),
         "Char" => Some(Ty::Char),
