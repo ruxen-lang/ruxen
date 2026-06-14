@@ -45,7 +45,11 @@ impl ArgMask {
         ArgMask((1 << i) | (1 << j))
     }
     pub fn contains(self, i: usize) -> bool {
-        self.0 & (1 << i) != 0
+        // The mask is a u8 (only arg0..arg7 can ever be flagged as transferred).
+        // `contains` is queried for EVERY arg index in the drops.rs arg loop,
+        // including args >= 8 (e.g. a 9-arg FFI like `ruxen_canvas_draw_rect`),
+        // so guard the shift — a bit beyond the u8 is unset by definition.
+        i < 8 && self.0 & (1 << i) != 0
     }
 }
 
@@ -867,5 +871,18 @@ mod tests {
         // Negatives:
         assert!(!is_static_constructor("Vec", "len"));
         assert!(!is_static_constructor("File", "read"));
+    }
+
+    #[test]
+    fn arg_mask_contains_is_safe_beyond_u8_width() {
+        // A many-arg FFI (e.g. `ruxen_canvas_draw_rect`, 9 args) queries
+        // `contains()` for arg indices >= 8; the u8 mask must NOT overflow-shift
+        // (regression: `1u8 << 8` panicked in debug). Bits beyond the u8 are
+        // unset by definition.
+        let m = ArgMask::single(1);
+        assert!(m.contains(1));
+        assert!(!m.contains(8));
+        assert!(!m.contains(64));
+        assert!(!ArgMask::none().contains(8));
     }
 }

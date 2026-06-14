@@ -7,6 +7,13 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Fixed
+- **MIR lowering no longer panics on FFI/runtime calls with >8 arguments.** The
+  per-call ownership analysis (`runtime_abi::ArgMask`, a u8 bitset) queried
+  `contains(i)` for every arg index; `1u8 << i` overflowed for `i >= 8` (debug
+  panic). Surfaced by a 9-arg FFI binding (`ruxen_canvas_draw_rect` in the canvas
+  web backend). Bits beyond the u8 are unset by definition — guarded with `i < 8`.
+
 ### Added
 - **Host imports on wasm (tier 4.09): wasm modules can call host (JS) functions.**
   A top-level `lib "<module>"` block on the wasm target declares host-supplied
