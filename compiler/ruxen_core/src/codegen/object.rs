@@ -443,6 +443,7 @@ pub const WASM_RT_C: &str = r#"/* Ruxen wasm32 runtime shim — bundled allocato
  * Generated/owned by codegen/object.rs (tier 4.09). Compiled with -fno-builtin. */
 #include <stdint.h>
 #include <stddef.h>
+#include <stdarg.h>
 
 /* Prototypes so the allocator can call mem* before their definitions below. */
 void *memcpy(void *, const void *, size_t);
@@ -583,17 +584,197 @@ void qsort(void *base, size_t n, size_t sz, int (*cmp)(const void *, const void 
         for (size_t j = i; j > 0 && cmp(b + (j - 1) * sz, b + j * sz) > 0; j--)
             rx_byteswap(b + (j - 1) * sz, b + j * sz, sz);
 }
+
+/* ---- stdio/stdlib error-path stubs (fmt.c / string.c OOM paths) ---- */
+void *stderr = (void *)0;                /* opaque dummy FILE* */
+int errno = 0;
+void exit(int code) { (void)code; __builtin_trap(); }
+int fprintf(void *stream, const char *fmt, ...) { (void)stream; (void)fmt; return 0; }
+
+/* round half away from zero (string.c float formatting) */
+double round(double x) {
+    return (x >= 0.0) ? (double)(long long)(x + 0.5) : -(double)(long long)(-x + 0.5);
+}
+
+/* strtoll — [ws][sign]digits in `base` (string.c passes base 10). Overflow is
+ * not flagged (errno untouched); fine for in-range GUI inputs. */
+long long strtoll(const char *s, char **endptr, int base) {
+    const char *p = s;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    int neg = 0;
+    if (*p == '+' || *p == '-') { neg = (*p == '-'); p++; }
+    if (base == 0) base = 10;
+    long long v = 0;
+    for (;;) {
+        int d;
+        if (*p >= '0' && *p <= '9') d = *p - '0';
+        else if (*p >= 'a' && *p <= 'z') d = *p - 'a' + 10;
+        else if (*p >= 'A' && *p <= 'Z') d = *p - 'A' + 10;
+        else break;
+        if (d >= base) break;
+        v = v * base + d;
+        p++;
+    }
+    if (neg) v = -v;
+    if (endptr) *endptr = (char *)p;
+    return v;
+}
+
+/* strtoul — unsigned sibling of strtoll (string.c passes base 10). */
+unsigned long strtoul(const char *s, char **endptr, int base) {
+    const char *p = s;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    if (*p == '+') p++;
+    if (base == 0) base = 10;
+    unsigned long v = 0;
+    for (;;) {
+        int d;
+        if (*p >= '0' && *p <= '9') d = *p - '0';
+        else if (*p >= 'a' && *p <= 'z') d = *p - 'a' + 10;
+        else if (*p >= 'A' && *p <= 'Z') d = *p - 'A' + 10;
+        else break;
+        if (d >= base) break;
+        v = v * (unsigned long)base + (unsigned long)d;
+        p++;
+    }
+    if (endptr) *endptr = (char *)p;
+    return v;
+}
+
+/* ---- strtod: [ws][sign]digits[.digits][(e|E)[sign]digits] (string.c) ---- */
+double strtod(const char *s, char **endptr) {
+    const char *p = s;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    int neg = 0;
+    if (*p == '+' || *p == '-') { neg = (*p == '-'); p++; }
+    double val = 0.0;
+    while (*p >= '0' && *p <= '9') { val = val * 10.0 + (double)(*p - '0'); p++; }
+    if (*p == '.') {
+        p++;
+        double frac = 0.0, scale = 1.0;
+        while (*p >= '0' && *p <= '9') { frac = frac * 10.0 + (double)(*p - '0'); scale *= 10.0; p++; }
+        val += frac / scale;
+    }
+    if (*p == 'e' || *p == 'E') {
+        p++;
+        int eneg = 0;
+        if (*p == '+' || *p == '-') { eneg = (*p == '-'); p++; }
+        int ex = 0;
+        while (*p >= '0' && *p <= '9') { ex = ex * 10 + (*p - '0'); p++; }
+        double ep = 1.0;
+        for (int i = 0; i < ex; i++) ep *= 10.0;
+        if (eneg) val /= ep; else val *= ep;
+    }
+    if (neg) val = -val;
+    if (endptr) *endptr = (char *)p;
+    return val;
+}
+
+/* ---- minimal snprintf: %d/%i/%u/%x/%X (with l/ll), %f/%.*f/%.Nf, %g, %s, %c,
+ * %% — covers string.c (PRId64, %g, %.*f) + fmt.c. Integer paths are exact;
+ * float paths are reasonable (a fuller printf is a follow-up). ---- */
+static int rx_utoa(unsigned long long v, unsigned base, int upper, char *out) {
+    char tmp[24]; int n = 0;
+    const char *dig = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    if (v == 0) tmp[n++] = '0';
+    while (v) { tmp[n++] = dig[v % base]; v /= base; }
+    for (int i = 0; i < n; i++) out[i] = tmp[n - 1 - i];
+    return n;
+}
+
+static int rx_ftoa(double f, int prec, char *out) {
+    int n = 0;
+    if (f != f) { out[0] = 'n'; out[1] = 'a'; out[2] = 'n'; return 3; }
+    if (f < 0) { out[n++] = '-'; f = -f; }
+    double scale = 1.0;
+    for (int i = 0; i < prec; i++) scale *= 10.0;
+    unsigned long long ip = (unsigned long long)f;
+    double frac = f - (double)ip;
+    unsigned long long fp = (unsigned long long)(frac * scale + 0.5);
+    if (prec > 0 && fp >= (unsigned long long)scale) { ip++; fp -= (unsigned long long)scale; }
+    n += rx_utoa(ip, 10, 0, out + n);
+    if (prec > 0) {
+        out[n++] = '.';
+        char fb[24]; int fn = rx_utoa(fp, 10, 0, fb);
+        for (int i = 0; i < prec - fn; i++) out[n++] = '0';
+        for (int i = 0; i < fn; i++) out[n++] = fb[i];
+    }
+    return n;
+}
+
+int snprintf(char *buf, size_t cap, const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    size_t pos = 0;
+#define RX_PUT(c) do { if (cap && pos + 1 < cap) buf[pos] = (c); pos++; } while (0)
+    for (const char *p = fmt; *p; p++) {
+        if (*p != '%') { RX_PUT(*p); continue; }
+        p++;
+        if (*p == '%') { RX_PUT('%'); continue; }
+        while (*p == '-' || *p == '+' || *p == ' ' || *p == '0' || *p == '#') p++; /* flags (ignored) */
+        while (*p >= '0' && *p <= '9') p++;                                        /* width (ignored) */
+        int prec = -1;
+        if (*p == '.') {
+            p++;
+            if (*p == '*') { prec = va_arg(ap, int); p++; }
+            else { prec = 0; while (*p >= '0' && *p <= '9') { prec = prec * 10 + (*p - '0'); p++; } }
+        }
+        int lng = 0;
+        while (*p == 'l') { lng++; p++; }
+        while (*p == 'h' || *p == 'z') p++; /* other length mods (ignored) */
+        char num[40]; int nn;
+        switch (*p) {
+            case 'd': case 'i': {
+                long long v = (lng >= 2) ? va_arg(ap, long long)
+                            : (lng == 1) ? (long long)va_arg(ap, long)
+                                         : (long long)va_arg(ap, int);
+                if (v < 0) { RX_PUT('-'); v = -v; }
+                nn = rx_utoa((unsigned long long)v, 10, 0, num);
+                for (int i = 0; i < nn; i++) RX_PUT(num[i]);
+                break;
+            }
+            case 'u': {
+                unsigned long long v = (lng >= 2) ? va_arg(ap, unsigned long long)
+                                     : (lng == 1) ? (unsigned long long)va_arg(ap, unsigned long)
+                                                  : (unsigned long long)va_arg(ap, unsigned);
+                nn = rx_utoa(v, 10, 0, num); for (int i = 0; i < nn; i++) RX_PUT(num[i]); break;
+            }
+            case 'x': case 'X': {
+                unsigned long long v = (lng >= 2) ? va_arg(ap, unsigned long long)
+                                     : (lng == 1) ? (unsigned long long)va_arg(ap, unsigned long)
+                                                  : (unsigned long long)va_arg(ap, unsigned);
+                nn = rx_utoa(v, 16, *p == 'X', num); for (int i = 0; i < nn; i++) RX_PUT(num[i]); break;
+            }
+            case 'f': case 'F': {
+                double v = va_arg(ap, double);
+                nn = rx_ftoa(v, prec < 0 ? 6 : prec, num); for (int i = 0; i < nn; i++) RX_PUT(num[i]); break;
+            }
+            case 'g': case 'G': {
+                double v = va_arg(ap, double);
+                nn = rx_ftoa(v, 6, num);
+                while (nn > 0 && num[nn - 1] == '0') nn--;     /* trim trailing zeros */
+                if (nn > 0 && num[nn - 1] == '.') nn--;        /* and a dangling '.' */
+                for (int i = 0; i < nn; i++) RX_PUT(num[i]); break;
+            }
+            case 's': { const char *s = va_arg(ap, const char *); if (!s) s = "(null)"; while (*s) RX_PUT(*s++); break; }
+            case 'c': { int c = va_arg(ap, int); RX_PUT((char)c); break; }
+            default: RX_PUT('%'); if (*p) RX_PUT(*p); break;
+        }
+    }
+#undef RX_PUT
+    if (cap) buf[pos < cap ? pos : cap - 1] = '\0';
+    va_end(ap);
+    return (int)pos;
+}
 "#;
 
 /// Heap-core runtime `.c` files (by basename) compiled for the wasm target. A
 /// curated subset of the per-package `runtime/*.c` — matches the curated wasm
 /// stdlib bootstrap (tier 4.09). Grows as more heap surface is wired (string, fmt).
-// alloc.c + vec.c link cleanly today (the libc they need is in the shim).
-// Adding string.c/fmt.c/hash.c is the next step but needs the shim to grow:
-// fmt.c uses fprintf/exit (error paths — stub to trap/no-op), and string.c uses
-// snprintf/strtod (real number formatting/parsing — vendor a small printf). See
-// docs/requirements/tier4_09_wasm_heap_and_host_imports.md §9.
-pub const WASM_RUNTIME_CORE: &[&str] = &["alloc.c", "vec.c"];
+// The heap-core stdlib runtime compiled+linked for wasm. All the libc these
+// need (malloc family, mem*/str*, qsort, snprintf, strtod, and fprintf/exit
+// stubs) lives in the WASM_RT_C shim. fmt.c/string.c error paths trap via the
+// exit stub. Grows as more of the stdlib is needed on wasm (tier 4.09).
+pub const WASM_RUNTIME_CORE: &[&str] = &["alloc.c", "vec.c", "string.c", "fmt.c", "hash.c"];
 
 /// Discover the C compiler used to build the wasm runtime: `RUXEN_WASM_CLANG`
 /// override → `clang` on `PATH` (the LLVM-18 prefix should be on PATH where the

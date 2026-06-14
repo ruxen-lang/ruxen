@@ -35,6 +35,10 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdarg.h>
+/* POSIX `ssize_t` (normally <sys/types.h>) — string.c uses it for reverse
+ * indices. Pointer-width signed integer, matching its native definition. */
+typedef ptrdiff_t ssize_t;
 void *malloc(size_t);
 void free(void *);
 void *realloc(void *, size_t);
@@ -49,6 +53,27 @@ int strncmp(const char *, const char *, size_t);
 char *strchr(const char *, int);
 char *strstr(const char *, const char *);
 void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
+/* Formatting / numeric / error-path libc the heap-core runtime (string.c, fmt.c)
+ * needs. snprintf + strtod are real (small) impls in the shim; fprintf/exit are
+ * stubs (error paths trap). FILE is opaque (only used as `stderr` for fprintf). */
+typedef void FILE;
+extern FILE *stderr;
+int snprintf(char *, size_t, const char *, ...);
+int fprintf(FILE *, const char *, ...);
+void exit(int);
+double strtod(const char *, char **);
+long long strtoll(const char *, char **, int);
+unsigned long strtoul(const char *, char **, int);
+double round(double);
+extern int errno;
+#ifndef ERANGE
+#define ERANGE 34
+#endif
+/* <inttypes.h> is gated out; string.c uses `"%" PRId64`. On wasm32 int64_t is
+ * `long long`, so PRId64 is "lld". */
+#ifndef PRId64
+#define PRId64 "lld"
+#endif
 #else
 #include <stdio.h>
 #include <stdlib.h>

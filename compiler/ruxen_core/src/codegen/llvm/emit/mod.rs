@@ -150,15 +150,20 @@ fn declare_ffi_function<'ctx>(
         fn_type,
         Some(inkwell::module::Linkage::External),
     );
+    let _ = llvm_fn;
 
-    // On wasm, a top-level `lib "<module>"` function is a host import: pin its
-    // import module + name so wasm-ld emits `<module>.<symbol>` deterministically.
-    if is_wasm && !lib_name.is_empty() {
-        let module_attr = context.create_string_attribute("wasm-import-module", lib_name);
-        let name_attr = context.create_string_attribute("wasm-import-name", &ffi_fn.name);
-        llvm_fn.add_attribute(inkwell::attributes::AttributeLoc::Function, module_attr);
-        llvm_fn.add_attribute(inkwell::attributes::AttributeLoc::Function, name_attr);
-    }
+    // Host imports on wasm: we deliberately do NOT pin `wasm-import-module`/
+    // `-name` attributes. An explicit import-module forces the symbol to be an
+    // import even when a definition exists — which conflicts with FFI bindings
+    // whose C runtime IS linked on wasm (e.g. the stdlib `ruxen_string_*` /
+    // `ruxen_vec_*` in WASM_RUNTIME_CORE: import-vs-defined mismatch). Instead we
+    // let `wasm-ld --allow-undefined` resolve defined symbols and route the rest
+    // to the default `env` import module — so genuinely host-supplied functions
+    // (e.g. `ruxen_canvas_*`, and stubs for sync/io/time) arrive as `env.<symbol>`
+    // for the JS host to provide, while linked runtime symbols just resolve.
+    // (Custom import modules would need attrs gated on "not in the linked set" —
+    // tier 4.09 follow-up.) `is_wasm` is kept for that future gating.
+    let _ = is_wasm;
 
     // Also register with lib-qualified name
     if !lib_name.is_empty() {
