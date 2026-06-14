@@ -8,6 +8,16 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Host imports on wasm (tier 4.09): wasm modules can call host (JS) functions.**
+  A top-level `lib "<module>"` block on the wasm target declares host-supplied
+  functions — each gets `wasm-import-module = "<module>"` + `wasm-import-name =
+  "<symbol>"` attributes, so `wasm-ld` emits a precise `<module>.<field>` import
+  (e.g. `lib "console" / def log as "log"` → imports `console.log`) instead of
+  relying on `--allow-undefined`'s implicit `env` default. No new keyword — the
+  existing FFI `lib` surface covers it. The stdlib's `ruxen_*` runtime bindings
+  are class-body FFI and stay linked (not imported). New `examples/08-wasm-import`
+  + a third `scripts/wasm_verify.sh` bar. This is the mechanism the browser canvas
+  backend will use to call browser/JS.
 - **Heap types on wasm (tier 4.09): `String`/`Array` now work on
   `wasm32-unknown-unknown`.** Previously wasm was a pure-computation reactor (no
   heap). Now the wasm path bootstraps a curated heap-core stdlib subset (`core`,

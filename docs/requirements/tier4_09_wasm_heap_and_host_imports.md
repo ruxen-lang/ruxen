@@ -1,9 +1,14 @@
 # Tier 4.09 — WASM heap + host imports (browser-GUI foundations)
 
-Status: **heap landed** (2026-06-13) — a heap-allocated `Array` compiles to
-`wasm32-unknown-unknown` and runs in Node returning the correct result
-(`examples/07-wasm-heap`, `scripts/wasm_verify.sh`). Host imports (`wasm_import`)
-still pending. See §11 for what landed.
+Status: **heap + host imports landed** (2026-06-14) — both wasm foundations work
+end-to-end on `wasm32-unknown-unknown`: a heap-allocated `Array` runs in Node
+(`examples/07-wasm-heap`), and a module can call host (JS) functions
+(`examples/08-wasm-import`). `scripts/wasm_verify.sh` proves all three bars
+(math/heap/import). Host imports use a top-level `lib "<module>"` block whose
+functions get `wasm-import-module`/`wasm-import-name` attrs (lib name = import
+module, `as` symbol = field) — NOT a separate `wasm_import` keyword; the existing
+FFI `lib` surface covers it. Next: full String-method surface on wasm, free-list
+allocator, then the canvas web backend. See §11.
 Extends: [`tier4_03_wasm_target.md`](tier4_03_wasm_target.md) (which landed pure-computation
 `wasm32-unknown-unknown`: LLVM backend, `wasm-ld`, automatic exports, no runtime).
 
