@@ -265,6 +265,42 @@ pub fn run_bootstrap_with_package_names(
         .collect()
 }
 
+/// Default stdlib packages bootstrapped for the wasm target (tier 4.09): the
+/// heap-core subset that compiles on the LLVM/wasm path. Excludes the
+/// `dispatch runtime` module (`future`, whose class_info the LLVM backend can't
+/// lower) and the libc/host-heavy modules a no-libc wasm target can't link.
+/// Overridable via `RUXEN_WASM_BOOTSTRAP` (comma-separated package names) so the
+/// viable set can be tuned without recompiling the toolchain as the wasm runtime
+/// grows.
+pub const WASM_BOOTSTRAP_DEFAULT: &str = "core,option_result,scalar,string,array,fmt,hash";
+
+/// Like [`run_bootstrap_with_package_names`] but only the curated wasm subset
+/// (see [`WASM_BOOTSTRAP_DEFAULT`]). Both the single-file `ruxen compile` path
+/// and the multi-package `ruxen build` path use this for wasm targets so they
+/// agree on which stdlib is available (tier 4.09).
+pub fn run_wasm_bootstrap_with_package_names(
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<(String, Program)> {
+    let want = std::env::var("RUXEN_WASM_BOOTSTRAP")
+        .unwrap_or_else(|_| WASM_BOOTSTRAP_DEFAULT.to_string());
+    let selected: Vec<&str> = want
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let files: Vec<&str> = BOOTSTRAP_FILES
+        .iter()
+        .copied()
+        .filter(|rel| selected.contains(&rel.split('/').next().unwrap_or("")))
+        .collect();
+    let programs = run_bootstrap_with_files(&files, None, diagnostics);
+    files
+        .iter()
+        .zip(programs)
+        .filter_map(|(rel, p)| Some((rel.split('/').next()?.to_string(), p)))
+        .collect()
+}
+
 /// Test-friendly variant of [`run_bootstrap`] that takes an explicit
 /// file list and an optional path override. The override pins the
 /// sysroot to a specific directory (a tempdir, typically) so tests

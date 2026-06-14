@@ -771,8 +771,15 @@ fn compile_project(
             .join("\n")
     })?;
 
-    // Phase 3: Type check
-    let type_result = typeck::type_check(&program);
+    // Phase 3: Type check. On the wasm target use the curated stdlib bootstrap
+    // (heap-core subset) — the full bootstrap drags in `dispatch runtime` stdlib
+    // (TimeSleepFuture) the LLVM/wasm backend can't lower (tier 4.09). Mirrors
+    // the single-file `ruxen compile` wasm path.
+    let type_result = if target.is_wasm() {
+        typeck::type_check_wasm(&program)
+    } else {
+        typeck::type_check(&program)
+    };
     let has_errors = type_result
         .diagnostics
         .iter()

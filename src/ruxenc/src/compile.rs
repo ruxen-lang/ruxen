@@ -379,26 +379,11 @@ fn load_bootstrap_or_err() -> Result<Vec<(String, Program)>, String> {
 /// grows. Load order follows `BOOTSTRAP_FILES` (types-before-use), filtered to
 /// the selected packages.
 fn load_wasm_bootstrap_or_err() -> Result<Vec<(String, Program)>, String> {
-    const DEFAULT_WASM_PACKAGES: &str = "core,option_result,scalar,string,array,fmt,hash";
-    let want = std::env::var("RUXEN_WASM_BOOTSTRAP")
-        .unwrap_or_else(|_| DEFAULT_WASM_PACKAGES.to_string());
-    let selected: Vec<&str> = want
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    let files: Vec<&str> = stdlib_bootstrap::BOOTSTRAP_FILES
-        .iter()
-        .copied()
-        .filter(|rel| {
-            let pkg = rel.split('/').next().unwrap_or("");
-            selected.contains(&pkg)
-        })
-        .collect();
-
+    // Single source of truth for the curated wasm package set lives in
+    // ruxen_core (shared with the `ruxen build` path). See
+    // `run_wasm_bootstrap_with_package_names` / `WASM_BOOTSTRAP_DEFAULT`.
     let mut diags: Vec<Diagnostic> = Vec::new();
-    let programs = stdlib_bootstrap::run_bootstrap_with_files(&files, None, &mut diags);
+    let programs = stdlib_bootstrap::run_wasm_bootstrap_with_package_names(&mut diags);
     if !diags.is_empty() {
         let mut msg = String::from("wasm stdlib bootstrap failed:");
         for d in &diags {
@@ -407,15 +392,7 @@ fn load_wasm_bootstrap_or_err() -> Result<Vec<(String, Program)>, String> {
         }
         return Err(msg);
     }
-
-    Ok(files
-        .iter()
-        .zip(programs)
-        .filter_map(|(rel, p)| {
-            let pkg = rel.split('/').next()?.to_string();
-            Some((pkg, p))
-        })
-        .collect())
+    Ok(programs)
 }
 
 fn type_check_with_package_bootstrap(

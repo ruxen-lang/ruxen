@@ -51,43 +51,49 @@ pub fn type_check(program: &ast::Program) -> TypeCheckResult {
     // — no hand-maintained FIXUPS row required per package.
     let bootstrap_packages =
         crate::resolve::bootstrap::run_bootstrap_with_package_names(&mut bootstrap_diagnostics);
+    type_check_with_loaded_bootstrap(program, &bootstrap_packages, bootstrap_diagnostics)
+}
+
+/// Like [`type_check`] but bootstraps only the curated wasm stdlib subset
+/// ([`crate::resolve::bootstrap::run_wasm_bootstrap_with_package_names`]). The
+/// `ruxen build` wasm path uses this so a multi-package app doesn't drag in the
+/// `dispatch runtime` stdlib (`TimeSleepFuture`) the LLVM/wasm backend can't
+/// lower — matching what the single-file `ruxen compile` wasm path already does
+/// (tier 4.09).
+pub fn type_check_wasm(program: &ast::Program) -> TypeCheckResult {
+    let mut bootstrap_diagnostics: Vec<crate::diagnostics::Diagnostic> = Vec::new();
+    let bootstrap_packages = crate::resolve::bootstrap::run_wasm_bootstrap_with_package_names(
+        &mut bootstrap_diagnostics,
+    );
+    type_check_with_loaded_bootstrap(program, &bootstrap_packages, bootstrap_diagnostics)
+}
+
+/// Shared body of [`type_check`] / [`type_check_wasm`]: the async-lowering
+/// pre-checks + bootstrap-aware resolve/typeck, parameterized on the
+/// already-loaded `bootstrap_packages`. Splitting this out lets the two entry
+/// points differ ONLY in which stdlib subset they bootstrap.
+fn type_check_with_loaded_bootstrap(
+    program: &ast::Program,
+    bootstrap_packages: &[(String, ast::Program)],
+    bootstrap_diagnostics: Vec<crate::diagnostics::Diagnostic>,
+) -> TypeCheckResult {
     // Async lowering — Milestone 2A (docs/specs/syntax/async_lowering.spec.md
     // B1–B6). Synthesises a Future state-machine class per top-level
     // `async def` and rewrites the original fn to construct it. Runs
     // BEFORE the resolver so the generated class lifts through the
     // normal resolve/typeck/MIR pipeline as if it were user-written.
     let mut lowered = program.clone();
-    // E1112 pre-check (docs/specs/stdlib/executor.spec.md B6):
-    // detect `block_on(...)` calls inside async function/closure
-    // bodies BEFORE the async-fn rewrite collapses them into a
-    // synth state-machine class. Once the rewrite fires the call
-    // would live inside the (non-async) generated `poll` method,
-    // making the async-scope check at resolve time unreachable.
+    // E1112/E1116/E1115 pre-checks: detect block_on-in-async, Task.spawn-in-sync,
+    // and .await-in-loop BEFORE the async-fn rewrite collapses bodies into synth
+    // state-machine classes (which would make the checks unreachable).
     let e1112_diags = crate::async_lowering::collect_block_on_in_async_diagnostics(&lowered);
-    // E1116 pre-check (docs/specs/stdlib/task_spawn.spec.md §B7):
-    // detect high-level `Task.spawn(...)` calls in sync scope BEFORE
-    // the async-fn rewrite collapses async bodies
-    // into a synth state-machine class. Once the rewrite fires, the
-    // call would live inside the (non-async) generated `poll`
-    // method, making the check unreachable.
     let e1116_diags = crate::async_lowering::collect_task_spawn_outside_async_diagnostics(&lowered);
-    // E1115 pre-check: detect `.await` inside `loop` / `while` /
-    // `for` bodies BEFORE the async-fn rewrite either lowers the
-    // body to a state machine (which would silently drop the
-    // diagnostic — the segmenter just bails) or wraps it via the
-    // no-await path (which leaves the `.await` inside a sync
-    // `poll` body, producing a misleading E1110 at resolve time).
     let e1115_diags = crate::async_lowering::collect_await_in_loop_diagnostics(&lowered);
-    // Pass bootstrap programs through so the .await desugar's
-    // awaitee classifier can see stdlib Future classes (e.g.
-    // `TimeSleepFuture`, `TaskJoinFuture`). Without this,
-    // `Async.sleep(d).await` / `Task.join(h).await` fall off the
-    // desugar path and codegen emits unresolved `Future_await` link
-    // symbols. See `async_lowering::lower_async_defs_with_bootstrap`
-    // and `project_ruxen_async_compiler_gaps.md` (#2).
+    // Pass bootstrap programs through so the .await desugar's awaitee classifier
+    // can see stdlib Future classes. See `lower_async_defs_with_bootstrap`.
     let bootstrap_refs: Vec<&ast::Program> = bootstrap_packages.iter().map(|(_, p)| p).collect();
     crate::async_lowering::lower_async_defs_with_bootstrap(&mut lowered, &bootstrap_refs);
-    let mut result = type_check_with_bootstrap_packages(&lowered, &bootstrap_packages);
+    let mut result = type_check_with_bootstrap_packages(&lowered, bootstrap_packages);
     result.diagnostics.extend(bootstrap_diagnostics);
     result.diagnostics.extend(e1112_diags);
     result.diagnostics.extend(e1116_diags);
