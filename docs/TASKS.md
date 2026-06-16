@@ -280,6 +280,24 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       LLVM-side. Found benchmarking rondo vs Go `net/http` (debug-Cranelift rondo
       ~113k RPS vs optimized Go ~164k — the debug handicap confounds the number).
       rondo workaround W22; details §Q41.
+- [x] **Q42 · S2 — deliver a DOM event to a Ruxen handler on wasm — NOT a
+      compiler bug; pure-Ruxen pattern. RESOLVED 2026-06-16 (verified by spike).**
+      Spike GREEN: exported `def boot() -> Registry` (holds `handlers: Array[any
+      Fn]`) + `def dispatch_event(reg: &var Registry, id, kind)` calling
+      `reg.handlers.get(id)` via `f.()` + `def read_count`, compiled to wasm32 and
+      run in node — JS holds the i32 `Registry` handle, calls `dispatch_event`
+      twice across SEPARATE calls, `read_count` → 2, ZERO host imports. No
+      `__indirect_function_table`, no `call_indirect`, no codegen edit. (`init` is
+      the reserved constructor word → exported entry named `boot`.) Repro
+      `tmp/spikeA/`; details §Q42 + plan RESULTS.
+- [ ] **Q43 · S3 — `Mutex`/`SharedSync` pthread runtime not bundled for wasm;
+      reactive core needs a single-threaded sync shim (NEW 2026-06-16).** Phase-0.5
+      Spike C: a minimal `Mutex` compiles to wasm32 cleanly (does NOT hit the Q41
+      vtable wall), but `std.sync` is pthread-backed so `mutex.c` is excluded from
+      the curated wasm runtime → `ruxen_mutex_new/lock/guard_get/guard_set` are
+      undefined host imports. Proven to run with a thin single-threaded JS sync
+      shim (the canvas-harness approach). Fix: ship a `cfg(wasm)` no-op sync
+      runtime so quiver-on-wasm is self-contained. Repro `tmp/spikeC/`; §Q43.
 - [x] **Q37 · S2 — generic `frame[S: Mixin]` gets a bogus `__block` when
       consumed by a binary — SAME BUG AS Q37·S1, FIXED 2026-06-10.** This was
       filed separately as the "binary-consumes-library" symptom (`could not infer
