@@ -1910,6 +1910,42 @@ supply the `ruxen_mutex_*` (and `ruxen_sharedsync_*`) imports. Cross-linked from
 
 Toolchain: `ruxen 0.1.0`.
 
+## Q44 · S3 — string interpolation's `Formatter` C runtime is not bundled for wasm; needs a wasm fmt runtime (or host shims + JS→wasm string marshalling)  ⏳ OPEN (NEW 2026-06-16)
+
+Found 2026-06-16 wiring the native-element web counter (quiver
+`examples/counter-dom`). A `"count: #{n}"` interpolation lowers to compiler-
+emitted calls `Formatter_new`/`Formatter_write_str`/`Formatter_buffer` (the MIR
+interpolation lowerer; see `library/std/fmt`). On wasm32 the `fmt.c` runtime
+behind those symbols is NOT bundled into the curated wasm runtime, so they are
+emitted as **undefined host imports** (like Q43's sync symbols).
+
+Two sub-problems for a host shim:
+1. **ABI (verified by parsing the module's type section):** `Formatter_new() ->
+   i64`, `Formatter_write_str(i32, i32) -> void`, `Formatter_buffer(i32) ->
+   i64`. The handle is created as i64 but truncated to i32 at later call sites;
+   `buffer` returns the result `String` in an i64 slot (the pointer value fits
+   i32). A shim must return BigInt for `new`/`buffer`.
+2. **JS→wasm string marshalling (the real gap):** `Formatter_buffer` must return
+   a `String` **living in wasm linear memory** so the rest of the program (and
+   `dom_set_text`) can read it. JS has the built string but must WRITE it into
+   linear memory and return a pointer — and there is no exported allocator, so
+   the shim writes into a high scratch region of exported `memory` and bumps a
+   pointer (must stay above the wasm bump heap, else corruption — observed as a
+   non-deterministic wrong initial value until the scratch was placed high
+   enough). This is the same "no JS→wasm string helper" gap the tier-4.09
+   findings flagged.
+
+**Proven workable:** with the ABI shim + a high bump-scratch, the counter renders
+correct interpolated text and is fully interactive in a real browser
+(`examples/counter-dom/web/index.html`, Playwright-verified). **Fix direction:**
+bundle a `cfg(wasm)` `fmt` runtime (so interpolation is self-contained, no host
+import), OR export a wasm allocator (`ruxen_alloc`/`ruxen_dealloc`) so a host
+`Formatter_buffer` shim can safely allocate the result string instead of
+scribbling into a guessed scratch offset. Cross-linked from
+`quiver/docs/decisions/native-element-backend.md`. Sibling of Q43 (sync runtime).
+
+Toolchain: `ruxen 0.1.0`.
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:

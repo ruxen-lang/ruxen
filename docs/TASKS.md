@@ -298,6 +298,15 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       undefined host imports. Proven to run with a thin single-threaded JS sync
       shim (the canvas-harness approach). Fix: ship a `cfg(wasm)` no-op sync
       runtime so quiver-on-wasm is self-contained. Repro `tmp/spikeC/`; §Q43.
+- [ ] **Q44 · S3 — string interpolation's `Formatter` C runtime not bundled for
+      wasm (NEW 2026-06-16).** `"…#{x}"` lowers to `Formatter_new/write_str/buffer`
+      (ABI: `new()->i64`, `write_str(i32,i32)->void`, `buffer(i32)->i64`); `fmt.c`
+      isn't in the curated wasm runtime → undefined host imports. Host-shimmable,
+      but `buffer` must return the result String IN wasm memory (JS→wasm marshalling
+      gap — no exported allocator, so the shim bump-writes a high scratch region).
+      Proven working in the browser counter (`quiver/examples/counter-dom`). Fix:
+      bundle a `cfg(wasm)` fmt runtime, or export `ruxen_alloc` so a host shim can
+      allocate safely. Sibling of Q43; §Q44.
 - [x] **Q37 · S2 — generic `frame[S: Mixin]` gets a bogus `__block` when
       consumed by a binary — SAME BUG AS Q37·S1, FIXED 2026-06-10.** This was
       filed separately as the "binary-consumes-library" symptom (`could not infer
