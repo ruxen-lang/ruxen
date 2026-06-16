@@ -802,6 +802,15 @@ extern const char *ruxen_fmt_formatter_buffer(struct RuxenFormatter *);
 int64_t Formatter_new(void) { return (int64_t)(uintptr_t)ruxen_fmt_formatter_new(); }
 void Formatter_write_str(int32_t f, int32_t s) { ruxen_fmt_formatter_write_str((struct RuxenFormatter *)(uintptr_t)f, (const char *)(uintptr_t)s); }
 int64_t Formatter_buffer(int32_t f) { return (int64_t)(uintptr_t)ruxen_fmt_formatter_buffer((struct RuxenFormatter *)(uintptr_t)f); }
+
+/* --- tier 4.09 host->wasm marshalling (gui-stack Q45) ----------------------
+ * Export the bundled allocator so a JS host can allocate a buffer inside wasm
+ * linear memory, write a NUL-terminated UTF-8 string into it, and pass the
+ * pointer to an exported Ruxen `def` typed `&String` (Ruxen strings ARE
+ * NUL-terminated char*). This is the JS->wasm string path text inputs need —
+ * without it the host can only read strings OUT of wasm, never write them in. */
+__attribute__((export_name("ruxen_wasm_alloc"))) void *ruxen_wasm_alloc(int32_t n) { return malloc((size_t)(uint32_t)n); }
+__attribute__((export_name("ruxen_wasm_free"))) void ruxen_wasm_free(void *p) { free(p); }
 "#;
 
 /// Heap-core runtime `.c` files (by basename) compiled for the wasm target. A

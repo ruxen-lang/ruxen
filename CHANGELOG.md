@@ -19,6 +19,14 @@ once 1.0.0 ships.
   self-contained for both. wasm-only (native unchanged; wasm pins 4/4 + examples
   05/07/08 green). Proven end-to-end by `quiver/examples/counter-dom` (a quiver
   counter rendered as real, interactive, DevTools-inspectable DOM).
+- **WASM: exported allocator for host→wasm marshalling (gui-stack Q45).** The
+  `WASM_RT_C` shim now `export_name`-exports `ruxen_wasm_alloc(i32)->ptr` and
+  `ruxen_wasm_free(ptr)`, so a JS host can allocate a buffer inside wasm linear
+  memory, write a NUL-terminated UTF-8 string, and pass the pointer to an exported
+  Ruxen `def` typed `&String` (Ruxen strings ARE NUL-terminated `char*`). This is
+  the JS→wasm string path a native `<input>`'s value needs — previously the host
+  could only read strings OUT of wasm, never write them in. Verified present in
+  `quiver/examples/counter-dom`'s `.wasm` exports.
 
 ### Fixed
 - **LLVM backend: an `Int as Float` / `Float as Int` numeric cast no longer

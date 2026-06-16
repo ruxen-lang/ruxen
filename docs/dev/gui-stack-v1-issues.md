@@ -1970,6 +1970,18 @@ scribbling into a guessed scratch offset. Cross-linked from
 
 Toolchain: `ruxen 0.1.0`.
 
+## Q45 · S3 — no JS→wasm string path (host could read strings OUT of wasm, never write them IN)  ✅ RESOLVED 2026-06-16
+
+Found 2026-06-16 planning native `<input>` for quiver's web backend. A host could
+read a Ruxen `&String` out of wasm (NUL-terminated `char*` in exported `memory`),
+but had no way to put a string IN — no exported allocator, so a native input's
+typed value couldn't reach the app's `State`. **RESOLVED:** the `WASM_RT_C` shim
+now `export_name`-exports `ruxen_wasm_alloc(i32)->ptr` + `ruxen_wasm_free(ptr)`
+over the bundled allocator. JS allocates a buffer in wasm memory, writes
+UTF-8+NUL, and passes the pointer to an exported `def f(... text: &String)` (the
+i32 ptr IS the `&String`). Verified exported in `quiver/examples/counter-dom`.
+Toolchain: `ruxen 0.1.0`.
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:
