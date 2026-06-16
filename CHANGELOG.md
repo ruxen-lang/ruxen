@@ -8,6 +8,15 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **macOS native backends: compile `.m` Objective-C runtime shims + opt-in
+  framework linking.** `find_runtime_sources` now compiles `runtime/*.m`
+  (Objective-C — clang detects it by extension) alongside `.c`, and a new opt-in
+  `RUXEN_MACOS_FRAMEWORKS=Cocoa,WebKit,…` env var adds `-framework <name>` at link
+  (gated so non-GUI binaries don't load-link AppKit). This lets a Ruxen binary
+  drive a real AppKit shim — `quiver/examples/counter-native` renders a quiver app
+  as genuine `NSTextField`/`NSButton`/`NSSlider`/`NSPopUpButton` widgets. No
+  effect on existing builds (no stdlib `.m` files; framework flag is off by
+  default).
 - **WASM: self-contained single-threaded sync + string-format runtimes (gui-stack
   Q43, Q44).** The `WASM_RT_C` shim (`codegen/object.rs`) now bundles the
   `ruxen_mutex_*`/`ruxen_sharedsync_*` surface as one-slot i64 boxes

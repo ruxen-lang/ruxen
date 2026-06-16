@@ -287,8 +287,12 @@ pub fn find_runtime_sources_in_dir(dir: &Path) -> Result<Vec<PathBuf>, String> {
             Err(_) => continue,
         };
         let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("c") {
-            sources.push(path);
+        // `.c` C runtime shims, plus `.m` Objective-C shims (macOS AppKit/Cocoa
+        // backends — clang compiles `.m` as Objective-C by extension). Frameworks
+        // the `.m` needs are added in `object::linker_args` on macOS.
+        match path.extension().and_then(|s| s.to_str()) {
+            Some("c") | Some("m") => sources.push(path),
+            _ => {}
         }
     }
     sources.sort();

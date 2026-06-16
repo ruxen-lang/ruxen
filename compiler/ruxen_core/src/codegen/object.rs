@@ -21,6 +21,16 @@ fn linker_args(sanitize: bool, extra_link_flags: &[String]) -> Vec<String> {
     if cfg!(target_os = "macos") {
         args.push("-framework".to_string());
         args.push("Security".to_string());
+        // App-declared macOS frameworks for native-widget / platform backends
+        // (a `.m` AppKit shim needs `-framework Cocoa`). Opt-in via
+        // `RUXEN_MACOS_FRAMEWORKS=Cocoa,WebKit` (comma-separated) so non-GUI
+        // binaries don't load-link AppKit. Each name adds `-framework <name>`.
+        if let Ok(fws) = std::env::var("RUXEN_MACOS_FRAMEWORKS") {
+            for fw in fws.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                args.push("-framework".to_string());
+                args.push(fw.to_string());
+            }
+        }
     }
     if sanitize {
         args.push("-fsanitize=address,undefined".to_string());
