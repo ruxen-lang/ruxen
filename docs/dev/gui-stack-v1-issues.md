@@ -1880,7 +1880,17 @@ in a separate call, observing the Ruxen-side counter increment. Cross-linked fro
 
 Toolchain: `ruxen 0.1.0`.
 
-## Q43 · S3 — `Mutex`/`SharedSync` pthread C runtime is not bundled for wasm; quiver's reactive core needs a single-threaded sync shim  ⏳ OPEN (NEW 2026-06-16)
+## Q43 · S3 — `Mutex`/`SharedSync` pthread C runtime is not bundled for wasm; quiver's reactive core needs a single-threaded sync shim  ✅ RESOLVED 2026-06-16
+
+> **RESOLVED 2026-06-16.** A single-threaded wasm sync runtime is now bundled in
+> the `WASM_RT_C` shim (`compiler/ruxen_core/src/codegen/object.rs`): `Mutex`/
+> `SharedSync`/`MutexGuard` are one-slot i64 boxes over the bundled allocator,
+> guard handle == mutex pointer, all `ruxen_mutex_*`/`ruxen_sharedsync_*` defined
+> with the exact wasm ABI. wasm-only (native still uses the pthread runtime — no
+> regression; wasm pins 4/4 + examples 05/07/08 green). quiver's reactive
+> `State[T]` (`SharedSync[Mutex[Int]]`) now runs on wasm with NO sync host
+> imports — verified end-to-end by `quiver/examples/counter-dom` (the counter
+> increments via real `State` on wasm). The JS sync shim is gone.
 
 Found 2026-06-16 in the Phase-0.5 wasm de-risk (Spike C,
 `docs/superpowers/plans/2026-06-16-wasm-native-element-gates.md`). GOOD news
@@ -1910,7 +1920,21 @@ supply the `ruxen_mutex_*` (and `ruxen_sharedsync_*`) imports. Cross-linked from
 
 Toolchain: `ruxen 0.1.0`.
 
-## Q44 · S3 — string interpolation's `Formatter` C runtime is not bundled for wasm; needs a wasm fmt runtime (or host shims + JS→wasm string marshalling)  ⏳ OPEN (NEW 2026-06-16)
+## Q44 · S3 — string interpolation's `Formatter` C runtime is not bundled for wasm; needs a wasm fmt runtime (or host shims + JS→wasm string marshalling)  ✅ RESOLVED 2026-06-16
+
+> **RESOLVED 2026-06-16.** `fmt.c` was already in `WASM_RUNTIME_CORE`, but the
+> MIR interpolation lowerer emits the mangled callees `Formatter_new`/
+> `Formatter_write_str`/`Formatter_buffer` (not the `ruxen_fmt_formatter_*` FFI
+> aliases), and the wasm backend doesn't bridge them → they leaked as host
+> imports. Fix: the `WASM_RT_C` shim now defines those three mangled symbols as
+> thin wrappers over the bundled `ruxen_fmt_formatter_*`, matching the exact
+> emitted ABI (`new()->i64`, `write_str(i32,i32)->void`, `buffer(i32)->i64`). So
+> interpolation builds real strings in wasm linear memory via `fmt.c` — no host
+> import, no JS→wasm marshalling hack. Verified: `"count: #{n}"` renders correctly
+> on wasm in `quiver/examples/counter-dom` (deterministic in a real browser). The
+> JS Formatter shim + scratch region are gone. (A cleaner future fix would teach
+> the wasm codegen to apply the same mangled→C-symbol mapping as native, but the
+> bundled wrapper is sufficient and wasm-only.)
 
 Found 2026-06-16 wiring the native-element web counter (quiver
 `examples/counter-dom`). A `"count: #{n}"` interpolation lowers to compiler-

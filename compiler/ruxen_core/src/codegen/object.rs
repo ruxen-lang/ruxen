@@ -765,6 +765,43 @@ int snprintf(char *buf, size_t cap, const char *fmt, ...) {
     va_end(ap);
     return (int)pos;
 }
+
+/* --- tier 4.09 wasm sync shim (gui-stack Q43) ------------------------------
+ * wasm32 is single-threaded, so a Mutex / SharedSync is just a one-slot i64
+ * box and the guard handle IS the mutex pointer. The pthread-backed sync
+ * runtime (library/std/sync/runtime/*.c) is NOT bundled for wasm, so define
+ * the ruxen_*_* surface here over the bundled allocator. Signatures match the
+ * .rx lib decls' wasm ABI exactly (handles are i32 pointers; payloads i64). */
+int32_t ruxen_mutex_new(int64_t v) { int64_t *p = (int64_t *)malloc(8); if (p) *p = v; return (int32_t)(uintptr_t)p; }
+int32_t ruxen_mutex_lock(int32_t m) { return m; }
+int32_t ruxen_mutex_try_lock(int32_t m) { return m; }
+int64_t ruxen_mutex_guard_get(int32_t g) { return *(int64_t *)(uintptr_t)g; }
+void ruxen_mutex_guard_set(int32_t g, int64_t v) { *(int64_t *)(uintptr_t)g = v; }
+void ruxen_mutex_guard_drop(int32_t g) { (void)g; }
+int32_t ruxen_mutex_is_poisoned(int32_t m) { (void)m; return 0; }
+void ruxen_mutex_clear_poison(int32_t m) { (void)m; }
+int64_t ruxen_mutex_into_inner(int32_t m) { return *(int64_t *)(uintptr_t)m; }
+void ruxen_mutex_drop(int32_t m) { (void)m; }
+int32_t ruxen_sharedsync_new(int64_t v) { int64_t *p = (int64_t *)malloc(8); if (p) *p = v; return (int32_t)(uintptr_t)p; }
+int32_t ruxen_sharedsync_clone(int32_t s) { return s; }
+int64_t ruxen_sharedsync_strong_count(int32_t s) { (void)s; return 1; }
+int64_t ruxen_sharedsync_get(int32_t s) { return *(int64_t *)(uintptr_t)s; }
+void ruxen_sharedsync_drop(int32_t s) { (void)s; }
+
+/* --- tier 4.09 wasm fmt shim (gui-stack Q44) -------------------------------
+ * The MIR interpolation lowerer emits the mangled callees Formatter_new /
+ * Formatter_write_str / Formatter_buffer (NOT the ruxen_fmt_formatter_* FFI
+ * aliases), and the wasm backend does not bridge mangled→C-symbol for them, so
+ * they leak as host imports. Define them here over the already-bundled fmt.c so
+ * string interpolation is self-contained on wasm. ABI matches the emitted call
+ * sites: new()->i64, write_str(i32,i32)->void, buffer(i32)->i64. */
+struct RuxenFormatter;
+extern struct RuxenFormatter *ruxen_fmt_formatter_new(void);
+extern int64_t ruxen_fmt_formatter_write_str(struct RuxenFormatter *, const char *);
+extern const char *ruxen_fmt_formatter_buffer(struct RuxenFormatter *);
+int64_t Formatter_new(void) { return (int64_t)(uintptr_t)ruxen_fmt_formatter_new(); }
+void Formatter_write_str(int32_t f, int32_t s) { ruxen_fmt_formatter_write_str((struct RuxenFormatter *)(uintptr_t)f, (const char *)(uintptr_t)s); }
+int64_t Formatter_buffer(int32_t f) { return (int64_t)(uintptr_t)ruxen_fmt_formatter_buffer((struct RuxenFormatter *)(uintptr_t)f); }
 "#;
 
 /// Heap-core runtime `.c` files (by basename) compiled for the wasm target. A

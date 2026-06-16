@@ -7,6 +7,19 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Added
+- **WASM: self-contained single-threaded sync + string-format runtimes (gui-stack
+  Q43, Q44).** The `WASM_RT_C` shim (`codegen/object.rs`) now bundles the
+  `ruxen_mutex_*`/`ruxen_sharedsync_*` surface as one-slot i64 boxes
+  (single-threaded — wasm32 has no threads; the pthread runtime isn't bundled)
+  and defines the MIR-interpolation-lowerer's mangled `Formatter_new`/
+  `Formatter_write_str`/`Formatter_buffer` over the already-bundled `fmt.c`. So a
+  quiver app's reactive `State` (`SharedSync[Mutex[T]]`) AND string interpolation
+  (`"…#{x}"`) now run on wasm with **no host imports** — a `.wasm` is
+  self-contained for both. wasm-only (native unchanged; wasm pins 4/4 + examples
+  05/07/08 green). Proven end-to-end by `quiver/examples/counter-dom` (a quiver
+  counter rendered as real, interactive, DevTools-inspectable DOM).
+
 ### Fixed
 - **LLVM backend: an `Int as Float` / `Float as Int` numeric cast no longer
   silently produces garbage (and the optimizer no longer folds it to `undef`).**

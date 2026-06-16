@@ -290,16 +290,22 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       `__indirect_function_table`, no `call_indirect`, no codegen edit. (`init` is
       the reserved constructor word → exported entry named `boot`.) Repro
       `tmp/spikeA/`; details §Q42 + plan RESULTS.
-- [ ] **Q43 · S3 — `Mutex`/`SharedSync` pthread runtime not bundled for wasm;
-      reactive core needs a single-threaded sync shim (NEW 2026-06-16).** Phase-0.5
+- [x] **Q43 · S3 — wasm single-threaded sync runtime — RESOLVED 2026-06-16.**
+      Bundled single-threaded `ruxen_mutex_*`/`ruxen_sharedsync_*` in the
+      `WASM_RT_C` shim (one-slot i64 boxes); quiver's `State` runs on wasm with no
+      sync host imports (verified `quiver/examples/counter-dom`). wasm-only, no
+      native regression. Originally filed as: Phase-0.5
       Spike C: a minimal `Mutex` compiles to wasm32 cleanly (does NOT hit the Q41
       vtable wall), but `std.sync` is pthread-backed so `mutex.c` is excluded from
       the curated wasm runtime → `ruxen_mutex_new/lock/guard_get/guard_set` are
       undefined host imports. Proven to run with a thin single-threaded JS sync
       shim (the canvas-harness approach). Fix: ship a `cfg(wasm)` no-op sync
       runtime so quiver-on-wasm is self-contained. Repro `tmp/spikeC/`; §Q43.
-- [ ] **Q44 · S3 — string interpolation's `Formatter` C runtime not bundled for
-      wasm (NEW 2026-06-16).** `"…#{x}"` lowers to `Formatter_new/write_str/buffer`
+- [x] **Q44 · S3 — `Formatter` wasm runtime — RESOLVED 2026-06-16.** The
+      `WASM_RT_C` shim now defines the mangled `Formatter_new/write_str/buffer`
+      over the bundled `fmt.c`, so interpolation is self-contained on wasm
+      (verified `quiver/examples/counter-dom`). Originally filed as:
+      `"…#{x}"` lowers to `Formatter_new/write_str/buffer`
       (ABI: `new()->i64`, `write_str(i32,i32)->void`, `buffer(i32)->i64`); `fmt.c`
       isn't in the curated wasm runtime → undefined host imports. Host-shimmable,
       but `buffer` must return the result String IN wasm memory (JS→wasm marshalling
