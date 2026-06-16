@@ -870,6 +870,13 @@ fn compile_project(
     for dep_dir in dep_source_dirs {
         user_runtime.extend(codegen::find_runtime_sources_in_dir(dep_dir)?);
     }
+    // `.m` (Objective-C / AppKit) shims are native-only — never compile them for
+    // wasm (no AppKit; clang would fail). On the wasm reactor path their symbols
+    // become host imports like other deps' runtime, so a quiver web app that
+    // transitively depends on canvas's native shim still links cleanly.
+    if target.is_wasm() {
+        user_runtime.retain(|p| p.extension().and_then(|s| s.to_str()) != Some("m"));
+    }
 
     // Q32: a flat-merged FFI dependency's `[system_libs]` (e.g. `-lpthread`)
     // must also reach this binary's link line, the same way its `runtime/*.c`
@@ -883,6 +890,32 @@ fn compile_project(
                 let flag = format!("-l{}", lib);
                 if !extra_link_flags.contains(&flag) {
                     extra_link_flags.push(flag);
+                }
+            }
+        }
+    }
+
+    // macOS frameworks: this binary OR any dep may declare `[system_libs]
+    // frameworks = ["Cocoa", ...]` — e.g. a native AppKit widget backend. Forward
+    // each as `-framework <name>` so plain `ruxen build/run` links them (no env
+    // var). Native macOS targets only — never for wasm (wasm-ld rejects
+    // -framework) so a web app transitively depending on canvas still links.
+    #[cfg(target_os = "macos")]
+    if !target.is_wasm() {
+        let mut fw_tomls: Vec<PathBuf> = vec![project_dir.join("Ruxen.toml")];
+        for dep_dir in dep_source_dirs {
+            fw_tomls.push(dep_dir.join("Ruxen.toml"));
+        }
+        for toml_path in &fw_tomls {
+            if let Ok(contents) = fs::read_to_string(toml_path) {
+                for fw in codegen::parse_system_frameworks(&contents) {
+                    let dup = extra_link_flags
+                        .windows(2)
+                        .any(|w| w[0] == "-framework" && w[1] == fw);
+                    if !dup {
+                        extra_link_flags.push("-framework".to_string());
+                        extra_link_flags.push(fw);
+                    }
                 }
             }
         }

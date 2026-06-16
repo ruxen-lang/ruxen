@@ -17,6 +17,13 @@ once 1.0.0 ships.
   as genuine `NSTextField`/`NSButton`/`NSSlider`/`NSPopUpButton` widgets. No
   effect on existing builds (no stdlib `.m` files; framework flag is off by
   default).
+- **Declare macOS frameworks in `Ruxen.toml` (`[system_libs] frameworks = [...]`).**
+  The build (and the test runner) forward each as `-framework <name>` from the
+  binary's own toml AND every dep's — so a native-widget backend ships its
+  framework needs WITH the package (canvas declares `frameworks = ["Cocoa"]`) and
+  plain `ruxen build/run/test` links them, no env var. Native macOS targets only;
+  `.m` shims are skipped for wasm (they become host imports), so a web app that
+  transitively depends on a native FFI package still links cleanly.
 - **WASM: self-contained single-threaded sync + string-format runtimes (gui-stack
   Q43, Q44).** The `WASM_RT_C` shim (`codegen/object.rs`) now bundles the
   `ruxen_mutex_*`/`ruxen_sharedsync_*` surface as one-slot i64 boxes

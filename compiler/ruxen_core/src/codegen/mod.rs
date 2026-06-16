@@ -367,6 +367,21 @@ pub fn collect_system_lib_flags() -> Result<Vec<String>, String> {
 /// extension requires more, expand here (do NOT pull in `toml` for
 /// what is currently a 30-line surface).
 pub fn parse_system_libs(toml_contents: &str) -> Vec<String> {
+    parse_system_array(toml_contents, "libs")
+}
+
+/// Like [`parse_system_libs`] but reads `frameworks = [...]` inside
+/// `[system_libs]` — the macOS `-framework <name>` set a binary (or one of its
+/// deps) needs at link time. A native AppKit widget backend declares
+/// `frameworks = ["Cocoa"]`; the build forwards each as `-framework <name>` on
+/// macOS (ignored on other targets). Opt-in per package, so non-GUI binaries
+/// never load-link AppKit.
+pub fn parse_system_frameworks(toml_contents: &str) -> Vec<String> {
+    parse_system_array(toml_contents, "frameworks")
+}
+
+/// Shared line scanner for a `key = ["a", "b"]` array inside `[system_libs]`.
+fn parse_system_array(toml_contents: &str, key: &str) -> Vec<String> {
     let mut in_section = false;
     let mut out: Vec<String> = Vec::new();
 
@@ -385,8 +400,8 @@ pub fn parse_system_libs(toml_contents: &str) -> Vec<String> {
         if !in_section {
             continue;
         }
-        // Look for `libs = [ ... ]`.
-        let Some(rest) = trimmed.strip_prefix("libs") else {
+        // Look for `<key> = [ ... ]`.
+        let Some(rest) = trimmed.strip_prefix(key) else {
             continue;
         };
         let rest = rest.trim_start();
