@@ -1,0 +1,37 @@
+## Feature #3 Inc 1 — second arm wins. Slow (Pending) as arm A, Quick (Ready)
+## as arm B → Race2.Second(22). Confirms the C step's arm-B branch + tag.
+class Quick2
+  payload: Int
+  include Future
+  type Output = Int
+  def init(p: Int)
+    self.payload = p
+  end
+  def self.make(p: Int) -> Quick2
+    Quick2.new(p)
+  end
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Ready(self.payload)
+  end
+end
+class Slow2
+  tag: Int
+  include Future
+  type Output = Int
+  def init(t: Int)
+    self.tag = t
+  end
+  def self.make(t: Int) -> Slow2
+    Slow2.new(t)
+  end
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Pending
+  end
+end
+def main
+  let r = block_on(Race.of(Slow2.make(99), Quick2.make(22)))
+  match r
+    Race2.First(p)  -> puts "first won p=#{p}"
+    Race2.Second(p) -> puts "second won p=#{p}"
+  end
+end

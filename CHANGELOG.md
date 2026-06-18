@@ -8,6 +8,33 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **General async `Race` combinator (concurrency §4.3, Feature #3).** The first
+  arm future to complete wins; ALL losers are deterministically cancelled (each
+  loser's `def drop` runs — reactor deregister / fd close / free) BEFORE the
+  winner's value is returned, reusing the §4.1 `Drop_dynamic_drop` path. New
+  stdlib `library/std/future/src/race.rx` + a C step machine in `scheduler.c`
+  (`ruxen_race_*`, mirroring `AsyncReadWithTimeoutFuture`); NO new reactor
+  primitive (both arms share the per-thread reactor, so one `park_current` wakes
+  on either). Surface: `Race.of(a, b)` (2-arm) and `Race.any_of(arr)` (N-way over
+  an `Array[Int]`) — arms are FUTURE VALUES (i64 heap pointers, like
+  `Task.spawn_raw`/`Scope.spawn`; async closures aren't lowered). Named `any_of`
+  not `any` (`any` is a reserved keyword). Results: `enum Race2 First(Int)
+  Second(Int)` / `enum RaceN Won(Int, Int)` (winner index + i64-ABI payload — v1
+  Int channel, same as `TaskJoinFuture.Output`; caller casts). The poll step
+  polls each live arm via the compiler-synthesised `Future_dynamic_poll`,
+  inspects the `Poll`, and on first-Ready cancels the loser(s) + reports the
+  winner; the WINNER block is LEAKED (its `def drop` is NOT run — it returned
+  Ready, moving its Output out, so a heap-pointer payload stays valid — matching
+  the v1 scheduler discipline of leaking completed future blocks). `RaceFuture#drop`
+  cancels both still-live arms (a race dropped before resolving, e.g. via an
+  outer `Scope`). Reentrancy-safe (arms snapshotted + zeroed before any user
+  drop; N-way state has a `busy`/`free_pending` guard). Move-by-value ownership
+  contract (don't reuse/retain an arm value — not enforceable without typed
+  move-only future params, a v1 gap shared with spawn/scope). Empty `Race.any_of`
+  panics (a no-arm race can't resolve). Pins:
+  `417_race_of_two_arm_winner.rx`, `418_race_second_arm_winner.rx`,
+  `419_race_loser_cancel_drop.rx`, `420_race_drop_cancels_both_arms.rx` (via
+  Scope cancel), `421_race_any_n_way.rx`, `422_race_winner_not_dropped.rx`.
 - **Structured task `Scope` (concurrency §4.2, Feature #2 — the keystone).**
   A `Scope` value OWNS its spawned children and cancels every still-pending child
   before control leaves the block, so a detached/leaked async task is

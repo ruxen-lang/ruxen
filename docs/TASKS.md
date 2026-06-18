@@ -149,10 +149,23 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       where the arg is an async-def WRAPPER call fails to link (`_<fn>` undefined) —
       spawn a direct stdlib future or a hand-written future for now; (b) typed
       `Result[T,E]` child channel awaits typed `TaskJoinFuture.Output`.
-- [ ] **§4.3 Race**, **§4.4 Queue**, **§4.5 Stream**, **§4.6 Retry/Schedule**,
-      **§4.7 TestClock** — sequence on §4.1/§4.2 per spec §6. Open maintainer
-      decisions tracked in the plan doc + spec §6 (async methods on classes,
-      `segment_cfg` widening, cross-thread reactor wake).
+- [x] **§4.3 General `Race` (Feature #3 COMPLETE, uncommitted on
+      `feat/concurrency-adoption`).** `library/std/future/src/race.rx` +
+      `ruxen_race_*` C step in scheduler.c. `Race.of(a, b)` 2-arm +
+      `Race.any_of(arr)` N-way (renamed from `any` — reserved keyword). First arm
+      to complete wins; losers cancelled (their `def drop` fires via the §4.1
+      `Drop_dynamic_drop`) before the winner is returned; winner block leaked
+      (not dropped → heap payload stays valid). Results `Race2.First/Second(Int)`
+      / `RaceN.Won(idx, Int)` (v1 Int channel). No new reactor primitive.
+      Reentrancy-safe; empty `any_of` panics. Pins `417`–`422`. FOLLOW-UPS: (a)
+      raw-`Int` arm move-contract not enforceable (shared spawn/scope/race gap —
+      needs typed move-only future params); (b) typed-generic Output (the Int
+      channel); (c) heap-payload result ergonomics — `p as String` on the Int
+      payload prints the raw pointer, not the value (no typed re-hydration).
+- [ ] **§4.4 Queue**, **§4.5 Stream**, **§4.6 Retry/Schedule**, **§4.7 TestClock**
+      — sequence on §4.1/§4.2/§4.3 per spec §6. Open maintainer decisions
+      tracked in the plan doc + spec §6 (async methods on classes, `segment_cfg`
+      widening, cross-thread reactor wake).
 
 ### Language features
 

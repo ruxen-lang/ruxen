@@ -483,6 +483,334 @@ void ruxen_executor_cancel_task(int64_t handle_ptr) {
 }
 
 /* ---------------------------------------------------------------------
+ * §4.3 General `Race` — C step machine for the 2-arm `Race.of(a, b)`.
+ *
+ * Mirrors the AsyncReadWithTimeoutFuture 2-way race, generalised to arbitrary
+ * `Future` arms (polled polymorphically via `Future_dynamic_poll`). The Ruxen
+ * `RaceFuture` owns a `RuxenRaceState` (the `state_ptr` pattern) and drives it
+ * from `poll`; the C side polls each LIVE arm, and on the FIRST arm that returns
+ * Ready it CANCELS the other arm (runs its user `def drop` via the §4.1
+ * `Drop_dynamic_drop`, then frees its heap block) BEFORE reporting the winner.
+ * Loser cleanup is synchronous — no async-drop machinery.
+ *
+ * Both arms share the per-thread reactor, so `park_current` (driven by the
+ * block_on/collect pump's Pending arm) wakes as soon as EITHER arm's
+ * registration fires; the next step resolves the race. No new reactor
+ * primitive. Arms are the i64 heap pointers of the two future instances. */
+typedef struct RuxenRaceState {
+    int64_t arm_a;          /* future heap ptr; 0 once consumed/cancelled */
+    int64_t arm_b;          /* future heap ptr; 0 once consumed/cancelled */
+    int64_t winner_payload; /* the winning Poll.Ready payload (i64 ABI) */
+    int winner;             /* 0 = undecided, 1 = arm_a won, 2 = arm_b won */
+} RuxenRaceState;
+
+int64_t ruxen_race_state_new(int64_t arm_a, int64_t arm_b) {
+    RuxenRaceState *s = (RuxenRaceState *)malloc(sizeof(RuxenRaceState));
+    if (!s) {
+        ruxen_panic("ruxen_race_state_new: malloc failed");
+        return 0;
+    }
+    s->arm_a = arm_a;
+    s->arm_b = arm_b;
+    s->winner_payload = 0;
+    s->winner = 0;
+    return (int64_t)(uintptr_t)s;
+}
+
+/* Cancel (drop + free) ONE arm by its heap pointer. Reentrancy discipline
+ * (mirrors `cancel_task`): the caller has already cleared the arm's slot in the
+ * state (so a re-entrant step can't see it) BEFORE calling this. Fires the
+ * arm's user `def drop` via the §4.1 path, then frees the heap block. NULL arm
+ * (already consumed) is a no-op. */
+static void ruxen_race_cancel_arm(int64_t arm_ptr) {
+    if (arm_ptr == 0) {
+        return;
+    }
+    if (Drop_dynamic_drop) {
+        Drop_dynamic_drop(arm_ptr);
+    }
+    ruxen_dealloc((void *)(uintptr_t)arm_ptr);
+}
+
+/* Poll the live arms once. Returns 0 = both still Pending (undecided),
+ * 1 = arm_a won, 2 = arm_b won. On a win: record the winner payload, then
+ * CANCEL the LOSER (its `def drop` runs + free). The WINNER block is NOT
+ * touched — it is LEAKED, deliberately:
+ *   - the winner returned `Poll.Ready(payload)`, MOVING ownership of its
+ *     Output out (the i64 `payload` may itself be a heap pointer — String /
+ *     class — that the caller now owns). Running the winner's `def drop` could
+ *     free that moved-out payload → use-after-free of the RESULT (Codex
+ *     blocker). Freeing the winner block without its drop could leak/UAF its
+ *     other fields. So we leak the winner block — matching the established v1
+ *     scheduler discipline (the pump-completion path also leaks completed
+ *     future blocks; only the payload is consumed). The user-visible RESOURCE
+ *     guarantee Race makes is loser-cleanup, which is what fires `def drop`.
+ * Left-to-right poll order (arm_a first) — documented, NOT fair. */
+int64_t ruxen_race_step(int64_t state_ptr, int64_t cx) {
+    if (state_ptr == 0) {
+        return 0;
+    }
+    RuxenRaceState *s = (RuxenRaceState *)(uintptr_t)state_ptr;
+    if (s->winner != 0) {
+        /* Already decided — idempotent. */
+        return s->winner;
+    }
+
+    /* Arm A. */
+    if (s->arm_a != 0) {
+        int64_t pa = Future_dynamic_poll(s->arm_a, cx);
+        int64_t payload = 0;
+        if (ruxen_poll_is_ready(pa, &payload)) {
+            /* A won. Clear both slots BEFORE cancelling (reentrancy). The
+             * winner block is leaked (see header); only the loser is dropped. */
+            int64_t loser = s->arm_b;
+            s->arm_a = 0;
+            s->arm_b = 0;
+            s->winner_payload = payload;
+            s->winner = 1;
+            ruxen_race_cancel_arm(loser); /* loser: def drop + free */
+            return 1;
+        }
+    }
+
+    /* Arm B. */
+    if (s->arm_b != 0) {
+        int64_t pb = Future_dynamic_poll(s->arm_b, cx);
+        int64_t payload = 0;
+        if (ruxen_poll_is_ready(pb, &payload)) {
+            int64_t loser = s->arm_a;
+            s->arm_a = 0;
+            s->arm_b = 0;
+            s->winner_payload = payload;
+            s->winner = 2;
+            ruxen_race_cancel_arm(loser);
+            return 2;
+        }
+    }
+
+    return 0; /* both Pending */
+}
+
+int64_t ruxen_race_winner_payload(int64_t state_ptr) {
+    if (state_ptr == 0) {
+        return 0;
+    }
+    return ((RuxenRaceState *)(uintptr_t)state_ptr)->winner_payload;
+}
+
+/* Free the race state. If the race was DROPPED before resolving (e.g. an outer
+ * Scope cancelled the RaceFuture), CANCEL both still-live arms first — their
+ * `def drop`s run, no leak. Called from `RaceFuture#drop`. */
+void ruxen_race_state_free(int64_t state_ptr) {
+    if (state_ptr == 0) {
+        return;
+    }
+    RuxenRaceState *s = (RuxenRaceState *)(uintptr_t)state_ptr;
+    /* Clear slots before cancelling (reentrancy discipline). */
+    int64_t a = s->arm_a;
+    int64_t b = s->arm_b;
+    s->arm_a = 0;
+    s->arm_b = 0;
+    ruxen_race_cancel_arm(a);
+    ruxen_race_cancel_arm(b);
+    free(s);
+}
+
+/* ---------------------------------------------------------------------
+ * §4.3 General `Race.any(arr)` — N-way race over a runtime-length array of
+ * arms. Same semantics as `Race.of` generalised to N: first arm Ready wins;
+ * ALL other live arms are cancelled (their `def drop` runs) + freed before the
+ * winner is reported. Forward decls into the array runtime (vec.c). */
+uint64_t ruxen_vec_len(void *v);
+int64_t ruxen_vec_get(void *v, uint64_t index);
+
+typedef struct RuxenRaceAnyState {
+    int64_t *arms;          /* malloc'd copy of the N arm ptrs; entry 0 once consumed/cancelled */
+    int64_t n;              /* number of arms */
+    int64_t winner_idx;     /* 0-based index of the winning arm (valid once decided) */
+    int64_t winner_payload; /* the winning Poll.Ready payload */
+    int decided;            /* 0 = undecided, 1 = a winner recorded */
+    int busy;               /* reentrancy guard: 1 while step/free is running a
+                             * user `def drop` — a re-entrant `state_free` while
+                             * `busy` defers the free instead of freeing the
+                             * state out from under the running frame. */
+    int free_pending;       /* a re-entrant free arrived while busy; the
+                             * outermost frame performs it when busy clears. */
+} RuxenRaceAnyState;
+
+/* Copy the arm pointers out of the Ruxen `Array[Int]` (a RuxenVec*) into a
+ * C-owned array, so the source vec can be dropped independently. */
+int64_t ruxen_race_any_state_new(int64_t arms_vec) {
+    RuxenRaceAnyState *s = (RuxenRaceAnyState *)malloc(sizeof(RuxenRaceAnyState));
+    if (!s) {
+        ruxen_panic("ruxen_race_any_state_new: malloc(state) failed");
+        return 0;
+    }
+    void *v = (void *)(uintptr_t)arms_vec;
+    int64_t n = (int64_t)ruxen_vec_len(v);
+    if (n <= 0) {
+        /* An empty race has no arm to ever complete → it would Pending
+         * forever (block_on hangs). Reject it loudly rather than deadlock. */
+        free(s);
+        ruxen_panic("Race.any_of: empty arms array (a race with no arms never resolves)");
+        return 0;
+    }
+    s->arms = NULL;
+    if (n > 0) {
+        s->arms = (int64_t *)malloc((size_t)n * sizeof(int64_t));
+        if (!s->arms) {
+            free(s);
+            ruxen_panic("ruxen_race_any_state_new: malloc(arms) failed");
+            return 0;
+        }
+        for (int64_t i = 0; i < n; i++) {
+            s->arms[i] = ruxen_vec_get(v, (uint64_t)i);
+        }
+    }
+    s->n = n;
+    s->winner_idx = 0;
+    s->winner_payload = 0;
+    s->decided = 0;
+    s->busy = 0;
+    s->free_pending = 0;
+    return (int64_t)(uintptr_t)s;
+}
+
+/* Poll each live arm in index order; first Ready wins. On a win: record the
+ * winner idx+payload, then CANCEL every OTHER live arm (its `def drop` runs +
+ * free). The WINNER block is LEAKED, not dropped (same rationale as the 2-arm
+ * `ruxen_race_step` — the payload was moved out; running the winner's drop
+ * could free a heap-pointer result → UAF). Returns winner-index + 1
+ * (0 = undecided / Pending), matching the 1-based convention `Race.of` uses.
+ *
+ * REENTRANCY: snapshot every arm pointer into locals and ZERO every slot
+ * BEFORE invoking any user `def drop` (so a re-entrant `state_free` from inside
+ * a loser's drop sees all slots already 0 → no double-free / no
+ * walk-over-freed-memory). */
+int64_t ruxen_race_any_step(int64_t state_ptr, int64_t cx) {
+    if (state_ptr == 0) {
+        return 0;
+    }
+    RuxenRaceAnyState *s = (RuxenRaceAnyState *)(uintptr_t)state_ptr;
+    if (s->decided) {
+        return s->winner_idx + 1;
+    }
+    for (int64_t i = 0; i < s->n; i++) {
+        if (s->arms[i] == 0) {
+            continue;
+        }
+        int64_t p = Future_dynamic_poll(s->arms[i], cx);
+        int64_t payload = 0;
+        if (ruxen_poll_is_ready(p, &payload)) {
+            s->winner_idx = i;
+            s->winner_payload = payload;
+            s->decided = 1;
+            /* Snapshot + zero ALL slots BEFORE any user drop runs (reentrancy:
+             * a loser's drop that re-enters and frees the state must see every
+             * slot already 0). Then cancel each LOSER from the snapshot; LEAK
+             * the winner block. */
+            int64_t *snapshot = (int64_t *)malloc((size_t)s->n * sizeof(int64_t));
+            if (!snapshot) {
+                ruxen_panic("ruxen_race_any_step: malloc(snapshot) failed");
+                return i + 1;
+            }
+            for (int64_t j = 0; j < s->n; j++) {
+                snapshot[j] = s->arms[j];
+                s->arms[j] = 0;
+            }
+            /* `busy` guards the state's LIFETIME: if a loser's `def drop`
+             * re-enters and calls `ruxen_race_any_state_free(this)`, that free
+             * is DEFERRED (free_pending) so the state isn't freed out from
+             * under us — we read no state fields after the cancel loop, but the
+             * caller (`poll`) reads winner_idx/payload right after, so the state
+             * must outlive this call. */
+            s->busy = 1;
+            for (int64_t j = 0; j < s->n; j++) {
+                if (j == i) {
+                    continue; /* winner: leaked, not dropped */
+                }
+                if (snapshot[j] != 0) {
+                    ruxen_race_cancel_arm(snapshot[j]); /* loser: def drop + free */
+                }
+            }
+            free(snapshot);
+            s->busy = 0;
+            /* If a re-entrant free arrived during the cancel loop, the state is
+             * logically dead — but `poll` still needs winner_idx/payload from
+             * it. We keep the state alive here (do NOT free) and let the
+             * RaceAnyFuture's own `#drop` free it later; a deferred-free flag is
+             * recorded but the final free is the future's drop, which runs once
+             * `poll` has consumed the result. (Single-threaded: the future is
+             * borrowed during poll, so its own drop can't run until poll
+             * returns — the re-entrant free can only have come from a loser's
+             * drop reaching a DIFFERENT alias of this state, which the move
+             * contract already forbids.) */
+            return i + 1;
+        }
+    }
+    return 0; /* all Pending */
+}
+
+int64_t ruxen_race_any_winner_idx(int64_t state_ptr) {
+    if (state_ptr == 0) {
+        return 0;
+    }
+    return ((RuxenRaceAnyState *)(uintptr_t)state_ptr)->winner_idx;
+}
+
+int64_t ruxen_race_any_winner_payload(int64_t state_ptr) {
+    if (state_ptr == 0) {
+        return 0;
+    }
+    return ((RuxenRaceAnyState *)(uintptr_t)state_ptr)->winner_payload;
+}
+
+/* Free the N-way race state, cancelling any still-live arms first (a race
+ * dropped before resolving). Called from `RaceAnyFuture#drop`. */
+void ruxen_race_any_state_free(int64_t state_ptr) {
+    if (state_ptr == 0) {
+        return;
+    }
+    RuxenRaceAnyState *s = (RuxenRaceAnyState *)(uintptr_t)state_ptr;
+    /* Reentrancy: if a free arrives while a step's cancel loop is running this
+     * state's user drops (busy), DEFER the actual free — the outer frame still
+     * reads winner fields. Record the request; the owning RaceAnyFuture's own
+     * `#drop` (which runs after poll returns, single-threaded) performs the
+     * real free. Returning here avoids freeing the state out from under the
+     * running step. */
+    if (s->busy) {
+        s->free_pending = 1;
+        return;
+    }
+    if (s->arms) {
+        /* Snapshot + zero every slot BEFORE any user drop (reentrancy: a
+         * cancelled arm's `def drop` must not see a live slot here either).
+         * Guard `busy` so a re-entrant free during a cancelled arm's drop is
+         * deferred rather than double-freeing this state. */
+        s->busy = 1;
+        int64_t *snapshot = (int64_t *)malloc((size_t)s->n * sizeof(int64_t));
+        if (!snapshot) {
+            ruxen_panic("ruxen_race_any_state_free: malloc(snapshot) failed");
+            return;
+        }
+        for (int64_t i = 0; i < s->n; i++) {
+            snapshot[i] = s->arms[i];
+            s->arms[i] = 0;
+        }
+        for (int64_t i = 0; i < s->n; i++) {
+            if (snapshot[i] != 0) {
+                ruxen_race_cancel_arm(snapshot[i]);
+            }
+        }
+        free(snapshot);
+        free(s->arms);
+        s->arms = NULL;
+        s->busy = 0;
+    }
+    free(s);
+}
+
+/* ---------------------------------------------------------------------
  * TaskHandle accessors (used by the Ruxen-level `class TaskHandle[T]`
  * lib decls and by the synthesised `__TaskJoinFuture` in commit 2). */
 int64_t ruxen_task_handle_is_done(int64_t handle_ptr) {

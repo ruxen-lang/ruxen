@@ -409,6 +409,93 @@ Each increment: failing pin first → minimal `.rx` (+ the one C primitive in In
 
 ---
 
+## Feature #3 — General `Race` (spec §4.3)
+
+First future to complete wins; **all losers are deterministically cancelled (their
+`def drop` runs) before the winner's value is returned**, reusing the §4.1
+`Drop_dynamic_drop` path. No new reactor primitive — the reactor already
+multiplexes multiple registrations on one `park_current`, so two arms both
+registered (e.g. a read fd + a timer) both wake the same poll.
+
+### Ground truth (verified — Explore over scheduler.c + the precedent)
+- `Future_dynamic_poll(self, cx)`, `Drop_dynamic_drop(self)`, `ruxen_poll_is_ready`
+  are **C-only** symbols (not `.rx`-callable). `cx` is the raw `RuxenContext*` at
+  the i64 ABI — pass straight into `Future_dynamic_poll(child, cx)`. Poll heap
+  layout: tag@0 (Ready=0, Pending=1), payload@8.
+- A future VALUE flows into an `Int` param as its heap pointer (the
+  `Task.spawn_raw(fut: Int)` / `Scope.spawn` precedent).
+- `AsyncReadWithTimeoutFuture` is the proven 2-way race: a hand-written `.rx`
+  future driving a C step machine, first-Ready wins, loser resource torn down on
+  the win path + in `drop`.
+
+### Design (C-helper-backed `RaceFuture`, mirroring AsyncReadWithTimeoutFuture)
+- `Race.of(a, b)` takes two future VALUES as `Int` (heap pointers) and returns a
+  `RaceFuture` (hand-written, `include Future`). The poll logic — polling each arm
+  via `Future_dynamic_poll`, inspecting the `Poll`, firing the loser's
+  `Drop_dynamic_drop`, freeing the loser's heap block — lives in a C step machine
+  (`ruxen_race_*`, like the read-timeout state). The `.rx` `poll` calls the step,
+  and on a win builds the `Poll.Ready(Race2.<arm>(payload))` enum (enum
+  construction stays in `.rx` so the compiler owns the layout).
+- **Result encoding (chosen): `enum Race2 First(Int) Second(Int)`** — the winner's
+  i64 payload, tagged by which arm won. v1 Int channel (same limit as
+  `TaskJoinFuture.Output = Int`; typed-generic-Output deferred). The user
+  `match`es `First`/`Second` and casts the Int to the arm's type. Mirrors the
+  spec sketch's `Race.First(b)`/`Race.Second(_)`, Int-typed. Documented.
+- **Loser-cancel fires `def drop` via the §4.1 path:** the C step, on first-Ready,
+  calls `Drop_dynamic_drop(loser_ptr)` (its concrete `def drop` — reactor
+  deregister / fd close) + frees the loser block, BEFORE returning the winner.
+  `RaceFuture#drop` (dropped un-resolved, e.g. cancelled by an outer Scope) drops
+  BOTH still-live arms. Reentrancy-safe by the same discipline as
+  `cancel_task` (don't hold a reachable reference across the user drop).
+
+### Increments (TDD, pins 417+)
+- **Inc 1 — `Race.of(a, b)` 2-arm, winner returned.** Two arms; one resolves first
+  (Ready), the other is Pending; `Race.of(a,b).await` (or hand-poll) returns
+  `Race2.First`/`Second` with the winner's payload. Pin `417`. Establishes the
+  `RaceFuture` class, the C step, the `Race2` enum, the Int-pointer ABI.
+- **Inc 2 — loser-cancel runs the loser's `def drop`.** The losing arm has an
+  OBSERVABLE `def drop`; when the winner resolves, the loser's drop fires EXACTLY
+  ONCE (before the winner's value is observed). Pin `418`. Plus a `RaceFuture#drop`
+  pin (`419`): a Race dropped before either arm resolves drops BOTH arms.
+- **Inc 3 — `Race.any(arr)` N-way.** Poll a runtime-length `Array[Int]` of arms;
+  first Ready wins, all other arms dropped. Result is `Won(idx, payload)` or the
+  `Race2`-style tag generalized. Pin `420`. (Spec: ship `Race.of` first, `Race.any`
+  second — the N-way array-of-futures storage + per-element dispatch.)
+
+Each increment: failing pin first (417+) → minimal `.rx` + C step → narrow tests
++ re-confirm 391–398 & 412–416 → Codex review (park LOW).
+
+### AS-BUILT (all increments GREEN, pins 417–422)
+- **`Race.any` → `Race.any_of`** — `any` is a reserved keyword (the `any Mixin`
+  type position), so the N-way constructor is `any_of`.
+- **Winner block is LEAKED, not dropped** (Codex blocker fix): the winner
+  returned Ready, MOVING its Output out (the i64 payload may be a heap String/
+  class pointer the caller now owns); running the winner's `def drop` would free
+  that moved-out result → UAF. So only LOSERS are dropped+freed; the winner block
+  leaks, matching the v1 scheduler discipline (completed future blocks leak; only
+  the payload is consumed). Tradeoff: a reactor-backed winner's own fd/timer
+  isn't torn down by Race — but a winner that returned Ready should have released
+  its own resources on its Ready path. Pin `422` (winner NOT dropped, only loser).
+- **Reentrancy-safe** (Codex high fix): the N-way step/free snapshot all arm
+  pointers + zero every slot BEFORE any user `def drop`, and the any-state carries
+  a `busy`/`free_pending` guard so a re-entrant `state_free` during a loser's drop
+  defers rather than freeing the state mid-step. Snapshot mallocs null-checked.
+- **Empty `Race.any_of` panics** (Codex medium fix) — a no-arm race never resolves.
+- **Move-by-value arm contract** (Codex blocker, documentation-only — same
+  non-enforceable raw-`Int` gap as `Task.spawn_raw`/`Scope.spawn`): Race owns +
+  frees its arms; don't reuse/retain an arm value, nor pass one already spawned.
+  Needs typed move-only future params (a shared v1 lowering gap).
+- **Pins:** `417` first-arm win, `418` second-arm win, `419` loser-cancel drop,
+  `420` RaceFuture#drop both arms (via a `Scope` cancel — composes §4.2+§4.3),
+  `421` N-way `any_of`, `422` winner-not-dropped.
+- **Known v1 limitation:** the result payload is an `Int`; a heap Output (String/
+  class) survives (winner leaked) but `p as String` prints the raw pointer — no
+  typed re-hydration (the Int-channel limit). Typed-generic Output is deferred.
+
+**Feature #3 (§4.3) is COMPLETE** across Increments 1–3 (+ the Codex fixes).
+
+---
+
 ## How §4.2–§4.7 sequence on top (per spec §6)
 
 - **§4.2 Scope** (keystone): hard-depends on §4.1 (Scope#drop joins-then-cancels

@@ -1,0 +1,55 @@
+## Feature #3 Increment 1 (spec §4.3) — general `Race.of(a, b)` 2-arm: the
+## first arm to complete wins and its value is returned, tagged by which arm
+## won. `Race.of` takes two FUTURE VALUES (i64 heap pointers, like
+## `Task.spawn_raw`/`Scope.spawn`), returns a `RaceFuture` driven by block_on.
+##
+## Result encoding (v1): `enum Race2 First(Int) Second(Int)` — the winner's
+## payload at the i64 ABI, tagged by arm (same Int channel as
+## `TaskJoinFuture.Output = Int`; the caller casts).
+##
+## `Quick` resolves Ready(11) on its first poll; `Slow` stays Pending forever.
+## So arm A (Quick) wins → `Race2.First(11)`.
+
+class Quick
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(p: Int)
+    self.payload = p
+  end
+
+  def self.make(p: Int) -> Quick
+    Quick.new(p)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Ready(self.payload)
+  end
+end
+
+class Slow
+  tag: Int
+  include Future
+  type Output = Int
+
+  def init(t: Int)
+    self.tag = t
+  end
+
+  def self.make(t: Int) -> Slow
+    Slow.new(t)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Pending
+  end
+end
+
+def main
+  let r = block_on(Race.of(Quick.make(11), Slow.make(99)))
+  match r
+    Race2.First(p)  -> puts "first won p=#{p}"
+    Race2.Second(p) -> puts "second won p=#{p}"
+  end
+end

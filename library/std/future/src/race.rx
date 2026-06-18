@@ -1,0 +1,171 @@
+## Race — general async race combinator (spec §4.3). The FIRST arm future to
+## complete wins; ALL losers are deterministically cancelled (their `def drop`
+## runs — reactor deregister / fd close / free) BEFORE the winner's value is
+## returned, reusing the §4.1 `Drop_dynamic_drop` path. No new reactor
+## primitive: both arms share the per-thread reactor, so `park_current` wakes
+## as soon as EITHER arm's registration fires.
+##
+## v1 surface (what the current lowering supports):
+##   * `Race.of(a, b)` — `a`/`b` are FUTURE VALUES (i64 heap pointers at the
+##     ABI, like `Task.spawn_raw` / `Scope.spawn`). Returns a `RaceFuture` you
+##     drive with `block_on` (or `.await`). NOT an async closure (those aren't
+##     lowered).
+##   * Result is `enum Race2 First(Int) Second(Int)` — the winner's payload at
+##     the i64 ABI, tagged by which arm won. v1 Int channel (same limit as
+##     `TaskJoinFuture.Output = Int`; typed-generic Output deferred): the caller
+##     `match`es `First`/`Second` and casts the Int to the arm's type.
+##
+## OWNERSHIP CONTRACT (move-by-value, same as `Task.spawn_raw`/`Scope.spawn`):
+## `Race` takes ownership of its arm futures and frees/cancels them. Pass a
+## freshly-constructed future expression — `Race.of(read(n), Async.sleep(d))` —
+## and do NOT retain or reuse the arm value afterward, nor pass a future already
+## handed to `spawn`. The raw-`Int` ABI cannot ENFORCE this (it needs typed
+## move-only future params — a v1 lowering gap shared across spawn/scope/race);
+## breaking the contract is a use-after-free. The WINNER future block is LEAKED
+## (its `def drop` is NOT run — it returned Ready, moving its Output out, so its
+## payload — even a heap String/class pointer — stays VALID for the caller; only
+## the LOSERS are dropped+freed). This matches the v1 scheduler discipline
+## (completed future blocks are leaked; only the payload is consumed).
+##
+## Poll logic lives in a C step machine (`ruxen_race_*` in scheduler.c, mirroring
+## AsyncReadWithTimeoutFuture): it polls each live arm via the compiler-
+## synthesised `Future_dynamic_poll`, and on first-Ready cancels the loser
+## (`Drop_dynamic_drop`) + frees both arm blocks, then reports the winner. The
+## `.rx` `poll` builds the `Poll.Ready(Race2.<arm>(payload))` enum (enum
+## construction stays in `.rx` so the compiler owns the layout).
+
+## Result of a 2-arm race: which arm won + its i64-ABI payload.
+enum Race2
+  First(Int)
+  Second(Int)
+end
+
+## The future returned by `Race.of`. Owns a C `RuxenRaceState` (the two arm
+## pointers + the recorded winner). `poll` drives the C step; on a win it builds
+## the tagged result. `drop` cancels both still-live arms (a race dropped before
+## resolving — e.g. cancelled by an outer Scope — fires both arms' `def drop`).
+class RaceFuture
+  state_ptr: Int
+  done: Int
+  include Future
+  type Output = Race2
+
+  def init(arm_a: Int, arm_b: Int)
+    self.state_ptr = ruxen_race_state_new(arm_a, arm_b)
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Race2]
+    if self.done != 0
+      return Poll.Pending
+    end
+    # The C step polls each live arm via Future_dynamic_poll; on first-Ready it
+    # cancels the loser (def drop) + frees both arm blocks, and returns which
+    # arm won (1 = a, 2 = b; 0 = both still Pending). `cx` flows in as its raw
+    # RuxenContext* (a `&var Context` IS the i64 pointer at the ABI), which the
+    # step forwards to Future_dynamic_poll.
+    let winner = ruxen_race_step(self.state_ptr, cx)
+    if winner == 0
+      return Poll.Pending
+    end
+    let payload = ruxen_race_winner_payload(self.state_ptr)
+    self.done = 1
+    if winner == 1
+      Poll.Ready(Race2.First(payload))
+    else
+      Poll.Ready(Race2.Second(payload))
+    end
+  end
+
+  def drop
+    # If the race was dropped before resolving, the C state still holds live arm
+    # pointers — `ruxen_race_state_free` cancels both (fires their `def drop`)
+    # then frees the state. After a win both arms are already 0 (consumed), so
+    # this just frees the state. Idempotent.
+    if self.state_ptr != 0
+      ruxen_race_state_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end
+
+## Result of an N-way `Race.any`: the winning arm's INDEX (0-based into the
+## input array) + its i64-ABI payload.
+enum RaceN
+  Won(Int, Int)
+end
+
+## The future returned by `Race.any` — N-way generalisation of `RaceFuture`
+## over a runtime-length `Array[Int]` of arm future values. Owns a C
+## `RuxenRaceAnyState` (a malloc'd copy of the arm pointers + the recorded
+## winner). Same loser-cancel + drop semantics as `RaceFuture`.
+class RaceAnyFuture
+  state_ptr: Int
+  done: Int
+  include Future
+  type Output = RaceN
+
+  def init(arms: &Array[Int])
+    self.state_ptr = ruxen_race_any_state_new(arms)
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[RaceN]
+    if self.done != 0
+      return Poll.Pending
+    end
+    # 1-based winner index (0 = all still Pending). On a win the C step has
+    # already cancelled every other arm (each loser's def drop) + freed all.
+    let winner1 = ruxen_race_any_step(self.state_ptr, cx)
+    if winner1 == 0
+      return Poll.Pending
+    end
+    let idx = ruxen_race_any_winner_idx(self.state_ptr)
+    let payload = ruxen_race_any_winner_payload(self.state_ptr)
+    self.done = 1
+    Poll.Ready(RaceN.Won(idx, payload))
+  end
+
+  def drop
+    if self.state_ptr != 0
+      ruxen_race_any_state_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end
+
+## Race namespace.
+class Race
+  ## Race two future VALUES; first to complete wins, loser cancelled.
+  def self.of(a: Int, b: Int) -> RaceFuture
+    RaceFuture.new(a, b)
+  end
+
+  ## Race N future VALUES (an `Array[Int]` of heap pointers); first to complete
+  ## wins, ALL other arms cancelled. Result is `RaceN.Won(index, payload)`.
+  ##
+  ## Named `any_of` (NOT `any`): `any` is a reserved keyword in Ruxen (the
+  ## `any Mixin` type position), so it can't be a method name. The spec sketch's
+  ## `Race.any(arr)` becomes `Race.any_of(arr)`.
+  def self.any_of(arms: &Array[Int]) -> RaceAnyFuture
+    RaceAnyFuture.new(arms)
+  end
+end
+
+## §4.3 scheduler primitives (defined in scheduler.c — same TU as the C-only
+## `Future_dynamic_poll` / `Drop_dynamic_drop` / `ruxen_poll_is_ready` the step
+## reuses). Module-level lib decls so the `RaceFuture` can call them by bare
+## identifier. `ruxen_race_step` takes `cx: &var Context` — the `&var Context`
+## flows in as its raw `RuxenContext*` at the i64 ABI, which the step forwards
+## verbatim to `Future_dynamic_poll`.
+lib "runtime/scheduler.c"
+  def ruxen_race_state_new(arm_a: Int, arm_b: Int) -> Int
+  def ruxen_race_step(state_ptr: Int, cx: &var Context) -> Int
+  def ruxen_race_winner_payload(state_ptr: Int) -> Int
+  def ruxen_race_state_free(state_ptr: Int) -> nil
+  def ruxen_race_any_state_new(arms_vec: &Array[Int]) -> Int
+  def ruxen_race_any_step(state_ptr: Int, cx: &var Context) -> Int
+  def ruxen_race_any_winner_idx(state_ptr: Int) -> Int
+  def ruxen_race_any_winner_payload(state_ptr: Int) -> Int
+  def ruxen_race_any_state_free(state_ptr: Int) -> nil
+end
