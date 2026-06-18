@@ -94,6 +94,53 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       release-e2e 920. Verified: quiver counter example builds again. Ledger
       §Q37.
 
+### Concurrency adoption (`decisions/zio-comparison-concurrency-adoption.md`, plan `dev/concurrency-impl-plan.md`)
+
+- [x] **§4.1 First-class cancellation + leak-free `def drop` across `.await`
+      (Feature #1 — COMPLETE, uncommitted on `feat/concurrency-adoption`)** —
+      the foundation (spec §6 build order #1). Decision: NARROW path (Drop vtable
+      slot inside the future's existing class_info; NO global `mixin Drop
+      dispatch runtime`; no non-future layout change). All three increments
+      landed + pinned (`391`–`398`). What a user can now rely on: a cancelled or
+      drained async future runs its `def drop` (and its sub-futures' drops),
+      deterministically and leak-free, via synchronous RAII. Increments:
+      - [x] **Increment 1 — a drained future runs its `def drop`** (in progress on
+            `feat/concurrency-adoption`, uncommitted). `Drop_dynamic_drop` routed
+            through the future class_info; `ruxen_executor_drain_remaining` fires
+            it. Pin `tests/release-e2e/cases/391_async_drop_on_drain.rx` + layout
+            pins in `tests/mixin_vtables.rs`. Explicit-drain surface only; the
+            automatic block_on-exit/Scope drain is deferred to §4.2.
+      - [x] **Increment 2 — state-indexed drop glue** on the synthesised state
+            machine (uncommitted on `feat/concurrency-adoption`). MIR
+            `synthesize_future_state_machine_drop` drops each owned `__sub_i`
+            sub-future via `Drop_dynamic_drop` + `ruxen_dealloc`, reverse decl
+            order, each NULL-guarded (`if self.__sub_i != 0` — loop machines build
+            `__sub_i` lazily, so a loop future drained before first pump has a zero
+            field that must be skipped, else null-deref). Double-drop sound:
+            `<Future>_drop` is the SOLE dropper (poll only borrows; pump never drops
+            completed futures; spawned future tainted out of scope drop). Bare-named
+            await-binding fields NOT dropped (uninitialised until their await
+            resolves — partial-init UB). Pins `392`–`395`. Two FOLLOW-UPS surfaced:
+            (a) dropping cross-suspend USER-DROP class locals needs eager-vs-late
+            metadata threaded from async-lowering; (b) loop re-init overwrites a
+            completed prior iteration's `__sub_i` without dropping the old one
+            (pre-existing intra-loop LEAK in the loop builder, not a UAF — Codex
+            LOW, relayed to user).
+      - [x] **Increment 3 — cooperative `cx.cancelled?` bit** through `Context`.
+            `_Thread_local` flag in executor.c (the user body never sees `cx`, so
+            thread-scoped like the reactor handle) + `cx.cancelled?` /
+            `ruxen_request_cancel`/`clear_cancel`/`cancel_requested`. A leaf future
+            checks it at its await boundary and early-returns → Increment-2 drop
+            glue fires. Cooperative (no preemption of await-free loops). ALSO
+            fixed the pre-existing block_on-root-future leak it surfaced: drop
+            elaboration now force-roots a never-consumed `__block_on_fut_*` Future
+            local (the spec §4.1 block_on-exit drop). Pins `396`/`397`/`398`.
+- [ ] **§4.2 Scope** (keystone), **§4.3 Race**, **§4.4 Queue**, **§4.5 Stream**,
+      **§4.6 Retry/Schedule**, **§4.7 TestClock** — sequence on §4.1 per spec §6.
+      Open maintainer decisions tracked in the plan doc + spec §6 (async methods
+      on classes, `segment_cfg` widening, raw-`Int` handle wall-off, cross-thread
+      reactor wake, Scope default).
+
 ### Language features
 
 - [x] **String-literal coercion model — `String.from("literal")` removed
@@ -645,6 +692,13 @@ tooling/DX incl. LSP, debugger, docgen, incremental compile (T3) → ecosystem,
 package manager, cross-compile, WASM, stable ABI (T4) → spec & stability,
 language reference, edition/deprecation, error-code registry (T5). Gate is
 `prompts/v1/25_v1_release_checklist.md`.
+
+Forward-looking analysis (not yet committed tasks): [`decisions/zio-comparison-concurrency-adoption.md`](decisions/zio-comparison-concurrency-adoption.md)
+ranks seven async-concurrency capabilities distilled from the Ruby-vs-Scala/ZIO
+comparison — cancellation + runtime-dispatched `Drop`, structured task scopes,
+`Race`, async `Queue`, `Stream`, `Schedule`, and a virtual `TestClock` — each with
+rondo-grounded rationale, market impact, and the maintainer decisions they gate
+(async methods on classes, `segment_cfg` widening, cross-thread reactor wake).
 
 ## How to update this file
 

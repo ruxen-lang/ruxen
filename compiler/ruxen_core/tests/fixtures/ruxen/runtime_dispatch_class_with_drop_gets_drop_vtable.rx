@@ -1,0 +1,73 @@
+# §4.1 NARROW cancellation path layout pin
+# (docs/dev/concurrency-impl-plan.md Increment 1).
+#
+# A FUTURE class (runtime-dispatch via the `Future` async-protocol mixin)
+# that defines `def drop` gets a second `Drop` vtable appended INSIDE its
+# existing class_info struct (slot 1, after Future@slot0). This routes a
+# drained/cancelled future's drop through the class_info it already carries
+# — WITHOUT making `mixin Drop` global-dispatch and WITHOUT adding a header
+# to any non-future class.
+#
+# `mixin Future dispatch runtime` is declared inline so the fixture is
+# self-contained under the no-bootstrap `type_check` path the pin uses
+# (the gate keys on the mixin being NAMED `Future`).
+
+mixin Future dispatch runtime
+  def poll -> Int
+end
+
+# Future-shaped: runtime-dispatch Future + def drop → Future@slot0,
+# Drop@slot1 (the concrete Sentinel_drop).
+class Sentinel
+  payload: Int
+
+  def init(@payload: Int)
+  end
+
+  include Future
+
+  def poll -> Int
+    self.payload
+  end
+
+  def drop
+    nil
+  end
+end
+
+# Future WITHOUT a user def drop → still gets a Drop slot, but it points
+# at a synthesised no-op (NoDropFuture_drop_noop) so the uniform-slot
+# drain dispatch stays valid for futures that define no drop.
+class NoDropFuture
+  payload: Int
+
+  def init(@payload: Int)
+  end
+
+  include Future
+
+  def poll -> Int
+    self.payload
+  end
+end
+
+# Plain droppable class: def drop but NO runtime-dispatch mixin → it must
+# stay flat (no class_info header, no Drop vtable). Proves the narrow
+# path does NOT touch non-future class layout.
+class PlainResource
+  fd: Int
+
+  def init(@fd: Int)
+  end
+
+  def drop
+    nil
+  end
+end
+
+def main
+  let s = Sentinel.new(7)
+  let n = NoDropFuture.new(9)
+  let p = PlainResource.new(3)
+  nil
+end

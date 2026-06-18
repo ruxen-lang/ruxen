@@ -1,0 +1,41 @@
+## Increment 3 soundness guard (Codex high finding). The block_on-exit
+## root-future drop force-roots a local named `__block_on_fut_*`. That name
+## prefix is only a CHEAP FILTER scoping the rule to compiler-generated
+## block_on roots; SOUNDNESS is structural — a local is force-rooted ONLY if
+## it is never CONSUMED (never passed by-value to a call, stored into an
+## aggregate, moved, or returned). A genuine block_on root is only borrowed.
+##
+## A (pathological) USER local that happens to share the `__block_on_fut_`
+## name AND is consumed by-value must NOT be force-rooted — else its `def drop`
+## would fire on a value already moved into the callee → double-free.
+##
+## Here `__block_on_fut_user` is a droppable `Crate` MOVED by value into `sink`.
+## The local is CONSUMED by the call, so the structural check leaves it tainted
+## (NOT force-rooted). If the force-root were name-only (unsound), drop WOULD
+## fire at main's scope exit on a value already moved into `sink` → a
+## double-free / crash. The clean exit (no crash) is the soundness proof.
+## (Note: `box dropped` does not print at all — Ruxen's move-into-a-by-value
+## param does not drop in the callee either; that's a pre-existing, orthogonal
+## move-by-value leak, not what this pin guards. The pin guards ONLY that the
+## force-root does not double-free a consumed `__block_on_fut_`-named local.)
+
+class Crate
+  tag: Int
+  def init(t: Int)
+    self.tag = t
+  end
+  def drop
+    puts "box dropped tag=#{self.tag}"
+  end
+end
+
+# Consumes its argument by value (owns it, drops it at this fn's scope exit).
+def sink(b: Crate) -> nil
+  puts "sink got tag=#{b.tag}"
+end
+
+def main
+  let __block_on_fut_user = Crate.new(3)
+  sink(__block_on_fut_user)
+  puts "after sink"
+end

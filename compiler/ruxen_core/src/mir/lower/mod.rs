@@ -659,6 +659,34 @@ impl<'a> Lowerer<'a> {
                 if module_path.is_empty() && class_has("Clone") {
                     mir.functions.push(self.synthesize_class_clone(class));
                 }
+
+                // §4.1 Increment 2: state-indexed drop glue. A synthesised
+                // async `Future` state machine owns its awaited sub-futures as
+                // `__sub_i` fields; Ruxen has NO automatic per-field drop, so
+                // without an explicit `def drop` those sub-futures leak when the
+                // future is drained/cancelled (Increment 1 only gave such a
+                // future a `_drop_noop`). When this class is a synthesised future
+                // state machine owning sub-futures, synthesise its `<Class>_drop`
+                // to drop them and register it so `collect_mixin_vtables` points
+                // the Drop vtable slot at the REAL drop instead of the no-op.
+                //
+                // Use the SYMBOL-TABLE class name (`def.name`) for the function
+                // symbol + the `user_drop_classes` key — IDENTICAL to what
+                // `collect_mixin_vtables` keys on (`def.name`) — so the Drop
+                // vtable's `{name}_drop` method symbol and the synthesised
+                // function symbol always agree, even for a (hypothetical) module-
+                // nested state machine. (Today async state machines are always
+                // top-level, so `class.name == def.name == class_symbol`.)
+                let sm_symbol = self
+                    .symbols
+                    .get(class.def_id)
+                    .map(|d| d.name.clone())
+                    .unwrap_or_else(|| class.name.clone());
+                if let Some(drop_fn) = self.synthesize_future_state_machine_drop(class, &sm_symbol)
+                {
+                    self.user_drop_classes.insert(sm_symbol);
+                    mir.functions.push(drop_fn);
+                }
             }
             HirItem::Struct(s) => {
                 let qualified_struct = Self::qualified_item_name(module_path, &s.name);
@@ -908,6 +936,11 @@ impl<'a> Lowerer<'a> {
     fn collect_mixin_vtables(&self, mir: &mut MirProgram) {
         use crate::resolve::symbols::DefKind;
 
+        // §4.1 NARROW: runtime-dispatch classes with no user `def drop`
+        // that still need a no-op drop fn for their uniform Drop vtable
+        // slot. Collected during the class walk, synthesised after it.
+        let mut drop_noop_classes: Vec<String> = Vec::new();
+
         // Iterate over classes. We need a stable order: walk the
         // symbol table.
         for def in self.symbols.iter() {
@@ -942,11 +975,311 @@ impl<'a> Lowerer<'a> {
                 mir.vtables.push(vt);
             }
 
+            // §4.1 NARROW cancellation path: every FUTURE class (a class
+            // whose runtime-dispatch includes the `Future` async-protocol
+            // mixin — the only runtime-dispatch class the scheduler ever
+            // queues + drains) gets an extra `Drop` vtable appended INSIDE
+            // its existing class_info struct, at the slot AFTER the real
+            // runtime-dispatch mixins (slot 1, after `Future`@0). The Drop
+            // vtable's single entry is the concrete `<Class>_drop` when the
+            // class defines `def drop`, or a synthesised no-op
+            // `<Class>_drop_noop` otherwise.
+            //
+            // The slot is UNIFORM across all futures so the SINGLE
+            // `Drop_dynamic_drop(self)` helper the C drain calls can always
+            // read a valid fn pointer from `class_info[1]` — including
+            // futures with no user `def drop` (e.g. `PayloadFuture`,
+            // `__GFuture`), which the drain would otherwise dereference an
+            // out-of-bounds slot for. The no-op makes the drain a safe
+            // no-op for those.
+            //
+            // Gated on the `Future` mixin specifically (NOT all
+            // runtime-dispatch classes): a non-future runtime-dispatch
+            // class — e.g. a `Sized dispatch runtime` user mixin — is
+            // never queued/drained, so adding a Drop slot to it would only
+            // widen its class_info for no consumer. `Future` is the async
+            // *protocol* marker (same structural name async_lowering and
+            // mixin_vtables.spec.md key on), not per-type stdlib knowledge.
+            //
+            // This routes a drained/cancelled future's `def drop` through
+            // the class_info it already carries, WITHOUT making `mixin Drop`
+            // globally `dispatch runtime` and WITHOUT adding a header to
+            // any non-runtime-dispatch class.
+            // Spec: docs/decisions/zio-comparison-concurrency-adoption.md
+            // §4.1; docs/dev/concurrency-impl-plan.md Step 1/Increment 1.
+            let is_future = info.runtime_dispatch_includes.iter().any(|&m| {
+                self.symbols
+                    .get(m)
+                    .map(|d| d.name == "Future")
+                    .unwrap_or(false)
+            });
+            if is_future {
+                let class_has_user_drop = self.user_drop_classes.contains(&class_name)
+                    || self
+                        .user_drop_classes
+                        .iter()
+                        .any(|q| q.ends_with(&format!(".{}", class_name)));
+                let drop_method_sym = if class_has_user_drop {
+                    format!("{}_drop", class_name)
+                } else {
+                    // No user `def drop` → point the slot at a synthesised
+                    // no-op so the uniform-slot drain dispatch stays valid.
+                    drop_noop_classes.push(class_name.clone());
+                    format!("{}_drop_noop", class_name)
+                };
+                let drop_vt = crate::mir::nodes::MirVtable {
+                    mixin_name: "Drop".to_string(),
+                    class_name: class_name.clone(),
+                    method_symbols: vec![drop_method_sym],
+                };
+                class_vtable_syms.push(drop_vt.symbol());
+                mir.vtables.push(drop_vt);
+            }
+
             mir.class_infos.push(crate::mir::nodes::MirClassInfo {
                 class_name,
                 vtable_symbols: class_vtable_syms,
             });
         }
+
+        // Synthesise a no-op `<Class>_drop_noop(self) -> nil` for each
+        // runtime-dispatch class lacking a user `def drop`, so the Drop
+        // vtable slot above resolves to a real (trivial) symbol.
+        for class_name in drop_noop_classes {
+            mir.functions.push(self.build_drop_noop(&class_name));
+        }
+    }
+
+    /// Build a trivial `<Class>_drop_noop(self) -> nil` whose body is an
+    /// immediate `return`. Backs the uniform Drop vtable slot for a
+    /// FUTURE that defines no user `def drop`, so the single
+    /// `Drop_dynamic_drop` helper always resolves a valid fn pointer.
+    ///
+    /// SCOPE LIMIT (Increment 1): the no-op does NOT drop the future's
+    /// owned FIELDS / sub-futures. For a future that owns a droppable field
+    /// but declares no `def drop` (e.g. a synthesised `async def` state
+    /// machine that hoisted a droppable cross-suspend local), draining it
+    /// runs this no-op and that field's `def drop` does NOT fire — the same
+    /// leak as before this increment (drain previously fired NO drop at
+    /// all), so this is no regression. Synthesising per-state field-drop
+    /// glue for such futures is **Increment 2** (state-indexed drop glue,
+    /// docs/dev/concurrency-impl-plan.md). The no-op is the honest,
+    /// documented Increment-1 boundary, not a claim of complete cleanup.
+    /// §4.1 NARROW.
+    fn build_drop_noop(&self, class_name: &str) -> MirFunction {
+        let fn_name = format!("{}_drop_noop", class_name);
+        let mut mir_fn = MirFunction::new(&fn_name, Ty::Unit);
+        let self_local = mir_fn.new_local(
+            "self",
+            Ty::Class {
+                name: class_name.to_string(),
+                generic_args: vec![],
+            },
+            false,
+        );
+        mir_fn.params.push(self_local);
+        let entry = mir_fn.entry_block;
+        mir_fn.blocks[entry].terminator = Terminator::Return(None);
+        mir_fn
+    }
+
+    /// §4.1 Increment 2 — state-indexed drop glue for a synthesised async
+    /// `Future` state machine.
+    ///
+    /// Returns `Some((symbol_name, <Class>_drop))` when `class` is a synthesised
+    /// future state machine that owns droppable `__sub_i` sub-future fields, else
+    /// `None` (the caller then leaves the Increment-1 `_drop_noop` in place).
+    /// `symbol_name` is the module-qualified class name — IDENTICAL to the name
+    /// `collect_mixin_vtables` derives from the symbol table — so the Drop vtable
+    /// slot and the emitted `<symbol>_drop` agree even for a (hypothetical)
+    /// module-nested state machine.
+    ///
+    /// Ruxen has NO automatic per-field drop (see drops.rs /
+    /// drop-elaboration.md), so this destructor drops each owned sub-future
+    /// EXPLICITLY: a `__sub_i` is itself a `Future` (it carries the Drop vtable
+    /// slot Increment 1 added), so we drop it via the same
+    /// `Drop_dynamic_drop(self.__sub_i)` helper the C drain uses — its concrete
+    /// `<SubClass>_drop` runs (idempotent for a completed sub-future, e.g.
+    /// TimeSleepFuture guards on `handle != 0`) — then `ruxen_dealloc` frees its
+    /// heap block.
+    ///
+    /// SCOPE (Increment 2): we drop ONLY the `__sub_i` sub-future fields. These
+    /// are the resources that actually leak on drain/cancel (a parked sub-future
+    /// owns the reactor timer / fd / read-state) and they are the ONLY fields we
+    /// can prove are EAGERLY initialised at any `self.__state`: the state machine
+    /// `init` constructs every `__sub_i` at `.new()` time (`lower.rs` init body),
+    /// so dropping them is safe at every state. We deliberately do NOT drop
+    /// bare-named class fields here: a binding-result field (the `r` in
+    /// `let r = make().await`) is a non-`__` name with no synthesisable default,
+    /// so it holds UNINITIALISED memory until its await resolves — dropping it
+    /// while parked at an earlier state is UB (partial-init / spec §4.1 risk 2).
+    /// A pre-await crossing local IS eagerly inited and could be dropped, but at
+    /// MIR a crossing local is name-indistinguishable from a binding-result
+    /// field, so dropping cross-suspend user-drop locals needs the eager-vs-late
+    /// metadata threaded from async-lowering — tracked as a follow-up.
+    ///
+    /// Double-drop (risk 1): `<Class>_drop` is the SOLE dropper of `__sub_i` —
+    /// the poll body only BORROWS the field (`(&var self.__sub_i).poll(cx)`); the
+    /// pump never drops a completed future (`scheduler.c`); a spawned state
+    /// machine is tainted out of scope-exit drop (`task_spawn_move_by_ffi`); a
+    /// block_on root is scope-exit-dropped exactly once. So `__state` is not even
+    /// needed as a discriminant for the eager `__sub_i` set: each runs once.
+    fn synthesize_future_state_machine_drop(
+        &self,
+        class: &crate::hir::nodes::HirClassDef,
+        symbol_name: &str,
+    ) -> Option<MirFunction> {
+        use crate::resolve::symbols::DefKind;
+
+        // Must be a FUTURE (runtime-dispatch via the `Future` mixin) — the
+        // only runtime-dispatch class the scheduler queues/drains.
+        let info = match self.symbols.get(class.def_id) {
+            Some(d) => match &d.kind {
+                DefKind::Class { info } => info,
+                _ => return None,
+            },
+            None => return None,
+        };
+        let is_future = info.runtime_dispatch_includes.iter().any(|&m| {
+            self.symbols
+                .get(m)
+                .map(|d| d.name == "Future")
+                .unwrap_or(false)
+        });
+        if !is_future {
+            return None;
+        }
+        // Synthesised state machines carry a `__state` field. A hand-written
+        // future (TimeSleepFuture, etc.) defines its OWN `def drop` and is not
+        // touched here.
+        let has_state = class.fields.iter().any(|f| f.name == "__state");
+        if !has_state {
+            return None;
+        }
+        let class_has_user_drop_method = class.methods.iter().any(|m| m.name == "drop")
+            || class.impl_blocks.iter().any(|b| {
+                b.items.iter().any(|it| {
+                    matches!(it, crate::hir::nodes::HirImplItem::Method(m) if m.name == "drop")
+                })
+            });
+        if class_has_user_drop_method {
+            // A synthesised machine never authors its own `def drop`; if one is
+            // present this isn't ours to synthesise — bail.
+            return None;
+        }
+
+        // Collect the droppable `__sub_i` sub-future fields, in declaration
+        // order, with their MIR field index (after the runtime-dispatch
+        // class_info header shift). ONLY `__sub_i` futures — see SCOPE note.
+        let shift = self.class_field_index_shift(&class.name);
+        let mut sub_future_idxs: Vec<usize> = Vec::new();
+        for (decl_idx, field) in class.fields.iter().enumerate() {
+            let mir_idx = decl_idx + shift;
+            let field_class = match &field.ty {
+                Ty::Class { name, .. } => name.clone(),
+                _ => continue, // primitives / params / binding scalars: nothing to drop
+            };
+            if field.name.starts_with("__sub_") && self.class_is_future(&field_class) {
+                sub_future_idxs.push(mir_idx);
+            }
+        }
+
+        if sub_future_idxs.is_empty() {
+            // No owned sub-futures — the Increment-1 no-op is correct and
+            // cheaper. Leave it.
+            return None;
+        }
+
+        // Build `<symbol>_drop(self) -> nil`. Drop in REVERSE declaration order
+        // (LIFO, matching sync RAII / drops.rs).
+        //
+        // NULL-GUARD per sub-future (partial-init / spec §4.1 risk 2): a `__sub_i`
+        // is NOT always live. LINEAR state machines construct every `__sub_i`
+        // eagerly in `init`, but LOOP state machines (`lower_loop_via_cfg`)
+        // construct `__sub_i` LAZILY inside `poll` (init only zeroes
+        // `__sub_ready_i`), so a loop future drained BEFORE its first pump has a
+        // ZERO `__sub_i`. Calling `Drop_dynamic_drop(0)` would null-deref the
+        // class_info load. We therefore guard each drop on `self.__sub_i != 0`,
+        // dropping only constructed sub-futures — sound for BOTH shapes (and
+        // matching how hand-written futures guard, e.g. TimeSleepFuture's
+        // `if self.handle != 0`). A zero field is an un-constructed sub-future
+        // that owns no resource, so skipping it leaks nothing.
+        let fn_name = format!("{}_drop", symbol_name);
+        let mut mir_fn = MirFunction::new(&fn_name, Ty::Unit);
+        let self_local = mir_fn.new_local(
+            "self",
+            Ty::Class {
+                name: symbol_name.to_string(),
+                generic_args: vec![],
+            },
+            false,
+        );
+        mir_fn.params.push(self_local);
+
+        // Chain a guarded drop block per sub-future. `cur` is the block that
+        // performs the next check; it always ends in a Branch into a drop block
+        // (taken when the field is non-NULL) or the continue block.
+        let mut cur = mir_fn.entry_block;
+        for mir_idx in sub_future_idxs.iter().rev() {
+            // sub = self.__sub_i  (opaque pointer; Drop_dynamic_drop takes i64)
+            let field_local = mir_fn.new_temp(Ty::Int);
+            mir_fn.blocks[cur].instructions.push(MirInst::GetField {
+                dest: field_local,
+                base: self_local,
+                field_index: *mir_idx,
+            });
+            // is_live = (sub != 0)
+            let is_live = mir_fn.new_temp(Ty::Bool);
+            mir_fn.blocks[cur].instructions.push(MirInst::Compare {
+                dest: is_live,
+                op: CmpOp::NotEq,
+                lhs: MirValue::Use(field_local),
+                rhs: MirValue::Literal(Literal::Int(0)),
+            });
+            let drop_block = mir_fn.new_block();
+            let cont_block = mir_fn.new_block();
+            mir_fn.blocks[cur].terminator = Terminator::Branch {
+                cond: MirValue::Use(is_live),
+                then_block: drop_block,
+                else_block: cont_block,
+            };
+            // drop_block: Drop_dynamic_drop(sub) then free its heap block.
+            mir_fn.blocks[drop_block].instructions.push(MirInst::Call {
+                dest: None,
+                callee: "Drop_dynamic_drop".to_string(),
+                args: vec![MirValue::Use(field_local)],
+            });
+            mir_fn.blocks[drop_block].instructions.push(MirInst::Call {
+                dest: None,
+                callee: "ruxen_dealloc".to_string(),
+                args: vec![MirValue::Use(field_local)],
+            });
+            mir_fn.blocks[drop_block].terminator = Terminator::Goto(cont_block);
+            cur = cont_block;
+        }
+
+        mir_fn.blocks[cur].terminator = Terminator::Return(None);
+        Some(mir_fn)
+    }
+
+    /// True when the named class is a `Future` (its `runtime_dispatch_includes`
+    /// contains the `Future` mixin). Used to route a sub-future field's drop
+    /// through `Drop_dynamic_drop`. §4.1 Increment 2.
+    fn class_is_future(&self, class_name: &str) -> bool {
+        use crate::resolve::symbols::DefKind;
+        for def in self.symbols.iter() {
+            if def.name == *class_name {
+                if let DefKind::Class { info } = &def.kind {
+                    return info.runtime_dispatch_includes.iter().any(|&m| {
+                        self.symbols
+                            .get(m)
+                            .map(|d| d.name == "Future")
+                            .unwrap_or(false)
+                    });
+                }
+            }
+        }
+        false
     }
 
     /// Phase C: synthesize one `<Mixin>_dynamic_<method>` helper per
@@ -1042,18 +1375,178 @@ impl<'a> Lowerer<'a> {
                     continue;
                 };
 
-                let helper =
-                    self.build_dynamic_dispatch_helper(&mixin_name, method_name, method_idx, &sig);
+                // The real runtime-dispatch mixins occupy class_info
+                // slots 0..N in `runtime_dispatch_includes` order. v1
+                // ships exactly one (`Future` at slot 0), so the slot
+                // equals the mixin's index in that list. `Future` is
+                // always slot 0 today; the lookup keeps this honest if
+                // a second real runtime-dispatch mixin is ever added.
+                let mixin_slot = self.runtime_dispatch_mixin_slot(mixin_def_id).unwrap_or(0);
+                let helper = self.build_dynamic_dispatch_helper(
+                    &mixin_name,
+                    method_name,
+                    mixin_slot,
+                    method_idx,
+                    &sig,
+                );
                 mir.functions.push(helper);
             }
         }
+
+        // §4.1 NARROW: synthesise the SINGLE `Drop_dynamic_drop(self)` if
+        // ANY future emitted a `Drop` vtable above. The Drop vtable sits at
+        // the class_info slot AFTER all real runtime-dispatch mixins — slot
+        // 1 for every future (Future at 0). One helper serves all futures
+        // ONLY because they share that slot index: today every future has
+        // exactly one real runtime-dispatch mixin (`Future`), so the Drop
+        // slot is uniformly 1. We compute the set of distinct slots and
+        // assert it is a singleton — if a future ever carries a second real
+        // runtime-dispatch mixin (Drop@2), one shared helper would dispatch
+        // the wrong slot and this assert fires (telling us to key the helper
+        // per-slot). The drop method has a uniform `(self) -> nil` shape, so
+        // no signature recovery from the symbol table is needed.
+        // All `Drop` vtables today belong to FUTURE classes (we only append a
+        // Drop slot for futures — `collect_mixin_vtables`). If a non-future Drop
+        // vtable were ever added, `drop_vtable_slot_for_class` would return its
+        // `runtime_dispatch_includes.len()` (0 for a non-future), diverging from
+        // futures' slot 1 → the hard assert below trips loudly. So scanning all
+        // Drop vtables is safe: a stray non-future entry cannot silently
+        // miscompile, it fails the singleton-slot assert.
+        let drop_slots: std::collections::BTreeSet<usize> = mir
+            .vtables
+            .iter()
+            .filter(|vt| vt.mixin_name == "Drop")
+            .map(|vt| self.drop_vtable_slot_for_class(&vt.class_name))
+            .collect();
+        // HARD assert (not debug_assert): a release build must NOT silently
+        // miscompile if this invariant is ever violated. One shared
+        // `Drop_dynamic_drop` reads a FIXED class_info slot, so it is only
+        // correct when every future puts its Drop vtable at the SAME slot.
+        // Today every future has exactly one real runtime-dispatch mixin
+        // (`Future`@0), so Drop is uniformly @1. If a future ever carries a
+        // second runtime-dispatch mixin (v2 — spec "out of scope"), Drop
+        // lands at a different slot and the single helper would dispatch the
+        // wrong slot (out-of-bounds read on the lower-slot futures). When
+        // that day comes, key `Drop_dynamic_drop` per-slot; until then fail
+        // loudly rather than miscompile.
+        assert!(
+            drop_slots.len() <= 1,
+            "Drop_dynamic_drop assumes a uniform Drop class_info slot across \
+             futures, but found multiple: {:?}. A future now carries >1 real \
+             runtime-dispatch mixin — Drop_dynamic_drop must be keyed per slot \
+             (see docs/dev/concurrency-impl-plan.md Increment 1).",
+            drop_slots
+        );
+        if let Some(&drop_slot) = drop_slots.iter().next_back() {
+            mir.functions
+                .push(self.build_drop_dynamic_helper(drop_slot));
+        }
+    }
+
+    /// The class_info slot index where the `Drop` vtable lives for a
+    /// runtime-dispatch class: after all real runtime-dispatch mixins.
+    /// For every async future this is 1 (Future occupies slot 0).
+    fn drop_vtable_slot_for_class(&self, class_name: &str) -> usize {
+        use crate::resolve::symbols::DefKind;
+        for def in self.symbols.iter() {
+            if def.name == *class_name {
+                if let DefKind::Class { info } = &def.kind {
+                    return info.runtime_dispatch_includes.len();
+                }
+            }
+        }
+        // Defensive: a Drop vtable was emitted for this class only
+        // because it is a runtime-dispatch class, so the lookup should
+        // always succeed; fall back to slot 1 (the future layout).
+        1
+    }
+
+    /// Slot index of a real runtime-dispatch mixin within a class's
+    /// class_info. Returns the position of `mixin_def_id` across all
+    /// runtime-dispatch classes (the order is stable per spec §B8); v1
+    /// ships a single such mixin (`Future`) so this is always 0.
+    fn runtime_dispatch_mixin_slot(&self, mixin_def_id: DefId) -> Option<usize> {
+        use crate::resolve::symbols::DefKind;
+        for def in self.symbols.iter() {
+            if let DefKind::Class { info } = &def.kind {
+                if let Some(idx) = info
+                    .runtime_dispatch_includes
+                    .iter()
+                    .position(|&m| m == mixin_def_id)
+                {
+                    return Some(idx);
+                }
+            }
+        }
+        None
+    }
+
+    /// Build `Drop_dynamic_drop(self) -> nil`: read the Drop vtable from
+    /// `self`'s class_info at `drop_slot`, then call its single
+    /// `<Class>_drop(self)` entry. Mirrors `build_dynamic_dispatch_helper`
+    /// but is hand-rolled because `Drop` is not a runtime-dispatch mixin
+    /// (no `DefKind::Method` contract to recover the signature from) and
+    /// the drop method shape is the fixed `(self) -> nil`. §4.1 NARROW.
+    fn build_drop_dynamic_helper(&self, drop_slot: usize) -> MirFunction {
+        let mut mir_fn = MirFunction::new("Drop_dynamic_drop", Ty::Unit);
+
+        let self_local = mir_fn.new_local(
+            "self",
+            Ty::Class {
+                name: "__dyn_self".to_string(),
+                generic_args: vec![],
+            },
+            false,
+        );
+        mir_fn.params.push(self_local);
+
+        let entry = mir_fn.entry_block;
+
+        // class_info = self[0]
+        let class_info = mir_fn.new_temp(Ty::Int);
+        mir_fn.blocks[entry].instructions.push(MirInst::GetField {
+            dest: class_info,
+            base: self_local,
+            field_index: 0,
+        });
+
+        // drop_vtable = class_info[drop_slot]
+        let drop_vtable = mir_fn.new_temp(Ty::Int);
+        mir_fn.blocks[entry].instructions.push(MirInst::GetField {
+            dest: drop_vtable,
+            base: class_info,
+            field_index: drop_slot,
+        });
+
+        // drop_ptr = drop_vtable[0]  (single-method Drop vtable)
+        let drop_ptr = mir_fn.new_temp(Ty::Int);
+        mir_fn.blocks[entry].instructions.push(MirInst::GetField {
+            dest: drop_ptr,
+            base: drop_vtable,
+            field_index: 0,
+        });
+
+        // drop_ptr(self) — result discarded (drop returns nil).
+        mir_fn.blocks[entry]
+            .instructions
+            .push(MirInst::CallIndirect {
+                dest: None,
+                callee: drop_ptr,
+                args: vec![MirValue::Use(self_local)],
+            });
+
+        mir_fn.blocks[entry].terminator = Terminator::Return(None);
+        mir_fn
     }
 
     /// Build one `<Mixin>_dynamic_<method>` MIR function. See spec §B5.
+    /// `mixin_slot` is the mixin's position in the class_info struct
+    /// (0 for `Future` in v1).
     fn build_dynamic_dispatch_helper(
         &self,
         mixin_name: &str,
         method_name: &str,
+        mixin_slot: usize,
         method_idx: usize,
         sig: &crate::resolve::symbols::FnSignature,
     ) -> MirFunction {
@@ -1092,12 +1585,12 @@ impl<'a> Lowerer<'a> {
             field_index: 0,
         });
 
-        // vtable = class_info[mixin_slot]  — v1: mixin_slot is 0 (single-mixin)
+        // vtable = class_info[mixin_slot]  — v1: `Future` is slot 0.
         let vtable = mir_fn.new_temp(Ty::Int);
         mir_fn.blocks[entry].instructions.push(MirInst::GetField {
             dest: vtable,
             base: class_info,
-            field_index: 0,
+            field_index: mixin_slot,
         });
 
         // method_ptr = vtable[method_idx]

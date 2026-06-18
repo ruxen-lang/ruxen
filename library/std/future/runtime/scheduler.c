@@ -80,6 +80,24 @@
  * for v1). */
 int64_t Future_dynamic_poll(int64_t self, int64_t ctx);
 
+/* §4.1 NARROW cancellation path: the compiler synthesises ONE
+ * `Drop_dynamic_drop(self)` (MIR `build_drop_dynamic_helper`) whenever the
+ * program has ANY future (a class including `Future dispatch runtime`). It
+ * reads the Drop vtable from the future's class_info (slot AFTER Future)
+ * and calls the concrete `<Class>_drop(self)` — or a synthesised no-op for
+ * a future that declared no `def drop` (so the lookup is always valid).
+ * `ruxen_executor_drain_remaining` calls it on every still-queued/parked
+ * future before freeing the queue entry, so a drained/cancelled future
+ * runs its `def drop` (reactor deregister, fd close, refcount release)
+ * instead of leaking. Declared `__weak` so a program with NO future at all
+ * (the helper is then never emitted) still links — the drain no-ops the
+ * call (NULL symbol guarded below). NOTE: the NULL case is "no futures in
+ * the program", NOT "no future defines drop" — a no-user-drop future still
+ * emits the helper (pointing its Drop slot at the no-op).
+ * Spec: docs/decisions/zio-comparison-concurrency-adoption.md §4.1;
+ * docs/dev/concurrency-impl-plan.md Increment 1. */
+__attribute__((weak)) void Drop_dynamic_drop(int64_t self);
+
 /* Forward decl into Context factory (executor.c). The pump call
  * needs a Context pointer to pass into each Future_dynamic_poll;
  * the AST-level block_on rewriter already constructs one per
@@ -346,25 +364,39 @@ int64_t ruxen_executor_pump_tasks(void) {
 
 /* ---------------------------------------------------------------------
  * Drain remaining tasks at block_on exit. Spec §B10: every still-
- * queued task's future has its drop method fire — clean up reactor
- * registrations, fds, etc. v1 ships WITHOUT calling user-defined
- * `def drop` on the dropped future heap blocks (Drop mixin is not
- * yet runtime-dispatched — see mixin_vtables.spec.md §B9 + §B11).
- * The futures' OS-side registrations leak per task in the v1 ship;
- * spec §B10 acknowledges this as the v1 trade-off. Once Drop joins
- * the runtime-dispatched mixin set, swap in the call to
- * `Drop_dynamic_drop(future_ptr)` here.
+ * queued task's future has its `def drop` fire — clean up reactor
+ * registrations, fds, etc.
  *
- * For v1 we DO free the queue entries + drop the queue-side handle
- * refcount, but leave the future heap blocks themselves alone (no
- * way to free them without their drop fn anyway). This matches the
- * "v1 leak the future heap blocks" carve-out in the scheduler.c
- * header comment.
+ * §4.1 NARROW cancellation path (docs/dev/concurrency-impl-plan.md
+ * Increment 1): we now call `Drop_dynamic_drop(future_ptr)` on every
+ * still-queued/parked future BEFORE freeing the queue entry. The
+ * compiler routes this through the Drop vtable slot it added to the
+ * future's existing class_info (no global `mixin Drop dispatch runtime`),
+ * so the concrete `<Class>_drop(self)` runs — deregistering the reactor
+ * timer, closing the fd, releasing the refcount the hand-written future
+ * `def drop`s own. `Drop_dynamic_drop` is `__weak`: a program with no
+ * drop-defining future never emits the helper, so the symbol is NULL and
+ * we skip the call (the future then carries no `def drop` to run anyway).
+ *
+ * Drop ordering: we run the future's `def drop` first (it may touch the
+ * reactor via `ruxen_reactor_current_handle()`), THEN release the
+ * queue-side handle refcount and the Context. The future heap block
+ * itself is still leaked here — freeing it needs an allocator-side
+ * companion (a `ruxen_dealloc(future_ptr)` after drop) tracked as the
+ * residual; the user-visible RESOURCE leak (fds/timers/refcounts) is
+ * what `def drop` releases and is now closed.
  */
 void ruxen_executor_drain_remaining(void) {
     RuxenTaskEntry *cur = t_queue_head;
     while (cur) {
         RuxenTaskEntry *next = cur->next;
+        /* Run the future's `def drop` (or its no-op) before tearing
+         * down the queue bookkeeping. The weak symbol is NULL (call
+         * skipped) only when the program has NO future at all, so the
+         * helper was never emitted. */
+        if (Drop_dynamic_drop && cur->future_ptr) {
+            Drop_dynamic_drop(cur->future_ptr);
+        }
         /* Decrement handle refcount; free if no caller holds it
          * (rare — usually the caller has dropped its TaskHandle by
          * the time block_on exits; the join-fence in B6 is the

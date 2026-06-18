@@ -1,0 +1,56 @@
+## Increment 1 of the concurrency adoption (§4.1 foundation):
+## a future that is DRAINED (never completed) must run its `def drop`.
+## Pre-fix, `ruxen_executor_drain_remaining` freed the queue entry but
+## NEVER called the future's user `def drop` (Drop was not runtime-
+## dispatched), so the sentinel below would NOT print. The fix routes
+## the drop through a Drop vtable slot added to the future's EXISTING
+## class_info (the NARROW path — no global `mixin Drop dispatch runtime`,
+## no layout change to non-future classes). The drain now calls
+## `Drop_dynamic_drop(future_ptr)` per still-queued future.
+## See docs/dev/concurrency-impl-plan.md (Increment 1) and the drain
+## hook in library/std/future/runtime/scheduler.c.
+##
+## Shape: the driver spawns a `LeakSentinel` future that stays Pending
+## forever (it never completes), then returns Ready(0) immediately.
+## After block_on, the sentinel is still on the scheduler queue. The
+## program then calls `ruxen_executor_drain_remaining()` explicitly
+## (the v1 teardown surface — the automatic block_on-exit/Scope drain
+## is a follow-up tied to §4.2 task ownership). Drain fires
+## `LeakSentinel_drop` via `Drop_dynamic_drop`; the printed line is the
+## OBSERVABLE proof the drop ran on a drained, never-completed future.
+
+class LeakSentinel
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(p: Int)
+    self.payload = p
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    # Never completes: always Pending. It exists only to be drained.
+    Poll.Pending
+  end
+
+  def drop
+    puts "dropped on drain payload=#{self.payload}"
+  end
+end
+
+## Driver: spawn one never-completing sentinel, then return Ready(0)
+## right away. block_on exits with the sentinel still on the queue.
+async def driver -> Int
+  let f = LeakSentinel.new(7)
+  let h = Task.spawn_raw(f)
+  0
+end
+
+def main
+  let r = block_on(driver())
+  puts "driver returned #{r}"
+  # Explicit teardown: drain the still-queued sentinel. Its `def drop`
+  # fires via Drop_dynamic_drop — the Increment 1 mechanism.
+  ruxen_executor_drain_remaining()
+  puts "drained"
+end

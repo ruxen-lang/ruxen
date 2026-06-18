@@ -3026,6 +3026,19 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
     // The loop is the block's trailing expression — typeck infers its
     // type from break-with-value, so the block evaluates to the
     // future's Output type.
+    //
+    // §4.1 NARROW (Increment 1) note: we deliberately do NOT auto-emit
+    // `ruxen_executor_drain_remaining()` at block_on exit here. The
+    // v1 surface supports the legitimate "spawn in async, then hand-pump
+    // the queue from sync code AFTER block_on returns" pattern (fixture
+    // `task_spawn_move_by_ffi` / 728-style); an eager block_on-exit drain
+    // would free those still-queued tasks out from under the post-block_on
+    // pump loop. Increment 1 lands the DROP MECHANISM (the C drain calls
+    // `Drop_dynamic_drop` per still-queued future) and exposes
+    // `ruxen_executor_drain_remaining` as an explicit teardown call; the
+    // automatic block_on-exit/Scope-drop drain is a follow-up tied to the
+    // §4.2 Scope ownership model (which decides who OWNS spawned tasks).
+    // See docs/dev/concurrency-impl-plan.md Increment 1.
     let outer_block = Block {
         statements: vec![let_fut, let_ctx, Statement::Expression(loop_expr)],
         span: span.clone(),

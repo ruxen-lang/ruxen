@@ -799,3 +799,163 @@ fn dynamic_dispatch_helper_synthesized_per_mixin_method() {
         "helper must emit a CallIndirect on the method pointer",
     );
 }
+
+// ─── §4.1 NARROW cancellation path — Drop vtable in future class_info ──
+//
+// docs/dev/concurrency-impl-plan.md Increment 1. A FUTURE class (a class
+// whose runtime-dispatch includes the `Future` async-protocol mixin) gets
+// a second `Drop` vtable appended INSIDE its existing class_info struct —
+// slot 1 (after `Future`@slot0). The slot holds the concrete `<Class>_drop`
+// when the future defines `def drop`, or a synthesised no-op otherwise (so
+// the uniform-slot drain dispatch is valid for every future). This routes a
+// drained/cancelled future's `def drop` through the class_info it already
+// carries, so the C scheduler can fire it via `Drop_dynamic_drop`, WITHOUT
+// promoting `mixin Drop` to global `dispatch runtime` and WITHOUT changing
+// the layout of any non-future class.
+
+/// A future with `def drop` carries [Future, Drop] in its class_info
+/// (Future@0, Drop@1). The instance header stays a single offset-0
+/// class_info pointer (field-index shift stays 1, not 2) — the class_info
+/// STRUCT widens, the instance does NOT.
+#[test]
+fn runtime_dispatch_class_with_drop_gets_drop_vtable_slot() {
+    let mir = lower_fixture("runtime_dispatch_class_with_drop_gets_drop_vtable");
+
+    // class_info for Sentinel: two slots, Future then Drop.
+    let ci = mir
+        .class_infos
+        .iter()
+        .find(|c| c.class_name == "Sentinel")
+        .expect("Sentinel must have a class_info (it is a future)");
+    assert_eq!(
+        ci.vtable_symbols,
+        vec![
+            "__rx_vtable_Future_for_Sentinel".to_string(),
+            "__rx_vtable_Drop_for_Sentinel".to_string(),
+        ],
+        "Sentinel class_info must hold Future@slot0 + Drop@slot1, in order",
+    );
+
+    // The Drop vtable's single method symbol is the concrete <Class>_drop.
+    let drop_vt = mir
+        .vtables
+        .iter()
+        .find(|v| v.class_name == "Sentinel" && v.mixin_name == "Drop")
+        .expect("Sentinel must emit a Drop vtable");
+    assert_eq!(
+        drop_vt.method_symbols,
+        vec!["Sentinel_drop".to_string()],
+        "Drop vtable's single entry is the concrete Sentinel_drop",
+    );
+
+    // A future WITHOUT a user `def drop` still gets a uniform Drop slot,
+    // but it points at a synthesised no-op so the C drain's single
+    // `Drop_dynamic_drop` helper never reads an out-of-bounds slot.
+    let nodrop_ci = mir
+        .class_infos
+        .iter()
+        .find(|c| c.class_name == "NoDropFuture")
+        .expect("NoDropFuture must have a class_info (it is a future)");
+    assert_eq!(
+        nodrop_ci.vtable_symbols,
+        vec![
+            "__rx_vtable_Future_for_NoDropFuture".to_string(),
+            "__rx_vtable_Drop_for_NoDropFuture".to_string(),
+        ],
+        "NoDropFuture must STILL carry a Drop slot (pointing at a no-op)",
+    );
+    let nodrop_vt = mir
+        .vtables
+        .iter()
+        .find(|v| v.class_name == "NoDropFuture" && v.mixin_name == "Drop")
+        .expect("NoDropFuture must emit a Drop vtable");
+    assert_eq!(
+        nodrop_vt.method_symbols,
+        vec!["NoDropFuture_drop_noop".to_string()],
+        "NoDropFuture's Drop slot points at the synthesised no-op",
+    );
+    assert!(
+        mir.functions
+            .iter()
+            .any(|f| f.name == "NoDropFuture_drop_noop"),
+        "the NoDropFuture_drop_noop MIR fn must be synthesised",
+    );
+
+    // The single Drop_dynamic_drop helper is synthesised once.
+    let drop_helpers: Vec<_> = mir
+        .functions
+        .iter()
+        .filter(|f| f.name == "Drop_dynamic_drop")
+        .collect();
+    assert_eq!(
+        drop_helpers.len(),
+        1,
+        "exactly one Drop_dynamic_drop helper is synthesised",
+    );
+
+    // The helper reads class_info(slot0) then the Drop vtable at slot 1,
+    // then the drop fn at vtable[0], then an indirect call: GetFields at
+    // [0, 1, 0] + a CallIndirect.
+    let helper = drop_helpers[0];
+    let mut get_field_slots: Vec<usize> = Vec::new();
+    let mut saw_call_indirect = false;
+    for block in &helper.blocks {
+        for inst in &block.instructions {
+            match inst {
+                ruxen_core::mir::nodes::MirInst::GetField { field_index, .. } => {
+                    get_field_slots.push(*field_index);
+                }
+                ruxen_core::mir::nodes::MirInst::CallIndirect { .. } => {
+                    saw_call_indirect = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(
+        get_field_slots,
+        vec![0, 1, 0],
+        "Drop_dynamic_drop must load class_info@0, drop_vtable@1, drop_fn@0",
+    );
+    assert!(
+        saw_call_indirect,
+        "Drop_dynamic_drop must indirectly call the concrete drop fn",
+    );
+}
+
+/// LAYOUT STABILITY (the narrow-path proof): a plain droppable class that
+/// does NOT include a runtime-dispatch mixin emits ZERO vtable and ZERO
+/// class_info — its instance layout stays flat (no offset-0 header). The
+/// Drop-vtable mechanism is keyed strictly on runtime-dispatch classes, so
+/// the broad-path ABI change (a header on every droppable class) is avoided.
+#[test]
+fn plain_droppable_class_layout_unchanged_by_drop_vtable() {
+    let mir = lower_fixture("runtime_dispatch_class_with_drop_gets_drop_vtable");
+
+    let plain_vtables: Vec<_> = mir
+        .vtables
+        .iter()
+        .filter(|v| v.class_name == "PlainResource")
+        .collect();
+    assert!(
+        plain_vtables.is_empty(),
+        "PlainResource has def drop but no runtime-dispatch mixin → no \
+         vtable (no Drop vtable either), got: {:?}",
+        plain_vtables.iter().map(|v| v.symbol()).collect::<Vec<_>>()
+    );
+
+    let plain_class_infos: Vec<_> = mir
+        .class_infos
+        .iter()
+        .filter(|c| c.class_name == "PlainResource")
+        .collect();
+    assert!(
+        plain_class_infos.is_empty(),
+        "PlainResource must emit no class_info (layout stays flat, no \
+         offset-0 header), got: {:?}",
+        plain_class_infos
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+    );
+}

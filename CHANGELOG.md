@@ -8,6 +8,88 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Cooperative async cancellation + block_on-exit root-future drop (concurrency
+  §4.1 foundation, Increment 3 — Feature #1 COMPLETE).** A leaf future can now
+  observe a cooperative cancel bit at its `poll`/await boundary via
+  `cx.cancelled?` (or the bare free fn `ruxen_cancel_requested()`) and
+  early-return instead of parking forever; the early return lets the awaiting
+  `async def` state machine complete, and its drop then fires the Increment-2
+  state-indexed glue so live `__sub_i` sub-futures are cleaned up. Surface:
+  `ruxen_request_cancel()` / `ruxen_clear_cancel()` / `ruxen_cancel_requested()`
+  (module-level lib decls) + `Context.cancelled?`, all backed by a `_Thread_local`
+  flag in `executor.c` — chosen because the user async-fn body never sees `cx`
+  (only the synthesised `poll(cx)` does), exactly mirroring the thread-local
+  reactor handle. COOPERATIVE: it only takes effect where a future CHECKS the
+  bit — it does NOT preempt an await-free compute loop (spec §4.1 risk 5). The
+  flag is thread-scoped and persists across `block_on` calls until
+  `ruxen_clear_cancel()` (so a cancel requested before `block_on` is observed).
+  **Also fixes a pre-existing leak this surfaced:** a `block_on(async_fn())` root
+  future was NEVER scope-exit-dropped (its local is assigned from a wrapper-call
+  result, which the conservative dealloc analysis tainted), so the root future +
+  its sub-futures leaked on every block_on. Drop elaboration now force-roots a
+  `__block_on_fut_*` Future-typed local — but ONLY when it is structurally never
+  consumed (never passed by-value, stored, moved, or returned; a genuine
+  block_on root is only borrowed by `poll`), so a same-named user local that IS
+  consumed is left tainted (no double-free). This is the spec §4.1 "block_on-exit
+  path calls Drop_dynamic_drop on the future." Pins:
+  `396_async_cooperative_cancel.rx` (cancel → early-return → drop glue fires),
+  `397_block_on_fut_name_collision_safe.rx` (consumed same-named local NOT
+  force-rooted — no double-free), `398_cancel_flag_persists_until_clear.rx`
+  (cancel persists across block_on until clear).
+- **State-indexed drop glue on async future state machines (concurrency §4.1
+  foundation, Increment 2).** A synthesised `async def` state machine owns its
+  awaited sub-futures (`self.__sub_i`) — each itself a `Future` holding the
+  parked resource (reactor timer / fd / read-state). Ruxen has NO automatic
+  per-field drop, so before this increment a drained/cancelled state-machine
+  future ran the Increment-1 `_drop_noop` and those sub-futures' `def drop`s
+  never fired (the reactor slot / fd leaked). MIR now synthesises the state
+  machine's real `<Future>_drop` (`synthesize_future_state_machine_drop`, gated on
+  `include Future` + a `__state` field) that drops each owned `__sub_i`
+  sub-future via the Increment-1 `Drop_dynamic_drop(self.__sub_i)` helper (its
+  concrete `<SubClass>_drop` runs) + `ruxen_dealloc`, in reverse declaration
+  order. Registering the synthesised drop makes the state machine a user-drop
+  class so Increment 1 points its Drop vtable slot at the real drop (not the
+  no-op).
+  **Double-drop safety:** `<Future>_drop` is the SOLE dropper of `__sub_i` (the
+  poll body only *borrows* `self.__sub_i` to poll it; the pump never drops
+  completed futures; a spawned future is tainted out of scope-exit drop), so each
+  sub-future is dropped exactly once.
+  **Partial-init safety (spec §4.1 risk 2):** each sub-future drop is NULL-guarded
+  (`if self.__sub_i != 0`). Linear state machines build every `__sub_i` eagerly
+  in `init`; LOOP state machines build them LAZILY inside `poll` (init only zeroes
+  `__sub_ready_i`), so a loop future drained before its first pump has a zero
+  `__sub_i` — the guard skips it instead of dereferencing a NULL class_info. Bare-
+  named await-binding fields (the `r` in `let r = make().await`) are deliberately
+  NOT dropped: they have no synthesisable default and hold uninitialised memory
+  until their await resolves; dropping cross-suspend user-drop locals needs eager-
+  vs-late metadata threaded from async-lowering and is a tracked follow-up. Pins:
+  `392_async_subfuture_drop_on_drain.rx` (drained-while-parked sub-future drop
+  fires), `393_async_drop_count_exactly_once.rx` (exactly-once / second-drain
+  no-op), `394_async_binding_not_dropped_uninit.rx` (droppable-Output binding NOT
+  dropped while uninitialised — no UB), `395_async_loop_drain_before_pump.rx`
+  (loop future drained before first pump — zero `__sub_0` skipped, no crash). No
+  non-future class layout changes.
+- **Async cancellation/drain runs a future's `def drop` (concurrency §4.1
+  foundation, Increment 1).** A future that is *drained* (still queued, never
+  completed) now runs its user `def drop` — closing the leak the scheduler
+  conceded (`library/std/future/runtime/scheduler.c` drain hook previously freed
+  the queue entry but never fired the future's drop). The fix uses the **NARROW**
+  path (`docs/dev/concurrency-impl-plan.md` Step 1): a `Drop` vtable slot is
+  appended INSIDE the *existing* class_info every future already carries via
+  `mixin Future dispatch runtime` (slot 1, after `Future`@0), so the C drain calls
+  a synthesised `Drop_dynamic_drop(future_ptr)` to reach the concrete
+  `<Class>_drop`. Futures with no `def drop` get a synthesised no-op in that slot
+  so the uniform drain dispatch never reads out of bounds. This is gated on the
+  `Future` mixin specifically — `mixin Drop` is NOT promoted to global
+  `dispatch runtime`, and **no non-future class layout changes** (the spec §4.1
+  risk-4 broad-ABI change is avoided). `ruxen_executor_drain_remaining` is the
+  explicit teardown surface that fires it; the automatic block_on-exit/Scope drain
+  is a follow-up tied to §4.2 task ownership. Pins:
+  `tests/release-e2e/cases/391_async_drop_on_drain.rx` (drop fires on a drained,
+  never-completed spawned future) + layout-stability pins in
+  `compiler/ruxen_core/tests/mixin_vtables.rs`
+  (`runtime_dispatch_class_with_drop_gets_drop_vtable_slot`,
+  `plain_droppable_class_layout_unchanged_by_drop_vtable`).
 - **macOS native backends: compile `.m` Objective-C runtime shims + opt-in
   framework linking.** `find_runtime_sources` now compiles `runtime/*.m`
   (Objective-C — clang detects it by extension) alongside `.c`, and a new opt-in

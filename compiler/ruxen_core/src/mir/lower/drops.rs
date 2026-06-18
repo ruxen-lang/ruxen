@@ -787,6 +787,63 @@ fn compute_dealloc_safe_locals(
         }
     }
 
+    // §4.1 Increment 3 — drop the block_on ROOT future at block_on exit.
+    //
+    // The block_on rewriter emits `var __block_on_fut_N = <fut_expr>`, where
+    // `<fut_expr>` is an async-fn wrapper call (`worker()`) returning a fresh
+    // `__*Future`. The conservative user-callee taint rule marks that
+    // call-result local NOT-alloc-rooted, so `__block_on_fut_N` was never
+    // scope-exit-dropped — the root future (and, via the Increment-2 glue, its
+    // live `__sub_i` sub-futures) LEAKED on every `block_on(async_fn())`, and a
+    // cooperatively-cancelled future's resources were never cleaned. Force such
+    // a local back into `alloc_rooted` so `insert_drops` emits its
+    // `<Class>_drop` (Increment-2 glue) + `ruxen_dealloc`. This is the spec
+    // §4.1 "block_on-exit path calls Drop_dynamic_drop on the future".
+    //
+    // SOUNDNESS is STRUCTURAL, not by name: we force-root only when the local
+    // is NEVER CONSUMED — never passed by-value to a call, stored into an
+    // aggregate (`SetField`), moved/copied/assigned INTO another local, or
+    // returned. A genuine block_on root is only ever BORROWED
+    // (`(&var fut).poll(cx)`), so it satisfies this; a (hypothetical) user
+    // local that merely shares the `__block_on_fut_` name but IS consumed (e.g.
+    // moved into another call) fails the check and is left tainted — no
+    // double-free. The name prefix only SCOPES the rule to compiler-generated
+    // block_on roots (cheap filter); the consume check is what makes it safe.
+    let mut consumed: HashSet<LocalId> = HashSet::new();
+    for block in &func.blocks {
+        for inst in &block.instructions {
+            match inst {
+                MirInst::Call { args, .. } | MirInst::CallIndirect { args, .. } => {
+                    for a in args {
+                        if let MirValue::Use(l) = a {
+                            consumed.insert(*l);
+                        }
+                    }
+                }
+                MirInst::SetField { value, .. } | MirInst::Assign { value, .. } => {
+                    if let MirValue::Use(l) = value {
+                        consumed.insert(*l);
+                    }
+                }
+                MirInst::Copy { src, .. } | MirInst::Move { src, .. } => {
+                    consumed.insert(*src);
+                }
+                _ => {}
+            }
+        }
+        if let Terminator::Return(Some(MirValue::Use(l))) = &block.terminator {
+            consumed.insert(*l);
+        }
+    }
+    for local in &func.locals {
+        if local.name.starts_with("__block_on_fut_")
+            && matches!(local.ty, Ty::Class { .. })
+            && !consumed.contains(&local.id)
+        {
+            alloc_rooted.insert(local.id);
+        }
+    }
+
     alloc_rooted
 }
 
