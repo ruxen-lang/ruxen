@@ -1,0 +1,6 @@
+scope start
+ok1 ran
+failing ran
+ok2 ran
+errors=1
+scope done

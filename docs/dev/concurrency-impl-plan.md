@@ -295,6 +295,120 @@ Codex high finding).
 
 ---
 
+## Feature #2 — Structured task `Scope` (spec §4.2)
+
+The keystone: a `Scope` value that OWNS its spawned children and whose `def drop`
+joins-then-cancels every still-pending child before control leaves the block, so
+a detached/leaked async task is unrepresentable. Built as a `.rx` class over the
+thread-local scheduler (`ruxen_executor_spawn`), the `Future` mixin, and the §4.1
+drop machinery — plus ONE small additive scheduler primitive (per-handle cancel).
+
+### Surface decision (honest — what the current lowering supports)
+
+The spec sketch is `Scope.open do |s| ... s.spawn { || fetch(u).await } ... s.collect.await ... end`.
+Two pieces of that sketch are NOT supported by the current lowering, verified
+against source this session:
+- **async closures** — `s.spawn { || fetch(u).await }` needs a closure body
+  containing `.await` lowered into a spawnable future. `async_lowering/lower.rs:2486`
+  treats closure bodies as "a separate async scope — opaque to this scan": async
+  closures are NOT lowered into state machines. So **`s.spawn` takes an already-
+  constructed FUTURE VALUE** — `s.spawn(fetch(u))`, where `fetch` is a top-level
+  `async def` (which IS lowered to a wrapper returning its `__*Future`). This is
+  the `Task.spawn_raw(future_ptr)` precedent.
+- **`s.collect.await` as an async method** — async methods on classes are
+  unlowered (only top-level free fns). So **`collect` is a SYNCHRONOUS method that
+  pumps the thread-local scheduler** (`ruxen_executor_pump_tasks()` in a loop)
+  until every child handle reports `TaskHandle.is_done` — the same hand-pump the
+  v1 728 spawn-join surface uses, no `.await` needed. `Scope.open` is therefore
+  callable from SYNC code (it drives async internally, like `block_on`).
+
+So the v1 surface is:
+```ruxen
+Scope.open do |s|        # s: &var Scope, yielded by Scope.open (immediately-invoked do…end)
+  s.spawn(work_a())      # work_a / work_b are top-level `async def`s → future values
+  s.spawn(work_b())
+  s.collect              # SYNC pump: drive all children to completion (fail-fast)
+end                      # <- Scope#drop: cancel any still-pending child (fires its def drop)
+```
+
+### Per-scope cancel — the one new runtime primitive
+
+`drain_remaining` (§4.1) drains the ENTIRE thread-local queue — wrong for a Scope
+that must cancel only ITS OWN children (nested scopes / mixed block_on roots must
+be untouched). The scheduler has per-handle `is_done`/`result`/`drop_handle`
+(refcount) but NO per-handle cancel. Add ONE additive C primitive:
+`ruxen_executor_cancel_task(handle)` — find the queue entry whose `handle ==`
+the arg, fire `Drop_dynamic_drop(future_ptr)` on it (the §4.1 path), unlink + free
+the entry, and mark the handle `done` so a dangling join resolves. `Scope#drop`
+calls it per still-pending child. This is the only runtime addition; everything
+else is `.rx`.
+
+### Raw-`Int` handle wall-off (spec §4.2 risk 4)
+
+`s.spawn` records the child's raw `Int` handle in the Scope's private
+`Array[Int]` field and returns `nil` (NOT the handle) — so a child handle cannot
+escape the scope to be copied out / joined out-of-band, which would break the
+ownership/borrow guarantee. The scope is the sole holder of its children's
+handles; `collect`/`drop` are the only ways to observe/cancel them.
+
+### Increments (TDD)
+
+> **Pin-numbering scheme.** Feature #1 occupies `391`–`398` (committed). Cases
+> `399`–`411` are contended (`401`–`411` are pre-existing `*_array_*` fixtures),
+> so all Feature #2+ concurrency pins live in the free **`412`–`499`** block.
+> Feature #2 (Scope) = `412`–`416`; later features continue from `417`.
+
+- **Inc 1 — spawn + collect happy path.** `Scope.open do |s| s.spawn(a()); s.spawn(b()); s.collect end`
+  drives both children to completion; observable side effects (each child prints)
+  prove both ran. Pin `412`. (Establishes the class, the `Array[Int]` child list,
+  the sync pump-collect, the raw-Int wall-off.)
+- **Inc 2 — Scope#drop cancels a still-pending child.** A child that never
+  completes (Pending forever) is cancelled by `Scope#drop` when the block exits
+  WITHOUT collecting it (or collect stops early) → its `def drop` fires via
+  `ruxen_executor_cancel_task` → `Drop_dynamic_drop`. Pin `413` (observable child
+  drop). Adds the scheduler `cancel_task` primitive.
+- **Inc 3 — fail-fast vs supervised.** `Scope.open` (fail-fast): a child error
+  cancels siblings + propagates; `Scope.supervised`: children fail independently,
+  errors aggregated. v1 error channel: children return an `Int` status (the raw
+  scheduler result is `Int`); fail-fast stops the collect loop + cancels remaining
+  on the first error sentinel. Pin `414`/`415`. (If the error-encoding proves to
+  need typed results — `TaskJoinFuture.Output` is pinned to `Int` — scope v1 uses
+  the Int-sentinel convention and documents it.)
+
+Each increment: failing pin first → minimal `.rx` (+ the one C primitive in Inc 2)
+→ narrow tests + re-confirm 391–398 → Codex review (park LOW).
+
+### AS-BUILT (all increments GREEN, pins `412`–`416`)
+
+- **`Scope.open` uses an EXPLICIT `cancel_remaining` join-fence after the block,
+  NOT `s`'s scope-exit `def drop`.** The `yield(s)` passes `s` to the block by
+  value at the closure-call ABI, which the drop analysis treats as a consume, so
+  `s` is not auto-drop-elaborated in `open` (same class as the Increment-3
+  block_on-fut issue, but here resolved by an explicit cleanup call rather than a
+  force-root). `def drop` remains as a safety net.
+- **`collect` PARKS on the reactor** (`Scope.pump_or_park` mirrors block_on's
+  pending arm: pump; if `pumped==0 && !ready`, `Thread.yield_now`) — without this
+  a timer/fd-backed child busy-spins. Pin `416` (Codex high finding).
+- **`ruxen_executor_cancel_task` is reentrancy-safe**: unlink the entry + mark the
+  handle done BEFORE running the child's `def drop`, so a `def drop` that re-enters
+  the scheduler can't double-free the entry (Codex blocker finding).
+- **Fail-fast/supervised are two collect METHODS** (`collect` / `collect_supervised`)
+  the user chooses, not two `Scope.open` entry variants — the entry-level
+  `Scope.supervised` sugar is deferred (would need a mode flag); the method choice
+  is the v1 surface.
+- **FOLLOW-UPS:** (a) `s.spawn(async_fn())` where the arg is an async-def WRAPPER
+  call fails to LINK (`_<fn>` undefined symbol) — the async-fn wrapper isn't
+  emitted/linked for the spawn-arg path; v1 spawns a direct stdlib future or a
+  hand-written `include Future` value. (b) typed `Result[T,E]` child channel awaits
+  typed `TaskJoinFuture.Output` (pinned to `Int` today). (c) entry-level
+  `Scope.supervised` sugar. (d) the stale-`libruxenrt.a` linkage note: adding a new
+  C runtime symbol referenced by a bootstrap stdlib class (emitted into every
+  program) requires a clean rebuild of all `target/*/libruxenrt.a` archives.
+
+**Feature #2 (§4.2) is COMPLETE** across Increments 1–3 (+ the two Codex fixes).
+
+---
+
 ## How §4.2–§4.7 sequence on top (per spec §6)
 
 - **§4.2 Scope** (keystone): hard-depends on §4.1 (Scope#drop joins-then-cancels

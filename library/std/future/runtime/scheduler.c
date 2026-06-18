@@ -416,6 +416,73 @@ void ruxen_executor_drain_remaining(void) {
 }
 
 /* ---------------------------------------------------------------------
+ * §4.2 Structured Scope — cancel ONE still-queued task by its handle.
+ *
+ * Unlike `drain_remaining` (which hits the WHOLE thread-local queue), this
+ * cancels exactly the task whose handle matches `handle_ptr` — so a
+ * `Scope#drop` cancels only ITS OWN children, leaving nested scopes / block_on
+ * roots / other scopes' tasks untouched. Used by `Scope#drop` per still-pending
+ * child.
+ *
+ * Steps (ordered for REENTRANCY SAFETY — the user `def drop` may re-enter
+ * the scheduler, so the entry must be off-queue before it runs):
+ *   1. find the queue entry with `entry->handle == handle_ptr`;
+ *   2. UNLINK it (`*prev_link = cur->next`) + mark the handle `done` so a
+ *      dangling `Task.join` resolves (default 0 result — cancelled, not run)
+ *      and a nested pump/cancel can no longer reach this entry;
+ *   3. THEN fire the child future's `def drop` via the §4.1 `Drop_dynamic_drop`
+ *      (reactor deregister / fd close), with cur/future_ptr/ctx held in locals;
+ *   4. drop the QUEUE-side handle refcount + free the Context + free the entry.
+ *
+ * No-op if the handle isn't in the queue (already completed via the pump, or
+ * already cancelled) — idempotent, so `Scope#drop` can call it unconditionally
+ * on any not-yet-done child. */
+void ruxen_executor_cancel_task(int64_t handle_ptr) {
+    if (handle_ptr == 0) {
+        return;
+    }
+    RuxenTaskHandle *target = (RuxenTaskHandle *)(uintptr_t)handle_ptr;
+    RuxenTaskEntry **prev_link = &t_queue_head;
+    RuxenTaskEntry *cur = t_queue_head;
+    while (cur) {
+        if (cur->handle == target) {
+            /* REENTRANCY SAFETY: unlink the entry from the queue and mark the
+             * handle done BEFORE running the user `def drop`. A future's
+             * `def drop` is arbitrary user code that may re-enter the scheduler
+             * (e.g. call `ruxen_executor_pump_tasks`); if `cur` were still
+             * linked with `done == 0` during the drop, a nested pump could poll
+             * it Ready and `free(cur)`, then this frame would double-free `cur`
+             * on resume. By unlinking + marking done first, `cur` is
+             * unreachable from the queue while the drop runs — the nested pump
+             * can't see it. We hold `cur`/`cur->future_ptr`/`cur->ctx` alive in
+             * locals across the drop, then tear them down after it returns. */
+            *prev_link = cur->next;
+            cur->handle->done = 1; /* dangling join → resolves (0 result) */
+
+            /* Now run the child's user `def drop` (off-queue). */
+            if (Drop_dynamic_drop && cur->future_ptr) {
+                Drop_dynamic_drop(cur->future_ptr);
+            }
+
+            /* Queue-side refcount drop + Context teardown + free the entry. */
+            cur->handle->refcount--;
+            if (cur->handle->refcount == 0) {
+                free(cur->handle);
+            }
+            if (cur->ctx) {
+                ruxen_executor_context_drop(cur->ctx);
+                free(cur->ctx);
+            }
+            free(cur);
+            return;
+        }
+        prev_link = &cur->next;
+        cur = cur->next;
+    }
+    /* Not found: already completed or cancelled — no-op. */
+}
+
+/* ---------------------------------------------------------------------
  * TaskHandle accessors (used by the Ruxen-level `class TaskHandle[T]`
  * lib decls and by the synthesised `__TaskJoinFuture` in commit 2). */
 int64_t ruxen_task_handle_is_done(int64_t handle_ptr) {

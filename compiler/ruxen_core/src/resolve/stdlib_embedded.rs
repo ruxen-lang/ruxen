@@ -239,6 +239,10 @@ pub const BOOTSTRAP_EMBEDDED_SIBLINGS: &[(&str, &[(&str, &str)])] = &[
                 "task_join_future.rx",
                 include_str!("../../../../library/std/future/src/task_join_future.rx"),
             ),
+            (
+                "scope.rx",
+                include_str!("../../../../library/std/future/src/scope.rx"),
+            ),
         ],
     ),
     (

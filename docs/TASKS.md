@@ -135,11 +135,24 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
             fixed the pre-existing block_on-root-future leak it surfaced: drop
             elaboration now force-roots a never-consumed `__block_on_fut_*` Future
             local (the spec §4.1 block_on-exit drop). Pins `396`/`397`/`398`.
-- [ ] **§4.2 Scope** (keystone), **§4.3 Race**, **§4.4 Queue**, **§4.5 Stream**,
-      **§4.6 Retry/Schedule**, **§4.7 TestClock** — sequence on §4.1 per spec §6.
-      Open maintainer decisions tracked in the plan doc + spec §6 (async methods
-      on classes, `segment_cfg` widening, raw-`Int` handle wall-off, cross-thread
-      reactor wake, Scope default).
+- [x] **§4.2 Structured `Scope` (keystone — Feature #2 COMPLETE, uncommitted on
+      `feat/concurrency-adoption`).** `library/std/future/src/scope.rx` over the
+      thread-local scheduler + §4.1 drop machinery + one C primitive
+      (`ruxen_executor_cancel_task`, reentrancy-safe). What a user can rely on: a
+      `Scope.open do |s| ... end` block owns its children — `s.spawn(fut)` (handle
+      walled off), `s.collect` (sync pump, reactor-parking, fail-fast) /
+      `s.collect_supervised`, and falling off the block cancels every still-pending
+      child (fires its `def drop`). Single-reactor v1; Int error channel. Pins
+      `399`–`403`. Surface choices (current-lowering): spawn takes a future VALUE
+      (async closures unlowered), collect is SYNC (async methods unlowered) — both
+      documented in scope.rx + the plan. FOLLOW-UPS surfaced: (a) `s.spawn(async_fn())`
+      where the arg is an async-def WRAPPER call fails to link (`_<fn>` undefined) —
+      spawn a direct stdlib future or a hand-written future for now; (b) typed
+      `Result[T,E]` child channel awaits typed `TaskJoinFuture.Output`.
+- [ ] **§4.3 Race**, **§4.4 Queue**, **§4.5 Stream**, **§4.6 Retry/Schedule**,
+      **§4.7 TestClock** — sequence on §4.1/§4.2 per spec §6. Open maintainer
+      decisions tracked in the plan doc + spec §6 (async methods on classes,
+      `segment_cfg` widening, cross-thread reactor wake).
 
 ### Language features
 

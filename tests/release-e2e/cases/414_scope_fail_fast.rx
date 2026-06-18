@@ -1,0 +1,57 @@
+## Feature #2 Increment 3a (spec §4.2) — FAIL-FAST scope (the `Scope.open`
+## default, per P3). On the FIRST child that completes with an error, the
+## scope cancels every still-pending SIBLING (firing each one's `def drop`
+## via the §4.1 cancel path) and `collect` returns the error sentinel.
+##
+## v1 error channel (documented limitation): a child returns an `Int`
+## status — `>= 0` OK, `< 0` error — because `TaskHandle.result` /
+## `TaskJoinFuture.Output` is `Int` today (typed Result[T,E] deferred).
+##
+## Three children: `ok` (returns 1), `fail` (returns -1), and a
+## never-completing `Pending` sibling with an OBSERVABLE drop. Fail-fast
+## `collect` observes `fail`'s -1 and cancels the pending sibling → its
+## "sibling cancelled" drop prints; collect returns -1.
+
+class Sibling
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(p: Int)
+    self.payload = p
+  end
+
+  def self.make(p: Int) -> Sibling
+    Sibling.new(p)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Pending
+  end
+
+  def drop
+    puts "sibling cancelled payload=#{self.payload}"
+  end
+end
+
+async def ok_child() -> Int
+  puts "ok ran"
+  1
+end
+
+async def failing_child() -> Int
+  puts "fail ran"
+  0 - 1
+end
+
+def main
+  puts "scope start"
+  Scope.open do |s|
+    s.spawn(ok_child())
+    s.spawn(failing_child())
+    s.spawn(Sibling.make(7))
+    let status = s.collect
+    puts "collect status=#{status}"
+  end
+  puts "scope done"
+end

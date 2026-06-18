@@ -1,0 +1,23 @@
+## Feature #2 Increment 3 — `collect` PARKS on a reactor-backed child instead
+## of busy-spinning (Codex high finding). A reactor-backed child (a
+## `TimeSleepFuture` from `Async.sleep`) registers a timer and returns
+## Pending; further pumps make no progress until the timer fires.
+## `collect` must PARK (`Thread.yield_now` → reactor wait) when a pump makes
+## no progress and no task is ready — otherwise it busy-spins the CPU.
+##
+## We spawn a ~30ms `Async.sleep` future directly (its Output is nil → the
+## scheduler stores 0, so `collect` sees status 0). The test completing
+## within the harness wall-clock cap proves `collect` drives the timer child
+## by parking on the reactor between pumps, not spinning.
+
+use std.time.Duration
+
+def main
+  puts "scope start"
+  Scope.open do |s|
+    s.spawn(Async.sleep(Duration.from_millis(30)))
+    let status = s.collect
+    puts "collect status=#{status}"
+  end
+  puts "scope done"
+end

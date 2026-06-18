@@ -8,6 +8,35 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Structured task `Scope` (concurrency §4.2, Feature #2 — the keystone).**
+  A `Scope` value OWNS its spawned children and cancels every still-pending child
+  before control leaves the block, so a detached/leaked async task is
+  unrepresentable. New stdlib `library/std/future/src/scope.rx` over the
+  thread-local scheduler + the §4.1 drop machinery; one new C primitive
+  (`ruxen_executor_cancel_task`). Surface (what the current lowering supports):
+  `Scope.open do |s| ... end` yields a `&var Scope`, then runs an explicit
+  join-fence (`cancel_remaining`) after the block; `s.spawn(fut)` takes a FUTURE
+  VALUE (async closures aren't lowered) and records the raw handle PRIVATELY
+  (walled off — returns nil, so a child handle can't escape ownership);
+  `s.collect` is a SYNCHRONOUS scheduler pump (async methods aren't lowered) that
+  parks on the reactor between pumps (`pump_or_park`, mirroring block_on — no
+  busy-spin on a timer/fd child). FAIL-FAST is the default (`s.collect`: first
+  child with a negative-`Int` error sentinel cancels still-pending siblings + and
+  returns the sentinel); `s.collect_supervised` is the named exception (all
+  children run, error count returned, no sibling cancel). Cancellation fires each
+  pending child's `def drop` via `ruxen_executor_cancel_task` → the §4.1
+  `Drop_dynamic_drop` — scoped to THIS scope's children (not the whole-queue
+  `drain_remaining`); reentrancy-safe (the entry is unlinked + marked done before
+  the user `def drop` runs). v1 is single-reactor ("structured concurrency within
+  a worker," matching rondo's thread-per-core model). v1 error channel is `Int`
+  (negative = error) because `TaskHandle.result`/`TaskJoinFuture.Output` is `Int`
+  (typed `Result[T,E]` deferred with the multi-threaded scheduler). Pins:
+  `412_scope_spawn_collect.rx` (spawn+collect happy path),
+  `413_scope_drop_cancels_pending_child.rx` (scope-exit cancels a pending child),
+  `414_scope_fail_fast.rx` (first error cancels siblings), `415_scope_supervised.rx`
+  (independent failures, error count), `416_scope_collect_reactor_child.rx`
+  (collect parks on a reactor-backed timer child, no busy-spin).
+
 - **Cooperative async cancellation + block_on-exit root-future drop (concurrency
   §4.1 foundation, Increment 3 — Feature #1 COMPLETE).** A leaf future can now
   observe a cooperative cancel bit at its `poll`/await boundary via

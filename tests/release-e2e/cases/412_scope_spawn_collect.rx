@@ -1,0 +1,36 @@
+## Feature #2 Increment 1 (spec §4.2) — structured `Scope` spawn + collect
+## happy path. `Scope.open do |s| ... end` yields a scope; `s.spawn(fut)`
+## enqueues a child future (a top-level `async def` value — NOT an async
+## closure, which the lowering doesn't support) and records its raw handle
+## PRIVATELY (walled off — `spawn` returns nil); `s.collect` SYNCHRONOUSLY
+## pumps the thread-local scheduler until every child completes.
+##
+## Two children each print a sentinel as they complete; `collect` drives both
+## to completion, so both sentinels print. Proves: scope construction, the
+## private child-handle list, spawn-enqueue, and the sync pump-collect.
+##
+## v1 surface (current-lowering): collect is a SYNC method (async methods on
+## classes are unlowered) and spawn takes a future VALUE (async closures are
+## unlowered). Scope.open is therefore callable from sync `main`.
+
+## A child future: a no-await `async def` whose body runs (and prints) when
+## the scheduler polls it to completion.
+async def child_a() -> Int
+  puts "child a ran"
+  1
+end
+
+async def child_b() -> Int
+  puts "child b ran"
+  2
+end
+
+def main
+  puts "scope start"
+  Scope.open do |s|
+    s.spawn(child_a())
+    s.spawn(child_b())
+    s.collect
+  end
+  puts "scope done"
+end
