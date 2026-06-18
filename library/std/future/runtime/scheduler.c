@@ -621,8 +621,8 @@ void ruxen_race_state_free(int64_t state_ptr) {
  * arms. Same semantics as `Race.of` generalised to N: first arm Ready wins;
  * ALL other live arms are cancelled (their `def drop` runs) + freed before the
  * winner is reported. Forward decls into the array runtime (vec.c). */
-uint64_t ruxen_vec_len(void *v);
-int64_t ruxen_vec_get(void *v, uint64_t index);
+uint64_t ruxen_vec_len(RuxenVec *v);
+int64_t ruxen_vec_get(RuxenVec *v, uint64_t index);
 
 typedef struct RuxenRaceAnyState {
     int64_t *arms;          /* malloc'd copy of the N arm ptrs; entry 0 once consumed/cancelled */
@@ -646,7 +646,7 @@ int64_t ruxen_race_any_state_new(int64_t arms_vec) {
         ruxen_panic("ruxen_race_any_state_new: malloc(state) failed");
         return 0;
     }
-    void *v = (void *)(uintptr_t)arms_vec;
+    RuxenVec *v = (RuxenVec *)(uintptr_t)arms_vec;
     int64_t n = (int64_t)ruxen_vec_len(v);
     if (n <= 0) {
         /* An empty race has no arm to ever complete → it would Pending
