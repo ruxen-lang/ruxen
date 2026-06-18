@@ -88,6 +88,12 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     // ── Equality / ordering / hashing lowering (`==`, `<=>`) ────────
     decl!("ruxen_string_concat", ptr_ty, [ptr_ty, ptr_ty]);
     decl!("ruxen_string_cmp", i64_ty, [ptr_ty, ptr_ty]);
+    // String equality (string.c: `int64_t ruxen_string_eq(const char*, const
+    // char*)`). MUST be declared with 2 params: the call-site fallback in
+    // `get_or_declare_runtime` declares an unknown runtime fn as `ptr -> i64`
+    // (1 param), which the string `==` lowering then calls with 2 args → an
+    // "incorrect number of arguments" broken-module error (tier 4.09).
+    decl!("ruxen_string_eq", i64_ty, [ptr_ty, ptr_ty]);
     decl!("ruxen_string_hash", i64_ty, [ptr_ty]);
     decl!("ruxen_string_from_iter", ptr_ty, [ptr_ty]);
     decl!("ruxen_str_split", ptr_ty, [ptr_ty, ptr_ty]);
@@ -102,6 +108,18 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("ruxen_vec_get_mut_opt", ptr_ty, [ptr_ty, i64_ty]);
     decl!("ruxen_vec_set", void, [ptr_ty, i64_ty, i64_ty]);
     decl!("ruxen_vec_from_iter", ptr_ty, [ptr_ty]);
+
+    // ── Vec constructors / iteration emitted by Array methods. These MUST
+    //    be declared: without an explicit signature the call-site fallback
+    //    (calls.rs) infers arg widths from values, which matches the C
+    //    int64-slot ABI on 64-bit targets but passes a pointer-width (i32)
+    //    item on wasm32 — an ABI mismatch with the runtime's int64_t
+    //    parameters (tier 4.09). ──────────────────────────────────────────
+    decl!("ruxen_vec_new", ptr_ty, []);
+    decl!("ruxen_vec_push", void, [ptr_ty, i64_ty]);
+    decl!("ruxen_vec_pop", ptr_ty, [ptr_ty]);
+    decl!("ruxen_vec_len", i64_ty, [ptr_ty]);
+    decl!("ruxen_vec_sum", i64_ty, [ptr_ty]);
 
     // ── Pointer indirection helpers (`&mut T` mutation lowering) ────
     decl!("ruxen_deref_ptr", ptr_ty, [ptr_ty]);

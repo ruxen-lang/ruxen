@@ -25,6 +25,56 @@
 #ifndef RUXEN_RUNTIME_H
 #define RUXEN_RUNTIME_H
 
+#if defined(__wasm32__)
+/* wasm32-unknown-unknown has no sysroot — the POSIX headers below don't exist
+ * there (tier 4.09). Pull only the freestanding headers clang ships, and declare
+ * the small libc surface the heap-core runtime (alloc.c, vec.c, string.c, …) uses;
+ * their definitions come from the bundled wasm runtime shim
+ * (library/runtime/wasm/wasm_rt.c). The full POSIX set in the #else is for the
+ * host-only modules (io/net/fs/process/time), which are never compiled for wasm. */
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+#include <stdarg.h>
+/* POSIX `ssize_t` (normally <sys/types.h>) — string.c uses it for reverse
+ * indices. Pointer-width signed integer, matching its native definition. */
+typedef ptrdiff_t ssize_t;
+void *malloc(size_t);
+void free(void *);
+void *realloc(void *, size_t);
+void *calloc(size_t, size_t);
+void *memcpy(void *, const void *, size_t);
+void *memmove(void *, const void *, size_t);
+void *memset(void *, int, size_t);
+int memcmp(const void *, const void *, size_t);
+size_t strlen(const char *);
+int strcmp(const char *, const char *);
+int strncmp(const char *, const char *, size_t);
+char *strchr(const char *, int);
+char *strstr(const char *, const char *);
+void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
+/* Formatting / numeric / error-path libc the heap-core runtime (string.c, fmt.c)
+ * needs. snprintf + strtod are real (small) impls in the shim; fprintf/exit are
+ * stubs (error paths trap). FILE is opaque (only used as `stderr` for fprintf). */
+typedef void FILE;
+extern FILE *stderr;
+int snprintf(char *, size_t, const char *, ...);
+int fprintf(FILE *, const char *, ...);
+void exit(int);
+double strtod(const char *, char **);
+long long strtoll(const char *, char **, int);
+unsigned long strtoul(const char *, char **, int);
+double round(double);
+extern int errno;
+#ifndef ERANGE
+#define ERANGE 34
+#endif
+/* <inttypes.h> is gated out; string.c uses `"%" PRId64`. On wasm32 int64_t is
+ * `long long`, so PRId64 is "lld". */
+#ifndef PRId64
+#define PRId64 "lld"
+#endif
+#else
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +95,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <sys/types.h>
+#endif
 
 /* Secure-entropy headers (<sys/random.h>, <Security/Security.h>) are
  * intentionally NOT included here. This header is pulled into every
@@ -65,11 +116,20 @@
 
 /* ── Platform Assertions ──────────────────────────────────────────── */
 
+/* The runtime stores pointers in `int64_t` slots (see RuxenVec below), which
+ * requires 64-bit pointers on native targets. wasm32 is the deliberate
+ * exception (tier 4.09): pointers are 32-bit there, but wasm is always
+ * little-endian, so a 32-bit pointer reinterpret-cast into a 64-bit slot lives
+ * in the low bytes and round-trips back losslessly. Gate the 64-bit assertions
+ * out for wasm32 so the core runtime subset compiles for the browser-GUI target.
+ * (A proper `slot_t`→`intptr_t` pass is tracked separately; cosmetic on LE wasm.) */
+#if !defined(__wasm32__)
 _Static_assert(sizeof(void *) == sizeof(int64_t),
     "Ruxen requires a 64-bit platform (sizeof(void*) must equal sizeof(int64_t))");
 
 _Static_assert(sizeof(void *) == 8,
     "Ruxen requires 64-bit pointers");
+#endif
 
 /* `_ORIG_FREE`-style asm-label trick: the drop_fixtures textual
  * splice rewrites every `free(` callsite to `ruxen_test_free(`. To
@@ -233,11 +293,13 @@ void *ruxen_io_error_struct(int32_t tag, const char *message);
 void *ruxen_io_error_from_errno(int err);
 
 /* Stream helpers (defined in io/runtime/io_error.c, called from io/stdio.c
- * and fs.c). */
+ * and fs.c). FILE-typed → host-only; the io module isn't built for wasm. */
+#if !defined(__wasm32__)
 void *ruxen_stream_handle(FILE *stream);
 FILE *ruxen_stream_from_handle(void *handle, FILE *fallback);
 void *ruxen_stream_read_line(FILE *stream);
 void *ruxen_stream_read_to_string(FILE *stream);
+#endif
 
 /* String helpers cross-package (defined in string/string.c, hash/hash.c). */
 char *ruxen_string_concat(const char *a, const char *b);

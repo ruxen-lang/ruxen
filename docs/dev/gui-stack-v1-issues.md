@@ -1743,6 +1743,245 @@ investigation. Also reconfirmed by the same quiver report: the
 non-Copy-call-result-as-method-arg landmine at a fresh site (quiver
 `cut`/`clip_write` — let-bind first, as documented).
 
+## Q41 · S2 — LLVM backend can't lower a `DataAddr` class-info ref for a `dispatch runtime` mixin type → `ruxen build --release` blocked for async projects  ⏳ OPEN (NEW 2026-06-14)
+
+Found 2026-06-14 in rondo (workaround **W22**, `rondo/docs/ruxen-issues.md`)
+while benchmarking the framework against a Go `net/http` baseline. `ruxen build`
+(default Cranelift) compiles and runs; `ruxen build --release` (LLVM backend)
+aborts in codegen:
+
+```
+$ ruxen build --release
+  Compiling piece `rondo` v0.1.0
+Error: mixin-vtables: LLVM backend cannot lower DataAddr { data_sym:
+'__rx_classinfo_TimeSleepFuture' } — use the Cranelift backend (default)
+for code that includes a `dispatch runtime` mixin.
+```
+
+**Trigger.** Any type that participates in a `dispatch runtime` mixin and whose
+`__rx_classinfo_<T>` symbol is referenced as a `DataAddr` operand. Here it is
+`TimeSleepFuture`, pulled in transitively by `AsyncTcpStream.read_with_timeout`
+(the per-poll idle-timeout timer — rondo F9), so the whole async server depends
+on it. The error fires while compiling the `rondo` library piece itself, so it
+is **not** specific to one binary: every release build of any rondo-dependent
+program hits it, and more generally any project using the async timer / a
+runtime mixin.
+
+**Repro (minimal):**
+
+```
+# any binary depending on rondo (e.g. the rondo-smoke bench crate)
+ruxen build              # OK   (Cranelift)
+ruxen build --release    # FAIL (LLVM, error above)
+```
+
+`RUXEN_BACKEND=cranelift ruxen build --release` does NOT help — `--release`
+still routes to LLVM and fails. There is no flag to get Cranelift *with*
+optimizations, so async projects currently have **no optimized build path**.
+
+**Why it matters.** Severity **S2**: no crash/corruption and a working debug
+path exists, but there is no release/optimized build for async code, which
+distorts every performance number. In a like-for-like HTTP bench (single
+plaintext route, keep-alive, CPU-pinned 8-core server / 8-core load generator on
+a 16-core Linux box), debug-Cranelift rondo peaked ~113k RPS and cliffed past
+c≈200, versus optimized Go `net/http` ~164k RPS stable through c=400 — the
+debug-build handicap is a real confound.
+
+**Fix direction.** Cranelift already lowers this correctly, so the gap is on the
+LLVM backend: it needs to emit the `DataAddr` reference to a `__rx_classinfo_*`
+class-info symbol for runtime-mixin types (see the `mixin-vtables` lowering path
+referenced in the error). Cross-linked from rondo W22.
+
+Toolchain: `ruxen 0.1.0`.
+
+## Q42 · S2 — deliver a DOM event to a Ruxen handler on wasm — NOT a compiler bug; a pure-Ruxen pattern  ✅ RESOLVED 2026-06-16 (verified by spike)
+
+> **RESOLVED 2026-06-16 (same day it was filed).** The falsification spike is
+> GREEN: a `.rx` with an exported `def boot() -> Registry` (a class holding
+> `handlers: Array[any Fn[...]]`), `def dispatch_event(reg: &var Registry, id,
+> kind)` calling `reg.handlers.get(id)` via `f.(&var reg.count)`, and `def
+> read_count` — compiled to wasm32 (`ruxen compile --target
+> wasm32-unknown-unknown`) and run in node: JS calls `boot()`, holds the returned
+> i32 handle, calls `dispatch_event(reg,0,1)` TWICE in SEPARATE calls, then
+> `read_count(reg)` → **2**, with ZERO host imports. So the registry round-trips
+> through JS as an i32 across calls and the stored closure dispatches correctly —
+> **no `__indirect_function_table`, no `call_indirect` trampoline, no codegen
+> edit.** Repro + evidence: `tmp/spikeA/` and
+> `docs/superpowers/plans/2026-06-16-wasm-native-element-gates.md` (RESULTS). No
+> L0 work needed for event delivery. (Naming gotcha discovered: `init` is the
+> reserved constructor word — name the exported entry `boot`, not `init`.)
+>
+> **Original grounding note (2026-06-16), now confirmed:** this is NOT L0
+> compiler work. Every top-level free `def`
+> is already auto-exported to wasm (`mir/lower/mod.rs:608-628`,
+> `codegen/llvm/emit/mod.rs:78-96`), and `f.()` already lowers on wasm to
+> `build_indirect_call` (`codegen/llvm/emit/instructions.rs:566-619`). So a
+> plain exported `def dispatch_event(reg, id, kind)` that looks up a stored
+> closure in an `Array[any Fn]` and calls it needs **no** new export plumbing,
+> no `__indirect_function_table`, no `call_indirect` trampoline, no codegen
+> edit. The one real constraint is **no top-level mutable global** — the handler
+> registry must persist across calls via a heap handle round-tripped through JS
+> as an i32 (a class lowers to `ptr`; canvas's opaque-handle inversion). That
+> round-trip is the **single unverified primitive**, and the whole web backend
+> depends on it. **Do not edit the compiler for Q42 until the falsification
+> spike is RED.** Spike + plan: `ruxen/docs/superpowers/plans/2026-06-16-wasm-native-element-gates.md` (Task 1).
+> Only the sub-cases there (closures-in-`Array` corrupts, or the heap handle
+> can't survive a second call) would escalate to genuine L0 work (a new Q43).
+
+Found 2026-06-16 designing quiver's **native-element web backend** (real
+DevTools-inspectable DOM instead of CanvasKit paint — see
+`quiver/docs/decisions/native-element-backend.md`). **Create-and-mutate DOM from
+wasm already works** (the opaque-handle pattern `ruxen_canvas_host_new` ships,
+plus linear-memory strings). The OPEN question is only whether the reverse
+(event → stored handler) works in pure Ruxen across calls — see the revision
+note above.
+
+**Trigger.** Any interactive web app: a DOM `click`/`input` listener must call
+back **into** wasm to run the stored quiver handler closure. There is no path.
+
+**Root cause (verified in-tree):**
+
+- wasm exports are **only** concrete top-level free `def`s — `mir.wasm_exports`
+  is populated from those alone (`compiler/ruxen_core/src/mir/lower/mod.rs:611-627`),
+  and the `export_name` attr is set only for them
+  (`compiler/ruxen_core/src/codegen/llvm/emit/mod.rs:78-96`).
+- No `__indirect_function_table` is exported and no `call_indirect` trampoline is
+  emitted on the wasm path (the only `call_indirect` is in the Cranelift backend,
+  which is hard-blocked for wasm).
+- A Ruxen `Fn`/`FnMut`/`FnOnce` lowers to an opaque `ptr` (an `i32` into linear
+  memory pointing at a closure env) — **not** a JS-callable
+  (`compiler/ruxen_core/src/codegen/llvm/types.rs:58-60`).
+
+So the whole runtime is one-shot **pull**: JS calls a single exported `render()`,
+wasm calls out via `env.*` imports, returns, done. JS cannot re-enter wasm to
+deliver an event.
+
+**Repro (shape):** compile a `.rx` exporting `render()` and a handler closure;
+from JS, attempt to invoke the handler on a DOM `click`. There is no exported
+symbol or table index to call — the handler is unreachable from JS.
+
+**Why it matters.** Severity **S2**: no crash/corruption, and non-interactive
+render works, but **no interactive web app is possible** without it. It is the
+single decisive gate for quiver's native-element web milestone.
+
+**Fix direction (library-first).** Write `dispatch_event` as an ordinary
+top-level `def` in Ruxen — `def dispatch_event(reg: Registry, id: Int, kind:
+Int)` that pulls a stored closure from `reg.handlers: Array[any Fn]` (the
+Q2-safe closure-pool pattern quiver already uses for `dyn_text`/`button`
+handlers) and calls it with `f.()`. The registry persists across the two wasm
+calls (register during `render`, fire on a later `click`) as a heap handle
+returned by an exported `def init() -> Registry` and passed back in by JS as an
+i32 — NOT a global. **No `__indirect_function_table`, no `call_indirect`
+trampoline, no compiler edit** (the spike confirmed the round-trip IS
+expressible). De-risked GREEN: the wasm spike has JS call `boot()` (the exported
+entry — `init` is the reserved constructor word), then `dispatch_event(reg,…)`
+in a separate call, observing the Ruxen-side counter increment. Cross-linked from
+`quiver/docs/decisions/native-element-backend.md`.
+
+Toolchain: `ruxen 0.1.0`.
+
+## Q43 · S3 — `Mutex`/`SharedSync` pthread C runtime is not bundled for wasm; quiver's reactive core needs a single-threaded sync shim  ✅ RESOLVED 2026-06-16
+
+> **RESOLVED 2026-06-16.** A single-threaded wasm sync runtime is now bundled in
+> the `WASM_RT_C` shim (`compiler/ruxen_core/src/codegen/object.rs`): `Mutex`/
+> `SharedSync`/`MutexGuard` are one-slot i64 boxes over the bundled allocator,
+> guard handle == mutex pointer, all `ruxen_mutex_*`/`ruxen_sharedsync_*` defined
+> with the exact wasm ABI. wasm-only (native still uses the pthread runtime — no
+> regression; wasm pins 4/4 + examples 05/07/08 green). quiver's reactive
+> `State[T]` (`SharedSync[Mutex[Int]]`) now runs on wasm with NO sync host
+> imports — verified end-to-end by `quiver/examples/counter-dom` (the counter
+> increments via real `State` on wasm). The JS sync shim is gone.
+
+Found 2026-06-16 in the Phase-0.5 wasm de-risk (Spike C,
+`docs/superpowers/plans/2026-06-16-wasm-native-element-gates.md`). GOOD news
+first: a minimal `Mutex` program (`Mutex.new(0)` → `lock!` → `guard.set(get+41)`
+→ `get`) **compiles to wasm32 cleanly — it does NOT hit the Q41 LLVM
+vtable/class_info wall.** The catch: `std.sync` is pthread-backed
+(`[system_libs] libs = ["pthread"]`, `library/std/sync/runtime/mutex.c`), and
+wasm32-unknown-unknown has no pthread, so the curated wasm runtime does not
+bundle `mutex.c`. The four FFI symbols (`ruxen_mutex_new`, `ruxen_mutex_lock`,
+`ruxen_mutex_guard_get`, `ruxen_mutex_guard_set`) are therefore emitted as
+**undefined host imports** (resolved by `wasm-ld --allow-undefined`).
+
+**Proven workable:** with a thin single-threaded JS sync shim (a JS box per
+Mutex; guard handle == mutex handle; ABI: `Mutex`/`MutexGuard` classes are i32
+handles, payload `T=Int` is i64), the program runs in node and returns 41
+(`tmp/spikeC/run.mjs`). This is the exact approach the canvas web harness already
+uses (its Mutex/SharedSync are JS-boxed).
+
+**Why it matters.** Severity **S3**: not a crash/blocker — quiver's reactive
+core (`State[T] = SharedSync[Mutex[T]]`) DOES run on wasm, but only if something
+provides the sync symbols. **Fix direction:** ship a wasm-targeted single-
+threaded sync runtime (a `cfg(wasm)` no-op `mutex.c`/`sharedsync.c` shim —
+single-threaded wasm needs no real locking), so quiver-on-wasm is self-contained
+and apps don't each hand-roll JS sync shims. Until then, the web shell must
+supply the `ruxen_mutex_*` (and `ruxen_sharedsync_*`) imports. Cross-linked from
+`quiver/docs/decisions/native-element-backend.md`.
+
+Toolchain: `ruxen 0.1.0`.
+
+## Q44 · S3 — string interpolation's `Formatter` C runtime is not bundled for wasm; needs a wasm fmt runtime (or host shims + JS→wasm string marshalling)  ✅ RESOLVED 2026-06-16
+
+> **RESOLVED 2026-06-16.** `fmt.c` was already in `WASM_RUNTIME_CORE`, but the
+> MIR interpolation lowerer emits the mangled callees `Formatter_new`/
+> `Formatter_write_str`/`Formatter_buffer` (not the `ruxen_fmt_formatter_*` FFI
+> aliases), and the wasm backend doesn't bridge them → they leaked as host
+> imports. Fix: the `WASM_RT_C` shim now defines those three mangled symbols as
+> thin wrappers over the bundled `ruxen_fmt_formatter_*`, matching the exact
+> emitted ABI (`new()->i64`, `write_str(i32,i32)->void`, `buffer(i32)->i64`). So
+> interpolation builds real strings in wasm linear memory via `fmt.c` — no host
+> import, no JS→wasm marshalling hack. Verified: `"count: #{n}"` renders correctly
+> on wasm in `quiver/examples/counter-dom` (deterministic in a real browser). The
+> JS Formatter shim + scratch region are gone. (A cleaner future fix would teach
+> the wasm codegen to apply the same mangled→C-symbol mapping as native, but the
+> bundled wrapper is sufficient and wasm-only.)
+
+Found 2026-06-16 wiring the native-element web counter (quiver
+`examples/counter-dom`). A `"count: #{n}"` interpolation lowers to compiler-
+emitted calls `Formatter_new`/`Formatter_write_str`/`Formatter_buffer` (the MIR
+interpolation lowerer; see `library/std/fmt`). On wasm32 the `fmt.c` runtime
+behind those symbols is NOT bundled into the curated wasm runtime, so they are
+emitted as **undefined host imports** (like Q43's sync symbols).
+
+Two sub-problems for a host shim:
+1. **ABI (verified by parsing the module's type section):** `Formatter_new() ->
+   i64`, `Formatter_write_str(i32, i32) -> void`, `Formatter_buffer(i32) ->
+   i64`. The handle is created as i64 but truncated to i32 at later call sites;
+   `buffer` returns the result `String` in an i64 slot (the pointer value fits
+   i32). A shim must return BigInt for `new`/`buffer`.
+2. **JS→wasm string marshalling (the real gap):** `Formatter_buffer` must return
+   a `String` **living in wasm linear memory** so the rest of the program (and
+   `dom_set_text`) can read it. JS has the built string but must WRITE it into
+   linear memory and return a pointer — and there is no exported allocator, so
+   the shim writes into a high scratch region of exported `memory` and bumps a
+   pointer (must stay above the wasm bump heap, else corruption — observed as a
+   non-deterministic wrong initial value until the scratch was placed high
+   enough). This is the same "no JS→wasm string helper" gap the tier-4.09
+   findings flagged.
+
+**Proven workable:** with the ABI shim + a high bump-scratch, the counter renders
+correct interpolated text and is fully interactive in a real browser
+(`examples/counter-dom/web/index.html`, Playwright-verified). **Fix direction:**
+bundle a `cfg(wasm)` `fmt` runtime (so interpolation is self-contained, no host
+import), OR export a wasm allocator (`ruxen_alloc`/`ruxen_dealloc`) so a host
+`Formatter_buffer` shim can safely allocate the result string instead of
+scribbling into a guessed scratch offset. Cross-linked from
+`quiver/docs/decisions/native-element-backend.md`. Sibling of Q43 (sync runtime).
+
+Toolchain: `ruxen 0.1.0`.
+
+## Q45 · S3 — no JS→wasm string path (host could read strings OUT of wasm, never write them IN)  ✅ RESOLVED 2026-06-16
+
+Found 2026-06-16 planning native `<input>` for quiver's web backend. A host could
+read a Ruxen `&String` out of wasm (NUL-terminated `char*` in exported `memory`),
+but had no way to put a string IN — no exported allocator, so a native input's
+typed value couldn't reach the app's `State`. **RESOLVED:** the `WASM_RT_C` shim
+now `export_name`-exports `ruxen_wasm_alloc(i32)->ptr` + `ruxen_wasm_free(ptr)`
+over the bundled allocator. JS allocates a buffer in wasm memory, writes
+UTF-8+NUL, and passes the pointer to an exported `def f(... text: &String)` (the
+i32 ptr IS the `&String`). Verified exported in `quiver/examples/counter-dom`.
+Toolchain: `ruxen 0.1.0`.
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:

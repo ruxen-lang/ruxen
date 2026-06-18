@@ -581,6 +581,30 @@ fn build_one(
             }
         }
     }
+    // macOS frameworks: a test binary that flat-merges a native FFI dep (e.g.
+    // canvas's AppKit shim) must link the frameworks that dep declares in
+    // `[system_libs] frameworks`, mirroring the `ruxen build` link line. Read the
+    // project's own toml + each dep's; emit `-framework <name>` link args. macOS
+    // only (tests build for the host; non-macOS hosts have no such frameworks).
+    #[cfg(target_os = "macos")]
+    {
+        let mut fw_tomls: Vec<std::path::PathBuf> = vec![project_dir.join("Ruxen.toml")];
+        for dep_dir in dep_dirs {
+            fw_tomls.push(dep_dir.join("Ruxen.toml"));
+        }
+        let mut seen_fw: Vec<String> = Vec::new();
+        for toml_path in &fw_tomls {
+            if let Ok(contents) = fs::read_to_string(toml_path) {
+                for fw in ruxen_core::codegen::parse_system_frameworks(&contents) {
+                    if !seen_fw.contains(&fw) {
+                        seen_fw.push(fw.clone());
+                        compile_args.push("--link-arg=-framework".to_string());
+                        compile_args.push(format!("--link-arg={}", fw));
+                    }
+                }
+            }
+        }
+    }
     crate::compile::run(&compile_args).map_err(|e| format!("compile of {test_path}: {e}"))?;
     Ok(bin_path)
 }

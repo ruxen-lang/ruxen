@@ -215,8 +215,16 @@ void ruxen_noop(void) {}
 /* ── Panic ─────────────────────────────────────────────────────────── */
 
 void ruxen_panic(const char *message) {
+#if defined(__wasm32__)
+    /* wasm32 has no stdio/exit — a panic traps (unreachable → a
+     * WebAssembly.RuntimeError the host catches). A host-import panic hook to
+     * surface the message is a staged follow-up (kept the runtime importless). */
+    (void)message;
+    __builtin_trap();
+#else
     fflush(stdout);
     fprintf(stderr, "ruxen panic: %s\n", message ? message : "(unknown)");
     fflush(stderr);
     exit(101);
+#endif
 }

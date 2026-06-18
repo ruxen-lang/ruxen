@@ -21,6 +21,16 @@ fn linker_args(sanitize: bool, extra_link_flags: &[String]) -> Vec<String> {
     if cfg!(target_os = "macos") {
         args.push("-framework".to_string());
         args.push("Security".to_string());
+        // App-declared macOS frameworks for native-widget / platform backends
+        // (a `.m` AppKit shim needs `-framework Cocoa`). Opt-in via
+        // `RUXEN_MACOS_FRAMEWORKS=Cocoa,WebKit` (comma-separated) so non-GUI
+        // binaries don't load-link AppKit. Each name adds `-framework <name>`.
+        if let Ok(fws) = std::env::var("RUXEN_MACOS_FRAMEWORKS") {
+            for fw in fws.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                args.push("-framework".to_string());
+                args.push(fw.to_string());
+            }
+        }
     }
     if sanitize {
         args.push("-fsanitize=address,undefined".to_string());
@@ -375,9 +385,17 @@ fn find_wasm_ld() -> Result<String, String> {
     )
 }
 
-/// Link a WebAssembly object into a `.wasm` module. See [`find_wasm_ld`].
+/// Link a WebAssembly object (plus any runtime objects) into a `.wasm` module.
+/// See [`find_wasm_ld`].
+///
+/// `runtime_objects` are the compiled heap-core runtime + allocator/libc shim
+/// objects (tier 4.09). With them present, `wasm-ld` resolves `ruxen_vec_*`,
+/// `ruxen_alloc`, `malloc`, … internally instead of leaving them as host imports.
+/// `--allow-undefined` is retained so any genuinely host-supplied symbol (future
+/// `wasm_import` work) still links.
 pub fn emit_wasm_module(
     object_bytes: &[u8],
+    runtime_objects: &[PathBuf],
     output_path: &str,
     target: &ResolvedTarget,
 ) -> Result<(), String> {
@@ -390,9 +408,11 @@ pub fn emit_wasm_module(
     cmd.arg("--no-entry")
         .arg("--export-dynamic")
         .arg("--allow-undefined")
-        .arg(&obj_path)
-        .arg("-o")
-        .arg(output_path);
+        .arg(&obj_path);
+    for ro in runtime_objects {
+        cmd.arg(ro);
+    }
+    cmd.arg("-o").arg(output_path);
 
     let status = cmd.status().map_err(|e| {
         format!(
@@ -409,8 +429,481 @@ pub fn emit_wasm_module(
             target.canonical()
         ));
     }
+    // Clean temp objects only after a successful link (a failed link leaves the
+    // inputs in place for inspection / retry — matches `emit_executable`).
     let _ = std::fs::remove_file(&obj_path);
+    for ro in runtime_objects {
+        let _ = std::fs::remove_file(ro);
+    }
     Ok(())
+}
+
+/// The bundled wasm runtime shim (tier 4.09): a freestanding allocator + the few
+/// libc functions the heap-core runtime needs, for `wasm32-unknown-unknown` (which
+/// has no libc). Embedded as a string so it travels with the compiler (no source
+/// tree needed) and is written to a temp `.c` and compiled on demand.
+///
+/// The allocator is a **bump allocator** over `__builtin_wasm_memory_grow` with an
+/// 8-byte size header (so `realloc` can size-copy). `free` does not reclaim — a
+/// free-list upgrade is a tracked follow-up; correctness (not yet peak memory) is
+/// the bar for the first heap milestone. `mem*`/`qsort` are simple, correct
+/// implementations; the shim is compiled with `-fno-builtin` so these definitions
+/// don't get pattern-matched back into self-recursive calls.
+pub const WASM_RT_C: &str = r#"/* Ruxen wasm32 runtime shim — bundled allocator + minimal libc.
+ * Generated/owned by codegen/object.rs (tier 4.09). Compiled with -fno-builtin. */
+#include <stdint.h>
+#include <stddef.h>
+#include <stdarg.h>
+
+/* Prototypes so the allocator can call mem* before their definitions below. */
+void *memcpy(void *, const void *, size_t);
+void *memmove(void *, const void *, size_t);
+void *memset(void *, int, size_t);
+int memcmp(const void *, const void *, size_t);
+
+#define RX_WASM_PAGE 65536u
+
+extern unsigned char __heap_base; /* wasm-ld: first byte past static data */
+
+static uintptr_t rx_brk;
+static uintptr_t rx_end;
+static int rx_init_done;
+
+static void rx_heap_init(void) {
+    if (!rx_init_done) {
+        rx_brk = (uintptr_t)&__heap_base;
+        rx_end = (uintptr_t)__builtin_wasm_memory_size(0) * RX_WASM_PAGE;
+        rx_init_done = 1;
+    }
+}
+
+static uintptr_t rx_bump(size_t total) { /* returns 16-aligned base, or 0 on OOM */
+    uintptr_t p = (rx_brk + 15u) & ~(uintptr_t)15u;
+    uintptr_t nb = p + total;
+    if (nb > rx_end) {
+        size_t need = nb - rx_end;
+        size_t pages = (need + RX_WASM_PAGE - 1) / RX_WASM_PAGE;
+        size_t prev = __builtin_wasm_memory_grow(0, pages);
+        if (prev == (size_t)-1) return 0;
+        rx_end += pages * RX_WASM_PAGE;
+    }
+    rx_brk = nb;
+    return p;
+}
+
+void *malloc(size_t n) {
+    rx_heap_init();
+    size_t payload = (n + 15u) & ~(size_t)15u;
+    if (payload == 0) payload = 16;
+    uintptr_t base = rx_bump(payload + 16); /* 16-byte header keeps payload aligned */
+    if (!base) return (void *)0;
+    *(size_t *)base = payload; /* store the rounded size: realloc copies the full live payload */
+    return (void *)(base + 16);
+}
+
+void free(void *p) { (void)p; /* bump allocator: no reclaim (free-list upgrade pending) */ }
+
+void *calloc(size_t nm, size_t sz) {
+    size_t tot = nm * sz;
+    if (sz != 0 && tot / sz != nm) return (void *)0; /* overflow */
+    void *p = malloc(tot);
+    if (p) memset(p, 0, tot);
+    return p;
+}
+
+void *realloc(void *p, size_t n) {
+    if (!p) return malloc(n);
+    size_t old = *(size_t *)((unsigned char *)p - 16);
+    if (n <= old) return p;
+    void *np = malloc(n);
+    if (!np) return (void *)0;
+    memcpy(np, p, old);
+    return np;
+}
+
+void *memcpy(void *d, const void *s, size_t n) {
+    unsigned char *dd = (unsigned char *)d;
+    const unsigned char *ss = (const unsigned char *)s;
+    for (size_t i = 0; i < n; i++) dd[i] = ss[i];
+    return d;
+}
+
+void *memmove(void *d, const void *s, size_t n) {
+    unsigned char *dd = (unsigned char *)d;
+    const unsigned char *ss = (const unsigned char *)s;
+    if (dd < ss) { for (size_t i = 0; i < n; i++) dd[i] = ss[i]; }
+    else { for (size_t i = n; i > 0; i--) dd[i - 1] = ss[i - 1]; }
+    return d;
+}
+
+void *memset(void *d, int c, size_t n) {
+    unsigned char *dd = (unsigned char *)d;
+    for (size_t i = 0; i < n; i++) dd[i] = (unsigned char)c;
+    return d;
+}
+
+int memcmp(const void *a, const void *b, size_t n) {
+    const unsigned char *x = (const unsigned char *)a;
+    const unsigned char *y = (const unsigned char *)b;
+    for (size_t i = 0; i < n; i++) { if (x[i] != y[i]) return (int)x[i] - (int)y[i]; }
+    return 0;
+}
+
+size_t strlen(const char *s) { size_t n = 0; while (s[n]) n++; return n; }
+
+int strcmp(const char *a, const char *b) {
+    while (*a && *a == *b) { a++; b++; }
+    return (int)(unsigned char)*a - (int)(unsigned char)*b;
+}
+
+int strncmp(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char ca = (unsigned char)a[i], cb = (unsigned char)b[i];
+        if (ca != cb) return (int)ca - (int)cb;
+        if (ca == 0) break;
+    }
+    return 0;
+}
+
+char *strchr(const char *s, int c) {
+    char ch = (char)c;
+    for (;; s++) {
+        if (*s == ch) return (char *)s;
+        if (!*s) return (char *)0;
+    }
+}
+
+char *strstr(const char *hay, const char *needle) {
+    if (!*needle) return (char *)hay;
+    for (; *hay; hay++) {
+        const char *a = hay, *b = needle;
+        while (*a && *b && *a == *b) { a++; b++; }
+        if (!*b) return (char *)hay;
+    }
+    return (char *)0;
+}
+
+static void rx_byteswap(unsigned char *a, unsigned char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) { unsigned char t = a[i]; a[i] = b[i]; b[i] = t; }
+}
+
+/* Insertion sort — O(n^2) but correct and tiny; a faster sort is a follow-up. */
+void qsort(void *base, size_t n, size_t sz, int (*cmp)(const void *, const void *)) {
+    unsigned char *b = (unsigned char *)base;
+    for (size_t i = 1; i < n; i++)
+        for (size_t j = i; j > 0 && cmp(b + (j - 1) * sz, b + j * sz) > 0; j--)
+            rx_byteswap(b + (j - 1) * sz, b + j * sz, sz);
+}
+
+/* ---- stdio/stdlib error-path stubs (fmt.c / string.c OOM paths) ---- */
+void *stderr = (void *)0;                /* opaque dummy FILE* */
+int errno = 0;
+void exit(int code) { (void)code; __builtin_trap(); }
+int fprintf(void *stream, const char *fmt, ...) { (void)stream; (void)fmt; return 0; }
+
+/* round half away from zero (string.c float formatting) */
+double round(double x) {
+    return (x >= 0.0) ? (double)(long long)(x + 0.5) : -(double)(long long)(-x + 0.5);
+}
+
+/* strtoll — [ws][sign]digits in `base` (string.c passes base 10). Overflow is
+ * not flagged (errno untouched); fine for in-range GUI inputs. */
+long long strtoll(const char *s, char **endptr, int base) {
+    const char *p = s;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    int neg = 0;
+    if (*p == '+' || *p == '-') { neg = (*p == '-'); p++; }
+    if (base == 0) base = 10;
+    long long v = 0;
+    for (;;) {
+        int d;
+        if (*p >= '0' && *p <= '9') d = *p - '0';
+        else if (*p >= 'a' && *p <= 'z') d = *p - 'a' + 10;
+        else if (*p >= 'A' && *p <= 'Z') d = *p - 'A' + 10;
+        else break;
+        if (d >= base) break;
+        v = v * base + d;
+        p++;
+    }
+    if (neg) v = -v;
+    if (endptr) *endptr = (char *)p;
+    return v;
+}
+
+/* strtoul — unsigned sibling of strtoll (string.c passes base 10). */
+unsigned long strtoul(const char *s, char **endptr, int base) {
+    const char *p = s;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    if (*p == '+') p++;
+    if (base == 0) base = 10;
+    unsigned long v = 0;
+    for (;;) {
+        int d;
+        if (*p >= '0' && *p <= '9') d = *p - '0';
+        else if (*p >= 'a' && *p <= 'z') d = *p - 'a' + 10;
+        else if (*p >= 'A' && *p <= 'Z') d = *p - 'A' + 10;
+        else break;
+        if (d >= base) break;
+        v = v * (unsigned long)base + (unsigned long)d;
+        p++;
+    }
+    if (endptr) *endptr = (char *)p;
+    return v;
+}
+
+/* ---- strtod: [ws][sign]digits[.digits][(e|E)[sign]digits] (string.c) ---- */
+double strtod(const char *s, char **endptr) {
+    const char *p = s;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    int neg = 0;
+    if (*p == '+' || *p == '-') { neg = (*p == '-'); p++; }
+    double val = 0.0;
+    while (*p >= '0' && *p <= '9') { val = val * 10.0 + (double)(*p - '0'); p++; }
+    if (*p == '.') {
+        p++;
+        double frac = 0.0, scale = 1.0;
+        while (*p >= '0' && *p <= '9') { frac = frac * 10.0 + (double)(*p - '0'); scale *= 10.0; p++; }
+        val += frac / scale;
+    }
+    if (*p == 'e' || *p == 'E') {
+        p++;
+        int eneg = 0;
+        if (*p == '+' || *p == '-') { eneg = (*p == '-'); p++; }
+        int ex = 0;
+        while (*p >= '0' && *p <= '9') { ex = ex * 10 + (*p - '0'); p++; }
+        double ep = 1.0;
+        for (int i = 0; i < ex; i++) ep *= 10.0;
+        if (eneg) val /= ep; else val *= ep;
+    }
+    if (neg) val = -val;
+    if (endptr) *endptr = (char *)p;
+    return val;
+}
+
+/* ---- minimal snprintf: %d/%i/%u/%x/%X (with l/ll), %f/%.*f/%.Nf, %g, %s, %c,
+ * %% — covers string.c (PRId64, %g, %.*f) + fmt.c. Integer paths are exact;
+ * float paths are reasonable (a fuller printf is a follow-up). ---- */
+static int rx_utoa(unsigned long long v, unsigned base, int upper, char *out) {
+    char tmp[24]; int n = 0;
+    const char *dig = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    if (v == 0) tmp[n++] = '0';
+    while (v) { tmp[n++] = dig[v % base]; v /= base; }
+    for (int i = 0; i < n; i++) out[i] = tmp[n - 1 - i];
+    return n;
+}
+
+static int rx_ftoa(double f, int prec, char *out) {
+    int n = 0;
+    if (f != f) { out[0] = 'n'; out[1] = 'a'; out[2] = 'n'; return 3; }
+    if (f < 0) { out[n++] = '-'; f = -f; }
+    double scale = 1.0;
+    for (int i = 0; i < prec; i++) scale *= 10.0;
+    unsigned long long ip = (unsigned long long)f;
+    double frac = f - (double)ip;
+    unsigned long long fp = (unsigned long long)(frac * scale + 0.5);
+    if (prec > 0 && fp >= (unsigned long long)scale) { ip++; fp -= (unsigned long long)scale; }
+    n += rx_utoa(ip, 10, 0, out + n);
+    if (prec > 0) {
+        out[n++] = '.';
+        char fb[24]; int fn = rx_utoa(fp, 10, 0, fb);
+        for (int i = 0; i < prec - fn; i++) out[n++] = '0';
+        for (int i = 0; i < fn; i++) out[n++] = fb[i];
+    }
+    return n;
+}
+
+int snprintf(char *buf, size_t cap, const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    size_t pos = 0;
+#define RX_PUT(c) do { if (cap && pos + 1 < cap) buf[pos] = (c); pos++; } while (0)
+    for (const char *p = fmt; *p; p++) {
+        if (*p != '%') { RX_PUT(*p); continue; }
+        p++;
+        if (*p == '%') { RX_PUT('%'); continue; }
+        while (*p == '-' || *p == '+' || *p == ' ' || *p == '0' || *p == '#') p++; /* flags (ignored) */
+        while (*p >= '0' && *p <= '9') p++;                                        /* width (ignored) */
+        int prec = -1;
+        if (*p == '.') {
+            p++;
+            if (*p == '*') { prec = va_arg(ap, int); p++; }
+            else { prec = 0; while (*p >= '0' && *p <= '9') { prec = prec * 10 + (*p - '0'); p++; } }
+        }
+        int lng = 0;
+        while (*p == 'l') { lng++; p++; }
+        while (*p == 'h' || *p == 'z') p++; /* other length mods (ignored) */
+        char num[40]; int nn;
+        switch (*p) {
+            case 'd': case 'i': {
+                long long v = (lng >= 2) ? va_arg(ap, long long)
+                            : (lng == 1) ? (long long)va_arg(ap, long)
+                                         : (long long)va_arg(ap, int);
+                if (v < 0) { RX_PUT('-'); v = -v; }
+                nn = rx_utoa((unsigned long long)v, 10, 0, num);
+                for (int i = 0; i < nn; i++) RX_PUT(num[i]);
+                break;
+            }
+            case 'u': {
+                unsigned long long v = (lng >= 2) ? va_arg(ap, unsigned long long)
+                                     : (lng == 1) ? (unsigned long long)va_arg(ap, unsigned long)
+                                                  : (unsigned long long)va_arg(ap, unsigned);
+                nn = rx_utoa(v, 10, 0, num); for (int i = 0; i < nn; i++) RX_PUT(num[i]); break;
+            }
+            case 'x': case 'X': {
+                unsigned long long v = (lng >= 2) ? va_arg(ap, unsigned long long)
+                                     : (lng == 1) ? (unsigned long long)va_arg(ap, unsigned long)
+                                                  : (unsigned long long)va_arg(ap, unsigned);
+                nn = rx_utoa(v, 16, *p == 'X', num); for (int i = 0; i < nn; i++) RX_PUT(num[i]); break;
+            }
+            case 'f': case 'F': {
+                double v = va_arg(ap, double);
+                nn = rx_ftoa(v, prec < 0 ? 6 : prec, num); for (int i = 0; i < nn; i++) RX_PUT(num[i]); break;
+            }
+            case 'g': case 'G': {
+                double v = va_arg(ap, double);
+                nn = rx_ftoa(v, 6, num);
+                while (nn > 0 && num[nn - 1] == '0') nn--;     /* trim trailing zeros */
+                if (nn > 0 && num[nn - 1] == '.') nn--;        /* and a dangling '.' */
+                for (int i = 0; i < nn; i++) RX_PUT(num[i]); break;
+            }
+            case 's': { const char *s = va_arg(ap, const char *); if (!s) s = "(null)"; while (*s) RX_PUT(*s++); break; }
+            case 'c': { int c = va_arg(ap, int); RX_PUT((char)c); break; }
+            default: RX_PUT('%'); if (*p) RX_PUT(*p); break;
+        }
+    }
+#undef RX_PUT
+    if (cap) buf[pos < cap ? pos : cap - 1] = '\0';
+    va_end(ap);
+    return (int)pos;
+}
+
+/* --- tier 4.09 wasm sync shim (gui-stack Q43) ------------------------------
+ * wasm32 is single-threaded, so a Mutex / SharedSync is just a one-slot i64
+ * box and the guard handle IS the mutex pointer. The pthread-backed sync
+ * runtime (library/std/sync/runtime/*.c) is NOT bundled for wasm, so define
+ * the ruxen_*_* surface here over the bundled allocator. Signatures match the
+ * .rx lib decls' wasm ABI exactly (handles are i32 pointers; payloads i64). */
+int32_t ruxen_mutex_new(int64_t v) { int64_t *p = (int64_t *)malloc(8); if (p) *p = v; return (int32_t)(uintptr_t)p; }
+int32_t ruxen_mutex_lock(int32_t m) { return m; }
+int32_t ruxen_mutex_try_lock(int32_t m) { return m; }
+int64_t ruxen_mutex_guard_get(int32_t g) { return *(int64_t *)(uintptr_t)g; }
+void ruxen_mutex_guard_set(int32_t g, int64_t v) { *(int64_t *)(uintptr_t)g = v; }
+void ruxen_mutex_guard_drop(int32_t g) { (void)g; }
+int32_t ruxen_mutex_is_poisoned(int32_t m) { (void)m; return 0; }
+void ruxen_mutex_clear_poison(int32_t m) { (void)m; }
+int64_t ruxen_mutex_into_inner(int32_t m) { return *(int64_t *)(uintptr_t)m; }
+void ruxen_mutex_drop(int32_t m) { (void)m; }
+int32_t ruxen_sharedsync_new(int64_t v) { int64_t *p = (int64_t *)malloc(8); if (p) *p = v; return (int32_t)(uintptr_t)p; }
+int32_t ruxen_sharedsync_clone(int32_t s) { return s; }
+int64_t ruxen_sharedsync_strong_count(int32_t s) { (void)s; return 1; }
+int64_t ruxen_sharedsync_get(int32_t s) { return *(int64_t *)(uintptr_t)s; }
+void ruxen_sharedsync_drop(int32_t s) { (void)s; }
+
+/* --- tier 4.09 wasm fmt shim (gui-stack Q44) -------------------------------
+ * The MIR interpolation lowerer emits the mangled callees Formatter_new /
+ * Formatter_write_str / Formatter_buffer (NOT the ruxen_fmt_formatter_* FFI
+ * aliases), and the wasm backend does not bridge mangled→C-symbol for them, so
+ * they leak as host imports. Define them here over the already-bundled fmt.c so
+ * string interpolation is self-contained on wasm. ABI matches the emitted call
+ * sites: new()->i64, write_str(i32,i32)->void, buffer(i32)->i64. */
+struct RuxenFormatter;
+extern struct RuxenFormatter *ruxen_fmt_formatter_new(void);
+extern int64_t ruxen_fmt_formatter_write_str(struct RuxenFormatter *, const char *);
+extern const char *ruxen_fmt_formatter_buffer(struct RuxenFormatter *);
+int64_t Formatter_new(void) { return (int64_t)(uintptr_t)ruxen_fmt_formatter_new(); }
+void Formatter_write_str(int32_t f, int32_t s) { ruxen_fmt_formatter_write_str((struct RuxenFormatter *)(uintptr_t)f, (const char *)(uintptr_t)s); }
+int64_t Formatter_buffer(int32_t f) { return (int64_t)(uintptr_t)ruxen_fmt_formatter_buffer((struct RuxenFormatter *)(uintptr_t)f); }
+
+/* --- tier 4.09 host->wasm marshalling (gui-stack Q45) ----------------------
+ * Export the bundled allocator so a JS host can allocate a buffer inside wasm
+ * linear memory, write a NUL-terminated UTF-8 string into it, and pass the
+ * pointer to an exported Ruxen `def` typed `&String` (Ruxen strings ARE
+ * NUL-terminated char*). This is the JS->wasm string path text inputs need —
+ * without it the host can only read strings OUT of wasm, never write them in. */
+__attribute__((export_name("ruxen_wasm_alloc"))) void *ruxen_wasm_alloc(int32_t n) { return malloc((size_t)(uint32_t)n); }
+__attribute__((export_name("ruxen_wasm_free"))) void ruxen_wasm_free(void *p) { free(p); }
+"#;
+
+/// Heap-core runtime `.c` files (by basename) compiled for the wasm target. A
+/// curated subset of the per-package `runtime/*.c` — matches the curated wasm
+/// stdlib bootstrap (tier 4.09). Grows as more heap surface is wired (string, fmt).
+// The heap-core stdlib runtime compiled+linked for wasm. All the libc these
+// need (malloc family, mem*/str*, qsort, snprintf, strtod, and fprintf/exit
+// stubs) lives in the WASM_RT_C shim. fmt.c/string.c error paths trap via the
+// exit stub. Grows as more of the stdlib is needed on wasm (tier 4.09).
+pub const WASM_RUNTIME_CORE: &[&str] = &["alloc.c", "vec.c", "string.c", "fmt.c", "hash.c"];
+
+/// Discover the C compiler used to build the wasm runtime: `RUXEN_WASM_CLANG`
+/// override → `clang` on `PATH` (the LLVM-18 prefix should be on PATH where the
+/// wasm backend already assumes LLVM 18).
+fn find_wasm_clang() -> String {
+    std::env::var("RUXEN_WASM_CLANG")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "clang".to_string())
+}
+
+/// Compile a single C source to a `wasm32-unknown-unknown` object with clang.
+/// Freestanding (`-nostdlib`), `-fno-builtin` so the shim's `mem*`/`qsort` don't
+/// self-recurse and so the stdlib runtime's `mem*` calls resolve to the shim.
+fn compile_one_wasm_c(src: &Path, label: &str) -> Result<PathBuf, String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or(label);
+    let out = std::env::temp_dir().join(format!(
+        "ruxen_wasm_{}_{}_{}.o",
+        stem,
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed),
+    ));
+    let clang = find_wasm_clang();
+    let mut cmd = Command::new(&clang);
+    cmd.arg("--target=wasm32-unknown-unknown")
+        .arg("-nostdlib")
+        .arg("-fno-builtin")
+        .arg("-O2")
+        .arg("-c")
+        .arg(src)
+        .arg("-o")
+        .arg(&out);
+    let status = cmd.status().map_err(|e| {
+        format!(
+            "Failed to invoke '{}' to compile {} for wasm: {}. \
+             Install clang (LLVM 18) or set RUXEN_WASM_CLANG.",
+            clang,
+            src.display(),
+            e
+        )
+    })?;
+    if !status.success() {
+        return Err(format!(
+            "wasm C compile failed for {} ({})",
+            src.display(),
+            label
+        ));
+    }
+    Ok(out)
+}
+
+/// Compile one heap-core runtime `.c` (e.g. `vec.c`) for wasm. See [`compile_one_wasm_c`].
+pub fn compile_runtime_for_wasm(src: &Path) -> Result<PathBuf, String> {
+    compile_one_wasm_c(src, "runtime")
+}
+
+/// Materialize [`WASM_RT_C`] to a temp file and compile it for wasm. Returns the
+/// object path (caller links it, then `emit_wasm_module` cleans it up).
+pub fn compile_wasm_shim() -> Result<PathBuf, String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let c_path = std::env::temp_dir().join(format!(
+        "ruxen_wasm_shim_{}_{}.c",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed),
+    ));
+    std::fs::write(&c_path, WASM_RT_C)
+        .map_err(|e| format!("Failed to write wasm runtime shim: {}", e))?;
+    let obj = compile_one_wasm_c(&c_path, "wasm_rt");
+    let _ = std::fs::remove_file(&c_path);
+    obj
 }
 
 /// Two-stage Docker link: emit the target object locally, then compile the

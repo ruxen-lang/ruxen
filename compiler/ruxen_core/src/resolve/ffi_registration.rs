@@ -1437,9 +1437,33 @@ impl Resolver {
 /// GP register and the C side would read garbage. The parity guard
 /// `tests/runtime_abi_derivation.rs` pins the derived width for every
 /// shared symbol, so a wrong receiver here fails the guard immediately.
+///
+/// ## wasm32: the scalar int-slot homes need an EXPLICIT i64, not a class
+///
+/// `Int`/`USize`/`Bool`/`Char` pass the receiver value BY VALUE in an
+/// `int64_t` slot (`ruxen_int_to_string(int64_t)`,
+/// `ruxen_bool_to_string(int64_t)`, `ruxen_char_to_string(int64_t)`).
+/// A `Ty::Class { name }` receiver derives I64 in Cranelift (where every
+/// pointer-like type is I64) AND on 64-bit LLVM targets (`ptr` == i64),
+/// so it happened to match. But the LLVM backend lowers `Ty::Class` to a
+/// real `ptr`, and on **wasm32 a pointer is i32** — so the `.rx`-derived
+/// FFI decl came out `(i32) -> i32` and clashed with the canonical
+/// `(i64) -> ptr` runtime decl, making wasm-ld splice a trapping stub
+/// (`function signature mismatch: ruxen_int_to_string`). Prepend an
+/// explicit `Ty::Int64` instead: it lowers to i64 on EVERY target/backend
+/// (Cranelift I64 — unchanged width — and LLVM i64 even on wasm32),
+/// matching the C `int64_t`. The receiver value (a `Char` i32 / `Bool`
+/// i8) is zero-extended to i64 by `coerce_value` at the call site. This
+/// is the same "int-slot ABI" rule that maps `Ty::TypeParam` to i64
+/// (`codegen/llvm/types.rs`). Heap/pointer homes (`String`, the
+/// collections, `Option`/`Result`) keep the `Ty::Class` handle: their C
+/// symbols genuinely take a `char*` / boxed pointer, which IS a wasm i32,
+/// so they must NOT be widened.
 fn primitive_ffi_receiver_ty(parent_name: &str) -> Ty {
     match parent_name {
         "Float" => Ty::Float,
+        // Scalar int-slot method-homes: receiver crosses as `int64_t`.
+        "Int" | "USize" | "Bool" | "Char" => Ty::Int64,
         _ => Ty::Class {
             name: parent_name.to_string(),
             generic_args: vec![],

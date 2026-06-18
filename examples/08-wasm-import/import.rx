@@ -1,0 +1,12 @@
+## Tier 4.09 — host imports on wasm. `host_mul` is supplied by the JS host at
+## instantiate time: the lib name ("env") is the import MODULE and the `as`
+## symbol ("host_mul") is the import FIELD, so this imports `env.host_mul`. Use
+## any module name (e.g. lib "canvas") to organize host APIs — that's how the
+## browser canvas backend will call into JS. `compute` is the wasm export.
+lib "env"
+  def host_mul as "host_mul"(a: Int, b: Int) -> Int
+end
+
+def compute -> Int
+  host_mul(6, 7)
+end

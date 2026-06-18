@@ -42,31 +42,40 @@ miss() { say "SKIP: $*"; exit 0; }
 command -v node >/dev/null 2>&1 || miss "node not found"
 [ -x "$RUXEN" ] || miss "ruxen binary not found at $RUXEN (build with --features llvm)"
 
-WASM="$WORK/add.wasm"
+# Verify one example: compile <dir>/<stem>.rx → wasm, run <dir>/run.mjs on it.
+# Echoes PASS/SKIP/FAIL and returns 0 (pass), 2 (skip), or 1 (fail). A
+# toolchain-without-llvm compile error is a SKIP, not a FAIL.
+verify_example() {
+  local dir="$1" stem="$2" label="$3"
+  local wasm="$WORK/${stem}.wasm"
+  local out rc
+  out="$("$RUXEN" compile "$dir/${stem}.rx" --target wasm32-unknown-unknown -o "$wasm" 2>&1)"
+  rc=$?
+  if [ $rc -ne 0 ]; then
+    case "$out" in
+      *"requires the LLVM backend"*|*"LLVM backend not available"*|*"wasm-ld not found"*)
+        say "SKIP: wasm toolchain unavailable ($label): $out"; return 2 ;;
+      *)
+        say "FAIL: ruxen compile $label errored:"; say "$out"; return 1 ;;
+    esac
+  fi
+  [ -f "$wasm" ] || { say "FAIL: no .wasm produced ($label)"; return 1; }
+  if node "$dir/run.mjs" "$wasm"; then
+    say "PASS: $label — .wasm built by ruxen runs in node"; return 0
+  else
+    say "FAIL: node run.mjs reported a wrong/invalid export ($label)"; return 1
+  fi
+}
 
-# Compile. A toolchain built WITHOUT --features llvm errors with a clear
-# "requires the LLVM backend" message — treat that as SKIP, not FAIL.
-COMPILE_OUT="$("$RUXEN" compile "$EXAMPLE/add.rx" \
-  --target wasm32-unknown-unknown -o "$WASM" 2>&1)"
-COMPILE_RC=$?
-if [ $COMPILE_RC -ne 0 ]; then
-  case "$COMPILE_OUT" in
-    *"requires the LLVM backend"*|*"LLVM backend not available"*|*"wasm-ld not found"*)
-      miss "wasm toolchain unavailable (rebuild with --features llvm): $COMPILE_OUT" ;;
-    *)
-      say "FAIL: ruxen compile --target wasm32-unknown-unknown errored:"
-      say "$COMPILE_OUT"
-      exit 1 ;;
-  esac
-fi
+# Bar 1: pure-math reactor (tier 4.03). Bar 2: heap Array (tier 4.09).
+# Bar 3: host import (tier 4.09) — its run.mjs supplies the imported function.
+verify_example "$EXAMPLE" "add" "05-wasm (math)"; rc1=$?
+[ $rc1 -eq 2 ] && miss "math bar skipped — wasm toolchain unavailable"
+verify_example "$REPO_ROOT/examples/07-wasm-heap" "heap" "07-wasm-heap (heap Array)"; rc2=$?
+verify_example "$REPO_ROOT/examples/08-wasm-import" "import" "08-wasm-import (host import)"; rc3=$?
 
-[ -f "$WASM" ] || { say "FAIL: no .wasm produced"; exit 1; }
-
-# Validate + run the asserted exports in node.
-if node "$EXAMPLE/run.mjs" "$WASM"; then
-  say "PASS: wasm32-unknown-unknown — .wasm built by ruxen runs in node"
-  exit 0
-else
-  say "FAIL: node run.mjs reported a wrong/invalid export"
+# A skipped bar is not a failure; a real FAIL is.
+if [ $rc1 -eq 1 ] || [ $rc2 -eq 1 ] || [ $rc3 -eq 1 ]; then
   exit 1
 fi
+exit 0

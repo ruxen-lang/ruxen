@@ -268,6 +268,51 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       param). Sub-gap: a `&block` param's type doesn't infer through the yield
       seam (untyped block param ⇒ `?T`). Likely from `8a783f9` (block semantics).
       Repro: `quiver/tmp/test-cache/ruxen-two-var-yield.md`; details §Q36.
+- [ ] **Q41 · S2 — LLVM backend can't lower a `DataAddr` class-info ref for a
+      `dispatch runtime` mixin type ⇒ `ruxen build --release` blocked for async
+      projects (NEW 2026-06-14).** `ruxen build` (Cranelift) is fine; `--release`
+      (LLVM) aborts: `mixin-vtables: LLVM backend cannot lower DataAddr { data_sym:
+      '__rx_classinfo_TimeSleepFuture' }`. Fires compiling the `rondo` library
+      itself (its async server pulls `TimeSleepFuture` via `read_with_timeout`), so
+      every release build of any rondo/async-using project hits it — there is no
+      optimized build path (no flag for Cranelift+opt; `RUXEN_BACKEND=cranelift`
+      doesn't override `--release`). Cranelift already lowers this, so the fix is
+      LLVM-side. Found benchmarking rondo vs Go `net/http` (debug-Cranelift rondo
+      ~113k RPS vs optimized Go ~164k — the debug handicap confounds the number).
+      rondo workaround W22; details §Q41.
+- [x] **Q42 · S2 — deliver a DOM event to a Ruxen handler on wasm — NOT a
+      compiler bug; pure-Ruxen pattern. RESOLVED 2026-06-16 (verified by spike).**
+      Spike GREEN: exported `def boot() -> Registry` (holds `handlers: Array[any
+      Fn]`) + `def dispatch_event(reg: &var Registry, id, kind)` calling
+      `reg.handlers.get(id)` via `f.()` + `def read_count`, compiled to wasm32 and
+      run in node — JS holds the i32 `Registry` handle, calls `dispatch_event`
+      twice across SEPARATE calls, `read_count` → 2, ZERO host imports. No
+      `__indirect_function_table`, no `call_indirect`, no codegen edit. (`init` is
+      the reserved constructor word → exported entry named `boot`.) Repro
+      `tmp/spikeA/`; details §Q42 + plan RESULTS.
+- [x] **Q43 · S3 — wasm single-threaded sync runtime — RESOLVED 2026-06-16.**
+      Bundled single-threaded `ruxen_mutex_*`/`ruxen_sharedsync_*` in the
+      `WASM_RT_C` shim (one-slot i64 boxes); quiver's `State` runs on wasm with no
+      sync host imports (verified `quiver/examples/counter-dom`). wasm-only, no
+      native regression. Originally filed as: Phase-0.5
+      Spike C: a minimal `Mutex` compiles to wasm32 cleanly (does NOT hit the Q41
+      vtable wall), but `std.sync` is pthread-backed so `mutex.c` is excluded from
+      the curated wasm runtime → `ruxen_mutex_new/lock/guard_get/guard_set` are
+      undefined host imports. Proven to run with a thin single-threaded JS sync
+      shim (the canvas-harness approach). Fix: ship a `cfg(wasm)` no-op sync
+      runtime so quiver-on-wasm is self-contained. Repro `tmp/spikeC/`; §Q43.
+- [x] **Q44 · S3 — `Formatter` wasm runtime — RESOLVED 2026-06-16.** The
+      `WASM_RT_C` shim now defines the mangled `Formatter_new/write_str/buffer`
+      over the bundled `fmt.c`, so interpolation is self-contained on wasm
+      (verified `quiver/examples/counter-dom`). Originally filed as:
+      `"…#{x}"` lowers to `Formatter_new/write_str/buffer`
+      (ABI: `new()->i64`, `write_str(i32,i32)->void`, `buffer(i32)->i64`); `fmt.c`
+      isn't in the curated wasm runtime → undefined host imports. Host-shimmable,
+      but `buffer` must return the result String IN wasm memory (JS→wasm marshalling
+      gap — no exported allocator, so the shim bump-writes a high scratch region).
+      Proven working in the browser counter (`quiver/examples/counter-dom`). Fix:
+      bundle a `cfg(wasm)` fmt runtime, or export `ruxen_alloc` so a host shim can
+      allocate safely. Sibling of Q43; §Q44.
 - [x] **Q37 · S2 — generic `frame[S: Mixin]` gets a bogus `__block` when
       consumed by a binary — SAME BUG AS Q37·S1, FIXED 2026-06-10.** This was
       filed separately as the "binary-consumes-library" symptom (`could not infer

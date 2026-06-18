@@ -23,6 +23,16 @@ pub fn ty_to_llvm<'ctx>(ty: &Ty, context: &'ctx Context) -> Option<BasicTypeEnum
             Some(context.i64_type().into())
         }
 
+        // A type-erased generic value crosses the ABI as an int64 slot (NOT a
+        // pointer): the C runtime takes/returns it as `int64_t`, and the Cranelift
+        // backend maps `TypeParam` to I64 likewise. On 64-bit targets a pointer is
+        // also i64 so the prior `ptr` mapping happened to work, but on wasm32 a
+        // pointer is i32 — an ABI mismatch with the runtime's int64 slots (e.g.
+        // `ruxen_vec_push`'s item). Map to i64 to match the slot ABI on every
+        // target. Pointer values flowing through a `T` slot are int/ptr-converted
+        // at the boundary (see `coerce_value`). (tier 4.09)
+        Ty::TypeParam { .. } => Some(context.i64_type().into()),
+
         // Float types
         Ty::Float32 => Some(context.f32_type().into()),
         Ty::Float | Ty::Float64 => Some(context.f64_type().into()),
@@ -52,7 +62,6 @@ pub fn ty_to_llvm<'ctx>(ty: &Ty, context: &'ctx Context) -> Option<BasicTypeEnum
         | Ty::SomeMixin(_)
         | Ty::Alias { .. }
         | Ty::Newtype { .. }
-        | Ty::TypeParam { .. }
         | Ty::Infer(_)
         | Ty::Tuple(_)
         | Ty::FixedArray(_, _) => Some(context.ptr_type(AddressSpace::default()).into()),

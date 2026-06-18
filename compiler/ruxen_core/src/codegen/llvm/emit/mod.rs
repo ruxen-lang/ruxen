@@ -56,7 +56,7 @@ pub fn compile_program<'ctx>(
     // zero_rust_stdlib_classes.spec.md ABI-derivation migration.
     for lib in &program.ffi_libs {
         for ffi_fn in &lib.functions {
-            declare_ffi_function(module, context, ffi_fn, &lib.name);
+            declare_ffi_function(module, context, ffi_fn, &lib.name, is_wasm);
         }
     }
 
@@ -107,11 +107,21 @@ pub fn compile_program<'ctx>(
 }
 
 /// Declare an FFI function in the LLVM module.
+///
+/// Tier 4.09 (wasm host imports): on the wasm target a top-level `lib "<module>"`
+/// block declares functions the HOST supplies — there is no native linking. Each
+/// gets `wasm-import-module = "<module>"` + `wasm-import-name = "<symbol>"` so
+/// `wasm-ld` emits a precise, intentional import (`<module>.<symbol>`) instead of
+/// relying on `--allow-undefined`'s implicit `env` default. The stdlib's
+/// `ruxen_*` runtime bindings are class-body FFI (declared in Pass 1), NOT
+/// top-level libs, so they are unaffected and still resolve to the linked
+/// runtime objects.
 fn declare_ffi_function<'ctx>(
     module: &Module<'ctx>,
     context: &'ctx Context,
     ffi_fn: &FfiFuncDecl,
     lib_name: &str,
+    is_wasm: bool,
 ) {
     if module.get_function(&ffi_fn.name).is_some() {
         return;
@@ -140,6 +150,20 @@ fn declare_ffi_function<'ctx>(
         fn_type,
         Some(inkwell::module::Linkage::External),
     );
+    let _ = llvm_fn;
+
+    // Host imports on wasm: we deliberately do NOT pin `wasm-import-module`/
+    // `-name` attributes. An explicit import-module forces the symbol to be an
+    // import even when a definition exists — which conflicts with FFI bindings
+    // whose C runtime IS linked on wasm (e.g. the stdlib `ruxen_string_*` /
+    // `ruxen_vec_*` in WASM_RUNTIME_CORE: import-vs-defined mismatch). Instead we
+    // let `wasm-ld --allow-undefined` resolve defined symbols and route the rest
+    // to the default `env` import module — so genuinely host-supplied functions
+    // (e.g. `ruxen_canvas_*`, and stubs for sync/io/time) arrive as `env.<symbol>`
+    // for the JS host to provide, while linked runtime symbols just resolve.
+    // (Custom import modules would need attrs gated on "not in the linked set" —
+    // tier 4.09 follow-up.) `is_wasm` is kept for that future gating.
+    let _ = is_wasm;
 
     // Also register with lib-qualified name
     if !lib_name.is_empty() {
@@ -264,6 +288,27 @@ fn compile_function<'ctx>(
 //  Value generation
 // ═══════════════════════════════════════════════════════════════════════
 
+/// Whether a MIR operand is a signed numeric value (for `sitofp`/`fptosi`
+/// selection on numeric `as` casts). Mirrors
+/// `cranelift::emit::mir_arg_is_signed`.
+pub(super) fn mir_arg_is_signed(arg: &MirValue, func: &MirFunction) -> bool {
+    let ty = match arg {
+        MirValue::Literal(Literal::Int(_)) | MirValue::Literal(Literal::Char(_)) => return true,
+        MirValue::Literal(Literal::Bool(_))
+        | MirValue::Literal(Literal::Float(_))
+        | MirValue::Literal(Literal::String(_))
+        | MirValue::Unit => return false,
+        MirValue::Use(local_id) => match func.locals.get(*local_id as usize) {
+            Some(local) => &local.ty,
+            None => return false,
+        },
+    };
+    matches!(
+        ty,
+        Ty::Int8 | Ty::Int16 | Ty::Int32 | Ty::Int | Ty::Int64 | Ty::ISize | Ty::Char
+    )
+}
+
 /// Convert a MirValue to an LLVM BasicValueEnum.
 pub(super) fn gen_value<'ctx>(
     mir_val: &MirValue,
@@ -303,16 +348,79 @@ pub(super) fn gen_value<'ctx>(
 // ═══════════════════════════════════════════════════════════════════════
 
 /// Coerce a value to a target type if they differ.
+///
+/// Signedness-blind convenience wrapper. For numeric int↔float casts the
+/// signedness matters (`-5 as Float` must be `-5.0`, not `1.8e19`), so the
+/// `Assign` codegen — the one place a Ruxen `as` numeric cast is lowered —
+/// calls [`coerce_value_signed`] with the correct signedness instead. Mirrors
+/// the Cranelift backend's `coerce_value` / `coerce_value_signed` split
+/// (`codegen/cranelift/emit.rs`).
 pub(super) fn coerce_value<'ctx>(
     val: BasicValueEnum<'ctx>,
     target_ty: BasicTypeEnum<'ctx>,
+    builder: &Builder<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    coerce_value_signed(val, target_ty, false, builder)
+}
+
+/// Signedness-aware coercion (mirrors `cranelift::emit::coerce_value_signed`).
+///
+/// `signed` only affects numeric int↔float conversions: for int→float it
+/// selects the SOURCE interpretation (`sitofp` vs `uitofp`); for float→int it
+/// selects the TARGET interpretation (`fptosi` vs `fptoui`). Int↔int and
+/// float↔float widening/narrowing ignore it.
+pub(super) fn coerce_value_signed<'ctx>(
+    val: BasicValueEnum<'ctx>,
+    target_ty: BasicTypeEnum<'ctx>,
+    signed: bool,
     builder: &Builder<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     if val.get_type() == target_ty {
         return val;
     }
 
-    // Integer <-> Integer: truncate or zero-extend
+    // Int -> Float (numeric cast, e.g. `n as Float`). Without this an integer
+    // value stored into a float-typed slot was left as an int bit-pattern in a
+    // narrower (f32) alloca — a type-punned, out-of-bounds store the LLVM
+    // optimizer folds to `undef` (a 9-arg FFI's 4th f64 arg vanished on wasm).
+    if let (BasicValueEnum::IntValue(int_val), BasicTypeEnum::FloatType(target_float)) =
+        (val, target_ty)
+    {
+        return if signed {
+            builder
+                .build_signed_int_to_float(int_val, target_float, "sitofp")
+                .unwrap()
+                .into()
+        } else {
+            builder
+                .build_unsigned_int_to_float(int_val, target_float, "uitofp")
+                .unwrap()
+                .into()
+        };
+    }
+
+    // Float -> Int (numeric cast, e.g. `f as Int`).
+    if let (BasicValueEnum::FloatValue(float_val), BasicTypeEnum::IntType(target_int)) =
+        (val, target_ty)
+    {
+        return if signed {
+            builder
+                .build_float_to_signed_int(float_val, target_int, "fptosi")
+                .unwrap()
+                .into()
+        } else {
+            builder
+                .build_float_to_unsigned_int(float_val, target_int, "fptoui")
+                .unwrap()
+                .into()
+        };
+    }
+
+    // Integer <-> Integer: truncate, or extend honoring `signed` (sext for a
+    // signed source so `-1i32 as Int` is `-1`, not `0x0000_0000_FFFF_FFFF`).
+    // The default wrapper passes `signed = false` → zext, preserving the prior
+    // behaviour at every non-cast call site. Mirrors Cranelift's
+    // `coerce_value_signed` int↔int branch.
     if let (BasicValueEnum::IntValue(int_val), BasicTypeEnum::IntType(target_int)) =
         (val, target_ty)
     {
@@ -321,6 +429,11 @@ pub(super) fn coerce_value<'ctx>(
         return if src_bits > dst_bits {
             builder
                 .build_int_truncate(int_val, target_int, "trunc")
+                .unwrap()
+                .into()
+        } else if signed {
+            builder
+                .build_int_s_extend(int_val, target_int, "sext")
                 .unwrap()
                 .into()
         } else {

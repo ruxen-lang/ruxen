@@ -1,40 +1,43 @@
-## std::scalar — scalar primitive method-home class (Int).
+## std::scalar — scalar primitive method-homes (Int, Float, Bool, Char, USize).
 ##
-## Zero-Rust-stdlib migration, Phase 3 (Option C). `class Int` below is
-## the METHOD-HOME class for the `Ty::Int` primitive head: it carries
-## the FFI alias decls (`Int_to_s` → `ruxen_int_to_string`, etc.) AND
-## the true surface return types delegated via the builtin-receiver
+## Zero-Rust-stdlib migration, Phase 3 (Option C) + Feature A. The classes
+## below are the METHOD-HOME classes for the scalar primitive heads: each
+## carries the FFI alias decls (`Int_to_s` → `ruxen_int_to_string`, etc.)
+## AND the true surface return types delegated via the builtin-receiver
 ## bridge (`bridge_builtin_method`, reached because
-## `builtin_bridge::is_delegated_head` includes `Ty::Int`).
+## `builtin_bridge::is_delegated_head` includes the scalar heads).
 ##
-## CRITICAL INVARIANT — this class changes only the METHOD-HOME, NOT the
-## value representation. `Int` is registered as `TypeAlias { target:
-## Ty::Int }` by `register_primitives`; the bootstrap merge anchors this
-## class onto the same DefId and stomps it to `Class`, but
-## `resolve_type_expr`'s `primitive_class_ty` fast-path returns the
-## primitive head for a bare `let x: Int` annotation, so literals,
-## arithmetic, comparisons, and the C ABI / runtime repr are unchanged.
-## The receiver is passed by value (i64) at the call site — `42.to_s`.
+## CRITICAL INVARIANT — these classes change only the METHOD-HOME, NOT the
+## value representation. Each is registered as `TypeAlias { target: <head> }`
+## by `register_primitives`; the bootstrap merge anchors the class onto the
+## same DefId and stomps it to `Class`, but `resolve_type_expr`'s
+## `primitive_class_ty` fast-path returns the primitive head for a bare
+## `let x: Int` annotation, so literals, arithmetic, comparisons, and the C
+## ABI / runtime repr are unchanged. The receiver value is passed by value
+## at the call site — `42.to_s`, `'a'.to_s`.
 ##
-## ## ABI notes — why ONLY Int (not Float/Bool/Char)
+## ## ABI notes — the FFI receiver width
 ##
-## The instance-method receiver is prepended to the derived FFI param
-## list as `Ty::Class { name: "Int" }` (`register_class_lib_method_in`),
-## which `ty_to_cranelift` lowers to a pointer-sized **I64**. That
-## happens to MATCH `ruxen_int_to_string(int64_t)` / `ruxen_int_to_f(
-## int64_t)` exactly, so Int migrates cleanly (the parity guard
-## `tests/runtime_abi_derivation.rs` confirms it).
+## The instance-method receiver is prepended to the derived FFI param list
+## by `primitive_ffi_receiver_ty` (`register_class_lib_method_in`), choosing
+## a `Ty` whose lowered width matches the C symbol's first parameter:
 ##
-## Float / Bool / Char do NOT migrate — the prepended class receiver is
-## always I64, but their C symbols take a `double` (Float → F64) or an
-## `int64_t` that a `class Bool` / `class Char` receiver would derive to
-## I8 / I32. The derived receiver width would contradict the C ABI and
-## fail the parity guard. They stay Rust residuals in
-## `typeck/method_resolvers/numeric.rs` — same divergence rule as
-## `String.remove`. FOLLOW-UP: teach the receiver-prepend to use the
-## primitive head (or widen the C receivers) and migrate Float/Bool/Char.
-## `USize.to_s` / `to_string` likewise stay residual — there is no
-## `class USize` (it shares `ruxen_int_to_string` with Int).
+##   * `Float` → `Ty::Float` (F64) — its `ruxen_float_*` symbols take a
+##     `double`.
+##   * `Int` / `USize` / `Bool` / `Char` → an explicit `Ty::Int64` — their
+##     C symbols take the value by value in an `int64_t` slot
+##     (`ruxen_int_to_string(int64_t)`, `ruxen_bool_to_string(int64_t)`,
+##     `ruxen_char_to_string(int64_t)`). `Ty::Int64` lowers to i64 on EVERY
+##     backend/target. A `Ty::Class` receiver also lowered to I64 in
+##     Cranelift and on 64-bit LLVM (ptr == i64), so it matched there — but
+##     the LLVM backend lowers `Ty::Class` to a real `ptr`, which is **i32
+##     on wasm32**, producing an `(i32) -> i32` decl that clashed with the
+##     canonical `(i64)` runtime decl and made wasm-ld splice a trapping
+##     stub. The Bool/Char receiver value (i8 / i32) is zero-extended to i64
+##     by `coerce_value` at the call site (both are non-negative).
+##
+## The parity guard `tests/runtime_abi_derivation.rs` pins every derived
+## width against the frozen `runtime_signature` table.
 class Int
   # `Add` capability: Int elements can be `sum`med (receiver-element
   # bound on `Array[T].sum where T: Add`). Nominal opt-in — the bound
@@ -53,10 +56,16 @@ end
 ## These migrated once `primitive_ffi_receiver_ty` taught the receiver-
 ## prepend to use the C symbol's TRUE register class:
 ##   * `Float` → F64 (its `ruxen_float_*` symbols take a `double`);
-##   * `Bool` / `Char` / `USize` → I64 (their `ruxen_*` symbols take an
-##     `int64_t`, so the default pointer-sized class receiver already
-##     matches — the migration is the `.rx` shell + `primitive_class_ty`
-##     + `is_delegated_head` entries, no width change for these three).
+##   * `Int` / `USize` / `Bool` / `Char` → an explicit `Ty::Int64` (their
+##     `ruxen_*` symbols take the value by-value in an `int64_t` slot).
+##     A `Ty::Class` receiver lowered to I64 in Cranelift AND on 64-bit
+##     LLVM (ptr == i64), so it matched THERE — but the LLVM backend
+##     lowers `Ty::Class` to a real `ptr`, which is **i32 on wasm32**,
+##     producing an `(i32) -> i32` decl that clashed with the canonical
+##     `(i64)` runtime decl and made wasm-ld splice a trapping stub. The
+##     explicit `Ty::Int64` is i64 on every backend/target. The
+##     migration is the `.rx` shell + `primitive_class_ty` +
+##     `is_delegated_head` entries; width is i64 everywhere now.
 ## The parity guard `tests/runtime_abi_derivation.rs` pins every derived
 ## width against the frozen `runtime_signature` table.
 class Float

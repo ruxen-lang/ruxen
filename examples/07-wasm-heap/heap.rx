@@ -1,0 +1,9 @@
+## Tier 4.09 — heap on wasm. `array_sum` builds a heap-allocated Array
+## (ruxen_vec_new + push over the bundled wasm allocator) and sums it. Unlike
+## examples/05-wasm (pure math, no heap), this exercises String/Array support
+## on wasm32-unknown-unknown — the foundation for running the GUI stack in the
+## browser. A reactor module exports `array_sum`; no `main` (the host calls it).
+def array_sum -> Int
+  let v = [10, 20, 12]
+  v.sum
+end

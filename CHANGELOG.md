@@ -8,6 +8,106 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **macOS native backends: compile `.m` Objective-C runtime shims + opt-in
+  framework linking.** `find_runtime_sources` now compiles `runtime/*.m`
+  (Objective-C — clang detects it by extension) alongside `.c`, and a new opt-in
+  `RUXEN_MACOS_FRAMEWORKS=Cocoa,WebKit,…` env var adds `-framework <name>` at link
+  (gated so non-GUI binaries don't load-link AppKit). This lets a Ruxen binary
+  drive a real AppKit shim — `quiver/examples/counter-native` renders a quiver app
+  as genuine `NSTextField`/`NSButton`/`NSSlider`/`NSPopUpButton` widgets. No
+  effect on existing builds (no stdlib `.m` files; framework flag is off by
+  default).
+- **Declare macOS frameworks in `Ruxen.toml` (`[system_libs] frameworks = [...]`).**
+  The build (and the test runner) forward each as `-framework <name>` from the
+  binary's own toml AND every dep's — so a native-widget backend ships its
+  framework needs WITH the package (canvas declares `frameworks = ["Cocoa"]`) and
+  plain `ruxen build/run/test` links them, no env var. Native macOS targets only;
+  `.m` shims are skipped for wasm (they become host imports), so a web app that
+  transitively depends on a native FFI package still links cleanly.
+- **WASM: self-contained single-threaded sync + string-format runtimes (gui-stack
+  Q43, Q44).** The `WASM_RT_C` shim (`codegen/object.rs`) now bundles the
+  `ruxen_mutex_*`/`ruxen_sharedsync_*` surface as one-slot i64 boxes
+  (single-threaded — wasm32 has no threads; the pthread runtime isn't bundled)
+  and defines the MIR-interpolation-lowerer's mangled `Formatter_new`/
+  `Formatter_write_str`/`Formatter_buffer` over the already-bundled `fmt.c`. So a
+  quiver app's reactive `State` (`SharedSync[Mutex[T]]`) AND string interpolation
+  (`"…#{x}"`) now run on wasm with **no host imports** — a `.wasm` is
+  self-contained for both. wasm-only (native unchanged; wasm pins 4/4 + examples
+  05/07/08 green). Proven end-to-end by `quiver/examples/counter-dom` (a quiver
+  counter rendered as real, interactive, DevTools-inspectable DOM).
+- **WASM: exported allocator for host→wasm marshalling (gui-stack Q45).** The
+  `WASM_RT_C` shim now `export_name`-exports `ruxen_wasm_alloc(i32)->ptr` and
+  `ruxen_wasm_free(ptr)`, so a JS host can allocate a buffer inside wasm linear
+  memory, write a NUL-terminated UTF-8 string, and pass the pointer to an exported
+  Ruxen `def` typed `&String` (Ruxen strings ARE NUL-terminated `char*`). This is
+  the JS→wasm string path a native `<input>`'s value needs — previously the host
+  could only read strings OUT of wasm, never write them in. Verified present in
+  `quiver/examples/counter-dom`'s `.wasm` exports.
+
+### Fixed
+- **LLVM backend: an `Int as Float` / `Float as Int` numeric cast no longer
+  silently produces garbage (and the optimizer no longer folds it to `undef`).**
+  The LLVM `coerce_value` lacked any int↔float case, so an integer value cast to
+  a float (a Ruxen `as Float`/`as Float32`, which lowers to a typed `Assign`) was
+  stored, unconverted, as an int bit-pattern into a float-typed — and on
+  `Float32` *narrower* — alloca. That type-punned, out-of-bounds store limped
+  along at `-O0`, but `-O2`'s SROA/mem2reg saw the `store i64` into a `float` slot
+  followed by `load float` and replaced the load with `undef`. The visible
+  symptom was a 9-argument canvas FFI call (`ruxen_canvas_draw_rect`: receiver +
+  4 `Float` + 4 `Int`) whose 4th float argument vanished on wasm — every quiver
+  widget drew a zero-size rect, so the GUI counter painted a blank frame on the
+  wasm backend while rendering correctly on Cranelift desktop. Added
+  signedness-aware `sitofp`/`uitofp`/`fptosi`/`fptoui` conversions to
+  `coerce_value` (now `coerce_value_signed`) and routed the `Assign` cast through
+  them with the operand's signedness — mirroring the Cranelift backend's existing
+  `coerce_value_signed` / `mir_arg_is_signed` (Q5) handling, which is why desktop
+  was unaffected. Regression test:
+  `tests/wasm_codegen.rs::ffi_call_passes_all_nine_mixed_width_args`.
+- **wasm32: `Int`/`USize`/`Bool`/`Char` `.to_s`/`to_string` no longer trap.** The
+  scalar method-home FFI decls prepended the receiver as `Ty::Class { name }`,
+  which the LLVM backend lowers to a real `ptr` — i64 on 64-bit targets (so it
+  matched) but **i32 on wasm32**. That made the `.rx`-derived decl come out
+  `(i32) -> i32` for `ruxen_int_to_string` / `ruxen_char_to_string` /
+  `ruxen_bool_to_string`, clashing with the canonical `(i64) -> ptr` runtime
+  decl; `wasm-ld` resolves a signature mismatch by splicing a trapping stub,
+  so any wasm program that interpolated an int/char/bool (e.g. quiver's
+  `dyn_text("count: #{n}")`) hit `unreachable` at runtime. `primitive_ffi_receiver_ty`
+  now prepends an explicit `Ty::Int64` for these int-slot homes — i64 on every
+  backend/target, matching the C `int64_t`. Cranelift width is unchanged (it
+  already lowered both `Ty::Class` and `Ty::Int64` to I64).
+- **MIR lowering no longer panics on FFI/runtime calls with >8 arguments.** The
+  per-call ownership analysis (`runtime_abi::ArgMask`, a u8 bitset) queried
+  `contains(i)` for every arg index; `1u8 << i` overflowed for `i >= 8` (debug
+  panic). Surfaced by a 9-arg FFI binding (`ruxen_canvas_draw_rect` in the canvas
+  web backend). Bits beyond the u8 are unset by definition — guarded with `i < 8`.
+
+### Added
+- **Host imports on wasm (tier 4.09): wasm modules can call host (JS) functions.**
+  A top-level `lib "<module>"` block on the wasm target declares host-supplied
+  functions — each gets `wasm-import-module = "<module>"` + `wasm-import-name =
+  "<symbol>"` attributes, so `wasm-ld` emits a precise `<module>.<field>` import
+  (e.g. `lib "console" / def log as "log"` → imports `console.log`) instead of
+  relying on `--allow-undefined`'s implicit `env` default. No new keyword — the
+  existing FFI `lib` surface covers it. The stdlib's `ruxen_*` runtime bindings
+  are class-body FFI and stay linked (not imported). New `examples/08-wasm-import`
+  + a third `scripts/wasm_verify.sh` bar. This is the mechanism the browser canvas
+  backend will use to call browser/JS.
+- **Heap types on wasm (tier 4.09): `String`/`Array` now work on
+  `wasm32-unknown-unknown`.** Previously wasm was a pure-computation reactor (no
+  heap). Now the wasm path bootstraps a curated heap-core stdlib subset (`core`,
+  `array`, `string`, … — overridable via `RUXEN_WASM_BOOTSTRAP`; excludes the
+  `dispatch runtime` / libc-heavy host modules the LLVM backend or a no-libc
+  target can't handle) and links the heap-core C runtime (`alloc.c`, `vec.c`)
+  plus a bundled allocator/libc shim compiled with `clang --target=wasm32`. The
+  resulting `.wasm` instantiates with no imports (it carries its own allocator).
+  `TypeParam` now lowers to i64 in the LLVM backend (the int64-slot ABI, matching
+  Cranelift) so generic FFI args don't mismatch the runtime on wasm32. New
+  `examples/07-wasm-heap` + a second `scripts/wasm_verify.sh` bar prove a
+  heap-allocated `Array` runs in Node. Host imports (`wasm_import`) are the next
+  step. See `docs/requirements/tier4_09_wasm_heap_and_host_imports.md`. The
+  default wasm bootstrap set now also includes `map`, `set`, `sync`, `io`, and
+  `time` (was `core,option_result,scalar,string,array,fmt,hash`), so a quiver
+  app builds to `.wasm` without a `RUXEN_WASM_BOOTSTRAP` override.
 - **no_std mode (tier 4.04): `ruxen compile --no-std` + E1400.** A no_std host
   build skips the stdlib bootstrap and links WITHOUT the Ruxen C runtime or
   per-package `[system_libs]` — the user object is the whole program (zero
