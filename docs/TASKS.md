@@ -210,10 +210,27 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       drop drop-rooting fix; the `Future+Stream` incoherent-include diagnostic;
       Q46 (no-arg-init source crashing inside an adapter — a separate
       constructor-lowering bug, filed).
-- [ ] **§4.6 Retry/Schedule**, **§4.7 TestClock** — sequence on §4.1/§4.2/§4.3
-      per spec §6. Open maintainer decisions tracked in the plan doc + spec §6
-      (async methods on classes, `segment_cfg` widening, cross-thread reactor
-      wake).
+- [x] **§4.7 deterministic virtual `TestClock` (Feature #7 COMPLETE, uncommitted
+      on `feat/concurrency-adoption`).** `library/std/future/runtime/test_clock.c`
+      + edits to `time.c`/`reactor.c` + `library/std/future/src/test_clock.rx`.
+      A `--test`-style mode: `TestClock.install`/`advance(d)`/`advance_to_next`/
+      `set(d)`/`uninstall` swap the per-thread reactor's real OS timer for a
+      virtual clock, so `Async.sleep`/timeouts resolve INSTANTLY when advanced
+      past (pin 437: 60s sleep fires in 0.85s). Covers BOTH the async-sleep seam
+      AND sync `Instant` (spec §4.7 Correction 1 — they sample the clock
+      independently). HYBRID: real fd readiness untouched. **NO compiler change**
+      (only the bootstrap-embedded sibling registration). v1: single-thread;
+      explicit `uninstall` (the guard's `def drop` is the RAII intent but a
+      method-result local isn't drop-elaborated — the Scope/Queue/Stream
+      drop-rooting limit). Pins `437`–`443`. Codex fixes: a deregister blocker
+      (fired virtual timer would `close` an fd / double-decrement registered_count
+      — pin 442) + nested-install medium (depth-counted — pin 443). FOLLOW-UPS:
+      the guard auto-restore (drop-rooting fix); a `static inline` clock seam
+      (LTO closes the cross-TU-call LOW); multi-thread virtual clock.
+- [ ] **§4.6 Retry/Schedule** — sequence on §4.1/§4.2/§4.3 + §4.7 (TestClock makes
+      backoff timing testable) per spec §6. Open maintainer decisions tracked in
+      the plan doc + spec §6 (async methods on classes, `segment_cfg` widening,
+      cross-thread reactor wake).
 
 ### Language features
 

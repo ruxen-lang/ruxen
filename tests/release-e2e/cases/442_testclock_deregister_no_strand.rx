@@ -1,0 +1,47 @@
+## Feature #7 Increment 3 (spec §4.7) — Codex BLOCKER guard: deregistering a
+## FIRED virtual timer must NOT (a) double-decrement `registered_count` (which
+## would strand a still-pending timer) nor (b) touch the OS (a Linux
+## `close((int)ident)` on a synthetic virtual handle would close an arbitrary
+## fd — e.g. ident 1 = stdout). `ruxen_reactor_deregister` now has a virtual
+## branch: clear the slot with no OS ops, decrement only if NOT already fired.
+##
+## This pin drives the reactor primitives DIRECTLY (the same calls
+## `TimeSleepFuture` makes) so it deterministically reaches the deregister path
+## — a `TimeSleepFuture` LOCAL would not auto-drop (the method-result drop-rooting
+## limit), so we exercise deregister explicitly:
+##   1. install virtual clock; register timer A (10s) + timer B (20s) → 2 live.
+##   2. advance(10s) → A fires (check_fired(A)=1), B not yet.
+##   3. DEREGISTER A (a FIRED virtual timer — the blocker path). Must be a no-op
+##      on the OS + must NOT double-decrement (A was already decremented on fire).
+##   4. advance(15s) (now=25s) → B fires (check_fired(B)=1). B firing proves its
+##      wake/count path was NOT stranded by A's deregister. No crash / no closed
+##      stdout proves the OS was untouched.
+
+use std.time.Duration
+
+def main
+  puts "dereg start"
+  TestClock.install
+  var cx = Context.executor
+  let h = ruxen_reactor_current_handle()
+
+  let a = ruxen_reactor_register_timer(h, 10000000000)  # 10s virtual
+  let b = ruxen_reactor_register_timer(h, 20000000000)  # 20s virtual
+
+  TestClock.advance(Duration.from_secs(10))
+  puts "a_fired=#{ruxen_reactor_check_fired(h, a)}"
+
+  # Deregister the FIRED virtual timer A — the guarded blocker path. A was
+  # already decremented when it fired, so deregister must NOT decrement again:
+  # registered_count must stay at 1 (B still live), NOT drop to 0. (Without the
+  # fix it double-decrements to 0, stranding park_current's fast-path.)
+  ruxen_reactor_deregister(h, a)
+  puts "count_after_dereg=#{ruxen_reactor_registered_count()}"
+
+  # B must still fire (not stranded by A's deregister).
+  TestClock.advance(Duration.from_secs(15))
+  puts "b_fired=#{ruxen_reactor_check_fired(h, b)}"
+
+  TestClock.uninstall
+  puts "dereg done"
+end

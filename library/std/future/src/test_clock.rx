@@ -1,0 +1,104 @@
+## TestClock — deterministic virtual clock for async tests (spec §4.7). A
+## `--test`-style mode where the per-thread reactor swaps its real OS timer for
+## an in-memory virtual clock + ordered timer queue, so timeouts / retries /
+## `Async.sleep` resolve INSTANTLY and deterministically — no real sleeps.
+##
+## SURFACE:
+##   * `TestClock.install -> TestClock` — flips the current thread into virtual
+##     mode (virtual-now anchored at the real monotonic now) and returns a GUARD
+##     value. The guard's `def drop` calls `uninstall`, restoring the real clock
+##     at scope exit — so a test's time-virtualization is scoped to the guard's
+##     lifetime (RAII install/restore).
+##   * `TestClock.advance(d: &Duration)` — jump virtual time forward by `d`,
+##     firing every timer whose deadline is now reached + waking its parked task.
+##   * `TestClock.advance_to_next -> Int` — jump to the EARLIEST pending timer's
+##     deadline (firing it), returning the ns advanced; returns -1 if no timer
+##     is pending. Lets a test step deterministically deadline-by-deadline.
+##   * `TestClock.set(d: &Duration)` — set virtual-now to an ABSOLUTE instant
+##     (`d` ns since the virtual epoch), firing every timer at/before it.
+##
+## WHICH TIME SEAMS ARE VIRTUAL (spec §4.7 Correction 1): BOTH the async sleep
+## deadline (`ruxen_time_now_ns`, read by `TimeSleepFuture`) AND sync
+## `Instant.now`/`Instant.elapsed` (which sample the monotonic clock
+## INDEPENDENTLY) route through the same TestClock seam — so a test sees virtual
+## time on both. Wall-clock `Time.unix_ns` (REALTIME) is NOT virtualized.
+##
+## HYBRID: only the timer + clock seam is virtualized; real epoll/kqueue fd
+## readiness is untouched, so a test mixing real sockets + virtual time gets
+## real I/O wakeups AND virtual timer wakeups (matches tokio's `pause()`).
+##
+## v1: SINGLE-THREAD (the cell is thread-local) — install the clock on the
+## thread that drives `block_on`. NO compiler changes: this is a C-runtime
+## seam + this `.rx` namespace/guard class. Spec: §4.7.
+class TestClock
+  active: Int
+
+  def init
+    self.active = 1
+  end
+
+  ## Install the virtual clock on this thread; returns a guard whose `def drop`
+  ## restores the real clock.
+  ##
+  ## v1 RESTORE NOTE: the guard's `def drop` IS the intended RAII restore, but a
+  ## `let guard = TestClock.install` local (bound from a static-method result) is
+  ## currently tainted OUT of drop-elaboration (the conservative-dealloc limit
+  ## Scope/Queue/Stream also hit), so its `def drop` does NOT fire automatically
+  ## at scope exit. Until that drop-rooting follow-up lands, a test must call
+  ## `TestClock.uninstall` EXPLICITLY to restore the real clock (the `Scope`
+  ## `cancel_remaining` precedent — explicit teardown + `def drop` as a
+  ## belt-and-braces net). install/uninstall are NESTING-AWARE: only the
+  ## outermost install anchors + the outermost uninstall restores.
+  def self.install -> TestClock
+    ruxen_test_clock_install()
+    TestClock.new
+  end
+
+  ## Explicitly restore the real clock (the v1 teardown surface — see `install`).
+  ## Nesting-aware: only the outermost uninstall restores.
+  def self.uninstall -> nil
+    ruxen_test_clock_uninstall()
+    nil
+  end
+
+  ## Advance virtual time by `d`, firing every now-due timer.
+  def self.advance(d: &Duration) -> nil
+    ruxen_test_clock_advance(d.as_nanos())
+    nil
+  end
+
+  ## Jump to the next pending timer's deadline (firing it); returns the ns
+  ## advanced, or -1 if nothing is pending.
+  def self.advance_to_next -> Int
+    ruxen_test_clock_advance_to_next()
+  end
+
+  ## Set virtual-now to an absolute instant (`d` ns since the virtual epoch).
+  def self.set(d: &Duration) -> nil
+    ruxen_test_clock_set(d.as_nanos())
+    nil
+  end
+
+  ## Guard restore: drop the install guard → restore the real clock.
+  def drop
+    ruxen_test_clock_uninstall()
+  end
+end
+
+## §4.7 TestClock C surface (runtime/test_clock.c). Module-level lib decls so the
+## class statics call them by bare identifier (the `ruxen_reactor_*` / scheduler
+## decl convention).
+lib "runtime/test_clock.c"
+  def ruxen_test_clock_install -> nil
+  def ruxen_test_clock_uninstall -> nil
+  def ruxen_test_clock_advance(delta_ns: Int) -> nil
+  def ruxen_test_clock_advance_to_next -> Int
+  def ruxen_test_clock_set(absolute_ns: Int) -> nil
+end
+
+## §4.7 test-observability: the reactor's live registration count (excludes the
+## background wake fd). A deregister-of-fired-virtual-timer pin reads it to prove
+## no double-decrement strands `park_current`'s fast-path.
+lib "runtime/reactor.c"
+  def ruxen_reactor_registered_count -> Int
+end

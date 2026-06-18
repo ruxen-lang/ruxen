@@ -8,6 +8,57 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Deterministic virtual `TestClock` (concurrency §4.7, Feature #7).** A
+  `--test`-style mode where the per-thread reactor swaps its real OS timer for an
+  in-memory virtual clock + ordered timer queue, so timeouts / retries /
+  `Async.sleep` resolve INSTANTLY and deterministically in a test — no real
+  sleeps. **NO compiler change** (the only `.rs` edit is the bootstrap-embedded
+  sibling registration); pure C-runtime seam (new
+  `library/std/future/runtime/test_clock.c` + edits to `time.c`/`reactor.c`) + a
+  `.rx` namespace/guard class (`library/std/future/src/test_clock.rx`).
+  - **Surface:** `TestClock.install` (anchors virtual-now at 0, flips the thread
+    virtual, returns a guard) · `TestClock.advance(d)` (jump forward, fire due
+    timers + wake their tasks) · `TestClock.advance_to_next` (step to the next
+    pending deadline, returning the ns advanced, or -1) · `TestClock.set(d)`
+    (absolute jump; never rewinds) · `TestClock.uninstall` (restore the real
+    clock). The killer property (pin 437): a 60-SECOND `Async.sleep` parks, then
+    `advance(60s)` fires it ready — in 0.85s, no real sleep.
+  - **Which time seams are virtual (spec §4.7 Correction 1, verified against
+    source):** BOTH the async sleep deadline (`ruxen_time_now_ns`, read by
+    `TimeSleepFuture`) AND sync `Instant.now`/`Instant.elapsed` (which sample
+    `clock_gettime` INDEPENDENTLY of `ruxen_time_now_ns`) route their real sample
+    through the TestClock seam — so a test sees virtual time on both (pin 439:
+    `Instant.elapsed` reports the virtual 300s after `advance(300s)` with ~0 real
+    time). Wall-clock `Time.unix_ns` (REALTIME) is NOT virtualized.
+  - **Mechanism:** in virtual mode `register_timer` records the timer's absolute
+    virtual deadline in its slot WITHOUT arming a real timerfd/kevent (same
+    ident-handle ABI); `ruxen_reactor_fire_due_timers(now)` marks fired + wakes
+    tasks for due virtual timers; `check_fired`/`deregister` have a virtual-slot
+    branch (no OS ops); `park_current` does a non-blocking OS poll (so real fd
+    readiness still surfaces — the HYBRID case, only the timer+clock seam is
+    virtual) then returns. The clock seam `ruxen_test_clock_now_ns(real)` is a
+    single thread-local read + branch off-test (zero behaviour change — pins
+    553/554/555/725 real-time still pass).
+  - **v1 limitations (documented):** single-thread (the cell is thread-local —
+    install the clock on the thread driving `block_on`); the install GUARD's
+    `def drop` is the intended RAII restore but a `TestClock.install` result local
+    is tainted out of drop-elaboration today (the Scope/Queue/Stream drop-rooting
+    limit), so v1 tests call `TestClock.uninstall` EXPLICITLY (the
+    `Scope.cancel_remaining` precedent; `def drop` stays a belt-and-braces net).
+    install/uninstall are NESTING-AWARE (depth-counted).
+  - **Codex review (rule 44):** fixed a BLOCKER — `deregister` had no virtual
+    branch, so a fired virtual timer's drop would (Linux) `close((int)ident)` an
+    arbitrary fd and (both) double-decrement `registered_count`, stranding
+    `park_current`'s fast-path; now a virtual-slot branch clears the slot with no
+    OS ops + decrements only if not-already-fired (proven by pin 442, which fails
+    with the fix reverted). Fixed a MEDIUM — nested `install` re-anchored / inner
+    `uninstall` killed the outer clock; now depth-counted (proven by pin 443).
+    Parked LOW: the clock seam is a cross-TU call, not a literal inlined
+    thread-local read (behaviourally transparent; LTO/`static inline` would
+    close it). Pins: `437_testclock_advance_fires_sleep.rx`,
+    `438_testclock_advance_to_next_set.rx`, `439_testclock_sync_instant.rx`,
+    `440_testclock_set_absolute.rx`, `441_testclock_guard_restore.rx`,
+    `442_testclock_deregister_no_strand.rx`, `443_testclock_nested_install.rx`.
 - **Async `Stream` (concurrency §4.5, Feature #5).** A pull-based, backpressured
   async stream — the async analogue of `Enumerable[T]`. New stdlib
   `library/std/future/src/stream.rx` + a tiny `library/std/future/runtime/stream.c`

@@ -255,6 +255,10 @@ pub const BOOTSTRAP_EMBEDDED_SIBLINGS: &[(&str, &[(&str, &str)])] = &[
                 "stream.rx",
                 include_str!("../../../../library/std/future/src/stream.rx"),
             ),
+            (
+                "test_clock.rx",
+                include_str!("../../../../library/std/future/src/test_clock.rx"),
+            ),
         ],
     ),
     (

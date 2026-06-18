@@ -29,6 +29,15 @@ void ruxen_reactor_park_current(void);
 void ruxen_thread_yield(void) {
     ruxen_reactor_park_current();
 }
+
+/* §4.7 TestClock seam. `ruxen_test_clock_now_ns(real)` (in
+ * library/std/future/runtime/test_clock.c) returns the VIRTUAL now when a
+ * TestClock is installed on this thread, else `real` unchanged. Both the async
+ * sleep deadline (`ruxen_time_now_ns`) and sync `Instant` (`ruxen_instant_now`
+ * / `_elapsed`) route their real CLOCK_MONOTONIC sample through it, so a test
+ * can virtualize BOTH (spec §4.7 Correction 1 — they sample the clock
+ * independently). Off-test it is a single thread-local read + branch. */
+int64_t ruxen_test_clock_now_ns(int64_t real_ns);
 /* ---------------------------------------------------------------------
  * std::time
  *
@@ -47,12 +56,20 @@ void ruxen_thread_yield(void) {
  * keeps the type signature simple — no Result wrapping for a syscall
  * that has no failure mode in practice.
  * --------------------------------------------------------------------- */
-int64_t ruxen_time_now_ns(void) {
+/* The UN-virtualized real monotonic sample. `ruxen_time_now_ns` routes this
+ * through the TestClock seam; `test_clock.c` calls THIS directly to anchor
+ * virtual-now at install (so a virtualized clock starts at "now", not 0). */
+int64_t ruxen_time_now_ns_real(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
         return 0;
     }
     return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+}
+
+int64_t ruxen_time_now_ns(void) {
+    /* §4.7: virtual now when a TestClock is installed, else the real sample. */
+    return ruxen_test_clock_now_ns(ruxen_time_now_ns_real());
 }
 
 int64_t ruxen_time_unix_ns(void) {
@@ -204,10 +221,16 @@ RuxenDuration *ruxen_duration_sub(RuxenDuration *a, RuxenDuration *b) {
  * failure path on Linux/macOS in practice). */
 RuxenInstant *ruxen_instant_now(void) {
     struct timespec ts;
+    int64_t real_ns;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        return ruxen_instant_alloc(0);
+        real_ns = 0;
+    } else {
+        real_ns = (int64_t)ts.tv_sec * RUXEN_NS_PER_SEC + (int64_t)ts.tv_nsec;
     }
-    return ruxen_instant_alloc((int64_t)ts.tv_sec * RUXEN_NS_PER_SEC + (int64_t)ts.tv_nsec);
+    /* §4.7 Correction 1: sync Instant samples the clock INDEPENDENTLY of
+     * ruxen_time_now_ns, so it must ALSO route through the TestClock seam to be
+     * virtual in a test. */
+    return ruxen_instant_alloc(ruxen_test_clock_now_ns(real_ns));
 }
 
 RuxenDuration *ruxen_instant_elapsed(RuxenInstant *t) {
@@ -215,12 +238,14 @@ RuxenDuration *ruxen_instant_elapsed(RuxenInstant *t) {
         ruxen_panic("Instant.elapsed on null receiver");
     }
     struct timespec ts;
-    int64_t now_ns;
+    int64_t real_ns;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        now_ns = t->monotonic_nanos;
+        real_ns = t->monotonic_nanos;
     } else {
-        now_ns = (int64_t)ts.tv_sec * RUXEN_NS_PER_SEC + (int64_t)ts.tv_nsec;
+        real_ns = (int64_t)ts.tv_sec * RUXEN_NS_PER_SEC + (int64_t)ts.tv_nsec;
     }
+    /* §4.7 Correction 1: route through the TestClock seam (sync Instant). */
+    int64_t now_ns = ruxen_test_clock_now_ns(real_ns);
     if (now_ns < t->monotonic_nanos) {
         /* Monotonic clock contract guarantees this can't happen, but if
          * the kernel ever lies, surface zero rather than a negative. */

@@ -722,6 +722,88 @@ adapter chains.
 
 ---
 
+## Feature #7 — deterministic virtual `TestClock` (spec §4.7)
+
+A `--test`-style mode where the per-thread reactor swaps its real OS timer for an
+in-memory virtual clock + ordered timer queue, so timeouts / retries /
+`Async.sleep` resolve INSTANTLY and deterministically — no real sleeps. Built
+BEFORE §4.6 Retry/Schedule (which it makes testable). **NO compiler change**: a
+C-runtime seam (`runtime/test_clock.c` + edits to `time.c`/`reactor.c`) + a `.rx`
+namespace/guard class (`src/test_clock.rx`); the only `.rs` edit is the
+bootstrap-embedded sibling registration.
+
+### Architecture (where the state lives)
+- A `_Thread_local` virtual-clock cell `{ mode; now_ns; depth }` in test_clock.c
+  is the SINGLE SOURCE OF TRUTH. `ruxen_test_clock_now_ns(real)` is the hot-path
+  seam — virtual-now in virtual mode, else `real` unchanged (one TLS read +
+  branch off-test). The reactor owns the timer slots (each gets `virtual` +
+  `virtual_deadline_ns`); test_clock's `advance`/`set` call
+  `ruxen_reactor_fire_due_timers(now)`.
+- VIRTUAL EPOCH = 0: `install` anchors now=0 (NOT the real boot-time monotonic
+  value — that would make absolute `set(40s)` a no-op since 40s ≪ the ~10^15-ns
+  boot offset; the bug pin 440 caught and the fix corrected).
+
+### Which time seams are virtual (spec §4.7 Correction 1 — VERIFIED against source)
+`ruxen_time_now_ns` backs ONLY the async sleep deadline (read by
+`TimeSleepFuture`). Sync `Instant.now`/`Instant.elapsed` sample
+`clock_gettime(CLOCK_MONOTONIC)` INDEPENDENTLY — the time/runtime CLAUDE.md
+comment that `ruxen_time_now_ns` "backs `ruxen_instant_now`" was inaccurate to
+the C body. So ALL THREE readers route through the seam separately, virtualizing
+BOTH async-sleep AND sync-Instant time (pin 439). Wall-clock `Time.unix_ns`
+(REALTIME) is NOT virtualized.
+
+### Mechanism (reactor, in virtual mode)
+- `register_timer`: record absolute virtual deadline in a slot, NO real
+  timerfd/kevent, return a positive ident handle (same ABI). `check_fired`:
+  virtual-slot branch reads the `fired` bit. `deregister`: virtual-slot branch
+  clears the slot with NO OS ops + decrements `registered_count` only if not
+  already fired (the Codex blocker — see below). `park_current`: NON-BLOCKING OS
+  poll (so real fd readiness still surfaces — the HYBRID case, only timer+clock
+  is virtual) then return.
+
+### Increments (TDD, pins 437+)
+- **Inc 1 — virtual clock + `advance` fires async sleep instantly.** Pin `437`
+  (the killer: 60s `Async.sleep` parks, `advance(60s)` fires it ready — in 0.85s).
+- **Inc 2 — `advance_to_next` + `set` + sync `Instant` seam.** Pins `438`
+  (advance_to_next steps deadline-by-deadline, returns the delta), `439` (sync
+  `Instant.elapsed` reports virtual 300s, the Correction-1 proof), `440`
+  (absolute `set` + no-rewind clamp — caught + fixed the epoch-anchor bug).
+- **Inc 3 — hybrid + guard restore + the Codex fixes.** Pins `441` (uninstall
+  restores the real clock — a real `block_on(Async.sleep)` runs after), `442`
+  (deregister-of-fired-virtual-timer doesn't double-decrement / corrupt fds —
+  fails with the fix reverted), `443` (nested install/uninstall is depth-counted).
+
+### AS-BUILT (all increments GREEN, pins `437`–`443`)
+- **Codex (rule 44) fixes:** (BLOCKER) `deregister` had NO virtual branch → on
+  Linux a fired virtual timer's drop would `close((int)ident)` an arbitrary fd
+  (ident 1 = stdout) and on both platforms double-decrement `registered_count`
+  (stranding `park_current`'s `registered_count <= 0` fast-path). FIXED — a
+  virtual-slot branch clears the slot with no OS ops + decrements only if
+  not-already-fired; PROVEN by pin 442 (which reports `count_after_dereg=1`, and
+  fails with `=0` when the `!was_fired` guard is reverted). (MEDIUM) nested/
+  repeated `install` re-anchored the active clock + an inner `uninstall` killed
+  the outer guard's clock. FIXED — depth-counted (only outermost anchors/
+  restores); PROVEN by pin 443. (LOW, parked) the clock seam is a cross-TU call,
+  not a literal inlined TLS read — behaviourally transparent; LTO / `static
+  inline` would close it.
+- **v1 limitations (documented):** single-thread (the cell is thread-local).
+  **Guard restore:** the install GUARD's `def drop` is the intended RAII restore,
+  but a `TestClock.install` result local is tainted OUT of drop-elaboration today
+  (the Scope/Queue/Stream drop-rooting limit), so its drop doesn't fire
+  automatically — v1 tests call `TestClock.uninstall` EXPLICITLY (the
+  `Scope.cancel_remaining` precedent; `def drop` stays a belt-and-braces net for
+  when drop-rooting is fixed). Same follow-up as the other features.
+- **NO compiler change confirmed:** the only non-C/non-`.rx` edit is the one-line
+  `stdlib_embedded.rs` sibling registration (the package-load mechanism the spec
+  keeps). Off-test transparency verified — the real-time pins (553/554 Instant,
+  555/725 sleep, 726/727/727b async I/O) all still pass.
+
+**Feature #7 (§4.7) is COMPLETE** across Increments 1–3 (+ the Codex fixes),
+scoped to single-thread virtual time over BOTH the async-sleep and sync-Instant
+seams, with a real-I/O hybrid.
+
+---
+
 ## How §4.2–§4.7 sequence on top (per spec §6)
 
 - **§4.2 Scope** (keystone): hard-depends on §4.1 (Scope#drop joins-then-cancels
