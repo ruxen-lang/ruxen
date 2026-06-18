@@ -1,0 +1,45 @@
+## Feature #4 Increment 3 (spec §4.4) — CLOSE→Err, recv side: when the queue's
+## recv side is closed (the consumer is gone), a `send` resolves
+## `Err(QueueClosed)` instead of parking forever on a full queue. This is the
+## send half of closing Go's forgotten-sender leak — a producer blocked on a
+## queue whose consumer has abandoned it is told the channel is done.
+##
+## SCOPE (honest, same as pin 427): proves the close→Err RETURN SEMANTICS, NOT
+## full leak-free ownership cleanup — the surviving `tx` ref is not released by
+## the synthesized future drop (only `__sub_i` sub-futures are). Scoped to the
+## close→Err codepath; full leak-free close is a field-drop follow-up.
+##
+## CLOSE TRIGGER (same honest v1 note as pin 427): `ruxen_queue_receiver_drop`
+## is the C logic `AsyncReceiver`'s `def drop` runs (receiver_refs 1→0 →
+## recv_closed → wake a parked send). We invoke it directly because a
+## stdlib-class END local is not drop-elaborated at a deterministic mid-program
+## point (the drop-rooting follow-up). Here we close the recv side BEFORE the
+## send so `send_step` observes `recv_closed` and returns CLOSED → the send
+## resolves `Err(QueueClosed)` — exercising the same close→Err path a parked
+## Suspend-send would hit when the receiver drops while it waits.
+##
+## `closed_code` maps the send result to 1 on `Err(QueueClosed)`, proving the
+## Err arm fired.
+
+async def producer(tx: AsyncSender) -> Int
+  let r = tx.send(99).await
+  closed_code(r)
+end
+
+def closed_code(r: Result[Int, QueueError]) -> Int
+  match r
+    Ok(_)  -> 0
+    Err(_) -> 1
+  end
+end
+
+def main
+  puts "queue start"
+  let qp = ruxen_queue_new(1, Overflow.Suspend)
+  let tx = AsyncSender.new(qp)
+  # Close the recv side — the C logic AsyncReceiver's `def drop` runs.
+  let _close = ruxen_queue_receiver_drop(qp)
+  let code = block_on(producer(tx))
+  puts "closed=#{code}"
+  puts "queue done"
+end

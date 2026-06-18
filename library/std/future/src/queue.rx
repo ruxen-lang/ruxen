@@ -1,0 +1,360 @@
+## Queue — async backpressured bounded queue (spec §4.4). The only channel
+## in-tree before this is the SYNCHRONOUS MPSC (`Sender`/`Receiver`,
+## std.sync) whose `recv` BLOCKS THE OS THREAD — fatal in rondo's
+## thread-per-core model (blocking the thread stalls the whole per-core
+## reactor). This is the async-aware alternative: a bounded ring buffer whose
+## `send`/`recv` PARK THE TASK via the reactor, never the OS thread.
+##
+## v1 surface (what the current lowering supports):
+##   * `Queue.bounded(capacity, overflow)` → a split `(AsyncSender,
+##     AsyncReceiver)` pair sharing one refcounted C control block. Mirrors
+##     the existing `Sender`/`Receiver` split so the borrow checker tracks
+##     producer and consumer separately. Capacity is MANDATORY — there is NO
+##     unbounded constructor (Go's deliberate fixed-capacity discipline).
+##   * `enum Overflow { Suspend; DropOldest; DropNewest }` — the ZIO overflow
+##     taxonomy: backpressure / sliding / dropping. VARIANT ORDER is the
+##     load-bearing contract: tags must match `RUXEN_OVERFLOW_*` in
+##     `runtime/queue.c` (Suspend=0, DropOldest=1, DropNewest=2). A no-payload
+##     enum crosses to C as a HEAP POINTER whose int32 tag at offset 0 the C
+##     reads (`*(int32_t *)overflow`) — NOT a bare i64 tag (the `Shutdown` enum
+##     ABI in std.net; an unknown/null tag panics rather than defaulting).
+##   * `tx.send(v)` → `SendFuture`; `rx.recv` → `RecvFuture`. HAND-WRITTEN
+##     futures (async methods on classes aren't lowered), shaped like
+##     `AsyncReadWithTimeoutFuture`: `queue_ptr`/`done` + `include Future` +
+##     `def var poll` + `def drop`. On would-block, `poll` records the parked
+##     task's WAKER on the queue's wake slot and returns `Poll.Pending`; the
+##     peer's enqueue/dequeue wakes that task via the reactor. The TASK parks;
+##     the OS thread never blocks. Drive them with `.await` (Shape-3 instance-
+##     method awaitee) inside a top-level `async def`, or hand-poll.
+##   * Element/error channel is `Int` (the established Task/Race/Scope
+##     convention; typed-generic `Queue[T]` recovery deferred with the
+##     multi-threaded round). `send`/`recv` resolve `Result[Int, QueueError]`.
+##
+## LEAK-FREE CLOSE BY OWNERSHIP (the ZIO/Go-leak fix):
+##   * dropping the LAST `AsyncSender` marks the queue send-closed, so a parked
+##     `recv` resolves `Err(QueueClosed)` (closes Go's abandoned-receiver leak:
+##     a recv waiting on a queue whose producers are all gone is woken + told
+##     the channel is done);
+##   * dropping the `AsyncReceiver` marks the queue recv-closed, so a parked
+##     `Suspend`-`send` resolves `Err(QueueClosed)` (closes Go's forgotten-
+##     sender leak). The C control block is refcounted by BOTH ends and freed
+##     only when the last end drops.
+##
+## v1 LIMITATION — SINGLE PARKED WAITER PER DIRECTION. The control block has
+## ONE recv wake slot and ONE send wake slot, so v1 supports at most one
+## IN-FLIGHT recv (single-consumer) and one in-flight PARKED send under
+## `Overflow.Suspend`. Multiple producers (via `share`) work as long as they do
+## not BLOCK on a full queue simultaneously; a waiter LIST for multi-producer
+## backpressure is deferred to v2 (Codex high finding, documented).
+##
+## v1 LIMITATION — SINGLE-REACTOR (spec §4.4 risk 3 / §6, the largest genuine
+## unknown): producer and consumer live on ONE worker/reactor. A cross-core
+## wake (an AsyncSender on core A waking an AsyncReceiver on core B) needs a
+## wake routed to a SPECIFIC remote reactor handle, which the single-thread/
+## per-reactor executor does not evidence a primitive for. DEFERRED to v2.
+## Because of single-reactor, no locking is needed and the refcounts are plain
+## (not atomic) — the "SharedSync-style ATOMIC refcount" lands with the
+## multi-threaded scheduler round.
+##
+## OWNERSHIP CONTRACT: an `AsyncSender`/`AsyncReceiver` value owns its share of
+## the control block; `def drop` releases it. `Queue.bounded` returns the two
+## ends by value (`Queue.bounded` returns a `QueueEnds` handle; pull `sender` /
+## `receiver` off it) — move each into the side that uses it (e.g. into a
+## spawned producer/consumer `async def`). Use `AsyncSender.share` for multiple
+## producers.
+
+## The overflow policy when a `send` meets a full buffer. ORDER PINNED to the
+## C `RUXEN_OVERFLOW_*` tags — append-only, never reorder (a no-payload enum
+## crosses to C as a heap pointer whose int32 tag at offset 0 `ruxen_queue_new`
+## reads).
+enum Overflow
+  Suspend     # backpressure: the producer parks until a slot frees
+  DropOldest  # sliding:   evict the head element, enqueue the new one
+  DropNewest  # dropping:  reject the incoming element, keep the buffer
+end
+
+## The error arm of a `send`/`recv` result: the queue's other end is gone.
+## A data-less marker (presence in `Err` is the whole signal), like the
+## channel `SendError`/`RecvError` markers.
+enum QueueError
+  QueueClosed
+end
+
+## The future returned by `rx.recv`. Holds the shared control-block pointer
+## (NOT owned — the AsyncReceiver owns the end-refcount; this op future only
+## borrows the pointer to poll) + a `done` latch. `poll` drives the C
+## `recv_step`: READY → dequeue a value (Ok); CLOSED → send-closed + drained
+## (Err(QueueClosed)); BLOCK → park (waker recorded C-side), Pending.
+class RecvFuture
+  queue_ptr: Int
+  waker: Int
+  done: Int
+  include Future
+  type Output = Result[Int, QueueError]
+
+  def init(queue_ptr: Int)
+    self.queue_ptr = queue_ptr
+    self.waker = 0
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[Int, QueueError]]
+    if self.done != 0
+      return Poll.Pending
+    end
+    # `cx: &var Context` flows into the step as its raw RuxenContext* at the
+    # i64 ABI; the step reads cx's waker to know which task to wake on a later
+    # enqueue/close. Returns: 0 = would-block (parked), 1 = value ready,
+    # 2 = closed.
+    let code = ruxen_queue_recv_step(self.queue_ptr, cx)
+    if code == 0
+      # Parked: remember WHICH waker we registered so `def drop` can vacate
+      # exactly that slot if this future is cancelled/dropped while parked —
+      # otherwise the slot would dangle into a freed Context (UAF on the next
+      # peer wake). Codex blocker fix.
+      self.waker = ruxen_queue_recv_waker(self.queue_ptr)
+      return Poll.Pending
+    end
+    # Resolved (value or close): we are no longer parked, so forget any waker.
+    self.waker = 0
+    self.done = 1
+    if code == 2
+      return Poll.Ready(Result.Err(QueueError.QueueClosed))
+    end
+    let value = ruxen_queue_recv_taken_value(self.queue_ptr)
+    Poll.Ready(Result.Ok(value))
+  end
+
+  def drop
+    # If this future was DROPPED/CANCELLED while parked, vacate its wake slot
+    # so a later peer enqueue/close does not wake a dangling waker (the cancel
+    # fn clears the slot ONLY if it still holds OUR waker). The control block
+    # itself is owned by the AsyncReceiver end, not this op future — we only
+    # release our hold on the slot.
+    if self.queue_ptr != 0 && self.waker != 0
+      ruxen_queue_cancel_recv(self.queue_ptr, self.waker)
+    end
+    self.waker = 0
+    self.queue_ptr = 0
+  end
+end
+
+## The future returned by `tx.send(v)`. Holds the control-block pointer + the
+## value to enqueue + a `done` latch. `poll` drives the C `send_step`: READY →
+## enqueued (Ok); DROPPED → the policy dropped it but the send still resolves
+## (Ok); CLOSED → recv-closed (Err(QueueClosed)); BLOCK → full + Suspend, park.
+class SendFuture
+  queue_ptr: Int
+  value: Int
+  waker: Int
+  done: Int
+  include Future
+  type Output = Result[Int, QueueError]
+
+  def init(queue_ptr: Int, value: Int)
+    self.queue_ptr = queue_ptr
+    self.value = value
+    self.waker = 0
+    self.done = 0
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[Int, QueueError]]
+    if self.done != 0
+      return Poll.Pending
+    end
+    # 0 = would-block (full + Suspend, parked), 1 = enqueued, 2 = closed,
+    # 3 = dropped-by-policy (resolves Ok — non-blocking policy).
+    let code = ruxen_queue_send_step(self.queue_ptr, cx, self.value)
+    if code == 0
+      # Parked on a full Suspend queue — remember our wake slot (cancel-while-
+      # parked UAF guard, Codex blocker fix; see RecvFuture.poll).
+      self.waker = ruxen_queue_send_waker(self.queue_ptr)
+      return Poll.Pending
+    end
+    self.waker = 0
+    self.done = 1
+    if code == 2
+      return Poll.Ready(Result.Err(QueueError.QueueClosed))
+    end
+    # code 1 (enqueued) or 3 (dropped-by-policy): the send completed. Return
+    # the value the producer offered (0-payload Ok — the channel carries the
+    # success, not a meaningful value).
+    Poll.Ready(Result.Ok(self.value))
+  end
+
+  def drop
+    if self.queue_ptr != 0 && self.waker != 0
+      ruxen_queue_cancel_send(self.queue_ptr, self.waker)
+    end
+    self.waker = 0
+    self.queue_ptr = 0
+  end
+end
+
+## The producing end. Owns one sender-refcount of the shared control block;
+## `def drop` releases it (the LAST sender drop closes the send side).
+class AsyncSender
+  include Send
+
+  queue_ptr: Int
+
+  def init(queue_ptr: Int)
+    self.queue_ptr = queue_ptr
+  end
+
+  ## Send `value`. Returns a `SendFuture` you `.await` (Shape-3) or hand-poll.
+  ## Under `Overflow.Suspend` a full queue parks the producer until the
+  ## consumer drains a slot; under DropOldest/DropNewest it never parks.
+  def send(value: Int) -> SendFuture
+    SendFuture.new(self.queue_ptr, value)
+  end
+
+  ## Make an additional producer end (bumps the C sender refcount; both
+  ## AsyncSender values share the control block). The send side closes only
+  ## when the LAST sender drops. Named `share` (NOT `clone`): `clone` is the
+  ## compiler-synthesised field-copy method — overriding it collides at
+  ## codegen — and these semantics (refcount bump, shared backing) are a
+  ## deliberate SHARE, not a value copy.
+  def share -> AsyncSender
+    AsyncSender.new(ruxen_queue_sender_clone(self.queue_ptr))
+  end
+
+  ## `def drop` is an FFI-ALIAS drop (`as "ruxen_async_sender_end_drop"`), NOT an
+  ## `.rx` body — matching the sync `Sender`/`Receiver`/`File`/`Mutex` precedent.
+  ## A bootstrap stdlib class's `.rx`-BODY `def drop` is NOT picked up by MIR
+  ## drop-elaboration for a scope-exit local (verified: a local AsyncSender with
+  ## an .rx-body drop never fired `ruxen_queue_sender_drop`), whereas the
+  ## FFI-alias form IS elaborated (the established stdlib drop shape). The C
+  ## helper receives THIS AsyncSender's heap pointer (`{ int64 queue_ptr }`),
+  ## reads the control-block ptr from it, and runs the sender-close logic. The
+  ## MIR pass emits `AsyncSender_drop(p) + ruxen_dealloc(p)` at scope exit, and
+  ## the last sender's drop closes the send side.
+  lib "runtime/queue.c"
+    def drop as "ruxen_async_sender_end_drop" -> nil
+  end
+end
+
+## The consuming end. Owns the receiver-refcount; `def drop` releases it
+## (closing the recv side so a parked Suspend-send resolves Err(QueueClosed)).
+## SINGLE-CONSUMER in v1 (one `recv` future in flight at a time).
+class AsyncReceiver
+  include Send
+
+  queue_ptr: Int
+
+  def init(queue_ptr: Int)
+    self.queue_ptr = queue_ptr
+  end
+
+  ## Receive the next value. Returns a `RecvFuture` you `.await` or hand-poll.
+  ## Parks the TASK (via the reactor) when the queue is empty; the next
+  ## `send` wakes it. Resolves `Err(QueueClosed)` when the queue is drained
+  ## AND every sender has dropped.
+  def recv -> RecvFuture
+    RecvFuture.new(self.queue_ptr)
+  end
+
+  ## FFI-alias drop (see AsyncSender.drop for why an .rx-body drop isn't
+  ## elaborated for a bootstrap-class local). Receives this AsyncReceiver's heap
+  ## pointer; reads the control-block ptr and runs the receiver-close logic.
+  lib "runtime/queue.c"
+    def drop as "ruxen_async_receiver_end_drop" -> nil
+  end
+end
+
+## The two ends of a bounded queue, handed back by `Queue.bounded`. A thin
+## handle over the shared control-block pointer with `sender`/`receiver`
+## accessors that mint the typed ends.
+##
+## WHY a handle and not the spec sketch's `let (tx, rx) = Queue.bounded(...)`:
+## tuple-destructuring a tuple whose ELEMENT TYPES are classes does not
+## propagate those types to the bindings today — the call's return type stays
+## an unresolved `Infer` and `tx.send` mangles as `?T_send` (verified this
+## session; `(Int, Int)` tuples destructure fine, but class-typed tuple
+## elements do not). That is a typeck inference gap (class-typed tuple return),
+## NOT specific to Queue — deferred as a v1 follow-up. The handle uses only
+## single-class static/instance returns (proven to resolve) and reads cleanly:
+##   let ends = Queue.bounded(256, Overflow.Suspend)
+##   let tx = ends.sender
+##   let rx = ends.receiver
+## The construction (`ruxen_queue_new`) starts the block with one sender ref +
+## one receiver ref; `sender`/`receiver` HAND those founding refs out (they do
+## NOT bump — the handle is a transient splitter, not a third owner). Call each
+## accessor EXACTLY ONCE; use `tx.share` for additional producers.
+class QueueEnds
+  sender_ptr: Int    # founding sender ref; 0 once handed out
+  receiver_ptr: Int  # founding receiver ref; 0 once handed out
+
+  def init(queue_ptr: Int)
+    self.sender_ptr = queue_ptr
+    self.receiver_ptr = queue_ptr
+  end
+
+  ## Take the producing end (the founding sender ref). CONSUMING: each end is
+  ## handed out EXACTLY ONCE. A second call panics rather than minting a second
+  ## AsyncSender off the same founding ref (which would over-decrement
+  ## sender_refs on drop → premature close + a dangling control block → UAF;
+  ## Codex high finding). Use `tx.share` for additional producers.
+  def var sender -> AsyncSender
+    if self.sender_ptr == 0
+      panic!("QueueEnds.sender already taken (use tx.share for more producers)")
+    end
+    let p = self.sender_ptr
+    self.sender_ptr = 0
+    AsyncSender.new(p)
+  end
+
+  ## Take the consuming end (the founding receiver ref). CONSUMING: call once
+  ## (single-consumer v1); a second call panics.
+  def var receiver -> AsyncReceiver
+    if self.receiver_ptr == 0
+      panic!("QueueEnds.receiver already taken (single-consumer v1)")
+    end
+    let p = self.receiver_ptr
+    self.receiver_ptr = 0
+    AsyncReceiver.new(p)
+  end
+
+  ## If an end was never taken, its founding ref must still be released so the
+  ## control block is not leaked. A taken end (ptr 0) is skipped; the
+  ## AsyncSender/AsyncReceiver that took it now owns that ref. Belt-and-braces:
+  ## the common path takes both ends, so both ptrs are 0 here.
+  def drop
+    if self.sender_ptr != 0
+      ruxen_queue_sender_drop(self.sender_ptr)
+      self.sender_ptr = 0
+    end
+    if self.receiver_ptr != 0
+      ruxen_queue_receiver_drop(self.receiver_ptr)
+      self.receiver_ptr = 0
+    end
+  end
+end
+
+## Queue namespace — the constructor surface.
+class Queue
+  ## Construct a bounded queue with the given capacity (mandatory, >= 1) and
+  ## overflow policy. Returns a `QueueEnds` handle; pull the typed `sender` /
+  ## `receiver` ends off it. NO unbounded variant (Go's discipline).
+  def self.bounded(capacity: Int, overflow: Overflow) -> QueueEnds
+    QueueEnds.new(ruxen_queue_new(capacity, overflow))
+  end
+end
+
+## §4.4 queue primitives (defined in runtime/queue.c). Module-level lib decls
+## so the futures + ends call them by bare identifier. `cx: &var Context` flows
+## into the step decls as the raw `RuxenContext*` at the i64 ABI (the `race.rx`
+## precedent), which the step reads for the parked task's waker.
+lib "runtime/queue.c"
+  def ruxen_queue_new(capacity: Int, overflow: Overflow) -> Int
+  def ruxen_queue_recv_step(queue_ptr: Int, cx: &var Context) -> Int
+  def ruxen_queue_recv_taken_value(queue_ptr: Int) -> Int
+  def ruxen_queue_recv_waker(queue_ptr: Int) -> Int
+  def ruxen_queue_send_step(queue_ptr: Int, cx: &var Context, value: Int) -> Int
+  def ruxen_queue_send_waker(queue_ptr: Int) -> Int
+  def ruxen_queue_cancel_recv(queue_ptr: Int, waker: Int) -> nil
+  def ruxen_queue_cancel_send(queue_ptr: Int, waker: Int) -> nil
+  def ruxen_queue_sender_drop(queue_ptr: Int) -> nil
+  def ruxen_queue_sender_clone(queue_ptr: Int) -> Int
+  def ruxen_queue_receiver_drop(queue_ptr: Int) -> nil
+end

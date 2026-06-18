@@ -1,0 +1,44 @@
+## Feature #4 Increment 2 (spec §4.4) — `Overflow.DropOldest` (SLIDING): a
+## `send` into a FULL bounded queue EVICTS the head (oldest) element and
+## enqueues the new one. The producer NEVER parks (non-blocking policy) — the
+## send resolves Ok immediately. The buffer keeps the NEWEST `capacity`
+## elements.
+##
+## Capacity 2; drive everything from the `block_on` ROOT (no spawn, no parking):
+##   send 1 → [1]              send 2 → [1,2] (full)
+##   send 3 → evict 1 → [2,3]  send 4 → evict 2 → [3,4]
+##   recv → 3,  recv → 4
+## So the two recvs sum to 7 (the two NEWEST), proving DropOldest slid the
+## window forward, evicting 1 and 2. (Contrast pin 426 DropNewest → 1+2 = 3.)
+##
+## Drives 6 awaits as the block_on ROOT — a multi-await ROOT is re-polled every
+## loop iteration so it self-advances (unlike a spawned multi-await task; see
+## pin 423's note). Overflow tag (DropOldest=1) crosses to C as the int32 tag in
+## the enum's heap block (the no-payload-enum / `Shutdown` ABI).
+
+async def run(tx: AsyncSender, rx: AsyncReceiver) -> Int
+  let _1 = tx.send(1).await
+  let _2 = tx.send(2).await
+  let _3 = tx.send(3).await
+  let _4 = tx.send(4).await
+  let a = rx.recv().await
+  let b = rx.recv().await
+  unwrap_or_neg(a) + unwrap_or_neg(b)
+end
+
+def unwrap_or_neg(r: Result[Int, QueueError]) -> Int
+  match r
+    Ok(v)  -> v
+    Err(_) -> -1
+  end
+end
+
+def main
+  puts "queue start"
+  var ends = Queue.bounded(2, Overflow.DropOldest)
+  let tx = ends.sender
+  let rx = ends.receiver
+  let sum = block_on(run(tx, rx))
+  puts "sum=#{sum}"
+  puts "queue done"
+end

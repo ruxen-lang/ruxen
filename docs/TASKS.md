@@ -162,10 +162,32 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       needs typed move-only future params); (b) typed-generic Output (the Int
       channel); (c) heap-payload result ergonomics — `p as String` on the Int
       payload prints the raw pointer, not the value (no typed re-hydration).
-- [ ] **§4.4 Queue**, **§4.5 Stream**, **§4.6 Retry/Schedule**, **§4.7 TestClock**
-      — sequence on §4.1/§4.2/§4.3 per spec §6. Open maintainer decisions
-      tracked in the plan doc + spec §6 (async methods on classes, `segment_cfg`
-      widening, cross-thread reactor wake).
+- [x] **§4.4 Async backpressured `Queue` (Feature #4 COMPLETE, uncommitted on
+      `feat/concurrency-adoption`).** `library/std/future/src/queue.rx` + a C
+      control block + step machines in `library/std/future/runtime/queue.c`.
+      `Queue.bounded(capacity, overflow)` → a `QueueEnds` handle (pull
+      `sender`/`receiver`; not the spec's `let (tx, rx)` tuple — class-tuple
+      destructuring gap); capacity mandatory, no unbounded. `AsyncSender`/
+      `AsyncReceiver` split; `send`/`recv` are hand-written futures that PARK THE
+      TASK via the reactor (never block the OS thread), resolving
+      `Result[Int, QueueError]`. `enum Overflow { Suspend; DropOldest; DropNewest }`
+      (no-payload enum → int32 tag at heap offset 0, `Shutdown` ABI; unknown/null
+      panics). Close→Err: last-sender-drop → recv `Err(QueueClosed)`; receiver-drop
+      → parked Suspend-send `Err`. `share` = multi-producer. v1: SINGLE-REACTOR
+      (cross-core wake deferred to v2, §4.4 risk 3 / §6), single in-flight parked
+      waiter per direction, Int channel. Pins `423`–`428`. Codex fixes: cancel-
+      while-parked waker UAF, `QueueEnds` duplicate-end UAF, capacity guard,
+      overflow-tag-from-pointer ABI, unknown-tag panic. PARKED LOW (orchestrator):
+      add an `Overflow` tag-stability pin (mirroring `shutdown_tag_stability.rs`).
+      FOLLOW-UPS (v2/cross-cutting): cross-core wake + atomic refcounts; a waiter
+      list for multi-producer backpressure + multi-consumer recv; spawned-multi-
+      await self-reschedule; drop-rooting for stdlib-class method-result locals
+      (→ automatic ownership-driven close); class-typed tuple destructuring
+      (restore `let (tx, rx) = ...`); typed `Queue[T]` element channel.
+- [ ] **§4.5 Stream**, **§4.6 Retry/Schedule**, **§4.7 TestClock** — sequence on
+      §4.1/§4.2/§4.3 per spec §6. Open maintainer decisions tracked in the plan
+      doc + spec §6 (async methods on classes, `segment_cfg` widening, cross-thread
+      reactor wake).
 
 ### Language features
 

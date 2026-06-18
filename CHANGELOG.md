@@ -8,6 +8,58 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Async backpressured `Queue` (concurrency §4.4, Feature #4).** A bounded,
+  reactor-aware queue split into `AsyncSender`/`AsyncReceiver` ends (mirrors the
+  sync `Sender`/`Receiver` split so the borrow checker tracks producer/consumer
+  separately). `send`/`recv` PARK THE TASK via the reactor — never block the OS
+  thread (the fatal flaw of the sync MPSC `Receiver.recv` in a thread-per-core
+  model). New stdlib `library/std/future/src/queue.rx` + a C control block +
+  step machines in `library/std/future/runtime/queue.c`; reuses the per-op
+  future shape (`AsyncReadWithTimeoutFuture`), the `Future` mixin, and the
+  reactor wake path (`ruxen_waker_wake` via the parked op's `cx` waker). NO new
+  reactor primitive.
+  - **Surface:** `Queue.bounded(capacity, overflow)` returns a `QueueEnds`
+    handle; pull the typed `sender`/`receiver` ends off it (a handle, not the
+    spec's `let (tx, rx) = ...` tuple — class-typed tuple destructuring doesn't
+    propagate element types today, a separate typeck gap). Capacity MANDATORY;
+    **no unbounded constructor** (Go's discipline). `AsyncSender.share` makes
+    additional producers (named `share`, not `clone` — `clone` is the synthesised
+    field-copy method).
+  - **Overflow policy** `enum Overflow { Suspend; DropOldest; DropNewest }` (the
+    ZIO taxonomy: backpressure / sliding / dropping). The no-payload enum crosses
+    to C as a heap pointer whose int32 tag at offset 0 the constructor reads (the
+    `Shutdown` enum ABI), tag-pinned to `RUXEN_OVERFLOW_*`; an unknown/null tag
+    panics. `send`/`recv` resolve `Result[Int, QueueError]` (v1 Int element
+    channel, the established Task/Race/Scope convention).
+  - **Close→Err semantics:** dropping the last `AsyncSender` marks send-closed so
+    a `recv` on a drained queue resolves `Err(QueueClosed)` (closes Go's
+    abandoned-receiver leak); dropping `AsyncReceiver` marks recv-closed so a
+    `Suspend`-`send` resolves `Err(QueueClosed)` (forgotten-sender leak). The
+    control block is refcounted by BOTH ends, freed only when both reach 0. End
+    `def drop`s are FFI-alias (`ruxen_async_{sender,receiver}_end_drop`), matching
+    the `Sender`/`File` stdlib precedent.
+  - **v1 limitations (documented, not hidden):** SINGLE-REACTOR (cross-core wake
+    — an `AsyncSender` on core A waking an `AsyncReceiver` on core B — is the
+    spec's largest unknown, §4.4 risk 3 / §6, deferred to v2; refcounts are plain
+    int64, not atomic, for the same reason). SINGLE in-flight parked waiter per
+    direction (single-consumer recv; one parked `Suspend`-sender — a second
+    blocking producer would strand the first; a waiter list is the v2 fix).
+    SPAWNED multi-await producers don't self-reschedule (a pre-existing
+    async-lowering limit — a `block_on` ROOT re-polls every iteration so a
+    multi-await root works; pins use single-send producer tasks + a multi-recv
+    consumer root). Pins 427/428 prove the close→Err CODEPATH (the close trigger
+    is called directly — a stdlib-class END local from a method/constructor result
+    is tainted out of drop-elaboration, the same drop-rooting limit Scope worked
+    around; full leak-free ownership cleanup awaits that follow-up).
+  - **Codex review (rule 44):** Inc1 fixed a cancel-while-parked waker UAF
+    (the op future now records its registered waker and clears the slot in `def
+    drop`), a `QueueEnds` duplicate-end UAF (consuming `sender`/`receiver`
+    accessors that zero the founding ptr + panic on re-take), and a capacity
+    overflow guard; Inc2 fixed the overflow-tag-from-pointer ABI (it was reading a
+    bare i64) and made an unknown/null tag panic. Pins:
+    `423_queue_send_recv_basic.rx`, `424_queue_send_backpressure.rx`,
+    `425_queue_overflow_drop_oldest.rx`, `426_queue_overflow_drop_newest.rx`,
+    `427_queue_close_sender_drop.rx`, `428_queue_close_receiver_drop.rx`.
 - **General async `Race` combinator (concurrency §4.3, Feature #3).** The first
   arm future to complete wins; ALL losers are deterministically cancelled (each
   loser's `def drop` runs — reactor deregister / fd close / free) BEFORE the

@@ -1,0 +1,55 @@
+## Feature #4 Increment 3 (spec §4.4) — CLOSE→Err, send side: when the queue's
+## send side is closed (no more producers), a `recv` on a drained queue resolves
+## `Err(QueueClosed)` instead of parking forever. This is the recv half of
+## closing Go's abandoned-receiver leak — a consumer waiting on a queue whose
+## producers are all gone is told the channel is done rather than hanging.
+##
+## SCOPE OF THIS PIN (honest): it proves the close→Err RETURN SEMANTICS, NOT
+## full leak-free ownership cleanup. The surviving end here (`rx`) moves into the
+## consumer state machine, and the synthesized future drop only drops `__sub_i`
+## sub-futures — NOT a captured `AsyncReceiver` field — so that receiver ref is
+## not released and the control block is not freed in this program. Full
+## leak-free close (every end's ref released on drop) needs the field-drop /
+## drop-rooting follow-up; this pin is scoped to the close→Err codepath only
+## (Codex Inc3 medium finding — claims tightened, not overstated).
+##
+## CLOSE TRIGGER (honest v1 note): the ownership story is "dropping the LAST
+## AsyncSender closes the send side", and `ruxen_queue_sender_drop` is EXACTLY
+## the C logic the `AsyncSender` `def drop` runs (sender_refs 1→0 → send_closed
+## → wake a parked recv). We invoke that codepath directly here because Ruxen
+## cannot yet drop a queue END at a deterministic mid-program point: a
+## stdlib-class local bound from a constructor/method result
+## (`AsyncSender.new(...)` / `ends.sender`) is tainted OUT of drop-elaboration's
+## `alloc_rooted` set — verified, its `def drop` never fires — the SAME
+## conservative-dealloc limitation Feature #2's `Scope` worked around with an
+## explicit `cancel_remaining`. (A hand-written FUTURE's `def drop` DOES fire,
+## but only at its owner's scope exit — too late to close BEFORE a recv in the
+## same function.) So this pin drives the real close CODEPATH directly; the
+## automatic last-`def drop`-closes-it TRIGGER is a documented v1 follow-up (the
+## drop-rooting fix), NOT a gap in the close logic itself.
+##
+## `closed_code` maps the recv result to 1 on `Err(QueueClosed)`, proving the
+## Err arm fired (not a value, not a hang).
+
+async def consumer(rx: AsyncReceiver) -> Int
+  let r = rx.recv().await
+  closed_code(r)
+end
+
+def closed_code(r: Result[Int, QueueError]) -> Int
+  match r
+    Ok(v)  -> v
+    Err(_) -> 1
+  end
+end
+
+def main
+  puts "queue start"
+  let qp = ruxen_queue_new(2, Overflow.Suspend)
+  let rx = AsyncReceiver.new(qp)
+  # Close the send side — the C logic AsyncSender's `def drop` runs.
+  let _close = ruxen_queue_sender_drop(qp)
+  let code = block_on(consumer(rx))
+  puts "closed=#{code}"
+  puts "queue done"
+end

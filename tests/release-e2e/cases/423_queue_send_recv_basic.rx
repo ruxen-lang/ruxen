@@ -1,0 +1,74 @@
+## Feature #4 Increment 1 (spec §4.4) — async backpressured `Queue`, basic
+## bounded send/recv over the per-thread reactor.
+##
+## `Queue.bounded(cap, Overflow.Suspend)` returns a `QueueEnds` handle; pull
+## the typed `sender`/`receiver` ends off it. Both share one refcounted C
+## control block (a ring buffer of capacity `cap`). `send`/`recv` are
+## HAND-WRITTEN futures (async methods on classes aren't lowered) returning
+## `Result[Int, QueueError]`, shaped like `AsyncReadWithTimeoutFuture`
+## (`queue_ptr`/`done` + `include Future` + `def var poll` + `def drop`). On
+## would-block they record the parked task's WAKER on the queue's wake slot and
+## return `Poll.Pending`; the peer's enqueue/dequeue wakes the parked TASK via
+## the reactor — the TASK parks, the OS thread NEVER blocks (unlike the sync
+## MPSC `Receiver.recv`, which `pthread_cond_wait`s the whole thread).
+##
+## Shape: three single-send producer tasks (each sends one value then
+## completes) are spawned; the consumer is the `block_on` ROOT that recvs three
+## values and sums them (10+20+30 = 60). The consumer's first recv parks on the
+## empty queue; each producer's send wakes it. Proves: split ends, the shared
+## control block, ring enqueue/dequeue, the Result[Int, QueueError] channel, and
+## reactor park/wake (NOT thread block).
+##
+## Why single-send producer tasks (not one 3-send task): a SPAWNED multi-await
+## state machine does not self-reschedule when an intermediate `.await` resolves
+## Ready and the machine advances+yields Pending — the linear-N dispatch returns
+## `Poll.Pending` without re-waking its own task, so the pump (which gates on
+## the task's ready bit) never re-polls it. A `block_on` ROOT is re-polled every
+## loop iteration regardless, so a MULTI-await future works fine AS THE ROOT
+## (the consumer here) — only SPAWNED multi-await tasks strand. This is a
+## pre-existing async-lowering limitation (spawned-multi-await self-wake),
+## documented as a v1 follow-up; the queue itself parks/wakes correctly.
+##
+## v1: SINGLE-REACTOR (all tasks on one worker/reactor — cross-core wake is
+## deferred to v2, spec §4.4 risk 3 / §6). Int element channel (the established
+## Task/Race/Scope convention). `.await` on the no-arg `recv` is spelled
+## `recv()` (empty-paren method call → MethodCall awaitee Shape-3).
+
+async def producer_one(tx: AsyncSender, value: Int) -> Int
+  let _a = tx.send(value).await
+  0
+end
+
+async def consumer(rx: AsyncReceiver) -> Int
+  let r1 = rx.recv().await
+  let r2 = rx.recv().await
+  let r3 = rx.recv().await
+  let v1 = unwrap_or_neg(r1)
+  let v2 = unwrap_or_neg(r2)
+  let v3 = unwrap_or_neg(r3)
+  v1 + v2 + v3
+end
+
+## A recv Result → its Int value, or -1 on QueueClosed. A free fn so the
+## consumer's await segments stay simple `let`s (the accepted linear-N shape).
+def unwrap_or_neg(r: Result[Int, QueueError]) -> Int
+  match r
+    Ok(v)  -> v
+    Err(_) -> -1
+  end
+end
+
+def main
+  puts "queue start"
+  var ends = Queue.bounded(4, Overflow.Suspend)
+  let rx = ends.receiver
+  let tx1 = ends.sender
+  let tx2 = tx1.share
+  let tx3 = tx1.share
+  let _h1 = Task.spawn_raw(producer_one(tx1, 10))
+  let _h2 = Task.spawn_raw(producer_one(tx2, 20))
+  let _h3 = Task.spawn_raw(producer_one(tx3, 30))
+  let sum = block_on(consumer(rx))
+  puts "sum=#{sum}"
+  puts "queue done"
+end

@@ -496,6 +496,118 @@ Each increment: failing pin first (417+) → minimal `.rx` + C step → narrow t
 
 ---
 
+## Feature #4 — Async backpressured `Queue` (spec §4.4)
+
+A bounded, reactor-aware queue split into `AsyncSender`/`AsyncReceiver` whose
+`send`/`recv` PARK THE TASK via the reactor (never block the OS thread — the
+fatal flaw of the sync MPSC `Receiver.recv`). Built as `library/std/future/src/
+queue.rx` (hand-written `SendFuture`/`RecvFuture`, the `AsyncReadWithTimeoutFuture`
+shape) over a new C control block + step machines in `runtime/queue.c`. Reuses
+the `Future` mixin, the reactor wake path (`ruxen_waker_wake` via the parked op's
+`cx` waker), and the `SharedSync`-style refcount discipline. NO new reactor
+primitive.
+
+### Decisions (v1 defaults, from the brief — taken, not re-litigated)
+- `Queue.bounded(capacity, overflow)` → split ends; capacity MANDATORY, NO
+  unbounded constructor (Go). `enum Overflow { Suspend; DropOldest; DropNewest }`
+  (ZIO taxonomy). Int element/error channel (`Result[Int, QueueError]`), the
+  established Task/Race/Scope convention. SINGLE-REACTOR v1 (cross-core wake is
+  §4.4 risk 3 / §6, the largest unknown — deferred to v2). Leak-free close by
+  ownership (last-sender-drop → recv `Err(QueueClosed)`; receiver-drop → parked
+  Suspend-send `Err`).
+
+### Surface deviations forced by the current lowering (verified this session)
+- **`let (tx, rx) = Queue.bounded(...)` (spec sketch) does NOT work** — class-typed
+  tuple destructuring leaves the bindings unresolved `Infer` (`?T_send`); `(Int,
+  Int)` tuples destructure fine, class-typed elements don't. So `bounded` returns
+  a **`QueueEnds` handle**; pull `sender`/`receiver` off it (single-class returns
+  resolve). Typeck class-tuple gap = a v1 follow-up.
+- **`.await` on the no-arg `recv`** must be spelled `recv()` (empty-paren →
+  `MethodCall` awaitee Shape-3; a paren-less `rx.recv` parses as `FieldAccess`,
+  which `describe_awaitee` doesn't desugar).
+- **Await segments must be simple `let`s** (the accepted linear-N CFG shape) — no
+  `match`-with-mutation between awaits. The consumer binds each recv then does the
+  matching/summing in the terminal segment.
+- **SPAWNED multi-await futures don't self-reschedule:** the linear-N state
+  machine returns `Poll.Pending` on intermediate-state advance WITHOUT re-waking
+  its own task, and the pump gates on the task's ready bit → a spawned multi-await
+  producer strands after its first await. A `block_on` ROOT is re-polled every
+  loop iteration regardless, so a multi-await ROOT works. Pins therefore use
+  single-send producer TASKS + a multi-recv consumer ROOT. (Pre-existing
+  async-lowering limit; self-wake-on-advance is the systemic fix, deferred.)
+- **A stdlib-class END local from a method/constructor result is tainted out of
+  drop-elaboration** (`alloc_rooted`), so its `def drop` never fires at a
+  mid-program point — the SAME conservative-dealloc limit `Scope` worked around
+  with `cancel_remaining`. So the close pins drive the close CODEPATH directly
+  (`ruxen_queue_{sender,receiver}_drop`, the exact C logic `def drop` runs); the
+  automatic last-`def drop`-closes-it trigger is a drop-rooting follow-up.
+
+### ABI notes
+- The `Overflow` no-payload enum crosses to C as a HEAP POINTER whose int32 tag
+  sits at offset 0 (the `Shutdown`/`ruxen_tcp_stream_shutdown` precedent — NOT a
+  bare i64). `ruxen_queue_new` reads it; unknown/null tag panics. Tag order pinned
+  to `RUXEN_OVERFLOW_*` (Suspend=0/DropOldest=1/DropNewest=2). *(Was a latent bug
+  — Inc1 stored `(int)overflow` directly; only surfaced in Inc2 when the overflow
+  branch was first reached. Fixed.)*
+- The END `def drop`s are FFI-ALIAS (`ruxen_async_{sender,receiver}_end_drop`),
+  not `.rx` bodies — a bootstrap-class `.rx`-body drop isn't elaborated for a
+  local; the FFI-alias form is (the `Sender`/`File` precedent). The wrapper reads
+  the control-block ptr from the END heap block (`{ int64 queue_ptr }` offset 0;
+  the ends don't `include Future`, so no class_info header).
+
+### Increments (TDD, pins 423+ — the free concurrency block)
+- **Inc 1 — bounded enqueue/dequeue + `Suspend` backpressure.** Pin `423`
+  (3 single-send producer tasks via `share` + parked multi-recv consumer root,
+  sum=60); pin `424` (cap-1 full-queue send parks the producer, a dequeue wakes
+  it, the 2nd send resolves Ok). Establishes the control block, ring buffer, both
+  futures, the `Result[Int, QueueError]` channel, the park/wake wiring.
+- **Inc 2 — DropOldest / DropNewest.** Pin `425` (sliding: cap-2, send 1..4 →
+  recv 3,4 = 7); pin `426` (dropping: send 1..4 → recv 1,2 = 3). Drove out the
+  overflow-tag-from-pointer ABI bug.
+- **Inc 3 — close→Err.** Pin `427` (send-closed → recv `Err(QueueClosed)`);
+  pin `428` (recv-closed → send `Err(QueueClosed)`). Scoped to the close→Err
+  CODEPATH (not full leak-free cleanup — the surviving end's ref isn't released,
+  the field-drop follow-up).
+
+### AS-BUILT (all increments GREEN, pins `423`–`428`)
+- **Wake routing:** a parked op records `ruxen_context_waker(cx)` (the `cx->waker`
+  pointer, offset 0 of `RuxenContext`) in the queue's single recv/send wake slot;
+  the peer's enqueue/dequeue/close calls `ruxen_waker_wake(slot)` (marks the task
+  ready + pokes the reactor wake fd — the exact path spawned-task wakeups use). A
+  `block_on` ROOT's waker has `task == NULL`, so it relies on the loop's
+  unconditional re-poll rather than `wake_task`; a spawned task gets the precise
+  `wake_task`.
+- **Codex (rule 44) fixes applied:** Inc1 — (blocker) cancel-while-parked waker
+  UAF: the op future captures its registered waker (`ruxen_queue_{recv,send}_waker`)
+  and clears the slot in `def drop` via `ruxen_queue_cancel_{recv,send}` (`==`
+  match-guarded); (high) `QueueEnds` duplicate-end UAF: `sender`/`receiver` are
+  consuming (`def var`, zero the founding ptr, panic on re-take) + `QueueEnds.drop`
+  releases untaken refs; (medium) capacity overflow guard. Inc2 — (medium) unknown/
+  null `Overflow` tag panics rather than silently defaulting to Suspend (matching
+  the `Shutdown` precedent) + stale "bare i64 tag" ABI comments corrected. Inc3 —
+  (medium, verified) the close pins prove the close→Err codepath but NOT full
+  leak-free ownership (the surviving end's ref isn't released by the synthesized
+  future drop, which drops only `__sub_i` sub-futures) — claims tightened in the
+  pin headers + this plan, not overstated.
+- **Parked LOW for the orchestrator:** add an `Overflow` tag-stability pin test
+  (mirroring `compiler/ruxen_core/tests/shutdown_tag_stability.rs`) — `Overflow`
+  has no equivalent source-order pin; the e2e pins exercise each tag end-to-end
+  but a dedicated pin would catch ABI drift directly. (Codex Inc2 low.)
+- **FOLLOW-UPS (v2 / cross-cutting, not Feature #4 bugs):** (a) cross-core wake
+  routing (the §4.4 risk-3 unknown) + atomic refcounts. (b) a waiter LIST for
+  multi-producer backpressure (single `send_waker` strands a 2nd blocking sender)
+  and multi-consumer recv. (c) spawned-multi-await self-reschedule (self-wake on
+  state advance) — would let a spawned producer do >1 await. (d) drop-rooting for
+  stdlib-class method-result locals — would make the automatic ownership-driven
+  close fire (and `QueueEnds`/end locals free their refs). (e) class-typed tuple
+  destructuring → restore the `let (tx, rx) = Queue.bounded(...)` sugar. (f) typed
+  `Queue[T]` element channel (currently Int, like `TaskJoinFuture.Output`).
+
+**Feature #4 (§4.4) is COMPLETE** across Increments 1–3 (+ the Codex fixes),
+scoped to the single-reactor v1 the brief specified.
+
+---
+
 ## How §4.2–§4.7 sequence on top (per spec §6)
 
 - **§4.2 Scope** (keystone): hard-depends on §4.1 (Scope#drop joins-then-cancels
