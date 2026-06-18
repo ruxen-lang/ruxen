@@ -251,6 +251,10 @@ pub const BOOTSTRAP_EMBEDDED_SIBLINGS: &[(&str, &[(&str, &str)])] = &[
                 "queue.rx",
                 include_str!("../../../../library/std/future/src/queue.rx"),
             ),
+            (
+                "stream.rx",
+                include_str!("../../../../library/std/future/src/stream.rx"),
+            ),
         ],
     ),
     (

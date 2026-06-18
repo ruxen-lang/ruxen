@@ -1,0 +1,66 @@
+## Feature #5 Increment 2 (spec §4.5) — adapter FUSE: once an adapter's inner
+## returns `nil` (end), every later `poll_next` returns `nil` WITHOUT re-polling
+## the inner. So a NON-FUSED inner that yields a value after its `nil` cannot
+## leak past the adapter's end (Codex medium finding). `for_each` already stops
+## on the first `nil`, but `poll_next` is the public primitive — a custom driver
+## or composing adapter can re-poll, so the latch lives in the adapter.
+##
+## `Naughty` is a deliberately NON-FUSED source: step 1 → Some(1), step 2 → nil,
+## step >=3 → Some(99) forever (a contract violation a fused adapter must
+## absorb). Wrapped in `MapStream(x -> x*10)`, hand-polled FOUR times via a
+## free-fn driver:
+##   poll1 → some 10   (inner Some(1))
+##   poll2 → end       (inner nil → MapStream latches done)
+##   poll3 → end       (latched — inner NOT re-polled, the 99 absorbed)
+##   poll4 → end       (still latched)
+## Without the fuse, poll3/poll4 would surface `some 990` (10*99). The output
+## proves the adapter stays ended after the inner's first `nil`.
+
+class Naughty
+  step: Int
+  cap: Int
+  include Stream
+  type Item = Int
+
+  def init(cap: Int)
+    self.step = 0
+    self.cap = cap
+  end
+
+  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
+    self.step = self.step + 1
+    if self.step == 1
+      return Poll.Ready(Some(1))
+    end
+    if self.step == 2
+      return Poll.Ready(nil)
+    end
+    Poll.Ready(Some(99))
+  end
+end
+
+## Hand-poll a MapStream `count` times, printing each result.
+def poll_n(m: &var MapStream, count: Int) -> nil
+  var cx = Context.executor
+  var i = 0
+  while i < count
+    match (&var m).poll_next(&var cx)
+      Poll.Ready(item) ->
+        match item
+          Some(v) -> puts "some #{v}"
+          nil     -> puts "end"
+        end
+      Poll.Pending -> puts "pending"
+    end
+    i = i + 1
+  end
+  nil
+end
+
+def main
+  puts "fuse start"
+  var src = Naughty.new(0)
+  var m = MapStream.new(src, { |x| x * 10 })
+  poll_n(&var m, 4)
+  puts "fuse done"
+end

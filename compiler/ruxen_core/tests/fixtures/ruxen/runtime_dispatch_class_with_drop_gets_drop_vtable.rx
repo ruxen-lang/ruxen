@@ -65,9 +65,42 @@ class PlainResource
   end
 end
 
+# §4.5 Increment 4: the Drop-vtable gate is widened to the `Stream`
+# async-protocol mixin too, so a stream ADAPTER can run its owned inner's
+# `def drop` via `Drop_dynamic_drop` (chain teardown). A STREAM class with
+# `def drop` gets [Stream@slot0, Drop@slot1] — the SAME uniform slot a
+# future uses (each has exactly one real runtime-dispatch mixin), so the
+# single Drop_dynamic_drop helper still reads slot 1 and the
+# singleton-slot assert stays satisfied. Declared inline (the gate keys on
+# the mixin being NAMED `Stream`).
+
+mixin Stream dispatch runtime
+  def poll_next -> Int
+end
+
+# Stream-shaped: runtime-dispatch Stream + def drop → Stream@slot0,
+# Drop@slot1 (the concrete StreamSentinel_drop).
+class StreamSentinel
+  payload: Int
+
+  def init(@payload: Int)
+  end
+
+  include Stream
+
+  def poll_next -> Int
+    self.payload
+  end
+
+  def drop
+    nil
+  end
+end
+
 def main
   let s = Sentinel.new(7)
   let n = NoDropFuture.new(9)
   let p = PlainResource.new(3)
+  let st = StreamSentinel.new(5)
   nil
 end

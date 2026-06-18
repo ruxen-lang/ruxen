@@ -1,0 +1,54 @@
+## Feature #5 Increment 1 (spec §4.5) — `mixin Stream` + a source `poll_next` +
+## the synchronous `for_each`/`count`/`sum` drain drivers.
+##
+## `mixin Stream dispatch runtime` (in `library/std/future/src/stream.rx`) is
+## the async analogue of `Enumerable[T]`: one required primitive
+## `def var poll_next(cx) -> Poll[Option[Int]]`, with `for_each`/`count`/`sum`
+## as DEFAULT BODIES built on `poll_next` (just as `Enumerable` is defined over
+## `each`). `poll_next` dispatches through the runtime vtable
+## (`dispatch runtime`), so adapters can hold a heterogeneous inner stream.
+##
+## `for_each` is a SYNC pump driver (builds + drops a `Context`, pumps
+## `poll_next`, parks on Pending, stops on `Ready(nil)` = end-of-stream) — NOT
+## an `async def` and NOT `.await`-in-loop (both gated). So the v1 consumer
+## driver is `stream.for_each do |x| … end` from SYNC code, not the spec
+## sketch's `for x in stream` (method-level async lowering, deferred to v2).
+##
+## `Counter` is a finite source yielding 1, 2, 3 then `nil` (end). The pin
+## drives it three ways: `for_each` (prints each), `count` (3), `sum` (6) — each
+## over a FRESH Counter (the drain consumes a stream). Proves: the mixin lowers,
+## `poll_next` runtime-dispatches, the sync drain drivers work, and the default
+## bodies compose over `poll_next`.
+
+class Counter
+  n: Int
+  limit: Int
+  include Stream
+  type Item = Int
+
+  def init(limit: Int)
+    self.n = 0
+    self.limit = limit
+  end
+
+  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
+    if self.n >= self.limit
+      return Poll.Ready(nil)
+    end
+    self.n = self.n + 1
+    Poll.Ready(Some(self.n))
+  end
+end
+
+def main
+  puts "stream start"
+  var a = Counter.new(3)
+  a.for_each do |v|
+    puts "got #{v}"
+  end
+  var b = Counter.new(3)
+  puts "count=#{b.count}"
+  var c = Counter.new(3)
+  puts "sum=#{c.sum}"
+  puts "stream done"
+end

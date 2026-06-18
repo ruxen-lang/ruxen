@@ -1982,6 +1982,45 @@ UTF-8+NUL, and passes the pointer to an exported `def f(... text: &String)` (the
 i32 ptr IS the `&String`). Verified exported in `quiver/examples/counter-dom`.
 Toolchain: `ruxen 0.1.0`.
 
+## Q46 · S2 — a NO-ARG `def init` class's paren-less `.new` CRASHES (exit=None / segfault) when the value is wrapped/moved into another class's field  ⏳ OPEN (NEW 2026-06-19)
+
+Found 2026-06-19 building the §4.5 async `Stream` adapters. A class whose `def
+init` takes **no parameters**, constructed paren-less as `X.new`, compiles and
+runs fine in isolation, but the program **crashes (no exit code / segfault, empty
+stdout)** when that value is moved into another class's constructor (e.g. a
+stream adapter holding it as an `any Mixin` field). Giving the source an
+ARG-taking `init` makes the crash vanish — so the trigger is the no-arg-init
+constructor in the wrap-into-field position, NOT the wrapping itself. Pre-existing
+constructor-lowering bug, unrelated to Stream.
+
+**Minimal repro** (crashes; `cargo test -p ruxen_core --test release_e2e_smoke`):
+```ruxen
+class Src
+  step: Int
+  include Stream        # any `dispatch runtime` mixin; the field below is `any Stream`
+  type Item = Int
+  def init               # NO params — the trigger
+    self.step = 0
+  end
+  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
+    Poll.Ready(nil)
+  end
+end
+
+def main
+  var src = Src.new                       # paren-less, no-arg init
+  var m = MapStream.new(src, { |x| x })   # move `src` into an `any Stream` field → CRASH
+  puts "sum=#{m.sum}"
+end
+```
+**Workaround (in use, pin 435):** give the source an arg-taking `init`
+(`def init(cap: Int)` … `Src.new(0)`) — the crash disappears. **Severity S2**
+(a silent segfault on legal code, but a narrow trigger with a trivial
+workaround). Likely in constructor/`_init` lowering or the move-into-`any Mixin`-
+field ABI. A focused repro lives in this entry; do NOT need a release-e2e pin
+until someone takes the fix (a `.deferred` repro could be added then).
+Toolchain: `ruxen 0.1.0` (`feat/concurrency-adoption`).
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:

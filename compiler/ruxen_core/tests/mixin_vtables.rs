@@ -923,6 +923,63 @@ fn runtime_dispatch_class_with_drop_gets_drop_vtable_slot() {
     );
 }
 
+/// §4.5 Increment 4 — LAYOUT STABILITY for the Stream Drop-vtable slot. The
+/// Drop-vtable gate is widened to the `Stream` async-protocol mixin (so a
+/// stream adapter can run its owned inner's `def drop` via `Drop_dynamic_drop`
+/// — chain teardown). A STREAM class with `def drop` carries [Stream, Drop] in
+/// its class_info (Stream@0, Drop@1) — the SAME uniform slot a future uses, so
+/// the single `Drop_dynamic_drop` helper (asserted as exactly-one above) reads
+/// the same slot 1 for both. This proves the gate widening is sound: no second
+/// slot, no second helper, no layout drift on non-async classes.
+#[test]
+fn stream_class_with_drop_gets_drop_vtable_slot() {
+    let mir = lower_fixture("runtime_dispatch_class_with_drop_gets_drop_vtable");
+
+    // class_info for StreamSentinel: two slots, Stream then Drop (uniform
+    // slot 1, identical to the future Future@0/Drop@1 shape).
+    let ci = mir
+        .class_infos
+        .iter()
+        .find(|c| c.class_name == "StreamSentinel")
+        .expect("StreamSentinel must have a class_info (it is a Stream)");
+    assert_eq!(
+        ci.vtable_symbols,
+        vec![
+            "__rx_vtable_Stream_for_StreamSentinel".to_string(),
+            "__rx_vtable_Drop_for_StreamSentinel".to_string(),
+        ],
+        "StreamSentinel class_info must hold Stream@slot0 + Drop@slot1, in order",
+    );
+
+    // The Drop vtable's single method symbol is the concrete <Class>_drop.
+    let drop_vt = mir
+        .vtables
+        .iter()
+        .find(|v| v.class_name == "StreamSentinel" && v.mixin_name == "Drop")
+        .expect("StreamSentinel must emit a Drop vtable");
+    assert_eq!(
+        drop_vt.method_symbols,
+        vec!["StreamSentinel_drop".to_string()],
+        "Drop vtable's single entry is the concrete StreamSentinel_drop",
+    );
+
+    // CRITICAL: still EXACTLY ONE `Drop_dynamic_drop` helper, even though both
+    // a Future class (Sentinel) and a Stream class (StreamSentinel) now emit a
+    // Drop vtable — they share the uniform slot 1, so the singleton-slot assert
+    // in `collect_mixin_vtables` holds and one helper serves both.
+    let drop_helpers: Vec<_> = mir
+        .functions
+        .iter()
+        .filter(|f| f.name == "Drop_dynamic_drop")
+        .collect();
+    assert_eq!(
+        drop_helpers.len(),
+        1,
+        "exactly one Drop_dynamic_drop helper across Future + Stream classes \
+         (uniform Drop slot 1 — the gate widening must not split the helper)",
+    );
+}
+
 /// LAYOUT STABILITY (the narrow-path proof): a plain droppable class that
 /// does NOT include a runtime-dispatch mixin emits ZERO vtable and ZERO
 /// class_info — its instance layout stays flat (no offset-0 header). The

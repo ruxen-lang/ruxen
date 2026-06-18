@@ -608,6 +608,120 @@ scoped to the single-reactor v1 the brief specified.
 
 ---
 
+## Feature #5 — Async `Stream` (spec §4.5)
+
+A pull-based, backpressured async stream — the async analogue of `Enumerable[T]`.
+`library/std/future/src/stream.rx` (`mixin Stream` + 3 adapters) + a tiny
+`runtime/stream.c` (resource helper for the drop-on-cancel pin). Reuses the
+`Future`/`Enumerable` patterns directly — this feature was smooth because the
+two existing patterns translated 1:1.
+
+### Decisions (v1 defaults, from the brief — taken, not re-litigated)
+- `mixin Stream dispatch runtime` over ONE required `def var poll_next(cx) ->
+  Poll[Option[Int]]`, with `for_each`/`count`/`sum`/`map`/`filter`/`take` as
+  default bodies / adapter classes built on `poll_next` (the `Enumerable`-over-
+  `each` reuse). Int channel (v1). Single-consumer pull; leak-free cancel via
+  `def drop`. NOT in scope: concurrent stages (`mapPar`/`merge`), reactive-
+  streams interop (v2).
+
+### SPIKE result (make-or-break, confirmed FIRST)
+A user-defined `mixin Stream dispatch runtime` with a required `poll_next` + a
+default-body `for_each` (sync pump) LOWERS and RUNS, with `poll_next`
+runtime-dispatched. This is the FIRST `dispatch runtime` mixin that also carries
+default-body methods — `Future` has only the required method, `Enumerable` has
+defaults but isn't `dispatch runtime`. The combination works.
+
+### Surface as built (what the current lowering supports)
+- **`for_each` is a SYNC pump driver** (builds a `Context`, pumps `poll_next`,
+  parks on `Pending` via `Scope.pump_or_park`, stops on `Ready(nil)`) — NOT an
+  `async def`, NOT `.await`-in-loop (both gated). The v1 consumer driver is
+  `stream.for_each do |x| … end` from SYNC code, NOT the spec's `for x in
+  stream` (method-level async lowering — v2).
+- **Adapters constructed DIRECTLY** (`MapStream.new(src, f)`), not fluent
+  `src.map(f)` — moving `self` out of a `&var self` method body isn't supported
+  (the explicit `(self)` consume is `lib`-block-only). The v1 surface takes the
+  inner stream as a constructor arg by value (the `Race`/`Queue` value-construct
+  shape); fluent `.map`/`.filter`/`.take` is a v2 by-move-self follow-up.
+- **Adapters hold the inner as `any Stream`** (dyn-mixin) and poll it via the
+  runtime vtable (`(&var self.inner).poll_next(cx)`) — verified via a spike that
+  the dyn field + dyn dispatch lowers.
+- **`.await` of a no-arg method needs explicit parens** carried over from F4
+  (not relevant to Stream's sync driver, but the same lowering floor).
+
+### Increments (TDD, pins 429+)
+- **Inc 1 — `mixin Stream` + source `poll_next` + drain drivers.** Pin `429`
+  (Counter source, `for_each`/`count`/`sum`); pin `430` (task-backed source over
+  a Queue + spawned producer — proves `for_each` PUMPS on Pending, would spin
+  without it).
+- **Inc 2 — `map`/`filter`/`take` adapters.** Pins `431` (map), `432` (filter),
+  `433` (take + composed `map→filter→take` chain, take stops the chain early),
+  `435` (adapter FUSE — re-polling a finished adapter stays `nil`).
+- **Inc 3 — leak-free drop-on-cancel mid-stream.** Pin `434` (a resource-owning
+  source partially consumed via a borrow-driver, then scope-exit drop fires the
+  source `def drop` exactly once).
+- **Inc 4 — leak-free adapter CHAINS** (the spec's headline guarantee: "dropping
+  the chain drops every stage"). Widen the §4.1 narrow Drop-vtable gate
+  (`mir/lower/mod.rs`) from `Future`-only to `Future OR Stream` so a `Stream`
+  class gets a Drop vtable slot at the uniform slot 1; each adapter's `def drop`
+  runs its inner `any Stream`'s `def drop` via `ruxen_stream_drop_inner` →
+  `Drop_dynamic_drop(inner)` + free. Pin `436` (a `TakeStream(MapStream(Resource
+  Source))` chain partially consumed then dropped → source `def drop` fires
+  EXACTLY once, a live-count guard reads 0 — no leak, no double-drop) + a layout
+  pin (`stream_class_with_drop_gets_drop_vtable_slot`).
+
+### AS-BUILT (all increments GREEN, pins `429`–`436`)
+- **Codex (rule 44) fixes:** Inc1 — (high) `for_each` Pending arm now uses
+  `Scope.pump_or_park` (was a bare `Thread.yield_now`), so a TASK-backed source
+  makes progress instead of spinning (proven by pin 430); (high) the misleading
+  explicit `cx.drop` was removed (it never fired — `cx.drop` didn't reach
+  `ruxen_executor_context_drop` — and masked a bounded per-drive `Context` leak,
+  now documented). Inc2 — (medium) adapters are now FUSED (a `done` latch: once
+  the inner returns `nil`, later `poll_next`s return `nil` without re-polling, so
+  a non-fused inner can't leak a value past end; proven by pin 435). Inc4 (the
+  gate widening — an ABI/layout change) — Codex VALIDATED no double-drop
+  (moved-in sources/adapters are tainted out of scope-exit drop), the
+  `__weak Drop_dynamic_drop` guard, and no non-async layout regression; one
+  verified low (a stale C comment) fixed.
+- **Inc4 slot-uniformity — verified sound:** a Future class and a Stream class
+  each have exactly ONE real runtime-dispatch mixin, so
+  `drop_vtable_slot_for_class` (returns `runtime_dispatch_includes.len()`) yields
+  1 for both → Drop at the uniform slot 1 → the singleton-slot assert holds → ONE
+  `Drop_dynamic_drop` helper serves both (pin
+  `stream_class_with_drop_gets_drop_vtable_slot`). The change is one site
+  (`is_future` → `is_async_protocol`) + the C helper + adapter drops + the layout
+  pin — no broad ABI work, no destabilization (33 e2e + 20 mixin_vtables pins
+  green).
+- **Inc4 SHARP EDGE (pre-existing, REPORTED to the maintainer, NOT fixed here):**
+  a class that `include`s BOTH `Future` AND `Stream` (semantically incoherent — a
+  value can't be both a one-shot future and a pull stream) has 2 runtime-dispatch
+  mixins → Drop@2, diverging from the uniform slot 1 → the hard slot-uniformity
+  `assert!` PANICS (a LOUD compiler crash, NOT a silent miscompile). This panic
+  PRE-DATES Inc4 (the §4.1 assert already covered `Future + <2nd dispatch-runtime
+  mixin>`; before Stream there was no 2nd stdlib `dispatch runtime` mixin to
+  combine). Inc4 makes `Future + Stream` a newly-reachable instance. A proper
+  diagnostic (reject the combination with an error code, or per-slot
+  `Drop_dynamic_drop` helpers) is a separate maintainer call — out of Inc4's
+  "leak-free chains" scope (a new `E####` + `docs/errors/`).
+- **Pre-existing compiler limits hit + documented (NOT Stream bugs):**
+  (a) a stdlib-class / source local consumed via a `&var self` mixin method
+  (`src.for_each`) is tainted out of drop-elaboration → its scope-exit drop is
+  suppressed; the borrow-driver path (`&var stream` to a free fn) drops correctly
+  (pin 434). Same drop-rooting limit Scope/Queue hit. (b) A no-arg-`def init`
+  source class `.new` (paren-less) CRASHES when wrapped in an adapter (a separate
+  constructor-lowering quirk — worked around with an arg-init source; filed as
+  **Q46** in `gui-stack-v1-issues.md`).
+- **FOLLOW-UPS (v2):** fluent `.map`/`.filter`/`.take` (by-move-self); the
+  ergonomic `for x in stream` driver (method-level async lowering); typed
+  `Stream[T]` element channel (currently Int); concurrent stages
+  (`mapPar`/`merge`); the for_each-then-drop drop-rooting fix; a proper diagnostic
+  (or per-slot helpers) for the `Future + Stream` incoherent-include panic.
+
+**Feature #5 (§4.5) is COMPLETE** across Increments 1–4 (+ the Codex fixes),
+scoped to single-consumer pull streams with leak-free cancel AND leak-free
+adapter chains.
+
+---
+
 ## How §4.2–§4.7 sequence on top (per spec §6)
 
 - **§4.2 Scope** (keystone): hard-depends on §4.1 (Scope#drop joins-then-cancels

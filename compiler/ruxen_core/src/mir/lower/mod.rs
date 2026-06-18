@@ -993,27 +993,43 @@ impl<'a> Lowerer<'a> {
             // out-of-bounds slot for. The no-op makes the drain a safe
             // no-op for those.
             //
-            // Gated on the `Future` mixin specifically (NOT all
-            // runtime-dispatch classes): a non-future runtime-dispatch
-            // class — e.g. a `Sized dispatch runtime` user mixin — is
-            // never queued/drained, so adding a Drop slot to it would only
-            // widen its class_info for no consumer. `Future` is the async
-            // *protocol* marker (same structural name async_lowering and
-            // mixin_vtables.spec.md key on), not per-type stdlib knowledge.
+            // Gated on the `Future` OR `Stream` async-protocol mixins (NOT all
+            // runtime-dispatch classes): a generic non-async runtime-dispatch
+            // class — e.g. a `Sized dispatch runtime` user mixin — is never
+            // drained/cancelled and is not the inner of an owning adapter, so
+            // adding a Drop slot to it would only widen its class_info for no
+            // consumer. `Future` and `Stream` are the two async *protocol*
+            // markers (structural names async_lowering / stream adapters key
+            // on), not per-type stdlib knowledge.
+            //   - `Future` (§4.1): the scheduler drains/cancels queued futures
+            //     via `Drop_dynamic_drop`.
+            //   - `Stream` (§4.5 Increment 4): a stream ADAPTER owns its inner
+            //     `any Stream` by value and runs the inner's `def drop` via
+            //     `Drop_dynamic_drop` when the adapter drops — so dropping an
+            //     adapter chain drops every stage (the spec's leak-free-on-
+            //     cancel guarantee). Without a Drop slot on Stream classes the
+            //     adapter's inner source would leak its reactor resource.
             //
-            // This routes a drained/cancelled future's `def drop` through
-            // the class_info it already carries, WITHOUT making `mixin Drop`
-            // globally `dispatch runtime` and WITHOUT adding a header to
-            // any non-runtime-dispatch class.
+            // Both put their Drop vtable at the SAME class_info slot — each has
+            // exactly ONE real runtime-dispatch mixin (`Future`@0 / `Stream`@0),
+            // so Drop lands uniformly at slot 1 (`drop_vtable_slot_for_class`
+            // returns `runtime_dispatch_includes.len()` == 1 for both). The
+            // single `Drop_dynamic_drop` helper reads that uniform slot; the
+            // hard singleton-slot assert (below) stays satisfied.
+            //
+            // This routes a future's drain/cancel drop AND an adapter's
+            // inner-drop through the class_info each already carries, WITHOUT
+            // making `mixin Drop` globally `dispatch runtime` and WITHOUT adding
+            // a header to any non-runtime-dispatch class.
             // Spec: docs/decisions/zio-comparison-concurrency-adoption.md
-            // §4.1; docs/dev/concurrency-impl-plan.md Step 1/Increment 1.
-            let is_future = info.runtime_dispatch_includes.iter().any(|&m| {
+            // §4.1 + §4.5; docs/dev/concurrency-impl-plan.md Increment 1 + F5/Inc4.
+            let is_async_protocol = info.runtime_dispatch_includes.iter().any(|&m| {
                 self.symbols
                     .get(m)
-                    .map(|d| d.name == "Future")
+                    .map(|d| d.name == "Future" || d.name == "Stream")
                     .unwrap_or(false)
             });
-            if is_future {
+            if is_async_protocol {
                 let class_has_user_drop = self.user_drop_classes.contains(&class_name)
                     || self
                         .user_drop_classes
@@ -1431,10 +1447,14 @@ impl<'a> Lowerer<'a> {
         // loudly rather than miscompile.
         assert!(
             drop_slots.len() <= 1,
-            "Drop_dynamic_drop assumes a uniform Drop class_info slot across \
-             futures, but found multiple: {:?}. A future now carries >1 real \
-             runtime-dispatch mixin — Drop_dynamic_drop must be keyed per slot \
-             (see docs/dev/concurrency-impl-plan.md Increment 1).",
+            "Drop_dynamic_drop assumes a uniform Drop class_info slot across the \
+             async-protocol (Future/Stream) classes, but found multiple: {:?}. A \
+             class now carries >1 real runtime-dispatch mixin (e.g. `include \
+             Future` AND `include Stream` on one class — semantically incoherent: \
+             a value can't be both a one-shot future and a pull stream), so its \
+             Drop slot diverges from the uniform slot 1. Reject that combination \
+             upstream, or key `Drop_dynamic_drop` per slot \
+             (see docs/dev/concurrency-impl-plan.md Increment 1 + F5/Inc4).",
             drop_slots
         );
         if let Some(&drop_slot) = drop_slots.iter().next_back() {

@@ -8,6 +8,75 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Async `Stream` (concurrency §4.5, Feature #5).** A pull-based, backpressured
+  async stream — the async analogue of `Enumerable[T]`. New stdlib
+  `library/std/future/src/stream.rx` + a tiny `library/std/future/runtime/stream.c`
+  (resource helper for the drop-on-cancel pin).
+  - **`mixin Stream dispatch runtime`** over ONE required primitive
+    `def var poll_next(cx) -> Poll[Option[Int]]` (`Some(v)` = next element, `nil`
+    = end, `Pending` = parked), with `for_each`/`count`/`sum` as DEFAULT BODIES
+    built on `poll_next` — exactly how `Enumerable[T]` is defined over `each`.
+    `poll_next` dispatches through the runtime vtable (the `Future` mechanism);
+    this is the first `dispatch runtime` mixin that ALSO carries default-body
+    methods, and it lowers cleanly. Backpressure is intrinsic to pull: the
+    consumer drives `poll_next`, so upstream is polled only on demand.
+  - **`for_each` is a SYNC pump driver** (builds a `Context`, pumps `poll_next`,
+    parks on `Pending` via `Scope.pump_or_park`, stops on `Ready(nil)`) — NOT an
+    `async def` and NOT `.await`-in-loop (both gated), the same hand-pump shape as
+    `block_on` / `Scope.collect`. So the v1 consumer driver is
+    `stream.for_each do |x| … end` from SYNC code, NOT the spec sketch's
+    `for x in stream` (which needs method-level async lowering — v2).
+  - **Adapters `MapStream`/`FilterStream`/`TakeStream`** — each `include`s
+    `Stream`, OWNS its inner stream by value as an `any Stream` (dyn-mixin) field,
+    and implements `poll_next` by polling the inner via the runtime vtable and
+    transforming; chains compose (`take(filter(map(src)))`) and `take` stops
+    pulling the inner once its quota is met (pull backpressure). Each adapter is
+    FUSED (a `done` latch — once the inner returns `nil`, later `poll_next`s
+    return `nil` without re-polling, so a non-fused inner can't leak past end).
+    v1 adapters are constructed DIRECTLY (`MapStream.new(src, f)`), NOT via a
+    fluent `src.map(f)` (that needs by-move-`self`, which `&var self` method
+    bodies can't express — v2).
+  - **Leak-free drop-on-cancel:** a source stream owns its resource (reactor
+    registration / `state_ptr`) and releases it in `def drop` when dropped
+    mid-stream (consumer stops pulling). Pinned via a borrow-driver
+    (`&var stream`) drive then scope-exit drop — fires the source `def drop`
+    exactly once.
+  - **v1 limitations (documented):** Int element channel (`Poll[Option[Int]]`,
+    the Task/Race/Scope/Queue convention; typed `Stream[T]` deferred);
+    single-consumer pull streams; NOT concurrent stages (`mapPar`/`merge`) or
+    reactive-streams interop (v2). Drop-rooting taint: calling a `&var self`
+    mixin method (`src.for_each`) directly on a local taints it out of
+    drop-elaboration (suppresses its scope-exit drop) — the borrow-driver path
+    drops correctly; same drop-rooting follow-up as Scope/Queue.
+  - **Leak-free adapter CHAINS (Increment 4):** dropping an adapter chain drops
+    EVERY stage, each running its own `def drop` (spec §4.5's headline guarantee).
+    The §4.1 narrow Drop-vtable gate (`mir/lower/mod.rs`, was `Future`-only) is
+    WIDENED to `Future OR Stream`, so a `Stream` class gets a Drop vtable slot at
+    the SAME uniform class_info slot (each has one runtime-dispatch mixin → Drop@1;
+    the singleton-slot assert + the single `Drop_dynamic_drop` helper still hold —
+    pinned by `stream_class_with_drop_gets_drop_vtable_slot` in `mixin_vtables.rs`,
+    a layout-stability pin). Each adapter's `def drop` runs its inner `any Stream`'s
+    `def drop` via `ruxen_stream_drop_inner` → `Drop_dynamic_drop(inner)` + free,
+    so `TakeStream(MapStream(ResourceSource))` frees the source's resource. Pin
+    `436_stream_chain_drop.rx` proves the source's `def drop` fires EXACTLY ONCE
+    (a process-wide live-count guard reads 0 after — no leak, no double-drop). The
+    non-async layout is untouched (a plain droppable class still has no header).
+  - **Codex review (rule 44):** Inc1 fixed two highs — `for_each` now pumps the
+    scheduler on `Pending` (`Scope.pump_or_park`, was a bare `Thread.yield_now`)
+    so a TASK-backed source makes progress (pinned by 430, would spin without
+    it); and the misleading explicit `cx.drop` was removed (it didn't fire and
+    masked a bounded per-drive `Context` leak, now documented). Inc2 fixed a
+    medium — adapters are now FUSED (pinned by 435). Inc4 (the gate widening, an
+    ABI/layout change) — Codex VALIDATED no double-drop (moved-in sources/adapters
+    are tainted out of scope-exit drop), the `__weak Drop_dynamic_drop` guard, and
+    no non-async layout regression; one verified low (a stale C comment) fixed.
+    KNOWN sharp edge (pre-existing, reported): a class that `include`s BOTH `Future`
+    AND `Stream` (semantically incoherent) trips the slot-uniformity assert (a loud
+    compiler panic, not a miscompile) — a proper diagnostic for it is a separate
+    maintainer call. Pins: `429_stream_source_drain.rx`,
+    `430_stream_task_backed_pump.rx`, `431_stream_map.rx`, `432_stream_filter.rx`,
+    `433_stream_take_chain.rx`, `434_stream_drop_on_cancel.rx`,
+    `435_stream_adapter_fuse.rx`, `436_stream_chain_drop.rx`.
 - **Async backpressured `Queue` (concurrency §4.4, Feature #4).** A bounded,
   reactor-aware queue split into `AsyncSender`/`AsyncReceiver` ends (mirrors the
   sync `Sender`/`Receiver` split so the borrow checker tracks producer/consumer

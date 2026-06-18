@@ -1,0 +1,41 @@
+## Feature #5 Increment 2 (spec §4.5) — `MapStream` adapter: apply a closure to
+## each element of an inner stream. The adapter OWNS the inner stream by value
+## as an `any Stream` (dyn-mixin) field and polls it via the runtime vtable;
+## `poll_next` transforms each `Some(v)` into `Some(f.(v))`, passes `nil`/Pending
+## through.
+##
+## v1 surface: adapters are constructed DIRECTLY (`MapStream.new(src, f)`), not
+## via a fluent `src.map(f)` (which would need by-move-self — deferred to v2).
+##
+## Source 1,2,3; map x -> x*10 → 10,20,30; sum = 60.
+
+class Counter
+  n: Int
+  limit: Int
+  include Stream
+  type Item = Int
+  def init(limit: Int)
+    self.n = 0
+    self.limit = limit
+  end
+  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
+    if self.n >= self.limit
+      return Poll.Ready(nil)
+    end
+    self.n = self.n + 1
+    Poll.Ready(Some(self.n))
+  end
+end
+
+def main
+  puts "stream start"
+  var src = Counter.new(3)
+  var m = MapStream.new(src, { |x| x * 10 })
+  m.for_each do |v|
+    puts "got #{v}"
+  end
+  var src2 = Counter.new(3)
+  var m2 = MapStream.new(src2, { |x| x * 10 })
+  puts "sum=#{m2.sum}"
+  puts "stream done"
+end

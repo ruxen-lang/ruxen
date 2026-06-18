@@ -184,10 +184,36 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       await self-reschedule; drop-rooting for stdlib-class method-result locals
       (→ automatic ownership-driven close); class-typed tuple destructuring
       (restore `let (tx, rx) = ...`); typed `Queue[T]` element channel.
-- [ ] **§4.5 Stream**, **§4.6 Retry/Schedule**, **§4.7 TestClock** — sequence on
-      §4.1/§4.2/§4.3 per spec §6. Open maintainer decisions tracked in the plan
-      doc + spec §6 (async methods on classes, `segment_cfg` widening, cross-thread
-      reactor wake).
+- [x] **§4.5 Async `Stream` (Feature #5 COMPLETE, uncommitted on
+      `feat/concurrency-adoption`).** `library/std/future/src/stream.rx` + a tiny
+      `runtime/stream.c`. `mixin Stream dispatch runtime` over ONE required
+      `def var poll_next(cx) -> Poll[Option[Int]]`, with `for_each`/`count`/`sum`
+      default bodies (the async `Enumerable[T]` — and the first `dispatch runtime`
+      mixin to also carry default-body methods). `for_each` is a SYNC pump driver
+      (parks via `Scope.pump_or_park`, NOT a bare yield — pumps task-backed
+      sources). Adapters `MapStream`/`FilterStream`/`TakeStream` own their inner
+      as `any Stream` (dyn-mixin), poll via the runtime vtable, compose into
+      chains, and are FUSED (latch on inner-`nil`). LEAK-FREE CHAINS (Inc4):
+      dropping a chain drops every stage — the §4.1 Drop-vtable gate was widened
+      to `Future OR Stream` so a `Stream` class gets a Drop vtable slot (uniform
+      slot 1; layout-pinned), and each adapter's `def drop` runs its inner's
+      `def drop` via `Drop_dynamic_drop` (pin 436 proves exactly-once via a
+      live-count guard). v1: Int channel, single-consumer pull, leak-free
+      drop-on-cancel + leak-free chains. Pins `429`–`436`. Codex fixes: `for_each`
+      pump-on-Pending (pin 430), explicit-`cx.drop` removed, adapter fuse (pin
+      435), Inc4 ABI/layout VALIDATED (no double-drop, slot-uniform). REPORTED
+      sharp edge (pre-existing, NOT fixed): a class including BOTH `Future` AND
+      `Stream` (incoherent) trips the slot-uniformity assert (loud panic) — a
+      proper diagnostic is a maintainer call. FOLLOW-UPS (v2): fluent
+      `.map`/`.filter`/`.take` (by-move-self); `for x in stream` (method-level
+      async lowering); typed `Stream[T]`; concurrent stages; the for_each-then-
+      drop drop-rooting fix; the `Future+Stream` incoherent-include diagnostic;
+      Q46 (no-arg-init source crashing inside an adapter — a separate
+      constructor-lowering bug, filed).
+- [ ] **§4.6 Retry/Schedule**, **§4.7 TestClock** — sequence on §4.1/§4.2/§4.3
+      per spec §6. Open maintainer decisions tracked in the plan doc + spec §6
+      (async methods on classes, `segment_cfg` widening, cross-thread reactor
+      wake).
 
 ### Language features
 
@@ -375,6 +401,15 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       LLVM-side. Found benchmarking rondo vs Go `net/http` (debug-Cranelift rondo
       ~113k RPS vs optimized Go ~164k — the debug handicap confounds the number).
       rondo workaround W22; details §Q41.
+- [ ] **Q46 · S2 — a no-arg `def init` class's paren-less `.new` CRASHES
+      (exit=None/segfault) when the value is moved into another class's field
+      (NEW 2026-06-19).** Found building the §4.5 Stream adapters: a source class
+      with `def init` (no params), constructed `Src.new`, runs fine alone but
+      segfaults (empty stdout) when moved into an adapter's `any Stream` field.
+      Arg-taking `init` makes it vanish — so the trigger is the no-arg-init
+      constructor in the wrap-into-field position. Pre-existing constructor-
+      lowering bug, NOT a Stream bug. Workaround (pin 435): give the source an
+      arg-taking init. Minimal repro + details in `dev/gui-stack-v1-issues.md` §Q46.
 - [x] **Q42 · S2 — deliver a DOM event to a Ruxen handler on wasm — NOT a
       compiler bug; pure-Ruxen pattern. RESOLVED 2026-06-16 (verified by spike).**
       Spike GREEN: exported `def boot() -> Registry` (holds `handlers: Array[any

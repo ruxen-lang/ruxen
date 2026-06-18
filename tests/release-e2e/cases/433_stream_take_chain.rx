@@ -1,0 +1,55 @@
+## Feature #5 Increment 2 (spec §4.5) — `TakeStream` adapter + a COMPOSED chain
+## (map → filter → take). `take(n)` yields at most the first `n` elements then
+## ends — and (crucially for a long/infinite source) STOPS pulling the inner
+## once `n` are taken, so the upstream is never polled again (pull backpressure).
+##
+## Composition: each adapter OWNS its inner by value, so the chain
+## `TakeStream(FilterStream(MapStream(Counter)))` is one owned tower; dropping it
+## drops every stage. Element flow:
+##   Counter 1..100  →  map x*x  →  1,4,9,16,25,36,49,64,81,100,...
+##   →  filter even  →  4,16,36,64,100,...
+##   →  take 3       →  4,16,36
+## sum = 56. The Counter has limit 100 but `take 3` means only the first few are
+## ever pulled — proving pull semantics (take stops the chain early).
+
+class Counter
+  n: Int
+  limit: Int
+  include Stream
+  type Item = Int
+  def init(limit: Int)
+    self.n = 0
+    self.limit = limit
+  end
+  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
+    if self.n >= self.limit
+      return Poll.Ready(nil)
+    end
+    self.n = self.n + 1
+    Poll.Ready(Some(self.n))
+  end
+end
+
+def main
+  puts "stream start"
+  # take alone: 1..10 take 3 → 1,2,3 = 6
+  var src0 = Counter.new(10)
+  var t0 = TakeStream.new(src0, 3)
+  puts "take_sum=#{t0.sum}"
+
+  # composed chain map→filter→take
+  var src = Counter.new(100)
+  var mapped = MapStream.new(src, { |x| x * x })
+  var evens = FilterStream.new(mapped, { |x| x % 2 == 0 })
+  var first3 = TakeStream.new(evens, 3)
+  first3.for_each do |v|
+    puts "got #{v}"
+  end
+
+  var src2 = Counter.new(100)
+  var mapped2 = MapStream.new(src2, { |x| x * x })
+  var evens2 = FilterStream.new(mapped2, { |x| x % 2 == 0 })
+  var first3b = TakeStream.new(evens2, 3)
+  puts "chain_sum=#{first3b.sum}"
+  puts "stream done"
+end

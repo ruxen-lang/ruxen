@@ -1,0 +1,7 @@
+stream start
+take_sum=6
+got 4
+got 16
+got 36
+chain_sum=56
+stream done
