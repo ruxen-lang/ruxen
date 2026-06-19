@@ -178,4 +178,11 @@ fn main() {
         println!("cargo:rerun-if-changed={}", src.display());
     }
     println!("cargo:rerun-if-changed={}", std_root.display());
+    // The weak-stub TU is compiled into libruxenrt.a too — without this an
+    // edit to it (e.g. adding a new synthesized-symbol stub) is silently
+    // ignored and the archive goes stale.
+    println!(
+        "cargo:rerun-if-changed={}",
+        PathBuf::from(&crate_dir).join("runtime_stubs.c").display()
+    );
 }

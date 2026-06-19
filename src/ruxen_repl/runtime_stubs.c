@@ -19,3 +19,13 @@ __attribute__((weak)) int64_t Future_dynamic_poll(int64_t self, int64_t ctx) {
     (void)ctx;
     return 0;
 }
+
+/* Likewise `Drop_dynamic_drop` — the per-class drop dispatcher the AOT
+ * backend synthesises for the narrow Drop vtable (concurrency §4.1). The
+ * future runtime now calls it: scheduler.c (drain/cancel), schedule.c
+ * (retry child teardown), stream.c (adapter-chain inner drop). The REPL
+ * link doesn't go through Ruxen codegen, so it needs a weak no-op target;
+ * a real Ruxen program's synthesised symbol overrides it via `weak`. */
+__attribute__((weak)) void Drop_dynamic_drop(int64_t self) {
+    (void)self;
+}

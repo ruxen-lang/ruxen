@@ -104,15 +104,18 @@ fn compile_c_harness(name: &str, source: &str) -> PathBuf {
     let harness_exe = temp_dir.join(format!("{name}_{suffix}"));
 
     // `library/std/future/runtime/scheduler.c` forward-declares
-    // `Future_dynamic_poll` — the symbol Ruxen codegen synthesises for
-    // every class that includes `Future dispatch runtime` (see
-    // `synthesize_dynamic_dispatch_helpers`). Pure-C harnesses don't go
-    // through codegen, so the link step fails with "undefined symbol".
-    // Inject a weak stub that's overridden when Ruxen *does* define
-    // the symbol (i.e. for the normal compile path).
+    // `Future_dynamic_poll` (and, since concurrency §4.1, `Drop_dynamic_drop`)
+    // — symbols Ruxen codegen synthesises for every class that includes
+    // `Future`/`Stream dispatch runtime` (see `synthesize_dynamic_dispatch_helpers`
+    // + the narrow Drop vtable). Pure-C harnesses don't go through codegen, so
+    // the link step fails with "undefined symbol". Inject weak stubs that are
+    // overridden when Ruxen *does* define the symbols (the normal compile path).
     let stub_prelude = "\
 __attribute__((weak)) long long Future_dynamic_poll(long long self, long long ctx) { \
     (void)self; (void)ctx; return 0; \
+}\n\
+__attribute__((weak)) void Drop_dynamic_drop(long long self) { \
+    (void)self; \
 }\n";
     let harness_source = format!("{}{}", stub_prelude, source);
     std::fs::write(&harness_c, harness_source).expect("write harness");
