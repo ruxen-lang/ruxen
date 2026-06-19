@@ -1,0 +1,4 @@
+sched start
+a_ok=99
+b_err=2
+sched done

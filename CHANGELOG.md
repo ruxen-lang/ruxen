@@ -8,6 +8,54 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Retry / `Schedule` (concurrency §4.6, Feature #6).** A composable IMMUTABLE
+  retry/backoff policy plus SYNC and ASYNC drivers — pure `.rx` over closures +
+  `Duration` + `Rand` + `Async.sleep` + `include Future`/`def drop`, with ONE
+  thin C poll-step (no new compiler machinery).
+  - **`Schedule` value (immutable builder):** `recurs(n)` / `exponential(base)`
+    constructors; `.max_attempts(n)` / `.max_delay(d)` / `.jittered` /
+    `.while_input { |e| … }` / `.and_then(next)` combinators each return a NEW
+    `Schedule` (one field changed). `delay_ns_for` is overflow-SAFE (saturates
+    the exponential doubling before it can wrap i64 negative — Codex high);
+    `actual_delay_ns` applies full-jitter via `Rand.random_u64` (uniform in
+    `[0, base]`). v1 SUBSET: no union/intersection, no repeat-on-success;
+    `and_then` is attempt-budget concatenation keeping self's policy (the
+    phase-switching ZIO algebra is out of v1, documented honestly). Int channel.
+  - **Sync driver:** `Schedule#run do … end` over a `Result[Int, Int]`-returning
+    block — re-invokes per attempt (`yield`), sleeps the backoff via
+    `Thread.sleep`, honours the budget + predicate (pin 444).
+  - **Async driver:** `Async.retry(sched, block) -> RetryFuture` — a hand-written
+    poll STATE MACHINE (NOT an `.await`-in-loop, which is `segment_cfg`-gated).
+    Each attempt is a FRESH future from the `Fn` block; between failing attempts
+    it PARKS on a child `TimeSleepFuture` (the backoff) driven by the reactor —
+    so backoff timing is TestClock-virtualizable (the killer pin 445:
+    `exponential(50ms).max_attempts(5)` advanced through 50/100/200ms backoffs,
+    no real sleep). The block returns the attempt future as a raw `Int` ptr (the
+    `Task.spawn_raw`/`Race` value ABI) — DELIBERATELY, because a closure typed
+    `Fn[() -> any Future]` that is CALLED inside a bootstrap class poisons global
+    `any Future`→`Future` mixin satisfaction (filed Q-issue; the Int channel
+    sidesteps it). The inner attempt is polled via the C step
+    `ruxen_retry_poll_inner` (a thin wrapper over the EXISTING
+    `Future_dynamic_poll`, mirroring `ruxen_race_step`) since a dyn `any Future`'s
+    `poll -> Poll[Self.Output]` has an indeterminate Output and can't be polled
+    at the `.rx` level. `while_input` short-circuits the async retry (pin 447);
+    `and_then` extends the async attempt budget (pin 448); `jittered` keeps the
+    backoff within `[0, base]` (pin 449).
+  - **Drop correctness (§4.6 story):** `RetryFuture#drop` drops whichever child
+    is live — the in-flight backoff timer (deregisters its reactor slot) AND/OR
+    the current attempt — via `Drop_dynamic_drop`, so a cancelled retry tears
+    down its parked backoff deterministically (pin 446: drop-mid-backoff returns
+    `registered_count` 1→0). A COMPLETED attempt (one whose `poll` returned
+    Ready) is CONSUMED, not dropped — `self.inner` is zeroed and its block leaks,
+    matching the established Race-winner / scheduler-pump completed-future-leak
+    discipline (Codex blocker fix). A FIRED backoff timer is deregistered the
+    moment the machine leaves the backoff phase, before the field is overwritten,
+    so no reactor slot leaks across retries (Codex high fix; pin 445 asserts
+    `slots_after=0`).
+  - C surface: `library/std/future/runtime/schedule.c` —
+    `ruxen_retry_poll_inner`/`ruxen_retry_inner_value` (the dyn-poll step) +
+    `ruxen_retry_drop_child`/`ruxen_retry_drop_inner` (child teardown). Pins
+    `444`–`449`. NEW `src/schedule.rx` in `BOOTSTRAP_FILES`/embedded list.
 - **Deterministic virtual `TestClock` (concurrency §4.7, Feature #7).** A
   `--test`-style mode where the per-thread reactor swaps its real OS timer for an
   in-memory virtual clock + ordered timer queue, so timeouts / retries /

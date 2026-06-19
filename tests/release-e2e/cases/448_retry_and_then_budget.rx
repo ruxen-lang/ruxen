@@ -1,0 +1,53 @@
+## Feature #6 Increment 3 (spec §4.6) — `and_then` attempt-budget concatenation
+## flows through the ASYNC RetryFuture driver. `recurs(1).and_then(recurs(2))`
+## has max_attempts = (1+1) + (2+1) = 5 total tries (v1 and_then = budget
+## extension, self's policy throughout — documented in Inc1). The source fails
+## Err on attempts 0..3 then Ok(42) on attempt 4 (the 5th try) — it succeeds ONLY
+## because the concatenated budget reaches 5. recurs → 0 delay, so it drives
+## through in a single poll (no TestClock needed).
+
+class Step
+  i: Int
+  include Future
+  type Output = Result[Int, Int]
+  def init(i: Int)
+    self.i = i
+  end
+  def var poll(cx: &var Context) -> Poll[Result[Int, Int]]
+    if self.i < 4
+      Poll.Ready(Result.Err(self.i))
+    else
+      Poll.Ready(Result.Ok(42))
+    end
+  end
+end
+
+class Src
+  n: Int
+  def init
+    self.n = 0
+  end
+  def var make_next -> Step
+    let f = Step.new(self.n)
+    self.n = self.n + 1
+    f
+  end
+end
+
+def main
+  puts "at start"
+  var cx = Context.executor
+  var src = Src.new
+
+  var rf = AsyncRetry.retry(Schedule.recurs(1).and_then(Schedule.recurs(2)), { || src.make_next })
+  match (&var rf).poll(&var cx)
+    Poll.Ready(r) ->
+      match r
+        Ok(v)  -> puts "ok=#{v}"
+        Err(e) -> puts "err=#{e}"
+      end
+    Poll.Pending -> puts "pending"
+  end
+  Context.drop(cx)
+  puts "at done"
+end

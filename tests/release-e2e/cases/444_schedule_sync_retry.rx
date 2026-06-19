@@ -1,0 +1,62 @@
+## Feature #6 Increment 1 (spec §4.6) — immutable `Schedule` builder + the SYNC
+## `run` driver over a `Result`-returning block.
+##
+## `Schedule.recurs(n)` is an immutable retry policy (n+1 total tries, no delay).
+## `sched.run do … end` re-evaluates the block each attempt; on `Err` it retries
+## up to the budget, returning the final `Result` (the first `Ok`, or the last
+## `Err` once attempts are spent). The block is re-invoked per attempt (it must
+## be `Fn`).
+##
+## A `Flaky` source fails (Err) the first 2 calls then succeeds Ok(99).
+## `recurs(5)` (6 tries) → it succeeds on the 3rd try → `Ok(99)`. A `recurs(1)`
+## (2 tries) over a source that fails 3× → exhausts → returns the last `Err`.
+## Proves: the immutable builder, the sync re-invoke-and-retry loop, and that
+## the budget is honoured both ways (success-within and exhaust).
+
+class Flaky
+  n: Int
+  fail_until: Int
+  ok_val: Int
+  def init(fail_until: Int, ok_val: Int)
+    self.n = 0
+    self.fail_until = fail_until
+    self.ok_val = ok_val
+  end
+  ## Err(attempt#) for the first `fail_until` calls, then Ok(ok_val).
+  def var attempt -> Result[Int, Int]
+    self.n = self.n + 1
+    if self.n <= self.fail_until
+      Result.Err(self.n)
+    else
+      Result.Ok(self.ok_val)
+    end
+  end
+end
+
+def main
+  puts "sched start"
+
+  # Succeeds on the 3rd try (fails twice), budget 6 → Ok(99).
+  var a = Flaky.new(2, 99)
+  var sa = Schedule.recurs(5)
+  let ra = sa.run do
+    a.attempt
+  end
+  match ra
+    Ok(v)  -> puts "a_ok=#{v}"
+    Err(e) -> puts "a_err=#{e}"
+  end
+
+  # Fails 3×, budget 2 (recurs(1)) → exhausts → last Err.
+  var b = Flaky.new(9, 0)
+  var sb = Schedule.recurs(1)
+  let rb = sb.run do
+    b.attempt
+  end
+  match rb
+    Ok(v)  -> puts "b_ok=#{v}"
+    Err(e) -> puts "b_err=#{e}"
+  end
+
+  puts "sched done"
+end

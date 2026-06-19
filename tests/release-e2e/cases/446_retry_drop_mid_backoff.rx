@@ -1,0 +1,69 @@
+## Feature #6 Increment 2 (spec §4.6) — drop-mid-backoff: cancelling a
+## `RetryFuture` that is PARKED in its backoff `TimeSleepFuture` runs that
+## timer's `def drop`, tearing down the in-flight reactor registration. The
+## §4.6 drop-correctness story: a cancelled retry deterministically releases its
+## parked backoff timer.
+##
+## Under a virtual `TestClock`, a registered timer bumps the reactor's
+## `registered_count`; deregistering it (the `TimeSleepFuture.def drop`)
+## decrements it. So: build a `RetryFuture` whose first attempt FAILS, poll it
+## once (attempt 0 Err → parks on a 50ms backoff → a virtual timer is registered,
+## count 0→1), then DROP the RetryFuture (at the helper fn's scope exit) → its
+## `def drop` drops the live backoff child via `Drop_dynamic_drop` → the timer
+## deregisters → count 1→0. We read `registered_count` before the drop (1) and
+## after (0) to prove the in-flight backoff timer was torn down on cancel.
+##
+## (The RetryFuture is built via the direct constructor in a helper that returns,
+## so it drops at the helper's scope exit — a method-result local isn't
+## drop-elaborated, the shared drop-rooting limit.)
+
+use std.time.Duration
+
+class AlwaysFail
+  include Future
+  type Output = Result[Int, Int]
+  tag: Int
+  def init(tag: Int)
+    self.tag = tag
+  end
+  def var poll(cx: &var Context) -> Poll[Result[Int, Int]]
+    Poll.Ready(Result.Err(1))
+  end
+end
+
+class Src
+  n: Int
+  def init
+    self.n = 0
+  end
+  def var make_next -> AlwaysFail
+    let f = AlwaysFail.new(self.n)
+    self.n = self.n + 1
+    f
+  end
+end
+
+## Build a RetryFuture, poll it ONCE (parks on the backoff), then return — the
+## RetryFuture drops at this fn's scope exit, firing its `def drop` → the live
+## backoff timer's `def drop` → deregister. Returns the count WHILE parked (1).
+def park_then_drop(src: &var Src, cx: &var Context) -> Int
+  let first = src.make_next
+  var rf = RetryFuture.new(first, Schedule.exponential(Duration.from_millis(50)).max_attempts(5), { || src.make_next })
+  let _p = (&var rf).poll(&var cx)             # attempt 0 Err → parks on 50ms backoff
+  ruxen_reactor_registered_count()             # count WHILE the backoff timer is live (1)
+  # rf drops HERE → its def drop tears down the backoff timer → count back to 0
+end
+
+def main
+  puts "drop start"
+  TestClock.install
+  var cx = Context.executor
+  var src = Src.new
+
+  let count_while_parked = park_then_drop(&var src, &var cx)
+  puts "count_while_parked=#{count_while_parked}"
+  puts "count_after_drop=#{ruxen_reactor_registered_count()}"
+
+  TestClock.uninstall
+  puts "drop done"
+end

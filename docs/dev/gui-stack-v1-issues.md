@@ -2021,6 +2021,47 @@ field ABI. A focused repro lives in this entry; do NOT need a release-e2e pin
 until someone takes the fix (a `.deferred` repro could be added then).
 Toolchain: `ruxen 0.1.0` (`feat/concurrency-adoption`).
 
+## Q47 · S2 — calling a `Fn[() -> any Future]` closure inside a BOOTSTRAP class POISONS global `any Future`→`Future` mixin satisfaction for every program  ⏳ OPEN (NEW 2026-06-19)
+
+Found 2026-06-19 building the §4.6 async `RetryFuture`. A bootstrap (stdlib) class
+that holds a closure field/param typed `any Fn[Fn() -> any Future]` and CALLS it
+(`block.()` / `make.()` — producing an `any Future` value) makes `any Future`
+FAIL to satisfy the `Future` mixin for **every** compiled program, not just the
+one using it. The typeck error `type \`any Future\` does not satisfy \`Future\``
+then fires on unrelated user code (e.g. a future class that polls a stored
+`any Future` via `.poll`), and even a previously-passing Race/spike program
+breaks. The bootstrap class itself compiles clean (signature-only) — the poison
+only surfaces when a user program is typechecked against the now-corrupted
+satisfaction state.
+
+**Bisected (verified 2026-06-19):**
+- A bootstrap class with an `inner: any Future` FIELD alone → FINE.
+- …plus a `make: any Fn[Fn() -> any Future]` FIELD (uncalled) → FINE.
+- …a static/`def` that CALLS the closure (`let first = make.()`, result type
+  `any Future`) → POISONS. Both the `&block: Fn[() -> any Future]` + `yield`
+  form AND the plain `make: any Fn[Fn() -> any Future]` param + `make.()` form
+  trigger it. Switching the closure's return type to `Int`
+  (`any Fn[Fn() -> Int]`, the future-as-raw-ptr channel) → FINE.
+
+Root cause is unconfirmed but localized to how a CALL whose result type is the
+dyn `any Future` (associated `Output` indeterminate) is registered/cached in the
+global mixin-satisfaction table during bootstrap typeck. Contrast `any Stream`
+(`poll_next -> Poll[Option[Int]]`, FIXED Output) which never poisons.
+
+**Workaround (in use, §4.6):** the `Async.retry(sched, block)` block is typed
+`any Fn[Fn() -> Int]` — the closure body constructs the attempt future and returns
+it AS A RAW `Int` ptr (a future value coerces to `Int` at the closure boundary,
+the established `Task.spawn_raw`/`Race` value ABI). The `RetryFuture` then polls
+that raw ptr through the C step `ruxen_retry_poll_inner` (wrapping
+`Future_dynamic_poll`). No `any Future`-typed value appears in any CALL → no
+poison. **Severity S2** (corrupts an unrelated global invariant from one stdlib
+construct — high blast radius — but a clean, already-established workaround
+exists: every dyn-future value already flows as a raw `Int` in Task/Race/Scope/
+Queue). The proper fix is in the satisfaction-table population for an
+indeterminate-`Output` dyn-mixin call result. No release-e2e pin (the workaround
+IS the shipped shape, pins `445`–`449`); a `.deferred` repro could be added when
+someone takes the fix. Toolchain: `ruxen 0.1.0` (`feat/concurrency-adoption`).
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:

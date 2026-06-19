@@ -1,0 +1,381 @@
+## Schedule — composable retry/backoff policy (spec §4.6). An IMMUTABLE value
+## describing WHEN to retry: how many attempts, the backoff delay between them,
+## an optional cap, jitter, and a retry-on-error predicate. Two drivers consume
+## it: a SYNC `run do … end` over a `Result`-returning block (this file), and an
+## ASYNC `Async.retry(sched) do … end` over a future (see the `RetryFuture` in
+## this file). Pure `.rx` over closures + `Duration` + `Rand` + `Async.sleep` +
+## `include Future`/`def drop` — NO compiler edit, NO new FFI.
+##
+## v1 SUBSET (deliberate — the ZIO high-water algebra is OUT): `recurs(n)` /
+## `exponential(base)` / `max_attempts(n)` / `max_delay(d)` / `jittered` /
+## `while_input` / `and_then`. NO union/intersection, NO repeat-on-success.
+##
+## v1 error/value channel is `Int` (the established Task/Race/Scope/Queue/Stream
+## convention): the sync block returns `Result[Int, Int]`, the predicate sees the
+## `Int` error. Typed-generic retry is deferred.
+##
+## IMMUTABLE BUILDER: every combinator returns a NEW `Schedule` with one field
+## changed (the others copied), so a base policy can be shared + specialised
+## without mutation. The `layout` is a flat record of config Ints + the optional
+## predicate closure.
+
+class Schedule
+  max_attempts: Int     # total tries = max_attempts (>= 1). recurs(n) → n+1.
+  base_delay_ns: Int    # backoff base; 0 = no delay (immediate retry)
+  exponential: Bool     # true → delay doubles each attempt; false → constant
+  max_delay_ns: Int     # cap on a single backoff; 0 = uncapped
+  jitter: Bool          # full-jitter: actual delay = random in [0, computed]
+  has_pred: Bool        # true → `pred` decides retry-on-error
+  pred: any Fn[Fn(Int) -> Bool]   # retry iff pred(err) (when has_pred)
+
+  def init(max_attempts: Int, base_delay_ns: Int, exponential: Bool, max_delay_ns: Int, jitter: Bool, has_pred: Bool, pred: any Fn[Fn(Int) -> Bool])
+    self.max_attempts = max_attempts
+    self.base_delay_ns = base_delay_ns
+    self.exponential = exponential
+    self.max_delay_ns = max_delay_ns
+    self.jitter = jitter
+    self.has_pred = has_pred
+    self.pred = pred
+  end
+
+  ## ── Constructors ──────────────────────────────────────────────────────────
+
+  ## `recurs(n)` — retry up to `n` times after the first attempt (so n+1 total
+  ## tries), no delay. The base policy.
+  def self.recurs(n: Int) -> Schedule
+    Schedule.new(n + 1, 0, false, 0, false, false, Schedule.never_pred)
+  end
+
+  ## `exponential(base)` — exponential backoff seeded at `base`, doubling each
+  ## attempt. Starts with `max_attempts = 1` (one try); chain `.max_attempts(n)`.
+  def self.exponential(base: &Duration) -> Schedule
+    Schedule.new(1, base.as_nanos(), true, 0, false, false, Schedule.never_pred)
+  end
+
+  ## ── Builder combinators (each returns a NEW Schedule) ─────────────────────
+
+  ## Total tries = `n` (a hard cap on attempts). With `recurs(k)` total is k+1;
+  ## `max_attempts` overrides it to exactly `n`.
+  def max_attempts(n: Int) -> Schedule
+    Schedule.new(n, self.base_delay_ns, self.exponential, self.max_delay_ns, self.jitter, self.has_pred, self.pred)
+  end
+
+  ## Cap a single backoff delay at `d` (so exponential growth plateaus).
+  def max_delay(d: &Duration) -> Schedule
+    Schedule.new(self.max_attempts, self.base_delay_ns, self.exponential, d.as_nanos(), self.jitter, self.has_pred, self.pred)
+  end
+
+  ## Full-jitter: the actual backoff is a uniform random value in [0, computed
+  ## delay] (decorrelation, AWS/Brooker default). Uses `Rand.random_u64` — fine
+  ## for jitter (not crypto).
+  def jittered -> Schedule
+    Schedule.new(self.max_attempts, self.base_delay_ns, self.exponential, self.max_delay_ns, true, self.has_pred, self.pred)
+  end
+
+  ## Retry-on-error predicate: retry an `Err(e)` only while `pred(e)` holds (a
+  ## non-matching error stops immediately). `&block` is stored as `Fn` so it is
+  ## re-invokable per attempt.
+  def while_input(&block: Fn[(Int) -> Bool]) -> Schedule
+    Schedule.new(self.max_attempts, self.base_delay_ns, self.exponential, self.max_delay_ns, self.jitter, true, block)
+  end
+
+  ## Sequence — v1 is ATTEMPT-BUDGET CONCATENATION: the result retries up to
+  ## `self.max_attempts + next.max_attempts` times using SELF's delay/jitter/
+  ## predicate policy throughout. It does NOT phase-switch to `next`'s delay
+  ## policy after `self` is exhausted — that needs a phased Schedule
+  ## representation (a per-phase delay/predicate), which is the ZIO-style
+  ## algebra explicitly OUT of v1 (Codex medium: the impl extends the budget but
+  ## keeps self's policy; the surface is honestly scoped to budget-extension).
+  ## The common use is `recurs(k).and_then(recurs(m))` to widen a flat budget;
+  ## mixing two DIFFERENT delay policies via `and_then` is a v2 follow-up.
+  def and_then(next: &Schedule) -> Schedule
+    Schedule.new(self.max_attempts + next.max_attempts, self.base_delay_ns, self.exponential, self.max_delay_ns, self.jitter, self.has_pred, self.pred)
+  end
+
+  ## ── The backoff calculation (shared by both drivers) ──────────────────────
+
+  ## The base (pre-jitter) backoff delay in ns for a given 0-based `attempt`:
+  ## constant `base_delay_ns`, or `base_delay_ns << attempt` if exponential,
+  ## capped at `max_delay_ns` (when set). Public so the async RetryFuture reuses
+  ## it.
+  ##
+  ## OVERFLOW-SAFE (Codex high): the doubling SATURATES before it can overflow
+  ## i64 (`base << 34` for a 1s base already exceeds i64::MAX, which would wrap
+  ## NEGATIVE — then the cap check `d > max_delay_ns` would be false for a
+  ## negative `d` and `run` would skip the sleep entirely). We stop doubling and
+  ## clamp the moment `d` would exceed the cap (or i64/2 when uncapped), so a
+  ## deep exponential retry plateaus at the cap instead of silently going to 0.
+  def delay_ns_for(attempt: Int) -> Int
+    var d = self.base_delay_ns
+    let int64_half = 4611686018427387903   # INT64_MAX / 2 — past this, d*2 overflows
+    if self.exponential
+      var i = 0
+      var saturated = false
+      while i < attempt && !saturated
+        # Would the next double overflow i64, or pass the cap? Clamp + stop.
+        if self.max_delay_ns > 0 && d > self.max_delay_ns / 2
+          d = self.max_delay_ns
+          saturated = true
+        else
+          if d > int64_half
+            d = int64_half * 2   # the largest even i64 we can represent safely
+            saturated = true
+          else
+            d = d * 2
+          end
+        end
+        i = i + 1
+      end
+    end
+    if self.max_delay_ns > 0 && d > self.max_delay_ns
+      d = self.max_delay_ns
+    end
+    d
+  end
+
+  ## The ACTUAL backoff for `attempt` — `delay_ns_for` with full-jitter applied
+  ## (a random value in [0, base]) when `jittered`. Public for the async driver.
+  def actual_delay_ns(attempt: Int) -> Int
+    let base = self.delay_ns_for(attempt)
+    if self.jitter && base > 0
+      let r = Rand.random_u64()
+      # r is an unsigned-u64-as-Int; mask clears the sign bit so the modulo
+      # operand is non-negative. `% (base+1)` gives a uniform value in [0, base]
+      # (full jitter). Guard: `base+1` overflows i64 only at base==INT64_MAX —
+      # there the masked value is already in [0, INT64_MAX] = [0, base], so
+      # return it directly (Codex low). `delay_ns_for` saturates to INT64_MAX/2
+      # at worst when uncapped, so this edge needs an uncapped INT64_MAX base.
+      let nonneg = r & 9223372036854775807
+      if base == 9223372036854775807
+        nonneg
+      else
+        nonneg % (base + 1)
+      end
+    else
+      base
+    end
+  end
+
+  ## ── SYNC driver ───────────────────────────────────────────────────────────
+
+  ## Run the `Result`-returning block; on `Err`, retry up to the attempt budget,
+  ## SLEEPING the computed backoff between tries (real `Thread.sleep` — the sync
+  ## path; the async `Async.retry` path parks on the reactor instead and is
+  ## TestClock-virtualizable). Returns the final `Result` (the last `Ok`, or the
+  ## last `Err` once attempts/predicate are exhausted). The block is
+  ## re-evaluated each attempt (it must be `Fn`, re-invokable).
+  def var run(&block: Fn[() -> Result[Int, Int]]) -> Result[Int, Int]
+    var attempt = 0
+    var out: Result[Int, Int] = Result.Err(0)
+    var done = false
+    while !done
+      let r = yield
+      match r
+        Ok(v) ->
+          out = Result.Ok(v)
+          done = true
+        Err(e) ->
+          out = Result.Err(e)
+          # Stop if the predicate rejects this error, or the budget is spent.
+          if self.has_pred && !self.pred.(e)
+            done = true
+          else
+            let next_attempt = attempt + 1
+            if next_attempt >= self.max_attempts
+              done = true
+            else
+              let delay = self.actual_delay_ns(attempt)
+              if delay > 0
+                Thread.sleep(Duration.from_nanos(delay))
+              end
+              attempt = next_attempt
+            end
+          end
+      end
+    end
+    out
+  end
+
+  ## A never-retry predicate sentinel (the default `pred` when `has_pred` is
+  ## false; never consulted, but the field must hold a valid closure). Bound to
+  ## a `let` first — a brace-closure as a method's bare tail expression is
+  ## ambiguous with a block body and won't parse.
+  def self.never_pred -> any Fn[Fn(Int) -> Bool]
+    let p: any Fn[Fn(Int) -> Bool] = { |e| false }
+    p
+  end
+end
+
+## ── ASYNC driver: RetryFuture + Async.retry ──────────────────────────────────
+##
+## `Async.retry(sched, block)` returns a hand-written `RetryFuture` — a poll
+## STATE MACHINE (NOT an async loop; `.await`-in-loop is `segment_cfg`-gated, so
+## the retry loop is driven by hand-written `poll` re-entry). The `block`
+## produces a FRESH attempt future per try (it must be `Fn` — re-invokable; it
+## can't move-capture a value it needs next attempt). Each attempt future's
+## `Output` is `Result[Int, Int]` (v1 Int channel).
+##
+## The block returns the attempt future AS A RAW POINTER (`Int`): a future value
+## coerces to `Int` at the closure boundary (the `Task.spawn_raw`/`Race` value
+## ABI). This is DELIBERATE, not just convenient — a closure typed
+## `Fn[() -> any Future]` that is CALLED (`block.()`) inside a bootstrap class
+## corrupts global `any Future`→`Future` mixin satisfaction (a compiler bug:
+## invoking a dyn-`any Future`-returning closure from a bootstrap-loaded class
+## poisons the satisfaction check for EVERY program). Returning the future as a
+## raw `Int` ptr sidesteps it entirely — there is no `any Future`-typed value in
+## the call. Filed as a Q## follow-up. So `Async.retry` takes
+## `block: any Fn[Fn() -> Int]` (the closure body constructs + returns the
+## attempt future, e.g. `Async.retry(sched, { || my_async_fn() })`).
+##
+## INNER-POLL via the C step: the attempt is held as a RAW future pointer (Int)
+## and polled through `ruxen_retry_poll_inner` (a thin wrapper over the EXISTING
+## `Future_dynamic_poll`, mirroring `ruxen_race_step`) — a dyn `any Future`'s
+## `poll -> Poll[Self.Output]` has an indeterminate associated Output and can't
+## be polled at the `.rx` level. The step returns 0=Pending / 1=Ready-Ok /
+## 2=Ready-Err and stashes the Int value. The backoff `TimeSleepFuture` IS
+## concrete (`Output = nil`) so it polls at the `.rx` level.
+##
+## `def drop` drops whichever child is LIVE — the current attempt future
+## (`Drop_dynamic_drop` via `ruxen_retry_drop_inner`) and the in-flight backoff
+## timer (`ruxen_retry_drop_child`) — so a cancelled retry tears down its parked
+## timer / attempt deterministically (the §4.6 drop-correctness story).
+class RetryFuture
+  inner: Int                        # raw ptr of the current attempt future
+  backoff: TimeSleepFuture          # the in-flight backoff timer (live when phase==1)
+  sched: Schedule                   # the policy
+  make: any Fn[Fn() -> Int]         # produces a fresh attempt future (as a raw ptr)
+  attempt: Int                      # 0-based attempt index
+  phase: Int                        # 0 = polling the attempt, 1 = backing off
+  has_backoff: Int                  # 1 once a backoff timer has been constructed
+  done: Int
+  result: Result[Int, Int]
+  include Future
+  type Output = Result[Int, Int]
+
+  def init(first: Int, sched: Schedule, make: any Fn[Fn() -> Int])
+    self.inner = first
+    self.backoff = Async.sleep(Duration.from_nanos(0))   # placeholder; rebuilt per backoff
+    self.sched = sched
+    self.make = make
+    self.attempt = 0
+    self.phase = 0
+    self.has_backoff = 0
+    self.done = 0
+    self.result = Result.Err(0)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[Int, Int]]
+    if self.done != 0
+      return Poll.Ready(self.result)
+    end
+    # Single-poll state machine with an internal DRIVE-THROUGH loop: a backoff
+    # that fires immediately re-polls the freshly-built attempt in the SAME poll
+    # call. Each turn either resolves (Ready) or PARKS (Pending) on a child
+    # whose waker is set, so the loop terminates.
+    var pending = false
+    while self.done == 0 && !pending
+      if self.phase == 1
+        # Backing off: poll the timer (concrete, .rx-level). When it fires,
+        # DEREGISTER the fired timer (its `def drop` releases the reactor slot —
+        # `TimeSleepFuture.poll` does NOT self-deregister on Ready, and we're
+        # about to overwrite `self.backoff` with the next attempt's timer, which
+        # would otherwise leak this slot), then build a fresh attempt and fall
+        # through to poll it. The backoff future returned Ready and carries no
+        # moved-out payload (Output = nil), so dropping it is sound.
+        match (&var self.backoff).poll(cx)
+          Poll.Ready(_) ->
+            ruxen_retry_drop_child(self.backoff)
+            self.has_backoff = 0
+            self.inner = self.make.()
+            self.phase = 0
+          Poll.Pending -> pending = true
+        end
+      else
+        # Attempt phase: poll the inner via the C dyn-poll step.
+        # 0 = Pending, 1 = Ready Ok, 2 = Ready Err.
+        let code = ruxen_retry_poll_inner(self.inner, cx)
+        if code == 0
+          pending = true
+        else
+          # The attempt RETURNED READY: it is now a COMPLETED future. Per the
+          # established runtime rule (Race winner / scheduler pump-consume), a
+          # Ready future is NOT `def drop`'d — its Output was moved/decoded out,
+          # so running its `def drop` and freeing its block is unsound (the
+          # completed-future-leak discipline). We CONSUME it by zeroing
+          # `self.inner` (so a later `RetryFuture.drop` can't cancel it); its
+          # 16-byte heap block leaks, exactly like a Race winner. This holds for
+          # BOTH the terminal Ok/Err AND a retried Err — every path here has a
+          # COMPLETED inner.
+          let v = ruxen_retry_inner_value()
+          self.inner = 0
+          if code == 1
+            self.done = 1
+            self.result = Result.Ok(v)
+          else
+            # Err(v) — retry unless the predicate rejects it or budget is spent.
+            if self.sched.has_pred && !self.sched.pred.(v)
+              self.done = 1
+              self.result = Result.Err(v)
+            else
+              let next_attempt = self.attempt + 1
+              if next_attempt >= self.sched.max_attempts
+                self.done = 1
+                self.result = Result.Err(v)
+              else
+                # Park on a fresh backoff timer (the completed attempt was already
+                # consumed above — no drop, leak its block).
+                let delay = self.sched.actual_delay_ns(self.attempt)
+                self.backoff = Async.sleep(Duration.from_nanos(delay))
+                self.has_backoff = 1
+                self.attempt = next_attempt
+                self.phase = 1
+              end
+            end
+          end
+        end
+      end
+    end
+    if self.done != 0
+      Poll.Ready(self.result)
+    else
+      Poll.Pending
+    end
+  end
+
+  ## Drop whichever child is live: the in-flight backoff timer (its `def drop`
+  ## deregisters the reactor timer) AND the current attempt future (its `def
+  ## drop` via `Drop_dynamic_drop`). A cancelled retry thus deterministically
+  ## releases its parked timer / attempt resources.
+  def drop
+    if self.has_backoff != 0
+      ruxen_retry_drop_child(self.backoff)
+      self.has_backoff = 0
+    end
+    if self.inner != 0
+      ruxen_retry_drop_inner(self.inner)
+      self.inner = 0
+    end
+  end
+end
+
+## `Async.retry(sched, block)` — the async retry factory. `block` is a closure
+## producing a fresh attempt future (returned as a raw ptr `Int`); the first
+## attempt is built eagerly here so `RetryFuture` has an inner to poll, and the
+## block is stored for re-invocation on retry. Returns a `RetryFuture` to drive
+## with `block_on` (or `.await`).
+class AsyncRetry
+  def self.retry(sched: Schedule, block: any Fn[Fn() -> Int]) -> RetryFuture
+    let first = block.()
+    RetryFuture.new(first, sched, block)
+  end
+end
+
+## §4.6 RetryFuture C surface (runtime/schedule.c). The poll-step wraps the
+## EXISTING `Future_dynamic_poll`; the drop helpers wrap `Drop_dynamic_drop`.
+## A future VALUE / raw ptr flows into the `Int` params at the i64 ABI.
+lib "runtime/schedule.c"
+  def ruxen_retry_poll_inner(inner_ptr: Int, cx: &var Context) -> Int
+  def ruxen_retry_inner_value -> Int
+  def ruxen_retry_drop_child(child_ptr: Int) -> nil
+  def ruxen_retry_drop_inner(child_ptr: Int) -> nil
+end

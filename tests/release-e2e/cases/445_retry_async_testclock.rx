@@ -1,0 +1,75 @@
+## Feature #6 Increment 2 (spec §4.6) — async Async.retry + RetryFuture, TIMED
+## deterministically with the TestClock (the killer pin: exponential backoff
+## timing in milliseconds, no real sleep). The block returns the attempt future
+## as a raw ptr (coerced to Int at the closure boundary; a Fn[() -> any Future]
+## that is CALLED inside a bootstrap class poisons global Future-satisfaction —
+## a filed compiler bug). Between failing attempts the RetryFuture parks on a
+## child TimeSleepFuture (the backoff), driven by the reactor — so TestClock
+## advance fires it instantly. exponential(50ms).max_attempts(5); source fails 3x
+## (Err) then Ok(7); backoffs 50/100/200ms; total virtual 350ms, all instant.
+
+use std.time.Duration
+
+class Flaky
+  n: Int
+  include Future
+  type Output = Result[Int, Int]
+  def init(n: Int)
+    self.n = n
+  end
+  def var poll(cx: &var Context) -> Poll[Result[Int, Int]]
+    if self.n < 3
+      Poll.Ready(Result.Err(self.n))
+    else
+      Poll.Ready(Result.Ok(7))
+    end
+  end
+end
+
+class Source
+  n: Int
+  def init
+    self.n = 0
+  end
+  def var make_next -> Flaky
+    let f = Flaky.new(self.n)
+    self.n = self.n + 1
+    f
+  end
+end
+
+def poll_phase(rf: &var RetryFuture, cx: &var Context) -> Int
+  match (&var rf).poll(&var cx)
+    Poll.Ready(r) ->
+      match r
+        Ok(v)  -> v
+        Err(_) -> -1
+      end
+    Poll.Pending -> -2
+  end
+end
+
+def main
+  puts "retry start"
+  TestClock.install
+  var cx = Context.executor
+  var src = Source.new
+
+  var rf = AsyncRetry.retry(Schedule.exponential(Duration.from_millis(50)).max_attempts(5), { || src.make_next })
+
+  puts "p1=#{poll_phase(&var rf, &var cx)}"
+  TestClock.advance(Duration.from_millis(50))
+  puts "p2=#{poll_phase(&var rf, &var cx)}"
+  TestClock.advance(Duration.from_millis(100))
+  puts "p3=#{poll_phase(&var rf, &var cx)}"
+  TestClock.advance(Duration.from_millis(200))
+  puts "p4=#{poll_phase(&var rf, &var cx)}"
+
+  # After the retry resolves, every fired backoff timer was deregistered as the
+  # machine left each backoff phase — so NO reactor timer slots leak across the
+  # 3 backoffs (the Codex `high` fix). registered_count must be back to 0.
+  puts "slots_after=#{ruxen_reactor_registered_count()}"
+
+  TestClock.uninstall
+  puts "retry done"
+end

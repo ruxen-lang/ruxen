@@ -227,10 +227,22 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       — pin 442) + nested-install medium (depth-counted — pin 443). FOLLOW-UPS:
       the guard auto-restore (drop-rooting fix); a `static inline` clock seam
       (LTO closes the cross-TU-call LOW); multi-thread virtual clock.
-- [ ] **§4.6 Retry/Schedule** — sequence on §4.1/§4.2/§4.3 + §4.7 (TestClock makes
-      backoff timing testable) per spec §6. Open maintainer decisions tracked in
-      the plan doc + spec §6 (async methods on classes, `segment_cfg` widening,
-      cross-thread reactor wake).
+- [x] **§4.6 Retry/Schedule (Feature #6)** — DONE. Composable IMMUTABLE
+      `Schedule` (`recurs`/`exponential` + `max_attempts`/`max_delay`/`jittered`/
+      `while_input`/`and_then`) + SYNC `run do … end` and ASYNC
+      `Async.retry(sched, block) -> RetryFuture` drivers. Pure `.rx` over
+      closures/`Duration`/`Rand`/`Async.sleep`/`include Future`, with ONE thin C
+      dyn-poll step (`ruxen_retry_poll_inner` wrapping the existing
+      `Future_dynamic_poll`, the `ruxen_race_step` pattern) — no new compiler
+      machinery. Backoff timing tested deterministically under the §4.7 TestClock
+      (pin 445: `exponential(50ms).max_attempts(5)` advanced through the backoffs,
+      no real sleep). Drop-mid-backoff tears down the parked timer (pin 446).
+      Pins `444`–`449`. Found + filed a compiler bug: a `Fn[() -> any Future]`
+      closure CALLED inside a bootstrap class poisons global `any Future`
+      satisfaction (worked around via the Int-ptr channel — see gui-stack issues).
+      Parked LOW (for maintainer): the `schedule.c` Poll-leak inline comment is
+      narrower than the actual leak (documented fully in runtime CLAUDE.md); the
+      `RetryFuture.init` placeholder backoff is a tiny per-instance heap leak.
 
 ### Language features
 
