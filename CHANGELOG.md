@@ -7,6 +7,20 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Fixed
+- **Concurrency LOW-finding cleanup (post-§4.6 review).** (1) `RetryFuture.init`
+  no longer leaks its placeholder backoff `TimeSleepFuture`: the placeholder is
+  marked a live child (`has_backoff = 1`) and torn down before the first real
+  backoff overwrites it — guard-skipped after a fired backoff, so no double-free
+  (Codex-proved across all paths). (2) New pin `overflow_tag_stability.rs` snapshots
+  the `Overflow` enum ↔ `RUXEN_OVERFLOW_*` tag contract (Suspend=0/DropOldest=1/
+  DropNewest=2). (3) `schedule.c` / `test_clock.c` comments widened to match
+  reality (all C-side Poll blocks leak Pending+Ready; the TestClock seam is a
+  cross-TU call, not an inlined TLS read). (4) The async loop builder's
+  completed-`__sub_i` leak is documented as the intentional completed-future-leak
+  discipline (a drop-before-overwrite "fix" would UAF a moved-out heap payload, à
+  la the Race winner) — reclassified as a v2 typed-completion-drop item.
+
 ### Added
 - **Retry / `Schedule` (concurrency §4.6, Feature #6).** A composable IMMUTABLE
   retry/backoff policy plus SYNC and ASYNC drivers — pure `.rx` over closures +

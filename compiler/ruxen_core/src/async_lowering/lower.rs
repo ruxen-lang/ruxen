@@ -1433,6 +1433,19 @@ fn build_loop_poll_body_cfg(
 
         // Ready arm: self.<binding> = v; __sub_ready_i = 0; then either
         // (last phase) post-last-await + __phase = 0, or (else) __phase = i+1.
+        //
+        // NOTE — `__sub_i` (the just-completed sub-future) is deliberately NOT
+        // dropped/freed here. A future that returned Ready has had its Output
+        // moved out (into `v`), so running its `def drop` would free a moved-out
+        // payload — the completed-future-leak discipline shared with the scheduler
+        // pump, the Race winner, and Stream's source. Its heap block leaks until
+        // the next iteration overwrites `__sub_i` (the `__sub_ready_i == 0`
+        // re-init guard). Reclaiming it safely needs a per-future "completed →
+        // free-resources-but-not-payload" distinction the compiler can't make in
+        // general (some futures' Output IS a heap pointer their def drop would
+        // free → UAF, exactly the Race-winner case). So a drop-before-overwrite
+        // "fix" would escalate this BOUNDED leak into a UAF — it is a v2 design
+        // item (typed completion-drop), not a quick fix.
         let mut ready_arm_stmts: Vec<Statement> = Vec::new();
         ready_arm_stmts.push(Statement::Let(LetBinding {
             mutable: false,

@@ -254,12 +254,16 @@ class RetryFuture
 
   def init(first: Int, sched: Schedule, make: any Fn[Fn() -> Int])
     self.inner = first
-    self.backoff = Async.sleep(Duration.from_nanos(0))   # placeholder; rebuilt per backoff
+    # The placeholder backoff is a real (un-registered) TimeSleepFuture, so we
+    # mark has_backoff = 1: it is a LIVE allocated child that must be torn down
+    # (by def drop, or before the first real backoff overwrites it) — otherwise
+    # its heap block leaks once per RetryFuture instance.
+    self.backoff = Async.sleep(Duration.from_nanos(0))
     self.sched = sched
     self.make = make
     self.attempt = 0
     self.phase = 0
-    self.has_backoff = 0
+    self.has_backoff = 1
     self.done = 0
     self.result = Result.Err(0)
   end
@@ -323,7 +327,14 @@ class RetryFuture
                 self.result = Result.Err(v)
               else
                 # Park on a fresh backoff timer (the completed attempt was already
-                # consumed above — no drop, leak its block).
+                # consumed above — no drop, leak its block). Tear down the current
+                # backoff child first: the init placeholder on the first retry, so
+                # it doesn't leak. (A prior FIRED backoff is already dropped at the
+                # Ready arm with has_backoff = 0, so the guard skips it — no
+                # double-free.)
+                if self.has_backoff != 0
+                  ruxen_retry_drop_child(self.backoff)
+                end
                 let delay = self.sched.actual_delay_ns(self.attempt)
                 self.backoff = Async.sleep(Duration.from_nanos(delay))
                 self.has_backoff = 1

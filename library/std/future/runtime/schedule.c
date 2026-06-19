@@ -47,8 +47,11 @@ int64_t Future_dynamic_poll(int64_t self, int64_t ctx);
  *   2 = inner Ready Err  — `ruxen_retry_inner_value` holds the Err Int
  * `cx` is the raw `RuxenContext*` at the i64 ABI, forwarded to
  * `Future_dynamic_poll`. NO new dispatch/vtable machinery — one thin wrapper
- * over the existing helper. The Poll heap block is NOT freed here (v1 scheduler
- * discipline — a Pending Poll's 16-byte block leaks, bounded by polls). */
+ * over the existing helper. The Poll heap block returned by `Future_dynamic_poll`
+ * is NOT freed here, and on the Ready path the decoded `Result[Int,Int]` wrapper
+ * is not freed either (v1 scheduler-runtime discipline — EVERY C-side Poll block
+ * leaks, Pending AND Ready, bounded by polls; same as the scheduler pump /
+ * Race step). See `runtime/CLAUDE.md` for the full Poll-block-leak accounting. */
 #define RUXEN_POLL_READY_TAG    0
 #define RUXEN_RESULT_OK_TAG     0
 static _Thread_local int64_t t_retry_inner_value = 0;

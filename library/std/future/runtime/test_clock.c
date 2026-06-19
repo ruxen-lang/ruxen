@@ -27,10 +27,14 @@
  * test). `ruxen_time_unix_ns` (REALTIME / wall clock) is NOT virtualized — it
  * is not a monotonic-deadline source.
  *
- * HOT-PATH COST (spec §4.7 risk 1): `ruxen_test_clock_now_ns` is a single
- * thread-local flag read + branch; when virtual mode is off it returns its
- * argument unchanged, so the release/non-test path pays one predictable-branch
- * thread-local load — no syscall, no allocation.
+ * HOT-PATH COST (spec §4.7 risk 1): off-test, `ruxen_test_clock_now_ns` just
+ * returns its argument after one thread-local flag read + branch — no syscall,
+ * no allocation. NOTE it is a CROSS-TU function CALL (this seam lives in its own
+ * TU; the callers in `time.c` are in another), so the caller pays a real,
+ * non-inlined `call` — NOT a literal inlined "single TLS read" at the call site.
+ * Collapsing it to an inlined load would need LTO or a shared `static inline`
+ * header helper; the current cost (predictable call + TLS load + branch) is
+ * negligible and behaviourally transparent off-test, so it is left as-is for v1.
  *
  * HYBRID (spec §4.7): ONLY the timer + clock seam is virtualized. Real
  * epoll/kqueue fd readiness is untouched — a test mixing real sockets + virtual
