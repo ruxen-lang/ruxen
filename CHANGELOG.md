@@ -17,6 +17,15 @@ once 1.0.0 ships.
   ordered assignment/function-call execution, and explicit-main compatibility.
 
 ### Fixed
+- **Q51: returned Enumerable results survive closure cleanup.** Set and Hash
+  combinators passed a real closure to `each`; the synthesized closure destructor
+  freed a directly captured result Array even when that same enclosing local was
+  the combinator's return value. MIR now records owned capture slots with their
+  source locals and clears slots that flow into a direct or aggregate return
+  before running closure cleanup. The returned collection remains owned by the
+  caller, while the captures block, closure pair, and non-escaping fields retain
+  their existing cleanup. Release-e2e 612/613 confirm `select` sizes, and pin 936
+  covers `select`, `reject`, `map`, and `partition` across Array, Set, and Hash.
 - **Q49: branch-scoped owned temporaries are dropped only on initialized
   paths.** MIR drop elaboration no longer hoists every owned local to a shared
   return block, where LLVM could pass an uninitialized stack value to

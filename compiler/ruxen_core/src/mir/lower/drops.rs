@@ -279,16 +279,30 @@ pub(super) fn capture_slot_still_owned(
     true
 }
 
+#[derive(Clone)]
+struct ClosureDropGlue {
+    drop_fn: String,
+    owned_capture_slots: Vec<(usize, LocalId)>,
+}
+
 fn closure_drop_callees(
     func: &MirFunction,
     dealloc_safe: &HashSet<LocalId>,
     return_locals: &HashSet<LocalId>,
     return_alias_chain: &HashSet<LocalId>,
-) -> HashMap<LocalId, String> {
-    let mut owners: HashMap<LocalId, String> = func
+) -> HashMap<LocalId, ClosureDropGlue> {
+    let mut owners: HashMap<LocalId, ClosureDropGlue> = func
         .closure_drops
         .iter()
-        .map(|drop| (drop.local, drop.drop_fn.clone()))
+        .map(|drop| {
+            (
+                drop.local,
+                ClosureDropGlue {
+                    drop_fn: drop.drop_fn.clone(),
+                    owned_capture_slots: drop.owned_capture_slots.clone(),
+                },
+            )
+        })
         .collect();
 
     for block in &func.blocks {
@@ -808,54 +822,73 @@ pub(super) fn insert_drops(
     all_drop_locals.sort_unstable();
     all_drop_locals.dedup();
 
-    let drop_instructions: HashMap<LocalId, Vec<MirInst>> = all_drop_locals
-        .iter()
-        .map(|&local_id| {
-            let mut instructions = Vec::new();
-            if let Some(callee) = closure_drop_callees.get(&local_id) {
+    let mut drop_instructions: HashMap<LocalId, Vec<MirInst>> = HashMap::new();
+    for &local_id in &all_drop_locals {
+        let mut instructions = Vec::new();
+        if let Some(glue) = closure_drop_callees.get(&local_id) {
+            let escaped_slots: Vec<usize> = glue
+                .owned_capture_slots
+                .iter()
+                .filter_map(|(slot, source)| return_alias_chain.contains(source).then_some(*slot))
+                .collect();
+            if !escaped_slots.is_empty() {
+                let captures = func.new_temp(Ty::Int);
+                instructions.push(MirInst::GetField {
+                    dest: captures,
+                    base: local_id,
+                    field_index: 1,
+                });
+                for slot in escaped_slots {
+                    instructions.push(MirInst::SetField {
+                        base: captures,
+                        field_index: slot,
+                        value: MirValue::Literal(Literal::Int(0)),
+                    });
+                }
+            }
+            instructions.push(MirInst::Call {
+                dest: None,
+                callee: glue.drop_fn.clone(),
+                args: vec![MirValue::Use(local_id)],
+            });
+            instructions.push(MirInst::Drop { local: local_id });
+            drop_instructions.insert(local_id, instructions);
+            continue;
+        }
+
+        // User-defined `def drop` runs first, while the allocation is live.
+        // Ownership-tainted values and a class's own drop body remain
+        // excluded exactly as they were under return-only placement.
+        if !in_user_drop_method && dealloc_safe.contains(&local_id) {
+            if let Some(callee) = drop_callees.get(&local_id) {
                 instructions.push(MirInst::Call {
                     dest: None,
                     callee: callee.clone(),
                     args: vec![MirValue::Use(local_id)],
                 });
-                instructions.push(MirInst::Drop { local: local_id });
-                return (local_id, instructions);
             }
+        }
 
-            // User-defined `def drop` runs first, while the allocation is live.
-            // Ownership-tainted values and a class's own drop body remain
-            // excluded exactly as they were under return-only placement.
-            if !in_user_drop_method && dealloc_safe.contains(&local_id) {
-                if let Some(callee) = drop_callees.get(&local_id) {
-                    instructions.push(MirInst::Call {
-                        dest: None,
-                        callee: callee.clone(),
-                        args: vec![MirValue::Use(local_id)],
-                    });
-                }
-            }
-
-            // `MirInst::Drop` is a backend no-op; this type-directed call is
-            // the actual free and remains gated by exclusive alloc provenance.
-            if dealloc_safe.contains(&local_id) {
-                let local = func
-                    .locals
-                    .iter()
-                    .find(|candidate| candidate.id == local_id)
-                    .expect("drop_locals references a missing local");
-                let drop_callee = heap_free_callee(&local.ty).unwrap_or_else(|| {
-                    unimplemented!("insert_drops: no drop callee for type {:?}", local.ty)
-                });
-                instructions.push(MirInst::Call {
-                    dest: None,
-                    callee: drop_callee.to_string(),
-                    args: vec![MirValue::Use(local_id)],
-                });
-            }
-            instructions.push(MirInst::Drop { local: local_id });
-            (local_id, instructions)
-        })
-        .collect();
+        // `MirInst::Drop` is a backend no-op; this type-directed call is
+        // the actual free and remains gated by exclusive alloc provenance.
+        if dealloc_safe.contains(&local_id) {
+            let local = func
+                .locals
+                .iter()
+                .find(|candidate| candidate.id == local_id)
+                .expect("drop_locals references a missing local");
+            let drop_callee = heap_free_callee(&local.ty).unwrap_or_else(|| {
+                unimplemented!("insert_drops: no drop callee for type {:?}", local.ty)
+            });
+            instructions.push(MirInst::Call {
+                dest: None,
+                callee: drop_callee.to_string(),
+                args: vec![MirValue::Use(local_id)],
+            });
+        }
+        instructions.push(MirInst::Drop { local: local_id });
+        drop_instructions.insert(local_id, instructions);
+    }
 
     // A marker-only Drop never reads the local in either backend. Only locals
     // with real closure/user/free glue need path-sensitive placement.
@@ -1369,7 +1402,7 @@ fn compute_dealloc_safe_locals(
 }
 
 /// Compute the transitive set of locals whose value flows into a `Return`
-/// terminator via `Assign` / `Copy` / `Move`.
+/// terminator via `Assign` / `Copy` / `Move` or into a returned aggregate.
 ///
 /// Seed the set with the locals that appear directly in any
 /// `Return(Some(Use(L)))` terminator, then iterate to a fixpoint: every
@@ -1402,6 +1435,15 @@ fn compute_return_alias_chain(
                     }
                     MirInst::Copy { dest, src } | MirInst::Move { dest, src } => {
                         if chain.contains(dest) {
+                            chain.insert(*src);
+                        }
+                    }
+                    MirInst::SetField {
+                        base,
+                        value: MirValue::Use(src),
+                        ..
+                    } => {
+                        if chain.contains(base) {
                             chain.insert(*src);
                         }
                     }

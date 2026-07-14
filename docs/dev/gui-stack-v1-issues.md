@@ -2247,15 +2247,24 @@ relocated branch-scoped drops. NOTE: real `rondo`/`quiver` apps that interpolate
 method results into responses/labels can hit this; the plaintext rondo-bench uses
 a bare literal (`Response.text("hello, world")`) and is unaffected.
 
-## Q51 · S2 — `Enumerable#select` over-counts (returns extra elements)  ⚠️ OPEN (found 2026-07-14)
+## Q51 · S2 — `Enumerable#select` over-counts (returns extra elements)  ✅ FIXED 2026-07-14
 
-`Set[Int]{1,2,3,4}.select { |x| x % 2 == 0 }.size` returns **3**, expected **2**;
-`Hash#select` similarly off. Both come from the shared `mixin Enumerable[T]`
-combinator over the collection's `each`. The aggregate is order-independent, so
-this is a real logic bug in the `select` default body (or its interaction with
-`Set`/`Hash` `each`), not iteration-order flakiness. Repro: release-e2e cases
-`612_set_enumerable` (`evens=3` vs `evens=2`) and `613_hash_enumerable`.
-PRE-EXISTING — present with and without Q49/implicit-main (isolation-verified).
+The `select` body and collection iteration were correct. Instrumentation around
+the push showed exactly two predicate hits, with `out.size` progressing `0 → 1
+→ 2` and remaining `2` after `each`; only the caller's subsequent `evens.size`
+read heap garbage (`5574` in the instrumented run; baseline runs also produced
+`17082`/`5571`). The real defect was closure-capture drop elaboration. Set/Hash
+`each` receive a real heap closure, and its synthesized destructor still treated
+the directly captured `out` Array as owned. At `select` return it freed `out`,
+even though that same source local was the method's return value.
+
+MIR closure-drop metadata now retains each owned capture slot's enclosing source
+local. Before running closure cleanup, drop elaboration finds slots whose source
+flows into the function return (directly or through a returned aggregate) and
+NULLs those slots, transferring the value back to the caller while the normal
+destructor still frees the captures block and closure pair. Release-e2e 612 and
+613 now report `evens=2` / `big=2`; pin 936 covers `select`, `reject`, `map`, and
+`partition` across Array, Set, and Hash.
 
 ## Q52 · S1 — `Mutex` guard dropped in a closure/match arm crashes (exit 133)  ⚠️ OPEN (found 2026-07-14)
 

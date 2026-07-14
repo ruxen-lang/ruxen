@@ -94,7 +94,7 @@ behind.
       `mixin_element_subst` (records each include's trait args so `Fn(T)`
       seeds to `(K, V)` for Hash); cell-promotion retypes the captured local
       to pointer width (fixed `load.i8` verifier error when a real capturing
-      closure is passed to `Set_each`/`Hash_each`). Pins 612/613/614.
+      closure is passed to `Set_each`/`Hash_each`). Pins 612/613/614/936.
       **RESIDUAL:** `collections.rs` Option/Result arms are now `try_op`
       (`?`-intrinsic), `map` (fresh-var return), `ok_or` (arg-derived err);
       Array `each`/`to_h`/`sum`/`select!`/`get_mut`/`get_var`. `ok_or` left
