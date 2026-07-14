@@ -406,6 +406,18 @@ impl MixinResolver {
             };
         }
 
+        match ty {
+            Ty::AnyMixin(bounds) if bounds.iter().any(|bound| bound == trait_ref) => {
+                return MixinSatisfaction::Nominal;
+            }
+            Ty::SomeMixin(bounds)
+                if !require_nominal && bounds.iter().any(|bound| bound == trait_ref) =>
+            {
+                return MixinSatisfaction::Structural;
+            }
+            _ => {}
+        }
+
         let type_name = Self::type_name(ty);
 
         // Check nominal satisfaction first
