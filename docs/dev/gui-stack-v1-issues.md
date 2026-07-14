@@ -1470,7 +1470,7 @@ public); `async` modifier drop (`async def` → `def`); plus the catalogued
 bulk-run `ruxen fmt`" caution is LIFTED — `ruxen fmt` is now reparse-faithful
 over the entire corpus (491 files, binary + in-process, green).
 
-## Q35 · S3 — a STRUCT's `include <Mixin>` does not satisfy a generic's mixin bound  ⏳ OPEN (NEW 2026-06-10)
+## Q35 · S3 — a STRUCT's `include <Mixin>` does not satisfy a generic's mixin bound  ✅ FIXED (2026-07-14)
 
 Found 2026-06-10 while independently verifying Q17 on the installed toolchain.
 A struct that `include`s a mixin is rejected by the generic bound-satisfaction
@@ -1502,14 +1502,21 @@ def main
 end
 ```
 
-Repro: `tmp/test-cache/q35-struct-include-bound-repro.rx`. Likely typeck's
-implementor registry records `include` only for classes (struct includes DO
-work for direct method calls and for `Send`-style marker mixins — quiver's
-ListModel relies on that — so the gap is specifically the generic-bound
-satisfaction path). S3: clean diagnostic, no silent miscompile, and no GUI-stack
-code is blocked (quiver's PaintSurface implementors are classes). Fix when
-touching typeck satisfaction next; pin with struct-implementor variants of the
-655/658 e2e cases.
+Root cause: `typeck/mixins.rs::collect_item_impls` registered a class's body
+methods, derives, and `impl_blocks`, but the `HirItem::Struct` and
+`HirItem::Enum` arms registered only derives. Consequently their positive
+`include Mixin` edges never reached `MixinResolver::nominal_impls`, which is the
+registry consulted by E1015 generic-bound satisfaction. Direct method calls,
+marker `Send`/`Sync`, and MIR's downstream implementor collection use separate
+paths, explaining why only this seam failed.
+
+Fixed by registering struct and enum inner impl blocks under their concrete
+(module-qualified when applicable) type names, including parameterized mixin
+arguments, exactly as the class path does. The change does not register bare
+body methods as nominal includes: a struct without `include` still emits E1015.
+Release-e2e case `659_generic_fn_mixin_struct_implementor.rx` compiles, links,
+runs through Q17's generic free-function monomorphization, and asserts
+`one=21`; focused typeck pins cover the non-including struct and enum symmetry.
 
 ## Q36 · S2 — `yield` with TWO `&var` reference args miscompiles (block sees empty target)  ⏳ OPEN (NEW 2026-06-10)
 

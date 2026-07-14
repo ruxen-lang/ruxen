@@ -908,24 +908,89 @@ impl MixinResolver {
                 }
             }
             HirItem::Struct(strukt) => {
+                let type_name = if module_path.is_empty() {
+                    strukt.name.clone()
+                } else {
+                    format!("{}.{}", module_path.join("."), strukt.name)
+                };
                 self.register_derived_impls(
-                    &strukt.name,
+                    &type_name,
                     &Ty::Struct {
-                        name: strukt.name.clone(),
+                        name: type_name.clone(),
                         generic_args: vec![],
                     },
                     &strukt.derive_traits,
                 );
+
+                // Struct-body `include Mixin` blocks are nominal impls just
+                // like class-body includes. Recording the edge here is what
+                // lets a concrete struct satisfy a generic `T: Mixin` bound.
+                for imp in &strukt.impl_blocks {
+                    if imp.negative_trait {
+                        continue;
+                    }
+                    if let Some(ref trait_ref) = imp.trait_ref {
+                        let methods: Vec<(String, FnSignature)> = imp
+                            .items
+                            .iter()
+                            .filter_map(|item| match item {
+                                HirImplItem::Method(m) => {
+                                    Some((m.name.clone(), self.func_to_sig(m)))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        self.register_impl(&type_name, Some(&trait_ref.name), methods);
+                        if !trait_ref.generic_args.is_empty() {
+                            self.mixin_include_args.insert(
+                                (type_name.clone(), trait_ref.name.clone()),
+                                trait_ref.generic_args.clone(),
+                            );
+                        }
+                    }
+                }
             }
             HirItem::Enum(enm) => {
+                let type_name = if module_path.is_empty() {
+                    enm.name.clone()
+                } else {
+                    format!("{}.{}", module_path.join("."), enm.name)
+                };
                 self.register_derived_impls(
-                    &enm.name,
+                    &type_name,
                     &Ty::Enum {
-                        name: enm.name.clone(),
+                        name: type_name.clone(),
                         generic_args: vec![],
                     },
                     &enm.derive_traits,
                 );
+
+                // Enums carry the same HIR impl-block shape as classes and
+                // structs, so keep nominal bound satisfaction symmetric.
+                for imp in &enm.impl_blocks {
+                    if imp.negative_trait {
+                        continue;
+                    }
+                    if let Some(ref trait_ref) = imp.trait_ref {
+                        let methods: Vec<(String, FnSignature)> = imp
+                            .items
+                            .iter()
+                            .filter_map(|item| match item {
+                                HirImplItem::Method(m) => {
+                                    Some((m.name.clone(), self.func_to_sig(m)))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        self.register_impl(&type_name, Some(&trait_ref.name), methods);
+                        if !trait_ref.generic_args.is_empty() {
+                            self.mixin_include_args.insert(
+                                (type_name.clone(), trait_ref.name.clone()),
+                                trait_ref.generic_args.clone(),
+                            );
+                        }
+                    }
+                }
             }
             HirItem::Impl(imp) => {
                 let type_name = Self::type_name(&imp.target_ty);

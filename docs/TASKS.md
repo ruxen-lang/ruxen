@@ -17,9 +17,9 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-35 of 39 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
+36 of 39 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
 feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned; Q28, Q30,
-Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 fixed 2026-06-10 via the syntax-parity harness; Q37 fixed 2026-06-10 (root cause: a yielding/`&block` method poisoned an unrelated same-named free fn via a bare-name yield map — this covers BOTH the S1 name-collision symptom AND the S2 "generic `frame[S: PaintSurface]` gets a bogus `__block` in binary-consumes-library builds" symptom; they were the same bug) — quiver examples build again; Q38 fixed 2026-06-10 (bare-literal `String` local leaked); Q39 fixed 2026-06-11 (bare `""` in a tuple-element position expecting `String` stayed `&str` — rondo W21; fixed via `coerce_tuple_literal_elements`, pin `924`); Q35, Q36 NEW 2026-06-10, both OPEN** — Q36 from the quiver Ruby-block DSL migration: two-`&var`-arg `yield` miscompile, left filed-open; Q35 a struct `include` not satisfying a generic mixin bound). The
+Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 fixed 2026-06-10 via the syntax-parity harness; Q37 fixed 2026-06-10 (root cause: a yielding/`&block` method poisoned an unrelated same-named free fn via a bare-name yield map — this covers BOTH the S1 name-collision symptom AND the S2 "generic `frame[S: PaintSurface]` gets a bogus `__block` in binary-consumes-library builds" symptom; they were the same bug) — quiver examples build again; Q38 fixed 2026-06-10 (bare-literal `String` local leaked); Q39 fixed 2026-06-11 (bare `""` in a tuple-element position expecting `String` stayed `&str` — rondo W21; fixed via `coerce_tuple_literal_elements`, pin `924`); Q35 fixed 2026-07-14 (struct/enum in-body includes now populate typeck's nominal mixin registry; pin `659`); Q36 remains OPEN** — Q36 from the quiver Ruby-block DSL migration: two-`&var`-arg `yield` miscompile, left filed-open). The
 canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
 (canvas 143 green, sub-pixel pinned, live windowed loop verified).
 
@@ -403,13 +403,13 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       ownership gap, `State[Array]`/`Mutex[Array]` family). `Mutex[String]` is
       sound for the single-lock-per-scope / SharedSync shapes quiver uses; details
       §Q40.
-- [ ] **Q35 · S3 — a STRUCT's `include <Mixin>` does not satisfy a generic's
-      mixin bound (E1015).** Even a single struct implementor is rejected by a
-      mixin-bounded generic; the identical class works (Q17's 655 fixture runs
-      on the installed CLI). Orthogonal to Q17 — typeck's bound-satisfaction
-      registry records `include` only for classes. Clean diagnostic, nothing in
-      the GUI stack blocked (PaintSurface implementors are classes). Repro:
-      `tmp/test-cache/q35-struct-include-bound-repro.rx`; details §Q35.
+- [x] **Q35 · S3 — struct/enum `include <Mixin>` satisfies generic mixin bounds
+      (FIXED 2026-07-14).** Typeck's mixin collector registered inner nominal
+      impls for classes but only derives for structs/enums. Their `impl_blocks`
+      now populate the same nominal registry (and generic include-argument map).
+      Pin `659` compiles/runs the struct + Q17 free-function path as `one=21`;
+      focused typeck pins retain E1015 for a non-including struct and cover enum
+      symmetry. Details §Q35.
 - [ ] **Q36 · S2 — `yield` with two `&var` reference args miscompiles (NEW
       2026-06-10).** `yield(&var app.ui, &var app.root)` (two `&var` refs in one
       yield) runs the block against an EMPTY target; single-`&var` yield and the

@@ -7,7 +7,7 @@
 //! exactly why quiver was capped at one `PaintSurface` implementor.
 //!
 //! These pins read the SAME fixtures the release-e2e harness runs
-//! (`tests/release-e2e/cases/655..658`) so the cargo pin and the e2e case can
+//! (`tests/release-e2e/cases/655..659`) so the cargo pin and the e2e case can
 //! never drift apart, and they COMPILE + RUN + assert exact stdout (three prior
 //! episodes on this branch had pins pass while real codegen was broken). The
 //! negative pin compiles an INLINE generic-method-over-mixin shape (NOT yet
@@ -122,6 +122,16 @@ fn mixin_default_body_monomorphizes_per_implementor() {
 fn single_implementor_still_works() {
     let (src, expected) = case("658_generic_fn_mixin_single_implementor.rx");
     let (stdout, stderr, ok) = compile_and_run(&src, "q17_single_impl");
+    assert!(ok, "link/run failed; stderr: {stderr}");
+    assert_eq!(stdout, expected, "stdout was {stdout:?}");
+}
+
+/// Q35: the single implementor may be a STRUCT. Its in-body `include`
+/// must satisfy typeck's nominal bound and reach Q17 monomorphization.
+#[test]
+fn struct_implementor_satisfies_bound_and_runs() {
+    let (src, expected) = case("659_generic_fn_mixin_struct_implementor.rx");
+    let (stdout, stderr, ok) = compile_and_run(&src, "q35_struct_impl");
     assert!(ok, "link/run failed; stderr: {stderr}");
     assert_eq!(stdout, expected, "stdout was {stdout:?}");
 }
