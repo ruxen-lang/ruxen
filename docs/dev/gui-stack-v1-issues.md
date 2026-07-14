@@ -2247,6 +2247,30 @@ relocated branch-scoped drops. NOTE: real `rondo`/`quiver` apps that interpolate
 method results into responses/labels can hit this; the plaintext rondo-bench uses
 a bare literal (`Response.text("hello, world")`) and is unaffected.
 
+## Q51 · S2 — `Enumerable#select` over-counts (returns extra elements)  ⚠️ OPEN (found 2026-07-14)
+
+`Set[Int]{1,2,3,4}.select { |x| x % 2 == 0 }.size` returns **3**, expected **2**;
+`Hash#select` similarly off. Both come from the shared `mixin Enumerable[T]`
+combinator over the collection's `each`. The aggregate is order-independent, so
+this is a real logic bug in the `select` default body (or its interaction with
+`Set`/`Hash` `each`), not iteration-order flakiness. Repro: release-e2e cases
+`612_set_enumerable` (`evens=3` vs `evens=2`) and `613_hash_enumerable`.
+PRE-EXISTING — present with and without Q49/implicit-main (isolation-verified).
+
+## Q52 · S1 — `Mutex` guard dropped in a closure/match arm crashes (exit 133)  ⚠️ OPEN (found 2026-07-14)
+
+`let reader = { || match m.lock { Ok(g) -> g.get.clone; Err(_) -> "poisoned" } }`
+then `reader.()` **deterministically crashes** (SIGTRAP, empty output). The
+`Mutex[String]` guard `g` is bound in a `match` arm inside a closure, cloned out,
+then dropped at arm/closure exit. Repro: release-e2e `926_mutex_string_lock_capture`
+(closure capture) and `927_mutex_string_sharedsync_roundtrip`. PRE-EXISTING —
+crashes identically with and without Q49 (isolation-verified via the
+implicit-main-only worktree binary). SUSPECT: interaction between the guard's
+Drop and the closure-capture drop elaboration (the "blockdrop" work) — needs a
+base (`d5464a4e`) bisect to confirm whether an earlier session fix regressed it
+or it predates the session. S1 because it is a hard crash on a documented Q40
+ergonomic (`Mutex.lock` through a capture).
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:
