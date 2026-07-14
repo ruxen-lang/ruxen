@@ -10,6 +10,22 @@ class AsyncTcpListener
     ruxen_async_tcp_listener_bind(addr)
   end
 
+  ## Bind ONE shared listening socket and return its raw fd (or -1 on error).
+  ## The portable multi-core serving model: bind once, hand the fd to every
+  ## worker thread, and let each build its own reactor-registered listener via
+  ## `from_fd`. macOS/BSD SO_REUSEPORT does not load-balance per-worker
+  ## sockets, so shared-accept is how every core gets work on those platforms.
+  def self.bind_raw(addr: &String) -> Int
+    ruxen_async_tcp_listener_bind_raw(addr)
+  end
+
+  ## Wrap a shared listening fd for accept on the CALLING thread's reactor.
+  ## `dup`s the fd so this listener owns an independent descriptor. Call this
+  ## from inside each worker thread so every worker parks on its own reactor.
+  def self.from_fd(fd: Int) -> AsyncTcpListener
+    ruxen_async_tcp_listener_from_fd(fd)
+  end
+
   def var accept -> AsyncAcceptFuture
     AsyncAcceptFuture.new(
       ruxen_async_tcp_listener_fd(self),
@@ -24,6 +40,8 @@ end
 
 lib "runtime/async_net.c"
   def ruxen_async_tcp_listener_bind(addr: &String) -> Result[AsyncTcpListener, IoError]
+  def ruxen_async_tcp_listener_bind_raw(addr: &String) -> Int
+  def ruxen_async_tcp_listener_from_fd(fd: Int) -> AsyncTcpListener
   def ruxen_async_tcp_listener_fd(listener: &AsyncTcpListener) -> Int
   def ruxen_async_tcp_listener_accept_handle(listener: &AsyncTcpListener) -> Int
 end

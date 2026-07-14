@@ -22,6 +22,16 @@ once 1.0.0 ships.
   `main` programs are unchanged, while mixing explicit `main` with loose
   statements remains E0728. Release-e2e pins `933`–`935` cover script hello,
   ordered assignment/function-call execution, and explicit-main compatibility.
+- **`AsyncTcpListener.bind_raw` / `from_fd`: portable shared-accept multi-core
+  serving.** macOS/BSD `SO_REUSEPORT` does not load-balance connections across
+  per-worker listening sockets (only Linux 3.9+ does), so a per-worker bind pins
+  all traffic to one core on those platforms. `bind_raw` binds one shared socket
+  and returns its raw fd (no reactor registration); each worker calls `from_fd`
+  to `dup` the fd onto its own per-thread reactor and accept. The kernel wakes
+  the parked workers and one wins each accept, spreading work across every core
+  on both platforms. Mirrors the existing `bind` / `stream_from_fd` void*-as-
+  class FFI ABI. Drives rondo from 130k to 207k RPS across multiple cores on
+  Apple M4 (loopback, co-located load generator; parity with Go net/http).
 
 ### Fixed
 - **Q53: closure interpolation preserves declared `String` call results.**

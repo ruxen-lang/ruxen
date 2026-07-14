@@ -286,6 +286,86 @@ void *ruxen_async_tcp_listener_bind(const char *addr) {
     return ruxen_result_ok_value((int64_t)l);
 }
 
+/* ── Shared-accept multi-core model (portable across macOS/BSD) ──────────
+ *
+ * The per-worker `bind` path above relies on SO_REUSEPORT kernel connection
+ * load-balancing. Linux 3.9+ distributes across per-worker sockets, but
+ * macOS/BSD SO_REUSEPORT does NOT: every connection lands on ONE socket, so
+ * only one worker (one core) does any work. The portable alternative is a
+ * SHARED listening socket that every worker accept()s from. Each worker
+ * registers the socket on its own reactor level-triggered (no
+ * EPOLLEXCLUSIVE / EV_ONESHOT), so an incoming connection wakes every parked
+ * worker; one wins the accept() and the rest get EAGAIN and re-park. Work
+ * therefore spreads across all cores on both platforms. The redundant
+ * wakeups are a thundering herd, but under HTTP keep-alive accepts are rare
+ * (once per connection, not per request), so the cost is negligible here.
+ *
+ * `bind_raw` opens + binds + listens ONE socket and returns its raw fd
+ * (no reactor registration, no wrapper struct). The caller hands that fd to
+ * N worker threads; each calls `from_fd` from INSIDE its own thread. */
+int64_t ruxen_async_tcp_listener_bind_raw(const char *addr) {
+    if (ruxen_repl_is_replaying) {
+        return -1;
+    }
+    if (!addr) {
+        return -1;
+    }
+    struct sockaddr_in sa;
+    if (ruxen_async_net_parse_addr(addr, &sa) != 0) {
+        return -1;
+    }
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    ruxen_async_net_set_nosigpipe(fd);
+    int one = 1;
+    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    if (ruxen_async_net_set_nonblock(fd) != 0) {
+        close(fd);
+        return -1;
+    }
+    if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+        close(fd);
+        return -1;
+    }
+    if (listen(fd, 1024) != 0) {
+        close(fd);
+        return -1;
+    }
+    return (int64_t)fd;
+}
+
+/* Wrap an EXISTING shared listening fd for accept on the CURRENT thread's
+ * reactor. `dup`s the fd so this listener owns an independent descriptor:
+ * its `drop` closes only the dup and deregisters from its own reactor, while
+ * the shared socket stays open until every worker's dup (and the original raw
+ * fd) is closed. Registers the dup for read-readiness on the calling thread's
+ * reactor, so each worker must call this from within its own thread. On dup
+ * failure the listener is returned closed (fd = -1); accept then errors. */
+void *ruxen_async_tcp_listener_from_fd(int64_t shared_fd) {
+    RuxenAsyncTcpListener *l =
+        (RuxenAsyncTcpListener *)ruxen_alloc(sizeof(RuxenAsyncTcpListener));
+    int dup_fd = -1;
+    if (shared_fd >= 0) {
+        do {
+            dup_fd = dup((int)shared_fd);
+        } while (dup_fd < 0 && errno == EINTR);
+    }
+    if (dup_fd < 0) {
+        l->fd = -1;
+        l->closed = 1;
+        l->accept_handle = 0;
+        return l;
+    }
+    ruxen_async_net_set_nosigpipe(dup_fd);
+    (void)ruxen_async_net_set_nonblock(dup_fd);
+    l->fd = dup_fd;
+    l->closed = 0;
+    l->accept_handle = ruxen_reactor_register_fd_read_persistent(0, (int64_t)dup_fd);
+    return l;
+}
+
 void *ruxen_async_bind_state_to_result(void *state) {
     if (!state) {
         return ruxen_result_err_value(
