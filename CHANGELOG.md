@@ -26,6 +26,14 @@ once 1.0.0 ships.
   leak fix from becoming a double-free/UAF. The allocation tracker proves
   `allocs == frees == 3` for both brace and `do…end` forms; a moved-out-capture
   pin proves only the pair and captures block are freed. Release-e2e pin 475.
+- **Q48: LLVM resolves FFI method aliases to their linked C symbols.** LLVM's
+  lazy call resolver ignored MIR FFI declarations, so synthesized calls such as
+  `Formatter_new` became undefined mangled externs even though Pass 0 had
+  declared `ruxen_fmt_formatter_new`. The LLVM backend now maps both Ruxen-side
+  and lib-qualified names to the existing C-symbol declaration, matching
+  Cranelift's two-key import lookup. Optimized String/interpolation binaries now
+  link against `libruxenrt.a`; the obsolete wasm-only Formatter wrappers are
+  removed.
 - **Q47: dyn call results retain their declared mixin guarantees.** A call to a
   closure returning `any Future` produced an existential value that the bound
   checker immediately re-tested as if it were a concrete type named

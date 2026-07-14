@@ -1974,19 +1974,14 @@ Toolchain: `ruxen 0.1.0`.
 
 ## Q44 · S3 — string interpolation's `Formatter` C runtime is not bundled for wasm; needs a wasm fmt runtime (or host shims + JS→wasm string marshalling)  ✅ RESOLVED 2026-06-16
 
-> **RESOLVED 2026-06-16.** `fmt.c` was already in `WASM_RUNTIME_CORE`, but the
-> MIR interpolation lowerer emits the mangled callees `Formatter_new`/
-> `Formatter_write_str`/`Formatter_buffer` (not the `ruxen_fmt_formatter_*` FFI
-> aliases), and the wasm backend doesn't bridge them → they leaked as host
-> imports. Fix: the `WASM_RT_C` shim now defines those three mangled symbols as
-> thin wrappers over the bundled `ruxen_fmt_formatter_*`, matching the exact
-> emitted ABI (`new()->i64`, `write_str(i32,i32)->void`, `buffer(i32)->i64`). So
-> interpolation builds real strings in wasm linear memory via `fmt.c` — no host
-> import, no JS→wasm marshalling hack. Verified: `"count: #{n}"` renders correctly
-> on wasm in `quiver/examples/counter-dom` (deterministic in a real browser). The
-> JS Formatter shim + scratch region are gone. (A cleaner future fix would teach
-> the wasm codegen to apply the same mangled→C-symbol mapping as native, but the
-> bundled wrapper is sufficient and wasm-only.)
+> **RESOLVED 2026-06-16; generalized by Q48 on 2026-07-14.** `fmt.c` was already
+> in `WASM_RUNTIME_CORE`, but mangled `Formatter_*` calls leaked as host imports.
+> The original fix added wasm-only wrappers over the bundled
+> `ruxen_fmt_formatter_*` symbols, which made interpolation self-contained and
+> was verified by `quiver/examples/counter-dom`. Q48 fixed the LLVM resolver
+> itself: it now maps every FFI alias to its C declaration on native and wasm,
+> so the temporary mangled wrappers have been removed. The JS Formatter shim
+> and scratch region remain unnecessary.
 
 Found 2026-06-16 wiring the native-element web counter (quiver
 `examples/counter-dom`). A `"count: #{n}"` interpolation lowers to compiler-
@@ -2160,6 +2155,40 @@ bootstrap-shaped `make.()` body, then runs unrelated code that polls a stored
 `any Future`; the Rust `async_surface` regression asserts the same two-shape
 ordering through the production bootstrap/typeck path. Pins `445`–`449` remain
 green. Toolchain: `ruxen 0.1.0` (`fix/q47`).
+
+## Q48 · S1 — LLVM leaves FFI-aliased method calls under mangled Ruxen names, blocking optimized binaries  ✅ FIXED (2026-07-14)
+
+`ruxen build --release` compiled String/interpolation programs to object code
+but failed at the native link with undefined `_String_*` and `_Formatter_*`
+symbols. The runtime archive already exported the corresponding
+`_ruxen_string_*` and `_ruxen_fmt_formatter_*` C symbols, and the default
+Cranelift backend linked the same MIR successfully.
+
+**Root cause:** LLVM Pass 0 correctly declared each `FfiFuncDecl` under its
+linked C symbol, but `codegen/llvm/emit/calls.rs::get_or_declare_func` ignored
+the `MirProgram` and searched only the LLVM module by the incoming callee name.
+Synthesized MIR paths such as interpolation and derived `Display#fmt` retain
+the mangled callee (`Formatter_new`, `Formatter_write_str`,
+`Formatter_buffer`) instead of passing through the ordinary lowerer's alias-map
+rewrite. LLVM therefore missed the existing C declaration and its fallback
+created a fresh external function under the mangled name. Cranelift did not
+fail because Pass 0 registers both `FfiFuncDecl::name` (the C symbol) and
+`ruxen_name` to the same imported `FuncId`.
+
+**Fix:** LLVM's lazy resolver now looks up residual Ruxen-side and
+lib-qualified FFI names in `MirProgram::ffi_libs` and returns the already
+declared C-symbol `FunctionValue`, mirroring Cranelift's two-key import lookup.
+LLVM no longer creates fake lib-qualified external declarations. This is a
+general alias path with no String/Formatter special cases. The obsolete
+wasm-only mangled Formatter wrappers from Q44 were removed because wasm now
+uses the same C-symbol resolution as native LLVM.
+
+**Pin:** `q48_llvm_ffi_alias_calls_reference_only_c_symbols` emits the LLVM
+module for a direct String-construction/push plus interpolation program and
+asserts that its call operands use the String and Formatter C symbols while
+none of their mangled Ruxen aliases occur. It failed before the fix on
+`@Formatter_new`. The existing
+`string_interp_identical` fixture now also links and runs through both backends.
 
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 

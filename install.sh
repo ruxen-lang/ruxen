@@ -149,8 +149,36 @@ if [ -n "$FROM_SOURCE" ]; then
   # exposes everything (compile, lsp, repl, fmt, bench, etc.) as
   # subcommands; the old standalone `ruxenc` / `ruxen-lsp` / `ruxen-repl`
   # binaries no longer exist.
+  #
+  # The optimizing LLVM backend (used by `ruxen build --release`) is behind
+  # the `llvm` cargo feature. Without it, `--release` silently falls back to
+  # the unoptimized Cranelift backend — so we build WITH `--features llvm`
+  # whenever LLVM 18 is discoverable, and degrade gracefully to a
+  # Cranelift-only toolchain (with a loud note) when it is not.
+  CARGO_FEATURES=""
+  if [ -z "${LLVM_SYS_180_PREFIX:-}" ]; then
+    for cand in \
+      "$(brew --prefix llvm@18 2>/dev/null || true)" \
+      /opt/homebrew/opt/llvm@18 \
+      /usr/lib/llvm-18 \
+      /usr/local/opt/llvm@18; do
+      if [ -n "$cand" ] && [ -x "$cand/bin/llvm-config" ]; then
+        export LLVM_SYS_180_PREFIX="$cand"
+        break
+      fi
+    done
+  fi
+  if [ -n "${LLVM_SYS_180_PREFIX:-}" ] && [ -x "${LLVM_SYS_180_PREFIX}/bin/llvm-config" ]; then
+    CARGO_FEATURES="--features llvm"
+    # Some hosts need the LLVM lib dir on the link path (e.g. libzstd/libc++).
+    export LIBRARY_PATH="${LLVM_SYS_180_PREFIX}/lib:${LIBRARY_PATH:-}"
+    ok "LLVM 18 found at ${DIM}${LLVM_SYS_180_PREFIX}${RESET} — building with the optimizing backend (${BOLD}--features llvm${RESET})"
+  else
+    warn "LLVM 18 not found — building a Cranelift-only toolchain. \`ruxen build --release\` will NOT be optimized. Install llvm@18 (e.g. \`brew install llvm@18\`) and re-run to get optimized release builds."
+  fi
+
   ( cd "$ABS_SRC" && \
-    cargo build --release --bin ruxen ) \
+    cargo build --release --bin ruxen $CARGO_FEATURES ) \
     || err "cargo build failed in $ABS_SRC"
 
   # Point the install loop at cargo's output dir.

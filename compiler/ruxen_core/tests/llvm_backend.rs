@@ -9,23 +9,11 @@ use std::process::Command;
 
 use ruxen_core::codegen::{self, Backend};
 use ruxen_core::lexer::Lexer;
+use ruxen_core::mir::nodes::MirProgram;
 use ruxen_core::parser::Parser;
 use ruxen_core::{borrow_check, typeck};
 
-/// Compile source code to a temp executable using the given backend.
-fn compile_to_exe(source: &str, backend: Backend) -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let output_path = format!(
-        "{}/ruxen_test_{}_{}.exe",
-        std::env::temp_dir().display(),
-        std::process::id(),
-        id
-    );
-
-    // Compile pipeline
+fn lower_to_mir(source: &str) -> MirProgram {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().expect("lex failed");
     let mut parser = Parser::new(tokens);
@@ -42,9 +30,25 @@ fn compile_to_exe(source: &str, backend: Backend) -> String {
     let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
     assert!(borrow_errors.is_empty(), "borrow errors");
     let mut lowerer = ruxen_core::mir::lower::Lowerer::new(&type_result.symbols);
-    let mir_program = lowerer
+    lowerer
         .lower_program(&type_result.program)
-        .expect("MIR lowering failed");
+        .expect("MIR lowering failed")
+}
+
+/// Compile source code to a temp executable using the given backend.
+fn compile_to_exe(source: &str, backend: Backend) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let output_path = format!(
+        "{}/ruxen_test_{}_{}.exe",
+        std::env::temp_dir().display(),
+        std::process::id(),
+        id
+    );
+
+    let mir_program = lower_to_mir(source);
     codegen::compile_with_options(&mir_program, &output_path, false, &[], &[], backend)
         .expect("codegen failed");
 
@@ -109,6 +113,64 @@ backend_test!(mini_sample_identical, "mini_sample.rx");
 backend_test!(tasklist_identical, "tasklist.rx");
 backend_test!(sample_program_identical, "sample_program.rx");
 backend_test!(drop_owned_struct_identical, "drop_owned_struct.rx");
+
+#[test]
+fn q48_llvm_ffi_alias_calls_reference_only_c_symbols() {
+    let source = r#"
+def main
+  var s = String.new
+  s.push_str(&"hello ")
+  s.push_str(&"world")
+  puts "len=#{s.size} val=#{s}"
+end
+"#;
+    let mir = lower_to_mir(&source);
+    let context = inkwell::context::Context::create();
+    let module = context.create_module("q48_ffi_alias_pin");
+
+    ruxen_core::codegen::llvm::emit::compile_program(&mir, &module, &context, false)
+        .expect("LLVM IR emission failed");
+
+    let ir = module.print_to_string().to_string();
+    for symbol in [
+        "ruxen_string_new",
+        "ruxen_string_push_str",
+        "ruxen_string_truncate",
+        "ruxen_fmt_formatter_new",
+        "ruxen_fmt_formatter_write_str",
+        "ruxen_fmt_formatter_buffer",
+    ] {
+        assert!(
+            ir.contains(&format!("@{symbol}")),
+            "LLVM IR does not reference FFI C symbol @{symbol}"
+        );
+    }
+    for called_symbol in [
+        "ruxen_string_new",
+        "ruxen_string_push_str",
+        "ruxen_fmt_formatter_new",
+        "ruxen_fmt_formatter_write_str",
+        "ruxen_fmt_formatter_buffer",
+    ] {
+        assert!(
+            ir.matches(&format!("@{called_symbol}")).count() > 1,
+            "LLVM IR declares @{called_symbol} but does not call it"
+        );
+    }
+    for mangled in [
+        "String_new",
+        "String_push_str",
+        "String_truncate",
+        "Formatter_new",
+        "Formatter_write_str",
+        "Formatter_buffer",
+    ] {
+        assert!(
+            !ir.contains(&format!("@{mangled}")),
+            "LLVM IR leaked mangled FFI alias @{mangled} instead of its C symbol"
+        );
+    }
+}
 
 #[test]
 fn q41_runtime_mixin_class_info_lowers_links_and_runs() {
