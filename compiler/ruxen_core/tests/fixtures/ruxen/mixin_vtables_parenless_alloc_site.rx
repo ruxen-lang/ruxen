@@ -1,0 +1,24 @@
+# Q46: the paren-less zero-argument constructor path must initialize the
+# runtime-dispatch class-info header exactly like `Circle.new()`.
+
+mixin Sized dispatch runtime
+  def size -> Int
+end
+
+class Circle
+  radius: Int
+
+  def init
+    self.radius = 5
+  end
+
+  include Sized
+
+  def size -> Int
+    self.radius
+  end
+end
+
+def make_one -> Circle
+  Circle.new
+end
