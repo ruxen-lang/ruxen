@@ -129,6 +129,10 @@ impl<'a> Lowerer<'a> {
                 }
             }
         };
+        let concrete_item_ty = match recv_ty {
+            Ty::Array(inner) => Some((**inner).clone()),
+            _ => None,
+        };
         let array_receiver = matches!(recv_ty, Ty::Array(_))
             || matches!(recv_ty, Ty::Class { name, .. } if {
                 let base = name.split('[').next().unwrap_or(name);
@@ -156,7 +160,12 @@ impl<'a> Lowerer<'a> {
         match method_name {
             "each" => {
                 // for i in 0..vec.len: item = vec[i]; <body>
-                self.inline_each(vec_id, closure_params, closure_body)?;
+                self.inline_each(
+                    vec_id,
+                    closure_params,
+                    closure_body,
+                    concrete_item_ty.as_ref(),
+                )?;
                 Ok(Some(None))
             }
             "each_with_index" => {

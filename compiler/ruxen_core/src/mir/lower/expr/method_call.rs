@@ -72,9 +72,10 @@ impl<'a> Lowerer<'a> {
                 args,
                 block,
             } => {
+                let receiver_ty = self.mir_refined_expr_ty(object);
                 let type_name = self
                     .receiver_type_name(object)
-                    .unwrap_or_else(|| type_name_from_ty(&object.ty));
+                    .unwrap_or_else(|| type_name_from_ty(&receiver_ty));
 
                 // ── Universal `to_s` on user-defined types (REQ4) ───────
                 // `obj.to_s()` on a class / struct / enum that does NOT
@@ -812,11 +813,7 @@ impl<'a> Lowerer<'a> {
                 // call site. Without this guard the verifier rejects
                 // the resulting `ruxen_thread_join(0, handle)` as
                 // "got 2, expected 1".
-                let static_dispatch_ty = if matches!(&object.ty, Ty::Infer(_)) {
-                    &expr.ty
-                } else {
-                    &object.ty
-                };
+                let static_dispatch_ty = &receiver_ty;
                 let receiver_is_class_identifier = self.is_class_identifier(object);
                 let is_static = is_builtin_static_method(&type_name, method_name)
                     || self.is_user_static_method(&type_name, method_name)
@@ -848,7 +845,7 @@ impl<'a> Lowerer<'a> {
                 // For a generic type parameter or impl/dyn Trait, dispatch
                 // to the unique implementor of the trait bound when one
                 // exists.
-                let resolved_class = match &object.ty {
+                let resolved_class = match &receiver_ty {
                     Ty::Class { name, .. } => {
                         self.resolve_method_class_with_args(name, method_name, args)
                     }
@@ -986,7 +983,7 @@ impl<'a> Lowerer<'a> {
                 // actually emitted (FFI shells / un-specialized
                 // instantiations keep the opaque callee).
                 let mangled = if bufio_instance_suffix.is_none() {
-                    match self.mono_base_for_ty(&object.ty) {
+                    match self.mono_base_for_ty(&receiver_ty) {
                         Some(base) => format!("{}_{}", base, lowered_method_name),
                         None => mangled,
                     }
@@ -1034,7 +1031,7 @@ impl<'a> Lowerer<'a> {
                 // this guard. Surface a clear error instead of the placeholder
                 // symbol. The single-implementor case never reaches here:
                 // `unique_bound_impl` already resolved a concrete `resolved_class`.
-                if self.receiver_is_unresolved_bound(&object.ty) {
+                if self.receiver_is_unresolved_bound(&receiver_ty) {
                     return Err(format!(
                         "cannot lower method `{method_name}` on unresolved mixin-bound \
                          receiver `{resolved_class}`: no concrete monomorphization reached \
@@ -1319,8 +1316,12 @@ impl<'a> Lowerer<'a> {
                     return Ok(None);
                 }
 
+                let result_ty = self
+                    .declared_method_return_ty(expr)
+                    .filter(|ty| !ty.is_infer() && !ty.is_error())
+                    .unwrap_or_else(|| expr.ty.clone());
                 let dest = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
-                    Some(self.new_temp(expr.ty.clone()))
+                    Some(self.new_temp(result_ty))
                 } else {
                     None
                 };

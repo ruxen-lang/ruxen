@@ -58,7 +58,7 @@ pub(super) fn subst_type_params_in_func(
     subst_type_params_in_expr(&mut func.body, subst);
 }
 
-fn subst_type_params_in_ty(ty: &mut Ty, subst: &std::collections::HashMap<String, Ty>) {
+pub(super) fn subst_type_params_in_ty(ty: &mut Ty, subst: &std::collections::HashMap<String, Ty>) {
     match ty {
         Ty::TypeParam { name, .. } => {
             if let Some(concrete) = subst.get(name) {

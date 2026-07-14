@@ -130,7 +130,7 @@ impl<'a> Lowerer<'a> {
                 // each pair below. (Previously a Hash flowed straight into
                 // the Vec ops below and was read as a Vec → garbage / the
                 // value binding stayed unresolved into codegen.)
-                let mut iter_ty = iterable.ty.clone();
+                let mut iter_ty = self.mir_refined_expr_ty(iterable);
                 while let Ty::Ref(inner)
                 | Ty::RefMut(inner)
                 | Ty::RefLifetime(_, inner)
@@ -149,7 +149,7 @@ impl<'a> Lowerer<'a> {
                     iter_id = entries;
                     pair_ty
                 } else {
-                    element_type_of(&iterable.ty)
+                    element_type_of(&iter_ty)
                 };
 
                 // Index counter: _i = 0

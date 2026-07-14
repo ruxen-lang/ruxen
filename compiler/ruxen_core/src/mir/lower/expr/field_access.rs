@@ -276,12 +276,13 @@ impl<'a> Lowerer<'a> {
                 // method call.  The parser produces FieldAccess whenever no
                 // parentheses follow the dot, but in Ruxen method calls can
                 // omit parens.
+                let receiver_ty = self.mir_refined_expr_ty(object);
                 let obj_type_name = self
                     .receiver_type_name(object)
-                    .unwrap_or_else(|| type_name_from_ty(&object.ty));
+                    .unwrap_or_else(|| type_name_from_ty(&receiver_ty));
                 // Peel through references to find the underlying class type.
                 let base_ty = {
-                    let mut ty = &object.ty;
+                    let mut ty = &receiver_ty;
                     loop {
                         match ty {
                             Ty::Ref(inner)
@@ -422,7 +423,7 @@ impl<'a> Lowerer<'a> {
                     // type (not by string-matching the mangled callee, which a
                     // sound `Array[T: Showable]`-style builtin would also trip).
                     // Surface a clear error instead of the placeholder symbol.
-                    if self.receiver_is_unresolved_bound(&object.ty) {
+                    if self.receiver_is_unresolved_bound(&receiver_ty) {
                         return Err(format!(
                             "cannot lower method `{field_name}` on unresolved mixin-bound \
                              receiver `{resolved_class}`: no concrete monomorphization reached \
@@ -451,8 +452,12 @@ impl<'a> Lowerer<'a> {
                         0,
                     ));
 
+                    let result_ty = self
+                        .declared_method_return_ty(expr)
+                        .filter(|ty| !ty.is_infer() && !ty.is_error())
+                        .unwrap_or_else(|| expr.ty.clone());
                     let dest = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
-                        Some(self.new_temp(expr.ty.clone()))
+                        Some(self.new_temp(result_ty))
                     } else {
                         None
                     };

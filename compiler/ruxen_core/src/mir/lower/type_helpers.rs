@@ -1,6 +1,79 @@
 use super::*;
 
 impl<'a> Lowerer<'a> {
+    fn instantiate_method_return_ty(&self, parent: DefId, receiver_ty: &Ty, return_ty: &Ty) -> Ty {
+        use crate::resolve::symbols::DefKind;
+
+        let mut receiver = receiver_ty;
+        while let Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) = receiver
+        {
+            receiver = inner;
+        }
+        let generic_args = match receiver {
+            Ty::Class { generic_args, .. }
+            | Ty::Struct { generic_args, .. }
+            | Ty::Enum { generic_args, .. } => generic_args,
+            _ => return return_ty.clone(),
+        };
+        let Some(parent_def) = self.symbols.get(parent) else {
+            return return_ty.clone();
+        };
+        let generic_params = match &parent_def.kind {
+            DefKind::Class { info } => &info.generic_params,
+            DefKind::Struct { info } => &info.generic_params,
+            DefKind::Enum { info } => &info.generic_params,
+            _ => return return_ty.clone(),
+        };
+        if generic_params.len() != generic_args.len() {
+            return return_ty.clone();
+        }
+        let subst = generic_params
+            .iter()
+            .map(|param| param.name.clone())
+            .zip(generic_args.iter().cloned())
+            .collect();
+        let mut instantiated = return_ty.clone();
+        crate::mir::lower::trait_default::subst_type_params_in_ty(&mut instantiated, &subst);
+        instantiated
+    }
+
+    /// Prefer a concrete MIR binding type when HIR left a variable reference
+    /// abstract. Inlined collection closures are lowered in their caller, so
+    /// their parameter can be refined from `T`/`Infer` to the collection's
+    /// concrete element type even though the original closure HIR stays
+    /// generic.
+    pub(super) fn mir_refined_expr_ty(&self, expr: &HirExpr) -> Ty {
+        fn is_abstract(ty: &Ty) -> bool {
+            match ty {
+                Ty::TypeParam { .. } | Ty::Infer(_) | Ty::Error => true,
+                Ty::Ref(inner)
+                | Ty::RefMut(inner)
+                | Ty::RefLifetime(_, inner)
+                | Ty::RefMutLifetime(_, inner) => is_abstract(inner),
+                _ => false,
+            }
+        }
+
+        if !is_abstract(&expr.ty) {
+            return expr.ty.clone();
+        }
+        let HirExprKind::VarRef(def_id) = expr.kind else {
+            return expr.ty.clone();
+        };
+        let Some(local_id) = self.def_to_local.get(&def_id) else {
+            return expr.ty.clone();
+        };
+        self.fn_ref()
+            .locals
+            .get(*local_id as usize)
+            .map(|local| local.ty.clone())
+            .filter(|ty| !is_abstract(ty))
+            .unwrap_or_else(|| expr.ty.clone())
+    }
+
     /// Recover the declared return type of a call-shaped expression directly
     /// from its resolved method definition. This is an independent safety net
     /// for MIR locals whose inferred type is stale: a declared `String` return
@@ -9,9 +82,16 @@ impl<'a> Lowerer<'a> {
         use crate::resolve::symbols::DefKind;
 
         let resolved_method = match &expr.kind {
-            HirExprKind::MethodCall { method, .. } if *method != UNRESOLVED_DEF => {
+            HirExprKind::MethodCall { object, method, .. } if *method != UNRESOLVED_DEF => {
+                let receiver_ty = self.mir_refined_expr_ty(object);
                 self.symbols.get(*method).and_then(|def| match &def.kind {
-                    DefKind::Method { signature, .. } => Some(signature.return_ty.clone()),
+                    DefKind::Method { parent, signature } => {
+                        Some(self.instantiate_method_return_ty(
+                            *parent,
+                            &receiver_ty,
+                            &signature.return_ty,
+                        ))
+                    }
                     _ => None,
                 })
             }
@@ -38,7 +118,8 @@ impl<'a> Lowerer<'a> {
             } => (object.as_ref(), field_name.as_str(), 0),
             _ => return None,
         };
-        let receiver_name = type_name_from_ty(&object.ty);
+        let receiver_ty = self.mir_refined_expr_ty(object);
+        let receiver_name = type_name_from_ty(&receiver_ty);
         self.symbols.iter().find_map(|def| {
             let DefKind::Method { parent, signature } = &def.kind else {
                 return None;
@@ -50,7 +131,9 @@ impl<'a> Lowerer<'a> {
             let name_matches = def.name == method_name
                 || def.name.starts_with(&format!("{method_name}__overload"));
             (parent_name == receiver_name && name_matches && signature.params.len() == arg_count)
-                .then(|| signature.return_ty.clone())
+                .then(|| {
+                    self.instantiate_method_return_ty(*parent, &receiver_ty, &signature.return_ty)
+                })
         })
     }
 

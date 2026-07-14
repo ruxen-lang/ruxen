@@ -2303,6 +2303,36 @@ calls the reader twice: the second acquisition proves the first guard really
 unlocked, so the fix cannot be a no-op/leak mask. 926 and 927 are stable across
 five runs.
 
+## Q53 · S2 — String-returning method interpolation in a generic closure prints a pointer  ✅ FIXED (2026-07-14)
+
+This is a Q50 regression. Q50 removed the name-based
+`is_inferred_string_expr` heuristic, correctly eliminating its sample-specific
+method allowlist, but the replacement declaration lookup could not recover a
+method called through an abstract `.each` parameter. The closure HIR kept the
+parameter and call result as `Infer`/`TypeParam`, and the unresolved method had
+no `DefId`; `declared_method_return_ty` therefore had neither a resolved method
+nor a concrete receiver class to query. Interpolation consequently selected
+the opaque `TypeParam -> Int_fmt` ABI fallback for a valid returned `char*`.
+
+MIR inlining now types an Array `.each` parameter from the concrete collection
+element, and for-loop lowering likewise consults the refined MIR iterable type
+instead of falling back to the `Int` sentinel. No-parens and parenthesized
+method calls use that refined receiver for concrete callee selection and type
+their destination from the selected method's declared return, substituting a
+generic receiver's concrete class arguments into that return. Thus
+`Item_to_display`, `Todo_summary`, and any other declared `-> String` method
+produce a `String` local, and interpolation takes its ordinary string
+pass-through. The recovery is entirely type/declaration-driven; no method-name
+list was restored. The Q50 invalid-type guard remains loud for
+`Unit`/`Never`/`Error`.
+
+Release-e2e pin `938_closure_interp_string_method` uses an unrelated `caption`
+method inside `.each`. The flagship `sample_program_identical` differential and
+the full LLVM fixture verifier now pass, so Cranelift and LLVM agree on the
+titles/summaries emitted from generic closures and refined for loops. Existing
+case `101_two_type_params` also confirms that `Pair[Int, String]#second_ref`
+instantiates `&B` as `&String` before interpolation.
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:

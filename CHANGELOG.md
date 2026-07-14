@@ -17,6 +17,17 @@ once 1.0.0 ships.
   ordered assignment/function-call execution, and explicit-main compatibility.
 
 ### Fixed
+- **Q53: closure interpolation preserves declared `String` call results.**
+  Q50's removal of the inferred-method name allowlist exposed abstract `.each`
+  parameters whose unresolved call result stayed `Infer`/`TypeParam`; Display
+  then formatted the valid `char*` with `Int_fmt`. Inlined Array closures and
+  for loops now derive bindings from concrete MIR collection types, method
+  lowering selects callees from those refined receivers, and call destinations
+  use the selected declaration's return type with concrete class-generic
+  substitution. This is type/decl-driven and keeps Q50's loud invalid-type
+  guard. Release-e2e `938` covers an unrelated `caption -> String` method,
+  existing case `101` covers a generic `&String` return, and the 19-test LLVM
+  differential including the flagship sample now agrees with Cranelift.
 - **Q50: interpolated calls that return `String` no longer print their raw
   pointer.** Type checking omitted inline struct/enum methods from the direct
   method registry, so an included mixin's unannotated required-method
