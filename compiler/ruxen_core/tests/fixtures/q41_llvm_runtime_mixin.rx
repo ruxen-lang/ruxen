@@ -1,0 +1,45 @@
+# Q41: LLVM must lower the class-info address installed when a class
+# includes a runtime-dispatch mixin, then preserve the vtable relocations
+# through object emission and native linking.
+
+lib "C"
+  def putchar(value: Int32) -> Int32
+end
+
+mixin Q41Future dispatch runtime
+  def poll -> Int
+end
+
+class Q41TinyFuture
+  def init
+  end
+
+  include Q41Future
+
+  def poll -> Int
+    41
+  end
+end
+
+class FutureHolder
+  inner: any Q41Future
+
+  def init(inner: any Q41Future)
+    self.inner = inner
+  end
+
+  def poll -> Int
+    (&self.inner).poll
+  end
+end
+
+def main
+  let future = Q41TinyFuture.new()
+  let holder = FutureHolder.new(future)
+  if holder.poll == 41
+    putchar(81)
+  else
+    putchar(88)
+  end
+  let newline = putchar(10)
+end
