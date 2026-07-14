@@ -798,21 +798,6 @@ int64_t ruxen_sharedsync_strong_count(int32_t s) { (void)s; return 1; }
 int64_t ruxen_sharedsync_get(int32_t s) { return *(int64_t *)(uintptr_t)s; }
 void ruxen_sharedsync_drop(int32_t s) { (void)s; }
 
-/* --- tier 4.09 wasm fmt shim (gui-stack Q44) -------------------------------
- * The MIR interpolation lowerer emits the mangled callees Formatter_new /
- * Formatter_write_str / Formatter_buffer (NOT the ruxen_fmt_formatter_* FFI
- * aliases), and the wasm backend does not bridge mangled→C-symbol for them, so
- * they leak as host imports. Define them here over the already-bundled fmt.c so
- * string interpolation is self-contained on wasm. ABI matches the emitted call
- * sites: new()->i64, write_str(i32,i32)->void, buffer(i32)->i64. */
-struct RuxenFormatter;
-extern struct RuxenFormatter *ruxen_fmt_formatter_new(void);
-extern int64_t ruxen_fmt_formatter_write_str(struct RuxenFormatter *, const char *);
-extern const char *ruxen_fmt_formatter_buffer(struct RuxenFormatter *);
-int64_t Formatter_new(void) { return (int64_t)(uintptr_t)ruxen_fmt_formatter_new(); }
-void Formatter_write_str(int32_t f, int32_t s) { ruxen_fmt_formatter_write_str((struct RuxenFormatter *)(uintptr_t)f, (const char *)(uintptr_t)s); }
-int64_t Formatter_buffer(int32_t f) { return (int64_t)(uintptr_t)ruxen_fmt_formatter_buffer((struct RuxenFormatter *)(uintptr_t)f); }
-
 /* --- tier 4.09 host->wasm marshalling (gui-stack Q45) ----------------------
  * Export the bundled allocator so a JS host can allocate a buffer inside wasm
  * linear memory, write a NUL-terminated UTF-8 string into it, and pass the

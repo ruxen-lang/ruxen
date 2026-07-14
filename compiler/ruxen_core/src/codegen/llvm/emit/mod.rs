@@ -56,7 +56,7 @@ pub fn compile_program<'ctx>(
     // zero_rust_stdlib_classes.spec.md ABI-derivation migration.
     for lib in &program.ffi_libs {
         for ffi_fn in &lib.functions {
-            declare_ffi_function(module, context, ffi_fn, &lib.name, is_wasm);
+            declare_ffi_function(module, context, ffi_fn, is_wasm);
         }
     }
 
@@ -220,7 +220,6 @@ fn declare_ffi_function<'ctx>(
     module: &Module<'ctx>,
     context: &'ctx Context,
     ffi_fn: &FfiFuncDecl,
-    lib_name: &str,
     is_wasm: bool,
 ) {
     if module.get_function(&ffi_fn.name).is_some() {
@@ -264,22 +263,6 @@ fn declare_ffi_function<'ctx>(
     // (Custom import modules would need attrs gated on "not in the linked set" —
     // tier 4.09 follow-up.) `is_wasm` is kept for that future gating.
     let _ = is_wasm;
-
-    // Also register with lib-qualified name
-    if !lib_name.is_empty() {
-        let qualified = format!("{}_{}", lib_name, ffi_fn.name);
-        if module.get_function(&qualified).is_none() {
-            // Create an alias by adding a second function that calls through
-            // For simplicity, just add the function under both names
-            module.add_function(
-                &qualified,
-                fn_type,
-                Some(inkwell::module::Linkage::External),
-            );
-        }
-    }
-
-    let _ = llvm_fn; // suppress unused warning
 }
 
 /// Compile a single MIR function into LLVM IR.
