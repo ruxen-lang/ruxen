@@ -473,11 +473,11 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1122",
         title: "alias name collides with an existing definition",
     },
-    // E1123 fires for an operator-spelled alias new-name or target
-    // (`alias << push`, `alias [] get`) — staged for Tier 2 (ADR D6).
+    // E1123 fires when an operator-spelled alias new-name or target has no
+    // surface expression dispatch path (`alias +@ value`, ADR D6).
     CodeInfo {
         code: "E1123",
-        title: "operator aliases are not yet supported",
+        title: "operator alias has no supported expression dispatch path",
     },
     // ── no_std / embedded (E1400-E1499) ──────────────────────────────
     // Tier 4.04. E1400 fires when a no_std compilation unit constructs a

@@ -40,6 +40,10 @@ pub struct MixinResolver {
     /// (both required method signatures and default methods). Used to
     /// dispatch method calls on a generic `T: Trait` receiver.
     trait_method_sigs: HashMap<String, HashMap<String, Vec<FnSignature>>>,
+    /// Subset of `trait_method_sigs` backed by actual default bodies. Alias
+    /// registration uses this to avoid treating an unimplemented requirement
+    /// as a callable alias target with no emitted body.
+    trait_default_method_sigs: HashMap<String, HashMap<String, Vec<FnSignature>>>,
     /// trait_name → its declared generic parameter NAMES, in order
     /// (`mixin Enumerable[T]` → `["T"]`). Paired with `mixin_include_args`
     /// to recover the mixin-element binding an including class chose.
@@ -73,6 +77,7 @@ impl MixinResolver {
             nominal_impls: HashMap::new(),
             type_methods: HashMap::new(),
             trait_method_sigs: HashMap::new(),
+            trait_default_method_sigs: HashMap::new(),
             trait_generic_params: HashMap::new(),
             mixin_include_args: HashMap::new(),
         }
@@ -339,8 +344,9 @@ impl MixinResolver {
 
     /// Register Ruby `alias new old` method synonyms (resolver
     /// `method_aliases`: type → {alias → canonical}). For each alias, clone the
-    /// canonical method's already-registered signature under the alias NAME so
-    /// a call via the alias type-checks identically (same arity/params/return).
+    /// canonical method's signature under the alias NAME so a call via the alias
+    /// type-checks identically (same arity/params/return). Type-owned methods win;
+    /// an included mixin's default-body signature is the fallback.
     /// MIR separately rewrites the alias name to the canonical at symbol-mangle
     /// time, so this adds NO method body — it is a pure synonym
     /// (docs/decisions/alias-keyword.md, D2). Run AFTER
@@ -355,11 +361,26 @@ impl MixinResolver {
             // registered for the type, collecting synonym entries first so we
             // don't borrow `type_methods` mutably while reading it.
             let mut synonyms: Vec<(String, FnSignature)> = Vec::new();
-            if let Some(meths) = self.type_methods.get(type_name) {
-                for (alias, canonical) in aliases {
-                    if let Some(m) = meths.iter().find(|m| &m.name == canonical) {
-                        synonyms.push((alias.clone(), m.signature.clone()));
-                    }
+            for (alias, canonical) in aliases {
+                let own_signature = self
+                    .type_methods
+                    .get(type_name)
+                    .and_then(|meths| meths.iter().find(|m| &m.name == canonical))
+                    .map(|m| m.signature.clone());
+                let signature = own_signature.or_else(|| {
+                    self.nominal_impls
+                        .keys()
+                        .filter(|(target, _)| target == type_name)
+                        .find_map(|(_, mixin)| {
+                            self.trait_default_method_sigs
+                                .get(mixin)
+                                .and_then(|methods| methods.get(canonical))
+                                .and_then(|signatures| signatures.first())
+                                .cloned()
+                        })
+                });
+                if let Some(signature) = signature {
+                    synonyms.push((alias.clone(), signature));
                 }
             }
             if synonyms.is_empty() {
@@ -802,6 +823,7 @@ impl MixinResolver {
             HirItem::Mixin(tdef) => {
                 use crate::resolve::symbols::ParamInfo;
                 let mut new_entries: Vec<(String, FnSignature)> = Vec::new();
+                let mut default_entries: Vec<(String, FnSignature)> = Vec::new();
                 for ti in &tdef.items {
                     match ti {
                         HirMixinItem::MethodSig {
@@ -832,7 +854,9 @@ impl MixinResolver {
                             new_entries.push((name.clone(), sig));
                         }
                         HirMixinItem::DefaultMethod(f) => {
-                            new_entries.push((f.name.clone(), self.func_to_sig(f)));
+                            let signature = self.func_to_sig(f);
+                            new_entries.push((f.name.clone(), signature.clone()));
+                            default_entries.push((f.name.clone(), signature));
                         }
                         HirMixinItem::AssocType { .. } => {}
                     }
@@ -840,6 +864,13 @@ impl MixinResolver {
                 let entry = self.trait_method_sigs.entry(tdef.name.clone()).or_default();
                 for (k, v) in new_entries {
                     entry.entry(k).or_default().push(v);
+                }
+                let defaults = self
+                    .trait_default_method_sigs
+                    .entry(tdef.name.clone())
+                    .or_default();
+                for (k, v) in default_entries {
+                    defaults.entry(k).or_default().push(v);
                 }
                 // Record the mixin's declared generic param names so an
                 // including class's `Enumerable[(K, V)]` args can be mapped

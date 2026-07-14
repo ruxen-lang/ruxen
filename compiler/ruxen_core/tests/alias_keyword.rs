@@ -2,7 +2,7 @@
 //!
 //! Covers the assertions the release-e2e stdout fixtures cannot: the alias
 //! diagnostics (E1120 unknown target, E1122 collision/self-alias, E1123 staged
-//! operator alias) and the fmt byte-stability of the alias item. The runtime
+//! unsupported operator alias) and the fmt byte-stability of the alias item. The runtime
 //! synonym behaviour (a/b/c/e/f/j) is pinned by the release-e2e cases
 //! (913–918) which compile + run + assert stdout; a couple are mirrored here
 //! in-process for a fast, hermetic signal.
@@ -179,25 +179,104 @@ end
     );
 }
 
-/// Pin (d): an operator-spelled alias is staged → E1123 (ADR D6).
+/// Follow-up pin: a binary operator alias routes to the canonical method body.
 #[test]
-fn operator_alias_is_staged_e1123() {
+fn shift_operator_alias_dispatches_to_target() {
     let source = r##"
 class V
-  def push(x: Int) -> Int
-    x
+  value: Int
+  def init
+    self.value = 0
+  end
+  def push(x: Int) -> nil
+    self.value = x
   end
   alias << push
 end
 def main
   let v = V.new
-  puts "#{v.push(1)}"
+  v << 41
+  puts "#{v.value}"
+end
+"##;
+    let (stdout, stderr, code) = compile_and_run(source, "alias_shift_operator");
+    assert_eq!(code, Some(0), "stderr={stderr:?}");
+    assert_eq!(stdout, "41\n", "stdout was {stdout:?}");
+}
+
+/// Follow-up pin: index read/write aliases route to their canonical bodies.
+#[test]
+fn index_operator_aliases_dispatch_to_targets() {
+    let source = r##"
+class V
+  value: Int
+  def init
+    self.value = 0
+  end
+  def get(index: Int) -> Int
+    self.value
+  end
+  def set(index: Int, value: Int) -> nil
+    self.value = value
+  end
+  alias [] get
+  alias []= set
+end
+def main
+  let v = V.new
+  v[0] = 42
+  puts "#{v[0]}"
+end
+"##;
+    let (stdout, stderr, code) = compile_and_run(source, "alias_index_operators");
+    assert_eq!(code, Some(0), "stderr={stderr:?}");
+    assert_eq!(stdout, "42\n", "stdout was {stdout:?}");
+}
+
+/// Follow-up pin: an included mixin's default body can be an alias target.
+#[test]
+fn mixin_default_method_can_be_alias_target() {
+    let source = r##"
+mixin Greeting
+  def greeting -> Int
+    43
+  end
+end
+class Greeter
+  include Greeting
+  def init
+  end
+  alias salute greeting
+end
+def main
+  let g = Greeter.new
+  puts "#{g.salute}"
+end
+"##;
+    let (stdout, stderr, code) = compile_and_run(source, "alias_mixin_default");
+    assert_eq!(code, Some(0), "stderr={stderr:?}");
+    assert_eq!(stdout, "43\n", "stdout was {stdout:?}");
+}
+
+/// `+@` has no surface operator expression and remains staged with E1123.
+#[test]
+fn unsupported_unary_plus_alias_is_e1123() {
+    let source = r##"
+class V
+  def value -> Int
+    1
+  end
+  alias +@ value
+end
+def main
+  let v = V.new
+  puts "#{v.value}"
 end
 "##;
     let errors = typecheck_errors(source);
     assert!(
         errors.iter().any(|(code, _)| code == "E1123"),
-        "expected E1123 for operator alias, got {errors:?}"
+        "expected E1123 for unsupported +@ alias, got {errors:?}"
     );
 }
 

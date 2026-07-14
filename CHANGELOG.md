@@ -19,6 +19,12 @@ once 1.0.0 ships.
   Release-e2e pin `473` combines the bootstrap-shaped closure call with an
   unrelated stored `any Future` poll and runs successfully; the focused typeck
   regression pins the same ordering.
+- **Ruby `alias` follow-ups.** Operator aliases now dispatch through the existing
+  canonical method-name map for `+ - * / % & | ^ << >>`, unary `!`/`-@`, and
+  `[]`/`[]=`; unsupported unary `+@` remains a hard E1123. Aliases may also target
+  a method inherited solely from an included mixin's default body, while a type's
+  own implementation keeps precedence and an absent target remains E1120.
+  Release-e2e pins 470–472 cover shift, index read/write, and default dispatch.
 - **Q46: paren-less no-argument constructors now initialize runtime-mixin
   metadata.** `Class.new` now writes the class-info header after allocation,
   matching `Class.new()`, so moving the value into an `any Mixin` field and

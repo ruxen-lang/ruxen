@@ -5,8 +5,8 @@
 //! live in `parser/classes.rs`; this module dispatches into them.
 
 use crate::lexer::token::TokenKind;
-use crate::parser::ast::*;
 use crate::parser::Parser;
+use crate::parser::ast::*;
 
 impl Parser {
     pub(super) fn parse_top_level_item(&mut self) -> Option<TopLevelItem> {
@@ -149,9 +149,10 @@ impl Parser {
     pub(super) fn is_alias_item_start(&self) -> bool {
         matches!(self.current_kind(), TokenKind::Identifier(s) if s == "alias")
             && (matches!(self.peek_kind(), TokenKind::Identifier(_))
-                // An operator-spelled new name (`alias << push`) is parsed
-                // too, so resolve can emit the staged E1123 rather than the
-                // parser tripping a generic error (ADR D6).
+                // Operator-spelled new names (`alias << push`, `alias [] get`)
+                // are parsed too; resolve admits operators with expression
+                // dispatch paths and emits E1123 for the remaining staged
+                // forms (ADR D6).
                 || Self::is_operator_name_start(&self.peek_kind()))
     }
 
@@ -163,9 +164,9 @@ impl Parser {
     pub(super) fn parse_alias_item(&mut self) -> AliasDef {
         let start = self.current_span();
         self.advance(); // consume the `alias` contextual keyword
-                        // `parse_def_name` accepts both plain/`?`/`!` identifiers and
-                        // operator-symbol names (`<<`, `[]`); operator names are caught at
-                        // resolve with E1123 (ADR D6), so they parse cleanly here.
+        // `parse_def_name` accepts both plain/`?`/`!` identifiers and
+        // operator-symbol names (`<<`, `[]`); resolve admits supported
+        // operator dispatch paths and rejects the rest with E1123 (ADR D6).
         let new_name = self.parse_def_name();
         // Ruby's `alias` takes NO comma. Reject the comma form explicitly so
         // the diagnostic is actionable instead of a generic "expected
