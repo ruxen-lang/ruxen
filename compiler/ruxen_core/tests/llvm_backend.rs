@@ -115,6 +115,90 @@ backend_test!(sample_program_identical, "sample_program.rx");
 backend_test!(drop_owned_struct_identical, "drop_owned_struct.rx");
 
 #[test]
+fn q49_branch_scoped_string_drops_stay_in_their_arms() {
+    let source = std::fs::read_to_string("tests/fixtures/control_flow.rx").unwrap();
+    let mir = lower_to_mir(&source);
+    let main = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main MIR function");
+
+    let mut arm_owned_locals = Vec::new();
+    for expected in ["positive", "non-positive"] {
+        let (block, literal_local) = main
+            .blocks
+            .iter()
+            .find_map(|block| {
+                block.instructions.iter().find_map(|inst| match inst {
+                    ruxen_core::mir::nodes::MirInst::StringLiteral { dest, value }
+                        if value == expected =>
+                    {
+                        Some((block, *dest))
+                    }
+                    _ => None,
+                })
+            })
+            .unwrap_or_else(|| panic!("missing {expected:?} StringLiteral arm"));
+        let owned_local = block
+            .instructions
+            .iter()
+            .find_map(|inst| match inst {
+                ruxen_core::mir::nodes::MirInst::Call {
+                    dest: Some(dest),
+                    callee,
+                    args,
+                } if callee == "ruxen_string_from"
+                    && matches!(args.as_slice(), [ruxen_core::mir::nodes::MirValue::Use(local)] if *local == literal_local) =>
+                {
+                    Some(*dest)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing owned wrapper for {expected:?}"));
+        assert!(
+            block.instructions.iter().any(|inst| matches!(
+                inst,
+                ruxen_core::mir::nodes::MirInst::Call { dest: None, callee, args }
+                    if callee == "ruxen_string_free"
+                        && matches!(args.as_slice(), [ruxen_core::mir::nodes::MirValue::Use(local)] if *local == owned_local)
+            )),
+            "Q49 regression: local {owned_local} is not freed inside its initializing arm"
+        );
+        assert!(
+            block.instructions.iter().any(|inst| matches!(
+                inst,
+                ruxen_core::mir::nodes::MirInst::Drop { local } if *local == owned_local
+            )),
+            "Q49 regression: local {owned_local} lacks its arm-local Drop marker"
+        );
+        assert!(matches!(
+            block.terminator,
+            ruxen_core::mir::nodes::Terminator::Goto(_)
+        ));
+        arm_owned_locals.push(owned_local);
+    }
+
+    for block in &main.blocks {
+        if !matches!(
+            block.terminator,
+            ruxen_core::mir::nodes::Terminator::Return(_)
+        ) {
+            continue;
+        }
+        assert!(
+            !block.instructions.iter().any(|inst| matches!(
+                inst,
+                ruxen_core::mir::nodes::MirInst::Call { callee, args, .. }
+                    if callee == "ruxen_string_free"
+                        && matches!(args.as_slice(), [ruxen_core::mir::nodes::MirValue::Use(local)] if arm_owned_locals.contains(local))
+            )),
+            "Q49 regression: a branch-only String free was hoisted to Return"
+        );
+    }
+}
+
+#[test]
 fn q48_llvm_ffi_alias_calls_reference_only_c_symbols() {
     let source = r#"
 def main

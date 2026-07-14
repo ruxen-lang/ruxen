@@ -1,10 +1,11 @@
 use super::*;
 
-/// Insert `MirInst::Drop` instructions for all locals that have Move semantics
-/// before every `Terminator::Return` in the function.
+/// Insert `MirInst::Drop` instructions for all locals that have Move semantics.
 ///
 /// Drops are inserted in **reverse declaration order** (LIFO: last declared,
-/// first dropped). We skip:
+/// first dropped). Branch-local values are destroyed in their defining block;
+/// values shared across blocks are destroyed at returns, guarded by definite-
+/// initialization flags when not every path initializes them. We skip:
 /// - Copy types (primitives, references, bools, etc.)
 /// - Parameters (owned by the caller)
 /// - Any local that appears as the value of a `Return` terminator
@@ -315,6 +316,271 @@ fn closure_drop_callees(
     owners
 }
 
+fn value_uses_local(value: &MirValue, local: LocalId) -> bool {
+    matches!(value, MirValue::Use(candidate) if *candidate == local)
+}
+
+fn instruction_initializes_local(inst: &MirInst, local: LocalId) -> bool {
+    match inst {
+        MirInst::Assign { dest, value } => {
+            *dest == local && !matches!(value, MirValue::Literal(Literal::Int(0)))
+        }
+        MirInst::BinOp { dest, .. }
+        | MirInst::Negate { dest, .. }
+        | MirInst::Not { dest, .. }
+        | MirInst::Compare { dest, .. }
+        | MirInst::Alloc { dest, .. }
+        | MirInst::StackAlloc { dest, .. }
+        | MirInst::GetField { dest, .. }
+        | MirInst::GetTag { dest, .. }
+        | MirInst::GetPayload { dest, .. }
+        | MirInst::Ref { dest, .. }
+        | MirInst::RefMut { dest, .. }
+        | MirInst::Copy { dest, .. }
+        | MirInst::Move { dest, .. }
+        | MirInst::StringLiteral { dest, .. }
+        | MirInst::FuncAddr { dest, .. }
+        | MirInst::FloatToBits { dest, .. }
+        | MirInst::DataAddr { dest, .. } => *dest == local,
+        MirInst::Call {
+            dest: Some(dest), ..
+        }
+        | MirInst::CallIndirect {
+            dest: Some(dest), ..
+        } => *dest == local,
+        MirInst::Call { dest: None, .. }
+        | MirInst::CallIndirect { dest: None, .. }
+        | MirInst::SetField { .. }
+        | MirInst::SetTag { .. }
+        | MirInst::Drop { .. }
+        | MirInst::Nop => false,
+    }
+}
+
+fn instruction_clears_local(inst: &MirInst, local: LocalId) -> bool {
+    match inst {
+        MirInst::Assign { dest, value } => {
+            (*dest == local && matches!(value, MirValue::Literal(Literal::Int(0))))
+                || (*dest != local && value_uses_local(value, local))
+        }
+        MirInst::Copy { dest, src } | MirInst::Move { dest, src } => {
+            *dest != local && *src == local
+        }
+        MirInst::SetField { value, .. } => value_uses_local(value, local),
+        MirInst::Drop { local: dropped } => *dropped == local,
+        _ => false,
+    }
+}
+
+fn initialized_after_block(block: &BasicBlock, local: LocalId, mut initialized: bool) -> bool {
+    for inst in &block.instructions {
+        if instruction_clears_local(inst, local) {
+            initialized = false;
+        }
+        if instruction_initializes_local(inst, local) {
+            initialized = true;
+        }
+    }
+    initialized
+}
+
+fn instruction_mentions_local(inst: &MirInst, local: LocalId) -> bool {
+    match inst {
+        MirInst::Assign { dest, value } => *dest == local || value_uses_local(value, local),
+        MirInst::BinOp { dest, lhs, rhs, .. } | MirInst::Compare { dest, lhs, rhs, .. } => {
+            *dest == local || value_uses_local(lhs, local) || value_uses_local(rhs, local)
+        }
+        MirInst::Negate { dest, operand } | MirInst::Not { dest, operand } => {
+            *dest == local || value_uses_local(operand, local)
+        }
+        MirInst::Call { dest, args, .. } => {
+            *dest == Some(local) || args.iter().any(|arg| value_uses_local(arg, local))
+        }
+        MirInst::Alloc { dest, .. }
+        | MirInst::StackAlloc { dest, .. }
+        | MirInst::StringLiteral { dest, .. }
+        | MirInst::FuncAddr { dest, .. }
+        | MirInst::DataAddr { dest, .. } => *dest == local,
+        MirInst::GetField { dest, base, .. } => *dest == local || *base == local,
+        MirInst::SetField { base, value, .. } => *base == local || value_uses_local(value, local),
+        MirInst::SetTag { dest, .. } => *dest == local,
+        MirInst::GetTag { dest, src }
+        | MirInst::Ref { dest, src }
+        | MirInst::RefMut { dest, src }
+        | MirInst::Copy { dest, src }
+        | MirInst::Move { dest, src }
+        | MirInst::FloatToBits { dest, src } => *dest == local || *src == local,
+        MirInst::GetPayload { dest, src, .. } => *dest == local || *src == local,
+        MirInst::Drop { local: candidate } => *candidate == local,
+        MirInst::CallIndirect {
+            dest, callee, args, ..
+        } => {
+            *dest == Some(local)
+                || *callee == local
+                || args.iter().any(|arg| value_uses_local(arg, local))
+        }
+        MirInst::Nop => false,
+    }
+}
+
+fn terminator_mentions_local(terminator: &Terminator, local: LocalId) -> bool {
+    match terminator {
+        Terminator::Return(value) => value
+            .as_ref()
+            .is_some_and(|value| value_uses_local(value, local)),
+        Terminator::Branch { cond, .. } => value_uses_local(cond, local),
+        Terminator::Switch { value, .. } => value_uses_local(value, local),
+        Terminator::Goto(_) | Terminator::Unreachable => false,
+    }
+}
+
+fn terminator_successors(terminator: &Terminator) -> Vec<BlockId> {
+    match terminator {
+        Terminator::Goto(target) => vec![*target],
+        Terminator::Branch {
+            then_block,
+            else_block,
+            ..
+        } => vec![*then_block, *else_block],
+        Terminator::Switch {
+            targets, otherwise, ..
+        } => {
+            let mut successors: Vec<BlockId> = targets.iter().map(|(_, target)| *target).collect();
+            successors.push(*otherwise);
+            successors
+        }
+        Terminator::Return(_) | Terminator::Unreachable => Vec::new(),
+    }
+}
+
+fn reachable_blocks(func: &MirFunction) -> Vec<bool> {
+    let mut reachable = vec![false; func.blocks.len()];
+    let mut pending = vec![func.entry_block];
+    while let Some(block_id) = pending.pop() {
+        if block_id >= func.blocks.len() || reachable[block_id] {
+            continue;
+        }
+        reachable[block_id] = true;
+        pending.extend(terminator_successors(&func.blocks[block_id].terminator));
+    }
+    reachable
+}
+
+fn local_initialized_at_all_returns(
+    func: &MirFunction,
+    local: LocalId,
+    reachable: &[bool],
+) -> bool {
+    let mut predecessors: Vec<Vec<BlockId>> = vec![Vec::new(); func.blocks.len()];
+    for (block_id, block) in func.blocks.iter().enumerate() {
+        if !reachable[block_id] {
+            continue;
+        }
+        for successor in terminator_successors(&block.terminator) {
+            if successor < func.blocks.len() && reachable[successor] {
+                predecessors[successor].push(block_id);
+            }
+        }
+    }
+
+    let mut initialized_in = vec![true; func.blocks.len()];
+    let mut initialized_out = vec![true; func.blocks.len()];
+    initialized_in[func.entry_block] = false;
+    initialized_out[func.entry_block] =
+        initialized_after_block(&func.blocks[func.entry_block], local, false);
+
+    loop {
+        let mut changed = false;
+        for block_id in 0..func.blocks.len() {
+            if !reachable[block_id] {
+                continue;
+            }
+            let new_in = if block_id == func.entry_block {
+                false
+            } else if predecessors[block_id].is_empty() {
+                false
+            } else {
+                predecessors[block_id]
+                    .iter()
+                    .all(|predecessor| initialized_out[*predecessor])
+            };
+            let new_out = initialized_after_block(&func.blocks[block_id], local, new_in);
+            changed |= initialized_in[block_id] != new_in || initialized_out[block_id] != new_out;
+            initialized_in[block_id] = new_in;
+            initialized_out[block_id] = new_out;
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    func.blocks.iter().enumerate().all(|(block_id, block)| {
+        !reachable[block_id]
+            || !matches!(block.terminator, Terminator::Return(_))
+            || initialized_out[block_id]
+    })
+}
+
+fn block_reaches(func: &MirFunction, start: BlockId, target: BlockId) -> bool {
+    let mut visited = vec![false; func.blocks.len()];
+    let mut pending = vec![start];
+    while let Some(block_id) = pending.pop() {
+        if block_id == target {
+            return true;
+        }
+        if block_id >= func.blocks.len() || visited[block_id] {
+            continue;
+        }
+        visited[block_id] = true;
+        pending.extend(terminator_successors(&func.blocks[block_id].terminator));
+    }
+    false
+}
+
+fn branch_local_drop_blocks(
+    func: &MirFunction,
+    locals: &HashSet<LocalId>,
+    reachable: &[bool],
+) -> HashMap<BlockId, Vec<LocalId>> {
+    let mut placements: HashMap<BlockId, Vec<LocalId>> = HashMap::new();
+    for &local in locals {
+        if local_initialized_at_all_returns(func, local, reachable) {
+            continue;
+        }
+        let mention_blocks: Vec<BlockId> = func
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, block)| {
+                block
+                    .instructions
+                    .iter()
+                    .any(|inst| instruction_mentions_local(inst, local))
+                    || terminator_mentions_local(&block.terminator, local)
+            })
+            .map(|(block_id, _)| block_id)
+            .collect();
+        let [block_id] = mention_blocks.as_slice() else {
+            continue;
+        };
+        let block = &func.blocks[*block_id];
+        let Terminator::Goto(target) = block.terminator else {
+            continue;
+        };
+        if !reachable[*block_id]
+            || block_reaches(func, target, *block_id)
+            || !initialized_after_block(block, local, false)
+        {
+            continue;
+        }
+        placements.entry(*block_id).or_default().push(local);
+    }
+    for locals in placements.values_mut() {
+        locals.sort_unstable_by(|left, right| right.cmp(left));
+    }
+    placements
+}
+
 pub(super) fn insert_drops(
     func: &mut MirFunction,
     return_locals: &HashSet<LocalId>,
@@ -537,81 +803,187 @@ pub(super) fn insert_drops(
         })
         .collect();
 
-    // For each block that ends with a Return terminator, insert Drop
-    // instructions (in reverse declaration order) before the return.
-    for block in &mut func.blocks {
-        if matches!(block.terminator, Terminator::Return(_)) {
-            let mut all_drop_locals = drop_locals.clone();
-            all_drop_locals.extend(closure_drop_callees.keys().copied());
-            all_drop_locals.sort_unstable();
-            all_drop_locals.dedup();
-            // Insert drops in reverse declaration order (LIFO).
-            for &local_id in all_drop_locals.iter().rev() {
-                if let Some(callee) = closure_drop_callees.get(&local_id) {
-                    block.instructions.push(MirInst::Call {
+    let mut all_drop_locals = drop_locals.clone();
+    all_drop_locals.extend(closure_drop_callees.keys().copied());
+    all_drop_locals.sort_unstable();
+    all_drop_locals.dedup();
+
+    let drop_instructions: HashMap<LocalId, Vec<MirInst>> = all_drop_locals
+        .iter()
+        .map(|&local_id| {
+            let mut instructions = Vec::new();
+            if let Some(callee) = closure_drop_callees.get(&local_id) {
+                instructions.push(MirInst::Call {
+                    dest: None,
+                    callee: callee.clone(),
+                    args: vec![MirValue::Use(local_id)],
+                });
+                instructions.push(MirInst::Drop { local: local_id });
+                return (local_id, instructions);
+            }
+
+            // User-defined `def drop` runs first, while the allocation is live.
+            // Ownership-tainted values and a class's own drop body remain
+            // excluded exactly as they were under return-only placement.
+            if !in_user_drop_method && dealloc_safe.contains(&local_id) {
+                if let Some(callee) = drop_callees.get(&local_id) {
+                    instructions.push(MirInst::Call {
                         dest: None,
                         callee: callee.clone(),
                         args: vec![MirValue::Use(local_id)],
                     });
-                    block.instructions.push(MirInst::Drop { local: local_id });
-                    continue;
                 }
-                // 1) User-defined `def drop` runs first (if any), so the
-                //    body still sees the live allocation. Skip when we're
-                //    already lowering that class's own drop method to
-                //    avoid infinite self-recursion.
-                //
-                //    Gate the drop call on `dealloc_safe` so we don't
-                //    run the destructor on a value whose ownership has
-                //    been transferred (otherwise builder patterns like
-                //    `let cmd = Command.new(p); cmd.arg(a)` would
-                //    double-`Command_drop` — once on the `arg` return
-                //    temp, once on the now-tainted `cmd`). This is also
-                //    semantically correct: dropping a moved-from value
-                //    should be a no-op everywhere.
-                if !in_user_drop_method && dealloc_safe.contains(&local_id) {
-                    if let Some(callee) = drop_callees.get(&local_id) {
-                        block.instructions.push(MirInst::Call {
-                            dest: None,
-                            callee: callee.clone(),
-                            args: vec![MirValue::Use(local_id)],
-                        });
-                    }
-                }
-                // 2) Heap-allocated values need their backing memory
-                // freed at scope exit. `MirInst::Drop` itself remains a
-                // no-op in both backends — the free call we emit just
-                // below is what releases memory.
-                //
-                // Only emit the free when we can prove the local owns a
-                // fresh allocation (see `compute_dealloc_safe_locals`).
-                // The callee depends on the local's type:
-                //   * Class/Struct/Enum     → `ruxen_dealloc`
-                //   * String                → `ruxen_string_free`
-                //   * Vec[_]                → `ruxen_vec_free` (spine only)
-                //   * HashMap[_, _]         → `ruxen_hash_free` (spine only)
-                if dealloc_safe.contains(&local_id) {
-                    let local = func
-                        .locals
-                        .iter()
-                        .find(|l| l.id == local_id)
-                        .expect("drop_locals references a missing local");
-                    let drop_callee = heap_free_callee(&local.ty).unwrap_or_else(|| {
-                        // Unreachable: the drop_locals filter above restricts to
-                        // exactly the variants `heap_free_callee` handles. Panic
-                        // rather than silently mis-free so a future widening of
-                        // the filter surfaces immediately.
-                        unimplemented!("insert_drops: no drop callee for type {:?}", local.ty)
+            }
+
+            // `MirInst::Drop` is a backend no-op; this type-directed call is
+            // the actual free and remains gated by exclusive alloc provenance.
+            if dealloc_safe.contains(&local_id) {
+                let local = func
+                    .locals
+                    .iter()
+                    .find(|candidate| candidate.id == local_id)
+                    .expect("drop_locals references a missing local");
+                let drop_callee = heap_free_callee(&local.ty).unwrap_or_else(|| {
+                    unimplemented!("insert_drops: no drop callee for type {:?}", local.ty)
+                });
+                instructions.push(MirInst::Call {
+                    dest: None,
+                    callee: drop_callee.to_string(),
+                    args: vec![MirValue::Use(local_id)],
+                });
+            }
+            instructions.push(MirInst::Drop { local: local_id });
+            (local_id, instructions)
+        })
+        .collect();
+
+    // A marker-only Drop never reads the local in either backend. Only locals
+    // with real closure/user/free glue need path-sensitive placement.
+    let active_drop_locals: HashSet<LocalId> = all_drop_locals
+        .iter()
+        .copied()
+        .filter(|local| closure_drop_callees.contains_key(local) || dealloc_safe.contains(local))
+        .collect();
+    let reachable = reachable_blocks(func);
+    let sink_placements = branch_local_drop_blocks(func, &active_drop_locals, &reachable);
+    let sunk_locals: HashSet<LocalId> = sink_placements.values().flatten().copied().collect();
+
+    // Confined, acyclic branch locals can be destroyed immediately before the
+    // branch's Goto. This is the zero-overhead path used by ordinary if/match
+    // arm temporaries.
+    for (block_id, locals) in sink_placements {
+        for local in locals {
+            func.blocks[block_id]
+                .instructions
+                .extend(drop_instructions[&local].clone());
+        }
+    }
+
+    let scope_drop_locals: Vec<LocalId> = all_drop_locals
+        .iter()
+        .copied()
+        .filter(|local| !sunk_locals.contains(local))
+        .collect();
+    let guarded_locals: HashSet<LocalId> = scope_drop_locals
+        .iter()
+        .copied()
+        .filter(|local| {
+            active_drop_locals.contains(local)
+                && !local_initialized_at_all_returns(func, *local, &reachable)
+        })
+        .collect();
+
+    // General CFG fallback: a local spanning multiple blocks but initialized
+    // on only some return paths gets one flag. False is installed at entry and
+    // true immediately after every initializing definition.
+    let mut drop_flags: HashMap<LocalId, LocalId> = HashMap::new();
+    for &local in &guarded_locals {
+        let flag = func.new_local(format!("__drop_flag_{}", local), Ty::Bool, true);
+        drop_flags.insert(local, flag);
+    }
+    if !drop_flags.is_empty() {
+        for block in &mut func.blocks {
+            let original = std::mem::take(&mut block.instructions);
+            for inst in original {
+                let mut flag_updates: Vec<(LocalId, bool)> = drop_flags
+                    .iter()
+                    .filter_map(|(&local, &flag)| {
+                        if instruction_initializes_local(&inst, local) {
+                            Some((flag, true))
+                        } else if instruction_clears_local(&inst, local) {
+                            Some((flag, false))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                flag_updates.sort_unstable_by_key(|(flag, _)| *flag);
+                block.instructions.push(inst);
+                for (flag, value) in flag_updates {
+                    block.instructions.push(MirInst::Assign {
+                        dest: flag,
+                        value: MirValue::Literal(Literal::Bool(value)),
                     });
-                    block.instructions.push(MirInst::Call {
-                        dest: None,
-                        callee: drop_callee.to_string(),
-                        args: vec![MirValue::Use(local_id)],
-                    });
                 }
-                block.instructions.push(MirInst::Drop { local: local_id });
             }
         }
+        let mut initializers: Vec<MirInst> = drop_flags
+            .values()
+            .copied()
+            .map(|flag| MirInst::Assign {
+                dest: flag,
+                value: MirValue::Literal(Literal::Bool(false)),
+            })
+            .collect();
+        initializers.sort_unstable_by_key(|inst| match inst {
+            MirInst::Assign { dest, .. } => *dest,
+            _ => unreachable!(),
+        });
+        initializers.append(&mut func.blocks[func.entry_block].instructions);
+        func.blocks[func.entry_block].instructions = initializers;
+    }
+
+    let return_blocks: Vec<BlockId> = func
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| matches!(block.terminator, Terminator::Return(_)))
+        .map(|(block_id, _)| block_id)
+        .collect();
+    for return_block in return_blocks {
+        let return_terminator = std::mem::replace(
+            &mut func.blocks[return_block].terminator,
+            Terminator::Unreachable,
+        );
+        let mut current = return_block;
+        for &local in scope_drop_locals.iter().rev() {
+            if let Some(&flag) = drop_flags.get(&local) {
+                let drop_block = func.blocks.len();
+                let continuation_block = drop_block + 1;
+                let mut drop_path = BasicBlock::new(drop_block);
+                drop_path
+                    .instructions
+                    .extend(drop_instructions[&local].clone());
+                drop_path.instructions.push(MirInst::Assign {
+                    dest: flag,
+                    value: MirValue::Literal(Literal::Bool(false)),
+                });
+                drop_path.terminator = Terminator::Goto(continuation_block);
+                func.blocks.push(drop_path);
+                func.blocks.push(BasicBlock::new(continuation_block));
+                func.blocks[current].terminator = Terminator::Branch {
+                    cond: MirValue::Use(flag),
+                    then_block: drop_block,
+                    else_block: continuation_block,
+                };
+                current = continuation_block;
+            } else {
+                func.blocks[current]
+                    .instructions
+                    .extend(drop_instructions[&local].clone());
+            }
+        }
+        func.blocks[current].terminator = return_terminator;
     }
 }
 
