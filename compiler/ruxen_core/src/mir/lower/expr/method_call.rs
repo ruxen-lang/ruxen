@@ -994,14 +994,40 @@ impl<'a> Lowerer<'a> {
                     mangled
                 };
 
-                // Q17 (staged boundary): a method call whose RECEIVER itself is
+                // Q17b: specialize a generic METHOD over a mixin bound using
+                // the concrete types of its user arguments. The receiver is
+                // already the fixed first MIR argument (`self`); it does not
+                // participate in recovery of the method's own `[T: Mixin]`.
+                let mut method_arg_tys: Vec<Ty> = args.iter().map(|arg| arg.ty.clone()).collect();
+                if let Some(block_expr) = block {
+                    method_arg_tys.push(block_expr.ty.clone());
+                }
+                let mangled = if *method != UNRESOLVED_DEF {
+                    if let Some(specialized) = self.method_mono_callee(*method, &method_arg_tys) {
+                        specialized
+                    } else if self.is_generic_mixin_method(*method) {
+                        return Err(format!(
+                            "cannot monomorphize generic method `{method_name}`: its \
+                             mixin-bound type argument did not resolve to a concrete type at \
+                             this call site (generic-calling-generic across methods requires \
+                             a concrete leaf — see docs/decisions/q17-cross-package-\
+                             monomorphization.md)."
+                        ));
+                    } else {
+                        mangled
+                    }
+                } else {
+                    mangled
+                };
+
+                // Sound residual boundary: a method call whose RECEIVER itself is
                 // a still-abstract, mixin-bound type parameter (`item.width`
                 // where `item: &var T, T: Sized`) with NO unique implementor
                 // would mangle to a bound-PLACEHOLDER callee (`T: Sized_width`)
-                // that link-fails. This is the generic METHOD over a mixin case
-                // (a generic `def` inside a class), which this pass does NOT yet
-                // monomorphize (generic FREE functions ARE — see Q17 ADR). We
-                // detect it STRUCTURALLY on the peeled receiver type, NOT by
+                // that link-fails. Q17/Q17b substitution normally makes this
+                // receiver concrete before lowering. If an unsupported
+                // generic-through-generic shape remains, detect it structurally
+                // on the peeled receiver type, NOT by
                 // string-matching the mangled callee: a concrete receiver with a
                 // bounded generic ARG (`Array[T: Showable]`) also stringifies
                 // with `": "` but is a sound builtin call, so it must not trip
@@ -1010,12 +1036,10 @@ impl<'a> Lowerer<'a> {
                 // `unique_bound_impl` already resolved a concrete `resolved_class`.
                 if self.receiver_is_unresolved_bound(&object.ty) {
                     return Err(format!(
-                        "cannot monomorphize generic method `{method_name}` over the \
-                         mixin-bound type parameter `{resolved_class}`: a generic METHOD \
-                         over a mixin with ≥2 implementors is not yet supported (generic \
-                         free functions are — see docs/decisions/q17-cross-package-\
-                         monomorphization.md). Move the generic over the mixin into a \
-                         free function `def {method_name}[T: <bound>](recv: &var T, …)`."
+                        "cannot lower method `{method_name}` on unresolved mixin-bound \
+                         receiver `{resolved_class}`: no concrete monomorphization reached \
+                         this call (generic-calling-generic requires a concrete leaf — see \
+                         docs/decisions/q17-cross-package-monomorphization.md)."
                     ));
                 }
 

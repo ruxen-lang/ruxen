@@ -1,8 +1,9 @@
-# ADR: Q17 — generic-free-function / mixin-bound monomorphization for consumer types
+# ADR: Q17/Q17b — generic callable / mixin-bound monomorphization
 
 Status: Accepted (2026-06-10)
+Updated: Q17b method completion (2026-07-14)
 Branch: `feat/drop-elaboration`
-Scope: `compiler/ruxen_core/src/mir/lower/{monomorphize.rs, mod.rs, expr/method_call.rs}`
+Scope: `compiler/ruxen_core/src/mir/lower/{monomorphize.rs, mod.rs, expr/fn_call.rs, expr/method_call.rs, expr/field_access.rs}`
 
 ## TL;DR
 
@@ -87,9 +88,10 @@ fast path so quiver's current shape emits byte-identical code.
 Concretely, three coordinated changes, all in MIR lowering (shared by both
 backends — they consume `MirProgram`, so no backend-specific work):
 
-1. **Collect free-fn/method instantiations (demand-driven).** A new pass
-   `collect_generic_fn_instances` walks every `HirExprKind::FnCall` /
-   `MethodCall` in the program. For a callee that is a generic function (≥1
+1. **Collect free-fn/method instantiations (demand-driven).** The
+   `collect_generic_fn_instances` and `collect_generic_method_instances` passes
+   walk `HirExprKind::FnCall` / resolved `MethodCall` nodes. For a callee that is
+   generic (≥1
    `generic_param`) with at least one **mixin-bounded** type param, it unifies
    the callee's declared param types against the call's actual (concrete) arg
    `.ty`s to recover `{ T → ConcreteTy }`. Only **fully-concrete** bindings
@@ -98,11 +100,15 @@ backends — they consume `MirProgram`, so no backend-specific work):
    This is demand-driven: only `(callee, type-args)` pairs that actually appear
    in a call are recorded, so there is no combinatorial blowup.
 
-2. **Emit one specialized body per instantiation.** `emit_generic_fn_instances`
-   clones the callee `HirFuncDef`, runs the EXISTING
+2. **Emit one specialized body per instantiation.**
+   `emit_generic_fn_instances` / `emit_generic_method_instances` clone the
+   callee `HirFuncDef`, run the existing
    `trait_default::subst_type_params_in_func` with the recovered substitution
    (`T → TallySurface`), and lowers it under a mangled name
-   `paint_all__mono__TallySurface`. After substitution the receiver param's
+   `paint_all__mono__TallySurface` or
+   `Frame_measure_scaled__mono__Wide`. Method copies lower through
+   `lower_method`, retaining fixed `self` as their first parameter. After
+   substitution the bounded parameter's
    `.ty` is `&var TallySurface` (concrete), so the body's `s.fill_rect(...)`
    lowers through the ordinary `Ty::Class` dispatch arm to
    `TallySurface_fill_rect` — no new dispatch logic, the existing concrete-class
@@ -110,30 +116,22 @@ backends — they consume `MirProgram`, so no backend-specific work):
    method bodies; we reuse `MONO_SEP` and the `mono_base`/`strip_mono_suffix`
    helpers unchanged.
 
-3. **Redirect call sites.** `fn_call.rs` (and the method-call path) consult a
-   new `self.fn_mono_emitted: HashMap<callee_name, Vec<(MonoKey, mangled)>>`.
+3. **Redirect call sites.** `fn_call.rs` and `method_call.rs` consult their
+   emitted-instantiation maps.
    When the call's recovered type-arg vector matches an emitted instantiation,
-   the callee is rewritten to the mangled name; otherwise it keeps the opaque
-   `callee_name` (the abstract body is still emitted by the normal `lower_item`
-   path as the fallback, identical to class-mono's opaque fallback).
+   the callee is rewritten to the mangled name. Eligible opaque bodies are
+   suppressed because they can emit placeholder callees; a call with no
+   concrete emitted match receives a clear lowering error.
 
-### Why the abstract fallback stays sound
+### Why suppressing the abstract fallback is sound
 
-The opaque body is still emitted. It only link-fails if it CONTAINS an
-unresolvable bound-placeholder call AND is actually referenced. Two cases:
-
-- The bound type param is the single-implementor case → `unique_bound_impl`
-  devirtualizes inside the opaque body, so it links (quiver today).
-- The bound type param has ≥2 implementors → EVERY call site is redirected to a
-  monomorphic copy (we record an instantiation for each concrete call), so the
-  opaque body is **emitted but never referenced**, and a never-referenced
-  function with an undefined internal symbol is dropped by the linker's
-  dead-strip — OR, to be defensive and not rely on dead-strip, we additionally
-  **skip emitting the opaque fallback** for a generic fn all of whose
-  mixin-bound params resolve at every call site (tracked: if any call site
-  could NOT be monomorphized — e.g. the type arg stayed abstract because the
-  caller is itself generic — we keep the opaque body and it devirtualizes or
-  errors, see Risks).
+Every concrete call targets a body in which all method-level bounded parameters
+have been substituted. Eligible opaque free-function and method bodies are never
+emitted, so correctness does not depend on linker dead-stripping. If collection
+cannot reach a concrete leaf (including a generic-calling-generic method
+boundary), call lowering errors before emitting a dangling or placeholder
+callee. `unique_bound_impl` remains available for ordinary concrete lowering,
+but is no longer the safety mechanism for these generic bodies.
 
 ## What is OUT of scope (sound partial boundary)
 
@@ -153,8 +151,8 @@ unresolvable bound-placeholder call AND is actually referenced. Two cases:
 
 | Risk | Mitigation |
 |---|---|
-| **Bound-placeholder garbage** (`T: Paintable_fill_rect`) reaching the linker — the exact Q17 bug | Every ≥2-impl call site is redirected to a monomorphic copy whose body dispatches on a concrete `Ty::Class`. The opaque body with the placeholder is emitted only where `unique_bound_impl` devirtualizes it (1 impl), or is suppressed when all call sites monomorphize. No placeholder symbol is ever both emitted AND referenced. |
-| **An unmonomorphizable call** (type arg stays abstract — generic caller, no concrete leaf) | Detected at collection: a generic call whose mixin-bound arg resolves to a non-concrete `Ty` (TypeParam/Infer) AND whose enclosing function is itself generic over that param is **left to the opaque body**; if the opaque body would emit a placeholder, that is a real "cannot monomorphize" condition → a clear lowering `Err` (no silent fallback, no placeholder symbol). For v1 the practical surface (concrete implementor → dep generic) never hits this. |
+| **Bound-placeholder garbage** (`T: Paintable_fill_rect`) reaching the linker — the exact Q17 bug | Every concrete call site is redirected to a monomorphic copy whose body dispatches on a concrete receiver. Placeholder-prone opaque free-function and method bodies are suppressed unconditionally. |
+| **An unmonomorphizable call** (type arg stays abstract — generic caller, no concrete leaf) | With no emitted concrete match, call lowering returns a clear `Err`; it never falls back to the suppressed opaque body or emits a placeholder/missing symbol. Free-function generic chains reach a fixpoint; cross-method generic chains remain the explicit residual. |
 | **Compile-time blowup** | Collection is demand-driven: only `(callee, concrete-args)` pairs that literally appear at a call site are recorded, deduped on the mangled base. N call sites with K distinct concrete types → K copies, not K^params. Matches class-mono's cost model. |
 | **Regressing quiver's single-implementor shape** | `unique_bound_impl` is untouched and still runs first for the 1-impl case; a generic fn with a single-implementor bound records ONE instantiation that lowers to the same concrete callee the devirtualize path already produced. An existing-case e2e build is diffed before/after to confirm byte-stability of the single-impl path. |
 | **Different field layouts between implementors** | Each monomorphic copy is a fully concrete body; field slot indices are resolved per concrete class by the normal `Ty::Class` field-access path. Layouts never mix. |
@@ -168,11 +166,13 @@ monomorphization, not devirtualize-to-one. Pinned by staged-install integration
 tests (the `dep_visibility.rs` pattern) that compile + run + assert stdout, plus
 single-unit release-e2e cases (655+).
 
-## Staged-out remainder (if the full fix exceeds one pass)
+## Staged remainder status (updated by Q17b)
 
-If method-over-mixin or 3-implementor shapes prove deeper than one pass, the
-sound subset to land first is **generic FREE functions over a consumer type**
-(quiver's `paint_all` shape), with the generic-METHOD case and the
-generic-calling-generic case filed precisely in §Q17 of the ledger and
-`docs/TASKS.md`. The acceptance bar above (second implementor in a binary,
-distinct stdout) is NOT compromised — it is the floor, not the ceiling.
+The generic-METHOD remainder is complete for methods declared directly inside
+class, struct, and enum receivers. Pin `474_generic_method_mixin_mono.rx` runs
+two concrete implementors through distinct specialized class-method bodies; the
+focused compiler suite additionally runs generic methods owned by a struct and
+an enum. A generic-calling-generic chain that crosses method boundaries is still
+outside the worklist fixpoint; it is rejected clearly at lowering with no opaque
+fallback, placeholder symbol, or silent miscompile. True separate-compilation
+generics remain out of scope under Q16's source flat-merge model.

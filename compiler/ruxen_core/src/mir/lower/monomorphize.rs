@@ -48,6 +48,14 @@ const MONO_SEP: &str = "__mono__";
 /// use of a generic class.
 pub(super) type MonoKey = Vec<Ty>;
 
+/// One eligible generic method together with the receiver-qualified symbol
+/// prefix used for emitted specializations (`Frame_measure`).
+#[derive(Clone)]
+pub(super) struct MonoMethod {
+    pub(super) owner_symbol: String,
+    pub(super) def: HirFuncDef,
+}
+
 /// Build the C-safe mangled *base* for a `(class, generic_args)`
 /// instantiation, e.g. `Box__mono__String`, `Pair__mono__Int__String`.
 /// Method callees are then `format!("{base}_{method}")`.
@@ -545,16 +553,18 @@ impl<'a> Lowerer<'a> {
             }
         };
         for_each_fn_body(program, &mut |body, enclosing_is_generic| {
-            walk_calls_in_expr(body, &mut |callee_name, args| {
-                seed(
-                    callee_name,
-                    args,
-                    enclosing_is_generic,
-                    &mut needs_opaque,
-                    &mut seen,
-                    &mut instances,
-                    &mut worklist,
-                );
+            walk_calls_in_expr(body, &mut |call| {
+                if let GenericCall::Function(callee_name, args) = call {
+                    seed(
+                        callee_name,
+                        args,
+                        enclosing_is_generic,
+                        &mut needs_opaque,
+                        &mut seen,
+                        &mut instances,
+                        &mut worklist,
+                    );
+                }
             });
         });
 
@@ -582,10 +592,12 @@ impl<'a> Lowerer<'a> {
             // (should not happen post-substitution) does not force the
             // callee's opaque body to be referenced.
             let mut discovered: Vec<(String, MonoKey)> = Vec::new();
-            walk_calls_in_expr(&cloned.body, &mut |callee_name, call_args| {
-                let arg_tys: Vec<Ty> = call_args.iter().map(|a| a.ty.clone()).collect();
-                if let Some(inst) = recover(callee_name, &arg_tys, &mut needs_opaque, false) {
-                    discovered.push(inst);
+            walk_calls_in_expr(&cloned.body, &mut |call| {
+                if let GenericCall::Function(callee_name, call_args) = call {
+                    let arg_tys: Vec<Ty> = call_args.iter().map(|a| a.ty.clone()).collect();
+                    if let Some(inst) = recover(callee_name, &arg_tys, &mut needs_opaque, false) {
+                        discovered.push(inst);
+                    }
                 }
             });
             for inst in discovered {
@@ -645,6 +657,216 @@ impl<'a> Lowerer<'a> {
         self.fn_mono_instances = instances;
         self.fn_mono_needs_opaque = needs_opaque;
         self.fn_mono_emitted = emitted;
+    }
+
+    // ── Q17b: generic METHOD / mixin-bound monomorphization ─────────────
+
+    /// Collect concrete instantiations of methods that declare at least one
+    /// mixin-bounded type parameter. Unlike generic-class monomorphization,
+    /// the receiver is fixed (`Frame`); only the method's own type parameters
+    /// are recovered by unifying its declared parameters with call arguments.
+    pub(super) fn collect_generic_method_instances(&mut self, program: &HirProgram) {
+        fn eligible(method: &HirFuncDef) -> bool {
+            !method.generic_params.is_empty()
+                && method.generic_params.iter().any(|g| !g.bounds.is_empty())
+        }
+
+        fn collect_methods(
+            item: &HirItem,
+            module_path: &mut Vec<String>,
+            out: &mut HashMap<DefId, MonoMethod>,
+        ) {
+            let mut record = |owner: &str, methods: &[HirFuncDef]| {
+                let qualified = if module_path.is_empty() {
+                    owner.to_string()
+                } else {
+                    format!("{}.{}", module_path.join("."), owner)
+                };
+                let owner_symbol = qualified.replace('.', "_");
+                for method in methods {
+                    if eligible(method) {
+                        out.insert(
+                            method.def_id,
+                            MonoMethod {
+                                owner_symbol: owner_symbol.clone(),
+                                def: method.clone(),
+                            },
+                        );
+                    }
+                }
+            };
+
+            match item {
+                HirItem::Class(c) => record(&c.name, &c.methods),
+                HirItem::Struct(s) => record(&s.name, &s.methods),
+                HirItem::Enum(e) => record(&e.name, &e.methods),
+                HirItem::Module(m) => {
+                    module_path.push(m.name.clone());
+                    for sub in &m.items {
+                        collect_methods(sub, module_path, out);
+                    }
+                    module_path.pop();
+                }
+                HirItem::Function(_)
+                | HirItem::Impl(_)
+                | HirItem::Const(_)
+                | HirItem::Mixin(_)
+                | HirItem::TypeAlias(_)
+                | HirItem::Newtype(_) => {}
+            }
+        }
+
+        let mut methods = HashMap::new();
+        let mut module_path = Vec::new();
+        for item in &program.items {
+            collect_methods(item, &mut module_path, &mut methods);
+        }
+
+        let mut seen: HashMap<DefId, BTreeSet<String>> = HashMap::new();
+        let mut instances: HashMap<DefId, Vec<MonoKey>> = HashMap::new();
+        for_each_fn_body(program, &mut |body, _enclosing_is_generic| {
+            walk_calls_in_expr(body, &mut |call| {
+                let GenericCall::Method(method_id, args) = call else {
+                    return;
+                };
+                let Some(method) = methods.get(&method_id) else {
+                    return;
+                };
+                let param_names: Vec<String> = method
+                    .def
+                    .generic_params
+                    .iter()
+                    .map(|g| g.name.clone())
+                    .collect();
+                let mut subst = HashMap::new();
+                for (param, arg) in method.def.params.iter().zip(args.iter()) {
+                    unify_collect_type_params(&param.ty, &arg.ty, &mut subst);
+                }
+                let Some(arg_vec) = param_names
+                    .iter()
+                    .map(|name| subst.get(name).cloned())
+                    .collect::<Option<MonoKey>>()
+                else {
+                    return;
+                };
+                if !arg_vec.iter().all(is_fully_concrete) {
+                    return;
+                }
+                let method_base = format!("{}_{}", method.owner_symbol, method.def.name);
+                let emitted_name = mono_base(&method_base, &arg_vec);
+                if seen.entry(method_id).or_default().insert(emitted_name) {
+                    instances.entry(method_id).or_default().push(arg_vec);
+                }
+            });
+        });
+
+        // Populate redirects before normal lowering. Eligible opaque method
+        // bodies are suppressed, so every valid call must resolve to one of
+        // these concrete symbols or receive the explicit residual diagnostic.
+        let mut emitted = HashMap::new();
+        for (method_id, keys) in &instances {
+            let Some(method) = methods.get(method_id) else {
+                continue;
+            };
+            let method_base = format!("{}_{}", method.owner_symbol, method.def.name);
+            for args in keys {
+                if args.len() == method.def.generic_params.len() {
+                    emitted
+                        .entry(*method_id)
+                        .or_insert_with(Vec::new)
+                        .push((args.clone(), mono_base(&method_base, args)));
+                }
+            }
+        }
+
+        self.mono_methods = methods;
+        self.method_mono_instances = instances;
+        self.method_mono_emitted = emitted;
+    }
+
+    /// Emit one specialized self-bearing MIR body for every concrete generic
+    /// method instantiation recorded above.
+    pub(super) fn emit_generic_method_instances(
+        &mut self,
+        mir: &mut MirProgram,
+    ) -> Result<(), String> {
+        let methods = self.mono_methods.clone();
+        let instances = self.method_mono_instances.clone();
+        for (method_id, keys) in &instances {
+            let Some(method) = methods.get(method_id) else {
+                continue;
+            };
+            let param_names: Vec<String> = method
+                .def
+                .generic_params
+                .iter()
+                .map(|g| g.name.clone())
+                .collect();
+            let method_base = format!("{}_{}", method.owner_symbol, method.def.name);
+            let mut emitted_names = HashSet::new();
+            for args in keys {
+                if args.len() != param_names.len() {
+                    continue;
+                }
+                let mangled = mono_base(&method_base, args);
+                if !emitted_names.insert(mangled.clone()) {
+                    continue;
+                }
+                let subst: HashMap<String, Ty> = param_names
+                    .iter()
+                    .cloned()
+                    .zip(args.iter().cloned())
+                    .collect();
+                let mut cloned = method.def.clone();
+                crate::mir::lower::trait_default::subst_type_params_in_func(&mut cloned, &subst);
+                mir.functions.push(self.lower_method(&mangled, &cloned)?);
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve a generic method call to its emitted monomorphic symbol.
+    pub(super) fn method_mono_callee(&self, method_id: DefId, arg_tys: &[Ty]) -> Option<String> {
+        let method = self.mono_methods.get(&method_id)?;
+        let emitted = self.method_mono_emitted.get(&method_id)?;
+        let param_names: Vec<String> = method
+            .def
+            .generic_params
+            .iter()
+            .map(|g| g.name.clone())
+            .collect();
+        let mut subst = HashMap::new();
+        for (param, actual) in method.def.params.iter().zip(arg_tys.iter()) {
+            unify_collect_type_params(&param.ty, actual, &mut subst);
+        }
+        let args: MonoKey = param_names
+            .iter()
+            .map(|name| subst.get(name).cloned())
+            .collect::<Option<_>>()?;
+        if !args.iter().all(is_fully_concrete) {
+            return None;
+        }
+        let method_base = format!("{}_{}", method.owner_symbol, method.def.name);
+        let wanted = mono_base(&method_base, &args);
+        emitted
+            .iter()
+            .find(|(_, symbol)| *symbol == wanted)
+            .map(|(_, symbol)| symbol.clone())
+    }
+
+    pub(super) fn generic_method_keeps_opaque(&self, method_id: DefId) -> bool {
+        !self.mono_methods.contains_key(&method_id)
+    }
+
+    pub(super) fn is_generic_mixin_method(&self, method_id: DefId) -> bool {
+        self.mono_methods.contains_key(&method_id)
+    }
+
+    pub(super) fn is_generic_mixin_method_symbol(&self, owner: &str, method_name: &str) -> bool {
+        let owner_symbol = owner.replace('.', "_");
+        self.mono_methods
+            .values()
+            .any(|method| method.owner_symbol == owner_symbol && method.def.name == method_name)
     }
 
     /// Emit one monomorphized copy of every eligible generic free function,
@@ -729,13 +951,12 @@ impl<'a> Lowerer<'a> {
         !self.mono_fns.contains_key(fn_name)
     }
 
-    /// True when a CONCRETE-context (non-generic-caller) call to `fn_name`
-    /// could not be monomorphized — its type args did not resolve to a
-    /// fully-concrete vector. Such a call cannot fall back to the opaque body
-    /// (it is suppressed and would link-fail), so `fn_call.rs` surfaces a clear
-    /// diagnostic instead. Recorded during `collect_generic_fn_instances`.
+    /// True when `fn_name` is an eligible generic free function. Called only
+    /// after `fn_mono_callee` found no emitted concrete match; such a call can
+    /// never fall back to the suppressed opaque body, so `fn_call.rs` must
+    /// surface a clear diagnostic.
     pub(super) fn generic_fn_unmonomorphizable(&self, fn_name: &str) -> bool {
-        self.fn_mono_needs_opaque.contains(fn_name)
+        self.mono_fns.contains_key(fn_name)
     }
 }
 
@@ -890,12 +1111,17 @@ fn for_each_fn_body(program: &HirProgram, f: &mut impl FnMut(&HirExpr, bool)) {
     }
 }
 
-fn walk_calls_in_expr(expr: &HirExpr, f: &mut impl FnMut(&str, &[HirExpr])) {
+enum GenericCall<'a> {
+    Function(&'a str, &'a [HirExpr]),
+    Method(DefId, &'a [HirExpr]),
+}
+
+fn walk_calls_in_expr(expr: &HirExpr, f: &mut impl FnMut(GenericCall<'_>)) {
     match &expr.kind {
         HirExprKind::FnCall {
             callee_name, args, ..
         } => {
-            f(callee_name, args);
+            f(GenericCall::Function(callee_name, args));
             for a in args {
                 walk_calls_in_expr(a, f);
             }
@@ -903,10 +1129,12 @@ fn walk_calls_in_expr(expr: &HirExpr, f: &mut impl FnMut(&str, &[HirExpr])) {
         HirExprKind::FieldAccess { object, .. } => walk_calls_in_expr(object, f),
         HirExprKind::MethodCall {
             object,
+            method,
             args,
             block,
             ..
         } => {
+            f(GenericCall::Method(*method, args));
             walk_calls_in_expr(object, f);
             for a in args {
                 walk_calls_in_expr(a, f);
@@ -1025,7 +1253,7 @@ fn walk_calls_in_expr(expr: &HirExpr, f: &mut impl FnMut(&str, &[HirExpr])) {
     }
 }
 
-fn walk_calls_in_stmt(stmt: &HirStatement, f: &mut impl FnMut(&str, &[HirExpr])) {
+fn walk_calls_in_stmt(stmt: &HirStatement, f: &mut impl FnMut(GenericCall<'_>)) {
     match stmt {
         HirStatement::Let { value, .. } => {
             if let Some(v) = value {

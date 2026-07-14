@@ -7,11 +7,11 @@
 //! exactly why quiver was capped at one `PaintSurface` implementor.
 //!
 //! These pins read the SAME fixtures the release-e2e harness runs
-//! (`tests/release-e2e/cases/655..659`) so the cargo pin and the e2e case can
+//! (`tests/release-e2e/cases/474` and `655..659`) so the cargo pin and e2e cases can
 //! never drift apart, and they COMPILE + RUN + assert exact stdout (three prior
 //! episodes on this branch had pins pass while real codegen was broken). The
-//! negative pin compiles an INLINE generic-method-over-mixin shape (NOT yet
-//! supported) and asserts a clear lowering error — no bound-placeholder symbol.
+//! Q17b's generic-method analogue reads case 474 and likewise compiles, runs,
+//! and asserts exact stdout for two distinct concrete implementors.
 
 use ruxen_core::codegen;
 use ruxen_core::lexer::Lexer;
@@ -66,7 +66,6 @@ fn compile_and_run(source: &str, basename: &str) -> (String, String, bool) {
     )
 }
 
-/// Lower only (no codegen); return the lowering error message if any.
 fn lower_error(source: &str) -> Option<String> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().expect("lex");
@@ -75,6 +74,16 @@ fn lower_error(source: &str) -> Option<String> {
     let result = typeck::type_check(&program);
     let mut lowerer = Lowerer::new(&result.symbols);
     lowerer.lower_program(&result.program).err()
+}
+
+fn lower_to_mir(source: &str) -> ruxen_core::mir::nodes::MirProgram {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize().expect("lex");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("parse");
+    let result = typeck::type_check(&program);
+    let mut lowerer = Lowerer::new(&result.symbols);
+    lowerer.lower_program(&result.program).expect("MIR lowering")
 }
 
 fn case(name: &str) -> (String, String) {
@@ -136,58 +145,113 @@ fn struct_implementor_satisfies_bound_and_runs() {
     assert_eq!(stdout, expected, "stdout was {stdout:?}");
 }
 
-/// NEGATIVE: a generic METHOD over a mixin with ≥2 implementors (a generic
-/// `def` INSIDE a class) is NOT yet monomorphized — the staged remainder. It
-/// must surface a CLEAR lowering error, never a bound-placeholder symbol that
-/// link-fails opaquely.
+/// Q17b: a generic METHOD inside a class specializes once for each concrete
+/// mixin implementor (`Wide` and `Tall`) and dispatches both bodies correctly.
 #[test]
-fn generic_method_over_mixin_errors_cleanly() {
+fn generic_method_over_mixin_monomorphizes_per_implementor() {
+    let (src, expected) = case("474_generic_method_mixin_mono.rx");
+    let mir = lower_to_mir(&src);
+    let names: Vec<&str> = mir.functions.iter().map(|f| f.name.as_str()).collect();
+    assert!(names.contains(&"Frame_measure_scaled__mono__Wide"));
+    assert!(names.contains(&"Frame_measure_scaled__mono__Tall"));
+    assert!(
+        !names.contains(&"Frame_measure_scaled"),
+        "placeholder-prone opaque method body must be suppressed"
+    );
+    let (stdout, stderr, ok) = compile_and_run(&src, "q17b_method");
+    assert!(ok, "link/run failed; stderr: {stderr}");
+    assert_eq!(stdout, expected, "stdout was {stdout:?}");
+}
+
+/// The same Q17b path applies to fixed struct and enum receivers; only the
+/// method's mixin-bounded parameter varies.
+#[test]
+fn generic_method_supports_struct_and_enum_receivers() {
     let source = "\
-mixin Sized
-  def width -> Int
+mixin Measured
+  def measure -> Int
 end
 
-class Frame
-  scale: Int
-  def init(@scale: Int) end
-  def measure[T: Sized](item: &var T) -> Int
-    item.width * self.scale
-  end
-end
-
-class Wide
-  include Sized
+struct Wide
+  include Measured
   w: Int
-  def init(@w: Int) end
-  def width -> Int
+  def measure -> Int
     self.w
   end
 end
 
-class Tall
-  include Sized
-  v: Int
-  def init(@v: Int) end
-  def width -> Int
-    self.v + 1
+struct Scaler
+  scale: Int
+  def apply[T: Measured](item: &var T) -> Int
+    item.measure * self.scale
+  end
+end
+
+enum Multiplier
+  Triple
+  def apply[T: Measured](item: &var T) -> Int
+    item.measure * 3
   end
 end
 
 def main
-  var f = Frame.new(3)
-  var a = Wide.new(10)
-  var b = Tall.new(20)
-  puts \"#{f.measure(&var a)} #{f.measure(&var b)}\"
+  var wide = Wide.new(7)
+  let scaler = Scaler.new(4)
+  puts \"struct=#{scaler.apply(&var wide)}\"
+  puts \"enum=#{Multiplier.Triple.apply(&var wide)}\"
 end
 ";
-    let err = lower_error(source).expect("generic method over mixin must error at lowering");
+    let (stdout, stderr, ok) = compile_and_run(source, "q17b_receivers");
+    assert!(ok, "link/run failed; stderr: {stderr}");
+    assert_eq!(stdout, "struct=28\nenum=21\n");
+}
+
+/// The staged cross-method fixpoint is a hard error, never a call to an
+/// un-emitted opaque method or a bound-placeholder symbol.
+#[test]
+fn generic_calling_generic_across_methods_errors_without_placeholder() {
+    let source = "\
+mixin Measured
+  def measure -> Int
+end
+
+class Frame
+  def inner[T: Measured](item: &var T) -> Int
+    item.measure
+  end
+
+  def outer[U: Measured](item: &var U) -> Int
+    self.inner(item)
+  end
+end
+
+class Wide
+  include Measured
+  def measure -> Int
+    7
+  end
+end
+
+class Tall
+  include Measured
+  def measure -> Int
+    9
+  end
+end
+
+def main
+  var frame = Frame.new
+  var wide = Wide.new
+  puts frame.outer(&var wide)
+end
+";
+    let err = lower_error(source).expect("cross-method generic chain must fail clearly");
     assert!(
-        err.contains("cannot monomorphize generic method"),
-        "expected a clear generic-method-not-supported error, got: {err}"
+        err.contains("generic-calling-generic across methods"),
+        "unexpected residual diagnostic: {err}"
     );
-    // The error must NOT be a raw placeholder symbol leaking to the user.
     assert!(
-        !err.contains(": Sized_width"),
-        "diagnostic must not surface the raw bound-placeholder symbol: {err}"
+        !err.contains(": Measured_measure"),
+        "bound placeholder leaked into residual diagnostic: {err}"
     );
 }
