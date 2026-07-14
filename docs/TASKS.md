@@ -430,15 +430,16 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       LLVM-side. Found benchmarking rondo vs Go `net/http` (debug-Cranelift rondo
       ~113k RPS vs optimized Go ~164k — the debug handicap confounds the number).
       rondo workaround W22; details §Q41.
-- [ ] **Q46 · S2 — a no-arg `def init` class's paren-less `.new` CRASHES
+- [x] **Q46 · S2 — a no-arg `def init` class's paren-less `.new` CRASHES
       (exit=None/segfault) when the value is moved into another class's field
-      (NEW 2026-06-19).** Found building the §4.5 Stream adapters: a source class
+      (FIXED 2026-07-14).** The paren-less `FieldAccess` constructor branch
+      allocated and called `_init` without emitting the runtime-mixin class-info
+      header written by the parenthesized branch; later `any Mixin` dispatch
+      dereferenced slot 0 as null. Found building the §4.5 Stream adapters: a source class
       with `def init` (no params), constructed `Src.new`, runs fine alone but
       segfaults (empty stdout) when moved into an adapter's `any Stream` field.
-      Arg-taking `init` makes it vanish — so the trigger is the no-arg-init
-      constructor in the wrap-into-field position. Pre-existing constructor-
-      lowering bug, NOT a Stream bug. Workaround (pin 435): give the source an
-      arg-taking init. Minimal repro + details in `dev/gui-stack-v1-issues.md` §Q46.
+      Fixed by initializing class info in that branch; pinned by reduced custom
+      runtime-mixin case 460. Details in `dev/gui-stack-v1-issues.md` §Q46.
 - [x] **Q42 · S2 — deliver a DOM event to a Ruxen handler on wasm — NOT a
       compiler bug; pure-Ruxen pattern. RESOLVED 2026-06-16 (verified by spike).**
       Spike GREEN: exported `def boot() -> Registry` (holds `handlers: Array[any

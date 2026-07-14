@@ -8,6 +8,10 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- **Q46: paren-less no-argument constructors now initialize runtime-mixin
+  metadata.** `Class.new` now writes the class-info header after allocation,
+  matching `Class.new()`, so moving the value into an `any Mixin` field and
+  dispatching through that field no longer dereferences a null header.
 - **Concurrency LOW-finding cleanup (post-§4.6 review).** (1) `RetryFuture.init`
   no longer leaks its placeholder backoff `TimeSleepFuture`: the placeholder is
   marked a live child (`has_backoff = 1`) and torn down before the first real

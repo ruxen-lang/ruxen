@@ -1982,7 +1982,7 @@ UTF-8+NUL, and passes the pointer to an exported `def f(... text: &String)` (the
 i32 ptr IS the `&String`). Verified exported in `quiver/examples/counter-dom`.
 Toolchain: `ruxen 0.1.0`.
 
-## Q46 · S2 — a NO-ARG `def init` class's paren-less `.new` CRASHES (exit=None / segfault) when the value is wrapped/moved into another class's field  ⏳ OPEN (NEW 2026-06-19)
+## Q46 · S2 — a NO-ARG `def init` class's paren-less `.new` CRASHES (exit=None / segfault) when the value is wrapped/moved into another class's field  ✅ FIXED (2026-07-14)
 
 Found 2026-06-19 building the §4.5 async `Stream` adapters. A class whose `def
 init` takes **no parameters**, constructed paren-less as `X.new`, compiles and
@@ -1993,33 +1993,64 @@ ARG-taking `init` makes the crash vanish — so the trigger is the no-arg-init
 constructor in the wrap-into-field position, NOT the wrapping itself. Pre-existing
 constructor-lowering bug, unrelated to Stream.
 
-**Minimal repro** (crashes; `cargo test -p ruxen_core --test release_e2e_smoke`):
+**Confirmed root cause:** the parser represents paren-less `Class.new` as a
+`FieldAccess`, so it uses a separate lowering branch in
+`compiler/ruxen_core/src/mir/lower/expr/field_access.rs`. That branch emitted
+`Alloc` and called `Class_init(self)` but omitted the
+`emit_class_info_init(&expr.ty, obj)` performed by the parenthesized
+`Class.new()` branch. For a class including a `dispatch runtime` mixin, slot 0
+therefore remained null. Concrete calls did not consult the header, so the
+object appeared healthy in isolation; dispatch after moving it into an
+`any Mixin` field read slot 0 as a class-info pointer and segfaulted. An
+argument-taking `init` necessarily used call syntax and the already-correct
+parenthesized lowering path, explaining the original asymmetry.
+
+**Reduced repro** (no async or Stream dependency; release-e2e pin 460):
 ```ruxen
-class Src
-  step: Int
-  include Stream        # any `dispatch runtime` mixin; the field below is `any Stream`
-  type Item = Int
-  def init               # NO params — the trigger
-    self.step = 0
+mixin Readable dispatch runtime
+  def read -> Int
+end
+
+class Source
+  value: Int
+  include Readable
+
+  def init
+    self.value = 42
   end
-  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
-    Poll.Ready(nil)
+
+  def read -> Int
+    self.value
+  end
+end
+
+class Holder
+  inner: any Readable
+
+  def init(inner: any Readable)
+    self.inner = inner
+  end
+
+  def read -> Int
+    (&self.inner).read
   end
 end
 
 def main
-  var src = Src.new                       # paren-less, no-arg init
-  var m = MapStream.new(src, { |x| x })   # move `src` into an `any Stream` field → CRASH
-  puts "sum=#{m.sum}"
+  var source = Source.new
+  var holder = Holder.new(source)
+  puts "value=#{holder.read}"
 end
 ```
-**Workaround (in use, pin 435):** give the source an arg-taking `init`
-(`def init(cap: Int)` … `Src.new(0)`) — the crash disappears. **Severity S2**
-(a silent segfault on legal code, but a narrow trigger with a trivial
-workaround). Likely in constructor/`_init` lowering or the move-into-`any Mixin`-
-field ABI. A focused repro lives in this entry; do NOT need a release-e2e pin
-until someone takes the fix (a `.deferred` repro could be added then).
-Toolchain: `ruxen 0.1.0` (`feat/concurrency-adoption`).
+
+**Fix:** call `emit_class_info_init` immediately after allocation in the
+paren-less constructor branch, before `_init`, matching all other class
+allocation paths. The helper is already a no-op for structs, ordinary classes,
+and classes with only static mixins. Structural MIR coverage pins the header
+write for paren-less construction; the in-process compile/run test and
+release-e2e case 460 prove the reduced field-move program exits cleanly and
+prints `value=42`. Before the fix, both pins reproduced the missing MIR write
+and the signal exit with empty output.
 
 ## Q47 · S2 — calling a `Fn[() -> any Future]` closure inside a BOOTSTRAP class POISONS global `any Future`→`Future` mixin satisfaction for every program  ⏳ OPEN (NEW 2026-06-19)
 

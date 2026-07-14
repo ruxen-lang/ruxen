@@ -248,6 +248,13 @@ impl<'a> Lowerer<'a> {
                         ty: expr.ty.clone(),
                         size: self.alloc_size(&expr.ty),
                     });
+                    // Q46 / Phase B-5: paren-less `ClassName.new` lowers
+                    // through FieldAccess rather than the MethodCall branch.
+                    // Install the runtime-dispatch class-info header here too,
+                    // before `ClassName_init` can use it or the value can move
+                    // into an `any Mixin` slot. This is a no-op for structs and
+                    // classes without runtime-dispatch mixins.
+                    self.emit_class_info_init(&expr.ty, obj);
 
                     // Structs have no synthetic init — zero-arg `.new` on a
                     // struct leaves fields uninitialised (same as C). Emit

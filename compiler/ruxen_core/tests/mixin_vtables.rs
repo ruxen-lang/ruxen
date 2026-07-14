@@ -21,6 +21,7 @@
 //! | B-4       | `runtime_dispatch_class_field_index_shifted_by_one`        | §B2  |
 //! | B-4       | `static_mixin_class_field_index_unshifted`                 | §B11 |
 //! | B-5       | `class_init_writes_class_info_ptr_at_slot_zero`            | §B4/§B5 |
+//! | B-5/Q46   | `parenless_class_init_writes_class_info_ptr_at_slot_zero`  | §B4/§B5 |
 //! | C         | `dyn_mixin_call_lowers_to_dynamic_helper`                  | §B5/§B6 |
 //! | C         | `concrete_class_call_stays_static_dispatch`                | §B6  |
 //! | C         | `dynamic_dispatch_helper_synthesized_per_mixin_method`      | §B5  |
@@ -681,6 +682,41 @@ fn class_init_writes_class_info_ptr_at_slot_zero() {
         found,
         "make_one must emit `DataAddr __rx_classinfo_Circle` → `SetField slot 0` pair \
          to install the class_info_ptr header at the Circle.new alloc site (Phase B-5)",
+    );
+}
+
+/// Q46: the parser represents paren-less `Circle.new` as `FieldAccess`, so it
+/// lowers through a separate constructor branch from `Circle.new()`. Both
+/// branches must install the runtime-dispatch class-info header at slot zero.
+#[test]
+fn parenless_class_init_writes_class_info_ptr_at_slot_zero() {
+    let mir = lower_fixture("mixin_vtables_parenless_alloc_site");
+    let make_one = mir
+        .functions
+        .iter()
+        .find(|f| f.name == "make_one")
+        .expect("make_one MIR fn must exist");
+
+    let found = make_one.blocks.iter().any(|block| {
+        block.instructions.windows(2).any(|pair| {
+            matches!(
+                (&pair[0], &pair[1]),
+                (
+                    ruxen_core::mir::nodes::MirInst::DataAddr { dest, data_sym },
+                    ruxen_core::mir::nodes::MirInst::SetField {
+                        field_index: 0,
+                        value: ruxen_core::mir::nodes::MirValue::Use(value),
+                        ..
+                    }
+                ) if dest == value && data_sym == "__rx_classinfo_Circle"
+            )
+        })
+    });
+
+    assert!(
+        found,
+        "paren-less Circle.new must emit `DataAddr __rx_classinfo_Circle` -> \
+         `SetField slot 0` before calling Circle_init",
     );
 }
 
