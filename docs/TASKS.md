@@ -34,10 +34,13 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
       recovers a stale call result from its resolved declaration before Display
       dispatch. Pins: release-e2e `94_custom_error_enum` and
       `931_interpolation_method_string`.
-- [ ] **Q51 — `Enumerable#select` over-counts (OPEN, found 2026-07-14).**
-      `Set{1,2,3,4}.select { even }.size` = 3, expected 2; `Hash#select` similarly.
-      Real logic bug in the shared `Enumerable[T]` `select` body. Repro: release-e2e
-      `612_set_enumerable`, `613_hash_enumerable`. Pre-existing (isolation-verified).
+- [x] **Q51 — `Enumerable#select` returned a freed captured Array (FIXED
+      2026-07-14, `fix/q51-select`).** The Set/Hash `each` closure destructor
+      freed its directly captured `out` Array at the combinator return even when
+      the enclosing source local was itself returned. Drop elaboration now NULLs
+      return-escaping capture slots before closure cleanup, preserving the value
+      while still freeing the captures block and pair. Pins 612/613 and 936 cover
+      Array/Set/Hash `select`, `reject`, `map`, and `partition` sizes.
 - [x] **Q52 — `Mutex` guard drop in a closure/match arm (FIXED 2026-07-14,
       `fix/q52-guarddrop`).** The guard itself was correctly arm-sunk and dropped
       once. The later synthesized closure destructor called the captured

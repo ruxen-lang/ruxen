@@ -342,7 +342,7 @@ impl<'a> Lowerer<'a> {
 
                 // Extract the completed closure function.
                 let completed_fn = self.current_fn.take().unwrap();
-                let closure_drop =
+                let (closure_drop, owned_capture_slots) =
                     self.synthesize_closure_drop(&closure_name, &slots, &completed_fn, cap_param);
                 let closure_drop_name = closure_drop.name.clone();
                 self.pending_closures.push(completed_fn);
@@ -385,6 +385,7 @@ impl<'a> Lowerer<'a> {
                 self.fn_mut().closure_drops.push(MirClosureDrop {
                     local: pair,
                     drop_fn: closure_drop_name,
+                    owned_capture_slots,
                 });
                 Ok(Some(pair))
             }
@@ -400,18 +401,23 @@ impl<'a> Lowerer<'a> {
         slots: &[(DefId, CaptureSource, Ty, CaptureKind)],
         closure_fn: &MirFunction,
         captures_param: LocalId,
-    ) -> MirFunction {
-        let mut owned_fields: Vec<(usize, Ty)> = slots
+    ) -> (MirFunction, Vec<(usize, LocalId)>) {
+        let mut owned_fields: Vec<(usize, Ty, LocalId)> = slots
             .iter()
             .enumerate()
             .filter_map(|(slot, (_def, source, ty, kind))| {
-                let directly_owned =
-                    matches!(source, CaptureSource::Local(_)) && *kind == CaptureKind::ByValue;
-                (directly_owned
+                let CaptureSource::Local(source_local) = source else {
+                    return None;
+                };
+                (*kind == CaptureKind::ByValue
                     && heap_free_callee(ty).is_some()
                     && capture_slot_still_owned(closure_fn, captures_param, slot, self.symbols))
-                .then(|| (slot, ty.clone()))
+                .then(|| (slot, ty.clone(), *source_local))
             })
+            .collect();
+        let owned_capture_slots = owned_fields
+            .iter()
+            .map(|(slot, _, source)| (*slot, *source))
             .collect();
 
         let drop_name = format!("{}_drop", closure_name);
@@ -461,7 +467,7 @@ impl<'a> Lowerer<'a> {
 
         let mut current = captures_block;
         owned_fields.reverse();
-        for (slot, ty) in owned_fields {
+        for (slot, ty, _) in owned_fields {
             let captured = drop_fn.new_temp(ty.clone());
             drop_fn.blocks[current]
                 .instructions
@@ -527,6 +533,6 @@ impl<'a> Lowerer<'a> {
         });
         drop_fn.blocks[pair_block].terminator = Terminator::Goto(return_block);
         drop_fn.blocks[return_block].terminator = Terminator::Return(None);
-        drop_fn
+        (drop_fn, owned_capture_slots)
     }
 }

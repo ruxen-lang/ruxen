@@ -172,6 +172,10 @@ pub struct MirLocal {
 pub struct MirClosureDrop {
     pub local: LocalId,
     pub drop_fn: String,
+    /// Direct by-value capture slots whose heap value came from a local in
+    /// this enclosing function. Drop elaboration uses the source local to
+    /// transfer a returned capture back out before running closure cleanup.
+    pub owned_capture_slots: Vec<(usize, LocalId)>,
 }
 
 // ─── Function ───────────────────────────────────────────────────────────────
