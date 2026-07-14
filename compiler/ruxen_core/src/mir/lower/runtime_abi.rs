@@ -122,6 +122,19 @@ pub fn callee_ownership(callee: &str) -> CalleeOwnership {
     }
 }
 
+/// True when a user-drop FFI callee releases the allocation that represents
+/// `self`, rather than only cleaning up resources stored inside it.
+///
+/// Most Ruxen drop hooks follow the compiler-owned-storage contract: run the
+/// hook, then emit the type-directed heap free. These runtime handles are the
+/// exception because their destructor is also their ownership primitive
+/// (atomic/refcount decrement or handle release). Appending `ruxen_dealloc`
+/// after one of them double-frees a final handle and incorrectly frees a
+/// non-final shared handle.
+pub fn drop_frees_storage(callee: &str) -> bool {
+    DROP_FREES_STORAGE.contains(&callee)
+}
+
 /// For a USER callee (a function/method NOT classified by the runtime-ABI
 /// tables above), resolve which of its first `arg_count` *value-carrying*
 /// parameters are declared as a reference (`&T` / `&var T`) or are the
@@ -684,6 +697,17 @@ const FREE_FAMILY: &[&str] = &[
     "ruxen_set_drop_string",
 ];
 
+/// FFI drop hooks that consume the storage carrying `self`.
+const DROP_FREES_STORAGE: &[&str] = &[
+    "ruxen_atomic_i64_drop",
+    "ruxen_atomic_bool_drop",
+    "ruxen_atomic_usize_drop",
+    "ruxen_channel_sender_drop",
+    "ruxen_channel_receiver_drop",
+    "ruxen_mutex_drop",
+    "ruxen_sharedsync_drop",
+];
+
 /// Old `is_runtime_consume_helper` (drops.rs:1003-1043).
 const CONSUME_HELPERS: &[&str] = &[
     "ruxen_dealloc",
@@ -784,6 +808,16 @@ mod tests {
         // `continue`s on arg0 so it is NOT tainted) — encoded as the
         // borrows_first_arg flag.
         assert!(o.borrows_first_arg);
+    }
+
+    #[test]
+    fn drop_frees_storage_classifies_ffi_ownership_primitives_only() {
+        assert!(drop_frees_storage("ruxen_mutex_drop"));
+        assert!(drop_frees_storage("ruxen_sharedsync_drop"));
+        assert!(drop_frees_storage("ruxen_channel_sender_drop"));
+        assert!(!drop_frees_storage("ruxen_mutex_guard_drop"));
+        assert!(!drop_frees_storage("ruxen_file_drop"));
+        assert!(!drop_frees_storage("Holder_drop"));
     }
 
     #[test]

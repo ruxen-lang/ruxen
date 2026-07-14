@@ -485,12 +485,15 @@ impl<'a> Lowerer<'a> {
                 else_block: next,
             };
 
+            let mut user_drop_freed_storage = false;
             if let Ty::Class { name, .. } = &ty {
                 let suffix = format!(".{}", name);
                 if self.user_drop_classes.contains(name)
                     || self.user_drop_classes.iter().any(|q| q.ends_with(&suffix))
                 {
                     let callee = self.resolve_ffi_alias_callee(format!("{}_drop", name));
+                    user_drop_freed_storage =
+                        crate::mir::lower::runtime_abi::drop_frees_storage(&callee);
                     drop_fn.blocks[field_drop].instructions.push(MirInst::Call {
                         dest: None,
                         callee,
@@ -498,13 +501,15 @@ impl<'a> Lowerer<'a> {
                     });
                 }
             }
-            let free = heap_free_callee(&ty)
-                .expect("owned closure capture must have a type-directed free helper");
-            drop_fn.blocks[field_drop].instructions.push(MirInst::Call {
-                dest: None,
-                callee: free.to_string(),
-                args: vec![MirValue::Use(captured)],
-            });
+            if !user_drop_freed_storage {
+                let free = heap_free_callee(&ty)
+                    .expect("owned closure capture must have a type-directed free helper");
+                drop_fn.blocks[field_drop].instructions.push(MirInst::Call {
+                    dest: None,
+                    callee: free.to_string(),
+                    args: vec![MirValue::Use(captured)],
+                });
+            }
             drop_fn.blocks[field_drop].terminator = Terminator::Goto(next);
             current = next;
         }

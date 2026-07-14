@@ -825,8 +825,11 @@ pub(super) fn insert_drops(
             // User-defined `def drop` runs first, while the allocation is live.
             // Ownership-tainted values and a class's own drop body remain
             // excluded exactly as they were under return-only placement.
+            let mut user_drop_freed_storage = false;
             if !in_user_drop_method && dealloc_safe.contains(&local_id) {
                 if let Some(callee) = drop_callees.get(&local_id) {
+                    user_drop_freed_storage =
+                        crate::mir::lower::runtime_abi::drop_frees_storage(callee);
                     instructions.push(MirInst::Call {
                         dest: None,
                         callee: callee.clone(),
@@ -837,7 +840,7 @@ pub(super) fn insert_drops(
 
             // `MirInst::Drop` is a backend no-op; this type-directed call is
             // the actual free and remains gated by exclusive alloc provenance.
-            if dealloc_safe.contains(&local_id) {
+            if dealloc_safe.contains(&local_id) && !user_drop_freed_storage {
                 let local = func
                     .locals
                     .iter()

@@ -17,6 +17,18 @@ once 1.0.0 ships.
   ordered assignment/function-call execution, and explicit-main compatibility.
 
 ### Fixed
+- **Q52: self-freeing captured handles no longer double-free at closure
+  teardown.** The blockdrop closure destructor always appended a type-directed
+  `ruxen_dealloc` after a captured class's user drop. That is correct for normal
+  Ruxen classes and cleanup-only FFI drops, but `Mutex`, `SharedSync`, atomics,
+  and channel endpoints free or release their own handle storage; captured
+  `Mutex`/`SharedSync` therefore deterministically trapped after an otherwise
+  correct match-arm `MutexGuard` drop. Runtime ABI metadata now identifies
+  storage-consuming drop callees, and both scope and closure drop elaboration
+  suppress only the redundant outer free. The guard still runs
+  `ruxen_mutex_guard_drop` followed by its one spine deallocation in the taken
+  arm. Release-e2e 926/927 now run, and pin 936 invokes the same closure twice
+  to prove the first guard actually unlocks.
 - **Q49: branch-scoped owned temporaries are dropped only on initialized
   paths.** MIR drop elaboration no longer hoists every owned local to a shared
   return block, where LLVM could pass an uninitialized stack value to

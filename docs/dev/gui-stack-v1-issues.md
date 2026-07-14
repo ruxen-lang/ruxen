@@ -2257,19 +2257,35 @@ this is a real logic bug in the `select` default body (or its interaction with
 `612_set_enumerable` (`evens=3` vs `evens=2`) and `613_hash_enumerable`.
 PRE-EXISTING — present with and without Q49/implicit-main (isolation-verified).
 
-## Q52 · S1 — `Mutex` guard dropped in a closure/match arm crashes (exit 133)  ⚠️ OPEN (found 2026-07-14)
+## Q52 · S1 — `Mutex` guard dropped in a closure/match arm crashes (exit 133)  ✅ FIXED (2026-07-14)
 
 `let reader = { || match m.lock { Ok(g) -> g.get.clone; Err(_) -> "poisoned" } }`
 then `reader.()` **deterministically crashes** (SIGTRAP, empty output). The
 `Mutex[String]` guard `g` is bound in a `match` arm inside a closure, cloned out,
 then dropped at arm/closure exit. Repro: release-e2e `926_mutex_string_lock_capture`
-(closure capture) and `927_mutex_string_sharedsync_roundtrip`. PRE-EXISTING —
-crashes identically with and without Q49 (isolation-verified via the
-implicit-main-only worktree binary). SUSPECT: interaction between the guard's
-Drop and the closure-capture drop elaboration (the "blockdrop" work) — needs a
-base (`d5464a4e`) bisect to confirm whether an earlier session fix regressed it
-or it predates the session. S1 because it is a hard crash on a documented Q40
-ergonomic (`Mutex.lock` through a capture).
+(closure capture) and `927_mutex_string_sharedsync_roundtrip`.
+
+**Origin:** session regression from `fix/blockdrop` (`e70497d`). The compiler
+binary built before blockdrop runs 926 and prints `v=captured world`; binaries
+built after blockdrop on both implicit-main and Q49 exit 133. Q49 is not the
+cause.
+
+**Root cause:** `mir/lower/expr/closure.rs::synthesize_closure_drop` correctly
+ran the captured class's registered user drop, but unconditionally followed it
+with `heap_free_callee`. `ruxen_mutex_drop` and `ruxen_sharedsync_drop` already
+free/release their handle storage, so closure teardown double-freed the captured
+pointer. The empty stdout was buffered output lost when the later destructor
+trapped; emitted MIR shows the guard itself had already been used correctly.
+
+**Fix:** `mir/lower/runtime_abi.rs::drop_frees_storage` is the single list of FFI
+drop hooks that consume their own storage. Ordinary and synthesized closure
+drop elaboration consult it and suppress only the redundant outer free. The
+`Ok` arm still materializes the cloned String, calls
+`ruxen_mutex_guard_drop(g)` exactly once, then deallocates the guard spine once,
+and the `Err` arm never touches `g`. Pin `937_mutex_guard_match_arm_closure_drop`
+calls the reader twice: the second acquisition proves the first guard really
+unlocked, so the fix cannot be a no-op/leak mask. 926 and 927 are stable across
+five runs.
 
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
