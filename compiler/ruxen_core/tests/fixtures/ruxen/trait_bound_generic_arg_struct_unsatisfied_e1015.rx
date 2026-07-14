@@ -1,0 +1,23 @@
+## Q35 negative pin: a struct does not satisfy a nominal mixin bound merely
+## because it has a same-named method. Without `include Greet`, E1015 must remain.
+
+mixin Greet
+  def greet -> String
+end
+
+struct Plain
+  value: Int
+
+  def greet -> String
+    "not nominal"
+  end
+end
+
+def needs[T: Greet](x: &T) -> String
+  x.greet
+end
+
+def main
+  let p = Plain.new(1)
+  let _r = needs(&p)
+end

@@ -12,6 +12,15 @@ once 1.0.0 ships.
   metadata.** `Class.new` now writes the class-info header after allocation,
   matching `Class.new()`, so moving the value into an `any Mixin` field and
   dispatching through that field no longer dereferences a null header.
+- **Q35 — struct/enum `include Mixin` now satisfies generic mixin bounds.**
+  Type checking collected nominal in-body mixin impls only from classes; the
+  `HirItem::Struct` and `HirItem::Enum` collector arms registered derives but
+  skipped `impl_blocks`, so calls through `T: Mixin` failed with E1015 even
+  though direct methods and MIR implementor collection already worked. The
+  nominal satisfaction registry now records value-type includes (including
+  generic include arguments) symmetrically. Release-e2e pin `659` compiles and
+  runs the struct/Q17 free-function path (`one=21`); focused pins keep a
+  non-including struct on E1015 and cover enum symmetry.
 - **Concurrency LOW-finding cleanup (post-§4.6 review).** (1) `RetryFuture.init`
   no longer leaks its placeholder backoff `TimeSleepFuture`: the placeholder is
   marked a live child (`has_backoff = 1`) and torn down before the first real

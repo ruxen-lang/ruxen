@@ -69,3 +69,31 @@ fn generic_param_bound_satisfied_is_clean() {
             .collect::<Vec<_>>()
     );
 }
+
+// Q35: nominal includes on value types must use the same satisfaction registry
+// as class includes, while a same-shaped struct without the include stays red.
+
+#[test]
+fn struct_generic_param_bound_unsatisfied_still_emits_e1015() {
+    let errs = typeck_errors(&rx("trait_bound_generic_arg_struct_unsatisfied_e1015"));
+    assert!(
+        count_with_code(&errs, "E1015") >= 1,
+        "expected E1015 for needs[T: Greet](&Plain) where struct Plain does not include Greet, got: {:?}",
+        errs.iter()
+            .map(|d| (&d.code, &d.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn enum_include_satisfies_generic_param_bound() {
+    let errs = typeck_errors(&rx("trait_bound_generic_arg_enum_satisfied_clean"));
+    assert_eq!(
+        count_with_code(&errs, "E1015"),
+        0,
+        "enum Choice includes Labelled and must satisfy T: Labelled, got: {:?}",
+        errs.iter()
+            .map(|d| (&d.code, &d.message))
+            .collect::<Vec<_>>()
+    );
+}
