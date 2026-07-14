@@ -28,6 +28,10 @@ impl Resolver {
                     stmts.push(self.resolve_let(binding));
                 }
                 ast::Statement::Expression(expr) => {
+                    if let Some(binding) = self.resolve_bare_assignment_binding(expr) {
+                        stmts.push(binding);
+                        continue;
+                    }
                     let hir_expr = self.resolve_expr(expr);
                     if is_last {
                         // Last expression in block is the tail (implicit return)
@@ -48,6 +52,31 @@ impl Resolver {
             ty,
             span: block.span.clone(),
         }
+    }
+
+    fn resolve_bare_assignment_binding(&mut self, expression: &ast::Expr) -> Option<HirStatement> {
+        let ast::ExprKind::Assign { target, value } = &expression.kind else {
+            return None;
+        };
+        let ast::ExprKind::Identifier(name) = &target.kind else {
+            return None;
+        };
+        if self.scopes.lookup(name).is_some() {
+            return None;
+        }
+
+        let binding = ast::LetBinding {
+            mutable: true,
+            pattern: ast::Pattern::Identifier {
+                name: name.clone(),
+                mutable: true,
+                span: target.span.clone(),
+            },
+            type_annotation: None,
+            value: Some(value.clone()),
+            span: expression.span.clone(),
+        };
+        Some(self.resolve_let(&binding))
     }
 
     pub(super) fn resolve_let(&mut self, binding: &ast::LetBinding) -> HirStatement {

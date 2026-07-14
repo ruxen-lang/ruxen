@@ -7,6 +7,15 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Added
+- **Implicit main: top-level statements execute without `def main`.** The
+  shared compile/build front end now collects every top-level expression in
+  source order and moves it into a synthesized zero-argument, `nil`-returning
+  `main`; declarations stay hoisted and forward-visible. Existing explicit
+  `main` programs are unchanged, while mixing explicit `main` with loose
+  statements remains E0728. Release-e2e pins `933`–`935` cover script hello,
+  ordered assignment/function-call execution, and explicit-main compatibility.
+
 ### Fixed
 - **Q49: branch-scoped owned temporaries are dropped only on initialized
   paths.** MIR drop elaboration no longer hoists every owned local to a shared

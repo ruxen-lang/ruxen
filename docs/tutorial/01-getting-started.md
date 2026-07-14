@@ -7,9 +7,7 @@ Welcome. This chapter gets Ruxen installed on your machine and a working program
 Create a file called `hello.rx`:
 
 ```ruxen
-def main
-  puts "Hello, Ruxen!"
-end
+puts "Hello, Ruxen!"
 ```
 
 Compile and run:
@@ -25,7 +23,14 @@ You should see:
 Hello, Ruxen!
 ```
 
-That's it — you wrote, compiled, and ran a Ruxen program. The rest of this chapter is reference material you can skim now and come back to later.
+That's it — you wrote, compiled, and ran a Ruxen program. Like Ruby, Ruxen
+executes top-level statements from top to bottom. Definitions remain available
+regardless of where they appear; the compiler collects the executable
+statements into an implicit `main`. You can still write an explicit `def main`
+when you prefer, but do not mix one with loose top-level statements.
+
+The rest of this chapter is reference material you can skim now and come back
+to later.
 
 ## Installation
 

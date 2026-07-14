@@ -7,6 +7,7 @@ pub mod ast;
 pub mod classes;
 pub mod expr;
 pub mod ffi;
+pub mod implicit_main;
 pub mod items;
 pub mod methods;
 pub mod patterns;

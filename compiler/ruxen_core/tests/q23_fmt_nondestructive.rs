@@ -11,13 +11,14 @@
 //!     `tests/*.rx`) made the formatter error at 1:1, because
 //!     `parse_top_level_item` rejected a top-level expression statement. The
 //!     SHARED parser now accepts a clean top-level expression statement as a
-//!     `TopLevelItem::Expr`, so the formatter round-trips it. The direct
-//!     compile path still rejects it (resolve → E0728); `ruxen test` wraps
-//!     test files in a synthesised `def main` before compiling, so it is
-//!     unaffected.
+//!     `TopLevelItem::Expr`, so the formatter round-trips it. The compile path
+//!     moves those items into an implicit `main`; `ruxen test` keeps its own
+//!     explicit runner `main` and remains unaffected.
 
 use ruxen_core::formatter;
 use ruxen_core::lexer::Lexer;
+use ruxen_core::parser::ast::TopLevelItem;
+use ruxen_core::parser::implicit_main::synthesize_implicit_main;
 use ruxen_core::parser::Parser;
 
 fn fmt(src: &str) -> formatter::FormatResult {
@@ -82,15 +83,15 @@ fn top_level_describe_formats_cleanly() {
     assert_eq!(r.output, r2.output, "not idempotent");
 }
 
-/// (b) The shared main parser ACCEPTS the top-level describe (1 item) — the
-/// formatter parser is the same parser, so they stay consistent.
+/// (b) The shared parser preserves the source item for formatting, then the
+/// compile pre-pass moves it into an implicit `main`.
 #[test]
-fn main_parser_accepts_top_level_describe() {
+fn top_level_describe_becomes_implicit_main_for_compile() {
     let src = "Tester.describe(\"d\") do |t: &var Tester|\n  1\nend\n";
     let mut lexer = Lexer::new(src);
     let tokens = lexer.tokenize().expect("lex");
     let mut parser = Parser::new(tokens);
-    let program = parser
+    let mut program = parser
         .parse()
         .expect("parse should accept top-level expr stmt");
     assert_eq!(
@@ -98,6 +99,15 @@ fn main_parser_accepts_top_level_describe() {
         1,
         "expected exactly one top-level item"
     );
+    assert!(matches!(program.items[0], TopLevelItem::Expr(_)));
+
+    synthesize_implicit_main(&mut program);
+
+    let [TopLevelItem::Function(main)] = program.items.as_slice() else {
+        panic!("compile pre-pass should replace the expression with main");
+    };
+    assert_eq!(main.name, "main");
+    assert_eq!(main.body.statements.len(), 1);
 }
 
 /// Negative: a genuine top-level garbage token sequence (not a clean

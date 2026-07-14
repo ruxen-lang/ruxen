@@ -30,9 +30,9 @@
 //!                   variant is added without a parity decision (fix-or-
 //!                   allowlist), so a future AST variant cannot silently skip
 //!                   the harness.
-//!   5. intentional-divergence allowlist — the parser-accepts-but-compile-
-//!                   rejects cases (E0728 top-level expr, E0607 retired `@[...]`)
-//!                   are an EXPLICIT table, not silent.
+//!   5. intentional-divergence allowlist — any parser-accepts-but-compile-
+//!                   rejects case must be explicit. The table is currently
+//!                   empty now that top-level expressions get implicit main.
 //!
 //! Extending the corpus: add `.rx` files under `tests/release-e2e/cases/` or
 //! `library/std/`; they are picked up automatically. Sibling repos
@@ -334,10 +334,8 @@ fn guard_top_level_item(it: &TopLevelItem) {
         TopLevelItem::Lib(_) => {}
         TopLevelItem::Extern(_) => {}
         TopLevelItem::Alias(_) => {}
-        // Intentional divergence (allowlisted below): parser accepts a
-        // bare top-level expression so fmt round-trips test files; the
-        // direct-compile path rejects it with E0728 (`ruxen test` hoists
-        // first). See `INTENTIONAL_DIVERGENCES`.
+        // Parser, formatter, and compiler all accept this. The compile
+        // pipeline moves it into implicit `main` unless one already exists.
         TopLevelItem::Expr(_) => {}
     }
 }
@@ -365,19 +363,12 @@ fn guard_impl_item(it: &ImplItem) {
 // ─── Axis 5: intentional-divergence allowlist ────────────────────────
 //
 // Constructs the SHARED parser ACCEPTS (so fmt/lsp/ide round-trip them) but
-// the direct compile path intentionally REJECTS with a specific diagnostic.
-// These are NOT silent divergences — they are an explicit contract. The test
-// asserts each one still parses (the acceptance half of the contract); the
-// rejection half is owned by the resolve-phase tests that emit the code.
+// the compile path intentionally REJECTS with a specific diagnostic. The
+// table is intentionally empty: top-level expressions now compile through an
+// implicit `main`, while retired `@[...]` syntax is rejected by the parser.
 
 /// (source, diagnostic-code, why the compile path rejects it)
-const INTENTIONAL_DIVERGENCES: &[(&str, &str, &str)] = &[(
-    "Tester.describe(\"x\") do\n  1\nend\n",
-    "E0728",
-    "top-level expression statement: parser accepts so `ruxen fmt` \
-         round-trips test files; direct compile rejects (ruxen test hoists \
-         into a synthesised `def main` first)",
-)];
+const INTENTIONAL_DIVERGENCES: &[(&str, &str, &str)] = &[];
 
 #[test]
 fn axis_intentional_divergences_still_parse() {
@@ -419,9 +410,8 @@ fn axis_repl_accepts_corpus_top_level_items() {
             continue;
         };
         for item in &prog.items {
-            // Top-level bare expressions are the allowlisted E0728 case,
-            // exercised by the repl's expression arm separately; keep this
-            // axis about ITEM-kind dispatch.
+            // Top-level expressions are exercised by the repl's expression
+            // arm separately; keep this axis about ITEM-kind dispatch.
             if matches!(item, TopLevelItem::Expr(_)) {
                 continue;
             }

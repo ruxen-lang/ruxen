@@ -83,6 +83,7 @@ fn type_check_with_loaded_bootstrap(
     // BEFORE the resolver so the generated class lifts through the
     // normal resolve/typeck/MIR pipeline as if it were user-written.
     let mut lowered = program.clone();
+    crate::parser::implicit_main::synthesize_implicit_main(&mut lowered);
     // E1112/E1116/E1115 pre-checks: detect block_on-in-async, Task.spawn-in-sync,
     // and .await-in-loop BEFORE the async-fn rewrite collapses bodies into synth
     // state-machine classes (which would make the checks unreachable).
@@ -111,6 +112,12 @@ pub fn type_check_with_bootstrap_packages(
     program: &ast::Program,
     bootstrap_packages: &[(String, ast::Program)],
 ) -> TypeCheckResult {
+    let synthesized = crate::parser::implicit_main::needs_implicit_main(program).then(|| {
+        let mut prepared = program.clone();
+        crate::parser::implicit_main::synthesize_implicit_main(&mut prepared);
+        prepared
+    });
+    let prepared = synthesized.as_ref().unwrap_or(program);
     let resolver = Resolver::new();
     let ResolveResult {
         mut program,
@@ -119,7 +126,7 @@ pub fn type_check_with_bootstrap_packages(
         mut diagnostics,
         type_registry,
         method_aliases,
-    } = resolver.resolve_with_bootstrap_packages(program, bootstrap_packages);
+    } = resolver.resolve_with_bootstrap_packages(prepared, bootstrap_packages);
 
     diagnostics.extend(crate::implicit_includes::validate_program(
         &program, &symbols,
@@ -171,6 +178,7 @@ pub fn type_check_with_bootstrap(
     // Async lowering — see `type_check` for context. Identical
     // injection point in this non-package-aware variant.
     let mut lowered_user = program.clone();
+    crate::parser::implicit_main::synthesize_implicit_main(&mut lowered_user);
     // E1112 pre-check (docs/specs/stdlib/executor.spec.md B6) —
     // mirrors `type_check`'s injection.
     let e1112_diags = crate::async_lowering::collect_block_on_in_async_diagnostics(&lowered_user);
