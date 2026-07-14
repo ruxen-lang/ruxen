@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::module::Module;
+use inkwell::module::{Linkage, Module};
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, IntValue, PointerValue,
@@ -96,11 +96,111 @@ pub fn compile_program<'ctx>(
         }
     }
 
+    // Pass 1.5: define runtime-mixin vtable and class-info globals after all
+    // method functions have been declared, but before function bodies can
+    // lower `DataAddr` references to them. Each global is an array of opaque
+    // pointers, so LLVM's target data layout controls pointer size and
+    // alignment for both native and wasm targets.
+    emit_mixin_vtable_data(program, module, context)?;
+
     // Pass 2: define all user functions
     let mut string_cache: HashMap<String, GlobalValue<'ctx>> = HashMap::new();
 
     for func in &program.functions {
         compile_function(func, program, module, context, &mut string_cache)?;
+    }
+
+    Ok(())
+}
+
+fn emit_mixin_vtable_data<'ctx>(
+    program: &MirProgram,
+    module: &Module<'ctx>,
+    context: &'ctx Context,
+) -> Result<(), String> {
+    let ptr_ty = context.ptr_type(AddressSpace::default());
+
+    for vtable in &program.vtables {
+        let symbol = vtable.symbol();
+        if module.get_global(&symbol).is_some() {
+            return Err(format!(
+                "mixin-vtables: duplicate vtable data symbol '{}'",
+                symbol
+            ));
+        }
+        let global = module.add_global(
+            ptr_ty.array_type(vtable.method_symbols.len() as u32),
+            None,
+            &symbol,
+        );
+        global.set_linkage(Linkage::Internal);
+        global.set_constant(true);
+    }
+
+    for class_info in &program.class_infos {
+        let symbol = class_info.symbol();
+        if module.get_global(&symbol).is_some() {
+            return Err(format!(
+                "mixin-vtables: duplicate class_info data symbol '{}'",
+                symbol
+            ));
+        }
+        let global = module.add_global(
+            ptr_ty.array_type(class_info.vtable_symbols.len() as u32),
+            None,
+            &symbol,
+        );
+        global.set_linkage(Linkage::Internal);
+        global.set_constant(true);
+    }
+
+    for vtable in &program.vtables {
+        let symbol = vtable.symbol();
+        let method_ptrs: Result<Vec<PointerValue<'ctx>>, String> = vtable
+            .method_symbols
+            .iter()
+            .map(|method_symbol| {
+                module
+                    .get_function(method_symbol)
+                    .map(|function| function.as_global_value().as_pointer_value())
+                    .ok_or_else(|| {
+                        format!(
+                            "mixin-vtables: method symbol '{}' for vtable '{}' not declared \
+                             — required-method check (E1117) should have caught this",
+                            method_symbol, symbol
+                        )
+                    })
+            })
+            .collect();
+        let initializer = ptr_ty.const_array(&method_ptrs?);
+        module
+            .get_global(&symbol)
+            .expect("vtable global was declared above")
+            .set_initializer(&initializer);
+    }
+
+    for class_info in &program.class_infos {
+        let symbol = class_info.symbol();
+        let vtable_ptrs: Result<Vec<PointerValue<'ctx>>, String> = class_info
+            .vtable_symbols
+            .iter()
+            .map(|vtable_symbol| {
+                module
+                    .get_global(vtable_symbol)
+                    .map(|global| global.as_pointer_value())
+                    .ok_or_else(|| {
+                        format!(
+                            "mixin-vtables: class_info '{}' references unknown vtable '{}'",
+                            symbol, vtable_symbol
+                        )
+                    })
+            })
+            .collect();
+        let initializer = ptr_ty.const_array(&vtable_ptrs?);
+        module
+            .get_global(&symbol)
+            .expect("class_info global was declared above")
+            .set_initializer(&initializer);
     }
 
     Ok(())

@@ -1772,7 +1772,7 @@ investigation. Also reconfirmed by the same quiver report: the
 non-Copy-call-result-as-method-arg landmine at a fresh site (quiver
 `cut`/`clip_write` — let-bind first, as documented).
 
-## Q41 · S2 — LLVM backend can't lower a `DataAddr` class-info ref for a `dispatch runtime` mixin type → `ruxen build --release` blocked for async projects  ⏳ OPEN (NEW 2026-06-14)
+## Q41 · S2 — LLVM backend can't lower a `DataAddr` class-info ref for a `dispatch runtime` mixin type → `ruxen build --release` blocked for async projects  ✅ FIXED 2026-07-14
 
 Found 2026-06-14 in rondo (workaround **W22**, `rondo/docs/ruxen-issues.md`)
 while benchmarking the framework against a Go `net/http` baseline. `ruxen build`
@@ -1816,10 +1816,33 @@ a 16-core Linux box), debug-Cranelift rondo peaked ~113k RPS and cliffed past
 c≈200, versus optimized Go `net/http` ~164k RPS stable through c=400 — the
 debug-build handicap is a real confound.
 
-**Fix direction.** Cranelift already lowers this correctly, so the gap is on the
-LLVM backend: it needs to emit the `DataAddr` reference to a `__rx_classinfo_*`
-class-info symbol for runtime-mixin types (see the `mixin-vtables` lowering path
-referenced in the error). Cross-linked from rondo W22.
+**Root cause.** LLVM's function-emission pass had no equivalent of Cranelift's
+Pass 1.5/Pass 3 mixin-data handling. It neither declared nor initialized the
+`__rx_vtable_*` and `__rx_classinfo_*` globals, so the `MirInst::DataAddr` arm
+deliberately returned the quoted error. A second guard rejected any program
+whose MIR contained vtables/class-info even if instruction lowering could have
+continued.
+
+**Fix.** The LLVM emitter now creates each vtable and class-info as an internal,
+constant array of LLVM 18 opaque pointers after declaring all user functions
+and before emitting bodies. Vtable initializers contain method-function
+pointers; class-info initializers contain pointers to the matching vtable
+globals. `DataAddr` resolves the same symbol in the module, converts its opaque
+pointer to the MIR destination's `Int` slot, and stores it. The module also
+uses the target machine's data layout, leaving native/wasm pointer size and
+alignment to LLVM rather than encoding a typed-pointer or host-width
+assumption. Both former LLVM-only bailouts are removed; an unknown data symbol
+still produces a hard codegen error rather than null/garbage.
+
+**Regression pin.** `q41_runtime_mixin_class_info_lowers_links_and_runs` compiles
+a Ruby-syntax future-like class including `Q41Future dispatch runtime` with
+LLVM `-O2`, links it, executes a call through an `any Q41Future` field, and
+asserts the dynamically dispatched result. Before the fix it failed on
+`__rx_classinfo_TimeSleepFuture`; after the fix it prints the success marker.
+Run with `cargo test -p ruxen_core --features llvm --test llvm_backend
+q41_runtime_mixin_class_info_lowers_links_and_runs -- --exact`.
+
+Cross-linked from rondo W22.
 
 Toolchain: `ruxen 0.1.0`.
 

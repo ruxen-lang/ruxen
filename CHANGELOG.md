@@ -25,6 +25,12 @@ once 1.0.0 ships.
   a method inherited solely from an included mixin's default body, while a type's
   own implementation keeps precedence and an absent target remains E1120.
   Release-e2e pins 470–472 cover shift, index read/write, and default dispatch.
+- **Q41: LLVM release builds now support runtime-dispatch mixins.** The LLVM
+  backend now emits internal constant vtable and class-info globals, lowers
+  MIR `DataAddr` operands to those globals with LLVM 18 opaque pointers, and
+  preserves their function/global relocations through optimized object
+  emission. This unblocks optimized builds of async projects that pull in
+  `TimeSleepFuture`.
 - **Q46: paren-less no-argument constructors now initialize runtime-mixin
   metadata.** `Class.new` now writes the class-info header after allocation,
   matching `Class.new()`, so moving the value into an `any Mixin` field and

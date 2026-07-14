@@ -36,7 +36,8 @@ fn compile_to_exe(source: &str, backend: Backend) -> String {
             .diagnostics
             .iter()
             .any(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error),
-        "type errors"
+        "type errors: {:#?}",
+        type_result.diagnostics
     );
     let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
     assert!(borrow_errors.is_empty(), "borrow errors");
@@ -108,6 +109,17 @@ backend_test!(mini_sample_identical, "mini_sample.rx");
 backend_test!(tasklist_identical, "tasklist.rx");
 backend_test!(sample_program_identical, "sample_program.rx");
 backend_test!(drop_owned_struct_identical, "drop_owned_struct.rx");
+
+#[test]
+fn q41_runtime_mixin_class_info_lowers_links_and_runs() {
+    let source = std::fs::read_to_string("tests/fixtures/q41_llvm_runtime_mixin.rx").unwrap();
+
+    let llvm_exe = compile_to_exe(&source, Backend::Llvm { opt_level: 2 });
+    let (stdout, exit) = run_exe(&llvm_exe);
+
+    assert_eq!(stdout, "Q\n");
+    assert_eq!(exit, 0);
+}
 
 /// Test that all optimization levels produce correct output.
 #[test]
