@@ -956,6 +956,12 @@ impl MixinResolver {
                 } else {
                     format!("{}.{}", module_path.join("."), strukt.name)
                 };
+                let methods = strukt
+                    .methods
+                    .iter()
+                    .map(|method| (method.name.clone(), self.func_to_sig(method)))
+                    .collect();
+                self.register_impl(&type_name, None, methods);
                 self.register_derived_impls(
                     &type_name,
                     &Ty::Struct {
@@ -999,6 +1005,12 @@ impl MixinResolver {
                 } else {
                     format!("{}.{}", module_path.join("."), enm.name)
                 };
+                let methods = enm
+                    .methods
+                    .iter()
+                    .map(|method| (method.name.clone(), self.func_to_sig(method)))
+                    .collect();
+                self.register_impl(&type_name, None, methods);
                 self.register_derived_impls(
                     &type_name,
                     &Ty::Enum {

@@ -17,6 +17,16 @@ once 1.0.0 ships.
   ordered assignment/function-call execution, and explicit-main compatibility.
 
 ### Fixed
+- **Q50: interpolated calls that return `String` no longer print their raw
+  pointer.** Type checking omitted inline struct/enum methods from the direct
+  method registry, so an included mixin's unannotated required-method
+  signature (`Unit`) could shadow an enum's concrete `-> String` method. MIR
+  then routed the returned `char*` through `Int_fmt`. Struct and enum methods
+  are now registered symmetrically with class methods; MIR also recovers a
+  stale call temporary from the resolved method's declared return type before
+  Display dispatch, and invalid/error types no longer use the integer
+  fallback. The method-name string heuristic was removed. Release-e2e cases
+  `94_custom_error_enum` and `931_interpolation_method_string` pin the fix.
 - **Q49: branch-scoped owned temporaries are dropped only on initialized
   paths.** MIR drop elaboration no longer hoists every owned local to a shared
   return block, where LLVM could pass an uninitialized stack value to

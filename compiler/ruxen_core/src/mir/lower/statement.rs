@@ -63,20 +63,15 @@ impl<'a> Lowerer<'a> {
                     _ => def_id_name(*def_id, self.symbols),
                 };
 
-                // Refine unresolved Infer types: if the initializer is a
-                // method call known to return a string, use Ty::String
-                // instead.  This ensures correct string interpolation for
-                // variables like `let task_name = ... .unwrap_or(other.clone)`.
+                // Refine an unresolved binding from its initializer's
+                // inferred type. MIR should not need method-name knowledge to
+                // recover the representation of a call result.
                 let refined_ty = if matches!(ty, Ty::Infer(_)) {
-                    if let Some(init_expr) = value {
-                        if is_inferred_string_expr(init_expr) {
-                            Ty::String
-                        } else {
-                            ty.clone()
-                        }
-                    } else {
-                        ty.clone()
-                    }
+                    value
+                        .as_ref()
+                        .map(|init| init.ty.clone())
+                        .filter(|init_ty| !init_ty.is_infer() && !init_ty.is_error())
+                        .unwrap_or_else(|| ty.clone())
                 } else {
                     ty.clone()
                 };
