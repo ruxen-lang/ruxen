@@ -335,7 +335,8 @@ impl<'a> Lowerer<'a> {
                     // For static/class methods (`def self.foo`), the callee
                     // takes no `self` parameter, so omit the receiver.
                     let is_static_builtin = is_builtin_static_method(&obj_type_name, field_name)
-                        || self.is_user_static_method(&obj_type_name, field_name);
+                        || self.is_user_static_method(&obj_type_name, field_name)
+                        || self.is_class_identifier(object);
                     let obj_local = self.lower_expr(object)?;
 
                     let dispatch_ty = if matches!(base_ty, Ty::Infer(_)) {

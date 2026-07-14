@@ -8,6 +8,7 @@ use ruxen_core::borrow_check;
 use ruxen_core::codegen;
 use ruxen_core::lexer::Lexer;
 use ruxen_core::mir;
+use ruxen_core::module_loader::{ModuleLoader, SourceBundle};
 use ruxen_core::parser::Parser;
 use ruxen_core::typeck;
 
@@ -276,13 +277,9 @@ pub fn check(target: Option<&str>) -> Result<(), String> {
         return Err(format!("entry point not found: {}", entry.display()));
     }
 
-    // Discover and gather all module sources. Flat-merge the project's
-    // dependency sources ahead of its own (Q16) so `ruxen check` sees
-    // dependency symbols — the same visibility a binary build gets.
-    let tree = ModuleTree::discover(&project_dir)?;
     let dep_source_dirs = resolve_dep_source_dirs(&project_dir)?;
-    let mut combined = gather_dep_sources(&dep_source_dirs)?;
-    combined.push_str(&gather_sources(&project_dir, &tree, &package.name)?);
+    let combined =
+        gather_project_bundle(&project_dir, &entry, &dep_source_dirs, &package.name)?.source;
 
     if let Err(e) = check_single_file(&combined, &entry) {
         eprintln!("{}", e);
@@ -523,6 +520,31 @@ fn gather_sources(project_dir: &Path, tree: &ModuleTree, name: &str) -> Result<S
     Ok(combined)
 }
 
+fn gather_project_bundle(
+    project_dir: &Path,
+    entry: &Path,
+    dep_source_dirs: &[PathBuf],
+    name: &str,
+) -> Result<SourceBundle, String> {
+    let mut load_paths = Vec::with_capacity(dep_source_dirs.len() + 1);
+    load_paths.push(project_dir.to_path_buf());
+    load_paths.extend(dep_source_dirs.iter().cloned());
+    let bundle = ModuleLoader::new(load_paths).load(entry)?;
+    if bundle.has_directives {
+        return Ok(bundle);
+    }
+
+    let tree = ModuleTree::discover(project_dir)?;
+    let mut source = gather_dep_sources(dep_source_dirs)?;
+    source.push_str(&gather_sources(project_dir, &tree, name)?);
+    Ok(SourceBundle {
+        source,
+        files: bundle.files,
+        autoloads: bundle.autoloads,
+        has_directives: false,
+    })
+}
+
 /// Wrap the rlib object-extraction call with rich diagnostic context.
 ///
 /// The underlying I/O / archive errors are technically accurate (`No
@@ -704,22 +726,20 @@ fn compile_piece(
     _extern_libs: &[(String, PathBuf)],
     dep_source_dirs: &[PathBuf],
 ) -> Result<(), String> {
-    let tree = ModuleTree::discover(source_dir)?;
-
-    // Gather all source files: dep sources first (Q16), then entry point
-    // + modules. Flat-merge (not extern-rlib link) keeps a single object
-    // per rlib — no duplicate symbols.
-    let mut combined = gather_dep_sources(dep_source_dirs)?;
-    combined.push_str(&gather_sources(source_dir, &tree, name)?);
-
-    let entry_file = source_dir.join("src/lib.rx");
+    let entry_file = if source_dir.join("src/lib.rx").is_file() {
+        source_dir.join("src/lib.rx")
+    } else {
+        source_dir.join("src/main.rx")
+    };
+    let bundle = gather_project_bundle(source_dir, &entry_file, dep_source_dirs, name)?;
+    let combined = bundle.source;
     let (object_bytes, mut metadata) = compile_single_file(&combined, &entry_file, release)?;
 
     // Set the piece metadata
     metadata.name = name.to_string();
     metadata.version = version.to_string();
 
-    let source_hash = rlib::hash_sources(source_dir)?;
+    let source_hash = rlib::hash_bytes(combined.as_bytes());
     rlib::create_rlib(rlib_path, name, &object_bytes, &metadata, &source_hash)?;
 
     Ok(())
@@ -741,15 +761,8 @@ fn compile_project(
         return Err(format!("entry point not found: {}", entry.display()));
     }
 
-    let tree = ModuleTree::discover(project_dir)?;
     let package_name = manifest.require_package()?.name.clone();
-    let user_source = gather_sources(project_dir, &tree, &package_name)?;
-
-    // Flat-merge dep sources ahead of user source so the resolver
-    // sees their declarations during typecheck (see `gather_dep_sources`).
-    let mut combined = gather_dep_sources(dep_source_dirs)?;
-    combined.push_str(&user_source);
-    let source = combined;
+    let source = gather_project_bundle(project_dir, &entry, dep_source_dirs, &package_name)?.source;
 
     // Phase 1: Lex
     let mut lexer = Lexer::new(&source);

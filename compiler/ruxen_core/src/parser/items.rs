@@ -5,8 +5,8 @@
 //! live in `parser/classes.rs`; this module dispatches into them.
 
 use crate::lexer::token::TokenKind;
-use crate::parser::Parser;
 use crate::parser::ast::*;
+use crate::parser::Parser;
 
 impl Parser {
     pub(super) fn parse_top_level_item(&mut self) -> Option<TopLevelItem> {
@@ -161,9 +161,9 @@ impl Parser {
     pub(super) fn parse_alias_item(&mut self) -> AliasDef {
         let start = self.current_span();
         self.advance(); // consume the `alias` contextual keyword
-        // `parse_def_name` accepts both plain/`?`/`!` identifiers and
-        // operator-symbol names (`<<`, `[]`); resolve admits supported
-        // operator dispatch paths and rejects the rest with E1123 (ADR D6).
+                        // `parse_def_name` accepts both plain/`?`/`!` identifiers and
+                        // operator-symbol names (`<<`, `[]`); resolve admits supported
+                        // operator dispatch paths and rejects the rest with E1123 (ADR D6).
         let new_name = self.parse_def_name();
         // Ruby's `alias` takes NO comma. Reject the comma form explicitly so
         // the diagnostic is actionable instead of a generic "expected

@@ -8,6 +8,13 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Ruby-style module loading: `require` / `require_relative` / `autoload`;
+  files anywhere, not just `src/`.** The AOT loader follows the entry file's
+  require graph, deduplicates canonical paths, reports Ruby-like `LoadError`
+  diagnostics with searched locations, and expands autoload registrations at
+  unresolved-constant fixpoints. Projects without loading directives retain
+  the existing recursive `src/` discovery behavior, and incremental hashes now
+  cover every loaded file's canonical path and contents.
 - **Implicit main: top-level statements execute without `def main`.** The
   shared compile/build front end now collects every top-level expression in
   source order and moves it into a synthesized zero-argument, `nil`-returning

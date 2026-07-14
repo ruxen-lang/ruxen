@@ -268,7 +268,7 @@ impl Parser {
         // For known IO/statement functions, allow broader expression args.
         let is_bare_call_fn = matches!(
             callee_name,
-            "puts" | "print" | "eputs" | "require" | "include" | "raise"
+            "puts" | "print" | "eputs" | "include" | "raise"
         );
         if !is_bare_call_fn {
             return false;

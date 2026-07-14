@@ -25,6 +25,23 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
 
 ### Toolchain / tests
 
+- [x] **Ruby-style AOT module loading (DONE 2026-07-14,
+      `feat/require-autoload`).** `require` and `require_relative` now drive a
+      canonical-path-deduplicated source graph from the entry file;
+      `autoload :Const, "path"` expands on an unresolved-name fixpoint. The
+      load path is project root followed by dependency roots, while relative
+      requests use the declaring file's directory. Directive-free projects
+      retain recursive `src/` discovery. The low-level compile cache and rlib
+      hash both consume the combined canonical-path/content source. Seven
+      focused loader tests plus files-anywhere, autoload, cache-invalidation,
+      and legacy-`src/` CLI smokes pin the behavior. Specification:
+      `requirements/module_loading.md`.
+  - [ ] **Followup: harden autoload's unresolved-name detection.** The fixpoint
+        currently matches the constant name against diagnostic message text
+        (Ruxen has no dedicated error code for an unresolved name). This is
+        sound in normal use (a spurious match needs a co-occurring error that
+        already fails the build), but a structured unresolved-constant API from
+        `resolve` would remove the text coupling and the per-round full recompile.
 - [x] **Q53 — String-returning method interpolation in a generic closure
       (FIXED 2026-07-14, `fix/q53-closure-interp`).** Q50 removed a fragile
       inferred-call method-name allowlist, exposing that inlined `.each`

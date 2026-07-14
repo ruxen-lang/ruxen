@@ -435,9 +435,10 @@ impl Parser {
             // Fall through to normal handling as if we had just the TypeIdentifier.
         }
 
-        // Check if followed by . — could be enum variant construction or static method
-        if self.at(TokenKind::Dot) {
-            // Peek what follows the dot
+        // Check if followed by `.` or Ruby's `::` namespace separator —
+        // could be enum variant construction or a static method receiver.
+        if self.at(TokenKind::Dot) || self.at(TokenKind::ColonColon) {
+            // Peek what follows the separator.
             let after_dot = self.peek_at_kind(1);
             // The stdlib variant keywords (Some/None/Ok/Err) also serve as
             // variant names for user-defined generic enums that re-use
@@ -501,10 +502,10 @@ impl Parser {
                             {
                                 let vname = vname.clone();
                                 self.advance();
-                                if self.at(TokenKind::Dot) {
+                                if self.at(TokenKind::Dot) || self.at(TokenKind::ColonColon) {
                                     if let TokenKind::TypeIdentifier(_) = self.peek_kind() {
                                         path.push(vname);
-                                        self.advance(); // consume .
+                                        self.advance(); // consume namespace separator
                                         continue;
                                     }
                                 }

@@ -108,8 +108,25 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     let output_path = output_path.unwrap_or_else(|| path.replace(".rx", ""));
 
-    let source =
-        fs::read_to_string(path).map_err(|e| format!("Error reading '{}': {}", path, e))?;
+    let entry = PathBuf::from(path);
+    let current_dir = env::current_dir()
+        .map_err(|error| format!("failed to get current directory: {}", error))?;
+    let entry = if entry.is_absolute() {
+        entry
+    } else {
+        current_dir.join(entry)
+    };
+    let entry_dir = entry
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let mut load_paths = vec![entry_dir];
+    if !load_paths.contains(&current_dir) {
+        load_paths.push(current_dir);
+    }
+    let source = ruxen_core::module_loader::ModuleLoader::new(load_paths)
+        .load(&entry)?
+        .source;
 
     // Resolve the cross-compilation target (tier 4.02). `None`/host keeps the
     // byte-identical cached host path below; a non-host target takes the

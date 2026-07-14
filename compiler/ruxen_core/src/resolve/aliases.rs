@@ -19,8 +19,8 @@ use std::collections::HashMap;
 
 use crate::diagnostics::Diagnostic;
 use crate::parser::ast;
-use crate::resolve::Resolver;
 use crate::resolve::symbols::DefKind;
+use crate::resolve::Resolver;
 
 /// An operator-symbol method name (`+`, `<<`, `[]`, `[]=`, `-@`, …).
 fn is_operator_name(name: &str) -> bool {
