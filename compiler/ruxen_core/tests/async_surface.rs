@@ -48,6 +48,47 @@ fn symbols_after_bootstrap() -> SymbolTable {
     result.symbols
 }
 
+#[test]
+fn any_future_still_satisfies_future_after_dyn_closure_call_result() {
+    let source = r#"
+class BootstrapFutureFactory
+  def self.call(make: any Fn[Fn() -> any Future]) -> any Future
+    make.()
+  end
+end
+
+class StoredFuture
+  inner: any Future
+
+  def init(inner: any Future)
+    self.inner = inner
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    match (&var self.inner).poll(cx)
+      Poll.Ready(value) -> Poll.Ready(value)
+      Poll.Pending -> Poll.Pending
+    end
+  end
+end
+"#;
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize().expect("lex Q47 source");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("parse Q47 source");
+    let result = typeck::type_check(&program);
+    let errors: Vec<&Diagnostic> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "calling a dyn closure returning `any Future` must preserve the existential's own Future guarantee; got: {:?}",
+        errors.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
 // ─── B1 — Future mixin shape ────────────────────────────────────────
 
 /// The bootstrap-merged `Future` mixin declares ONE required method

@@ -2081,7 +2081,7 @@ release-e2e case 460 prove the reduced field-move program exits cleanly and
 prints `value=42`. Before the fix, both pins reproduced the missing MIR write
 and the signal exit with empty output.
 
-## Q47 · S2 — calling a `Fn[() -> any Future]` closure inside a BOOTSTRAP class POISONS global `any Future`→`Future` mixin satisfaction for every program  ⏳ OPEN (NEW 2026-06-19)
+## Q47 · S2 — calling a `Fn[() -> any Future]` closure inside a BOOTSTRAP class POISONS global `any Future`→`Future` mixin satisfaction for every program  ✅ FIXED (2026-07-14)
 
 Found 2026-06-19 building the §4.6 async `RetryFuture`. A bootstrap (stdlib) class
 that holds a closure field/param typed `any Fn[Fn() -> any Future]` and CALLS it
@@ -2103,10 +2103,22 @@ satisfaction state.
   trigger it. Switching the closure's return type to `Int`
   (`any Fn[Fn() -> Int]`, the future-as-raw-ptr channel) → FINE.
 
-Root cause is unconfirmed but localized to how a CALL whose result type is the
-dyn `any Future` (associated `Output` indeterminate) is registered/cached in the
-global mixin-satisfaction table during bootstrap typeck. Contrast `any Stream`
-(`poll_next -> Poll[Option[Int]]`, FIXED Output) which never poisons.
+**Root cause:** the call resolver correctly returned
+`Ty::AnyMixin([Future])`, but the declared-bound seam then decomposed the
+expected `any Future` and asked `MixinResolver::check_satisfaction` whether the
+found `Ty::AnyMixin([Future])` satisfied `Future`. The resolver did not honor
+the guarantee carried by an opaque/existential mixin value. Instead it formatted
+the found type as the synthetic concrete key `"any Future"`, missed both the
+nominal implementation map and the concrete method map, and emitted
+`type \`any Future\` does not satisfy \`Future\``. There was no mutable
+process-global satisfaction cache: the apparent cross-program poison came from
+the offending bootstrap shape participating in every user compilation.
+
+**Fix:** `MixinResolver::check_satisfaction` now accepts an `any Mixin` value
+nominally, or a `some Mixin` value in static-dispatch mode, when it carries the
+exact queried `MixinRef`, including its generic arguments. This is the general
+existential/opaque rule; it does not special-case `Future` or associated
+`Output`. Concrete values still take the existing nominal/structural paths.
 
 **Workaround (in use, §4.6):** the `Async.retry(sched, block)` block is typed
 `any Fn[Fn() -> Int]` — the closure body constructs the attempt future and returns
@@ -2114,13 +2126,17 @@ it AS A RAW `Int` ptr (a future value coerces to `Int` at the closure boundary,
 the established `Task.spawn_raw`/`Race` value ABI). The `RetryFuture` then polls
 that raw ptr through the C step `ruxen_retry_poll_inner` (wrapping
 `Future_dynamic_poll`). No `any Future`-typed value appears in any CALL → no
-poison. **Severity S2** (corrupts an unrelated global invariant from one stdlib
-construct — high blast radius — but a clean, already-established workaround
-exists: every dyn-future value already flows as a raw `Int` in Task/Race/Scope/
-Queue). The proper fix is in the satisfaction-table population for an
-indeterminate-`Output` dyn-mixin call result. No release-e2e pin (the workaround
-IS the shipped shape, pins `445`–`449`); a `.deferred` repro could be added when
-someone takes the fix. Toolchain: `ruxen 0.1.0` (`feat/concurrency-adoption`).
+poison. The workaround remains unchanged in this task because pins `445`–`449`
+and the current retry ABI depend on it; a follow-up may simplify `Async.retry`
+to a typed `any Future` block. **Severity S2** (corrupts an unrelated global
+invariant from one stdlib construct — high blast radius — but a clean,
+already-established workaround exists: every dyn-future value already flows as
+a raw `Int` in Task/Race/Scope/Queue). Release-e2e pin
+`473_any_future_call_no_poison.rx` typechecks the
+bootstrap-shaped `make.()` body, then runs unrelated code that polls a stored
+`any Future`; the Rust `async_surface` regression asserts the same two-shape
+ordering through the production bootstrap/typeck path. Pins `445`–`449` remain
+green. Toolchain: `ruxen 0.1.0` (`fix/q47`).
 
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 

@@ -8,6 +8,17 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- **Q47: dyn call results retain their declared mixin guarantees.** A call to a
+  closure returning `any Future` produced an existential value that the bound
+  checker immediately re-tested as if it were a concrete type named
+  `any Future`. The mixin registry had no concrete method table under that
+  synthetic name, so it reported that `any Future` did not satisfy `Future`;
+  bootstrap bodies made the false negative appear in every compilation. Opaque
+  `some Mixin` and existential `any Mixin` values now satisfy the exact bounds
+  they carry in their declared dispatch mode (including generic arguments).
+  Release-e2e pin `473` combines the bootstrap-shaped closure call with an
+  unrelated stored `any Future` poll and runs successfully; the focused typeck
+  regression pins the same ordering.
 - **Q46: paren-less no-argument constructors now initialize runtime-mixin
   metadata.** `Class.new` now writes the class-info header after allocation,
   matching `Class.new()`, so moving the value into an `any Mixin` field and
@@ -65,10 +76,10 @@ once 1.0.0 ships.
     so backoff timing is TestClock-virtualizable (the killer pin 445:
     `exponential(50ms).max_attempts(5)` advanced through 50/100/200ms backoffs,
     no real sleep). The block returns the attempt future as a raw `Int` ptr (the
-    `Task.spawn_raw`/`Race` value ABI) — DELIBERATELY, because a closure typed
-    `Fn[() -> any Future]` that is CALLED inside a bootstrap class poisons global
-    `any Future`→`Future` mixin satisfaction (filed Q-issue; the Int channel
-    sidesteps it). The inner attempt is polled via the C step
+    `Task.spawn_raw`/`Race` value ABI) — the Int channel remains in place for
+    compatibility with pins `445`–`449`, although the `Fn[() -> any Future]`
+    satisfaction bug is now fixed as Q47. The inner attempt is polled via the C
+    step
     `ruxen_retry_poll_inner` (a thin wrapper over the EXISTING
     `Future_dynamic_poll`, mirroring `ruxen_race_step`) since a dyn `any Future`'s
     `poll -> Poll[Self.Output]` has an indeterminate Output and can't be polled

@@ -19,7 +19,7 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 36 of 39 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
 feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned; Q28, Q30,
-Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 fixed 2026-06-10 via the syntax-parity harness; Q37 fixed 2026-06-10 (root cause: a yielding/`&block` method poisoned an unrelated same-named free fn via a bare-name yield map — this covers BOTH the S1 name-collision symptom AND the S2 "generic `frame[S: PaintSurface]` gets a bogus `__block` in binary-consumes-library builds" symptom; they were the same bug) — quiver examples build again; Q38 fixed 2026-06-10 (bare-literal `String` local leaked); Q39 fixed 2026-06-11 (bare `""` in a tuple-element position expecting `String` stayed `&str` — rondo W21; fixed via `coerce_tuple_literal_elements`, pin `924`); Q35 fixed 2026-07-14 (struct/enum in-body includes now populate typeck's nominal mixin registry; pin `659`); Q36 fixed 2026-07-14 (parenthesized multi-argument `yield(a, b)` parsed as one tuple argument; pin `929`); Q46 fixed 2026-07-14 (paren-less no-arg `.new` now installs the runtime-mixin class-info header; pin `460`)**). The
+Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 fixed 2026-06-10 via the syntax-parity harness; Q37 fixed 2026-06-10 (root cause: a yielding/`&block` method poisoned an unrelated same-named free fn via a bare-name yield map — this covers BOTH the S1 name-collision symptom AND the S2 "generic `frame[S: PaintSurface]` gets a bogus `__block` in binary-consumes-library builds" symptom; they were the same bug) — quiver examples build again; Q38 fixed 2026-06-10 (bare-literal `String` local leaked); Q39 fixed 2026-06-11 (bare `""` in a tuple-element position expecting `String` stayed `&str` — rondo W21; fixed via `coerce_tuple_literal_elements`, pin `924`); Q35 fixed 2026-07-14 (struct/enum in-body includes now populate typeck's nominal mixin registry; pin `659`); Q36 fixed 2026-07-14 (parenthesized multi-argument `yield(a, b)` parsed as one tuple argument; pin `929`); Q46 fixed 2026-07-14 (paren-less no-arg `.new` now installs the runtime-mixin class-info header; pin `460`); Q47 fixed 2026-07-14 (an existential `any Mixin` call result now self-satisfies its exact carried bound instead of probing a nonexistent concrete method table; pin `473`)**). The
 canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
 (canvas 143 green, sub-pixel pinned, live windowed loop verified).
 
@@ -237,9 +237,10 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       machinery. Backoff timing tested deterministically under the §4.7 TestClock
       (pin 445: `exponential(50ms).max_attempts(5)` advanced through the backoffs,
       no real sleep). Drop-mid-backoff tears down the parked timer (pin 446).
-      Pins `444`–`449`. Found + filed a compiler bug: a `Fn[() -> any Future]`
-      closure CALLED inside a bootstrap class poisons global `any Future`
-      satisfaction (worked around via the Int-ptr channel — see gui-stack issues).
+      Pins `444`–`449`. Q47 fixed the compiler bug where a
+      `Fn[() -> any Future]` closure called inside a bootstrap class made the
+      bound checker reject the returned existential's own `Future` guarantee;
+      the Int-ptr channel remains unchanged in this task.
       Parked LOW (for maintainer): the `schedule.c` Poll-leak inline comment is
       narrower than the actual leak (documented fully in runtime CLAUDE.md); the
       `RetryFuture.init` placeholder backoff is a tiny per-instance heap leak.
@@ -440,6 +441,13 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       segfaults (empty stdout) when moved into an adapter's `any Stream` field.
       Fixed by initializing class info in that branch; pinned by reduced custom
       runtime-mixin case 460. Details in `dev/gui-stack-v1-issues.md` §Q46.
+- [x] **Q47 · S2 — calling a `Fn[() -> any Future]` closure in bootstrap
+      invalidates `any Future: Future` (FIXED 2026-07-14).** The bound checker
+      treated the returned existential as a concrete type named `any Future`
+      and queried the nominal/structural registry under that synthetic key.
+      `some`/`any` mixin values now satisfy the exact bounds they carry. Pin
+      `473` combines the bootstrap-shaped call with an unrelated stored-dyn
+      poll; a focused Rust typeck pin asserts the same ordering. Details §Q47.
 - [x] **Q42 · S2 — deliver a DOM event to a Ruxen handler on wasm — NOT a
       compiler bug; pure-Ruxen pattern. RESOLVED 2026-06-16 (verified by spike).**
       Spike GREEN: exported `def boot() -> Registry` (holds `handlers: Array[any
