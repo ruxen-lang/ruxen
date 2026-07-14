@@ -298,22 +298,24 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       resolver synonym (one body, two names; zero duplicated codegen), valid in
       class/struct/enum/mixin/extension bodies (method synonym) and at
       top-level/module scope (free-fn synonym). Contextual keyword (not
-      reserved). Plain + `?`/`!` names; operator aliases staged (E1123). New
+      reserved). Plain + `?`/`!` names; operator aliases completed by the S4
+      follow-up below (E1123 remains for unsupported operator forms). New
       diagnostics **E1120/E1121/E1122/E1123** (registered + `docs/errors/`).
       Accepted on every surface (compiler/fmt/repl/lsp/ide). stdlib sweep:
       `Array#to_a` → `alias to_a clone`. Pins: release-e2e 913–918,
       `tests/alias_keyword.rs`.
-- [ ] **Alias follow-up · S4 — operator aliases (`alias << push`, `alias [] get`).**
-      Staged from Tier 1 (E1123). Operator names route through the
-      post-typeck operator-desugar path (`mir/lower/expr/binops.rs` +
-      `typeck/infer/ops.rs`), distinct from ordinary method-name mangling; wiring
-      the synonym map into that path is the remaining work. ADR D6.
-- [ ] **Alias follow-up · S4 — aliasing a mixin DEFAULT-method target.** An alias
-      whose target is a method the type gets ONLY from a mixin default body (not
-      redefined in the type) is rejected with E1120 today. The default's signature
-      lives in `typeck::trait_method_sigs`, not the type's `type_methods`, so the
-      typeck-side synonym registration can't yet bind it. Aliasing a type's OWN
-      method (incl. one satisfying a mixin requirement) works. ADR D7.
+- [x] **Alias follow-up · S4 — operator aliases (`alias << push`, `alias [] get`)
+      (DONE 2026-07-14, `fix/alias`).** The existing post-typeck operator
+      desugars now consume the same canonical method-name map as ordinary calls.
+      Supported: `+ - * / % & | ^ << >>`, unary `!`/`-@`, and `[]`/`[]=`.
+      Unary `+@` remains E1123 because Ruxen has no unary-plus expression; operator
+      families outside the operator-method grammar remain parser-rejected. Pins
+      470–471 and `tests/alias_keyword.rs`. ADR D6.
+- [x] **Alias follow-up · S4 — aliasing a mixin DEFAULT-method target (DONE
+      2026-07-14, `fix/alias`).** Typeck alias registration still prefers the
+      type's own canonical method, then falls back to the default-body signature
+      of a mixin the type nominally includes. Required methods without a body are
+      not admitted by this fallback. Pin 472 and `tests/alias_keyword.rs`. ADR D7.
 - [ ] **Block follow-up · S3 — closure/block captures are not freed at
       closure-drop.** A closure (`{ }` OR `do…end`) that captures a heap value
       leaks that capture: `allocs=3, frees=0` for both forms (verified — this is

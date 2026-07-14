@@ -1,0 +1,19 @@
+# Alias follow-up: an alias may target a method inherited solely from an
+# included mixin's default body.
+mixin Greeting
+  def greeting -> Int
+    48
+  end
+end
+
+class Greeter
+  include Greeting
+  def init
+  end
+  alias salute greeting
+end
+
+def main
+  let greeter = Greeter.new
+  puts "default=#{greeter.salute}"
+end
