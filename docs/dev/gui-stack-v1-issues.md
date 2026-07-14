@@ -2226,7 +2226,7 @@ block, then runs the fixture through both backends. Release-e2e case `930`
 exercises bare owned literals in both `if` and `match` arms. The LLVM comparison
 suite also covers the larger class/match programs that previously crashed.
 
-## Q50 · S2 — interpolating a method-returning-`String` formats a raw pointer  ⚠️ OPEN (found 2026-07-14)
+## Q50 · S2 — interpolating a method-returning-`String` formats a raw pointer  ✅ FIXED (2026-07-14)
 
 Surfaced while fixing Q49. In `sample_program.rx`, `puts "  Failed: #{e.message}"`
 (where `e.message` is a user `def message -> String`) prints a large integer that
@@ -2236,16 +2236,23 @@ formats correctly, so the receiver value is fine — the defect is in the
 interpolation Display path for a `#{...}` part whose expression is a **method call
 returning an owned `String`** (as opposed to a bare literal or a variable).
 
-**Hypothesis (unconfirmed):** the interpolation temporary holding the call result
-is either (a) formatted by pointer value rather than dereferenced through
-`Display`, or (b) freed before the formatter reads its bytes (a premature-drop /
-use-after-free — the nondeterminism points at reading freed memory). Repro is the
-`Err(e) -> #{e.message}` arm of `sample_program.rx` (see the Q50 comment there);
-the fixture uses `+` concat as a workaround until this is fixed. Cranelift and LLVM
-both misformat, so it is not backend-specific. **Not fixed by Q49** — Q49 only
-relocated branch-scoped drops. NOTE: real `rondo`/`quiver` apps that interpolate
-method results into responses/labels can hit this; the plaintext rondo-bench uses
-a bare literal (`Response.text("hello, world")`) and is unaffected.
+**Root cause:** `MixinResolver::collect_item_impls` registered inline methods for
+classes but omitted `HirItem::Struct.methods` and `HirItem::Enum.methods`. For
+`MyErr include Error`, lookup therefore skipped the concrete inline
+`message -> String` and selected `Error`'s unannotated required-method signature
+(`Unit`). MIR allocated the call result temporary as `Unit`, missed interpolation's
+string pass-through, and used the legacy `Int_fmt` fallback on the valid `char*`.
+ASLR made that pointer-shaped integer change each run; there was no premature
+drop.
+
+**Fix:** struct and enum inline methods now enter the direct-method registry with
+the same precedence as class methods. Interpolation also recovers an unresolved
+or invalid call temporary from its resolved method declaration before Display
+dispatch, recognizes aliased/newtype strings, and rejects `Unit`/`Never`/error
+values rather than formatting them as integers. The name-based list of
+"likely String methods" was removed. `sample_program.rx` now uses
+`#{e.message}` again. Release-e2e `94_custom_error_enum` and the method-name-
+independent `931_interpolation_method_string` pin the behavior.
 
 ## Q51 · S2 — `Enumerable#select` over-counts (returns extra elements)  ⚠️ OPEN (found 2026-07-14)
 

@@ -99,19 +99,31 @@ impl<'a> Lowerer<'a> {
                     // corrected by enum variant field type lookup) over
                     // the HIR expression type (which may have stale or
                     // unresolved types from type inference).
-                    let effective_ty = val_local
+                    let local_ty = val_local
                         .and_then(|lid| {
                             self.fn_mut().locals.get(lid as usize).map(|l| l.ty.clone())
                         })
                         .unwrap_or_else(|| expr.ty.clone());
+                    let effective_ty = if local_ty.is_infer()
+                        || local_ty.is_error()
+                        || matches!(local_ty, Ty::Unit | Ty::Never | Ty::TypeParam { .. })
+                    {
+                        self.declared_method_return_ty(expr)
+                            .filter(|ty| !ty.is_infer() && !ty.is_error())
+                            .unwrap_or(local_ty)
+                    } else {
+                        local_ty
+                    };
 
                     // Phase 2 #06.D2.S3 dispatch priority (top-down):
-                    //   1. string-like / inferred-string  → pass-through
+                    //   1. string-like                    → pass-through
                     //   2. user `impl Display for T`      → `{T}_fmt` via Formatter
                     //   3. struct with `derive Debug`     → `{Name}_to_debug` (legacy)
                     //   4. enum with `derive Debug`       → `{Name}_to_debug` (legacy)
                     //   5. primitive Char/Int/Float/Bool  → synth `{Prim}_fmt` via Formatter
-                    //   6. anything else                  → synth `Int_fmt` (pointer-as-int fallback)
+                    //   6. abstract type parameter        → synth `Int_fmt` (opaque generic ABI)
+                    //   7. invalid/error type             → lowering error (no pointer fallback)
+                    //   8. legacy unresolved scalar       → synth `Int_fmt`
                     //
                     // Priorities 2/5/6 emit the canonical Display dispatch:
                     //     fmt = Formatter_new()
@@ -128,9 +140,7 @@ impl<'a> Lowerer<'a> {
                     // Formatter can apply width / precision / align /
                     // fill — the legacy pass-through skips the formatter
                     // entirely and would silently drop the spec.
-                    if (is_string_like(&effective_ty) || is_inferred_string_expr(expr))
-                        && spec.is_default()
-                    {
+                    if is_string_like(&effective_ty) && spec.is_default() {
                         val_local.unwrap_or_else(|| {
                             let d = self.new_temp(Ty::String);
                             self.emit(MirInst::StringLiteral {
@@ -188,7 +198,7 @@ impl<'a> Lowerer<'a> {
                         });
                         dest
                     } else {
-                        // Priorities #5 + #6: primitives + last-resort
+                        // Priorities #5 + #6: primitives + opaque generic
                         // fallback.  Each dispatches through the canonical
                         // `Formatter_new` → `{Prim}_fmt(value, fmt)` →
                         // `Formatter_buffer(fmt)` sequence.  `Char` must be
@@ -219,11 +229,20 @@ impl<'a> Lowerer<'a> {
                             "Float_fmt"
                         } else if effective_ty == Ty::Bool {
                             "Bool_fmt"
+                        } else if matches!(effective_ty, Ty::TypeParam { .. }) {
+                            // Unspecialized generic bodies use the compiler's
+                            // uniform-word ABI. Concrete generic call sites are
+                            // monomorphized before this dispatch when possible.
+                            "Int_fmt"
+                        } else if matches!(effective_ty, Ty::Unit | Ty::Never | Ty::Error) {
+                            return Err(format!(
+                                "cannot interpolate value of type `{effective_ty}`: the type has no Display formatter"
+                            ));
                         } else {
-                            // Unknown type — treat as integer (pointer
-                            // value) as a fallback.  This handles USize,
-                            // enum tags, and any not-yet-inferred type.
-                            // Preserves the pre-Stage-3 default behaviour.
+                            // Legacy unresolved/borrowed scalar lowering. A
+                            // call with a declared String return cannot reach
+                            // this arm: `declared_method_return_ty` above
+                            // recovers it before dispatch.
                             "Int_fmt"
                         };
                         self.emit_display_dispatch(src, fmt_callee, Some(spec))

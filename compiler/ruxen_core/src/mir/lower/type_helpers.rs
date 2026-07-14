@@ -1,6 +1,59 @@
 use super::*;
 
 impl<'a> Lowerer<'a> {
+    /// Recover the declared return type of a call-shaped expression directly
+    /// from its resolved method definition. This is an independent safety net
+    /// for MIR locals whose inferred type is stale: a declared `String` return
+    /// must never be sent through interpolation's integer fallback.
+    pub(super) fn declared_method_return_ty(&self, expr: &HirExpr) -> Option<Ty> {
+        use crate::resolve::symbols::DefKind;
+
+        let resolved_method = match &expr.kind {
+            HirExprKind::MethodCall { method, .. } if *method != UNRESOLVED_DEF => {
+                self.symbols.get(*method).and_then(|def| match &def.kind {
+                    DefKind::Method { signature, .. } => Some(signature.return_ty.clone()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        };
+        if resolved_method.is_some() {
+            return resolved_method;
+        }
+
+        let (object, method_name, arg_count) = match &expr.kind {
+            HirExprKind::MethodCall {
+                object,
+                method_name,
+                args,
+                block,
+                ..
+            } => (
+                object.as_ref(),
+                method_name.as_str(),
+                args.len() + usize::from(block.is_some()),
+            ),
+            HirExprKind::FieldAccess {
+                object, field_name, ..
+            } => (object.as_ref(), field_name.as_str(), 0),
+            _ => return None,
+        };
+        let receiver_name = type_name_from_ty(&object.ty);
+        self.symbols.iter().find_map(|def| {
+            let DefKind::Method { parent, signature } = &def.kind else {
+                return None;
+            };
+            let parent_name = self
+                .symbols
+                .get(*parent)
+                .map(|parent| parent.name.as_str())?;
+            let name_matches = def.name == method_name
+                || def.name.starts_with(&format!("{method_name}__overload"));
+            (parent_name == receiver_name && name_matches && signature.params.len() == arg_count)
+                .then(|| signature.return_ty.clone())
+        })
+    }
+
     /// Returns Some(struct_name) if `ty` (peeling refs/aliases) is a struct
     /// whose declaration includes `derive Debug`; otherwise None.
     pub(super) fn struct_with_derive_debug(&self, ty: &Ty) -> Option<String> {
@@ -28,7 +81,7 @@ impl<'a> Lowerer<'a> {
             | Ty::RefMut(inner)
             | Ty::RefLifetime(_, inner)
             | Ty::RefMutLifetime(_, inner) => {
-                return self.enum_with_derive_trait(inner, trait_name)
+                return self.enum_with_derive_trait(inner, trait_name);
             }
             Ty::Alias { target, .. } => return self.enum_with_derive_trait(target, trait_name),
             Ty::Newtype { inner, .. } => return self.enum_with_derive_trait(inner, trait_name),
@@ -130,7 +183,6 @@ impl<'a> Lowerer<'a> {
     }
 }
 
-/// Check if a type is an Option type (including via references and inferred types).
 /// Returns true if the type is a string-like type whose runtime representation
 /// is already a `char*` and needs no conversion for string interpolation.
 pub(super) fn is_string_like(ty: &Ty) -> bool {
@@ -139,44 +191,9 @@ pub(super) fn is_string_like(ty: &Ty) -> bool {
         Ty::Ref(inner)
         | Ty::RefMut(inner)
         | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) => is_string_like(inner),
-        _ => false,
-    }
-}
-
-/// Returns true if the expression's type is unresolved but the expression
-/// is a method call that likely returns a string at runtime. This handles
-/// cases where type inference left Infer(...) types unresolved for methods
-/// like `to_display`, `message`, `summary`, `clone` on string types, etc.
-pub(super) fn is_inferred_string_expr(expr: &HirExpr) -> bool {
-    if !matches!(expr.ty, Ty::Infer(_)) {
-        return false;
-    }
-    // Known string-returning method names.
-    let string_methods = [
-        "to_display",
-        "to_string",
-        "message",
-        "summary",
-        "serialize",
-        "clone",
-        "title_ref",
-        "deadline_ref",
-        "to_lower",
-        "trim",
-        "push_str",
-        "unwrap_or",
-        "unwrap_or_else",
-    ];
-
-    match &expr.kind {
-        HirExprKind::MethodCall { method_name, .. } => {
-            string_methods.contains(&method_name.as_str())
-        }
-        // FieldAccess can also be a no-arg method call.
-        HirExprKind::FieldAccess { field_name, .. } => {
-            string_methods.contains(&field_name.as_str())
-        }
+        | Ty::RefMutLifetime(_, inner)
+        | Ty::Alias { target: inner, .. }
+        | Ty::Newtype { inner, .. } => is_string_like(inner),
         _ => false,
     }
 }

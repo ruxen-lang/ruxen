@@ -1,0 +1,20 @@
+mixin Renderable
+  def render
+end
+
+enum Label
+  Text(value: String)
+
+  include Renderable
+
+  def render -> String
+    match self
+      Label.Text(value) -> "label: #{value}"
+    end
+  end
+end
+
+def main
+  let label = Label.Text(value: "stable")
+  puts "result=#{label.render}"
+end

@@ -410,9 +410,7 @@ def main
   for result in results
     match result
       Ok(id)  -> puts "  Created task ##{id}"
-      # Q50: interpolating a method-returning-String (`#{e.message}`) formats a
-      # raw pointer nondeterministically; use `+` concat until Q50 is fixed.
-      Err(e)  -> puts "  Failed: " + e.message
+      Err(e)  -> puts "  Failed: #{e.message}"
     end
   end
 
