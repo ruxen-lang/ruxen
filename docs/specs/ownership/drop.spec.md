@@ -79,6 +79,18 @@ any new codegen change that drops a drop call will fail this.
 For every fixture the suite runs, `allocs == frees` at process exit
 (leak tracker reports `0 outstanding`).
 
+## B11 — Owned closure captures are released
+
+A closure pair owns its captures block. At closure drop, direct by-value heap
+captures that are proven still owned are dropped in reverse capture order, with
+each pointer NULL-guarded. The captures block is then freed, followed by the
+closure pair. The synthetic `__block`/`&block` parameter borrows the pair for
+the yielding call, so the caller performs this cleanup.
+
+Borrowed captures are never freed by closure drop. A capture returned from the
+closure, stored into another aggregate, explicitly moved, or passed to a
+consuming/ambiguous call is treated as escaped and is not field-dropped.
+
 ---
 
 ## Pin tests
@@ -100,6 +112,7 @@ For every fixture the suite runs, `allocs == frees` at process exit
 | B8        | `string_plus_op_frees_both_operands`                   | `drop_fixtures.rs`  |
 | B9        | `runtime_no_leak_fixture_exits_without_tracked_leaks`  | `drop_fixtures.rs`  |
 | B10       | `tracker_reports_balanced_allocs_for_dropped_locals`   | `drop_fixtures.rs`  |
+| B11       | `closure_and_block_captures_are_freed_at_closure_drop` + `closure_drop_does_not_free_a_moved_out_capture` | `drop_fixtures.rs` |
 
 The leak tracker is implemented by a textual substitution at test
 compile time (`free(` → `ruxen_test_free(`); see `drop_fixtures.rs`
@@ -116,3 +129,6 @@ top-of-file commentary for the sentinel-based safe-list mechanism.
 - `Drop` for `enum` payloads (today the elaboration assumes each
   variant's payload follows the standard rules; corner cases for
   generic enums are tracked separately).
+- Precise drop flags for conditionally escaped closure captures. Nested
+  by-value re-captures and ambiguous consuming calls currently suppress the
+  capture-field drop, preferring a bounded leak to a possible double-free.

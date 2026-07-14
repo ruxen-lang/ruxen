@@ -1,0 +1,13 @@
+struct Buffer
+  value: Int
+end
+
+def take(&block: Fn[() -> Buffer]) -> Buffer
+  yield
+end
+
+def main
+  let b = Buffer.new(42)
+  let escaped = take({ || b })
+  print("#{escaped.value}")
+end

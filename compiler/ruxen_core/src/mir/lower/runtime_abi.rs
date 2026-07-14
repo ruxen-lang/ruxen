@@ -124,7 +124,8 @@ pub fn callee_ownership(callee: &str) -> CalleeOwnership {
 
 /// For a USER callee (a function/method NOT classified by the runtime-ABI
 /// tables above), resolve which of its first `arg_count` *value-carrying*
-/// parameters are declared as a reference (`&T` / `&var T`).
+/// parameters are declared as a reference (`&T` / `&var T`) or are the
+/// synthetic `__block`/`&block` call-duration borrow.
 ///
 /// A value passed to a reference parameter is AUTO-BORROWED, not consumed: the
 /// callee never owns it (drop elaboration unconditionally skips a function's
@@ -145,7 +146,8 @@ pub fn callee_ownership(callee: &str) -> CalleeOwnership {
 ///
 /// SAFETY / no-double-free guard: this is consulted ONLY for callees the
 /// runtime-ABI tables did not classify, and ONLY to UNTAINT a borrow param.
-/// A by-value (consuming) param keeps its taint (returned `false`). When the
+/// A by-value (consuming) param keeps its taint (returned `false`), except for
+/// the explicit block slot whose pair remains caller-owned. When the
 /// name resolves to MULTIPLE candidate signatures (same method name across
 /// classes / an overload set) that DISAGREE on a slot's ref-ness, we
 /// conservatively report `false` for that slot — never untaint on ambiguity.
@@ -293,7 +295,12 @@ pub fn user_callee_param_is_ref(
             match sig.params.get(param_idx) {
                 Some(p) => {
                     saw_any = true;
-                    if !ty_is_reference(&p.ty) {
+                    // The synthetic `__block` parameter is also a borrow for
+                    // the duration of the yielding call. The callee never owns
+                    // or drops the closure pair; the caller reclaims it after
+                    // the call. Treating this Fn slot as consuming would leak
+                    // every trailing block and its captures.
+                    if !matches!(p.name.as_str(), "__block" | "&block") && !ty_is_reference(&p.ty) {
                         all_ref = false;
                         break;
                     }

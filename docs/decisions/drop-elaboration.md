@@ -56,6 +56,16 @@ For each block ending in `Terminator::Return`, `insert_drops` appends, in
    - any other type reaching this point → `unimplemented!` (loud, not a silent
      fall-through), since the eligibility filter restricts to exactly these.
 
+Closures use the same MIR-call architecture. Lowering attaches a synthesized
+`__closure_N_drop(pair)` function to the fresh pair local. Drop elaboration
+propagates that destructor across `Assign`/`Copy`/`Move` and emits it only when
+`compute_dealloc_safe_locals` still proves the final pair is owned. The helper
+loads the captures pointer, NULL-guards each eligible field in reverse capture
+order, runs its user `def drop` plus type-directed free, then frees the captures
+block and pair. Synthetic `__block`/`&block` parameters are call-duration
+borrows, matching the rule that function parameters are not dropped by the
+callee.
+
 ## How it avoids drop-after-move (the load-bearing soundness argument)
 
 Drop emission is gated on a forward dataflow analysis,
@@ -104,6 +114,10 @@ counters + an `atexit` leak report) and asserts `outstanding == 0`. Coverage:
 - e2e behavioural drop pins: `138_struct_drop_no_leak`, `518_file_drop_closes`
   (1024 fds without EMFILE), `545_tcp_listener_drop_closes`,
   `711_sharedsync_clone_drop_refcount`.
+- closure capture glue: `closure_and_block_captures_are_freed_at_closure_drop`
+  balances all three allocations for both closure syntaxes; the moved-out pin
+  proves capture escape suppresses only the field free. Release-e2e 475 covers
+  both surface forms through the normal compiler/runtime path.
 
 ## What this does NOT yet cover (staged remainder — open work)
 
@@ -121,6 +135,11 @@ counters + an `atexit` leak report) and asserts `outstanding == 0`. Coverage:
   feature, tracked separately.
 - **Partial-move field-granular drop** (D6) beyond what the alias/taint analysis
   already handles structurally.
+- **Precise closure capture drop flags.** A direct by-value capture is dropped
+  only while its extracted MIR alias never returns, enters an aggregate, moves,
+  or reaches a consuming/ambiguous call. Nested re-captures are not assigned a
+  second owner. These conservative cases can leak until path-sensitive capture
+  ownership is represented; they cannot double-free the escaped value.
 - **Temporaries**: the current filter drops only `_t*` temps that are built-in
   heap types proven alloc-rooted; the general "drop every non-Copy temp at
   end-of-statement" rule (tier1_04 §7.2.6) is not in place.

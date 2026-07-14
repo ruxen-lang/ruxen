@@ -181,6 +181,140 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
     }
 }
 
+/// True only when a by-value capture is never moved out of its captures slot.
+/// Reads through the captured value are borrows; returns, aggregate stores,
+/// explicit moves, and consuming/unknown calls make ownership unprovable and
+/// suppress that field's closure-drop glue.
+pub(super) fn capture_slot_still_owned(
+    func: &MirFunction,
+    captures: LocalId,
+    slot: usize,
+    symbols: &SymbolTable,
+) -> bool {
+    use crate::mir::lower::runtime_abi::{callee_ownership, user_callee_param_is_ref};
+
+    let mut aliases: HashSet<LocalId> = HashSet::new();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in &func.blocks {
+            for inst in &block.instructions {
+                match inst {
+                    MirInst::GetField {
+                        dest,
+                        base,
+                        field_index,
+                    } if *base == captures && *field_index == slot => {
+                        changed |= aliases.insert(*dest);
+                    }
+                    MirInst::Assign { dest, value } => {
+                        if matches!(value, MirValue::Use(src) if aliases.contains(src)) {
+                            changed |= aliases.insert(*dest);
+                        }
+                    }
+                    MirInst::Copy { dest, src } => {
+                        if aliases.contains(src) {
+                            changed |= aliases.insert(*dest);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    for block in &func.blocks {
+        for inst in &block.instructions {
+            match inst {
+                MirInst::Move { src, .. } if aliases.contains(src) => {
+                    return false;
+                }
+                MirInst::Call { callee, args, .. } => {
+                    let abi = callee_ownership(callee);
+                    let param_is_ref = if abi.args_are_borrowed {
+                        Vec::new()
+                    } else {
+                        user_callee_param_is_ref(symbols, callee, args.len())
+                    };
+                    for (idx, arg) in args.iter().enumerate() {
+                        let MirValue::Use(local) = arg else {
+                            continue;
+                        };
+                        if !aliases.contains(local) {
+                            continue;
+                        }
+                        let borrowed = (abi.borrows_first_arg && idx == 0)
+                            || (!abi.arg_transfer.contains(idx)
+                                && (abi.args_are_borrowed
+                                    || param_is_ref.get(idx).copied().unwrap_or(false)));
+                        if !borrowed {
+                            return false;
+                        }
+                    }
+                }
+                MirInst::CallIndirect { args, .. } => {
+                    if args
+                        .iter()
+                        .any(|arg| matches!(arg, MirValue::Use(local) if aliases.contains(local)))
+                    {
+                        return false;
+                    }
+                }
+                MirInst::SetField { value, .. } => {
+                    if matches!(value, MirValue::Use(local) if aliases.contains(local)) {
+                        return false;
+                    }
+                }
+                MirInst::Drop { local } if aliases.contains(local) => return false,
+                _ => {}
+            }
+        }
+        if matches!(
+            &block.terminator,
+            Terminator::Return(Some(MirValue::Use(local))) if aliases.contains(local)
+        ) {
+            return false;
+        }
+    }
+    true
+}
+
+fn closure_drop_callees(
+    func: &MirFunction,
+    dealloc_safe: &HashSet<LocalId>,
+    return_locals: &HashSet<LocalId>,
+    return_alias_chain: &HashSet<LocalId>,
+) -> HashMap<LocalId, String> {
+    let mut owners: HashMap<LocalId, String> = func
+        .closure_drops
+        .iter()
+        .map(|drop| (drop.local, drop.drop_fn.clone()))
+        .collect();
+
+    for block in &func.blocks {
+        for inst in &block.instructions {
+            let (dest, src) = match inst {
+                MirInst::Assign {
+                    dest,
+                    value: MirValue::Use(src),
+                }
+                | MirInst::Copy { dest, src }
+                | MirInst::Move { dest, src } => (*dest, *src),
+                _ => continue,
+            };
+            if let Some(drop_fn) = owners.remove(&src) {
+                owners.insert(dest, drop_fn);
+            }
+        }
+    }
+
+    owners.retain(|local, _| {
+        dealloc_safe.contains(local)
+            && !return_locals.contains(local)
+            && !return_alias_chain.contains(local)
+    });
+    owners
+}
+
 pub(super) fn insert_drops(
     func: &mut MirFunction,
     return_locals: &HashSet<LocalId>,
@@ -247,6 +381,8 @@ pub(super) fn insert_drops(
     // read through `2`. We compute the set iteratively from the seed
     // `return_locals` and exclude every member from `drop_locals` below.
     let return_alias_chain = compute_return_alias_chain(func, return_locals);
+    let closure_drop_callees =
+        closure_drop_callees(func, &dealloc_safe, return_locals, &return_alias_chain);
 
     // Collect locals that need dropping: Move types, not params, not the
     // return value. Collect in declaration order.
@@ -364,7 +500,7 @@ pub(super) fn insert_drops(
         .map(|local| local.id)
         .collect();
 
-    if drop_locals.is_empty() {
+    if drop_locals.is_empty() && closure_drop_callees.is_empty() {
         return;
     }
 
@@ -405,8 +541,21 @@ pub(super) fn insert_drops(
     // instructions (in reverse declaration order) before the return.
     for block in &mut func.blocks {
         if matches!(block.terminator, Terminator::Return(_)) {
+            let mut all_drop_locals = drop_locals.clone();
+            all_drop_locals.extend(closure_drop_callees.keys().copied());
+            all_drop_locals.sort_unstable();
+            all_drop_locals.dedup();
             // Insert drops in reverse declaration order (LIFO).
-            for &local_id in drop_locals.iter().rev() {
+            for &local_id in all_drop_locals.iter().rev() {
+                if let Some(callee) = closure_drop_callees.get(&local_id) {
+                    block.instructions.push(MirInst::Call {
+                        dest: None,
+                        callee: callee.clone(),
+                        args: vec![MirValue::Use(local_id)],
+                    });
+                    block.instructions.push(MirInst::Drop { local: local_id });
+                    continue;
+                }
                 // 1) User-defined `def drop` runs first (if any), so the
                 //    body still sees the live allocation. Skip when we're
                 //    already lowering that class's own drop method to
