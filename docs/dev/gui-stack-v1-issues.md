@@ -2190,6 +2190,63 @@ none of their mangled Ruxen aliases occur. It failed before the fix on
 `@Formatter_new`. The existing
 `string_interp_identical` fixture now also links and runs through both backends.
 
+## Q49 · S0 — drop elaboration frees uninitialized branch locals at a shared Return  ✅ FIXED (2026-07-14)
+
+An optimized `ruxen build --release` of the minimal `control_flow.rx` printed
+the correct branch output and then aborted in the function epilogue. Each arm
+created its own owned `String`, but the shared MIR return block unconditionally
+called `ruxen_string_free` for both locals. Whichever arm was not taken left its
+local uninitialized. LLVM's stack slot therefore held garbage and `free` raised
+SIGABRT. Cranelift appeared correct only because its local model yielded a
+zero/NULL value and the String free helper is NULL-safe. Zero-initializing LLVM
+allocas would not solve the general case: user `<Class>_drop` glue dereferences
+its receiver before the backing allocation is freed.
+
+**Root cause:** `mir/lower/drops.rs::insert_drops` selected drop-eligible locals
+with the existing exclusive-ownership analysis, but placement ignored the CFG
+and appended every cleanup sequence before every `Terminator::Return`. The
+ownership proof says a value may be freed if it exists; it does not prove the
+value was initialized along every path reaching that return.
+
+**Fix:** drop placement is now path-sensitive and backend-independent. A local
+whose complete definition/use range is confined to one reachable, acyclic arm
+block ending in `Goto` is destroyed there, in reverse declaration order, before
+control reaches the merge. For a local spanning multiple blocks, a
+definite-initialization dataflow check keeps the zero-cost return cleanup when
+all paths initialize it; otherwise a bool flag is false at entry, set after its
+initializing definition, and guards the return cleanup. The real free, user
+drop glue, closure drop, and `MirInst::Drop` marker all stay on the initialized
+path. `compute_dealloc_safe_locals`, async `__block_on_fut_*` force-rooting,
+loop-edge cleanup, alias-source stripping, type-directed collection frees, FFI
+transfer exclusions, and return-alias exclusions are unchanged.
+
+**Pins:** the LLVM backend test lowers `control_flow.rx` and asserts each
+`ruxen_string_free`/`Drop` pair is in its own arm and absent from the return
+block, then runs the fixture through both backends. Release-e2e case `930`
+exercises bare owned literals in both `if` and `match` arms. The LLVM comparison
+suite also covers the larger class/match programs that previously crashed.
+
+## Q50 · S2 — interpolating a method-returning-`String` formats a raw pointer  ⚠️ OPEN (found 2026-07-14)
+
+Surfaced while fixing Q49. In `sample_program.rx`, `puts "  Failed: #{e.message}"`
+(where `e.message` is a user `def message -> String`) prints a large integer that
+looks like a raw pointer (e.g. `4334782334`), **nondeterministically**, instead of
+the returned string. The equivalent `"  Failed: " + e.message` (Ruby `+` concat)
+formats correctly, so the receiver value is fine — the defect is in the
+interpolation Display path for a `#{...}` part whose expression is a **method call
+returning an owned `String`** (as opposed to a bare literal or a variable).
+
+**Hypothesis (unconfirmed):** the interpolation temporary holding the call result
+is either (a) formatted by pointer value rather than dereferenced through
+`Display`, or (b) freed before the formatter reads its bytes (a premature-drop /
+use-after-free — the nondeterminism points at reading freed memory). Repro is the
+`Err(e) -> #{e.message}` arm of `sample_program.rx` (see the Q50 comment there);
+the fixture uses `+` concat as a workaround until this is fixed. Cranelift and LLVM
+both misformat, so it is not backend-specific. **Not fixed by Q49** — Q49 only
+relocated branch-scoped drops. NOTE: real `rondo`/`quiver` apps that interpolate
+method results into responses/labels can hit this; the plaintext rondo-bench uses
+a bare literal (`Response.text("hello, world")`) and is unaffected.
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:

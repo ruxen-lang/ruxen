@@ -8,6 +8,15 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- **Q49: branch-scoped owned temporaries are dropped only on initialized
+  paths.** MIR drop elaboration no longer hoists every owned local to a shared
+  return block, where LLVM could pass an uninitialized stack value to
+  `ruxen_string_free`, `ruxen_dealloc`, or user drop glue. Acyclic arm-local
+  values now drop before their arm's `Goto`; values spanning a wider CFG use
+  definite-initialization flags at returns. This removes the optimized-build
+  SIGABRT while retaining reverse declaration order, type-directed collection
+  frees, user destructors, closure cleanup, and the existing ownership gates.
+  Release-e2e pin `930` covers bare owned strings in both `if` and `match` arms.
 - **Q17b: generic methods over mixin bounds now monomorphize per concrete
   implementor.** Resolved calls to a generic method declared inside a class,
   struct, or enum recover the method's concrete type arguments, redirect to a
