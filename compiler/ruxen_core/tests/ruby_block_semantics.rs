@@ -201,6 +201,88 @@ end
     );
 }
 
+/// Q36: `yield` through the synthetic `__block` slot must forward every
+/// mutable-reference argument. The ordinary `f.(&var a, &var b)` closure-call
+/// path already did; this pins the two-reference yield ABI end to end.
+#[test]
+fn yield_forwards_two_mutable_references() {
+    let source = r##"
+class Ui
+  n: Int
+  def init
+    self.n = 0
+  end
+  def bump -> nil
+    self.n = self.n + 1
+  end
+end
+class Col
+  n: Int
+  def init
+    self.n = 0
+  end
+  def add -> nil
+    self.n = self.n + 1
+  end
+end
+class App
+  ui: Ui
+  root: Col
+  def init
+    self.ui = Ui.new
+    self.root = Col.new
+  end
+end
+def self_or_free_build(&block: Fn[(&var Ui, &var Col) -> nil]) -> App
+  var app = App.new
+  yield(&var app.ui, &var app.root)
+  app
+end
+def main
+  var app = self_or_free_build do |ui: &var Ui, root: &var Col|
+    ui.bump
+    ui.bump
+    root.add
+  end
+  puts "ui=#{app.ui.n} root=#{app.root.n}"
+end
+"##;
+    let (stdout, stderr, code) = compile_and_run(source, "yield_two_var_refs");
+    assert_eq!(code, Some(0), "stderr={stderr:?}");
+    assert_eq!(stdout, "ui=2 root=1\n", "stdout was {stdout:?}");
+}
+
+/// An explicit `&block` signature supplies types for unannotated trailing
+/// block parameters across the `yield` seam.
+#[test]
+fn yield_infers_explicit_block_parameter_types() {
+    let source = r##"
+class Col
+  n: Int
+  def init
+    self.n = 0
+  end
+  def add -> nil
+    self.n = self.n + 1
+  end
+end
+def build(&block: Fn[(&var Col) -> nil]) -> Col
+  var col = Col.new
+  yield(&var col)
+  col
+end
+def main
+  var col = build do |c|
+    c.add
+  end
+  puts "n=#{col.n}"
+end
+"##;
+    let (stdout, stderr, code) = compile_and_run(source, "yield_infers_block_param");
+    assert_eq!(code, Some(0), "stderr={stderr:?}");
+    assert_eq!(stdout, "n=1\n", "stdout was {stdout:?}");
+}
+
 /// Pin (c2): an explicit `&block` parameter works on a METHOD — block-bearing
 /// call (`do…end`), the parens blockless form (`w.build()`), AND the paren-less
 /// blockless form (`w.build`). All three reach `block_defined?` correctly. The

@@ -312,14 +312,19 @@ impl Parser {
             // Yield
             TokenKind::Yield => {
                 self.advance();
-                let mut args = Vec::new();
-                if self.is_expression_start() {
-                    args.push(self.parse_expression());
-                    while self.eat(TokenKind::Comma) {
-                        self.skip_newlines();
+                let args = if self.at(TokenKind::LParen) {
+                    self.parse_call_args()
+                } else {
+                    let mut args = Vec::new();
+                    if self.is_expression_start() {
                         args.push(self.parse_expression());
+                        while self.eat(TokenKind::Comma) {
+                            self.skip_newlines();
+                            args.push(self.parse_expression());
+                        }
                     }
-                }
+                    args
+                };
                 let span = self.span_from(&start);
                 Expr {
                     kind: ExprKind::Yield(args),
