@@ -1511,7 +1511,7 @@ code is blocked (quiver's PaintSurface implementors are classes). Fix when
 touching typeck satisfaction next; pin with struct-implementor variants of the
 655/658 e2e cases.
 
-## Q36 · S2 — `yield` with TWO `&var` reference args miscompiles (block sees empty target)  ⏳ OPEN (NEW 2026-06-10)
+## Q36 · S2 — `yield` with TWO `&var` reference args miscompiles (block sees empty target)  ✅ FIXED 2026-07-14
 
 Found 2026-06-10 migrating quiver's builder DSL to `&block`/`yield` (after the
 block-semantics feature `8a783f9`). A function declaring
@@ -1541,11 +1541,33 @@ Repro: `quiver/tmp/test-cache/ruxen-two-var-yield.md`. S2 (silent wrong build,
 not a crash). Workaround in quiver: `App.build` stays an explicit closure param.
 Likely the synthetic-`__block` call ABI mishandles multiple by-reference args.
 
-**Related (same pass, smaller):** a `&block` parameter's TYPE does not infer
-through the yield seam — an untyped `do |c| … end` against
-`&block: Fn[(&var Col) -> nil]` leaves `c` as `?T` (surfaces at codegen as
-`no runtime symbol for ?T::text`). Typed `do |c: &var Col| … end` works. quiver
-types all builder block params; document as a `&block` ergonomics gap.
+**Related report (same pass, smaller):** the original report also observed an
+untyped `do |c| … end` against `&block: Fn[(&var Col) -> nil]` leaving `c` as
+`?T` (surfacing at codegen as `no runtime symbol for ?T::text`). This was
+retested below against the current tree.
+
+**ROOT CAUSE.** `parser/expr/atoms.rs` parsed the token after `yield` as a
+general expression. For `yield(&var app.ui, &var app.root)`, the general
+parenthesized-expression parser correctly produced a `TupleLiteral`, but that
+meant `ExprKind::Yield` contained ONE argument: the tuple. MIR therefore
+materialized both references into a tuple and emitted `CallIndirect(captures,
+tuple)`, while the block closure ABI expected `CallIndirect(captures, ui,
+root)`. A single parenthesized argument has no comma and is unwrapped by the
+parenthesized-expression parser, explaining why single-`&var` yield worked;
+ordinary `f.(a, b)` already used the call-argument parser and never formed the
+tuple.
+
+**FIX.** Parenthesized `yield(...)` now uses the same `parse_call_args` path as
+ordinary calls, preserving each argument as its own ABI slot. Bare Ruby-style
+`yield a, b` remains supported. Release-e2e pin
+`929_yield_two_var_refs.rx` runs through the in-process compiler and proves
+both references mutate the original `App` fields (`ui=2 root=1`).
+
+**Inference sub-gap.** No residual remains on the current tree: an in-process
+pin with an untyped `do |c|` against `&block: Fn[(&var Col) -> nil]` resolves
+`c` as `&var Col` and runs successfully. The existing signature-based closure
+parameter seeding had already closed this path; Q36 adds the missing regression
+coverage.
 
 ## Q37 · S1 — a yielding/`&block` METHOD poisons an unrelated same-named free fn with a phantom `__block`  ✅ FIXED 2026-06-10
 

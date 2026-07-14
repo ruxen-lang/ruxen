@@ -8,6 +8,13 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- **Q36: parenthesized multi-reference `yield` forwarding.**
+  `yield(&var app.ui, &var app.root)` was parsed as one tuple argument, so the
+  synthetic `__block` closure received one ABI slot instead of two and mutated
+  an empty/wrong target. Parenthesized `yield(...)` now shares the normal
+  call-argument parser, preserving every argument slot. Release-e2e pin `929`
+  proves both referenced fields mutate (`ui=2 root=1`); the block-semantics
+  suite also pins untyped explicit-`&block` parameter inference.
 - **Concurrency LOW-finding cleanup (post-§4.6 review).** (1) `RetryFuture.init`
   no longer leaks its placeholder backoff `TimeSleepFuture`: the placeholder is
   marked a live child (`has_backoff = 1`) and torn down before the first real

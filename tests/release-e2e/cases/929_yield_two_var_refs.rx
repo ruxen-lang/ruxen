@@ -1,0 +1,51 @@
+# Q36: `yield` must preserve every mutable-reference argument when dispatching
+# through the synthetic `__block` closure slot.
+
+class Ui
+  n: Int
+
+  def init
+    self.n = 0
+  end
+
+  def bump -> nil
+    self.n = self.n + 1
+  end
+end
+
+class Col
+  n: Int
+
+  def init
+    self.n = 0
+  end
+
+  def add -> nil
+    self.n = self.n + 1
+  end
+end
+
+class App
+  ui: Ui
+  root: Col
+
+  def init
+    self.ui = Ui.new
+    self.root = Col.new
+  end
+end
+
+def self_or_free_build(&block: Fn[(&var Ui, &var Col) -> nil]) -> App
+  var app = App.new
+  yield(&var app.ui, &var app.root)
+  app
+end
+
+def main
+  var app = self_or_free_build do |ui: &var Ui, root: &var Col|
+    ui.bump
+    ui.bump
+    root.add
+  end
+  puts "ui=#{app.ui.n} root=#{app.root.n}"
+end
