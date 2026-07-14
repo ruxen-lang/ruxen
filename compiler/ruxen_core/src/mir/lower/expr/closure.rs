@@ -342,7 +342,11 @@ impl<'a> Lowerer<'a> {
 
                 // Extract the completed closure function.
                 let completed_fn = self.current_fn.take().unwrap();
+                let closure_drop =
+                    self.synthesize_closure_drop(&closure_name, &slots, &completed_fn, cap_param);
+                let closure_drop_name = closure_drop.name.clone();
                 self.pending_closures.push(completed_fn);
+                self.pending_closures.push(closure_drop);
 
                 // Restore the parent function state.
                 self.current_fn = saved_fn;
@@ -378,11 +382,146 @@ impl<'a> Lowerer<'a> {
                     field_index: 1,
                     value: cap_val,
                 });
+                self.fn_mut().closure_drops.push(MirClosureDrop {
+                    local: pair,
+                    drop_fn: closure_drop_name,
+                });
                 Ok(Some(pair))
             }
 
             // ── Tuple ───────────────────────────────────────────────
             _ => unreachable!("lower_closure: dispatched to wrong helper"),
         }
+    }
+
+    fn synthesize_closure_drop(
+        &self,
+        closure_name: &str,
+        slots: &[(DefId, CaptureSource, Ty, CaptureKind)],
+        closure_fn: &MirFunction,
+        captures_param: LocalId,
+    ) -> MirFunction {
+        let mut owned_fields: Vec<(usize, Ty)> = slots
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, (_def, source, ty, kind))| {
+                let directly_owned =
+                    matches!(source, CaptureSource::Local(_)) && *kind == CaptureKind::ByValue;
+                (directly_owned
+                    && heap_free_callee(ty).is_some()
+                    && capture_slot_still_owned(closure_fn, captures_param, slot, self.symbols))
+                .then(|| (slot, ty.clone()))
+            })
+            .collect();
+
+        let drop_name = format!("{}_drop", closure_name);
+        let mut drop_fn = MirFunction::new(&drop_name, Ty::Unit);
+        let pair = drop_fn.new_local("closure", Ty::Int, false);
+        drop_fn.params.push(pair);
+        let has_pair = drop_fn.new_temp(Ty::Bool);
+        drop_fn.blocks[drop_fn.entry_block]
+            .instructions
+            .push(MirInst::Compare {
+                dest: has_pair,
+                op: CmpOp::NotEq,
+                lhs: MirValue::Use(pair),
+                rhs: MirValue::Literal(Literal::Int(0)),
+            });
+        let pair_live_block = drop_fn.new_block();
+        let return_block = drop_fn.new_block();
+        drop_fn.blocks[drop_fn.entry_block].terminator = Terminator::Branch {
+            cond: MirValue::Use(has_pair),
+            then_block: pair_live_block,
+            else_block: return_block,
+        };
+        let captures = drop_fn.new_temp(Ty::Int);
+        drop_fn.blocks[pair_live_block]
+            .instructions
+            .push(MirInst::GetField {
+                dest: captures,
+                base: pair,
+                field_index: 1,
+            });
+        let has_captures = drop_fn.new_temp(Ty::Bool);
+        drop_fn.blocks[pair_live_block]
+            .instructions
+            .push(MirInst::Compare {
+                dest: has_captures,
+                op: CmpOp::NotEq,
+                lhs: MirValue::Use(captures),
+                rhs: MirValue::Literal(Literal::Int(0)),
+            });
+        let captures_block = drop_fn.new_block();
+        let pair_block = drop_fn.new_block();
+        drop_fn.blocks[pair_live_block].terminator = Terminator::Branch {
+            cond: MirValue::Use(has_captures),
+            then_block: captures_block,
+            else_block: pair_block,
+        };
+
+        let mut current = captures_block;
+        owned_fields.reverse();
+        for (slot, ty) in owned_fields {
+            let captured = drop_fn.new_temp(ty.clone());
+            drop_fn.blocks[current]
+                .instructions
+                .push(MirInst::GetField {
+                    dest: captured,
+                    base: captures,
+                    field_index: slot,
+                });
+            let is_live = drop_fn.new_temp(Ty::Bool);
+            drop_fn.blocks[current].instructions.push(MirInst::Compare {
+                dest: is_live,
+                op: CmpOp::NotEq,
+                lhs: MirValue::Use(captured),
+                rhs: MirValue::Literal(Literal::Int(0)),
+            });
+            let field_drop = drop_fn.new_block();
+            let next = drop_fn.new_block();
+            drop_fn.blocks[current].terminator = Terminator::Branch {
+                cond: MirValue::Use(is_live),
+                then_block: field_drop,
+                else_block: next,
+            };
+
+            if let Ty::Class { name, .. } = &ty {
+                let suffix = format!(".{}", name);
+                if self.user_drop_classes.contains(name)
+                    || self.user_drop_classes.iter().any(|q| q.ends_with(&suffix))
+                {
+                    let callee = self.resolve_ffi_alias_callee(format!("{}_drop", name));
+                    drop_fn.blocks[field_drop].instructions.push(MirInst::Call {
+                        dest: None,
+                        callee,
+                        args: vec![MirValue::Use(captured)],
+                    });
+                }
+            }
+            let free = heap_free_callee(&ty)
+                .expect("owned closure capture must have a type-directed free helper");
+            drop_fn.blocks[field_drop].instructions.push(MirInst::Call {
+                dest: None,
+                callee: free.to_string(),
+                args: vec![MirValue::Use(captured)],
+            });
+            drop_fn.blocks[field_drop].terminator = Terminator::Goto(next);
+            current = next;
+        }
+
+        drop_fn.blocks[current].instructions.push(MirInst::Call {
+            dest: None,
+            callee: "ruxen_dealloc".to_string(),
+            args: vec![MirValue::Use(captures)],
+        });
+        drop_fn.blocks[current].terminator = Terminator::Goto(pair_block);
+        drop_fn.blocks[pair_block].instructions.push(MirInst::Call {
+            dest: None,
+            callee: "ruxen_dealloc".to_string(),
+            args: vec![MirValue::Use(pair)],
+        });
+        drop_fn.blocks[pair_block].terminator = Terminator::Goto(return_block);
+        drop_fn.blocks[return_block].terminator = Terminator::Return(None);
+        drop_fn
     }
 }

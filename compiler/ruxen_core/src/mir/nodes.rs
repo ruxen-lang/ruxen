@@ -167,6 +167,13 @@ pub struct MirLocal {
     pub mutable: bool,
 }
 
+/// Drop glue attached to the fresh local that owns a closure pair.
+#[derive(Debug, Clone)]
+pub struct MirClosureDrop {
+    pub local: LocalId,
+    pub drop_fn: String,
+}
+
 // ─── Function ───────────────────────────────────────────────────────────────
 
 /// A single function in MIR form.
@@ -179,6 +186,9 @@ pub struct MirFunction {
     pub locals: Vec<MirLocal>,
     pub blocks: Vec<BasicBlock>,
     pub entry_block: BlockId,
+    /// Per-closure destructor roots. Assign/Copy/Move propagation is resolved
+    /// by drop elaboration so only the final, still-owned pair is destroyed.
+    pub closure_drops: Vec<MirClosureDrop>,
     /// Counter used by `new_temp()` to generate unique names.
     next_temp: u32,
 }
@@ -194,6 +204,7 @@ impl MirFunction {
             locals: Vec::new(),
             blocks: vec![entry_block],
             entry_block: 0,
+            closure_drops: Vec::new(),
             next_temp: 0,
         }
     }
@@ -214,6 +225,7 @@ impl MirFunction {
             locals,
             blocks,
             entry_block,
+            closure_drops: Vec::new(),
             next_temp: 0,
         }
     }

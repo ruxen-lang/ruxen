@@ -16,6 +16,16 @@ once 1.0.0 ships.
   emit a mixin-bound placeholder. Unsupported generic-through-generic method
   residuals now stop with a clear lowering error. Release-e2e pin `474` runs
   two distinct implementors; focused pins also cover struct and enum owners.
+- **Closure/block capture drop elaboration.** Heap captures owned by a `{ }` or
+  `do…end` closure are no longer leaked when the closure dies. MIR now records
+  the closure pair's destructor, propagates it along ownership-preserving local
+  moves, and synthesizes reverse-order, NULL-guarded capture cleanup followed by
+  freeing the captures block and pair. Only direct by-value captures proven not
+  to escape are field-dropped; borrowed, returned, aggregate-stored, consuming-
+  call, and nested re-capture shapes stay conservatively undropped, preventing a
+  leak fix from becoming a double-free/UAF. The allocation tracker proves
+  `allocs == frees == 3` for both brace and `do…end` forms; a moved-out-capture
+  pin proves only the pair and captures block are freed. Release-e2e pin 475.
 - **Q47: dyn call results retain their declared mixin guarantees.** A call to a
   closure returning `any Future` produced an existential value that the bound
   checker immediately re-tested as if it were a concrete type named

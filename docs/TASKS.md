@@ -317,15 +317,16 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       type's own canonical method, then falls back to the default-body signature
       of a mixin the type nominally includes. Required methods without a body are
       not admitted by this fallback. Pin 472 and `tests/alias_keyword.rs`. ADR D7.
-- [ ] **Block follow-up · S3 — closure/block captures are not freed at
-      closure-drop.** A closure (`{ }` OR `do…end`) that captures a heap value
-      leaks that capture: `allocs=3, frees=0` for both forms (verified — this is
-      a PRE-EXISTING closure-capture-drop gap, NOT a block regression; the block
-      surface reuses the same machinery). Drop elaboration over a closure's
-      captures struct (free each owned capture, then the captures block and the
-      pair) is unimplemented. No double-free, no segfault — purely a leak.
-      Repro: `tests/fixtures/ruxen/block_capture_heap_no_leak.rx` (soundness
-      pinned; leak-freedom is this follow-up).
+- [x] **Block follow-up · S3 — closure/block captures are freed at
+      closure-drop (FIXED 2026-07-14, `fix/blockdrop`).** Each closure now has
+      synthesized drop glue that NULL-guards and drops provably-owned by-value
+      heap captures in reverse order, then frees the captures block and closure
+      pair. The caller retains ownership across the synthetic `&block` borrow.
+      Capture aliases that return, enter an aggregate, reach a consuming or
+      ambiguous call, or come from a nested re-capture are conservatively not
+      field-dropped. Pins: `closure_and_block_captures_are_freed_at_closure_drop`
+      (`allocs=3, frees=3` for both `{ }` and `do…end`),
+      `closure_drop_does_not_free_a_moved_out_capture`, and release-e2e 475.
 - [x] **Block follow-up · S3 — paren-less blockless call to an optional-block
       METHOD doesn't fill the block slot (FIXED 2026-06-10,
       `feat/drop-elaboration`).** `w.frame` (no parens, no block) on a method
