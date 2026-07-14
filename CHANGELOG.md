@@ -8,6 +8,14 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- **Q17b: generic methods over mixin bounds now monomorphize per concrete
+  implementor.** Resolved calls to a generic method declared inside a class,
+  struct, or enum recover the method's concrete type arguments, redirect to a
+  specialized self-bearing body such as
+  `Frame_measure_scaled__mono__Wide`, and suppress the abstract body that could
+  emit a mixin-bound placeholder. Unsupported generic-through-generic method
+  residuals now stop with a clear lowering error. Release-e2e pin `474` runs
+  two distinct implementors; focused pins also cover struct and enum owners.
 - **Q47: dyn call results retain their declared mixin guarantees.** A call to a
   closure returning `any Future` produced an existential value that the bound
   checker immediately re-tested as if it were a concrete type named
@@ -895,10 +903,10 @@ once 1.0.0 ships.
   opaque body of every eligible generic free fn is suppressed (it could only emit
   placeholders); the single-implementor case monomorphizes to one concrete copy,
   byte-equivalent to the old devirtualize path. Backend-agnostic (shared MIR).
-  **Staged remainder:** a generic METHOD over a mixin (a generic `def` inside a
-  class) is not yet monomorphized — it now produces a CLEAR lowering error, never
-  a placeholder symbol. Quiver's paint pass is entirely generic FREE functions,
-  so the framework is unblocked. Design:
+  **Subsequently completed by Q17b:** generic METHODS declared directly inside
+  class/struct/enum receivers now use the same per-concrete-implementor model;
+  no placeholder-prone opaque method body is emitted. Quiver's paint pass was
+  already unblocked by the free-function stage. Design:
   `docs/decisions/q17-cross-package-monomorphization.md`. Pins (COMPILE + RUN +
   assert stdout): `src/ruxen_cli/tests/cross_package_mono.rs` (staged-install,
   two-package, binary + `ruxen test`, asserts `dep=20 mine=9` per-implementor),

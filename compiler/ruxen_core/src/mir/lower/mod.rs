@@ -158,6 +158,17 @@ pub struct Lowerer<'a> {
     /// path so that call resolves (and devirtualizes via `unique_bound_impl`,
     /// or surfaces a clear error).
     fn_mono_needs_opaque: HashSet<String>,
+    /// Q17b: eligible generic METHODS (methods with at least one
+    /// mixin-bounded type parameter), keyed by their resolved DefId. The
+    /// stored owner-qualified symbol keeps same-named methods on different
+    /// receiver types distinct.
+    mono_methods: HashMap<DefId, monomorphize::MonoMethod>,
+    /// Q17b: method DefId -> distinct fully-concrete generic-arg vectors
+    /// recovered from method-call sites.
+    method_mono_instances: HashMap<DefId, Vec<monomorphize::MonoKey>>,
+    /// Q17b: method DefId -> emitted `(concrete-args, mangled-symbol)` pairs
+    /// consulted by method-call lowering.
+    method_mono_emitted: HashMap<DefId, Vec<(monomorphize::MonoKey, String)>>,
     /// Tier 4.04: no_std mode. Suppresses the synthesized primitive `*_fmt`
     /// Display helpers (`Int_fmt`/`Char_fmt`/…), which reference hosted runtime
     /// symbols (`ruxen_int_to_string`, `Formatter_write_str`) absent in a
@@ -256,6 +267,9 @@ impl<'a> Lowerer<'a> {
             fn_mono_instances: HashMap::new(),
             fn_mono_emitted: HashMap::new(),
             fn_mono_needs_opaque: HashSet::new(),
+            mono_methods: HashMap::new(),
+            method_mono_instances: HashMap::new(),
+            method_mono_emitted: HashMap::new(),
             no_std: false,
         }
     }
@@ -307,13 +321,14 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Q17 (staged boundary): true when the receiver type (after peeling refs)
+    /// Q17/Q17b residual guard: true when the receiver type (after peeling refs)
     /// is ITSELF a still-abstract, mixin-bound type parameter
     /// (`TypeParam`/`SomeMixin`/`AnyMixin`) with bounds but NO unique
     /// implementor — so a method call on it would mangle to a
-    /// bound-placeholder callee (`T: Sized_width`) that link-fails. This is the
-    /// generic-METHOD-over-mixin case (not yet monomorphized; generic free
-    /// functions ARE handled). Detected on the receiver SHAPE, not on the
+    /// bound-placeholder callee (`T: Sized_width`) that link-fails. Normal Q17
+    /// free-function and Q17b method specialization makes this concrete first;
+    /// a remaining abstract receiver is an unsupported generic-chain residual.
+    /// Detected on the receiver SHAPE, not on the
     /// stringified callee: a concrete receiver carrying a bounded generic ARG
     /// (`Array[T: Showable]`) is a sound builtin call and must return false.
     fn receiver_is_unresolved_bound(&self, ty: &Ty) -> bool {
@@ -631,6 +646,12 @@ impl<'a> Lowerer<'a> {
                 let qualified_class = Self::qualified_item_name(module_path, &class.name);
                 let class_symbol = Self::symbol_name(&qualified_class);
                 for method in &class.methods {
+                    // Q17b: an eligible generic method's abstract body could
+                    // only dispatch through a mixin-bound placeholder. Calls
+                    // target emitted concrete copies instead.
+                    if !self.generic_method_keeps_opaque(method.def_id) {
+                        continue;
+                    }
                     let mangled = format!("{}_{}", class_symbol, method.name);
                     let mir_fn = self.lower_method(&mangled, method)?;
                     mir.functions.push(mir_fn);
@@ -692,6 +713,9 @@ impl<'a> Lowerer<'a> {
                 let qualified_struct = Self::qualified_item_name(module_path, &s.name);
                 let struct_symbol = Self::symbol_name(&qualified_struct);
                 for method in &s.methods {
+                    if !self.generic_method_keeps_opaque(method.def_id) {
+                        continue;
+                    }
                     let mangled = format!("{}_{}", struct_symbol, method.name);
                     let mir_fn = self.lower_method(&mangled, method)?;
                     mir.functions.push(mir_fn);
@@ -734,6 +758,9 @@ impl<'a> Lowerer<'a> {
                 let qualified_enum = Self::qualified_item_name(module_path, &e.name);
                 let enum_symbol = Self::symbol_name(&qualified_enum);
                 for method in &e.methods {
+                    if !self.generic_method_keeps_opaque(method.def_id) {
+                        continue;
+                    }
                     let mangled = format!("{}_{}", enum_symbol, method.name);
                     let mir_fn = self.lower_method(&mangled, method)?;
                     mir.functions.push(mir_fn);
@@ -796,6 +823,12 @@ impl<'a> Lowerer<'a> {
         // `collect_mono_instances` (the trait-impl table is already built).
         self.collect_generic_fn_instances(program);
 
+        // Q17b: collect concrete instantiations of generic methods over
+        // mixin bounds. This is deliberately separate from generic-class
+        // monomorphization: the receiver type is fixed; only the method's own
+        // `[T: Mixin]` parameters vary per call.
+        self.collect_generic_method_instances(program);
+
         // Collect `const` initializer expressions so references are
         // substituted with the RHS value at every use site.
         self.collect_const_values(program);
@@ -850,9 +883,13 @@ impl<'a> Lowerer<'a> {
         // Q17: emit one specialized MIR copy of every eligible generic free
         // function, per recorded concrete instantiation, and record the
         // `(fn, args) → mangled` redirects consulted by `fn_call.rs`. Same
-        // ordering rationale as `emit_mono_instances` (opaque fallback bodies
-        // and symbols already in place).
+        // ordering rationale as `emit_mono_instances`; eligible opaque generic
+        // bodies themselves were deliberately suppressed above.
         self.emit_generic_fn_instances(&mut mir)?;
+
+        // Q17b: emit the specialized method bodies after ordinary items, in
+        // parallel with the free-function specialization pass above.
+        self.emit_generic_method_instances(&mut mir)?;
 
         // Emit the primitive Display::fmt synth functions (Phase 2 #06.D2.S1).
         // These are program-level, not per-use. Stage 3 (D2)

@@ -1,0 +1,45 @@
+# Q17b regression pin — a generic METHOD bound by a mixin must monomorphize
+# once per concrete implementor. Wide and Tall deliberately return different
+# measurements, so the output proves both specialized Frame method bodies run.
+mixin Sized
+  def measure -> Int
+end
+
+class Frame
+  scale: Int
+  def init(scale: Int)
+    self.scale = scale
+  end
+
+  def measure_scaled[T: Sized](item: &var T) -> Int
+    item.measure * self.scale
+  end
+end
+
+struct Wide
+  include Sized
+  w: Int
+  def measure -> Int
+    self.w
+  end
+end
+
+class Tall
+  include Sized
+  h: Int
+  def init(h: Int)
+    self.h = h
+  end
+
+  def measure -> Int
+    self.h + 1
+  end
+end
+
+def main
+  var frame = Frame.new(10)
+  var wide = Wide.new(7)
+  var tall = Tall.new(8)
+  puts "wide=#{frame.measure_scaled(&var wide)}"
+  puts "tall=#{frame.measure_scaled(&var tall)}"
+end

@@ -401,26 +401,33 @@ impl<'a> Lowerer<'a> {
                         mangled
                     };
 
-                    // Q17 (staged boundary): a paren-less method call whose
+                    // A paren-less call carries no argument vector from which
+                    // a generic method's `[T: Mixin]` can be recovered. Do not
+                    // fall through to the suppressed opaque body.
+                    if self.is_generic_mixin_method_symbol(&resolved_class, field_name) {
+                        return Err(format!(
+                            "cannot monomorphize generic method `{field_name}` from a \
+                             paren-less call: its mixin-bound type argument has no concrete \
+                             argument to infer from (use an explicit argument list)."
+                        ));
+                    }
+
+                    // Sound residual boundary: a paren-less method call whose
                     // RECEIVER is itself a still-abstract, mixin-bound type
                     // parameter (`item.width` where `item: &var T, T: Sized`)
                     // with NO unique implementor mangles to a bound-PLACEHOLDER
-                    // callee (`T: Sized_width`) that link-fails — the generic
-                    // METHOD over a mixin case (a generic `def` INSIDE a class),
-                    // not yet monomorphized (generic FREE functions ARE — see
-                    // the Q17 ADR). Detected STRUCTURALLY on the peeled receiver
+                    // callee (`T: Sized_width`) that link-fails. Q17/Q17b
+                    // substitution normally makes this receiver concrete.
+                    // Detect any unsupported residual STRUCTURALLY on the peeled receiver
                     // type (not by string-matching the mangled callee, which a
                     // sound `Array[T: Showable]`-style builtin would also trip).
                     // Surface a clear error instead of the placeholder symbol.
                     if self.receiver_is_unresolved_bound(&object.ty) {
                         return Err(format!(
-                            "cannot monomorphize generic method `{field_name}` over the \
-                             mixin-bound type parameter `{resolved_class}`: a generic METHOD \
-                             over a mixin with ≥2 implementors is not yet supported (generic \
-                             free functions are — see docs/decisions/\
-                             q17-cross-package-monomorphization.md). Move the generic over \
-                             the mixin into a free function \
-                             `def {field_name}[T: <bound>](recv: &var T, …)`."
+                            "cannot lower method `{field_name}` on unresolved mixin-bound \
+                             receiver `{resolved_class}`: no concrete monomorphization reached \
+                             this call (generic-calling-generic requires a concrete leaf — see \
+                             docs/decisions/q17-cross-package-monomorphization.md)."
                         ));
                     }
 
