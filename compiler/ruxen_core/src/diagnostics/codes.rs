@@ -277,7 +277,7 @@ pub const REGISTRY: &[CodeInfo] = &[
     },
     CodeInfo {
         code: "E0728",
-        title: "top-level expression statement is not executable; wrap it in `def main`",
+        title: "top-level expression statement conflicts with explicit `def main`",
     },
     CodeInfo {
         code: "E0729",

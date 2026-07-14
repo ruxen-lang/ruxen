@@ -1,0 +1,9 @@
+puts "start"
+x = compute()
+puts "value=#{x}"
+
+def compute -> Int
+  40 + 2
+end
+
+puts "done"

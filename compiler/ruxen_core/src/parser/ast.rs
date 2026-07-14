@@ -45,16 +45,10 @@ pub enum TopLevelItem {
     /// free-function synonym. Both names resolve to ONE callable DefId; no
     /// new body is emitted (ADR: docs/decisions/alias-keyword.md, D2).
     Alias(AliasDef),
-    /// A top-level expression statement — e.g. a call with a trailing
-    /// `do…end` block at module scope (`Tester.describe("…") do … end`).
-    /// The compiler's normal pipeline does NOT execute top-level
-    /// statements directly: `ruxen test` HOISTS top-level items and wraps
-    /// the remaining statements in a synthesised `def main` before
-    /// compiling, so this variant only ever survives to `resolve` when a
-    /// raw file is compiled directly — where it is rejected with a clear
-    /// E0728. Its purpose is to let the SHARED parser (compiler + LSP +
-    /// `ruxen fmt`) ACCEPT the test-file surface so the formatter can
-    /// round-trip it instead of erroring at 1:1 (Q23b).
+    /// A top-level executable expression statement. The compile/type-check
+    /// pipeline moves these into an implicit `main` when no explicit `main`
+    /// exists. With an explicit `main`, they remain top-level so resolve can
+    /// report the ambiguous combination as E0728.
     Expr(Expr),
 }
 

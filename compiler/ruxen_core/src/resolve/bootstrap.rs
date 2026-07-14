@@ -639,11 +639,9 @@ fn item_load_priority(item: &ast::TopLevelItem) -> u8 {
         | ast::TopLevelItem::Lib(_)
         | ast::TopLevelItem::Extern(_)
         | ast::TopLevelItem::Const(_)
-        // A top-level expression statement (Q23b) loads last, like a
-        // function body — it consumes already-registered names. It is only
-        // ever present in non-bootstrap user files compiled directly, where
-        // resolve rejects it (E0608); ordering it here just keeps the sort
-        // total.
+        // A top-level expression loads last, like a function body. User
+        // programs normally move these into implicit `main` before resolve;
+        // keeping an ordering here makes bootstrap sorting total.
         | ast::TopLevelItem::Expr(_)
         // A free-fn `alias new old` consumes an already-registered callable
         // name (docs/decisions/alias-keyword.md), so it loads last.

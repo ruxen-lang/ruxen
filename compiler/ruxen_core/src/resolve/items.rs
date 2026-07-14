@@ -88,19 +88,12 @@ impl Resolver {
                 None
             }
             ast::TopLevelItem::Expr(e) => {
-                // A top-level expression statement (Q23b). The parser accepts
-                // this so the SHARED parser surface (and therefore `ruxen
-                // fmt`) round-trips test files shaped like
-                // `Tester.describe("…") do … end`. The COMPILE path never
-                // executes a top-level statement directly: `ruxen test`
-                // hoists items + wraps the statements in a synthesised `def
-                // main` first. So reaching resolve with one means a raw file
-                // with top-level statements was compiled directly — reject it
-                // clearly rather than silently dropping it.
+                // The implicit-main pre-pass consumes these unless the program
+                // already declares `main`. Reaching resolve therefore means a
+                // hand-written entry point was mixed with loose executable code.
                 self.diagnostics.push(Diagnostic::error_with_code(
-                    "top-level expression statements are not executable on the \
-                     direct compile path — wrap them in `def main` (or run the \
-                     file through `ruxen test`, which does this for you)"
+                    "top-level expression statements cannot be combined with an \
+                     explicit `def main` — move them into the existing `main`"
                         .to_string(),
                     e.span.clone(),
                     "E0728",

@@ -25,6 +25,14 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
 
 ### Toolchain / tests
 
+- [x] **Implicit `main` — Ruby-style top-level execution (DONE 2026-07-14,
+      `feat/implicit-main`).** After parse and before resolve, executable
+      `TopLevelItem::Expr` nodes are moved in source order into a synthesized
+      zero-argument, `nil`-returning `main` when no explicit entry point exists.
+      Declarations remain top-level and forward-visible. An explicit `main`
+      remains an AST no-op; combining it with loose statements retains E0728.
+      Release-e2e pins `933`–`935`; focused resolver, syntax-parity, Q23, CLI
+      smoke, and `ruxen test` checks cover the shared compile/build seam.
 - [x] **Q48 — LLVM FFI-alias resolution (FIXED 2026-07-14,
       `fix/q48-llvm-ffi`).** LLVM Pass 0 already declared aliased FFI methods
       under their C symbols, but its lazy call resolver ignored
@@ -81,8 +89,8 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
       `docs/decisions/syntax-parity-harness.md`. Two axes: per-surface
       conformance over the cases + stdlib + canvas/quiver/rondo corpus (491
       files), and structural pins (a compile-time exhaustiveness guard over
-      `TopLevelItem`/`MixinItem`/`ImplItem`; an intentional-divergence
-      allowlist for the E0728/E0607 accepted-but-compile-rejected class). The
+      `TopLevelItem`/`MixinItem`/`ImplItem`; an explicit, currently-empty
+      accepted-but-compile-rejected divergence allowlist). The
       fmt axis (reparse-identity + idempotence) caught **Q34** (dropped
       grouping parens) plus four more fmt-destructiveness bugs — zero-arg
       `MethodCall`→field-access, method-visibility-section drop, `async`
@@ -698,10 +706,10 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
       class/struct/enum/impl/mixin method `##` docs are now emitted
       (`format_func_with_leading_comments`). (b) The shared parser accepts a clean
       top-level expression statement (`TopLevelItem::Expr`) so `ruxen fmt`
-      round-trips `Tester.describe` test files; the direct compile path rejects it
-      with the new E0728 (`ruxen test` wraps in `def main` and is unaffected).
-      Pin: `compiler/ruxen_core/tests/q23_fmt_nondestructive.rs`; doc
-      `docs/errors/E0728.md`.
+      round-trips `Tester.describe` test files. The later implicit-main feature
+      made the same shape executable on direct compile; E0728 now applies only
+      when an explicit `main` is mixed with loose statements. Pin:
+      `compiler/ruxen_core/tests/q23_fmt_nondestructive.rs`.
 - [x] **Q24 · S4 — stale incremental cache replays false move/borrow diagnostics**
       ✅ FIXED 2026-06-08. The cache key's toolchain component was just
       `CARGO_PKG_VERSION`, invariant across a `--from-source` rebuild, so stale

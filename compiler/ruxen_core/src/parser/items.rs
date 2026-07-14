@@ -89,13 +89,10 @@ impl Parser {
             _ => {
                 // A top-level EXPRESSION STATEMENT — e.g. a call with a
                 // trailing `do…end` at module scope (`Tester.describe("…")
-                // do … end`, the shape of every `tests/*.rx`). The compile
-                // path never reaches here for those files (`ruxen test`
-                // hoists items + wraps statements in a synthesised `def
-                // main` first); resolve rejects a `TopLevelItem::Expr` with
-                // E0608 if a raw file is compiled directly. Accepting it
-                // here lets the SHARED parser (and therefore `ruxen fmt`)
-                // round-trip test files instead of erroring at 1:1. (Q23b.)
+                // do … end`, the shape of every `tests/*.rx`), or a Ruby-style
+                // assignment. The compile pipeline moves clean expressions
+                // into an implicit `main`; the shared parser retains the raw
+                // item so `ruxen fmt` can round-trip source faithfully.
                 if self.starts_top_level_expr_stmt() {
                     let before_pos = self.pos;
                     let before_diags = self.diagnostics.len();
