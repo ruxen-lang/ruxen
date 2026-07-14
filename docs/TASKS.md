@@ -17,9 +17,9 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-39 of 44 fixed (Q50 fixed 2026-07-14; Q51/Q52 opened 2026-07-14 — see below; Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
+41 of 44 fixed (Q50/Q51/Q52 fixed 2026-07-14; Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
 feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned; Q28, Q30,
-Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 fixed 2026-06-10 via the syntax-parity harness; Q37 fixed 2026-06-10 (root cause: a yielding/`&block` method poisoned an unrelated same-named free fn via a bare-name yield map — this covers BOTH the S1 name-collision symptom AND the S2 "generic `frame[S: PaintSurface]` gets a bogus `__block` in binary-consumes-library builds" symptom; they were the same bug) — quiver examples build again; Q38 fixed 2026-06-10 (bare-literal `String` local leaked); Q39 fixed 2026-06-11 (bare `""` in a tuple-element position expecting `String` stayed `&str` — rondo W21; fixed via `coerce_tuple_literal_elements`, pin `924`); Q35 fixed 2026-07-14 (struct/enum in-body includes now populate typeck's nominal mixin registry; pin `659`); Q36 fixed 2026-07-14 (parenthesized multi-argument `yield(a, b)` parsed as one tuple argument; pin `929`); Q46 fixed 2026-07-14 (paren-less no-arg `.new` now installs the runtime-mixin class-info header; pin `460`); Q47 fixed 2026-07-14 (an existential `any Mixin` call result now self-satisfies its exact carried bound instead of probing a nonexistent concrete method table; pin `473`); Q48 fixed 2026-07-14 (LLVM's lazy call resolver now maps residual mangled FFI method callees to their declared C symbols, matching Cranelift); Q49 fixed 2026-07-14 (branch-only drops are sunk into their initializing arms and wider partial-initialization CFGs are flag-guarded; pin `930`)**). The canvas
+Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 fixed 2026-06-10 via the syntax-parity harness; Q37 fixed 2026-06-10 (root cause: a yielding/`&block` method poisoned an unrelated same-named free fn via a bare-name yield map — this covers BOTH the S1 name-collision symptom AND the S2 "generic `frame[S: PaintSurface]` gets a bogus `__block` in binary-consumes-library builds" symptom; they were the same bug) — quiver examples build again; Q38 fixed 2026-06-10 (bare-literal `String` local leaked); Q39 fixed 2026-06-11 (bare `""` in a tuple-element position expecting `String` stayed `&str` — rondo W21; fixed via `coerce_tuple_literal_elements`, pin `924`); Q35 fixed 2026-07-14 (struct/enum in-body includes now populate typeck's nominal mixin registry; pin `659`); Q36 fixed 2026-07-14 (parenthesized multi-argument `yield(a, b)` parsed as one tuple argument; pin `929`); Q46 fixed 2026-07-14 (paren-less no-arg `.new` now installs the runtime-mixin class-info header; pin `460`); Q47 fixed 2026-07-14 (an existential `any Mixin` call result now self-satisfies its exact carried bound instead of probing a nonexistent concrete method table; pin `473`); Q48 fixed 2026-07-14 (LLVM's lazy call resolver now maps residual mangled FFI method callees to their declared C symbols, matching Cranelift); Q49 fixed 2026-07-14 (branch-only drops are sunk into their initializing arms and wider partial-initialization CFGs are flag-guarded; pin `930`); Q52 fixed 2026-07-14 (blockdrop's closure destructor double-freed captured self-freeing `Mutex`/`SharedSync` handles; pins `926`/`927`/`937`)**). The canvas
 `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
 (canvas 143 green, sub-pixel pinned, live windowed loop verified).
 
@@ -38,11 +38,15 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
       `Set{1,2,3,4}.select { even }.size` = 3, expected 2; `Hash#select` similarly.
       Real logic bug in the shared `Enumerable[T]` `select` body. Repro: release-e2e
       `612_set_enumerable`, `613_hash_enumerable`. Pre-existing (isolation-verified).
-- [ ] **Q52 — `Mutex` guard drop in a closure/match arm crashes, exit 133 (OPEN,
-      found 2026-07-14).** `{ || match m.lock { Ok(g) -> g.get.clone; … } }.()`
-      deterministically SIGTRAPs. Suspect guard-Drop × closure-capture-drop
-      interaction (blockdrop). Repro: release-e2e `926`/`927`. Pre-existing
-      (isolation-verified); needs a base bisect to see if a session fix regressed it.
+- [x] **Q52 — `Mutex` guard drop in a closure/match arm (FIXED 2026-07-14,
+      `fix/q52-guarddrop`).** The guard itself was correctly arm-sunk and dropped
+      once. The later synthesized closure destructor called the captured
+      `Mutex`/`SharedSync` self-freeing drop and then freed the same pointer
+      again. Storage-consuming FFI drops are now ABI-classified so closure and
+      ordinary drop glue omit only that second free. This was a `fix/blockdrop`
+      regression: the pre-blockdrop binary passes 926, while post-blockdrop
+      implicit-main and Q49 binaries both exit 133. Pins `926`/`927` plus `937`,
+      whose second lock proves the first guard still unlocks.
 - [x] **Q49 — path-safe MIR drop elaboration (FIXED 2026-07-14,
       `fix/q49-drop-branch-scope`).** Scope-exit cleanup was appended to every
       `Return` without proving each local initialized on every incoming path.
