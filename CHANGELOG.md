@@ -7,6 +7,18 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Changed
+- **`AsyncTcpStream.read_with_timeout` arms its deadline timer lazily.** The
+  future now attempts the read BEFORE registering a reactor timer, and arms the
+  timer only when the read reports EAGAIN (a genuine wait). On a loaded
+  keep-alive connection the next request is usually already buffered, so the
+  read succeeds on the first poll and the fast path costs one `read(2)` and zero
+  `kevent(EVFILT_TIMER)` syscalls, instead of arming and immediately tearing
+  down a timer on every request. Timeout semantics are unchanged (a
+  never-readable fd still reaches the EAGAIN branch on its first poll and arms
+  the timer there). Measured on rondo's plaintext bench: kevent syscall time
+  down ~33%, throughput +1-4% (the loopback bench is otherwise machine-bound).
+
 ### Added
 - **Ruby-style module loading: `require` / `require_relative` / `autoload`;
   files anywhere, not just `src/`.** The AOT loader follows the entry file's
