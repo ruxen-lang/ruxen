@@ -158,3 +158,12 @@ void *ruxen_env_current_dir(void) {
         cap = next;
     }
 }
+
+/* Logical (online) CPU count for default worker/pool sizing. sysconf's
+ * _SC_NPROCESSORS_ONLN returns online logical processors on both macOS
+ * (all P + E cores) and Linux; unistd.h comes in via runtime.h. Clamped to
+ * a minimum of 1 so callers can size pools without a zero-worker foot-gun. */
+int64_t ruxen_cpu_count(void) {
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? (int64_t)n : 1;
+}

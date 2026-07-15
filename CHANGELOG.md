@@ -20,6 +20,12 @@ once 1.0.0 ships.
   down ~33%, throughput +1-4% (the loopback bench is otherwise machine-bound).
 
 ### Added
+- **`Env.cpu_count`: logical CPU count for default pool/worker sizing.** A thin
+  `sysconf(_SC_NPROCESSORS_ONLN)` FFI returning the online logical processor
+  count (all P + E cores on Apple Silicon, online CPUs on Linux), clamped to a
+  minimum of 1. Lets servers auto-size their worker count to the machine the way
+  Go's `GOMAXPROCS` and nginx's `worker_processes auto` do. Release-e2e `939`
+  pins the invariant (`>= 1`).
 - **Ruby-style module loading: `require` / `require_relative` / `autoload`;
   files anywhere, not just `src/`.** The AOT loader follows the entry file's
   require graph, deduplicates canonical paths, reports Ruby-like `LoadError`

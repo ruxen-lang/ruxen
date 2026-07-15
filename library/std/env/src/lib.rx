@@ -21,6 +21,7 @@ class Env
     def self.get as "ruxen_env_var"(name: &String) -> Result[String, IoError]
     def self.vars as "ruxen_env_vars" -> Hash[String, String]
     def self.current_dir as "ruxen_env_current_dir" -> Result[String, IoError]
+    def self.cpu_count as "ruxen_cpu_count" -> Int
   end
 end
 
@@ -30,4 +31,5 @@ lib "runtime/env.c"
   def get as "ruxen_env_var"(name: &String) -> Result[String, IoError]
   def vars as "ruxen_env_vars" -> Hash[String, String]
   def current_dir as "ruxen_env_current_dir" -> Result[String, IoError]
+  def cpu_count as "ruxen_cpu_count" -> Int
 end
