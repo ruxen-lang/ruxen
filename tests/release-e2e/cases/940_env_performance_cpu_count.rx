@@ -1,0 +1,12 @@
+# Pins std::env's performance-core-count FFI (Env.performance_cpu_count ->
+# ruxen_performance_cpu_count). The exact count is machine-dependent (P-cores on
+# Apple Silicon, all logical cores on homogeneous CPUs), so assert the invariant
+# every machine satisfies (>= 1) and emit a deterministic marker.
+def main
+  let p = Env.performance_cpu_count
+  if p >= 1
+    puts "perf_cpu_count_ok"
+  else
+    puts "perf_cpu_count_bad"
+  end
+end

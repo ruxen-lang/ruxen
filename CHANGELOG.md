@@ -26,6 +26,17 @@ once 1.0.0 ships.
   minimum of 1. Lets servers auto-size their worker count to the machine the way
   Go's `GOMAXPROCS` and nginx's `worker_processes auto` do. Release-e2e `939`
   pins the invariant (`>= 1`).
+- **`Env.performance_cpu_count`: performance-core count for topology-aware,
+  latency-sensitive pool sizing.** On Apple Silicon it reads
+  `sysctlbyname("hw.perflevel0.logicalcpu")`, the fast performance (P) core
+  count; on homogeneous CPUs (Linux, Intel Macs) every core is "performance", so
+  it falls back to the full online logical count. Clamped to a minimum of 1. A
+  connection is pinned to its accepting worker and never migrates, so a worker
+  landing on a slow efficiency (E) core adds tail latency. Sizing the pool to the
+  P-cores keeps p99 low on heterogeneous chips (measured Go-class tail on an M4)
+  while staying a no-op on homogeneous CPUs. Rondo now defaults its worker count
+  to this. Adds a macOS-guarded `#include <sys/sysctl.h>` to `env.c`. Release-e2e
+  `940` pins the invariant (`>= 1`).
 - **Ruby-style module loading: `require` / `require_relative` / `autoload`;
   files anywhere, not just `src/`.** The AOT loader follows the entry file's
   require graph, deduplicates canonical paths, reports Ruby-like `LoadError`
