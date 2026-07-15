@@ -34,6 +34,15 @@ lib "runtime/reactor.c"
   def ruxen_reactor_deregister(reactor: Int, handle: Int) -> nil
 end
 
+## `ruxen_reactor_rearm_timer` (Lever D.2, same C file) is deliberately NOT
+## declared here: it is called ONLY C-to-C, from
+## async_net.c::ruxen_async_tcp_stream_ensure_timer, mirroring
+## `ruxen_reactor_register_fd_read_persistent`/`_write_persistent` and
+## `ruxen_reactor_next_virtual_deadline` (also reactor.c primitives with zero
+## `.rx` lib decl — the latter is used only by test_clock.c). No `.rx` caller
+## needs it, so it stays off the FFI alias-map surface rather than adding an
+## unused declaration.
+
 ## Monotonic nanos free fn used by `TimeSleepFuture` to compute its
 ## absolute deadline. Cross-package lib decl pointing at the C symbol
 ## owned by std.time's runtime/time.c.

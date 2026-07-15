@@ -82,21 +82,31 @@ typedef struct {
     int32_t closed;
     int64_t read_handle;    /* persistent read-readiness registration */
     int64_t write_handle;   /* persistent write-readiness registration */
+    int64_t timer_handle;   /* persistent idle-timeout timer (Lever D.2);
+                              * 0 = not armed yet. Created once on the first
+                              * read_with_timeout EAGAIN, re-armed in place on
+                              * every subsequent cycle — see
+                              * ruxen_async_tcp_stream_ensure_timer below. */
 } RuxenAsyncTcpStream;
 
 _Static_assert(sizeof(RuxenAsyncTcpListener) == 16,
     "RuxenAsyncTcpListener wire layout drifted from documented 16-byte form "
     "(grew from 8 in v1-missing-features to add accept_handle)");
-_Static_assert(sizeof(RuxenAsyncTcpStream) == 24,
-    "RuxenAsyncTcpStream wire layout drifted from documented 24-byte form "
-    "(grew from 8 in v1-missing-features to add read_handle + write_handle)");
+_Static_assert(sizeof(RuxenAsyncTcpStream) == 32,
+    "RuxenAsyncTcpStream wire layout drifted from documented 32-byte form "
+    "(grew from 24 in Lever D.2 to add timer_handle)");
 
 /* Reactor FFI — declared here so we can register persistently at
  * stream/listener construction without going through the Ruxen side.
- * The persistent variants live in library/std/future/runtime/reactor.c. */
+ * The persistent variants + timer primitives live in
+ * library/std/future/runtime/reactor.c. */
 extern int64_t ruxen_reactor_register_fd_read_persistent(int64_t reactor, int64_t fd);
 extern int64_t ruxen_reactor_register_fd_write_persistent(int64_t reactor, int64_t fd);
 extern void    ruxen_reactor_deregister(int64_t reactor, int64_t handle);
+extern int64_t ruxen_reactor_current_handle(void);
+extern int64_t ruxen_reactor_register_timer(int64_t reactor, int64_t nanos);
+extern int64_t ruxen_reactor_rearm_timer(int64_t reactor, int64_t timer_handle, int64_t nanos);
+extern int64_t ruxen_reactor_check_fired(int64_t reactor, int64_t handle);
 
 /* ── socket helpers ────────────────────────────────────────────────── */
 
@@ -592,6 +602,7 @@ void *ruxen_async_tcp_stream_from_fd(int64_t fd) {
      * filter) is dwarfed by the savings on the hot path. */
     s->read_handle  = ruxen_reactor_register_fd_read_persistent(0, fd);
     s->write_handle = ruxen_reactor_register_fd_write_persistent(0, fd);
+    s->timer_handle = 0;
     return s;
 }
 
@@ -974,12 +985,86 @@ int64_t ruxen_async_tcp_stream_write_handle(void *self) {
     return ((RuxenAsyncTcpStream *)self)->write_handle;
 }
 
-/* Internal helper: tear down both r+w persistent registrations. Idempotent.
+/* Raw self-pointer as an Int. Every other cross-poll-cycle handle on this
+ * struct (state_ptr, handle, timer_handle across the whole async_net/future
+ * packages) is threaded through futures as an opaque `Int`, never a typed
+ * borrow — a Future class field can't carry a borrow's lifetime across
+ * `poll()` calls. AsyncReadWithTimeoutFuture stashes this at construction
+ * (read_with_timeout, which already holds `self`) as its `stream_ptr: Int`
+ * field so later polls can reach ensure_timer/check_timer_fired below
+ * without holding a typed `&AsyncTcpStream`. Safe: the stream is guaranteed
+ * to outlive the future by the same by-reference contract read()/write()
+ * already rely on (the caller owns the stream across the whole
+ * block_on(future) call). */
+int64_t ruxen_async_tcp_stream_ptr(void *self) {
+    return (int64_t)(uintptr_t)self;
+}
+
+/* ── AsyncTcpStream — persistent idle-timeout timer (Lever D.2) ─────
+ *
+ * Owned entirely C-side, mirroring read_handle/write_handle: armed ONCE
+ * (the first EAGAIN of the connection's first read_with_timeout call) and
+ * RE-ARMED IN PLACE on every subsequent cycle instead of paying a fresh
+ * register+deregister pair. Per keep-alive request this turns 2
+ * kevent/timerfd syscalls into 1 (macOS: EV_ADD re-arm on the same ident;
+ * Linux: timerfd_settime on the same timerfd) — see
+ * reactor.c::ruxen_reactor_rearm_timer. Timeout semantics are unchanged: a
+ * genuinely idle connection still times out `nanos` after its most recent
+ * arm/re-arm; a busy connection re-arms the deadline every cycle and never
+ * spuriously fires.
+ *
+ * `ruxen_async_tcp_stream_unregister` (called from both `drop` and
+ * `shutdown` below) is the SOLE teardown point — AsyncReadWithTimeoutFuture
+ * no longer owns or deregisters a timer of its own (see that future's
+ * header comment in async_read_with_timeout_future.rx). */
+
+int64_t ruxen_async_tcp_stream_ensure_timer(void *self, int64_t nanos) {
+    if (!self) return 0;
+    RuxenAsyncTcpStream *s = (RuxenAsyncTcpStream *)self;
+    int64_t reactor = ruxen_reactor_current_handle();
+    if (s->timer_handle == 0) {
+        s->timer_handle = ruxen_reactor_register_timer(reactor, nanos);
+    } else {
+        s->timer_handle = ruxen_reactor_rearm_timer(reactor, s->timer_handle, nanos);
+    }
+    return s->timer_handle;
+}
+
+int64_t ruxen_async_tcp_stream_check_timer_fired(void *self) {
+    if (!self) return 0;
+    RuxenAsyncTcpStream *s = (RuxenAsyncTcpStream *)self;
+    if (s->timer_handle == 0) return 0;
+    return ruxen_reactor_check_fired(ruxen_reactor_current_handle(), s->timer_handle);
+}
+
+int64_t ruxen_async_tcp_stream_timer_handle(void *self) {
+    if (!self) return 0;
+    return ((RuxenAsyncTcpStream *)self)->timer_handle;
+}
+
+/* Internal helper: tear down r+w+timer persistent registrations. Idempotent.
  * Called from both drop and shutdown — close() also implicitly
  * removes the fd from kqueue, but our slot table still owns bookkeeping
  * for `fired` / `registered_count`, and Linux epoll does NOT auto-remove
  * on close (only on the last fd dup closes). Always deregister
- * explicitly. */
+ * explicitly.
+ *
+ * NOTE (pre-existing, not introduced by Lever D.2): the read_handle/
+ * write_handle deregister calls below pass a LITERAL `0` as the reactor
+ * handle. `ruxen_reactor_deregister` in reactor.c early-returns whenever
+ * `reactor_handle == 0` (`if (reactor_handle == 0 || handle == 0) return;`
+ * — unlike the register_fd_*_persistent functions, deregister has NO
+ * lazy-acquire-current-thread-reactor fallback for a 0 handle). That makes
+ * the two calls below permanent no-ops: read_handle/write_handle are never
+ * actually torn down on stream drop/shutdown today. This predates Lever
+ * D.2 and is out of this change's scope (timer-ownership refactor only;
+ * fixing it would touch listener_drop's identical pattern too and is a
+ * separate leak-fix task) — flagged here, NOT fixed, per review protocol.
+ * The NEW timer_handle deregister call below deliberately does NOT copy
+ * this pattern: it passes the real `ruxen_reactor_current_handle()` so the
+ * timer this change introduces is actually torn down and
+ * `registered_count` actually returns to baseline (the task's explicit
+ * no-leak requirement). */
 static void ruxen_async_tcp_stream_unregister(RuxenAsyncTcpStream *s) {
     if (s->read_handle != 0) {
         ruxen_reactor_deregister(0, s->read_handle);
@@ -988,6 +1073,10 @@ static void ruxen_async_tcp_stream_unregister(RuxenAsyncTcpStream *s) {
     if (s->write_handle != 0) {
         ruxen_reactor_deregister(0, s->write_handle);
         s->write_handle = 0;
+    }
+    if (s->timer_handle != 0) {
+        ruxen_reactor_deregister(ruxen_reactor_current_handle(), s->timer_handle);
+        s->timer_handle = 0;
     }
 }
 

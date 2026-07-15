@@ -683,6 +683,97 @@ int64_t ruxen_reactor_register_timer(int64_t reactor_handle, int64_t nanos) {
 #endif
 }
 
+/* Re-arm an EXISTING timer slot's deadline to now+nanos, reusing the SAME
+ * slot — no allocation, no new registration. Backs AsyncTcpStream's
+ * persistent idle timer (Lever D.2, async_net.c::ruxen_async_tcp_stream_ensure_timer):
+ * a busy keep-alive connection re-arms the same kevent/timerfd registration
+ * every read cycle instead of paying a register+deregister pair, turning 2
+ * syscalls/request into 1 on macOS with IDENTICAL timeout semantics.
+ *
+ * Looks the slot up the SAME way `check_fired`/`deregister` do (route by
+ * handle sign / ident) — NOT `register_timer`'s lazy-acquire-on-0 semantics.
+ * `reactor_handle`/`timer_handle` of 0, or a timer_handle that doesn't match
+ * a live slot, is a bad-input no-op returning 0 (mirrors check_fired /
+ * deregister's early-return contract, not register_timer's). Fd-readiness
+ * handles (negative) are never valid here — only positive timer idents.
+ *
+ * `registered_count` is left UNCHANGED: the slot was already counted at the
+ * original `register_timer` call, and a re-arm is neither a fresh
+ * registration nor a teardown — double-counting here would desync the
+ * park_current fast-path just as surely as the double-decrement bug the
+ * deregister virtual-branch guards against above. */
+int64_t ruxen_reactor_rearm_timer(int64_t reactor_handle, int64_t timer_handle, int64_t nanos) {
+    if (reactor_handle == 0 || timer_handle == 0 || timer_handle < 0) {
+        return 0;
+    }
+    RuxenReactor *r = (RuxenReactor *)(uintptr_t)reactor_handle;
+    if (nanos < 0) {
+        nanos = 0;
+    }
+
+    int slot = ruxen_reactor_find_slot(r, timer_handle);
+    if (slot < 0) {
+        return 0;
+    }
+
+    /* If this timer had ALREADY FIRED, its fire path decremented
+     * registered_count (park_current for a real EV_ONESHOT timer, which the
+     * kernel also auto-removed; ruxen_reactor_fire_due_timers for a virtual
+     * one); see both above and below. Re-arming makes it a live registration
+     * again, so restore the count in lockstep; otherwise a fire-then-rearm
+     * sequence drifts registered_count DOWN and can wrongly trip
+     * park_current's `registered_count <= 0` sched_yield fast path. A timer
+     * that is still LIVE (not yet fired) keeps its existing count; re-arm
+     * only resets its deadline. Applies to virtual + both OS branches below,
+     * so it lives here before the fired bit is cleared. */
+    if (r->slots[slot].fired && r->registered_count >= 0) {
+        r->registered_count++;
+    }
+
+    /* §4.7 VIRTUAL CLOCK: mirror register_timer's virtual path — update the
+     * slot's ABSOLUTE virtual deadline with NO real OS syscall, and clear
+     * `fired` so a timer that already fired once can fire again after
+     * re-arm. `registered_count` untouched — see function header. */
+    if (r->slots[slot].virtual) {
+        r->slots[slot].virtual_deadline_ns = ruxen_test_clock_virtual_now() + nanos;
+        r->slots[slot].fired = 0;
+        return timer_handle;
+    }
+
+#if defined(__APPLE__)
+    /* EV_ADD on the SAME ident re-arms/resets an existing EVFILT_TIMER
+     * rather than creating a duplicate registration (man kqueue: "Re-adding
+     * an existing event will modify the parameters of the original event,
+     * and not result in a duplicate entry"). */
+    struct kevent ev;
+    EV_SET(&ev, (uintptr_t)timer_handle, EVFILT_TIMER,
+           EV_ADD | EV_ENABLE | EV_ONESHOT,
+           NOTE_NSECONDS, (intptr_t)nanos, NULL);
+    if (kevent(r->fd, &ev, 1, NULL, 0, NULL) < 0) {
+        ruxen_panic("ruxen_reactor_rearm_timer: kevent EV_ADD failed");
+        return 0;
+    }
+    r->slots[slot].fired = 0;
+    return timer_handle;
+#elif defined(__linux__)
+    /* timerfd_settime on the SAME fd re-arms it in place. */
+    int tfd = (int)timer_handle;
+    struct itimerspec spec;
+    memset(&spec, 0, sizeof(spec));
+    spec.it_value.tv_sec = (time_t)(nanos / 1000000000LL);
+    spec.it_value.tv_nsec = (long)(nanos % 1000000000LL);
+    if (spec.it_value.tv_sec == 0 && spec.it_value.tv_nsec == 0) {
+        spec.it_value.tv_nsec = 1;
+    }
+    if (timerfd_settime(tfd, 0, &spec, NULL) < 0) {
+        ruxen_panic("ruxen_reactor_rearm_timer: timerfd_settime failed");
+        return 0;
+    }
+    r->slots[slot].fired = 0;
+    return timer_handle;
+#endif
+}
+
 /* §4.7 TestClock: fire every VIRTUAL timer whose absolute deadline is <=
  * `now_ns`. Called from test_clock.c's advance/advance_to_next/set after
  * bumping virtual-now. Marks the slot `fired` and wakes its parked task (so the

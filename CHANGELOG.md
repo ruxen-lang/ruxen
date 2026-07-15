@@ -8,6 +8,25 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- **`AsyncTcpStream.read_with_timeout` idle timer is persistent and re-armed in
+  place (Lever D.2).** Previously each `read_with_timeout` registered a FRESH
+  reactor timer on the first EAGAIN and deregistered it on Ready/drop; under
+  closed-loop keep-alive load the read EAGAINs before the next request arrives,
+  so that timer was armed then torn down every request (2 `kevent` syscalls on
+  macOS just for the deadline). The idle timer now lives on the `AsyncTcpStream`
+  (created once on the connection's first EAGAIN, torn down exactly once at
+  stream drop) and is re-armed in place each cycle via the new
+  `ruxen_reactor_rearm_timer` (macOS `EV_ADD` on the same ident; Linux
+  `timerfd_settime` on the same timerfd), turning 2 syscalls/request into 1 on
+  the hot path with identical timeout semantics. The future arms the stream's
+  timer exactly once per read cycle (a per-future `armed` guard), so the fired
+  bit survives to be observed rather than being cleared by a re-arm on the same
+  poll. `rearm_timer` restores `registered_count` when it re-arms a
+  previously-fired timer, keeping the park fast-path bookkeeping balanced.
+  Release-e2e `941` pins the re-arm path (a data read then a timeout read on one
+  connection). No measurable throughput/p99 delta on the macOS loopback
+  plaintext bench (machine-bound; the win is per-request syscall count, expected
+  to show on Linux / syscall-bound workloads).
 - **`AsyncTcpStream.read_with_timeout` arms its deadline timer lazily.** The
   future now attempts the read BEFORE registering a reactor timer, and arms the
   timer only when the read reports EAGAIN (a genuine wait). On a loaded

@@ -1,53 +1,70 @@
-## --- AsyncReadWithTimeoutFuture (v1-missing-features) --------------
+## --- AsyncReadWithTimeoutFuture (Lever D.2: persistent re-armed idle timer) --
 ##
-## Wraps AsyncReadFuture's state machine plus a per-call deadline
-## timer. Resolves to:
+## Wraps AsyncReadFuture's state machine plus a per-connection idle
+## deadline. Resolves to:
 ##   * Ok(String)              — bytes (incl. zero-length on clean EOF)
 ##   * Err(IoError.<errno>)    — read(2) reported a real I/O error
 ##   * Err(IoError.TimedOut)   — `timeout_ns` elapsed with no readiness
 ##
-## Two registrations are live while the future is parked:
+## Two registrations are live while the future is parked, and BOTH are now
+## owned by the parent AsyncTcpStream, not by this future:
 ##
-##   1. The PERSISTENT read-readiness registration owned by the parent
-##      AsyncTcpStream (installed at stream construction, see
-##      async_net.c::ruxen_async_tcp_stream_from_fd). park_current
-##      wakes on real bytes arriving — handled fully outside this
-##      future. We must NOT deregister it on drop.
+##   1. The PERSISTENT read-readiness registration (installed at stream
+##      construction, see async_net.c::ruxen_async_tcp_stream_from_fd).
+##      park_current wakes on real bytes arriving — handled fully outside
+##      this future. Unchanged from before Lever D.2.
 ##
-##   2. A FRESH timer registered LAZILY on the first EAGAIN poll via
-##      ruxen_reactor_register_timer (never armed when the read has bytes
-##      ready on entry). THIS future owns the timer slot and is responsible
-##      for tearing it down (Ready or drop).
+##   2. The PERSISTENT idle-timeout timer (async_net.c::
+##      ruxen_async_tcp_stream_ensure_timer). Previously this future
+##      registered a FRESH reactor timer on first EAGAIN and deregistered
+##      it on Ready/drop — under closed-loop keep-alive load the read
+##      EAGAINs before the next request arrives, so that timer was armed
+##      then torn down EVERY request (2 kevent syscalls on macOS just for
+##      the deadline). Lever D.2 moves the timer onto the stream: created
+##      once on the connection's first EAGAIN, RE-ARMED IN PLACE (same
+##      reactor slot) on every subsequent read_with_timeout cycle instead
+##      of a fresh register+deregister pair — 1 kevent/request instead of
+##      2, identical timeout semantics. This future reaches it via
+##      `stream_ptr` (the stream's own heap pointer, threaded through as an
+##      Int like every other cross-poll-cycle handle in this codebase) and
+##      never deregisters it — the stream's own drop/shutdown is the SOLE
+##      timer teardown (async_net.c::ruxen_async_tcp_stream_unregister).
 ##
 ## Both registrations live in the same per-thread reactor, so
 ## `park_current` returns as soon as EITHER fires; the next poll
 ## resolves the race deterministically:
 ##   - If ruxen_async_tcp_read_step returns 2/3 (data/error), the
-##     read won — return Ready with that result, deregister the timer.
-##   - If step returns 1 (EAGAIN), check the timer. If fired, return
-##     Ready(Err(TimedOut)). Otherwise stay Pending.
+##     read won — return Ready with that result. The timer is left
+##     exactly as it is (armed or not) — re-arming it is the STREAM's
+##     job on the *next* read_with_timeout call, not this future's.
+##   - If step returns 1 (EAGAIN), arm-or-re-arm the stream's timer and
+##     check it. If fired, return Ready(Err(TimedOut)). Otherwise stay
+##     Pending.
 ## Step is checked first so a byte that arrived in the same wakeup
 ## as the timer doesn't get silently dropped.
 ##
-## State-struct lifecycle: on Ready-with-timeout we deliberately
-## bypass ruxen_async_tcp_read_state_take_result (it would consume
-## buffer + lose the unit-tag semantics we need for the message-
-## carrying TimedOut variant). The state is freed unconditionally
-## in `drop` via ruxen_async_tcp_read_state_free.
+## State-struct lifecycle: on Ready-with-timeout we deliberately bypass
+## ruxen_async_tcp_read_state_take_result (it would consume the buffer and
+## lose the unit-tag semantics we need for the message-carrying TimedOut
+## variant). The read state is freed unconditionally in `drop` via
+## ruxen_async_tcp_read_state_free — this future's ONLY remaining
+## teardown responsibility. It owns no reactor registration at all now.
 class AsyncReadWithTimeoutFuture
   state_ptr: Int
-  timer_handle: Int
   read_handle: Int
+  stream_ptr: Int
   timeout_ns: Int
+  armed: Int
   done: Int
   include Future
   type Output = Result[String, IoError]
 
-  def init(fd: Int, max_bytes: Int, timeout_ns: Int, read_handle: Int)
+  def init(fd: Int, max_bytes: Int, timeout_ns: Int, read_handle: Int, stream_ptr: Int)
     self.state_ptr = ruxen_async_tcp_read_state_new(fd, max_bytes)
-    self.timer_handle = 0
     self.read_handle = read_handle
+    self.stream_ptr = stream_ptr
     self.timeout_ns = timeout_ns
+    self.armed = 0
     self.done = 0
   end
 
@@ -56,36 +73,42 @@ class AsyncReadWithTimeoutFuture
       return Poll.Pending
     end
     let w = cx.waker
-    # Try the read FIRST, before arming any timer. On a loaded keep-alive
-    # connection the next request is usually already buffered, so the read
-    # succeeds right here and we never touch the reactor timer. That makes the
-    # fast path cost one read(2) and ZERO kevent(EVFILT_TIMER) syscalls; the
-    # deadline timer is armed lazily below, only when the read reports EAGAIN
-    # (a genuine wait). A never-readable fd still reaches the EAGAIN branch on
-    # its first poll and arms the timer there, so the timeout can never starve.
+    # Try the read FIRST, before touching the stream's idle timer. On a loaded
+    # keep-alive connection the next request is usually already buffered, so
+    # the read succeeds right here and we never touch the reactor at all. That
+    # makes the fast path cost one read(2) and ZERO reactor syscalls — no
+    # ensure_timer, no re-arm. A never-readable fd still reaches the EAGAIN
+    # branch on its first poll and arms the timer there, so the timeout can
+    # never starve.
     let step = ruxen_async_tcp_read_step(self.state_ptr)
     if step != 1
-      # Ready (step == 2 data / step == 3 error). Tear down the timer if an
-      # earlier poll armed it (no-op on the fast path), return the result.
-      let _drop_timer = self.discard_timer()
+      # Ready (step == 2 data / step == 3 error). The stream's idle timer is
+      # left untouched here on purpose — it stays armed (or unarmed, on the
+      # very first request) until the NEXT read_with_timeout cycle re-arms it
+      # in place. That re-arm-not-teardown is the whole point of Lever D.2.
       self.done = 1
       return Poll.Ready(ruxen_async_tcp_read_state_take_result(self.state_ptr))
     end
 
     # step == 1 (EAGAIN): no bytes yet, so we now need the deadline. Arm the
-    # timer on the first EAGAIN only (idempotent on later polls). timeout_ns
-    # <= 0 still registers (the reactor treats sub-ms remaining as "fire ASAP");
-    # user code wanting a zero-timeout poll should call `read` directly.
-    if self.timer_handle == 0
-      self.timer_handle =
-        ruxen_reactor_register_timer(ruxen_reactor_current_handle(),
-                                     self.timeout_ns)
+    # stream's timer exactly ONCE per read_with_timeout cycle, on the FIRST
+    # EAGAIN of THIS future. Each keep-alive cycle constructs a fresh future
+    # (armed=0), so the stream's persistent timer is re-armed once per cycle
+    # (the Lever D.2 win: 1 kevent, not register+deregister). It must NOT be
+    # re-armed on every poll: rearm_timer resets the deadline AND clears the
+    # `fired` bit, so re-arming right before check_timer_fired would wipe the
+    # very timeout we are about to observe and the read could never time out.
+    # timeout_ns <= 0 still arms (reactor treats sub-ms remaining as "fire
+    # ASAP"); user code wanting a zero-timeout poll should call `read` directly.
+    if self.armed == 0
+      let _armed_timer = ruxen_async_tcp_stream_ensure_timer(self.stream_ptr, self.timeout_ns)
+      self.armed = 1
     end
-    ruxen_reactor_set_waker(ruxen_reactor_current_handle(), self.timer_handle, w)
+    let timer = ruxen_async_tcp_stream_timer_handle(self.stream_ptr)
+    ruxen_reactor_set_waker(ruxen_reactor_current_handle(), timer, w)
 
     # Check whether the timer has fired in the interim. If it has, timeout wins.
-    if ruxen_reactor_check_fired(ruxen_reactor_current_handle(), self.timer_handle) != 0
-      let _drop_timer = self.discard_timer()
+    if ruxen_async_tcp_stream_check_timer_fired(self.stream_ptr) != 0
       self.done = 1
       return Poll.Ready(ruxen_async_net_make_timeout_result())
     end
@@ -95,26 +118,11 @@ class AsyncReadWithTimeoutFuture
     Poll.Pending
   end
 
-  ## Idempotent timer-deregister. Separate method so both the
-  ## ready-path and the drop-path share one teardown sequence.
-  ## Returns 0 (W3: `()` is not an expression).
-  def var discard_timer -> Int
-    if self.timer_handle != 0
-      ruxen_reactor_deregister(ruxen_reactor_current_handle(), self.timer_handle)
-      self.timer_handle = 0
-    end
-    0
-  end
-
   def drop
-    # Order: timer first (it lives in the reactor slot table), then
-    # the read state (heap allocation owned by this future). The
-    # stream's persistent fd registration is NOT touched here — it
-    # outlives this future.
-    if self.timer_handle != 0
-      ruxen_reactor_deregister(ruxen_reactor_current_handle(), self.timer_handle)
-      self.timer_handle = 0
-    end
+    # The stream owns BOTH persistent registrations now (read reg + idle
+    # timer) — neither is touched here, matching AsyncReadFuture's drop.
+    # This future's only remaining responsibility is its own read-state
+    # heap allocation.
     if self.state_ptr != 0
       ruxen_async_tcp_read_state_free(self.state_ptr)
       self.state_ptr = 0
