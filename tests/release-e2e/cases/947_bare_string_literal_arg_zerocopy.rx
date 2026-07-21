@@ -1,0 +1,18 @@
+# Bare-literal zero-copy (TASKS.md). A string literal passed DIRECTLY to a
+# `&String` param (`show("x")`, no explicit `&`) lowers to the raw `.rodata`
+# pointer. Pins ABI-correctness: the callee reads the literal's exact bytes and
+# length through the `.rodata` `char*`.
+def show(s: &String) -> Int
+  puts s.clone
+  s.size() as Int
+end
+
+def main
+  let a = show("transient")
+  let b = show("hi")
+  if a + b == 11
+    puts "sum_ok"
+  else
+    puts "sum_bad"
+  end
+end

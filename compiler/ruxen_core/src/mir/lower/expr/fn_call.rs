@@ -29,15 +29,34 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
+                // Bare-literal zero-copy: a string literal passed DIRECTLY to a
+                // `&String` param (`puts "x"`, `f("x")`, no explicit `&`) lowers
+                // to the raw `.rodata` pointer instead of a heap-copied owned
+                // String, mirroring the explicit `&"x"` borrow. Sound because
+                // `user_callee_param_is_ref` reports a slot as a borrow ONLY when
+                // every candidate agrees it is an immutable `&`-param with no
+                // mutable out-channel (its escape gate), so the callee only reads
+                // the immortal `.rodata` and never frees or mutates it.
+                let param_is_ref = crate::mir::lower::runtime_abi::user_callee_param_is_ref(
+                    self.symbols,
+                    callee_name.as_str(),
+                    args.len(),
+                );
                 let mut arg_values = Vec::with_capacity(args.len());
-                for arg in args {
-                    // Auto-invoke bare zero-arg function references used as
-                    // arguments.  Ruxen allows calling a function without
-                    // parentheses (`puts greet` ≡ `puts greet()`), so when an
-                    // argument is an identifier that resolves to a zero-arg
-                    // function, synthesize the invocation rather than passing
-                    // the function address as a value.
-                    let local = self.lower_fn_arg(arg)?;
+                for (slot, arg) in args.iter().enumerate() {
+                    let local = if param_is_ref.get(slot).copied().unwrap_or(false) {
+                        if let HirExprKind::StringLiteral(s) = &arg.kind {
+                            Some(self.emit_raw_string_literal(s))
+                        } else {
+                            self.lower_fn_arg(arg)?
+                        }
+                    } else {
+                        // Auto-invoke bare zero-arg function references used as
+                        // arguments (`puts greet` is `puts greet()`), so an
+                        // identifier resolving to a zero-arg function is invoked
+                        // rather than passed as a function address.
+                        self.lower_fn_arg(arg)?
+                    };
                     arg_values.push(local_to_value(local));
                 }
 

@@ -831,6 +831,30 @@ fn borrow_of_string_literal_is_zero_copy() {
     );
 }
 
+/// Bare-literal zero-copy: a string literal passed DIRECTLY (no `&`) to a
+/// `&String` param (`f("x")`, `puts "x"`) also lowers to the raw `.rodata`
+/// pointer, gated by `user_callee_param_is_ref` at the free-fn call-arg site.
+/// The escape gate guarantees the slot is an immutable `&`-param with no
+/// mutation channel, so handing over the immortal `.rodata` is sound. Like the
+/// explicit `&"x"` case: no owned String is born, so `string_frees == 0` and
+/// nothing leaks.
+#[test]
+fn bare_string_literal_arg_to_ref_param_is_zero_copy() {
+    let source = rx("bare_literal_arg_zerocopy");
+    let report = run_fixture_inline("bare_literal_arg_zerocopy", &source);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "leak on a bare `\"literal\"` arg to a `&String` param: {:#?}",
+        report
+    );
+    assert_eq!(
+        report.string_frees, 0,
+        "expected zero-copy: a bare `\"literal\"` passed to a `&String` param \
+         must not create an owned String, so string_frees must be 0: {:#?}",
+        report
+    );
+}
+
 /// An `Array[_]` local bound from `Array.new` (with at least one push) must
 /// have both its struct slot and its `data` buffer freed by scope-exit
 /// drop. (P0.7)
@@ -1322,14 +1346,16 @@ end
     assert_eq!(exit, Some(0), "mixed fixture crashed. stderr:\n{stderr}");
     assert_eq!(stdout, "ok\n", "unexpected stdout: {stdout:?}");
     let report = parse_leak_report(&stderr);
-    // Before Fix 1 string_frees=1 (only the `"ok"` literal frees; both `keep`
-    // and `give` leak — raw_outstanding=2). After Fix 1 the borrow source
-    // `keep` ALSO frees (string_frees>=2) and only the by-value `give` leaks
-    // (raw_outstanding=1, the pre-existing by-value gap asserted elsewhere).
+    // The borrow source `keep` must be freed (untainted borrow arg), while the
+    // by-value `give` leaks (the pre-existing by-value gap, raw_outstanding=1).
+    // `keep`/`give` are named locals, so the bare-literal zero-copy does not
+    // touch them; only the incidental `puts "ok"` literal changed, from a
+    // heap-copied owned String to an immortal `.rodata` borrow that allocates
+    // and frees nothing. So `keep` is now the SOLE string free (string_frees>=1);
+    // before the bare-literal zero-copy the `"ok"` literal also freed.
     assert!(
-        report.string_frees >= 2,
-        "the borrow-slot source `keep` must be freed after Fix 1 (>=2 incl. the \
-         `\"ok\"` literal): {:#?}",
+        report.string_frees >= 1,
+        "the borrow-slot source `keep` must be freed (untainted borrow arg): {:#?}",
         report
     );
     assert_eq!(

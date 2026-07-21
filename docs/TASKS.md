@@ -659,12 +659,19 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
       `drop_fixtures.rs::borrow_of_string_literal_is_zero_copy` (`string_frees == 0`,
       `outstanding == 0`) + release-e2e `942` (ABI: reads a literal's bytes and
       length through the borrow). Whole release-e2e suite (354) green.
-  - [ ] **Remaining (perf only): bare-literal zero-copy.** A bare literal
-        auto-borrowed into a `&String` param (`f("x")` / `puts "x"`, i.e. no
-        explicit `&`) still heap-copies then frees it (leak-free, just a transient
-        copy). Making it zero-copy needs param-target-type-aware arg lowering at
-        the ~7 call-arg sites (`fn_call.rs` / `method_call.rs`), gated by
-        `user_callee_param_is_ref`. Lower priority now that the leak is gone.
+  - [x] **Bare-literal zero-copy, free-fn path (LANDED 2026-07-21).** A bare
+        literal passed to a free-fn `&String` param (`f("x")`, `puts "x"`, no
+        explicit `&`) now lowers to the raw `.rodata` pointer, gated by
+        `user_callee_param_is_ref` at the `fn_call.rs` arg loop (its escape gate
+        guarantees an immutable `&`-param with no mutation channel). Pins:
+        `drop_fixtures.rs::bare_string_literal_arg_to_ref_param_is_zero_copy`
+        (`string_frees == 0`), release-e2e `947`. Covers the common `puts`/`print`
+        case.
+    - [ ] **Remaining (perf only): method-call bare-literal.** The same interception
+          for the ~5 `method_call.rs` arg loops (`obj.m("x")`) is not yet done;
+          those bare literals still heap-copy (leak-free). Each loop resolves its
+          callee differently, so it is a per-site change; low priority (rare for
+          string literals, and the leak is long gone).
 - [x] **Discovered drop-elaboration gap: a `String` passed to a USER function's
       `&String` param suppressed the source's scope-exit free → LEAK (FIXED
       2026-06-11, `feat/drop-elaboration`).** `let owned = "x"; user_fn(owned)`

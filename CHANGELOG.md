@@ -77,9 +77,12 @@ once 1.0.0 ships.
   (`drop_fixtures.rs::borrow_of_string_literal_is_zero_copy` asserts
   `string_frees == 0`, `outstanding == 0`). Only the immutable borrow changes; a
   `&var` of a literal and owned literal locals (`let s = "x"`) still heap-copy.
-  The whole release-e2e suite (354 cases) stays green. The bare-literal case
-  (`f("x")` with no explicit `&`) still heap-copies then frees it (leak-free);
-  its zero-copy is a scoped follow-up.
+  The whole release-e2e suite stays green. A bare literal passed to a FREE-FN
+  `&String` param (`f("x")`, `puts "x"`, no explicit `&`) is also zero-copy now,
+  gated by `user_callee_param_is_ref` at the `fn_call.rs` arg loop (pins:
+  `drop_fixtures.rs::bare_string_literal_arg_to_ref_param_is_zero_copy`,
+  release-e2e `947`). The same interception for method-call args
+  (`obj.m("x")`) is a scoped follow-up.
 - **`AsyncTcpStream.read_with_timeout` idle timer is persistent and re-armed in
   place (Lever D.2).** Previously each `read_with_timeout` registered a FRESH
   reactor timer on the first EAGAIN and deregistered it on Ready/drop; under
