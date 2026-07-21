@@ -5,7 +5,6 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::diagnostics::{Diagnostic, DiagnosticLevel};
 use crate::lexer::token::{Token, TokenKind};
 use crate::lexer::Lexer;
 use crate::parser::Parser;
@@ -143,16 +142,13 @@ impl ModuleLoader {
         }
         loop {
             let source = combine_files(&self.files);
-            let diagnostics = compile_diagnostics(&source);
+            let unresolved = compile_unresolved_names(&source);
             let pending: Vec<AutoloadRegistration> = self
                 .autoloads
                 .values()
                 .filter(|registration| {
                     !autoload_already_loaded(registration, &self.loaded, &self.load_paths)
-                        && diagnostics.iter().any(|diagnostic| {
-                            diagnostic.level == DiagnosticLevel::Error
-                                && diagnostic_mentions_constant(diagnostic, &registration.constant)
-                        })
+                        && unresolved_names_match(&unresolved, &registration.constant)
                 })
                 .cloned()
                 .collect();
@@ -477,27 +473,38 @@ fn update_scope_stack(tokens: &[Token], stack: &mut Vec<Option<String>>) {
     }
 }
 
-fn compile_diagnostics(source: &str) -> Vec<Diagnostic> {
+/// Resolve `source` and return the raw identifiers name resolution could not
+/// resolve. Drives the autoload fixpoint: a registration whose constant appears
+/// here is loaded, and the loop repeats until the set is empty (or no file was
+/// added). Parse/lex failures yield an empty list (a genuine syntax error fails
+/// the real build downstream).
+fn compile_unresolved_names(source: &str) -> Vec<String> {
     let Ok(tokens) = Lexer::new(source).tokenize() else {
         return Vec::new();
     };
     let Ok(program) = Parser::new(tokens).parse() else {
         return Vec::new();
     };
-    typeck::type_check(&program).diagnostics
+    typeck::type_check(&program).unresolved_names
 }
 
-fn diagnostic_mentions_constant(diagnostic: &Diagnostic, constant: &str) -> bool {
+/// True when `constant` is one of the raw identifiers name resolution reported
+/// as unresolved. Tries the registration's fully-qualified name, its `::` form,
+/// and its leaf, comparing by NAME EQUALITY against the structured `unresolved`
+/// list rather than scraping `diagnostic.message` text (the old
+/// `diagnostic_mentions_constant`). The structured signal removes the coupling
+/// to diagnostic wording and cannot be fooled by an unrelated error that
+/// happens to mention the name.
+fn unresolved_names_match(unresolved: &[String], constant: &str) -> bool {
     let leaf = constant.rsplit('.').next().unwrap_or(constant);
     let alternatives = [
         constant.to_string(),
         constant.replace('.', "::"),
         leaf.to_string(),
     ];
-    alternatives.iter().any(|name| {
-        diagnostic.message.contains(&format!("`{}`", name))
-            || diagnostic.message.contains(&format!("'{}'", name))
-    })
+    unresolved
+        .iter()
+        .any(|name| alternatives.iter().any(|alt| alt == name))
 }
 
 fn autoload_already_loaded(
@@ -684,5 +691,23 @@ mod tests {
         assert!(bundle.autoloads.contains_key("Foo.Bar"));
         assert_eq!(bundle.files.len(), 1, "unreferenced autoload stays lazy");
         fs::remove_dir_all(root).expect("remove temp dir");
+    }
+
+    #[test]
+    fn unresolved_names_match_uses_name_equality_not_substring() {
+        // Bare and qualified constants match a structurally-reported unresolved
+        // name (whole-name equality, tried against the `::` form and the leaf).
+        assert!(unresolved_names_match(&["First".to_string()], "First"));
+        assert!(unresolved_names_match(&["Foo::Bar".to_string()], "Foo.Bar"));
+        assert!(unresolved_names_match(&["Bar".to_string()], "Foo.Bar"));
+        // A constant absent from the unresolved set does not match.
+        assert!(!unresolved_names_match(&["Other".to_string()], "First"));
+        // The robustness win over the old diagnostic-text scrape: a longer,
+        // unrelated name that merely CONTAINS the constant as a substring does
+        // NOT match, because matching is by whole-name equality.
+        assert!(!unresolved_names_match(
+            &["FirstResponder".to_string()],
+            "First"
+        ));
     }
 }

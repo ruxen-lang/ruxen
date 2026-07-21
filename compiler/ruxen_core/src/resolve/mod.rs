@@ -40,6 +40,11 @@ pub struct ResolveResult {
     pub symbols: SymbolTable,
     pub type_context: TypeContext,
     pub diagnostics: Vec<Diagnostic>,
+    /// Structured list of the raw identifiers `resolve` could not resolve
+    /// (undefined variable / function / type). The autoload fixpoint
+    /// (`module_loader::expand_autoloads`) matches its registrations against
+    /// these by NAME, instead of scraping `diagnostic.message` text.
+    pub unresolved_names: Vec<String>,
     /// Phase E.E of #06.95: surfaced to typeck so its `collect_impls`
     /// pass can register module-nested class methods under their
     /// QUALIFIED names (e.g. `BufReader.File` rather than the
@@ -62,6 +67,10 @@ pub struct Resolver {
     pub scopes: ScopeStack,
     pub type_context: TypeContext,
     pub diagnostics: Vec<Diagnostic>,
+
+    /// Raw identifiers this pass could not resolve, collected structurally
+    /// alongside the undefined-name diagnostics (see `ResolveResult`).
+    pub unresolved_names: Vec<String>,
 
     /// Maps type names to their DefIds for quick lookup during type resolution.
     pub(super) type_registry: HashMap<String, DefId>,
@@ -206,6 +215,7 @@ impl Resolver {
             scopes: ScopeStack::new(),
             type_context: TypeContext::new(),
             diagnostics: Vec::new(),
+            unresolved_names: Vec::new(),
             type_registry: HashMap::new(),
             current_self_ty: None,
             current_class_def: None,

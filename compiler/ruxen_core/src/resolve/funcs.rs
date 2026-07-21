@@ -833,6 +833,7 @@ impl Resolver {
                             format!("'{}' not found in module '{}'", name, def.name),
                             use_decl.span.clone(),
                         ));
+                        self.unresolved_names.push(name.to_string());
                         None
                     }
                     DefKind::Enum { info } => {
@@ -863,6 +864,7 @@ impl Resolver {
                             format!("'{}' not found in class '{}'", name, def.name),
                             use_decl.span.clone(),
                         ));
+                        self.unresolved_names.push(name.to_string());
                         None
                     }
                     _ => {

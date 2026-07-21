@@ -271,6 +271,7 @@ impl Resolver {
                         }
                     } else {
                         self.error(format!("undefined qualified type `{}`", name), &span);
+                        self.unresolved_names.push(name.to_string());
                         HirExpr {
                             kind: HirExprKind::Error,
                             ty: Ty::Error,
@@ -279,6 +280,7 @@ impl Resolver {
                     }
                 } else {
                     self.error(format!("undefined variable `{}`", name), &span);
+                    self.unresolved_names.push(name.to_string());
                     HirExpr {
                         kind: HirExprKind::Error,
                         ty: Ty::Error,
@@ -590,6 +592,7 @@ impl Resolver {
                                 }
                             }
                             self.error(format!("undefined function `{}`", name), &span);
+                            self.unresolved_names.push(name.to_string());
                             HirExpr {
                                 kind: HirExprKind::Error,
                                 ty: Ty::Error,
@@ -598,6 +601,7 @@ impl Resolver {
                         } else {
                             // Could be a type constructor: Type.new(...)
                             self.error(format!("undefined function `{}`", name), &span);
+                            self.unresolved_names.push(name.to_string());
                             HirExpr {
                                 kind: HirExprKind::Error,
                                 ty: Ty::Error,

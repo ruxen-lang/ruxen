@@ -78,6 +78,7 @@ impl Resolver {
                 let composite = format!("{}.{}", type_name, variant);
                 let variant_def = self.scopes.lookup(&composite).unwrap_or_else(|| {
                     self.error(format!("undefined enum variant `{}`", composite), span);
+                    self.unresolved_names.push(composite.clone());
                     UNRESOLVED_DEF
                 });
 

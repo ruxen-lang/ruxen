@@ -683,6 +683,10 @@ impl Resolver {
         }
 
         self.error(format!("undefined type `{}`", name), &path.span);
+        // An undefined TYPE in an annotation position (`def f(c: HttpClient)`) is
+        // a primary autoload trigger; record it structurally so the fixpoint can
+        // match it (the old diagnostic-text scrape matched this message too).
+        self.unresolved_names.push(name.to_string());
         Ty::Error
     }
 

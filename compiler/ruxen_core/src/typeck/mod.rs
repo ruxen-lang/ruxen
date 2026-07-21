@@ -26,6 +26,9 @@ pub struct TypeCheckResult {
     pub symbols: SymbolTable,
     pub type_context: TypeContext,
     pub diagnostics: Vec<Diagnostic>,
+    /// Raw identifiers `resolve` could not resolve, surfaced structurally so
+    /// the autoload fixpoint matches registrations by name (see `ResolveResult`).
+    pub unresolved_names: Vec<String>,
 }
 
 /// Run the full type checking pipeline on a parsed AST program.
@@ -124,6 +127,7 @@ pub fn type_check_with_bootstrap_packages(
         mut symbols,
         mut type_context,
         mut diagnostics,
+        unresolved_names,
         type_registry,
         method_aliases,
     } = resolver.resolve_with_bootstrap_packages(prepared, bootstrap_packages);
@@ -158,6 +162,7 @@ pub fn type_check_with_bootstrap_packages(
         symbols,
         type_context,
         diagnostics,
+        unresolved_names,
     }
 }
 
@@ -199,6 +204,7 @@ pub fn type_check_with_bootstrap(
         mut symbols,
         mut type_context,
         mut diagnostics,
+        unresolved_names,
         type_registry,
         method_aliases,
     } = resolver.resolve_with_bootstrap(&lowered_user, bootstrap_programs);
@@ -234,6 +240,7 @@ pub fn type_check_with_bootstrap(
         symbols,
         type_context,
         diagnostics,
+        unresolved_names,
     }
 }
 

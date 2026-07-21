@@ -36,12 +36,21 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
       focused loader tests plus files-anywhere, autoload, cache-invalidation,
       and legacy-`src/` CLI smokes pin the behavior. Specification:
       `requirements/module_loading.md`.
-  - [ ] **Followup: harden autoload's unresolved-name detection.** The fixpoint
-        currently matches the constant name against diagnostic message text
-        (Ruxen has no dedicated error code for an unresolved name). This is
-        sound in normal use (a spurious match needs a co-occurring error that
-        already fails the build), but a structured unresolved-constant API from
-        `resolve` would remove the text coupling and the per-round full recompile.
+  - [x] **Followup: harden autoload's unresolved-name detection (DONE 2026-07-21).**
+        `resolve` now threads a structured `unresolved_names: Vec<String>`
+        (populated at the undefined-variable / function / type + `use`-path
+        sites) through `ResolveResult` and `TypeCheckResult`; the autoload
+        fixpoint (`module_loader::expand_autoloads`) matches its registrations
+        against that list by NAME EQUALITY (`unresolved_names_match`), replacing
+        the fragile `diagnostic_mentions_constant` scrape of `diagnostic.message`
+        text. Pin: `unresolved_names_match_uses_name_equality_not_substring`; the
+        multi-round fixpoint test (`autoload_expands_to_fixpoint_...`) stays green;
+        lib suite 592/0.
+    - [ ] **Remaining (perf only): the per-round full recompile.** Each fixpoint
+          iteration still re-runs `typeck::type_check` (bootstrap included) to
+          get the unresolved set. Inherent to a load-then-re-resolve fixpoint;
+          making it incremental (cached bootstrap / resolve-only pass) is a
+          separate optimization, not the detection-hardening this item covered.
 - [x] **Q53 — String-returning method interpolation in a generic closure
       (FIXED 2026-07-14, `fix/q53-closure-interp`).** Q50 removed a fragile
       inferred-call method-name allowlist, exposing that inlined `.each`

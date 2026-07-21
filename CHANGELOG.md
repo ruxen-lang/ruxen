@@ -8,6 +8,20 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- **Autoload's unresolved-name detection is now structured, not text-scraped.**
+  `resolve` collects a `unresolved_names: Vec<String>` of the raw identifiers it
+  could not resolve (at the undefined-variable / function / type and `use`-path
+  sites) and threads it through `ResolveResult` and `TypeCheckResult`. The
+  autoload fixpoint (`module_loader::expand_autoloads`) matches its registrations
+  against that list by whole-name equality (`unresolved_names_match`), replacing
+  the previous `diagnostic_mentions_constant` scrape of `diagnostic.message`
+  text. This removes the coupling to diagnostic wording and cannot be fooled by
+  an unrelated error that merely mentions the constant's name as a substring.
+  Behavior is otherwise unchanged: the multi-round fixpoint + namespace-scoped
+  autoload tests stay green, and a new pin
+  (`unresolved_names_match_uses_name_equality_not_substring`) covers the matcher.
+  The per-round recompile (each iteration re-runs typeck) is inherent to the
+  fixpoint and left as a separate perf follow-up.
 - **Zero-copy `&String` borrow of a string literal.** An immutable borrow of a
   string literal (`&"x"`) now lowers to the raw `.rodata` `const char*`
   (`Ty::RawPtr(Char)`) directly, via the new `emit_raw_string_literal` helper in
