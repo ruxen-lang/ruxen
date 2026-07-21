@@ -479,6 +479,15 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1123",
         title: "operator alias has no supported expression dispatch path",
     },
+    // Block Tier-2 (docs/decisions/ruby-block-semantics.md, staged). E1124
+    // fires when a `&`-form block argument (`&:sym` to-proc, `&block` / bare
+    // `&` block-forwarding) is used incorrectly — either it is not the last
+    // argument of the call, or a `&block` / `&` forward appears in a function
+    // that has no block parameter to forward.
+    CodeInfo {
+        code: "E1124",
+        title: "invalid `&`-block argument",
+    },
     // ── no_std / embedded (E1400-E1499) ──────────────────────────────
     // Tier 4.04. E1400 fires when a no_std compilation unit constructs a
     // heap-allocated value (String/Array/Map/Set) — there is no global

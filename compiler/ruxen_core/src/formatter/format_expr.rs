@@ -37,6 +37,11 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         ExprKind::UnitLiteral => text("()"),
         ExprKind::NullLiteral => text("nil"),
         ExprKind::RegexLiteral { pattern, flags } => text(format!("/{}/{}", pattern, flags)),
+        // Block Tier-2 `&`-forms in argument position. `Forward` prints as the
+        // canonical `&block` (bare `&` normalizes to it — both re-parse to
+        // `Forward`, so `format(format(x)) == format(x)`).
+        ExprKind::BlockPass(BlockPassKind::ToProc(sym)) => text(format!("&:{}", sym)),
+        ExprKind::BlockPass(BlockPassKind::Forward) => text("&block"),
 
         // ── Identifiers ──
         ExprKind::Identifier(name) => text(name.clone()),
@@ -291,6 +296,14 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
                 nest(INDENT_WIDTH, format_expr(e, comments)),
             ])),
             None => text("break"),
+        },
+
+        ExprKind::Next(val) => match val {
+            Some(e) => group(concat(vec![
+                text("next "),
+                nest(INDENT_WIDTH, format_expr(e, comments)),
+            ])),
+            None => text("next"),
         },
 
         ExprKind::Continue => text("continue"),

@@ -10,6 +10,7 @@ use crate::lexer::token::Span;
 use crate::parser::ast::{self, Visibility};
 
 use super::const_helpers;
+use super::implicit_block_params::split_trailing_block_pass;
 use super::scope::{ScopeId, ScopeKind, ScopeStack};
 use super::symbols::*;
 use super::{ClosureCaptureContext, PatternSpan, ResolveResult, Resolver};
@@ -393,9 +394,16 @@ impl Resolver {
                 block,
             } => {
                 let obj_hir = self.resolve_expr(object);
+                // Block Tier-2: a trailing `&:sym` / `&block` / `&` argument is
+                // hoisted out of the positional args into the block slot.
+                let (pos_args, trailing_bp) = split_trailing_block_pass(args);
                 let mut args_hir: Vec<HirExpr> =
-                    args.iter().map(|a| self.resolve_expr(a)).collect();
-                let block_hir = block.as_ref().map(|b| Box::new(self.resolve_expr(b)));
+                    pos_args.iter().map(|a| self.resolve_expr(a)).collect();
+                let block_hir = if let Some(bp) = trailing_bp {
+                    Some(Box::new(self.resolve_block_pass(bp, &span)))
+                } else {
+                    block.as_ref().map(|b| Box::new(self.resolve_expr(b)))
+                };
                 if block_hir.is_none() {
                     if let HirExprKind::VarRef(module_id) = &obj_hir.kind {
                         if let Some(module_def) = self.symbols.get(*module_id) {
@@ -466,9 +474,15 @@ impl Resolver {
                 args,
                 block,
             } => {
+                // Block Tier-2: hoist a trailing `&:sym` / `&block` / `&`.
+                let (pos_args, trailing_bp) = split_trailing_block_pass(args);
                 let mut args_hir: Vec<HirExpr> =
-                    args.iter().map(|a| self.resolve_expr(a)).collect();
-                let mut block_hir = block.as_ref().map(|b| Box::new(self.resolve_expr(b)));
+                    pos_args.iter().map(|a| self.resolve_expr(a)).collect();
+                let mut block_hir = if let Some(bp) = trailing_bp {
+                    Some(Box::new(self.resolve_block_pass(bp, &span)))
+                } else {
+                    block.as_ref().map(|b| Box::new(self.resolve_expr(b)))
+                };
 
                 // E1112 (docs/specs/stdlib/executor.spec.md B6) is
                 // detected in `async_lowering::collect_block_on_in_async_diagnostics`,
@@ -825,6 +839,18 @@ impl Resolver {
                 }
                 HirExpr {
                     kind: HirExprKind::Continue,
+                    ty: Ty::Never,
+                    span,
+                }
+            }
+            ast::ExprKind::Next(value) => {
+                // Block Tier-2: `next [expr]` is the block's value for this
+                // iteration. The parser only produces it inside a closure body,
+                // so no scope check is needed here; it lowers to an early
+                // return from the block's closure.
+                let value_hir = value.as_ref().map(|v| Box::new(self.resolve_expr(v)));
+                HirExpr {
+                    kind: HirExprKind::Next(value_hir),
                     ty: Ty::Never,
                     span,
                 }
@@ -1194,6 +1220,22 @@ impl Resolver {
                         ty,
                         span,
                     }
+                }
+            }
+            ast::ExprKind::BlockPass(_) => {
+                // A `&`-form block argument is only valid as the LAST argument
+                // of a call (where the MethodCall/Call arms hoist it into the
+                // block slot). Anywhere else it is malformed.
+                self.diagnostics.push(Diagnostic::error_with_code(
+                    "a `&`-block argument (`&:sym`, `&block`, `&`) must be the last \
+                     argument of a call",
+                    span.clone(),
+                    "E1124",
+                ));
+                HirExpr {
+                    kind: HirExprKind::Error,
+                    ty: Ty::Error,
+                    span,
                 }
             }
             ast::ExprKind::UnsafeBlock(block) => {

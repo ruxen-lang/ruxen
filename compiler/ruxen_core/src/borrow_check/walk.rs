@@ -190,7 +190,7 @@ impl<'a> BorrowChecker<'a> {
                 self.check_return(opt_expr.as_deref(), &expr.span);
             }
 
-            HirExprKind::Break(opt_expr) => {
+            HirExprKind::Break(opt_expr) | HirExprKind::Next(opt_expr) => {
                 if let Some(inner) = opt_expr {
                     self.check_expr(inner);
                 }

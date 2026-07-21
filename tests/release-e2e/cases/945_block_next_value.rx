@@ -1,0 +1,51 @@
+# Block Tier-2 (block ADR, staged): `next [expr]` as a block-value. Inside a
+# block, `next expr` early-returns `expr` as this iteration's block result and
+# skips the rest of the body. It is recognized only inside a block (the parser
+# `closure_depth` gate), so `.next` field access is unaffected. It works wherever
+# the block is a real closure: a `&block`/`yield` method body, and real `Array`
+# `map`/`select`/etc. (which route to real closures over `Enumerable`). A `next`
+# in a MIR-inlined `each` block is rejected, never miscompiled.
+
+def transform(n: Int, &block: Fn[(Int) -> Int]) -> Int
+  yield(n)
+end
+
+class Node
+  next: Int
+  def init(@next: Int)
+  end
+end
+
+def main
+  # `next` in a map block: even elements short-circuit to 0.
+  let xs = [1, 2, 3, 4]
+  let ys = xs.map { |x|
+    if x % 2 == 0
+      next 0
+    end
+    x * 10
+  }
+  puts "#{ys[0]} #{ys[1]} #{ys[2]} #{ys[3]}"
+
+  # `next` in a select predicate: element 3 is force-dropped.
+  let keep = xs.select { |x|
+    if x == 3
+      next false
+    end
+    x > 1
+  }
+  puts "#{keep.size}"
+
+  # `next` as the value of a `yield`ed block.
+  let a = transform(5) { |v|
+    if v > 3
+      next 100
+    end
+    v
+  }
+  puts "#{a}"
+
+  # `.next` field access is unaffected by the block-value keyword.
+  let node = Node.new(7)
+  puts "#{node.next}"
+end

@@ -528,6 +528,129 @@ pub(super) fn collect_break_types(
     }
 }
 
+/// Collect the value types of every `next expr` that belongs to THIS block
+/// (Block Tier-2). Mirrors `collect_break_types` but: a `next` targets the
+/// enclosing *closure*, so it descends through nested loops (a `next` inside a
+/// `for`/`while` in the block still belongs to the block) and STOPS at a nested
+/// closure boundary (that closure's `next` is its own). `return` is skipped —
+/// it is a separate jump. The accumulator unifies all collected types.
+pub(super) fn collect_next_types(
+    expr: &HirExpr,
+    ctx: &mut crate::hir::context::TypeContext,
+    acc: &mut Option<Ty>,
+    block_span: &Span,
+) {
+    match &expr.kind {
+        HirExprKind::Next(value) => {
+            let t = match value {
+                Some(v) => ctx.resolve(&v.ty),
+                None => Ty::Unit,
+            };
+            match acc {
+                Some(prev) => {
+                    let _ = unify(prev, &t, ctx, block_span);
+                }
+                None => *acc = Some(t),
+            }
+        }
+        // A nested closure owns its own `next`; do not descend. `return` does
+        // not contribute to the block's `next`-value type.
+        HirExprKind::Closure { .. } | HirExprKind::Return(_) => {}
+        // Unlike `break`, a `next` inside a nested loop still targets this
+        // block (loops use `continue`/`break`, never `next`), so descend.
+        HirExprKind::Loop { body } => collect_next_types(body, ctx, acc, block_span),
+        HirExprKind::While { condition, body } => {
+            collect_next_types(condition, ctx, acc, block_span);
+            collect_next_types(body, ctx, acc, block_span);
+        }
+        HirExprKind::For { iterable, body, .. } => {
+            collect_next_types(iterable, ctx, acc, block_span);
+            collect_next_types(body, ctx, acc, block_span);
+        }
+        HirExprKind::Block(stmts, tail) => {
+            for s in stmts {
+                match s {
+                    HirStatement::Let { value: Some(v), .. } => {
+                        collect_next_types(v, ctx, acc, block_span);
+                    }
+                    HirStatement::Expr(e) => {
+                        collect_next_types(e, ctx, acc, block_span);
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(t) = tail {
+                collect_next_types(t, ctx, acc, block_span);
+            }
+        }
+        HirExprKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            collect_next_types(cond, ctx, acc, block_span);
+            collect_next_types(then_branch, ctx, acc, block_span);
+            if let Some(e) = else_branch {
+                collect_next_types(e, ctx, acc, block_span);
+            }
+        }
+        HirExprKind::Match { scrutinee, arms } => {
+            collect_next_types(scrutinee, ctx, acc, block_span);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    collect_next_types(g, ctx, acc, block_span);
+                }
+                collect_next_types(&arm.body, ctx, acc, block_span);
+            }
+        }
+        HirExprKind::BinaryOp { left, right, .. } => {
+            collect_next_types(left, ctx, acc, block_span);
+            collect_next_types(right, ctx, acc, block_span);
+        }
+        HirExprKind::UnaryOp { operand, .. } => {
+            collect_next_types(operand, ctx, acc, block_span);
+        }
+        HirExprKind::Borrow { expr: inner, .. } => {
+            collect_next_types(inner, ctx, acc, block_span);
+        }
+        HirExprKind::Assign { target, value, .. }
+        | HirExprKind::CompoundAssign { target, value, .. } => {
+            collect_next_types(target, ctx, acc, block_span);
+            collect_next_types(value, ctx, acc, block_span);
+        }
+        HirExprKind::FnCall { args, .. } => {
+            for a in args {
+                collect_next_types(a, ctx, acc, block_span);
+            }
+        }
+        HirExprKind::MethodCall {
+            object,
+            args,
+            block,
+            ..
+        } => {
+            collect_next_types(object, ctx, acc, block_span);
+            for a in args {
+                collect_next_types(a, ctx, acc, block_span);
+            }
+            if let Some(b) = block {
+                collect_next_types(b, ctx, acc, block_span);
+            }
+        }
+        HirExprKind::FieldAccess { object, .. } => {
+            collect_next_types(object, ctx, acc, block_span);
+        }
+        HirExprKind::Interpolation { parts } => {
+            for p in parts {
+                if let HirInterpolationPart::Expr { expr: e, .. } = p {
+                    collect_next_types(e, ctx, acc, block_span);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod substitute_generic_params_tests {
     use super::substitute_generic_params;

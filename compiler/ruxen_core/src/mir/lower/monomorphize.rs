@@ -1191,7 +1191,7 @@ fn walk_calls_in_expr(expr: &HirExpr, f: &mut impl FnMut(GenericCall<'_>)) {
             walk_calls_in_expr(target, f);
             walk_calls_in_expr(value, f);
         }
-        HirExprKind::Return(e) | HirExprKind::Break(e) => {
+        HirExprKind::Return(e) | HirExprKind::Break(e) | HirExprKind::Next(e) => {
             if let Some(inner) = e {
                 walk_calls_in_expr(inner, f);
             }
@@ -1423,7 +1423,7 @@ fn walk_tys_in_expr(expr: &HirExpr, f: &mut impl FnMut(&Ty)) {
             walk_tys_in_expr(target, f);
             walk_tys_in_expr(value, f);
         }
-        HirExprKind::Return(e) | HirExprKind::Break(e) => {
+        HirExprKind::Return(e) | HirExprKind::Break(e) | HirExprKind::Next(e) => {
             if let Some(inner) = e {
                 walk_tys_in_expr(inner, f);
             }

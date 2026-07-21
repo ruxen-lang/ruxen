@@ -10,18 +10,84 @@ impl Parser {
         self.skip_newlines();
         let mut args = Vec::new();
         if !self.at(TokenKind::RParen) {
-            args.push(self.parse_expression());
+            args.push(self.parse_call_arg());
             while self.eat(TokenKind::Comma) {
                 self.skip_newlines();
                 if self.at(TokenKind::RParen) {
                     break;
                 }
-                args.push(self.parse_expression());
+                args.push(self.parse_call_arg());
             }
         }
         self.skip_newlines();
         self.expect(TokenKind::RParen);
         args
+    }
+
+    /// A single call argument. Recognizes the Block Tier-2 `&`-forms in
+    /// argument position — `&:symbol` (to-proc) and `&block` / bare `&`
+    /// (block-forwarding) — producing an `ExprKind::BlockPass` that `resolve`
+    /// later hoists into the call's block slot. Any other argument (including
+    /// an ordinary `&expr` borrow) parses as a normal expression.
+    fn parse_call_arg(&mut self) -> Expr {
+        if let Some(bp) = self.try_parse_block_pass() {
+            return bp;
+        }
+        self.parse_expression()
+    }
+
+    /// If the cursor is at a `&`-form block argument, consume it and return the
+    /// `BlockPass` node; otherwise leave the cursor untouched and return `None`.
+    ///
+    /// Recognized (all unambiguous against Ruxen's `&expr` borrow, except the
+    /// literal identifier `block` which is treated as the received block):
+    ///   - `&:sym`        → `BlockPass(ToProc("sym"))`
+    ///   - `&block`       → `BlockPass(Forward)`
+    ///   - `&` then `)`/`,` (bare) → `BlockPass(Forward)`
+    fn try_parse_block_pass(&mut self) -> Option<Expr> {
+        if !self.at(TokenKind::Amp) {
+            return None;
+        }
+        let start = self.current_span();
+        // `&:sym` — a colon can never follow `&` in a borrow, so this is
+        // unambiguous to-proc sugar.
+        if self.peek_kind() == TokenKind::Colon {
+            if let TokenKind::Identifier(name) = self.peek_at_kind(2) {
+                self.advance(); // &
+                self.advance(); // :
+                self.advance(); // sym
+                let span = self.span_from(&start);
+                return Some(Expr {
+                    kind: ExprKind::BlockPass(BlockPassKind::ToProc(name)),
+                    span,
+                });
+            }
+        }
+        // `&block` — the literal identifier `block` in argument position means
+        // forward the enclosing function's received block.
+        if let TokenKind::Identifier(name) = self.peek_kind() {
+            if name == "block"
+                && matches!(self.peek_at_kind(2), TokenKind::RParen | TokenKind::Comma)
+            {
+                self.advance(); // &
+                self.advance(); // block
+                let span = self.span_from(&start);
+                return Some(Expr {
+                    kind: ExprKind::BlockPass(BlockPassKind::Forward),
+                    span,
+                });
+            }
+        }
+        // Bare `&` immediately followed by `)` or `,` — anonymous forwarding.
+        if matches!(self.peek_kind(), TokenKind::RParen | TokenKind::Comma) {
+            self.advance(); // &
+            let span = self.span_from(&start);
+            return Some(Expr {
+                kind: ExprKind::BlockPass(BlockPassKind::Forward),
+                span,
+            });
+        }
+        None
     }
 
     pub(super) fn parse_postfix(&mut self, lhs: Expr) -> Expr {

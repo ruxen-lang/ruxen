@@ -1073,13 +1073,37 @@ impl<'a> InferenceEngine<'a> {
                 expr.ty = Ty::Never;
             }
 
+            HirExprKind::Next(value) => {
+                // Block Tier-2: `next expr` is a Never-typed jump; its value is
+                // unified with the enclosing closure's result type in the
+                // `Closure` arm below (via `collect_next_types`).
+                if let Some(ref mut val) = value {
+                    self.infer_expr(val);
+                }
+                expr.ty = Ty::Never;
+            }
+
             HirExprKind::Closure { params, body, .. } => {
                 self.infer_expr(body);
+                // Block Tier-2: fold every `next expr` value into the closure's
+                // result type. When the body falls through only via `next`
+                // (tail is `Never`/uninferred), the block's type IS the `next`
+                // value type; otherwise all `next` values must match the tail.
+                let mut ret_ty = self.ctx.resolve(&body.ty);
+                let mut next_acc: Option<Ty> = None;
+                super::helpers::collect_next_types(body, self.ctx, &mut next_acc, &expr.span);
+                if let Some(next_ty) = next_acc {
+                    if matches!(ret_ty, Ty::Never) || ret_ty.is_infer() {
+                        let _ = unify(&body.ty, &next_ty, self.ctx, &expr.span);
+                        ret_ty = self.ctx.resolve(&next_ty);
+                    } else {
+                        let _ = unify(&ret_ty, &next_ty, self.ctx, &expr.span);
+                    }
+                }
                 let param_tys: Vec<Ty> = params.iter().map(|p| self.ctx.resolve(&p.ty)).collect();
-                let ret_ty = self.ctx.resolve(&body.ty);
                 expr.ty = Ty::Fn {
                     params: param_tys,
-                    ret: Box::new(ret_ty),
+                    ret: Box::new(self.ctx.resolve(&ret_ty)),
                 };
             }
 

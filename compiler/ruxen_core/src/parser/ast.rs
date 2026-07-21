@@ -425,6 +425,21 @@ pub enum ExprKind {
     // Yield
     Yield(Vec<Expr>),
 
+    /// Block Tier-2: `next [expr]` inside a block — the block's value for this
+    /// iteration is `expr` (or `nil`), and the rest of the block body is
+    /// skipped. Recognized only inside a closure body (parser `closure_depth`
+    /// gate), so `.next` field access is unaffected. Lowers to an early
+    /// return from the block's closure; rejected inside an inlined combinator
+    /// block (E1125) so it can never become a non-local return.
+    Next(Option<Box<Expr>>),
+
+    /// Block Tier-2: a `&`-form block argument in call position — either the
+    /// `&:symbol` to-proc sugar or `&block` / bare `&` block-forwarding. Lives
+    /// transiently as a call's trailing argument; `resolve` hoists it into the
+    /// call's block slot and desugars it (to a closure or the enclosing block
+    /// slot). It never reaches typeck / MIR.
+    BlockPass(BlockPassKind),
+
     // Macros
     MacroCall {
         name: String,
@@ -624,6 +639,15 @@ pub struct LoopExpr {
 }
 
 // ─── Closures ────────────────────────────────────────────────────────
+
+/// The `&`-form of a block argument (Block Tier-2). See `ExprKind::BlockPass`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlockPassKind {
+    /// `&:symbol` — desugars to `{ |x| x.symbol }` (a 1-arg to-proc closure).
+    ToProc(String),
+    /// `&block` / bare `&` — forward the enclosing function's received block.
+    Forward,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClosureExpr {

@@ -278,7 +278,19 @@ impl<'a> Lowerer<'a> {
 
                 // Build the synthesized closure function.  First parameter
                 // is the captures pointer (may be NULL for no captures).
-                let ret_ty = body.ty.clone();
+                //
+                // The MIR return type comes from the closure's `Ty::Fn` (set by
+                // typeck), NOT from `body.ty`: when the body diverges on every
+                // path (e.g. all branches exit via `next` — Block Tier-2), its
+                // tail type is `Never`, yet the closure genuinely returns the
+                // `next` values' type (which typeck folded into `expr.ty`).
+                // Using `body.ty` there would declare a `Never`-returning
+                // function that a `next expr` then `Return`s a real value from,
+                // tripping the codegen verifier.
+                let ret_ty = match &expr.ty {
+                    Ty::Fn { ret, .. } => (**ret).clone(),
+                    _ => body.ty.clone(),
+                };
                 let mut closure_fn = MirFunction::new(&closure_name, ret_ty);
                 let cap_param = closure_fn.new_local("__captures".to_string(), Ty::Int, false);
                 closure_fn.params.push(cap_param);
@@ -332,8 +344,14 @@ impl<'a> Lowerer<'a> {
 
                 // Lower the closure body.
                 let body_result = self.lower_expr(body)?;
-                let ret_is_unit = matches!(body.ty, Ty::Unit | Ty::Never);
-                if body_result.is_some() && !ret_is_unit {
+                if matches!(body.ty, Ty::Never) {
+                    // The body diverges on every path (all branches exit via
+                    // `next` / `return`), so this fall-through is unreachable.
+                    // Emitting `Return(None)` here would mismatch a non-`Unit`
+                    // MIR return type (inferred from the `next` values). Leave
+                    // the block unreachable instead. (Block Tier-2.)
+                    self.set_terminator(Terminator::Unreachable);
+                } else if body_result.is_some() && body.ty != Ty::Unit {
                     let body_val = local_to_value(body_result);
                     self.set_terminator(Terminator::Return(Some(body_val)));
                 } else {

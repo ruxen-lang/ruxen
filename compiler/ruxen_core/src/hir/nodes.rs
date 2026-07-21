@@ -225,6 +225,12 @@ pub enum HirExprKind {
     /// Continue to next loop iteration
     Continue,
 
+    /// Block Tier-2: `next [expr]` — the block's value for this iteration.
+    /// Only ever appears inside a closure body; lowers to an early return
+    /// from the block's closure. (An inlined-combinator block containing a
+    /// top-level `next` is rejected at MIR with E1125.)
+    Next(Option<Box<HirExpr>>),
+
     /// Closure expression
     Closure {
         params: Vec<HirClosureParam>,

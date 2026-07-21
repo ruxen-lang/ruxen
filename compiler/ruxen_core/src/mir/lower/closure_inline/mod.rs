@@ -11,6 +11,74 @@ mod partition;
 mod position;
 mod retain;
 
+/// Does `body` contain a `next` that belongs to it (Block Tier-2)? Walks the
+/// block, descending through control flow (`if`/`match`/`for`/`while`/loops —
+/// which use `continue`/`break`, never `next`) but STOPPING at a nested closure
+/// boundary (a `next` inside a nested block is that block's, not ours). Used to
+/// reject a `next` in a block that is about to be MIR-inlined.
+fn block_body_has_own_next(body: &HirExpr) -> bool {
+    match &body.kind {
+        HirExprKind::Next(_) => true,
+        // Nested closure owns its own `next`; `return` is a separate jump.
+        HirExprKind::Closure { .. } | HirExprKind::Return(_) => false,
+        HirExprKind::Loop { body } => block_body_has_own_next(body),
+        HirExprKind::While { condition, body } => {
+            block_body_has_own_next(condition) || block_body_has_own_next(body)
+        }
+        HirExprKind::For { iterable, body, .. } => {
+            block_body_has_own_next(iterable) || block_body_has_own_next(body)
+        }
+        HirExprKind::Block(stmts, tail) => {
+            stmts.iter().any(|s| match s {
+                HirStatement::Let { value: Some(v), .. } => block_body_has_own_next(v),
+                HirStatement::Expr(e) => block_body_has_own_next(e),
+                _ => false,
+            }) || tail.as_deref().is_some_and(block_body_has_own_next)
+        }
+        HirExprKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            block_body_has_own_next(cond)
+                || block_body_has_own_next(then_branch)
+                || else_branch.as_deref().is_some_and(block_body_has_own_next)
+        }
+        HirExprKind::Match { scrutinee, arms } => {
+            block_body_has_own_next(scrutinee)
+                || arms.iter().any(|a| {
+                    a.guard.as_deref().is_some_and(block_body_has_own_next)
+                        || block_body_has_own_next(&a.body)
+                })
+        }
+        HirExprKind::BinaryOp { left, right, .. } => {
+            block_body_has_own_next(left) || block_body_has_own_next(right)
+        }
+        HirExprKind::UnaryOp { operand, .. } => block_body_has_own_next(operand),
+        HirExprKind::Borrow { expr: inner, .. } => block_body_has_own_next(inner),
+        HirExprKind::Assign { target, value, .. }
+        | HirExprKind::CompoundAssign { target, value, .. } => {
+            block_body_has_own_next(target) || block_body_has_own_next(value)
+        }
+        HirExprKind::FnCall { args, .. } => args.iter().any(block_body_has_own_next),
+        HirExprKind::MethodCall {
+            object,
+            args,
+            block,
+            ..
+        } => {
+            block_body_has_own_next(object)
+                || args.iter().any(block_body_has_own_next)
+                || block.as_deref().is_some_and(block_body_has_own_next)
+        }
+        HirExprKind::FieldAccess { object, .. } => block_body_has_own_next(object),
+        HirExprKind::Interpolation { parts } => parts.iter().any(|p| {
+            matches!(p, HirInterpolationPart::Expr { expr, .. } if block_body_has_own_next(expr))
+        }),
+        _ => false,
+    }
+}
+
 impl<'a> Lowerer<'a> {
     pub(super) fn try_inline_closure_method(
         &mut self,
@@ -155,6 +223,26 @@ impl<'a> Lowerer<'a> {
             )
         {
             return Ok(None);
+        }
+
+        // Block Tier-2: a `next` that belongs to THIS block cannot be inlined —
+        // an inlined body shares the enclosing function's frame, so lowering a
+        // `next` there (`Terminator::Return`) would return from the ENCLOSING
+        // function (the non-local return the ADR rejects), not just this
+        // iteration. Reject it with a clear message. `next` still works in every
+        // NON-inlined block: a `&block`/`yield` method body, and real `Array`
+        // `map`/`select`/`reject`/`find`/`index`/`all?`/`any?`/`partition`/
+        // `each_with_index`/`reduce` (which route to real closures over
+        // `Enumerable`), where it lowers to a normal early return from the
+        // block's own closure. A `next` inside a NESTED closure within this body
+        // belongs to that closure and is not flagged.
+        if block_body_has_own_next(closure_body) {
+            return Err(format!(
+                "`next` is not supported inside an inlined `{method_name}` block \
+                 (it would become a non-local return). Use `map`/`select`/`find` \
+                 (which run the block as a real closure) or restructure with \
+                 `if`/`for … continue`."
+            ));
         }
 
         match method_name {

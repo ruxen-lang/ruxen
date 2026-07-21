@@ -8,6 +8,28 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- **Block Tier-2 (block ADR, staged): four Ruby-block features.** (1) **Implicit
+  numbered params `_1`..`_9` and bare `it`.** A paramless block referencing them
+  synthesizes the matching closure parameters (`xs.map { _1 * 2 }`, `xs.map { it
+  * 2 }`); the highest index sets arity, and the desugar runs in `resolve` (not
+  the parser) so `ruxen fmt` preserves the authored surface. Pin `943`. (2)
+  **`&:symbol` to-proc.** A `&:name` argument in call position desugars to the
+  one-argument closure `{ |x| x.name }` and fills the call's block slot (new
+  `ExprKind::BlockPass`); a misplaced `&`-block arg is `E1124`. Pin `944`. (3)
+  **`next` as block-value.** Inside a block, `next expr` early-returns `expr` as
+  this iteration's block result (`bare next` yields `nil`); recognized only
+  inside a block (parser `closure_depth` gate), so `.next` field access is
+  untouched. Works in `yield`/`&block` bodies and real-`Array` combinators
+  (`map`/`select`/`find`/etc. over `Enumerable`). A `next` in a MIR-inlined block
+  (`each`, user Vec-wrappers) is rejected at lowering with a clear message rather
+  than miscompiled (it would be a non-local return, which the ADR rejects); use
+  a real-closure combinator or `for ... continue` there. Pin `945`. (4) **`&`
+  block-forwarding.** `g(&block)` (named) and `g(&)` (anonymous) forward the
+  enclosing function's received block to another call, for free-fn and method
+  targets. Pin `946`. A divergent all-`next` closure body (`map { |x| next x }`)
+  now takes its MIR return type from the typeck-inferred `Fn` return and emits
+  `Unreachable` for the diverging fall-through, so the Cranelift verifier is
+  satisfied. Pins: `tests/block_tier2.rs` (19), release-e2e `943`-`946`.
 - **DWARF line-number debug info for the LLVM backend (P0.14).** An unoptimized
   (`-O0`), non-wasm `--backend=llvm` build now emits minimal DWARF: a
   `DICompileUnit`, a `DISubprogram` per source-spanned function (at its `def`

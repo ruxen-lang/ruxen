@@ -1,0 +1,30 @@
+# Block Tier-2 (block ADR, staged): implicit numbered params `_1`..`_9` and the
+# bare `it` in a paramless block. The desugar runs in `resolve` (surface kept
+# for `ruxen fmt`): a paramless block referencing `_1`/`it` synthesizes those
+# closure parameters. `_2` implies arity 2 (`_1` also bound). `it` is the lone
+# implicit parameter; a nested block has its own `_1`/`it` scope.
+
+def main
+  let nums = [1, 2, 3]
+
+  # `_1` — single implicit parameter.
+  let doubled = nums.map { _1 * 2 }
+  puts "#{doubled[0]} #{doubled[1]} #{doubled[2]}"
+
+  # `it` — the lone implicit parameter (Ruby 3.4).
+  let plus = nums.map { it + 10 }
+  puts "#{plus[0]} #{plus[1]} #{plus[2]}"
+
+  # `it` as a receiver: a method call on the implicit parameter.
+  let names = ["ab", "cde"]
+  let lens = names.map { it.size }
+  puts "#{lens[0]} #{lens[1]}"
+
+  # `_1`..`_2` — the highest index used sets the arity (reduce is 2-arg).
+  let total = nums.reduce(0) { _1 + _2 }
+  puts "#{total}"
+
+  # a numbered param inside a select predicate.
+  let odds = nums.select { _1 % 2 == 1 }
+  puts "#{odds.size}"
+end

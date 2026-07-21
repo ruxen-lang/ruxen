@@ -15,6 +15,7 @@ mod yield_scan;
 mod aliases;
 mod bootstrap_merge;
 mod control_flow;
+mod implicit_block_params;
 mod exprs;
 mod ffi_registration;
 mod funcs;

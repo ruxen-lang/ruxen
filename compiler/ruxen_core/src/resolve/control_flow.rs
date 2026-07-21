@@ -262,8 +262,27 @@ impl Resolver {
             captures: Vec::new(),
         });
 
+        // Block Tier-2: a paramless closure that references `_1`..`_9` or the
+        // bare `it` gets those implicit parameters synthesized here (surface
+        // preserved for `ruxen fmt`; see `implicit_block_params`). An explicit
+        // `|params|` header takes precedence and suppresses the scan.
+        let implicit_names = if closure.params.is_empty() {
+            super::implicit_block_params::implicit_param_names(&closure.body)
+        } else {
+            Vec::new()
+        };
+
         let mut params = Vec::new();
-        for p in &closure.params {
+        let synth_params: Vec<ast::ClosureParam> = implicit_names
+            .into_iter()
+            .map(|name| ast::ClosureParam {
+                name,
+                type_expr: None,
+                span: span.clone(),
+            })
+            .collect();
+        let param_iter = closure.params.iter().chain(synth_params.iter());
+        for p in param_iter {
             let ty = p
                 .type_expr
                 .as_ref()
@@ -329,6 +348,84 @@ impl Resolver {
             },
             ty: fn_ty,
             span: span.clone(),
+        }
+    }
+
+    /// Desugar a `&`-form block argument (Block Tier-2) into the HIR that fills
+    /// the call's block slot.
+    ///   - `&:sym`  → the closure `{ |__proc_arg| __proc_arg.sym }`.
+    ///   - `&block` / `&` → a reference to the enclosing function's block slot.
+    pub(super) fn resolve_block_pass(
+        &mut self,
+        bp: &ast::BlockPassKind,
+        span: &Span,
+    ) -> HirExpr {
+        match bp {
+            ast::BlockPassKind::ToProc(method_name) => {
+                // Build `{ |__proc_arg| __proc_arg.<method_name> }` and resolve
+                // it through the normal closure path so capture / typing behave
+                // identically to a hand-written block.
+                let arg_name = "__proc_arg".to_string();
+                let receiver = ast::Expr {
+                    kind: ast::ExprKind::Identifier(arg_name.clone()),
+                    span: span.clone(),
+                };
+                let call = ast::Expr {
+                    kind: ast::ExprKind::MethodCall {
+                        object: Box::new(receiver),
+                        method: method_name.clone(),
+                        generic_args: Vec::new(),
+                        args: Vec::new(),
+                        block: None,
+                    },
+                    span: span.clone(),
+                };
+                let closure = ast::ClosureExpr {
+                    is_async: false,
+                    is_move: false,
+                    params: vec![ast::ClosureParam {
+                        name: arg_name,
+                        type_expr: None,
+                        span: span.clone(),
+                    }],
+                    body: ast::ClosureBody::Expr(Box::new(call)),
+                    span: span.clone(),
+                };
+                self.resolve_closure(&closure, span)
+            }
+            ast::BlockPassKind::Forward => self.resolve_block_forward(span),
+        }
+    }
+
+    /// `&block` / bare `&` — forward the enclosing function's received block.
+    /// The block slot is bound under `__block` (implicit-yield fns) and
+    /// `&block` (explicit `&block:` params); a reference to it is a plain
+    /// `VarRef` carrying the block's `Ty::Fn`, which the call site then passes
+    /// as its own trailing block argument. No enclosing block → E1120.
+    fn resolve_block_forward(&mut self, span: &Span) -> HirExpr {
+        let block_def = self
+            .scopes
+            .lookup("__block")
+            .or_else(|| self.scopes.lookup("&block"));
+        if let Some(def) = block_def {
+            let ty = self.symbols.def_ty(def).unwrap_or(Ty::Error);
+            HirExpr {
+                kind: HirExprKind::VarRef(def),
+                ty,
+                span: span.clone(),
+            }
+        } else {
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "`&block` / `&` forwards the enclosing function's block, but this \
+                 function has no block parameter to forward",
+                span.clone(),
+                "E1124",
+            ));
+            HirExpr {
+                kind: HirExprKind::Error,
+                ty: Ty::Error,
+                span: span.clone(),
+            }
         }
     }
 

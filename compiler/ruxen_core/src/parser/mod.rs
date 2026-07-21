@@ -31,6 +31,11 @@ pub struct Parser {
     /// Doc comments (`## ...`) accumulated while skipping leading trivia.
     /// Drained by `take_pending_docs()` when a definition is built.
     pending_doc_comments: Vec<String>,
+    /// How many closure bodies enclose the cursor. `next` is only recognized
+    /// as the block-value keyword when this is > 0 (Block Tier-2); outside a
+    /// closure `next` stays an ordinary identifier so `.next` / a `next`
+    /// method are unaffected.
+    closure_depth: usize,
 }
 
 // ─── Token Navigation ───────────────────────────────────────────────
@@ -42,6 +47,7 @@ impl Parser {
             pos: 0,
             diagnostics: Vec::new(),
             pending_doc_comments: Vec::new(),
+            closure_depth: 0,
         }
     }
 

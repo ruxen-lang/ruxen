@@ -1,0 +1,46 @@
+# Block Tier-2 (block ADR, staged): `&` block-forwarding. A function that
+# received a block forwards it to another call with `g(&block)` (named) or `g(&)`
+# (anonymous). The `&block` / `&` argument resolves to the enclosing function's
+# block slot and fills the callee's trailing block — for both free-function and
+# method targets. Forwarding from a function with no block is E1124 (see the
+# focused test `forward_with_no_block_is_e1124`).
+
+def twice(&block: Fn[(Int) -> nil]) -> nil
+  yield(1)
+  yield(2)
+end
+
+def relay(&block: Fn[(Int) -> nil]) -> nil
+  twice(&block)     # named forward
+end
+
+def relay_anon(&block: Fn[(Int) -> nil]) -> nil
+  twice(&)          # anonymous forward
+end
+
+class Emitter
+  base: Int
+  def init(@base: Int)
+  end
+  def emit(&block: Fn[(Int) -> nil]) -> nil
+    yield(self.base)
+    yield(self.base + 1)
+  end
+end
+
+def relay_method(e: Emitter, &block: Fn[(Int) -> nil]) -> nil
+  e.emit(&block)    # forward to a method target
+end
+
+def main
+  relay do |n|
+    puts "relay #{n}"
+  end
+  relay_anon do |n|
+    puts "anon #{n}"
+  end
+  let e = Emitter.new(10)
+  relay_method(e) do |n|
+    puts "method #{n}"
+  end
+end

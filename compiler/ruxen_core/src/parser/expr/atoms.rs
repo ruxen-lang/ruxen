@@ -117,6 +117,24 @@ impl Parser {
                 self.parse_type_expr_primary(name, start)
             }
 
+            // Block Tier-2: `next [expr]` inside a block. Only a bare `next` at
+            // expression-start position inside a closure body is the block-value
+            // keyword; `.next` field access (postfix) and a `next` outside any
+            // closure are unaffected.
+            TokenKind::Identifier(ref name) if name == "next" && self.closure_depth > 0 => {
+                self.advance();
+                let value = if self.is_expression_start() {
+                    Some(Box::new(self.parse_expression()))
+                } else {
+                    None
+                };
+                let span = self.span_from(&start);
+                Expr {
+                    kind: ExprKind::Next(value),
+                    span,
+                }
+            }
+
             // Plain identifier
             TokenKind::Identifier(ref name) => {
                 let name = name.clone();
@@ -1003,6 +1021,10 @@ impl Parser {
         // For non-keyword starts (expression-start), we still try
         // single-expression first and fall through to block mode if
         // additional statements follow before `}`.
+        //
+        // Track closure nesting so a bare `next` inside the body parses as the
+        // Block Tier-2 block-value keyword (see `closure_depth`).
+        self.closure_depth += 1;
         let body = if self.at(TokenKind::RBrace) {
             // Empty closure
             ClosureBody::Expr(Box::new(Expr {
@@ -1054,6 +1076,7 @@ impl Parser {
             }
         };
 
+        self.closure_depth -= 1;
         self.expect(TokenKind::RBrace);
         let span = self.span_from(&start);
         Expr {
@@ -1084,7 +1107,11 @@ impl Parser {
         };
         self.skip_newlines();
 
+        // Track closure nesting so a bare `next` in the body is the block-value
+        // keyword (Block Tier-2, see `closure_depth`).
+        self.closure_depth += 1;
         let block = self.parse_body();
+        self.closure_depth -= 1;
         self.expect(TokenKind::End);
         let span = self.span_from(&start);
         Expr {

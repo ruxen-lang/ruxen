@@ -49,6 +49,7 @@ impl<'a> Lowerer<'a> {
             | HirExprKind::Loop { .. }
             | HirExprKind::Return(_)
             | HirExprKind::Break(_)
+            | HirExprKind::Next(_)
             | HirExprKind::Continue => self.lower_control(expr),
             HirExprKind::For { .. } => self.lower_for_loop(expr),
 

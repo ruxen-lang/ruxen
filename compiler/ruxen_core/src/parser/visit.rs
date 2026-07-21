@@ -68,6 +68,7 @@ pub fn walk_expr<V: Visit>(v: &mut V, e: &Expr) {
         | ExprKind::SelfType
         | ExprKind::Continue
         | ExprKind::NullLiteral
+        | ExprKind::BlockPass(_)
         | ExprKind::RegexLiteral { .. } => {}
 
         ExprKind::BinaryOp { left, right, .. } => {
@@ -235,7 +236,7 @@ pub fn walk_expr<V: Visit>(v: &mut V, e: &Expr) {
                 v.visit_expr(val);
             }
         }
-        ExprKind::Return(opt) | ExprKind::Break(opt) => {
+        ExprKind::Return(opt) | ExprKind::Break(opt) | ExprKind::Next(opt) => {
             if let Some(x) = opt {
                 v.visit_expr(x);
             }
@@ -386,6 +387,7 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, e: &mut Expr) {
         | ExprKind::SelfType
         | ExprKind::Continue
         | ExprKind::NullLiteral
+        | ExprKind::BlockPass(_)
         | ExprKind::RegexLiteral { .. } => {}
 
         ExprKind::BinaryOp { left, right, .. } => {
@@ -537,7 +539,7 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, e: &mut Expr) {
                 v.visit_expr_mut(val);
             }
         }
-        ExprKind::Return(opt) | ExprKind::Break(opt) => {
+        ExprKind::Return(opt) | ExprKind::Break(opt) | ExprKind::Next(opt) => {
             if let Some(x) = opt {
                 v.visit_expr_mut(x);
             }

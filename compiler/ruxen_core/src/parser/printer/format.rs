@@ -319,6 +319,8 @@ pub fn format_expr_short(e: &Expr) -> String {
         ExprKind::Loop(_) => "<loop ...>".to_string(),
         ExprKind::Block(_) => "<block>".to_string(),
         ExprKind::Closure(_) => "<closure>".to_string(),
+        ExprKind::BlockPass(BlockPassKind::ToProc(sym)) => format!("&:{}", sym),
+        ExprKind::BlockPass(BlockPassKind::Forward) => "&block".to_string(),
 
         ExprKind::Range {
             start,
@@ -375,6 +377,10 @@ pub fn format_expr_short(e: &Expr) -> String {
         ExprKind::Break(val) => match val {
             Some(v) => format!("break {}", format_expr_short(v)),
             None => "break".to_string(),
+        },
+        ExprKind::Next(val) => match val {
+            Some(v) => format!("next {}", format_expr_short(v)),
+            None => "next".to_string(),
         },
         ExprKind::Continue => "continue".to_string(),
 

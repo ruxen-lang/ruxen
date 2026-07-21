@@ -433,12 +433,22 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
       just asserts), `ruby_block_semantics.rs`
       (`parenless_blockless_method_call_fills_block_slot`,
       `explicit_block_param_on_method` extended). ADR known-limitations updated.
-- [ ] **Block follow-up · Tier-2 (staged, per ADR).** `&` block-forwarding
-      (`g(&block)` / anonymous `&`), `next` as block-value, `&:symbol` to-proc
-      sugar, numbered params / `it`. Rejected (see ADR): non-local `return` /
-      Ruby `break`-exits-yielder, `redo`, lenient arity, `instance_eval`
-      self-rebinding. Nested `yield` inside a closure body errors cleanly in
-      Tier 1.
+- [x] **Block follow-up · Tier-2 (staged, per ADR): LANDED 2026-07-21.** All
+      four staged features implemented: numbered params / `it` (resolve-time
+      desugar of `_1`..`_9` / bare `it`, surface preserved for `ruxen fmt`; pin
+      `943`); `&:symbol` to-proc (resolve desugar to `{ |x| x.sym }` via new
+      `ExprKind::BlockPass`; `E1124` for a misplaced `&`-block arg; pin `944`);
+      `next` as block-value (early return from the block's real closure, works in
+      yield / `&block` bodies and real-`Array` `map`/`select`/etc. over
+      `Enumerable`; pin `945`); `&` block-forwarding (`g(&block)` / `g(&)`; pin
+      `946`). Rejected (see ADR): non-local `return`, `redo`, lenient arity,
+      `instance_eval` self-rebinding. **Known limitation:** a `next` in a
+      MIR-inlined block (`each`, user Vec-wrapper combinators) is rejected at
+      lowering (it would be a non-local return the ADR rejects), NOT supported;
+      use `map`/`select`/`find` (real closures) or a `for ... continue` loop.
+      A divergent all-`next` body takes its return type from the inferred `Fn`
+      return and emits `Unreachable` for the fall-through (Cranelift-verifier
+      clean). Pins: release-e2e `943`-`946`; `tests/block_tier2.rs` (19).
 - [x] **Interpolating a closure prints silent pointer garbage → now E0729
       (FIXED 2026-06-10, `feat/drop-elaboration`).** A bare `do … end` is a
       closure literal, NEVER an expression block (parser `atoms.rs`: "do…end is
