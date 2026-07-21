@@ -71,6 +71,19 @@ impl<'a> Lowerer<'a> {
                 mutable,
                 expr: inner,
             } => {
+                // Zero-copy immortal borrow of a string literal (`&"x"`): emit the
+                // raw `.rodata` pointer directly instead of heap-copying via
+                // `ruxen_string_from` and then `Ref`-ing it (TASKS.md, "zero-copy
+                // `&String` borrow of a literal"). That owned copy is a needless
+                // heap allocation: drop elaboration frees it at scope exit, so it
+                // is leak-free but wasteful. `.rodata` is read-only, so this fires
+                // ONLY for the immutable borrow; a `&var` of a literal must still
+                // heap-copy into writable memory.
+                if !*mutable {
+                    if let HirExprKind::StringLiteral(s) = &inner.kind {
+                        return Ok(Some(self.emit_raw_string_literal(s)));
+                    }
+                }
                 let src_local = self.lower_expr(inner)?;
                 if let Some(src) = src_local {
                     let dest = self.new_temp(expr.ty.clone());

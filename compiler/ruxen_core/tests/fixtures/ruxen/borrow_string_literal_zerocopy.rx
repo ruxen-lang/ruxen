@@ -1,0 +1,15 @@
+# Zero-copy `&String` borrow of a string literal. `&"x"` in an immutable
+# borrow position lowers to the raw `.rodata` pointer (emit_raw_string_literal),
+# so it performs NO heap allocation and cannot leak. `borrow_len` reads the
+# literal's length through the raw `char*` (a Ruxen String is a bare
+# NUL-terminated `char*`); the old lowering heap-copied each literal via
+# ruxen_string_from into an owned String just to borrow it.
+def borrow_len(s: &String) -> Int
+  s.size() as Int
+end
+
+def main
+  let a = borrow_len(&"transient")
+  let b = borrow_len(&"hi")
+  let _t = a + b
+end

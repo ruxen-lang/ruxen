@@ -231,6 +231,23 @@ impl<'a> Lowerer<'a> {
         owned
     }
 
+    /// Lower a string literal as the raw `.rodata const char*`
+    /// (`Ty::RawPtr(Char)`) WITHOUT the `ruxen_string_from` heap copy. The
+    /// pointer is immortal (static `.rodata`) and Copy, so the drop elaborator
+    /// never frees it. Used for an IMMUTABLE borrow of a literal (`&"x"`): a
+    /// Ruxen `String` is a bare NUL-terminated `char*` (Q29), so this raw
+    /// pointer IS a valid read-only `&String`, zero-copy and leak-free. The
+    /// owned form above must still be used wherever the value is owned (a
+    /// `let` binding, a by-value `String` param) or mutably borrowed.
+    pub(super) fn emit_raw_string_literal(&mut self, value: &str) -> LocalId {
+        let raw = self.new_temp(Ty::RawPtr(Box::new(Ty::Char)));
+        self.emit(MirInst::StringLiteral {
+            dest: raw,
+            value: value.to_string(),
+        });
+        raw
+    }
+
     /// Ruby-block-semantics ADR D5: guard a block-slot indirect call against
     /// an absent (optional) block. `pair` is the closure-pair-pointer of the
     /// `__block` slot; when it is the null sentinel (ADR D1) the caller passed

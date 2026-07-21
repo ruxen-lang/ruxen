@@ -781,9 +781,11 @@ fn string_local_is_freed_on_scope_exit() {
 /// local and the clone must fire a string free (>=2) — no leak, no double-free.
 /// This is the regression pin for the `&str` removal: with the old `&str` type,
 /// a literal-typed local was excluded from drop elaboration (it leaked), and an
-/// owned-typed view of a borrow double-freed the source. (The bare-literal-into-
-/// `&String`-param zero-copy borrow provenance is a separate filed follow-up;
-/// see `docs/decisions/one-string-type.md`.)
+/// owned-typed view of a borrow double-freed the source. (The EXPLICIT
+/// `&"literal"` borrow is now zero-copy, see `borrow_of_string_literal_is_zero_copy`
+/// below; the BARE-literal-into-`&String`-param case still heap-copies then frees
+/// it, leak-free but not yet zero-copy, a filed follow-up in
+/// `docs/decisions/one-string-type.md`.)
 #[test]
 fn string_literal_and_clone_are_drop_safe() {
     let source = rx("string_literal_borrow_clone_matrix");
@@ -797,6 +799,34 @@ fn string_literal_and_clone_are_drop_safe() {
         report.string_frees >= 2,
         "expected the owned literal local AND the clone to each free a String \
          (>=2): {:#?}",
+        report
+    );
+}
+
+/// Zero-copy `&String` borrow of a string literal (TASKS.md, "zero-copy
+/// `&String` borrow of a literal"). `&"x"` in an immutable borrow position now
+/// lowers to the raw `.rodata` pointer (`emit_raw_string_literal` /
+/// `unaryops.rs` Borrow arm), so it allocates NOTHING: the old lowering
+/// heap-copied each literal via `ruxen_string_from` into an owned `String`
+/// only to `Ref`-borrow it. Assert zero-copy (`string_frees == 0`: no owned
+/// String is ever born for the two `&"literal"` borrows, so there is nothing
+/// to free) AND leak-free (`outstanding == 0`). The pre-fix lowering would have
+/// produced two owned Strings (each freed at scope exit by drop elaboration, so
+/// `string_frees` would be 2, not 0); this test's `string_frees == 0` is what
+/// proves the borrow is genuinely zero-copy, not merely leak-free.
+#[test]
+fn borrow_of_string_literal_is_zero_copy() {
+    let source = rx("borrow_string_literal_zerocopy");
+    let report = run_fixture_inline("borrow_string_literal_zerocopy", &source);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "leak on an `&\"literal\"` borrow: {:#?}",
+        report
+    );
+    assert_eq!(
+        report.string_frees, 0,
+        "expected zero-copy: no owned String should be created for the \
+         `&\"literal\"` borrows, so string_frees must be 0: {:#?}",
         report
     );
 }

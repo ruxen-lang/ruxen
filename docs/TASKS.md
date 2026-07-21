@@ -628,16 +628,24 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
       (coordinator): canvas 4 `&str` sites (`examples/demo.rx:3`,
       `src/canvas.rx:662,681`, `src/path.rx:101`); quiver 1 comment
       (`src/dsl.rx:25` — the dead landmine note); rondo 0.
-- [ ] **Follow-up (one-string-type ADR): zero-copy `&String` borrow of a literal.**
-      A bare string literal passed DIRECTLY to a `&String` param currently
-      heap-copies (copy-everywhere) and the copy lands in a borrow-typed slot
-      that nobody frees → it LEAKS (pre-existing; see next item for the root
-      cause — it leaked identically under the old `&str` model). The sound fix:
-      when a `StringLiteral` is lowered in a borrow-param position, emit the raw
-      `.rodata` pointer (`Ty::RawPtr(Char)`, an immortal borrow) instead of
-      heap-copying — zero-copy AND leak-free. Needs param-target-type-aware arg
-      lowering (the "deep provenance plumbing" the ADR flagged). Pin: extend the
-      drop matrix with `borrow_len("transient")` once landed.
+- [x] **Zero-copy `&String` borrow of a string literal (LANDED for explicit
+      borrows 2026-07-21).** An immutable borrow of a literal (`&"x"`) now lowers
+      to the raw `.rodata` pointer (`Ty::RawPtr(Char)`) via `emit_raw_string_literal`
+      in the `unaryops.rs` Borrow arm, instead of heap-copying it through
+      `ruxen_string_from` only to `Ref`-borrow it: zero-copy, and (being immortal
+      + Copy) never freed. **The item's original "→ it LEAKS" premise is STALE:**
+      the drop-elaboration work (`user_callee_param_is_ref`) already made the
+      heap copy drop-eligible, so a direct-literal borrow was leak-free before
+      this change (empirically `outstanding == 0`). Pins:
+      `drop_fixtures.rs::borrow_of_string_literal_is_zero_copy` (`string_frees == 0`,
+      `outstanding == 0`) + release-e2e `942` (ABI: reads a literal's bytes and
+      length through the borrow). Whole release-e2e suite (354) green.
+  - [ ] **Remaining (perf only): bare-literal zero-copy.** A bare literal
+        auto-borrowed into a `&String` param (`f("x")` / `puts "x"`, i.e. no
+        explicit `&`) still heap-copies then frees it (leak-free, just a transient
+        copy). Making it zero-copy needs param-target-type-aware arg lowering at
+        the ~7 call-arg sites (`fn_call.rs` / `method_call.rs`), gated by
+        `user_callee_param_is_ref`. Lower priority now that the leak is gone.
 - [x] **Discovered drop-elaboration gap: a `String` passed to a USER function's
       `&String` param suppressed the source's scope-exit free → LEAK (FIXED
       2026-06-11, `feat/drop-elaboration`).** `let owned = "x"; user_fn(owned)`
@@ -824,11 +832,13 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
 
 ## Open now — pre-flight P0s (`requirements/ROADMAP.md`)
 
-The P0 list blocks tiers downstream. **It predates recent compiler work and its
-file paths reference the old `crates/` layout — re-audit against the current tree
-before picking one up** (several may be partially landed; check `CHANGELOG.md`).
-Highest-leverage, still-relevant:
+**Re-audited against the current tree 2026-07-20.** The P0 list predated recent
+compiler work and its paths referenced the old `crates/` layout. Of the 15 P0s,
+**14 are done** (each with the evidence cited below); only **P0.14** (DWARF /
+debug line info) is genuinely open. Reconcile the `requirements/ROADMAP.md`
+source table to match.
 
+- [x] **P0.1 — license (DONE).** `LICENSE-MIT` + `LICENSE-APACHE` present; README carries a dual-license section.
 - [x] **P0.2 — real `Drop` elaboration (RESOLVED; premise stale).** `MirInst::Drop`
       is an inert marker; `insert_drops` (`mir/lower/drops.rs`) emits per-type free +
       user-destructor calls at scope exit, gated by `compute_dealloc_safe_locals` so a
@@ -836,10 +846,37 @@ Highest-leverage, still-relevant:
       `user_drop_runs.rs` 19/19, `outstanding == 0`. ADR: `docs/decisions/drop-elaboration.md`.
       Remaining tier1_04 work (drop flags for conditional moves, drop-on-unwind,
       Copy/Clone) is separate and still open.
-- [ ] **P0.5 — unresolved generic method calls fall back to `ruxen_noop_passthrough`**
-      (silent no-op). Violates the "no silent no-op" rule.
-- [ ] **P0.15 — variance rules encoded as comments only; no fixtures prove them.**
-- [ ] Remainder (P0.1, P0.3–P0.14): triage against current tree.
+- [x] **P0.5 — unresolved generic method no-op (RESOLVED).** The blanket
+      `ruxen_noop_passthrough` fallback is gone; an unresolved `?T_xxx_method` call now
+      errors naming the method instead of silently no-op'ing. Pin:
+      `tests/codegen_unknown_method_rejected.rs`.
+- [x] **P0.6 — Hash/Map name collision (RESOLVED).** Resolved the other way from the
+      original proposal: the mixin was renamed `Hashable` (`library/std/hash`); the
+      collection stays `Hash[K,V]` (Ruby's Hash, `library/std/map`). No collision.
+- [x] **P0.7 — string-literal drop double-free (RESOLVED)** via the drop-elaboration +
+      one-string-type work. Pin: `drop_fixtures.rs::string_literal_and_clone_are_drop_safe`.
+- [x] **P0.8 — registry deps rejected (RESOLVED by design).** Distribution is Go-style,
+      git-based (`src/ruxen_cli/src/publish.rs`); there is no central registry, so the old
+      "not yet supported" hard-reject is gone.
+- [x] **P0.9 — MSRV (DONE).** `rust-version = "1.91"` at the workspace root.
+- [x] **P0.10 — proptest tautologies (RESOLVED).** The `len<=100` / `n==n` tautologies are
+      gone; `tests/runtime_safety.rs` proptests now assert real lexer token properties.
+- [x] **P0.11 — inert edition field (RESOLVED).** `manifest.rs` parses, validates, and
+      defaults the edition (`parse_edition` / `edition()`), no longer dead.
+- [x] **P0.12 — async tokens dead code (RESOLVED).** `async`/`await`/`spawn` are fully
+      implemented (async-lowering + `block_on`/`Task`); the tokens are consumed.
+- [x] **P0.13 — doc comments discarded (RESOLVED).** HIR nodes carry `doc_comments: Vec<String>`;
+      `##` is threaded through, not dropped.
+- [x] **P0.15 — variance fixtures (RESOLVED).** `tests/variance.rs` (12/12 green) pins `&mut`
+      and `Vec` invariance and `Option` covariance; e2e `136`/`137` cover the surface cases.
+- [ ] **P0.14 — DWARF / debug line info is still a stub.** `codegen/llvm/debug.rs` is 3 lines;
+      `--backend=llvm` debug builds emit no line info. GENUINELY OPEN (tier3_02).
+- [x] **P0.3 / P0.4 — derive untangle (RESOLVED).** `derive Trait` is consumed: the borrow
+      checker routes Copy-ness through `ty_is_effectively_copy` (never bare `Ty::is_copy`) at
+      6+ sites (`borrow_check/checks.rs`, `walk.rs`; see `borrow_check/CLAUDE.md`), and MIR
+      lowering honours `ty_has_derive_trait`. Storage is separated: `derive_traits` and
+      `layout` are distinct `Vec<String>` fields in `parser/ast.rs` + `hir/nodes.rs`
+      ("does NOT include layout args").
 
 ## GUI-stack critical path (what `canvas`/`quiver` are waiting on)
 
@@ -879,11 +916,12 @@ but its next cycles are gated here. Prioritized by blast radius:
       2026-06-08. **Unblocks:** reactive `dyn_text`/`button` children inside quiver
       `Row`/`Col` containers (the widget library's core; previously only static
       `text` children worked in containers). S1.
-- [ ] **Enum float payloads + FFI `&String` pointer bugs.** canvas works around
-      both (pointer coords forced to `Int`; `measure_text` forwards a char count
-      not the string). File/repro as `Q##` if not yet tracked, then canvas
-      reverts its deviations. **Unblocks:** correct float event coords + real
-      text advance widths.
+- [x] **Enum float payloads + FFI `&String` pointer bugs (RESOLVED on the ruxen
+      side).** Both were fixed/audited-sound: enum `Float`/`Float32` payloads round-trip
+      (Q28, 2026-06-09, pins `647`/`648`) and a borrowed `&String` forwards the correct
+      data pointer + recoverable length into `lib "C"` (Q29, 2026-06-09, pin `649`). The
+      only remaining work is on the **canvas** side (revert the `Int`-coord and
+      `measure_text` char-count deviations); no ruxen change is outstanding.
 
 ## Long-horizon
 

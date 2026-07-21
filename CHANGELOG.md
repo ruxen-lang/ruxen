@@ -8,6 +8,21 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- **Zero-copy `&String` borrow of a string literal.** An immutable borrow of a
+  string literal (`&"x"`) now lowers to the raw `.rodata` `const char*`
+  (`Ty::RawPtr(Char)`) directly, via the new `emit_raw_string_literal` helper in
+  the `unaryops.rs` Borrow arm, instead of heap-copying the literal through
+  `ruxen_string_from` into an owned `String` only to `Ref`-borrow it. A Ruxen
+  `String` is a bare NUL-terminated `char*`, so the `.rodata` pointer IS a valid
+  read-only `&String` (release-e2e `942` pins the ABI by reading a literal's
+  exact bytes and length through the borrow). The pointer is immortal and Copy,
+  so it is never freed: the borrow is zero-copy and cannot leak
+  (`drop_fixtures.rs::borrow_of_string_literal_is_zero_copy` asserts
+  `string_frees == 0`, `outstanding == 0`). Only the immutable borrow changes; a
+  `&var` of a literal and owned literal locals (`let s = "x"`) still heap-copy.
+  The whole release-e2e suite (354 cases) stays green. The bare-literal case
+  (`f("x")` with no explicit `&`) still heap-copies then frees it (leak-free);
+  its zero-copy is a scoped follow-up.
 - **`AsyncTcpStream.read_with_timeout` idle timer is persistent and re-armed in
   place (Lever D.2).** Previously each `read_with_timeout` registered a FRESH
   reactor timer on the first EAGAIN and deregistered it on Ready/drop; under
