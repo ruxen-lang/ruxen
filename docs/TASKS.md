@@ -841,11 +841,11 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
 
 ## Open now — pre-flight P0s (`requirements/ROADMAP.md`)
 
-**Re-audited against the current tree 2026-07-20.** The P0 list predated recent
-compiler work and its paths referenced the old `crates/` layout. Of the 15 P0s,
-**14 are done** (each with the evidence cited below); only **P0.14** (DWARF /
-debug line info) is genuinely open. Reconcile the `requirements/ROADMAP.md`
-source table to match.
+**Re-audited against the current tree 2026-07-20; P0.14 landed 2026-07-21.** The
+P0 list predated recent compiler work and its paths referenced the old `crates/`
+layout. **All 15 P0s are now done** (each with the evidence cited below),
+including P0.14 (DWARF line info). Reconcile the `requirements/ROADMAP.md` source
+table to match.
 
 - [x] **P0.1 — license (DONE).** `LICENSE-MIT` + `LICENSE-APACHE` present; README carries a dual-license section.
 - [x] **P0.2 — real `Drop` elaboration (RESOLVED; premise stale).** `MirInst::Drop`
@@ -878,8 +878,16 @@ source table to match.
       `##` is threaded through, not dropped.
 - [x] **P0.15 — variance fixtures (RESOLVED).** `tests/variance.rs` (12/12 green) pins `&mut`
       and `Vec` invariance and `Option` covariance; e2e `136`/`137` cover the surface cases.
-- [ ] **P0.14 — DWARF / debug line info is still a stub.** `codegen/llvm/debug.rs` is 3 lines;
-      `--backend=llvm` debug builds emit no line info. GENUINELY OPEN (tier3_02).
+- [x] **P0.14 — DWARF / debug line info (DONE 2026-07-21).** The LLVM backend emits
+      minimal DWARF for `-O0` non-wasm builds: a `DICompileUnit`, a `DISubprogram`
+      per source-spanned function, and a `DILocation` per instruction. MIR now
+      carries source spans (`MirFunction::def_span`, `BasicBlock::inst_spans`
+      populated from `Lowerer::current_span`); `codegen/llvm/debug.rs` holds the
+      `DebugCtx`. Gated on `opt_level == 0`, so release + wasm + Cranelift are
+      untouched. Pins: `tests/llvm_debug_info.rs`, `tests/mir_debug_spans.rs`;
+      `llvm_backend` 19/19 and `wasm_codegen` 4/4 confirm no codegen regression.
+      Follow-ups (in `debug.rs`): variable/type/lexical-block info, multi-file
+      DWARF, exact drop-path `inst_spans` alignment.
 - [x] **P0.3 / P0.4 — derive untangle (RESOLVED).** `derive Trait` is consumed: the borrow
       checker routes Copy-ness through `ty_is_effectively_copy` (never bare `Ty::is_copy`) at
       6+ sites (`borrow_check/checks.rs`, `walk.rs`; see `borrow_check/CLAUDE.md`), and MIR

@@ -8,6 +8,27 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- **DWARF line-number debug info for the LLVM backend (P0.14).** An unoptimized
+  (`-O0`), non-wasm `--backend=llvm` build now emits minimal DWARF: a
+  `DICompileUnit`, a `DISubprogram` per source-spanned function (at its `def`
+  line), and a `DILocation` on every instruction, so lldb/gdb can map a program
+  counter back to a source line and set breakpoints by function. MIR carries
+  source spans for the first time: `MirFunction::def_span` (function definition
+  line) and `BasicBlock::inst_spans` (per-instruction, kept index-aligned with
+  `instructions` via `push_inst`/`insert_inst`/`remove_inst`), populated during
+  HIR to MIR lowering from `Lowerer::current_span` at the `emit` choke point. The
+  emitter (`codegen/llvm/debug.rs`) sets the `Debug Info Version` / `Dwarf
+  Version` module flags LLVM requires to keep the metadata, and `finalize()`s
+  before verification. Gated on the existing `opt_level` debug/release signal, so
+  release/optimized and wasm builds are byte-identical to before, and the
+  Cranelift default backend is untouched. Scope is line info plus function scopes
+  ONLY; variable/type/lexical-block debug info and multi-file DWARF (one `DIFile`
+  today) are documented follow-ups, as is exact `inst_spans` alignment through
+  the scope-exit drop-elaboration path (synthesized drop/free instructions fall
+  back to the function line). Proven by `tests/llvm_debug_info.rs` (IR assertions
+  plus the `-O0` gate) and `tests/mir_debug_spans.rs` (lowering span population);
+  `llvm_backend` (19/19) and `wasm_codegen` (4/4) confirm vtable and wasm codegen
+  are unaffected.
 - **Autoload's unresolved-name detection is now structured, not text-scraped.**
   `resolve` collects a `unresolved_names: Vec<String>` of the raw identifiers it
   could not resolve (at the undefined-variable / function / type and `use`-path

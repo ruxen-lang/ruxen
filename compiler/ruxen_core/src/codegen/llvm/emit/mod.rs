@@ -21,6 +21,7 @@ use crate::hir::types::Ty;
 use crate::mir::nodes::*;
 use crate::parser::ast::BinOp;
 
+use super::debug::DebugCtx;
 use super::runtime_decl;
 use super::types::ty_to_llvm;
 use crate::codegen::runtime::{extract_method_name, runtime_name};
@@ -45,6 +46,7 @@ pub fn compile_program<'ctx>(
     module: &Module<'ctx>,
     context: &'ctx Context,
     is_wasm: bool,
+    debug: bool,
 ) -> Result<(), String> {
     // Declare the DERIVED FFI imports FIRST so every `.rx`-declared
     // `ruxen_*` symbol is created from its lib-decl-derived signature
@@ -103,11 +105,33 @@ pub fn compile_program<'ctx>(
     // alignment for both native and wasm targets.
     emit_mixin_vtable_data(program, module, context)?;
 
+    // DWARF debug info (P0.14): create the builder + compile unit once, after
+    // all functions are declared (so subprograms can attach to them) and
+    // before any body is lowered (so instruction `DILocation`s resolve).
+    // `None` when debug info is off (release / wasm), leaving the path inert.
+    let debug_ctx = if debug {
+        Some(DebugCtx::new(module, context))
+    } else {
+        None
+    };
+
     // Pass 2: define all user functions
     let mut string_cache: HashMap<String, GlobalValue<'ctx>> = HashMap::new();
 
     for func in &program.functions {
-        compile_function(func, program, module, context, &mut string_cache)?;
+        compile_function(
+            func,
+            program,
+            module,
+            context,
+            &mut string_cache,
+            debug_ctx.as_ref(),
+        )?;
+    }
+
+    // Resolve outstanding debug metadata before the caller verifies / emits.
+    if let Some(dctx) = &debug_ctx {
+        dctx.finalize();
     }
 
     Ok(())
@@ -272,6 +296,7 @@ fn compile_function<'ctx>(
     module: &Module<'ctx>,
     context: &'ctx Context,
     string_cache: &mut HashMap<String, GlobalValue<'ctx>>,
+    debug: Option<&DebugCtx<'ctx>>,
 ) -> Result<(), String> {
     let llvm_fn = module
         .get_function(&func.name)
@@ -279,9 +304,33 @@ fn compile_function<'ctx>(
 
     let builder = context.create_builder();
 
+    // DWARF (P0.14): attach a per-function `DISubprogram` scope when debug info
+    // is on AND this function has a source span (synthesized helpers do not, so
+    // they get no scope and no `!dbg` locations, which is what the LLVM
+    // verifier expects for a function with no subprogram). `debug_scope` is
+    // `Copy` (a shared ref + a `DISubprogram`), reused for every location.
+    let debug_scope: Option<(&DebugCtx<'ctx>, inkwell::debug_info::DISubprogram<'ctx>)> = debug
+        .and_then(|dctx| {
+            let local_to_unit = matches!(llvm_fn.get_linkage(), Linkage::Internal);
+            dctx.function_scope(func, local_to_unit).map(|sp| {
+                llvm_fn.set_subprogram(sp);
+                (dctx, sp)
+            })
+        });
+    // The function's definition line, used as the fallback location for
+    // instructions with no recorded span (drops, zero-init) so that every
+    // instruction in a debug-scoped function carries a `!dbg`; LLVM's verifier
+    // requires it for calls in a function that has debug info.
+    let fn_line = func.def_span.as_ref().map(|s| s.line).unwrap_or(0);
+
     // Create entry block for allocas
     let entry_bb = context.append_basic_block(llvm_fn, "entry");
     builder.position_at_end(entry_bb);
+    // Seed a location covering the entry-block allocas / param stores / the
+    // `ruxen_env_init` call in `main`, all built before the MIR block loop.
+    if let Some((dctx, sp)) = debug_scope {
+        builder.set_current_debug_location(dctx.location(context, fn_line, 1, sp));
+    }
 
     // Create allocas for all local variables
     let mut local_allocas: HashMap<LocalId, PointerValue<'ctx>> = HashMap::new();
@@ -339,7 +388,23 @@ fn compile_function<'ctx>(
     for (mir_idx, mir_block) in func.blocks.iter().enumerate() {
         builder.position_at_end(block_map[mir_idx]);
 
-        for inst in &mir_block.instructions {
+        // Default this block's location to the function line so an empty
+        // block's terminator still carries a `!dbg` in the right scope.
+        if let Some((dctx, sp)) = debug_scope {
+            builder.set_current_debug_location(dctx.location(context, fn_line, 1, sp));
+        }
+
+        for (inst_idx, inst) in mir_block.instructions.iter().enumerate() {
+            // Set the source location for every LLVM instruction this MIR
+            // instruction emits (P0.14). Falls back to the function line when
+            // the instruction has no recorded span.
+            if let Some((dctx, sp)) = debug_scope {
+                let (line, col) = mir_block
+                    .span_at(inst_idx)
+                    .map(|s| (s.line, s.column))
+                    .unwrap_or((fn_line, 1));
+                builder.set_current_debug_location(dctx.location(context, line, col, sp));
+            }
             translate_instruction(
                 inst,
                 func,

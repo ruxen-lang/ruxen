@@ -90,12 +90,13 @@ impl<'a> Lowerer<'a> {
         }
         let block = &mut self.fn_mut().blocks[frame.body_entry_block];
         for (i, &local) in frame.body_locals.iter().enumerate() {
-            block.instructions.insert(
+            block.insert_inst(
                 i,
                 MirInst::Assign {
                     dest: local,
                     value: MirValue::Literal(Literal::Int(0)),
                 },
+                None,
             );
         }
     }
@@ -177,8 +178,9 @@ impl<'a> Lowerer<'a> {
             }
         }
         let block_id = self.current_block;
+        let span = self.current_span.clone();
         let func = self.current_fn.as_mut().expect("no current function");
-        func.blocks[block_id].instructions.push(inst);
+        func.blocks[block_id].push_inst(inst, span);
     }
 
     /// Emit a value-transfer instruction selected by the source's move

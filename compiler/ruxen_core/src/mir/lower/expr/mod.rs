@@ -18,6 +18,11 @@ mod var_ref;
 
 impl<'a> Lowerer<'a> {
     pub(super) fn lower_expr(&mut self, expr: &HirExpr) -> Result<Option<LocalId>, String> {
+        // Stamp the debug span for every instruction this expression emits
+        // (P0.14). Recursion re-stamps for each sub-expression, so an
+        // instruction carries the span of the innermost node being lowered
+        // when it is pushed, which is good enough for line-granular DWARF.
+        self.current_span = Some(expr.span.clone());
         match &expr.kind {
             // Literals
             HirExprKind::IntLiteral(_)

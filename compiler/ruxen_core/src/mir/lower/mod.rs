@@ -48,6 +48,12 @@ pub struct Lowerer<'a> {
     current_fn: Option<MirFunction>,
     /// The block we are currently emitting into.
     current_block: BlockId,
+    /// Source span of the HIR node currently being lowered. `emit` stamps it
+    /// onto each instruction's `BasicBlock::inst_spans` slot so the LLVM
+    /// backend can attach DWARF line info (P0.14). Set at the top of
+    /// `lower_expr` / `lower_statement` and reset per function in
+    /// `lower_method`; `None` before any function body is entered.
+    current_span: Option<crate::lexer::token::Span>,
     /// Counter for generating unique closure function names.
     closure_counter: u32,
     /// Closure functions generated during lowering (added to the program).
@@ -246,6 +252,7 @@ impl<'a> Lowerer<'a> {
             def_to_local: HashMap::new(),
             current_fn: None,
             current_block: 0,
+            current_span: None,
             closure_counter: 0,
             pending_closures: Vec::new(),
             trait_impls: HashMap::new(),

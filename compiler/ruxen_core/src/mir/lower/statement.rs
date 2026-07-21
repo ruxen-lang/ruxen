@@ -4,6 +4,11 @@ impl<'a> Lowerer<'a> {
     // ── Statement lowering ──────────────────────────────────────────────
 
     pub(super) fn lower_statement(&mut self, stmt: &HirStatement) -> Result<(), String> {
+        // Stamp the debug span for instructions this statement emits (P0.14).
+        match stmt {
+            HirStatement::Let { span, .. } => self.current_span = Some(span.clone()),
+            HirStatement::Expr(expr) => self.current_span = Some(expr.span.clone()),
+        }
         match stmt {
             HirStatement::Let {
                 def_id,

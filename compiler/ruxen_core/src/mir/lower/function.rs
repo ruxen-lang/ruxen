@@ -16,6 +16,10 @@ impl<'a> Lowerer<'a> {
         self.def_to_local.clear();
         self.cell_promoted.clear();
         self.initialized_heap_locals.clear();
+        // Seed the current debug span with the function's own definition line
+        // so any pre-body emits (auto-assign SetFields) get a sensible
+        // location; body expressions override it per-node in `lower_expr`.
+        self.current_span = Some(func.span.clone());
         let mir_fn = MirFunction::new(name, func.return_ty.clone());
         self.current_block = mir_fn.entry_block;
         self.current_fn = Some(mir_fn);
@@ -135,6 +139,9 @@ impl<'a> Lowerer<'a> {
         }
 
         let mut mir_fn = self.current_fn.take().expect("current_fn must be Some");
+        // Record the function's definition line for DWARF (P0.14). Only real
+        // HIR functions reach here; synthesized MIR functions keep `None`.
+        mir_fn.def_span = Some(func.span.clone());
 
         // Determine the return-value locals so we don't drop them. A
         // function may return through multiple `Return` terminators (one

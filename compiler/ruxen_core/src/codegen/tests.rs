@@ -357,6 +357,7 @@ mod tests {
         let blocks = vec![BasicBlock {
             id: 0,
             instructions: vec![],
+            inst_spans: vec![],
             terminator: Terminator::Return(None),
         }];
 
@@ -405,6 +406,7 @@ mod tests {
                     rhs: MirValue::Literal(Literal::Int(32)),
                 },
             ],
+            inst_spans: vec![None, None],
             terminator: Terminator::Return(None),
         }];
 
@@ -438,6 +440,7 @@ mod tests {
                     dest: 0,
                     value: MirValue::Literal(Literal::Bool(true)),
                 }],
+                inst_spans: vec![None],
                 terminator: Terminator::Branch {
                     cond: MirValue::Use(0),
                     then_block: 1,
@@ -447,11 +450,13 @@ mod tests {
             BasicBlock {
                 id: 1,
                 instructions: vec![],
+                inst_spans: vec![],
                 terminator: Terminator::Return(None),
             },
             BasicBlock {
                 id: 2,
                 instructions: vec![],
+                inst_spans: vec![],
                 terminator: Terminator::Return(None),
             },
         ];

@@ -5,6 +5,7 @@
 //! terminators. Instructions within a block are simple three-address code.
 
 use crate::hir::types::Ty;
+use crate::lexer::token::Span;
 use crate::parser::ast::BinOp;
 
 /// A local variable identifier (index into MirFunction::locals).
@@ -193,6 +194,12 @@ pub struct MirFunction {
     /// Per-closure destructor roots. Assign/Copy/Move propagation is resolved
     /// by drop elaboration so only the final, still-owned pair is destroyed.
     pub closure_drops: Vec<MirClosureDrop>,
+    /// Source span of the function's definition (its `def` line). `None` for
+    /// compiler-synthesized functions (derives, drop glue, dynamic-dispatch
+    /// helpers) that have no source location. Consumed by the LLVM backend's
+    /// debug-info emitter (P0.14) to build the function's `DISubprogram` line;
+    /// a `None` here means the function gets no DWARF scope at all.
+    pub def_span: Option<Span>,
     /// Counter used by `new_temp()` to generate unique names.
     next_temp: u32,
 }
@@ -209,6 +216,7 @@ impl MirFunction {
             blocks: vec![entry_block],
             entry_block: 0,
             closure_drops: Vec::new(),
+            def_span: None,
             next_temp: 0,
         }
     }
@@ -230,6 +238,7 @@ impl MirFunction {
             blocks,
             entry_block,
             closure_drops: Vec::new(),
+            def_span: None,
             next_temp: 0,
         }
     }
@@ -272,6 +281,22 @@ impl MirFunction {
 pub struct BasicBlock {
     pub id: BlockId,
     pub instructions: Vec<MirInst>,
+    /// Per-instruction source spans, positionally aligned with
+    /// `instructions`, for DWARF line info (P0.14). An entry is `None` for a
+    /// compiler-synthesized instruction (drop glue, zero-init) that has no
+    /// source location.
+    ///
+    /// Alignment invariant: this vector stays index-aligned with
+    /// `instructions` for every block built through `Lowerer::emit` (user
+    /// function bodies), because both grow together via [`Self::push_inst`] /
+    /// [`Self::insert_inst`] / [`Self::remove_inst`]. Compiler-synthesized
+    /// functions (derive bodies, dispatch/drop helpers) push straight onto
+    /// `instructions` and leave this empty; those functions carry no
+    /// `MirFunction::def_span`, so the debug emitter skips them and never
+    /// reads their spans. Reads go through [`Self::span_at`], which tolerates
+    /// a shorter/empty vector, so a mismatch degrades to "no line info", never
+    /// a panic or a wrong-program bug.
+    pub inst_spans: Vec<Option<Span>>,
     pub terminator: Terminator,
 }
 
@@ -280,8 +305,39 @@ impl BasicBlock {
         BasicBlock {
             id,
             instructions: Vec::new(),
+            inst_spans: Vec::new(),
             terminator: Terminator::Unreachable,
         }
+    }
+
+    /// Append an instruction, recording its source span in lockstep so
+    /// `inst_spans` stays index-aligned with `instructions`.
+    pub fn push_inst(&mut self, inst: MirInst, span: Option<Span>) {
+        self.instructions.push(inst);
+        self.inst_spans.push(span);
+    }
+
+    /// Insert an instruction at `idx`, keeping `inst_spans` aligned. Only
+    /// called on user-function blocks (loop-body zero-init), which are already
+    /// span-aligned; the `min` clamp is defensive against an unexpected caller.
+    pub fn insert_inst(&mut self, idx: usize, inst: MirInst, span: Option<Span>) {
+        self.instructions.insert(idx, inst);
+        let at = idx.min(self.inst_spans.len());
+        self.inst_spans.insert(at, span);
+    }
+
+    /// Remove the instruction at `idx`, keeping `inst_spans` aligned.
+    pub fn remove_inst(&mut self, idx: usize) -> MirInst {
+        if idx < self.inst_spans.len() {
+            self.inst_spans.remove(idx);
+        }
+        self.instructions.remove(idx)
+    }
+
+    /// The source span recorded for the instruction at `idx`, if any.
+    /// Defensive against a shorter/empty `inst_spans` (synthesized blocks).
+    pub fn span_at(&self, idx: usize) -> Option<Span> {
+        self.inst_spans.get(idx).cloned().flatten()
     }
 }
 

@@ -212,7 +212,7 @@ end
     let context = inkwell::context::Context::create();
     let module = context.create_module("q48_ffi_alias_pin");
 
-    ruxen_core::codegen::llvm::emit::compile_program(&mir, &module, &context, false)
+    ruxen_core::codegen::llvm::emit::compile_program(&mir, &module, &context, false, false)
         .expect("LLVM IR emission failed");
 
     let ir = module.print_to_string().to_string();
