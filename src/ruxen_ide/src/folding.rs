@@ -276,7 +276,7 @@ impl<'a> HirWalker<'a> {
                 self.walk_expr(target);
                 self.walk_expr(value);
             }
-            HirExprKind::Return(opt) | HirExprKind::Break(opt) => {
+            HirExprKind::Return(opt) | HirExprKind::Break(opt) | HirExprKind::Next(opt) => {
                 if let Some(e) = opt {
                     self.walk_expr(e);
                 }

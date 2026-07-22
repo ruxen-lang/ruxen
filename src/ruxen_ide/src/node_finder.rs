@@ -274,7 +274,9 @@ impl NodeFinder {
                 self.visit_expr(target);
                 self.visit_expr(value);
             }
-            HirExprKind::Return(Some(inner)) | HirExprKind::Break(Some(inner)) => {
+            HirExprKind::Return(Some(inner))
+            | HirExprKind::Break(Some(inner))
+            | HirExprKind::Next(Some(inner)) => {
                 self.visit_expr(inner);
             }
             HirExprKind::Closure { body, .. } => {
@@ -351,6 +353,7 @@ impl NodeFinder {
             | HirExprKind::Continue
             | HirExprKind::Return(None)
             | HirExprKind::Break(None)
+            | HirExprKind::Next(None)
             | HirExprKind::Error => {}
         }
     }

@@ -302,7 +302,7 @@ fn walk_expr(ctx: &Ctx<'_>, expr: &HirExpr, out: &mut Vec<InlayHint>) {
             walk_expr(ctx, target, out);
             walk_expr(ctx, value, out);
         }
-        HirExprKind::Return(e) | HirExprKind::Break(e) => {
+        HirExprKind::Return(e) | HirExprKind::Break(e) | HirExprKind::Next(e) => {
             if let Some(e) = e {
                 walk_expr(ctx, e, out);
             }

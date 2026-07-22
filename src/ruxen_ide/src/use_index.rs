@@ -442,7 +442,7 @@ impl<'a> Builder<'a> {
                 self.visit_expr(value);
             }
 
-            HirExprKind::Return(opt) | HirExprKind::Break(opt) => {
+            HirExprKind::Return(opt) | HirExprKind::Break(opt) | HirExprKind::Next(opt) => {
                 if let Some(v) = opt {
                     self.visit_expr(v);
                 }
