@@ -2475,6 +2475,44 @@ dispatch keeps the documented bounded-leak fallback. Pin case:
 `tests/release-e2e/cases/948_by_value_rebind_no_uaf.rx` (asserts `PASS n=222`);
 receiver-builder cases stay green.
 
+**Known residual (Q55b, S3 — memory-safe leak, follow-up).** The
+returned-param detection traces provenance with a LINEAR walk over blocks in
+vector order (last-writer-wins), not a CFG-aware meet-over-paths. At a
+control-flow merge it can misattribute. Confirmed shape:
+
+```ruxen
+def pick(a: Payload, cond: Bool) -> Payload
+  if cond
+    Payload.new(999)   # fresh on the `then` path
+  else
+    a                  # parameter 0 on the `else` path
+  end
+end
+```
+
+The if-expression's value merges into one local; in block-vector order the
+`then` block (fresh, revokes the local) is processed before the `else` block
+(sets the local back to param 0), so the trace ends with the returned local at
+param 0 and classifies `pick` as always-returns-param-0. A caller `x = pick(x,
+cond)` then elides `dealloc(x)` unconditionally (verified via `--emit=mir`: no
+dealloc between the `pick` call and the reassign). When `cond` takes the fresh
+branch at runtime, `pick` returns a NEW object, so `x`'s old object is never
+freed: a LEAK. This is memory-safe (never a use-after-free or double-free, since
+elision only ever REMOVES a free), and it is not hit by any release-e2e case or
+by rondo's suite. It was not introduced as a regression in the UAF direction:
+the old detection would not have recognized `pick` either (the return local is
+not `params[0]` literally), so before the fix this shape kept its dealloc.
+
+Note the two cheap "hardenings" are both WRONG: a "must-alias across ALL
+definitions of the returned local" check would disqualify a single-path
+`var r = fresh; r = a; r` (returns param 0 always) and REINTRODUCE a UAF there
+(worse). The sound fix is a proper CFG dataflow: at each return, the returned
+local is param `k` only if EVERY predecessor path yields `k` (meet lattice
+`param k` / `⊤`), which correctly disqualifies `pick` (leak avoided) while still
+eliding the single-path `fresh-then-param` case (UAF avoided). Deferred as a
+scoped follow-up rather than rushed inline, because the current state is
+memory-safe and a wrong dataflow rewrite of a memory-safety pass is a UAF risk.
+
 Cross-linked from rondo `docs/ruxen-issues.md` W24.
 Toolchain: `ruxen 0.1.0`.
 
