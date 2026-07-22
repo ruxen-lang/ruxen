@@ -2398,7 +2398,7 @@ and assert the linked module contains no `signature_mismatch:` symbol.
 Cross-linked from canvas `docs/ROADMAP.md` (Web backend → L839).
 Toolchain: `ruxen 0.1.0`.
 
-## Q55 · S2 — miscompile: `x = f(x)` where `f` takes `x` by value AND returns it silently corrupts `x` (native)
+## Q55 · S2 — miscompile: `x = f(x)` where `f` takes `x` by value AND returns it silently corrupts `x` (native)  ✅ FIXED 2026-07-22
 
 Found 2026-07-22 adding rondo's structured-logging `finish` consolidation. A
 `var` holding a class value with drop semantics (fields include an FFI-backed
@@ -2449,20 +2449,31 @@ across the whole suite; rewriting to the single-binding nested form
 `var r = self.with_request_id(self.cors_response(resp), &req.request_id)` fixed
 all 94 tests. Documented as rondo **W24**.
 
-**Root-cause hypothesis.** Same family as the tuple double-drop (rondo W16): MIR
-move/drop elaboration mishandles the case where one binding is simultaneously the
-by-value argument being consumed and the destination being overwritten in the
-same statement — the moved-out value's slot is reused / dropped out of order, so
-the returned value lands on a stale/dropped slot. Look at the drop-insertion
-around reassignment where RHS consumes the LHS binding.
+**Root cause (confirmed).** `x = f(x)` lowers to a pre-reassign
+`ruxen_dealloc(x)` before `Assign x = <call result>`. When `f` returns the very
+object it was handed for `x`, that dealloc frees the object the assign then
+re-reads, a use-after-free. The post-lowering fixup `elide_returns_self_realloc`
+(`compiler/ruxen_core/src/mir/lower/drops.rs`) is meant to remove exactly that
+dealloc, but it only recognized callees whose returning block was LITERALLY
+`Return(Some(Use(params[0])))`: (1) `wrap` returns a local `Move`d from its
+parameter, not the parameter literally, so it was never recognized; (2) it only
+looked at parameter index 0, missing by-value args at any other position (e.g.
+rondo's `with_request_id(self, resp, rid)` returns index 1). So the guarding
+dealloc was left in place and the UAF fired. The receiver-builder form
+`r = r.with_status(201)` returns `self` (index 0) literally, so it was already
+covered and stayed correct.
 
-**Fix + pin.** Once fixed, add the repro above as a `tests/release-e2e/cases/`
-case asserting `PASS n=222`. Severity: **high** — silent data corruption on a
-natural builder-style shape. (A minimal repro where the by-value param is the
-method's OWN enclosing class, e.g. `def wrap(b: Box)` inside `class Box`, instead
-trips a SEPARATE single-file return-type-inference gap — "could not infer type
-for parameter b" — worth its own Q if pursued; the distinct-class free-fn repro
-above isolates Q55 cleanly.)
+**Fix + pin.** Generalized the detection to a `name -> returned-param-index`
+map: each returning block's local is traced back to a parameter index through
+intra-function `Move`/`Copy`/`Assign(Use)` aliasing (seeded `params[i] -> i`,
+revoking on any non-aliasing redefinition); a function qualifies with index `k`
+only when every returning block agrees on that `k`. The elide site now removes
+the dealloc only when the callee returns index `k` AND `x` was passed at exactly
+that position (`args[k] == Use(x)`), which is stricter than the prior
+"any-arg-aliases" check and also fixes a latent leak. Indirect (closure)
+dispatch keeps the documented bounded-leak fallback. Pin case:
+`tests/release-e2e/cases/948_by_value_rebind_no_uaf.rx` (asserts `PASS n=222`);
+receiver-builder cases stay green.
 
 Cross-linked from rondo `docs/ruxen-issues.md` W24.
 Toolchain: `ruxen 0.1.0`.

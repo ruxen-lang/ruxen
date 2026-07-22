@@ -157,6 +157,24 @@ once 1.0.0 ships.
   Apple M4 (loopback, co-located load generator; parity with Go net/http).
 
 ### Fixed
+- **Q55: `x = f(x)` by-value rebind no longer corrupts `x` on the native
+  backend.** Rebinding a drop-bearing `var` from a function that takes it by
+  value and returns it (`def wrap(p) -> Payload; var r = p; r; end`) lowers to a
+  pre-reassign `ruxen_dealloc(x)` before `x = <call result>`; when the callee
+  hands back the same object, that dealloc frees what the assign then re-reads, a
+  use-after-free (the repro printed `FAIL n=3` for `222`). The post-lowering
+  fixup `elide_returns_self_realloc` removes exactly that dealloc, but it only
+  recognized callees returning `Return(Some(Use(params[0])))` literally, so it
+  missed a returned local traced from a parameter through `Move`/`Assign`/`Copy`,
+  and missed by-value args at any parameter index other than 0. Detection is now
+  a `name -> returned-param-index` map that traces each returning block's local
+  back to its parameter index (all returning blocks must agree on one index),
+  and the elide fires only when the reassigned local was passed at exactly the
+  position the callee returns (`args[k] == Use(x)`), which is stricter than the
+  prior any-arg-aliases check, so it also closes a latent leak. Indirect (closure)
+  dispatch keeps the documented bounded-leak fallback; the receiver-builder form
+  `r = r.with_status(201)` (returns `self`, index 0) stays covered. Pin case
+  `tests/release-e2e/cases/948_by_value_rebind_no_uaf.rx`; rondo W24.
 - **Q53: closure interpolation preserves declared `String` call results.**
   Q50's removal of the inferred-method name allowlist exposed abstract `.each`
   parameters whose unresolved call result stayed `Infer`/`TypeParam`; Display

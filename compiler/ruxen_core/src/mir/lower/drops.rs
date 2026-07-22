@@ -1,84 +1,148 @@
 use super::*;
 
-/// Insert `MirInst::Drop` instructions for all locals that have Move semantics.
+/// Post-lowering fixup that elides use-after-free deallocs caused by the
+/// `lower_assign` "pre-reassign drop" path. That path emits
+/// `ruxen_dealloc(R)` before `Assign { dest: R, value: Use(X) }`; when the
+/// call that produced `X` hands back the very same heap object it was given
+/// for `R`, the dealloc frees the object the assign then re-reads.
 ///
-/// Drops are inserted in **reverse declaration order** (LIFO: last declared,
-/// first dropped). Branch-local values are destroyed in their defining block;
-/// values shared across blocks are destroyed at returns, guarded by definite-
-/// initialization flags when not every path initializes them. We skip:
-/// - Copy types (primitives, references, bools, etc.)
-/// - Parameters (owned by the caller)
-/// - Any local that appears as the value of a `Return` terminator
-///   (returning the value, not dropping it).
-///
-/// Post-lowering fixup that elides use-after-free deallocs caused by
-/// the `lower_assign` "pre-reassign drop" path emitting
-/// `ruxen_dealloc(R)` before `Assign { dest: R, value: Use(X) }` —
-/// when the call that produced `X` was an instance method that
-/// returns `self` (i.e. `X` aliases `R`), the dealloc frees the very
-/// heap object the assign then re-reads.
-///
-/// Reproducer:
+/// Two shapes hit this:
 ///
 /// ```text
+///   # receiver-builder: returns `self` (parameter index 0)
 ///   def var with_status(c: Int) -> Reply
 ///     self.status = c
 ///     self
 ///   end
-///   …
 ///   var r = Reply.new
-///   r = r.with_status(201)   // ← UAF: dealloc(r) before re-assign of r
+///   r = r.with_status(201)     # dealloc(r) before the re-assign of r
+///
+///   # by-value rebind (Q55): takes a parameter BY VALUE and returns it,
+///   # possibly via an intermediate `var q = p; ...; q`
+///   def wrap(p: Payload) -> Payload
+///     var q = p
+///     q
+///   end
+///   var x = wrap(Payload.new(1))
+///   x = wrap(x)                # dealloc(x) before the re-assign of x
 /// ```
 ///
 /// MIR pattern (consecutive instructions in one block):
 ///
 /// ```text
-///   Call { dest: Some(X), callee: F, args: [Use(R), …] }
+///   Call { dest: Some(X), callee: F, args: [... Use(R) ...] }
 ///   Call { dest: None,    callee: "ruxen_dealloc", args: [Use(R)] }
 ///   Assign { dest: R, value: Use(X) }
 /// ```
 ///
-/// where `F` is a function whose final terminator is
-/// `Return(Some(Use(params[0])))` — i.e. it returns its self
-/// argument. Action: remove the middle `ruxen_dealloc` instruction.
+/// where `F` deterministically returns the parameter at the SAME index `k`
+/// that `R` was passed at (`args[k] == Use(R)`). We detect this by building,
+/// per function, a `name -> returned-param-index` map: for each block ending
+/// in `Return(Some(Use(local)))` we resolve `local` back to a parameter index
+/// by tracing intra-function `Move` / `Copy` / `Assign { value: Use(_) }`
+/// aliasing, seeded with `params[i] -> i`. A function qualifies with index `k`
+/// only when it has at least one returning block AND every returning block
+/// resolves to that same `k`; a returning block that resolves to a different
+/// index, or to a non-parameter local, disqualifies it. The receiver-builder
+/// case is `k == 0` returned literally; the by-value-rebind case is any `k`
+/// reached through the alias trace. Action: remove the middle `ruxen_dealloc`.
+///
+/// Indirect calls (closure / fn-pointer dispatch) cannot be traced, so they
+/// keep the documented bounded-leak tradeoff: elide when `R` aliases ANY
+/// user-visible argument (worst case a one-time leak, never a use-after-free).
 ///
 /// We can't fix this in `lower_assign` itself because the callee's
-/// "returns self" property isn't known until that callee's body has
-/// been lowered, and lowering order is per-function. Running this
-/// as a post-pass over the whole `MirProgram` sidesteps the ordering.
+/// returned-parameter property isn't known until that callee's body has been
+/// lowered, and lowering order is per-function. Running this as a post-pass
+/// over the whole `MirProgram` sidesteps the ordering.
 pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
     use crate::mir::nodes::{MirInst, MirValue, Terminator};
 
-    // Step 1: collect the names of functions that return their first
-    // parameter (i.e. instance methods that yield `self`).
-    let mut returns_self: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Step 1: collect, for each function, the SINGLE parameter index it
+    // deterministically returns (if any). A function maps to index `k` when
+    // every block that returns `Return(Some(Use(local)))` resolves `local`
+    // back to parameter `k` through intra-function `Move` / `Copy` /
+    // `Assign(Use)` aliasing. Receiver-builders that return `self` literally
+    // are the `k == 0` special case; a by-value passthrough (`var q = p; q`)
+    // is any `k` reached through the alias trace.
+    //
+    // Conservatism: we require ALL returning blocks to agree on the same `k`.
+    // A returning block that resolves to a different index, or to a local that
+    // is not a parameter alias, disqualifies the function entirely. We would
+    // rather leave a dealloc in place (at worst a leak) than elide one whose
+    // callee might hand back a fresh object (a use-after-free).
+    let mut returns_param: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for func in &mir.functions {
-        let Some(&self_id) = func.params.first() else {
-            continue;
-        };
-        // Any block ending in `Return(Some(Use(self_id)))` counts. If
-        // there's at least one such block AND every non-trivial return
-        // returns self, the function unconditionally returns self —
-        // but for the dealloc-elide we only need to know the return
-        // ALIASES self on at least one tail. To be conservative we
-        // require ALL returning blocks to yield self.
+        // `local_to_param[l] = i` means local `l` currently aliases the
+        // allocation originally bound to parameter `i`. Seed with the params
+        // themselves, then propagate forward in block/instruction order (which
+        // is lowering order). Every non-aliasing (re)definition of a local
+        // REVOKES its param provenance, so a param-alias overwritten by a
+        // fresh value before a return is correctly seen as a non-param return.
+        let mut local_to_param: std::collections::HashMap<crate::mir::nodes::LocalId, usize> =
+            std::collections::HashMap::new();
+        for (idx, &param) in func.params.iter().enumerate() {
+            local_to_param.insert(param, idx);
+        }
+
         let mut saw_return = false;
-        let mut all_return_self = true;
+        let mut agreed_index: Option<usize> = None;
+        let mut disqualified = false;
         for block in &func.blocks {
+            for inst in &block.instructions {
+                match inst {
+                    MirInst::Move { dest, src } | MirInst::Copy { dest, src } => {
+                        match local_to_param.get(src).copied() {
+                            Some(i) => {
+                                local_to_param.insert(*dest, i);
+                            }
+                            None => {
+                                local_to_param.remove(dest);
+                            }
+                        }
+                    }
+                    MirInst::Assign {
+                        dest,
+                        value: MirValue::Use(src),
+                    } => match local_to_param.get(src).copied() {
+                        Some(i) => {
+                            local_to_param.insert(*dest, i);
+                        }
+                        None => {
+                            local_to_param.remove(dest);
+                        }
+                    },
+                    other => {
+                        // Any other definition writes a value that does not
+                        // alias a parameter; strip provenance from its dest.
+                        if let Some(dest) = defined_local(other) {
+                            local_to_param.remove(&dest);
+                        }
+                    }
+                }
+            }
             if let Terminator::Return(Some(MirValue::Use(local))) = &block.terminator {
                 saw_return = true;
-                if *local != self_id {
-                    all_return_self = false;
-                    break;
+                match local_to_param.get(local).copied() {
+                    Some(i) => match agreed_index {
+                        None => agreed_index = Some(i),
+                        Some(prev) if prev != i => disqualified = true,
+                        Some(_) => {}
+                    },
+                    None => disqualified = true,
                 }
             }
         }
-        if saw_return && all_return_self {
-            returns_self.insert(func.name.clone());
+
+        if saw_return && !disqualified {
+            if let Some(k) = agreed_index {
+                returns_param.insert(func.name.clone(), k);
+            }
         }
     }
 
-    if returns_self.is_empty() {
+    if returns_param.is_empty() {
         return;
     }
 
@@ -86,19 +150,19 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
     // and delete the middle (ruxen_dealloc) instruction.
     for func in &mut mir.functions {
         for block in &mut func.blocks {
-            // Track each local's provenance: the name of the last
-            // callee that wrote it (or `<indirect>` for closure /
-            // fn-pointer dispatch), alongside the set of LocalIds
-            // that could alias the return value (i.e. any arg the
-            // callee might have returned). For named calls we use
-            // `returns_self` to decide; for indirect calls we
-            // conservatively assume the callee might return any of
-            // its user-visible args.
+            // Track, per result local, the call that produced it: the callee
+            // name plus its POSITIONAL argument list. For a direct call we
+            // consult `returns_param[callee]` to learn which argument position
+            // the callee hands back, and elide only when `R` sits at exactly
+            // that position (`args[k] == Use(R)`). For an indirect call we
+            // can't know the returned slot, so we tag it `<indirect>` and fall
+            // back to "R is any user-visible arg", the documented bounded-leak
+            // (never a UAF) tradeoff.
             const INDIRECT_SENTINEL: &str = "<indirect>";
-            // Map dest_local → (callee_name, candidate_alias_args).
+            // Map dest_local -> (callee_name, positional args).
             let mut last_call: std::collections::HashMap<
                 crate::mir::nodes::LocalId,
-                (String, Vec<crate::mir::nodes::LocalId>),
+                (String, Vec<MirValue>),
             > = std::collections::HashMap::new();
 
             let mut to_remove: Vec<usize> = Vec::new();
@@ -106,18 +170,11 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
                 match inst {
                     MirInst::Call { dest, callee, args } => {
                         if let Some(d) = dest {
-                            let candidates: Vec<crate::mir::nodes::LocalId> = args
-                                .iter()
-                                .filter_map(|a| match a {
-                                    MirValue::Use(l) => Some(*l),
-                                    _ => None,
-                                })
-                                .collect();
-                            last_call.insert(*d, (callee.clone(), candidates));
+                            last_call.insert(*d, (callee.clone(), args.clone()));
                         }
-                        // Detect: ruxen_dealloc(R) followed by
-                        // Assign R = X where X came from a callee
-                        // that aliases R via one of its args.
+                        // Detect: ruxen_dealloc(R) followed by Assign R = X
+                        // where X came from a callee that hands R's object back
+                        // at the argument position it returns.
                         if callee == "ruxen_dealloc" && args.len() == 1 {
                             if let MirValue::Use(r) = &args[0] {
                                 if let Some(MirInst::Assign {
@@ -126,12 +183,29 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
                                 }) = block.instructions.get(i + 1)
                                 {
                                     if a_dest == r {
-                                        if let Some((callee_name, candidates)) = last_call.get(x) {
-                                            let aliases = candidates.contains(r);
-                                            let could_return_self = returns_self
-                                                .contains(callee_name)
-                                                || callee_name == INDIRECT_SENTINEL;
-                                            if aliases && could_return_self {
+                                        if let Some((callee_name, call_args)) = last_call.get(x) {
+                                            let elide = if callee_name == INDIRECT_SENTINEL {
+                                                // Indirect: args[0] is the
+                                                // captures_ptr; `R` aliasing ANY
+                                                // user arg means the closure may
+                                                // hand it back.
+                                                call_args.iter().skip(1).any(|a| {
+                                                    matches!(a, MirValue::Use(l) if l == r)
+                                                })
+                                            } else if let Some(&k) =
+                                                returns_param.get(callee_name)
+                                            {
+                                                // Direct: elide only when `R` is
+                                                // the arg at the position the
+                                                // callee actually returns.
+                                                matches!(
+                                                    call_args.get(k),
+                                                    Some(MirValue::Use(l)) if l == r
+                                                )
+                                            } else {
+                                                false
+                                            };
+                                            if elide {
                                                 to_remove.push(i);
                                             }
                                         }
@@ -145,23 +219,16 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
                         args,
                         ..
                     } => {
-                        // Indirect call through a closure / fn pointer.
-                        // ABI: args[0] is the captures_ptr the closure
-                        // lowering prepends; args[1..] are the user's
-                        // visible arguments. We can't know which (if
-                        // any) the closure returns, so mark every
-                        // user arg as a potential alias and tag with
-                        // INDIRECT_SENTINEL — worst case is a bounded
-                        // one-time leak, not a use-after-free.
-                        let candidates: Vec<crate::mir::nodes::LocalId> = args
-                            .iter()
-                            .skip(1) // skip captures_ptr
-                            .filter_map(|a| match a {
-                                MirValue::Use(l) => Some(*l),
-                                _ => None,
-                            })
-                            .collect();
-                        last_call.insert(*d, (INDIRECT_SENTINEL.to_string(), candidates));
+                        // Indirect call through a closure / fn pointer. ABI:
+                        // args[0] is the captures_ptr the closure lowering
+                        // prepends; args[1..] are the user's visible arguments.
+                        // We can't know which (if any) the closure returns, so
+                        // we store the full arg list and tag it
+                        // INDIRECT_SENTINEL; the elide site skips arg 0 and
+                        // treats any remaining user arg as a potential alias.
+                        // The worst case is a bounded one-time leak, not a
+                        // use-after-free.
+                        last_call.insert(*d, (INDIRECT_SENTINEL.to_string(), args.clone()));
                     }
                     MirInst::Assign {
                         dest,
@@ -178,6 +245,38 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
             for &i in to_remove.iter().rev() {
                 block.instructions.remove(i);
             }
+        }
+    }
+}
+
+/// The local a MIR instruction writes, if any. Used by
+/// `elide_returns_self_realloc`'s parameter-provenance trace to REVOKE a
+/// local's param alias when it is redefined by anything other than a
+/// param-propagating `Move` / `Copy` / `Assign(Use)`.
+fn defined_local(inst: &crate::mir::nodes::MirInst) -> Option<crate::mir::nodes::LocalId> {
+    use crate::mir::nodes::MirInst;
+    match inst {
+        MirInst::Assign { dest, .. }
+        | MirInst::BinOp { dest, .. }
+        | MirInst::Negate { dest, .. }
+        | MirInst::Not { dest, .. }
+        | MirInst::Compare { dest, .. }
+        | MirInst::Alloc { dest, .. }
+        | MirInst::StackAlloc { dest, .. }
+        | MirInst::GetField { dest, .. }
+        | MirInst::GetTag { dest, .. }
+        | MirInst::GetPayload { dest, .. }
+        | MirInst::Ref { dest, .. }
+        | MirInst::RefMut { dest, .. }
+        | MirInst::Copy { dest, .. }
+        | MirInst::Move { dest, .. }
+        | MirInst::StringLiteral { dest, .. }
+        | MirInst::FuncAddr { dest, .. }
+        | MirInst::FloatToBits { dest, .. }
+        | MirInst::DataAddr { dest, .. } => Some(*dest),
+        MirInst::Call { dest, .. } | MirInst::CallIndirect { dest, .. } => *dest,
+        MirInst::SetField { .. } | MirInst::SetTag { .. } | MirInst::Drop { .. } | MirInst::Nop => {
+            None
         }
     }
 }
