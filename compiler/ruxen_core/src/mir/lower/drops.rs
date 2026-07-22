@@ -60,74 +60,93 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
 
     // Step 1: collect, for each function, the SINGLE parameter index it
     // deterministically returns (if any). A function maps to index `k` when
-    // every block that returns `Return(Some(Use(local)))` resolves `local`
-    // back to parameter `k` through intra-function `Move` / `Copy` /
-    // `Assign(Use)` aliasing. Receiver-builders that return `self` literally
-    // are the `k == 0` special case; a by-value passthrough (`var q = p; q`)
-    // is any `k` reached through the alias trace.
+    // every block that returns `Return(Some(Use(local)))` has `local` proven to
+    // alias parameter `k` ON EVERY execution path that reaches that return.
+    // Receiver-builders that return `self` literally are the `k == 0` special
+    // case; a by-value passthrough (`var q = p; q`) is any `k` reached through
+    // parameter aliasing.
     //
-    // Conservatism: we require ALL returning blocks to agree on the same `k`.
-    // A returning block that resolves to a different index, or to a local that
-    // is not a parameter alias, disqualifies the function entirely. We would
-    // rather leave a dealloc in place (at worst a leak) than elide one whose
-    // callee might hand back a fresh object (a use-after-free).
+    // This is a forward dataflow over the CFG, NOT a linear last-writer walk
+    // over the block vector. A per-local map `local -> k` (presence means
+    // "definitely aliases parameter k on every path to here"; absence means
+    // "not a known single parameter") is transferred through each block
+    // (`transfer_param_prov`) and MET at control-flow merges by intersection
+    // with value agreement (a local survives only when every predecessor agrees
+    // on the same `k`). A merge where one path yields a fresh object and
+    // another the parameter (`if c; Foo.new; else; a; end`) therefore drops the
+    // returned local out of the map, so the function is correctly NOT treated
+    // as returns-parameter (Q55b: the old linear walk misclassified it and
+    // elided a needed dealloc, leaking on the fresh branch). Erring toward
+    // "not a parameter" only ever LEAVES a dealloc in place (at worst a leak),
+    // never removes a needed one, so it cannot create a use-after-free.
     let mut returns_param: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     for func in &mir.functions {
-        // `local_to_param[l] = i` means local `l` currently aliases the
-        // allocation originally bound to parameter `i`. Seed with the params
-        // themselves, then propagate forward in block/instruction order (which
-        // is lowering order). Every non-aliasing (re)definition of a local
-        // REVOKES its param provenance, so a param-alias overwritten by a
-        // fresh value before a return is correctly seen as a non-param return.
-        let mut local_to_param: std::collections::HashMap<crate::mir::nodes::LocalId, usize> =
-            std::collections::HashMap::new();
-        for (idx, &param) in func.params.iter().enumerate() {
-            local_to_param.insert(param, idx);
+        let n = func.blocks.len();
+        if n == 0 {
+            continue;
         }
 
+        // Predecessor lists from each block's terminator successors.
+        let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (bi, block) in func.blocks.iter().enumerate() {
+            for succ in block_successors(&block.terminator) {
+                if succ < n {
+                    preds[succ].push(bi);
+                }
+            }
+        }
+
+        // Entry seed: each parameter aliases itself.
+        let entry_in: std::collections::HashMap<crate::mir::nodes::LocalId, usize> =
+            func.params.iter().enumerate().map(|(i, &p)| (p, i)).collect();
+
+        // Forward dataflow to a fixpoint. `outs[b]` is the provenance map at the
+        // END of block `b` (its state at the terminator / return point). The
+        // maps only ever shrink as merges intersect them, so the fixpoint
+        // converges; the iteration cap is a defensive bound.
+        let mut outs: Vec<std::collections::HashMap<crate::mir::nodes::LocalId, usize>> =
+            vec![std::collections::HashMap::new(); n];
+        let cap = n.saturating_mul(2).saturating_add(4);
+        let mut changed = true;
+        let mut guard = 0usize;
+        while changed && guard < cap {
+            changed = false;
+            guard += 1;
+            for bi in 0..n {
+                // IN[bi] = meet (intersection with agreement) over predecessor
+                // OUTs, seeded with the parameter map for the entry block.
+                let mut acc: Option<std::collections::HashMap<crate::mir::nodes::LocalId, usize>> =
+                    if bi == 0 { Some(entry_in.clone()) } else { None };
+                for &p in &preds[bi] {
+                    let po = &outs[p];
+                    match acc.as_mut() {
+                        None => acc = Some(po.clone()),
+                        Some(a) => a.retain(|k, v| po.get(k) == Some(v)),
+                    }
+                }
+                let new_in = acc.unwrap_or_default();
+                let new_out = transfer_param_prov(&new_in, &func.blocks[bi]);
+                if new_out != outs[bi] {
+                    outs[bi] = new_out;
+                    changed = true;
+                }
+            }
+        }
+
+        // A function qualifies with index `k` only when every returning block's
+        // returned local is proven to alias parameter `k` at that return point,
+        // and all agree on the same `k`.
         let mut saw_return = false;
         let mut agreed_index: Option<usize> = None;
         let mut disqualified = false;
-        for block in &func.blocks {
-            for inst in &block.instructions {
-                match inst {
-                    MirInst::Move { dest, src } | MirInst::Copy { dest, src } => {
-                        match local_to_param.get(src).copied() {
-                            Some(i) => {
-                                local_to_param.insert(*dest, i);
-                            }
-                            None => {
-                                local_to_param.remove(dest);
-                            }
-                        }
-                    }
-                    MirInst::Assign {
-                        dest,
-                        value: MirValue::Use(src),
-                    } => match local_to_param.get(src).copied() {
-                        Some(i) => {
-                            local_to_param.insert(*dest, i);
-                        }
-                        None => {
-                            local_to_param.remove(dest);
-                        }
-                    },
-                    other => {
-                        // Any other definition writes a value that does not
-                        // alias a parameter; strip provenance from its dest.
-                        if let Some(dest) = defined_local(other) {
-                            local_to_param.remove(&dest);
-                        }
-                    }
-                }
-            }
+        for (bi, block) in func.blocks.iter().enumerate() {
             if let Terminator::Return(Some(MirValue::Use(local))) = &block.terminator {
                 saw_return = true;
-                match local_to_param.get(local).copied() {
-                    Some(i) => match agreed_index {
-                        None => agreed_index = Some(i),
-                        Some(prev) if prev != i => disqualified = true,
+                match outs[bi].get(local).copied() {
+                    Some(k) => match agreed_index {
+                        None => agreed_index = Some(k),
+                        Some(prev) if prev != k => disqualified = true,
                         Some(_) => {}
                     },
                     None => disqualified = true,
@@ -247,6 +266,74 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
             }
         }
     }
+}
+
+/// The successor block ids reachable from a terminator. Used to build the
+/// predecessor map for `elide_returns_self_realloc`'s CFG dataflow.
+fn block_successors(t: &crate::mir::nodes::Terminator) -> Vec<crate::mir::nodes::BlockId> {
+    use crate::mir::nodes::Terminator;
+    match t {
+        Terminator::Goto(b) => vec![*b],
+        Terminator::Branch {
+            then_block,
+            else_block,
+            ..
+        } => vec![*then_block, *else_block],
+        Terminator::Switch {
+            targets, otherwise, ..
+        } => {
+            let mut v: Vec<crate::mir::nodes::BlockId> = targets.iter().map(|(_, b)| *b).collect();
+            v.push(*otherwise);
+            v
+        }
+        Terminator::Return(_) | Terminator::Unreachable => Vec::new(),
+    }
+}
+
+/// Transfer a parameter-provenance map through one block's instructions,
+/// returning the map at the block's end. A key `local -> k` means "definitely
+/// aliases parameter `k` on every path to this point"; an absent local is not a
+/// known single parameter. A `Move` / `Copy` / `Assign(Use)` carries the
+/// source's provenance to the destination (or clears it when the source has
+/// none); every other definition writes a value that does not alias a
+/// parameter, so it clears its destination.
+fn transfer_param_prov(
+    in_state: &std::collections::HashMap<crate::mir::nodes::LocalId, usize>,
+    block: &crate::mir::nodes::BasicBlock,
+) -> std::collections::HashMap<crate::mir::nodes::LocalId, usize> {
+    use crate::mir::nodes::{MirInst, MirValue};
+    let mut s = in_state.clone();
+    for inst in &block.instructions {
+        match inst {
+            MirInst::Move { dest, src } | MirInst::Copy { dest, src } => {
+                match s.get(src).copied() {
+                    Some(k) => {
+                        s.insert(*dest, k);
+                    }
+                    None => {
+                        s.remove(dest);
+                    }
+                }
+            }
+            MirInst::Assign {
+                dest,
+                value: MirValue::Use(src),
+            } => match s.get(src).copied() {
+                Some(k) => {
+                    s.insert(*dest, k);
+                }
+                None => {
+                    s.remove(dest);
+                }
+            },
+            other => {
+                if let Some(dest) = defined_local(other) {
+                    s.remove(&dest);
+                }
+            }
+        }
+    }
+    s
 }
 
 /// The local a MIR instruction writes, if any. Used by

@@ -17,20 +17,28 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-43 of 47 fixed (Q54 surfaced 2026-07-22, OPEN — wasm fmt `write_str` i32/i64
-return-ABI mismatch inserts a `signature_mismatch:` `unreachable` stub that traps
-every string interpolation on wasm; blocks canvas's web quiver-counter, §Q54;
+45 of 47 fixed (Q54 fixed 2026-07-22: the wasm fmt `write_str`/`write_char`
+returned a bare `int64_t` tag while the compiler derives their `.rx`
+`-> Result[nil, FmtError]` return as a pointer (i32 on wasm32, i64 native), so
+wasm-ld linked an i32-vs-i64 `signature_mismatch:` `unreachable` stub that trapped
+every string interpolation; fixed by returning pointer-width `void *` from both C
+helpers (the convention the other 28 of 30 Result-returning runtime helpers
+already follow), native byte-identical (parity oracle + full release-e2e green),
+§Q54;
 Q55 fixed 2026-07-22 (miscompile `x = f(x)` by-value rebind silently corrupted
 `x` on native; the pre-reassign `ruxen_dealloc` freed the object the call handed
 back, a UAF); `elide_returns_self_realloc` now traces the returned local to its
 parameter index and elides only the argument position the callee actually
-returns, rondo **W24**, pin `948`, §Q55; **Q55b surfaced 2026-07-22, OPEN — a
-memory-safe residual of the Q55 fix: the returned-param trace is linear over
-blocks (last-writer-wins), not CFG meet-over-paths, so a conditional
-return-param-vs-fresh function (`if cond; fresh; else; a; end`) is misclassified
-as always-returns-param and a `x = pick(x, cond)` rebind elides `dealloc(x)`,
-leaking `x`'s old object on the fresh branch; LEAK not UAF, no test hits it, the
-sound fix is a CFG dataflow pass, §Q55b**; Q50/Q51/Q52/Q53 fixed 2026-07-14; Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
+returns, rondo **W24**, pin `948`, §Q55; Q55b fixed 2026-07-22 (a memory-safe
+residual of the Q55 fix: the returned-param trace was linear over blocks
+(last-writer-wins), not CFG meet-over-paths, so a conditional
+return-param-vs-fresh function (`if cond; fresh; else; a; end`) was misclassified
+as always-returns-param and a `x = pick(x, cond)` rebind elided `dealloc(x)`,
+leaking on the fresh branch; closed by replacing the linear trace with a CFG
+forward dataflow that meets provenance at merges by intersection-with-agreement,
+so the merged local drops and the function is no longer treated as
+returns-param; release-e2e + parity + drop_fixtures green, `pick`'s dealloc
+restored, §Q55b); Q50/Q51/Q52/Q53 fixed 2026-07-14; Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
 feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned; Q28, Q30,
 Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 fixed 2026-06-10 via the syntax-parity harness; Q37 fixed 2026-06-10 (root cause: a yielding/`&block` method poisoned an unrelated same-named free fn via a bare-name yield map — this covers BOTH the S1 name-collision symptom AND the S2 "generic `frame[S: PaintSurface]` gets a bogus `__block` in binary-consumes-library builds" symptom; they were the same bug) — quiver examples build again; Q38 fixed 2026-06-10 (bare-literal `String` local leaked); Q39 fixed 2026-06-11 (bare `""` in a tuple-element position expecting `String` stayed `&str` — rondo W21; fixed via `coerce_tuple_literal_elements`, pin `924`); Q35 fixed 2026-07-14 (struct/enum in-body includes now populate typeck's nominal mixin registry; pin `659`); Q36 fixed 2026-07-14 (parenthesized multi-argument `yield(a, b)` parsed as one tuple argument; pin `929`); Q46 fixed 2026-07-14 (paren-less no-arg `.new` now installs the runtime-mixin class-info header; pin `460`); Q47 fixed 2026-07-14 (an existential `any Mixin` call result now self-satisfies its exact carried bound instead of probing a nonexistent concrete method table; pin `473`); Q48 fixed 2026-07-14 (LLVM's lazy call resolver now maps residual mangled FFI method callees to their declared C symbols, matching Cranelift); Q49 fixed 2026-07-14 (branch-only drops are sunk into their initializing arms and wider partial-initialization CFGs are flag-guarded; pin `930`); Q52 fixed 2026-07-14 (blockdrop's closure destructor double-freed captured self-freeing `Mutex`/`SharedSync` handles; pins `926`/`927`/`937`)**). The canvas
 `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED

@@ -2333,7 +2333,7 @@ titles/summaries emitted from generic closures and refined for loops. Existing
 case `101_two_type_params` also confirms that `Pair[Int, String]#second_ref`
 instantiates `&B` as `&String` before interpolation.
 
-## Q54 · S2 — wasm: `ruxen_fmt_formatter_write_str` call-site return width (i32) mismatches the bundled fmt.c definition (i64); wasm-ld traps EVERY string interpolation with an `unreachable` stub
+## Q54 · S2 — wasm: `ruxen_fmt_formatter_write_str` call-site return width (i32) mismatches the bundled fmt.c definition (i64); wasm-ld traps EVERY string interpolation with an `unreachable` stub  ✅ FIXED 2026-07-22
 
 Found 2026-07-22 re-verifying canvas's web backend (canvas `docs/ROADMAP.md` →
 Web backend, the L839 "render() traps" item) after Q44/Q48 bundled the fmt
@@ -2387,13 +2387,51 @@ canvas's web-backend quiver-counter proof (`canvas/web/verify_counter.mjs`)
 traps, while the interpolation-free `draw.wasm` (`canvas/web/verify.mjs`) renders
 pixel-exact. This is what still blocks a real quiver app in the browser.
 
-**Fix direction:** make the wasm FFI-alias call-site lowering consult the same
-runtime-ABI derivation the native/Cranelift path uses (so
-`ruxen_fmt_formatter_write_str` is emitted with an i64 result on wasm too), OR
-give the wasm fmt shim a wrapper whose return width matches the Ruxen decl. This
-is the direct sibling of Q44/Q48 (fmt-on-wasm ABI) — the name is now resolved but
-the SIGNATURE is not. Pin a wasm release-e2e case that exports an interpolation
-and assert the linked module contains no `signature_mismatch:` symbol.
+**Root cause (confirmed).** The Ruxen runtime convention is that a pointer-like
+Ruxen return type (`Result`/`Option`) crosses the C-ABI boundary as a
+POINTER-WIDTH value (`void *`), which the compiler's `ty_to_llvm`/`ty_to_cranelift`
+lowering of that type (a pointer) matches on every target: i64 on 64-bit, i32 on
+wasm32. Of the ~30 `Result`/`Option`-returning FFI helpers in the stdlib, 28
+follow that convention (`ruxen_file_open`, `ruxen_vec_pop`, `ruxen_hash_get`,
+`ruxen_stdout_write_str`, … all return `void *`). The two fmt helpers
+`ruxen_fmt_formatter_write_str`/`_write_char` were the ONLY violators: they
+returned a bare `int64_t` tag (0/1). On a 64-bit target `int64_t` and a pointer
+are both 64 bits, so the anomaly was invisible; on wasm32 the pointer is i32 while
+`int64_t` stays i64, so `wasm-ld` linked the i32 call-site against the i64
+definition through a generated `signature_mismatch:` `unreachable` stub, and the
+first interpolation call trapped.
+
+Note the anomaly is NOT derivable from the `.rx` type: `write_str -> Result[nil,
+FmtError]` and `stdout_write_str -> Result[nil, IoError]` have identical Ruxen
+return types but different C return widths (`int64_t` vs `void *`). So a
+compiler-side "map `Result`→i64 on wasm" rule would fix the two fmt symbols and
+newly BREAK the 28 conforming `void *` ones. The correct fix restores the
+runtime's own convention at the two violation sites.
+
+**Fix (landed).** `library/std/fmt/runtime/fmt.c`: `ruxen_fmt_formatter_write_str`
+and `ruxen_fmt_formatter_write_char` now return `void *` (`NULL` = Ok tag, `(void
+*)1` = FmtError tag) instead of `int64_t`. Zero compiler-code changes, so the
+native backend is byte-identical: the ABI-classification parity oracle
+(`runtime_abi_derivation` / `runtime_abi_parity`) stays green (both still derive
+`I64` for these symbols on native, where `void *` == `int64_t` width and returns
+in the same register), and the full native release-e2e passes. The interpolation
+lowerer discards the tag, so no consumer sees the representation change. This is
+the direct sibling of Q44/Q48 (fmt-on-wasm ABI): the NAME was resolved by Q48, the
+SIGNATURE by Q54.
+
+**Reproducible gate (no wasm release-e2e harness exists).** The release-e2e
+harness has no wasm mode, and the `tests/wasm_codegen.rs` lane uses an empty
+stdlib bootstrap (no fmt link), so neither can host a faithful interpolation-link
+pin without new infrastructure. The reproducible check is the `llvm-nm` gate on
+the interpolation repro built for wasm32:
+```
+RUXEN_WASM_CLANG=/opt/homebrew/opt/llvm/bin/clang \
+  ruxen compile repro.rx --target wasm32-unknown-unknown -o repro.wasm
+llvm-nm repro.wasm | grep signature_mismatch      # must be EMPTY post-fix
+```
+plus instantiating the module in Node and calling the exported `render()` (must
+return 0 without a trap). Verified against both the source tree (via
+`RUXEN_STDLIB_ROOT`) and the installed toolchain.
 
 Cross-linked from canvas `docs/ROADMAP.md` (Web backend → L839).
 Toolchain: `ruxen 0.1.0`.
@@ -2475,10 +2513,20 @@ dispatch keeps the documented bounded-leak fallback. Pin case:
 `tests/release-e2e/cases/948_by_value_rebind_no_uaf.rx` (asserts `PASS n=222`);
 receiver-builder cases stay green.
 
-**Known residual (Q55b, S3 — memory-safe leak, follow-up).** The
-returned-param detection traces provenance with a LINEAR walk over blocks in
-vector order (last-writer-wins), not a CFG-aware meet-over-paths. At a
-control-flow merge it can misattribute. Confirmed shape:
+**Q55b (memory-safe leak residual)  ✅ FIXED 2026-07-22.** The original Q55
+returned-param detection traced provenance with a LINEAR walk over blocks in
+vector order (last-writer-wins), not a CFG-aware meet-over-paths, so at a
+control-flow merge it could misattribute. FIX: `elide_returns_self_realloc` now
+runs a forward dataflow over the CFG (`block_successors` + `transfer_param_prov`
+in `drops.rs`), meeting per-local provenance at merges by intersection with value
+agreement (a local survives only when every predecessor agrees on the same
+parameter index), iterated to a fixpoint. The merge below now drops the returned
+local, so `pick` is correctly NOT treated as returns-param (`pick`'s
+`dealloc(x)` is restored, verified via `--emit=mir`), while a single-path
+`var r = fresh; r = a; r` still resolves to the parameter (no UAF false-negative,
+verified by the `ftp` repro `PASS n=222`). Gate: release-e2e `1 passed` (all
+~354 fixtures), `runtime_abi_parity` 3, `drop_fixtures` 33, `w24_a` `PASS n=222`.
+The originally-reported shape:
 
 ```ruxen
 def pick(a: Payload, cond: Bool) -> Payload

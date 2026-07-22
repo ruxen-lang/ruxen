@@ -157,6 +157,26 @@ once 1.0.0 ships.
   Apple M4 (loopback, co-located load generator; parity with Go net/http).
 
 ### Fixed
+- **Q54: wasm string interpolation no longer traps on a fmt ABI mismatch.** On
+  the `wasm32-unknown-unknown` target the fmt runtime helpers
+  `ruxen_fmt_formatter_write_str`/`_write_char` returned a bare `int64_t` tag,
+  while the compiler derives their `.rx` `-> Result[nil, FmtError]` return as a
+  pointer (i32 on wasm32, i64 native). On 64-bit the two widths coincide, so the
+  mismatch was invisible; on wasm32 `wasm-ld` linked the i32 call-site against the
+  i64 definition through a generated `signature_mismatch:` `unreachable` stub, and
+  the first interpolation call trapped (`RuntimeError: unreachable`), breaking
+  every wasm program that interpolates a string (canvas's web quiver-counter). The
+  two helpers now return pointer-width `void *` (`NULL` = Ok tag, `(void *)1` =
+  FmtError tag), the convention the other 28 of 30 `Result`/`Option`-returning
+  runtime helpers already follow (`ruxen_file_open`, `ruxen_vec_pop`,
+  `ruxen_stdout_write_str`, … all return `void *`). The fix is confined to
+  `library/std/fmt/runtime/fmt.c` with zero compiler-code changes, so the native
+  backend is byte-identical: the ABI-classification parity oracle stays green and
+  the full native release-e2e passes. The interpolation lowerer discards the tag,
+  so no consumer sees the representation change. Reproducible gate: `llvm-nm
+  repro.wasm | grep signature_mismatch` is now empty and the exported `render()`
+  returns 0 without trapping under Node. See `docs/dev/gui-stack-v1-issues.md`
+  §Q54.
 - **Q55: `x = f(x)` by-value rebind no longer corrupts `x` on the native
   backend.** Rebinding a drop-bearing `var` from a function that takes it by
   value and returns it (`def wrap(p) -> Payload; var r = p; r; end`) lowers to a
@@ -175,6 +195,20 @@ once 1.0.0 ships.
   dispatch keeps the documented bounded-leak fallback; the receiver-builder form
   `r = r.with_status(201)` (returns `self`, index 0) stays covered. Pin case
   `tests/release-e2e/cases/948_by_value_rebind_no_uaf.rx`; rondo W24.
+- **Q55b: the Q55 returned-param detection no longer leaks on a conditional
+  return.** The Q55 detection traced provenance with a linear last-writer walk
+  over the block vector, not a CFG meet-over-paths, so a function that returns a
+  parameter on one branch and a fresh object on another (`if cond; Foo.new;
+  else; a; end`) was misclassified as always returning its parameter; a
+  `x = pick(x, cond)` rebind then elided a needed `dealloc(x)` and leaked the old
+  object on the fresh branch (memory-safe, never a UAF). Replaced the linear walk
+  with a forward dataflow over the CFG (`block_successors` + `transfer_param_prov`
+  in `drops.rs`) that meets per-local provenance at merges by intersection with
+  value agreement (a local survives only when every predecessor agrees on the
+  same parameter index), iterated to a fixpoint. The conditional-return merge now
+  drops the local (leak fixed, `pick`'s dealloc restored), while a single-path
+  `var r = fresh; r = a; r` still resolves to its parameter (no UAF
+  false-negative). release-e2e + parity + drop_fixtures green.
 - **Q53: closure interpolation preserves declared `String` call results.**
   Q50's removal of the inferred-method name allowlist exposed abstract `.each`
   parameters whose unresolved call result stayed `Infer`/`TypeParam`; Display
