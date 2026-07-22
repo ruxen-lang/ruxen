@@ -2333,6 +2333,71 @@ titles/summaries emitted from generic closures and refined for loops. Existing
 case `101_two_type_params` also confirms that `Pair[Int, String]#second_ref`
 instantiates `&B` as `&String` before interpolation.
 
+## Q54 · S2 — wasm: `ruxen_fmt_formatter_write_str` call-site return width (i32) mismatches the bundled fmt.c definition (i64); wasm-ld traps EVERY string interpolation with an `unreachable` stub
+
+Found 2026-07-22 re-verifying canvas's web backend (canvas `docs/ROADMAP.md` →
+Web backend, the L839 "render() traps" item) after Q44/Q48 bundled the fmt
+runtime into wasm. Q44/Q48 correctly removed the `Formatter_*` host imports (the
+fmt runtime `library/std/fmt/runtime/fmt.c` is now bundled), but on the wasm
+target the interpolation CALL-SITE and the runtime DEFINITION disagree on
+`ruxen_fmt_formatter_write_str`'s RETURN width:
+
+- **Definition** (`library/std/fmt/runtime/fmt.c:92`):
+  `int64_t ruxen_fmt_formatter_write_str(RuxenFormatter *f, const char *s)` — i64 result.
+- **Call-site** (wasm codegen of the interpolation lowering of the Ruxen decl
+  `library/std/fmt/src/lib.rx:51`,
+  `def write_str as "ruxen_fmt_formatter_write_str"(s: &String) -> Result[nil, FmtError]`):
+  lowered with an **i32** result (the `Result[nil, FmtError]` width).
+- The native path is already correct — `compiler/ruxen_core/tests/runtime_abi_derivation.rs:61`
+  maps this symbol to `([I64, I64], Some(I64))` — so the **wasm** call-site is
+  NOT consulting that runtime-ABI derivation, leaving an i32-vs-i64 return
+  mismatch that native never sees.
+
+Consequence at link time:
+```
+wasm-ld: warning: function signature mismatch: ruxen_fmt_formatter_write_str
+>>> defined as (i32, i32) -> i32 in <app>.o
+>>> defined as (i32, i32) -> i64 in <fmt runtime>.o
+```
+wasm-ld links the mismatching reference to a generated
+`signature_mismatch:ruxen_fmt_formatter_write_str` function whose body is
+`unreachable`, so the FIRST interpolation call traps at runtime (`RuntimeError:
+unreachable`).
+
+**Minimal repro** (compiles cleanly, traps at run time):
+```ruxen
+def render -> Int
+  let n = 5
+  let s = "count: #{n}"
+  puts(s)
+  0
+end
+```
+```
+RUXEN_WASM_CLANG=/opt/homebrew/opt/llvm/bin/clang \
+  ruxen compile repro.rx --target wasm32-unknown-unknown -o repro.wasm
+llvm-nm repro.wasm | grep signature_mismatch
+# → 000000c3 t signature_mismatch:ruxen_fmt_formatter_write_str
+```
+Calling the exported `render()` from a JS host traps `unreachable`.
+
+**Blast radius:** every wasm program that interpolates a string — which is the
+whole point of quiver's reactive `dyn_text` (`"count: #{n.get(ui)}"`). So
+canvas's web-backend quiver-counter proof (`canvas/web/verify_counter.mjs`)
+traps, while the interpolation-free `draw.wasm` (`canvas/web/verify.mjs`) renders
+pixel-exact. This is what still blocks a real quiver app in the browser.
+
+**Fix direction:** make the wasm FFI-alias call-site lowering consult the same
+runtime-ABI derivation the native/Cranelift path uses (so
+`ruxen_fmt_formatter_write_str` is emitted with an i64 result on wasm too), OR
+give the wasm fmt shim a wrapper whose return width matches the Ruxen decl. This
+is the direct sibling of Q44/Q48 (fmt-on-wasm ABI) — the name is now resolved but
+the SIGNATURE is not. Pin a wasm release-e2e case that exports an interpolation
+and assert the linked module contains no `signature_mismatch:` symbol.
+
+Cross-linked from canvas `docs/ROADMAP.md` (Web backend → L839).
+Toolchain: `ruxen 0.1.0`.
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:
