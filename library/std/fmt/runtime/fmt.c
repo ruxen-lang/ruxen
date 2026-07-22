@@ -87,23 +87,36 @@ void ruxen_fmt_formatter_ORIG_FREE(RuxenFormatter *f) {
 }
 
 /* Append the NUL-terminated string `s` to the buffer.
- * Returns 0 (tag-0 = Ok(())) on success, 1 (tag-1 = FmtError) on
- * null input (v1 simplification — buffer overflow is not surfaced). */
-int64_t ruxen_fmt_formatter_write_str(RuxenFormatter *f, const char *s) {
-    if (!f || !s) return 1;
+ * Returns a POINTER-WIDTH `Result[nil, FmtError]` tag: NULL (tag-0 =
+ * Ok(())) on success, (void *)1 (tag-1 = FmtError) on null input (v1
+ * simplification: buffer overflow is not surfaced).
+ *
+ * Q54: the return type is `void *`, NOT `int64_t`. The compiler derives
+ * this symbol's FFI signature from the `.rx` decl `-> Result[nil,
+ * FmtError]`, a pointer-like type it lowers to a pointer (i64 on a
+ * 64-bit target, i32 on wasm32). An `int64_t` return matched only on
+ * 64-bit, where a pointer is also 64 bits; on wasm32 it linked as an
+ * i32-vs-i64 mismatch that trapped EVERY string interpolation. Every
+ * other Result-returning runtime helper already returns a pointer-width
+ * value (`void *`); this matches that convention on every target. The
+ * interpolation lowerer discards the tag. */
+void *ruxen_fmt_formatter_write_str(RuxenFormatter *f, const char *s) {
+    if (!f || !s) return (void *)1;
     size_t n = strlen(s);
     ruxen_fmt_formatter_reserve(f, n);
     memcpy(f->buf + f->len, s, n);
     f->len += n;
     f->buf[f->len] = '\0';
-    return 0;
+    return NULL;
 }
 
 /* Append a single Unicode codepoint.
- * v1: ASCII codepoints (0–0x7F) are stored directly; non-ASCII
- * codepoints emit '?' (Phase D4 will add full UTF-8 encoding). */
-int64_t ruxen_fmt_formatter_write_char(RuxenFormatter *f, int64_t codepoint) {
-    if (!f) return 1;
+ * v1: ASCII codepoints (0..0x7F) are stored directly; non-ASCII
+ * codepoints emit '?' (Phase D4 will add full UTF-8 encoding).
+ * Returns the pointer-width `Result[nil, FmtError]` tag (NULL = Ok); see
+ * `ruxen_fmt_formatter_write_str` for why the return is `void *` (Q54). */
+void *ruxen_fmt_formatter_write_char(RuxenFormatter *f, int64_t codepoint) {
+    if (!f) return (void *)1;
     if (codepoint >= 0 && codepoint <= 0x7f) {
         ruxen_fmt_formatter_reserve(f, 1);
         f->buf[f->len++] = (char) codepoint;
@@ -114,7 +127,7 @@ int64_t ruxen_fmt_formatter_write_char(RuxenFormatter *f, int64_t codepoint) {
         f->buf[f->len++] = '?';
         f->buf[f->len]   = '\0';
     }
-    return 0;
+    return NULL;
 }
 
 /* Phase 2 #06.D4: apply width / align / fill to `taken` in place.
