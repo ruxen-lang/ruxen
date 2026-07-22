@@ -17,7 +17,11 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-42 of 46 fixed (Q54 surfaced 2026-07-22, OPEN — wasm fmt `write_str` i32/i64
+42 of 47 fixed (Q55 surfaced 2026-07-22, OPEN — miscompile: `x = f(x)` where `f`
+takes `x` by value AND returns it silently corrupts `x` on native (rebind reuses
+the moved-out slot); found adding rondo's structured-logging `finish`, rondo
+**W24**, minimal repro prints `FAIL n=3` for `222`, §Q55; Q54 surfaced 2026-07-22,
+OPEN — wasm fmt `write_str` i32/i64
 return-ABI mismatch inserts a `signature_mismatch:` `unreachable` stub that traps
 every string interpolation on wasm; blocks canvas's web quiver-counter, §Q54;
 Q50/Q51/Q52/Q53 fixed 2026-07-14; Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on

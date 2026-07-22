@@ -2398,6 +2398,75 @@ and assert the linked module contains no `signature_mismatch:` symbol.
 Cross-linked from canvas `docs/ROADMAP.md` (Web backend → L839).
 Toolchain: `ruxen 0.1.0`.
 
+## Q55 · S2 — miscompile: `x = f(x)` where `f` takes `x` by value AND returns it silently corrupts `x` (native)
+
+Found 2026-07-22 adding rondo's structured-logging `finish` consolidation. A
+`var` holding a class value with drop semantics (fields include an FFI-backed
+`String`/`Hash`), reassigned from a function that takes **that same var by value
+and returns a value of the same type**, comes back corrupted — the result's
+fields read as garbage. This is a silent miscompile (no diagnostic), NOT the
+`def var` receiver-builder form (`r = r.with_status(201)` borrows `self` and is
+safe and used throughout rondo).
+
+**Minimal repro** (single file; compiles cleanly, prints the wrong value):
+```ruxen
+class Payload
+  n: Int
+  tag: String
+  def init(v: Int)
+    self.n = v
+    self.tag = "p"
+  end
+end
+
+def wrap(p: Payload) -> Payload
+  var r = p
+  r
+end
+
+def main
+  var x = wrap(Payload.new(222))
+  x = wrap(x)              # rebind the SAME var through a by-value fn
+  if x.n == 222
+    puts "PASS n=#{x.n}"
+  else
+    puts "FAIL n=#{x.n}"   # ← actually prints: FAIL n=3
+  end
+end
+```
+`ruxen compile` + run prints `FAIL n=3` — `x.n` was 222 before the rebind and
+reads as `3` after. (The `tag` String field is what makes the value
+drop-bearing; a plain-`Int`-only class does not need to reproduce it, but the
+corruption is on the whole value.)
+
+**Production evidence.** In rondo, `finish` first written as
+```ruxen
+var r = self.cors_response(resp)
+r = self.with_request_id(r, &req.request_id)   # by-value arg, rebind to r
+```
+made EVERY dispatched response report a nonsense status (200 → `4`, 404 → `0`)
+across the whole suite; rewriting to the single-binding nested form
+`var r = self.with_request_id(self.cors_response(resp), &req.request_id)` fixed
+all 94 tests. Documented as rondo **W24**.
+
+**Root-cause hypothesis.** Same family as the tuple double-drop (rondo W16): MIR
+move/drop elaboration mishandles the case where one binding is simultaneously the
+by-value argument being consumed and the destination being overwritten in the
+same statement — the moved-out value's slot is reused / dropped out of order, so
+the returned value lands on a stale/dropped slot. Look at the drop-insertion
+around reassignment where RHS consumes the LHS binding.
+
+**Fix + pin.** Once fixed, add the repro above as a `tests/release-e2e/cases/`
+case asserting `PASS n=222`. Severity: **high** — silent data corruption on a
+natural builder-style shape. (A minimal repro where the by-value param is the
+method's OWN enclosing class, e.g. `def wrap(b: Box)` inside `class Box`, instead
+trips a SEPARATE single-file return-type-inference gap — "could not infer type
+for parameter b" — worth its own Q if pursued; the distinct-class free-fn repro
+above isolates Q55 cleanly.)
+
+Cross-linked from rondo `docs/ruxen-issues.md` W24.
+Toolchain: `ruxen 0.1.0`.
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:
