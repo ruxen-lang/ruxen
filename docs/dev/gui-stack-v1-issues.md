@@ -2564,6 +2564,56 @@ memory-safe and a wrong dataflow rewrite of a memory-safety pass is a UAF risk.
 Cross-linked from rondo `docs/ruxen-issues.md` W24.
 Toolchain: `ruxen 0.1.0`.
 
+## Q56 · S2 — async client I/O via `block_on` (no worker reactor) SILENTLY does nothing
+
+Found 2026-07-23 building the first HTTP client for the data-apps North Star
+(`../NORTH-STAR.md`). A standalone program that does async CLIENT I/O through
+`block_on` fails silently: the connection appears to open, `write` returns a
+byte count as if it sent, but the bytes NEVER reach the peer, and subsequent
+reads time out. rondo only ever runs async I/O inside its per-worker reactors
+(`spawn_async_workers` + `Task.spawn_raw` + the poll loop), so the standalone
+`block_on(AsyncTcpStream.connect(...))` + `block_on(s.write(...))` path was never
+exercised.
+
+**Repro** (server logs prove it):
+```ruxen
+match block_on(AsyncTcpStream.connect(&"127.0.0.1:8799"))
+  Ok(stream) ->
+    var s = stream
+    match block_on(s.write(&"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"))
+      Ok(nw) -> puts "wrote #{nw} bytes"   # prints "wrote 54 bytes"
+      Err(_) -> puts "write err"
+    end
+    match block_on(s.read_with_timeout(65536, 3000000000))
+      Ok(c) -> puts "read #{c.size() as Int}"
+      Err(_) -> puts "read ERR/timeout"    # prints this: nothing ever arrives
+    end
+  Err(_) -> puts "connect err"
+end
+```
+The peer (a logging HTTP server) records the request from `curl` but NOT from
+this program, so the 54-byte `write` was never flushed to the socket.
+
+**Root cause hypothesis.** `block_on` drives ONE future on a minimal executor;
+async net I/O completion depends on a reactor that registers the socket fd and
+services readiness (edge-triggered), which the worker loop provides but a bare
+`block_on` does not. The async write future's `poll` reports completion (returns
+the byte count) without the reactor having actually driven the non-blocking send
+to the wire.
+
+**Severity.** S2 for correctness UX: it is a SILENT wrong result (write claims
+success), which is a footgun for any app doing client-side networking outside
+rondo's server. Either `block_on` should set up a reactor that services client
+socket I/O, or the async net methods should error clearly when driven without a
+reactor.
+
+**Workaround (in use).** Use the SYNC `TcpStream` for a request/response client:
+`TcpStream.connect` + `write(&Array[Int])` + loop `read(&var Array[Int])` (reads
+APPEND to the buffer) until `Ok(0)`, then `String.from_bytes`. Blocking syscalls
+need no reactor and work correctly. This is what the data-apps HTTP client uses.
+
+Toolchain: `ruxen 0.1.0`.
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:

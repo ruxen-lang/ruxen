@@ -17,7 +17,10 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-45 of 47 fixed (Q54 fixed 2026-07-22: the wasm fmt `write_str`/`write_char`
+45 of 48 fixed (Q56 surfaced 2026-07-23, OPEN — async CLIENT I/O via `block_on`
+without a worker reactor SILENTLY does nothing: `write` returns a byte count but
+never flushes to the socket, reads time out; hit building the data-apps HTTP
+client, workaround is the sync `TcpStream`, §Q56; Q54 fixed 2026-07-22: the wasm fmt `write_str`/`write_char`
 returned a bare `int64_t` tag while the compiler derives their `.rx`
 `-> Result[nil, FmtError]` return as a pointer (i32 on wasm32, i64 native), so
 wasm-ld linked an i32-vs-i64 `signature_mismatch:` `unreachable` stub that trapped
