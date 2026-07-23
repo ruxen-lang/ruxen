@@ -69,10 +69,13 @@ end
 # (case-insensitive; the head is lowercased before the lookup).
 def http_content_length(head: &String) -> Int
   let lower = head.to_lower
-  if !lower.include?(&"content-length:")
+  # Match the header at a line boundary (`\r\ncontent-length:`) so a header
+  # VALUE that happens to contain the text does not false-match. The first
+  # header always follows the status line's CRLF, so this still finds it.
+  if !lower.include?(&"\r\ncontent-length:")
     return -1
   end
-  let after = lower.split(&"content-length:")
+  let after = lower.split(&"\r\ncontent-length:")
   let tail = http_seg_at(&after, 1)
   let lines = tail.split(&"\r\n")
   let valstr = http_seg_at(&lines, 0)
@@ -130,6 +133,9 @@ class Http
     match TcpStream.connect(&addr)
       Ok(stream) ->
         let s = stream
+        # Bound each read so a non-conformant server (keep-alive, no
+        # Content-Length, never closes) cannot hang the client forever.
+        let _t = s.set_read_timeout_ns(30000000000)
         let req = http_request_line(host, path)
         let req_bytes = http_str_to_bytes(&req)
         let _w = s.write(&req_bytes)
