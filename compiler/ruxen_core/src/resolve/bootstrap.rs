@@ -158,6 +158,9 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     // Keep it after those packages so `Array[Json]`, `Map[String, Json]`,
     // and `String` payload helpers resolve.
     "json/src/lib.rx",
+    // http — blocking HTTP/1.1 client. Pure `.rx` on net (TcpStream)
+    // + string/array/option, all loaded above. No runtime `.c`.
+    "http/src/lib.rx",
     // _pin_zero_rust_stdlib — trio-leak pin fixture (B5 of
     // docs/specs/system/zero_rust_stdlib_classes.spec.md). Adding a
     // stdlib class via a fresh package MUST require ONLY this entry in

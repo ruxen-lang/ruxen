@@ -1,0 +1,5 @@
+status=200
+body={"count":7}
+s404=404
+ok=true
+ok500=false

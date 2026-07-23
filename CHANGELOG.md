@@ -114,6 +114,16 @@ once 1.0.0 ships.
   down ~33%, throughput +1-4% (the loopback bench is otherwise machine-bound).
 
 ### Added
+- **`std/http`: a minimal blocking HTTP/1.1 client.** `Http.get(host, port,
+  path)` opens a `TcpStream`, sends a GET (`Connection: close`), reads the full
+  response, and returns an `HttpResponse` (`status` / `body` / `ok?`); decode the
+  body with `std/json`. This is the "call a backend API" primitive the data-apps
+  goal needs (`NORTH-STAR.md`): a pure-`.rx` package on `std/net`, registered in
+  the bootstrap + embed lists. It deliberately uses the SYNC `TcpStream`, not
+  async, because the async `block_on` client path silently no-ops without a
+  worker reactor (Q56). Pure parser + `HttpResponse.ok?` pinned by release-e2e
+  case `949`; the networked `Http.get` verified against a localhost server
+  (`status=200 ok=true`, JSON decoded).
 - **`Env.cpu_count`: logical CPU count for default pool/worker sizing.** A thin
   `sysconf(_SC_NPROCESSORS_ONLN)` FFI returning the online logical processor
   count (all P + E cores on Apple Silicon, online CPUs on Linux), clamped to a
