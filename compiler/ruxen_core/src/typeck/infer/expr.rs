@@ -692,13 +692,27 @@ impl<'a> InferenceEngine<'a> {
                 {
                     let arg_ty = self.ctx.resolve(&args[0].ty);
                     if !Self::is_puts_compatible(&arg_ty) {
-                        self.error(
-                            format!(
-                                "`{}` expects String or &str, found `{}`; use string interpolation: {} \"#{{expr}}\"",
-                                callee_name, arg_ty, callee_name,
-                            ),
-                            &expr.span,
-                        );
+                        // Ruby-parity: `puts x` accepts any value by converting it
+                        // through its universal `to_s` (`puts 42` becomes
+                        // `puts 42.to_s`), removing the `"#{}"` tax on every
+                        // print. The conversion is inserted into the HIR only, so
+                        // the AST stays `puts x` and `ruxen fmt` is unaffected. A
+                        // value with no `to_s` surfaces the method error here.
+                        let object = args[0].clone();
+                        let mut wrapped = HirExpr {
+                            kind: HirExprKind::MethodCall {
+                                object: Box::new(object),
+                                method: UNRESOLVED_DEF,
+                                method_name: "to_s".to_string(),
+                                generic_args: Vec::new(),
+                                args: Vec::new(),
+                                block: None,
+                            },
+                            ty: Ty::String,
+                            span: expr.span.clone(),
+                        };
+                        self.infer_expr(&mut wrapped);
+                        args[0] = wrapped;
                     }
                 }
 

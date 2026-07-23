@@ -359,6 +359,13 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
 
 ### Language features
 
+- [x] **`puts`/`print` accept any value, single-arg (DONE 2026-07-23).** A
+      non-String argument to `puts`/`eputs`/`print`/`println`/`eprintln` is
+      converted via its universal `to_s` in typeck (`puts x` becomes
+      `puts x.to_s`). Inserted into the HIR only, so the AST and `ruxen fmt`
+      stay `puts x`. Pin `956`; parity `language.md` §12 / P0.7.
+  - [ ] **Follow-up: multi-arg `puts a, b`** (prints each on its own line).
+        Needs variadic handling, deferred.
 - [x] **`&&`/`||` short-circuit + `||=`/`&&=` (DONE 2026-07-23).** Fixed a P0
       correctness bug: logical `&&`/`||` lowered to an eager `MirInst::BinOp`, so
       both operands always ran (`ptr != nil && ptr.field` touched `ptr.field`

@@ -114,6 +114,14 @@ once 1.0.0 ships.
   down ~33%, throughput +1-4% (the loopback bench is otherwise machine-bound).
 
 ### Added
+- **`puts` / `print` accept any value (single-argument form).** `puts 42`,
+  `puts 3.14`, `puts true`, and `puts some_struct` now work without the
+  `"#{x}"` interpolation tax. When a `puts`/`eputs`/`print`/`println`/`eprintln`
+  call has a single non-String argument, typeck converts it through its
+  universal `to_s` (`puts x` becomes `puts x.to_s`). The conversion lands in the
+  HIR only, so the AST stays `puts x` and `ruxen fmt` is unaffected. A value
+  with no `to_s` still reports a clear error. Multi-arg `puts a, b` is a
+  follow-up. Pin `956`; Ruby-parity `language.md` §12 / P0.7.
 - **`||=` / `&&=` conditional assignment.** New `PipePipeEq` / `AmpAmpEq` lexer
   tokens (assignment precedence). `a ||= b` desugars to `a || (a = b)` and
   `a &&= b` to `a && (a = b)`, so the assign runs only when the value actually

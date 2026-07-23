@@ -346,8 +346,8 @@ standalone and emit empty output at runtime. They are not functional today; the
 
 | Ruby feature | Status | Ruxen location or gap | Note |
 |---|---|---|---|
-| `puts` / `print` accept any value | MISSING | probe: `puts 5` → "expects String or &str" | Ruby calls `to_s`; Ruxen requires `String` (`puts "#{x}"` or `x.to_s`). Ergonomic gap. |
-| `puts a, b` (multi-arg) | MISSING | probe: `found Comma` | Single arg only. |
+| `puts` / `print` accept any value | DONE | typeck `to_s` conversion; case `956` | A non-String arg is converted through its universal `to_s`; inserted into the HIR only, so the AST and `ruxen fmt` are unchanged. |
+| `puts a, b` (multi-arg) | MISSING | probe: `found Comma` | Single arg only; multi-arg is a follow-up. |
 | String `%` formatting `"%05d" % x` | DONE | probe PASS | |
 | `format` / `sprintf` | MISSING | probe: undefined function | `%` operator works; the functions do not. |
 | `p` / `pp` (inspect) | MISSING | — | |
@@ -382,7 +382,7 @@ truly irreducible slice is excluded from both (listed last).
 4. ~~**`||=` and `&&=`.**~~ **DONE** (Bool conditional-assign; desugars to `a || (a = b)` / `a && (a = b)`). This also uncovered and fixed a **short-circuit bug**: `&&`/`||` were evaluating both operands eagerly. Pins `954`, `955`. (§2)
 5. **Ternary `c ? a : b`.** (§3)
 6. ~~**`**` power operator.**~~ **DONE** (`StarStar` token + `BinOp::Pow`, right-associative, routed to `ruxen_int_pow`/`ruxen_float_pow`). Fixed the silent miscompile (`2 ** 8` was `16`, now `256`). Pin `952`. (§3)
-7. **`puts`/`print` accept any `to_s`-able value** (and multiple args). Removes the `"#{x}"` boilerplate tax on every print. (§12)
+7. ~~**`puts`/`print` accept any `to_s`-able value**~~ **DONE** for the single-argument form (typeck converts a non-String arg via its universal `to_s`; `puts 42` works, AST and fmt unchanged). Multi-arg `puts a, b` is a follow-up. Pin `956`. (§12)
 
 #### P1 — high-frequency, need one new primitive each
 
