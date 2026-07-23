@@ -122,8 +122,9 @@ once 1.0.0 ships.
   data-apps demo (`quiver/examples/data_app` renders a list from a fetched JSON
   array).
 - **`std/http`: a minimal blocking HTTP/1.1 client.** `Http.get(host, port,
-  path)` opens a `TcpStream`, sends a GET (`Connection: close`), reads the full
-  response, and returns an `HttpResponse` (`status` / `body` / `ok?`); decode the
+  path)` opens a `TcpStream`, sends a GET, reads the response until it has
+  `Content-Length` bytes (falling back to EOF when there is no length), and
+  returns an `HttpResponse` (`status` / `body` / `ok?`); decode the
   body with `std/json`. This is the "call a backend API" primitive the data-apps
   goal needs (`NORTH-STAR.md`): a pure-`.rx` package on `std/net`, registered in
   the bootstrap + embed lists. It deliberately uses the SYNC `TcpStream`, not

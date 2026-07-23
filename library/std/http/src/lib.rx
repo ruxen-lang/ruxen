@@ -65,6 +65,45 @@ def http_response_body(resp: &String) -> String
   http_seg_at(&hb, 1)
 end
 
+# The `Content-Length` value in a response head, or -1 if absent
+# (case-insensitive; the head is lowercased before the lookup).
+def http_content_length(head: &String) -> Int
+  let lower = head.to_lower
+  if !lower.include?(&"content-length:")
+    return -1
+  end
+  let after = lower.split(&"content-length:")
+  let tail = http_seg_at(&after, 1)
+  let lines = tail.split(&"\r\n")
+  let valstr = http_seg_at(&lines, 0)
+  match valstr.trim.parse_int
+    Ok(n) -> n
+    Err(_) -> -1
+  end
+end
+
+# Total bytes the full response should be, given what has been read so
+# far, or -1 while it is not yet determinable. Once the head terminator
+# (CRLFCRLF) is present AND a Content-Length header is parsed, the total
+# is `head_len + content_length`; the read loop stops there instead of
+# waiting for EOF, so it works with keep-alive servers (which never
+# close). Returns -1 (keep reading, stop on EOF) when the head is
+# incomplete or has no Content-Length.
+def http_expected_total(buf: &Array[Int]) -> Int
+  let sofar = String.from_bytes(buf)
+  if !sofar.include?(&"\r\n\r\n")
+    return -1
+  end
+  let parts = sofar.splitn(2, &"\r\n\r\n")
+  let head = http_seg_at(&parts, 0)
+  let head_len = (head.size() as Int) + 4
+  let cl = http_content_length(&head)
+  if cl < 0
+    return -1
+  end
+  head_len + cl
+end
+
 ## The parsed result of an HTTP request: the status code and the body.
 ## `ok?` is true for a 2xx status.
 class HttpResponse
@@ -94,7 +133,12 @@ class Http
         let req = http_request_line(host, path)
         let req_bytes = http_str_to_bytes(&req)
         let _w = s.write(&req_bytes)
+        # Read chunks into one buffer (read APPENDS). Stop when we have
+        # the full response by Content-Length, or on EOF if the server
+        # closes / sends no length. `need_total` stays -1 until the head
+        # + a Content-Length are in hand.
         var buf: Array[Int] = Array.new
+        var need_total: Int = -1
         var reading = true
         while reading
           match s.read(&var buf)
@@ -102,7 +146,12 @@ class Http
               if n == 0
                 reading = false
               else
-                0
+                if need_total < 0
+                  need_total = http_expected_total(&buf)
+                end
+                if need_total >= 0 && (buf.size() as Int) >= need_total
+                  reading = false
+                end
               end
             Err(_) -> reading = false
           end
