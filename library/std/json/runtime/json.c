@@ -847,6 +847,17 @@ void *ruxen_json_array_len(void *value) {
     return option_some(items ? (int64_t)items->len : 0);
 }
 
+/* `Json.array_get(value, index) -> Option[Json]`. The element at `index`
+ * of a JSON array (a borrowed handle into the parent's node, like
+ * `object_get`). None for a non-array, a null payload, or an
+ * out-of-range index. */
+void *ruxen_json_array_get(void *value, int64_t index) {
+    if (!ruxen_json_is_array(value)) return option_none();
+    RuxenVec *items = (RuxenVec *)json_payload(value);
+    if (!items || index < 0 || index >= (int64_t)items->len) return option_none();
+    return option_some(items->data[index]);
+}
+
 void *ruxen_json_object_len(void *value) {
     if (!ruxen_json_is_object(value)) return option_none();
     RuxenHash *obj = (RuxenHash *)json_payload(value);

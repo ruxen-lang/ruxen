@@ -114,6 +114,13 @@ once 1.0.0 ships.
   down ~33%, throughput +1-4% (the loopback bench is otherwise machine-bound).
 
 ### Added
+- **`JSON.array_get(value, index) -> Option[Json]`.** Element access for JSON
+  arrays (a borrowed handle into the parent node, like `object_get`); `None` for
+  a non-array, null payload, or out-of-range index. Fills the gap that made it
+  impossible to iterate a decoded array (`array_len` existed but nothing read the
+  elements). Pinned by release-e2e case `950`; exercised end to end by the
+  data-apps demo (`quiver/examples/data_app` renders a list from a fetched JSON
+  array).
 - **`std/http`: a minimal blocking HTTP/1.1 client.** `Http.get(host, port,
   path)` opens a `TcpStream`, sends a GET (`Connection: close`), reads the full
   response, and returns an `HttpResponse` (`status` / `body` / `ok?`); decode the
