@@ -72,6 +72,9 @@ pub fn binop_prec(op: BinOp) -> u8 {
         BinOp::Shl | BinOp::Shr => 17,
         BinOp::Add | BinOp::Sub => 19,
         BinOp::Mul | BinOp::Div | BinOp::Mod => 21,
+        // Exponentiation binds tighter than `* / %` and is right-associative;
+        // mirrors `infix_binding_power`'s `StarStar => (26, 25)`.
+        BinOp::Pow => 26,
     }
 }
 
@@ -86,12 +89,19 @@ pub enum Side {
 
 /// Does `child`, sitting on `side` of a parent operator whose precedence is
 /// `parent_prec`, need grouping parentheses to re-parse identically?
-pub fn needs_parens(child: &Expr, parent_prec: u8, side: Side) -> bool {
+///
+/// `right_assoc` inverts the equal-precedence rule: a left-associative parent
+/// (`+ - * /`, the default) wraps its RIGHT child at equal precedence; a
+/// right-associative parent (`**`) wraps its LEFT child instead, so
+/// `(a ** b) ** c` keeps its parens while `a ** b ** c` does not.
+pub fn needs_parens(child: &Expr, parent_prec: u8, side: Side, right_assoc: bool) -> bool {
     match expr_prec(child) {
         None => false,
-        Some(cp) => match side {
-            Side::Left => cp < parent_prec,
-            Side::Right => cp <= parent_prec,
+        Some(cp) => match (side, right_assoc) {
+            (Side::Left, false) => cp < parent_prec,
+            (Side::Right, false) => cp <= parent_prec,
+            (Side::Left, true) => cp <= parent_prec,
+            (Side::Right, true) => cp < parent_prec,
         },
     }
 }

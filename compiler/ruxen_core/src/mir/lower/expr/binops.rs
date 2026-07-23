@@ -104,6 +104,86 @@ impl<'a> Lowerer<'a> {
         (new_l, new_r)
     }
 
+    /// Coerce an operand local to `f64` for `ruxen_float_pow`. A float-typed
+    /// local passes through; an int local is routed through a target-typed
+    /// `Assign` to `Ty::Float`, invoking codegen's signedness-aware int→float
+    /// conversion (the same Q33 path `coerce_compare_operands` uses).
+    fn coerce_local_to_float(&mut self, local: Option<LocalId>) -> Option<LocalId> {
+        let Some(l) = local else {
+            return local;
+        };
+        let ty = self.fn_ref().locals.get(l as usize).map(|x| x.ty.clone());
+        if matches!(ty, Some(Ty::Float) | Some(Ty::Float32) | Some(Ty::Float64)) {
+            return Some(l);
+        }
+        let d = self.new_temp(Ty::Float);
+        self.emit(MirInst::Assign {
+            dest: d,
+            value: MirValue::Use(l),
+        });
+        Some(d)
+    }
+
+    /// Short-circuit lowering for `&&` / `||`. Builds a branch CFG (mirroring
+    /// the `if` lowering in `control.rs`) so the RHS is evaluated ONLY on the
+    /// path where the LHS did not already decide the result: `a && b` skips `b`
+    /// when `a` is false; `a || b` skips `b` when `a` is true. Without this the
+    /// eager `MirInst::BinOp` path evaluates both operands, so
+    /// `ptr != nil && ptr.field` would touch `ptr.field` even when `ptr` is nil.
+    fn lower_short_circuit(
+        &mut self,
+        op: BinOp,
+        left: &HirExpr,
+        right: &HirExpr,
+    ) -> Result<LocalId, String> {
+        let lhs_local = self.lower_expr(left)?;
+        let lhs_val = local_to_value(lhs_local);
+
+        let result = self.new_temp(Ty::Bool);
+        let rhs_block = self.new_block();
+        let short_block = self.new_block();
+        let merge_block = self.new_block();
+
+        // `&&`: LHS true → evaluate RHS, LHS false → short to `false`.
+        // `||`: LHS true → short to `true`, LHS false → evaluate RHS.
+        let (then_block, else_block) = match op {
+            BinOp::And => (rhs_block, short_block),
+            BinOp::Or => (short_block, rhs_block),
+            _ => unreachable!("lower_short_circuit only handles And/Or"),
+        };
+        self.set_terminator(Terminator::Branch {
+            cond: lhs_val,
+            then_block,
+            else_block,
+        });
+
+        // Short-circuit block: the LHS already fixed the result
+        // (`false` for `&&`, `true` for `||`).
+        self.current_block = short_block;
+        self.emit(MirInst::Assign {
+            dest: result,
+            value: MirValue::Literal(Literal::Bool(matches!(op, BinOp::Or))),
+        });
+        self.set_terminator(Terminator::Goto(merge_block));
+
+        // RHS block: the result is the (Bool) value of the right operand,
+        // evaluated here so it only runs on this path. Guard against a diverging
+        // RHS (e.g. `a || panic!(…)`) that already set its own terminator: only
+        // assign the result and wire the Goto when the block is still open.
+        self.current_block = rhs_block;
+        let rhs_local = self.lower_expr(right)?;
+        if matches!(self.get_terminator(), Terminator::Unreachable) {
+            self.emit(MirInst::Assign {
+                dest: result,
+                value: local_to_value(rhs_local),
+            });
+            self.set_terminator(Terminator::Goto(merge_block));
+        }
+
+        self.current_block = merge_block;
+        Ok(result)
+    }
+
     pub(super) fn lower_binops(&mut self, expr: &HirExpr) -> Result<Option<LocalId>, String> {
         match &expr.kind {
             // ── Binary operations ───────────────────────────────────
@@ -197,10 +277,48 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
+                // ── Short-circuit `&&` / `||` ──
+                // These MUST NOT evaluate the RHS once the LHS decides the
+                // result (`ptr != nil && ptr.field`, `x || default()`). The
+                // eager `MirInst::BinOp` path below lowers BOTH operands first,
+                // so intercept here and build a branch CFG before either operand
+                // is lowered, so only the taken side evaluates its operand.
+                if matches!(op, BinOp::And | BinOp::Or) {
+                    return Ok(Some(self.lower_short_circuit(*op, left, right)?));
+                }
+
                 let lhs_local = self.lower_expr(left)?;
                 let rhs_local = self.lower_expr(right)?;
                 let lhs_val = local_to_value(lhs_local);
                 let rhs_val = local_to_value(rhs_local);
+
+                // ── Exponentiation `a ** b` (power operator) ──
+                // There is no machine `pow` instruction, so route to a runtime
+                // call. `Int ** Int` → `ruxen_int_pow(i64,i64)->i64`; any float
+                // operand → `ruxen_float_pow(f64,f64)->f64` with the int side
+                // coerced to `f64` first (target-typed `Assign`, the Q33 path).
+                // typeck (`infer_binop`) guarantees `expr.ty == Ty::Float` here
+                // whenever either operand is float.
+                if matches!(op, BinOp::Pow) {
+                    if matches!(expr.ty, Ty::Float | Ty::Float32 | Ty::Float64) {
+                        let l = self.coerce_local_to_float(lhs_local);
+                        let r = self.coerce_local_to_float(rhs_local);
+                        let dest = self.new_temp(Ty::Float);
+                        self.emit(MirInst::Call {
+                            dest: Some(dest),
+                            callee: "ruxen_float_pow".to_string(),
+                            args: vec![local_to_value(l), local_to_value(r)],
+                        });
+                        return Ok(Some(dest));
+                    }
+                    let dest = self.new_temp(expr.ty.clone());
+                    self.emit(MirInst::Call {
+                        dest: Some(dest),
+                        callee: "ruxen_int_pow".to_string(),
+                        args: vec![lhs_val, rhs_val],
+                    });
+                    return Ok(Some(dest));
+                }
 
                 // ── Phase 2 stdlib batch 2 (#02): String + String ──
                 // The default `MirInst::BinOp { op: Add, ... }` would

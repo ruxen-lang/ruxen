@@ -603,8 +603,65 @@ impl Parser {
 
         match self.current_kind() {
             TokenKind::Let | TokenKind::Var => Statement::Let(self.parse_let_binding()),
-            _ => Statement::Expression(self.parse_expression()),
+            _ => {
+                let expr = self.parse_expression();
+                Statement::Expression(self.apply_statement_modifier(expr))
+            }
         }
+    }
+
+    /// Ruby trailing statement modifiers: `EXPR if C` / `EXPR unless C` /
+    /// `EXPR while C` / `EXPR until C`. Each desugars to the matching block
+    /// form wrapping the single statement. `if`/`while` etc. are not infix
+    /// operators, so `parse_expression` already stopped before the keyword;
+    /// here we consume it (if present) and wrap. No modifier keyword → the
+    /// expression is returned unchanged.
+    fn apply_statement_modifier(&mut self, expr: Expr) -> Expr {
+        if !self.at_statement_modifier() {
+            return expr;
+        }
+        let start = expr.span.clone();
+        let modifier = self.current_kind().clone();
+        self.advance(); // consume the modifier keyword
+        self.skip_newlines();
+        let condition = self.parse_expression();
+        let span = self.span_from(&start);
+        let body = Block {
+            statements: vec![Statement::Expression(expr)],
+            span: span.clone(),
+        };
+        let kind = match modifier {
+            TokenKind::If => ExprKind::If(IfExpr {
+                condition: Box::new(condition),
+                then_body: body,
+                elsif_clauses: Vec::new(),
+                else_body: None,
+                span: span.clone(),
+            }),
+            TokenKind::Unless => ExprKind::If(IfExpr {
+                condition: Box::new(crate::parser::expr::control_flow::negate_condition(
+                    condition,
+                )),
+                then_body: body,
+                elsif_clauses: Vec::new(),
+                else_body: None,
+                span: span.clone(),
+            }),
+            TokenKind::While => ExprKind::While(WhileExpr {
+                condition: Box::new(condition),
+                body,
+                span: span.clone(),
+            }),
+            TokenKind::Until => ExprKind::While(WhileExpr {
+                condition: Box::new(crate::parser::expr::control_flow::negate_condition(
+                    condition,
+                )),
+                body,
+                span: span.clone(),
+            }),
+            _ => unreachable!("guarded by the matches! above"),
+        };
+        Expr { kind, span }
     }
 
     fn parse_let_binding(&mut self) -> LetBinding {

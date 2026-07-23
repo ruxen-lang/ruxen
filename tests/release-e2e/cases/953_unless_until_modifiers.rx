@@ -1,0 +1,27 @@
+# Pins `unless`/`until` control-flow keywords (block form) and the trailing
+# statement modifiers `if`/`unless`/`while`/`until`, including `return … unless`.
+def classify(n: Int) -> String
+  return "zero or negative" unless n > 0
+  return "big" if n > 100
+  "small"
+end
+
+def main
+  puts classify(-3)
+  puts classify(5)
+  puts classify(200)
+
+  var i = 0
+  until i >= 3
+    puts "tick #{i}"
+    i = i + 1
+  end
+
+  var j = 0
+  j = j + 1 while j < 2
+  puts "j=#{j}"
+
+  unless false
+    puts "unless-block ran"
+  end
+end

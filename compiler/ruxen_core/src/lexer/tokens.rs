@@ -477,7 +477,13 @@ impl<'a> Lexer<'a> {
                 }
             }
             '*' => {
-                if !self.is_at_end() && self.current() == '=' {
+                if !self.is_at_end() && self.current() == '*' {
+                    // `**` is exponentiation. (`**=` power-assign is not yet
+                    // supported; it lexes as `**` then `=` and errors in the
+                    // parser, which is acceptable for now.)
+                    self.advance();
+                    self.emit(TokenKind::StarStar, start_byte, start_line, start_col);
+                } else if !self.is_at_end() && self.current() == '=' {
                     self.advance();
                     self.emit(TokenKind::StarEq, start_byte, start_line, start_col);
                 } else {
@@ -554,7 +560,12 @@ impl<'a> Lexer<'a> {
             '&' => {
                 if !self.is_at_end() && self.current() == '&' {
                     self.advance();
-                    self.emit(TokenKind::AmpAmp, start_byte, start_line, start_col);
+                    if !self.is_at_end() && self.current() == '=' {
+                        self.advance();
+                        self.emit(TokenKind::AmpAmpEq, start_byte, start_line, start_col);
+                    } else {
+                        self.emit(TokenKind::AmpAmp, start_byte, start_line, start_col);
+                    }
                 } else if !self.is_at_end() && self.current() == '.' {
                     // `&.` — Ruby safe navigation (`h&.hello&.now`).
                     self.advance();
@@ -581,7 +592,12 @@ impl<'a> Lexer<'a> {
             '|' => {
                 if !self.is_at_end() && self.current() == '|' {
                     self.advance();
-                    self.emit(TokenKind::PipePipe, start_byte, start_line, start_col);
+                    if !self.is_at_end() && self.current() == '=' {
+                        self.advance();
+                        self.emit(TokenKind::PipePipeEq, start_byte, start_line, start_col);
+                    } else {
+                        self.emit(TokenKind::PipePipe, start_byte, start_line, start_col);
+                    }
                 } else {
                     self.emit(TokenKind::Pipe, start_byte, start_line, start_col);
                 }

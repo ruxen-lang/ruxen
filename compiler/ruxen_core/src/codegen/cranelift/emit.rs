@@ -717,6 +717,11 @@ pub fn emit_binop(
             BinOp::MatchOp => unreachable!(
                 "BinOp::MatchOp should have been desugared to a method call at MIR-lower"
             ),
+            // `**` is lowered to a `ruxen_float_pow` runtime Call in
+            // `mir/lower/expr/binops.rs`, never a `MirInst::BinOp`.
+            BinOp::Pow => {
+                unreachable!("BinOp::Pow should have been lowered to a runtime call at MIR-lower")
+            }
         }
     } else {
         match op {
@@ -745,6 +750,11 @@ pub fn emit_binop(
             BinOp::MatchOp => unreachable!(
                 "BinOp::MatchOp should have been desugared to a method call at MIR-lower"
             ),
+            // `**` is lowered to a `ruxen_int_pow` runtime Call in
+            // `mir/lower/expr/binops.rs`, never a `MirInst::BinOp`.
+            BinOp::Pow => {
+                unreachable!("BinOp::Pow should have been lowered to a runtime call at MIR-lower")
+            }
         }
     }
 }

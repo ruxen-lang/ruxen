@@ -186,13 +186,15 @@ pub enum TokenKind {
     Const,
     When,
     Unless,
+    Until,
 
     // ── Operators: Arithmetic ──
-    Plus,    // +
-    Minus,   // -
-    Star,    // *
-    Slash,   // /
-    Percent, // %
+    Plus,     // +
+    Minus,    // -
+    Star,     // *
+    StarStar, // ** power operator (exponentiation), right-associative
+    Slash,    // /
+    Percent,  // %
 
     // ── Operators: Comparison ──
     EqEq,  // ==
@@ -218,12 +220,14 @@ pub enum TokenKind {
     Shr,   // >>
 
     // ── Operators: Assignment ──
-    Eq,        // =
-    PlusEq,    // +=
-    MinusEq,   // -=
-    StarEq,    // *=
-    SlashEq,   // /=
-    PercentEq, // %=
+    Eq,         // =
+    PlusEq,     // +=
+    MinusEq,    // -=
+    StarEq,     // *=
+    SlashEq,    // /=
+    PercentEq,  // %=
+    PipePipeEq, // ||= conditional-assign; desugars to `a || (a = b)`
+    AmpAmpEq,   // &&= conditional-assign; desugars to `a && (a = b)`
 
     // ── Operators: Range (ruby-naming.spec.md §3.10b) ──
     // Ruby semantics: `..` is INCLUSIVE, `...` is EXCLUSIVE. There is no
@@ -297,6 +301,7 @@ impl TokenKind {
             TokenKind::Plus
                 | TokenKind::Minus
                 | TokenKind::Star
+                | TokenKind::StarStar
                 | TokenKind::Slash
                 | TokenKind::Percent
                 | TokenKind::Eq
@@ -305,6 +310,8 @@ impl TokenKind {
                 | TokenKind::StarEq
                 | TokenKind::SlashEq
                 | TokenKind::PercentEq
+                | TokenKind::PipePipeEq
+                | TokenKind::AmpAmpEq
                 | TokenKind::EqEq
                 | TokenKind::NotEq
                 | TokenKind::Lt
@@ -406,6 +413,7 @@ pub const KEYWORDS: &[&str] = &[
     "const",
     "when",
     "unless",
+    "until",
 ];
 
 /// Look up a keyword from an identifier string.
@@ -500,6 +508,7 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
         "const" => Some(TokenKind::Const),
         "when" => Some(TokenKind::When),
         "unless" => Some(TokenKind::Unless),
+        "until" => Some(TokenKind::Until),
 
         _ => None,
     }

@@ -493,6 +493,10 @@ pub enum BinOp {
     Mul,
     Div,
     Mod,
+    /// Exponentiation `a ** b` (Ruby power operator, right-associative).
+    /// Lowers to a runtime call (`ruxen_int_pow` / `ruxen_float_pow`), not a
+    /// machine instruction and not a `def **` method; see `mir/lower/expr/binops.rs`.
+    Pow,
     Eq,
     NotEq,
     Lt,
@@ -533,7 +537,10 @@ impl BinOp {
             BinOp::BitXor => "^",
             BinOp::Shl => "<<",
             BinOp::Shr => ">>",
-            BinOp::Eq
+            // `Pow` is machine-primitive-only (routed to a runtime call in
+            // MIR), NOT a `def **` method for now, so it desugars to no method.
+            BinOp::Pow
+            | BinOp::Eq
             | BinOp::NotEq
             | BinOp::Lt
             | BinOp::Gt

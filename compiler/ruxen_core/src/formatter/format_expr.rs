@@ -12,9 +12,15 @@ use super::prec::{binop_prec, needs_parens, Side};
 /// grouping parentheses iff dropping them would re-associate or change
 /// precedence on re-parse (Q34). `parent_prec` is the parent's tier
 /// (`super::prec`); `side` selects the left/right associativity rule.
-fn format_operand(child: &Expr, parent_prec: u8, side: Side, comments: &CommentMap) -> Doc {
+fn format_operand(
+    child: &Expr,
+    parent_prec: u8,
+    side: Side,
+    right_assoc: bool,
+    comments: &CommentMap,
+) -> Doc {
     let inner = format_expr(child, comments);
-    if needs_parens(child, parent_prec, side) {
+    if needs_parens(child, parent_prec, side, right_assoc) {
         concat(vec![text("("), inner, text(")")])
     } else {
         inner
@@ -191,11 +197,11 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
             // range keeps its grouping on re-parse.
             let mut parts = Vec::new();
             if let Some(s) = start {
-                parts.push(format_operand(s, 9, Side::Left, comments));
+                parts.push(format_operand(s, 9, Side::Left, false, comments));
             }
             parts.push(text(op));
             if let Some(e) = end {
-                parts.push(format_operand(e, 9, Side::Right, comments));
+                parts.push(format_operand(e, 9, Side::Right, false, comments));
             }
             concat(parts)
         }
@@ -358,7 +364,7 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         // when it is a looser operator so `(a + b) as Int` does not collapse
         // to `a + b as Int` = `a + (b as Int)` (Q34).
         ExprKind::Cast { expr, target_type } => concat(vec![
-            format_operand(expr, 23, Side::Left, comments),
+            format_operand(expr, 23, Side::Left, false, comments),
             text(" as "),
             format_type_expr(target_type, comments),
         ]),
@@ -667,6 +673,7 @@ fn bin_op_str(op: BinOp) -> &'static str {
         BinOp::Add => "+",
         BinOp::Sub => "-",
         BinOp::Mul => "*",
+        BinOp::Pow => "**",
         BinOp::Div => "/",
         BinOp::Mod => "%",
         BinOp::Eq => "==",
@@ -703,12 +710,13 @@ fn format_binary_op(left: &Expr, op: BinOp, right: &Expr, comments: &CommentMap)
     // to the SAME tree — the parser discards grouping parens, so the
     // formatter must re-derive them from tree shape (Q34).
     let p = binop_prec(op);
+    let right_assoc = matches!(op, BinOp::Pow);
     group(concat(vec![
-        format_operand(left, p, Side::Left, comments),
+        format_operand(left, p, Side::Left, right_assoc, comments),
         text(" "),
         text(bin_op_str(op)),
         line(),
-        format_operand(right, p, Side::Right, comments),
+        format_operand(right, p, Side::Right, right_assoc, comments),
     ]))
 }
 
@@ -724,7 +732,7 @@ fn format_unary_op(op: UnaryOp, operand: &Expr, comments: &CommentMap) -> Doc {
     // this, `-(a + b)` would reformat to `-a + b` = `(-a) + b` (Q34).
     concat(vec![
         text(op_str),
-        format_operand(operand, 25, Side::Right, comments),
+        format_operand(operand, 25, Side::Right, false, comments),
     ])
 }
 

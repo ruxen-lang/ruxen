@@ -114,6 +114,26 @@ once 1.0.0 ships.
   down ~33%, throughput +1-4% (the loopback bench is otherwise machine-bound).
 
 ### Added
+- **`||=` / `&&=` conditional assignment.** New `PipePipeEq` / `AmpAmpEq` lexer
+  tokens (assignment precedence). `a ||= b` desugars to `a || (a = b)` and
+  `a &&= b` to `a && (a = b)`, so the assign runs only when the value actually
+  changes (relies on the short-circuit fix above). Bool operands, since Ruxen is
+  strict-Bool; the nilable memoization idiom (`@x ||= compute`) will land with a
+  future `??` nil-coalescing operator. Same parse-time-desugar `ruxen fmt`
+  caveat as `unless`/`until`. Pin `954`; Ruby-parity `language.md` §2 / P0.4.
+- **`unless` / `until` control flow + trailing statement modifiers.** Block
+  `unless COND … [else …] end` (desugars to `if !COND`) and `until COND … end`
+  (desugars to `while !COND`), plus the Ruby trailing modifiers `EXPR if COND` /
+  `EXPR unless COND` / `EXPR while COND` / `EXPR until COND`. A new `Until` lexer
+  keyword was added (`unless`/`when` already had tokens). Jump keywords stop
+  swallowing a trailing modifier as their value, so `return … unless c` is a
+  conditional return, not `return (unless c … end)` (via `at_statement_modifier`).
+  All four desugar in the parser to existing `if`/`while` HIR, so resolve /
+  typeck / MIR / codegen are unchanged. Pin `953`; Ruby-parity `language.md` §6 /
+  P0.1 and P0.2. Known follow-up: because the desugar happens at parse time, `ruxen
+  fmt` currently rewrites `unless c` to `if !c` and a modifier to its block form;
+  surface-preserving formatting needs dedicated AST nodes (tracked as a
+  follow-up).
 - **`std/base64`: Base64 encode/decode (Ruby `Base64` module parity).**
   `Base64.strict_encode64` / `strict_decode64` / `urlsafe_encode64` /
   `urlsafe_decode64` / `encode64` (MIME newlines) / `decode64`, over a small C
@@ -181,6 +201,26 @@ once 1.0.0 ships.
   Apple M4 (loopback, co-located load generator; parity with Go net/http).
 
 ### Fixed
+- **`&&` / `||` now short-circuit (were evaluating both operands eagerly).**
+  The MIR lowering emitted an eager `MirInst::BinOp` for logical `&&`/`||`, so
+  the right operand always ran: `true || f()` still called `f()`, and, worse,
+  `ptr != nil && ptr.field` evaluated `ptr.field` even when `ptr` was nil. User
+  `&&`/`||` now lower to a branch CFG (mirroring `if`): the RHS is evaluated only
+  on the path where the LHS did not already decide the result. Struct-derive
+  `PartialEq`/`Ord` combine their field comparisons via directly-emitted
+  `MirInst::BinOp { And }` (already-computed Bools), which is unaffected. Pin
+  `955`. Surfaced while implementing `||=`.
+- **`**` power operator (was a silent miscompile).** `2 ** 8` compiled to `16`
+  (the lexer had no `**` token, so `**` lexed as `*` then a prefix deref `*`,
+  making `2 ** 8` parse as `2 * (*8)`). Added a `StarStar` lexer token and a
+  `BinOp::Pow` AST/MIR node. `**` is right-associative and binds tighter than
+  unary minus and `* / %` (`2 ** 3 ** 2 == 512`, `-2 ** 2 == -4`,
+  `2 * 3 ** 2 == 18`), matching Ruby. `Int ** Int → Int` lowers to a new
+  `ruxen_int_pow` runtime helper (exponentiation by squaring; a negative
+  exponent truncates toward zero as Ruxen has no Rational); any float operand
+  makes the result `Float` via `ruxen_float_pow` (`__builtin_pow`, with the int
+  operand widened to `f64`). The formatter learned the operator's symbol and
+  right-associative re-parenthesisation. Pin `952`.
 - **Q54: wasm string interpolation no longer traps on a fmt ABI mismatch.** On
   the `wasm32-unknown-unknown` target the fmt runtime helpers
   `ruxen_fmt_formatter_write_str`/`_write_char` returned a bare `int64_t` tag,

@@ -1749,4 +1749,135 @@ end";
             "`()` value should be rejected with a `nil` fix-it; got: {diags:?}"
         );
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  unless / until + statement modifiers (parser desugar to if / while)
+    // ═══════════════════════════════════════════════════════════════════
+
+    fn is_negated(cond: &Expr) -> bool {
+        matches!(
+            &cond.kind,
+            ExprKind::UnaryOp {
+                op: UnaryOp::Not,
+                ..
+            }
+        )
+    }
+
+    #[test]
+    fn unless_block_desugars_to_if_with_negated_condition() {
+        match parse_expr("unless x > 0\n  puts 1\nend").kind {
+            ExprKind::If(if_expr) => {
+                assert!(is_negated(&if_expr.condition));
+                assert!(if_expr.elsif_clauses.is_empty());
+                assert!(if_expr.else_body.is_none());
+            }
+            other => panic!("expected If, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn until_block_desugars_to_while_with_negated_condition() {
+        match parse_expr("until x > 0\n  puts 1\nend").kind {
+            ExprKind::While(while_expr) => assert!(is_negated(&while_expr.condition)),
+            other => panic!("expected While, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn if_modifier_wraps_statement_in_block_if() {
+        match parse_stmt("puts 1 if x > 0") {
+            Statement::Expression(Expr {
+                kind: ExprKind::If(if_expr),
+                ..
+            }) => {
+                assert!(!is_negated(&if_expr.condition));
+                assert_eq!(if_expr.then_body.statements.len(), 1);
+            }
+            other => panic!("expected modifier If, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unless_modifier_negates_condition() {
+        match parse_stmt("puts 1 unless x > 0") {
+            Statement::Expression(Expr {
+                kind: ExprKind::If(if_expr),
+                ..
+            }) => assert!(is_negated(&if_expr.condition)),
+            other => panic!("expected modifier If, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn while_and_until_modifiers_produce_while() {
+        assert!(matches!(
+            parse_stmt("puts 1 while x"),
+            Statement::Expression(Expr {
+                kind: ExprKind::While(_),
+                ..
+            })
+        ));
+        match parse_stmt("puts 1 until x") {
+            Statement::Expression(Expr {
+                kind: ExprKind::While(w),
+                ..
+            }) => assert!(is_negated(&w.condition)),
+            other => panic!("expected While, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn return_unless_is_a_conditional_return_not_an_unless_value() {
+        // `return unless c` is a bare `return` wrapped by an `unless` modifier,
+        // NOT `return (unless c … end)`.
+        match parse_stmt("return unless x > 0") {
+            Statement::Expression(Expr {
+                kind: ExprKind::If(if_expr),
+                ..
+            }) => {
+                assert!(is_negated(&if_expr.condition));
+                match &if_expr.then_body.statements[0] {
+                    Statement::Expression(Expr {
+                        kind: ExprKind::Return(v),
+                        ..
+                    }) => assert!(v.is_none(), "return should carry no value"),
+                    other => panic!("expected bare Return in the modifier body, got {other:?}"),
+                }
+            }
+            other => panic!("expected modifier If wrapping a Return, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn or_assign_desugars_to_or_of_inner_assign() {
+        // `a ||= b` → `a || (a = b)`
+        match parse_expr("a ||= b").kind {
+            ExprKind::BinaryOp {
+                op: BinOp::Or,
+                right,
+                ..
+            } => assert!(
+                matches!(right.kind, ExprKind::Assign { .. }),
+                "||= RHS should be an assignment"
+            ),
+            other => panic!("expected `a || (a = b)`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn and_assign_desugars_to_and_of_inner_assign() {
+        // `a &&= b` → `a && (a = b)`
+        match parse_expr("a &&= b").kind {
+            ExprKind::BinaryOp {
+                op: BinOp::And,
+                right,
+                ..
+            } => assert!(
+                matches!(right.kind, ExprKind::Assign { .. }),
+                "&&= RHS should be an assignment"
+            ),
+            other => panic!("expected `a && (a = b)`, got {other:?}"),
+        }
+    }
 }

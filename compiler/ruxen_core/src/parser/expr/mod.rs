@@ -19,7 +19,7 @@ use crate::parser::Parser;
 
 mod atoms;
 mod calls;
-mod control_flow;
+pub(in crate::parser) mod control_flow;
 mod match_expr;
 mod operators;
 
@@ -34,7 +34,9 @@ fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
         | TokenKind::MinusEq
         | TokenKind::StarEq
         | TokenKind::SlashEq
-        | TokenKind::PercentEq => Some((1, 2)),
+        | TokenKind::PercentEq
+        | TokenKind::PipePipeEq
+        | TokenKind::AmpAmpEq => Some((1, 2)),
 
         // Logical OR: left-associative (3, 4)
         TokenKind::PipePipe => Some((3, 4)),
@@ -72,6 +74,12 @@ fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
 
         // Mul/Div/Mod (21, 22)
         TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Some((21, 22)),
+
+        // Exponentiation binds TIGHTER than `* / %` and unary minus, and is
+        // RIGHT-associative (`l_bp > r_bp`): `2 ** 3 ** 2 == 512`, and
+        // `-2 ** 2 == -4` (the `**` is consumed inside the prefix operand,
+        // whose min_bp is 25). Postfix (`.m`/`[i]`, bp 27) still binds tighter.
+        TokenKind::StarStar => Some((26, 25)),
 
         // Cast (23, 24)
         TokenKind::As => Some((23, 24)),
@@ -239,6 +247,18 @@ impl Parser {
         matches!(self.current_kind(), TokenKind::Let | TokenKind::Var)
     }
 
+    /// True when the current token is a trailing statement-modifier keyword
+    /// (`if` / `unless` / `while` / `until`). Used both to trigger the modifier
+    /// desugar in `parse_statement` and to stop a jump keyword (`return` /
+    /// `break` / `yield`) from swallowing a trailing modifier as its value, so
+    /// `return if c` is a conditional return, not `return (if c … end)`.
+    pub(in crate::parser) fn at_statement_modifier(&self) -> bool {
+        matches!(
+            self.current_kind(),
+            TokenKind::If | TokenKind::Unless | TokenKind::While | TokenKind::Until
+        )
+    }
+
     /// Check if current token could start an expression.
     pub(crate) fn is_expression_start(&self) -> bool {
         matches!(
@@ -289,6 +309,7 @@ fn token_to_binop(kind: &TokenKind) -> BinOp {
         TokenKind::Plus => BinOp::Add,
         TokenKind::Minus => BinOp::Sub,
         TokenKind::Star => BinOp::Mul,
+        TokenKind::StarStar => BinOp::Pow,
         TokenKind::Slash => BinOp::Div,
         TokenKind::Percent => BinOp::Mod,
         TokenKind::EqEq => BinOp::Eq,

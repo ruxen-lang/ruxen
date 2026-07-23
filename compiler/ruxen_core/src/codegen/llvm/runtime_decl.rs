@@ -75,6 +75,11 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("ruxen_int_to_f", f64_ty, [i64_ty]);
     decl!("ruxen_float_to_i", i64_ty, [f64_ty]);
 
+    // ── Exponentiation lowering (`a ** b`) ──────────────────────────
+    // Emitted by `mir/lower/expr/binops.rs` for the power operator.
+    decl!("ruxen_int_pow", i64_ty, [i64_ty, i64_ty]);
+    decl!("ruxen_float_pow", f64_ty, [f64_ty, f64_ty]);
+
     // ── Formatter synthesis surface (Debug/Display derive) ──────────
     decl!("ruxen_float_to_string_prec", ptr_ty, [f64_ty, i64_ty]);
     decl!("ruxen_string_truncate_chars", ptr_ty, [ptr_ty, i64_ty]);

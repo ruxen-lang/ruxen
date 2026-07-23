@@ -99,8 +99,8 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | Destructuring `let (a, b) = t` | DONE | probe PASS; case `123` | Ruxen's substitute for LHS destructuring. |
 | Splat assign `a, *b = [1,2,3]` | MISSING | probe: `found Comma` | |
 | Nested destructure `(a,(b,c)) = ...` | PARTIAL | tuple patterns only | Works for tuples; no array-splat form. |
-| `||=` | MISSING | probe: `found Eq` | High-value. |
-| `&&=` | MISSING | no token | |
+| `||=` | DONE | `PipePipeEq` token; case `954` | Desugars to `a \|\| (a = b)`. Bool operands (Ruxen is strict-Bool); nilable memoization awaits a `??` operator. |
+| `&&=` | DONE | `AmpAmpEq` token; case `954` | Desugars to `a && (a = b)`. |
 | `+= -= *= /= %=` | DONE | `CompoundAssign`; probe PASS | |
 | `<<= >>= &= |= ^= **=` | MISSING | lexer has only `PlusEq..PercentEq` | No tokens for bitwise/shift compound-assign. |
 
@@ -111,11 +111,11 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | Ruby feature | Status | Ruxen location or gap | Note |
 |---|---|---|---|
 | Arithmetic `+ - * / %` | DONE | `BinOp`; case `02` | |
-| Power `**` | MISSING | **silent misparse** | `2 ** 8` compiles to `2 * (*8)` = **16**, not 256. No `**` token; parses as `*` then deref-`*`. Correctness footgun. |
+| Power `**` | DONE | `StarStar` token; `BinOp::Pow`; case `952` | Right-associative, binds tighter than unary minus (`-2 ** 2 == -4`). `Int ** Int → Int` (`ruxen_int_pow`), any float operand → `Float` (`ruxen_float_pow`). Fixed the former silent misparse (`2 ** 8` was `16`). |
 | Comparison `< > <= >=` | DONE | cases `126/209` | Auto-`Ord` on structs/enums. |
 | Equality `== !=` | DONE | auto-`PartialEq`; case `206` | |
 | Spaceship `<=>` | MISSING | probe: `found Gt` | No token. Blocks hand-written `Comparable`. |
-| Logical `&& || !` | DONE | `BinOp`/`UnaryOp` | |
+| Logical `&& \|\| !` | DONE | `BinOp`/`UnaryOp`; case `955` | Now **short-circuit** (branch-CFG lowering). Was eagerly evaluating both operands (a correctness bug: `ptr != nil && ptr.field` touched `ptr.field` when nil); fixed 2026-07-23. |
 | Keyword `and` / `or` / `not` | MISSING | probe: parsed as identifiers | Low-precedence keyword operators absent. |
 | Bitwise `& | ^ << >>` | DONE | `BinOp`; case `812` | |
 | Bitwise complement `~` | MISSING | probe: `E0006` on `~` | No token (only `~=`). |
@@ -183,13 +183,13 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | Ruby feature | Status | Ruxen location or gap | Note |
 |---|---|---|---|
 | `if/elsif/else` | DONE | case `07` | |
-| `if` modifier `X if c` | MISSING | probe: parses `if` as block-if to EOF | Very common Ruby idiom. High-value. |
-| `unless` statement | MISSING | probe: `found Unless` (reserved, unimplemented) | |
-| `unless` modifier | MISSING | probe | |
+| `if` modifier `X if c` | DONE | `parse_statement`; case `953` | Parser desugar to a block `if`. |
+| `unless` statement | DONE | `parse_unless_expr`; case `953` | Desugars to `if !cond` (no `elsif`, per Ruby). |
+| `unless` modifier | DONE | `parse_statement`; case `953` | `return … unless c` supported. |
 | `while` | DONE | case `08` | |
-| `while` modifier `X while c` | MISSING | probe | |
-| `until` statement | MISSING | no `until` token; probe: `undefined variable until` | |
-| `until` modifier | MISSING | probe | |
+| `while` modifier `X while c` | DONE | `parse_statement`; case `953` | Condition-first (not do-while). |
+| `until` statement | DONE | `Until` token + `parse_until_expr`; case `953` | Desugars to `while !cond`. |
+| `until` modifier | DONE | `parse_statement`; case `953` | |
 | `begin..end while` (do-while) | MISSING | probe: `found While` | |
 | `for x in ...` | DONE | cases `09/639`; probe PASS | |
 | `loop` | DONE | case `53/54` | `loop` + `end` (no `do`; `loop do` is a parse error). |
@@ -376,12 +376,12 @@ truly irreducible slice is excluded from both (listed last).
 
 #### P0 — cheap, ubiquitous, block the "reads like Ruby" promise
 
-1. **Statement modifiers** `X if c` / `X unless c` / `X while c` / `X until c`. Pervasive in idiomatic Ruby; today every one is a parse error. (§6)
-2. **`unless` and `until`** (statement + modifier). `until` has no token at all. (§6)
+1. ~~**Statement modifiers** `X if c` / `X unless c` / `X while c` / `X until c`.~~ **DONE** (parser desugar; `return … unless c` handled). Pin `953`. (§6)
+2. ~~**`unless` and `until`** (statement + modifier).~~ **DONE** (`Until` token added; block + modifier forms). Pin `953`. (§6)
 3. **Multiple assignment** `a, b = 1, 2` and swap `a, b = b, a`; then splat `a, *b = xs`. (§2)
-4. **`||=` and `&&=`.** (§2)
+4. ~~**`||=` and `&&=`.**~~ **DONE** (Bool conditional-assign; desugars to `a || (a = b)` / `a && (a = b)`). This also uncovered and fixed a **short-circuit bug**: `&&`/`||` were evaluating both operands eagerly. Pins `954`, `955`. (§2)
 5. **Ternary `c ? a : b`.** (§3)
-6. **`**` power operator.** Currently a **silent miscompile** (`2 ** 8 == 16`). Fix or reject at lex time; do not leave it parsing as `* deref`. (§3)
+6. ~~**`**` power operator.**~~ **DONE** (`StarStar` token + `BinOp::Pow`, right-associative, routed to `ruxen_int_pow`/`ruxen_float_pow`). Fixed the silent miscompile (`2 ** 8` was `16`, now `256`). Pin `952`. (§3)
 7. **`puts`/`print` accept any `to_s`-able value** (and multiple args). Removes the `"#{x}"` boilerplate tax on every print. (§12)
 
 #### P1 — high-frequency, need one new primitive each

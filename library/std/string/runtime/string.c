@@ -19,6 +19,40 @@ int64_t ruxen_float_to_i(double f) {
     return (int64_t)f;
 }
 
+/* ── Exponentiation (`a ** b`) ──────────────────────────────────────── */
+
+/* `Int ** Int`, exponentiation by squaring in 64-bit. Ruby returns a
+   Rational for a negative exponent; Ruxen has no Rational, so a negative
+   exponent yields the truncated integer result: exact for a base of
+   1 / -1, and 0 for any |base| > 1 (its reciprocal truncates to zero).
+   The squaring/multiply run in unsigned so overflow wraps modulo 2^64
+   (well-defined) rather than tripping signed-overflow UB, matching the
+   two's-complement wrap of the machine int arithmetic used elsewhere. */
+int64_t ruxen_int_pow(int64_t base, int64_t exp) {
+    if (exp < 0) {
+        if (base == 1) return 1;
+        if (base == -1) return (exp & 1) ? -1 : 1;
+        return 0;
+    }
+    uint64_t result = 1;
+    uint64_t b = (uint64_t)base;
+    uint64_t e = (uint64_t)exp;
+    while (e > 0) {
+        if (e & 1u) result *= b;
+        e >>= 1;
+        if (e > 0) b *= b;
+    }
+    return (int64_t)result;
+}
+
+/* `a ** b` when either operand is a Float, IEEE-754 `pow` via the compiler
+   builtin (avoids a `<math.h>` include, keeping the runtime include order
+   untouched; `libm` is linked into every Ruxen binary via std-core). Int
+   operands are widened to `double` at the MIR call site. */
+double ruxen_float_pow(double base, double exp) {
+    return __builtin_pow(base, exp);
+}
+
 /* ── To-String Conversions ─────────────────────────────────────────── */
 
 char *ruxen_int_to_string(int64_t n) {

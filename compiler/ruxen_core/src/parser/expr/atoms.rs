@@ -287,15 +287,17 @@ impl Parser {
 
             // Control flow expressions
             TokenKind::If => self.parse_if_expr(),
+            TokenKind::Unless => self.parse_unless_expr(),
             TokenKind::Match => self.parse_match_expr(),
             TokenKind::While => self.parse_while_expr(),
+            TokenKind::Until => self.parse_until_expr(),
             TokenKind::For => self.parse_for_expr(),
             TokenKind::Loop => self.parse_loop_expr(),
 
             // Return, break, continue
             TokenKind::Return => {
                 self.advance();
-                let value = if self.is_expression_start() {
+                let value = if self.is_expression_start() && !self.at_statement_modifier() {
                     Some(Box::new(self.parse_expression()))
                 } else {
                     None
@@ -308,7 +310,7 @@ impl Parser {
             }
             TokenKind::Break => {
                 self.advance();
-                let value = if self.is_expression_start() {
+                let value = if self.is_expression_start() && !self.at_statement_modifier() {
                     Some(Box::new(self.parse_expression()))
                 } else {
                     None
@@ -334,7 +336,7 @@ impl Parser {
                     self.parse_call_args()
                 } else {
                     let mut args = Vec::new();
-                    if self.is_expression_start() {
+                    if self.is_expression_start() && !self.at_statement_modifier() {
                         args.push(self.parse_expression());
                         while self.eat(TokenKind::Comma) {
                             self.skip_newlines();

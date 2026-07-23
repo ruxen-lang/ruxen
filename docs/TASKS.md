@@ -359,6 +359,33 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
 
 ### Language features
 
+- [x] **`&&`/`||` short-circuit + `||=`/`&&=` (DONE 2026-07-23).** Fixed a P0
+      correctness bug: logical `&&`/`||` lowered to an eager `MirInst::BinOp`, so
+      both operands always ran (`ptr != nil && ptr.field` touched `ptr.field`
+      when nil). User `&&`/`||` now lower to a branch CFG (`lower_short_circuit`,
+      mirroring `if`). On top of that, added `||=`/`&&=` (`PipePipeEq`/`AmpAmpEq`
+      tokens) desugaring to `a || (a = b)` / `a && (a = b)` (Bool; nilable
+      memoization awaits a `??` operator). Pins `955` (short-circuit), `954`
+      (`||=`/`&&=`); parity `language.md` §2 and §3 / P0.4.
+- [x] **`unless`/`until` + statement modifiers (DONE 2026-07-23).** Block
+      `unless … end` (→ `if !cond`) and `until … end` (→ `while !cond`), plus the
+      trailing modifiers `EXPR if/unless/while/until COND`. Added the `Until`
+      lexer keyword; jump keywords no longer swallow a trailing modifier as
+      their value (`return … unless c`). All desugar in the parser to `if`/
+      `while` HIR (resolve/typeck/MIR/codegen unchanged). Pin `953`; parity
+      `language.md` §6 / P0.1 and P0.2.
+  - [ ] **Follow-up: surface-preserving `ruxen fmt` for these.** The parse-time
+        desugar means `ruxen fmt` rewrites `unless c` → `if !c` and a modifier →
+        its block form. Preserving the authored surface needs dedicated AST
+        nodes (`Unless`/`Until` + a modifier flag) lowered at resolve time, with
+        formatter rendering. Mirrors the `bracketed`-field precedent (D8).
+- [x] **`**` power operator (DONE 2026-07-23).** Was a **silent miscompile**
+      (`2 ** 8 == 16`): no `**` token, so it lexed as `*` then prefix-deref `*`.
+      Added a `StarStar` lexer token + `BinOp::Pow`. Right-associative, binds
+      tighter than unary minus and `* / %` (`2 ** 3 ** 2 == 512`, `-2 ** 2 ==
+      -4`). `Int ** Int → Int` via `ruxen_int_pow`; any float operand → `Float`
+      via `ruxen_float_pow`. Formatter learned the symbol + right-assoc parens.
+      Pin `952`; Ruby-parity `language.md` §3 / P0.6.
 - [x] **String-literal coercion model — `String.from("literal")` removed
       everywhere we ship (DONE 2026-06-10, `feat/drop-elaboration`).** Verified
       model: `""` is an owned `String` (lowered via `ruxen_string_from`); at a

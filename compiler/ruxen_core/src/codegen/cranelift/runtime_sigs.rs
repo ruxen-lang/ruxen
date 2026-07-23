@@ -84,6 +84,13 @@ pub fn compiler_internal_signature(name: &str) -> Option<(Vec<Type>, Option<Type
         )),
         "ruxen_fmt_formatter_precision" => Some((vec![types::I64], Some(types::I64))),
 
+        // ── Exponentiation lowering (`a ** b`) ──────────────────────
+        // Emitted by `mir/lower/expr/binops.rs` for the power operator;
+        // no `.rx` block declares them. Int→int fast exponentiation,
+        // Float→libm `pow`.
+        "ruxen_int_pow" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_float_pow" => Some((vec![types::F64, types::F64], Some(types::F64))),
+
         // ── Equality / ordering / hashing lowering (`==`, `<=>`) ─────
         // `cranelift/emit` and `llvm/emit/instructions` emit these for
         // the `Compare` instruction on string/collection operands.

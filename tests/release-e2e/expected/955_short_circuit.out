@@ -1,0 +1,7 @@
+eval A
+a=true
+eval C
+b=false
+eval E
+eval F
+c=true

@@ -56,6 +56,59 @@ impl Parser {
         }
     }
 
+    /// `unless COND ... [else ...] end` desugars to `if !COND ... [else ...] end`.
+    /// Ruby forbids `elsif` after `unless`, so none is parsed.
+    pub(super) fn parse_unless_expr(&mut self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // consume unless
+        self.skip_newlines();
+
+        let condition = self.parse_expression();
+        self.skip_newlines();
+        let then_body = self.parse_body();
+
+        let else_body = if self.eat(TokenKind::Else) {
+            self.skip_newlines();
+            Some(self.parse_body())
+        } else {
+            None
+        };
+
+        self.expect(TokenKind::End);
+        let span = self.span_from(&start);
+        Expr {
+            kind: ExprKind::If(IfExpr {
+                condition: Box::new(negate_condition(condition)),
+                then_body,
+                elsif_clauses: Vec::new(),
+                else_body,
+                span: span.clone(),
+            }),
+            span,
+        }
+    }
+
+    /// `until COND ... end` desugars to `while !COND ... end`.
+    pub(super) fn parse_until_expr(&mut self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // consume until
+        self.skip_newlines();
+
+        let condition = self.parse_expression();
+        self.skip_newlines();
+        let body = self.parse_body();
+        self.expect(TokenKind::End);
+        let span = self.span_from(&start);
+        Expr {
+            kind: ExprKind::While(WhileExpr {
+                condition: Box::new(negate_condition(condition)),
+                body,
+                span: span.clone(),
+            }),
+            span,
+        }
+    }
+
     fn parse_if_let_expr(&mut self, start: Span) -> Expr {
         self.advance(); // consume let
         let pattern = self.parse_pattern();
@@ -165,5 +218,19 @@ impl Parser {
             }),
             span,
         }
+    }
+}
+
+/// Wrap a condition in a logical `!` for the `unless`/`until` desugars (and the
+/// `unless`/`until` statement modifiers). Reuses the same span so diagnostics
+/// point at the original condition.
+pub(in crate::parser) fn negate_condition(condition: Expr) -> Expr {
+    let span = condition.span.clone();
+    Expr {
+        kind: ExprKind::UnaryOp {
+            op: UnaryOp::Not,
+            operand: Box::new(condition),
+        },
+        span,
     }
 }

@@ -281,6 +281,30 @@ impl<'a> InferenceEngine<'a> {
 
     pub(super) fn infer_binop(&mut self, op: BinOp, left: &Ty, right: &Ty, span: &Span) -> Ty {
         match op {
+            // `**` exponentiation: `Int ** Int -> Int`, and any float operand
+            // makes the result `Float` (`2.0 ** 10 -> Float`). Unlike `+ - * / %`,
+            // the two sides need NOT match (a float base/exponent is coerced to
+            // `f64` in MIR, `ruxen_float_pow`). Both operands must be numeric.
+            BinOp::Pow => {
+                fn is_float_ty(t: &Ty) -> bool {
+                    matches!(t, Ty::Float | Ty::Float32 | Ty::Float64)
+                }
+                if left.is_numeric() && right.is_numeric() {
+                    if is_float_ty(left) || is_float_ty(right) {
+                        return Ty::Float;
+                    }
+                    return left.clone();
+                }
+                self.diagnostics.push(Diagnostic::error_with_code(
+                    format!(
+                        "binary operator `**` (exponentiation) requires numeric \
+                         operands, got `{left}` and `{right}`",
+                    ),
+                    span.clone(),
+                    "E0707",
+                ));
+                left.clone()
+            }
             // Arithmetic: both sides must be numeric, result is same type
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                 // String concatenation: `String + String` produces a
