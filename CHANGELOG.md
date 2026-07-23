@@ -114,6 +114,12 @@ once 1.0.0 ships.
   down ~33%, throughput +1-4% (the loopback bench is otherwise machine-bound).
 
 ### Added
+- **`std/base64`: Base64 encode/decode (Ruby `Base64` module parity).**
+  `Base64.strict_encode64` / `strict_decode64` / `urlsafe_encode64` /
+  `urlsafe_decode64` / `encode64` (MIME newlines) / `decode64`, over a small C
+  runtime. First burn-down item of the Ruby-parity effort (`docs/ruby-parity/`).
+  Pinned by release-e2e case `951` (known vectors `Man`->`TWFu`,
+  `hello`->`aGVsbG8=`, round-trip).
 - **`JSON.array_get(value, index) -> Option[Json]`.** Element access for JSON
   arrays (a borrowed handle into the parent node, like `object_get`); `None` for
   a non-array, null payload, or out-of-range index. Fills the gap that made it

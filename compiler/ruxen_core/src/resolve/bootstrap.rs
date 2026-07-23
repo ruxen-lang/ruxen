@@ -161,6 +161,8 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     // http — blocking HTTP/1.1 client. Pure `.rx` on net (TcpStream)
     // + string/array/option, all loaded above. No runtime `.c`.
     "http/src/lib.rx",
+    // base64 — Base64 encode/decode. String-only surface + a C runtime.
+    "base64/src/lib.rx",
     // _pin_zero_rust_stdlib — trio-leak pin fixture (B5 of
     // docs/specs/system/zero_rust_stdlib_classes.spec.md). Adding a
     // stdlib class via a fresh package MUST require ONLY this entry in
