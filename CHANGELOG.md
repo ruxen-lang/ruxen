@@ -272,6 +272,23 @@ once 1.0.0 ships.
   (`multiassign_swap_owned_class`, `multiassign_ternary_alias_owned_class`,
   `multiassign_fresh_alloc`) covering rejection, the ternary-aliasing gap, and
   the allowed fresh-allocation case.
+- **Third review pass: the parallel-assignment guard no longer over-rejects a
+  wrapper of fresh values.** The allow-list from the second pass rejected every
+  owned value that was not a bare call or constructor, which wrongly caught a
+  ternary/`match` whose branches are all fresh constructors, an operator-overload
+  result (`p1 + p2`), a unary-op result, a cast, and a block-expression value.
+  All of those cannot alias a target and compiled-and-ran correctly before the
+  second pass, so rejecting them regressed valid code. The guard now calls a
+  recursive `multiassign_value_is_fresh` (typeck/infer/helpers.rs) that peels the
+  `if`/`match`/`cast`/block wrappers and treats operator results as fresh,
+  requiring every producible value to be fresh; a wrapper of place reads (the
+  aliasing case the second pass fixed) is still rejected. So `a, b = (flag ?
+  Box.new(1) : Box.new(2)), Box.new(3)` compiles again while `a, b = (flag ? a :
+  b), Box.new(9)` is still a clean error. Pin `962` (compile-and-run) plus a
+  typeck test over the `multiassign_ternary_fresh` fixture. The guard flip is
+  strictly stronger than the original deny-list, so it never newly allowed an
+  aliasing value; every third-pass finding was a false rejection, not a
+  memory-safety regression.
 - **`&&` / `||` now short-circuit (were evaluating both operands eagerly).**
   The MIR lowering emitted an eager `MirInst::BinOp` for logical `&&`/`||`, so
   the right operand always ran: `true || f()` still called `f()`, and, worse,

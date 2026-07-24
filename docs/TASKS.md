@@ -393,7 +393,11 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
         second review pass flipped the guard to an allow-list of freshly-produced
         values, so a place read wrapped in a ternary/`if`/`match`/`cast` is also
         rejected (the deny-list only inspected the top-level node and let those
-        through). Guarded by typeck tests over `.rx` fixtures.
+        through). A third pass made the freshness check recursive
+        (`multiassign_value_is_fresh`) so a wrapper of FRESH values (a ternary of
+        two constructors, an operator-overload result) is allowed while a wrapper
+        of place reads stays rejected. Guarded by typeck tests over `.rx`
+        fixtures and release-e2e pin `962`.
 - [x] **`puts`/`print` accept any value, single-arg (DONE 2026-07-23).** A
       non-String argument to `puts`/`eputs`/`print`/`println`/`eprintln` is
       converted via its universal `to_s` in typeck (`puts x` becomes

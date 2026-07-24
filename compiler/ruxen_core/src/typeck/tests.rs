@@ -720,4 +720,22 @@ mod tests {
             result.diagnostics
         );
     }
+
+    #[test]
+    fn multiassign_ternary_of_fresh_values_is_allowed() {
+        // A ternary/`if` wrapping two fresh constructors cannot alias a
+        // target, so the guard must peel the wrapper and allow it — it is
+        // only the ternary of PLACE reads that aliases. Guards against the
+        // allow-list over-rejecting previously-compiling correct code.
+        let source = rx("multiassign_ternary_fresh");
+        let result = parse_and_check(&source);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("parallel assignment of an owned")),
+            "a ternary of fresh allocations must be allowed, got {:?}",
+            result.diagnostics
+        );
+    }
 }

@@ -1104,23 +1104,17 @@ impl<'a> InferenceEngine<'a> {
                     if !matches!(vty, Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }) {
                         return None;
                     }
-                    // Only a FRESHLY-produced owned value (a call or a
-                    // constructor) is safe here: it cannot alias one of the
-                    // targets. Any other form (a variable / field / index
-                    // read, or an `if` / `match` / `cast` that evaluates to
-                    // one) would be aliased, not moved or cloned, by the
-                    // current MIR lowering, which then double-frees on a swap
-                    // (`a, b = b, a`) or an alias-then-reassign. Allow-list
-                    // the fresh producers rather than deny-list the place
-                    // forms, so a nested aliasing expression cannot slip past.
-                    let is_fresh = matches!(
-                        value.kind,
-                        HirExprKind::MethodCall { .. }
-                            | HirExprKind::FnCall { .. }
-                            | HirExprKind::Construct { .. }
-                            | HirExprKind::EnumVariant { .. }
-                    );
-                    if is_fresh {
+                    // Only a FRESHLY-produced owned value is safe: it cannot
+                    // alias one of the targets. A value read from a place (a
+                    // variable / field / index) would be aliased, not moved or
+                    // cloned, by the current MIR lowering, which then
+                    // double-frees on a swap (`a, b = b, a`) or an
+                    // alias-then-reassign. `multiassign_value_is_fresh` peels
+                    // the `if` / `match` / `cast` / block wrappers and requires
+                    // every producible value to be fresh, so a nested aliasing
+                    // expression cannot slip past while a wrapper of fresh
+                    // values (a ternary of two constructors) is still allowed.
+                    if super::helpers::multiassign_value_is_fresh(value) {
                         None
                     } else {
                         Some(vty)

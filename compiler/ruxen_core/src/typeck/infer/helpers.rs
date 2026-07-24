@@ -651,6 +651,57 @@ pub(super) fn collect_next_types(
     }
 }
 
+/// Whether a parallel-assignment RHS value is *freshly produced* and so
+/// cannot alias one of the assignment targets.
+///
+/// The MIR lowering snapshots each RHS value into a temporary before any
+/// target is written, but for an owned heap aggregate (`Class`/`Struct`/
+/// `Enum`) that snapshot is a pointer copy, not a deep clone. A value read
+/// from a *place* (a variable, field, or index) therefore aliases the
+/// existing object, and the pre-reassign `dealloc` for the target
+/// double-frees it. Only a value produced afresh by this expression is safe.
+///
+/// This peels the wrapper forms (`if`/ternary, `match`, `cast`, block) and
+/// requires *every* value that could be produced to be fresh, so a ternary
+/// of two constructors is fresh but a ternary of two variable reads is not.
+/// An operator on an owned aggregate is an overload (`def +`, `def -@`)
+/// that returns a fresh value — primitive operators have scalar result
+/// types and never reach the caller's `Class`/`Struct`/`Enum` type gate.
+pub(super) fn multiassign_value_is_fresh(expr: &HirExpr) -> bool {
+    match &expr.kind {
+        // A call, constructor, or enum-variant literal yields a brand-new
+        // owned value that cannot alias one of the targets.
+        HirExprKind::MethodCall { .. }
+        | HirExprKind::FnCall { .. }
+        | HirExprKind::Construct { .. }
+        | HirExprKind::EnumVariant { .. } => true,
+        // Operator overloads on owned aggregates return a fresh value; this
+        // is the same trust already extended to `MethodCall` (both desugar
+        // to a user method that could, in principle, return `self`).
+        HirExprKind::BinaryOp { .. } | HirExprKind::UnaryOp { .. } => true,
+        // A ternary/`if` or `match` is fresh iff EVERY branch is fresh.
+        HirExprKind::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            multiassign_value_is_fresh(then_branch)
+                && else_branch
+                    .as_deref()
+                    .is_some_and(multiassign_value_is_fresh)
+        }
+        HirExprKind::Match { arms, .. } => {
+            !arms.is_empty() && arms.iter().all(|arm| multiassign_value_is_fresh(&arm.body))
+        }
+        // A cast reinterprets, and a block forwards its tail — recurse.
+        HirExprKind::Cast { expr: inner, .. } => multiassign_value_is_fresh(inner),
+        HirExprKind::Block(_, Some(tail)) => multiassign_value_is_fresh(tail),
+        // A place read (variable / field / index) aliases an existing owned
+        // object; anything else is conservatively treated as aliasing.
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod substitute_generic_params_tests {
     use super::substitute_generic_params;
