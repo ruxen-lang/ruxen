@@ -722,9 +722,9 @@ impl<'a> InferenceEngine<'a> {
                         } else {
                             self.error(
                                 format!(
-                                    "`{}` expects a String or a value with `to_s`, \
-                                     found `{}`; use string interpolation: {} \"#{{expr}}\"",
-                                    callee_name, arg_ty, callee_name,
+                                    "`{callee_name}` expects a String or a value with `to_s`, \
+                                     found `{arg_ty}`, which has no `to_s`; build the String \
+                                     yourself (for a collection, format its elements)",
                                 ),
                                 &expr.span,
                             );
@@ -1096,27 +1096,46 @@ impl<'a> InferenceEngine<'a> {
                 // clear error until proper move/clone lowering lands. Copy types,
                 // `String`, and fresh allocations (a call/constructor value) are
                 // unaffected.
-                for value in values.iter() {
+                // Report at most once per statement: a swap `a, b = b, a` has
+                // two offending values, but they share one span, so emitting per
+                // value would print the identical error twice.
+                if let Some(vty) = values.iter().find_map(|value| {
                     let vty = self.ctx.resolve(&value.ty);
-                    let is_place = matches!(
-                        value.kind,
-                        HirExprKind::VarRef(_)
-                            | HirExprKind::FieldAccess { .. }
-                            | HirExprKind::Index { .. }
-                    );
-                    if is_place
-                        && matches!(vty, Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. })
-                    {
-                        self.error(
-                            format!(
-                                "parallel assignment cannot move an owned `{vty}` read from a \
-                                 variable, field, or index (it would alias, e.g. a swap \
-                                 `a, b = b, a` of owned objects); assign it on its own line, or \
-                                 clone it first",
-                            ),
-                            &expr.span,
-                        );
+                    if !matches!(vty, Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }) {
+                        return None;
                     }
+                    // Only a FRESHLY-produced owned value (a call or a
+                    // constructor) is safe here: it cannot alias one of the
+                    // targets. Any other form (a variable / field / index
+                    // read, or an `if` / `match` / `cast` that evaluates to
+                    // one) would be aliased, not moved or cloned, by the
+                    // current MIR lowering, which then double-frees on a swap
+                    // (`a, b = b, a`) or an alias-then-reassign. Allow-list
+                    // the fresh producers rather than deny-list the place
+                    // forms, so a nested aliasing expression cannot slip past.
+                    let is_fresh = matches!(
+                        value.kind,
+                        HirExprKind::MethodCall { .. }
+                            | HirExprKind::FnCall { .. }
+                            | HirExprKind::Construct { .. }
+                            | HirExprKind::EnumVariant { .. }
+                    );
+                    if is_fresh {
+                        None
+                    } else {
+                        Some(vty)
+                    }
+                }) {
+                    self.error(
+                        format!(
+                            "parallel assignment of an owned `{vty}` value is only \
+                             supported for a freshly-constructed value (a call or a \
+                             constructor) for now; any other form (e.g. a swap \
+                             `a, b = b, a`, or a variable/field/index read) would alias \
+                             and is not yet allowed. Assign it on its own line instead",
+                        ),
+                        &expr.span,
+                    );
                 }
                 expr.ty = Ty::Unit;
             }

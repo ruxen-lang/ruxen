@@ -1,0 +1,13 @@
+class Box
+  n: Int
+  def init(@n: Int)
+  end
+end
+
+def main
+  var a = Box.new(0)
+  var b = Box.new(0)
+  a, b = Box.new(1), Box.new(2)
+  puts a.n
+  puts b.n
+end

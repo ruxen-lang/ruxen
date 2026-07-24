@@ -662,4 +662,62 @@ mod tests {
         // only the structural reachability.
         let _ = tail;
     }
+
+    // ─── Parallel-assignment owned-heap guard (v1) ──────────────────
+    // The MIR lowering aliases (does not move/clone) a place-read owned
+    // Class/Struct/Enum value, so a swap or an alias-then-reassign would
+    // double-free. typeck rejects every non-fresh owned value until real
+    // move/clone lowering lands; only a freshly-produced value is allowed.
+
+    #[test]
+    fn multiassign_swap_of_owned_class_is_rejected_once() {
+        let source = rx("multiassign_swap_owned_class");
+        let result = parse_and_check(&source);
+        let guard_errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.message.contains("parallel assignment of an owned"))
+            .collect();
+        // Both swapped values offend, but they share one span — the guard
+        // must report the statement once, not once per value.
+        assert_eq!(
+            guard_errors.len(),
+            1,
+            "expected exactly one parallel-assignment error for a swap, got {:?}",
+            guard_errors
+        );
+    }
+
+    #[test]
+    fn multiassign_ternary_aliased_owned_class_is_rejected() {
+        // A place read wrapped in a ternary (`(flag ? a : b)`) lowers to
+        // `HirExprKind::If`, not a bare VarRef — it must still be caught,
+        // otherwise the double-free the guard exists to stop slips past.
+        let source = rx("multiassign_ternary_alias_owned_class");
+        let result = parse_and_check(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("parallel assignment of an owned")),
+            "expected the ternary-aliased owned value to be rejected, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn multiassign_of_fresh_allocations_is_allowed() {
+        // Freshly-constructed values cannot alias a target, so they are
+        // safe and must NOT trip the guard.
+        let source = rx("multiassign_fresh_alloc");
+        let result = parse_and_check(&source);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("parallel assignment of an owned")),
+            "fresh allocations must be allowed in a parallel assignment, got {:?}",
+            result.diagnostics
+        );
+    }
 }

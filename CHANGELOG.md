@@ -255,6 +255,23 @@ once 1.0.0 ships.
   instead of being misread as a ternary (the grouping's span now covers its
   parens). (4) A line ending in `<=>` now continues onto the next line, like
   every other binary operator.
+- **Second review pass over the parallel-assignment guard and the `puts`
+  diagnostic.** (1) The owned-heap guard is now an allow-list of freshly-produced
+  values (a method/function call, a constructor, an enum-variant), not a
+  deny-list of the three place-read node kinds. The deny-list only inspected the
+  top-level `HirExprKind`, so an owned place read wrapped in any other node (a
+  ternary or `if`, a `match` arm, a `cast`) slipped through and still
+  double-freed; the allow-list rejects everything that is not provably fresh, so
+  a nested aliasing expression can no longer bypass it. (2) The guard now reports
+  a statement once instead of once per offending value, so a swap `a, b = b, a`
+  no longer prints the identical error twice. (3) The `puts`/`print` no-`to_s`
+  diagnostic no longer recommends `puts "#{expr}"`: that interpolation compiles
+  for the exact types that reach this error and prints a raw heap pointer, so the
+  message now tells the caller to build the String themselves (for a collection,
+  format its elements). Guarded by three typeck tests over `.rx` fixtures
+  (`multiassign_swap_owned_class`, `multiassign_ternary_alias_owned_class`,
+  `multiassign_fresh_alloc`) covering rejection, the ternary-aliasing gap, and
+  the allowed fresh-allocation case.
 - **`&&` / `||` now short-circuit (were evaluating both operands eagerly).**
   The MIR lowering emitted an eager `MirInst::BinOp` for logical `&&`/`||`, so
   the right operand always ran: `true || f()` still called `f()`, and, worse,

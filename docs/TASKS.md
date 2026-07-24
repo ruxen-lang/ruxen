@@ -389,7 +389,11 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
   - [ ] **Follow-up: splat `a, *b = xs`** and parallel assignment of owned
         Class/Struct/Enum values read from a place (e.g. a swap of two objects).
         The latter is currently a clean compile error (a review pass found the
-        naive lowering double-frees); it needs proper move/clone lowering.
+        naive lowering double-frees); it needs proper move/clone lowering. A
+        second review pass flipped the guard to an allow-list of freshly-produced
+        values, so a place read wrapped in a ternary/`if`/`match`/`cast` is also
+        rejected (the deny-list only inspected the top-level node and let those
+        through). Guarded by typeck tests over `.rx` fixtures.
 - [x] **`puts`/`print` accept any value, single-arg (DONE 2026-07-23).** A
       non-String argument to `puts`/`eputs`/`print`/`println`/`eprintln` is
       converted via its universal `to_s` in typeck (`puts x` becomes
