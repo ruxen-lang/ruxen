@@ -94,8 +94,8 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | Class var `@@x` | MISSING | probe: `found At` in class body | Use a `const` or class method. |
 | Global `$x` | MISSING | probe: `E0006` on `$` | |
 | Constant `CONST = ...` | DONE | `ConstDef`; case `44` | `const NAME: T = val`. |
-| Multiple assignment `a, b = 1, 2` | DONE | `ExprKind::MultiAssign`; case `957` | Targets and values equal length; values snapshotted before any store. |
-| Parallel swap `a, b = b, a` | DONE | case `957` | Simultaneous (all RHS evaluated to temps first). |
+| Multiple assignment `a, b = 1, 2` | DONE | `ExprKind::MultiAssign`; case `957` | Targets and values equal length; values snapshotted before any store. Owned Class/Struct/Enum values read from a place (variable/field/index) are rejected (would alias); Copy, String, and fresh-alloc values are allowed. |
+| Parallel swap `a, b = b, a` | PARTIAL | case `957` | Copy and String swap work (simultaneous). A swap of owned Class/Struct/Enum objects is a clean compile error for now (needs move/clone lowering). |
 | Destructuring `let (a, b) = t` | DONE | probe PASS; case `123` | Ruxen's substitute for LHS destructuring. |
 | Splat assign `a, *b = [1,2,3]` | MISSING | probe: `found Comma` | |
 | Nested destructure `(a,(b,c)) = ...` | PARTIAL | tuple patterns only | Works for tuples; no array-splat form. |
@@ -349,7 +349,7 @@ standalone and emit empty output at runtime. They are not functional today; the
 
 | Ruby feature | Status | Ruxen location or gap | Note |
 |---|---|---|---|
-| `puts` / `print` accept any value | DONE | typeck `to_s` conversion; case `956` | A non-String arg is converted through its universal `to_s`; inserted into the HIR only, so the AST and `ruxen fmt` are unchanged. |
+| `puts` / `print` accept any value | DONE | typeck `to_s` conversion; case `956` | A non-String arg is converted through its universal `to_s` (HIR only, so the AST and `ruxen fmt` are unchanged). A value with no `to_s` (Array, Option, tuple, a struct without a Debug/Display derive) gives a clean compile error, not a link error. |
 | `puts a, b` (multi-arg) | MISSING | probe: `found Comma` | Single arg only; multi-arg is a follow-up. |
 | String `%` formatting `"%05d" % x` | DONE | probe PASS | |
 | `format` / `sprintf` | MISSING | probe: undefined function | `%` operator works; the functions do not. |

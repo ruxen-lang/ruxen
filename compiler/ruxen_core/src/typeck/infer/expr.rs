@@ -696,8 +696,7 @@ impl<'a> InferenceEngine<'a> {
                         // through its universal `to_s` (`puts 42` becomes
                         // `puts 42.to_s`), removing the `"#{}"` tax on every
                         // print. The conversion is inserted into the HIR only, so
-                        // the AST stays `puts x` and `ruxen fmt` is unaffected. A
-                        // value with no `to_s` surfaces the method error here.
+                        // the AST stays `puts x` and `ruxen fmt` is unaffected.
                         let object = args[0].clone();
                         let mut wrapped = HirExpr {
                             kind: HirExprKind::MethodCall {
@@ -712,7 +711,24 @@ impl<'a> InferenceEngine<'a> {
                             span: expr.span.clone(),
                         };
                         self.infer_expr(&mut wrapped);
-                        args[0] = wrapped;
+                        // Only adopt the conversion when `to_s` actually resolved
+                        // to a `String`. A value with NO `to_s` (Array, Option, a
+                        // tuple, a struct without a Debug/Display derive) leaves
+                        // the wrapped call's type unresolved; in that case keep the
+                        // clean compile-time diagnostic instead of letting an
+                        // unresolved `<Type>_to_s` symbol leak to the linker.
+                        if matches!(self.ctx.resolve(&wrapped.ty), Ty::String) {
+                            args[0] = wrapped;
+                        } else {
+                            self.error(
+                                format!(
+                                    "`{}` expects a String or a value with `to_s`, \
+                                     found `{}`; use string interpolation: {} \"#{{expr}}\"",
+                                    callee_name, arg_ty, callee_name,
+                                ),
+                                &expr.span,
+                            );
+                        }
                     }
                 }
 
@@ -1071,6 +1087,36 @@ impl<'a> InferenceEngine<'a> {
                     let target_ty = self.ctx.resolve(&target.ty);
                     let value_ty = self.ctx.resolve(&value.ty);
                     let _ = unify(&target_ty, &value_ty, self.ctx, &expr.span);
+                }
+                // Memory-safety guard (v1): a value that is an owned heap
+                // aggregate (Class/Struct/Enum) READ FROM A PLACE (variable,
+                // field, or index) would be aliased, not moved/cloned, by the
+                // MIR lowering. That silently double-frees on a swap
+                // (`a, b = b, a`) or an alias-then-reassign. Reject it with a
+                // clear error until proper move/clone lowering lands. Copy types,
+                // `String`, and fresh allocations (a call/constructor value) are
+                // unaffected.
+                for value in values.iter() {
+                    let vty = self.ctx.resolve(&value.ty);
+                    let is_place = matches!(
+                        value.kind,
+                        HirExprKind::VarRef(_)
+                            | HirExprKind::FieldAccess { .. }
+                            | HirExprKind::Index { .. }
+                    );
+                    if is_place
+                        && matches!(vty, Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. })
+                    {
+                        self.error(
+                            format!(
+                                "parallel assignment cannot move an owned `{vty}` read from a \
+                                 variable, field, or index (it would alias, e.g. a swap \
+                                 `a, b = b, a` of owned objects); assign it on its own line, or \
+                                 clone it first",
+                            ),
+                            &expr.span,
+                        );
+                    }
                 }
                 expr.ty = Ty::Unit;
             }

@@ -242,6 +242,19 @@ once 1.0.0 ships.
   Apple M4 (loopback, co-located load generator; parity with Go net/http).
 
 ### Fixed
+- **Review-pass fixes for this session's parity features.** (1) `puts`/`print`
+  of a value with no resolvable `to_s` (Array, Option, Set, tuple, a struct
+  without a Debug/Display derive) now reports a clean compile-time error again
+  instead of leaking a mangled `<Type>_to_s` symbol to the linker (the `to_s`
+  conversion is adopted only when it actually resolves to `String`). (2)
+  Parallel assignment of an owned heap object (Class/Struct/Enum) READ FROM A
+  PLACE (variable/field/index), including the swap `a, b = b, a`, is now a clear
+  compile error rather than a silent use-after-free; Copy types, `String`, and
+  fresh-allocation values remain allowed. (3) `(expr)?` (an attached try after a
+  parenthesized group, e.g. `(check())?`) parses as the try operator again
+  instead of being misread as a ternary (the grouping's span now covers its
+  parens). (4) A line ending in `<=>` now continues onto the next line, like
+  every other binary operator.
 - **`&&` / `||` now short-circuit (were evaluating both operands eagerly).**
   The MIR lowering emitted an eager `MirInst::BinOp` for logical `&&`/`||`, so
   the right operand always ran: `true || f()` still called `f()`, and, worse,

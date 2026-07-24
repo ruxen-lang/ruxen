@@ -386,8 +386,10 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
       Targets must be pre-declared `var`s; equal target/value counts enforced at
       parse time. MIR `store_value_into_target` helper factored out of `Assign`
       lowering and shared. Pin `957`; parity `language.md` §2 / P0.3.
-  - [ ] **Follow-up: splat `a, *b = xs`** and a parallel swap of two heap-owned
-        (non-Copy) bindings (the reassign-frees-old-pointer path would alias).
+  - [ ] **Follow-up: splat `a, *b = xs`** and parallel assignment of owned
+        Class/Struct/Enum values read from a place (e.g. a swap of two objects).
+        The latter is currently a clean compile error (a review pass found the
+        naive lowering double-frees); it needs proper move/clone lowering.
 - [x] **`puts`/`print` accept any value, single-arg (DONE 2026-07-23).** A
       non-String argument to `puts`/`eputs`/`print`/`println`/`eprintln` is
       converted via its universal `to_s` in typeck (`puts x` becomes

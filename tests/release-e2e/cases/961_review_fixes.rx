@@ -1,0 +1,18 @@
+# Pins review fixes: a line-wrapped `<=>` continues the line, and a parallel
+# assignment of FRESH allocations (not place reads) is allowed and correct.
+class Box
+  n: Int
+  def init(@n: Int)
+  end
+end
+
+def main
+  let c = 10 <=>
+          4
+  puts c
+  var x = Box.new(1)
+  var y = Box.new(2)
+  x, y = Box.new(30), Box.new(40)
+  puts x.n
+  puts y.n
+end

@@ -829,9 +829,17 @@ impl Parser {
                 span,
             }
         } else {
-            // Parenthesized expression
+            // Parenthesized expression: the grouping node is discarded (Ruxen
+            // keeps no `Paren` AST node), but the returned expr's span is
+            // extended to cover the parens. Without this, `first.span.end` sits
+            // BEFORE the closing `)`, so a following attached postfix `?`
+            // (`(foo())?`) looks whitespace-separated to the try-vs-ternary
+            // adjacency check and gets misparsed as a ternary.
             self.expect(TokenKind::RParen);
-            first
+            Expr {
+                span: self.span_from(&start),
+                ..first
+            }
         }
     }
 

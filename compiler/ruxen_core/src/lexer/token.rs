@@ -321,6 +321,7 @@ impl TokenKind {
                 | TokenKind::Gt
                 | TokenKind::LtEq
                 | TokenKind::GtEq
+                | TokenKind::Spaceship
                 | TokenKind::AmpAmp
                 | TokenKind::PipePipe
                 | TokenKind::Arrow

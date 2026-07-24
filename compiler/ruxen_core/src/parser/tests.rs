@@ -1954,6 +1954,14 @@ end";
     }
 
     #[test]
+    fn parenthesized_group_then_try_is_try_not_ternary() {
+        // `(expr)?` with an attached `?` after the closing paren is the try
+        // operator, not a ternary (the grouping's span must include the parens).
+        assert!(matches!(parse_expr("(foo())?").kind, ExprKind::Try(_)));
+        assert!(matches!(parse_expr("(a || b)?").kind, ExprKind::Try(_)));
+    }
+
+    #[test]
     fn spaceship_parses_as_cmp_binop() {
         assert!(matches!(
             parse_expr("a <=> b").kind,
