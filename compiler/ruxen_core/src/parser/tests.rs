@@ -1920,4 +1920,24 @@ end";
             })
         ));
     }
+
+    #[test]
+    fn ternary_desugars_to_if_else() {
+        // `c ? a : b` becomes `if c then a else b end`.
+        match parse_expr("x > 0 ? 1 : 2").kind {
+            ExprKind::If(if_expr) => {
+                assert!(if_expr.else_body.is_some());
+                assert!(if_expr.elsif_clauses.is_empty());
+            }
+            other => panic!("expected If from ternary, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn attached_question_stays_the_try_operator() {
+        // `foo()?` (no space before `?`) is the try operator, not a ternary.
+        // (A trailing `?` on a bare identifier like `empty?` is absorbed into
+        // the identifier by the lexer, so it never reaches this path.)
+        assert!(matches!(parse_expr("foo()?").kind, ExprKind::Try(_)));
+    }
 }

@@ -56,6 +56,44 @@ impl Parser {
         }
     }
 
+    /// `cond ? then_expr : else_expr` ternary, desugared to an `if`/`else`
+    /// expression. The leading `?` (already confirmed to be ternary by the
+    /// caller's whitespace-adjacency check) is consumed here. Right-associative:
+    /// `a ? b : c ? d : e` parses as `a ? b : (c ? d : e)`. Kept as a parser
+    /// desugar; a surface-preserving `Ternary` node for `ruxen fmt` is a
+    /// follow-up (today fmt renders the `if`/`else` block form).
+    pub(super) fn parse_ternary(&mut self, cond: Expr) -> Expr {
+        let start = cond.span.clone();
+        self.advance(); // consume `?`
+        self.skip_newlines();
+        let then_expr = self.parse_expression(); // stops at `:` (not an infix op)
+        self.skip_newlines();
+        self.expect(TokenKind::Colon);
+        self.skip_newlines();
+        // Parse the else branch at the ternary tier so a chained ternary nests
+        // to the right.
+        let else_expr = self.parse_expr_bp(3);
+        let span = self.span_from(&start);
+        let then_body = Block {
+            statements: vec![Statement::Expression(then_expr)],
+            span: span.clone(),
+        };
+        let else_body = Block {
+            statements: vec![Statement::Expression(else_expr)],
+            span: span.clone(),
+        };
+        Expr {
+            kind: ExprKind::If(IfExpr {
+                condition: Box::new(cond),
+                then_body,
+                elsif_clauses: Vec::new(),
+                else_body: Some(else_body),
+                span: span.clone(),
+            }),
+            span,
+        }
+    }
+
     /// `unless COND ... [else ...] end` desugars to `if !COND ... [else ...] end`.
     /// Ruby forbids `elsif` after `unless`, so none is parsed.
     pub(super) fn parse_unless_expr(&mut self) -> Expr {

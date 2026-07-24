@@ -111,6 +111,21 @@ impl Parser {
 
             let kind = self.current_kind().clone();
 
+            // `?` is the postfix try operator when ATTACHED to its operand
+            // (`result?`), and a ternary conditional when separated by
+            // whitespace (`cond ? a : b`). Distinguish by span adjacency: a gap
+            // between the operand's end and the `?` means a ternary. Ternary is
+            // low precedence (`TERNARY_LBP`), so a higher-min-bp context (e.g.
+            // the RHS of `||`) leaves it for the enclosing expression.
+            if matches!(kind, TokenKind::Question) && lhs.span.end < self.current_span().start {
+                const TERNARY_LBP: u8 = 3;
+                if TERNARY_LBP < min_bp {
+                    break;
+                }
+                lhs = self.parse_ternary(lhs);
+                continue;
+            }
+
             // Check for postfix operators
             if self.is_postfix_op(&kind) && POSTFIX_BP >= min_bp {
                 lhs = self.parse_postfix(lhs);

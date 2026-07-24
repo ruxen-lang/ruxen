@@ -114,6 +114,13 @@ once 1.0.0 ships.
   down ~33%, throughput +1-4% (the loopback bench is otherwise machine-bound).
 
 ### Added
+- **Ternary conditional `cond ? a : b`.** Right-associative (`a ? b : c ? d : e`
+  parses as `a ? b : (c ? d : e)`), desugared in the parser to an `if`/`else`
+  expression. Disambiguated from the `?` try operator by whitespace adjacency:
+  an attached `result?` is the try operator, while a spaced `cond ? a : b` is a
+  ternary. A surface-preserving `Ternary` node so `ruxen fmt` keeps the `? :`
+  form (rather than expanding to `if`/`else`) is a follow-up. Pin `958`;
+  Ruby-parity `language.md` §3 / P0.5.
 - **Parallel assignment `a, b = 1, 2` (and simultaneous swap `a, b = b, a`).**
   A dedicated `ExprKind::MultiAssign` / `HirExprKind::MultiAssign` node (kept
   through to MIR so `ruxen fmt` renders the original surface). All right-hand

@@ -119,7 +119,7 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | Keyword `and` / `or` / `not` | MISSING | probe: parsed as identifiers | Low-precedence keyword operators absent. |
 | Bitwise `& | ^ << >>` | DONE | `BinOp`; case `812` | |
 | Bitwise complement `~` | MISSING | probe: `E0006` on `~` | No token (only `~=`). |
-| Ternary `c ? a : b` | MISSING | probe: `found Colon` | `?` is try-only. Use `if/else` expression. High-value. |
+| Ternary `c ? a : b` | DONE | parser desugar to `if`/`else`; case `958` | Right-associative. Disambiguated from the `?` try operator by whitespace: an attached `x?` is try, a spaced `c ? a : b` is ternary. |
 | Safe navigation `&.` | DONE | `SafeNav`; probe PASS | `&.` not `?.`. |
 | Range `.. ...` | DONE | §1 | |
 | Operator method def `+ - * / % & | ^ << >> [] []= -@ +@ !` | DONE | case `631/632` | Explicit `a.+(b)` and sugared `a + b` both dispatch. |
@@ -199,7 +199,7 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | `redo` | MISSING | no token | |
 | `retry` (loop) | MISSING | no token | |
 | `throw` / `catch` | MISSING | probe: `found Colon` | |
-| Ternary `? :` | MISSING | §3 | |
+| Ternary `? :` | DONE | §3; case `958` | See §3 row. |
 | `case/when` (`===` dispatch) | MISSING | probe: `found When` | Substitute is `match subj / pat -> body / end` (case `10`). Ruby keyword surface absent; `when`/`then` reserved-unimplemented. |
 | `case/when then` inline | MISSING | — | |
 | `.times`, `.upto`, `.each` iterators | PARTIAL | `.each` DONE (case `120`); `.times`/`.upto` MISSING | probe: `no method times on Int`. Use ranges. |
@@ -380,7 +380,7 @@ truly irreducible slice is excluded from both (listed last).
 2. ~~**`unless` and `until`** (statement + modifier).~~ **DONE** (`Until` token added; block + modifier forms). Pin `953`. (§6)
 3. ~~**Multiple assignment** `a, b = 1, 2` and swap `a, b = b, a`~~ **DONE** (dedicated `MultiAssign` node; simultaneous swap; targets must be pre-declared `var`s). Splat `a, *b = xs` remains a follow-up. Pin `957`. (§2)
 4. ~~**`||=` and `&&=`.**~~ **DONE** (Bool conditional-assign; desugars to `a || (a = b)` / `a && (a = b)`). This also uncovered and fixed a **short-circuit bug**: `&&`/`||` were evaluating both operands eagerly. Pins `954`, `955`. (§2)
-5. **Ternary `c ? a : b`.** (§3)
+5. ~~**Ternary `c ? a : b`.**~~ **DONE** (parser desugar to `if`/`else`; whitespace-disambiguated from the `?` try operator; right-associative). Pin `958`. (§3)
 6. ~~**`**` power operator.**~~ **DONE** (`StarStar` token + `BinOp::Pow`, right-associative, routed to `ruxen_int_pow`/`ruxen_float_pow`). Fixed the silent miscompile (`2 ** 8` was `16`, now `256`). Pin `952`. (§3)
 7. ~~**`puts`/`print` accept any `to_s`-able value**~~ **DONE** for the single-argument form (typeck converts a non-String arg via its universal `to_s`; `puts 42` works, AST and fmt unchanged). Multi-arg `puts a, b` is a follow-up. Pin `956`. (§12)
 

@@ -359,6 +359,13 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
 
 ### Language features
 
+- [x] **Ternary `cond ? a : b` (DONE 2026-07-24).** Right-associative, desugared
+      in the parser to `if`/`else`. Disambiguated from the `?` try operator by
+      whitespace: an attached `x?` is try, a spaced `c ? a : b` is ternary (span
+      adjacency check in the Pratt loop). Pin `958`; parity `language.md` §3 /
+      P0.5.
+  - [ ] **Follow-up: surface-preserving `Ternary` node** so `ruxen fmt` keeps
+        `? :` instead of expanding to `if`/`else`.
 - [x] **Parallel assignment `a, b = 1, 2` + swap (DONE 2026-07-24).** Dedicated
       `MultiAssign` AST/HIR node lowered in MIR; all RHS values snapshotted into
       fresh temps before any store, so `a, b = b, a` swaps simultaneously.
