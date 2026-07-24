@@ -19,6 +19,7 @@ use crate::parser::Parser;
 
 mod atoms;
 mod calls;
+mod case_expr;
 pub(in crate::parser) mod control_flow;
 mod match_expr;
 mod operators;
@@ -303,6 +304,7 @@ impl Parser {
                 | TokenKind::AmpMut
                 | TokenKind::If
                 | TokenKind::Match
+                | TokenKind::Case
                 | TokenKind::While
                 | TokenKind::For
                 | TokenKind::Loop

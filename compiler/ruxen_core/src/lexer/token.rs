@@ -187,6 +187,8 @@ pub enum TokenKind {
     When,
     Unless,
     Until,
+    Case, // `case … when/in … end` (Ruby case dispatch + pattern match)
+    Then, // `when x then …` clause separator
 
     // ── Operators: Arithmetic ──
     Plus,     // +
@@ -415,6 +417,8 @@ pub const KEYWORDS: &[&str] = &[
     "when",
     "unless",
     "until",
+    "case",
+    "then",
 ];
 
 /// Look up a keyword from an identifier string.
@@ -510,6 +514,8 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
         "when" => Some(TokenKind::When),
         "unless" => Some(TokenKind::Unless),
         "until" => Some(TokenKind::Until),
+        "case" => Some(TokenKind::Case),
+        "then" => Some(TokenKind::Then),
 
         _ => None,
     }

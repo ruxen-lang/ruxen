@@ -1960,4 +1960,22 @@ end";
             ExprKind::BinaryOp { op: BinOp::Cmp, .. }
         ));
     }
+
+    #[test]
+    fn case_when_desugars_to_if() {
+        // `case/when` is `===`-dispatch, desugared to an if/elsif chain.
+        match parse_expr("case n\nwhen 1 then \"a\"\nelse \"b\"\nend").kind {
+            ExprKind::If(if_expr) => assert!(if_expr.else_body.is_some()),
+            other => panic!("expected If from case/when, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn case_in_desugars_to_match() {
+        // `case/in` is pattern matching, an alias of `match`.
+        match parse_expr("case o\nin Some(x) then x\nin nil then 0\nend").kind {
+            ExprKind::Match(m) => assert_eq!(m.arms.len(), 2),
+            other => panic!("expected Match from case/in, got {other:?}"),
+        }
+    }
 }

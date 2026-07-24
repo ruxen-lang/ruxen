@@ -359,6 +359,14 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
 
 ### Language features
 
+- [x] **`case/when` + `case/in` (DONE 2026-07-24).** New `case`/`then` keywords.
+      `case/when` (`===` dispatch) desugars to `if`/`elsif` (value ==, `a, b` →
+      ||, `lo..hi` → range membership). `case/in` (pattern) desugars to the same
+      `Match` AST as `match`, which stays a full alias. Parser-only; no
+      downstream or IDE changes. Pin `960`; parity `language.md` §6/§7.
+  - [ ] **Follow-up: surface-preserving `Case` node** so `ruxen fmt` keeps
+        `case/when`/`case/in` instead of `if`/`match`. Also `case/when` subject
+        is re-evaluated per branch (bind to a temp to evaluate once).
 - [x] **`<=>` spaceship operator (DONE 2026-07-24).** `Spaceship` token +
       `BinOp::Cmp`; `a <=> b -> Int` (-1/0/1) for Int/Float/String via
       `ruxen_int_cmp` / `ruxen_float_cmp` / `ruxen_str_spaceship`. Same

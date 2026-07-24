@@ -289,6 +289,7 @@ impl Parser {
             TokenKind::If => self.parse_if_expr(),
             TokenKind::Unless => self.parse_unless_expr(),
             TokenKind::Match => self.parse_match_expr(),
+            TokenKind::Case => self.parse_case_expr(),
             TokenKind::While => self.parse_while_expr(),
             TokenKind::Until => self.parse_until_expr(),
             TokenKind::For => self.parse_for_expr(),

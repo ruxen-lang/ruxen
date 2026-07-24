@@ -200,17 +200,20 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | `retry` (loop) | MISSING | no token | |
 | `throw` / `catch` | MISSING | probe: `found Colon` | |
 | Ternary `? :` | DONE | §3; case `958` | See §3 row. |
-| `case/when` (`===` dispatch) | MISSING | probe: `found When` | Substitute is `match subj / pat -> body / end` (case `10`). Ruby keyword surface absent; `when`/`then` reserved-unimplemented. |
-| `case/when then` inline | MISSING | — | |
+| `case/when` (`===` dispatch) | DONE | `parse_case_when`; case `960` | Desugars to `if`/`elsif`: `when v` → `s == v`, `when a, b` → `s == a \|\| s == b`, `when lo..hi` → range membership. Subject re-evaluated per branch (v1). |
+| `case/when then` inline | DONE | case `960` | `when x then body` (and newline form) both parse. |
+| `case/in` (pattern) | DONE | `parse_case_in`; case `960` | Alias of `match`: `case s / in pat then body / … / end`. `else` becomes a wildcard arm. |
 | `.times`, `.upto`, `.each` iterators | PARTIAL | `.each` DONE (case `120`); `.times`/`.upto` MISSING | probe: `no method times on Int`. Use ranges. |
 
 ---
 
 ## 7. Pattern matching (`case/in`)
 
-Ruxen's `match subj ... end` is the substitute for both `case/when` and
-`case/in`. The Ruby `case ... in` keyword surface is **not** accepted; arms use
-`pattern -> body`.
+Ruxen's `match subj ... end` is the pattern-matching workhorse (arms use
+`pattern -> body`). The Ruby `case ... in` keyword surface is now **also**
+accepted and parses to the same `Match` AST: `case s / in pat then body / … /
+end` (pin `960`). Ruby's `case ... when` (`===` dispatch) is a separate
+construct that desugars to `if`/`elsif` (§6).
 
 | Ruby feature | Status | Ruxen location or gap | Note |
 |---|---|---|---|
@@ -392,7 +395,7 @@ truly irreducible slice is excluded from both (listed last).
 11. **`<=>` spaceship + user-definable `==`/`<=>`** so hand-written `Comparable` works, not only auto-`Ord`. The `<=>` OPERATOR is **DONE** (Int/Float/String, returns -1/0/1, pin `959`); routing `Comparable` through it and user-definable `def <=>` remain. (§3, §9)
 12. **`*args` / `**kwargs` splat params** and required-keyword args `def f(a:)`. (§4)
 13. **General `@ivar` read/write** beyond the `init` auto-assign sugar. (§2)
-14. **`case/when` keyword surface** (`===` dispatch) as sugar over `match`. (§6)
+14. ~~**`case/when` keyword surface** (`===` dispatch) as sugar over `match`.~~ **DONE** (`case/when` desugars to `if`/`elsif`; `case/in` is an alias of `match`). Pin `960`. (§6)
 15. **`Integer#times` / `#upto` / `#downto`** iterators. (§6)
 16. **`tap` and `then`/`yield_self`.** Cheap `Kernel` additions. (§11)
 

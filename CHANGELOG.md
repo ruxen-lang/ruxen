@@ -114,6 +114,16 @@ once 1.0.0 ships.
   down ~33%, throughput +1-4% (the loopback bench is otherwise machine-bound).
 
 ### Added
+- **`case/when` and `case/in`.** New `case` and `then` keywords. `case/when` is
+  Ruby's `===` dispatch, desugared in the parser to an `if`/`elsif` chain
+  (`when v` → `subject == v`, `when a, b` → `subject == a || subject == b`,
+  `when lo..hi` → a range-membership test; `then` and newline both separate the
+  body). `case/in` is Ruby's pattern matching, desugared to the same `Match` AST
+  the existing `match` keyword produces (`else` becomes a wildcard arm), so
+  `match` remains a full alias. Both are parser-level desugars, so resolve /
+  typeck / MIR are unchanged. The subject in a `case/when` is re-evaluated per
+  branch (v1), and `ruxen fmt` renders the desugared `if`/`match` form; a
+  surface-preserving `Case` node is a follow-up. Pin `960`; `language.md` §6/§7.
 - **`<=>` three-way comparison (spaceship).** New `Spaceship` lexer token and
   `BinOp::Cmp`. `a <=> b` returns `Int` (-1 / 0 / 1) for two Int, two Float, or
   two String operands, lowering to `ruxen_int_cmp` / `ruxen_float_cmp` /
