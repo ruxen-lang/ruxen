@@ -1922,6 +1922,18 @@ end";
     }
 
     #[test]
+    fn comma_list_without_equals_reports_a_clear_error() {
+        // `puts "a", "b"` (bare multi-arg, never valid) must NOT cascade a
+        // misleading "parallel assignment arity" error; it reports the missing
+        // parentheses clearly.
+        let diags = parse_errors("def f\n  puts \"a\", \"b\"\nend\n");
+        assert!(
+            diags.iter().any(|d| d.message.contains("parentheses")),
+            "expected a clear comma-list error mentioning parentheses; got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn ternary_desugars_to_if_else() {
         // `c ? a : b` becomes `if c then a else b end`.
         match parse_expr("x > 0 ? 1 : 2").kind {

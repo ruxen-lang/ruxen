@@ -627,7 +627,26 @@ impl Parser {
             self.skip_newlines();
             targets.push(self.parse_expr_bp(2));
         }
-        self.expect(TokenKind::Eq);
+        if !self.eat(TokenKind::Eq) {
+            // A comma list at statement level with no `=` is not a parallel
+            // assignment. Ruxen has no bare comma expressions and bare calls
+            // take a single argument, so this is a mistake (usually a missing
+            // pair of parentheses). Report it clearly instead of cascading a
+            // misleading "parallel assignment" arity error.
+            self.error(
+                "unexpected `,`: a comma list at statement level must be a \
+                 parallel assignment `a, b = ...`; a multi-argument call needs \
+                 parentheses, e.g. `f(a, b)`",
+            );
+            let span = self.span_from(&start);
+            return Expr {
+                kind: ExprKind::MultiAssign {
+                    targets,
+                    values: Vec::new(),
+                },
+                span,
+            };
+        }
         self.skip_newlines();
         let mut values = vec![self.parse_expr_bp(2)];
         while self.eat(TokenKind::Comma) {
