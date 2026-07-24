@@ -684,6 +684,18 @@ impl Resolver {
                     span,
                 }
             }
+            ast::ExprKind::MultiAssign { targets, values } => {
+                let targets_hir = targets.iter().map(|t| self.resolve_expr(t)).collect();
+                let values_hir = values.iter().map(|v| self.resolve_expr(v)).collect();
+                HirExpr {
+                    kind: HirExprKind::MultiAssign {
+                        targets: targets_hir,
+                        values: values_hir,
+                    },
+                    ty: Ty::Unit,
+                    span,
+                }
+            }
             ast::ExprKind::CompoundAssign { target, op, value } => {
                 let target_hir = self.resolve_expr(target);
                 let value_hir = self.resolve_expr(value);

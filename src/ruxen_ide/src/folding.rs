@@ -286,6 +286,14 @@ impl<'a> HirWalker<'a> {
                     self.walk_expr(e);
                 }
             }
+            HirExprKind::MultiAssign { targets, values } => {
+                for t in targets {
+                    self.walk_expr(t);
+                }
+                for v in values {
+                    self.walk_expr(v);
+                }
+            }
             HirExprKind::Tuple(es) | HirExprKind::ArrayLiteral(es) => {
                 for e in es {
                     self.walk_expr(e);

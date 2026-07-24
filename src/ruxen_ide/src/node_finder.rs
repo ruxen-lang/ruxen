@@ -292,6 +292,14 @@ impl NodeFinder {
                     self.visit_expr(val);
                 }
             }
+            HirExprKind::MultiAssign { targets, values } => {
+                for t in targets {
+                    self.visit_expr(t);
+                }
+                for v in values {
+                    self.visit_expr(v);
+                }
+            }
             HirExprKind::Tuple(elems) | HirExprKind::ArrayLiteral(elems) => {
                 for e in elems {
                     self.visit_expr(e);

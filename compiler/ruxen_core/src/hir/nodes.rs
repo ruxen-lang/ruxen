@@ -216,6 +216,14 @@ pub enum HirExprKind {
         value: Box<HirExpr>,
     },
 
+    /// Parallel assignment `a, b = 1, 2` (targets/values equal length). All
+    /// values are evaluated into temporaries before any target is written, so
+    /// swaps (`a, b = b, a`) are simultaneous. Lowered in MIR.
+    MultiAssign {
+        targets: Vec<HirExpr>,
+        values: Vec<HirExpr>,
+    },
+
     /// Return from function
     Return(Option<Box<HirExpr>>),
 

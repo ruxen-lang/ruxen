@@ -318,6 +318,14 @@ fn walk_expr(ctx: &Ctx<'_>, expr: &HirExpr, out: &mut Vec<InlayHint>) {
                 walk_expr(ctx, v, out);
             }
         }
+        HirExprKind::MultiAssign { targets, values } => {
+            for t in targets {
+                walk_expr(ctx, t, out);
+            }
+            for v in values {
+                walk_expr(ctx, v, out);
+            }
+        }
         HirExprKind::Tuple(xs) | HirExprKind::ArrayLiteral(xs) => {
             for x in xs {
                 walk_expr(ctx, x, out);

@@ -301,6 +301,11 @@ pub fn format_expr_short(e: &Expr) -> String {
                 format_expr_short(value)
             )
         }
+        ExprKind::MultiAssign { targets, values } => {
+            let ts: Vec<String> = targets.iter().map(format_expr_short).collect();
+            let vs: Vec<String> = values.iter().map(format_expr_short).collect();
+            format!("{} = {}", ts.join(", "), vs.join(", "))
+        }
         ExprKind::CompoundAssign { target, op, value } => {
             format!(
                 "{} {:?}= {}",

@@ -61,6 +61,9 @@ impl<'a> Lowerer<'a> {
             HirExprKind::Assign { .. } | HirExprKind::CompoundAssign { .. } => {
                 self.lower_assign(expr)
             }
+            HirExprKind::MultiAssign { targets, values } => {
+                self.lower_multiassign(targets, values)
+            }
 
             // Constructors / aggregates
             HirExprKind::Construct { .. }

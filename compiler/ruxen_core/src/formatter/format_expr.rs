@@ -161,6 +161,20 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
             nest(INDENT_WIDTH, format_expr(value, comments)),
         ])),
 
+        ExprKind::MultiAssign { targets, values } => {
+            let render = |exprs: &[Expr]| {
+                join(
+                    text(", "),
+                    exprs.iter().map(|e| format_expr(e, comments)).collect(),
+                )
+            };
+            group(concat(vec![
+                render(targets),
+                text(" = "),
+                nest(INDENT_WIDTH, render(values)),
+            ]))
+        }
+
         ExprKind::CompoundAssign { target, op, value } => group(concat(vec![
             format_expr(target, comments),
             text(" "),

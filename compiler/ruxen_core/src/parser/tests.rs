@@ -1880,4 +1880,44 @@ end";
             other => panic!("expected `a && (a = b)`, got {other:?}"),
         }
     }
+
+    #[test]
+    fn multiple_assignment_parses_target_and_value_lists() {
+        match parse_stmt("a, b = 1, 2") {
+            Statement::Expression(Expr {
+                kind: ExprKind::MultiAssign { targets, values },
+                ..
+            }) => {
+                assert_eq!(targets.len(), 2);
+                assert_eq!(values.len(), 2);
+            }
+            other => panic!("expected MultiAssign, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn multiple_assignment_swap_form_parses() {
+        match parse_stmt("a, b = b, a") {
+            Statement::Expression(Expr {
+                kind: ExprKind::MultiAssign { targets, values },
+                ..
+            }) => {
+                assert_eq!(targets.len(), 2);
+                assert_eq!(values.len(), 2);
+            }
+            other => panic!("expected MultiAssign, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn single_assignment_is_not_a_multiassign() {
+        // A plain `a = 1` (no comma) stays an ordinary assignment.
+        assert!(matches!(
+            parse_stmt("a = 1"),
+            Statement::Expression(Expr {
+                kind: ExprKind::Assign { .. },
+                ..
+            })
+        ));
+    }
 }

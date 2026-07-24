@@ -94,8 +94,8 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | Class var `@@x` | MISSING | probe: `found At` in class body | Use a `const` or class method. |
 | Global `$x` | MISSING | probe: `E0006` on `$` | |
 | Constant `CONST = ...` | DONE | `ConstDef`; case `44` | `const NAME: T = val`. |
-| Multiple assignment `a, b = 1, 2` | MISSING | probe: `found Comma` | Use `let (a, b) = (1, 2)` tuple destructuring instead. High-value gap. |
-| Parallel swap `a, b = b, a` | MISSING | probe: `found Comma` | Depends on multiple assignment. |
+| Multiple assignment `a, b = 1, 2` | DONE | `ExprKind::MultiAssign`; case `957` | Targets and values equal length; values snapshotted before any store. |
+| Parallel swap `a, b = b, a` | DONE | case `957` | Simultaneous (all RHS evaluated to temps first). |
 | Destructuring `let (a, b) = t` | DONE | probe PASS; case `123` | Ruxen's substitute for LHS destructuring. |
 | Splat assign `a, *b = [1,2,3]` | MISSING | probe: `found Comma` | |
 | Nested destructure `(a,(b,c)) = ...` | PARTIAL | tuple patterns only | Works for tuples; no array-splat form. |
@@ -378,7 +378,7 @@ truly irreducible slice is excluded from both (listed last).
 
 1. ~~**Statement modifiers** `X if c` / `X unless c` / `X while c` / `X until c`.~~ **DONE** (parser desugar; `return … unless c` handled). Pin `953`. (§6)
 2. ~~**`unless` and `until`** (statement + modifier).~~ **DONE** (`Until` token added; block + modifier forms). Pin `953`. (§6)
-3. **Multiple assignment** `a, b = 1, 2` and swap `a, b = b, a`; then splat `a, *b = xs`. (§2)
+3. ~~**Multiple assignment** `a, b = 1, 2` and swap `a, b = b, a`~~ **DONE** (dedicated `MultiAssign` node; simultaneous swap; targets must be pre-declared `var`s). Splat `a, *b = xs` remains a follow-up. Pin `957`. (§2)
 4. ~~**`||=` and `&&=`.**~~ **DONE** (Bool conditional-assign; desugars to `a || (a = b)` / `a && (a = b)`). This also uncovered and fixed a **short-circuit bug**: `&&`/`||` were evaluating both operands eagerly. Pins `954`, `955`. (§2)
 5. **Ternary `c ? a : b`.** (§3)
 6. ~~**`**` power operator.**~~ **DONE** (`StarStar` token + `BinOp::Pow`, right-associative, routed to `ruxen_int_pow`/`ruxen_float_pow`). Fixed the silent miscompile (`2 ** 8` was `16`, now `256`). Pin `952`. (§3)

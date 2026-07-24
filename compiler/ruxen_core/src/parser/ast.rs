@@ -386,6 +386,15 @@ pub enum ExprKind {
         op: BinOp,
         value: Box<Expr>,
     },
+    /// Ruby parallel assignment `a, b = 1, 2` (and swap `a, b = b, a`).
+    /// `targets` and `values` have equal length; all right-hand values are
+    /// evaluated into temporaries before any target is written, so a swap is
+    /// simultaneous. Kept as its own node (not desugared in the parser) so
+    /// `ruxen fmt` renders the original `a, b = ...` surface.
+    MultiAssign {
+        targets: Vec<Expr>,
+        values: Vec<Expr>,
+    },
 
     // Control flow
     If(IfExpr),

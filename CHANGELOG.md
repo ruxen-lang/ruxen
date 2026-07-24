@@ -114,6 +114,16 @@ once 1.0.0 ships.
   down ~33%, throughput +1-4% (the loopback bench is otherwise machine-bound).
 
 ### Added
+- **Parallel assignment `a, b = 1, 2` (and simultaneous swap `a, b = b, a`).**
+  A dedicated `ExprKind::MultiAssign` / `HirExprKind::MultiAssign` node (kept
+  through to MIR so `ruxen fmt` renders the original surface). All right-hand
+  values are lowered into fresh temporaries before any target is written, so a
+  swap is simultaneous rather than sequential. Targets and values must be equal
+  in count (an arity mismatch is a parse error) and targets must be pre-declared
+  `var`s. MIR reuses one `store_value_into_target` helper (factored out of
+  single-`Assign` lowering) for every target kind (variable, field, index).
+  Splat `a, *b = xs` and a parallel swap of two heap-owned bindings are
+  follow-ups. Pin `957`; Ruby-parity `language.md` §2 / P0.3.
 - **`puts` / `print` accept any value (single-argument form).** `puts 42`,
   `puts 3.14`, `puts true`, and `puts some_struct` now work without the
   `"#{x}"` interpolation tax. When a `puts`/`eputs`/`print`/`println`/`eprintln`

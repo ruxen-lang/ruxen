@@ -102,7 +102,7 @@ impl Parser {
     }
 
     /// Core Pratt parser.
-    pub(super) fn parse_expr_bp(&mut self, min_bp: u8) -> Expr {
+    pub(in crate::parser) fn parse_expr_bp(&mut self, min_bp: u8) -> Expr {
         self.skip_newlines();
         let mut lhs = self.parse_prefix();
 

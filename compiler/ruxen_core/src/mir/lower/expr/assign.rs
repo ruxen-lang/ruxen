@@ -1,6 +1,150 @@
 use super::super::*;
 
 impl<'a> Lowerer<'a> {
+    /// Store an already-lowered value `val` into an assignment target place
+    /// (a plain/captured/cell-promoted variable, a struct field, or a
+    /// fixed-array / backing-Vec index). Shared by single `Assign` lowering and
+    /// `MultiAssign` so both use one code path for every target kind.
+    fn store_value_into_target(
+        &mut self,
+        target: &HirExpr,
+        val: MirValue,
+    ) -> Result<(), String> {
+        match &target.kind {
+            HirExprKind::VarRef(def_id) => {
+                // Captured variable inside a closure body is ByRef (mutation
+                // requires cell-shared storage).
+                if let Some(slot) = self.capture_map.get(def_id).copied() {
+                    let cap_ptr = self.captures_ptr_local.unwrap();
+                    let cell_ptr = self.new_temp(Ty::Int);
+                    self.emit(MirInst::GetField {
+                        dest: cell_ptr,
+                        base: cap_ptr,
+                        field_index: slot.slot_index,
+                    });
+                    self.emit(MirInst::SetField {
+                        base: cell_ptr,
+                        field_index: 0,
+                        value: val,
+                    });
+                    return Ok(());
+                }
+                if let Some(&dest) = self.def_to_local.get(def_id) {
+                    if self.cell_promoted.contains(def_id) {
+                        // Write-through the cell.
+                        self.emit(MirInst::SetField {
+                            base: dest,
+                            field_index: 0,
+                            value: val,
+                        });
+                    } else {
+                        // Re-binding a heap-owned local: free the prior
+                        // allocation before the new pointer overwrites it. (P0.2)
+                        if self.initialized_heap_locals.contains(&dest) {
+                            self.emit(MirInst::Call {
+                                dest: None,
+                                callee: "ruxen_dealloc".to_string(),
+                                args: vec![MirValue::Use(dest)],
+                            });
+                        }
+                        self.emit(MirInst::Assign { dest, value: val });
+                        let dest_ty = self
+                            .fn_ref()
+                            .locals
+                            .iter()
+                            .find(|l| l.id == dest)
+                            .map(|l| l.ty.clone());
+                        if matches!(
+                            dest_ty,
+                            Some(Ty::Class { .. }) | Some(Ty::Struct { .. }) | Some(Ty::Enum { .. })
+                        ) {
+                            self.initialized_heap_locals.insert(dest);
+                        }
+                    }
+                }
+            }
+            HirExprKind::FieldAccess {
+                object, field_idx, ..
+            } => {
+                let base_local = self.lower_expr(object)?;
+                if let Some(base) = base_local {
+                    // Phase B-4: shift past class_info_ptr header for
+                    // runtime-dispatch classes.
+                    let shift = self.class_field_shift_for_ty(&object.ty);
+                    self.emit(MirInst::SetField {
+                        base,
+                        field_index: *field_idx + shift,
+                        value: val,
+                    });
+                }
+            }
+            // `xs[i] = v` index assignment (Q9). Mirrors the read path in
+            // `lower_index`: a fixed-array with a literal index stores a slot
+            // directly; a backing-Vec receiver calls the bounds-checked
+            // `ruxen_vec_set`. Map (`m[k] = v`) still goes through `.insert`.
+            HirExprKind::Index { object, index } => {
+                if matches!(object.ty, Ty::FixedArray(_, _)) {
+                    if let HirExprKind::IntLiteral(n) = &index.kind {
+                        if let Some(base) = self.lower_expr(object)? {
+                            self.emit(MirInst::SetField {
+                                base,
+                                field_index: *n as usize,
+                                value: val,
+                            });
+                        }
+                        return Ok(());
+                    }
+                }
+                if super::index::is_indexable_vec_ty(&object.ty) {
+                    let base_local = self.lower_expr(object)?;
+                    let idx_local = self.lower_expr(index)?;
+                    if let (Some(base), Some(idx)) = (base_local, idx_local) {
+                        self.emit(MirInst::Call {
+                            dest: None,
+                            callee: "ruxen_vec_set".to_string(),
+                            args: vec![MirValue::Use(base), MirValue::Use(idx), val],
+                        });
+                    }
+                }
+            }
+            _ => {
+                // Other assignment targets are not stored (no-op for now).
+            }
+        }
+        Ok(())
+    }
+
+    /// Parallel assignment `a, b = e1, e2`. Every right-hand value is lowered
+    /// into a temporary FIRST, then each temporary is stored into its target,
+    /// so `a, b = b, a` swaps simultaneously. (v1: values are Copy/value types
+    /// or fresh allocations; a parallel swap of two heap-owned bindings is a
+    /// documented follow-up because the reassign-frees-old-pointer path would
+    /// alias.) Produces no value (Unit statement).
+    pub(super) fn lower_multiassign(
+        &mut self,
+        targets: &[HirExpr],
+        values: &[HirExpr],
+    ) -> Result<Option<LocalId>, String> {
+        // Snapshot every RHS into a FRESH temp before any target is written. A
+        // bare `Use(var)` would alias the variable's storage, so on `a, b = b, a`
+        // the second store would read the already-overwritten `a`. Copying into a
+        // new temp captures the pre-assignment value.
+        let mut snapshots = Vec::with_capacity(values.len());
+        for value in values {
+            let v = self.lower_expr(value)?;
+            let temp = self.new_temp(value.ty.clone());
+            self.emit(MirInst::Assign {
+                dest: temp,
+                value: local_to_value(v),
+            });
+            snapshots.push(MirValue::Use(temp));
+        }
+        for (target, val) in targets.iter().zip(snapshots) {
+            self.store_value_into_target(target, val)?;
+        }
+        Ok(None)
+    }
+
     pub(super) fn lower_assign(&mut self, expr: &HirExpr) -> Result<Option<LocalId>, String> {
         match &expr.kind {
             // ── Assignment ──────────────────────────────────────────
@@ -44,114 +188,7 @@ impl<'a> Lowerer<'a> {
 
                 let val_local = self.lower_expr(value)?;
                 let val = local_to_value(val_local);
-
-                match &target.kind {
-                    HirExprKind::VarRef(def_id) => {
-                        // Captured variable inside a closure body — must be
-                        // ByRef (mutation requires cell-shared storage).
-                        if let Some(slot) = self.capture_map.get(def_id).copied() {
-                            let cap_ptr = self.captures_ptr_local.unwrap();
-                            let cell_ptr = self.new_temp(Ty::Int);
-                            self.emit(MirInst::GetField {
-                                dest: cell_ptr,
-                                base: cap_ptr,
-                                field_index: slot.slot_index,
-                            });
-                            self.emit(MirInst::SetField {
-                                base: cell_ptr,
-                                field_index: 0,
-                                value: val,
-                            });
-                            return Ok(None);
-                        }
-                        if let Some(&dest) = self.def_to_local.get(def_id) {
-                            if self.cell_promoted.contains(def_id) {
-                                // Write-through the cell.
-                                self.emit(MirInst::SetField {
-                                    base: dest,
-                                    field_index: 0,
-                                    value: val,
-                                });
-                            } else {
-                                // Re-binding a heap-owned local: free the
-                                // prior allocation before the new pointer
-                                // overwrites it. (P0.2)
-                                if self.initialized_heap_locals.contains(&dest) {
-                                    self.emit(MirInst::Call {
-                                        dest: None,
-                                        callee: "ruxen_dealloc".to_string(),
-                                        args: vec![MirValue::Use(dest)],
-                                    });
-                                }
-                                self.emit(MirInst::Assign { dest, value: val });
-                                let dest_ty = self
-                                    .fn_ref()
-                                    .locals
-                                    .iter()
-                                    .find(|l| l.id == dest)
-                                    .map(|l| l.ty.clone());
-                                if matches!(
-                                    dest_ty,
-                                    Some(Ty::Class { .. })
-                                        | Some(Ty::Struct { .. })
-                                        | Some(Ty::Enum { .. })
-                                ) {
-                                    self.initialized_heap_locals.insert(dest);
-                                }
-                            }
-                        }
-                    }
-                    HirExprKind::FieldAccess {
-                        object, field_idx, ..
-                    } => {
-                        let base_local = self.lower_expr(object)?;
-                        if let Some(base) = base_local {
-                            // Phase B-4: shift past class_info_ptr
-                            // header for runtime-dispatch classes.
-                            let shift = self.class_field_shift_for_ty(&object.ty);
-                            self.emit(MirInst::SetField {
-                                base,
-                                field_index: *field_idx + shift,
-                                value: val,
-                            });
-                        }
-                    }
-                    // `xs[i] = v` index assignment (Q9). Mirrors the read
-                    // path in `lower_index`: a fixed-array with a literal
-                    // index stores a slot directly; a backing-Vec receiver
-                    // calls the bounds-checked `ruxen_vec_set`. Previously
-                    // this fell to the no-op arm below and the write was
-                    // silently dropped (compiled, did nothing). Map (`m[k]
-                    // = v`) still goes through `.insert`; not handled here.
-                    HirExprKind::Index { object, index } => {
-                        if matches!(object.ty, Ty::FixedArray(_, _)) {
-                            if let HirExprKind::IntLiteral(n) = &index.kind {
-                                if let Some(base) = self.lower_expr(object)? {
-                                    self.emit(MirInst::SetField {
-                                        base,
-                                        field_index: *n as usize,
-                                        value: val,
-                                    });
-                                }
-                                return Ok(None);
-                            }
-                        }
-                        if super::index::is_indexable_vec_ty(&object.ty) {
-                            let base_local = self.lower_expr(object)?;
-                            let idx_local = self.lower_expr(index)?;
-                            if let (Some(base), Some(idx)) = (base_local, idx_local) {
-                                self.emit(MirInst::Call {
-                                    dest: None,
-                                    callee: "ruxen_vec_set".to_string(),
-                                    args: vec![MirValue::Use(base), MirValue::Use(idx), val],
-                                });
-                            }
-                        }
-                    }
-                    _ => {
-                        // Other assignment targets — skip for now.
-                    }
-                }
+                self.store_value_into_target(target, val)?;
                 Ok(None)
             }
 

@@ -1056,6 +1056,25 @@ impl<'a> InferenceEngine<'a> {
                 }
             }
 
+            HirExprKind::MultiAssign { targets, values } => {
+                // Parallel assignment `a, b = e1, e2`. Infer every value and
+                // target, then unify each target with its value so a type
+                // mismatch is reported (arity is equalized by the parser). The
+                // assignment itself is Unit.
+                for value in values.iter_mut() {
+                    self.infer_expr(value);
+                }
+                for target in targets.iter_mut() {
+                    self.infer_expr(target);
+                }
+                for (target, value) in targets.iter().zip(values.iter()) {
+                    let target_ty = self.ctx.resolve(&target.ty);
+                    let value_ty = self.ctx.resolve(&value.ty);
+                    let _ = unify(&target_ty, &value_ty, self.ctx, &expr.span);
+                }
+                expr.ty = Ty::Unit;
+            }
+
             HirExprKind::CompoundAssign {
                 target,
                 op: _,

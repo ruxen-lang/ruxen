@@ -197,6 +197,14 @@ fn validate_expr(expr: &HirExpr, diags: &mut Vec<Diagnostic>) {
             validate_expr(target, diags);
             validate_expr(value, diags);
         }
+        HirExprKind::MultiAssign { targets, values } => {
+            for t in targets {
+                validate_expr(t, diags);
+            }
+            for v in values {
+                validate_expr(v, diags);
+            }
+        }
         HirExprKind::CompoundAssign { target, value, .. } => {
             validate_expr(target, diags);
             validate_expr(value, diags);

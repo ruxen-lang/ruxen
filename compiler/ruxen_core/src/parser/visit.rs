@@ -132,6 +132,14 @@ pub fn walk_expr<V: Visit>(v: &mut V, e: &Expr) {
             v.visit_expr(target);
             v.visit_expr(value);
         }
+        ExprKind::MultiAssign { targets, values } => {
+            for t in targets {
+                v.visit_expr(t);
+            }
+            for val in values {
+                v.visit_expr(val);
+            }
+        }
         ExprKind::CompoundAssign { target, value, .. } => {
             v.visit_expr(target);
             v.visit_expr(value);
@@ -449,6 +457,14 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, e: &mut Expr) {
         ExprKind::Assign { target, value } => {
             v.visit_expr_mut(target);
             v.visit_expr_mut(value);
+        }
+        ExprKind::MultiAssign { targets, values } => {
+            for t in targets {
+                v.visit_expr_mut(t);
+            }
+            for val in values {
+                v.visit_expr_mut(val);
+            }
         }
         ExprKind::CompoundAssign { target, value, .. } => {
             v.visit_expr_mut(target);

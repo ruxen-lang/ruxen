@@ -359,6 +359,14 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
 
 ### Language features
 
+- [x] **Parallel assignment `a, b = 1, 2` + swap (DONE 2026-07-24).** Dedicated
+      `MultiAssign` AST/HIR node lowered in MIR; all RHS values snapshotted into
+      fresh temps before any store, so `a, b = b, a` swaps simultaneously.
+      Targets must be pre-declared `var`s; equal target/value counts enforced at
+      parse time. MIR `store_value_into_target` helper factored out of `Assign`
+      lowering and shared. Pin `957`; parity `language.md` §2 / P0.3.
+  - [ ] **Follow-up: splat `a, *b = xs`** and a parallel swap of two heap-owned
+        (non-Copy) bindings (the reassign-frees-old-pointer path would alias).
 - [x] **`puts`/`print` accept any value, single-arg (DONE 2026-07-23).** A
       non-String argument to `puts`/`eputs`/`print`/`println`/`eprintln` is
       converted via its universal `to_s` in typeck (`puts x` becomes

@@ -179,6 +179,21 @@ impl<'a> BorrowChecker<'a> {
                 self.check_assign(target, value, *semantics);
             }
 
+            HirExprKind::MultiAssign { targets, values } => {
+                // Parallel assignment: all values are read first, then each
+                // target is written. Check the value expressions and that every
+                // target is a mutable place; the actual move/store ordering is
+                // handled at MIR. Modeled on `CompoundAssign` (targets are
+                // pre-declared `var`s, so no fresh move-out tracking).
+                for value in values {
+                    self.check_expr(value);
+                }
+                for target in targets {
+                    self.check_assign_target_mutability(target, &expr.span);
+                    self.check_expr(target);
+                }
+            }
+
             HirExprKind::CompoundAssign { target, value, .. } => {
                 // Compound assign requires mutability of target
                 self.check_assign_target_mutability(target, &expr.span);

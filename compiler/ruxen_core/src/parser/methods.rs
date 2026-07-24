@@ -605,8 +605,46 @@ impl Parser {
             TokenKind::Let | TokenKind::Var => Statement::Let(self.parse_let_binding()),
             _ => {
                 let expr = self.parse_expression();
+                // Ruby parallel assignment: `a, b = e1, e2` (and swap
+                // `a, b = b, a`). `parse_expression` stopped at the first `,`
+                // (it is not an infix operator), so a trailing comma here starts
+                // a multi-assignment target list.
+                if self.at(TokenKind::Comma) {
+                    return Statement::Expression(self.parse_multiple_assignment(expr));
+                }
                 Statement::Expression(self.apply_statement_modifier(expr))
             }
+        }
+    }
+
+    /// Parse the tail of a parallel assignment `t1, t2, ... = v1, v2, ...`,
+    /// given the already-parsed first target. Targets and values are parsed at
+    /// a binding power above assignment so a target does not swallow the `=`.
+    fn parse_multiple_assignment(&mut self, first: Expr) -> Expr {
+        let start = first.span.clone();
+        let mut targets = vec![first];
+        while self.eat(TokenKind::Comma) {
+            self.skip_newlines();
+            targets.push(self.parse_expr_bp(2));
+        }
+        self.expect(TokenKind::Eq);
+        self.skip_newlines();
+        let mut values = vec![self.parse_expr_bp(2)];
+        while self.eat(TokenKind::Comma) {
+            self.skip_newlines();
+            values.push(self.parse_expr_bp(2));
+        }
+        let span = self.span_from(&start);
+        if targets.len() != values.len() {
+            self.error(&format!(
+                "parallel assignment needs equal counts: {} targets but {} values",
+                targets.len(),
+                values.len()
+            ));
+        }
+        Expr {
+            kind: ExprKind::MultiAssign { targets, values },
+            span,
         }
     }
 
