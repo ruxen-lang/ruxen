@@ -64,6 +64,7 @@ pub fn binop_prec(op: BinOp) -> u8 {
         BinOp::Or => 3,
         BinOp::And => 5,
         BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => 7,
+        BinOp::Cmp => 7,
         // `~=` shares the comparison tier (std.regex spec).
         BinOp::MatchOp => 7,
         BinOp::BitOr => 11,

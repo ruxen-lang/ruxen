@@ -320,6 +320,38 @@ impl<'a> Lowerer<'a> {
                     return Ok(Some(dest));
                 }
 
+                // ── Three-way comparison `a <=> b` (spaceship) ──
+                // Returns Int (-1 / 0 / 1). Route by operand type: two Strings
+                // → `ruxen_str_spaceship`; any float operand → `ruxen_float_cmp`
+                // (int side coerced to f64); otherwise `ruxen_int_cmp`.
+                if matches!(op, BinOp::Cmp) {
+                    let dest = self.new_temp(Ty::Int);
+                    if matches!(left.ty, Ty::String) {
+                        self.emit(MirInst::Call {
+                            dest: Some(dest),
+                            callee: "ruxen_str_spaceship".to_string(),
+                            args: vec![lhs_val, rhs_val],
+                        });
+                    } else if matches!(left.ty, Ty::Float | Ty::Float32 | Ty::Float64)
+                        || matches!(right.ty, Ty::Float | Ty::Float32 | Ty::Float64)
+                    {
+                        let l = self.coerce_local_to_float(lhs_local);
+                        let r = self.coerce_local_to_float(rhs_local);
+                        self.emit(MirInst::Call {
+                            dest: Some(dest),
+                            callee: "ruxen_float_cmp".to_string(),
+                            args: vec![local_to_value(l), local_to_value(r)],
+                        });
+                    } else {
+                        self.emit(MirInst::Call {
+                            dest: Some(dest),
+                            callee: "ruxen_int_cmp".to_string(),
+                            args: vec![lhs_val, rhs_val],
+                        });
+                    }
+                    return Ok(Some(dest));
+                }
+
                 // ── Phase 2 stdlib batch 2 (#02): String + String ──
                 // The default `MirInst::BinOp { op: Add, ... }` would
                 // treat both operands as integers and codegen would

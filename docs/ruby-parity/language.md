@@ -114,7 +114,7 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | Power `**` | DONE | `StarStar` token; `BinOp::Pow`; case `952` | Right-associative, binds tighter than unary minus (`-2 ** 2 == -4`). `Int ** Int → Int` (`ruxen_int_pow`), any float operand → `Float` (`ruxen_float_pow`). Fixed the former silent misparse (`2 ** 8` was `16`). |
 | Comparison `< > <= >=` | DONE | cases `126/209` | Auto-`Ord` on structs/enums. |
 | Equality `== !=` | DONE | auto-`PartialEq`; case `206` | |
-| Spaceship `<=>` | MISSING | probe: `found Gt` | No token. Blocks hand-written `Comparable`. |
+| Spaceship `<=>` | DONE | `Spaceship` token; `BinOp::Cmp`; case `959` | Returns `Int` (-1 / 0 / 1) for Int, Float, and String operands (`ruxen_int_cmp` / `ruxen_float_cmp` / `ruxen_str_spaceship`). Routing `Comparable` through it is a follow-up. |
 | Logical `&& \|\| !` | DONE | `BinOp`/`UnaryOp`; case `955` | Now **short-circuit** (branch-CFG lowering). Was eagerly evaluating both operands (a correctness bug: `ptr != nil && ptr.field` touched `ptr.field` when nil); fixed 2026-07-23. |
 | Keyword `and` / `or` / `not` | MISSING | probe: parsed as identifiers | Low-precedence keyword operators absent. |
 | Bitwise `& | ^ << >>` | DONE | `BinOp`; case `812` | |
@@ -359,7 +359,7 @@ standalone and emit empty output at runtime. They are not functional today; the
 | `BEGIN {}` / `END {}` | MISSING | — | |
 | `defined?` | MISSING | §3 | |
 | `__method__` / `__FILE__` / `__LINE__` | MISSING | §1 | |
-| `<=>` spaceship | MISSING | §3 | |
+| `<=>` spaceship | DONE | §3; case `959` | See §3 row. Int/Float/String. |
 | `and`/`or`/`not` | MISSING | §3 | |
 | `nil?` universal predicate | MISSING | probe: `no field nil? on Int` | Non-nullable types make it moot; `Int?` (Option) uses `match`/`?`. |
 
@@ -389,7 +389,7 @@ truly irreducible slice is excluded from both (listed last).
 8. **Symbols `:sym` as a first-class value** (+ `Symbol` type). Unlocks hash symbol-shorthand `{ a: 1 }`, symbol arrays, and reflective-style APIs. (§1)
 9. **Hash symbol-key shorthand `{ a: 1 }`** (rides on symbols). (§1)
 10. **`and` / `or` / `not` keyword operators.** (§3)
-11. **`<=>` spaceship + user-definable `==`/`<=>`** so hand-written `Comparable` works, not only auto-`Ord`. (§3, §9)
+11. **`<=>` spaceship + user-definable `==`/`<=>`** so hand-written `Comparable` works, not only auto-`Ord`. The `<=>` OPERATOR is **DONE** (Int/Float/String, returns -1/0/1, pin `959`); routing `Comparable` through it and user-definable `def <=>` remain. (§3, §9)
 12. **`*args` / `**kwargs` splat params** and required-keyword args `def f(a:)`. (§4)
 13. **General `@ivar` read/write** beyond the `init` auto-assign sugar. (§2)
 14. **`case/when` keyword surface** (`===` dispatch) as sugar over `match`. (§6)

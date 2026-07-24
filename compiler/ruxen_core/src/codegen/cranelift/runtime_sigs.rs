@@ -91,6 +91,11 @@ pub fn compiler_internal_signature(name: &str) -> Option<(Vec<Type>, Option<Type
         "ruxen_int_pow" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_float_pow" => Some((vec![types::F64, types::F64], Some(types::F64))),
 
+        // ── Three-way comparison lowering (`a <=> b`) ────────────────
+        "ruxen_int_cmp" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_float_cmp" => Some((vec![types::F64, types::F64], Some(types::I64))),
+        "ruxen_str_spaceship" => Some((vec![types::I64, types::I64], Some(types::I64))),
+
         // ── Equality / ordering / hashing lowering (`==`, `<=>`) ─────
         // `cranelift/emit` and `llvm/emit/instructions` emit these for
         // the `Compare` instruction on string/collection operands.

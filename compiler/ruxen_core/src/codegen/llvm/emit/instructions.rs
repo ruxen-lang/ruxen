@@ -809,6 +809,11 @@ pub(super) fn emit_binop<'ctx>(
         BinOp::Pow => {
             unreachable!("BinOp::Pow should have been lowered to a runtime call at MIR-lower")
         }
+        // `<=>` is lowered to a `ruxen_*_cmp` runtime Call in
+        // `mir/lower/expr/binops.rs`, never a `MirInst::BinOp`.
+        BinOp::Cmp => {
+            unreachable!("BinOp::Cmp should have been lowered to a runtime call at MIR-lower")
+        }
     })
 }
 

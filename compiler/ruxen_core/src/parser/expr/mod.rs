@@ -52,6 +52,7 @@ fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
         | TokenKind::Gt
         | TokenKind::LtEq
         | TokenKind::GtEq
+        | TokenKind::Spaceship
         | TokenKind::TildeEq => Some((7, 8)),
 
         // Range: non-associative (9, 10)
@@ -333,6 +334,7 @@ fn token_to_binop(kind: &TokenKind) -> BinOp {
         TokenKind::Gt => BinOp::Gt,
         TokenKind::LtEq => BinOp::LtEq,
         TokenKind::GtEq => BinOp::GtEq,
+        TokenKind::Spaceship => BinOp::Cmp,
         TokenKind::AmpAmp => BinOp::And,
         TokenKind::PipePipe => BinOp::Or,
         TokenKind::Amp => BinOp::BitAnd,

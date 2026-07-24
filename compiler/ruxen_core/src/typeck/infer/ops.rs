@@ -305,6 +305,26 @@ impl<'a> InferenceEngine<'a> {
                 ));
                 left.clone()
             }
+            // `<=>` three-way comparison: returns `Int` (-1 / 0 / 1). Operands
+            // must be the same comparable type (numeric or String); MIR routes
+            // to `ruxen_int_cmp` / `ruxen_float_cmp` / `ruxen_str_spaceship`.
+            BinOp::Cmp => {
+                let comparable = (left.is_numeric() && right.is_numeric())
+                    || (*left == Ty::String && *right == Ty::String);
+                if !comparable {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "binary operator `<=>` requires two numeric or two String \
+                             operands, got `{left}` and `{right}`",
+                        ),
+                        span.clone(),
+                        "E0707",
+                    ));
+                } else {
+                    let _ = unify(left, right, self.ctx, span);
+                }
+                Ty::Int
+            }
             // Arithmetic: both sides must be numeric, result is same type
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                 // String concatenation: `String + String` produces a

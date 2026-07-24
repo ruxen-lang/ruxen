@@ -1952,4 +1952,12 @@ end";
         // the identifier by the lexer, so it never reaches this path.)
         assert!(matches!(parse_expr("foo()?").kind, ExprKind::Try(_)));
     }
+
+    #[test]
+    fn spaceship_parses_as_cmp_binop() {
+        assert!(matches!(
+            parse_expr("a <=> b").kind,
+            ExprKind::BinaryOp { op: BinOp::Cmp, .. }
+        ));
+    }
 }

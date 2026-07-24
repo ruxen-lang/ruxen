@@ -80,6 +80,11 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("ruxen_int_pow", i64_ty, [i64_ty, i64_ty]);
     decl!("ruxen_float_pow", f64_ty, [f64_ty, f64_ty]);
 
+    // ── Three-way comparison lowering (`a <=> b`) ───────────────────
+    decl!("ruxen_int_cmp", i64_ty, [i64_ty, i64_ty]);
+    decl!("ruxen_float_cmp", i64_ty, [f64_ty, f64_ty]);
+    decl!("ruxen_str_spaceship", i64_ty, [ptr_ty, ptr_ty]);
+
     // ── Formatter synthesis surface (Debug/Display derive) ──────────
     decl!("ruxen_float_to_string_prec", ptr_ty, [f64_ty, i64_ty]);
     decl!("ruxen_string_truncate_chars", ptr_ty, [ptr_ty, i64_ty]);

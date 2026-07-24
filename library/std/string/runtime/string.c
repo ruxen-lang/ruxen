@@ -45,6 +45,28 @@ int64_t ruxen_int_pow(int64_t base, int64_t exp) {
     return (int64_t)result;
 }
 
+/* Three-way comparison `a <=> b` for integers, returning exactly -1 / 0 / 1
+   (the spaceship convention), unlike a bare subtraction which can overflow. */
+int64_t ruxen_int_cmp(int64_t a, int64_t b) {
+    return (a < b) ? -1 : (a > b) ? 1 : 0;
+}
+
+/* Three-way comparison for floats. NaN operands fall through to 0 (neither
+   `<` nor `>`), matching a total-order-free comparison. */
+int64_t ruxen_float_cmp(double a, double b) {
+    return (a < b) ? -1 : (a > b) ? 1 : 0;
+}
+
+/* `String <=> String`: `strcmp` normalized to the spaceship's -1 / 0 / 1,
+   with the same null handling as `ruxen_string_cmp`. */
+int64_t ruxen_str_spaceship(const char *a, const char *b) {
+    if (!a && !b) return 0;
+    if (!a) return -1;
+    if (!b) return 1;
+    int c = strcmp(a, b);
+    return (c < 0) ? -1 : (c > 0) ? 1 : 0;
+}
+
 /* `a ** b` when either operand is a Float, IEEE-754 `pow` via the compiler
    builtin (avoids a `<math.h>` include, keeping the runtime include order
    untouched; `libm` is linked into every Ruxen binary via std-core). Int

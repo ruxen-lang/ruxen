@@ -696,6 +696,7 @@ fn bin_op_str(op: BinOp) -> &'static str {
         BinOp::Gt => ">",
         BinOp::LtEq => "<=",
         BinOp::GtEq => ">=",
+        BinOp::Cmp => "<=>",
         BinOp::And => "&&",
         BinOp::Or => "||",
         BinOp::BitAnd => "&",

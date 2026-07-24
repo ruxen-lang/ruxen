@@ -512,6 +512,11 @@ pub enum BinOp {
     Gt,
     LtEq,
     GtEq,
+    /// Three-way comparison `a <=> b` (spaceship). Returns `Int` (-1 / 0 / 1).
+    /// Lowers to a runtime call (`ruxen_int_cmp` / `ruxen_float_cmp` /
+    /// `ruxen_str_spaceship`), not a machine instruction; see
+    /// `mir/lower/expr/binops.rs`.
+    Cmp,
     And,
     Or,
     BitAnd,
@@ -546,9 +551,11 @@ impl BinOp {
             BinOp::BitXor => "^",
             BinOp::Shl => "<<",
             BinOp::Shr => ">>",
-            // `Pow` is machine-primitive-only (routed to a runtime call in
-            // MIR), NOT a `def **` method for now, so it desugars to no method.
+            // `Pow` and `Cmp` are machine-primitive-only (routed to a runtime
+            // call in MIR), not `def`-able methods for now, so they desugar to
+            // no method.
             BinOp::Pow
+            | BinOp::Cmp
             | BinOp::Eq
             | BinOp::NotEq
             | BinOp::Lt

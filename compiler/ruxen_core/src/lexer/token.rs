@@ -197,12 +197,13 @@ pub enum TokenKind {
     Percent,  // %
 
     // ── Operators: Comparison ──
-    EqEq,  // ==
-    NotEq, // !=
-    Lt,    // <
-    Gt,    // >
-    LtEq,  // <=
-    GtEq,  // >=
+    EqEq,      // ==
+    NotEq,     // !=
+    Lt,        // <
+    Gt,        // >
+    LtEq,      // <=
+    GtEq,      // >=
+    Spaceship, // <=> three-way comparison, returns -1 / 0 / 1
 
     // ── Operators: Regex Match ──
     TildeEq, // ~= — `s ~= /pat/` regex-match operator (E17xx).

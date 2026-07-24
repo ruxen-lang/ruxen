@@ -538,7 +538,13 @@ impl<'a> Lexer<'a> {
             '<' => {
                 if !self.is_at_end() && self.current() == '=' {
                     self.advance();
-                    self.emit(TokenKind::LtEq, start_byte, start_line, start_col);
+                    if !self.is_at_end() && self.current() == '>' {
+                        // `<=>` three-way comparison (spaceship).
+                        self.advance();
+                        self.emit(TokenKind::Spaceship, start_byte, start_line, start_col);
+                    } else {
+                        self.emit(TokenKind::LtEq, start_byte, start_line, start_col);
+                    }
                 } else if !self.is_at_end() && self.current() == '<' {
                     self.advance();
                     self.emit(TokenKind::Shl, start_byte, start_line, start_col);

@@ -114,6 +114,12 @@ once 1.0.0 ships.
   down ~33%, throughput +1-4% (the loopback bench is otherwise machine-bound).
 
 ### Added
+- **`<=>` three-way comparison (spaceship).** New `Spaceship` lexer token and
+  `BinOp::Cmp`. `a <=> b` returns `Int` (-1 / 0 / 1) for two Int, two Float, or
+  two String operands, lowering to `ruxen_int_cmp` / `ruxen_float_cmp` /
+  `ruxen_str_spaceship` (all normalized to -1/0/1). Sits at the comparison
+  precedence tier. Routing `Comparable` through `<=>` and user-definable
+  `def <=>` are follow-ups. Pin `959`; Ruby-parity `language.md` §3.
 - **Ternary conditional `cond ? a : b`.** Right-associative (`a ? b : c ? d : e`
   parses as `a ? b : (c ? d : e)`), desugared in the parser to an `if`/`else`
   expression. Disambiguated from the `?` try operator by whitespace adjacency:
