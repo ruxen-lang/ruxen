@@ -197,7 +197,9 @@ fn validate_expr(expr: &HirExpr, diags: &mut Vec<Diagnostic>) {
             validate_expr(target, diags);
             validate_expr(value, diags);
         }
-        HirExprKind::MultiAssign { targets, values } => {
+        HirExprKind::MultiAssign {
+            targets, values, ..
+        } => {
             for t in targets {
                 validate_expr(t, diags);
             }
@@ -209,7 +211,9 @@ fn validate_expr(expr: &HirExpr, diags: &mut Vec<Diagnostic>) {
             validate_expr(target, diags);
             validate_expr(value, diags);
         }
-        HirExprKind::Return(Some(e)) | HirExprKind::Break(Some(e)) | HirExprKind::Next(Some(e)) => validate_expr(e, diags),
+        HirExprKind::Return(Some(e)) | HirExprKind::Break(Some(e)) | HirExprKind::Next(Some(e)) => {
+            validate_expr(e, diags)
+        }
         HirExprKind::Closure { body, .. } => validate_expr(body, diags),
         HirExprKind::Construct { fields, .. } => {
             for (_, e) in fields {

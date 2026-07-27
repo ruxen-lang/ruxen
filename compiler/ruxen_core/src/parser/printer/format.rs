@@ -301,8 +301,23 @@ pub fn format_expr_short(e: &Expr) -> String {
                 format_expr_short(value)
             )
         }
-        ExprKind::MultiAssign { targets, values } => {
-            let ts: Vec<String> = targets.iter().map(format_expr_short).collect();
+        ExprKind::MultiAssign {
+            targets,
+            values,
+            splat_target,
+        } => {
+            let ts: Vec<String> = targets
+                .iter()
+                .enumerate()
+                .map(|(index, target)| {
+                    let rendered = format_expr_short(target);
+                    if *splat_target == Some(index) {
+                        format!("*{rendered}")
+                    } else {
+                        rendered
+                    }
+                })
+                .collect();
             let vs: Vec<String> = values.iter().map(format_expr_short).collect();
             format!("{} = {}", ts.join(", "), vs.join(", "))
         }

@@ -26,7 +26,9 @@ in the notes where the answer was non-obvious.
 runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 **compile time** what Ruby does at runtime. So:
 
-- **Control-flow keyword ergonomics and literals are Direct parity.** A surprising number of *cheap, common* Ruby surfaces (statement modifiers, `unless`/`until`, `||=`, multiple assignment, symbols, ternary) are simply **not built yet** and dominate the Direct-parity backlog.
+- **Control-flow keyword ergonomics and literals are Direct parity.** Many cheap,
+  common Ruby surfaces are now built; symbols, keyword operators, richer splat
+  forms, and percent literals remain in the direct-parity burn-down.
 - **Ruby's load-time metaprogramming is re-expressed at compile time** (`derive` / mixins / `extension` / a new macro / attribute-driven codegen / a `match` over a fixed method set). `define_method`, `method_missing`, `attr_accessor`, `send`, `respond_to?`, `Struct`, delegation, and reopening-to-add-methods all get a **compile-time design that produces the same result** so the compiled program never mutates itself at runtime. These are `COMPILE-TIME` (a design + build task), not out-of-scope.
 - **Only the irreducibly-runtime slice is `OUT-OF-SCOPE`**: `eval` of a string unknown until runtime, `binding`, `TracePoint`, `ObjectSpace` heap-walking, and live monkey-patching of *already-compiled* third-party code. Each such row still names the closest compile-time design that covers the real use case.
 - **Ruby's exception model is a deliberate design substitution**, not a gap: `Result` + `?` + `Drop` + `panic!`. A `begin/rescue/ensure` *surface* could be offered later as compile-time sugar over that machinery.
@@ -97,7 +99,7 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | Multiple assignment `a, b = 1, 2` | DONE | `ExprKind::MultiAssign`; case `957` | Targets and values equal length; values snapshotted before any store. Owned Class/Struct/Enum values read from a place (variable/field/index) are rejected (would alias); Copy, String, and fresh-alloc values are allowed. |
 | Parallel swap `a, b = b, a` | PARTIAL | case `957` | Copy and String swap work (simultaneous). A swap of owned Class/Struct/Enum objects is a clean compile error for now (needs move/clone lowering). |
 | Destructuring `let (a, b) = t` | DONE | probe PASS; case `123` | Ruxen's substitute for LHS destructuring. |
-| Splat assign `a, *b = [1,2,3]` | MISSING | probe: `found Comma` | |
+| Splat assign `a, *b = [1,2,3]` | PARTIAL | `MultiAssign::splat_target`; case `963` | Trailing splat supports one Array RHS or a comma-list and is formatter-preserving. `b` must be a pre-declared `Array[T]` variable; `T` is Copy-only. Leading/middle splats, short-input nil-fill, and owned-element clone lowering remain. |
 | Nested destructure `(a,(b,c)) = ...` | PARTIAL | tuple patterns only | Works for tuples; no array-splat form. |
 | `||=` | DONE | `PipePipeEq` token; case `954` | Desugars to `a \|\| (a = b)`. Bool operands (Ruxen is strict-Bool); nilable memoization awaits a `??` operator. |
 | `&&=` | DONE | `AmpAmpEq` token; case `954` | Desugars to `a && (a = b)`. |
@@ -381,7 +383,7 @@ truly irreducible slice is excluded from both (listed last).
 
 1. ~~**Statement modifiers** `X if c` / `X unless c` / `X while c` / `X until c`.~~ **DONE** (parser desugar; `return … unless c` handled). Pin `953`. (§6)
 2. ~~**`unless` and `until`** (statement + modifier).~~ **DONE** (`Until` token added; block + modifier forms). Pin `953`. (§6)
-3. ~~**Multiple assignment** `a, b = 1, 2` and swap `a, b = b, a`~~ **DONE** (dedicated `MultiAssign` node; simultaneous swap; targets must be pre-declared `var`s). Splat `a, *b = xs` remains a follow-up. Pin `957`. (§2)
+3. ~~**Multiple assignment** `a, b = 1, 2` and Copy-value swap `a, b = b, a`.~~ **DONE** (dedicated `MultiAssign` node; simultaneous stores). Trailing Copy-element splat `a, *b = xs` is also built and formatter-preserving; leading/middle splats, short-input nil-fill, owned-object swap, and owned splat elements remain. Pins `957`, `963`. (§2)
 4. ~~**`||=` and `&&=`.**~~ **DONE** (Bool conditional-assign; desugars to `a || (a = b)` / `a && (a = b)`). This also uncovered and fixed a **short-circuit bug**: `&&`/`||` were evaluating both operands eagerly. Pins `954`, `955`. (§2)
 5. ~~**Ternary `c ? a : b`.**~~ **DONE** (parser desugar to `if`/`else`; whitespace-disambiguated from the `?` try operator; right-associative). Pin `958`. (§3)
 6. ~~**`**` power operator.**~~ **DONE** (`StarStar` token + `BinOp::Pow`, right-associative, routed to `ruxen_int_pow`/`ruxen_float_pow`). Fixed the silent miscompile (`2 ** 8` was `16`, now `256`). Pin `952`. (§3)

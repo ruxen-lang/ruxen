@@ -684,13 +684,18 @@ impl Resolver {
                     span,
                 }
             }
-            ast::ExprKind::MultiAssign { targets, values } => {
+            ast::ExprKind::MultiAssign {
+                targets,
+                values,
+                splat_target,
+            } => {
                 let targets_hir = targets.iter().map(|t| self.resolve_expr(t)).collect();
                 let values_hir = values.iter().map(|v| self.resolve_expr(v)).collect();
                 HirExpr {
                     kind: HirExprKind::MultiAssign {
                         targets: targets_hir,
                         values: values_hir,
+                        splat_target: *splat_target,
                     },
                     ty: Ty::Unit,
                     span,

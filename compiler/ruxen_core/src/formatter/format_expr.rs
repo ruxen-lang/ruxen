@@ -161,17 +161,32 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
             nest(INDENT_WIDTH, format_expr(value, comments)),
         ])),
 
-        ExprKind::MultiAssign { targets, values } => {
-            let render = |exprs: &[Expr]| {
+        ExprKind::MultiAssign {
+            targets,
+            values,
+            splat_target,
+        } => {
+            let render = |exprs: &[Expr], splat: Option<usize>| {
                 join(
                     text(", "),
-                    exprs.iter().map(|e| format_expr(e, comments)).collect(),
+                    exprs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, expr)| {
+                            let rendered = format_expr(expr, comments);
+                            if splat == Some(index) {
+                                concat(vec![text("*"), rendered])
+                            } else {
+                                rendered
+                            }
+                        })
+                        .collect(),
                 )
             };
             group(concat(vec![
-                render(targets),
+                render(targets, *splat_target),
                 text(" = "),
-                nest(INDENT_WIDTH, render(values)),
+                nest(INDENT_WIDTH, render(values, None)),
             ]))
         }
 

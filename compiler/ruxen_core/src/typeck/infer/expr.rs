@@ -1072,21 +1072,138 @@ impl<'a> InferenceEngine<'a> {
                 }
             }
 
-            HirExprKind::MultiAssign { targets, values } => {
-                // Parallel assignment `a, b = e1, e2`. Infer every value and
-                // target, then unify each target with its value so a type
-                // mismatch is reported (arity is equalized by the parser). The
-                // assignment itself is Unit.
+            HirExprKind::MultiAssign {
+                targets,
+                values,
+                splat_target,
+            } => {
+                // Parallel assignment `a, b = e1, e2` and trailing assignment
+                // splat `a, *rest = xs`. Infer every RHS before every target;
+                // MIR preserves that evaluation order when it snapshots the
+                // values.
                 for value in values.iter_mut() {
                     self.infer_expr(value);
                 }
                 for target in targets.iter_mut() {
                     self.infer_expr(target);
                 }
-                for (target, value) in targets.iter().zip(values.iter()) {
-                    let target_ty = self.ctx.resolve(&target.ty);
-                    let value_ty = self.ctx.resolve(&value.ty);
-                    let _ = unify(&target_ty, &value_ty, self.ctx, &expr.span);
+
+                if let Some(rest_index) = *splat_target {
+                    let Some(rest_target) = targets.get(rest_index) else {
+                        self.error("invalid assignment splat target".to_string(), &expr.span);
+                        expr.ty = Ty::Unit;
+                        return;
+                    };
+                    if !matches!(rest_target.kind, HirExprKind::VarRef(_)) {
+                        self.error(
+                            "assignment splat target must be a pre-declared `var`".to_string(),
+                            &rest_target.span,
+                        );
+                    }
+
+                    let array_rhs_elem = if values.len() == 1 {
+                        let value_ty = self.ctx.resolve(&values[0].ty);
+                        match value_ty.peel_refs() {
+                            Ty::Array(elem) => Some((**elem).clone()),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(elem_ty) = array_rhs_elem {
+                        for target in targets.iter().take(rest_index) {
+                            let target_ty = self.ctx.resolve(&target.ty);
+                            if let Err(error) = unify(&target_ty, &elem_ty, self.ctx, &expr.span) {
+                                self.type_error(error);
+                            }
+                        }
+                        let rest_ty = self.ctx.resolve(&rest_target.ty);
+                        if matches!(rest_ty, Ty::Array(_)) {
+                            let expected = Ty::Array(Box::new(elem_ty.clone()));
+                            if let Err(error) = unify(&rest_ty, &expected, self.ctx, &expr.span) {
+                                self.type_error(error);
+                            }
+                        } else {
+                            self.error(
+                                format!(
+                                    "assignment splat target must be an owned Array, \
+                                     found `{rest_ty}`"
+                                ),
+                                &rest_target.span,
+                            );
+                        }
+                        if !elem_ty.is_copy_with(self.symbols) {
+                            self.error(
+                                format!(
+                                    "assignment splat currently requires Copy array elements, \
+                                     found `{elem_ty}`; destructuring owned elements needs \
+                                     clone-aware lowering"
+                                ),
+                                &expr.span,
+                            );
+                        }
+                    } else {
+                        if values.len() < rest_index {
+                            self.error(
+                                format!(
+                                    "assignment splat needs at least {rest_index} value(s) \
+                                     before `*rest`, found {}",
+                                    values.len()
+                                ),
+                                &expr.span,
+                            );
+                        }
+                        for (target, value) in targets
+                            .iter()
+                            .take(rest_index)
+                            .zip(values.iter().take(rest_index))
+                        {
+                            let target_ty = self.ctx.resolve(&target.ty);
+                            let value_ty = self.ctx.resolve(&value.ty);
+                            if let Err(error) = unify(&target_ty, &value_ty, self.ctx, &expr.span) {
+                                self.type_error(error);
+                            }
+                        }
+
+                        let rest_ty = self.ctx.resolve(&rest_target.ty);
+                        if let Ty::Array(elem) = rest_ty {
+                            let elem_ty = (*elem).clone();
+                            for value in values.iter().skip(rest_index) {
+                                let value_ty = self.ctx.resolve(&value.ty);
+                                if let Err(error) = unify(&elem_ty, &value_ty, self.ctx, &expr.span)
+                                {
+                                    self.type_error(error);
+                                }
+                            }
+                            if values.len() > rest_index && !elem_ty.is_copy_with(self.symbols) {
+                                self.error(
+                                    format!(
+                                        "assignment splat currently requires Copy rest values, \
+                                         found `{elem_ty}`; collecting owned values needs \
+                                         clone-aware lowering"
+                                    ),
+                                    &expr.span,
+                                );
+                            }
+                        } else {
+                            self.error(
+                                format!(
+                                    "assignment splat target must be an owned Array, \
+                                     found `{rest_ty}`"
+                                ),
+                                &rest_target.span,
+                            );
+                        }
+                    }
+                } else {
+                    for (target, value) in targets.iter().zip(values.iter()) {
+                        let target_ty = self.ctx.resolve(&target.ty);
+                        let value_ty = self.ctx.resolve(&value.ty);
+                        if let Err(error) = unify(&target_ty, &value_ty, self.ctx, &expr.span) {
+                            self.type_error(error);
+                        }
+                    }
                 }
                 // Memory-safety guard (v1): a value that is an owned heap
                 // aggregate (Class/Struct/Enum) READ FROM A PLACE (variable,

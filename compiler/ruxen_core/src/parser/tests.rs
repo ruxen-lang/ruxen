@@ -4,6 +4,13 @@ mod tests {
     use crate::parser::ast::*;
     use crate::parser::Parser;
 
+    fn rx(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/ruxen")
+            .join(format!("{name}.rx"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    }
+
     fn parse(input: &str) -> Program {
         let mut lexer = Lexer::new(input);
         let tokens = lexer.tokenize().expect("lexer failed");
@@ -1885,11 +1892,17 @@ end";
     fn multiple_assignment_parses_target_and_value_lists() {
         match parse_stmt("a, b = 1, 2") {
             Statement::Expression(Expr {
-                kind: ExprKind::MultiAssign { targets, values },
+                kind:
+                    ExprKind::MultiAssign {
+                        targets,
+                        values,
+                        splat_target,
+                    },
                 ..
             }) => {
                 assert_eq!(targets.len(), 2);
                 assert_eq!(values.len(), 2);
+                assert_eq!(splat_target, None);
             }
             other => panic!("expected MultiAssign, got {other:?}"),
         }
@@ -1899,14 +1912,59 @@ end";
     fn multiple_assignment_swap_form_parses() {
         match parse_stmt("a, b = b, a") {
             Statement::Expression(Expr {
-                kind: ExprKind::MultiAssign { targets, values },
+                kind:
+                    ExprKind::MultiAssign {
+                        targets,
+                        values,
+                        splat_target,
+                    },
                 ..
             }) => {
                 assert_eq!(targets.len(), 2);
                 assert_eq!(values.len(), 2);
+                assert_eq!(splat_target, None);
             }
             other => panic!("expected MultiAssign, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn trailing_assignment_splat_records_its_target() {
+        let program = parse(&rx("multiassign_splat"));
+        let TopLevelItem::Function(main) = &program.items[0] else {
+            panic!("expected main function");
+        };
+        let multiassign = main
+            .body
+            .statements
+            .iter()
+            .find_map(|statement| match statement {
+                Statement::Expression(Expr {
+                    kind:
+                        ExprKind::MultiAssign {
+                            targets,
+                            values,
+                            splat_target,
+                        },
+                    ..
+                }) if splat_target.is_some() => Some((targets, values, splat_target)),
+                _ => None,
+            })
+            .expect("expected assignment splat");
+        assert_eq!(multiassign.0.len(), 2);
+        assert_eq!(multiassign.1.len(), 1);
+        assert_eq!(*multiassign.2, Some(1));
+    }
+
+    #[test]
+    fn assignment_splat_must_be_the_final_target() {
+        let diagnostics = parse_err(&rx("multiassign_splat_nonfinal"));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("final target")),
+            "expected final-target diagnostic, got {diagnostics:?}"
+        );
     }
 
     #[test]

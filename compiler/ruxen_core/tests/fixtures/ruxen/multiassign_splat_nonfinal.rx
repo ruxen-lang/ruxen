@@ -1,0 +1,7 @@
+def main
+  var first = 0
+  var rest: Array[Int] = []
+  var last = 0
+  var values = [1, 2, 3]
+  first, *rest, last = values
+end

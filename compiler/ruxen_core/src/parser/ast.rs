@@ -387,13 +387,15 @@ pub enum ExprKind {
         value: Box<Expr>,
     },
     /// Ruby parallel assignment `a, b = 1, 2` (and swap `a, b = b, a`).
-    /// `targets` and `values` have equal length; all right-hand values are
-    /// evaluated into temporaries before any target is written, so a swap is
-    /// simultaneous. Kept as its own node (not desugared in the parser) so
-    /// `ruxen fmt` renders the original `a, b = ...` surface.
+    /// Without a splat, `targets` and `values` have equal length. A trailing
+    /// assignment splat (`a, *rest = xs`) records the target index and permits
+    /// one Array RHS or a value list. All right-hand values are evaluated
+    /// before any target is written. Kept as its own node (not desugared in
+    /// the parser) so `ruxen fmt` preserves the authored surface.
     MultiAssign {
         targets: Vec<Expr>,
         values: Vec<Expr>,
+        splat_target: Option<usize>,
     },
 
     // Control flow

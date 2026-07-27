@@ -63,6 +63,15 @@ fn test_simple_function() {
 }
 
 #[test]
+fn multiassign_splat_preserves_the_star() {
+    let source = fmt_fixture("multiassign_splat");
+    let result = format(&source);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert!(result.output.contains("first, *rest = [1, 2, 3]"));
+    assert_idempotent(&source);
+}
+
+#[test]
 fn test_class_definition() {
     let source = fmt_fixture("test_class_definition");
     let result = format(&source);

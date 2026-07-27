@@ -114,6 +114,18 @@ once 1.0.0 ships.
   down ~33%, throughput +1-4% (the loopback bench is otherwise machine-bound).
 
 ### Added
+- **Trailing assignment splat `a, *rest = values`.** `MultiAssign` now records
+  a final splat target and preserves the `*` through AST, HIR, IDE traversal,
+  and `ruxen fmt`. A single Array RHS is evaluated once: prefix targets receive
+  indexed snapshots and `rest` receives a fresh tail Array. A comma-list RHS
+  (`a, *rest = 1, 2, 3`) snapshots every value and collects the remainder.
+  The splat target must be a pre-declared `var` whose type is `Array[T]`.
+  Element splitting is currently limited to Copy `T`; owned String/class
+  elements produce a clean type error until clone-aware lowering lands. MIR
+  frees the target's prior Array before rebinding it, and classifies
+  `ruxen_vec_skip` as a fresh allocation so the new tail is dropped normally.
+  Parser, formatter, typeck, runtime-ABI parity, Cranelift, and LLVM execution
+  are pinned by `.rx` fixtures and release-e2e case `963`.
 - **`case/when` and `case/in`.** New `case` and `then` keywords. `case/when` is
   Ruby's `===` dispatch, desugared in the parser to an `if`/`elsif` chain
   (`when v` → `subject == v`, `when a, b` → `subject == a || subject == b`,
@@ -145,8 +157,8 @@ once 1.0.0 ships.
   in count (an arity mismatch is a parse error) and targets must be pre-declared
   `var`s. MIR reuses one `store_value_into_target` helper (factored out of
   single-`Assign` lowering) for every target kind (variable, field, index).
-  Splat `a, *b = xs` and a parallel swap of two heap-owned bindings are
-  follow-ups. Pin `957`; Ruby-parity `language.md` §2 / P0.3.
+  A parallel swap of two heap-owned bindings remains a follow-up. Pin `957`;
+  Ruby-parity `language.md` §2 / P0.3.
 - **`puts` / `print` accept any value (single-argument form).** `puts 42`,
   `puts 3.14`, `puts true`, and `puts some_struct` now work without the
   `"#{x}"` interpolation tax. When a `puts`/`eputs`/`print`/`println`/`eprintln`

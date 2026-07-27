@@ -383,13 +383,26 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
 - [x] **Parallel assignment `a, b = 1, 2` + swap (DONE 2026-07-24).** Dedicated
       `MultiAssign` AST/HIR node lowered in MIR; all RHS values snapshotted into
       fresh temps before any store, so `a, b = b, a` swaps simultaneously.
-      Targets must be pre-declared `var`s; equal target/value counts enforced at
-      parse time. MIR `store_value_into_target` helper factored out of `Assign`
-      lowering and shared. Pin `957`; parity `language.md` §2 / P0.3.
-  - [ ] **Follow-up: splat `a, *b = xs`** and parallel assignment of owned
-        Class/Struct/Enum values read from a place (e.g. a swap of two objects).
-        The latter is currently a clean compile error (a review pass found the
-        naive lowering double-frees); it needs proper move/clone lowering. A
+      Targets must be pre-declared `var`s; without a splat, equal target/value
+      counts are enforced at parse time. MIR `store_value_into_target` helper
+      factored out of `Assign` lowering and shared. Pin `957`; parity
+      `language.md` §2 / P0.3.
+  - [x] **Follow-up: trailing assignment splat `a, *b = xs` (DONE
+        2026-07-27).** A final splat target accepts either one `Array[T]` RHS or
+        a comma-list (`a, *b = 1, 2, 3`), evaluates every RHS before stores, and
+        preserves the `*` in `ruxen fmt`. The splat target is a pre-declared
+        `var Array[T]`; `T` must currently be Copy because splitting owned
+        String/class elements needs clone-aware lowering. The prior target Array
+        is freed before rebind, and the fresh tail result is ownership-classified.
+        Pin `963` plus parser/formatter/typeck `.rx` fixtures.
+  - [ ] **Remaining assignment-splat parity:** leading/middle splats, Ruby's
+        nil-fill behavior when the Array has fewer prefix elements, and owned
+        element splitting. The last item shares the clone-aware ownership work
+        needed by owned parallel assignment.
+  - [ ] **Follow-up: parallel assignment of owned Class/Struct/Enum values read
+        from a place** (e.g. a swap of two objects). This is currently a clean
+        compile error (a review pass found the naive lowering double-frees); it
+        needs proper move/clone lowering. A
         second review pass flipped the guard to an allow-list of freshly-produced
         values, so a place read wrapped in a ternary/`if`/`match`/`cast` is also
         rejected (the deny-list only inspected the top-level node and let those

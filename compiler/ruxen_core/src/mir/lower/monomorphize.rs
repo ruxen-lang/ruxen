@@ -1191,7 +1191,9 @@ fn walk_calls_in_expr(expr: &HirExpr, f: &mut impl FnMut(GenericCall<'_>)) {
             walk_calls_in_expr(target, f);
             walk_calls_in_expr(value, f);
         }
-        HirExprKind::MultiAssign { targets, values } => {
+        HirExprKind::MultiAssign {
+            targets, values, ..
+        } => {
             for t in targets {
                 walk_calls_in_expr(t, f);
             }
@@ -1427,7 +1429,9 @@ fn walk_tys_in_expr(expr: &HirExpr, f: &mut impl FnMut(&Ty)) {
             walk_tys_in_expr(target, f);
             walk_tys_in_expr(value, f);
         }
-        HirExprKind::MultiAssign { targets, values } => {
+        HirExprKind::MultiAssign {
+            targets, values, ..
+        } => {
             for t in targets {
                 walk_tys_in_expr(t, f);
             }

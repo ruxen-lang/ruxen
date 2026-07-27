@@ -618,14 +618,23 @@ impl Parser {
     }
 
     /// Parse the tail of a parallel assignment `t1, t2, ... = v1, v2, ...`,
-    /// given the already-parsed first target. Targets and values are parsed at
-    /// a binding power above assignment so a target does not swallow the `=`.
+    /// given the already-parsed first target. A trailing target may be an
+    /// assignment splat (`a, *rest = xs`). Targets and values are parsed at a
+    /// binding power above assignment so a target does not swallow the `=`.
     fn parse_multiple_assignment(&mut self, first: Expr) -> Expr {
         let start = first.span.clone();
         let mut targets = vec![first];
+        let mut splat_target = None;
         while self.eat(TokenKind::Comma) {
             self.skip_newlines();
+            let is_splat = self.eat(TokenKind::Star);
+            if is_splat && splat_target.is_some() {
+                self.error("parallel assignment permits only one splat target");
+            }
             targets.push(self.parse_expr_bp(2));
+            if is_splat && splat_target.is_none() {
+                splat_target = Some(targets.len() - 1);
+            }
         }
         if !self.eat(TokenKind::Eq) {
             // A comma list at statement level with no `=` is not a parallel
@@ -643,6 +652,7 @@ impl Parser {
                 kind: ExprKind::MultiAssign {
                     targets,
                     values: Vec::new(),
+                    splat_target,
                 },
                 span,
             };
@@ -654,7 +664,11 @@ impl Parser {
             values.push(self.parse_expr_bp(2));
         }
         let span = self.span_from(&start);
-        if targets.len() != values.len() {
+        if let Some(index) = splat_target {
+            if index + 1 != targets.len() {
+                self.error("assignment splat must be the final target; use `a, *rest = values`");
+            }
+        } else if targets.len() != values.len() {
             self.error(&format!(
                 "parallel assignment needs equal counts: {} targets but {} values",
                 targets.len(),
@@ -662,7 +676,11 @@ impl Parser {
             ));
         }
         Expr {
-            kind: ExprKind::MultiAssign { targets, values },
+            kind: ExprKind::MultiAssign {
+                targets,
+                values,
+                splat_target,
+            },
             span,
         }
     }

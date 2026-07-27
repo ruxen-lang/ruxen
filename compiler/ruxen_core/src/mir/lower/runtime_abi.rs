@@ -533,8 +533,9 @@ fn has_runtime_prefix(c: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// The declarative tables. 1:1 move of the literals formerly inline in
-// drops.rs (line ranges noted). Not invented — transcribed verbatim.
+// The declarative tables started as a 1:1 move of the literals formerly inline
+// in drops.rs (line ranges noted). Intentional additions after extraction carry
+// focused tests and are recorded as deltas in runtime_abi_parity.rs.
 // ---------------------------------------------------------------------------
 
 /// Callees returning a fresh heap allocation owned by `dest`.
@@ -547,6 +548,8 @@ const FRESH_ALLOC_CALLEES: &[&str] = &[
     "ruxen_string_from",
     "ruxen_string_concat",
     "ruxen_vec_new",
+    // `ruxen_vec_skip` materializes the splatted tail into a new Array.
+    "ruxen_vec_skip",
     "ruxen_hash_new",
     // `String_into_bytes` / `ruxen_string_into_bytes` are in BOTH this list and
     // CONSUME_HELPERS, and this is NOT a contradiction — they are load-bearing
@@ -796,6 +799,10 @@ mod tests {
         assert_eq!(callee_ownership("File_open").result, ResultOwnership::Fresh);
         assert_eq!(
             callee_ownership("Mutex_lock_raw").result,
+            ResultOwnership::Fresh
+        );
+        assert_eq!(
+            callee_ownership("ruxen_vec_skip").result,
             ResultOwnership::Fresh
         );
     }

@@ -179,7 +179,9 @@ impl<'a> BorrowChecker<'a> {
                 self.check_assign(target, value, *semantics);
             }
 
-            HirExprKind::MultiAssign { targets, values } => {
+            HirExprKind::MultiAssign {
+                targets, values, ..
+            } => {
                 // Parallel assignment: all values are read first, then each
                 // target is written. Check the value expressions and that every
                 // target is a mutable place; the actual move/store ordering is

@@ -216,12 +216,14 @@ pub enum HirExprKind {
         value: Box<HirExpr>,
     },
 
-    /// Parallel assignment `a, b = 1, 2` (targets/values equal length). All
-    /// values are evaluated into temporaries before any target is written, so
-    /// swaps (`a, b = b, a`) are simultaneous. Lowered in MIR.
+    /// Parallel assignment `a, b = 1, 2`. Without a splat, targets and values
+    /// have equal length. `splat_target` identifies a trailing `*rest` target
+    /// that receives the remaining values as an Array. All values are
+    /// evaluated before any target is written. Lowered in MIR.
     MultiAssign {
         targets: Vec<HirExpr>,
         values: Vec<HirExpr>,
+        splat_target: Option<usize>,
     },
 
     /// Return from function

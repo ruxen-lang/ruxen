@@ -756,4 +756,57 @@ mod tests {
             result.diagnostics
         );
     }
+
+    #[test]
+    fn multiassign_splat_accepts_copy_array_elements_and_value_lists() {
+        let source = rx("multiassign_splat");
+        let result = parse_and_check(&source);
+        assert!(
+            result.diagnostics.is_empty(),
+            "expected assignment splat fixture to type-check, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn multiassign_splat_rejects_owned_array_elements() {
+        let source = rx("multiassign_splat_owned_elements");
+        let result = parse_and_check(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("requires Copy array elements")),
+            "expected owned-element safety diagnostic, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn multiassign_splat_rejects_a_borrowed_array_target() {
+        let source = rx("multiassign_splat_ref_target");
+        let result = parse_and_check(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("target must be an owned Array")),
+            "expected borrowed-target safety diagnostic, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn multiassign_reports_pairwise_type_mismatches() {
+        let source = rx("multiassign_type_mismatch");
+        let result = parse_and_check(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("type mismatch")),
+            "expected pairwise type mismatch, got {:?}",
+            result.diagnostics
+        );
+    }
 }

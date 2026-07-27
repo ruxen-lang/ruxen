@@ -286,7 +286,9 @@ impl<'a> HirWalker<'a> {
                     self.walk_expr(e);
                 }
             }
-            HirExprKind::MultiAssign { targets, values } => {
+            HirExprKind::MultiAssign {
+                targets, values, ..
+            } => {
                 for t in targets {
                     self.walk_expr(t);
                 }

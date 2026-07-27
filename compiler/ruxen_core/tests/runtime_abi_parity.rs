@@ -2,10 +2,10 @@
 //!
 //! VERBATIM transcription of the six `drops.rs` `Call`-arm predicates +
 //! `transfer_indices` as of commit 340f20f. These free reference functions ARE
-//! the parity oracle: they reproduce the *exact* current answers (contradictions
-//! included) so the upcoming `runtime_abi` table can be asserted to match them
-//! 1:1 BEFORE the old predicates are deleted. Do NOT "clean these up" — a wrong
-//! table entry is a double-free / use-after-free (master risk register, Phase 2).
+//! the parity oracle: they reproduce the extracted answers (contradictions
+//! included). Intentional post-extraction changes are listed separately and
+//! tested as explicit deltas. Do NOT "clean these up"; a wrong table entry is
+//! a double-free / use-after-free (master risk register, Phase 2).
 //!
 //! Source line ranges transcribed (drops.rs @ 340f20f):
 //!   FRESH_ALLOC_CALLEES            694-934
@@ -152,6 +152,10 @@ fn ref_returns_fresh_alloc(c: &str) -> bool {
         "ruxen_mutex_try_lock",
     ];
     FRESH_ALLOC_CALLEES.contains(&c)
+}
+
+fn intentional_fresh_addition(c: &str) -> bool {
+    matches!(c, "ruxen_vec_skip")
 }
 
 fn ref_borrows_first_arg(c: &str) -> bool {
@@ -320,6 +324,7 @@ pub(crate) const SYMBOLS: &[&str] = &[
     "ruxen_string_from",
     "ruxen_string_concat",
     "ruxen_vec_new",
+    "ruxen_vec_skip",
     "ruxen_hash_new",
     "String_into_bytes",
     "ruxen_string_into_bytes",
@@ -516,6 +521,7 @@ fn into_bytes_is_dual_axis_fresh_result_and_consumed_arg() {
 fn oracle_sanity_spot_checks() {
     // A few hand-verified answers to catch a transcription typo early.
     assert!(ref_returns_fresh_alloc("Vec_new"));
+    assert!(intentional_fresh_addition("ruxen_vec_skip"));
     assert!(!ref_returns_fresh_alloc("MyClass_method"));
 
     assert!(ref_borrows_first_arg("Point_init"));
@@ -570,10 +576,10 @@ fn table_reproduces_every_oracle_answer_for_every_symbol() {
     for &c in SYMBOLS {
         let o = callee_ownership(c);
 
-        // result == FRESH_ALLOC_CALLEES membership
+        // Result matches the extracted oracle plus reviewed additions.
         assert_eq!(
             o.result == ResultOwnership::Fresh,
-            ref_returns_fresh_alloc(c),
+            ref_returns_fresh_alloc(c) || intentional_fresh_addition(c),
             "result mismatch for {c:?}"
         );
 

@@ -331,7 +331,9 @@ impl MethodCallFinder {
                     self.visit_expr(v);
                 }
             }
-            HirExprKind::MultiAssign { targets, values } => {
+            HirExprKind::MultiAssign {
+                targets, values, ..
+            } => {
                 for t in targets {
                     self.visit_expr(t);
                 }
