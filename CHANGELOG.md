@@ -8,6 +8,16 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- **General `@ivar` read and write in method bodies.** `@name` in expression
+  position now parses as sugar for `self.name` (a field access on the receiver),
+  so a method can read (`@n`), write (`@n = @n + 1`), and compound-assign
+  (`@n += k`) its instance variables in Ruby style, not only receive them via the
+  `def init(@n: Int)` auto-assign param. The desugar is purely syntactic (parser
+  → `FieldAccess { object: self, field }`), so resolve, typeck, MIR, and codegen
+  are unchanged, and `@name` outside a method reuses the existing "`self` used
+  outside of method context" error. `ruxen fmt` currently renders the desugared
+  `self.name` (surface-preserving `@name` is a follow-up). Pin `970`; Ruby-parity
+  `language.md` section 2 / P1.13.
 - **Endless method definitions `def f(...) = expr`.** A `def` whose signature is
   followed by `=` takes a single expression as its whole body, with no `end`
   (`def double(x: Int) -> Int = x * 2`, `def area -> Int = self.w * self.h`). It

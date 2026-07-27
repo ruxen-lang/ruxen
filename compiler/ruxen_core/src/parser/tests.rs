@@ -2162,6 +2162,21 @@ end";
     }
 
     #[test]
+    fn at_ivar_desugars_to_self_field_access() {
+        match parse_expr("@count").kind {
+            ExprKind::FieldAccess { object, field } => {
+                assert_eq!(field, "count");
+                assert!(
+                    matches!(object.kind, ExprKind::SelfRef),
+                    "object should be `self`, got {:?}",
+                    object.kind
+                );
+            }
+            other => panic!("expected FieldAccess(self, count), got {other:?}"),
+        }
+    }
+
+    #[test]
     fn endless_method_def_parses_body_as_single_expression() {
         let mut parser = Parser::new(
             Lexer::new("def double(x: Int) -> Int = x * 2")

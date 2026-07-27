@@ -331,6 +331,7 @@ impl Parser {
                 | TokenKind::TypeIdentifier(_)
                 | TokenKind::SelfValue
                 | TokenKind::SelfType
+                | TokenKind::At
                 | TokenKind::SomeKw
                 | TokenKind::OkKw
                 | TokenKind::ErrKw

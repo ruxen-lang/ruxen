@@ -94,6 +94,24 @@ impl Parser {
                 }
             }
 
+            // `@name` — instance-variable access, sugar for `self.name`
+            // (read and, via a following `=`, write). The `@name` param form
+            // in `def init(@w: Int)` is handled separately in `parse_param`.
+            TokenKind::At => {
+                self.advance(); // consume @
+                let field = self.expect_identifier();
+                Expr {
+                    kind: ExprKind::FieldAccess {
+                        object: Box::new(Expr {
+                            kind: ExprKind::SelfRef,
+                            span: start.clone(),
+                        }),
+                        field,
+                    },
+                    span: self.span_from(&start),
+                }
+            }
+
             // Some, Ok, Err — used as enum constructors. `None` is spelled
             // `nil` after ruby-naming.spec.md §3.10, lexed as `TokenKind::Nil`
             // and handled in the nil-literal arm below.
