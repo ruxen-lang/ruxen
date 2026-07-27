@@ -1,0 +1,6 @@
+def choose(first: Option[Bool], second: Option[Bool], fallback: Bool, ready: Bool) -> Bool
+let chained=first??second??fallback
+let grouped=(first??second)??fallback
+let precedence=first??(ready||false)
+chained&&grouped&&precedence
+end

@@ -101,6 +101,17 @@ fn comparable_operator_method_names_are_preserved() {
 }
 
 #[test]
+fn nil_coalesce_preserves_spelling_and_grouping() {
+    let source = fmt_fixture("nil_coalesce");
+    let result = format(&source);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert!(result.output.contains("first ?? second ?? fallback"));
+    assert!(result.output.contains("(first ?? second) ?? fallback"));
+    assert!(result.output.contains("first ?? ready || false"));
+    assert_idempotent(&source);
+}
+
+#[test]
 fn test_class_definition() {
     let source = fmt_fixture("test_class_definition");
     let result = format(&source);

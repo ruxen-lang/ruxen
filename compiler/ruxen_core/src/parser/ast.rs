@@ -521,6 +521,8 @@ pub enum BinOp {
     Cmp,
     And,
     Or,
+    /// Lazy Option fallback: `Option[T] ?? T -> T`.
+    NilCoalesce,
     /// Ruby-style low-precedence logical `and`.
     KeywordAnd,
     /// Ruby-style low-precedence logical `or`.
@@ -566,6 +568,7 @@ impl BinOp {
             BinOp::Pow
             | BinOp::And
             | BinOp::Or
+            | BinOp::NilCoalesce
             | BinOp::KeywordAnd
             | BinOp::KeywordOr
             | BinOp::MatchOp => return None,

@@ -43,6 +43,10 @@ fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
         | TokenKind::PipePipeEq
         | TokenKind::AmpAmpEq => Some((1, 2)),
 
+        // Nil coalescing: right-associative and between assignment and `||`.
+        // Equal binding powers let `a ?? b ?? c` parse as `a ?? (b ?? c)`.
+        TokenKind::QuestionQuestion => Some((2, 2)),
+
         // Logical OR: left-associative (3, 4)
         TokenKind::PipePipe => Some((3, 4)),
 
@@ -358,6 +362,7 @@ fn token_to_binop(kind: &TokenKind) -> BinOp {
         TokenKind::Spaceship => BinOp::Cmp,
         TokenKind::AmpAmp => BinOp::And,
         TokenKind::PipePipe => BinOp::Or,
+        TokenKind::QuestionQuestion => BinOp::NilCoalesce,
         TokenKind::And => BinOp::KeywordAnd,
         TokenKind::Or => BinOp::KeywordOr,
         TokenKind::Amp => BinOp::BitAnd,

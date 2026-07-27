@@ -543,6 +543,7 @@ its closest compile-time substitute noted above.
 |---|---|---|
 | `nil` literal | DONE | also the empty `Option` (`nil` in `match` arms). |
 | `Int?` optional types | DONE (COMPILE-TIME) | sugar for `Option[Int]`. |
+| `Option[T] ?? T` fallback | DONE | case `966`; lazy and right-associative. |
 | `true` / `false` literals | DONE | |
 | `TrueClass#to_s` / `FalseClass#to_s` | DONE | `class Bool` → `ruxen_bool_to_string`. |
 | `Bool#to_string` | DONE | |

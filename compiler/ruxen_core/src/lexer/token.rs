@@ -211,12 +211,13 @@ pub enum TokenKind {
     TildeEq, // ~= — `s ~= /pat/` regex-match operator (E17xx).
 
     // ── Operators: Logical ──
-    And,      // `and` low-precedence logical AND
-    Or,       // `or` low-precedence logical OR
-    Not,      // `not` low-precedence logical negation
-    AmpAmp,   // &&
-    PipePipe, // ||
-    Bang,     // !
+    And,              // `and` low-precedence logical AND
+    Or,               // `or` low-precedence logical OR
+    Not,              // `not` low-precedence logical negation
+    AmpAmp,           // &&
+    PipePipe,         // ||
+    QuestionQuestion, // ?? lazy Option fallback
+    Bang,             // !
 
     // ── Operators: Bitwise ──
     Amp,   // &
@@ -329,6 +330,7 @@ impl TokenKind {
                 | TokenKind::Or
                 | TokenKind::AmpAmp
                 | TokenKind::PipePipe
+                | TokenKind::QuestionQuestion
                 | TokenKind::Arrow
                 | TokenKind::FatArrow
                 | TokenKind::Dot

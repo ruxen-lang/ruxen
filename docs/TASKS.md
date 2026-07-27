@@ -378,6 +378,12 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
         and `between?` defaults; `!=` inverts the dispatched `==`. Pin `965`.
   - [ ] **Comparable `clamp`.** Choose an ownership-safe return contract for a
         method that may return `self`, the lower bound, or the upper bound.
+- [x] **Lazy nil coalescing `Option[T] ?? T` (DONE 2026-07-27).** Added a
+      dedicated `QuestionQuestion` token and formatter-preserving
+      `BinOp::NilCoalesce`. It is right-associative at precedence tier 2
+      (between assignment and `||`) and lowers to an Option-tag branch, so the
+      fallback is evaluated only for `nil`. Invalid operands report `E0732`.
+      Pin `966`; parity `language.md` section 3.
 - [x] **Ternary `cond ? a : b` (DONE 2026-07-24).** Right-associative, desugared
       in the parser to `if`/`else`. Disambiguated from the `?` try operator by
       whitespace: an attached `x?` is try, a spaced `c ? a : b` is ternary (span
@@ -429,8 +435,9 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
       both operands always ran (`ptr != nil && ptr.field` touched `ptr.field`
       when nil). User `&&`/`||` now lower to a branch CFG (`lower_short_circuit`,
       mirroring `if`). On top of that, added `||=`/`&&=` (`PipePipeEq`/`AmpAmpEq`
-      tokens) desugaring to `a || (a = b)` / `a && (a = b)` (Bool; nilable
-      memoization awaits a `??` operator). Pins `955` (short-circuit), `954`
+      tokens) desugaring to `a || (a = b)` / `a && (a = b)` (Bool; Option
+      fallback now uses `??`, while `??=` remains unavailable). Pins `955`
+      (short-circuit), `954`
       (`||=`/`&&=`); parity `language.md` §2 and §3 / P0.4.
 - [x] **Ruby keyword `and`/`or`/`not` (DONE 2026-07-27).** Added reserved
       keyword tokens and distinct AST operator variants so `ruxen fmt` preserves

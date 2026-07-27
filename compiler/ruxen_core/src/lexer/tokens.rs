@@ -359,7 +359,9 @@ impl<'a> Lexer<'a> {
         // `empty?`. A trailing `?` after `)`/`]` (the try operator) is
         // unaffected — it is never part of an identifier lex. Uppercase
         // type identifiers do NOT absorb `?` (so `T?` stays an optional type).
-        if !self.is_at_end() && (self.current() == '!' || self.current() == '?') {
+        let method_suffix = !self.is_at_end()
+            && (self.current() == '!' || (self.current() == '?' && self.peek_at(1) != Some('?')));
+        if method_suffix {
             let suffix = self.advance();
             let full_ident: String = format!("{}{}", ident, suffix);
             self.emit(
@@ -641,11 +643,21 @@ impl<'a> Lexer<'a> {
                 }
             }
             '?' => {
+                // `??` is the lazy Option fallback operator. Check it before
+                // char-literal and postfix-try disambiguation.
+                if !self.is_at_end() && self.current() == '?' {
+                    self.advance();
+                    self.emit(
+                        TokenKind::QuestionQuestion,
+                        start_byte,
+                        start_line,
+                        start_col,
+                    );
                 // Safe navigation is `&.` (not `?.`), and a trailing `?` on
-                // an identifier is absorbed as a predicate-method name — so a
+                // an identifier is absorbed as a predicate-method name, so a
                 // standalone `?` here is either a char literal (`?a`) or the
                 // try operator.
-                if !self.is_at_end() && {
+                } else if !self.is_at_end() && {
                     // ruby-naming.spec.md §3.10a: `?a` / `?\n` is a char
                     // literal, but only in an expression-context position
                     // so postfix-`?` (try) and optional-type `T?` keep
@@ -767,7 +779,7 @@ pub(super) fn prev_token_starts_expr_context(prev: Option<&TokenKind>) -> bool {
         // for the RHS).
         | Plus | Minus | Star | SlashEq | Percent
         // Logical operators.
-        | AmpAmp | PipePipe | Bang
+        | AmpAmp | PipePipe | QuestionQuestion | Bang
         // The regex-match operator itself.
         | TildeEq
         // Keywords that introduce an expression position.

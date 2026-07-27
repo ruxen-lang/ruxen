@@ -243,6 +243,7 @@ fn test_multi_char_operators() {
         (">=", TokenKind::GtEq),
         ("&&", TokenKind::AmpAmp),
         ("||", TokenKind::PipePipe),
+        ("??", TokenKind::QuestionQuestion),
         ("<<", TokenKind::Shl),
         (">>", TokenKind::Shr),
         ("+=", TokenKind::PlusEq),
@@ -997,6 +998,20 @@ fn test_identifier_with_question_suffix() {
     assert_eq!(
         kinds,
         vec![TokenKind::Identifier("is_empty?".into()), TokenKind::Eof,]
+    );
+}
+
+#[test]
+fn test_nil_coalesce_after_identifier_is_not_a_predicate_suffix() {
+    let kinds = lex_kinds("value??fallback");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::Identifier("value".into()),
+            TokenKind::QuestionQuestion,
+            TokenKind::Identifier("fallback".into()),
+            TokenKind::Eof,
+        ]
     );
 }
 

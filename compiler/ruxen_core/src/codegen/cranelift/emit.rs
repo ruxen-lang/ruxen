@@ -727,6 +727,9 @@ pub fn emit_binop(
             BinOp::Cmp => {
                 unreachable!("BinOp::Cmp should have been lowered to a runtime call at MIR-lower")
             }
+            BinOp::NilCoalesce => {
+                unreachable!("BinOp::NilCoalesce should have been lowered to branch CFG")
+            }
         }
     } else {
         match op {
@@ -764,6 +767,9 @@ pub fn emit_binop(
             // `mir/lower/expr/binops.rs`, never a `MirInst::BinOp`.
             BinOp::Cmp => {
                 unreachable!("BinOp::Cmp should have been lowered to a runtime call at MIR-lower")
+            }
+            BinOp::NilCoalesce => {
+                unreachable!("BinOp::NilCoalesce should have been lowered to branch CFG")
             }
         }
     }

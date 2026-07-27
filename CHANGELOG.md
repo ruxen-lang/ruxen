@@ -8,6 +8,13 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- **Lazy nil coalescing with `??`.** Added a dedicated `QuestionQuestion`
+  token and surface-preserving `BinOp::NilCoalesce`. The operator is
+  right-associative, binds between assignment and `||`, and has the contract
+  `Option[T] ?? T -> T`. MIR lowers it to a tag branch, so the fallback is
+  evaluated only for `nil`; chains such as `first ?? second ?? fallback` work
+  when both candidates are Options. Invalid left operands or mismatched
+  fallbacks report `E0732`. Pin `966`; Ruby-parity `language.md` section 3.
 - **User-defined comparison operators and `Comparable` through `<=>`.**
   `def ==`, `def <`, `def <=`, `def >`, `def >=`, and `def <=>` now parse as
   operator method names, including explicit calls such as `a.<=>(b)`. Typeck
@@ -193,9 +200,9 @@ once 1.0.0 ships.
   tokens (assignment precedence). `a ||= b` desugars to `a || (a = b)` and
   `a &&= b` to `a && (a = b)`, so the assign runs only when the value actually
   changes (relies on the short-circuit fix above). Bool operands, since Ruxen is
-  strict-Bool; the nilable memoization idiom (`@x ||= compute`) will land with a
-  future `??` nil-coalescing operator. Same parse-time-desugar `ruxen fmt`
-  caveat as `unless`/`until`. Pin `954`; Ruby-parity `language.md` §2 / P0.4.
+  strict-Bool; Option fallback now uses the `??` nil-coalescing operator
+  (`??=` is not yet available). Same parse-time-desugar `ruxen fmt` caveat as
+  `unless`/`until`. Pin `954`; Ruby-parity `language.md` §2 / P0.4.
 - **`unless` / `until` control flow + trailing statement modifiers.** Block
   `unless COND … [else …] end` (desugars to `if !COND`) and `until COND … end`
   (desugars to `while !COND`), plus the Ruby trailing modifiers `EXPR if COND` /

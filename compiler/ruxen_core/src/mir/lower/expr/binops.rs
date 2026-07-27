@@ -208,10 +208,76 @@ impl<'a> Lowerer<'a> {
         Ok(result)
     }
 
+    /// Lower `Option[T] ?? fallback` as a branch on the Option tag. The Some
+    /// path extracts the payload; only the None path evaluates `fallback`.
+    fn lower_nil_coalesce(
+        &mut self,
+        left: &HirExpr,
+        right: &HirExpr,
+        result_ty: &Ty,
+    ) -> Result<LocalId, String> {
+        let option = self
+            .lower_expr(left)?
+            .ok_or_else(|| "left operand of `??` has no value".to_string())?;
+        let tag = self.new_temp(Ty::Int32);
+        self.emit(MirInst::GetTag {
+            dest: tag,
+            src: option,
+        });
+        let is_some = self.new_temp(Ty::Bool);
+        self.emit(MirInst::Compare {
+            dest: is_some,
+            op: CmpOp::Eq,
+            lhs: MirValue::Use(tag),
+            rhs: MirValue::Literal(Literal::Int(1)),
+        });
+
+        let some_block = self.new_block();
+        let fallback_block = self.new_block();
+        let merge_block = self.new_block();
+        let result = self.new_temp(result_ty.clone());
+        self.set_terminator(Terminator::Branch {
+            cond: MirValue::Use(is_some),
+            then_block: some_block,
+            else_block: fallback_block,
+        });
+
+        self.current_block = some_block;
+        let payload = self.new_temp(Ty::Int);
+        self.emit(MirInst::GetPayload {
+            dest: payload,
+            src: option,
+            ty: left.ty.clone(),
+        });
+        self.emit(MirInst::GetField {
+            dest: result,
+            base: payload,
+            field_index: 0,
+        });
+        self.set_terminator(Terminator::Goto(merge_block));
+
+        self.current_block = fallback_block;
+        let fallback = self.lower_expr(right)?;
+        if matches!(self.get_terminator(), Terminator::Unreachable) {
+            self.emit(MirInst::Assign {
+                dest: result,
+                value: local_to_value(fallback),
+            });
+            self.set_terminator(Terminator::Goto(merge_block));
+        }
+
+        self.current_block = merge_block;
+        Ok(result)
+    }
+
     pub(super) fn lower_binops(&mut self, expr: &HirExpr) -> Result<Option<LocalId>, String> {
         match &expr.kind {
             // ── Binary operations ───────────────────────────────────
             HirExprKind::BinaryOp { op, left, right } => {
+                if matches!(op, BinOp::NilCoalesce) {
+                    return Ok(Some(self.lower_nil_coalesce(left, right, &expr.ty)?));
+                }
+
                 // ── Operator → method desugar ──
                 // Prefer an available user method or included mixin default
                 // before structural derives. The availability probe is what

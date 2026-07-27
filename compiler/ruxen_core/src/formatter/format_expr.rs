@@ -607,6 +607,7 @@ fn interp_token_is_spaced(kind: &crate::lexer::token::TokenKind) -> bool {
             | K::GtEq
             | K::AmpAmp
             | K::PipePipe
+            | K::QuestionQuestion
             | K::Eq
             | K::As
             | K::Arrow
@@ -665,6 +666,7 @@ fn token_to_source(token: &crate::lexer::token::Token) -> String {
         TokenKind::DotDot => "..".to_string(),
         TokenKind::DotDotDot => "...".to_string(),
         TokenKind::Question => "?".to_string(),
+        TokenKind::QuestionQuestion => "??".to_string(),
         TokenKind::AmpDot => "&.".to_string(),
         TokenKind::At => "@".to_string(),
         TokenKind::AmpMut => "&var".to_string(),
@@ -720,6 +722,7 @@ fn bin_op_str(op: BinOp) -> &'static str {
         BinOp::Cmp => "<=>",
         BinOp::And => "&&",
         BinOp::Or => "||",
+        BinOp::NilCoalesce => "??",
         BinOp::KeywordAnd => "and",
         BinOp::KeywordOr => "or",
         BinOp::BitAnd => "&",
@@ -748,7 +751,7 @@ fn format_binary_op(left: &Expr, op: BinOp, right: &Expr, comments: &CommentMap)
     // to the SAME tree — the parser discards grouping parens, so the
     // formatter must re-derive them from tree shape (Q34).
     let p = binop_prec(op);
-    let right_assoc = matches!(op, BinOp::Pow);
+    let right_assoc = matches!(op, BinOp::Pow | BinOp::NilCoalesce);
     group(concat(vec![
         format_operand(left, p, Side::Left, right_assoc, comments),
         text(" "),

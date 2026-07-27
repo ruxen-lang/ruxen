@@ -17,8 +17,8 @@
 //!
 //! The numeric tiers below are the LEFT binding power of each operator as
 //! defined by `parser::expr::infix_binding_power` (keyword `and`/`or` 0,
-//! assignment and keyword `not` 1, `||` 3, `&&` 5, comparison/`~=` 7,
-//! range 9, `|` 11, `^` 13, `&` 15, shift 17, `+`/`-` 19,
+//! assignment and keyword `not` 1, `??` 2, `||` 3, `&&` 5,
+//! comparison/`~=` 7, range 9, `|` 11, `^` 13, `&` 15, shift 17, `+`/`-` 19,
 //! `*`/`/`/`%` 21, cast 23, prefix/unary 25, postfix 27). When that table
 //! changes, change these tiers in lock-step. The reparse-identity pin in
 //! `tests/syntax_parity.rs` fails if they drift.
@@ -69,6 +69,7 @@ pub fn expr_prec(expr: &Expr) -> Option<u8> {
 pub fn binop_prec(op: BinOp) -> u8 {
     match op {
         BinOp::KeywordAnd | BinOp::KeywordOr => 0,
+        BinOp::NilCoalesce => 2,
         BinOp::Or => 3,
         BinOp::And => 5,
         BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => 7,

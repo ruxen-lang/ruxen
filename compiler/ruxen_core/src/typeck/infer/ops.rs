@@ -344,6 +344,41 @@ impl<'a> InferenceEngine<'a> {
 
     pub(super) fn infer_binop(&mut self, op: BinOp, left: &Ty, right: &Ty, span: &Span) -> Ty {
         match op {
+            // `Option[T] ?? T -> T`. The MIR path branches on the Option tag,
+            // so the fallback is evaluated only for None.
+            BinOp::NilCoalesce => {
+                let inner = match left {
+                    Ty::Option(inner) => inner.as_ref().clone(),
+                    Ty::Infer(_) => {
+                        let expected = Ty::Option(Box::new(right.clone()));
+                        let _ = unify(left, &expected, self.ctx, span);
+                        return right.clone();
+                    }
+                    Ty::Error => return Ty::Error,
+                    other => {
+                        self.diagnostics.push(Diagnostic::error_with_code(
+                            format!(
+                                "nil-coalescing operator `??` requires an Option on the left, \
+                                 found `{other}`"
+                            ),
+                            span.clone(),
+                            "E0732",
+                        ));
+                        return Ty::Error;
+                    }
+                };
+                if !right.is_never() && unify(&inner, right, self.ctx, span).is_err() {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "nil-coalescing operator `??` fallback must have type `{inner}`, \
+                             found `{right}`"
+                        ),
+                        span.clone(),
+                        "E0732",
+                    ));
+                }
+                inner
+            }
             // `**` exponentiation: `Int ** Int -> Int`, and any float operand
             // makes the result `Float` (`2.0 ** 10 -> Float`). Unlike `+ - * / %`,
             // the two sides need NOT match (a float base/exponent is coerced to

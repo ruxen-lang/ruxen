@@ -1,0 +1,7 @@
+present=7
+fallback
+absent=42
+chain=11
+literal=5
+text=ready
+missing_text=backup

@@ -295,6 +295,10 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0731",
         title: "logical operator requires Bool operands",
     },
+    CodeInfo {
+        code: "E0732",
+        title: "nil-coalescing operator requires Option and a matching fallback",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`

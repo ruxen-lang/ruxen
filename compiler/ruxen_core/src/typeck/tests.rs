@@ -887,4 +887,37 @@ mod tests {
             result.diagnostics
         );
     }
+
+    #[test]
+    fn nil_coalesce_accepts_option_and_matching_fallback() {
+        let source = release_rx("966_nil_coalesce");
+        let result = parse_and_check(&source);
+        assert!(
+            result.diagnostics.is_empty(),
+            "expected nil coalescing to type-check, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn nil_coalesce_rejects_invalid_operands() {
+        let source = rx("nil_coalesce_invalid_operands");
+        let result = parse_and_check(&source);
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code.as_deref() == Some("E0732")
+                    && diagnostic.message.contains("requires an Option")
+            }),
+            "expected invalid-left E0732, got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code.as_deref() == Some("E0732")
+                    && diagnostic.message.contains("fallback must have type `Int`")
+            }),
+            "expected fallback-type E0732, got {:?}",
+            result.diagnostics
+        );
+    }
 }

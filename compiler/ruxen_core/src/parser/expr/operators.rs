@@ -121,10 +121,10 @@ impl Parser {
     /// `a ||= b` desugars to `a || (a = b)` and `a &&= b` to `a && (a = b)`.
     /// The logical operator short-circuits (see `lower_short_circuit`), so the
     /// inner `a = b` runs only when the value is actually replaced: `a` false
-    /// for `||=`, `a` true for `&&=`. Operands are Bool (Ruxen is strict-Bool);
-    /// the nilable memoization idiom needs a future `??` operator. The target
-    /// is evaluated twice (the read and the assign) as in Ruby, so keep
-    /// side-effecting targets in mind.
+    /// for `||=`, `a` true for `&&=`. Operands are Bool (Ruxen is strict-Bool).
+    /// Option fallback uses the separate `??` operator; `??=` is not yet
+    /// available. The target is evaluated twice (the read and the assign) as in
+    /// Ruby, so keep side-effecting targets in mind.
     fn make_conditional_assign(&mut self, lhs: Expr, op: BinOp, r_bp: u8, start: &Span) -> Expr {
         let rhs = self.parse_expr_bp(r_bp);
         let span = self.span_from(start);

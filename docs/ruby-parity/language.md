@@ -101,7 +101,7 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | Destructuring `let (a, b) = t` | DONE | probe PASS; case `123` | Ruxen's substitute for LHS destructuring. |
 | Splat assign `a, *b = [1,2,3]` | PARTIAL | `MultiAssign::splat_target`; case `963` | Trailing splat supports one Array RHS or a comma-list and is formatter-preserving. `b` must be a pre-declared `Array[T]` variable; `T` is Copy-only. Leading/middle splats, short-input nil-fill, and owned-element clone lowering remain. |
 | Nested destructure `(a,(b,c)) = ...` | PARTIAL | tuple patterns only | Works for tuples; no array-splat form. |
-| `||=` | DONE | `PipePipeEq` token; case `954` | Desugars to `a \|\| (a = b)`. Bool operands (Ruxen is strict-Bool); nilable memoization awaits a `??` operator. |
+| `||=` | DONE | `PipePipeEq` token; case `954` | Desugars to `a \|\| (a = b)`. Bool operands (Ruxen is strict-Bool); Option fallback uses `??`, while `??=` is unavailable. |
 | `&&=` | DONE | `AmpAmpEq` token; case `954` | Desugars to `a && (a = b)`. |
 | `+= -= *= /= %=` | DONE | `CompoundAssign`; probe PASS | |
 | `<<= >>= &= |= ^= **=` | MISSING | lexer has only `PlusEq..PercentEq` | No tokens for bitwise/shift compound-assign. |
@@ -117,6 +117,7 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | Comparison `< > <= >=` | DONE | cases `126/209/965` | Auto-`Ord` on structs/enums; user methods and `Comparable` defaults dispatch when available. |
 | Equality `== !=` | DONE | auto-`PartialEq`; cases `206/965` | User `def ==` dispatches; `!=` inverts it. |
 | Spaceship `<=>` | DONE | `Spaceship` token; `BinOp::Cmp`; cases `959/965` | Returns `Int` (-1 / 0 / 1) for Int, Float, String, and user-defined `def <=>`. |
+| Nil coalescing `??` | DONE | `QuestionQuestion`; `BinOp::NilCoalesce`; case `966` | Ruxen-specific `Option[T] ?? T -> T`. Right-associative, below `||` and above assignment; fallback is lazy. |
 | Logical `&& \|\| !` | DONE | `BinOp`/`UnaryOp`; case `955` | Now **short-circuit** (branch-CFG lowering). Was eagerly evaluating both operands (a correctness bug: `ptr != nil && ptr.field` touched `ptr.field` when nil); fixed 2026-07-23. |
 | Keyword `and` / `or` / `not` | DONE | `KeywordAnd`/`KeywordOr`/`KeywordNot`; case `964` | Ruby precedence: `and`/`or` share one left-associative tier below assignment; `not` consumes assignment and symbolic operators, then stops before keyword `and`/`or`. Strict-Bool, short-circuit, and formatter-preserving. |
 | Bitwise `& | ^ << >>` | DONE | `BinOp`; case `812` | |

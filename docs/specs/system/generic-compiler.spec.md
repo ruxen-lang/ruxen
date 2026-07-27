@@ -13,7 +13,8 @@ features only.
   `repr`, derive machinery, closures.
 - Machine primitives: i64, f64, bool, raw-ptr, byte-slice, array-slice.
 - Syntactic protocols: a literal lowers to a *primitive*; an operator desugars
-  to a *method call by symbol* (`a + b` → `a.+(b)`); operator precedence.
+  to a *method call by symbol* (`a + b` → `a.+(b)`); operator precedence;
+  control-flow operators such as lazy `Option[T] ?? T`.
 
 **Stdlib (`.rx`) — must NOT live in compiler Rust:**
 - Every named type (`Int`/`String`/`Array`/`Mutex`/…) and all their methods.
@@ -27,7 +28,8 @@ registers only `declared_method_resolvers` + `builtin_bridge`.
 
 ## Key architecture decisions (locked)
 1. **Method resolution from `.rx`** via `builtin_bridge` (done for most types).
-2. **Operators are overridable methods** named by the symbol: `a + b` → `a.+(b)`,
+2. **Value operators are overridable methods** named by the symbol:
+   `a + b` → `a.+(b)`,
    `a[i]` → `a.[](i)`, `a[i]=v` → `a.[]=(i,v)`, `-a` → `a.-@()`, `!a` → `a.!()`.
    **Desugar is POST-TYPECK, not in the parser** (corrected during Task OP, Fork 4):
    the machine-primitive floor (`Int`/`Float`/`Bool` + op → direct instruction) vs.
@@ -40,6 +42,8 @@ registers only `declared_method_resolvers` + `builtin_bridge`.
    post-typeck mechanism with an availability gate: a declared/default method
    wins, while PartialEq/Ord derives and primitive comparisons remain the
    fallback, avoiding double-definition.
+   `??` is not a value-method protocol: it branches on the built-in Option
+   representation so the fallback remains lazy.
 3. **Shared methods via mixins with default bodies** (Ruby modules). The mixins
    already exist as markers in `library/std/core/src/lib.rx` — fill them:
    - **`Enumerable[T]` over required `each`**: `map`/`select`/`reject`/`reduce`/

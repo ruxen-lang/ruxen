@@ -1889,6 +1889,45 @@ end";
     }
 
     #[test]
+    fn nil_coalesce_is_right_associative() {
+        match parse_expr("a ?? b ?? c").kind {
+            ExprKind::BinaryOp {
+                op: BinOp::NilCoalesce,
+                left,
+                right,
+            } => {
+                assert!(matches!(left.kind, ExprKind::Identifier(ref name) if name == "a"));
+                assert!(matches!(
+                    right.kind,
+                    ExprKind::BinaryOp {
+                        op: BinOp::NilCoalesce,
+                        ..
+                    }
+                ));
+            }
+            other => panic!("expected `a ?? (b ?? c)`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nil_coalesce_binds_between_assignment_and_logical_or() {
+        match parse_expr("a = b ?? c || d").kind {
+            ExprKind::Assign { value, .. } => match value.kind {
+                ExprKind::BinaryOp {
+                    op: BinOp::NilCoalesce,
+                    right,
+                    ..
+                } => assert!(matches!(
+                    right.kind,
+                    ExprKind::BinaryOp { op: BinOp::Or, .. }
+                )),
+                other => panic!("expected coalesce assignment value, got {other:?}"),
+            },
+            other => panic!("expected assignment root, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn keyword_and_binds_looser_than_assignment() {
         match parse_expr("a = true and false").kind {
             ExprKind::BinaryOp {
