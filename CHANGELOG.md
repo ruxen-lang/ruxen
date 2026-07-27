@@ -8,6 +8,12 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- **Ruby method-name parity on `String`: `upcase`, `downcase`, `length`.** Added
+  as FFI aliases sharing the existing C symbols (`upcase`/`downcase` →
+  `ruxen_string_to_upper`/`ruxen_string_to_lower`, `length` → `ruxen_string_len`),
+  the same second-alias mechanism `to_s`/`to_string` already use. The Ruxen
+  spellings (`to_upper`/`to_lower`/`size`) keep working alongside the Ruby ones,
+  so string code reads like Ruby. Pin `972`; Ruby-parity `core.md`.
 - **`Integer#times` iterator.** `n.times do |i| … end` yields `0, 1, …, n - 1`
   in order, added as a pure-Ruxen method on the `Int` method-home (a `while` loop
   over a closure param, the same shape the `Enumerable` combinators use). The

@@ -1,0 +1,12 @@
+# Pins Ruby method-name parity on String: `upcase`/`downcase` (aliases of
+# `to_upper`/`to_lower`) and `length` (alias of `size`), sharing the same C
+# symbols. The Ruxen spellings keep working alongside the Ruby ones.
+def main
+  let s = "Hello World"
+  puts(s.upcase)
+  puts(s.downcase)
+  puts(s.to_upper)
+  puts(s.to_lower)
+  puts(s.length)
+  puts(s.size)
+end

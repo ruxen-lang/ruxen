@@ -17,6 +17,9 @@ class String
     # its C symbol's wire width — pointers, boxed Option/Result, and
     # uint64 all cross the C ABI as I64. Zero-Rust-stdlib migration M3.
     def size as "ruxen_string_len" -> USize
+    # `length` is the Ruby spelling of `size` — same C symbol, same wire
+    # shape (admitted as a second alias by the wire-level E0722 check).
+    def length as "ruxen_string_len" -> USize
     def empty? as "ruxen_string_is_empty" -> Bool
     def include? as "ruxen_string_contains"(needle: &String) -> Bool
     def starts_with as "ruxen_string_starts_with"(needle: &String) -> Bool
@@ -29,6 +32,10 @@ class String
     def trim_end as "ruxen_string_trim_end" -> String
     def to_lower as "ruxen_string_to_lower" -> String
     def to_upper as "ruxen_string_to_upper" -> String
+    # `downcase`/`upcase` are the Ruby spellings of `to_lower`/`to_upper` —
+    # same C symbols, same wire shape (admitted as second aliases).
+    def downcase as "ruxen_string_to_lower" -> String
+    def upcase as "ruxen_string_to_upper" -> String
     def repeat as "ruxen_string_repeat"(n: Int) -> String
     def replace as "ruxen_string_replace"(from: &String, to: &String) -> String
     # as_str returns the receiver's own buffer pointer (a BORROW — see

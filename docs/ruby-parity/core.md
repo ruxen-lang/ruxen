@@ -77,7 +77,7 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 
 | Ruby method | Status | Ruxen symbol / gap | Note |
 |---|---|---|---|
-| `length` | MISSING | use `size` | `size` = `ruxen_string_len`; no `length` alias. |
+| `length` | DONE | `ruxen_string_len` | Ruby `length` aliased to the same C symbol as `size`. Pin `972`. |
 | `size` | DONE | `ruxen_string_len` | |
 | `bytesize` | MISSING | — | no byte-length accessor. |
 | `+` (concat) | DONE | operator | `"a"+"b"`. |
@@ -97,8 +97,8 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 | `lstrip` / `rstrip` | PARTIAL | `trim_start` / `trim_end` | Ruxen spellings. |
 | `strip!`/`lstrip!`/`rstrip!` | MISSING | — | no in-place variants. |
 | `chomp` / `chop` | MISSING | — | |
-| `upcase` | PARTIAL | `to_upper` | Ruxen spelling. |
-| `downcase` | PARTIAL | `to_lower` | Ruxen spelling. |
+| `upcase` | DONE | `to_upper` | Ruby `upcase` aliased to the same C symbol; `to_upper` also kept. Pin `972`. |
+| `downcase` | DONE | `to_lower` | Ruby `downcase` aliased to the same C symbol; `to_lower` also kept. Pin `972`. |
 | `capitalize` / `swapcase` | MISSING | — | |
 | `upcase!`/`downcase!`/… | MISSING | — | no bang variants. |
 | `start_with?` | PARTIAL | `starts_with` | non-`?` Ruxen name; single string arg (no multi-arg / regex). |
