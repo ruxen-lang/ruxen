@@ -270,8 +270,19 @@ impl Parser {
 
         self.skip_newlines();
 
-        // Body: either { expr } for single-expression methods or multi-line body ... end
-        let body = if self.at(TokenKind::LBrace) {
+        // Body: an endless `= expr`, a `{ expr }` single-expression body, or a
+        // multi-line `... end` body.
+        let body = if self.at(TokenKind::Eq) {
+            // Endless method definition: `def f(x) = expr` (no `end`).
+            self.advance(); // consume =
+            self.skip_newlines();
+            let expr = self.parse_expression();
+            let span = self.span_from(&start);
+            Block {
+                statements: vec![Statement::Expression(expr)],
+                span,
+            }
+        } else if self.at(TokenKind::LBrace) {
             // Single expression body: { expr }
             self.advance(); // consume {
             self.skip_newlines();

@@ -410,7 +410,7 @@ truly irreducible slice is excluded from both (listed last).
 #### P2 — completeness, lower frequency
 
 17. **Heredocs `<<~ID` / `<<-ID` / `<<ID`** (triple-quote exists as a partial substitute). (§1)
-18. **Endless method def `def f(x) = expr`.** (§4)
+18. ~~**Endless method def `def f(x) = expr`.**~~ **DONE** (a `def` signature followed by `=` takes a single-expression body, no `end`; top-level fns and class methods; fmt normalizes to `{ expr }`, surface-preserving `= expr` is a follow-up). Pin `969`. (§4)
 19. **`%w` / `%i` / `%q` / `%Q` / `%r` percent-literals.** (§1)
 20. **Beginless range `(..5)`.** (§1)
 21. ~~**`~` bitwise complement**; bitwise/shift compound-assigns `<<= &= |= ^=`.~~ **DONE** (`~` is `UnaryOp::BitNot` lowering to `x ^ -1`, non-integer → E0733; `<<= >>= &= |= ^=` desugar to `a = a OP b`). Pin `968`. (§2, §3)

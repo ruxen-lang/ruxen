@@ -8,6 +8,15 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- **Endless method definitions `def f(...) = expr`.** A `def` whose signature is
+  followed by `=` takes a single expression as its whole body, with no `end`
+  (`def double(x: Int) -> Int = x * 2`, `def area -> Int = self.w * self.h`). It
+  works for top-level functions and class methods alike (both flow through
+  `parse_func_def`), and the body is stored as a one-expression block, so typeck,
+  MIR, and codegen are unchanged. `ruxen fmt` currently normalizes `= expr` to
+  the equivalent `{ expr }` single-expression form (surface-preserving `= expr`
+  is a follow-up, as with the ternary/`case` desugars). Pin `969`; Ruby-parity
+  `language.md` section 4 / P2.18.
 - **Bitwise complement `~` and bitwise/shift compound-assignments.** `~x` is a
   new integer prefix operator (`UnaryOp::BitNot`) that lowers to `x ^ -1` (every
   bit flipped) rather than reusing `MirInst::Not`, which XORs with 1 (logical

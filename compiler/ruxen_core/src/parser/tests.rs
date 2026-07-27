@@ -2162,6 +2162,34 @@ end";
     }
 
     #[test]
+    fn endless_method_def_parses_body_as_single_expression() {
+        let mut parser = Parser::new(
+            Lexer::new("def double(x: Int) -> Int = x * 2")
+                .tokenize()
+                .unwrap(),
+        );
+        let program = parser.parse().expect("endless def should parse");
+        let func = program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                TopLevelItem::Function(f) if f.name == "double" => Some(f),
+                _ => None,
+            })
+            .expect("expected `double`");
+        assert_eq!(
+            func.body.statements.len(),
+            1,
+            "endless body is one statement"
+        );
+        assert!(
+            matches!(func.body.statements[0], Statement::Expression(_)),
+            "endless body statement should be an expression, got {:?}",
+            func.body.statements[0]
+        );
+    }
+
+    #[test]
     fn bitwise_complement_parses_as_unary_bitnot() {
         match parse_expr("~x").kind {
             ExprKind::UnaryOp { op, .. } => assert_eq!(op, UnaryOp::BitNot),
