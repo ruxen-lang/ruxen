@@ -51,7 +51,7 @@ baseline works; much of the rest **compiles but is broken**:
 | `Array[i]`, `Array[i]=`, `Hash[k]`, `Hash[k]=` | **DONE** | `a[1]`=20, `a[0]=9`, `h["a"]` all correct. |
 | `Array[range]` (e.g. `a[0..1]`) | DONE | compiles+runs. |
 | **`**` (power)** | **MISSING (BUG)** | `3**4`⇒**12**, `2**10`⇒**20**, silently lowered to `*`. Not lexed as a distinct token. |
-| **`<=>` (spaceship)** | **MISSING** | not lexed, parse error `expected expression, found Gt`. |
+| **`<=>` (spaceship)** | **DONE** | Primitive Int/Float/String pin `959`; user method and Comparable dispatch pin `965`. |
 | **String `*`** | **MISSING (BUG)** | `"ab"*3` ⇒ crash (SIGSEGV). Use `.repeat(3)`. |
 | **String `<<`** | **MISSING (BUG)** | no-op (receiver unchanged). Use `.push_str`. |
 | **String `[i]` (index)** | **MISSING (BUG)** | `"abc"[1]` ⇒ empty/null Char. No `[]` in `string.rx`. |
@@ -63,7 +63,7 @@ baseline works; much of the rest **compiles but is broken**:
 `Range#map` returns empty (though `for x in a..b` iteration works).
 
 These runtime-broken operators are recorded as MISSING (they are not usable),
-with the working method spelling noted. Fixing `**`, `<=>`, and the collection
+with the working method spelling noted. Fixing `**` and the collection
 operators is high-value backlog.
 
 ---
@@ -189,8 +189,8 @@ MISSING.**
 | `integer?` | MISSING | |
 | `chr` / `ord` | MISSING | |
 | `coerce` | MISSING | |
-| `<=>` | MISSING | operator not lexed. |
-| `clamp` / `between?` | MISSING | (Comparable not wired.) |
+| `<=>` | DONE | Primitive operator returns -1/0/1 (case `959`). |
+| `clamp` / `between?` | MISSING | (not exposed on the Int method-home.) |
 | `[]` (bit ref) | MISSING | |
 | `bit_length`/`size`/`numerator`/`denominator` | MISSING | |
 | `hash` | MISSING | |
@@ -457,15 +457,14 @@ are *stored* closures, `do…end` are immediately-invoked (see workspace ledger)
 
 | Ruby feature | Status | Note |
 |---|---|---|
-| `mixin Comparable` | PARTIAL (COMPILE-TIME) | Exists but declares only a required `compare` method; **no default `< <= == > >= between? clamp`** are derived from it. |
-| `<` `<=` `==` `>` `>=` | MISSING (as Comparable) | numeric/string `<`…`>=` work as built-in operators, not via Comparable. |
-| `<=>` | MISSING | not lexed; Comparable's linchpin operator is unavailable. |
-| `between?(min,max)` | MISSING | |
-| `clamp(min,max)` / `clamp(range)` | MISSING | |
+| `mixin Comparable` | DONE (ordering) | Requires `<=>`; shared `.rx` defaults provide `==`, `<`, `<=`, `>`, `>=`, and `between?`. |
+| `<` `<=` `==` `>` `>=` | DONE | Dispatches through a hand-written `<=>` when `Comparable` is included (case `965`). |
+| `<=>` | DONE | Primitive and user-defined forms are available (cases `959/965`). |
+| `between?(min,max)` | DONE | Shared Comparable default (case `965`). |
+| `clamp(min,max)` / `clamp(range)` | MISSING | Needs an ownership-safe return contract for `self` vs. either bound. |
 
-Until `<=>` lexes and Comparable grows default bodies, `include Comparable` on a
-user type yields no usable ordering operators. Tracked cross-ref: `language.md`
-(operator overloading, `<=>`).
+`include Comparable` plus `def <=>(other: &Self) -> Int` is the hand-written
+ordering protocol. `clamp` is the remaining core method gap.
 
 ---
 
@@ -640,8 +639,8 @@ family, or a cross-cutting compiler fix), each with a `tests/release-e2e/` pin.
 These silently miscompile or crash today; they erode trust in the whole surface.
 1. **`**` power operator**, currently lowered to `*` (`2**10`⇒20). Lex a
    distinct token + real pow lowering (Int + Float). *(Compiler.)*
-2. **`<=>` spaceship**, not lexed at all; blocks all of Comparable. Add the
-   token + comparison lowering. *(Compiler.)*
+2. ~~**`<=>` spaceship**~~ **DONE** for primitive and user-defined comparison
+   plus Comparable defaults (cases `959/965`).
 3. **`Array[Int]#join`**, returns empty for non-`String` element types; only
    `Array[String]` works. Fix `ruxen_vec_join` element stringification.
 4. **Collection/String operators that crash or no-op**, `Array +/-/*/&/|/<<`,
@@ -694,8 +693,8 @@ Add to the shared mixin: `collect`/`filter`/`detect`/`find_all`(aliases),
 lands on Array + Hash + Set + Range simultaneously.
 
 ### P7, Comparable wiring
-Once `<=>` lexes: give `mixin Comparable` default bodies for `< <= == > >=
-between? clamp` over the required `compare`, so `include Comparable` is usable.
+DONE for `< <= == > >= between?` over required `<=>` (case `965`). `clamp`
+remains staged until its ownership-safe return contract is chosen.
 
 ### P8, Kernel conveniences
 `p`/`pp` (debug-print, over the `Debug` derive), `format`/`sprintf` (or bless

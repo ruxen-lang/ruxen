@@ -561,9 +561,8 @@ impl Parser {
     /// and `-@` / `+@` are `Minus`/`Plus` followed by `At`. The `@`-suffix
     /// disambiguates the unary forms from the binary `-` / `+`.
     ///
-    /// NOTE: `**` (power) is intentionally absent — the language has no
-    /// `**` operator (no lexer token, no `BinOp` variant), so there is no
-    /// call site to desugar. It joins the set when the operator lands.
+    /// NOTE: `**` (power) is intentionally absent: it lowers directly to
+    /// numeric runtime helpers and is not user-definable.
     pub(crate) fn parse_def_name(&mut self) -> String {
         self.try_parse_operator_name()
             .unwrap_or_else(|| self.expect_identifier())
@@ -592,6 +591,12 @@ impl Parser {
                 | TokenKind::Shl
                 | TokenKind::Shr
                 | TokenKind::Bang
+                | TokenKind::EqEq
+                | TokenKind::Lt
+                | TokenKind::Gt
+                | TokenKind::LtEq
+                | TokenKind::GtEq
+                | TokenKind::Spaceship
                 | TokenKind::LBracket
         )
     }
@@ -649,6 +654,30 @@ impl Parser {
             TokenKind::Bang => {
                 self.advance();
                 "!"
+            }
+            TokenKind::EqEq => {
+                self.advance();
+                "=="
+            }
+            TokenKind::Lt => {
+                self.advance();
+                "<"
+            }
+            TokenKind::Gt => {
+                self.advance();
+                ">"
+            }
+            TokenKind::LtEq => {
+                self.advance();
+                "<="
+            }
+            TokenKind::GtEq => {
+                self.advance();
+                ">="
+            }
+            TokenKind::Spaceship => {
+                self.advance();
+                "<=>"
             }
             TokenKind::LBracket => {
                 self.advance();

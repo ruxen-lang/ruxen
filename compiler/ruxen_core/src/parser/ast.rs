@@ -536,15 +536,13 @@ pub enum BinOp {
 }
 
 impl BinOp {
-    /// The method name this operator desugars to, for the MIGRATED
-    /// operator families only (Task OP, Step 3): arithmetic (`+ - * / %`)
-    /// and bitwise (`& | ^ << >>`). Comparison / equality / logical /
-    /// regex-match return `None` — they are deliberately EXCLUDED from the
-    /// operator-as-method wave (they stay on the existing binop paths and
-    /// the later `Comparable` increment), so a `None` here means "do not
-    /// desugar; use the structural lowering". This is the SINGLE source of
-    /// the operator→method-name map, shared by typeck (`infer_binop`
-    /// routing) and MIR (`lower_binops`).
+    /// The method name this operator can desugar to. Nominal arithmetic and
+    /// bitwise operators always take this route. Comparisons only take it
+    /// when the receiver exposes the method, preserving primitive and
+    /// auto-derive lowering as fallbacks.
+    ///
+    /// `!=` deliberately probes `==`: its dispatched result is inverted by
+    /// MIR, matching Ruby's default relationship between the two operators.
     pub fn method_name(self) -> Option<&'static str> {
         Some(match self {
             BinOp::Add => "+",
@@ -557,17 +555,15 @@ impl BinOp {
             BinOp::BitXor => "^",
             BinOp::Shl => "<<",
             BinOp::Shr => ">>",
-            // `Pow` and `Cmp` are machine-primitive-only (routed to a runtime
-            // call in MIR), not `def`-able methods for now, so they desugar to
-            // no method.
+            BinOp::Eq | BinOp::NotEq => "==",
+            BinOp::Lt => "<",
+            BinOp::Gt => ">",
+            BinOp::LtEq => "<=",
+            BinOp::GtEq => ">=",
+            BinOp::Cmp => "<=>",
+            // Power remains a numeric runtime operation rather than an
+            // overridable method.
             BinOp::Pow
-            | BinOp::Cmp
-            | BinOp::Eq
-            | BinOp::NotEq
-            | BinOp::Lt
-            | BinOp::Gt
-            | BinOp::LtEq
-            | BinOp::GtEq
             | BinOp::And
             | BinOp::Or
             | BinOp::KeywordAnd

@@ -114,9 +114,9 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 |---|---|---|---|
 | Arithmetic `+ - * / %` | DONE | `BinOp`; case `02` | |
 | Power `**` | DONE | `StarStar` token; `BinOp::Pow`; case `952` | Right-associative, binds tighter than unary minus (`-2 ** 2 == -4`). `Int ** Int → Int` (`ruxen_int_pow`), any float operand → `Float` (`ruxen_float_pow`). Fixed the former silent misparse (`2 ** 8` was `16`). |
-| Comparison `< > <= >=` | DONE | cases `126/209` | Auto-`Ord` on structs/enums. |
-| Equality `== !=` | DONE | auto-`PartialEq`; case `206` | |
-| Spaceship `<=>` | DONE | `Spaceship` token; `BinOp::Cmp`; case `959` | Returns `Int` (-1 / 0 / 1) for Int, Float, and String operands (`ruxen_int_cmp` / `ruxen_float_cmp` / `ruxen_str_spaceship`). Routing `Comparable` through it is a follow-up. |
+| Comparison `< > <= >=` | DONE | cases `126/209/965` | Auto-`Ord` on structs/enums; user methods and `Comparable` defaults dispatch when available. |
+| Equality `== !=` | DONE | auto-`PartialEq`; cases `206/965` | User `def ==` dispatches; `!=` inverts it. |
+| Spaceship `<=>` | DONE | `Spaceship` token; `BinOp::Cmp`; cases `959/965` | Returns `Int` (-1 / 0 / 1) for Int, Float, String, and user-defined `def <=>`. |
 | Logical `&& \|\| !` | DONE | `BinOp`/`UnaryOp`; case `955` | Now **short-circuit** (branch-CFG lowering). Was eagerly evaluating both operands (a correctness bug: `ptr != nil && ptr.field` touched `ptr.field` when nil); fixed 2026-07-23. |
 | Keyword `and` / `or` / `not` | DONE | `KeywordAnd`/`KeywordOr`/`KeywordNot`; case `964` | Ruby precedence: `and`/`or` share one left-associative tier below assignment; `not` consumes assignment and symbolic operators, then stops before keyword `and`/`or`. Strict-Bool, short-circuit, and formatter-preserving. |
 | Bitwise `& | ^ << >>` | DONE | `BinOp`; case `812` | |
@@ -125,7 +125,7 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | Safe navigation `&.` | DONE | `SafeNav`; probe PASS | `&.` not `?.`. |
 | Range `.. ...` | DONE | §1 | |
 | Operator method def `+ - * / % & | ^ << >> [] []= -@ +@ !` | DONE | case `631/632` | Explicit `a.+(b)` and sugared `a + b` both dispatch. |
-| Operator method def `== <=> < > <= >=` | MISSING | probe: `def ==` → `found EqEq` | Comparison/equality family is auto-derived only, not user-definable. |
+| Operator method def `== <=> < > <= >=` | DONE | case `965` | Explicit and sugared comparison calls dispatch; primitive and auto-derived paths remain fallbacks. |
 | String concat `+` | DONE | case `317` | |
 | String append `<<` | DONE | probe PASS | |
 | `defined?(x)` | MISSING | probe: undefined function | |
@@ -278,7 +278,7 @@ the substitute is idiomatic but the sugar is not built.
 | Constants in class | DONE | case `44` | |
 | `attr`-style equality/hash/inspect | DONE (auto) | cases `133/207/139` | Auto `PartialEq`/`Hash`/`Debug`. |
 | `to_s` universal | DONE | case `810` | User `to_s` overrides derived. |
-| `<=>` + `Comparable` (hand-written) | PARTIAL | auto-`Ord` DONE (case `209`); manual `<=>` needs a spaceship token + `def <=>` in the operator wave | Direct-parity build: add `<=>` and route `Comparable` through it. |
+| `<=>` + `Comparable` (hand-written) | DONE (operators) | case `965` | Required `<=>` supplies default `==`, ordering operators, and `between?`; `clamp` remains an ownership-design follow-up. |
 | `Struct.new(:a, :b)` | COMPILE-TIME | a `Struct.new(...)` macro that expands to a `struct` with accessors + auto-derives | `struct` is the mechanism (case `63`); the `Struct.new` *surface* is a macro over it. |
 | `Data.define(:a, :b)` | COMPILE-TIME | macro → immutable `struct` (no writers) + value semantics + auto-derives | Same design as `Struct.new`, writers omitted. |
 | `Comparable` protocol (auto) | DONE | case `126/209` | Via derived `Ord`. |
@@ -300,7 +300,7 @@ the substitute is idiomatic but the sugar is not built.
 | Mixin static/assoc-type/generic | DONE | cases `80/81/655-659` | Beyond Ruby (typed mixins). |
 | MRO / ancestor linearization | COMPILE-TIME | static resolution | No runtime `ancestors`; resolution is compile-time. |
 | `refinements` / `using` | COMPILE-TIME | lexically-scoped `extension` activated per-module/per-import | Ruby refinements are already lexically scoped; a scoped `extension` covers the real use case at compile time. Runtime activation toggling is the only irreducible edge. |
-| `Comparable`/`Enumerable` includes | DONE / PARTIAL | §9 | `Enumerable` DONE; `Comparable` needs `<=>`. |
+| `Comparable`/`Enumerable` includes | DONE | §9 | Both use shared `.rx` default bodies over one required primitive. |
 | `require` / `require_relative` | DONE | `module_loader.rs` (2026-07-14) | Ruby-style AOT module loading. |
 | `autoload :Const, "path"` | DONE | `module_loader::expand_autoloads` | Unresolved-name fixpoint. |
 
@@ -396,7 +396,10 @@ truly irreducible slice is excluded from both (listed last).
 10. ~~**`and` / `or` / `not` keyword operators.**~~ **DONE** (Ruby
     low-precedence tiers, strict-Bool short-circuit lowering, and
     surface-preserving formatting). Pin `964`. (§3)
-11. **`<=>` spaceship + user-definable `==`/`<=>`** so hand-written `Comparable` works, not only auto-`Ord`. The `<=>` OPERATOR is **DONE** (Int/Float/String, returns -1/0/1, pin `959`); routing `Comparable` through it and user-definable `def <=>` remain. (§3, §9)
+11. ~~**`<=>` spaceship + user-definable `==`/`<=>`.**~~ **DONE** for
+    comparison operators and `between?`: primitive `<=>` pin `959`,
+    hand-written `Comparable` and user comparison methods pin `965`.
+    `Comparable#clamp` remains an ownership-design follow-up. (§3, §9)
 12. **`*args` / `**kwargs` splat params** and required-keyword args `def f(a:)`. (§4)
 13. **General `@ivar` read/write** beyond the `init` auto-assign sugar. (§2)
 14. ~~**`case/when` keyword surface** (`===` dispatch) as sugar over `match`.~~ **DONE** (`case/when` desugars to `if`/`elsif`; `case/in` is an alias of `match`). Pin `960`. (§6)

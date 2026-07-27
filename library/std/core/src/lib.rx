@@ -2,11 +2,10 @@
 ## package. Phase D-3 of #06.95 moved these from Rust registrations
 ## in resolve/stdlib/mod.rs into self-hosted .rx.
 ##
-## Each declaration preserves the EXACT required-method list the
-## Rust registration carried; aspirational broader surfaces are
-## intentionally left out — adding required methods today would
-## break every user impl that doesn't provide them. They'll
-## expand once default-method lowering for mixins ships.
+## Most declarations preserve the minimal required-method list from
+## the old Rust registrations. Comparable and Enumerable use shipped
+## mixin-default lowering to define shared behavior over one required
+## primitive each.
 mixin Displayable
   def to_display
 end
@@ -16,7 +15,34 @@ mixin Error
 end
 
 mixin Comparable
-  def compare
+  # The one required primitive. Including types define this; all ordinary
+  # comparison operators below are shared default bodies over its -1/0/1
+  # result.
+  def <=>(other: &Self) -> Int
+
+  def ==(other: &Self) -> Bool
+    (self <=> other) == 0
+  end
+
+  def <(other: &Self) -> Bool
+    (self <=> other) < 0
+  end
+
+  def <=(other: &Self) -> Bool
+    (self <=> other) <= 0
+  end
+
+  def >(other: &Self) -> Bool
+    (self <=> other) > 0
+  end
+
+  def >=(other: &Self) -> Bool
+    (self <=> other) >= 0
+  end
+
+  def between?(min: &Self, max: &Self) -> Bool
+    self >= min && self <= max
+  end
 end
 
 # Marker mixins (no required methods).

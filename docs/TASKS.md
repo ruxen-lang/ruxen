@@ -371,8 +371,13 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
       `BinOp::Cmp`; `a <=> b -> Int` (-1/0/1) for Int/Float/String via
       `ruxen_int_cmp` / `ruxen_float_cmp` / `ruxen_str_spaceship`. Same
       BinOp-as-runtime-call pattern as `**`. Pin `959`; parity `language.md` §3.
-  - [ ] **Follow-up: route `Comparable` through `<=>`** and allow user
-        `def <=>` so `<`/`>`/etc. derive from a hand-written spaceship.
+  - [x] **Follow-up: route `Comparable` through `<=>` (DONE 2026-07-27).**
+        User `def ==`/`<`/`<=`/`>`/`>=`/`<=>` operator methods dispatch when
+        available, with primitive and auto-derived comparisons retained as
+        fallbacks. `Comparable` requires `<=>` and supplies `==`, ordering,
+        and `between?` defaults; `!=` inverts the dispatched `==`. Pin `965`.
+  - [ ] **Comparable `clamp`.** Choose an ownership-safe return contract for a
+        method that may return `self`, the lower bound, or the upper bound.
 - [x] **Ternary `cond ? a : b` (DONE 2026-07-24).** Right-associative, desugared
       in the parser to `if`/`else`. Disambiguated from the `?` try operator by
       whitespace: an attached `x?` is try, a spaced `c ? a : b` is ternary (span

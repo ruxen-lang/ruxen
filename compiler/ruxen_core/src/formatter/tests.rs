@@ -86,6 +86,21 @@ fn keyword_logical_operators_preserve_spelling_and_grouping() {
 }
 
 #[test]
+fn comparable_operator_method_names_are_preserved() {
+    let source = fmt_fixture("comparable_operator_methods");
+    let result = format(&source);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert!(result.output.contains("def <=>(other: &Self) -> Int"));
+    assert!(result.output.contains("def ==(other: &Self) -> Bool"));
+    assert!(result.output.contains("def <(other: &Self) -> Bool"));
+    assert!(result.output.contains("def <=(other: &Self) -> Bool"));
+    assert!(result.output.contains("def >(other: &Self) -> Bool"));
+    assert!(result.output.contains("def >=(other: &Self) -> Bool"));
+    assert!(result.output.contains("a.<=>(b)"));
+    assert_idempotent(&source);
+}
+
+#[test]
 fn test_class_definition() {
     let source = fmt_fixture("test_class_definition");
     let result = format(&source);

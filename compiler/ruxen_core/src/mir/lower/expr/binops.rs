@@ -22,6 +22,30 @@ enum NumKind {
 }
 
 impl<'a> Lowerer<'a> {
+    fn nominal_comparison_method_available(
+        &self,
+        receiver_ty: &Ty,
+        method: &str,
+        args: &[HirExpr],
+    ) -> bool {
+        let class_name = type_name_from_ty(receiver_ty);
+        let canonical = self
+            .symbols
+            .canonical_method_name(&class_name, method)
+            .to_string();
+        let owner = self.resolve_method_class_with_args(&class_name, &canonical, args);
+        if self.class_has_method_accepting_args(&owner, &canonical, args) {
+            return true;
+        }
+        self.trait_impls.iter().any(|(trait_name, implementors)| {
+            implementors.iter().any(|name| name == &class_name)
+                && self
+                    .trait_default_methods
+                    .get(trait_name)
+                    .is_some_and(|methods| methods.contains_key(&canonical))
+        })
+    }
+
     /// Q33: re-materialize a mismatched numeric operand pair to a common type
     /// before a `Compare`, so the comparison happens at one width with a
     /// signedness-correct int↔float conversion.
@@ -188,6 +212,68 @@ impl<'a> Lowerer<'a> {
         match &expr.kind {
             // ── Binary operations ───────────────────────────────────
             HirExprKind::BinaryOp { op, left, right } => {
+                // ── Operator → method desugar ──
+                // Prefer an available user method or included mixin default
+                // before structural derives. The availability probe is what
+                // preserves auto-PartialEq/Ord for nominal types that do not
+                // define the corresponding symbol method.
+                fn unwrap_ref(t: &Ty) -> &Ty {
+                    match t {
+                        Ty::Ref(inner)
+                        | Ty::RefMut(inner)
+                        | Ty::RefLifetime(_, inner)
+                        | Ty::RefMutLifetime(_, inner) => unwrap_ref(inner),
+                        _ => t,
+                    }
+                }
+                let lhs_nominal = matches!(
+                    unwrap_ref(&left.ty),
+                    Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                );
+                if lhs_nominal {
+                    if let Some(method) = op.method_name() {
+                        let args = vec![(**right).clone()];
+                        let comparison = matches!(
+                            op,
+                            BinOp::Eq
+                                | BinOp::NotEq
+                                | BinOp::Lt
+                                | BinOp::Gt
+                                | BinOp::LtEq
+                                | BinOp::GtEq
+                                | BinOp::Cmp
+                        );
+                        if !comparison
+                            || self.nominal_comparison_method_available(&left.ty, method, &args)
+                        {
+                            let synthetic = HirExpr {
+                                kind: HirExprKind::MethodCall {
+                                    object: Box::new((**left).clone()),
+                                    method: UNRESOLVED_DEF,
+                                    method_name: method.to_string(),
+                                    generic_args: vec![],
+                                    args,
+                                    block: None,
+                                },
+                                ty: expr.ty.clone(),
+                                span: expr.span.clone(),
+                            };
+                            let result = self.lower_method_call(&synthetic)?;
+                            if matches!(op, BinOp::NotEq) {
+                                if let Some(src) = result {
+                                    let dest = self.new_temp(Ty::Bool);
+                                    self.emit(MirInst::Not {
+                                        dest,
+                                        operand: MirValue::Use(src),
+                                    });
+                                    return Ok(Some(dest));
+                                }
+                            }
+                            return Ok(result);
+                        }
+                    }
+                }
+
                 // ── derive PartialEq: structural equality on structs ──
                 // `a == b` and `a != b` on a struct that derives PartialEq
                 // must compare field-by-field. The default `Compare` lowering
@@ -225,55 +311,6 @@ impl<'a> Lowerer<'a> {
                             &struct_name,
                             partial,
                         )?));
-                    }
-                }
-
-                // ── Operator → method desugar (Task OP, Step 3) ──
-                // A NOMINAL receiver (user class / struct / enum, and
-                // stdlib classes like Duration) with a MIGRATED op
-                // (`+ - * / %`, `& | ^ << >>`) lowers as a real method
-                // call `left.OP(right)` to its `.rx` `def OP`. This is the
-                // generic mechanism that REPLACED the hardcoded
-                // Duration/Instant arithmetic arms (Duration now declares
-                // `def +`/`def -` in `.rx`). Machine primitives, String, and
-                // the collection heads fall through to the instruction /
-                // special-case lowering below — the machine floor, no
-                // method-call overhead on the hot path.
-                //
-                // We synthesize the same `MethodCall` HIR node the explicit
-                // `a.+(b)` surface produces and delegate to
-                // `lower_method_call`, so there is ONE method-call lowering
-                // path (overload selection, FFI alias rewrite, receiver
-                // prepend). This MUST run before the operands are lowered
-                // below, or they'd be lowered twice.
-                fn unwrap_ref(t: &Ty) -> &Ty {
-                    match t {
-                        Ty::Ref(inner)
-                        | Ty::RefMut(inner)
-                        | Ty::RefLifetime(_, inner)
-                        | Ty::RefMutLifetime(_, inner) => unwrap_ref(inner),
-                        _ => t,
-                    }
-                }
-                let lhs_nominal = matches!(
-                    unwrap_ref(&left.ty),
-                    Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
-                );
-                if lhs_nominal {
-                    if let Some(method) = op.method_name() {
-                        let synthetic = HirExpr {
-                            kind: HirExprKind::MethodCall {
-                                object: Box::new((**left).clone()),
-                                method: UNRESOLVED_DEF,
-                                method_name: method.to_string(),
-                                generic_args: vec![],
-                                args: vec![(**right).clone()],
-                                block: None,
-                            },
-                            ty: expr.ty.clone(),
-                            span: expr.span.clone(),
-                        };
-                        return self.lower_method_call(&synthetic);
                     }
                 }
 

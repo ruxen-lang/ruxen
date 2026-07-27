@@ -36,9 +36,10 @@ registers only `declared_method_resolvers` + `builtin_bridge`.
    + `typeck/infer/ops.rs` (shrink to machine-primitive instruction selection;
    non-primitive head → `def OP` method call; delete the migrated operator-synthesis
    arms). The parser learns only operator-symbol method NAMES (`def +`, `a.+(b)`).
-   Comparison/equality (`==`/`<`/…) + `Comparable`/`<=>` are a SEPARATE later
-   increment — left on the existing `binops.rs` paths (PartialEq derive, Vec/Map/Set
-   `==`, Ord-derive) to avoid double-defining.
+   Comparison/equality (`==`/`<`/…) + `Comparable`/`<=>` use the same
+   post-typeck mechanism with an availability gate: a declared/default method
+   wins, while PartialEq/Ord derives and primitive comparisons remain the
+   fallback, avoiding double-definition.
 3. **Shared methods via mixins with default bodies** (Ruby modules). The mixins
    already exist as markers in `library/std/core/src/lib.rx` — fill them:
    - **`Enumerable[T]` over required `each`**: `map`/`select`/`reject`/`reduce`/
@@ -185,10 +186,10 @@ behind.
       loop 0.99–1.06s before & after). Hardcoded Duration/Instant arithmetic arms
       DELETED; Duration declares `def +`/`def -` (Instant `def -`) in `.rx`. Twin
       pins `631`(explicit)/`632`(sugared) with byte-identical `.out` lock
-      desugar↔explicit equivalence. **Remaining:** the SEPARATE comparison/equality
-      + `Comparable` increment (deferred; `==`/`<`/… stay on the existing
-      binops PartialEq-derive / Vec-Map-Set-eq / Ord-derive paths; `<=>` token
-      vs reuse-`cmp` TBD).
+      desugar↔explicit equivalence. **Comparison increment DONE:** `def
+      ==`/`<`/`<=`/`>`/`>=`/`<=>` parse and dispatch when available;
+      primitive and PartialEq/Ord derive paths remain fallbacks.
+      `Comparable` defines shared defaults over required `<=>`; pin `965`.
 - [ ] Literals→primitives + de-primitivize `Ty::String`/`Ty::Array`.
 - [ ] Generic small-method inliner (perf).
 

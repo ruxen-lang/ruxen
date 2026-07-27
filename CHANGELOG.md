@@ -8,6 +8,16 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- **User-defined comparison operators and `Comparable` through `<=>`.**
+  `def ==`, `def <`, `def <=`, `def >`, `def >=`, and `def <=>` now parse as
+  operator method names, including explicit calls such as `a.<=>(b)`. Typeck
+  and MIR route comparison syntax to a user method only when the receiver
+  actually exposes it, preserving primitive comparison and auto-derived
+  `PartialEq`/`Ord` as fallbacks. `!=` reuses an available `==` method and
+  inverts its result. The core `Comparable` mixin now requires one
+  `<=>(other: &Self) -> Int` primitive and supplies shared defaults for
+  `==`, `<`, `<=`, `>`, `>=`, and `between?`. Pin `965`; Ruby-parity
+  `language.md` section 3 / P1.11.
 - **Ruby keyword `and`, `or`, and `not` operators.** The lexer now reserves all
   three spellings, and the parser gives `and`/`or` one shared left-associative
   tier below assignment while `not` consumes assignment, `||`, comparisons,
@@ -151,8 +161,9 @@ once 1.0.0 ships.
   `BinOp::Cmp`. `a <=> b` returns `Int` (-1 / 0 / 1) for two Int, two Float, or
   two String operands, lowering to `ruxen_int_cmp` / `ruxen_float_cmp` /
   `ruxen_str_spaceship` (all normalized to -1/0/1). Sits at the comparison
-  precedence tier. Routing `Comparable` through `<=>` and user-definable
-  `def <=>` are follow-ups. Pin `959`; Ruby-parity `language.md` §3.
+  precedence tier. Primitive behavior is pinned here; user-defined `<=>` and
+  `Comparable` defaults are pinned separately by case `965`. Pin `959`;
+  Ruby-parity `language.md` §3.
 - **Ternary conditional `cond ? a : b`.** Right-associative (`a ? b : c ? d : e`
   parses as `a ? b : (c ? d : e)`), desugared in the parser to an `if`/`else`
   expression. Disambiguated from the `?` try operator by whitespace adjacency:

@@ -254,11 +254,10 @@ impl<'a> InferenceEngine<'a> {
 
     // ─── Operator → method desugar (Task OP, Step 3) ────────────────
     //
-    // The operator→method-name map is `BinOp::method_name` (parser/ast.rs)
-    // — the SINGLE source shared with MIR's `lower_binops`. Only the
-    // MIGRATED families (arithmetic `+ - * / %`, bitwise `& | ^ << >>`)
-    // return a name; comparison/equality/logical/regex-match return `None`
-    // (they keep their existing paths + the later `Comparable` increment).
+    // The operator→method-name map is `BinOp::method_name` (parser/ast.rs),
+    // shared with MIR's `lower_binops`. Comparison routing is conditional so
+    // primitives and nominal types without a matching comparison method keep
+    // their existing instruction / derive paths.
 
     /// True when `ty` is a NOMINAL receiver (user/stdlib class, struct, or
     /// enum) — the receivers whose operators are real overridable `.rx`
@@ -275,6 +274,70 @@ impl<'a> InferenceEngine<'a> {
             Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => true,
             _ => false,
         }
+    }
+
+    /// Whether `ty` exposes an operator method that accepts `args`.
+    ///
+    /// Nominal receivers consult their own methods plus included mixin
+    /// defaults. Abstract receivers consult their declared mixin bounds,
+    /// which lets a `Comparable` default body type-check `self <=> other`
+    /// while `Self` is still abstract.
+    pub(super) fn comparison_method_available(
+        &self,
+        ty: &Ty,
+        method: &str,
+        args: &[crate::hir::nodes::HirExpr],
+    ) -> bool {
+        let mut peeled = ty;
+        while let Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) = peeled
+        {
+            peeled = inner;
+        }
+        match peeled {
+            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => self
+                .traits
+                .lookup_method_with_args(peeled, method, args, self.symbols)
+                .is_some(),
+            Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
+                !matches!(
+                    self.traits.lookup_method_on_bounds(bounds, method, args),
+                    Ok(None)
+                )
+            }
+            _ => false,
+        }
+    }
+
+    /// Comparison operator methods have fixed result contracts even though
+    /// ordinary operator overloads may return an arbitrary declared type.
+    pub(super) fn validate_comparison_method_return(
+        &mut self,
+        op: BinOp,
+        actual: Ty,
+        method: &str,
+        span: &Span,
+    ) -> Ty {
+        let expected = match op {
+            BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
+                Ty::Bool
+            }
+            BinOp::Cmp => Ty::Int,
+            _ => return actual,
+        };
+        if unify(&actual, &expected, self.ctx, span).is_err() {
+            self.diagnostics.push(Diagnostic::error_with_code(
+                format!(
+                    "comparison operator method `{method}` must return `{expected}`, \
+                     found `{actual}`"
+                ),
+                span.clone(),
+                "E0707",
+            ));
+        }
+        expected
     }
 
     // ─── Binary Operation Type Inference ────────────────────────────

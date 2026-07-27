@@ -14,6 +14,13 @@ mod tests {
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
     }
 
+    fn release_rx(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/release-e2e/cases")
+            .join(format!("{name}.rx"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    }
+
     fn span() -> Span {
         Span {
             start: 0,
@@ -836,6 +843,47 @@ mod tests {
                     && diagnostic.message.contains("operator `&&`")
             }),
             "expected a strict-Bool `&&` diagnostic, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn comparable_operator_defaults_typecheck() {
+        let source = release_rx("965_comparable_spaceship");
+        let result = parse_and_check(&source);
+        assert!(
+            result.diagnostics.is_empty(),
+            "expected user-defined comparison operators and Comparable defaults to type-check, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn spaceship_without_a_method_or_primitive_operand_is_rejected() {
+        let source = rx("spaceship_without_method");
+        let result = parse_and_check(&source);
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code.as_deref() == Some("E0707")
+                    && diagnostic.message.contains("operator `<=>`")
+            }),
+            "expected unsupported spaceship diagnostic, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn comparison_operator_method_return_type_is_enforced() {
+        let source = rx("comparison_method_bad_return");
+        let result = parse_and_check(&source);
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code.as_deref() == Some("E0707")
+                    && diagnostic
+                        .message
+                        .contains("operator method `<=>` must return `Int`")
+            }),
+            "expected comparison return-type diagnostic, got {:?}",
             result.diagnostics
         );
     }

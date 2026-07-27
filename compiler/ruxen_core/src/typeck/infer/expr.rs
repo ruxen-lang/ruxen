@@ -832,21 +832,33 @@ impl<'a> InferenceEngine<'a> {
 
                 let left_ty = self.ctx.resolve(&left.ty);
                 let right_ty = self.ctx.resolve(&right.ty);
-                // Operator → method desugar (Task OP, Step 3): a NOMINAL
-                // receiver (Duration, a user operator class) with a MIGRATED
-                // op (`+ - * / %`, `& | ^ << >>`) resolves to its `.rx`
-                // `def OP` — `a + b` is `a.+(b)`. Machine primitives, String,
-                // and the collection heads keep their `infer_binop` arms (the
-                // machine floor / special cases). The MIR side mirrors this
-                // (`lower_binops`): primitive head → instruction, nominal
-                // head → method call.
-                let routed = op
-                    .method_name()
-                    .filter(|_| Self::is_nominal_operator_receiver(&left_ty))
-                    .map(|m| {
-                        let args = std::slice::from_ref(right.as_ref());
-                        self.resolve_method_call(&left_ty, m, args, &expr.span)
-                    });
+                // Operator → method desugar: arithmetic/bitwise retain their
+                // nominal-method route. Comparisons use a method only when the
+                // receiver exposes one, extending the wave to Comparable
+                // without stealing auto-derived Ord/PartialEq or primitives.
+                let args = std::slice::from_ref(right.as_ref());
+                let routed = op.method_name().and_then(|method| {
+                    let comparison = matches!(
+                        op,
+                        BinOp::Eq
+                            | BinOp::NotEq
+                            | BinOp::Lt
+                            | BinOp::Gt
+                            | BinOp::LtEq
+                            | BinOp::GtEq
+                            | BinOp::Cmp
+                    );
+                    let dispatches = if comparison {
+                        self.comparison_method_available(&left_ty, method, args)
+                    } else {
+                        Self::is_nominal_operator_receiver(&left_ty)
+                    };
+                    dispatches.then(|| {
+                        let return_ty =
+                            self.resolve_method_call(&left_ty, method, args, &expr.span);
+                        self.validate_comparison_method_return(*op, return_ty, method, &expr.span)
+                    })
+                });
                 expr.ty = match routed {
                     Some(ty) => ty,
                     None => self.infer_binop(*op, &left_ty, &right_ty, &expr.span),
