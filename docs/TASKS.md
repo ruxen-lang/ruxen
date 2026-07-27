@@ -376,8 +376,12 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
         available, with primitive and auto-derived comparisons retained as
         fallbacks. `Comparable` requires `<=>` and supplies `==`, ordering,
         and `between?` defaults; `!=` inverts the dispatched `==`. Pin `965`.
-  - [ ] **Comparable `clamp`.** Choose an ownership-safe return contract for a
-        method that may return `self`, the lower bound, or the upper bound.
+  - [x] **Comparable `clamp` (DONE 2026-07-27).** `clamp(min: &Self, max:
+        &Self) -> &Self` returns a borrow of whichever of `self`/`min`/`max`
+        is in range, so no value is moved or copied. Required closing a
+        `Self`-return substitution gap: `substitute_generics_in_return` now
+        binds `Self` to the concrete receiver so a mixin-default returning
+        `Self`/`&Self` resolves its fields at the call site. Pin `967`.
 - [x] **Lazy nil coalescing `Option[T] ?? T` (DONE 2026-07-27).** Added a
       dedicated `QuestionQuestion` token and formatter-preserving
       `BinOp::NilCoalesce`. It is right-associative at precedence tier 2

@@ -8,6 +8,19 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- **`Comparable#clamp` plus `Self`-return substitution through mixin
+  defaults.** `clamp(min: &Self, max: &Self) -> &Self` is a new Comparable
+  default that returns a borrow of whichever of `self`/`min`/`max` is in the
+  `[min, max]` range, so no owned value is moved or copied (ownership-safe for
+  owned Comparable types). Making it usable required closing a gap in
+  return-type substitution: a mixin-default method that returns `Self`/`&Self`
+  previously left the abstract `Self: Bound` type param in place at the call
+  site, so the concrete receiver's fields were unreachable on the result
+  (`no field value on Self: Comparable`). `substitute_generics_in_return` now
+  also binds `Self` to the receiver's own concrete type, so `rank.clamp(lo,
+  hi).value` resolves. A `Self`-free return is unaffected (the substitution is
+  a structural no-op when the return names neither `Self` nor a receiver
+  generic). Pin `967`; parity `language.md` section 3.
 - **Lazy nil coalescing with `??`.** Added a dedicated `QuestionQuestion`
   token and surface-preserving `BinOp::NilCoalesce`. The operator is
   right-associative, binds between assignment and `||`, and has the contract

@@ -920,4 +920,24 @@ mod tests {
             result.diagnostics
         );
     }
+
+    #[test]
+    fn comparable_clamp_self_return_resolves_to_concrete_receiver() {
+        // `Comparable#clamp` returns `&Self`; at the call site on a concrete
+        // `Rank` the abstract `Self: Comparable` must substitute to `Rank`
+        // so `.value` (a Rank field) resolves on the result. Without the
+        // Self-return substitution this reports `no field value on Self`.
+        let source = release_rx("967_comparable_clamp");
+        let result = parse_and_check(&source);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "clamp's `&Self` return should resolve to the concrete receiver, got {:?}",
+            errors
+        );
+    }
 }

@@ -976,9 +976,22 @@ impl<'a> InferenceEngine<'a> {
     /// corresponding generic argument from `obj_ty` (a `Ty::Class` or
     /// `Ty::Struct`).
     pub(super) fn substitute_generics_in_return(&self, obj_ty: &Ty, ret_ty: &Ty) -> Ty {
-        let Some(subst) = self.receiver_generic_bindings(obj_ty) else {
-            return ret_ty.clone();
+        // Bind the receiver's class generics (`T`/`K`/`V`) and, for a
+        // mixin-default method that returns `Self`/`&Self` (e.g.
+        // `Comparable#clamp`), bind `Self` to the receiver's own concrete
+        // type so the result is the concrete class rather than the abstract
+        // `Self: Bound` type param. A `Self`-free return is unaffected: the
+        // substitution is a structural no-op when the return names neither
+        // `Self` nor a receiver generic.
+        let mut subst = self.receiver_generic_bindings(obj_ty).unwrap_or_default();
+        let self_ty = match obj_ty {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => (**inner).clone(),
+            other => other.clone(),
         };
+        subst.entry("Self".to_string()).or_insert(self_ty);
         Self::subst_ty(ret_ty, &subst)
     }
 

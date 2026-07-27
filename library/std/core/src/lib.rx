@@ -43,6 +43,19 @@ mixin Comparable
   def between?(min: &Self, max: &Self) -> Bool
     self >= min && self <= max
   end
+
+  # Return the receiver clamped to the `[min, max]` range. Borrows all
+  # three operands and returns a borrow of whichever one is in range, so no
+  # value is moved or copied (ownership-safe for owned Comparable types).
+  def clamp(min: &Self, max: &Self) -> &Self
+    if self < min
+      min
+    elsif self > max
+      max
+    else
+      self
+    end
+  end
 end
 
 # Marker mixins (no required methods).
