@@ -1,0 +1,10 @@
+def main
+  var assigned = false
+  let result = (assigned = true) and false
+  var grouped = false
+  grouped = (true and false)
+  var number = 1
+  number += (true and false)
+  let compared = (not false) == true
+  let nested = not (true and false)
+end

@@ -1889,6 +1889,83 @@ end";
     }
 
     #[test]
+    fn keyword_and_binds_looser_than_assignment() {
+        match parse_expr("a = true and false").kind {
+            ExprKind::BinaryOp {
+                op: BinOp::KeywordAnd,
+                left,
+                ..
+            } => assert!(
+                matches!(left.kind, ExprKind::Assign { .. }),
+                "assignment should bind before keyword `and`"
+            ),
+            other => panic!("expected `(a = true) and false`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn keyword_and_and_or_share_one_left_associative_tier() {
+        match parse_expr("true or false and false").kind {
+            ExprKind::BinaryOp {
+                op: BinOp::KeywordAnd,
+                left,
+                ..
+            } => assert!(
+                matches!(
+                    left.kind,
+                    ExprKind::BinaryOp {
+                        op: BinOp::KeywordOr,
+                        ..
+                    }
+                ),
+                "keyword `or` should associate before the following keyword `and`"
+            ),
+            other => panic!("expected `(true or false) and false`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn keyword_not_consumes_symbolic_or_but_stops_before_keyword_and() {
+        match parse_expr("not true || false and true").kind {
+            ExprKind::BinaryOp {
+                op: BinOp::KeywordAnd,
+                left,
+                ..
+            } => assert!(
+                matches!(
+                    left.kind,
+                    ExprKind::UnaryOp {
+                        op: UnaryOp::KeywordNot,
+                        operand
+                    } if matches!(
+                        operand.kind,
+                        ExprKind::BinaryOp {
+                            op: BinOp::Or,
+                            ..
+                        }
+                    )
+                ),
+                "`not` should consume `||` and stop before keyword `and`"
+            ),
+            other => panic!("expected `(not (true || false)) and true`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn keyword_not_consumes_assignment() {
+        match parse_expr("not a = false").kind {
+            ExprKind::UnaryOp {
+                op: UnaryOp::KeywordNot,
+                operand,
+            } => assert!(
+                matches!(operand.kind, ExprKind::Assign { .. }),
+                "`not` should consume an assignment operand"
+            ),
+            other => panic!("expected `not (a = false)`, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn multiple_assignment_parses_target_and_value_lists() {
         match parse_stmt("a, b = 1, 2") {
             Statement::Expression(Expr {

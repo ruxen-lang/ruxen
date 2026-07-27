@@ -118,7 +118,7 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | Equality `== !=` | DONE | auto-`PartialEq`; case `206` | |
 | Spaceship `<=>` | DONE | `Spaceship` token; `BinOp::Cmp`; case `959` | Returns `Int` (-1 / 0 / 1) for Int, Float, and String operands (`ruxen_int_cmp` / `ruxen_float_cmp` / `ruxen_str_spaceship`). Routing `Comparable` through it is a follow-up. |
 | Logical `&& \|\| !` | DONE | `BinOp`/`UnaryOp`; case `955` | Now **short-circuit** (branch-CFG lowering). Was eagerly evaluating both operands (a correctness bug: `ptr != nil && ptr.field` touched `ptr.field` when nil); fixed 2026-07-23. |
-| Keyword `and` / `or` / `not` | MISSING | probe: parsed as identifiers | Low-precedence keyword operators absent. |
+| Keyword `and` / `or` / `not` | DONE | `KeywordAnd`/`KeywordOr`/`KeywordNot`; case `964` | Ruby precedence: `and`/`or` share one left-associative tier below assignment; `not` consumes assignment and symbolic operators, then stops before keyword `and`/`or`. Strict-Bool, short-circuit, and formatter-preserving. |
 | Bitwise `& | ^ << >>` | DONE | `BinOp`; case `812` | |
 | Bitwise complement `~` | MISSING | probe: `E0006` on `~` | No token (only `~=`). |
 | Ternary `c ? a : b` | DONE | parser desugar to `if`/`else`; case `958` | Right-associative. Disambiguated from the `?` try operator by whitespace: an attached `x?` is try, a spaced `c ? a : b` is ternary. |
@@ -365,7 +365,7 @@ standalone and emit empty output at runtime. They are not functional today; the
 | `defined?` | MISSING | §3 | |
 | `__method__` / `__FILE__` / `__LINE__` | MISSING | §1 | |
 | `<=>` spaceship | DONE | §3; case `959` | See §3 row. Int/Float/String. |
-| `and`/`or`/`not` | MISSING | §3 | |
+| `and`/`or`/`not` | DONE | §3; case `964` | |
 | `nil?` universal predicate | MISSING | probe: `no field nil? on Int` | Non-nullable types make it moot; `Int?` (Option) uses `match`/`?`. |
 
 ---
@@ -393,7 +393,9 @@ truly irreducible slice is excluded from both (listed last).
 
 8. **Symbols `:sym` as a first-class value** (+ `Symbol` type). Unlocks hash symbol-shorthand `{ a: 1 }`, symbol arrays, and reflective-style APIs. (§1)
 9. **Hash symbol-key shorthand `{ a: 1 }`** (rides on symbols). (§1)
-10. **`and` / `or` / `not` keyword operators.** (§3)
+10. ~~**`and` / `or` / `not` keyword operators.**~~ **DONE** (Ruby
+    low-precedence tiers, strict-Bool short-circuit lowering, and
+    surface-preserving formatting). Pin `964`. (§3)
 11. **`<=>` spaceship + user-definable `==`/`<=>`** so hand-written `Comparable` works, not only auto-`Ord`. The `<=>` OPERATOR is **DONE** (Int/Float/String, returns -1/0/1, pin `959`); routing `Comparable` through it and user-definable `def <=>` remain. (§3, §9)
 12. **`*args` / `**kwargs` splat params** and required-keyword args `def f(a:)`. (§4)
 13. **General `@ivar` read/write** beyond the `init` auto-assign sugar. (§2)

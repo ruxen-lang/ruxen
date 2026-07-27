@@ -394,8 +394,31 @@ impl<'a> InferenceEngine<'a> {
                 Ty::Bool
             }
 
-            // Logical: both sides Bool, result is Bool
-            BinOp::And | BinOp::Or => Ty::Bool,
+            // Logical: both sides Bool, result is Bool. Keyword `and` / `or`
+            // use the same strict-Bool semantics as `&&` / `||`; only their
+            // parser precedence and formatter spelling differ.
+            BinOp::And | BinOp::Or | BinOp::KeywordAnd | BinOp::KeywordOr => {
+                let left_ok = unify(left, &Ty::Bool, self.ctx, span).is_ok();
+                let right_ok = unify(right, &Ty::Bool, self.ctx, span).is_ok();
+                if !left_ok || !right_ok {
+                    let op_name = match op {
+                        BinOp::And => "&&",
+                        BinOp::Or => "||",
+                        BinOp::KeywordAnd => "and",
+                        BinOp::KeywordOr => "or",
+                        _ => unreachable!(),
+                    };
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "logical operator `{op_name}` requires Bool operands, \
+                             got `{left}` and `{right}`",
+                        ),
+                        span.clone(),
+                        "E0731",
+                    ));
+                }
+                Ty::Bool
+            }
 
             // Bitwise: both sides integer, result is same type
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
@@ -451,7 +474,7 @@ impl<'a> InferenceEngine<'a> {
         }
     }
 
-    pub(super) fn infer_unaryop(&mut self, op: UnaryOp, operand: &Ty, _span: &Span) -> Ty {
+    pub(super) fn infer_unaryop(&mut self, op: UnaryOp, operand: &Ty, span: &Span) -> Ty {
         match op {
             UnaryOp::Neg => operand.clone(),
             UnaryOp::Not => {
@@ -460,6 +483,16 @@ impl<'a> InferenceEngine<'a> {
                 } else {
                     operand.clone() // bitwise not
                 }
+            }
+            UnaryOp::KeywordNot => {
+                if unify(operand, &Ty::Bool, self.ctx, span).is_err() {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!("logical operator `not` requires a Bool operand, got `{operand}`"),
+                        span.clone(),
+                        "E0731",
+                    ));
+                }
+                Ty::Bool
             }
             UnaryOp::Deref => {
                 // `*x` strips one level of reference.

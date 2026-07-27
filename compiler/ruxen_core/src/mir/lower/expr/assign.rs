@@ -329,7 +329,11 @@ impl<'a> Lowerer<'a> {
                 let val_local = self.lower_expr(value)?;
                 let val = local_to_value(val_local);
                 self.store_value_into_target(target, val)?;
-                Ok(None)
+                if expr.ty.is_copy() && expr.ty != Ty::Unit {
+                    Ok(val_local)
+                } else {
+                    Ok(None)
+                }
             }
 
             // ── Compound assignment ─────────────────────────────────

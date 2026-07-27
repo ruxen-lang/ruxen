@@ -307,6 +307,7 @@ move { |x| ... }                      # move-capturing closure
 +  -  *  /  %  **                     # arithmetic, power
 == != <  >  <= >=                     # comparison
 && || !                               # logical
+and or not                            # low-precedence logical
 &  |  ^  ~  << >>                     # bitwise
 ?                                     # try (propagates Err / nil)
 ..  ...                               # range inclusive / exclusive

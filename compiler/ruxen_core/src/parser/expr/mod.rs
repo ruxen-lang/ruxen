@@ -29,6 +29,10 @@ mod operators;
 /// Non-associative: left == right.
 fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
     match kind {
+        // Ruby keyword `and` / `or`: one shared precedence level, looser
+        // than assignment, and left-associative.
+        TokenKind::And | TokenKind::Or => Some((0, 1)),
+
         // Assignment: right-associative (1, 2)
         TokenKind::Eq
         | TokenKind::PlusEq
@@ -216,6 +220,20 @@ impl Parser {
                     span,
                 }
             }
+            TokenKind::Not => {
+                self.advance();
+                // Ruby `not` consumes assignment and every tighter operator,
+                // but stops before keyword `and` / `or`.
+                let operand = self.parse_expr_bp(1);
+                let span = self.span_from(&start);
+                Expr {
+                    kind: ExprKind::UnaryOp {
+                        op: UnaryOp::KeywordNot,
+                        operand: Box::new(operand),
+                    },
+                    span,
+                }
+            }
             TokenKind::Amp => {
                 self.advance();
                 let operand = self.parse_expr_bp(25);
@@ -300,6 +318,7 @@ impl Parser {
                 | TokenKind::LBrace
                 | TokenKind::Minus
                 | TokenKind::Bang
+                | TokenKind::Not
                 | TokenKind::Amp
                 | TokenKind::AmpMut
                 | TokenKind::If
@@ -339,6 +358,8 @@ fn token_to_binop(kind: &TokenKind) -> BinOp {
         TokenKind::Spaceship => BinOp::Cmp,
         TokenKind::AmpAmp => BinOp::And,
         TokenKind::PipePipe => BinOp::Or,
+        TokenKind::And => BinOp::KeywordAnd,
+        TokenKind::Or => BinOp::KeywordOr,
         TokenKind::Amp => BinOp::BitAnd,
         TokenKind::Pipe => BinOp::BitOr,
         TokenKind::Caret => BinOp::BitXor,

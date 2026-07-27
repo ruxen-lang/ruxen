@@ -89,6 +89,9 @@ fn test_all_keywords() {
         ("const", TokenKind::Const),
         ("when", TokenKind::When),
         ("unless", TokenKind::Unless),
+        ("and", TokenKind::And),
+        ("or", TokenKind::Or),
+        ("not", TokenKind::Not),
     ];
 
     for (input, expected) in pairs {

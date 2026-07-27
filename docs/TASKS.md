@@ -427,6 +427,15 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
       tokens) desugaring to `a || (a = b)` / `a && (a = b)` (Bool; nilable
       memoization awaits a `??` operator). Pins `955` (short-circuit), `954`
       (`||=`/`&&=`); parity `language.md` §2 and §3 / P0.4.
+- [x] **Ruby keyword `and`/`or`/`not` (DONE 2026-07-27).** Added reserved
+      keyword tokens and distinct AST operator variants so `ruxen fmt` preserves
+      the authored spelling. `and` and `or` share Ruby's left-associative tier
+      below assignment; `not` consumes assignment and all symbolic operators but
+      stops before keyword `and`/`or`. All three are strict-Bool and reuse the
+      existing short-circuit CFG. Copy assignments nested in a logical operator
+      produce the assigned value; owned assignment results remain Unit until
+      ownership-aware result lowering exists. Pin `964`; parity `language.md`
+      §3 / P1.10.
 - [x] **`unless`/`until` + statement modifiers (DONE 2026-07-23).** Block
       `unless … end` (→ `if !cond`) and `until … end` (→ `while !cond`), plus the
       trailing modifiers `EXPR if/unless/while/until COND`. Added the `Until`

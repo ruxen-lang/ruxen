@@ -27,6 +27,7 @@ impl<'a> Lowerer<'a> {
                 let unary_method = match op {
                     UnaryOp::Neg => Some("-@"),
                     UnaryOp::Not => Some("!"),
+                    UnaryOp::KeywordNot => None,
                     UnaryOp::Deref => None,
                 };
                 if nominal {
@@ -52,7 +53,9 @@ impl<'a> Lowerer<'a> {
                 let dest = self.new_temp(expr.ty.clone());
                 match op {
                     UnaryOp::Neg => self.emit(MirInst::Negate { dest, operand: val }),
-                    UnaryOp::Not => self.emit(MirInst::Not { dest, operand: val }),
+                    UnaryOp::Not | UnaryOp::KeywordNot => {
+                        self.emit(MirInst::Not { dest, operand: val })
+                    }
                     UnaryOp::Deref => {
                         // `*x` — strip one reference level. In Ruxen's value
                         // model a reference is represented the same as its

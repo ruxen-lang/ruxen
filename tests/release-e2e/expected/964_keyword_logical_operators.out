@@ -1,0 +1,13 @@
+assigned=true
+assignment_result=false
+same_tier=false
+symbolic_tighter=false
+comparison=true
+grouped=true
+eval A
+a=false
+eval C
+b=true
+eval E
+eval F
+c=true

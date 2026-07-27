@@ -291,6 +291,10 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0730",
         title: "`str` is not a type; use `String` (owned) or `&String` (borrowed)",
     },
+    CodeInfo {
+        code: "E0731",
+        title: "logical operator requires Bool operands",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`

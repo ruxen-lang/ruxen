@@ -809,4 +809,34 @@ mod tests {
             result.diagnostics
         );
     }
+
+    #[test]
+    fn keyword_logical_operators_require_bool_operands() {
+        let source = rx("keyword_logical_non_bool");
+        let result = parse_and_check(&source);
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code.as_deref() == Some("E0731")
+                    && diagnostic.message.contains("operator `and`")
+            }),
+            "expected a strict-Bool `and` diagnostic, got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code.as_deref() == Some("E0731")
+                    && diagnostic.message.contains("operator `not`")
+            }),
+            "expected a strict-Bool `not` diagnostic, got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code.as_deref() == Some("E0731")
+                    && diagnostic.message.contains("operator `&&`")
+            }),
+            "expected a strict-Bool `&&` diagnostic, got {:?}",
+            result.diagnostics
+        );
+    }
 }

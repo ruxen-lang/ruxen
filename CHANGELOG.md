@@ -8,6 +8,17 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- **Ruby keyword `and`, `or`, and `not` operators.** The lexer now reserves all
+  three spellings, and the parser gives `and`/`or` one shared left-associative
+  tier below assignment while `not` consumes assignment, `||`, comparisons,
+  and tighter operators but stops before keyword `and`/`or`. Dedicated
+  `BinOp::KeywordAnd` / `KeywordOr` and `UnaryOp::KeywordNot` variants preserve
+  the authored spelling through `ruxen fmt`. They use Ruxen's strict-Bool
+  semantics and the existing short-circuit branch CFG; non-Bool operands report
+  `E0731`. A Copy assignment nested directly in a logical operator produces its
+  assigned value, which makes `a = true and false` and the existing
+  `||=`/`&&=` desugars type-correct without creating a second owner for heap
+  values. Pin `964`; Ruby-parity `language.md` section 3 / P1.10.
 - **Block Tier-2 (block ADR, staged): four Ruby-block features.** (1) **Implicit
   numbered params `_1`..`_9` and bare `it`.** A paramless block referencing them
   synthesizes the matching closure parameters (`xs.map { _1 * 2 }`, `xs.map { it

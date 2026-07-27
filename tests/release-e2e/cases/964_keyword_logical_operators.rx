@@ -1,0 +1,34 @@
+# Pins Ruby precedence and short-circuit behavior for `and`, `or`, and `not`.
+def flag(tag: String, value: Bool) -> Bool
+  puts "eval #{tag}"
+  value
+end
+
+def main
+  var assigned = false
+  let assignment_result = (assigned = true) and false
+  puts "assigned=#{assigned}"
+  puts "assignment_result=#{assignment_result}"
+
+  # Ruby gives keyword `and` and `or` one shared, left-associative tier.
+  let same_tier = true or false and false
+  puts "same_tier=#{same_tier}"
+
+  # `not` consumes symbolic `||`, comparisons, and tighter operators.
+  let symbolic_tighter = not true || true
+  let comparison = not 1 == 2
+  let grouped = not (true and false)
+  puts "symbolic_tighter=#{symbolic_tighter}"
+  puts "comparison=#{comparison}"
+  puts "grouped=#{grouped}"
+
+  # A deciding left operand skips the keyword operator's right operand.
+  let a = flag(&"A", false) and flag(&"B", true)
+  puts "a=#{a}"
+  let b = flag(&"C", true) or flag(&"D", false)
+  puts "b=#{b}"
+
+  # A non-deciding left operand still evaluates the right operand.
+  let c = flag(&"E", true) and flag(&"F", true)
+  puts "c=#{c}"
+end

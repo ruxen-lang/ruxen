@@ -736,8 +736,10 @@ pub(super) fn emit_binop<'ctx>(
         BinOp::Mul => builder.build_int_mul(l, r, "mul").unwrap().into(),
         BinOp::Div => builder.build_int_signed_div(l, r, "sdiv").unwrap().into(),
         BinOp::Mod => builder.build_int_signed_rem(l, r, "srem").unwrap().into(),
-        BinOp::BitAnd | BinOp::And => builder.build_and(l, r, "and").unwrap().into(),
-        BinOp::BitOr | BinOp::Or => builder.build_or(l, r, "or").unwrap().into(),
+        BinOp::BitAnd | BinOp::And | BinOp::KeywordAnd => {
+            builder.build_and(l, r, "and").unwrap().into()
+        }
+        BinOp::BitOr | BinOp::Or | BinOp::KeywordOr => builder.build_or(l, r, "or").unwrap().into(),
         BinOp::BitXor => builder.build_xor(l, r, "xor").unwrap().into(),
         BinOp::Shl => builder.build_left_shift(l, r, "shl").unwrap().into(),
         BinOp::Shr => builder

@@ -147,8 +147,8 @@ impl<'a> Lowerer<'a> {
         // `&&`: LHS true → evaluate RHS, LHS false → short to `false`.
         // `||`: LHS true → short to `true`, LHS false → evaluate RHS.
         let (then_block, else_block) = match op {
-            BinOp::And => (rhs_block, short_block),
-            BinOp::Or => (short_block, rhs_block),
+            BinOp::And | BinOp::KeywordAnd => (rhs_block, short_block),
+            BinOp::Or | BinOp::KeywordOr => (short_block, rhs_block),
             _ => unreachable!("lower_short_circuit only handles And/Or"),
         };
         self.set_terminator(Terminator::Branch {
@@ -162,7 +162,7 @@ impl<'a> Lowerer<'a> {
         self.current_block = short_block;
         self.emit(MirInst::Assign {
             dest: result,
-            value: MirValue::Literal(Literal::Bool(matches!(op, BinOp::Or))),
+            value: MirValue::Literal(Literal::Bool(matches!(op, BinOp::Or | BinOp::KeywordOr))),
         });
         self.set_terminator(Terminator::Goto(merge_block));
 
@@ -283,7 +283,10 @@ impl<'a> Lowerer<'a> {
                 // eager `MirInst::BinOp` path below lowers BOTH operands first,
                 // so intercept here and build a branch CFG before either operand
                 // is lowered, so only the taken side evaluates its operand.
-                if matches!(op, BinOp::And | BinOp::Or) {
+                if matches!(
+                    op,
+                    BinOp::And | BinOp::Or | BinOp::KeywordAnd | BinOp::KeywordOr
+                ) {
                     return Ok(Some(self.lower_short_circuit(*op, left, right)?));
                 }
 

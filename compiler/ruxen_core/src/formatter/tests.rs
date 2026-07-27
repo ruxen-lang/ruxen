@@ -72,6 +72,20 @@ fn multiassign_splat_preserves_the_star() {
 }
 
 #[test]
+fn keyword_logical_operators_preserve_spelling_and_grouping() {
+    let source = fmt_fixture("keyword_logical_operators");
+    let result = format(&source);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert!(result.output.contains("assigned = true and false"));
+    assert!(result.output.contains("grouped = (true and false)"));
+    assert!(result.output.contains("number += (true and false)"));
+    assert!(result.output.contains("(not false) == true"));
+    assert!(result.output.contains("not (true and false)"));
+    assert!(!result.output.contains("&&"));
+    assert_idempotent(&source);
+}
+
+#[test]
 fn test_class_definition() {
     let source = fmt_fixture("test_class_definition");
     let result = format(&source);

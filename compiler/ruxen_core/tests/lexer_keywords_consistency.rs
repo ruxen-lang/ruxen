@@ -24,9 +24,7 @@ fn keywords_const_has_no_duplicates() {
 
 #[test]
 fn non_keywords_are_not_in_list() {
-    // Identifiers that must NOT be treated as keywords (regression guard for
-    // the old completion list, which wrongly included `and`/`or`/`not`).
-    for ident in ["and", "or", "not", "foo", "println", "Regex"] {
+    for ident in ["foo", "println", "Regex"] {
         assert!(
             lookup_keyword(ident).is_none(),
             "`{ident}` should not be a keyword"

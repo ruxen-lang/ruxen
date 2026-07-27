@@ -8,6 +8,7 @@ use crate::diagnostics::Diagnostic;
 use crate::hir::nodes::*;
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
+use crate::parser::ast::BinOp;
 use crate::resolve::symbols::DefKind;
 
 use super::super::coerce::auto_deref;
@@ -804,6 +805,31 @@ impl<'a> InferenceEngine<'a> {
             HirExprKind::BinaryOp { op, left, right } => {
                 self.infer_expr(left);
                 self.infer_expr(right);
+
+                // Assignment is normally Unit in statement/tail position, but
+                // Ruby's logical operators can consume a Copy assignment value:
+                // `a = true and false` means `(a = true) and false`, and the
+                // `||=` / `&&=` parser desugar puts an assignment on the RHS.
+                // Mark only those nested assignments as value-producing. Owned
+                // assignment results remain Unit to avoid creating two owners.
+                if matches!(
+                    op,
+                    BinOp::And | BinOp::Or | BinOp::KeywordAnd | BinOp::KeywordOr
+                ) {
+                    if let HirExprKind::Assign { value, .. } = &left.kind {
+                        let assigned_ty = self.ctx.resolve(&value.ty);
+                        if assigned_ty.is_copy() {
+                            left.ty = assigned_ty;
+                        }
+                    }
+                    if let HirExprKind::Assign { value, .. } = &right.kind {
+                        let assigned_ty = self.ctx.resolve(&value.ty);
+                        if assigned_ty.is_copy() {
+                            right.ty = assigned_ty;
+                        }
+                    }
+                }
+
                 let left_ty = self.ctx.resolve(&left.ty);
                 let right_ty = self.ctx.resolve(&right.ty);
                 // Operator → method desugar (Task OP, Step 3): a NOMINAL
@@ -838,6 +864,7 @@ impl<'a> InferenceEngine<'a> {
                 let unary_method = match op {
                     UnaryOp::Neg => Some("-@"),
                     UnaryOp::Not => Some("!"),
+                    UnaryOp::KeywordNot => None,
                     UnaryOp::Deref => None,
                 };
                 let routed = unary_method
@@ -1035,9 +1062,10 @@ impl<'a> InferenceEngine<'a> {
                 // Operator → method desugar (Task OP, Step 3): `a[i] = v`
                 // on a NOMINAL receiver resolves the `def []=` method
                 // (NOT the `[]` read). We infer the object + index + value,
-                // then type-check the call against `[]=`; the assignment
-                // itself is Unit. Builtin collections fall through to the
-                // normal target/value unify below.
+                // then type-check the call against `[]=`; a nominal index
+                // assignment stays Unit because the method can own or transform
+                // its argument. Builtin collections fall through to the normal
+                // target/value unify below.
                 let nominal_index_assign =
                     if let HirExprKind::Index { object, index } = &mut target.kind {
                         self.infer_expr(object);

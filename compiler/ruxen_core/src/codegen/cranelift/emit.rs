@@ -706,8 +706,8 @@ pub fn emit_binop(
             BinOp::GtEq => builder.ins().fcmp(FloatCC::GreaterThanOrEqual, lhs, rhs),
             // Bitwise / logical ops aren't valid on floats; caller shouldn't
             // emit these — keep the integer form to preserve old behavior.
-            BinOp::BitAnd | BinOp::And => builder.ins().band(lhs, rhs),
-            BinOp::BitOr | BinOp::Or => builder.ins().bor(lhs, rhs),
+            BinOp::BitAnd | BinOp::And | BinOp::KeywordAnd => builder.ins().band(lhs, rhs),
+            BinOp::BitOr | BinOp::Or | BinOp::KeywordOr => builder.ins().bor(lhs, rhs),
             BinOp::BitXor => builder.ins().bxor(lhs, rhs),
             BinOp::Shl => builder.ins().ishl(lhs, rhs),
             BinOp::Shr => builder.ins().sshr(lhs, rhs),
@@ -740,8 +740,8 @@ pub fn emit_binop(
             BinOp::BitXor => builder.ins().bxor(lhs, rhs),
             BinOp::Shl => builder.ins().ishl(lhs, rhs),
             BinOp::Shr => builder.ins().sshr(lhs, rhs),
-            BinOp::And => builder.ins().band(lhs, rhs),
-            BinOp::Or => builder.ins().bor(lhs, rhs),
+            BinOp::And | BinOp::KeywordAnd => builder.ins().band(lhs, rhs),
+            BinOp::Or | BinOp::KeywordOr => builder.ins().bor(lhs, rhs),
             BinOp::Eq => builder.ins().icmp(IntCC::Equal, lhs, rhs),
             BinOp::NotEq => builder.ins().icmp(IntCC::NotEqual, lhs, rhs),
             BinOp::Lt => builder.ins().icmp(IntCC::SignedLessThan, lhs, rhs),

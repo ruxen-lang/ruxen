@@ -211,6 +211,9 @@ pub enum TokenKind {
     TildeEq, // ~= — `s ~= /pat/` regex-match operator (E17xx).
 
     // ── Operators: Logical ──
+    And,      // `and` low-precedence logical AND
+    Or,       // `or` low-precedence logical OR
+    Not,      // `not` low-precedence logical negation
     AmpAmp,   // &&
     PipePipe, // ||
     Bang,     // !
@@ -322,6 +325,8 @@ impl TokenKind {
                 | TokenKind::LtEq
                 | TokenKind::GtEq
                 | TokenKind::Spaceship
+                | TokenKind::And
+                | TokenKind::Or
                 | TokenKind::AmpAmp
                 | TokenKind::PipePipe
                 | TokenKind::Arrow
@@ -420,6 +425,9 @@ pub const KEYWORDS: &[&str] = &[
     "until",
     "case",
     "then",
+    "and",
+    "or",
+    "not",
 ];
 
 /// Look up a keyword from an identifier string.
@@ -517,6 +525,11 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
         "until" => Some(TokenKind::Until),
         "case" => Some(TokenKind::Case),
         "then" => Some(TokenKind::Then),
+
+        // Low-precedence logical operators
+        "and" => Some(TokenKind::And),
+        "or" => Some(TokenKind::Or),
+        "not" => Some(TokenKind::Not),
 
         _ => None,
     }

@@ -521,6 +521,10 @@ pub enum BinOp {
     Cmp,
     And,
     Or,
+    /// Ruby-style low-precedence logical `and`.
+    KeywordAnd,
+    /// Ruby-style low-precedence logical `or`.
+    KeywordOr,
     BitAnd,
     BitOr,
     BitXor,
@@ -566,6 +570,8 @@ impl BinOp {
             | BinOp::GtEq
             | BinOp::And
             | BinOp::Or
+            | BinOp::KeywordAnd
+            | BinOp::KeywordOr
             | BinOp::MatchOp => return None,
         })
     }
@@ -575,6 +581,8 @@ impl BinOp {
 pub enum UnaryOp {
     Neg,
     Not,
+    /// Ruby-style low-precedence logical `not`.
+    KeywordNot,
     /// Dereference: `*expr` — strips one level of reference.
     Deref,
 }

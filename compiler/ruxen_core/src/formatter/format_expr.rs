@@ -158,7 +158,10 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         ExprKind::Assign { target, value } => group(concat(vec![
             format_expr(target, comments),
             text(" = "),
-            nest(INDENT_WIDTH, format_expr(value, comments)),
+            nest(
+                INDENT_WIDTH,
+                format_operand(value, 1, Side::Right, false, comments),
+            ),
         ])),
 
         ExprKind::MultiAssign {
@@ -195,7 +198,10 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
             text(" "),
             text(compound_assign_op_str(*op)),
             text(" "),
-            nest(INDENT_WIDTH, format_expr(value, comments)),
+            nest(
+                INDENT_WIDTH,
+                format_operand(value, 1, Side::Right, false, comments),
+            ),
         ])),
 
         // ── Control flow ──
@@ -714,6 +720,8 @@ fn bin_op_str(op: BinOp) -> &'static str {
         BinOp::Cmp => "<=>",
         BinOp::And => "&&",
         BinOp::Or => "||",
+        BinOp::KeywordAnd => "and",
+        BinOp::KeywordOr => "or",
         BinOp::BitAnd => "&",
         BinOp::BitOr => "|",
         BinOp::BitXor => "^",
@@ -751,9 +759,19 @@ fn format_binary_op(left: &Expr, op: BinOp, right: &Expr, comments: &CommentMap)
 }
 
 fn format_unary_op(op: UnaryOp, operand: &Expr, comments: &CommentMap) -> Doc {
+    if op == UnaryOp::KeywordNot {
+        return concat(vec![
+            text("not "),
+            // Assignment shares this tier and is consumed by `not`; keyword
+            // `and` / `or` are looser and therefore require grouping.
+            format_operand(operand, 1, Side::Right, true, comments),
+        ]);
+    }
+
     let op_str = match op {
         UnaryOp::Neg => "-",
         UnaryOp::Not => "!",
+        UnaryOp::KeywordNot => unreachable!(),
         UnaryOp::Deref => "*",
     };
     // A prefix unary binds at tier 25 — tighter than every binary/range/cast

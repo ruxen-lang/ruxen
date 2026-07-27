@@ -16,11 +16,12 @@
 //! # Single source of precedence truth
 //!
 //! The numeric tiers below are the LEFT binding power of each operator as
-//! defined by `parser::expr::infix_binding_power` (assignment 1, `||` 3,
-//! `&&` 5, comparison/`~=` 7, range 9, `|` 11, `^` 13, `&` 15, shift 17,
-//! `+`/`-` 19, `*`/`/`/`%` 21, cast 23, prefix/unary 25, postfix 27). When
-//! that table changes, change these tiers in lock-step. The reparse-identity
-//! pin in `tests/syntax_parity.rs` fails if they drift.
+//! defined by `parser::expr::infix_binding_power` (keyword `and`/`or` 0,
+//! assignment and keyword `not` 1, `||` 3, `&&` 5, comparison/`~=` 7,
+//! range 9, `|` 11, `^` 13, `&` 15, shift 17, `+`/`-` 19,
+//! `*`/`/`/`%` 21, cast 23, prefix/unary 25, postfix 27). When that table
+//! changes, change these tiers in lock-step. The reparse-identity pin in
+//! `tests/syntax_parity.rs` fails if they drift.
 //!
 //! All Ruxen binary operators are LEFT-associative (verified against the
 //! parser: `a - b - c` parses as `((a - b) - c)`), and `as`/range are
@@ -45,7 +46,13 @@ pub fn expr_prec(expr: &Expr) -> Option<u8> {
         ExprKind::Range { .. } => Some(9),
         // `as` cast — tier 23.
         ExprKind::Cast { .. } => Some(23),
-        // Prefix unary (`-`/`!`/`*`-deref) and reference operators — tier 25.
+        // Keyword `not` is deliberately loose: it consumes assignment and
+        // tighter operators, but stops before keyword `and` / `or`.
+        ExprKind::UnaryOp {
+            op: crate::parser::ast::UnaryOp::KeywordNot,
+            ..
+        } => Some(1),
+        // Symbolic prefix unary (`-`/`!`/`*`-deref) and references: tier 25.
         ExprKind::UnaryOp { .. } | ExprKind::Borrow(_) | ExprKind::BorrowMut(_) => Some(25),
         // Assignment / compound-assignment — tier 1 (loosest binding).
         ExprKind::Assign { .. } | ExprKind::CompoundAssign { .. } => Some(1),
@@ -61,6 +68,7 @@ pub fn expr_prec(expr: &Expr) -> Option<u8> {
 /// `parser::expr::infix_binding_power` (the LEFT element of its `(l, r)`).
 pub fn binop_prec(op: BinOp) -> u8 {
     match op {
+        BinOp::KeywordAnd | BinOp::KeywordOr => 0,
         BinOp::Or => 3,
         BinOp::And => 5,
         BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => 7,
