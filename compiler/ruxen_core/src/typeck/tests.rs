@@ -922,6 +922,21 @@ mod tests {
     }
 
     #[test]
+    fn bitwise_complement_on_non_integer_is_rejected() {
+        // `~` flips integer bits; applying it to a Float is E0733.
+        let source = rx("bitnot_non_integer");
+        let result = parse_and_check(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.code.as_deref() == Some("E0733")),
+            "expected E0733 for `~` on a Float, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
     fn comparable_clamp_self_return_resolves_to_concrete_receiver() {
         // `Comparable#clamp` returns `&Self`; at the call site on a concrete
         // `Rank` the abstract `Self: Comparable` must substitute to `Rank`

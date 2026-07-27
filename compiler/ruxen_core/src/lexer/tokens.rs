@@ -549,7 +549,12 @@ impl<'a> Lexer<'a> {
                     }
                 } else if !self.is_at_end() && self.current() == '<' {
                     self.advance();
-                    self.emit(TokenKind::Shl, start_byte, start_line, start_col);
+                    if !self.is_at_end() && self.current() == '=' {
+                        self.advance();
+                        self.emit(TokenKind::ShlEq, start_byte, start_line, start_col);
+                    } else {
+                        self.emit(TokenKind::Shl, start_byte, start_line, start_col);
+                    }
                 } else {
                     self.emit(TokenKind::Lt, start_byte, start_line, start_col);
                 }
@@ -560,7 +565,12 @@ impl<'a> Lexer<'a> {
                     self.emit(TokenKind::GtEq, start_byte, start_line, start_col);
                 } else if !self.is_at_end() && self.current() == '>' {
                     self.advance();
-                    self.emit(TokenKind::Shr, start_byte, start_line, start_col);
+                    if !self.is_at_end() && self.current() == '=' {
+                        self.advance();
+                        self.emit(TokenKind::ShrEq, start_byte, start_line, start_col);
+                    } else {
+                        self.emit(TokenKind::Shr, start_byte, start_line, start_col);
+                    }
                 } else {
                     self.emit(TokenKind::Gt, start_byte, start_line, start_col);
                 }
@@ -593,6 +603,9 @@ impl<'a> Lexer<'a> {
                         }
                     }
                     self.emit(TokenKind::Amp, start_byte, start_line, start_col);
+                } else if !self.is_at_end() && self.current() == '=' {
+                    self.advance();
+                    self.emit(TokenKind::AmpEq, start_byte, start_line, start_col);
                 } else {
                     self.emit(TokenKind::Amp, start_byte, start_line, start_col);
                 }
@@ -606,12 +619,20 @@ impl<'a> Lexer<'a> {
                     } else {
                         self.emit(TokenKind::PipePipe, start_byte, start_line, start_col);
                     }
+                } else if !self.is_at_end() && self.current() == '=' {
+                    self.advance();
+                    self.emit(TokenKind::PipeEq, start_byte, start_line, start_col);
                 } else {
                     self.emit(TokenKind::Pipe, start_byte, start_line, start_col);
                 }
             }
             '^' => {
-                self.emit(TokenKind::Caret, start_byte, start_line, start_col);
+                if !self.is_at_end() && self.current() == '=' {
+                    self.advance();
+                    self.emit(TokenKind::CaretEq, start_byte, start_line, start_col);
+                } else {
+                    self.emit(TokenKind::Caret, start_byte, start_line, start_col);
+                }
             }
             '.' => {
                 if !self.is_at_end() && self.current() == '.' {
@@ -710,20 +731,13 @@ impl<'a> Lexer<'a> {
                 self.emit(TokenKind::RBrace, start_byte, start_line, start_col);
             }
             '~' => {
-                // `~=` regex-match operator. There is no bare `~` in
-                // Ruxen today (no bitwise-not — use `!x` and `^` for
-                // the integer surface); a lone `~` falls through to
-                // the unexpected-character path below by design.
+                // `~=` regex-match operator; a lone `~` is the bitwise-complement
+                // prefix operator (`~x` for the integer surface).
                 if !self.is_at_end() && self.current() == '=' {
                     self.advance();
                     self.emit(TokenKind::TildeEq, start_byte, start_line, start_col);
                 } else {
-                    let span = self.make_span(start_byte, start_line, start_col);
-                    self.diagnostics.push(Diagnostic::error_with_code(
-                        format!("unexpected character: '{}'", ch),
-                        span,
-                        "E0006",
-                    ));
+                    self.emit(TokenKind::Tilde, start_byte, start_line, start_col);
                 }
             }
             '\\' => {

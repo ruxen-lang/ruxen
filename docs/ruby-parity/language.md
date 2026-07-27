@@ -413,7 +413,7 @@ truly irreducible slice is excluded from both (listed last).
 18. **Endless method def `def f(x) = expr`.** (§4)
 19. **`%w` / `%i` / `%q` / `%Q` / `%r` percent-literals.** (§1)
 20. **Beginless range `(..5)`.** (§1)
-21. **`~` bitwise complement**; bitwise/shift compound-assigns `<<= &= |= ^=`. (§2, §3)
+21. ~~**`~` bitwise complement**; bitwise/shift compound-assigns `<<= &= |= ^=`.~~ **DONE** (`~` is `UnaryOp::BitNot` lowering to `x ^ -1`, non-integer → E0733; `<<= >>= &= |= ^=` desugar to `a = a OP b`). Pin `968`. (§2, §3)
 22. **`defined?`.** (§3)
 23. **`redo`; `begin..end while` do-while.** (§6)
 24. **Full `case/in` pattern surface**: hash patterns, find patterns, pin `^`, `deconstruct`/`deconstruct_keys`, one-line `=>`/`in`. (§7)

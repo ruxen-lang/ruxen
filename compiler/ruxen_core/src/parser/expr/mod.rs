@@ -41,7 +41,12 @@ fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
         | TokenKind::SlashEq
         | TokenKind::PercentEq
         | TokenKind::PipePipeEq
-        | TokenKind::AmpAmpEq => Some((1, 2)),
+        | TokenKind::AmpAmpEq
+        | TokenKind::ShlEq
+        | TokenKind::ShrEq
+        | TokenKind::AmpEq
+        | TokenKind::PipeEq
+        | TokenKind::CaretEq => Some((1, 2)),
 
         // Nil coalescing: right-associative and between assignment and `||`.
         // Equal binding powers let `a ?? b ?? c` parse as `a ?? (b ?? c)`.
@@ -224,6 +229,18 @@ impl Parser {
                     span,
                 }
             }
+            TokenKind::Tilde => {
+                self.advance();
+                let operand = self.parse_expr_bp(25);
+                let span = self.span_from(&start);
+                Expr {
+                    kind: ExprKind::UnaryOp {
+                        op: UnaryOp::BitNot,
+                        operand: Box::new(operand),
+                    },
+                    span,
+                }
+            }
             TokenKind::Not => {
                 self.advance();
                 // Ruby `not` consumes assignment and every tighter operator,
@@ -323,6 +340,7 @@ impl Parser {
                 | TokenKind::Minus
                 | TokenKind::Bang
                 | TokenKind::Not
+                | TokenKind::Tilde
                 | TokenKind::Amp
                 | TokenKind::AmpMut
                 | TokenKind::If

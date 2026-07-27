@@ -235,6 +235,12 @@ pub enum TokenKind {
     PercentEq,  // %=
     PipePipeEq, // ||= conditional-assign; desugars to `a || (a = b)`
     AmpAmpEq,   // &&= conditional-assign; desugars to `a && (a = b)`
+    ShlEq,      // <<= compound-assign; desugars to `a = a << b`
+    ShrEq,      // >>= compound-assign; desugars to `a = a >> b`
+    AmpEq,      // &= compound-assign; desugars to `a = a & b`
+    PipeEq,     // |= compound-assign; desugars to `a = a | b`
+    CaretEq,    // ^= compound-assign; desugars to `a = a ^ b`
+    Tilde,      // ~ bitwise complement (prefix unary)
 
     // ── Operators: Range (ruby-naming.spec.md §3.10b) ──
     // Ruby semantics: `..` is INCLUSIVE, `...` is EXCLUSIVE. There is no
@@ -319,6 +325,11 @@ impl TokenKind {
                 | TokenKind::PercentEq
                 | TokenKind::PipePipeEq
                 | TokenKind::AmpAmpEq
+                | TokenKind::ShlEq
+                | TokenKind::ShrEq
+                | TokenKind::AmpEq
+                | TokenKind::PipeEq
+                | TokenKind::CaretEq
                 | TokenKind::EqEq
                 | TokenKind::NotEq
                 | TokenKind::Lt

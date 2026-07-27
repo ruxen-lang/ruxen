@@ -86,6 +86,20 @@ fn keyword_logical_operators_preserve_spelling_and_grouping() {
 }
 
 #[test]
+fn bitwise_complement_and_compound_assigns_round_trip() {
+    let source = fmt_fixture("bitwise_complement_and_compound");
+    let result = format(&source);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert!(result.output.contains("let mask = ~0"));
+    assert!(result.output.contains("a &= 10"));
+    assert!(result.output.contains("a |= 3"));
+    assert!(result.output.contains("a ^= 6"));
+    assert!(result.output.contains("a <<= 2"));
+    assert!(result.output.contains("a >>= 1"));
+    assert_idempotent(&source);
+}
+
+#[test]
 fn comparable_operator_method_names_are_preserved() {
     let source = fmt_fixture("comparable_operator_methods");
     let result = format(&source);

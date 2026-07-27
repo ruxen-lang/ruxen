@@ -2160,4 +2160,30 @@ end";
             other => panic!("expected Match from case/in, got {other:?}"),
         }
     }
+
+    #[test]
+    fn bitwise_complement_parses_as_unary_bitnot() {
+        match parse_expr("~x").kind {
+            ExprKind::UnaryOp { op, .. } => assert_eq!(op, UnaryOp::BitNot),
+            other => panic!("expected UnaryOp(BitNot), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bitwise_compound_assigns_parse_to_the_matching_binop() {
+        for (src, expected) in [
+            ("a <<= b", BinOp::Shl),
+            ("a >>= b", BinOp::Shr),
+            ("a &= b", BinOp::BitAnd),
+            ("a |= b", BinOp::BitOr),
+            ("a ^= b", BinOp::BitXor),
+        ] {
+            match parse_expr(src).kind {
+                ExprKind::CompoundAssign { op, .. } => {
+                    assert_eq!(op, expected, "for `{src}`")
+                }
+                other => panic!("expected CompoundAssign for `{src}`, got {other:?}"),
+            }
+        }
+    }
 }

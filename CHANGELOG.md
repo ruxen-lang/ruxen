@@ -8,6 +8,16 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- **Bitwise complement `~` and bitwise/shift compound-assignments.** `~x` is a
+  new integer prefix operator (`UnaryOp::BitNot`) that lowers to `x ^ -1` (every
+  bit flipped) rather than reusing `MirInst::Not`, which XORs with 1 (logical
+  negation, correct only for `Bool`). Applying `~` to a non-integer is `E0733`.
+  Added the compound-assignments `<<=`, `>>=`, `&=`, `|=`, `^=` (new lexer
+  tokens); each desugars to `a = a OP b` over the existing `Shl`/`Shr`/`BitAnd`/
+  `BitOr`/`BitXor` lowering. `ruxen fmt` preserves all six spellings. The
+  paren-less prefix-argument form (`puts ~5`) is a pre-existing parser
+  limitation shared with `-`/`!` and is unchanged. Pin `968`; Ruby-parity
+  `language.md` section 2 / P2.21.
 - **`Comparable#clamp` plus `Self`-return substitution through mixin
   defaults.** `clamp(min: &Self, max: &Self) -> &Self` is a new Comparable
   default that returns a borrow of whichever of `self`/`min`/`max` is in the

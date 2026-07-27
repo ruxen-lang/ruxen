@@ -741,6 +741,11 @@ fn compound_assign_op_str(op: BinOp) -> &'static str {
         BinOp::Mul => "*=",
         BinOp::Div => "/=",
         BinOp::Mod => "%=",
+        BinOp::Shl => "<<=",
+        BinOp::Shr => ">>=",
+        BinOp::BitAnd => "&=",
+        BinOp::BitOr => "|=",
+        BinOp::BitXor => "^=",
         _ => "=",
     }
 }
@@ -774,6 +779,7 @@ fn format_unary_op(op: UnaryOp, operand: &Expr, comments: &CommentMap) -> Doc {
     let op_str = match op {
         UnaryOp::Neg => "-",
         UnaryOp::Not => "!",
+        UnaryOp::BitNot => "~",
         UnaryOp::KeywordNot => unreachable!(),
         UnaryOp::Deref => "*",
     };

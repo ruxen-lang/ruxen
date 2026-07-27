@@ -582,6 +582,8 @@ pub enum UnaryOp {
     Not,
     /// Ruby-style low-precedence logical `not`.
     KeywordNot,
+    /// Bitwise complement: `~expr` (integer surface, primitive-only for now).
+    BitNot,
     /// Dereference: `*expr` — strips one level of reference.
     Deref,
 }

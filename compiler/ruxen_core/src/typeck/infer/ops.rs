@@ -592,6 +592,26 @@ impl<'a> InferenceEngine<'a> {
                 }
                 Ty::Bool
             }
+            UnaryOp::BitNot => {
+                let resolved = self.ctx.resolve(operand);
+                if resolved.is_integer() {
+                    resolved
+                } else {
+                    // Skip unresolved/abstract operands: an inference var can
+                    // still pin to an integer later. Only concrete non-integers
+                    // are a genuine error.
+                    if !matches!(resolved, Ty::Infer(_) | Ty::Error) {
+                        self.diagnostics.push(Diagnostic::error_with_code(
+                            format!(
+                                "bitwise complement `~` requires an integer operand, found `{resolved}`"
+                            ),
+                            span.clone(),
+                            "E0733",
+                        ));
+                    }
+                    resolved
+                }
+            }
             UnaryOp::Deref => {
                 // `*x` strips one level of reference.
                 let resolved = self.ctx.resolve(operand);

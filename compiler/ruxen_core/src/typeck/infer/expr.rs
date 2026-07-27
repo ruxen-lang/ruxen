@@ -877,6 +877,8 @@ impl<'a> InferenceEngine<'a> {
                     UnaryOp::Neg => Some("-@"),
                     UnaryOp::Not => Some("!"),
                     UnaryOp::KeywordNot => None,
+                    // `~` is primitive-only for now (no `def ~` method route).
+                    UnaryOp::BitNot => None,
                     UnaryOp::Deref => None,
                 };
                 let routed = unary_method

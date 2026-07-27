@@ -30,6 +30,11 @@ impl Parser {
             TokenKind::StarEq => self.make_compound_assign(lhs, BinOp::Mul, r_bp, &start_span),
             TokenKind::SlashEq => self.make_compound_assign(lhs, BinOp::Div, r_bp, &start_span),
             TokenKind::PercentEq => self.make_compound_assign(lhs, BinOp::Mod, r_bp, &start_span),
+            TokenKind::ShlEq => self.make_compound_assign(lhs, BinOp::Shl, r_bp, &start_span),
+            TokenKind::ShrEq => self.make_compound_assign(lhs, BinOp::Shr, r_bp, &start_span),
+            TokenKind::AmpEq => self.make_compound_assign(lhs, BinOp::BitAnd, r_bp, &start_span),
+            TokenKind::PipeEq => self.make_compound_assign(lhs, BinOp::BitOr, r_bp, &start_span),
+            TokenKind::CaretEq => self.make_compound_assign(lhs, BinOp::BitXor, r_bp, &start_span),
 
             // Conditional assignment: `a ||= b` / `a &&= b`. Unlike `+=`, these
             // short-circuit AND only assign when needed, so they desugar to

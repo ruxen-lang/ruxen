@@ -1232,7 +1232,7 @@ fn test_invalid_hex_literal() {
 
 #[test]
 fn test_unexpected_character() {
-    let (_, diags) = lex_with_errors("~");
+    let (_, diags) = lex_with_errors("`");
     assert!(!diags.is_empty());
     assert!(diags[0].message.contains("unexpected character"));
 }
@@ -1577,13 +1577,11 @@ fn lex_regex_tilde_eq_operator() {
 /// A lone `~` is still rejected with E0006 — there's no bitwise-not
 /// in Ruxen, and the regex op is only the two-char form.
 #[test]
-fn lex_regex_tilde_alone_is_rejected() {
-    let (_, diags) = lex_with_errors("~");
-    assert!(
-        diags.iter().any(|d| d.code.as_deref() == Some("E0006")),
-        "expected E0006 for bare `~`, got {:?}",
-        diags
-    );
+fn lex_tilde_alone_is_bitwise_complement() {
+    // A bare `~` is the bitwise-complement prefix operator (`Tilde`); only
+    // `~=` is the regex-match operator.
+    let toks = lex("~");
+    assert_eq!(toks.first().map(|t| &t.kind), Some(&TokenKind::Tilde));
 }
 
 /// `/foo/i` after `=` lexes as a RegexLiteral.

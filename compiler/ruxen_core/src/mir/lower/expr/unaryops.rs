@@ -28,6 +28,7 @@ impl<'a> Lowerer<'a> {
                     UnaryOp::Neg => Some("-@"),
                     UnaryOp::Not => Some("!"),
                     UnaryOp::KeywordNot => None,
+                    UnaryOp::BitNot => None,
                     UnaryOp::Deref => None,
                 };
                 if nominal {
@@ -55,6 +56,18 @@ impl<'a> Lowerer<'a> {
                     UnaryOp::Neg => self.emit(MirInst::Negate { dest, operand: val }),
                     UnaryOp::Not | UnaryOp::KeywordNot => {
                         self.emit(MirInst::Not { dest, operand: val })
+                    }
+                    UnaryOp::BitNot => {
+                        // Bitwise complement: `~x` == `x ^ -1` (every bit
+                        // flipped). Reuse the BitXor path rather than
+                        // `MirInst::Not`, which XORs with 1 (logical negation,
+                        // correct only for Bool).
+                        self.emit(MirInst::BinOp {
+                            dest,
+                            op: crate::parser::ast::BinOp::BitXor,
+                            lhs: val,
+                            rhs: MirValue::Literal(Literal::Int(-1)),
+                        })
                     }
                     UnaryOp::Deref => {
                         // `*x` — strip one reference level. In Ruxen's value
