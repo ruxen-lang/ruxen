@@ -738,4 +738,22 @@ mod tests {
             result.diagnostics
         );
     }
+
+    #[test]
+    fn multiassign_operator_overload_that_can_alias_target_is_rejected() {
+        // `a + b` can desugar to a user operator method that forwards `b`.
+        // Until sugared operators get the same move analysis as explicit
+        // `a.+(b)`, treating the BinaryOp result as fresh reopens the
+        // owned-heap parallel-assignment UAF.
+        let source = rx("multiassign_operator_alias_owned_class");
+        let result = parse_and_check(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("parallel assignment of an owned")),
+            "expected the operator-overload owned value to be rejected, got {:?}",
+            result.diagnostics
+        );
+    }
 }

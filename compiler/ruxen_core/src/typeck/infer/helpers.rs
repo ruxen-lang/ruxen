@@ -664,9 +664,6 @@ pub(super) fn collect_next_types(
 /// This peels the wrapper forms (`if`/ternary, `match`, `cast`, block) and
 /// requires *every* value that could be produced to be fresh, so a ternary
 /// of two constructors is fresh but a ternary of two variable reads is not.
-/// An operator on an owned aggregate is an overload (`def +`, `def -@`)
-/// that returns a fresh value — primitive operators have scalar result
-/// types and never reach the caller's `Class`/`Struct`/`Enum` type gate.
 pub(super) fn multiassign_value_is_fresh(expr: &HirExpr) -> bool {
     match &expr.kind {
         // A call, constructor, or enum-variant literal yields a brand-new
@@ -675,10 +672,10 @@ pub(super) fn multiassign_value_is_fresh(expr: &HirExpr) -> bool {
         | HirExprKind::FnCall { .. }
         | HirExprKind::Construct { .. }
         | HirExprKind::EnumVariant { .. } => true,
-        // Operator overloads on owned aggregates return a fresh value; this
-        // is the same trust already extended to `MethodCall` (both desugar
-        // to a user method that could, in principle, return `self`).
-        HirExprKind::BinaryOp { .. } | HirExprKind::UnaryOp { .. } => true,
+        // Operator overloads on owned aggregates are not trusted here. The
+        // explicit method-call form is checked by move analysis, but the
+        // sugared operator reaches MIR as a BinaryOp/UnaryOp and can otherwise
+        // forward an assignment target through the operator result.
         // A ternary/`if` or `match` is fresh iff EVERY branch is fresh.
         HirExprKind::If {
             then_branch,

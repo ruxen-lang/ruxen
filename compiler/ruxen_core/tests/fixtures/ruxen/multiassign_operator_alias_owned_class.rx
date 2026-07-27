@@ -1,0 +1,18 @@
+class Vec2
+  x: Int
+  y: Int
+
+  def init(@x: Int, @y: Int)
+  end
+
+  def +(other: Vec2) -> Vec2
+    other
+  end
+end
+
+def main
+  var a = Vec2.new(111, 0)
+  var b = Vec2.new(222, 0)
+  a, b = a + b, Vec2.new(333, 0)
+  puts a.x
+end
