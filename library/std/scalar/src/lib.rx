@@ -49,6 +49,21 @@ class Int
     def to_s as "ruxen_int_to_string" -> String
     def to_f as "ruxen_int_to_f" -> Float
   end
+
+  # Ruby `Integer#times` — yield 0, 1, …, self - 1 in order. The counter
+  # `i` is a machine `Int` (from the `0` literal), so its arithmetic uses
+  # the primitive floor; only `i < self` touches `self`, and comparison
+  # falls back to a primitive compare. (`upto`/`downto` are a follow-up:
+  # they need `self` itself in arithmetic, but a scalar method-home `self`
+  # is typed nominally as `Class[Int]`, which does not yet flow into the
+  # primitive `+`/`-` floor.)
+  def times(f: any Fn[Fn(Int) -> nil]) -> nil
+    var i = 0
+    while i < self
+      f.(i)
+      i = i + 1
+    end
+  end
 end
 
 ## Feature A — scalar method-homes for Float / Bool / Char / USize.

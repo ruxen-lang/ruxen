@@ -404,7 +404,7 @@ truly irreducible slice is excluded from both (listed last).
 12. **`*args` / `**kwargs` splat params** and required-keyword args `def f(a:)`. (§4)
 13. ~~**General `@ivar` read/write** beyond the `init` auto-assign sugar.~~ **DONE** (`@name` in expression position desugars to `self.name`; read, write, and compound-assign; fmt renders `self.name`, surface-preserving `@name` is a follow-up). Pin `970`. (§2)
 14. ~~**`case/when` keyword surface** (`===` dispatch) as sugar over `match`.~~ **DONE** (`case/when` desugars to `if`/`elsif`; `case/in` is an alias of `match`). Pin `960`. (§6)
-15. **`Integer#times` / `#upto` / `#downto`** iterators. (§6)
+15. **`Integer#times` / `#upto` / `#downto`** iterators. **PARTIAL** — `times` DONE (pin `971`); `upto`/`downto` are a follow-up (they need `self` in arithmetic, but a scalar method-home `self` is nominal `Class[Int]` and does not yet flow into the primitive `+`/`-` floor). (§6)
 16. **`tap` and `then`/`yield_self`.** Cheap `Kernel` additions. (§11)
 
 #### P2 — completeness, lower frequency

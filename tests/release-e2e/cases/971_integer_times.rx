@@ -1,0 +1,19 @@
+# Pins Ruby `Integer#times`: `n.times do |i| ... end` yields 0, 1, …, n-1.
+# The block runs for side effects (printing) and can mutate a captured outer
+# variable (the running sum).
+def main
+  3.times do |i|
+    puts(i)
+  end
+
+  var total = 0
+  5.times do |i|
+    total += i
+  end
+  puts(total)
+
+  0.times do |i|
+    puts(999)
+  end
+  puts(-1)
+end

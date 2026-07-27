@@ -8,6 +8,16 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- **`Integer#times` iterator.** `n.times do |i| … end` yields `0, 1, …, n - 1`
+  in order, added as a pure-Ruxen method on the `Int` method-home (a `while` loop
+  over a closure param, the same shape the `Enumerable` combinators use). The
+  block runs for side effects and may mutate a captured outer variable. `upto`
+  and `downto` are a documented follow-up: they need `self` itself in arithmetic,
+  but a scalar method-home `self` is typed nominally as `Class[Int]`, which does
+  not yet flow into the primitive `+`/`-` floor (it routes to a nonexistent
+  `Int_+`); `times` avoids this because its counter starts from the `0` literal
+  (a machine `Int`) and only compares against `self`. Pin `971`; Ruby-parity
+  `language.md` section 6 / P1.15.
 - **General `@ivar` read and write in method bodies.** `@name` in expression
   position now parses as sugar for `self.name` (a field access on the receiver),
   so a method can read (`@n`), write (`@n = @n + 1`), and compound-assign
