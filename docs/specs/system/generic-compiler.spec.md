@@ -7,6 +7,20 @@ the compiler's generic mechanisms. Adding a stdlib class or method requires
 ZERO compiler (Rust) edits. No `#[lang]`/registry mechanism — generic language
 features only.
 
+**HARD RULE — `.rx`-first (project directive).** Before writing ANY Rust compiler
+code for a language/stdlib feature, prove it cannot be expressed in `.rx`.
+Ruxen's own features — methods on objects/variables/types, `tap`/`then`,
+string/collection methods, `Comparable`/`Enumerable`, … — MUST be implemented in
+Ruxen (`.rx`). Only touch `compiler/` when it is genuinely impossible in `.rx`
+alone (a missing syntax, lowering, machine op, or a missing generic *mechanism*).
+A per-feature special-case in `typeck`/`mir` (hardcoded method names, a marker
+the two stages keep in lockstep, an interception) is the anti-pattern: bloat,
+fragile, and a north-star violation. If a feature needs a capability `.rx` lacks
+(e.g. a UNIVERSAL method on every type → an implicit `Kernel` base include),
+build that ONE reusable generic *mechanism* in the compiler, then define the
+feature itself in `.rx` on top of it. Also mirrored in the local root
+`CLAUDE.md` (gitignored).
+
 ## The dividing line (what stays in the compiler vs the stdlib)
 **Compiler-only (allowed):**
 - Generic mechanisms: class/method definition, generics, mixins/traits, FFI +
