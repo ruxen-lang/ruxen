@@ -1,0 +1,28 @@
+# Pins a mixin-DEFAULT method whose closure parameter is typed `Fn(&Self)`,
+# invoked on a user class that includes the mixin. The block param must seed to
+# the concrete receiver (`&Box`) so `x.n` inside the block resolves to the
+# field, and the `-> Self` return must substitute to the concrete class so the
+# bound result (`b`) still exposes `.n`. Regression guard for the mixin-default
+# closure-param Self-seeding + Self-return path (not the compiler tap builtin).
+mixin Tappable
+  def run_with(f: any Fn[Fn(&Self) -> nil]) -> Self
+    f.(self)
+    self
+  end
+end
+
+class Box
+  n: Int
+
+  include Tappable
+
+  def init(@n: Int)
+  end
+end
+
+def main
+  let b = Box.new(5).run_with do |x|
+    puts(x.n)
+  end
+  puts(b.n)
+end

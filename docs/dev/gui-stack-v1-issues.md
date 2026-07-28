@@ -2647,6 +2647,22 @@ language-design pair to settle before Drop semantics land.
 
 ## Q57 · S2 — a mixin-DEFAULT method that takes a trailing block silently does nothing (native)
 
+**FIXED 2026-07-28** (typeck; pins `tests/release-e2e/cases/980`–`982`,
+CHANGELOG "Mixin-DEFAULT methods that take a block…"). Three coordinated typeck
+changes landed the fix direction below: (1) the signature-based closure-param
+seeding (`expr.rs`) now PINS the block param's `Self`-substituted concrete type
+into the symbol table so `x.field` in the block body resolves; (2) the method-
+call return path passes the trailing block as the effective final arg to
+`resolve_method_call`, so the block-taking mixin default matches arity in
+`lookup_method_with_args` instead of degrading to a fresh `Infer`; (3)
+`resolve_method_call`'s trait-default arm runs the same receiver-generic
+substitution + method-generic harvest as `bridge_builtin_method`, so the
+`then`-shape's `U` binds from the closure's inferred return. The `tap`-shape,
+`then`-shape, and `Enumerable#map`-on-a-user-class repros below all compile and
+run correctly now. (A residual, SEPARATE pre-existing bug remains: `each` over
+an array of user-class *elements* can segfault at runtime — tracked apart from
+this typeck fix.) Original analysis retained below.
+
 **Pre-existing** (reproduces on 85b24f5a, before the Ruby-parity session — not
 introduced by `tap`/`then`). A method declared on a `mixin` and inherited by a
 class via `include`, when it takes a closure/`&block` param and is CALLED with a

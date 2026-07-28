@@ -8,6 +8,25 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Fixed
+- **Mixin-DEFAULT methods that take a block now resolve on user classes
+  (closure-param `Self`-seeding + method-generic return harvest).** A mixin
+  default such as `def run_with(f: Fn(&Self) -> nil) -> Self` or
+  `def transform[U](f: Fn(&Self) -> U) -> U`, inherited by a class that
+  `include`s the mixin, previously degraded to a fresh `Infer` at the call site
+  (the receiver of any later `.field` on the result mangled to `?T::field`).
+  Three coordinated typeck fixes: (1) the signature-based closure-param seeding
+  now PINS the block parameter's concrete (Self-substituted) type into the
+  symbol table, so `x.field` inside the block body resolves instead of staying
+  abstract; (2) the method-call return path passes the trailing `do…end` block
+  as the effective final argument to `resolve_method_call`, so a block-taking
+  mixin default (never an "own" method, so `select_class_method` skips it)
+  matches arity in `lookup_method_with_args` instead of falling through to a
+  fresh var; (3) `resolve_method_call`'s trait-default arm now runs the same
+  receiver-generic substitution + method-level generic harvest that
+  `bridge_builtin_method` runs for builtin heads, so a method generic `U` binds
+  from the closure's inferred return. This is the generic foundation for
+  defining universal combinators (`tap`/`then`) as `.rx` mixin methods rather
+  than a compiler special-case. Pins `tests/release-e2e/cases/980`–`982`.
 - **Nominal mixin-bound enforcement on value types (Q35 regression) and
   extension-based includes.** A `[T: M]` generic bound (and an `any M` param)
   again requires an explicit `include M`: a `struct` with a same-named method

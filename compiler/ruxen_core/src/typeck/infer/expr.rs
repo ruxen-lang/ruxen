@@ -627,8 +627,22 @@ impl<'a> InferenceEngine<'a> {
                                     for (blk_p, expected) in blk_params.iter().zip(fn_params.iter())
                                     {
                                         if !expected.is_infer() {
+                                            let def_id = blk_p.def_id;
                                             let _ =
                                                 unify(&blk_p.ty, expected, self.ctx, &expr.span);
+                                            // Also pin the block param's type in
+                                            // the symbol table so references to it
+                                            // inside the body (`x.field`) resolve
+                                            // to the concrete (Self-substituted)
+                                            // type, not `Infer` → `?T::field`.
+                                            // Without this a mixin-default block
+                                            // method (e.g. a `.rx` `tap` whose
+                                            // param is `Fn(&Self)`) leaves the
+                                            // param abstract at codegen.
+                                            let resolved = self.ctx.resolve(&blk_p.ty);
+                                            if !resolved.is_infer() {
+                                                self.symbols.update_ty(def_id, resolved);
+                                            }
                                         }
                                     }
                                 }
@@ -764,8 +778,20 @@ impl<'a> InferenceEngine<'a> {
                     self.infer_selected_method(selected, &derefed, args, &expr.span)
                 } else {
                     // Regular method call — substitute TypeParam in the
-                    // return type using the object's generic args.
-                    let raw = self.resolve_method_call(&derefed, method_name, args, &expr.span);
+                    // return type using the object's generic args. Pass
+                    // `effective_args` (the trailing `do…end` block appended as
+                    // the final argument, exactly as `builtin_method_type`
+                    // above receives it) so a block-taking method resolves at
+                    // the right arity. A mixin-DEFAULT method on a user class
+                    // (`class Box include Tappable2` inheriting `def my_tap(f:
+                    // Fn(&Self)) -> Self`) is NOT an own method of the class,
+                    // so `select_class_method` never selects it and it lands
+                    // here; with plain `args` the block-filled `f` slot is
+                    // missing, `lookup_method_with_args` fails arity, and the
+                    // call degrades to a fresh `Infer` — the receiver of any
+                    // later `.field` on the result then mangles to `?T::field`.
+                    let raw =
+                        self.resolve_method_call(&derefed, method_name, effective_args, &expr.span);
                     self.substitute_generics_in_return(&derefed, &raw)
                 };
 

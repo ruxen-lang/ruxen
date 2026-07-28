@@ -78,12 +78,25 @@ impl<'a> InferenceEngine<'a> {
             return ret;
         }
 
-        // Look up in trait resolver
+        // Look up in trait resolver. This is the path a mixin-DEFAULT method
+        // on a user class takes (`class Box include Thenable2` inheriting
+        // `def my_then[U](f: Fn(&Self) -> U) -> U`) — it is not an own method,
+        // so `select_class_method` never selects it. Run the SAME chain
+        // `bridge_builtin_method` runs for builtin heads: receiver-generic
+        // substitution (`Self` → the concrete class) THEN method-level generic
+        // harvesting from the args, so `U` binds from the closure argument's
+        // inferred return type. Without the harvest the call's type stays the
+        // un-substituted `U`/`Array[U]` and any downstream use fails (`puts`
+        // sees a bare `U`, an index yields `U`). Harvest is a no-op for a
+        // method with no own `generic_params`, so ordinary trait-default
+        // methods are unaffected.
         if let Some(sig) =
             self.traits
                 .lookup_method_with_args(obj_ty, method_name, args, self.symbols)
         {
-            return self.wrap_async_return(&sig);
+            let raw = self.wrap_async_return(&sig);
+            let receiver_subst = self.substitute_generics_in_return(obj_ty, &raw);
+            return self.harvest_and_subst_generics(&sig, args, &receiver_subst);
         }
 
         // Method call on a generic type parameter `T: Trait + Trait`

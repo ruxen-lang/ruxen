@@ -1,0 +1,28 @@
+# Pins Enumerable's `map` default resolving on a USER class that includes
+# `Enumerable[Int]` and supplies only `each`. `map[U](f: Fn(T) -> U) ->
+# Array[U]` must harvest `U` from the closure return (`x * 2` → Int) so the
+# result is a concrete `Array[Int]` indexable/measurable downstream.
+class Nums
+  items: Array[Int]
+
+  include Enumerable[Int]
+
+  def init(@items: Array[Int])
+  end
+
+  def each(f: any Fn[Fn(Int) -> nil]) -> nil
+    self.items.each do |x|
+      f.(x)
+    end
+  end
+end
+
+def main
+  let n = Nums.new([1, 2, 3])
+  let doubled = n.map do |x|
+    x * 2
+  end
+  puts(doubled.size)
+  puts(doubled[0])
+  puts(doubled[2])
+end
