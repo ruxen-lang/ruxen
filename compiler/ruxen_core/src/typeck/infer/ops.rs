@@ -121,8 +121,12 @@ impl<'a> InferenceEngine<'a> {
             _ => return,
         };
 
+        // `some M` accepts STRUCTURAL satisfaction (static dispatch); `any M`
+        // and a bounded type-param require NOMINAL (`include M`). See the mixin
+        // dispatch rule in `typeck/CLAUDE.md`.
+        let require_nominal = !matches!(&expected, Ty::SomeMixin(_));
         // No owner at the param-typed seam — Send/Sync emit E1011/E1012.
-        self.check_bounds_against(bounds, &found, None, span);
+        self.check_bounds_against(bounds, &found, None, span, require_nominal);
     }
 
     /// Generic-param enforcement seam (point b). Given a function/method/
@@ -157,7 +161,10 @@ impl<'a> InferenceEngine<'a> {
             {
                 continue;
             }
-            self.check_bounds_against(&gp.bounds, &concrete, owner, span);
+            // A `[T: M]` generic bound requires NOMINAL satisfaction (an
+            // explicit `include M`); a value type does not satisfy it merely by
+            // having a same-named method (Q35 negative pin).
+            self.check_bounds_against(&gp.bounds, &concrete, owner, span, true);
         }
     }
 
@@ -165,15 +172,20 @@ impl<'a> InferenceEngine<'a> {
     /// emitting the owner-appropriate diagnostic for every unsatisfied
     /// bound. `Send`/`Sync` retain their fast structural predicates (kept
     /// in lockstep with `check_satisfaction`, which special-cases them);
-    /// every other bound dispatches through `check_satisfaction` with
-    /// `require_nominal = false` (static-dispatch / structural acceptance,
-    /// the semantics a `[T: Bound]` generic call site has).
+    /// every other bound dispatches through `check_satisfaction` with the
+    /// caller-supplied `require_nominal`. A `[T: M]` generic bound and an
+    /// `any M` param require NOMINAL (`include M`) — a value type does not
+    /// satisfy them merely by having a same-named method (Q35 negative pin);
+    /// a `some M` param accepts STRUCTURAL. Derive markers (`Hashable`/`Ord`/…)
+    /// and the `Fn`-family satisfy either way, because `check_satisfaction`
+    /// checks those BEFORE the `require_nominal` gate.
     fn check_bounds_against(
         &mut self,
         bounds: &[MixinRef],
         found: &Ty,
         owner: Option<&str>,
         span: &Span,
+        require_nominal: bool,
     ) {
         // Unresolved / error types are unprovable — never flag them.
         if found.is_infer() || found.is_error() {
@@ -203,7 +215,7 @@ impl<'a> InferenceEngine<'a> {
                 }
                 _ => !matches!(
                     self.traits
-                        .check_satisfaction(found, bound, self.symbols, false),
+                        .check_satisfaction(found, bound, self.symbols, require_nominal),
                     MixinSatisfaction::Unsatisfied { .. }
                 ),
             };

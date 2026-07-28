@@ -447,19 +447,11 @@ impl MixinResolver {
             return MixinSatisfaction::Nominal;
         }
 
-        if require_nominal {
-            return MixinSatisfaction::Unsatisfied {
-                missing_methods: vec![format!(
-                    "no explicit `include {}` in `{}`",
-                    trait_ref.name, type_name
-                )],
-            };
-        }
-
         // Builtin marker FAMILIES are satisfied by their REAL semantics, not by
         // a manual required-method set (their methods are auto-derived /
         // intrinsic, so the structural "does the type define this method" check
-        // below would wrongly reject them). Handle them before that check:
+        // below would wrongly reject them). Handle them before BOTH the
+        // `require_nominal` gate and the structural method check:
         //   * derive markers (`Hashable`/`Ord`/`Eq`/`Clone`/`Copy`/`Default`/
         //     `Debug`/`PartialEq`/`PartialOrd` — the `SUPPORTED_DERIVES` set):
         //     the ruby-naming §3.6 structural auto-derive (primitives +
@@ -467,7 +459,8 @@ impl MixinResolver {
         //     incl. the Hash↔Hashable / Eq↔PartialEq naming duality). Without
         //     this a struct that auto-derives Hashable but never writes
         //     `include Hashable` is wrongly rejected (E1015) — regressing every
-        //     Map-key / derived-Ord program.
+        //     Map-key / derived-Ord program. These run BEFORE `require_nominal`
+        //     so an auto-derive still satisfies a `[T: Hashable]` bound.
         //   * `Fn`/`FnMut`/`FnOnce`: any callable value (closure / `Ty::Fn`
         //     family) satisfies it, regardless of the marker's `call` signature.
         // Pure-capability markers with neither (e.g. `Add`, opted into only via
@@ -499,6 +492,22 @@ impl MixinResolver {
                         ty, trait_ref.name
                     )],
                 }
+            };
+        }
+
+        // A user mixin (not a derive marker, not Fn-family, not Send/Sync) is
+        // satisfied ONLY nominally when `require_nominal` is set — a value type
+        // does not satisfy `[T: Greet]` merely by having a same-named `greet`
+        // method (Q35 negative pin). Ruby mixins are include-based, never
+        // structural; this gate is why `[T: M]` generic bounds require an
+        // explicit `include M`. (The structural fallback below still serves
+        // `some M`-style callers that pass `require_nominal = false`.)
+        if require_nominal {
+            return MixinSatisfaction::Unsatisfied {
+                missing_methods: vec![format!(
+                    "no explicit `include {}` in `{}`",
+                    trait_ref.name, type_name
+                )],
             };
         }
 
@@ -1058,7 +1067,26 @@ impl MixinResolver {
                         _ => None,
                     })
                     .collect();
-                self.register_impl(&type_name, trait_name, methods);
+                self.register_impl(&type_name, trait_name, methods.clone());
+                // An `include M` directive inside an `extension T` body
+                // nominally implements M for T — the extension's methods
+                // satisfy it — mirroring a class/struct/enum-body `include`.
+                // Without this, `extension Int; include Showable` never records
+                // (Int, Showable), so a `[T: Showable]` / `any Showable` bound
+                // (which requires nominal satisfaction) would wrongly reject
+                // `Int`. `include !M` (negative) is skipped.
+                for item in &imp.items {
+                    if let HirImplItem::Include {
+                        trait_name: included,
+                        negative_trait,
+                        ..
+                    } = item
+                    {
+                        if !negative_trait {
+                            self.register_impl(&type_name, Some(included), methods.clone());
+                        }
+                    }
+                }
             }
             HirItem::Module(m) => {
                 let mut child_path: Vec<String> = module_path.to_vec();

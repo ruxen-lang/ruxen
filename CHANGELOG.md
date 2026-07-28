@@ -7,6 +7,24 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Fixed
+- **Nominal mixin-bound enforcement on value types (Q35 regression) and
+  extension-based includes.** A `[T: M]` generic bound (and an `any M` param)
+  again requires an explicit `include M`: a `struct` with a same-named method
+  but no include no longer satisfies the bound (E1015), which the Q50
+  interpolation fix had silently broken by registering struct/enum methods into
+  the structural-satisfaction registry. Three coordinated changes: (1) an
+  `include M` directive inside an `extension T` body now registers `(T, M)`
+  nominally (`HirImplItem::Include` was previously dropped by the impl-block
+  collector), so `extension Int; include Showable` makes `Int` nominally satisfy
+  `Showable`; (2) `check_satisfaction` checks derive markers (`Hashable`/`Ord`/…)
+  and the `Fn`-family BEFORE the `require_nominal` gate, so auto-derives still
+  satisfy a `[T: Hashable]` bound; (3) the bound seam threads `require_nominal`
+  per caller — `[T: M]`/`any M` require nominal, `some M` keeps structural
+  acceptance. All 487 release-e2e fixtures pass, including the previously-green
+  structural cases (`100_where_clause`, `103_generic_constraint`) and the Q50
+  interpolation pin.
+
 ### Changed
 - **Ruby method-name parity on `String`: `upcase`, `downcase`, `length`.** Added
   as FFI aliases sharing the existing C symbols (`upcase`/`downcase` →
