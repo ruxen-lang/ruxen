@@ -535,6 +535,15 @@ impl Parser {
                 self.advance();
                 "match".to_string()
             }
+            // `then` is a keyword (`case/when … then …`) but is also the Ruby
+            // Kernel method name `Object#then` (`x.then { … }`). Method-name
+            // and field/path positions are unambiguous, so accept it as a
+            // plain identifier here — same contextual-keyword treatment as
+            // `match` / `var` above.
+            TokenKind::Then => {
+                self.advance();
+                "then".to_string()
+            }
             _ => {
                 self.error(&format!(
                     "expected identifier, found {:?}",

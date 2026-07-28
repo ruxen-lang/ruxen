@@ -347,6 +347,49 @@ impl<'a> InferenceEngine<'a> {
                 args,
                 block,
             } => {
+                // Ruby universal block methods `tap` / `then` (aka
+                // `yield_self`): `x.tap { |v| … }` runs the block with `v = x`
+                // and evaluates to `x`; `x.then { |v| … }` evaluates to the
+                // block's result. Both take exactly a block and no positional
+                // args. Universal (any receiver), so intercepted here before
+                // ordinary method resolution.
+                if (method_name == "tap" || method_name == "then" || method_name == "yield_self")
+                    && args.is_empty()
+                    && block.is_some()
+                {
+                    let is_tap = method_name == "tap";
+                    self.infer_expr(object);
+                    let obj_ty = self.ctx.resolve(&object.ty);
+                    let ret_var = self.ctx.fresh_type_var();
+                    let mut block_ret = ret_var.clone();
+                    if let Some(blk) = block.as_deref_mut() {
+                        let expected = Ty::Fn {
+                            params: vec![obj_ty.clone()],
+                            ret: Box::new(ret_var),
+                        };
+                        Self::seed_closure_param_types(blk, &expected);
+                        // Also pin the block param's type in the symbol table so
+                        // references to it inside the body (e.g. `x.to_s` behind
+                        // `puts(x)`) resolve to the receiver type, not `Infer`.
+                        let param_def = match &blk.kind {
+                            HirExprKind::Closure { params, .. } => params.first().map(|p| p.def_id),
+                            _ => None,
+                        };
+                        if let Some(def_id) = param_def {
+                            self.symbols.update_ty(def_id, obj_ty.clone());
+                        }
+                        self.infer_expr(blk);
+                        block_ret = match self.ctx.resolve(&blk.ty) {
+                            Ty::Fn { ret, .. } | Ty::FnMut { ret, .. } | Ty::FnOnce { ret, .. } => {
+                                *ret
+                            }
+                            other => other,
+                        };
+                    }
+                    expr.ty = if is_tap { obj_ty } else { block_ret };
+                    return;
+                }
+
                 // ── Phase 2 stdlib (#04): HashMap.entry(K).or_insert(V) /
                 //    .or_insert_with(closure) chain.
                 //

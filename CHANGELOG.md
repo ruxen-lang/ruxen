@@ -26,6 +26,19 @@ once 1.0.0 ships.
   interpolation pin.
 
 ### Changed
+- **Ruby universal block methods `tap`, `then`, `yield_self`.** `x.tap { |v| … }`
+  runs the block with `v = x` for side effects and evaluates to `x`;
+  `x.then { |v| … }` (and its alias `yield_self`) evaluates to the block's
+  result. Both work on any receiver (primitive, String, or user type) and are
+  intercepted before ordinary method resolution: typeck types the result (the
+  receiver type for `tap`, the block's return type for `then`) and pins the
+  block parameter to the receiver type so a `to_s`-driven `puts(v)` inside the
+  block resolves correctly; MIR inlines the block as a single closure invocation
+  (bind the parameter to the receiver's local, lower the body). `then` also
+  needed to parse as a method name (it is otherwise the `case/when … then`
+  keyword), so `.then` now joins `match`/`var` as a contextual keyword accepted
+  in method-name position. Pin `973`; Ruby-parity `language.md` section 11 /
+  P1.16.
 - **Ruby method-name parity on `String`: `upcase`, `downcase`, `length`.** Added
   as FFI aliases sharing the existing C symbols (`upcase`/`downcase` →
   `ruxen_string_to_upper`/`ruxen_string_to_lower`, `length` → `ruxen_string_len`),

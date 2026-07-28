@@ -2162,6 +2162,16 @@ end";
     }
 
     #[test]
+    fn then_keyword_parses_as_a_method_name() {
+        // `then` is a keyword (case/when) but must also parse as the Ruby
+        // `Object#then` method name in `.then` position.
+        match parse_expr("x.then do |v|\n      v\n    end").kind {
+            ExprKind::MethodCall { method, .. } => assert_eq!(method, "then"),
+            other => panic!("expected MethodCall `then`, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn at_ivar_desugars_to_self_field_access() {
         match parse_expr("@count").kind {
             ExprKind::FieldAccess { object, field } => {

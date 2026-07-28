@@ -115,6 +115,33 @@ impl<'a> Lowerer<'a> {
                     return self.lower_interpolation(&parts, &Ty::String);
                 }
 
+                // ── Ruby universal block methods `tap` / `then` / `yield_self` ─
+                // `x.tap { |v| … }` runs the block with `v = x` and evaluates
+                // to `x`; `x.then { |v| … }` evaluates to the block's result.
+                // Inlined as a single closure invocation: bind the block's
+                // parameter to the receiver's local, then lower the body. Typeck
+                // has already typed the result (receiver type for `tap`, block
+                // return for `then`).
+                if (method_name == "tap" || method_name == "then" || method_name == "yield_self")
+                    && args.is_empty()
+                {
+                    if let Some(block_expr) = block {
+                        if let HirExprKind::Closure { params, body, .. } = &block_expr.kind {
+                            if let (Some(obj), Some(param)) =
+                                (self.lower_expr(object)?, params.first())
+                            {
+                                self.def_to_local.insert(param.def_id, obj);
+                                let body_result = self.lower_expr(body)?;
+                                return Ok(if method_name == "tap" {
+                                    Some(obj)
+                                } else {
+                                    body_result
+                                });
+                            }
+                        }
+                    }
+                }
+
                 // ── Phase C: dynamic dispatch on `&Mixin` / `&var Mixin` ─
                 // When the receiver is statically typed as a
                 // runtime-dispatch mixin reference (e.g. `f: &Future`),
