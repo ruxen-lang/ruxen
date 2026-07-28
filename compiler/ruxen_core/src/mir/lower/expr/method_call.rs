@@ -128,17 +128,25 @@ impl<'a> Lowerer<'a> {
                 if method_name == "__ruxen_builtin_tap" || method_name == "__ruxen_builtin_then" {
                     if let Some(block_expr) = block {
                         if let HirExprKind::Closure { params, body, .. } = &block_expr.kind {
-                            if let Some(obj) = self.lower_expr(object)? {
-                                if let Some(param) = params.first() {
-                                    self.def_to_local.insert(param.def_id, obj);
-                                }
-                                let body_result = self.lower_expr(body)?;
-                                return Ok(if method_name == "__ruxen_builtin_tap" {
-                                    Some(obj)
-                                } else {
-                                    body_result
-                                });
+                            // Lower the receiver ONCE. A unit/void receiver
+                            // (e.g. `puts(x).tap { … }`) lowers to `None`; the
+                            // interception must STILL fire — typeck already
+                            // marked this call, so falling through here would
+                            // leak the reserved `__ruxen_builtin_*` name to the
+                            // linker. Bind the block param only when there is
+                            // both a receiver value and a named param.
+                            let obj = self.lower_expr(object)?;
+                            if let (Some(o), Some(param)) = (obj, params.first()) {
+                                self.def_to_local.insert(param.def_id, o);
                             }
+                            let body_result = self.lower_expr(body)?;
+                            return Ok(if method_name == "__ruxen_builtin_tap" {
+                                // `tap` yields the receiver (`None` for a unit
+                                // receiver, which is itself unit-valued).
+                                obj
+                            } else {
+                                body_result
+                            });
                         }
                     }
                 }
