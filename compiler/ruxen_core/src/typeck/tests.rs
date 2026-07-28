@@ -937,6 +937,23 @@ mod tests {
     }
 
     #[test]
+    fn tap_then_block_with_two_params_is_rejected() {
+        // `tap`/`then` blocks take at most one parameter (the receiver); a
+        // wider block must be a clean compile error, not a silent miscompile
+        // that reads an unbound local.
+        let source = rx("tap_then_arity");
+        let result = parse_and_check(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("at most one parameter")),
+            "expected an arity error for a 2-param tap/then block, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
     fn comparable_clamp_self_return_resolves_to_concrete_receiver() {
         // `Comparable#clamp` returns `&Self`; at the call site on a concrete
         // `Rank` the abstract `Self: Comparable` must substitute to `Rank`

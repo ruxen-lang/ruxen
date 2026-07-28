@@ -358,14 +358,24 @@ impl<'a> InferenceEngine<'a> {
                 // forwarded `&block` is a `VarRef`, not a `Closure`; a
                 // user-defined `def tap` must win), or the call reaches the
                 // linker as a nonexistent `<Type>_tap` symbol.
-                if (method_name == "tap" || method_name == "then" || method_name == "yield_self")
+                // The already-marked names are matched too so this arm is
+                // IDEMPOTENT: a `puts(x)`/interpolation re-inference of an
+                // already-intercepted call (whose name is now the marker) must
+                // re-inline here rather than fall through to ordinary
+                // resolution (which would error on the reserved name).
+                if (method_name == "tap"
+                    || method_name == "then"
+                    || method_name == "yield_self"
+                    || method_name == "__ruxen_builtin_tap"
+                    || method_name == "__ruxen_builtin_then")
                     && args.is_empty()
                     && matches!(
                         block.as_deref().map(|b| &b.kind),
                         Some(HirExprKind::Closure { .. })
                     )
                 {
-                    let is_tap = method_name == "tap";
+                    let is_tap = method_name == "tap" || method_name == "__ruxen_builtin_tap";
+                    let already_marked = method_name.starts_with("__ruxen_builtin_");
                     self.infer_expr(object);
                     let obj_ty = self.ctx.resolve(&object.ty);
                     // `lookup_method_by_name` sees BOTH own-class and included-
@@ -376,6 +386,22 @@ impl<'a> InferenceEngine<'a> {
                         .lookup_method_by_name(&obj_ty, method_name)
                         .is_some();
                     if !has_user_method {
+                        // A `tap`/`then` block takes at most one parameter (the
+                        // receiver). Reject a wider block cleanly on the first
+                        // pass — leaving extra params unbound would read an
+                        // uninitialized local at runtime.
+                        let too_many_params = matches!(
+                            block.as_deref().map(|b| &b.kind),
+                            Some(HirExprKind::Closure { params, .. }) if params.len() > 1
+                        );
+                        if too_many_params && !already_marked {
+                            self.error(
+                                "a `tap` / `then` / `yield_self` block takes at most one \
+                                 parameter (the receiver)"
+                                    .to_string(),
+                                &expr.span,
+                            );
+                        }
                         let ret_var = self.ctx.fresh_type_var();
                         let mut block_ret = ret_var.clone();
                         if let Some(blk) = block.as_deref_mut() {
