@@ -350,44 +350,62 @@ impl<'a> InferenceEngine<'a> {
                 // Ruby universal block methods `tap` / `then` (aka
                 // `yield_self`): `x.tap { |v| … }` runs the block with `v = x`
                 // and evaluates to `x`; `x.then { |v| … }` evaluates to the
-                // block's result. Both take exactly a block and no positional
-                // args. Universal (any receiver), so intercepted here before
-                // ordinary method resolution.
+                // block's result. Intercepted here before ordinary resolution,
+                // but ONLY when the block is a literal closure and the receiver
+                // does not define its own `tap`/`then` method. Keeping these two
+                // conditions in LOCKSTEP with the MIR interception is essential:
+                // typeck must never accept a shape MIR then fails to lower (a
+                // forwarded `&block` is a `VarRef`, not a `Closure`; a
+                // user-defined `def tap` must win), or the call reaches the
+                // linker as a nonexistent `<Type>_tap` symbol.
                 if (method_name == "tap" || method_name == "then" || method_name == "yield_self")
                     && args.is_empty()
-                    && block.is_some()
+                    && matches!(
+                        block.as_deref().map(|b| &b.kind),
+                        Some(HirExprKind::Closure { .. })
+                    )
                 {
-                    let is_tap = method_name == "tap";
                     self.infer_expr(object);
                     let obj_ty = self.ctx.resolve(&object.ty);
-                    let ret_var = self.ctx.fresh_type_var();
-                    let mut block_ret = ret_var.clone();
-                    if let Some(blk) = block.as_deref_mut() {
-                        let expected = Ty::Fn {
-                            params: vec![obj_ty.clone()],
-                            ret: Box::new(ret_var),
-                        };
-                        Self::seed_closure_param_types(blk, &expected);
-                        // Also pin the block param's type in the symbol table so
-                        // references to it inside the body (e.g. `x.to_s` behind
-                        // `puts(x)`) resolve to the receiver type, not `Infer`.
-                        let param_def = match &blk.kind {
-                            HirExprKind::Closure { params, .. } => params.first().map(|p| p.def_id),
-                            _ => None,
-                        };
-                        if let Some(def_id) = param_def {
-                            self.symbols.update_ty(def_id, obj_ty.clone());
-                        }
-                        self.infer_expr(blk);
-                        block_ret = match self.ctx.resolve(&blk.ty) {
-                            Ty::Fn { ret, .. } | Ty::FnMut { ret, .. } | Ty::FnOnce { ret, .. } => {
-                                *ret
+                    if self
+                        .traits
+                        .lookup_method_by_name(&obj_ty, method_name)
+                        .is_none()
+                    {
+                        let is_tap = method_name == "tap";
+                        let ret_var = self.ctx.fresh_type_var();
+                        let mut block_ret = ret_var.clone();
+                        if let Some(blk) = block.as_deref_mut() {
+                            let expected = Ty::Fn {
+                                params: vec![obj_ty.clone()],
+                                ret: Box::new(ret_var),
+                            };
+                            Self::seed_closure_param_types(blk, &expected);
+                            // Also pin the block param's type in the symbol table
+                            // so references to it inside the body (e.g. `x.to_s`
+                            // behind `puts(x)`) resolve to the receiver type.
+                            let param_def = match &blk.kind {
+                                HirExprKind::Closure { params, .. } => {
+                                    params.first().map(|p| p.def_id)
+                                }
+                                _ => None,
+                            };
+                            if let Some(def_id) = param_def {
+                                self.symbols.update_ty(def_id, obj_ty.clone());
                             }
-                            other => other,
-                        };
+                            self.infer_expr(blk);
+                            block_ret = match self.ctx.resolve(&blk.ty) {
+                                Ty::Fn { ret, .. }
+                                | Ty::FnMut { ret, .. }
+                                | Ty::FnOnce { ret, .. } => *ret,
+                                other => other,
+                            };
+                        }
+                        expr.ty = if is_tap { obj_ty } else { block_ret };
+                        return;
                     }
-                    expr.ty = if is_tap { obj_ty } else { block_ret };
-                    return;
+                    // A user-defined `tap`/`then` exists — fall through to the
+                    // ordinary method resolution below (which dispatches to it).
                 }
 
                 // ── Phase 2 stdlib (#04): HashMap.entry(K).or_insert(V) /

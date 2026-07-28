@@ -124,6 +124,7 @@ impl<'a> Lowerer<'a> {
                 // return for `then`).
                 if (method_name == "tap" || method_name == "then" || method_name == "yield_self")
                     && args.is_empty()
+                    && !self.class_has_method(&type_name, method_name)
                 {
                     if let Some(block_expr) = block {
                         if let HirExprKind::Closure { params, body, .. } = &block_expr.kind {

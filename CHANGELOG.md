@@ -55,8 +55,12 @@ once 1.0.0 ships.
   (bind the parameter to the receiver's local, lower the body). `then` also
   needed to parse as a method name (it is otherwise the `case/when … then`
   keyword), so `.then` now joins `match`/`var` as a contextual keyword accepted
-  in method-name position. Pin `973`; Ruby-parity `language.md` section 11 /
-  P1.16.
+  in method-name position. The interception is kept in lockstep between typeck
+  and MIR (both require a literal closure block and a receiver with no such
+  method of its own), so a param-less block (`x.tap { side_effect }`) inlines,
+  a user-defined `def tap`/`def then` on the receiver wins, and a forwarded
+  `&block` reports a clean compile error rather than reaching the linker.
+  Pins `973`, `977`; Ruby-parity `language.md` section 11 / P1.16.
 - **Ruby method-name parity on `String`.** Added Ruby spellings as FFI aliases
   sharing the existing C symbols (the same second-alias mechanism `to_s`/
   `to_string` already use): `upcase`/`downcase` (→ `to_upper`/`to_lower`),
