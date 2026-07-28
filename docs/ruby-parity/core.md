@@ -93,16 +93,16 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 | `replace` (whole-string) | PARTIAL | `ruxen_string_replace` | Ruxen `replace(from,to)` = substitute, NOT Ruby `replace(other)` (overwrite contents). Name collision. |
 | `split` | DONE | `ruxen_string_split` | string delimiter only; no regex/limit (see `splitn`). |
 | `splitn(n, delim)` | DONE | `ruxen_string_splitn` | Ruxen-specific limited split. |
-| `strip` | PARTIAL | `trim` | named `trim`; strips ASCII+unicode ws. |
-| `lstrip` / `rstrip` | PARTIAL | `trim_start` / `trim_end` | Ruxen spellings. |
+| `strip` | DONE | `ruxen_string_trim` | Ruby `strip` aliased to the same C symbol as `trim`. Pin `975`. |
+| `lstrip` / `rstrip` | DONE | `trim_start` / `trim_end` | Ruby spellings aliased to the same C symbols. Pin `975`. |
 | `strip!`/`lstrip!`/`rstrip!` | MISSING | — | no in-place variants. |
 | `chomp` / `chop` | MISSING | — | |
 | `upcase` | DONE | `to_upper` | Ruby `upcase` aliased to the same C symbol; `to_upper` also kept. Pin `972`. |
 | `downcase` | DONE | `to_lower` | Ruby `downcase` aliased to the same C symbol; `to_lower` also kept. Pin `972`. |
 | `capitalize` / `swapcase` | MISSING | — | |
 | `upcase!`/`downcase!`/… | MISSING | — | no bang variants. |
-| `start_with?` | PARTIAL | `starts_with` | non-`?` Ruxen name; single string arg (no multi-arg / regex). |
-| `end_with?` | PARTIAL | `ends_with` | non-`?` Ruxen name; single arg. |
+| `start_with?` | DONE | `ruxen_string_starts_with` | Ruby `start_with?` aliased; single string arg (no multi-arg / regex). Pin `975`. |
+| `end_with?` | DONE | `ruxen_string_ends_with` | Ruby `end_with?` aliased; single arg. Pin `975`. |
 | `include?` | DONE | `ruxen_string_contains` | |
 | `index` | PARTIAL | `find` | `find` → `Option[USize]`; no start-offset, no regex. |
 | `rindex` | MISSING | — | |

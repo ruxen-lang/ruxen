@@ -24,12 +24,21 @@ class String
     def include? as "ruxen_string_contains"(needle: &String) -> Bool
     def starts_with as "ruxen_string_starts_with"(needle: &String) -> Bool
     def ends_with as "ruxen_string_ends_with"(needle: &String) -> Bool
+    # `start_with?` / `end_with?` are the Ruby spellings of `starts_with` /
+    # `ends_with` — same C symbols, same wire shape (second aliases).
+    def start_with? as "ruxen_string_starts_with"(needle: &String) -> Bool
+    def end_with? as "ruxen_string_ends_with"(needle: &String) -> Bool
     def find as "ruxen_string_find"(needle: &String) -> Option[USize]
     # trim/trim_start/trim_end `malloc` a fresh owned buffer (see
     # runtime/string.c), so the surface is an owned `String` (drop-safe).
     def trim as "ruxen_string_trim" -> String
     def trim_start as "ruxen_string_trim_start" -> String
     def trim_end as "ruxen_string_trim_end" -> String
+    # `strip` / `lstrip` / `rstrip` are the Ruby spellings of `trim` /
+    # `trim_start` / `trim_end` — same C symbols (second aliases).
+    def strip as "ruxen_string_trim" -> String
+    def lstrip as "ruxen_string_trim_start" -> String
+    def rstrip as "ruxen_string_trim_end" -> String
     def to_lower as "ruxen_string_to_lower" -> String
     def to_upper as "ruxen_string_to_upper" -> String
     # `downcase`/`upcase` are the Ruby spellings of `to_lower`/`to_upper` —
