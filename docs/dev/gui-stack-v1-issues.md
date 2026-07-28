@@ -2675,13 +2675,55 @@ end
 ```
 A mixin default WITHOUT a block param (`def describe -> Int; 77; end`) dispatches
 fine, and an OWN class method with a block works — only the
-mixin-default-plus-trailing-block combination is broken. Surfaced while
-reviewing `tap`/`then`: a user who provides `tap` via a mixin has the universal
-`tap` correctly dispatch to their mixin method (typeck is the sole decider via a
-reserved `__ruxen_builtin_tap` marker, so the typeck/MIR interceptions can never
-diverge), which then hits THIS bug. Likely in the closure-inline / mixin-default
-monomorphization hand-off in `mir/lower`. Fix is out of scope for the parity
-work; needs its own investigation.
+mixin-default-plus-trailing-block combination is broken.
+
+**ROOT CAUSE (traced 2026-07-28).** Two distinct call-resolution paths in typeck
+that do NOT agree on closure-param handling:
+
+1. **Closure-param `Self` is not substituted for a mixin-default call.** An OWN
+   class method call seeds its closure argument's type from the (already
+   `Self`→receiver-substituted) declared param type at
+   `typeck/infer/expr.rs:711-716` (`substitute_generics_in_return` + then
+   `seed_closure_param_types`). A MIXIN-DEFAULT method call resolves through a
+   SEPARATE path (`select_class_method` returns `None` for an inherited method,
+   so that seeding loop is skipped; the call is typed via the
+   `bridge`/`lookup_method_with_args` mixin path). That path does NOT seed the
+   block's closure parameter, so a `def m(f: any Fn[Fn(&Self) -> nil])` leaves
+   the block param at the abstract `Self`/`?T`. The block body's `x.field` /
+   `x.method` then mangles to an unresolvable `?T<id>_<name>` symbol and codegen
+   errors, or the value is type-confused. Repro (fails with
+   `no runtime symbol for ?T::n`):
+   ```rx
+   mixin Tappable
+     def do_it(f: any Fn[Fn(&Self) -> nil]) -> Self
+       f.(self)
+       self
+     end
+   end
+   class Box
+     n: Int
+     include Tappable
+     def init(@n: Int)
+     end
+   end
+   Box.new(5).do_it do |x| puts(x.n) end   # ?T::n
+   ```
+   (A block param that does NOT dereference `Self` fields — `do_it { |x| puts(1) }`
+   — happens to link, which is why the trivial `Doer` probe passed.)
+2. **A mixin default that returns `Self` or the block result is mis-lowered** —
+   the `then`-shape (`def m[U](f: any Fn[Fn(&Self) -> U]) -> U; f.(self); end`)
+   returns empty. Related to the same mixin-default monomorphization not carrying
+   the concrete `Self`/`U` bindings through to the body.
+
+**Fix direction (the generic mechanism, per the `.rx`-first rule in `CLAUDE.md`).**
+Make the mixin-default method-call path seed its closure argument from the
+`Self`→receiver-substituted param type, exactly like the own-method path — ideally
+by factoring the own-method seeding loop (`expr.rs:711-716`) into a shared helper
+both paths call, so a `Self`-typed closure param is concrete for own AND inherited
+methods. This is what unblocks `tap`/`then` (and `Enumerable#map` on a USER class,
+which fails for the same reason) as pure `.rx` mixin methods. It needs its own
+careful pass (typeck seam + MIR mono + the full gate + review); it is NOT a
+per-feature special-case.
 
 ## Where the workarounds live (grep-able)
 
