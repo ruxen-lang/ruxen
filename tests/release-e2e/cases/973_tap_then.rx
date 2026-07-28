@@ -37,4 +37,14 @@ def main
     puts(x + 1)
   end
   puts(kept)
+
+  # A param-less block (side-effect-only tap; then returning a constant).
+  let noparam = 100.tap do
+    puts(101)
+  end
+  puts(noparam)
+  let picked = 7.then do
+    "done"
+  end
+  puts(picked)
 end

@@ -127,10 +127,16 @@ impl<'a> Lowerer<'a> {
                 {
                     if let Some(block_expr) = block {
                         if let HirExprKind::Closure { params, body, .. } = &block_expr.kind {
-                            if let (Some(obj), Some(param)) =
-                                (self.lower_expr(object)?, params.first())
-                            {
-                                self.def_to_local.insert(param.def_id, obj);
+                            if let Some(obj) = self.lower_expr(object)? {
+                                // Bind the block parameter to the receiver only
+                                // when the block names one. A param-less block
+                                // (`x.tap { side_effect }`, common Ruby for
+                                // side effects) still inlines — without this the
+                                // MIR guard would skip the intercept and fall
+                                // through to a nonexistent `<Type>_tap` symbol.
+                                if let Some(param) = params.first() {
+                                    self.def_to_local.insert(param.def_id, obj);
+                                }
                                 let body_result = self.lower_expr(body)?;
                                 return Ok(if method_name == "tap" {
                                     Some(obj)
