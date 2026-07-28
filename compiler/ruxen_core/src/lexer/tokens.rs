@@ -511,7 +511,22 @@ impl<'a> Lexer<'a> {
                 }
             }
             '%' => {
-                if !self.is_at_end() && self.current() == '=' {
+                // `%w[...]` / `%w(...)` / `%w{...}` / `%w<...>` — a word-array
+                // literal that desugars to an array of plain string literals
+                // (`%w[a b c]` → `["a", "b", "c"]`). Only in expression context,
+                // so a binary `a % w` (modulo) is untouched.
+                let prev = self.tokens.last().map(|t| t.kind.clone());
+                if !self.is_at_end()
+                    && prev_token_starts_expr_context(prev.as_ref())
+                    && self.current() == 'w'
+                    && matches!(
+                        self.peek_at(1),
+                        Some('[') | Some('(') | Some('{') | Some('<')
+                    )
+                {
+                    self.advance(); // consume `w`
+                    self.lex_word_array(start_byte, start_line, start_col);
+                } else if !self.is_at_end() && self.current() == '=' {
                     self.advance();
                     self.emit(TokenKind::PercentEq, start_byte, start_line, start_col);
                 } else {
@@ -803,6 +818,48 @@ pub(super) fn prev_token_starts_expr_context(prev: Option<&TokenKind>) -> bool {
 }
 
 impl<'a> Lexer<'a> {
+    /// Lex a `%w[...]` word-array literal into the token stream as a normal
+    /// array of string literals (`%w[a b c]` → `[`, `"a"`, `,`, `"b"`, `,`,
+    /// `"c"`, `]`). The opening delimiter (`[`/`(`/`{`/`<`) is the current char;
+    /// whitespace (including newlines) separates words. `%w` has already been
+    /// recognised by the caller. Spans point at the `%w` start (approximate).
+    fn lex_word_array(&mut self, sb: usize, sl: u32, sc: u32) {
+        let open = self.current();
+        let close = match open {
+            '[' => ']',
+            '(' => ')',
+            '{' => '}',
+            '<' => '>',
+            other => other,
+        };
+        self.advance(); // consume the opening delimiter
+        self.emit(TokenKind::LBracket, sb, sl, sc);
+        let mut first = true;
+        loop {
+            // Skip separating whitespace, but never past the close delimiter.
+            while !self.is_at_end() && self.current() != close && self.current().is_whitespace() {
+                self.advance();
+            }
+            if self.is_at_end() || self.current() == close {
+                break;
+            }
+            let mut word = String::new();
+            while !self.is_at_end() && self.current() != close && !self.current().is_whitespace() {
+                word.push(self.current());
+                self.advance();
+            }
+            if !first {
+                self.emit(TokenKind::Comma, sb, sl, sc);
+            }
+            first = false;
+            self.emit(TokenKind::StringLiteral(word), sb, sl, sc);
+        }
+        if !self.is_at_end() && self.current() == close {
+            self.advance(); // consume the closing delimiter
+        }
+        self.emit(TokenKind::RBracket, sb, sl, sc);
+    }
+
     /// Lex a `/pat/flags` regex literal. The opening `/` has already
     /// been consumed by [`lex_operator_or_punct`]. Emits the token on
     /// success; pushes an E1700/E1701/E1703 diagnostic on failure (and

@@ -1584,6 +1584,30 @@ fn lex_tilde_alone_is_bitwise_complement() {
     assert_eq!(toks.first().map(|t| &t.kind), Some(&TokenKind::Tilde));
 }
 
+#[test]
+fn lex_percent_w_word_array() {
+    // `%w[a b]` desugars in the lexer to `[ "a" , "b" ]`.
+    let kinds = lex_kinds("%w[a b]");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::LBracket,
+            TokenKind::StringLiteral("a".into()),
+            TokenKind::Comma,
+            TokenKind::StringLiteral("b".into()),
+            TokenKind::RBracket,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn lex_percent_is_still_modulo_after_a_value() {
+    // `a % w` (after a value) stays the modulo operator, not a word array.
+    let kinds = lex_kinds("a % w");
+    assert_eq!(kinds.get(1), Some(&TokenKind::Percent));
+}
+
 /// `/foo/i` after `=` lexes as a RegexLiteral.
 #[test]
 fn lex_regex_literal_after_eq() {

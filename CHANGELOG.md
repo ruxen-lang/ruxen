@@ -26,6 +26,15 @@ once 1.0.0 ships.
   interpolation pin.
 
 ### Changed
+- **`%w[...]` word-array literals.** `%w[foo bar baz]` lexes to the array
+  `["foo", "bar", "baz"]`; the `[]`, `()`, `{}`, and `<>` delimiters are all
+  accepted, whitespace (including newlines) separates words, and `%w[]` is the
+  empty array. The lexer emits the equivalent bracket/string/comma token
+  sequence, so parsing, typeck, and codegen are unchanged. Recognized only in
+  expression context (via the same positional check that distinguishes a regex
+  `/` from division), so a binary `a % w` modulo is untouched. `%i` (symbol
+  arrays) stays out of scope pending a `Symbol` type. Pin `974`; Ruby-parity
+  `language.md` section 1 / P2.19.
 - **Ruby universal block methods `tap`, `then`, `yield_self`.** `x.tap { |v| … }`
   runs the block with `v = x` for side effects and evaluates to `x`;
   `x.then { |v| … }` (and its alias `yield_self`) evaluates to the block's
