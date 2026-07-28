@@ -222,6 +222,22 @@ mixin Enumerable[T]
     end
     acc
   end
+
+  # Ruby method-name synonyms for the combinators above, as thin delegating
+  # default methods. (`alias` does not compose with the per-implementor
+  # monomorphization of a mixin default, and `collect` is NOT aliased to `map`
+  # — it is already the iterator `collect[Target]` method.)
+  def filter(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
+    self.select(pred)
+  end
+
+  def detect(pred: any Fn[Fn(T) -> Bool]) -> Option[T]
+    self.find(pred)
+  end
+
+  def inject[U](seed: U, f: any Fn[Fn(U, T) -> U]) -> U
+    self.reduce(seed, f)
+  end
 end
 
 mixin Copy

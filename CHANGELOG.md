@@ -26,6 +26,15 @@ once 1.0.0 ships.
   interpolation pin.
 
 ### Changed
+- **Ruby method-name parity on `Enumerable`: `filter`, `detect`, `inject`.**
+  Added as thin delegating default methods on the `Enumerable[T]` mixin (`filter`
+  → `select`, `detect` → `find`, `inject` → `reduce`), so every collection that
+  includes `Enumerable` gets the Ruby spellings alongside the existing ones. They
+  are real delegating methods rather than `alias`es because `alias` does not
+  compose with the per-implementor monomorphization of a mixin default (the
+  aliased name mangles to an undefined `<Class>_<alias>` symbol). `collect` is
+  intentionally NOT aliased to `map` — it is already Ruxen's iterator
+  `collect[Target]` method. Pin `976`; Ruby-parity `core.md`.
 - **`%w[...]` word-array literals.** `%w[foo bar baz]` lexes to the array
   `["foo", "bar", "baz"]`; the `[]`, `()`, `{}`, and `<>` delimiters are all
   accepted, whitespace (including newlines) separates words, and `%w[]` is the

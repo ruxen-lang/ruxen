@@ -1,0 +1,23 @@
+# Pins Ruby method-name parity on Enumerable: `filter` (select), `detect`
+# (find), `inject` (reduce), as delegating default methods. The Ruxen
+# spellings keep working.
+def main
+  let xs = [1, 2, 3, 4, 5]
+  let evens = xs.filter do |x|
+    x % 2 == 0
+  end
+  puts(evens.size)
+  puts(evens[0])
+  let big = xs.detect do |x|
+    x > 3
+  end
+  puts(big.unwrap_or(0))
+  let sum = xs.inject(0) do |acc, x|
+    acc + x
+  end
+  puts(sum)
+  let product = xs.reduce(1) do |acc, x|
+    acc * x
+  end
+  puts(product)
+end
