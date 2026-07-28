@@ -116,30 +116,24 @@ impl<'a> Lowerer<'a> {
                 }
 
                 // ── Ruby universal block methods `tap` / `then` / `yield_self` ─
-                // `x.tap { |v| … }` runs the block with `v = x` and evaluates
-                // to `x`; `x.then { |v| … }` evaluates to the block's result.
-                // Inlined as a single closure invocation: bind the block's
-                // parameter to the receiver's local, then lower the body. Typeck
-                // has already typed the result (receiver type for `tap`, block
-                // return for `then`).
-                if (method_name == "tap" || method_name == "then" || method_name == "yield_self")
-                    && args.is_empty()
-                    && !self.class_has_method(&type_name, method_name)
-                {
+                // typeck rewrote the intercepted builtin to a reserved method
+                // name (`__ruxen_builtin_tap` / `__ruxen_builtin_then`) after
+                // deciding — using own + mixin method resolution — that no user
+                // method should win. So MIR intercepts UNCONDITIONALLY on that
+                // marker; a user/mixin `tap`/`then` keeps its original name and
+                // reaches ordinary dispatch below. `x.tap { |v| … }` returns the
+                // receiver; `x.then { |v| … }` returns the block's result. The
+                // block is inlined as a single invocation: bind its parameter to
+                // the receiver's local (when it names one), then lower the body.
+                if method_name == "__ruxen_builtin_tap" || method_name == "__ruxen_builtin_then" {
                     if let Some(block_expr) = block {
                         if let HirExprKind::Closure { params, body, .. } = &block_expr.kind {
                             if let Some(obj) = self.lower_expr(object)? {
-                                // Bind the block parameter to the receiver only
-                                // when the block names one. A param-less block
-                                // (`x.tap { side_effect }`, common Ruby for
-                                // side effects) still inlines — without this the
-                                // MIR guard would skip the intercept and fall
-                                // through to a nonexistent `<Type>_tap` symbol.
                                 if let Some(param) = params.first() {
                                     self.def_to_local.insert(param.def_id, obj);
                                 }
                                 let body_result = self.lower_expr(body)?;
-                                return Ok(if method_name == "tap" {
+                                return Ok(if method_name == "__ruxen_builtin_tap" {
                                     Some(obj)
                                 } else {
                                     body_result

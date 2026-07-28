@@ -365,14 +365,17 @@ impl<'a> InferenceEngine<'a> {
                         Some(HirExprKind::Closure { .. })
                     )
                 {
+                    let is_tap = method_name == "tap";
                     self.infer_expr(object);
                     let obj_ty = self.ctx.resolve(&object.ty);
-                    if self
+                    // `lookup_method_by_name` sees BOTH own-class and included-
+                    // mixin/default methods, so a user `tap`/`then` (however
+                    // provided) wins and we do NOT intercept.
+                    let has_user_method = self
                         .traits
                         .lookup_method_by_name(&obj_ty, method_name)
-                        .is_none()
-                    {
-                        let is_tap = method_name == "tap";
+                        .is_some();
+                    if !has_user_method {
                         let ret_var = self.ctx.fresh_type_var();
                         let mut block_ret = ret_var.clone();
                         if let Some(blk) = block.as_deref_mut() {
@@ -401,11 +404,22 @@ impl<'a> InferenceEngine<'a> {
                                 other => other,
                             };
                         }
+                        // Mark the call so MIR intercepts the builtin
+                        // UNCONDITIONALLY on this reserved name. typeck is the
+                        // SOLE decider (it alone consults own + mixin methods),
+                        // so the two interception sites can never disagree — a
+                        // user/mixin `tap`/`then` keeps its original name and
+                        // dispatches normally through MIR.
+                        *method_name = if is_tap {
+                            "__ruxen_builtin_tap".to_string()
+                        } else {
+                            "__ruxen_builtin_then".to_string()
+                        };
                         expr.ty = if is_tap { obj_ty } else { block_ret };
                         return;
                     }
-                    // A user-defined `tap`/`then` exists — fall through to the
-                    // ordinary method resolution below (which dispatches to it).
+                    // A user/mixin-provided `tap`/`then` exists — fall through to
+                    // the ordinary method resolution below (which dispatches to it).
                 }
 
                 // ── Phase 2 stdlib (#04): HashMap.entry(K).or_insert(V) /

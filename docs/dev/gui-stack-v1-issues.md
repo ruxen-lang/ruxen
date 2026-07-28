@@ -2645,6 +2645,44 @@ Recommended order: **Q16 → Q17** (unblocks the layering story), then
 then **Q14/Q15** (namespacing, biggest), with **Q4/Q22** as the
 language-design pair to settle before Drop semantics land.
 
+## Q57 · S2 — a mixin-DEFAULT method that takes a trailing block silently does nothing (native)
+
+**Pre-existing** (reproduces on 85b24f5a, before the Ruby-parity session — not
+introduced by `tap`/`then`). A method declared on a `mixin` and inherited by a
+class via `include`, when it takes a closure/`&block` param and is CALLED with a
+trailing `do…end` block, does not run its body: the call produces empty output
+(and can segfault if its result is then used, e.g. printed).
+
+Repro:
+```rx
+mixin Wrappable
+  def wrap(f: any Fn[Fn(Int) -> nil]) -> Int
+    puts(100)   # never prints
+    42
+  end
+end
+class Widget
+  v: Int
+  include Wrappable
+  def init(@v: Int)
+  end
+end
+def main
+  let w = Widget.new(4)
+  let r = w.wrap do |x| puts(999) end
+  puts(r)       # empty output; exit 0 or 139
+end
+```
+A mixin default WITHOUT a block param (`def describe -> Int; 77; end`) dispatches
+fine, and an OWN class method with a block works — only the
+mixin-default-plus-trailing-block combination is broken. Surfaced while
+reviewing `tap`/`then`: a user who provides `tap` via a mixin has the universal
+`tap` correctly dispatch to their mixin method (typeck is the sole decider via a
+reserved `__ruxen_builtin_tap` marker, so the typeck/MIR interceptions can never
+diverge), which then hits THIS bug. Likely in the closure-inline / mixin-default
+monomorphization hand-off in `mir/lower`. Fix is out of scope for the parity
+work; needs its own investigation.
+
 ## Where the workarounds live (grep-able)
 
 - `quiver/CLAUDE.md` — "Ruxen v1 landmines" section (the working ruleset)
