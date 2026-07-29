@@ -383,6 +383,58 @@ ranks first and B71 second, both found after B01 to B05.
 - **Status:** READY-NOW (audit), then NEEDS-COMPILER-FEATURE per site.
 - **Pins:** 1830-1839, one per site actually proven broken.
 
+### B84 — `return <value>` from an Option-returning function SEGFAULTS
+- **Goal:** a guard-clause early return works in an `Option`-returning function.
+- **Repro (verified 2026-07-29 on `4560d00b`, no collection method involved):**
+
+  ```
+  def f(x: Int) -> Int?
+    if x > 1
+      return x * 10      # <- bare value through `return`
+    end
+    nil
+  end
+  def main
+    let r = f(5)
+    puts "got=#{r.unwrap_or(0)}"
+  end
+  ```
+  Exits **139 (SIGSEGV)**. The tail-position form (`if x > 1 then x * 10 else nil end`, no `return`) prints `got=50` correctly. `-> Option[Int]` and `-> Int?` behave identically, so the spelling is NOT the trigger; the `return` is.
+- **Cause (hypothesis, needs confirming):** the bare value is not wrapped into the `Option` on the `return` path, only on the tail-expression path, so a raw `Int` flows out where an `Option` box is expected and the first read dereferences it as a pointer.
+- **Severity: BLOCKER.** Guard-clause-plus-early-return is one of the most common shapes in both Ruby and Rust, `Option` returns are everywhere in the stdlib surface we are building (`min`, `max`, `find`, `find_index`, `filter_map`), and the failure is a hard crash produced by a silent miscompile rather than a diagnostic.
+- **How it evaded every gate:** pin `1061` exercises `filter_map` through a helper written in TAIL position (`only_odd`), so the whole B07 batch passed while the idiomatic early-return spelling crashes. This is the second pin this session that routed around a defect instead of exposing it (see also pin `991` and `unwrap_or`). When adding pins for `Option`-returning helpers, write BOTH spellings.
+- **Files:** the `Return` lowering path in `mir/lower/`, wherever the tail-expression path performs the `Option` wrap.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Pins:** 1850-1859. Pin the early-return form directly, plus a nested `return` inside a loop, and the same for `Result`.
+
+### B85 — Chaining off an inlined combinator iterates the ORIGINAL receiver
+- **Goal:** `a.select { … }.each { … }` iterates the SELECTED elements.
+- **Repro (verified 2026-07-29):** `["alpha","beta","gamma"].select { |s| s.size > 4 }.each { |s| puts "#{s}" }` prints all THREE. Binding first (`let big = a.select { … }; big.each { … }`) correctly prints two.
+- **Severity: high, silent wrong answer.** Method chaining is the defining idiom of Ruby's Enumerable, and anything chained off `select`/`map`/`reject` is suspect. It produces a plausible-looking result, never a crash or a diagnostic.
+- **Cause:** the MIR-inlined combinator's temporary is not what the chained call receives, so the chain re-reads the original receiver.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Pins:** 1860-1869. Pin chained `select.each`, `map.each`, `select.size`, and a three-link chain, each asserting a COUNT that differs from the receiver's.
+
+### B86 — `Array[String]#drop(n)` traps
+- **Repro (verified 2026-07-29):** `let d = ["a","b","c"].drop(2)` alone aborts (Trace/BPT trap 5, exit 133). `Int` elements are fine, so it is `ruxen_vec_skip` on a heap element type.
+- **Severity:** high (crash on ordinary input). Pin `1065` currently routes around it.
+- **Status:** NEEDS-RUNTIME-C.
+- **Pins:** 1870-1879. Cover `String`, a user class, and `Int` elements.
+
+### B87 — A free function whose name ends in `!` is a silent no-op
+- **Repro (verified 2026-07-29):** `def shout!(x: Int) puts "shouting #{x}" end` then `shout!(5)` compiles clean, prints NOTHING, and falls through.
+- **Severity:** high, silent wrong answer. Ruby uses `!` names throughout (`save!`, `exit!`, `sort!`), so this will be hit constantly, and it fails silently rather than refusing to compile.
+- **Consequence:** this is why B19 could not ship `exit!`.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Pins:** 1880-1889. Cover a `!` free function, a `!` method, and a `!` function with a return value.
+
+### B88 — `Set` iterates in hash-bucket order, not insertion order
+- **Repro:** inserting 1, 2, 3 yields 3, 1, 2.
+- **Impact:** every order-sensitive `Enumerable` method differs from Ruby, whose `Set` is insertion-ordered. Not a crash, but it makes `first`, `take`, `each_slice`, `each_cons` and `reverse_each` on a `Set` disagree with CRuby.
+- **Severity:** medium. Decide deliberately whether Ruxen's `Set` promises insertion order; if it does not, the matrices must say so rather than implying parity.
+- **Status:** NEEDS-RUNTIME-C (or a documented deviation).
+- **Pins:** 1890-1899.
+
 ---
 
 ## 3. READY-NOW batches (`.rx` only, no enabler needed)
