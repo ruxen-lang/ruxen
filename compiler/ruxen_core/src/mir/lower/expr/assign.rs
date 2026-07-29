@@ -1,6 +1,31 @@
 use super::super::*;
 
 impl<'a> Lowerer<'a> {
+    /// True when `o[i] = v` on a receiver of this type desugars to the
+    /// receiver's `[]=` method rather than the index-assign machine floor.
+    ///
+    /// Two receiver shapes qualify: a NOMINAL type (user/stdlib
+    /// `class`/`struct`/`enum`), and a BUILTIN head (`String`/`Array`/`Hash`/
+    /// `Set`) whose `.rx` class RESOLVES `[]=` — via a `def` or an `alias`,
+    /// which is how `Hash` provides it (`alias []= insert`). The builtin-head
+    /// half is the write-side twin of the builtin-head OPERATOR route in
+    /// `binops.rs`, and it reuses that module's head set and method probe so
+    /// the read/binop side and the write side cannot drift apart on which
+    /// receivers may dispatch to `.rx`.
+    ///
+    /// `lower_assign` consults this to take the route; the machine floor
+    /// consults it to tell "this receiver has no `[]=` at all" apart from "this
+    /// receiver HAS one but the caller reached the floor without desugaring"
+    /// (parallel assignment), so its refusal names the real limitation.
+    fn index_assign_routes_to_method(&self, object_ty: &Ty) -> bool {
+        let head = super::binops::unwrap_ref(object_ty);
+        matches!(
+            head,
+            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+        ) || (super::binops::is_builtin_op_head(head)
+            && self.builtin_head_has_op_method(head, "[]="))
+    }
+
     /// Store an already-lowered value `val` into an assignment target place
     /// (a plain/captured/cell-promoted variable, a struct field, or a
     /// fixed-array / backing-Vec index). Shared by single `Assign` lowering and
@@ -76,10 +101,12 @@ impl<'a> Lowerer<'a> {
                     });
                 }
             }
-            // `xs[i] = v` index assignment (Q9). Mirrors the read path in
-            // `lower_index`: a fixed-array with a literal index stores a slot
-            // directly; a backing-Vec receiver calls the bounds-checked
-            // `ruxen_vec_set`. Map (`m[k] = v`) still goes through `.insert`.
+            // `xs[i] = v` index assignment (Q9), machine floor. Mirrors the read
+            // path in `lower_index`: a fixed-array with a literal index stores a
+            // slot directly; a backing-Vec receiver calls the bounds-checked
+            // `ruxen_vec_set`. Receivers that dispatch to an `.rx` `[]=`
+            // (nominal, or a builtin head that resolves one) are intercepted by
+            // `lower_assign` and never reach here.
             HirExprKind::Index { object, index } => {
                 if matches!(object.ty, Ty::FixedArray(_, _)) {
                     if let HirExprKind::IntLiteral(n) = &index.kind {
@@ -103,7 +130,40 @@ impl<'a> Lowerer<'a> {
                             args: vec![MirValue::Use(base), MirValue::Use(idx), val],
                         });
                     }
+                    return Ok(());
                 }
+                // No store path for this receiver. Refuse to lower rather than
+                // drop the write: a silently discarded `o[i] = v` is exactly the
+                // failure mode B72 was (`Ty::Map` matched no arm above and the
+                // store vanished), and the repo forbids a silent no-op on any
+                // user-callable surface.
+                //
+                // Three distinct reasons land here; each gets its own message,
+                // because a wrong-but-confident "define `[]=`" would misdirect
+                // two of the three.
+                if matches!(object.ty, Ty::FixedArray(_, _)) {
+                    return Err(format!(
+                        "index assignment on the fixed-size array `{}` requires a \
+                         literal index; use an `Array` for a computed index",
+                        object.ty
+                    ));
+                }
+                if self.index_assign_routes_to_method(&object.ty) {
+                    // The receiver DOES have `[]=`; the caller reached the floor
+                    // without going through the desugar. Only `MultiAssign`
+                    // does that today — it stores an already-lowered value, so
+                    // it has no HIR argument to hand a synthetic method call.
+                    return Err(format!(
+                        "parallel assignment cannot write through an index on `{}`; \
+                         assign each index in its own statement",
+                        object.ty
+                    ));
+                }
+                return Err(format!(
+                    "no `[]=` on type `{}`, so `o[i] = v` has no store path; \
+                     define one on its class",
+                    object.ty
+                ));
             }
             _ => {
                 // Other assignment targets are not stored (no-op for now).
@@ -290,26 +350,17 @@ impl<'a> Lowerer<'a> {
             // ── Assignment ──────────────────────────────────────────
             HirExprKind::Assign { target, value, .. } => {
                 // ── Operator → method desugar (Task OP, Step 3) ──
-                // `a[i] = v` → `a.[]=(i, v)` when the indexed receiver is
-                // NOMINAL (user/stdlib class with `def []=`). Done BEFORE
-                // lowering `value` so the synthetic method call lowers its
-                // args exactly once. Builtin collection index-assign is not
-                // handled here (Array/Map mutation goes through their own
-                // methods); only a nominal `def []=` receiver routes.
+                // `a[i] = v` → `a.[]=(i, v)` for every receiver whose `[]=`
+                // resolves (see `index_assign_routes_to_method`). Done BEFORE
+                // lowering `value`, so the synthetic method call lowers its args
+                // exactly once. Everything else falls through to
+                // `store_value_into_target`'s machine floor, which is what keeps
+                // `Array`/`FixedArray` index-assign on `ruxen_vec_set` /
+                // `SetField`. B72: before the builtin-head half of that
+                // predicate existed, `Ty::Map` matched neither this test nor any
+                // arm of that floor, so `h[k] = v` type-checked and vanished.
                 if let HirExprKind::Index { object, index } = &target.kind {
-                    fn peel(t: &Ty) -> &Ty {
-                        match t {
-                            Ty::Ref(i)
-                            | Ty::RefMut(i)
-                            | Ty::RefLifetime(_, i)
-                            | Ty::RefMutLifetime(_, i) => peel(i),
-                            _ => t,
-                        }
-                    }
-                    if matches!(
-                        peel(&object.ty),
-                        Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
-                    ) {
+                    if self.index_assign_routes_to_method(&object.ty) {
                         let synthetic = HirExpr {
                             kind: HirExprKind::MethodCall {
                                 object: Box::new((**object).clone()),

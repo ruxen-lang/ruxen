@@ -21,6 +21,28 @@ enum NumKind {
     UnsignedInt,
 }
 
+/// The builtin heads whose `.rx` classes home operator methods: the string and
+/// collection types that are NOT `Ty::Class`/`Struct`/`Enum` (so they miss the
+/// nominal operator route) but still carry an `.rx` method home
+/// (`class String`, `class Array[T]`, `class Hash[K, V]`, `class Set[T]`).
+/// Shared with `assign.rs`, whose `o[i] = v` route asks the same question of the
+/// same head set for `[]=`, so the read/binop side and the write side cannot
+/// drift apart on which receivers may dispatch to `.rx`.
+pub(super) fn is_builtin_op_head(ty: &Ty) -> bool {
+    matches!(ty, Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_))
+}
+
+/// Strip references off a receiver type down to the head being dispatched on.
+pub(super) fn unwrap_ref(t: &Ty) -> &Ty {
+    match t {
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => unwrap_ref(inner),
+        _ => t,
+    }
+}
+
 impl<'a> Lowerer<'a> {
     fn nominal_comparison_method_available(
         &self,
@@ -48,33 +70,36 @@ impl<'a> Lowerer<'a> {
 
     /// True when a builtin-head receiver (`String` / `Array` / `Hash` / `Set`)
     /// declares a `.rx` method for operator `method` (e.g. `String#*`,
-    /// `Array#+`). The generic-compiler end-state moves collection/string
-    /// operators to `.rx`; when the method exists we route `a op b` to
-    /// `a.OP(b)` rather than the machine floor, which cannot express a
-    /// heap-collection operator and silently miscompiles (`"ab" * 3` → empty,
-    /// `[1,2] + [3,4]` → 0). The receiver's display name carries generic args
-    /// (`Array[Int]`); the `.rx` class parent is the bare head (`Array`), so
-    /// strip the `[...]` suffix before probing.
-    fn builtin_head_has_op_method(&self, head: &Ty, method: &str) -> bool {
-        let raw = type_name_from_ty(head);
-        let class_name = raw.split('[').next().unwrap_or(&raw);
-        // NAME-only existence check (not arg-typed): typeck already selected and
-        // type-checked this operator against the `.rx` method before MIR runs,
-        // and the `.rx` operator method's generic param (`Array[T]`) would not
-        // pass the strict `arg.ty == param.ty` arg check against a concrete
-        // `Array[Int]` argument anyway. MIR only needs to agree that the method
-        // exists so it dispatches there instead of the machine floor.
-        self.symbols.iter().any(|def| {
-            let crate::resolve::symbols::DefKind::Method { parent, .. } = &def.kind else {
-                return false;
-            };
-            def.name == method
-                && self
-                    .symbols
-                    .get(*parent)
-                    .map(|p| p.name == class_name)
-                    .unwrap_or(false)
-        })
+    /// `Array#+`, `Hash#[]=`). The generic-compiler end-state moves
+    /// collection/string operators to `.rx`; when the method exists we route
+    /// `a op b` (and `a[i] = v`, see `assign.rs`) to the method rather than the
+    /// machine floor, which cannot express a heap-collection operator and
+    /// silently miscompiles (`"ab" * 3` → empty, `[1,2] + [3,4]` → 0,
+    /// `h[k] = v` → dropped).
+    ///
+    /// NAME-only existence check (not arg-typed): typeck already selected and
+    /// type-checked this operator against the `.rx` method before MIR runs, and
+    /// the `.rx` operator method's generic param (`Array[T]`) would not pass the
+    /// strict `arg.ty == param.ty` arg check against a concrete `Array[Int]`
+    /// argument anyway. MIR only needs to agree that the method exists so it
+    /// dispatches there instead of the machine floor.
+    ///
+    /// The probe is `canonical_method_name` + `method_defs_on_class` — exactly
+    /// the two steps `select_method_symbol_name` takes to pick the symbol this
+    /// route will then emit, so "the route fires" and "the route resolves" can
+    /// never disagree. Both steps matter for a builtin head:
+    ///
+    ///   * the alias rewrite, because an operator on a builtin head may be an
+    ///     `alias` rather than a `def` (`Hash`'s `alias []= insert`), and an
+    ///     alias creates no `Method` def of its own to find;
+    ///   * `method_defs_on_class`'s generic-free-base fallback (Q58 /
+    ///     `7b1c1907`), because a builtin head's receiver display name carries
+    ///     its generic args (`Hash[String, Int]`) while the `.rx` method's
+    ///     symbol-table parent is the bare head (`Hash`).
+    pub(super) fn builtin_head_has_op_method(&self, head: &Ty, method: &str) -> bool {
+        let class_name = type_name_from_ty(head);
+        let canonical = self.symbols.canonical_method_name(&class_name, method);
+        !self.method_defs_on_class(&class_name, canonical).is_empty()
     }
 
     /// Q33: re-materialize a mismatched numeric operand pair to a common type
@@ -314,15 +339,6 @@ impl<'a> Lowerer<'a> {
                 // before structural derives. The availability probe is what
                 // preserves auto-PartialEq/Ord for nominal types that do not
                 // define the corresponding symbol method.
-                fn unwrap_ref(t: &Ty) -> &Ty {
-                    match t {
-                        Ty::Ref(inner)
-                        | Ty::RefMut(inner)
-                        | Ty::RefLifetime(_, inner)
-                        | Ty::RefMutLifetime(_, inner) => unwrap_ref(inner),
-                        _ => t,
-                    }
-                }
                 let lhs_nominal = matches!(
                     unwrap_ref(&left.ty),
                     Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
@@ -397,10 +413,7 @@ impl<'a> Lowerer<'a> {
                     )
                 {
                     let head = unwrap_ref(&left.ty);
-                    if matches!(
-                        head,
-                        Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_)
-                    ) {
+                    if is_builtin_op_head(head) {
                         if let Some(method) = op.method_name() {
                             if self.builtin_head_has_op_method(head, method) {
                                 let synthetic = HirExpr {

@@ -252,7 +252,51 @@ ranks first and B71 second, both found after B01 to B05.
 - **Matrix rows:** `docs/dev/gui-stack-v1-issues.md` Q56; `stdlib.md` §9 net/http (291-328) if the fix changes the client surface.
 - **Pins:** 1040-1049.
 
-### B72 — `Hash[k] = v` subscript-assign is a silent no-op
+### B72 — `Hash[k] = v` subscript-assign is a silent no-op — **DONE**
+- **Landed:** index-assign now routes to the receiver's `[]=` for a BUILTIN head
+  too, not only a nominal one — the write-side twin of the builtin-head operator
+  route, sharing `binops.rs`'s head predicate (`is_builtin_op_head`) and method
+  probe (`builtin_head_has_op_method`) so the read/binop side and the write side
+  cannot drift. `Hash[k] = v` works because `class Hash[K, V]` gained
+  `alias []= insert`; nothing names `Hash` in the Rust, so any head that
+  resolves `[]=` gets the route. `alias`, not a delegating `def`, is
+  load-bearing: it emits the same `ruxen_hash_insert` call `insert` does, so
+  drop elaboration applies the key/value ownership TRANSFER already recorded for
+  that symbol. A separate `Hash_[]=` body is classified as BORROWING its args by
+  the `Hash_` runtime-prefix rule in `runtime_abi.rs`, and the caller then
+  double-frees the key at scope exit (observed, SIGTRAP). The machine floor's
+  index-assign arm now returns a lowering ERROR for a receiver it has no store
+  path for, instead of silently discarding the write. Pins `1710` (String key)
+  and `1711` (Int key, kept below 4096 so it does not depend on B73), each
+  asserting `size` + `key?` + a subscript read-back plus overwrite semantics.
+- **Two shapes that used to no-op silently now REFUSE to compile** (they never
+  produced a correct store, so this is loud-instead-of-wrong, not a lost
+  feature). Both are still open gaps, neither is in scope for B72, and each
+  names itself in the refusal:
+  - **Parallel assignment through an index** (`h["a"], h["b"] = 1, 2`).
+    `MultiAssign` reaches the machine floor with an ALREADY-LOWERED value, so it
+    has no HIR argument to hand a synthetic `[]=` call and cannot take the
+    desugar. Assign each index in its own statement. Fixing it means giving
+    `store_value_into_target` a way to call a method with a pre-lowered arg, and
+    it has to settle the evaluation-order semantics of a parallel write into a
+    collection, so it wants its own batch.
+  - **Fixed-size array `[T; N]` index-assign with a COMPUTED index**
+    (`var a: [Int; 3] = …; a[i] = 9`). The floor stores a `[T; N]` slot only for
+    a literal index. Use an `Array` for a computed index.
+- **Adjacent PRE-EXISTING gap found while verifying the generality (needs its
+  own id).** The new route reaches any builtin head whose `.rx` CLASS method
+  home resolves `[]=`, which is how the whole stdlib is written (`class String`,
+  `class Array[T]`, `class Hash[K, V]`, `class Set[T]` all register their
+  methods under the BARE head name). It does NOT reach an `extension Array` /
+  `extension Hash` `def []=`: an `extension` on a GENERIC builtin head registers
+  its methods under an inference-suffixed parent spelling — `extension Array`
+  with `def []=` emits `Array[?T3522]_[]=`, verified via `--emit=mir` — which no
+  bare-base lookup can match. That is the same `Hash[K, V]`-versus-`Hash`
+  name-mismatch family as Q58, one layer further out (an unresolved `?T` rather
+  than a concrete arg), and it is NOT a regression: the pre-existing
+  builtin-head OPERATOR probe misses it identically, so `extension String` with
+  `def *` is equally unreachable today. Whoever picks it up should fix it where
+  the extension's parent name is FORMED, not by widening the lookups.
 - **Goal:** `h["a"] = 42` actually stores.
 - **Repro (verified 2026-07-29):**
 
@@ -1119,7 +1163,7 @@ Pins: none.
 | **BLOCKED-ON-B44 (Serialize)** | 2 | B64, B67 |
 | **NEEDS-RUNTIME-C** | 7 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61, **B73** |
 | **BLOCKED within B35** | 5 | B35b, B35c, B35d, B35e, B35f (all on B35a or B35b; see §6) |
-| **NEEDS-COMPILER-FEATURE** | 24 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B72**, **B74**, **B75** (toolchain), **B76**, **B77** (enabler), **B78** |
+| **NEEDS-COMPILER-FEATURE** | 26 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B74**, **B75** (toolchain), **B76**, **B77** (enabler), **B78**, **B79**, **B80**, **B82** — **B72** landed |
 
 Counts overlap where a batch has both a ready half and a blocked half; the
 per-batch status line is authoritative.

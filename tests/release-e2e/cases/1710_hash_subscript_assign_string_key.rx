@@ -1,0 +1,35 @@
+# B72 — `Hash[k] = v` subscript-assign is a silent no-op.
+#
+# `h["a"] = 42` type-checked and then VANISHED: `Ty::Map` matched neither the
+# nominal `def []=` desugar in `mir/lower/expr/assign.rs` nor any arm of the
+# index-assign machine floor, so the store was dropped without a diagnostic.
+# The subscript READ and `insert` both worked, which is what let the matrix
+# record the operator as DONE.
+#
+# The pin asserts the store three independent ways — `size`, `key?`, and a
+# subscript READ-BACK of the assigned key — so a fix that only reaches one of
+# them (e.g. bumping the table's length without storing the pair) cannot pass.
+# It also pins overwrite semantics (assigning an existing key REPLACES, it does
+# not grow the table) and that `[]=` and `insert` populate the SAME table.
+def main
+  var h: Hash[String, Int] = Hash.new
+  h["a"] = 42
+  puts h.size
+  puts h.key?("a")
+  puts h["a"]
+
+  # A second key, then a mixed `insert`, to show one table not two.
+  h["b"] = 7
+  h.insert("c", 9)
+  puts h.size
+  puts h["b"]
+  puts h["c"]
+
+  # Overwrite: same key, new value. Size must NOT grow.
+  h["a"] = 100
+  puts h.size
+  puts h["a"]
+
+  # A key that was never assigned is still absent.
+  puts h.key?("zz")
+end

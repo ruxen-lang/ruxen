@@ -155,6 +155,38 @@ once 1.0.0 ships.
   `!any?`; `one?` counts matches. Pins `tests/release-e2e/cases/985`.
 
 ### Fixed
+- **`Hash[k] = v` subscript-assign no longer vanishes silently (B72).**
+  `h["a"] = 42` type-checked, emitted no diagnostic, and stored nothing:
+  `size` stayed `0` and `key?("a")` stayed `false`, while `h.insert("a", 42)`
+  and the subscript READ both worked. `mir/lower/expr/assign.rs` desugared
+  `o[i] = v` to `o.[]=(i, v)` only for a NOMINAL receiver
+  (`Ty::Class`/`Struct`/`Enum`); a `Hash` is `Ty::Map`, so it fell through to
+  the index-assign machine floor, which handles only `Ty::FixedArray` and the
+  backing-Vec heads. `Ty::Map` matched neither arm and the arm returned `Ok`,
+  dropping the store. Index-assign now ALSO routes to the receiver's `[]=`
+  when the receiver is a builtin head (`String`/`Array`/`Hash`/`Set`) whose
+  `.rx` class resolves one — the write-side twin of the existing builtin-head
+  OPERATOR route, sharing that module's head predicate and method probe so the
+  two cannot drift. No method or type name is hardcoded: `Hash[k] = v` works
+  because `class Hash[K, V]` now carries `alias []= insert`, and any other head
+  that declares `[]=` gets the same route for free. A head with no `[]=` still
+  falls through to the machine floor, so `Array`/`FixedArray` index-assign is
+  byte-identical to before. The `.rx` side is an `alias`, not a delegating
+  `def`, so the emitted call is the same `ruxen_hash_insert` that `insert`
+  emits and drop elaboration applies the key/value ownership TRANSFER already
+  recorded for that symbol; a separate `Hash_[]=` body would instead be
+  classified as BORROWING its args by the `Hash_` runtime-prefix rule and
+  double-free the key at scope exit. The machine floor's index-assign arm now
+  returns a lowering ERROR for a receiver it has no store path for, rather than
+  silently discarding the write that produced this bug; the refusal names which
+  of the three reasons applies instead of blanket-advising `define []=`. Two
+  shapes that previously no-op'd silently therefore refuse to compile now, each
+  saying so: parallel assignment through an index (`h["a"], h["b"] = 1, 2` —
+  `MultiAssign` reaches the floor with an already-lowered value, so it cannot
+  take the desugar; assign each index separately) and a fixed-size array
+  `[T; N]` index-assign with a computed index (the floor stores a `[T; N]` slot
+  only for a literal index). Neither ever produced a correct store. Pins
+  `tests/release-e2e/cases/1710`, `1711`.
 - **`alias` to a method on a GENERIC builtin head no longer link-fails (Q58).**
   `h.has_key?(k)` on a `Hash[String, Int]` emitted a bodiless
   `Hash[String, Int]_has_key?` and the linker rejected it. MIR's
