@@ -152,7 +152,14 @@ once 1.0.0 ships.
   classified as BORROWING its args by the `Hash_` runtime-prefix rule and
   double-free the key at scope exit. The machine floor's index-assign arm now
   returns a lowering ERROR for a receiver it has no store path for, rather than
-  silently discarding the write that produced this bug. Pins
+  silently discarding the write that produced this bug; the refusal names which
+  of the three reasons applies instead of blanket-advising `define []=`. Two
+  shapes that previously no-op'd silently therefore refuse to compile now, each
+  saying so: parallel assignment through an index (`h["a"], h["b"] = 1, 2` —
+  `MultiAssign` reaches the floor with an already-lowered value, so it cannot
+  take the desugar; assign each index separately) and a fixed-size array
+  `[T; N]` index-assign with a computed index (the floor stores a `[T; N]` slot
+  only for a literal index). Neither ever produced a correct store. Pins
   `tests/release-e2e/cases/1710`, `1711`.
 - **`alias` to a method on a GENERIC builtin head no longer link-fails (Q58).**
   `h.has_key?(k)` on a `Hash[String, Int]` emitted a bodiless

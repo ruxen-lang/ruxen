@@ -226,6 +226,20 @@ ranks first and B71 second, both found after B01 to B05.
   path for, instead of silently discarding the write. Pins `1710` (String key)
   and `1711` (Int key, kept below 4096 so it does not depend on B73), each
   asserting `size` + `key?` + a subscript read-back plus overwrite semantics.
+- **Two shapes that used to no-op silently now REFUSE to compile** (they never
+  produced a correct store, so this is loud-instead-of-wrong, not a lost
+  feature). Both are still open gaps, neither is in scope for B72, and each
+  names itself in the refusal:
+  - **Parallel assignment through an index** (`h["a"], h["b"] = 1, 2`).
+    `MultiAssign` reaches the machine floor with an ALREADY-LOWERED value, so it
+    has no HIR argument to hand a synthetic `[]=` call and cannot take the
+    desugar. Assign each index in its own statement. Fixing it means giving
+    `store_value_into_target` a way to call a method with a pre-lowered arg, and
+    it has to settle the evaluation-order semantics of a parallel write into a
+    collection, so it wants its own batch.
+  - **Fixed-size array `[T; N]` index-assign with a COMPUTED index**
+    (`var a: [Int; 3] = …; a[i] = 9`). The floor stores a `[T; N]` slot only for
+    a literal index. Use an `Array` for a computed index.
 - **Goal:** `h["a"] = 42` actually stores.
 - **Repro (verified 2026-07-29):**
 
