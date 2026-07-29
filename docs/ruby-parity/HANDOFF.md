@@ -100,6 +100,27 @@ same commit as the fix.
   resolves for builtin heads too, mapping to the bare class name, WITHOUT pinning
   `*method`). So `.rx` methods with default args (`ljust(w, pad=" ")`) work.
 
+## Probing rules (READ — a bad probe is worse than no probe)
+
+- **NEVER establish a language fact from inside a string interpolation.** The
+  interpolation re-lexer is permissive: invalid syntax inside `"#{…}"` compiles,
+  then emits an **empty string** at runtime instead of failing. `language.md` §11
+  files this under metaprogramming, but it applies to any probe. A blank line in
+  probe output is the signature of this trap, not evidence of a working feature.
+  Verified 2026-07-29: `puts "#{box(h: 3, w: 2)}"` compiles and prints blank,
+  while the same call in a `let` is a clean parse error. This is very likely how
+  `language.md` §4's false "Named-argument call ... DONE, probe PASS" row was
+  produced.
+- **A DONE row citing "probe PASS" rather than a case pin is suspect.** The
+  process rule is that a row needs a `tests/release-e2e/` case; a probe-only
+  claim has not been through the harness.
+- **Compiles ≠ works.** Drive every probe to a real run and check the value, not
+  just the exit status (this is `core.md`'s own methodology note, and it keeps
+  paying).
+- **Give every probe its own filename.** The compile cache does not key on
+  stdlib identity (**B75**), so reusing a filename after a stdlib edit can replay
+  a stale object.
+
 ## Hard-won `.rx`-authoring rules (READ — these cost hours to find)
 
 - **`String` bodies MAY dispatch** (no generic `T`): build results char-by-char

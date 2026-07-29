@@ -173,6 +173,27 @@ ranks first and B71 second, both found after B01 to B05.
 - **Pins:** 1700-1709. Pin **both** call forms (paren-less and parens) and at least one non-literal default, so a future whitelist regression is caught.
 - **Matrix rows:** `language.md` §4 (the `def f(x = 1)` default-args row, currently DONE and now known to be conditionally wrong); `HANDOFF.md` known-bugs list (lines 161-165), where it is already recorded.
 
+### B76 — A defaulted parameter destroys a trailing `do…end` block
+- **Goal:** `def each(sep: String = ", ", &block: …)` called as `each do |x| … end` receives its block.
+- **Repro (verified 2026-07-29):**
+
+  ```
+  def show(prefix: String = "v=", &block: Fn[(Int) -> nil]) -> nil
+    yield(1)
+  end
+  show    do |n| … end   # ruxen panic: yield called without a block in `show`
+  show()  do |n| … end   # SAME panic, so parens do not help
+  show("p=") do |n| … end # works: prefix=[p=], n=1
+  ```
+
+- **Rule:** whenever a defaulted parameter is **actually defaulted**, the trailing block is lost. Supplying every defaulted parameter explicitly preserves it. Without a default in the signature (`show("v=") do … end`) it works.
+- **Distinct from B71:** B71 is paren-less-only and concerns the default's *value*; this loses the **block**, with or without parens. Likely a shared call-path root, so fixing them together may be cheaper, but they are separately observable and separately pinnable.
+- **Severity:** high. `def each(sep = ", ", &block)` is an everyday Ruby shape, and the whole Enumerable and iteration surface is built on defaulted-plus-block signatures. It panics rather than corrupting, which is the one mercy.
+- **Blocks B27:** the splat and keyword work extends the same call path, so building on this defect would make it far harder to isolate. See [`design/B27-splat-kwargs.md`](design/B27-splat-kwargs.md) §7.
+- **Files:** `compiler/ruxen_core/src/mir/lower/mod.rs` (default fill and the block-argument slot), `typeck/infer/expr.rs`.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Pins:** 1750-1759. Pin all four call forms from the repro, since three of them differ only in whether the default was supplied.
+
 ### B02 — `do…end` block plus bare-variable `puts` segfaults
 - **Goal:** `arr.each { |x| puts(x) }` stops crashing.
 - **Repro:** `arr.each { |x| puts(x) }` segfaults; `arr.each { |n| puts "#{n}" }` (interpolation) works. So the bare-variable `puts` path inside a block passes the wrong thing.
@@ -455,6 +476,9 @@ ranks first and B71 second, both found after B01 to B05.
 - **Pins:** 1250-1259.
 
 ### B27 — Splat parameters and keyword arguments
+- **Designed. Read [`design/B27-splat-kwargs.md`](design/B27-splat-kwargs.md) before starting.** It decides that keyword arguments are a **compile-time call-site binding, not sugar over `Hash[Symbol, V]`** (a homogeneous hash cannot even type `create(name: "ada", age: 36)`, so the hash model is ruled out on expressiveness, not performance), refuses `**opts` with arbitrary runtime keys and heterogeneous `*args` in favour of typed structs, fixes the splat ABI (caller materialises the pack, callee borrows), states the splat-versus-arity-overload resolution rules, and splits the work into **B27a-B27e**.
+- ⚠️ **Probes refuted a DONE row.** `language.md` §4 lists "Named-argument call `f(w: 3, h: 4)`" as **DONE (probe PASS)**. It **does not parse in any position** (`sq(w: 3)` → `error: expected expression, found Colon`) and there is no named-argument code in the parser. The row cites "probe PASS" rather than a case pin, and the original probe was almost certainly run inside a string interpolation, which is permissive. **Correct that row when the matrix files are free.** So B27 builds the keyword surface from nothing rather than extending anything.
+- ⚠️ **`f(*xs)` at a call site is a silent no-op today**: it compiles and passes the array as one argument. It must become either a real splat or an error, per the no-silent-wrong-answer rule.
 - **Scope:** positional splat `*args`, keyword splat `**kwargs`, required keyword args `def f(a:)`, splat call sites `f(*arr)`, and the `format`/`sprintf` free functions that ride on them. Also unblocks `puts a, b` if B26 has not landed it, `Set[a, b, c]`, and `values_at(*idx)`.
 - **Files:** `compiler/ruxen_core/src/{parser,typeck,mir/lower}`.
 - **Status:** NEEDS-COMPILER-FEATURE (E7). High value, medium-to-high risk (it changes the call ABI).
@@ -1022,7 +1046,7 @@ Pins: none.
 | **BLOCKED-ON-B44 (Serialize)** | 2 | B64, B67 |
 | **NEEDS-RUNTIME-C** | 7 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61, **B73** |
 | **BLOCKED within B35** | 5 | B35b, B35c, B35d, B35e, B35f (all on B35a or B35b; see §6) |
-| **NEEDS-COMPILER-FEATURE** | 21 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B72**, **B74**, **B75** (toolchain) |
+| **NEEDS-COMPILER-FEATURE** | 22 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B72**, **B74**, **B75** (toolchain), **B76** |
 
 Counts overlap where a batch has both a ready half and a blocked half; the
 per-batch status line is authoritative.

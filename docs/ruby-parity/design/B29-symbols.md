@@ -263,17 +263,31 @@ sub-batch**, and why it should ship on its own with no semantics attached.
 ### Symbols land first, and kwargs does not actually depend on them
 
 In Ruby, `**kwargs` is literally a `Hash` with `Symbol` keys, so the two look
-inseparable. **In Ruxen they are not**, and the reason is that Ruxen already has
-named arguments without symbols: `f(w: 3, h: 4)` is DONE, and Ruxen's parameters
-are position-or-name rather than a keyword bag.
+inseparable. **In Ruxen they are not.**
+
+> **Correction (2026-07-29).** An earlier version of this section said Ruxen
+> "already has named arguments without symbols: `f(w: 3, h: 4)` is DONE", and
+> concluded that B27 could be built on that machinery. **That was wrong.**
+> Probing for the B27 spec found that named arguments **do not parse at all**
+> (`sq(w: 3)` gives `error: expected expression, found Colon`), and there is no
+> named-argument code in the parser. `language.md` §4's DONE row is false, and
+> its "probe PASS" was almost certainly run inside a string interpolation, which
+> is permissive. See [`B27-splat-kwargs.md`](B27-splat-kwargs.md) §1.2.
+
+The conclusion below survives the correction, on a **stronger** argument than the
+one it originally rested on:
 
 - **Semantically, kwargs does not need symbols.** The typed-language answer to
   `**kwargs` is a typed struct, which is what `gems-web.md` already decided for
   strong params (`FromParams`), not a `Hash[Symbol, Any]` (Ruxen has no `Any`).
-  So B27 can be built on the existing named-argument machinery.
+  A symbol-keyed hash cannot even *type* a realistic kwargs call, since
+  `create(name: "ada", age: 36)` is heterogeneous and `Hash[Symbol, V]` has one
+  `V`. So B27 builds a compile-time binding mechanism from scratch and never
+  touches `Symbol`.
 - **Syntactically, they collide** in exactly one place, §6's argument-position
-  `:`. That disambiguation has to be designed once, and it is far easier to
-  design with symbols in hand than to retrofit afterwards.
+  `:`. That collision does not exist *today* (nothing claims the colon in
+  argument position yet), but B27 will create it, so the disambiguation still has
+  to be designed once and is far easier to design with symbols in hand.
 
 **Recommendation: B29a before B27.** Symbols first, because the parser rule is
 shared and symbols are the constrained party. The rest of B29 can proceed in
