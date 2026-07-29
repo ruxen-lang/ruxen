@@ -415,7 +415,7 @@ impl<'a> Lowerer<'a> {
                                     ty: expr.ty.clone(),
                                     span: expr.span.clone(),
                                 };
-                                return Ok(self.lower_method_call(&synthetic)?);
+                                return self.lower_method_call(&synthetic);
                             }
                         }
                     }
