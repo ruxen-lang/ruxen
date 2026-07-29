@@ -132,6 +132,28 @@ ranks first and B71 second, both found after B01 to B05.
 - **Size:** small, and well precedented. The risk is not the change, it is choosing the fingerprint's granularity: hashing every stdlib source on every compile costs time on the hot path, so consider mtime plus size first and a content hash only when that is ambiguous.
 - **Pins:** 1740-1749. A pin cannot easily prove a cache miss from inside the e2e harness, so this most likely wants a Rust integration test under `src/ruxenc/tests/` asserting that two compiles of identical source with different `RUXEN_STDLIB_PATH` contents produce different cache keys.
 
+### B77 — Static dispatch through an abstract type fails (`T.static`, `Self.static`)
+- **Goal:** a generic body can call a class method on its type parameter, and a mixin default can call a static on `Self`.
+- **Two distinct failures, one missing mechanism (verified 2026-07-29):**
+  1. **In a generic class:** `class Relation[T: FromRow]` whose body calls `T.from_row(row)` → `codegen: no runtime symbol for '?T::from_row' (mangled '?T1817_from_row')`.
+  2. **In a mixin default:** `mixin Model` with `def self.all` calling `Self.from_row` → `Failed to define function 'User_all': Verifier(... "mismatched argument count ...: got 2, expected 1")`. This is very likely the Cranelift arity mismatch reported previously as a defaulted-parameter symptom.
+- **The contrast that characterises it:** a mixin default calling a required **instance** method on `Self` **works** (verified in the same program). It is specifically **statics** on an abstract type that fail.
+- **Why it matters far beyond a corner case:** it is the reason `gems-db.md`'s Phase 2 (generic CRUD inherited from `mixin Model`, whose bodies call `Self.table_name`/`Self.columns`/`Self.from_row`) **cannot be built as written**, and it is what forced the folio design to a repository shape carrying metadata as values. See [`design/B54-folio-orm.md`](design/B54-folio-orm.md) §1.4 and §2.
+- **Workaround that folio uses meanwhile:** pass the decoder as a **closure value** into the generic function, which works today.
+- **Files:** `compiler/ruxen_core/src/mir/lower/{monomorphize.rs,trait_default.rs}`, plus the static-call mangling in `mir/lower/mod.rs`.
+- **Status:** NEEDS-COMPILER-FEATURE (enabler). Landing it would let the active-record facade be generic and would simplify B56.
+- **Pins:** 1760-1769. Pin both failing shapes and the working instance-method contrast.
+
+### B78 — `where` is a reserved keyword, so it cannot be a method name
+- **Goal:** `def where(...)` and `.where(...)` are legal, so the single most recognisable line in the Ruby ORM surface (`User.where(...)`) can be spelled.
+- **Repro (verified 2026-07-29):** `def where(frag: &String) -> Relation[T]` → `error: expected expression, found RParen` at the parameter list and `error: expected identifier, found Where` at the call site. Renaming to `filter` compiles immediately, so nothing else is wrong.
+- **Cause:** `where` is taken by generic bounds (`where T: Add`).
+- **Fix, with a precedent:** make it a **contextual keyword** in method-name and method-call position, exactly as `.then` was handled (pin 973, per `language.md` Backlog A item 16).
+- **Severity:** low as a defect, high as a papercut. Every ORM doc, every downstream app, and every Ruby developer's muscle memory uses `where`. Shipping `filter` and renaming later means a breaking change across the whole folio surface.
+- **Files:** `compiler/ruxen_core/src/parser/{methods.rs,expr/calls.rs}`.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Pins:** 1770-1779.
+
 ### B01 — Float receiver ABI: `self` truncates, closure arg passes as 0
 - **Goal:** a `Float` value keeps its bits when it crosses into an `.rx` method body or a closure parameter.
 - **Repros (both verified at baseline):**
@@ -816,7 +838,13 @@ factors into one compiler feature (the `Model` field-walk synthesis) plus a
 `.rx` library. Two batches ship **before** that feature and are therefore the
 right place to start.
 
-### B54 — folio Phase 0: prove the stack in pure `.rx`
+### B54 — folio Phase 0: the repository core (was "prove the stack")
+
+**Designed. Read [`design/B54-folio-orm.md`](design/B54-folio-orm.md) before starting any folio batch.** It re-derives the architecture from probes and **overturns `gems-db.md`'s Phase 2**: a `mixin Model` carrying generic CRUD cannot be built, because a mixin default calling a static on `Self` crashes the Cranelift verifier and a generic class calling `T.static` finds no symbol (**B77**). folio is therefore a **repository** (`Repo` plus `Relation[T]` over a `ModelDesc[T]` **value**), not active-record, with a thin per-model facade of one-line forwarders. The spec also revises the B54-B61 phasing (§12), adds a small **B54b** for ledger gaps (`last_insert_rowid` is absent, and every bind is text), and answers N+1 structurally by **not having lazy association accessors at all** (§9).
+
+Probes confirm the core is buildable today: a phantom-typed `Relation[T]` chains correctly in pure `.rx`, a decoder passed as a closure value works, and the ledger stack runs end to end (`ruxen run` in `examples/smoke` returns typed JSON rows).
+
+
 Write the `Relation` (a lazy, chainable bound-parameter SQL builder producing a
 `?`-placeholder string plus a parallel `Array[String]`, so it is injection-safe
 by construction) and the row-decode helpers over `ledger`, plus one
@@ -1046,7 +1074,7 @@ Pins: none.
 | **BLOCKED-ON-B44 (Serialize)** | 2 | B64, B67 |
 | **NEEDS-RUNTIME-C** | 7 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61, **B73** |
 | **BLOCKED within B35** | 5 | B35b, B35c, B35d, B35e, B35f (all on B35a or B35b; see §6) |
-| **NEEDS-COMPILER-FEATURE** | 22 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B72**, **B74**, **B75** (toolchain), **B76** |
+| **NEEDS-COMPILER-FEATURE** | 24 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B72**, **B74**, **B75** (toolchain), **B76**, **B77** (enabler), **B78** |
 
 Counts overlap where a batch has both a ready half and a blocked half; the
 per-batch status line is authoritative.
