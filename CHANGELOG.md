@@ -18,16 +18,34 @@ once 1.0.0 ships.
   `member?` (KEY-membership synonyms of `key?`) and `each_key` / `each_value` /
   `each_pair`, added as `.rx` methods on `class Hash[K, V]`
   (`library/std/map/src/lib.rx`). The `each_*` bodies iterate `each` + tuple
-  access on the `(K, V)` pair. The key-presence methods are delegating methods
-  rather than `alias`es because of Q58 (alias-on-a-generic-builtin-head doesn't
-  canonicalize the generic suffix — link error). Pins
-  `tests/release-e2e/cases/986`.
+  access on the `(K, V)` pair. The key-presence methods and `each_pair` are pure
+  `alias`es (one `Hash_key?` / `Hash_each` body serves every spelling); they
+  started as delegating bodies to work around Q58 and reverted once Q58 was
+  fixed. Pins `tests/release-e2e/cases/986`, `990`.
 - **`Enumerable#find_all` / `none?` / `one?`** — added as `.rx` mixin-default
   bodies over `each`/`any?` (`library/std/core/src/lib.rx`), so every includer
   (Array/Set/Hash) gets them. `find_all` delegates to `select`; `none?` is
   `!any?`; `one?` counts matches. Pins `tests/release-e2e/cases/985`.
 
 ### Fixed
+- **`alias` to a method on a GENERIC builtin head no longer link-fails (Q58).**
+  `h.has_key?(k)` on a `Hash[String, Int]` emitted a bodiless
+  `Hash[String, Int]_has_key?` and the linker rejected it. MIR's
+  `select_method_symbol_name` computed the alias's canonical name correctly, then
+  discarded it: its candidate scan compared the parent def's BARE class name
+  against the call site's INSTANTIATED receiver name, so every generic head
+  matched zero defs and the selector returned `None`. The caller then fell back
+  to the raw spelling, because typeck does not pin `*method` for a builtin head.
+  `method_trailing_default_sentinels` carried the same bug on a parallel path,
+  returning zero default sentinels for any generic head, so a paren-less call to
+  a method with trailing defaults emitted one argument too few and aborted in the
+  Cranelift verifier. Both now share `Lowerer::method_defs_on_class`, which scans
+  the exact class name first and falls back to the generic-free base
+  (`Hash[String, Int]` → `Hash`) only when that finds nothing. This is the same
+  full-then-base order `SymbolTable::canonical_method_name` already used for the
+  alias map; no method or type name is hardcoded. `Hash`'s `has_key?` /
+  `include?` / `member?` / `each_pair` reverted from delegating bodies to
+  one-line `alias`es. Pins `tests/release-e2e/cases/990`.
 - **Default arguments now fill on a builtin-head (`String`/`Array`/`Hash`/`Set`)
   method call.** The default-arg pass (`append_method_default_args`) + the
   signature-based arg seeding ran only for nominal (`Class`/`Struct`/`Enum`)

@@ -17,6 +17,13 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
+Q58 fixed 2026-07-29 (`alias` to a method on a GENERIC builtin head link-failed:
+MIR's `select_method_symbol_name` and `method_trailing_default_sentinels` both
+matched the parent def's BARE class name against the call site's INSTANTIATED
+receiver, so every generic head found zero candidates; both now share
+`method_defs_on_class`, which falls back to the generic-free base name. `Hash`'s
+`has_key?`/`include?`/`member?`/`each_pair` reverted to one-line `alias`es; pin
+`990`, §Q58).
 45 of 48 fixed (Q56 surfaced 2026-07-23, OPEN — async CLIENT I/O via `block_on`
 without a worker reactor SILENTLY does nothing: `write` returns a byte count but
 never flushes to the socket, reads time out; hit building the data-apps HTTP
