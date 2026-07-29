@@ -325,12 +325,12 @@ combinators.
 | `fetch` | MISSING | use `get` / `h[k]` | `get` → `Option[&V]`; no default/block `fetch`. |
 | `dig` | MISSING | — | |
 | `get(k)` | DONE (Ruxen name) | `ruxen_hash_get` → `Option[&V]` | |
-| `key?` / `has_key?` / `include?` / `member?` | DONE | `key?` + `.rx` delegating `has_key?`/`include?`/`member?` (pin 986). |
+| `key?` / `has_key?` / `include?` / `member?` | DONE | `key?` + `alias has_key?`/`include?`/`member?` (pins 986, 990). | one `Hash_key?` body serves all four; the delegating bodies went away with Q58. |
 | `value?` / `has_value?` | MISSING | — | |
 | `keys` / `values` | DONE | `ruxen_hash_keys`/`_values` | |
 | `values_at` / `fetch_values` | MISSING | — | |
-| `each` / `each_pair` | PARTIAL | `each` DONE (yields `(K,V)`) | `each_pair` alias MISSING. |
-| `each_key` / `each_value` / `each_pair` | DONE | `.rx` over `each` + tuple access (pin 986). |
+| `each` / `each_pair` | DONE | `each` (yields `(K,V)`) + `alias each_pair each` (pin 990). |
+| `each_key` / `each_value` | DONE | `.rx` over `each` + tuple access (pin 986). |
 | `map` / `select` / `filter` / `reject` | PARTIAL | `map`/`select`/`reject` DONE (Enumerable) | closure gets a `(K,V)` tuple; `filter` alias MISSING. |
 | `filter_map` / `flat_map` | MISSING | — | |
 | `find` / `detect` | PARTIAL | `find` DONE; `detect` MISSING | |

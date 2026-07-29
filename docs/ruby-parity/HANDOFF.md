@@ -107,8 +107,12 @@ same commit as the fix.
   (needs `T` eq) canNOT be simple `.rx` bodies → they need per-`T` mono (below)
   or a runtime C helper. Delegating methods that just move slots (`find_all`→
   `select`, `has_key?`→`key?`) are fine.
-- **`alias`-to-method on a GENERIC builtin head link-fails** (Q58) — use a real
-  delegating method (`def has_key?(k) = self.key?(k)`), not `alias`.
+- **`alias`-to-method on a GENERIC builtin head works** (Q58 FIXED, pin `990`).
+  Prefer `alias new old` over a delegating body for a pure synonym. The one
+  exception is an OPERATOR method (`def +`, `def |`): the builtin-head operator
+  route is a name-only `DefKind::Method` existence check and an `alias` records
+  no def, so an aliased operator falls through to the machine floor. Operators
+  stay real delegating bodies.
 - Operator methods (`def *`, `def +`) only need to EXIST in `.rx`; the builtin-
   head operator route dispatches them.
 
@@ -123,12 +127,11 @@ same commit as the fix.
    (like `trait_default.rs::rewrite_self_in_func` but for the element param). Then
    these become normal `.rx` bodies that dispatch on `T`. Start fresh — it's
    multi-hour and touches lowering.
-2. **Q58 alias fix (SMALL, has workaround).** Root cause: `mir/lower/mod.rs::
-   select_method_symbol_name` candidate scan compares `parent_def.name ==
-   class_name`, but the alias target's parent is the BARE class while `class_name`
-   may carry the generic suffix. Strip `class_name`'s `[...]` there
-   (`canonical_method_name` already strips). Then Hash/Array revert to one-line
-   `alias`es.
+2. ~~**Q58 alias fix.**~~ **DONE.** Both `mir/lower/mod.rs::
+   select_method_symbol_name` and `method_trailing_default_sentinels` now share
+   `method_defs_on_class`, which falls back from the receiver's instantiated
+   class name to its generic-free base. Hash's synonyms are one-line `alias`es
+   again. Pin `990_alias_generic_builtin_head`.
 3. **Cheap `.rx` wins (steady, low-risk):** more `String` (`swapcase`, `chomp`,
    `center` [default-arg now works], `sub`), more `Hash`/`Enumerable`. Follow the
    String char-by-char pattern.
@@ -154,7 +157,12 @@ same commit as the fix.
 - `arr.each { |x| puts(x) }` (do-end block + bare-var `puts`) segfaults;
   `arr.each { |n| puts "#{n}" }` (interpolation) works.
 - `docs/dev/gui-stack-v1-issues.md` Q56 (async `block_on` client I/O no-ops) is
-  the one live correctness bug tracked there. Q58 (above) was added this push.
+  the one live correctness bug tracked there. Q58 was added and FIXED this push.
+- A non-scalar param default (`prefix: String = "v="`) reached through a
+  PAREN-LESS call drops to the null sentinel and interpolates as empty, because
+  `mir/lower/mod.rs::default_expr_to_sentinel` only maps `nil`/Int/Bool/Float.
+  Reproduces on a plain NON-generic class at baseline, so it is not a Q58
+  regression. Int/Bool/Float defaults land correctly.
 
 ## Key files
 

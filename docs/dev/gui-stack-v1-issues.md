@@ -2743,20 +2743,16 @@ per-feature special-case.
 
 ## Q58 · S3 — `alias` to a method on a GENERIC builtin head doesn't canonicalize through the generic suffix (link error)
 
-**OPEN** (low severity; clean workaround). An `alias new old` inside a generic
-builtin-head class (`class Hash[K, V]`, `class Array[T]` when the receiver
-carries concrete generic args) does not rewrite the call-site mangled name to
-the canonical method: `h.has_key?(k)` on a `Hash[String, Int]` mangles to
-`Hash[String, Int]_has_key?`, which never canonicalizes to `Hash_key?`, so the
-linker reports an undefined `_Hash[String, Int]_has_key?`. The non-generic
-alias path works (`Array`'s `alias to_a clone` resolves), and a NON-alias `.rx`
-delegating method on the same generic head resolves fine (`Hash#each`,
-`Hash#each_key`), so the gap is specifically the alias-name canonicalization
-(`select_method_symbol_name` / `canonical_method_name`) not stripping the
-`[...]` suffix before the alias lookup the way the FFI-alias path
-(`method_call.rs` peel-and-retry) does.
+**FIXED** (pin `tests/release-e2e/cases/990_alias_generic_builtin_head.rx`).
 
-Repro (link-fails):
+Symptom: an `alias new old` inside a generic builtin-head class (`class
+Hash[K, V]`, `class Array[T]` when the receiver carries concrete generic args)
+did not rewrite the call-site mangled name to the canonical method.
+`h.has_key?(k)` on a `Hash[String, Int]` mangled to `Hash[String, Int]_has_key?`,
+which never canonicalized to `Hash_key?`, so the linker reported an undefined
+`_Hash[String, Int]_has_key?`.
+
+Repro (link-failed before the fix):
 ```rx
 class Hash[K, V]
   # ... (stdlib) ...
@@ -2764,11 +2760,39 @@ class Hash[K, V]
 end
 # h.has_key?("a")  =>  undefined _Hash[String, Int]_has_key?
 ```
-**Workaround (in use, `library/std/map/src/lib.rx`):** define `has_key?` /
-`include?` / `member?` as real `.rx` delegating methods (`def has_key?(key: K)
--> Bool; self.key?(key); end`) instead of `alias`. Fix direction: strip the
-generic suffix in the alias-canonicalization lookup (mirror the FFI-alias
-peel-and-retry), then these can revert to one-line `alias`es.
+
+Root cause: `mir/lower/mod.rs::select_method_symbol_name` canonicalized the
+alias name correctly (`canonical_method_name` already peels `[...]` for the
+alias-map lookup), then threw the result away. Its candidate scan matched the
+parent def's BARE class name against the call site's INSTANTIATED receiver name,
+so a generic head matched zero defs and the function returned `None`. The caller
+then fell back to the raw spelling, because typeck does not pin `*method` for a
+builtin head. Only the paren-less `FieldAccess` path escaped, since it calls
+`canonical_method_name` directly with no candidate scan, which is why
+`Array`'s `alias to_a clone` appeared to work and `a.to_a()` did not.
+
+`method_trailing_default_sentinels` (same file) carried the identical bug on a
+parallel path: for every generic head it found no signature and returned zero
+default sentinels, so a paren-less call to a method with trailing defaults
+emitted one argument too few and aborted in the Cranelift verifier
+(`mismatched argument count ... got 1, expected 2`). That half is latent today:
+no stdlib collection method declares a trailing default, and `extension
+Array[T]` is rejected, so it was reproduced with a temporary probe method.
+
+Fix: both sites now share `Lowerer::method_defs_on_class`, which scans the
+receiver's exact class name first and falls back to its generic-free base
+(`Hash[String, Int]` → `Hash`) only when the exact pass finds nothing. That is
+the same full-then-base order `SymbolTable::canonical_method_name` already used
+for the alias map, so the two agree on what "this class" means. No method or
+type name is hardcoded. `library/std/map/src/lib.rx` reverted its `has_key?` /
+`include?` / `member?` / `each_pair` delegating bodies to one-line `alias`es.
+
+Still NOT expressible as an `alias`, for an unrelated reason: the operator
+methods on `Array`/`Set` (`def +`, `def |`, `def &`, `def -`). The builtin-head
+operator route (`mir/lower/expr/binops.rs::builtin_head_has_op_method`) is a
+name-only existence check over `DefKind::Method`, and an `alias` records no def,
+so an aliased operator would fall through to the machine floor and bit-op two
+heap pointers. Those stay real delegating bodies.
 
 ## Where the workarounds live (grep-able)
 

@@ -488,6 +488,59 @@ impl<'a> Lowerer<'a> {
             })
     }
 
+    /// Every method def on `class_name` whose name is `method_name` or one of
+    /// its `<method_name>__overloadN` siblings, paired with its signature.
+    ///
+    /// Q58: the scan runs against the receiver's exact class name first and,
+    /// only when that yields nothing, against its generic-free base
+    /// (`Hash[String, Int]` → `Hash`). Symbol-table method parents are keyed by
+    /// the BARE class name, while a call site on a builtin collection head
+    /// carries the receiver's INSTANTIATED spelling (`Ty::Map` Displays as
+    /// `Hash[K, V]`, `Ty::Array` as `Array[T]`), so those heads matched nothing
+    /// at all on the exact-name pass and every lookup through here came back
+    /// empty. This mirrors the full-then-base lookup order
+    /// `SymbolTable::canonical_method_name` already uses for the alias map, so
+    /// the two agree on what "this class" means.
+    ///
+    /// A USER generic class does NOT reach here suffixed: its `Ty::Class` keeps
+    /// the bare `name` with the generic args in a separate field, so `Box[Int]`
+    /// arrives as `Box` and always hit on the exact pass.
+    ///
+    /// The base pass is strictly a FALLBACK, never a widening: an exact hit
+    /// wins outright, so a non-generic receiver resolves exactly as it did
+    /// before this existed.
+    fn method_defs_on_class(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Vec<(String, crate::resolve::symbols::FnSignature)> {
+        let base = class_name.split('[').next().unwrap_or(class_name);
+        let overload_prefix = format!("{}__overload", method_name);
+        let scan = |owner: &str| {
+            let mut found = Vec::new();
+            for def in self.symbols.iter() {
+                let crate::resolve::symbols::DefKind::Method { parent, signature } = &def.kind
+                else {
+                    continue;
+                };
+                let Some(parent_def) = self.symbols.get(*parent) else {
+                    continue;
+                };
+                if parent_def.name == owner
+                    && (def.name == method_name || def.name.starts_with(&overload_prefix))
+                {
+                    found.push((def.name.clone(), signature.clone()));
+                }
+            }
+            found
+        };
+        let exact = scan(class_name);
+        if !exact.is_empty() || base == class_name {
+            return exact;
+        }
+        scan(base)
+    }
+
     fn select_method_symbol_name(
         &self,
         class_name: &str,
@@ -499,21 +552,7 @@ impl<'a> Lowerer<'a> {
         // symbol, so a call via the alias mangles to the real method's body
         // (`set.member?(x)` → `Set_include?`), never a bodiless `Set_member?`.
         let method_name = self.symbols.canonical_method_name(class_name, method_name);
-        let mut candidates = Vec::new();
-        for def in self.symbols.iter() {
-            let crate::resolve::symbols::DefKind::Method { parent, signature } = &def.kind else {
-                continue;
-            };
-            let Some(parent_def) = self.symbols.get(*parent) else {
-                continue;
-            };
-            if parent_def.name == class_name
-                && (def.name == method_name
-                    || def.name.starts_with(&format!("{}__overload", method_name)))
-            {
-                candidates.push((def.name.clone(), signature.clone()));
-            }
-        }
+        let candidates = self.method_defs_on_class(class_name, method_name);
         candidates
             .iter()
             .find(|(_, sig)| {
@@ -564,18 +603,18 @@ impl<'a> Lowerer<'a> {
         let method_name = self.symbols.canonical_method_name(class_name, method_name);
         // Find the resolved method's signature, walking parents for inherited
         // methods (mirrors `resolve_method_class`'s ancestor search via the
-        // already-resolved `class_name`).
-        let signature = self.symbols.iter().find_map(|def| {
-            let crate::resolve::symbols::DefKind::Method { parent, signature } = &def.kind else {
-                return None;
-            };
-            let parent_name = self.symbols.get(*parent).map(|p| p.name.as_str())?;
-            (parent_name == class_name
-                && (def.name == method_name
-                    || def.name.starts_with(&format!("{}__overload", method_name))))
-            .then(|| signature.clone())
-        });
-        let Some(signature) = signature else {
+        // already-resolved `class_name`). Shares `select_method_symbol_name`'s
+        // scan so a generic-suffixed receiver (`Hash[String, Int]`) finds the
+        // signature declared on the bare class. Before Q58 this site returned
+        // an empty vector for EVERY generic builtin head, so a paren-less call
+        // to a method with trailing defaults appended no sentinels and emitted
+        // one argument too few, aborting in the Cranelift verifier with
+        // `mismatched argument count ... got 1, expected 2`.
+        let Some((_, signature)) = self
+            .method_defs_on_class(class_name, method_name)
+            .into_iter()
+            .next()
+        else {
             return Vec::new();
         };
         // Skip the params already covered by the supplied user args, then
