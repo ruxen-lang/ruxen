@@ -56,6 +56,21 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
 
 ### Toolchain / tests
 
+- [x] **Per-`T` monomorphization of builtin-head collection methods (DONE
+      2026-07-29, Ruby-parity enabler #1).** `Array[T]`/`Set[T]`/`Hash[K,V]`/
+      `Option[T]`/`Result[T,E]` are `.rx` classes represented by a structural
+      `Ty` head and carrying `lib` blocks, so generic-CLASS monomorphization
+      skipped them and every `.rx` body method lowered once with its type
+      params abstract. Bodies that DISPATCH on the element type therefore fell
+      to the pointer-as-`Int` floor. MIR now emits one specialized body per
+      `(concrete receiver instantiation, method)` seen at a call site
+      (`Array__mono__String_join`) and redirects those sites to it. Eligibility
+      is structural (a type-param-typed value feeding interpolation, a binary
+      operator, or a method receiver) — no method-name knowledge — so the
+      push/iterate/closure-call combinators keep their single shared body.
+      First users: `Array#join`/`min`/`max`/`uniq` as `.rx` bodies. Pin
+      `tests/release-e2e/cases/991`; unit pins in
+      `mir/lower/monomorphize.rs::builtin_head_tests`.
 - [x] **Ruby-style AOT module loading (DONE 2026-07-14,
       `feat/require-autoload`).** `require` and `require_relative` now drive a
       canonical-path-deduplicated source graph from the entry file;

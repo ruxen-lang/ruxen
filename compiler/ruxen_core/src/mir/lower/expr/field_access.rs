@@ -403,6 +403,19 @@ impl<'a> Lowerer<'a> {
                         mangled
                     };
 
+                    // Builtin-head per-`T` monomorphization, paren-less form
+                    // (`nums.max`): the receiver is a structural head, which
+                    // `mono_base_for_ty` never matches. Same redirect as the
+                    // parenthesised path in `method_call.rs`.
+                    let mangled = if !is_static {
+                        match self.builtin_head_mono_callee(dispatch_ty, field_name) {
+                            Some(specialized) => specialized,
+                            None => mangled,
+                        }
+                    } else {
+                        mangled
+                    };
+
                     // A paren-less call carries no argument vector from which
                     // a generic method's `[T: Mixin]` can be recovered. Do not
                     // fall through to the suppressed opaque body.
