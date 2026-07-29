@@ -68,6 +68,23 @@ class Hash[K, V]
     nil
   end
 
+  # Ruby `h[k] = v`. The subscript-assign lowering routes `o[i] = v` to the
+  # receiver's `[]=` for any builtin head that resolves one, so this one line is
+  # the whole of `Hash[k] = v` (B72 — before it, the store type-checked and was
+  # then dropped silently in MIR).
+  #
+  # An `alias`, NOT a delegating `def` (docs/decisions/alias-keyword.md D6 lists
+  # `[]=` among the operator names with a surface dispatch path, so it is a
+  # designed alias form). The distinction is load-bearing for OWNERSHIP: an
+  # alias binds the ONE `Hash_insert` body, so `h[k] = v` emits the exact
+  # `ruxen_hash_insert` call `h.insert(k, v)` does, and drop elaboration applies
+  # the key/value ownership TRANSFER it already records for that symbol
+  # (`runtime_abi::arg_transfer_mask`). A separate `def []=` body would emit a
+  # NEW `Hash_[]=` symbol, which the drop pass classifies by the `Hash_` runtime
+  # prefix as BORROWING its args — the caller would then free the key string the
+  # table had just taken ownership of, double-freeing at scope exit.
+  alias []= insert
+
   # Ruby key-presence synonyms of `key?` (`Hash#include?` / `#member?` test KEY
   # membership in Ruby). Pure `alias`es, not delegating bodies: all four names
   # bind the ONE `Hash_key?` body, so there is no second symbol to emit and no

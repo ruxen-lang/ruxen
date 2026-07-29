@@ -209,7 +209,23 @@ ranks first and B71 second, both found after B01 to B05.
 - **Matrix rows:** `docs/dev/gui-stack-v1-issues.md` Q56; `stdlib.md` §9 net/http (291-328) if the fix changes the client surface.
 - **Pins:** 1040-1049.
 
-### B72 — `Hash[k] = v` subscript-assign is a silent no-op
+### B72 — `Hash[k] = v` subscript-assign is a silent no-op — **DONE**
+- **Landed:** index-assign now routes to the receiver's `[]=` for a BUILTIN head
+  too, not only a nominal one — the write-side twin of the builtin-head operator
+  route, sharing `binops.rs`'s head predicate (`is_builtin_op_head`) and method
+  probe (`builtin_head_has_op_method`) so the read/binop side and the write side
+  cannot drift. `Hash[k] = v` works because `class Hash[K, V]` gained
+  `alias []= insert`; nothing names `Hash` in the Rust, so any head that
+  resolves `[]=` gets the route. `alias`, not a delegating `def`, is
+  load-bearing: it emits the same `ruxen_hash_insert` call `insert` does, so
+  drop elaboration applies the key/value ownership TRANSFER already recorded for
+  that symbol. A separate `Hash_[]=` body is classified as BORROWING its args by
+  the `Hash_` runtime-prefix rule in `runtime_abi.rs`, and the caller then
+  double-frees the key at scope exit (observed, SIGTRAP). The machine floor's
+  index-assign arm now returns a lowering ERROR for a receiver it has no store
+  path for, instead of silently discarding the write. Pins `1710` (String key)
+  and `1711` (Int key, kept below 4096 so it does not depend on B73), each
+  asserting `size` + `key?` + a subscript read-back plus overwrite semantics.
 - **Goal:** `h["a"] = 42` actually stores.
 - **Repro (verified 2026-07-29):**
 
@@ -1022,7 +1038,7 @@ Pins: none.
 | **BLOCKED-ON-B44 (Serialize)** | 2 | B64, B67 |
 | **NEEDS-RUNTIME-C** | 7 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61, **B73** |
 | **BLOCKED within B35** | 5 | B35b, B35c, B35d, B35e, B35f (all on B35a or B35b; see §6) |
-| **NEEDS-COMPILER-FEATURE** | 21 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B72**, **B74**, **B75** (toolchain) |
+| **NEEDS-COMPILER-FEATURE** | 20 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B74**, **B75** (toolchain) — **B72** landed |
 
 Counts overlap where a batch has both a ready half and a blocked half; the
 per-batch status line is authoritative.

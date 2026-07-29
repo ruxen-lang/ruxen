@@ -76,10 +76,12 @@ impl<'a> Lowerer<'a> {
                     });
                 }
             }
-            // `xs[i] = v` index assignment (Q9). Mirrors the read path in
-            // `lower_index`: a fixed-array with a literal index stores a slot
-            // directly; a backing-Vec receiver calls the bounds-checked
-            // `ruxen_vec_set`. Map (`m[k] = v`) still goes through `.insert`.
+            // `xs[i] = v` index assignment (Q9), machine floor. Mirrors the read
+            // path in `lower_index`: a fixed-array with a literal index stores a
+            // slot directly; a backing-Vec receiver calls the bounds-checked
+            // `ruxen_vec_set`. Receivers that dispatch to an `.rx` `[]=`
+            // (nominal, or a builtin head that resolves one) are intercepted by
+            // `lower_assign` and never reach here.
             HirExprKind::Index { object, index } => {
                 if matches!(object.ty, Ty::FixedArray(_, _)) {
                     if let HirExprKind::IntLiteral(n) = &index.kind {
@@ -103,7 +105,20 @@ impl<'a> Lowerer<'a> {
                             args: vec![MirValue::Use(base), MirValue::Use(idx), val],
                         });
                     }
+                    return Ok(());
                 }
+                // No store path for this receiver. Refuse to lower rather than
+                // drop the write: a silently discarded `o[i] = v` is exactly the
+                // failure mode B72 was (`Ty::Map` matched no arm above and the
+                // store vanished), and the repo forbids a silent no-op on any
+                // user-callable surface. The fix for a receiver that lands here
+                // is an `.rx` `def []=` on its head, which routes in
+                // `lower_assign` before this floor is reached.
+                return Err(format!(
+                    "no index-assign store path for receiver type `{}`: \
+                     define `def []=` on its class",
+                    object.ty
+                ));
             }
             _ => {
                 // Other assignment targets are not stored (no-op for now).
@@ -290,26 +305,33 @@ impl<'a> Lowerer<'a> {
             // ── Assignment ──────────────────────────────────────────
             HirExprKind::Assign { target, value, .. } => {
                 // ── Operator → method desugar (Task OP, Step 3) ──
-                // `a[i] = v` → `a.[]=(i, v)` when the indexed receiver is
-                // NOMINAL (user/stdlib class with `def []=`). Done BEFORE
-                // lowering `value` so the synthetic method call lowers its
-                // args exactly once. Builtin collection index-assign is not
-                // handled here (Array/Map mutation goes through their own
-                // methods); only a nominal `def []=` receiver routes.
+                // `a[i] = v` → `a.[]=(i, v)`. Done BEFORE lowering `value` so
+                // the synthetic method call lowers its args exactly once. Two
+                // receiver shapes route here:
+                //
+                //   * a NOMINAL receiver (user/stdlib `class`/`struct`/`enum`),
+                //   * a BUILTIN head (`String`/`Array`/`Hash`/`Set`) whose `.rx`
+                //     class RESOLVES `[]=` — via a `def` or an `alias`, which is
+                //     how `Hash` provides it (`alias []= insert`). This is the
+                //     write-side twin of the builtin-head OPERATOR route in
+                //     `binops.rs`, sharing that module's head set and method
+                //     probe so the two cannot drift.
+                //
+                // A builtin head with NO `[]=` falls through to
+                // `store_value_into_target`'s machine floor, which is what keeps
+                // `Array`/`FixedArray` index-assign on `ruxen_vec_set` /
+                // `SetField`. B72: before this route existed, `Ty::Map` matched
+                // neither the nominal test here nor any arm of that floor, so
+                // `h[k] = v` type-checked and then vanished silently.
                 if let HirExprKind::Index { object, index } = &target.kind {
-                    fn peel(t: &Ty) -> &Ty {
-                        match t {
-                            Ty::Ref(i)
-                            | Ty::RefMut(i)
-                            | Ty::RefLifetime(_, i)
-                            | Ty::RefMutLifetime(_, i) => peel(i),
-                            _ => t,
-                        }
-                    }
-                    if matches!(
-                        peel(&object.ty),
+                    let head = super::binops::unwrap_ref(&object.ty);
+                    let nominal = matches!(
+                        head,
                         Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
-                    ) {
+                    );
+                    let builtin_head_with_method = super::binops::is_builtin_op_head(head)
+                        && self.builtin_head_has_op_method(head, "[]=");
+                    if nominal || builtin_head_with_method {
                         let synthetic = HirExpr {
                             kind: HirExprKind::MethodCall {
                                 object: Box::new((**object).clone()),
