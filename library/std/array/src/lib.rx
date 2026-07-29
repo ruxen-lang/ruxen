@@ -173,4 +173,13 @@ class Array[T]
   # FFI decl — both names resolve to the ONE `Array_clone` body, no
   # duplicated codegen (docs/decisions/alias-keyword.md).
   alias to_a clone
+
+  # Ruby `Array#+` — a fresh array with both operands' elements in order
+  # (`[1, 2] + [3, 4] == [1, 2, 3, 4]`). A `.rx` operator method delegating to
+  # `chain`; the binop lowering routes `a + b` here (builtin-head operator
+  # route) instead of the machine floor, which would integer-add the two heap
+  # pointers and miscompile.
+  def +(other: Array[T]) -> Array[T]
+    self.chain(other)
+  end
 end

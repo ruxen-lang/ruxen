@@ -215,19 +215,18 @@ and the streaming instance API.
 
 ---
 
-## 6. `base64` — MISSING · no module
+## 6. `base64` — DONE · `library/std/base64`
 
-Small, self-contained, and a dependency of `securerandom`, JWT, Basic-Auth,
-data URIs, and email. High value / low cost — build early.
+The `base64` package exists (`class Base64`, FFI). Full 6-method surface.
 
 | Ruby API | Status | Ruxen module or gap | Note |
 |----------|--------|---------------------|------|
-| `Base64.encode64(bin)` | MISSING | — | MIME variant (adds `\n` every 60 chars, trailing `\n`). |
-| `Base64.decode64(str)` | MISSING | — | Lenient decode (ignores non-alphabet). |
-| `Base64.strict_encode64(bin)` | MISSING | — | No line breaks. |
-| `Base64.strict_decode64(str)` | MISSING | — | Strict (raises on bad input). |
-| `Base64.urlsafe_encode64(bin, padding: true)` | MISSING | — | `+/`→`-_`; optional `=` padding. |
-| `Base64.urlsafe_decode64(str)` | MISSING | — | URL-safe decode. |
+| `Base64.encode64(bin)` | DONE | `Base64.encode64` | MIME variant (line-wrap semantics unverified). |
+| `Base64.decode64(str)` | DONE | `Base64.decode64` | |
+| `Base64.strict_encode64(bin)` | DONE | `Base64.strict_encode64` | |
+| `Base64.strict_decode64(str)` | DONE | `Base64.strict_decode64` | |
+| `Base64.urlsafe_encode64(bin, padding: true)` | DONE | `Base64.urlsafe_encode64` | |
+| `Base64.urlsafe_decode64(str)` | DONE | `Base64.urlsafe_decode64` | |
 
 ---
 

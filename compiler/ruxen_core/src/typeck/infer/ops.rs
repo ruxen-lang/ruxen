@@ -323,6 +323,36 @@ impl<'a> InferenceEngine<'a> {
         }
     }
 
+    /// Whether a builtin-head receiver (`String`/`Array`/`Hash`/`Set`) declares
+    /// a `.rx` method for a non-comparison operator (`String#*`, `Array#+`, …).
+    /// These heads are NOT `is_nominal_operator_receiver` (they keep the
+    /// machine floor for ops that map to a machine instruction), but when the
+    /// `.rx` class provides an operator method the arithmetic/bitwise/shift
+    /// operator must route to it so the expression gets the method's declared
+    /// return type — the typeck twin of the MIR builtin-head operator route.
+    pub(super) fn builtin_head_operator_method_available(
+        &self,
+        ty: &Ty,
+        method: &str,
+        args: &[crate::hir::nodes::HirExpr],
+    ) -> bool {
+        let mut peeled = ty;
+        while let Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) = peeled
+        {
+            peeled = inner;
+        }
+        matches!(
+            peeled,
+            Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_)
+        ) && self
+            .traits
+            .lookup_method_with_args(peeled, method, args, self.symbols)
+            .is_some()
+    }
+
     /// Comparison operator methods have fixed result contracts even though
     /// ordinary operator overloads may return an arbitrary declared type.
     pub(super) fn validate_comparison_method_return(

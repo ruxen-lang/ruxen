@@ -7,6 +7,22 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Fixed
+- **Builtin-head collection/string operators that silently miscompiled now
+  work, via `.rx` operator methods.** `"ab" * 3` (was empty/SIGSEGV), `[1,2] +
+  [3,4]` (was `0`/garbage), and `Set` `|`/`&`/`-` (was garbage) previously fell
+  to the machine floor, which integer/bit-ops the heap pointers. They are now
+  ordinary `.rx` operator methods (`String#*`→`repeat`, `Array#+`→`chain`,
+  `Set#|`/`&`/`-`→`union`/`intersection`/`difference`), reached by a new
+  **builtin-head operator route**: the operator desugar (typeck `infer/expr.rs`
+  + MIR `binops.rs`) now routes an arithmetic/bitwise/shift operator on a
+  `String`/`Array`/`Hash`/`Set` receiver to the receiver's `.rx` operator method
+  when one exists — the builtin-head analogue of the existing nominal-receiver
+  route, and the generic-compiler end-state (operators as `.rx` methods).
+  Comparison/equality and `~=`/`??` keep their dedicated routes; a head with no
+  such method falls through unchanged (`String + String` concat, `Array ==`).
+  Pins `tests/release-e2e/cases/984`.
+
 ### Changed
 - **`tap` / `then` / `yield_self` are now defined in `.rx` (`mixin Kernel`),
   not a compiler special-case.** The universal Ruby object combinators moved

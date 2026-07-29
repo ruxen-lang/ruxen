@@ -62,4 +62,20 @@ class Set[T]
     items.each do |x| f.(x) end
     nil
   end
+
+  # Ruby `Set` boolean-algebra operators, `.rx` methods delegating to the named
+  # methods. The binop lowering routes `a | b` / `a & b` / `a - b` here
+  # (builtin-head operator route) instead of the machine floor, which would
+  # bit-op the two heap pointers and miscompile.
+  def |(other: Set[T]) -> Set[T]
+    self.union(other)
+  end
+
+  def &(other: Set[T]) -> Set[T]
+    self.intersection(other)
+  end
+
+  def -(other: Set[T]) -> Set[T]
+    self.difference(other)
+  end
 end

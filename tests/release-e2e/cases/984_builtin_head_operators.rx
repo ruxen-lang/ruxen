@@ -1,0 +1,23 @@
+# Pins the builtin-head operator → `.rx` method route: String / Array / Set
+# operators that the machine floor can't express now dispatch to `.rx` operator
+# methods (`String#*`→repeat, `Array#+`→chain, `Set#|&-`→union/intersection/
+# difference). Previously these compiled but miscompiled at runtime (empty /
+# garbage / segfault).
+def main
+  puts("ab" * 3)
+  let a = [1, 2] + [3, 4]
+  puts(a.size)
+  puts(a[0])
+  puts(a[3])
+  var s1: Set[Int] = Set.new
+  s1.insert(1)
+  s1.insert(2)
+  s1.insert(3)
+  var s2: Set[Int] = Set.new
+  s2.insert(2)
+  s2.insert(3)
+  s2.insert(4)
+  puts((s1 | s2).size)
+  puts((s1 & s2).size)
+  puts((s1 - s2).size)
+end

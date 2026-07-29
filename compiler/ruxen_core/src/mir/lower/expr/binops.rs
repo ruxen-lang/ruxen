@@ -46,6 +46,37 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// True when a builtin-head receiver (`String` / `Array` / `Hash` / `Set`)
+    /// declares a `.rx` method for operator `method` (e.g. `String#*`,
+    /// `Array#+`). The generic-compiler end-state moves collection/string
+    /// operators to `.rx`; when the method exists we route `a op b` to
+    /// `a.OP(b)` rather than the machine floor, which cannot express a
+    /// heap-collection operator and silently miscompiles (`"ab" * 3` → empty,
+    /// `[1,2] + [3,4]` → 0). The receiver's display name carries generic args
+    /// (`Array[Int]`); the `.rx` class parent is the bare head (`Array`), so
+    /// strip the `[...]` suffix before probing.
+    fn builtin_head_has_op_method(&self, head: &Ty, method: &str) -> bool {
+        let raw = type_name_from_ty(head);
+        let class_name = raw.split('[').next().unwrap_or(&raw);
+        // NAME-only existence check (not arg-typed): typeck already selected and
+        // type-checked this operator against the `.rx` method before MIR runs,
+        // and the `.rx` operator method's generic param (`Array[T]`) would not
+        // pass the strict `arg.ty == param.ty` arg check against a concrete
+        // `Array[Int]` argument anyway. MIR only needs to agree that the method
+        // exists so it dispatches there instead of the machine floor.
+        self.symbols.iter().any(|def| {
+            let crate::resolve::symbols::DefKind::Method { parent, .. } = &def.kind else {
+                return false;
+            };
+            def.name == method
+                && self
+                    .symbols
+                    .get(*parent)
+                    .map(|p| p.name == class_name)
+                    .unwrap_or(false)
+        })
+    }
+
     /// Q33: re-materialize a mismatched numeric operand pair to a common type
     /// before a `Compare`, so the comparison happens at one width with a
     /// signedness-correct int↔float conversion.
@@ -336,6 +367,56 @@ impl<'a> Lowerer<'a> {
                                 }
                             }
                             return Ok(result);
+                        }
+                    }
+                }
+
+                // ── Builtin-head operator → `.rx` method ──
+                // String / Array / Hash / Set carry `.rx` operator methods
+                // (`def *`, `def +`, …) for the arithmetic/bitwise/shift
+                // operators the machine floor can't express on a heap
+                // collection. Route to the method when the `.rx` class declares
+                // it — the builtin-head analogue of the nominal route above,
+                // and the generic-compiler end-state. Comparison/equality and
+                // `~=`/`??` keep their dedicated routes below, and a head with
+                // no such method falls through to the existing hardcoded
+                // runtime routes / machine floor. Runs before operand lowering,
+                // so the synthetic call re-lowers the operands exactly once.
+                if !lhs_nominal
+                    && !matches!(
+                        op,
+                        BinOp::Eq
+                            | BinOp::NotEq
+                            | BinOp::Lt
+                            | BinOp::Gt
+                            | BinOp::LtEq
+                            | BinOp::GtEq
+                            | BinOp::Cmp
+                            | BinOp::MatchOp
+                            | BinOp::NilCoalesce
+                    )
+                {
+                    let head = unwrap_ref(&left.ty);
+                    if matches!(
+                        head,
+                        Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_)
+                    ) {
+                        if let Some(method) = op.method_name() {
+                            if self.builtin_head_has_op_method(head, method) {
+                                let synthetic = HirExpr {
+                                    kind: HirExprKind::MethodCall {
+                                        object: Box::new((**left).clone()),
+                                        method: UNRESOLVED_DEF,
+                                        method_name: method.to_string(),
+                                        generic_args: vec![],
+                                        args: vec![(**right).clone()],
+                                        block: None,
+                                    },
+                                    ty: expr.ty.clone(),
+                                    span: expr.span.clone(),
+                                };
+                                return Ok(self.lower_method_call(&synthetic)?);
+                            }
                         }
                     }
                 }

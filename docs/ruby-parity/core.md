@@ -50,14 +50,14 @@ baseline works; much of the rest **compiles but is broken**:
 | String `+`, String `==` | **DONE** | `"ab"+"cd"`="abcd". |
 | `Array[i]`, `Array[i]=`, `Hash[k]`, `Hash[k]=` | **DONE** | `a[1]`=20, `a[0]=9`, `h["a"]` all correct. |
 | `Array[range]` (e.g. `a[0..1]`) | DONE | compiles+runs. |
-| **`**` (power)** | **MISSING (BUG)** | `3**4`⇒**12**, `2**10`⇒**20**, silently lowered to `*`. Not lexed as a distinct token. |
+| **`**` (power)** | **DONE** | `2**8`⇒256. `StarStar` token + `BinOp::Pow` → `ruxen_int_pow`/`ruxen_float_pow` (pin 952). |
 | **`<=>` (spaceship)** | **DONE** | Primitive Int/Float/String pin `959`; user method and Comparable dispatch pin `965`. |
-| **String `*`** | **MISSING (BUG)** | `"ab"*3` ⇒ crash (SIGSEGV). Use `.repeat(3)`. |
-| **String `<<`** | **MISSING (BUG)** | no-op (receiver unchanged). Use `.push_str`. |
+| **String `*`** | **DONE** | `"ab"*3`⇒"ababab". `.rx` `def *`→`repeat`, builtin-head operator route (pin 984). |
+| **String `<<`** | **MISSING (BUG)** | no-op (receiver unchanged). Use `.push_str`. (`<<` mutation semantics pending.) |
 | **String `[i]` (index)** | **MISSING (BUG)** | `"abc"[1]` ⇒ empty/null Char. No `[]` in `string.rx`. |
-| **Array `+ - * & \|`** | **MISSING (BUG)** | `[1,2]+[3]` ⇒ crash; `[1,2]&[2,3]` ⇒ garbage. Use `.chain`/`.to_set`. |
+| **Array `+`** | **DONE** | `[1,2]+[3,4]`⇒`[1,2,3,4]`. `.rx` `def +`→`chain` (pin 984). **`- * &  \|`** still MISSING (need element-eq set ops). |
 | **Array `<<`** | **MISSING (BUG)** | no-op. Use `.push(x)`. |
-| **Set `\| & - ^`** | **MISSING (BUG)** | `s1 \| s2` ⇒ 0. Use `.union`/`.intersection`/`.difference`. |
+| **Set `\| & -`** | **DONE** | `.rx` `def \|`/`&`/`-`→`union`/`intersection`/`difference` (pin 984). **`^`** (symmetric diff) MISSING. |
 
 **Also broken:** `Array[Int]#join` returns empty; `Array[String]#join` works.
 `Range#map` returns empty (though `for x in a..b` iteration works).
@@ -81,7 +81,7 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 | `size` | DONE | `ruxen_string_len` | |
 | `bytesize` | MISSING | — | no byte-length accessor. |
 | `+` (concat) | DONE | operator | `"a"+"b"`. |
-| `*` (repeat) | MISSING (BUG) | use `repeat(n)` | `"ab"*3` crashes. |
+| `*` (repeat) | DONE | `def *`→`repeat` (pin 984). |
 | `<<` / `concat` | MISSING (BUG) | use `push_str` | `<<` is a no-op. |
 | `%` (format) | MISSING | use `"#{}"` interp | no `String#%`. |
 | `[]` / `slice` (index) | MISSING (BUG) | — | `"abc"[1]` yields null Char; no 2-arg `[i,n]`, no `[range]`. |
@@ -238,7 +238,7 @@ Strongest core class. Verified working: builders, `size`/`count`/`capacity`/
 | `pop` | DONE | `ruxen_vec_pop` → `Option[T]` | |
 | `shift` / `unshift` / `prepend` | MISSING | — | no front ops. |
 | `<<` | MISSING (BUG) | use `push` | no-op operator. |
-| `+` / `concat` | MISSING (BUG) | use `chain(other)` | `+` crashes; `concat` unimplemented. |
+| `+` | DONE (`def +`→`chain`, pin 984); `concat` still MISSING. |
 | `-` | MISSING (BUG) | — | crashes. |
 | `*` (repeat/join) | MISSING (BUG) | — | garbage. |
 | `&` / `\|` (set ops) | MISSING (BUG) | use `.to_set` ops | garbage. |
@@ -498,8 +498,8 @@ ordering protocol. `clamp` is the remaining core method gap.
 | `respond_to?` (literal method) | COMPILE-TIME | — | fixed method set → constant-fold. See Reflection cluster. |
 | `send` / `public_send` / `__send__` (literal name) | COMPILE-TIME | — | constant name → static dispatch. See Reflection cluster. |
 | `define_method` / `method` / `methods` / `instance_variable_*` | COMPILE-TIME | — | derive/codegen + fn references. See Reflection cluster. |
-| `tap` | MISSING | — | |
-| `then` / `yield_self` | MISSING | — | |
+| `tap` | DONE | `.rx` `mixin Kernel` (universal include), pin 973/983. |
+| `then` / `yield_self` | DONE | `.rx` `mixin Kernel` (universal include); `yield_self` a real method, pin 973. |
 | `freeze` / `frozen?` | MISSING | — | no value-freeze protocol. |
 | `dup` / `clone` | PARTIAL | `.clone` on String/Array/collections | universal `dup` MISSING; `clone` derive for user types via `include Clone`. |
 | `object_id` / `__id__` | MISSING | — | runtime identity; a pointer-identity intrinsic could supply it (not a metaobject need). |

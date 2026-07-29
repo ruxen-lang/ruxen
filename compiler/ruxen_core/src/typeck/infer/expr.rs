@@ -916,6 +916,7 @@ impl<'a> InferenceEngine<'a> {
                         self.comparison_method_available(&left_ty, method, args)
                     } else {
                         Self::is_nominal_operator_receiver(&left_ty)
+                            || self.builtin_head_operator_method_available(&left_ty, method, args)
                     };
                     dispatches.then(|| {
                         let return_ty =

@@ -92,4 +92,12 @@ class String
     # header for the full rationale.
     def remove as "ruxen_string_remove"(i: Int) -> Int
   end
+
+  # Ruby `String#*` — the string repeated `n` times (`"ab" * 3 == "ababab"`).
+  # A `.rx` operator method delegating to `repeat`; the binop lowering routes
+  # `s * n` here (builtin-head operator route) instead of the machine floor,
+  # which would integer-multiply the heap pointer and miscompile.
+  def *(n: Int) -> String
+    self.repeat(n)
+  end
 end
