@@ -160,39 +160,55 @@ Ruxen uses **bare string literals** (owned `String`) where Ruby uses symbols
 
 ## Integer  (`library/std/scalar/src/lib.rx`, `class Int`)
 
-Method-home declares only `to_string` / `to_s` / `to_f` (+ `include Add`).
-Arithmetic is compiler-level (see Operator Reality). **Everything else is
-MISSING.**
+The `Integer` surface landed in batches **B12 / B13 / B14** (pins `1110`,
+`1111`, `1120`, `1121`, `1130`, `1131`), all in `.rx` on the `class Int`
+method-home. Every expected output in those pins was diffed line for line
+against CRuby 3.3.
+
+Two properties apply to the WHOLE table and are not repeated per row:
+
+* **`Int` is i64, not a Bignum.** CRuby promotes on overflow; Ruxen wraps
+  (`9223372036854775807 + 1` is `-9223372036854775808`). Any row whose Ruby
+  answer can leave the i64 range is PARTIAL for that reason alone.
+* **Division by zero traps** in hardware, exactly as the bare `/` operator
+  does. CRuby raises `ZeroDivisionError`; Ruxen has no `raise` yet (batch
+  B30), so the domain errors Ruby raises are documented per row as a
+  total-function fallback instead.
 
 | Ruby method | Status | Note |
 |---|---|---|
-| `+ - * / %` | DONE | operators. |
-| `**` (pow) | MISSING (BUG) | lowered to `*`. |
-| `divmod` / `fdiv` / `div` / `modulo` / `remainder` | MISSING | |
-| `gcd` / `lcm` / `gcdlcm` | MISSING | |
-| `abs` / `magnitude` | MISSING | (no `.abs`; `0 - n` works for negation). |
-| `ceil` / `floor` / `round` / `truncate` | MISSING | |
-| `times` | MISSING | use `for i in 0...n`. |
-| `upto` / `downto` / `step` | MISSING | `upto`/`downto` via ranges only for ascending `for`. |
-| `pred` / `succ` / `next` | MISSING | |
+| `+ - * / %` | DONE | operators. `/` and `%` TRUNCATE (C), where Ruby's floor. Use `div` / `modulo` for Ruby's answers. |
+| `**` (pow) | MISSING (BUG) | lowered to `*`. The working spelling is `pow`. |
+| `divmod` / `div` / `modulo` | DONE | FLOORED, Ruby's convention: `-7.div(2) == -4`, `-7.modulo(2) == 1`. Pin `1120`. |
+| `remainder` | DONE | TRUNCATED, sign of the dividend (`-7.remainder(2) == -1`). Pin `1120`. |
+| `fdiv` | DONE | Value matches; a whole Float RENDERS as `2` where CRuby prints `2.0` (pre-existing `ruxen_float_to_string` gap). |
+| `gcd` / `lcm` / `gcdlcm` | DONE | Non-negative results; `0.gcd(0) == 0`, `0.lcm(5) == 0`. Pin `1121`. |
+| `abs` / `magnitude` | DONE | `magnitude` is an `alias`. |
+| `ceil` / `floor` / `round` / `truncate` | DONE / PARTIAL | Precision arg included; `round` is half-away-from-zero like CRuby. PARTIAL only for `ndigits <= -19`, which leaves the i64 range (returns 0). Pin `1111`. |
+| `times` | DONE | Pre-existing; pinned by `1130`. |
+| `upto` / `downto` / `step` | DONE / PARTIAL | Block-taking `.rx` methods; both `step` arities. PARTIAL: `step(limit, 0)` yields nothing where CRuby raises `ArgumentError`. Pin `1130`. |
+| `pred` / `succ` / `next` | DONE | `next` is an `alias` of `succ`. |
 | `to_s` | DONE | `ruxen_int_to_string`. |
-| `to_s(base)` | MISSING | 1-arg `to_s` unresolved (`no method to_s`). |
-| `to_i` / `to_int` | MISSING | identity; not declared. |
+| `to_s(base)` | DONE / PARTIAL | Arity-1 `.rx` overload, bases 2..36, correct for i64-min. PARTIAL: an out-of-range base falls back to 10 where CRuby raises `ArgumentError`. Pin `1131`. |
+| `to_i` / `to_int` | DONE | identity; `to_int` is an `alias`. |
 | `to_f` | DONE | `ruxen_int_to_f`. |
 | `to_r` / `to_c` | MISSING | no Rational/Complex. |
-| `digits` | MISSING | |
-| `bit_length` | MISSING | |
-| `pow(n)` / `pow(n,m)` | MISSING | |
-| `<< >> & \| ^ ~` | DONE (`~` untested) | bitwise operators work. |
-| `even?` / `odd?` / `zero?` | MISSING | |
-| `positive?` / `negative?` / `nonzero?` | MISSING | |
-| `integer?` | MISSING | |
-| `chr` / `ord` | MISSING | |
-| `coerce` | MISSING | |
+| `digits` / `digits(base)` | DONE / PARTIAL | `1234.digits == [4,3,2,1]`, `0.digits == [0]`. PARTIAL: a negative receiver or `base < 2` returns an EMPTY array where CRuby raises `Math::DomainError` / `ArgumentError`. Pin `1121`. |
+| `bit_length` | DONE | Complement-counting for negatives (`(-7).bit_length == 3`). Pin `1121`. |
+| `pow(n)` | DONE / PARTIAL | Binary exponentiation. PARTIAL for a NEGATIVE exponent: CRuby returns a `Rational`, Ruxen returns its integer truncation (`0`, or `±1` for base `±1`). |
+| `pow(n, m)` | DONE / PARTIAL | Modular exponentiation, Ruby's sign convention (`(-2).pow(3,5) == 2`). PARTIAL: exact only while `m*m` fits in i64, and a negative exponent (modular inverse) returns 0. |
+| `Integer.sqrt` | DONE | Spelled `Int.sqrt(n)` (Ruxen's type name). Floors; a negative argument returns 0 where CRuby raises `Math::DomainError`. Pin `1121`. |
+| `<< >> & \| ^ ~` | DONE | bitwise operators; `~` verified by pin `1121`. |
+| `even?` / `odd?` / `zero?` | DONE | Sign-correct for negative receivers. Pin `1110`. |
+| `positive?` / `negative?` | DONE | Pin `1110`. |
+| `nonzero?` | MISSING | Needs an `Option[Int]` RETURN from a scalar method-home, which types as the payload at the call site (`no field present? on type Int`), so it cannot be consumed. A `Bool` version would be a different method (`!zero?`), not Ruby's. Blocked on the Option-return bug. |
+| `integer?` | DONE | always `true`. |
+| `chr` / `ord` | DONE | `chr` returns a real `Char` (CRuby returns a 1-char String). |
+| `coerce` | MISSING | No numeric coercion protocol in the language: nothing dispatches on the `[other, self]` pair, so the method would have no caller. Revisit with a `Numeric` surface. |
 | `<=>` | DONE | Primitive operator returns -1/0/1 (case `959`). |
-| `clamp` / `between?` | MISSING | (not exposed on the Int method-home.) |
-| `[]` (bit ref) | MISSING | |
-| `bit_length`/`size`/`numerator`/`denominator` | MISSING | |
+| `clamp` / `between?` | DONE | Pin `1110`. `clamp` with `low > high` returns `low` where CRuby raises `ArgumentError`. |
+| `[]` (bit ref) | PARTIAL | Ships as `bit(i)` with Ruby's infinite sign extension (`(-2).bit(100) == 1`). The `[]` SPELLING does not route: an index expression on a scalar head never reaches an `.rx` `def []` (it types as `<error>`). Pin `1121`. |
+| `size` / `numerator` / `denominator` | MISSING | |
 | `hash` | MISSING | |
 
 ---
@@ -221,6 +237,42 @@ Declares `to_string` / `to_s` / `to_i` (+ `include Add`). Everything else MISSIN
 
 **Numeric / Rational / Complex** as classes: **MISSING** entirely (no `Numeric`
 supertype surface, no `Rational`, no `Complex`, no `to_r`/`to_c`).
+
+---
+
+## Char  (`library/std/scalar/src/lib.rx`, `class Char`)
+
+Ruby has **no `Char` class** — a one-character string is a `String` — so this
+table maps each Ruxen `Char` method onto the `String` method a Ruby developer
+would call on `str[0]`. It matters because every `.rx` `String` body in this
+stdlib works char-by-char over `self.chars` (`Array[Char]`).
+
+Landed in batch **B18**, pin `1170`; the expected output was diffed against
+CRuby 3.3 using `"a"`-style receivers and the POSIX character classes
+(`/[[:digit:]]/` and friends).
+
+Classification is **ASCII-only**: a non-ASCII codepoint answers `false` to
+every predicate and is returned unchanged by `upcase` / `downcase`.
+
+**Authoring quirk:** a char literal used directly as a receiver (`?7.digit?`)
+mis-parses and silently produces nothing. Bind it first (`let c = ?7`).
+Also, `? ` and `?!` do not lex at all; use `32.chr` / `33.chr`.
+
+| Ruby (`String`) method | Ruxen `Char` | Status | Note |
+|---|---|---|---|
+| `ord` | `ord` | DONE | the codepoint. |
+| `to_i` | `to_i` | DONE | the DIGIT value, matching `"7".to_i == 7`; a non-digit is `0`. Use `ord` for the codepoint. |
+| `chr` | `chr` | DONE | the receiver itself (round-tripped through the codepoint: a bare `self` body is the FFI-shell type and fails `-> Char`). |
+| `upcase` / `downcase` | same | DONE | ASCII range only. |
+| `/[[:digit:]]/` | `digit?` | DONE | |
+| `/[[:alpha:]]/` | `alpha?` | DONE | |
+| `/[[:alnum:]]/` | `alnum?` | DONE | |
+| `/[[:space:]]/` | `space?` / `whitespace?` | DONE | codepoints 32 and 9..13. `whitespace?` is an `alias`. |
+| `/[[:punct:]]/` | `punct?` | DONE | ASCII runs 33..47, 58..64, 91..96, 123..126. |
+| `<=>` | `<=>` | PARTIAL | The METHOD spelling works (`a.<=>(b)`), returning -1/0/1 by codepoint. The OPERATOR spelling does NOT: `<=>` keeps its dedicated comparison route, which rejects `Char` operands with E0707. Needs the comparison route to consult `.rx` methods. |
+| `succ` / `next` | `succ` / `next` | PARTIAL | The next CODEPOINT (`?z.succ == ?{`). CRuby's `String#succ` CARRIES (`"z".succ == "aa"`), which a single `Char` cannot represent. |
+| `to_s` | `to_s` | DONE | `ruxen_char_to_string` (pre-existing). |
+| `casecmp` / `casecmp?` / `between?` | — | MISSING | |
 
 ---
 
@@ -547,7 +599,9 @@ its closest compile-time substitute noted above.
 | `true` / `false` literals | DONE | |
 | `TrueClass#to_s` / `FalseClass#to_s` | DONE | `class Bool` → `ruxen_bool_to_string`. |
 | `Bool#to_string` | DONE | |
-| `true & false`, `\| `, `^` | DONE | operators. |
+| `true & false`, `\| `, `^` | DONE | operators, non-short-circuiting exactly as in Ruby (`&&` / `||` are the short-circuiting pair in both). Nothing was added in `.rx`; batch B18 pinned them (pin `1171`) so they cannot regress. |
+| `!` (TrueClass/FalseClass) | DONE | machine unary operator; pin `1171`. |
+| `Bool#to_i` | DONE | Batch B18. Ruby has NO `true.to_i`; the 1/0 mapping is what a Ruby developer writes as `flag ? 1 : 0`. Pin `1171`. |
 | `NilClass#to_s` / `nil.to_s`→`""` | MISSING | no method surface on the nil value. |
 | `nil?` / `to_a` / `to_h` on nil | MISSING | use `match`. |
 | `TrueClass`/`FalseClass`/`NilClass` as reified classes | COMPILE-TIME | these types are known statically; no runtime class object is needed, `match` / static dispatch handles the branches Ruby resolves via the class. |
@@ -650,11 +704,20 @@ These silently miscompile or crash today; they erode trust in the whole surface.
    to the working methods (`chain`, `push`, `union`, …).
 
 ### P1, Integer / Float methods (whole family; `class Int`/`class Float`)
-`abs`, `times`, `upto`, `downto`, `step`, `pow`, `gcd`, `lcm`, `divmod`, `fdiv`,
-`ceil`, `floor`, `round`, `truncate`, `even?`, `odd?`, `zero?`, `positive?`,
-`negative?`, `nonzero?`, `pred`, `succ`, `digits`, `bit_length`, `chr`, `to_i`,
-`clamp`, `between?`, `to_s(base)`. Highest day-one-ergonomics payoff; each is a
-small C symbol + one `.rx` `def`.
+**Integer half: DONE** (batches B12/B13/B14, pins `1110`/`1111`/`1120`/`1121`/
+`1130`/`1131`) — `abs`, `times`, `upto`, `downto`, `step`, `pow`, `gcd`, `lcm`,
+`divmod`, `fdiv`, `div`, `modulo`, `remainder`, `ceil`, `floor`, `round`,
+`truncate`, `even?`, `odd?`, `zero?`, `positive?`, `negative?`, `pred`, `succ`,
+`digits`, `bit_length`, `bit`, `chr`, `ord`, `to_i`, `clamp`, `between?`,
+`to_s(base)`, `Int.sqrt`. No C symbol was needed: every one is an `.rx` `def`
+on the method-home. Still open on the Integer side: `nonzero?` (needs an
+`Option` return that survives the call site), `coerce` (needs a numeric
+coercion protocol), the `[]` bit-reference SPELLING, `**` (the P0 bug above),
+and `to_r`/`to_c`/`hash`.
+
+**Float half: still MISSING**, and blocked ahead of the methods themselves by
+the `class Float` receiver-ABI bug (batch B01): `self` arrives truncated to an
+integer inside a `Float` `.rx` body.
 
 ### P2, String method family (`string.rx` + `runtime/string.c`)
 Batch A (query): `length`(alias), `sub`, `gsub`, `scan`, `index`(alias `find`),

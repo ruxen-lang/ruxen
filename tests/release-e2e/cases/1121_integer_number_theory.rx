@@ -1,0 +1,34 @@
+# Ruby-parity batch B13 — `Integer#gcd` / `#lcm` / `#gcdlcm` / `#pow` (both
+# arities) / `#bit_length` / `#bit` / `#digits`, plus the class method
+# `Int.sqrt` (CRuby spells it `Integer.sqrt`).
+#
+# Edge cases pinned deliberately: `0.gcd(0) == 0`, a negative operand still
+# gives a NON-NEGATIVE gcd/lcm, `0.lcm(5) == 0`, `0.bit_length == 0`, a
+# negative receiver's `bit_length` counts the complement, `bit` sign-extends
+# forever (`(-2).bit(100) == 1`), `0.digits == [0]`, and `Int.sqrt` floors.
+# Diffed against CRuby 3.3.
+def main
+  let a = -7
+  let b = -2
+  puts("gcd #{12.gcd(18)} #{0.gcd(0)} #{0.gcd(5)} #{5.gcd(0)} #{a.gcd(21)} #{a.gcd(b)}")
+  puts("lcm #{4.lcm(6)} #{0.lcm(5)} #{5.lcm(0)} #{a.lcm(3)} #{a.lcm(b)}")
+  let gl = 12.gcdlcm(18)
+  puts("gcdlcm #{gl[0]},#{gl[1]}")
+  puts("pow #{2.pow(10)} #{2.pow(1)} #{2.pow(0)} #{b.pow(3)} #{b.pow(2)} #{0.pow(0)}")
+  puts("pow-mod #{2.pow(10, 1000)} #{5.pow(3, 13)} #{b.pow(3, 5)} #{7.pow(0, 5)}")
+  puts("bit_length #{255.bit_length} #{256.bit_length} #{0.bit_length} #{1.bit_length} #{a.bit_length}")
+  puts("bit #{5.bit(0)} #{5.bit(1)} #{5.bit(2)} #{5.bit(3)} #{b.bit(0)} #{b.bit(1)} #{b.bit(100)}")
+  let d1 = 1234.digits
+  let d2 = 0.digits
+  let d3 = 255.digits(16)
+  puts("digits #{d1[0]},#{d1[1]},#{d1[2]},#{d1[3]} len=#{d1.size}")
+  puts("digits-zero #{d2[0]} len=#{d2.size}")
+  puts("digits-base16 #{d3[0]},#{d3[1]} len=#{d3.size}")
+  puts("sqrt #{Int.sqrt(0)} #{Int.sqrt(1)} #{Int.sqrt(2)} #{Int.sqrt(15)} #{Int.sqrt(16)} #{Int.sqrt(1000000)}")
+  # Guards the Newton seed: seeding with `n` itself overflows the first
+  # step for a receiver near the i64 maximum and sends the iteration
+  # negative. CRuby agrees on both values.
+  let max = 9223372036854775807
+  puts("sqrt-big #{Int.sqrt(max)} #{Int.sqrt(4611686018427387904)}")
+  puts("complement #{~5} #{~0} #{~-1}")
+end

@@ -1,0 +1,13 @@
+abs 7 7 0
+magnitude 7 7
+even? false false true true
+odd? true true false false
+zero? true false false
+positive? true false false
+negative? false true false
+integer? true true
+succ 8 -6 1
+next 8 -6
+pred 6 -8 -1
+clamp 10 1 5 -8
+between? true false true true

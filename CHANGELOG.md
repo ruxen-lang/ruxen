@@ -8,6 +8,38 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **`Integer` Ruby surface (batches B12 / B13 / B14)** — 40-plus methods added
+  as `.rx` bodies on the `class Int` method-home
+  (`library/std/scalar/src/lib.rx`), no new C symbol:
+  - predicates and sign: `abs`/`magnitude`, `even?`, `odd?`, `zero?`,
+    `positive?`, `negative?`, `integer?`, `succ`/`next`, `pred`, `clamp`,
+    `between?`;
+  - rounding with the precision argument: `ceil`, `floor`, `round`,
+    `truncate` (`round` is half-away-from-zero, matching CRuby);
+  - arithmetic and number theory: `div`, `modulo`, `remainder`, `divmod`,
+    `fdiv`, `gcd`, `lcm`, `gcdlcm`, `pow(exp)`, `pow(exp, mod)`,
+    `bit_length`, `bit(i)`, `digits(base = 10)` and the class method
+    `Int.sqrt(n)`;
+  - iteration and conversion: `upto`, `downto`, `step(limit)` /
+    `step(limit, by)`, `to_s(base)`, `to_i`/`to_int`, `ord`, `chr`.
+
+  `div`/`modulo`/`divmod` FLOOR, which is Ruby's convention and NOT the
+  machine `/` and `%` (those truncate, C style, and keep that behavior);
+  `remainder` is the truncating one. Every pin's expected output was diffed
+  line for line against CRuby 3.3. Pins `tests/release-e2e/cases/1110`,
+  `1111`, `1120`, `1121`, `1130`, `1131`.
+
+  Each body reboxes its receiver (`let n = 0 + self`) because a scalar
+  method-home `self` on the LEFT of an arithmetic operator emits a call to a
+  nonexistent `Int_+` / `Int_%` and link-fails.
+- **`Char` and `Bool` scalar methods (batch B18)** — `Char#ord`, `#to_i`
+  (digit value, matching `"7".to_i`), `#chr`, `#upcase`, `#downcase`,
+  `#digit?`, `#alpha?`, `#alnum?`, `#space?`/`#whitespace?`, `#punct?`,
+  `#<=>` (method spelling) and `#succ`/`#next`, plus `Bool#to_i`. Ruby has no
+  `Char` class, so each mirrors the `String` method a Ruby developer calls on
+  `str[0]`; classification is ASCII-only. Ruby's `TrueClass`/`FalseClass`
+  `&`/`|`/`^`/`!` already work as machine operators and are now pinned rather
+  than reimplemented. Pins `tests/release-e2e/cases/1170`, `1171`.
 - **`String#reverse` / `capitalize` / `ljust` / `rjust`** — added as `.rx`
   methods (`library/std/string/src/string.rx`) built char-by-char over `chars`.
   A `String` carries no generic element type, so unlike the generic-collection
