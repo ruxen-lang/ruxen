@@ -190,6 +190,48 @@ below was found after B01 to B05 and ranks second.
 - **Matrix rows:** `docs/dev/gui-stack-v1-issues.md` Q56; `stdlib.md` §9 net/http (291-328) if the fix changes the client surface.
 - **Pins:** 1040-1049.
 
+### B72 — `Hash[k] = v` subscript-assign is a silent no-op
+- **Goal:** `h["a"] = 42` actually stores.
+- **Repro (verified 2026-07-29):**
+
+  ```
+  var h = Hash[String, Int].new
+  h["a"] = 42
+  # size=0, key?("a")=false      <- the store vanished
+  h.insert("b", 7)
+  # size=1, key?("b")=true, and h["b"] reads back 7
+  ```
+
+- **Shape:** the subscript **read** works and `insert` works, so only the subscript **assign** path is dead. `Array[i] = x` is fine (`a[0] = 9` verified), so this is `Hash`-specific.
+- **Severity:** high. `h[k] = v` is the single most common `Hash` operation in Ruby code, it fails silently rather than crashing, and it is currently documented as working.
+- **Refutes a matrix row:** `core.md`'s Operator-reality table lists "`Array[i]`, `Array[i]=`, `Hash[k]`, `Hash[k]=` **DONE** ... `h["a"]` all correct". The `Hash[k]=` half of that row is wrong. **The matrix files are owned by other agents right now, so this correction is recorded here and must be applied to `core.md` by whoever next holds it.**
+- **Files:** `compiler/ruxen_core/src/mir/lower/expr/assign.rs` (the index-assign arm) and the `Hash` route in `binops.rs`/`index.rs`.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Pins:** 1710-1719. Pin `[]=` followed by `size`, `key?`, and a subscript read, so a partial fix cannot pass.
+
+### B73 — The `Hash` key-kind protocol is a memory-probing heuristic
+- **Goal:** a `Hash` key's comparison and hashing are decided by its **type**, not by guessing from its bit pattern.
+- **Cause:** `library/std/hash/runtime/hash.c` stores every key in an `int64_t` and resolves a tristate `string_keys` flag **on the first insert** via `ruxen_hash_looks_like_string`, which **dereferences the key value as a pointer** and scans up to 256 bytes for a NUL.
+- **Three defects, one root (all verified 2026-07-29):**
+  1. **`Hash[Int, V]` SIGSEGVs for any key ≥ 4096.** `h.insert(7, 42)` and `h.insert(4095, 42)` work; `h.insert(5000, 42)` and `h.insert(100000, 42)` die with exit 139. The heuristic short-circuits below `0x1000` and dereferences address 5000 otherwise. Integer keys are ordinary (ids, ports, status codes), so this is a crash on plausible input.
+  2. **User types cannot be `Hash` keys.** A `struct` or `class` key is compared by object identity: `h.insert(SymI.new(3), 99)` then `h.key?(SymI.new(3))` is `false`. The `Hashable` mixin's `hash_code` and the structural `==` derive are **never consulted** by the C table.
+  3. The key kind is decided by the **first** insert, so a table's behaviour depends on insertion order.
+- **Fix shape:** pass the key kind down from the typed `.rx` side (the call site knows whether `K` is `String`, an integer-like primitive, or a user type) instead of inferring it in C, and route user types through `Hashable#hash_code` plus the `==` derive. That is a real protocol, not a heuristic, and it is what makes `Hash[UserType, V]` possible at all.
+- **Severity:** the segfault alone makes this high. Note it also **blocks B29c**: `Hash[Symbol, V]` cannot work until it lands (see [`design/B29-symbols.md`](design/B29-symbols.md) §1.4).
+- **Files:** `library/std/hash/runtime/hash.c`, plus the `.rx` key-kind plumbing in `library/std/map/src/lib.rx` and `library/std/set/src/lib.rx`.
+- **Status:** NEEDS-RUNTIME-C.
+- **Size:** one focused session. It is contained, but it is load-bearing for every `Hash` and `Set` in the workspace, so pin generously.
+- **Pins:** 1720-1729. Pin an integer key above and below 4096, a user-type key, and an insertion-order swap.
+
+### B74 — `class` structural equality returns false; `struct` works
+- **Goal:** `C.new(1) == C.new(1)` is `true` for a class, as it already is for a struct.
+- **Repro (verified 2026-07-29):** `struct P { x: Int; y: Int }` gives `P.new(1,2) == P.new(1,2)` → `true`, but `class C { x: Int }` gives `C.new(1) == C.new(1)` → `false`, with **or without** an explicit `include PartialEq`, and likewise for a `String` field.
+- **Why it went unnoticed:** pin `133_implicit_partial_eq.rx` covers a **`struct`**. There is no class-equality pin.
+- **Refutes a matrix claim:** `core.md`'s Kernel row says "structural `==` for user types via `include PartialEq`/derive" and `language.md` §9 lists auto equality as DONE (cases 133/207/139). Both are true for `struct` and false for `class`. **Record the narrowing in `core.md` and `language.md` when those files are free.**
+- **Files:** `compiler/ruxen_core/src/mir/lower/derive.rs` (`synthesize_struct_eq` and the class path), `resolve/symbols.rs::ty_has_derive_trait`.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Pins:** 1730-1739. Pin a class with an `Int` field, a class with a `String` field, and an inherited field.
+
 ---
 
 ## 3. READY-NOW batches (`.rx` only, no enabler needed)
@@ -958,9 +1000,9 @@ Pins: none.
 | **BLOCKED-ON-B36 (digest/HMAC)** | 3 | B37 (hex half), B66, B68 |
 | **BLOCKED-ON-B46 (TLS)** | 2 | B45 (HTTPS half), B69 |
 | **BLOCKED-ON-B44 (Serialize)** | 2 | B64, B67 |
-| **NEEDS-RUNTIME-C** | 6 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61 |
+| **NEEDS-RUNTIME-C** | 7 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61, **B73** |
 | **BLOCKED within B35** | 5 | B35b, B35c, B35d, B35e, B35f (all on B35a or B35b; see §6) |
-| **NEEDS-COMPILER-FEATURE** | 18 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71** |
+| **NEEDS-COMPILER-FEATURE** | 20 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B72**, **B74** |
 
 Counts overlap where a batch has both a ready half and a blocked half; the
 per-batch status line is authoritative.
