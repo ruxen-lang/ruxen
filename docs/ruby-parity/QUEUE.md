@@ -1,0 +1,892 @@
+# QUEUE.md — the batched Ruby-parity work queue
+
+Execution queue for the Ruby-parity push. **One subagent takes one batch.** Every
+batch below is self-contained: it names its goal, its exact method/feature list,
+its target files, its blocker status, and the matrix rows to tick on completion.
+A subagent running a batch does **not** need to read the big matrices
+(`core.md` / `language.md` / `stdlib.md` / `gems-db.md` / `gems-web.md`); it needs
+this file plus the local `CLAUDE.md` of the module it edits.
+
+Source of the ordering: `HANDOFF.md` (rules, bugs, enablers) plus the five
+matrices. Ordering rule: unblocked before blocked, then value to a Ruby developer
+building a real app, then low risk before high risk.
+
+---
+
+## 0. Read this before running any batch
+
+### The two hard rules
+
+1. **`.rx`-first.** Implement in `library/std/**/*.rx` by extending the stdlib
+   packages. Touch the Rust compiler only for a genuinely inexpressible
+   primitive or a missing *generic mechanism*, never a per-feature special-case.
+2. **No derive macros.** The compile-time surface is mixins (`include`) plus
+   `extension`, not derive/macros.
+
+### Authoring rules that cost hours to rediscover
+
+| Rule | Detail |
+|---|---|
+| **`String` bodies MAY dispatch** | No generic `T`, so build results char-by-char over `self.chars` (`Array[Char]`) with interpolation: `var result = ""` then `result = result + "#{c}"`. |
+| **Never use `self` as a `String` value** | Inside `class String`, `self` is the FFI shell (`&String` / `Class{"String"}`). It does not compose with the `String + String` concat route (`type mismatch: expected String, found String`), and `"#{self}"` interpolates the buffer pointer (garbage). `self.clone` / `self.to_string` return the shell type too. Go through `self.chars`. |
+| **Generic collections must NOT dispatch on `T`** | `Array` / `Set` / `Hash` method bodies lower ONCE with `T` abstract (only `each` / `push` / closure-call are available). Anything needing `to_s(T)`, `T` ordering, or `T` equality is blocked on per-`T` mono (enabler E1). Pure slot-moving and delegating bodies are fine today. |
+| **Key-addressed `Hash` / `Set` ops are fine** | `key?` / `get` / `insert` / `include?` hash inside the C runtime, so they do not need `.rx`-level `T` equality. `Hash#invert` and `Hash#value?` DO need value equality, so they are blocked. |
+| **`alias` on a generic builtin head link-fails (Q58)** | Use a real delegating method (`def has_key?(k) = self.key?(k)`), not `alias`, until E2 lands. |
+| **Operators are just `.rx` methods now** | A non-comparison operator on a `String` / `Array` / `Hash` / `Set` receiver routes to the receiver's `.rx` `def OP` when one exists (builtin-head operator route). Define `def *`, `def +`, `def ^` and they dispatch. |
+| **Default args work on builtin heads** | `def ljust(w, pad = " ")` resolves on `String` / `Array` / `Hash` / `Set`. |
+| **Scalar `self` on the LEFT of arithmetic link-fails** | Verified 2026-07-29: inside `class Int`, `self % 2` and `self + 1` emit calls to nonexistent `Int_%` / `Int_+`. **Workaround that works today: rebox first,** `let n = 0 + self` (or `var a = 0 + self`), then use `n` freely. `self` on the RIGHT of a primitive-left operand (`0 - self`, `2 * self`) and all comparisons (`self < 0`, `self == 0`) work as-is. This is why the Integer batches are READY-NOW. Enabler E3 removes the reboxing. |
+| **`Float` `.rx` method bodies are BROKEN** | Verified 2026-07-29: inside `class Float`, `self` arrives truncated to an integer (`2.5.probe` sees `2`, and a computed Float receiver sees `0`). Returning a Float constant is fine, so it is a receiver-ABI bug, same family as the known "Float closure-arg passes as 0". **Do not write Float `.rx` methods until B01 lands.** |
+| **Char literal as a receiver mis-parses** | `?7.digit?` compiles but produces no output; `let c = ?7; c.digit?` works. Bind to a variable. |
+
+### Build / test loop
+
+- Toolchain build: `cargo build --release --bin ruxen` (binary at `target/release/ruxen`).
+- **Fast `.rx` iteration without rebuilding:** `RUXEN_STDLIB_PATH="$PWD/library/std" ./target/release/ruxen compile f.rx -o f && ./f`.
+- Narrow test loop for additive `.rx` work: `cargo test -p ruxen_core --lib` (~0.5s). That is the whole gate for a purely additive stdlib batch (global rule 42).
+- Full gate (compiler changes only, once per phase): `RUXEN_WORKSPACE="$PWD" PHASES=compile bash tests/release-e2e/run.sh`, ~5 to 6 min, cache to `tmp/test-cache/`.
+- **Do not edit `library/std` or run `cargo build` while a `RUXEN_WORKSPACE` e2e run is in flight.**
+
+### Definition of done for a batch
+
+1. The `.rx` methods (or the compiler mechanism) land.
+2. One or more pinned cases under `tests/release-e2e/cases/NNN_*.rx` plus `expected/NNN_*.out`.
+3. The matrix rows named in the batch are updated in the same commit.
+4. A `CHANGELOG.md` entry under `[Unreleased]`.
+5. Reviewed under CLAUDE.md rule 44.
+
+### Pin-number allocation (avoid collisions between parallel batches)
+
+Highest existing case is `989`. **`990` to `999` are reserved** for the in-flight
+per-`T` mono and Q58 work. Every batch owns a block of ten:
+
+> **Batch `Bnn` owns pins `1000 + 10*(nn-1)` through `+9`.**
+> B01 → 1000-1009, B02 → 1010-1019, B07 → 1060-1069, B20 → 1190-1199, and so on.
+
+---
+
+## 1. Enablers (compiler mechanisms that unblock the BLOCKED batches)
+
+| id | Enabler | Where | Unblocks |
+|---|---|---|---|
+| **E1** | **Per-`T` monomorphization of generic-collection method bodies.** Extend the generic-CLASS mono (`mir/lower/monomorphize.rs`, which already clones user generic-class bodies per concrete receiver as `Box__mono__String_eq`) to emit `Array[Int]_join` / `Array[Int]_min` per concrete `T` at the call site, rewriting `T` to the concrete type in the body (the `trait_default.rs::rewrite_self_in_func` pattern applied to the element param). **In progress (agent `per-t-mono`).** | `compiler/ruxen_core/src/mir/lower/{monomorphize.rs,trait_default.rs}` | B20, B21, B23 (partly), and the element-typed half of B07/B15/B16 noted per batch |
+| **E2** | **Q58: `alias` to a method on a generic builtin head link-fails.** `mir/lower/mod.rs::select_method_symbol_name` compares `parent_def.name == class_name`, but the alias target's parent is the BARE class while `class_name` may carry the generic suffix. Strip `class_name`'s `[...]` there (`canonical_method_name` already strips). **In progress (agent `q58-alias`).** | `compiler/ruxen_core/src/mir/lower/mod.rs` | B22 (and lets several other batches collapse delegating methods back to one-line aliases) |
+| **E3** | **Scalar method-home `self` does not reach the primitive arithmetic floor.** A scalar `self` is typed nominally as `Class[Int]`, so `self + 1` lowers to a method call `Int_+` that does not exist. Make a scalar-class `self` flow into the primitive `+`/`-`/`*`/`/`/`%` floor. | `typeck/infer/ops.rs`, `mir/lower/expr/binops.rs` | Not a hard blocker (rebox with `let n = 0 + self`), but it removes the workaround from B12/B13/B14 and is a prerequisite for clean `Float` bodies |
+| **E4** | **Float receiver ABI on `.rx` method homes and closure args.** A `Float` receiver reaching an `.rx` body is read from an integer slot (truncates, or reads 0 for a computed value). Same family as the closure-arg bug. Delivered by **B01**. | codegen receiver coercion (`primitive_ffi_receiver_ty` neighbourhood), closure arg marshalling | B23 (all `Float` methods), the `Array[Float]` half of B20 |
+| **E5** | **Symbol type (`:sym`).** A first-class `Symbol` value plus lexer token. Delivered by **B29**. | lexer, parser, typeck | Hash symbol shorthand `{a: 1}`, `%i[]`, `String#to_sym`, hash patterns, and the literal-symbol folding in B34 |
+| **E6** | **Field-walk synthesis substrate** (the one new derive family): a mixin whose methods are generated from a class's declared fields, extending the existing derive walker. Delivered by **B33** (generic substrate) and **B55** (the `Model` target). | `mir/lower/derive.rs`, `implicit_includes/mod.rs` | B33, B34, B44, B55 to B60, B63, B64 (the whole ORM and serializer surface) |
+| **E7** | **Splat params `*args` / `**kwargs`.** Delivered by **B27**. | parser, typeck | `format`/`sprintf` free fns, `puts a, b`, variadic builders, `Set[a, b, c]` literal |
+| **E8** | **Range as a first-class Enumerable object.** Range is an iteration construct today (`Range#map` returns empty). Needs a real Range surface that can `include Enumerable`. Delivered by **B24**. | `library/std` (new `range` package) + typeck/MIR range lowering | B24, and Range rows across `core.md` |
+| **E9** | **Toolchain codegen step** (a `ruxen build` preprocessor emitting `.rx` from a non-`.rx` input). Delivered first by **B65** (the `.rhtml` template compiler). | `src/ruxen_cli` | B65, route-helper generation, I18n tables, asset manifests |
+| **E10** | **Mutating-operator route** (`<<` and friends taking `&var self`). Delivered by **B04**. | typeck operator route + MIR | `String#<<`, `Array#<<`, `Set#<<`, `StringIO#<<`, `CSV#<<` |
+
+---
+
+## 2. Known bugs (each sized as its own batch)
+
+These are correctness bugs that silently produce wrong answers or crash. They
+erode trust in the whole surface, so they lead the queue.
+
+### B01 — Float receiver ABI: `self` truncates, closure arg passes as 0
+- **Goal:** a `Float` value keeps its bits when it crosses into an `.rx` method body or a closure parameter.
+- **Repros (both verified at baseline):**
+  - `[2.5].map { |v| v + 0.5 }` yields `0` (affects `Array.map`, not just `Kernel#then`).
+  - A `def probe -> String` on `class Float` whose body is `let x = 0.0 + self; "#{x}"` prints `2` for receiver `2.5`, and `0` for a computed receiver such as `0.0 - 2.5`. Returning a Float *constant* from the same method is correct, so the defect is on the receiver/argument inbound path, not the return path.
+- **Files:** codegen receiver coercion (`primitive_ffi_receiver_ty` and the `coerce_value` call-site zero-extension neighbourhood), closure argument marshalling in `mir/lower`.
+- **Status:** NEEDS-COMPILER-FEATURE (E4).
+- **Size:** one self-contained defect; expect it to be a register-class/width mistake, not a redesign.
+- **Matrix rows:** `core.md` Float table (200-224) and the Operator-reality note (44-68); `HANDOFF.md` "Known PRE-EXISTING bugs".
+- **Pins:** 1000-1009.
+
+### B02 — `do…end` block plus bare-variable `puts` segfaults
+- **Goal:** `arr.each { |x| puts(x) }` stops crashing.
+- **Repro:** `arr.each { |x| puts(x) }` segfaults; `arr.each { |n| puts "#{n}" }` (interpolation) works. So the bare-variable `puts` path inside a block passes the wrong thing.
+- **Files:** `typeck/infer/expr.rs` (the `puts` universal-`to_s` conversion added by pin 956) plus `mir/lower` block-parameter binding.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Size:** one defect.
+- **Matrix rows:** `language.md` §12 (353-371, the `puts` row); `HANDOFF.md` bug list.
+- **Pins:** 1010-1019.
+
+### B03 — `String[i]` / `[i, n]` / `[range]` indexing returns null
+- **Goal:** Ruby's `String#[]` and `#slice` family work.
+- **Scope:** `"abc"[1]` → `"b"`, `"abc"[1, 2]` → `"bc"`, `"abc"[1..2]` → `"bc"`, negative indices, out-of-range → `nil`. Ruby returns a 1-char **String**, not a Char, so decide and document the return type (recommend `Option[String]` for the 1-arg form to keep `nil` honest).
+- **Files:** a `ruxen_string_char_at` / `ruxen_string_slice` in `library/std/string/runtime/string.c`, the `.rx` declarations in `library/std/string/src/string.rx`, and an Index-path arm in `compiler/ruxen_core/src/mir/lower/expr/index.rs`.
+- **Status:** NEEDS-RUNTIME-C (plus one small lowering arm).
+- **Size:** one feature, 3 to 4 methods.
+- **Matrix rows:** `core.md` String table rows `[]`/`slice`/`at`/`byteslice` (87-89) and the Operator-reality row for `String [i]` (57).
+- **Pins:** 1020-1029.
+
+### B04 — `<<` mutation semantics for `String` and `Array`
+- **Goal:** `s << "x"` and `a << 1` mutate the receiver instead of being silent no-ops.
+- **Scope:** the operator route currently passes the receiver by value for non-comparison operators, so a mutating operator has nowhere to write. Add a `&var self` operator route (E10) and define `def <<` on `String` (delegating to `push_str`), `Array` (to `push`), and `Set` (to `insert`). Chainability (`a << 1 << 2`) is Ruby behaviour, so return the receiver.
+- **Files:** `typeck/infer/ops.rs`, `mir/lower/expr/binops.rs`, then `library/std/{string/src/string.rx,array/src/lib.rx,set/src/lib.rx}`.
+- **Status:** NEEDS-COMPILER-FEATURE (E10).
+- **Size:** one mechanism plus three one-line methods.
+- **Matrix rows:** `core.md` Operator-reality rows (56, 59) plus String `<<`/`concat` (85), Array `<<` (240), Set `add`/`<<` (396).
+- **Pins:** 1030-1039.
+
+### B05 — Q56: async `block_on` client I/O no-ops
+- **Goal:** close the one live correctness bug tracked in `docs/dev/gui-stack-v1-issues.md`.
+- **Scope:** client-side I/O driven under `block_on` does nothing. Reproduce from the Q56 entry, find whether the reactor never registers the fd or the waker never fires, fix, and pin an async client round-trip case.
+- **Files:** `library/std/future`, `library/std/async_net`, the reactor in the async runtime; possibly `async_lowering`.
+- **Status:** NEEDS-COMPILER-FEATURE (runtime/reactor).
+- **Size:** one defect, but investigation-heavy; give it a full session.
+- **Matrix rows:** `docs/dev/gui-stack-v1-issues.md` Q56; `stdlib.md` §9 net/http (291-328) if the fix changes the client surface.
+- **Pins:** 1040-1049.
+
+---
+
+## 3. READY-NOW batches (`.rx` only, no enabler needed)
+
+### B06 — Matrix re-verification sweep (no production code)
+- **Goal:** stop subagents from re-implementing rows that already landed. Several matrix rows are stale.
+- **Known-stale examples found while building this queue:** `core.md` marks `Comparable#clamp` MISSING (456-469) but `library/std/core/src/lib.rx:50` defines it; `Enumerable` rows mark `filter` / `detect` / `inject` / `find_all` / `none?` / `one?` MISSING (418-453) but all six exist in `core/src/lib.rx`; the Integer and Float tables still mark `**` as "MISSING (BUG), lowered to `*`" although the Operator-reality table and pin 952 record it DONE.
+- **Method:** for every `PARTIAL`/`MISSING` row in `core.md`, compile a one-line probe with `RUXEN_STDLIB_PATH` against the workspace stdlib, and correct the row. Batch the probes (one `.rx` file per class) rather than one file per method.
+- **Files:** `docs/ruby-parity/core.md`, `language.md`, `stdlib.md` (rows only, no `library/std` edits).
+- **Status:** READY-NOW.
+- **Size:** one session; it is mechanical.
+- **Matrix rows:** all of `core.md`; the Enumerable table (418-453) and both scalar tables (161-224) first.
+- **Pins:** 1050-1059 (only for rows promoted to DONE that lack a pin).
+
+### B07 — Enumerable breadth I: closure-only combinators
+- **Goal:** one implementation lands on `Array` + `Hash` + `Set` simultaneously. Highest leverage `.rx` batch in the queue.
+- **Methods** (all expressible with `each` + a closure + `push`, so no `T` dispatch): `flat_map`, `collect_concat`, `filter_map`, `take_while`, `drop_while`, `each_slice(n)`, `each_cons(n)`, `each_with_object(memo)`, `first`, `first(n)`, `take(n)`, `drop(n)`, `count` (no-arg), `cycle(n)`, `reverse_each`, `collect`, `find_index` (predicate form), `to_a`/`entries`.
+- **Files:** `library/std/core/src/lib.rx` (`mixin Enumerable[T]`).
+- **Status:** READY-NOW.
+- **Size:** 18 methods; large but uniform. Split at `each_with_object` if it runs long.
+- **Matrix rows:** `core.md` Enumerable (418-453), plus the Array rows it satisfies (257-286) and the Hash/Set rows (334-343, 411).
+- **Pins:** 1060-1069.
+
+### B08 — String query and inspection
+- **Goal:** the read-only half of Ruby's `String` surface.
+- **Methods:** `bytesize`, `count(str)`, `index(sub, offset = 0)`, `rindex(sub)`, `casecmp(other)`, `casecmp?(other)`, `eql?(other)`, `start_with?` multi-arg, `end_with?` multi-arg, `each_char`, `each_line`, `each_byte`, `codepoints`, `empty?` (verify), `length`/`size` (verify), `chars`/`lines`/`bytes` (verify).
+- **Files:** `library/std/string/src/string.rx`.
+- **Status:** READY-NOW (char-by-char over `self.chars`; remember the `self`-as-String trap).
+- **Size:** 13 new methods.
+- **Matrix rows:** `core.md` String table 82-146 (rows `bytesize`, `count`, `index`, `rindex`, `each_*`, `codepoints`, `casecmp`, `eql?`).
+- **Pins:** 1070-1079.
+
+### B09 — String transformation: case, trim, pad, edges
+- **Goal:** the everyday string-shaping methods.
+- **Methods:** `swapcase`, `chomp(suffix = "\n")`, `chop`, `center(width, pad = " ")`, `succ`/`next`, `delete_prefix`, `delete_suffix`, `prepend`, `squeeze(set = "")`, `delete(set)`, `tr(from, to)`, `tr_s(from, to)`, `upcase!`/`downcase!`/`capitalize!`/`swapcase!`/`strip!` (bang variants, decide on `Option[String]` Ruby semantics or drop them and record why).
+- **Files:** `library/std/string/src/string.rx`.
+- **Status:** READY-NOW (`center` works now that default args fill on builtin heads).
+- **Size:** 12 non-bang methods plus a decision on the 5 bang variants.
+- **Matrix rows:** `core.md` String rows 99-146 (`chomp`/`chop`, `swapcase`, `center`, `tr`, `delete`, `squeeze`, `prepend`, `delete_prefix`/`delete_suffix`, `succ`, the bang rows at 98/103).
+- **Pins:** 1080-1089.
+
+### B10 — String search and replace
+- **Goal:** `sub`/`gsub` and the partition family, string-argument forms.
+- **Methods:** `sub(pattern, replacement)`, `sub!`, `gsub(pattern, replacement)` (align with the existing `replace(from,to)`, which is really `gsub`; also rename-or-alias so Ruby's `replace(other)` whole-string overwrite is available under its own name), `gsub!`, `partition(sep)`, `rpartition(sep)`, `slice(i, n)` (coordinate with B03 for the operator form), `split(sep, limit)` (limit arg over the existing `splitn`), `squeeze` if not taken by B09, `start_with?` regex form (defer to B11).
+- **Files:** `library/std/string/src/string.rx`.
+- **Status:** READY-NOW for the string-argument forms. The block form of `gsub` and the regex forms belong to B11.
+- **Size:** 9 methods plus the `replace` naming fix (a real name collision, call it out in the CHANGELOG).
+- **Matrix rows:** `core.md` String rows 90-95 (`sub`, `gsub`, `replace`, `split`) and 132 (`partition`/`rpartition`).
+- **Pins:** 1090-1099.
+
+### B11 — String conversion and the Regex bridge
+- **Goal:** Ruby's conversion methods and `String`-side regex spellings.
+- **Methods:** `to_i` / `to_i(base)` / `to_f` (lenient Ruby semantics returning `0` on garbage, keeping the `Result`-returning `parse_int`/`parse_float` alongside), `hex`, `oct`, `ord`, `chr`, `to_str`, `dup`, `scan(re)`, `match(re)`, `match?(re)`, `=~`/`~=` returning an index, `gsub(re, repl)`, `sub(re, repl)`, `split(re)`.
+- **Files:** `library/std/string/src/string.rx` delegating to `library/std/regex/src/lib.rx`.
+- **Status:** READY-NOW for the regex delegations and the lenient parsers. **Flag:** `ord`/`chr` need a `Char` to `Int` conversion; if `0 + self` does not type on `Char`, add a `ruxen_char_ord` shim to `library/std/string/runtime/string.c` and mark that sub-row NEEDS-RUNTIME-C.
+- **Size:** 15 methods.
+- **Matrix rows:** `core.md` String rows 118-127 (`scan`, `match`, `to_i`/`to_f`, `ord`/`chr`, `hex`/`oct`, `succ`) and the Regexp table row for `String#scan`/`#gsub(/re/)` (590).
+- **Pins:** 1100-1109.
+
+### B12 — Integer predicates, sign, rounding
+- **Goal:** the day-one-ergonomics half of `Integer`.
+- **Methods:** `abs`, `magnitude`, `even?`, `odd?`, `zero?`, `nonzero?`, `positive?`, `negative?`, `integer?`, `succ`, `next`, `pred`, `clamp(min, max)`, `between?(min, max)`, `ceil`, `floor`, `round`, `truncate` (the last four are identity or precision-argument forms on Integer).
+- **Files:** `library/std/scalar/src/lib.rx` (`class Int`).
+- **Status:** READY-NOW **with the reboxing rule**: open any body that needs arithmetic with `let n = 0 + self`, then operate on `n`. Verified working (`even?` via reboxing returns `true`/`false` correctly).
+- **Size:** 18 methods, all one-liners.
+- **Matrix rows:** `core.md` Integer table 161-197.
+- **Pins:** 1110-1119.
+
+### B13 — Integer arithmetic and number theory
+- **Goal:** the arithmetic family Ruby developers reach for.
+- **Methods:** `divmod`, `fdiv`, `div`, `modulo`, `remainder`, `gcd`, `lcm`, `gcdlcm`, `pow(n)`, `pow(n, mod)` (modular exponentiation), `bit_length`, `digits(base = 10)`, `sqrt` (as `Integer.sqrt`, a class method), `[]` (bit reference), `~` verification.
+- **Files:** `library/std/scalar/src/lib.rx` (`class Int`).
+- **Status:** READY-NOW with the same reboxing rule (`var a = 0 + self`). Verified: a full `gcd` loop with `%` over reboxed locals compiles and returns `12.gcd(18) == 6`.
+- **Size:** 14 methods.
+- **Matrix rows:** `core.md` Integer table 161-197; `stdlib.md` §31 rows that cross-reference core (785-788).
+- **Pins:** 1120-1129.
+
+### B14 — Integer iteration and base conversion
+- **Goal:** close the iterator family and stringification.
+- **Methods:** `upto(n)`, `downto(n)`, `step(limit, step)`, `to_s(base)`, `to_i`, `to_int`, `chr`, `ord`, `coerce` (decide and record), `times` (already DONE, verify and pin).
+- **Files:** `library/std/scalar/src/lib.rx` (`class Int`).
+- **Status:** READY-NOW. `upto`/`downto` were previously blocked precisely because `self` would not reach the arithmetic floor; the reboxing rule removes that. `to_s(base)` builds its digits into a `String` via interpolation, which is allowed.
+- **Size:** 9 methods.
+- **Matrix rows:** `core.md` Integer rows 176-180; `language.md` §6 row 209 and Backlog A item 15 (407).
+- **Pins:** 1130-1139.
+
+### B15 — Array access and slot-moving
+- **Goal:** the `Array` methods that only move slots, so none of them touch `T`.
+- **Methods:** `shift`, `shift(n)`, `unshift`/`prepend`, `at(i)`, `first(n)`, `last(n)`, `values_at(*idx)` (use an `Array[Int]` arg until E7 lands), `slice(i, n)`, `delete_at(i)`, `each_index`, `rotate(n = 1)`, `rotate!`, `length`, `concat(other)`, `fill(value)`, `sort!`, `reverse!`, `dup`, `bsearch_index` (index form only; the value form needs `T` ordering, so leave it to B20).
+- **Files:** `library/std/array/src/lib.rx`.
+- **Status:** READY-NOW.
+- **Size:** 18 methods.
+- **Matrix rows:** `core.md` Array table 235-312 (rows `shift`/`unshift`, `at`, `first(n)`/`last(n)`, `values_at`, `slice`, `delete_at`, `each_index`, `rotate`, `length`, `concat`, `fill`, `sort!`, `dup`).
+- **Pins:** 1140-1149.
+
+### B16 — Hash Ruby surface (key-addressed and closure-only)
+- **Goal:** make `Hash` read like Ruby's. Everything here is key-addressed (hashing happens in C) or closure-only, so none of it needs `T` equality in `.rx`.
+- **Methods:** `store(k, v)`, `length`, `fetch(k)` / `fetch(k, default)`, `dig(k)`, `merge(other)`, `merge!`/`update`, `transform_values`, `transform_keys`, `each_with_object`, `count`, `slice(*keys)`, `except(*keys)`, `keep_if`, `delete_if`, `reject!`, `select!`, `to_h`, `values_at`, `first`, `replace(other)`, `delete(k)` (Ruby name over the existing `remove`).
+- **Files:** `library/std/map/src/lib.rx`.
+- **Status:** READY-NOW. **Excluded (blocked, see B21):** `value?`/`has_value?`, `invert`, `key(v)`, `assoc`/`rassoc`, `==`, `default`/`default_proc`.
+- **Size:** 20 methods; split after `each_with_object` if it runs long.
+- **Matrix rows:** `core.md` Hash table 321-361.
+- **Pins:** 1150-1159.
+
+### B17 — Set completion
+- **Goal:** finish `Set` to Ruby's surface, including the predicates and the missing operator.
+- **Methods:** `add` (delegate to `insert`), `add?`, `delete(x)`, `delete?`, `member?`, `===`, `length`, `count`, `merge(other)`, `subtract(other)`, `to_set`, `^` (symmetric difference, `(a|b) - (a&b)`), `subset?`/`<=`, `proper_subset?`/`<`, `superset?`/`>=`, `proper_superset?`/`>`, `disjoint?`, `intersect?`, `Set.from(Array[T])`, `classify` (block, returns `Hash`).
+- **Files:** `library/std/set/src/lib.rx`.
+- **Status:** READY-NOW. The predicates test membership through `include?`, which hashes in C, so no `.rx`-level `T` equality is involved. Note that `<=`/`<`/`>=`/`>` are **comparison** operators, which keep their dedicated route, so ship the named predicates first and check whether the operator spellings dispatch; if they do not, record it as a new enabler row rather than forcing it.
+- **Size:** 19 methods.
+- **Matrix rows:** `core.md` Set table 394-415; `stdlib.md` §2 (66-97).
+- **Pins:** 1160-1169.
+
+### B18 — Char and Bool scalar methods
+- **Goal:** a usable `Char`, which every `String` char-by-char body depends on.
+- **Methods:** `Char#ord`, `#to_i`, `#chr`, `#upcase`, `#downcase`, `#digit?`, `#alpha?`, `#alnum?`, `#space?`/`whitespace?`, `#punct?`, `#<=>`, `#succ`; `Bool#&`, `#|`, `#^`, `#!`, `#to_i`.
+- **Files:** `library/std/scalar/src/lib.rx` (`class Char`, `class Bool`), plus `library/std/string/runtime/string.c` only if `ord` needs a shim.
+- **Status:** READY-NOW. Verified: a `Char` `.rx` method comparing `self` against char literals (`self >= ?0 && self <= ?9`) compiles and returns correct results when the receiver is a variable. Remember the literal-receiver parse quirk (`?7.digit?` yields no output) when writing pins: bind to a variable.
+- **Size:** 17 methods.
+- **Matrix rows:** `core.md` has no Char table today, so **add one** next to Integer/Float (around 224) and fill the Bool rows in NilClass/TrueClass/FalseClass (540-554).
+- **Pins:** 1170-1179.
+
+### B19 — Kernel conveniences
+- **Goal:** the free-function ergonomics a Ruby script assumes.
+- **Methods:** `warn(msg)`, `abort(msg)`, `exit!`, `sleep(secs)`, `rand`/`srand` (expose the existing `library/std/rand` as bare Kernel functions), `Integer(str)`, `Float(str)`, `String(x)`, `Array(x)`, `p(x)` and `pp(x)` (over the `Debug`/`to_s` path), `inspect`.
+- **Files:** `library/std/core/src/lib.rx` (`mixin Kernel`, the universal include) plus a small free-function module.
+- **Status:** READY-NOW for `warn`/`abort`/`exit!`/`sleep`/`rand`/`srand`/`Integer()`/`Float()`/`String()`. **Flag:** `p`/`pp`/`inspect` are only universal for types that have a `to_s`; scope them to `Debug`-carrying types and record the limit in the row rather than shipping a partial universal. `format`/`sprintf` are **excluded**: they need E7 (`*args`), so they live in B27.
+- **Size:** 11 methods plus 3 flagged.
+- **Matrix rows:** `core.md` Kernel/Object 473-513; `language.md` §12 (353-371).
+- **Pins:** 1180-1189.
+
+---
+
+## 4. BLOCKED batches (write them the day the enabler lands)
+
+### B20 — Element-typed collection methods
+- **Goal:** the `Array`/`Enumerable` methods that need `to_s(T)`, `T` ordering, or `T` equality.
+- **Methods:** `join` (including the `Array[Int]` case that returns empty today), `min`, `max`, `minmax`, `min_by`, `max_by`, `minmax_by`, `sum(init)`, `sum {}`, `uniq`, `uniq!`, `tally`, `group_by`, `sort_by` (Ruby's key-extractor form, distinct from the current in-place comparator `sort_by`), `include?(x)`, `index(x)`, `rindex(x)`, `delete(x)`, `flatten`, `compact`, `count(obj)`, `bsearch`.
+- **Files:** `library/std/array/src/lib.rx`, `library/std/core/src/lib.rx` (Enumerable).
+- **Status:** **BLOCKED-ON-PER-T-MONO (E1).**
+- **Size:** 22 methods; split into two batches (ordering/aggregation, then equality/grouping) once unblocked.
+- **Matrix rows:** `core.md` Array 272-292, Enumerable 439-449, plus the Operator-reality `Array[Int]#join` note (62).
+- **Pins:** 1190-1199.
+
+### B21 — Element-equality operators and Hash value operations
+- **Goal:** the operators and methods that crash or return garbage because they need element equality.
+- **Scope:** `Array` `-`, `*` (both repeat and join forms), `&`, `|`; `Hash#value?`/`has_value?`, `#invert`, `#key(v)`, `#assoc`/`#rassoc`, `#==`; `Array#==`/`eql?`/`hash`; `Set#==`/`hash`.
+- **Files:** `library/std/{array,map,set}/src/lib.rx`.
+- **Status:** **BLOCKED-ON-PER-T-MONO (E1).** Until then these must be a clean compile error, never a silent crash. If E1 slips, a stopgap batch that turns them into diagnostics is worth doing on its own.
+- **Size:** 14 items.
+- **Matrix rows:** `core.md` Operator-reality (44-68), Array 241-244, Hash 329-358, Set 404-413.
+- **Pins:** 1200-1209.
+
+### B22 — Collapse delegating methods back to `alias`
+- **Goal:** once Q58 is fixed, the Ruby-spelling synonyms become one-line aliases instead of hand-written delegating methods.
+- **Scope:** revisit every `def x(...) = self.y(...)` delegator written for `Hash` (`has_key?`, `include?`, `member?`), `Array`, `Set`, and `String`, and replace with `alias`. Add the aliases that were skipped because of Q58 in the first place.
+- **Files:** `library/std/{map,array,set,string}/src/*.rx`.
+- **Status:** **BLOCKED-ON-Q58-ALIAS (E2).**
+- **Size:** small, mechanical; a good first batch for whoever follows the Q58 fix.
+- **Matrix rows:** wherever a row says "delegating method (pin 985/986)".
+- **Pins:** 1210-1219.
+
+### B23 — Float method family
+- **Goal:** `class Float` reaches parity with `class Int`.
+- **Methods:** `abs`, `ceil`, `floor`, `round(n)`, `truncate`, `nan?`, `infinite?`, `finite?`, `zero?`, `positive?`, `negative?`, `nonzero?`, `divmod`, `modulo`, `quo`, `fdiv`, `to_f`, `clamp`, `between?`, `<=>`, `step`.
+- **Files:** `library/std/scalar/src/lib.rx` (`class Float`).
+- **Status:** **BLOCKED-ON-B01** (the Float receiver ABI). Writing these before B01 produces methods that compile and return wrong numbers, which is worse than not having them.
+- **Size:** 21 methods, all one-liners once unblocked.
+- **Matrix rows:** `core.md` Float table 204-224.
+- **Pins:** 1220-1229.
+
+### B24 — Range as an Enumerable object
+- **Goal:** `(1..5).map { }` stops returning empty and Range becomes a real value.
+- **Scope:** a `Range[T]` surface that carries `begin`/`end`/`exclude_end?`, `include Enumerable[T]` over a real `each`, then `to_a`, `to_set`, `include?`/`member?`/`cover?`/`===`, `step`, `min`, `max`, `minmax`, `sum`, `count`, `first`/`last`, `size`, `lazy`. Beginless ranges (`..5`) pair with B26.
+- **Files:** a new `library/std/range` package plus the Range lowering in `typeck` / `mir`.
+- **Status:** **NEEDS-COMPILER-FEATURE (E8)**, with the aggregation methods additionally gated on E1.
+- **Size:** one self-contained feature; give it a full session.
+- **Matrix rows:** `core.md` Range table 364-386 and P5 in the priority backlog (684-687).
+- **Pins:** 1230-1239.
+
+---
+
+## 5. Language / compiler batches
+
+### B25 — Percent literals and heredocs
+- **Scope:** `%q(...)`, `%Q(...)`, `%r{...}` (`%w[...]` is DONE, `%i[...]` waits on B29), and heredocs `<<~ID` / `<<-ID` / `<<ID`. The triple-quote string is the existing partial substitute, so keep it working.
+- **Files:** `compiler/ruxen_core/src/lexer/{strings.rs,token.rs}`, `formatter`.
+- **Status:** NEEDS-COMPILER-FEATURE. Lexer-local, low risk.
+- **Matrix rows:** `language.md` §1 (60-79) and Backlog A items 17 and 19 (412, 414).
+- **Pins:** 1240-1249.
+
+### B26 — Small syntax gaps
+- **Scope:** beginless range `(..5)`, `defined?(x)`, `redo`, `begin…end while` (do-while), `puts a, b` (multi-arg), `__FILE__` / `__LINE__` / `__method__`, `=begin`/`=end` block comments, bare octal `017` value semantics.
+- **Files:** `compiler/ruxen_core/src/{lexer,parser}`, `typeck` for `__method__` folding.
+- **Status:** NEEDS-COMPILER-FEATURE. Each item is small and independent; this is a good "many small wins" session.
+- **Matrix rows:** `language.md` §1 (80-85), §3 (132), §6 (196, 203), §12 (356, 362, 367), Backlog A items 20, 22, 23, 26.
+- **Pins:** 1250-1259.
+
+### B27 — Splat parameters and keyword arguments
+- **Scope:** positional splat `*args`, keyword splat `**kwargs`, required keyword args `def f(a:)`, splat call sites `f(*arr)`, and the `format`/`sprintf` free functions that ride on them. Also unblocks `puts a, b` if B26 has not landed it, `Set[a, b, c]`, and `values_at(*idx)`.
+- **Files:** `compiler/ruxen_core/src/{parser,typeck,mir/lower}`.
+- **Status:** NEEDS-COMPILER-FEATURE (E7). High value, medium-to-high risk (it changes the call ABI).
+- **Matrix rows:** `language.md` §4 (145-147) and Backlog A item 12 (404); `core.md` Kernel `format`/`sprintf` (482).
+- **Pins:** 1260-1269.
+
+### B28 — Stabby lambda, `Proc`, `lambda`, `curry`
+- **Scope:** `->(x) { }` syntax, `Proc.new { }` / `lambda { }` constructors over the existing closure values, `Proc#call`/`#[]`/`#()`/`#===`, `#arity` (constant-folded), `#curry` (a compile-time partial-application transform), `#lambda?`. Non-local `return` from a stored block stays out of scope; record why.
+- **Files:** `compiler/ruxen_core/src/{lexer,parser}` plus a `.rx` `Proc` shim if a nominal type is wanted.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Matrix rows:** `language.md` §5 (176-180), Backlog A item 25; `core.md` Proc table (561-570).
+- **Pins:** 1270-1279.
+
+### B29 — Symbols (the big one)
+- **Scope:** a first-class `Symbol` value type plus the `:sym` lexer token, then everything that rides on it: hash symbol-key shorthand `{ a: 1 }`, `%i[a b]`, dynamic symbols `:"#{x}"`, `String#to_sym`/`#intern`, `Symbol#to_s`/`#to_proc`/`#length`/`#<=>`/`#succ`/`#id2name`, and hash patterns `in { a:, b: }` in `case/in`.
+- **Files:** `compiler/ruxen_core/src/{lexer,parser,typeck,mir}` plus a `library/std/symbol` package for the method surface.
+- **Status:** NEEDS-COMPILER-FEATURE (E5). This is the single largest language batch; scope it to the value type plus hash shorthand first, and defer `to_proc` and hash patterns to a follow-up.
+- **Matrix rows:** `language.md` §1 (65-67, 72, 75), §7 (233), Backlog A items 8 and 9; `core.md` Symbol section (149-158).
+- **Pins:** 1280-1289.
+
+### B30 — `begin`/`rescue`/`ensure`/`raise`/`retry` sugar over `Result`
+- **Scope:** parser-level sugar lowering to the existing machinery: `rescue` to the `Err` match arm, `ensure` to a `Drop`/defer scope guard, `raise X` to an early-return `Err(X)` inside a `Result` function, `retry` to the bounded-loop combinator. The substitute already works, so this is ergonomics, not capability. Ship it only after B27/B29 if capacity is tight.
+- **Files:** `compiler/ruxen_core/src/parser`, a desugar pass, `formatter`.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Matrix rows:** `language.md` §8 (251-262), Backlog B item B7.
+- **Pins:** 1290-1299.
+
+### B31 — Pattern-matching completion
+- **Scope:** hash patterns (needs B29), find patterns `in [*, x, *]`, the pin operator `^var`, `deconstruct`/`deconstruct_keys` protocols, one-line `x => pat` and `x in pat`, and array patterns with a splat in the middle.
+- **Files:** `compiler/ruxen_core/src/parser/patterns.rs`, `typeck`, `mir` match lowering.
+- **Status:** NEEDS-COMPILER-FEATURE, partly BLOCKED-ON-B29.
+- **Matrix rows:** `language.md` §7 (221-238), Backlog A item 24.
+- **Pins:** 1300-1309.
+
+### B32 — `extension` maturation: `prepend`, `extend`, refinements, `class << self`
+- **Scope:** `prepend` (insert a mixin ahead of the type in the compile-time method-resolution order, with `super` chaining), `extend` (lift a module's `def`s to class methods), lexically-scoped `extension` as the refinements substitute, `class << self … end` as parser sugar over `def self.x`, and type-level `def obj.x` singleton methods.
+- **Files:** `compiler/ruxen_core/src/{resolve,typeck/infer/mixins.rs,parser}`.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Matrix rows:** `language.md` §9 (274-277), §10 (298-303), Backlog B item B4.
+- **Pins:** 1310-1319.
+
+### B33 — Attribute-driven codegen substrate (THE enabler for tier 2)
+- **Scope:** one reusable field-walk/codegen mechanism (an extension of the derive walker in `mir/lower/derive.rs` plus eligibility and diagnostics in `implicit_includes/`), then express these ON TOP of it in `.rx` or as declarations: `attr_accessor`/`attr_reader`/`attr_writer`, `Struct.new(:a, :b)`, `Data.define(:a, :b)`, `delegate`/`Forwardable#def_delegators`, `define_method` for a compile-time-known spec, `include Singleton`.
+- **Files:** `compiler/ruxen_core/src/mir/lower/derive.rs`, `compiler/ruxen_core/src/implicit_includes/mod.rs`, plus `.rx` consumers.
+- **Status:** NEEDS-COMPILER-FEATURE (E6). **This is the highest-leverage compiler batch in the queue after E1**: it unblocks the serializer derives, the ORM `Model` synthesis, and the web strong-params derive. Land the mechanism generically; do not special-case any one consumer.
+- **Size:** one substantial feature. Give it a full session and a design note in `docs/decisions/`.
+- **Matrix rows:** `language.md` §9 (271, 283-284), §11 (329-347), Backlog B item B1; `stdlib.md` §14 (420-439), §15 (449-456), §16 (466-471).
+- **Pins:** 1320-1329.
+
+### B34 — Compile-time reflection folding
+- **Scope:** fold Ruby's reflective results at compile time: `is_a?`/`kind_of?`/`instance_of?` and `respond_to?(:m)` to constant `Bool`s over the known type and `include` set; `.class`/`.class.name` to the static type token (needs a non-keyword surface spelling); `send(:m, …)`/`public_send` with a literal name to static dispatch; `method(:m)` to a first-class function reference; `methods`/`instance_variables` to literal lists; `instance_variable_get("@x")` with a constant to field access; `__method__` to the enclosing method name.
+- **Files:** a fold pass in `typeck`, plus `mir/lower`.
+- **Status:** NEEDS-COMPILER-FEATURE, BLOCKED-ON-B29 (literal symbols) and leaning on B33.
+- **Matrix rows:** `core.md` Reflection cluster (515-536) and P9 (705-714); `language.md` §11 (327-348), Backlog B items B2 and B3.
+- **Pins:** 1330-1339.
+
+---
+
+## 6. Large self-contained stdlib features
+
+Each of these is one package, one subagent, one session (or a scoped first
+slice of one). The scoping paragraph is the brief.
+
+### B35 — Civil `Time` / `Date` / `DateTime` (P0, the biggest single gap)
+Ruxen ships only a monotonic `Instant`/`Duration` plus a raw `Time.unix_ns`. A
+real app cannot store a `created_at`, emit an ISO-8601 API field, write a log
+timestamp, or set a cookie expiry. Build a civil `Time` value carrying
+year/month/day/hour/minute/second/nanosecond plus a UTC offset, with
+epoch-to-civil and civil-to-epoch conversion (leap-year and day-of-week math in
+C for correctness and speed), then `Date` and `DateTime` on the same core. The
+minimum viable surface is: construction (`Time.now`, `Time.at`, `Time.utc`,
+`Time.new(y,m,d,…)`, `Date.new`, `Date.today`), field accessors (`year` through
+`nsec`, `wday`, `yday`), arithmetic (`+`/`-` seconds, `Date#+` days, `<<`/`>>`
+months, `next_day`, `next_month`), `Comparable` ordering, `strftime` with the
+full common directive set, `strptime`/`parse` for ISO-8601 and RFC-2822, and the
+canonical emitters (`iso8601`, `rfc2822`, `httpdate`, `rfc3339`) that `net/http`
+and `logger` require. Start with fixed-offset plus UTC plus local; full IANA
+timezone and DST is a follow-up. Files: a rebuilt `library/std/time` (`src/lib.rx`
+plus `runtime/`). Status: **NEEDS-RUNTIME-C** plus a large `.rx` surface.
+Matrix rows: `stdlib.md` §3 (112-166) end to end, `core.md` Time table (607-620).
+Pins: 1340-1349.
+
+### B36 — `digest` plus HMAC plus the hex codec
+SHA-256, SHA-1, and MD5 (one-shot class methods and a streaming instance API:
+`new`/`update`/`<<`/`digest`/`hexdigest`/`base64digest`/`reset`/`digest_length`),
+a shared `hexencode`/`hexdecode` helper (also consumed by `SecureRandom.hex`),
+`Digest::CLASS.file(path)` streaming from `fs`, a constant-time `==`, and
+`HMAC.hexdigest(digest, key, data)`/`.digest`. This single batch unblocks signed
+cookie sessions, CSRF, JWT HS256, ETags, and the WebSocket handshake, so it is
+the critical path for the whole web security surface. Files: a new
+`library/std/digest` package (`src/lib.rx` plus `runtime/digest.c`, or an FFI to
+a vendored implementation). Status: **NEEDS-RUNTIME-C**. Matrix rows:
+`stdlib.md` §5 (200-214) and the HMAC row in §8 (270). Pins: 1350-1359.
+
+### B37 — `securerandom` conveniences
+`library/std/rand` already gives CSPRNG bytes. Add the Ruby-facing conveniences
+on top: `hex(n)`, `base64(n)`, `urlsafe_base64(n, padding:)`, **`uuid` (v4)**,
+`uuid_v7` (needs B35), `random_number(n)` for both Integer and Float arguments,
+`alphanumeric(n)`, and `choose`. `uuid` is a P0 because it is the default
+primary key for any real app. Depends on B36's hex codec and the existing
+`library/std/base64`. Files: `library/std/rand/src/lib.rx`. Status:
+**BLOCKED-ON-B36** for `hex`; the rest is READY-NOW `.rx`, so it can ship in two
+halves. Matrix rows: `stdlib.md` §4 (176-189). Pins: 1360-1369.
+
+### B38 — `uri` plus `cgi` escaping
+One RFC-3986 parser producing a `Uri` value (scheme, userinfo, host, port, path,
+query, fragment), `URI.parse`/`URI.join`/`#to_s`/`#normalize`/`#merge`/
+`#request_uri`/`#relative?`/`#absolute?`, plus one shared percent-codec powering
+`URI.encode_www_form`/`decode_www_form` and their `_component` variants, and the
+`CGI` helpers `escape`/`unescape`/`escapeHTML`/`unescapeHTML`/
+`escapeURIComponent`. `escapeHTML` is what makes view output XSS-safe, so it
+pairs with the view work in B65. Note that rondo has an inline `url_decode` in
+`helpers.rx` that should later delegate here. Files: a new `library/std/uri`
+package. Status: **READY-NOW** (`.rx` only, string processing over `chars`).
+Matrix rows: `stdlib.md` §7 (239-254) and §10 (336-345). Pins: 1370-1379.
+
+### B39 — `stringio`
+An in-memory buffer with the `IO` shape: `StringIO.new(str, mode)`, `read([len])`,
+`gets`, `readline`, `readlines`, `each_line`, `getc`, `ungetc`, `getbyte`,
+`write`, `<<`, `puts`, `print`, `printf`, `string`, `rewind`, `seek`, `pos`,
+`pos=`, `eof?`, `truncate`, `size`, `close`, `closed?`. Cheap, self-contained,
+and a dependency of clean `csv` and `erb` output. `<<` wants B04's mutating
+operator route; ship the `write` method first and add `<<` after. Files: a new
+`library/std/stringio` package. Status: **READY-NOW** (`<<` row only:
+BLOCKED-ON-B04). Matrix rows: `stdlib.md` §17 (481-489). Pins: 1380-1389.
+
+### B40 — `csv`
+The standard data-exchange path. Scope: `CSV.parse(str)`, `CSV.parse_line`,
+`CSV.read(path)`, `CSV.foreach(path) { |row| }`, `CSV.generate { |csv| }`,
+`CSV.generate_line(row)`, `CSV.new(io_or_string)` with `shift`/`read`/`each`/
+`<<`/`to_a`, and the `CSV::Row` header-addressed view (`[]`, `[]=`, `field`,
+`headers`, `to_h`, `to_a`). Options to support at minimum: `headers:`,
+`col_sep:`, `quote_char:`, `skip_blanks:`, `write_headers:`. Correct RFC-4180
+quoting and embedded-newline handling is the part to get right; write the pins
+around quoted fields containing separators, quotes, and newlines. Build on B39
+for the in-memory case. Files: a new `library/std/csv` package. Status:
+**READY-NOW** (`.rx` only; nicer with B39). Matrix rows: `stdlib.md` §11
+(355-368). Pins: 1390-1399.
+
+### B41 — `logger`
+Every service needs leveled logging. Scope: `Logger.new(sink)` over stdout,
+stderr, or a file; the level enum (DEBUG < INFO < WARN < ERROR < FATAL <
+UNKNOWN); `debug`/`info`/`warn`/`error`/`fatal`/`unknown` taking a message or a
+block; `add(sev, msg, progname)`; `level`/`level=` and the `debug?`-style
+predicates; a `formatter=` closure over severity/time/progname/message;
+`progname=`; `<<` for raw writes; `close`/`reopen`/`with_level`. Thread-safe
+writes via `library/std/sync`. Timestamps need B35, so ship first with a
+monotonic or epoch-second stamp and upgrade the formatter when `strftime` lands.
+Log rotation (`LogDevice` by age or size) is an explicit follow-up. Files: a new
+`library/std/logger` package. Status: **READY-NOW** (timestamp formatting row:
+BLOCKED-ON-B35). Matrix rows: `stdlib.md` §24 (636-647). Pins: 1400-1409.
+
+### B42 — `optparse`
+Pure string processing, so directly buildable. Scope: `OptionParser.new { |o| }`,
+`on(*opts, desc) { |val| }` plus `on_head`/`on_tail`, `banner=`, `separator`,
+`program_name=`, `version=`, `parse`/`parse!`, `order`/`permute`, required and
+optional argument syntax (`--flag VAL`, `[VAL]`), typed coercion for Integer,
+Float, and Array, generated `help`/`summarize`, automatic `--version`/`--help`,
+and `Result`-shaped errors replacing `ParseError`/`InvalidOption`/
+`MissingArgument`. Variadic `on(*opts)` wants B27; until then take an
+`Array[String]` of option spellings. Files: a new `library/std/optparse`
+package. Status: **READY-NOW** (with the `Array[String]` signature; the variadic
+spelling is BLOCKED-ON-B27). Matrix rows: `stdlib.md` §25 (656-669).
+Pins: 1410-1419.
+
+### B43 — `yaml` (safe subset)
+Config and fixtures, which is 90% of real YAML use. Scope: `YAML.safe_load(str)`
+and `YAML.load_file(path)` over scalars, maps, sequences, `nil`, booleans,
+integers, and floats; `YAML.dump(obj)`; multi-document `load_stream`. Anchors,
+aliases, and merge keys are a stretch goal; `!ruby/object` tags and
+`unsafe_load` are explicitly out of scope (no runtime class table). Because
+Ruxen is typed, decide up front whether `safe_load` returns a `Json`-style
+opaque node (recommended, mirroring `library/std/json`) or a typed struct via
+the B33 derive. Files: a new `library/std/yaml` package. Status: **READY-NOW**
+for the node-returning design. Matrix rows: `stdlib.md` §12 (378-387).
+Pins: 1420-1429.
+
+### B44 — `json` option gaps plus `to_json`/`from_json` derives
+Two halves. The cheap half is `.rx` today: `JSON.dump`/`JSON.load` aliases,
+`JSON.load_file`/`dump_file`, `JSON[…]` round-trip sugar, and a configurable
+`max_nesting`. The valuable half is the serializer derive: `include Serializable`
+synthesizing `to_json -> Json` from a struct's declared fields, and
+`include Deserializable` synthesizing `from_json(&Json) -> Result[Self,
+JsonError]`, recursing into fields that are themselves serializable. That half
+rides B33's field-walk substrate and is what makes both the ORM and the web JSON
+API stop hand-building nodes. Files: `library/std/json/src/lib.rx` plus
+`mir/lower/derive.rs`. Status: option gaps **READY-NOW**; derives
+**BLOCKED-ON-B33**. Matrix rows: `stdlib.md` §1 (36-56); `gems-web.md` §6
+(234-242). Pins: 1430-1439.
+
+### B45 — `net/http` full client
+The current `library/std/http` is a single blocking `Http.get(host, port, path)`
+with a hand-rolled parser, no headers map, no TLS. Build the real client: a
+connection object (`Net::HTTP.new(host, port)`, `start`/`finish`/`started?`),
+verb methods (`get`/`post`/`put`/`patch`/`delete`/`head`/`options`), request
+builders with a headers map, body, `set_form_data` (needs B38's
+`encode_www_form`) and `basic_auth` (needs `base64`), a response object with a
+parsed headers map, `code`/`message`/`body`/`read_body`, a status-class
+taxonomy, the one-shot class methods (`get`, `get_response`, `post`,
+`post_form`), timeouts plumbed through to `net.TcpStream`, opt-in redirect
+following, and chunked transfer-encoding support (the current parser assumes
+`Content-Length` plus `Connection: close`). HTTPS is deliberately excluded here;
+it waits on B46. Files: `library/std/http`. Status: **READY-NOW** for plain
+HTTP, **BLOCKED-ON-B38** for form encoding, **BLOCKED-ON-B46** for HTTPS.
+Matrix rows: `stdlib.md` §9 (291-328). Pins: 1440-1449.
+
+### B46 — `openssl`: TLS, Cipher, KDF
+The load-bearing subset, in priority order: `SSLContext` and `SSLSocket`
+wrapping a `net.TcpStream` (this is what gates HTTPS serving, an HTTPS client,
+SMTPS, and WSS); `Cipher` for AES-256-GCM (encrypted cookies and sessions);
+`PKCS5.pbkdf2_hmac` and `KDF.hkdf`/`scrypt` for password hashing; then
+asymmetric `PKey::RSA`/`EC` for JWT RS256; X.509 parsing last. Bind to a real
+backend by FFI (rustls plus ring, or system OpenSSL) and make that choice an
+explicit ADR since it is a new external dependency for the toolchain. Files: a
+new `library/std/openssl` package plus `runtime/`. Status: **NEEDS-RUNTIME-C**.
+Matrix rows: `stdlib.md` §8 (266-277). Pins: 1450-1459.
+
+### B47 — `bigdecimal`
+Arbitrary-precision decimal, required whenever money is involved (float is
+simply wrong there). Scope: `BigDecimal(str, precision)` construction from an
+exact string, `+`/`-`/`*`/`/` with scale tracking, `div(x, n)`, `%`/`modulo`,
+`power`/`**`/`sqrt(prec)`, `round(n, mode)` with the rounding modes (including
+banker's), `truncate`/`ceil`/`floor`, `to_s(fmt)`/`to_f`/`to_i`, and the
+introspection predicates (`precision`, `exponent`, `sign`, `nan?`, `infinite?`,
+`finite?`, `zero?`). `BigMath` transcendentals are a follow-up. Rank this up if
+a financial app becomes the target. Files: a new `library/std/bigdecimal`
+package. Status: **READY-NOW** (`.rx` over an `Array[Int]` limb representation)
+or **NEEDS-RUNTIME-C** if a C bignum core is preferred; decide in the batch and
+record why. Matrix rows: `stdlib.md` §33 (813-821). Pins: 1460-1469.
+
+### B48 — `pathname`, `fileutils` gaps, `tempfile`
+Three related filesystem batches that share one session. `Pathname` is an object
+wrapper over the existing `library/std/path` string ops plus `library/std/fs`
+IO: `Pathname.new`, `+`/`join`, `parent`, `basename(suffix)`, `sub_ext`,
+`split`, `relative?`, `cleanpath`/`expand_path`, `relative_path_from`,
+`each_filename`/`ascend`/`descend`, `root?`, the `exist?`/`file?`/`directory?`
+predicates, `read`/`write`/`open`/`each_line`, `children`/`entries`/`glob`,
+`mkpath`/`rmtree`/`unlink`, and `to_s`. The `fileutils` gaps are `cp_r`,
+`touch`, `mv` with a cross-filesystem fallback, `rm_f`, `ln`, `ln_sf`,
+`chmod`/`chown`, `install`, `compare_file`, `copy_stream`, `cd`, plus
+**`Dir.glob`** and a `Find.find` recursive walk (both commonly needed and
+currently absent). `tempfile` is `Tempfile.new`/`create` with `path`, `close`,
+`unlink`, and `Dir.mktmpdir`, built on `fs` plus `rand` plus `env`. Files:
+`library/std/path`, `library/std/fs`, plus a new `library/std/tempfile`.
+Status: **READY-NOW**; the `mtime`/`atime` rows are BLOCKED-ON-B35. Matrix rows:
+`stdlib.md` §18 (501-522), §19 (533-555), §20 (564-571). Pins: 1470-1479.
+
+### B49 — Thread, Queue, Monitor ergonomics
+`library/std/sync` has real threads, a typed `Mutex[T]`, atomics, and channels,
+but the Ruby-facing shape is missing. Scope: an ergonomic typed
+`Thread.new { }`/`Thread.start` (today `Thread.spawn` takes a raw function-pointer
+Int), `#join(limit)` and a typed `#value`, `#alive?`/`#status`, `#name`/`#name=`,
+`Thread.current`/`.list`/`.pass`, thread-local storage, a first-class
+`Queue`/`SizedQueue` over the existing channel (`push`/`pop`/`size`/`empty?`/
+`clear`/`close`/`closed?`/`num_waiting`), a standard `ConditionVariable`
+(`wait`/`signal`/`broadcast`) over `Signal`, `Mutex#synchronize`/`try_lock`/
+`locked?`, and a reentrant `Monitor` with `MonitorMixin`. Files:
+`library/std/sync/src/lib.rx` plus a new `library/std/monitor`. Status:
+**READY-NOW** for the wrappers; the typed-closure `Thread.new` may need a
+compiler assist, so probe before committing. Matrix rows: `stdlib.md` §27
+(698-716), §29 (746-752). Pins: 1480-1489.
+
+### B50 — `observer`, `singleton`, `delegate`, `forwardable`
+Four small mixin-shaped libraries. `Observable` is plain runtime state (a list
+of observer closures, `add_observer`/`delete_observer`/`count_observers`/
+`changed`/`changed?`/`notify_observers`) and is buildable in pure `.rx` today.
+`Singleton`, `Forwardable` (`def_delegator`/`def_delegators`/`delegate`), and
+`DelegateClass`/`SimpleDelegator` all want B33's generated-method substrate, so
+they ship after it. Files: new `library/std/{observer,singleton,forwardable}`
+packages. Status: observer **READY-NOW**; the other three
+**BLOCKED-ON-B33**. Matrix rows: `stdlib.md` §15 (449-456), §16 (466-471),
+§22 (605-610), §23 (620-627). Pins: 1490-1499.
+
+### B51 — `prime` and number theory
+`Prime.prime?`, `Prime.each(ubound)`, `Prime.take`/`first`, `prime_division`
+and `int_from_prime_division`, `Integer#prime?`, and `Integer.sqrt` (isqrt).
+Overlaps B13; if B13 has landed `gcd`/`lcm`/`pow(b, mod)`/`digits`/`bit_length`,
+this batch is just the sieve plus factorization. Files: a new
+`library/std/prime` package. Status: **READY-NOW**. Matrix rows: `stdlib.md`
+§31 (779-788). Pins: 1500-1509.
+
+### B52 — Misc P3 cluster: `pp`, `shellwords`, `benchmark`, `open3`, `timeout`
+One session for five small, low-frequency items: a `PrettyPrint` engine plus
+`PP.pp`/`pretty_inspect` over the `inspect` surface from B19;
+`Shellwords.escape`/`split` for safe `process`/`Command` argument quoting;
+`Benchmark.realtime`/`measure`/`bm`/`bmbm` and the `Tms` CPU-time breakdown
+(needs `getrusage` via C); `Open3.popen3`/`popen2`/`pipeline` streaming pipes
+over `library/std/process`; and `Timeout.timeout` scoped to the cases Ruxen can
+honestly serve (async cancellation and socket timeouts, not forcible
+interruption of arbitrary blocking code, which needs a thread-raise Ruxen will
+not grow). Files: `library/std/{bench,process}` plus new small packages.
+Status: **READY-NOW** except the `Tms` row (**NEEDS-RUNTIME-C**). Matrix rows:
+`stdlib.md` §26 (679-686), §30 (764-769), §34 (827-835), §35 (846-855).
+Pins: 1510-1519.
+
+### B53 — `matrix`
+Linear algebra: `Matrix` construction, special matrices, arithmetic,
+determinant/inverse/transpose/rank/trace, element and row/column access, and a
+companion `Vector` with dot/cross/norm/normalize. Rare in web and API work, so
+this is the last stdlib batch; do it only when a graphics or ML consumer asks.
+Files: a new `library/std/matrix` package. Status: **READY-NOW**. Matrix rows:
+`stdlib.md` §32 (796-804). Pins: 1520-1529.
+
+---
+
+## 7. ORM batches (the `folio` package over `ledger`)
+
+Nothing in `gems-db.md` is built; the package does not exist. The whole design
+factors into one compiler feature (the `Model` field-walk synthesis) plus a
+`.rx` library. Two batches ship **before** that feature and are therefore the
+right place to start.
+
+### B54 — folio Phase 0: prove the stack in pure `.rx`
+Write the `Relation` (a lazy, chainable bound-parameter SQL builder producing a
+`?`-placeholder string plus a parallel `Array[String]`, so it is injection-safe
+by construction) and the row-decode helpers over `ledger`, plus one
+**hand-written** model where `table_name`, `columns`, `to_row`, and `from_row`
+are typed out by hand. That proves `find`/`all`/`create`/`where`/`transaction`
+end to end with zero compiler support, at the cost of per-model boilerplate.
+Everything written here survives into the real ORM; only the hand-written glue
+gets deleted. Files: a new `folio` package (sibling repo layout mirroring
+`ledger`). Status: **READY-NOW**. Matrix rows: `gems-db.md` §2 (124-167) and §3
+(171-214), plus the Build-order Phase 0 note (467-473). Pins: 1530-1539.
+
+### B55 — folio Phase 1: the `Model` field-walk synthesis
+The single non-negotiable compiler ask for the ORM. `include Model` on a class
+generates, from the declared fields: `self.table_name`, `self.columns`,
+`self.column_types`, `to_row`, `self.from_row(&Json)`, `self.build(...)`, and
+`to_json`. It extends the existing derive walker rather than inventing a
+subsystem, and it should be built as the first consumer of B33's substrate, not
+as a bespoke pass. Register it as a new `Q##` in
+`docs/dev/gui-stack-v1-issues.md` and in `docs/TASKS.md`. Files:
+`compiler/ruxen_core/src/implicit_includes/mod.rs`,
+`compiler/ruxen_core/src/mir/lower/derive.rs`. Status:
+**NEEDS-COMPILER-FEATURE (E6), BLOCKED-ON-B33**. Matrix rows: `gems-db.md`
+"The one new compiler feature" (55-99) and §1 (102-120). Pins: 1540-1549.
+
+### B56 — folio Phase 2: generic CRUD plus the full `Relation`
+On the synthesized surface: `save`/`save!`, `create`, `update`, `destroy`,
+`reload`, `find`, `find_by`/`find_by!`, `all`, `first`, `last`, `exists?`,
+`count`, `find_each`/`in_batches`, `insert_all`/`upsert_all`; and the full lazy
+`Relation` (`where` fragment and hash and IN forms, `where_not`, `or`, `order`/
+`order_desc`, `limit`, `offset`, `group`/`having`, `joins`, `pluck`, `select`,
+`distinct`, `to_sql`). Return shapes follow the documented decision: plain forms
+return `Option`/`Result`, `!` forms return `Err(NotFound)`. Files: `folio`.
+Status: **BLOCKED-ON-B55**. Matrix rows: `gems-db.md` §2 (124-167), §3
+(171-214). Pins: 1550-1559.
+
+### B57 — folio Phase 3: migrations plus transactions
+The lowest-compiler-risk, highest-early-value slice, and it runs in parallel
+with everything else: a `create_table(db, name) do |t| … end` DDL builder with
+`t.string`/`integer`/`boolean`/`datetime`/`primary_key`/`timestamps`/
+`references`, `add_column`/`remove_column`/`rename_column`, `add_index` with
+`unique:`, reversible `change` plus explicit `up`/`down` (global rule 12), a
+`schema_migrations` version table and a runner that skips applied migrations,
+and a `transaction(db) do … end` helper that COMMITs on `Ok` and ROLLBACKs on
+`Err`, with `SAVEPOINT` nesting. Files: `folio`. Status: **READY-NOW**.
+Matrix rows: `gems-db.md` §7 (298-333), §8 (336-357). Pins: 1560-1569.
+
+### B58 — folio Phase 4: associations plus eager loading
+Read `belongs_to`/`has_many`/`has_one`/`has_many :through`/polymorphic
+declarations in the synthesis and emit the accessor methods (each expands to a
+one-line `Relation` call, so the codegen target is small), plus `dependent:
+:destroy` and `counter_cache`. The N+1 fix, `includes(:posts)`, stays in `.rx`
+as a batched two-query preload. Files: `folio` plus `mir/lower/derive.rs`.
+Status: **BLOCKED-ON-B55**. Matrix rows: `gems-db.md` §4 (218-247).
+Pins: 1570-1579.
+
+### B59 — folio Phase 5: validations plus callbacks
+Generate `valid?`/`errors` from `validates` declarations (presence, uniqueness,
+length, format, numericality, custom `validate :method`) and emit the callback
+hooks inside the generated `save`/`create`/`update`/`destroy`
+(`before_save`/`after_save`, the create and update variants,
+`before_destroy`/`after_destroy`, `before_validation`, `after_commit`/
+`after_rollback`). Pair every `uniqueness` validation with an emitted `UNIQUE`
+index and treat the constraint violation as the authoritative error, because
+the validation is a check and the index is the actual lock. Files: `folio` plus
+the synthesis. Status: **BLOCKED-ON-B55**. Matrix rows: `gems-db.md` §5
+(251-273), §6 (276-295). Pins: 1580-1589.
+
+### B60 — folio Phase 6: scopes, enums, timestamps, dirty tracking, serialization
+Scopes as plain class methods returning a `Relation`, enum fields mapped through
+`to_row`/`from_row` with generated predicates, automatic `created_at`/
+`updated_at` (needs B35), `touch`, whole-record dirty tracking via the existing
+`Clone`/`PartialEq` derives with per-field `name_was` as a synthesis extension,
+`to_json`/`as_json(only:, except:)`, and typed column predicates
+(`User.age_col.gt(18)`) as the query-builder endgame. Files: `folio` plus the
+synthesis. Status: **BLOCKED-ON-B55**, timestamps **BLOCKED-ON-B35**.
+Matrix rows: `gems-db.md` §11 (406-422), §12 (425-441). Pins: 1590-1599.
+
+### B61 — folio Phase 7: multi-adapter plus connection pool
+An `Adapter` mixin carrying every dialect difference (placeholder style,
+`RETURNING`, identifier quoting, upsert syntax, last-insert-id) so the `.rx`
+layers above never change per backend, then Postgres (libpq) and MySQL
+(libmysqlclient) FFI drivers behind it, a connection-URL parser, and a
+connection `Pool` with checkout/checkin (rondo is thread-per-core, so each
+request needs its own handle; SQLite handles are not concurrently shareable).
+Check what `SharedSync` already gives before adding a `std` mutex. Files:
+`folio` plus new FFI packages. Status: **NEEDS-RUNTIME-C**. Matrix rows:
+`gems-db.md` §9 (360-379), §10 (382-403), §13 (444-458). Pins: 1600-1609.
+
+---
+
+## 8. Web batches (rondo)
+
+rondo is close to Sinatra-complete. The Rails surface that is missing is missing
+mostly because of stdlib crypto gaps, not framework design. These batches live
+in `~/.projects/rondo` (note: **rondo forbids the `Co-Authored-By: Claude`
+commit trailer**, unlike this repo).
+
+### B62 — rondo Stage 0: close the routing gaps
+Pure `rondo .rx`, no compiler or stdlib work: splat/wildcard segments
+(`/files/*path`), full-pattern regex routes with named groups,
+`resources`/`resource`/nested resources and `namespace`/`scope` as ordinary
+startup-registration methods that loop over the existing `get`/`post`
+registrars, the `_method` verb-override before-hook, `send_file`/`send_data`
+with `Content-Disposition`, `request.ip` threaded from the accepted peer address
+with an `X-Forwarded-For` trusted-proxy flag, `req.params_all` merging form over
+query and route params, and `request.xhr?`. Outcome: Sinatra-complete plus REST
+route tables. Files: `rondo/src/{route,router,rondo,request,response}.rx`.
+Status: **READY-NOW**. Matrix rows: `gems-web.md` §1 (109-127), §3 (161-179).
+Pins: 1610-1619.
+
+### B63 — rondo Stage 1: controllers, strong params, filters
+A `Controller` mixin where each action is a method and the route binds a
+specific method reference (no `send`, no name lookup), per-controller
+`before_action`/`after_action`/`around_action` with compile-time `only:`/
+`except:` lists and a compile-time `skip_before_action`, and `rescue_from` over
+typed error enums. Strong params become a typed per-action struct with an
+`include FromParams` derive synthesizing `from(req) -> Result[T, ParamError]`:
+`permit` is the field set, `require` is a non-`Option` nested struct,
+unpermitted keys are dropped by construction, and there is deliberately no
+`permit!` escape hatch (global rule 4). Files: `rondo/src` plus the `FromParams`
+derive in the compiler. Status: **BLOCKED-ON-B33** for the derive; the
+`Controller` mixin half is READY-NOW. Matrix rows: `gems-web.md` §2 (138-153).
+Pins: 1620-1629.
+
+### B64 — rondo Stage 2: serialization and the JSON API
+Land the `Serialize`/`Deserialize` derives from B44 in rondo's consumers: model
+to JSON, JSON body to typed struct, nested and `has_many` embedding, and a typed
+`ApiError` envelope wired to `on_error`/`rescue_from`. Then API versioning via
+route prefixes, pagination as a query object over folio's `Relation` with
+`Link`/`X-Total-Count` headers, and opaque bearer-token auth (a before-hook
+looking the token up, no crypto needed). Files: `rondo/src`. Status:
+**BLOCKED-ON-B44** (derives) and cross-referencing B56. Matrix rows:
+`gems-web.md` §6 (234-242), §9 (286-298). Pins: 1630-1639.
+
+### B65 — rondo Stage 3: views and templates
+Two paths, in order. First an `Html` builder DSL in pure `rondo .rx`
+(`tag.div(class: "card") { tag.span(user.name) }`) that escapes by construction
+with no `raw`/`html_safe` bypass (global rules 13 and 27). Then the Rails
+ergonomic path: a **toolchain** template compiler (enabler E9) that preprocesses
+`app/views/**/*.rhtml` into render functions, where `<%= %>` is an escaped
+append, `<%== %>` is an explicit and greppable raw append, `<% %>` is control
+flow, and the locals are typed parameters so a typo is a compile error rather
+than a runtime `NoMethodError`. Plus layouts (the inner content as a block),
+partials as ordinary render functions with typed locals, `content_for` slots,
+and the view helpers (`link_to`, `form_with` emitting the CSRF field). Files:
+`rondo/src` plus `src/ruxen_cli`. Status: builder DSL **READY-NOW**; template
+compiler **NEEDS-COMPILER-FEATURE (E9)**. Matrix rows: `gems-web.md` §4
+(187-197); `stdlib.md` §13 (399-407). Pins: 1640-1649.
+
+### B66 — rondo Stage 4: the security weave (sessions, flash, CSRF, JWT, ETag)
+This is the batch B36 exists to unblock, and it delivers most of the Rails
+security surface in one stroke. Signed cookie sessions (a typed struct
+serialized to JSON, HMAC-signed, base64'd, written through the existing
+`with_secure_cookie`, verified and deserialized in a before-hook, re-signed in
+an after-hook), flash as a one-shot session sub-map, CSRF (a per-session HMAC
+token, a before-hook rejecting unsafe verbs whose `authenticity_token` field or
+`X-CSRF-Token` header does not match, and a `csrf_token` view helper), JWT
+HS256 verification, Basic auth, HMAC request signing with a constant-time
+compare, and ETag/conditional-GET (a body hash compared against
+`If-None-Match`). Encrypted (rather than signed) sessions wait on B46's
+AES-GCM. Files: `rondo/src`. Status: **BLOCKED-ON-B36**. Matrix rows:
+`gems-web.md` §3 (167-178), §5 (216-217), §9 (294-297). Pins: 1650-1659.
+
+### B67 — rondo Stage 5: background jobs
+A `Job` mixin with `perform`, `enqueue`/`perform_later` serializing arguments
+through the Serialize derive, an in-process worker pool draining the queue on
+the existing thread-per-core reactor, then a durable queue over folio (enqueue
+is an insert; the worker drains with `SELECT … FOR UPDATE SKIP LOCKED`),
+retries with backoff on an attempt counter, scheduled jobs via a `run_at`
+column and the timer future path, dedup keys and priorities, and
+`after_perform`-style callbacks mirroring the controller filters. Coordinate
+with the reactor-waker work in rondo's `remaining-tasks.md`. Files: `rondo/src`.
+Status: **BLOCKED-ON-B44** (Serialize) and partly on B05 (the reactor bug).
+Matrix rows: `gems-web.md` §8 (271-280). Pins: 1660-1669.
+
+### B68 — rondo Stage 6: streaming, SSE, WebSocket
+rondo buffers the whole response into one `String` today. Add a streaming
+`Response.stream { |out| … }` writing chunks with `Transfer-Encoding: chunked`
+over the async writer, then **SSE** (`text/event-stream`, no handshake, the
+right first target), then the WebSocket layer: the `Upgrade` handshake
+(`Sec-WebSocket-Accept = base64(SHA1(key + GUID))`, so it needs B36), RFC-6455
+frame parse and encode on the kept-alive socket, and an ActionCable-style
+channel registry (a `Sync` map from channel to connections) fanning broadcasts
+to subscribers. Files: `rondo/src` plus the async writer surface. Status:
+**BLOCKED-ON-B36** (handshake) and on the reactor work; the SSE half can start
+earlier. Matrix rows: `gems-web.md` §10 (304-310), §3 row 175. Pins: 1670-1679.
+
+### B69 — rondo Stage 7: mailers plus SMTP
+A `UserMailer`-shaped class where each method builds a typed `Email { to,
+subject, html_body, text_body }`, HTML and text bodies from the compiled
+templates of B65, layouts and helpers shared with the web views, multipart
+assembly, base64 attachments, `deliver_later` through B67's job queue, and an
+`Smtp` client speaking the SMTP dialog over `net.TcpStream`. Plain SMTP works
+over TCP today; real providers need STARTTLS or SMTPS, so delivery is gated on
+B46. Files: a new `mailer` package or `rondo/src`. Status:
+**BLOCKED-ON-B46** and B65. Matrix rows: `gems-web.md` §7 (252-260).
+Pins: 1680-1689.
+
+---
+
+## 9. Audit gap
+
+### B70 — write `gems-frontend.md`
+`README.md` lists six matrices; only five exist. `gems-frontend.md` (the
+frontend framework surface, components, state, forms, routing, data binding,
+mapped onto quiver, plus the asset and build story) was never written, so that
+whole area has no backlog. Audit quiver (`~/.projects/quiver`) the way the other
+five were audited and produce the matrix. Files:
+`docs/ruby-parity/gems-frontend.md`. Status: **READY-NOW** (documentation).
+Matrix rows: creates a new file; add its row to `README.md` (60-64).
+Pins: none.
+
+---
+
+## 10. Summary
+
+| Blocker status | Batches | Ids |
+|---|---|---|
+| **READY-NOW** | **30** | B06, B07, B08, B09, B10, B11, B12, B13, B14, B15, B16, B17, B18, B19, B38, B39, B40, B41, B42, B43, B47, B48, B49, B51, B52, B53, B54, B57, B62, B70 (note: B37, B44, B45, B50, B63, B65 are partly ready and counted under their blocker) |
+| **BLOCKED-ON-PER-T-MONO (E1)** | 2 | B20, B21 |
+| **BLOCKED-ON-Q58-ALIAS (E2)** | 1 | B22 |
+| **BLOCKED-ON-B01 (Float ABI)** | 1 | B23 |
+| **BLOCKED-ON-B33 (codegen substrate)** | 5 | B34, B44 (derive half), B50 (3 of 4), B55, B63 (derive half) |
+| **BLOCKED-ON-B55 (Model synth)** | 4 | B56, B58, B59, B60 |
+| **BLOCKED-ON-B36 (digest/HMAC)** | 3 | B37 (hex half), B66, B68 |
+| **BLOCKED-ON-B46 (TLS)** | 2 | B45 (HTTPS half), B69 |
+| **BLOCKED-ON-B44 (Serialize)** | 2 | B64, B67 |
+| **NEEDS-RUNTIME-C** | 6 | B03, B35, B36, B46, B52 (Tms row), B61 |
+| **NEEDS-COMPILER-FEATURE** | 17 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler) |
+
+Counts overlap where a batch has both a ready half and a blocked half; the
+per-batch status line is authoritative.
+
+**Recommended first wave (parallel-safe, no shared files):** B06 (matrix sweep),
+B07 (Enumerable), B08 (String query), B12 (Integer predicates), B15 (Array
+slots), B16 (Hash), B17 (Set). Each touches a different file, so seven subagents
+can run at once. B01 and B02 (the two compiler bugs) should run alongside them
+since they gate B23 and every block-using pin.
+
+---
+
+*Created 2026-07-29 from `HANDOFF.md` plus the five matrices. Probe findings in
+§0 (scalar `self` reboxing, the Float receiver ABI, the Char literal-receiver
+quirk) were established by compiling against the workspace stdlib with
+`RUXEN_STDLIB_PATH` on that date, and are not recorded anywhere else yet.*
