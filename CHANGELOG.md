@@ -8,6 +8,24 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **`String` search and replace (Ruby-parity batch B10)** — `sub(pattern,
+  replacement)`, `gsub(pattern, replacement)`, `partition(sep)`,
+  `rpartition(sep)`, `slice(start, len)` and `split(sep, limit)`, added as
+  `.rx` methods on `class String`. `gsub` is implemented in `.rx` rather than
+  delegating to the FFI `replace(from, to)` because the C helper leaves an
+  EMPTY pattern alone, where Ruby matches it at every position including the
+  end (`"abc".gsub("", "-")` is `"-a-b-c-"`). `slice` returns
+  `Option[String]`, reproducing Ruby's edges exactly: nil past the end or for
+  a negative length, the empty string for a start of exactly `length`, and a
+  negative start counting back from the end. `split(sep, limit)` follows
+  Ruby's three-way limit rule (positive caps the field count, zero drops
+  trailing empty fields, negative keeps them). **Name collision, called out
+  deliberately:** the pre-existing `replace(from, to)` is a replace-ALL, so it
+  is Ruxen's spelling of `gsub`, NOT Ruby's one-argument `replace(other)`,
+  which overwrites the receiver in place and is not expressible. Related: the
+  one-argument `split(sep)` keeps trailing empty fields, so it matches Ruby's
+  `split(sep, -1)` rather than Ruby's default; pass an explicit `0` for the
+  Ruby default. Pins `tests/release-e2e/cases/1090`-`1092`.
 - **`String` transformation (Ruby-parity batch B09)** — `swapcase`, `chomp` /
   `chomp(suffix)`, `chop`, `center(width, pad = " ")`, `delete_prefix`,
   `delete_suffix`, `prepend`, `delete(set)`, `squeeze` / `squeeze(set)`,

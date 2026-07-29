@@ -84,14 +84,14 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 | `*` (repeat) | DONE | `def *`→`repeat` (pin 984). |
 | `<<` / `concat` | MISSING (BUG) | use `push_str` | `<<` is a no-op. |
 | `%` (format) | MISSING | use `"#{}"` interp | no `String#%`. |
-| `[]` / `slice` (index) | MISSING (BUG) | — | `"abc"[1]` yields null Char; no 2-arg `[i,n]`, no `[range]`. |
+| `[]` / `slice` (index) | PARTIAL | `.rx` `slice(start, len)` (pin 1092) | the two-argument `slice` is DONE, returning `Option[String]` with Ruby's exact out-of-range/negative-start edges. The `[]` operator, the one-argument index form and the Range form are still MISSING (`"abc"[1]` yields a null Char). |
 | `at` | MISSING | — | |
 | `byteslice` | MISSING | — | |
-| `sub` / `sub!` | MISSING | — | no first-match replace. |
-| `gsub` / `gsub!` | PARTIAL | `replace(from,to)` | `replace` is literal replace-**all** (≈ `gsub` with a string arg); no regex/block form, no `sub`. |
+| `sub` / `sub!` | PARTIAL | `.rx` `sub(pattern, replacement)` (pin 1090), regex form pin 1101 | string and `Regex` first-match forms both present. `sub!` MISSING (no in-place variant is expressible; see `strip!`). The block form needs a block-taking overload. |
+| `gsub` / `gsub!` | PARTIAL | `.rx` `gsub(pattern, replacement)` (pin 1090), regex form pin 1101 | string and `Regex` replace-all forms both present. Implemented in `.rx` rather than delegating to the FFI `replace`, which leaves an EMPTY pattern alone where Ruby matches it at every position. `gsub!` MISSING (no in-place variant is expressible). The block form needs a block-taking overload. |
 | `tr` / `tr_s` | DONE | `.rx` (pin 1082) | tr-style sets with `a-z` ranges, `^` negation and `\\` escapes; a short `to` is padded with its last character and an empty `to` deletes. |
-| `replace` (whole-string) | PARTIAL | `ruxen_string_replace` | Ruxen `replace(from,to)` = substitute, NOT Ruby `replace(other)` (overwrite contents). Name collision. |
-| `split` | DONE | `ruxen_string_split` | string delimiter only; no regex/limit (see `splitn`). |
+| `replace` (whole-string) | MISSING | — | the NAME is taken: Ruxen's `replace(from, to)` is a replace-all, i.e. its `gsub`. Ruby's one-argument `replace(other)` overwrites the receiver in place, which is not expressible (see `strip!`). Use `gsub` for the two-argument meaning. |
+| `split` | PARTIAL | `ruxen_string_split` + `.rx` `split(sep, limit)` (pin 1092) and `split(re)` (pin 1101) | string, limit and `Regex` forms present. NOTE the one-argument `split(sep)` keeps trailing empty fields, so it matches Ruby's `split(sep, -1)`, not Ruby's default; pass an explicit `0` for Ruby's default. No awk-style whitespace-splitting default. |
 | `splitn(n, delim)` | DONE | `ruxen_string_splitn` | Ruxen-specific limited split. |
 | `strip` | DONE | `ruxen_string_trim` | Ruby `strip` aliased to the same C symbol as `trim`. Pin `975`. |
 | `lstrip` / `rstrip` | DONE | `trim_start` / `trim_end` | Ruby spellings aliased to the same C symbols. Pin `975`. |
@@ -129,7 +129,7 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 | `insert` | PARTIAL | `insert(i, codepoint)` / `insert_str(i, s)` | Ruxen splits into codepoint- vs string-insert; arg is an Int codepoint, not a String, for `insert`. |
 | `prepend` | PARTIAL | `.rx` (pin 1084) | returns a NEW String; Ruby mutates the receiver and returns self. |
 | `delete_prefix` / `delete_suffix` | DONE | `.rx` (pin 1084) | |
-| `partition` / `rpartition` | MISSING | — | |
+| `partition` / `rpartition` | DONE | `.rx` (pin 1091) | three-element `Array[String]`; string separators only. |
 | `freeze` / `frozen?` | MISSING | — | no freeze protocol on values. |
 | `dup` / `clone` | PARTIAL | `clone` | `clone` = borrow→owned copy (DONE); no `dup`. |
 | `hash` | MISSING | — | (`Hashable` mixin exists for user types; no `String#hash` surface.) |

@@ -1,0 +1,12 @@
+sub first = heLlo
+sub absent = hello
+sub empty pattern = Xabc
+sub whole = []
+sub on empty = []
+gsub all = heLLo
+gsub non-overlapping = ba
+gsub empty pattern = -a-b-c-
+gsub absent = hello
+gsub on empty = []
+gsub grows = a::b::c
+replace = heLLo

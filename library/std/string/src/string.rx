@@ -921,4 +921,173 @@ class String
   def next -> String
     self.succ
   end
+
+  # ─────────────────────────────────────────────────────────────────────
+  # B10 — search and replace, string-argument forms
+  #
+  # A NAME COLLISION worth knowing about: the pre-existing FFI `replace(from,
+  # to)` is a replace-ALL, so it is Ruxen's spelling of `gsub`, NOT Ruby's
+  # one-argument `replace(other)` (which overwrites the receiver's contents in
+  # place). `gsub` below is the Ruby spelling and is implemented in `.rx`
+  # rather than delegating to `replace`, because the C helper leaves an EMPTY
+  # pattern alone where Ruby matches it at every position. Ruby's mutating
+  # `replace(other)` is not expressible; see the B09 batch note.
+  # ─────────────────────────────────────────────────────────────────────
+
+  # Ruby `String#sub` — replace the FIRST occurrence of `pattern`. An empty
+  # pattern matches at position 0, so the replacement is inserted in front.
+  def sub(pattern: &String, replacement: &String) -> String
+    let n: Int = self.chars.size as Int
+    let m: Int = pattern.chars.size as Int
+    var at: Int = -1
+    match self.index(pattern)
+      Some(k) -> at = k
+      nil     -> at = -1
+    end
+    if at < 0
+      return self.take_chars(n)
+    end
+    var out = self.take_chars(at)
+    out.push_str(replacement)
+    let tail = self.drop_chars(at + m)
+    out.push_str(tail.as_str)
+    out
+  end
+
+  # Ruby `String#gsub` — replace EVERY non-overlapping occurrence of
+  # `pattern`, scanning left to right. An empty pattern matches at every
+  # position including the end, so `"abc".gsub("", "-")` is `"-a-b-c-"`.
+  def gsub(pattern: &String, replacement: &String) -> String
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    let m: Int = pattern.chars.size as Int
+    var out = ""
+    var i: Int = 0
+    if m == 0
+      while i < n
+        out.push_str(replacement)
+        out.push(cs[i])
+        i = i + 1
+      end
+      out.push_str(replacement)
+      return out
+    end
+    var scanning = true
+    while scanning
+      var at: Int = -1
+      match self.index(pattern, i)
+        Some(k) -> at = k
+        nil     -> at = -1
+      end
+      if at < 0
+        scanning = false
+      else
+        while i < at
+          out.push(cs[i])
+          i = i + 1
+        end
+        out.push_str(replacement)
+        i = i + m
+      end
+    end
+    while i < n
+      out.push(cs[i])
+      i = i + 1
+    end
+    out
+  end
+
+  # Ruby `String#partition` — `[head, separator, tail]` around the FIRST
+  # occurrence of `sep`, or `[self, "", ""]` when it does not occur.
+  def partition(sep: &String) -> Array[String]
+    let n: Int = self.chars.size as Int
+    let m: Int = sep.chars.size as Int
+    var at: Int = -1
+    match self.index(sep)
+      Some(k) -> at = k
+      nil     -> at = -1
+    end
+    var out: Array[String] = []
+    if at < 0
+      out.push(self.take_chars(n))
+      out.push("")
+      out.push("")
+    else
+      out.push(self.take_chars(at))
+      out.push(sep.take_chars(m))
+      out.push(self.drop_chars(at + m))
+    end
+    out
+  end
+
+  # Ruby `String#rpartition` — the same three parts around the LAST
+  # occurrence of `sep`, or `["", "", self]` when it does not occur.
+  def rpartition(sep: &String) -> Array[String]
+    let n: Int = self.chars.size as Int
+    let m: Int = sep.chars.size as Int
+    var at: Int = -1
+    match self.rindex(sep)
+      Some(k) -> at = k
+      nil     -> at = -1
+    end
+    var out: Array[String] = []
+    if at < 0
+      out.push("")
+      out.push("")
+      out.push(self.take_chars(n))
+    else
+      out.push(self.take_chars(at))
+      out.push(sep.take_chars(m))
+      out.push(self.drop_chars(at + m))
+    end
+    out
+  end
+
+  # Ruby `String#slice(start, len)` — `len` characters from `start`, counting
+  # `start` back from the end when it is negative. nil when `start` falls
+  # outside the string or `len` is negative; a `start` of exactly `length`
+  # yields the empty string, as in Ruby. The one-argument and Range forms of
+  # `[]` / `slice` belong to the operator batch.
+  def slice(start: Int, len: Int) -> Option[String]
+    let n: Int = self.chars.size as Int
+    var at: Int = start
+    if at < 0
+      at = n + at
+    end
+    if at < 0 || at > n || len < 0
+      return nil
+    end
+    var take: Int = len
+    if at + take > n
+      take = n - at
+    end
+    let tail = self.drop_chars(at)
+    Some(tail.take_chars(take))
+  end
+
+  # Ruby `String#split(sep, limit)`. A POSITIVE limit caps the number of
+  # fields; ZERO drops trailing empty fields (Ruby's default); a NEGATIVE
+  # limit keeps them. The pre-existing one-argument `split(sep)` is the FFI
+  # binding and keeps trailing empty fields, so it behaves as Ruby's
+  # `split(sep, -1)` rather than Ruby's default; pass an explicit `0` for
+  # Ruby's default.
+  def split(sep: &String, limit: Int) -> Array[String]
+    if limit > 0
+      return self.splitn(limit, sep)
+    end
+    let parts = self.split(sep)
+    var last: Int = parts.size as Int
+    if limit == 0
+      while last > 0 && parts[last - 1] == ""
+        last = last - 1
+      end
+    end
+    var out: Array[String] = []
+    var i: Int = 0
+    while i < last
+      out.push(parts[i].clone)
+      i = i + 1
+    end
+    out
+  end
 end

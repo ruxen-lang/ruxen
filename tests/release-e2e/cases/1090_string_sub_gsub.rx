@@ -1,0 +1,22 @@
+# Pins `String#sub` / `String#gsub`, string-argument forms (batch B10).
+# `gsub` is implemented in `.rx` rather than delegating to the pre-existing
+# FFI `replace(from, to)` because the C helper leaves an EMPTY pattern alone,
+# where Ruby matches it at every position INCLUDING the end.
+def main
+  puts "sub first = #{"hello".sub("l", "L")}"
+  puts "sub absent = #{"hello".sub("z", "Z")}"
+  puts "sub empty pattern = #{"abc".sub("", "X")}"
+  puts "sub whole = [#{"hello".sub("hello", "")}]"
+  puts "sub on empty = [#{"".sub("a", "b")}]"
+
+  puts "gsub all = #{"hello".gsub("l", "L")}"
+  puts "gsub non-overlapping = #{"aaa".gsub("aa", "b")}"
+  puts "gsub empty pattern = #{"abc".gsub("", "-")}"
+  puts "gsub absent = #{"hello".gsub("z", "Z")}"
+  puts "gsub on empty = [#{"".gsub("a", "b")}]"
+  puts "gsub grows = #{"a.b.c".gsub(".", "::")}"
+
+  # The Ruxen-native `replace(from, to)` is the same replace-ALL, minus the
+  # empty-pattern rule.
+  puts "replace = #{"hello".replace("l", "L")}"
+end
