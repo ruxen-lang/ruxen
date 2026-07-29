@@ -1,0 +1,26 @@
+# Pins `String#partition` / `String#rpartition` (batch B10). Both return the
+# three-element `[head, separator, tail]`; a missing separator puts the whole
+# receiver LAST for `rpartition` and FIRST for `partition`, as in Ruby.
+def show(a: Array[String], label: String)
+  var line = "#{label} ="
+  var i = 0
+  while i < (a.size as Int)
+    line = line + " [#{a[i]}]"
+    i = i + 1
+  end
+  puts line
+end
+
+def main
+  show("hello".partition("l"), "partition l")
+  show("hello".partition("ll"), "partition ll")
+  show("hello".partition("z"), "partition absent")
+  show("hello".partition(""), "partition empty")
+  show("".partition("a"), "partition on empty")
+
+  show("hello".rpartition("l"), "rpartition l")
+  show("hello".rpartition("ll"), "rpartition ll")
+  show("hello".rpartition("z"), "rpartition absent")
+  show("hello".rpartition(""), "rpartition empty")
+  show("".rpartition("a"), "rpartition on empty")
+end

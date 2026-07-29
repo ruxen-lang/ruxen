@@ -1,0 +1,48 @@
+# Pins `String#index` / `String#rindex` (batch B08). Both report a CHARACTER
+# index, unlike the pre-existing `find`, which reports a BYTE offset. The
+# no-offset `rindex` is a separate arity rather than a default argument
+# because a NEGATIVE default mis-lowers on a builtin head.
+def main
+  match "hello".index("l")
+    Some(i) -> puts "index l = #{i}"
+    nil     -> puts "index l = nil"
+  end
+  match "hello".index("l", 3)
+    Some(i) -> puts "index l from 3 = #{i}"
+    nil     -> puts "index l from 3 = nil"
+  end
+  match "hello".index("z")
+    Some(i) -> puts "index z = #{i}"
+    nil     -> puts "index z = nil"
+  end
+  # Ruby: an empty needle matches at the offset itself, and at the very end.
+  match "hello".index("")
+    Some(i) -> puts "index empty = #{i}"
+    nil     -> puts "index empty = nil"
+  end
+  match "hello".index("l", -2)
+    Some(i) -> puts "index l from -2 = #{i}"
+    nil     -> puts "index l from -2 = nil"
+  end
+  match "".index("a")
+    Some(i) -> puts "empty receiver = #{i}"
+    nil     -> puts "empty receiver = nil"
+  end
+
+  match "hello".rindex("l")
+    Some(i) -> puts "rindex l = #{i}"
+    nil     -> puts "rindex l = nil"
+  end
+  match "hello".rindex("l", 2)
+    Some(i) -> puts "rindex l to 2 = #{i}"
+    nil     -> puts "rindex l to 2 = nil"
+  end
+  match "hello".rindex("z")
+    Some(i) -> puts "rindex z = #{i}"
+    nil     -> puts "rindex z = nil"
+  end
+  match "hello hello".rindex("hello")
+    Some(i) -> puts "rindex hello = #{i}"
+    nil     -> puts "rindex hello = nil"
+  end
+end

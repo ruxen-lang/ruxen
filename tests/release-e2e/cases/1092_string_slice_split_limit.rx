@@ -1,0 +1,40 @@
+# Pins `String#slice(start, len)` and `String#split(sep, limit)` (batch B10).
+# `slice` returns nil for an out-of-range start or a negative length, and the
+# empty string for a start of exactly `length` — Ruby's exact edge behaviour.
+# For `split`, a POSITIVE limit caps the field count, ZERO drops trailing
+# empty fields (Ruby's default) and a NEGATIVE limit keeps them.
+def show(a: Array[String], label: String)
+  var line = "#{label} ="
+  var i = 0
+  while i < (a.size as Int)
+    line = line + " [#{a[i]}]"
+    i = i + 1
+  end
+  puts line
+end
+
+def say(o: Option[String], label: String)
+  match o
+    Some(s) -> puts "#{label} = [#{s}]"
+    nil     -> puts "#{label} = nil"
+  end
+end
+
+def main
+  say("hello".slice(1, 3), "slice 1,3")
+  say("hello".slice(0, 0), "slice 0,0")
+  say("hello".slice(5, 1), "slice at length")
+  say("hello".slice(9, 1), "slice past end")
+  say("hello".slice(-2, 2), "slice -2,2")
+  say("hello".slice(-9, 1), "slice -9,1")
+  say("hello".slice(1, -1), "slice negative len")
+  say("hello".slice(2, 99), "slice len clamped")
+  say("".slice(0, 0), "slice empty receiver")
+
+  show("a,b,,".split(",", 0), "split limit 0")
+  show("a,b,,".split(",", -1), "split limit -1")
+  show("a,b,c".split(",", 2), "split limit 2")
+  show("a,b,c".split(",", 1), "split limit 1")
+  # The one-argument FFI form keeps trailing empty fields.
+  show("a,b,,".split(","), "split one arg")
+end

@@ -77,63 +77,63 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 
 | Ruby method | Status | Ruxen symbol / gap | Note |
 |---|---|---|---|
-| `length` | DONE | `ruxen_string_len` | Ruby `length` aliased to the same C symbol as `size`. Pin `972`. |
-| `size` | DONE | `ruxen_string_len` | |
-| `bytesize` | MISSING | — | no byte-length accessor. |
+| `length` | PARTIAL | `ruxen_string_len` | Ruby `length` aliased to the same C symbol as `size`. Pin `972`. **Counts BYTES, not characters**, so it diverges from CRuby for non-ASCII text (`"héllo".length` is 6, Ruby says 5). `chars.size` / `codepoints.size` are the character counts. Changing it is a cross-cutting call (HTTP framing in `library/std/http` relies on the byte semantics), so it is recorded here rather than changed inside a String batch. |
+| `size` | PARTIAL | `ruxen_string_len` | Same byte-vs-character divergence as `length`. |
+| `bytesize` | DONE | `.rx` over `bytes` (pin 1071) | byte length, distinct from the character count. |
 | `+` (concat) | DONE | operator | `"a"+"b"`. |
 | `*` (repeat) | DONE | `def *`→`repeat` (pin 984). |
 | `<<` / `concat` | MISSING (BUG) | use `push_str` | `<<` is a no-op. |
 | `%` (format) | MISSING | use `"#{}"` interp | no `String#%`. |
-| `[]` / `slice` (index) | MISSING (BUG) | — | `"abc"[1]` yields null Char; no 2-arg `[i,n]`, no `[range]`. |
+| `[]` / `slice` (index) | PARTIAL | `.rx` `slice(start, len)` (pin 1092) | the two-argument `slice` is DONE, returning `Option[String]` with Ruby's exact out-of-range/negative-start edges. The `[]` operator, the one-argument index form and the Range form are still MISSING (`"abc"[1]` yields a null Char). |
 | `at` | MISSING | — | |
 | `byteslice` | MISSING | — | |
-| `sub` / `sub!` | MISSING | — | no first-match replace. |
-| `gsub` / `gsub!` | PARTIAL | `replace(from,to)` | `replace` is literal replace-**all** (≈ `gsub` with a string arg); no regex/block form, no `sub`. |
-| `tr` / `tr_s` | MISSING | — | |
-| `replace` (whole-string) | PARTIAL | `ruxen_string_replace` | Ruxen `replace(from,to)` = substitute, NOT Ruby `replace(other)` (overwrite contents). Name collision. |
-| `split` | DONE | `ruxen_string_split` | string delimiter only; no regex/limit (see `splitn`). |
+| `sub` / `sub!` | PARTIAL | `.rx` `sub(pattern, replacement)` (pin 1090), regex form pin 1101 | string and `Regex` first-match forms both present. `sub!` MISSING (no in-place variant is expressible; see `strip!`). The block form needs a block-taking overload. |
+| `gsub` / `gsub!` | PARTIAL | `.rx` `gsub(pattern, replacement)` (pin 1090), regex form pin 1101 | string and `Regex` replace-all forms both present. Implemented in `.rx` rather than delegating to the FFI `replace`, which leaves an EMPTY pattern alone where Ruby matches it at every position. `gsub!` MISSING (no in-place variant is expressible). The block form needs a block-taking overload. |
+| `tr` / `tr_s` | DONE | `.rx` (pin 1082) | tr-style sets with `a-z` ranges, `^` negation and `\\` escapes; a short `to` is padded with its last character and an empty `to` deletes. |
+| `replace` (whole-string) | MISSING | — | the NAME is taken: Ruxen's `replace(from, to)` is a replace-all, i.e. its `gsub`. Ruby's one-argument `replace(other)` overwrites the receiver in place, which is not expressible (see `strip!`). Use `gsub` for the two-argument meaning. |
+| `split` | PARTIAL | `ruxen_string_split` + `.rx` `split(sep, limit)` (pin 1092) and `split(re)` (pin 1101) | string, limit and `Regex` forms present. NOTE the one-argument `split(sep)` keeps trailing empty fields, so it matches Ruby's `split(sep, -1)`, not Ruby's default; pass an explicit `0` for Ruby's default. No awk-style whitespace-splitting default. |
 | `splitn(n, delim)` | DONE | `ruxen_string_splitn` | Ruxen-specific limited split. |
 | `strip` | DONE | `ruxen_string_trim` | Ruby `strip` aliased to the same C symbol as `trim`. Pin `975`. |
 | `lstrip` / `rstrip` | DONE | `trim_start` / `trim_end` | Ruby spellings aliased to the same C symbols. Pin `975`. |
-| `strip!`/`lstrip!`/`rstrip!` | MISSING | — | no in-place variants. |
-| `chomp` / `chop` | MISSING | — | |
+| `strip!`/`lstrip!`/`rstrip!` | MISSING | — | no in-place variants, and none are expressible: inside `class String` the receiver is the FFI shell (a buffer pointer held BY VALUE), so a `.rx` body cannot rewrite the caller's string, and growing it needs a realloc whose new pointer has nowhere to go. Needs a `&var self` receiver. |
+| `chomp` / `chop` | DONE | `.rx` (pin 1080) | `chomp` has both arities (no-arg drops one `\r\n` / `\n` / `\r`; `chomp("")` drops every trailing terminator); `chop` counts a trailing `\r\n` as one character. |
 | `upcase` | DONE | `to_upper` | Ruby `upcase` aliased to the same C symbol; `to_upper` also kept. Pin `972`. |
 | `downcase` | DONE | `to_lower` | Ruby `downcase` aliased to the same C symbol; `to_lower` also kept. Pin `972`. |
-| `capitalize` | DONE | `.rx` over `chars` + upcase/downcase (pin 987). `swapcase` MISSING. |
-| `upcase!`/`downcase!`/… | MISSING | — | no bang variants. |
-| `start_with?` | DONE | `ruxen_string_starts_with` | Ruby `start_with?` aliased; single string arg (no multi-arg / regex). Pin `975`. |
-| `end_with?` | DONE | `ruxen_string_ends_with` | Ruby `end_with?` aliased; single arg. Pin `975`. |
+| `capitalize` / `swapcase` | DONE | `.rx` over `chars` (pins 987, 1080) | `swapcase` is ASCII-only, matching `upcase` / `downcase`, which are per-byte C `toupper` / `tolower`. |
+| `upcase!`/`downcase!`/`capitalize!`/`swapcase!`/`squeeze!`/`sub!`/`gsub!`/… | MISSING | — | no `!` variant of ANY String method, and none are expressible for the same reason as `strip!` above. Every method here returns a new String. |
+| `start_with?` | PARTIAL | `ruxen_string_starts_with` + `.rx` array overload (pins 975, 1072) | single `&String` arg, plus an `&Array[String]` overload standing in for Ruby's splat. No regex form. An untyped `[]` literal cannot pick between the two overloads: use a typed local. |
+| `end_with?` | PARTIAL | `ruxen_string_ends_with` + `.rx` array overload (pins 975, 1072) | as `start_with?`. |
 | `include?` | DONE | `ruxen_string_contains` | |
-| `index` | PARTIAL | `find` | `find` → `Option[USize]`; no start-offset, no regex. |
-| `rindex` | MISSING | — | |
-| `count` | MISSING | — | |
-| `delete` / `squeeze` | MISSING | — | |
-| `center` / `ljust` / `rjust` | PARTIAL | `ljust`/`rjust` DONE (`.rx`, `pad` defaults to space; pin 988/989); `center` MISSING. |
+| `index` | DONE | `.rx` `index(sub, offset = 0)` (pin 1070) | CHARACTER index, `Option[Int]`, negative offset counts from the end. The pre-existing `find` stays as the BYTE-offset spelling. Regex form: see `match`. |
+| `rindex` | DONE | `.rx` `rindex(sub)` / `rindex(sub, offset)` (pin 1070) | two arities rather than a default argument: a NEGATIVE default argument mis-lowers on a builtin head. |
+| `count` | PARTIAL | `.rx` `count(set)` (pin 1071) | Ruby tr-style sets including `a-z` ranges, `^` negation and `\\` escapes. Ruby's multi-argument intersection form needs a splat Ruxen does not have. |
+| `delete` / `squeeze` | DONE | `.rx` (pin 1082) | tr-style sets, shared with `count` / `tr`. `squeeze` has both arities (no-arg collapses every run). |
+| `center` / `ljust` / `rjust` | DONE | `.rx` (pins 988, 989, 1081) | `pad` defaults to a space and is CYCLED one character at a time, so the result is exactly `max(width, length)` characters. A multi-character pad previously overshot the width. |
 | `chars` | DONE | `ruxen_string_chars` → `Array[Char]` | |
 | `bytes` | DONE | `ruxen_string_bytes` → `Array[UInt8]` | |
-| `codepoints` | MISSING | — | |
+| `codepoints` | DONE | `.rx` over `chars` (pin 1071) | |
 | `lines` | DONE | `ruxen_string_lines` | |
-| `each_char` / `each_line` / `each_byte` | MISSING | iterate `chars`/`lines`/`bytes` via `.each` | no direct `each_*`. |
+| `each_char` / `each_line` / `each_byte` | PARTIAL | `.rx` block forms (pin 1073) | the block is required (no Enumerator return) and the return is `nil`, not `self`. `each_line` strips the line terminator, where CRuby keeps it. |
 | `each_grapheme_cluster` | MISSING | — | |
-| `scan` | MISSING | use `Regex#scan` | on `String`: absent. |
-| `match` / `match?` / `=~` | MISSING | use `Regex#find`/`is_match` / `~=` | no `String`-side regex methods; `~=` is the operator. |
-| `to_i` / `to_f` | PARTIAL | `parse_int` / `parse_float` | return `Result[…]` (not lenient like Ruby `to_i`); no radix. |
+| `scan` | PARTIAL | `.rx` `scan(re)` (pin 1101) | returns `Array[String]` of whole matches. Ruby's array-per-match form for a pattern WITH groups is absent: use `Regex#scan` and read `Match#group`. |
+| `match` / `match?` / `=~` | PARTIAL | `.rx` `match(re)` / `match?(re)` / `index(re)` (pin 1101) | `match` returns `Option[Match]`, `match?` a Bool. `=~` CANNOT be defined: Ruxen's lexer has no `=~` token (its match operator is `~=`, a Bool-returning dedicated route). Ruby's `=~` answer, the character index of the match, is available under Ruby's other name for it, `index(regexp)`. |
+| `to_i` / `to_f` | DONE | `.rx` `to_i(base = 10)` / `to_f` (pin 1100) | Ruby's lenient semantics: leading whitespace and sign, `_` between digits, a `0x` / `0b` / `0o` / `0d` prefix when it agrees with `base`, scanning stops at the first bad character, and 0 when nothing parses. The strict `Result`-returning `parse_int` / `parse_float` remain. CAVEAT: the accumulator is an `Int`, so a value past 64 bits WRAPS where CRuby promotes to a Bignum. |
 | `parse_int`/`parse_float`/`parse_uint` | DONE | `ruxen_string_parse_*` | Ruxen-native, `Result`-returning. |
 | `to_sym` / `intern` | MISSING | — | blocked on the Symbol type (a language-design decision), not a metaobject need. |
 | `to_r` / `to_c` | MISSING | — | no Rational/Complex. |
-| `to_s` / `to_str` | DONE / PARTIAL | `ruxen_string_to_string` | `to_s` DONE; `to_str` absent. |
-| `ord` / `chr` | MISSING | — | |
-| `hex` / `oct` | MISSING | — | |
-| `succ` / `next` | MISSING | — | |
+| `to_s` / `to_str` | DONE | `ruxen_string_to_string`, `.rx` `to_str` (pin 1102) | |
+| `ord` / `chr` | DONE | `.rx` (pin 1102) | `ord` on an EMPTY receiver aborts via `panic!`: Ruby raises ArgumentError and Ruxen has no exception surface, so aborting beats inventing a 0. |
+| `hex` / `oct` | DONE | `.rx` over `to_i(base)` (pin 1100) | `oct` reads the base from the receiver's own prefix (`0x`→16, `0b`→2, `0d`→10, otherwise 8), as in Ruby. |
+| `succ` / `next` | DONE | `.rx` (pin 1083) | full carry semantics: rightmost alphanumeric, carrying leftwards across alphanumerics and skipping non-alphanumerics, seeding `"1"` / `"a"` / `"A"` on overflow. The no-alphanumeric path carries at the CHARACTER level where CRuby carries at the BYTE level; the two agree for every ASCII string. |
 | `reverse` | DONE | `.rx` over `chars`+`Array#reverse` (pin 987). |
 | `insert` | PARTIAL | `insert(i, codepoint)` / `insert_str(i, s)` | Ruxen splits into codepoint- vs string-insert; arg is an Int codepoint, not a String, for `insert`. |
-| `prepend` | MISSING | — | |
-| `delete_prefix` / `delete_suffix` | MISSING | — | |
-| `partition` / `rpartition` | MISSING | — | |
+| `prepend` | PARTIAL | `.rx` (pin 1084) | returns a NEW String; Ruby mutates the receiver and returns self. |
+| `delete_prefix` / `delete_suffix` | DONE | `.rx` (pin 1084) | |
+| `partition` / `rpartition` | DONE | `.rx` (pin 1091) | three-element `Array[String]`; string separators only. |
 | `freeze` / `frozen?` | MISSING | — | no freeze protocol on values. |
-| `dup` / `clone` | PARTIAL | `clone` | `clone` = borrow→owned copy (DONE); no `dup`. |
+| `dup` / `clone` | DONE | `clone`, `.rx` `dup` (pin 1102) | both are an owned copy. Ruby's `clone` also copies frozen state and singleton methods, neither of which Ruxen has. |
 | `hash` | MISSING | — | (`Hashable` mixin exists for user types; no `String#hash` surface.) |
-| `eql?` / `casecmp` / `casecmp?` | MISSING | `==` works | only `==`; no `<=>`, `casecmp`. |
+| `eql?` / `casecmp` / `casecmp?` | DONE | `.rx` (pin 1072) | `casecmp` returns -1/0/1, ASCII folding only (CRuby folds full Unicode). Ruby's nil-for-a-non-String return has no analogue: the parameter is statically `&String`. `<=>` on String is still absent. |
 | `encode`/`force_encoding`/`encoding`/`valid_encoding?`/`b`/`scrub` | MISSING | — | no encoding API (strings are UTF-8 bytes). |
 | `unpack` / `unpack1` | MISSING | — | |
 | `getbyte` / `setbyte` | MISSING | — | |
@@ -641,7 +641,7 @@ literals, and the `~=` operator.
 | `match` | PARTIAL | `Regex#find` → `Option[Match]` | renamed (`match` is a keyword). |
 | `match?` | DONE | `Regex#is_match` → `Bool` | |
 | `scan` (on Regexp) | DONE | `Regex#scan` → `Array[Match]` | |
-| `String#scan` / `#gsub(/re/)` / `#sub(/re/)` / `#split(/re/)` | PARTIAL | `Regex#replace`/`replace_all`/`split` | regex ops live on `Regex`, not `String`. |
+| `String#scan` / `#gsub(/re/)` / `#sub(/re/)` / `#split(/re/)` | DONE | `.rx` overloads on `String` delegating to `Regex` (pin 1101) | all four now spell as in Ruby, selected by argument TYPE against their string-argument siblings; `String#match` / `#match?` / `#index(regexp)` too. The `Regex` methods remain the direct route. |
 | `Regexp.escape` / `.quote` / `.union` | MISSING | — | |
 | `Regexp#source` / `#options` / `#names` / `#casefold?` | MISSING | — | |
 | `MatchData#[]` / `#to_a` / `#captures` | PARTIAL | `Match#group(n)` / `#groups` | `group(0)`=whole; `groups`→`Array[Option[String]]`. |

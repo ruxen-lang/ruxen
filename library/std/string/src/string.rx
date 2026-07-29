@@ -107,35 +107,49 @@ class String
 
   # Ruby `String#ljust` / `rjust` — pad the string to at least `width`
   # characters with `pad` (default one space) on the right / left. `pad` is
-  # appended whole per missing character, so a single-character `pad` (the
-  # common case) is exact; a multi-character `pad` may overshoot. Built
-  # char-by-char over `chars` (a `String` has no generic `T`, so its `.rx`
-  # bodies may dispatch on the concrete `Char`); `self` is never used directly
-  # as a `String` value (the FFI-shell receiver type does not compose with the
-  # `+` concat route).
+  # CYCLED one character at a time, so the result is exactly
+  # `max(width, length)` characters even for a multi-character pad
+  # (`"hi".ljust(7, "12")` is `"hi12121"`, as in Ruby). Built char-by-char
+  # over `chars` (a `String` has no generic `T`, so its `.rx` bodies may
+  # dispatch on the concrete `Char`); `self` is never used directly as a
+  # `String` value (the FFI-shell receiver type does not compose with the `+`
+  # concat route). An empty `pad` cannot fill anything, so the receiver is
+  # returned unpadded.
   def ljust(width: Int, pad: String = " ") -> String
     var result = ""
     var len: Int = 0
     self.chars.each do |c|
-      result = result + "#{c}"
+      result.push(c)
       len = len + 1
     end
-    while len < width
-      result = result + pad
-      len = len + 1
+    let ps = pad.chars
+    let pn: Int = ps.size as Int
+    if pn > 0
+      var k: Int = 0
+      while len < width
+        result.push(ps[k % pn])
+        k = k + 1
+        len = len + 1
+      end
     end
     result
   end
 
   def rjust(width: Int, pad: String = " ") -> String
     var result = ""
-    var i: Int = self.chars.size as Int
-    while i < width
-      result = result + pad
-      i = i + 1
+    let n: Int = self.chars.size as Int
+    let ps = pad.chars
+    let pn: Int = ps.size as Int
+    if pn > 0
+      let need: Int = width - n
+      var k: Int = 0
+      while k < need
+        result.push(ps[k % pn])
+        k = k + 1
+      end
     end
     self.chars.each do |c|
-      result = result + "#{c}"
+      result.push(c)
     end
     result
   end
@@ -163,5 +177,1322 @@ class String
   # which would integer-multiply the heap pointer and miscompile.
   def *(n: Int) -> String
     self.repeat(n)
+  end
+
+  # ─────────────────────────────────────────────────────────────────────
+  # B08 — query and inspection
+  #
+  # Every body below follows the two `String` authoring rules: results are
+  # built char-by-char over `self.chars` (an `Array[Char]`), and `self` is
+  # never used as a `String` value in a `+` concatenation (it is the FFI
+  # shell). `self.as_str` (a borrow) IS safe as an FFI argument and on both
+  # sides of a comparison. A `Char` codepoint must be bound to an explicitly
+  # typed local (`let cp: Int = c as Int`) before use: the cast does not
+  # lower correctly in argument or tail-expression position.
+  # ─────────────────────────────────────────────────────────────────────
+
+  # Ruby `String#bytesize` — the length in BYTES, as opposed to `length` /
+  # `size`, which count characters. They differ for any non-ASCII text
+  # ("é" is one character, two bytes).
+  def bytesize -> Int
+    let n: Int = self.bytes.size as Int
+    n
+  end
+
+  # Ruby `String#codepoints` — the Unicode codepoint of every character.
+  def codepoints -> Array[Int]
+    var out: Array[Int] = []
+    self.chars.each do |c|
+      let cp: Int = c as Int
+      out.push(cp)
+    end
+    out
+  end
+
+  # Internal building block shared by `count` / `delete` / `squeeze` / `tr`:
+  # expand a Ruby tr-style set spec into the literal characters it denotes.
+  # `"a-e"` becomes `"abcde"`, a leading `^` (the negation marker, read by
+  # `tr_set_negated?`) is dropped, and `\x` escapes the character `x`. A lone
+  # `"^"` is a literal caret, matching Ruby.
+  def tr_set_expand -> String
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    var out = ""
+    var i: Int = 0
+    if n > 1
+      let first: Int = cs[0] as Int
+      if first == 94
+        i = 1
+      end
+    end
+    while i < n
+      let cp: Int = cs[i] as Int
+      if cp == 92 && i + 1 < n
+        out.push(cs[i + 1])
+        i = i + 2
+      else
+        var range = false
+        if i + 2 < n
+          let dash: Int = cs[i + 1] as Int
+          if dash == 45
+            range = true
+          end
+        end
+        if range
+          let lo: Int = cs[i] as Int
+          let hi: Int = cs[i + 2] as Int
+          var k: Int = lo
+          while k <= hi
+            out.push(k as Char)
+            k = k + 1
+          end
+          i = i + 3
+        else
+          out.push(cs[i])
+          i = i + 1
+        end
+      end
+    end
+    out
+  end
+
+  # Internal companion to `tr_set_expand`: does this tr-style set spec open
+  # with the `^` negation marker? A one-character `"^"` is a literal caret.
+  def tr_set_negated? -> Bool
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    if n > 1
+      let first: Int = cs[0] as Int
+      first == 94
+    else
+      false
+    end
+  end
+
+  # Ruby `String#count` — how many characters belong to the tr-style set
+  # `set` (`"lo"`, `"a-z"`, `"^aeiou"`). Ruby's multi-argument intersection
+  # form takes one set here; see docs/ruby-parity/core.md.
+  #
+  # Membership is a codepoint scan over the expanded set, hoisted out of the
+  # loop, rather than `members.include?("#{c}")`: the interpolation would
+  # allocate a fresh one-character `String` for EVERY character tested. `tr` /
+  # `tr_s` / `delete` / `squeeze` all test membership the same way.
+  def count(set: &String) -> Int
+    let members = set.tr_set_expand
+    let negated = set.tr_set_negated?
+    let ms = members.chars
+    let mn: Int = ms.size as Int
+    var n: Int = 0
+    self.chars.each do |c|
+      let cp: Int = c as Int
+      var present = false
+      var i: Int = 0
+      while i < mn
+        let m: Int = ms[i] as Int
+        if m == cp
+          present = true
+        end
+        i = i + 1
+      end
+      if present != negated
+        n = n + 1
+      end
+    end
+    n
+  end
+
+  # Ruby `String#index` — the CHARACTER index of the first occurrence of
+  # `sub` at or after `offset`, or nil. A negative `offset` counts back from
+  # the end. (The pre-existing `find` reports a BYTE offset; `index` is the
+  # Ruby-semantics character-indexed spelling.)
+  def index(sub: &String, offset: Int = 0) -> Option[Int]
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    let ss = sub.chars
+    let m: Int = ss.size as Int
+    var start: Int = offset
+    if start < 0
+      start = n + start
+      if start < 0
+        return nil
+      end
+    end
+    if start > n
+      return nil
+    end
+    var i: Int = start
+    while i + m <= n
+      var hit = true
+      var j: Int = 0
+      while j < m
+        let a: Int = cs[i + j] as Int
+        let b: Int = ss[j] as Int
+        if a != b
+          hit = false
+        end
+        j = j + 1
+      end
+      if hit
+        return Some(i)
+      end
+      i = i + 1
+    end
+    nil
+  end
+
+  # Ruby `String#rindex` — the CHARACTER index of the LAST occurrence of
+  # `sub`, or nil. Ruby's default `offset` is the string's own length, which
+  # a default argument cannot spell (it cannot reference `self`), so the
+  # no-offset form is a separate arity that computes the bound itself.
+  # A negative default (`offset: Int = -1`) is NOT an option: default-argument
+  # fill on a builtin head mis-lowers a negated literal, leaving the call at
+  # the un-filled arity. See docs/dev/gui-stack-v1-issues.md.
+  def rindex(sub: &String) -> Option[Int]
+    let n: Int = self.chars.size as Int
+    self.rindex(sub, n)
+  end
+
+  # Ruby `String#rindex(sub, offset)` — as above, but the match must BEGIN at
+  # or before `offset`. A negative `offset` counts back from the end.
+  def rindex(sub: &String, offset: Int) -> Option[Int]
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    let ss = sub.chars
+    let m: Int = ss.size as Int
+    var last: Int = offset
+    if last < 0
+      last = n + last
+      if last < 0
+        return nil
+      end
+    end
+    if last > n - m
+      last = n - m
+    end
+    var i: Int = last
+    while i >= 0
+      var hit = true
+      var j: Int = 0
+      while j < m
+        let a: Int = cs[i + j] as Int
+        let b: Int = ss[j] as Int
+        if a != b
+          hit = false
+        end
+        j = j + 1
+      end
+      if hit
+        return Some(i)
+      end
+      i = i - 1
+    end
+    nil
+  end
+
+  # Ruby `String#casecmp` — case-insensitive three-way comparison, returning
+  # -1, 0 or 1. ASCII case folding only (it reuses `to_lower`), where CRuby
+  # folds the full Unicode range. Ruby's `nil`-for-a-non-String return has no
+  # analogue: the parameter is statically a `&String`.
+  def casecmp(other: &String) -> Int
+    let a = self.to_lower
+    let b = other.to_lower
+    if a == b
+      0
+    else
+      if a < b
+        -1
+      else
+        1
+      end
+    end
+  end
+
+  # Ruby `String#casecmp?` — case-insensitive equality. ASCII folding, as
+  # for `casecmp`.
+  def casecmp?(other: &String) -> Bool
+    self.casecmp(other) == 0
+  end
+
+  # Ruby `String#eql?` — true when both strings hold the same characters.
+  # For `String` receivers this is `==`; Ruby's "same class too" clause is
+  # already guaranteed by the static parameter type.
+  def eql?(other: &String) -> Bool
+    self.as_str == other
+  end
+
+  # Ruby `String#start_with?` / `#end_with?` with several candidates. Ruby
+  # spells this with a splat (`start_with?("a", "b")`); Ruxen has no splat,
+  # so the candidates arrive as an array. The one-argument `&String` forms
+  # are the FFI bindings above; these overloads are selected by argument
+  # type. An empty candidate list is false, as in Ruby.
+  def start_with?(prefixes: &Array[String]) -> Bool
+    var hit = false
+    prefixes.each do |p|
+      if self.starts_with(p)
+        hit = true
+      end
+    end
+    hit
+  end
+
+  def end_with?(suffixes: &Array[String]) -> Bool
+    var hit = false
+    suffixes.each do |s|
+      if self.ends_with(s)
+        hit = true
+      end
+    end
+    hit
+  end
+
+  # Ruby `String#each_char` — yield every character, as a one-character
+  # `String`. Ruby returns `self` for chaining and an Enumerator when called
+  # without a block; both need surface Ruxen does not have yet, so the block
+  # is required and the return is `nil`.
+  def each_char(&block: Fn[(String) -> nil]) -> nil
+    self.chars.each do |c|
+      yield "#{c}"
+    end
+  end
+
+  # Ruby `String#each_byte` — yield every byte.
+  def each_byte(&block: Fn[(UInt8) -> nil]) -> nil
+    self.bytes.each do |b|
+      yield b
+    end
+  end
+
+  # Ruby `String#each_line` — yield every line. Built on `lines`, which
+  # STRIPS the line terminator, where CRuby keeps it; see the PARTIAL row in
+  # docs/ruby-parity/core.md.
+  def each_line(&block: Fn[(String) -> nil]) -> nil
+    self.lines.each do |l|
+      yield l
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────
+  # B09 — transformation: case, trim, pad, edges
+  #
+  # None of these mutate. Ruby's `!`-suffixed in-place variants (`upcase!`,
+  # `strip!`, `squeeze!`, …) are NOT provided: inside `class String` the
+  # receiver is the FFI shell, a buffer pointer held BY VALUE, so a body
+  # cannot rewrite the caller's string. Growing it needs a realloc whose new
+  # pointer has nowhere to be stored. Expressing them needs a `&var self`
+  # receiver the surface does not have; the matrix rows say so rather than
+  # shipping a variant that silently fails to mutate.
+  # ─────────────────────────────────────────────────────────────────────
+
+  # Internal building block: the first `n` characters as an owned `String`.
+  # `n` is clamped into `[0, length]`.
+  def take_chars(n: Int) -> String
+    let cs = self.chars
+    let len: Int = cs.size as Int
+    var stop: Int = n
+    if stop > len
+      stop = len
+    end
+    var out = ""
+    var i: Int = 0
+    while i < stop
+      out.push(cs[i])
+      i = i + 1
+    end
+    out
+  end
+
+  # Internal building block: everything from character `n` onwards, as an
+  # owned `String`. `n` is clamped into `[0, length]`.
+  def drop_chars(n: Int) -> String
+    let cs = self.chars
+    let len: Int = cs.size as Int
+    var i: Int = n
+    if i < 0
+      i = 0
+    end
+    var out = ""
+    while i < len
+      out.push(cs[i])
+      i = i + 1
+    end
+    out
+  end
+
+  # Ruby `String#swapcase` — upper-case characters become lower-case and vice
+  # versa. ASCII only, matching the existing `upcase` / `downcase`, which are
+  # per-byte C `toupper` / `tolower`.
+  def swapcase -> String
+    var out = ""
+    self.chars.each do |c|
+      let cp: Int = c as Int
+      if cp >= 65 && cp <= 90
+        let lower: Int = cp + 32
+        out.push(lower as Char)
+      else
+        if cp >= 97 && cp <= 122
+          let upper: Int = cp - 32
+          out.push(upper as Char)
+        else
+          out.push(c)
+        end
+      end
+    end
+    out
+  end
+
+  # Ruby `String#chomp` with no argument — drop one trailing line terminator,
+  # which may be `"\r\n"`, `"\n"` or `"\r"`.
+  def chomp -> String
+    let cs = self.chars
+    var keep: Int = cs.size as Int
+    if keep > 0
+      let last: Int = cs[keep - 1] as Int
+      if last == 10
+        keep = keep - 1
+        if keep > 0
+          let prev: Int = cs[keep - 1] as Int
+          if prev == 13
+            keep = keep - 1
+          end
+        end
+      else
+        if last == 13
+          keep = keep - 1
+        end
+      end
+    end
+    self.take_chars(keep)
+  end
+
+  # Ruby `String#chomp(suffix)` — drop `suffix` from the end if present. The
+  # empty suffix is Ruby's "strip EVERY trailing line terminator" spelling.
+  def chomp(suffix: &String) -> String
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    let m: Int = suffix.chars.size as Int
+    if m == 0
+      var keep: Int = n
+      var scanning = true
+      while scanning && keep > 0
+        let last: Int = cs[keep - 1] as Int
+        if last == 10
+          keep = keep - 1
+          if keep > 0
+            let prev: Int = cs[keep - 1] as Int
+            if prev == 13
+              keep = keep - 1
+            end
+          end
+        else
+          scanning = false
+        end
+      end
+      self.take_chars(keep)
+    else
+      if self.ends_with(suffix)
+        self.take_chars(n - m)
+      else
+        self.take_chars(n)
+      end
+    end
+  end
+
+  # Ruby `String#chop` — drop the last character, counting a trailing
+  # `"\r\n"` as ONE character. An empty receiver stays empty.
+  def chop -> String
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    if n == 0
+      return ""
+    end
+    var keep: Int = n - 1
+    let last: Int = cs[n - 1] as Int
+    if last == 10 && keep > 0
+      let prev: Int = cs[keep - 1] as Int
+      if prev == 13
+        keep = keep - 1
+      end
+    end
+    self.take_chars(keep)
+  end
+
+  # Ruby `String#center` — pad on BOTH sides to at least `width` characters,
+  # the extra character going on the right when the padding is odd. `pad` is
+  # cycled, as in `ljust` / `rjust`.
+  def center(width: Int, pad: String = " ") -> String
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    let ps = pad.chars
+    let pn: Int = ps.size as Int
+    var total: Int = width - n
+    if total < 0
+      total = 0
+    end
+    let left: Int = total / 2
+    let right: Int = total - left
+    var out = ""
+    if pn > 0
+      var k: Int = 0
+      while k < left
+        out.push(ps[k % pn])
+        k = k + 1
+      end
+    end
+    cs.each do |c|
+      out.push(c)
+    end
+    if pn > 0
+      var j: Int = 0
+      while j < right
+        out.push(ps[j % pn])
+        j = j + 1
+      end
+    end
+    out
+  end
+
+  # Ruby `String#delete_prefix` / `#delete_suffix` — drop `part` from the
+  # front / back if it is there, otherwise return an unchanged copy.
+  def delete_prefix(part: &String) -> String
+    if self.starts_with(part)
+      let m: Int = part.chars.size as Int
+      self.drop_chars(m)
+    else
+      self.drop_chars(0)
+    end
+  end
+
+  def delete_suffix(part: &String) -> String
+    let n: Int = self.chars.size as Int
+    if self.ends_with(part)
+      let m: Int = part.chars.size as Int
+      self.take_chars(n - m)
+    else
+      self.take_chars(n)
+    end
+  end
+
+  # Ruby `String#prepend` — `other` in front of the receiver. Ruby MUTATES
+  # and returns self; this returns a new `String` (see the batch note above).
+  def prepend(other: &String) -> String
+    var out = ""
+    other.chars.each do |c|
+      out.push(c)
+    end
+    self.chars.each do |c|
+      out.push(c)
+    end
+    out
+  end
+
+  # Ruby `String#delete` — drop every character in the tr-style `set`
+  # (`"aeiou"`, `"a-z"`, `"^abc"`), sharing `tr_set_expand` / `tr_set_negated?`
+  # with `count`.
+  def delete(set: &String) -> String
+    let members = set.tr_set_expand
+    let negated = set.tr_set_negated?
+    let ms = members.chars
+    let mn: Int = ms.size as Int
+    var out = ""
+    self.chars.each do |c|
+      let cp: Int = c as Int
+      var present = false
+      var i: Int = 0
+      while i < mn
+        let m: Int = ms[i] as Int
+        if m == cp
+          present = true
+        end
+        i = i + 1
+      end
+      if present == negated
+        out.push(c)
+      end
+    end
+    out
+  end
+
+  # Ruby `String#squeeze` with no argument — collapse every run of the same
+  # character down to one.
+  def squeeze -> String
+    var out = ""
+    var prev: Int = -1
+    self.chars.each do |c|
+      let cp: Int = c as Int
+      if cp != prev
+        out.push(c)
+      end
+      prev = cp
+    end
+    out
+  end
+
+  # Ruby `String#squeeze(set)` — collapse runs only of characters that belong
+  # to the tr-style `set`.
+  def squeeze(set: &String) -> String
+    let members = set.tr_set_expand
+    let negated = set.tr_set_negated?
+    let ms = members.chars
+    let mn: Int = ms.size as Int
+    var out = ""
+    var prev: Int = -1
+    self.chars.each do |c|
+      let cp: Int = c as Int
+      var present = false
+      var i: Int = 0
+      while i < mn
+        let m: Int = ms[i] as Int
+        if m == cp
+          present = true
+        end
+        i = i + 1
+      end
+      if cp == prev && present != negated
+        prev = cp
+      else
+        out.push(c)
+        prev = cp
+      end
+    end
+    out
+  end
+
+  # Ruby `String#tr` — translate characters of the tr-style set `from` into
+  # the corresponding characters of `to`. A shorter `to` is padded with its
+  # last character; an EMPTY `to` deletes instead. When `from` is negated
+  # (`"^aeiou"`), every character OUTSIDE the set maps to the last character
+  # of `to`.
+  def tr(from: &String, to: &String) -> String
+    let members = from.tr_set_expand
+    let negated = from.tr_set_negated?
+    let targets = to.tr_set_expand
+    let ts = targets.chars
+    let tn: Int = ts.size as Int
+    let src = members.chars
+    let sn: Int = src.size as Int
+    var out = ""
+    self.chars.each do |c|
+      let cp: Int = c as Int
+      var at: Int = -1
+      var i: Int = 0
+      while i < sn
+        let s: Int = src[i] as Int
+        if s == cp && at < 0
+          at = i
+        end
+        i = i + 1
+      end
+      if negated
+        if at < 0
+          if tn > 0
+            out.push(ts[tn - 1])
+          end
+        else
+          out.push(c)
+        end
+      else
+        if at < 0
+          out.push(c)
+        else
+          if tn > 0
+            var pick: Int = at
+            if pick > tn - 1
+              pick = tn - 1
+            end
+            out.push(ts[pick])
+          end
+        end
+      end
+    end
+    out
+  end
+
+  # Ruby `String#tr_s` — `tr`, then squeeze runs of the characters that were
+  # actually TRANSLATED (untranslated runs are left alone).
+  def tr_s(from: &String, to: &String) -> String
+    let members = from.tr_set_expand
+    let negated = from.tr_set_negated?
+    let targets = to.tr_set_expand
+    let ts = targets.chars
+    let tn: Int = ts.size as Int
+    let src = members.chars
+    let sn: Int = src.size as Int
+    var out = ""
+    var prev: Int = -1
+    var prev_translated = false
+    self.chars.each do |c|
+      let cp: Int = c as Int
+      var at: Int = -1
+      var i: Int = 0
+      while i < sn
+        let s: Int = src[i] as Int
+        if s == cp && at < 0
+          at = i
+        end
+        i = i + 1
+      end
+      var hit = at >= 0
+      if negated
+        hit = at < 0
+      end
+      if hit
+        if tn > 0
+          var pick: Int = at
+          if negated
+            pick = tn - 1
+          end
+          if pick > tn - 1
+            pick = tn - 1
+          end
+          let mapped: Int = ts[pick] as Int
+          if prev_translated && prev == mapped
+            prev = mapped
+          else
+            out.push(ts[pick])
+            prev = mapped
+          end
+          prev_translated = true
+        end
+      else
+        out.push(c)
+        prev = cp
+        prev_translated = false
+      end
+    end
+    out
+  end
+
+  # Ruby `String#succ` / `#next` — the "next" string. The rightmost
+  # ALPHANUMERIC character is incremented, carrying leftwards across
+  # alphanumerics (`"9"`→`"0"`, `"z"`→`"a"`, `"Z"`→`"A"`) and SKIPPING
+  # non-alphanumerics, so `"1.9".succ` is `"2.0"` and `"zz".succ` is `"aaa"`.
+  # A string with no alphanumeric increments its last character's codepoint
+  # instead, carrying at 255. An empty receiver stays empty. CRuby carries at
+  # the BYTE level in that second path; this carries at the character level,
+  # which agrees for every ASCII string.
+  def succ -> String
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    if n == 0
+      return ""
+    end
+    var cps: Array[Int] = []
+    var i: Int = 0
+    var has_alnum = false
+    while i < n
+      let cp: Int = cs[i] as Int
+      cps.push(cp)
+      if (cp >= 48 && cp <= 57) || (cp >= 97 && cp <= 122) || (cp >= 65 && cp <= 90)
+        has_alnum = true
+      end
+      i = i + 1
+    end
+
+    var carry = true
+    var wrapped_at: Int = -1
+    var wrapped_seed: Int = 0
+    var k: Int = n - 1
+    while carry && k >= 0
+      let cp: Int = cps[k]
+      if cp >= 48 && cp <= 56
+        cps[k] = cp + 1
+        carry = false
+      else
+        if cp == 57
+          cps[k] = 48
+          wrapped_at = k
+          wrapped_seed = 49
+        else
+          if cp >= 97 && cp <= 121
+            cps[k] = cp + 1
+            carry = false
+          else
+            if cp == 122
+              cps[k] = 97
+              wrapped_at = k
+              wrapped_seed = 97
+            else
+              if cp >= 65 && cp <= 89
+                cps[k] = cp + 1
+                carry = false
+              else
+                if cp == 90
+                  cps[k] = 65
+                  wrapped_at = k
+                  wrapped_seed = 65
+                else
+                  if !has_alnum
+                    if cp == 255
+                      cps[k] = 0
+                      wrapped_at = k
+                      wrapped_seed = 1
+                    else
+                      cps[k] = cp + 1
+                      carry = false
+                    end
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+      if carry
+        k = k - 1
+      end
+    end
+
+    var out = ""
+    var j: Int = 0
+    while j < n
+      if carry && j == wrapped_at
+        out.push(wrapped_seed as Char)
+      end
+      out.push(cps[j] as Char)
+      j = j + 1
+    end
+    out
+  end
+
+  # Ruby `String#next` — the other spelling of `succ`.
+  def next -> String
+    self.succ
+  end
+
+  # ─────────────────────────────────────────────────────────────────────
+  # B10 — search and replace, string-argument forms
+  #
+  # A NAME COLLISION worth knowing about: the pre-existing FFI `replace(from,
+  # to)` is a replace-ALL, so it is Ruxen's spelling of `gsub`, NOT Ruby's
+  # one-argument `replace(other)` (which overwrites the receiver's contents in
+  # place). `gsub` below is the Ruby spelling and is implemented in `.rx`
+  # rather than delegating to `replace`, because the C helper leaves an EMPTY
+  # pattern alone where Ruby matches it at every position. Ruby's mutating
+  # `replace(other)` is not expressible; see the B09 batch note.
+  # ─────────────────────────────────────────────────────────────────────
+
+  # Ruby `String#sub` — replace the FIRST occurrence of `pattern`. An empty
+  # pattern matches at position 0, so the replacement is inserted in front.
+  def sub(pattern: &String, replacement: &String) -> String
+    let n: Int = self.chars.size as Int
+    let m: Int = pattern.chars.size as Int
+    var at: Int = -1
+    match self.index(pattern)
+      Some(k) -> at = k
+      nil     -> at = -1
+    end
+    if at < 0
+      return self.take_chars(n)
+    end
+    var out = self.take_chars(at)
+    out.push_str(replacement)
+    let tail = self.drop_chars(at + m)
+    out.push_str(tail.as_str)
+    out
+  end
+
+  # Ruby `String#gsub` — replace EVERY non-overlapping occurrence of
+  # `pattern`, scanning left to right. An empty pattern matches at every
+  # position including the end, so `"abc".gsub("", "-")` is `"-a-b-c-"`.
+  def gsub(pattern: &String, replacement: &String) -> String
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    let m: Int = pattern.chars.size as Int
+    var out = ""
+    var i: Int = 0
+    if m == 0
+      while i < n
+        out.push_str(replacement)
+        out.push(cs[i])
+        i = i + 1
+      end
+      out.push_str(replacement)
+      return out
+    end
+    var scanning = true
+    while scanning
+      var at: Int = -1
+      match self.index(pattern, i)
+        Some(k) -> at = k
+        nil     -> at = -1
+      end
+      if at < 0
+        scanning = false
+      else
+        while i < at
+          out.push(cs[i])
+          i = i + 1
+        end
+        out.push_str(replacement)
+        i = i + m
+      end
+    end
+    while i < n
+      out.push(cs[i])
+      i = i + 1
+    end
+    out
+  end
+
+  # Ruby `String#partition` — `[head, separator, tail]` around the FIRST
+  # occurrence of `sep`, or `[self, "", ""]` when it does not occur.
+  def partition(sep: &String) -> Array[String]
+    let n: Int = self.chars.size as Int
+    let m: Int = sep.chars.size as Int
+    var at: Int = -1
+    match self.index(sep)
+      Some(k) -> at = k
+      nil     -> at = -1
+    end
+    var out: Array[String] = []
+    if at < 0
+      out.push(self.take_chars(n))
+      out.push("")
+      out.push("")
+    else
+      out.push(self.take_chars(at))
+      out.push(sep.take_chars(m))
+      out.push(self.drop_chars(at + m))
+    end
+    out
+  end
+
+  # Ruby `String#rpartition` — the same three parts around the LAST
+  # occurrence of `sep`, or `["", "", self]` when it does not occur.
+  def rpartition(sep: &String) -> Array[String]
+    let n: Int = self.chars.size as Int
+    let m: Int = sep.chars.size as Int
+    var at: Int = -1
+    match self.rindex(sep)
+      Some(k) -> at = k
+      nil     -> at = -1
+    end
+    var out: Array[String] = []
+    if at < 0
+      out.push("")
+      out.push("")
+      out.push(self.take_chars(n))
+    else
+      out.push(self.take_chars(at))
+      out.push(sep.take_chars(m))
+      out.push(self.drop_chars(at + m))
+    end
+    out
+  end
+
+  # Ruby `String#slice(start, len)` — `len` characters from `start`, counting
+  # `start` back from the end when it is negative. nil when `start` falls
+  # outside the string or `len` is negative; a `start` of exactly `length`
+  # yields the empty string, as in Ruby. The one-argument and Range forms of
+  # `[]` / `slice` belong to the operator batch.
+  def slice(start: Int, len: Int) -> Option[String]
+    let n: Int = self.chars.size as Int
+    var at: Int = start
+    if at < 0
+      at = n + at
+    end
+    if at < 0 || at > n || len < 0
+      return nil
+    end
+    var take: Int = len
+    if at + take > n
+      take = n - at
+    end
+    let tail = self.drop_chars(at)
+    Some(tail.take_chars(take))
+  end
+
+  # Ruby `String#split(sep, limit)`. A POSITIVE limit caps the number of
+  # fields; ZERO drops trailing empty fields (Ruby's default); a NEGATIVE
+  # limit keeps them. The pre-existing one-argument `split(sep)` is the FFI
+  # binding and keeps trailing empty fields, so it behaves as Ruby's
+  # `split(sep, -1)` rather than Ruby's default; pass an explicit `0` for
+  # Ruby's default.
+  def split(sep: &String, limit: Int) -> Array[String]
+    if limit > 0
+      return self.splitn(limit, sep)
+    end
+    let parts = self.split(sep)
+    var last: Int = parts.size as Int
+    if limit == 0
+      while last > 0 && parts[last - 1] == ""
+        last = last - 1
+      end
+    end
+    var out: Array[String] = []
+    var i: Int = 0
+    while i < last
+      out.push(parts[i].clone)
+      i = i + 1
+    end
+    out
+  end
+
+  # ─────────────────────────────────────────────────────────────────────
+  # B11 — conversion and the Regex bridge
+  #
+  # `to_i` / `to_f` are Ruby's LENIENT parsers: they read as much of a number
+  # as they can from the front of the string and answer 0 when there is
+  # nothing to read. The `Result`-returning `parse_int` / `parse_float` stay
+  # as the strict spellings; reach for those when "not a number" has to be
+  # distinguishable from "zero".
+  #
+  # The regex methods delegate to `library/std/regex`. Each is an overload
+  # selected by ARGUMENT TYPE against its string-argument sibling from B10, so
+  # `gsub` takes either a `&String` or a `&Regex` under the one Ruby name.
+  # ─────────────────────────────────────────────────────────────────────
+
+  # Ruby `String#to_i` — the leading integer, or 0. Leading whitespace and a
+  # `+` / `-` sign are allowed, `_` may separate digits, a `0x` / `0b` / `0o` /
+  # `0d` prefix is consumed when it agrees with `base`, and scanning stops at
+  # the first character that is not a digit in `base`. The accumulator is an
+  # `Int`, so a value past 64 bits WRAPS where CRuby promotes to a Bignum.
+  def to_i(base: Int = 10) -> Int
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    var i: Int = 0
+    var skipping = true
+    while skipping && i < n
+      let cp: Int = cs[i] as Int
+      if cp == 32 || cp == 9 || cp == 10 || cp == 13 || cp == 11 || cp == 12
+        i = i + 1
+      else
+        skipping = false
+      end
+    end
+    var negative = false
+    if i < n
+      let sign: Int = cs[i] as Int
+      if sign == 45
+        negative = true
+        i = i + 1
+      else
+        if sign == 43
+          i = i + 1
+        end
+      end
+    end
+    if i + 1 < n
+      let lead: Int = cs[i] as Int
+      if lead == 48
+        let tag: Int = cs[i + 1] as Int
+        var prefixed = false
+        if base == 16 && (tag == 120 || tag == 88)
+          prefixed = true
+        end
+        if base == 2 && (tag == 98 || tag == 66)
+          prefixed = true
+        end
+        if base == 8 && (tag == 111 || tag == 79)
+          prefixed = true
+        end
+        if base == 10 && (tag == 100 || tag == 68)
+          prefixed = true
+        end
+        if prefixed
+          i = i + 2
+        end
+      end
+    end
+    var value: Int = 0
+    var seen = false
+    var reading = true
+    while reading && i < n
+      let cp: Int = cs[i] as Int
+      if cp == 95 && seen
+        i = i + 1
+      else
+        var digit: Int = -1
+        if cp >= 48 && cp <= 57
+          digit = cp - 48
+        else
+          if cp >= 97 && cp <= 122
+            digit = cp - 87
+          else
+            if cp >= 65 && cp <= 90
+              digit = cp - 55
+            end
+          end
+        end
+        if digit < 0 || digit >= base
+          reading = false
+        else
+          value = value * base + digit
+          seen = true
+          i = i + 1
+        end
+      end
+    end
+    if negative
+      0 - value
+    else
+      value
+    end
+  end
+
+  # Ruby `String#to_f` — the leading float, or 0.0. Reads an optional sign, a
+  # digit run (`_` may separate digits), an optional fraction and an optional
+  # exponent, then hands the collected prefix to the strict `parse_float`.
+  def to_f -> Float
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    var i: Int = 0
+    var skipping = true
+    while skipping && i < n
+      let cp: Int = cs[i] as Int
+      if cp == 32 || cp == 9 || cp == 10 || cp == 13 || cp == 11 || cp == 12
+        i = i + 1
+      else
+        skipping = false
+      end
+    end
+    var buf = ""
+    if i < n
+      let sign: Int = cs[i] as Int
+      if sign == 45 || sign == 43
+        buf.push(cs[i])
+        i = i + 1
+      end
+    end
+    var seen = false
+    var reading = true
+    while reading && i < n
+      let cp: Int = cs[i] as Int
+      if cp >= 48 && cp <= 57
+        buf.push(cs[i])
+        seen = true
+        i = i + 1
+      else
+        if cp == 95 && seen
+          i = i + 1
+        else
+          reading = false
+        end
+      end
+    end
+    if i < n
+      let dot: Int = cs[i] as Int
+      if dot == 46
+        var fraction = ""
+        var j: Int = i + 1
+        var scanning = true
+        while scanning && j < n
+          let cp: Int = cs[j] as Int
+          if cp >= 48 && cp <= 57
+            fraction.push(cs[j])
+            j = j + 1
+          else
+            if cp == 95 && (fraction.size as Int) > 0
+              j = j + 1
+            else
+              scanning = false
+            end
+          end
+        end
+        if (fraction.size as Int) > 0 || seen
+          buf.push(cs[i])
+          buf.push_str(fraction.as_str)
+          seen = seen || (fraction.size as Int) > 0
+          i = j
+        end
+      end
+    end
+    if seen && i < n
+      let e: Int = cs[i] as Int
+      if e == 101 || e == 69
+        var exponent = ""
+        var j: Int = i + 1
+        if j < n
+          let sign: Int = cs[j] as Int
+          if sign == 45 || sign == 43
+            exponent.push(cs[j])
+            j = j + 1
+          end
+        end
+        var digits = 0
+        var scanning = true
+        while scanning && j < n
+          let cp: Int = cs[j] as Int
+          if cp >= 48 && cp <= 57
+            exponent.push(cs[j])
+            digits = digits + 1
+            j = j + 1
+          else
+            scanning = false
+          end
+        end
+        # A trailing `e` with no digits is not part of the number.
+        if digits > 0
+          buf.push(cs[i])
+          buf.push_str(exponent.as_str)
+          i = j
+        end
+      end
+    end
+    if !seen
+      return 0.0
+    end
+    match buf.parse_float
+      Ok(v)  -> v
+      Err(e) -> 0.0
+    end
+  end
+
+  # Ruby `String#hex` — the leading hexadecimal integer, or 0. An `0x` prefix
+  # is optional.
+  def hex -> Int
+    self.to_i(16)
+  end
+
+  # Ruby `String#oct` — the leading integer in the base its own PREFIX names:
+  # `0x` is 16, `0b` is 2, `0d` is 10, and everything else (including a bare
+  # `0`) is 8.
+  def oct -> Int
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    var i: Int = 0
+    var skipping = true
+    while skipping && i < n
+      let cp: Int = cs[i] as Int
+      if cp == 32 || cp == 9 || cp == 10 || cp == 13 || cp == 11 || cp == 12
+        i = i + 1
+      else
+        skipping = false
+      end
+    end
+    if i < n
+      let sign: Int = cs[i] as Int
+      if sign == 45 || sign == 43
+        i = i + 1
+      end
+    end
+    var base: Int = 8
+    if i + 1 < n
+      let lead: Int = cs[i] as Int
+      if lead == 48
+        let tag: Int = cs[i + 1] as Int
+        if tag == 120 || tag == 88
+          base = 16
+        end
+        if tag == 98 || tag == 66
+          base = 2
+        end
+        if tag == 100 || tag == 68
+          base = 10
+        end
+      end
+    end
+    self.to_i(base)
+  end
+
+  # Ruby `String#ord` — the codepoint of the FIRST character. Ruby raises
+  # ArgumentError on an empty receiver; Ruxen has no exception surface, so
+  # this aborts rather than inventing a value such as 0.
+  def ord -> Int
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    if n == 0
+      panic!("String#ord: empty string")
+    end
+    let cp: Int = cs[0] as Int
+    cp
+  end
+
+  # Ruby `String#chr` — the first character as a one-character `String`, or
+  # the empty string when the receiver is empty.
+  def chr -> String
+    self.take_chars(1)
+  end
+
+  # Ruby `String#to_str` — the implicit-conversion spelling of `to_s`.
+  def to_str -> String
+    self.drop_chars(0)
+  end
+
+  # Ruby `String#dup` — an owned copy. `clone` is the Ruxen-native spelling of
+  # the same thing (Ruby's `clone` also copies frozen state and singletons,
+  # neither of which Ruxen has).
+  def dup -> String
+    self.drop_chars(0)
+  end
+
+  # Ruby `String#match` — the first `Regex` match, with its capture data, or
+  # nil.
+  def match(re: &Regex) -> Option[Match]
+    re.find(self.as_str)
+  end
+
+  # Ruby `String#match?` — does `re` match anywhere? Same answer as the `~=`
+  # operator, under the Ruby name.
+  def match?(re: &Regex) -> Bool
+    re.is_match(self.as_str)
+  end
+
+  # Ruby `String#scan` — every non-overlapping match, left to right, as
+  # strings. Ruby's "array-per-match when the pattern has groups" form is not
+  # covered: use `Regex#scan` and read `Match#group` for captures.
+  def scan(re: &Regex) -> Array[String]
+    let found = re.scan(self.as_str)
+    var out: Array[String] = []
+    found.each do |m|
+      out.push(m.matched)
+    end
+    out
+  end
+
+  # Ruby `String#sub` / `#gsub` with a `Regex` pattern. The replacement
+  # supports PCRE2 back-reference syntax (`$1`, `${name}`), which is where
+  # Ruby writes `\1`.
+  def sub(re: &Regex, replacement: &String) -> String
+    re.replace(self.as_str, replacement)
+  end
+
+  def gsub(re: &Regex, replacement: &String) -> String
+    re.replace_all(self.as_str, replacement)
+  end
+
+  # Ruby `String#split` with a `Regex` separator.
+  def split(re: &Regex) -> Array[String]
+    re.split(self.as_str)
+  end
+
+  # Internal building block: turn a BYTE offset into the receiver into a
+  # CHARACTER index, by re-walking the characters and adding up their UTF-8
+  # widths. `Match#start_pos` is a byte offset; every Ruby index is a
+  # character index.
+  def char_index_of_byte(offset: Int) -> Int
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    var bytes: Int = 0
+    var idx: Int = 0
+    while idx < n && bytes < offset
+      let cp: Int = cs[idx] as Int
+      if cp < 128
+        bytes = bytes + 1
+      else
+        if cp < 2048
+          bytes = bytes + 2
+        else
+          if cp < 65536
+            bytes = bytes + 3
+          else
+            bytes = bytes + 4
+          end
+        end
+      end
+      idx = idx + 1
+    end
+    idx
+  end
+
+  # Ruby `String#index(regexp)` — the CHARACTER index where `re` first
+  # matches, or nil. This is also the answer Ruby's `=~` gives; `=~` itself
+  # cannot be defined, because Ruxen's lexer has no such token (it spells the
+  # match operator `~=`, which is a Bool-returning dedicated route).
+  def index(re: &Regex) -> Option[Int]
+    match re.find(self.as_str)
+      Some(m) -> Some(self.char_index_of_byte(m.start_pos))
+      nil     -> nil
+    end
   end
 end

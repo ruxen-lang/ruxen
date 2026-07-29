@@ -40,6 +40,75 @@ once 1.0.0 ships.
   `str[0]`; classification is ASCII-only. Ruby's `TrueClass`/`FalseClass`
   `&`/`|`/`^`/`!` already work as machine operators and are now pinned rather
   than reimplemented. Pins `tests/release-e2e/cases/1170`, `1171`.
+- **`String` conversion and the Regex bridge (Ruby-parity batch B11)** —
+  `to_i(base = 10)`, `to_f`, `hex`, `oct`, `ord`, `chr`, `to_str`, `dup`, and
+  the String-side regex spellings `match(re)`, `match?(re)`, `scan(re)`,
+  `sub(re, repl)`, `gsub(re, repl)`, `split(re)` and `index(re)`, added as
+  `.rx` methods on `class String`. `to_i` / `to_f` are Ruby's LENIENT
+  parsers: leading whitespace and a sign, `_` between digits, a `0x` / `0b` /
+  `0o` / `0d` prefix when it agrees with the base, scanning stops at the first
+  character that does not fit, and 0 when nothing parses. The strict
+  `Result`-returning `parse_int` / `parse_float` are untouched and remain the
+  spelling to reach for when "not a number" has to be distinguishable from
+  "zero". Each regex method is an overload selected by ARGUMENT TYPE against
+  its string-argument sibling from B10, so one Ruby name (`gsub`, `sub`,
+  `split`, `index`) covers both. Two gaps recorded rather than faked: `=~`
+  cannot be defined, because Ruxen's lexer has no such token (its match
+  operator is `~=`, a Bool-returning dedicated route), so Ruby's `=~` answer
+  is served by Ruby's other name for it, `index(regexp)`, which converts the
+  match's BYTE offset into a CHARACTER index; and `ord` on an empty receiver
+  aborts via `panic!`, since Ruby raises ArgumentError and Ruxen has no
+  exception surface. Pins `tests/release-e2e/cases/1100`-`1102`.
+- **`String` search and replace (Ruby-parity batch B10)** — `sub(pattern,
+  replacement)`, `gsub(pattern, replacement)`, `partition(sep)`,
+  `rpartition(sep)`, `slice(start, len)` and `split(sep, limit)`, added as
+  `.rx` methods on `class String`. `gsub` is implemented in `.rx` rather than
+  delegating to the FFI `replace(from, to)` because the C helper leaves an
+  EMPTY pattern alone, where Ruby matches it at every position including the
+  end (`"abc".gsub("", "-")` is `"-a-b-c-"`). `slice` returns
+  `Option[String]`, reproducing Ruby's edges exactly: nil past the end or for
+  a negative length, the empty string for a start of exactly `length`, and a
+  negative start counting back from the end. `split(sep, limit)` follows
+  Ruby's three-way limit rule (positive caps the field count, zero drops
+  trailing empty fields, negative keeps them). **Name collision, called out
+  deliberately:** the pre-existing `replace(from, to)` is a replace-ALL, so it
+  is Ruxen's spelling of `gsub`, NOT Ruby's one-argument `replace(other)`,
+  which overwrites the receiver in place and is not expressible. Related: the
+  one-argument `split(sep)` keeps trailing empty fields, so it matches Ruby's
+  `split(sep, -1)` rather than Ruby's default; pass an explicit `0` for the
+  Ruby default. Pins `tests/release-e2e/cases/1090`-`1092`.
+- **`String` transformation (Ruby-parity batch B09)** — `swapcase`, `chomp` /
+  `chomp(suffix)`, `chop`, `center(width, pad = " ")`, `delete_prefix`,
+  `delete_suffix`, `prepend`, `delete(set)`, `squeeze` / `squeeze(set)`,
+  `tr(from, to)`, `tr_s(from, to)`, and `succ` / `next`, added as `.rx`
+  methods on `class String`. `delete` / `squeeze` / `tr` / `tr_s` share the
+  tr-style set building blocks introduced with B08's `count`. `succ`
+  implements Ruby's full carry: the rightmost alphanumeric is incremented,
+  the carry runs leftwards across alphanumerics and skips non-alphanumerics,
+  and overflowing the leftmost one seeds a `"1"` / `"a"` / `"A"` in front
+  (`"1999zzz".succ` is `"2000aaa"`). Two internal building blocks,
+  `take_chars` and `drop_chars`, back the edge-trimming methods. Ruby's
+  `!`-suffixed in-place variants are deliberately NOT provided: inside
+  `class String` the receiver is the FFI shell, a buffer pointer held by
+  value, so a `.rx` body cannot rewrite the caller's string, and growing it
+  needs a realloc whose new pointer has nowhere to be stored. Pins
+  `tests/release-e2e/cases/1080`-`1084`.
+- **`String` query and inspection (Ruby-parity batch B08)** — `bytesize`,
+  `codepoints`, `count(set)`, `index(sub, offset = 0)`, `rindex(sub)` /
+  `rindex(sub, offset)`, `casecmp`, `casecmp?`, `eql?`, array-argument
+  `start_with?` / `end_with?`, and `each_char` / `each_byte` / `each_line`,
+  all added as `.rx` methods on `class String`
+  (`library/std/string/src/string.rx`). `count` understands Ruby's tr-style
+  set syntax (`a-z` ranges, a leading `^` negation, `\` escapes) through two
+  shared building blocks, `tr_set_expand` and `tr_set_negated?`, which the
+  B09 `delete` / `squeeze` / `tr` methods reuse. `index` / `rindex` report a
+  CHARACTER index, unlike the pre-existing `find`, which reports a BYTE
+  offset. Notable non-parity points, recorded on the matrix rows rather than
+  papered over: `each_*` requires a block and returns `nil` (Ruby returns
+  `self`, or an Enumerator without a block); `each_line` strips the line
+  terminator because it is built on `lines`; `casecmp` folds ASCII only; and
+  Ruby's splat forms of `start_with?` / `end_with?` are spelled with an
+  array. Pins `tests/release-e2e/cases/1070`-`1073`.
 - **`String#reverse` / `capitalize` / `ljust` / `rjust`** — added as `.rx`
   methods (`library/std/string/src/string.rx`) built char-by-char over `chars`.
   A `String` carries no generic element type, so unlike the generic-collection
@@ -78,6 +147,14 @@ once 1.0.0 ships.
   alias map; no method or type name is hardcoded. `Hash`'s `has_key?` /
   `include?` / `member?` / `each_pair` reverted from delegating bodies to
   one-line `alias`es. Pins `tests/release-e2e/cases/990`.
+- **`String#ljust` / `#rjust` overshot the requested width with a
+  multi-character pad.** Both appended the pad WHOLE once per missing
+  character, so `"hi".ljust(7, "12")` produced eight characters
+  (`"hi12121212"`-style overshoot) where Ruby cycles the pad one character at
+  a time and guarantees exactly `max(width, length)`. Both now cycle, as does
+  the new `center`. Single-character pads (the common case, and everything the
+  pre-existing pins 988 / 989 covered) are unaffected. Pin
+  `tests/release-e2e/cases/1081`.
 - **Default arguments now fill on a builtin-head (`String`/`Array`/`Hash`/`Set`)
   method call.** The default-arg pass (`append_method_default_args`) + the
   signature-based arg seeding ran only for nominal (`Class`/`Struct`/`Enum`)

@@ -1,0 +1,10 @@
+index l = 2
+index l from 3 = 3
+index z = nil
+index empty = 0
+index l from -2 = 3
+empty receiver = nil
+rindex l = 3
+rindex l to 2 = 2
+rindex z = nil
+rindex hello = 6

@@ -1,0 +1,9 @@
+prepend = hello world
+prepend onto empty = ab
+prepend empty = ab
+delete_prefix hit = llo
+delete_prefix miss = hello
+delete_prefix whole = []
+delete_suffix hit = hel
+delete_suffix miss = hello
+delete_suffix whole = []

@@ -1,0 +1,29 @@
+# Pins `String#casecmp` / `casecmp?` / `eql?` and the array-argument
+# `start_with?` / `end_with?` overloads (batch B08). Ruby spells the last two
+# with a splat; Ruxen has no splat, so the candidates arrive as an array and
+# the overload is selected by argument TYPE against the one-argument
+# `&String` FFI bindings.
+def main
+  puts "casecmp eq = #{"Abc".casecmp("abc")}"
+  puts "casecmp lt = #{"a".casecmp("b")}"
+  puts "casecmp gt = #{"B".casecmp("a")}"
+  puts "casecmp? yes = #{"HELLO".casecmp?("hello")}"
+  puts "casecmp? no = #{"hello".casecmp?("world")}"
+
+  puts "eql? yes = #{"abc".eql?("abc")}"
+  puts "eql? no = #{"abc".eql?("abd")}"
+
+  puts "start_with? hit = #{"hello".start_with?(["x", "he"])}"
+  puts "start_with? miss = #{"hello".start_with?(["x", "y"])}"
+  # An untyped `[]` literal cannot pick between the `&String` and
+  # `&Array[String]` overloads, so the empty case is spelled with a typed
+  # local.
+  let none: Array[String] = []
+  puts "start_with? none = #{"hello".start_with?(none)}"
+  puts "end_with? hit = #{"hello".end_with?(["lo", "zz"])}"
+  puts "end_with? miss = #{"hello".end_with?(["zz"])}"
+
+  # The single-argument FFI forms still resolve.
+  puts "start_with? one = #{"hello".start_with?("he")}"
+  puts "end_with? one = #{"hello".end_with?("lo")}"
+end

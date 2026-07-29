@@ -1,0 +1,14 @@
+slice 1,3 = [ell]
+slice 0,0 = []
+slice at length = []
+slice past end = nil
+slice -2,2 = [lo]
+slice -9,1 = nil
+slice negative len = nil
+slice len clamped = [llo]
+slice empty receiver = []
+split limit 0 = [a] [b]
+split limit -1 = [a] [b] [] []
+split limit 2 = [a] [b,c]
+split limit 1 = [a,b,c]
+split one arg = [a] [b] [] []

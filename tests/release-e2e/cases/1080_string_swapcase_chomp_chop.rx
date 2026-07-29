@@ -1,0 +1,22 @@
+# Pins `String#swapcase`, `#chomp` (both arities) and `#chop` (batch B09).
+# `chomp` with no argument drops one "\r\n" | "\n" | "\r"; `chomp("")` drops
+# EVERY trailing terminator; `chop` treats a trailing "\r\n" as ONE character.
+def main
+  puts "swapcase = #{"Hello World 123".swapcase}"
+  puts "swapcase empty = [#{"".swapcase}]"
+
+  puts "chomp lf = [#{"line\n".chomp}]"
+  puts "chomp crlf = [#{"line\r\n".chomp}]"
+  puts "chomp cr = [#{"line\r".chomp}]"
+  puts "chomp none = [#{"line".chomp}]"
+  puts "chomp empty receiver = [#{"".chomp}]"
+
+  puts "chomp suffix = [#{"hello".chomp("llo")}]"
+  puts "chomp suffix absent = [#{"hello".chomp("z")}]"
+  puts "chomp all newlines = [#{"a\n\n\n".chomp("")}]"
+
+  puts "chop = [#{"hello".chop}]"
+  puts "chop crlf = [#{"line\r\n".chop}]"
+  puts "chop single = [#{"x".chop}]"
+  puts "chop empty = [#{"".chop}]"
+end
