@@ -313,8 +313,9 @@ ranks first and B71 second, both found after B01 to B05.
 
 ### B81 — `E1125` is emitted but unregistered and undocumented
 - **Goal:** satisfy the root `CLAUDE.md` convention that every emitted code is in `diagnostics::codes::REGISTRY` and has `docs/errors/E####.md`.
-- **Repro:** `E1125` is referenced at `hir/nodes.rs:241`, `parser/ast.rs:444`, `mir/lower/expr/control.rs:181`, but is absent from the registry and has no doc file. A registry test enforces this, so check why it did not fire.
-- **Also:** `resolve/control_flow.rs:400`'s doc comment says E1120 while `:418` emits `E1124`. Fix the comment in the same pass.
+- **Repro:** `E1125` is referenced at `hir/nodes.rs:241`, `parser/ast.rs:444`, `mir/lower/expr/control.rs:181`, but is absent from `REGISTRY` and has no `docs/errors/E1125.md`. Note all three references are COMMENTS describing a rejection, not `error_with_code` call sites, so first establish whether `E1125` is reachable at all: if the rejection it documents fires under a different code, the fix is to correct the comments; if it is genuinely emitted somewhere, register and document it.
+- **Why no test caught it:** no test enforces this direction. The `codes.rs` tests only iterate `REGISTRY` outward (no duplicates, well-formed codes, non-empty titles); nothing scans the source for emitted codes and asserts each is registered and documented. That missing test is the durable fix and is worth more than the one-off correction.
+- **Also:** `resolve/control_flow.rs:404`'s doc comment says "No enclosing block → E1120" while `:422` emits `E1124`; E1120 is the unrelated `alias`-target diagnostic (`codes.rs:473`). Fix the comment in the same pass.
 - **Severity:** medium, and cheap.
 - **Status:** READY-NOW (no enabler needed).
 - **Pins:** 1810-1819, plus the registry test.
