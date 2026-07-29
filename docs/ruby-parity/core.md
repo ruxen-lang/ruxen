@@ -300,25 +300,25 @@ Strongest core class. Verified working: builders, `size`/`count`/`capacity`/
 | `at` | MISSING | use `get(i)` / `a[i]` | `get` → `Option`. |
 | `values_at` / `dig` / `assoc` / `rassoc` | MISSING | — | |
 | `first` / `last` | DONE | `ruxen_vec_first`/`_last` → `Option[T]` | no `first(n)`/`last(n)`. |
-| `first(n)` / `last(n)` | MISSING | — | arity-1 form unimplemented. |
-| `index` / `find_index` | PARTIAL | `index {block}` (Enumerable) | predicate form only; no value-arg `index(x)`. |
+| `first(n)` / `last(n)` | MISSING | use `take(n)` | arity overloading does not reach a builtin head: with both `first` and `first(n)` defined, `a.first(2)` binds the ZERO-arg body and dies in the Cranelift verifier (`got 2, expected 1`). `take(n)` is what Ruby's `first(n)` returns. |
+| `index` / `find_index` | PARTIAL | `index {block}` / `find_index {block}` (Enumerable, pin 1061) | predicate form only; the value-arg `index(x)` needs `T` equality (B20). |
 | `rindex` | MISSING | — | |
 | `include?` / `member?` | PARTIAL | `include?` DONE; `member?` MISSING | |
 | `each` | DONE | `ruxen_vec_each` | iteration primitive. |
 | `each_with_index` | DONE | Enumerable body | |
-| `each_index` / `each_with_object` | MISSING | — | |
-| `reverse_each` / `cycle` | MISSING | — | |
-| `map` / `collect` | PARTIAL | `map` DONE (Enumerable); `collect` MISSING | no `collect` alias. |
-| `flat_map` / `collect_concat` | MISSING | — | |
+| `each_index` / `each_with_object` | PARTIAL | `each_with_object(memo)` `.rx` Enumerable (pin 1062) | `each_index` MISSING. `each_with_object` threads the memo THROUGH the block (`{ |x, memo| ... }` must return it) because Ruxen closures take arguments by value; the Ruby argument ORDER is preserved. |
+| `reverse_each` / `cycle` | DONE | `.rx` Enumerable defaults (pin 1062) | `cycle(n)` counted form only: Ruby's arg-less infinite form and its enumerator form are not expressible. |
+| `map` / `collect` | PARTIAL | `map` DONE (Enumerable); `collect` MISSING | the name `collect` is claimed by the iterator `collect[Target]` interception (`typeck/infer/expr.rs`, `mir/lower/expr/method_call.rs`), which fires for ANY receiver before method resolution. Ruby's `collect` needs that interception narrowed first. |
+| `flat_map` / `collect_concat` | DONE | `.rx` Enumerable defaults (pin 1061) | one level deep, as in Ruby. Required dropping `flat_map` from the unimplemented-Vec blocklist in `codegen/lang_intrinsics.rs`. |
 | `select` / `filter` | PARTIAL | `select` DONE; `filter` MISSING | no `filter` alias. |
 | `reject` | DONE | Enumerable | |
-| `filter_map` | MISSING | — | |
+| `filter_map` | DONE | `.rx` Enumerable default (pin 1061) | the block returns `Option[U]`; `nil` is the skip signal, which is the typed form of Ruby's truthiness test. |
 | `find` / `detect` | PARTIAL | `find` DONE; `detect` MISSING | |
 | `find_all` | DONE | `.rx` Enumerable delegating to `select` (pin 985). |
-| `find_index` | MISSING | — | |
+| `find_index` | PARTIAL | `.rx` Enumerable delegating to `index` (pin 1061) | predicate form only; the value form needs `T` equality (B20). |
 | `all?` / `any?` | DONE | Enumerable | |
 | `none?` / `one?` | DONE | `.rx` Enumerable defaults (pin 985). |
-| `count` | PARTIAL | `ruxen_vec_count` (no-arg) | `count {block}` / `count(obj)` MISSING (verifier error). |
+| `count` | PARTIAL | `ruxen_vec_count` (no-arg); `.rx` Enumerable `count` for other heads (pin 1060) | `count {block}` / `count(obj)` still MISSING. |
 | `reduce` / `inject` | PARTIAL | `reduce(seed){}` DONE; `inject` MISSING | no symbol form `reduce(:+)`, no no-seed form. |
 | `sum` | PARTIAL | `ruxen_vec_sum` (`where T: Add`) | no `sum(init)` / `sum{block}`. |
 | `min` / `max` | DONE | `.rx` body, per-`T` monomorphized (pin 991) | Ruby semantics: `nil` on empty. Orders by the element type's own `<` / `>` (numeric for Int, lexicographic for String). |
@@ -333,11 +333,11 @@ Strongest core class. Verified working: builders, `size`/`count`/`capacity`/
 | `compact` / `compact!` | MISSING | — | |
 | `zip` | DONE | `.rx` body → `Array[(T,U)]` | |
 | `take` / `drop` | DONE | `ruxen_vec_take`/`_skip` | |
-| `take_while` / `drop_while` | MISSING | — | |
+| `take_while` / `drop_while` | DONE | `.rx` Enumerable defaults (pin 1060) | latch semantics match Ruby: `drop_while` keeps the element that first failed the predicate and everything after it. |
 | `partition` | DONE | Enumerable → `(Array,Array)` | |
 | `group_by` | MISSING | — | |
 | `chunk` / `chunk_while` / `slice_when` | MISSING | — | |
-| `each_slice` / `each_cons` | MISSING | — | |
+| `each_slice` / `each_cons` | DONE | `.rx` Enumerable defaults (pin 1062, edges pin 1063) | short trailing run still yielded; a window wider than the collection yields nothing; `n <= 0` yields nothing instead of looping. |
 | `tally` | MISSING | — | |
 | `rotate` / `rotate!` | MISSING | — | |
 | `sample` / `shuffle` / `shuffle!` | MISSING | — | (no PRNG surface, see Kernel.) |
@@ -386,14 +386,14 @@ combinators.
 | `each` / `each_pair` | DONE | `each` (yields `(K,V)`) + `alias each_pair each` (pin 990). |
 | `each_key` / `each_value` | DONE | `.rx` over `each` + tuple access (pin 986). |
 | `map` / `select` / `filter` / `reject` | PARTIAL | `map`/`select`/`reject` DONE (Enumerable) | closure gets a `(K,V)` tuple; `filter` alias MISSING. |
-| `filter_map` / `flat_map` | MISSING | — | |
+| `filter_map` / `flat_map` | DONE | `.rx` Enumerable defaults (pin 1064) | the block sees the `(K, V)` pair. |
 | `find` / `detect` | PARTIAL | `find` DONE; `detect` MISSING | |
 | `all?` / `any?` / `none?` / `one?` | DONE | all four `.rx` Enumerable defaults (pin 985 for none?/one?). |
 | `reduce` / `inject` | PARTIAL | `reduce(seed){}` DONE | |
 | `partition` | DONE | Enumerable | |
 | `each_with_index` | DONE | Enumerable | |
-| `each_with_object` | MISSING | — | |
-| `count` | MISSING | — | (no `Hash#count`; Array-only.) |
+| `each_with_object` | DONE | `.rx` Enumerable default (pin 1064) | memo is threaded through the block, which must return it. |
+| `count` | DONE | `.rx` Enumerable default (pin 1064) | O(n) walk over `each`, no `Hash` length primitive behind it. |
 | `sum` / `min_by` / `max_by` / `sort_by` / `group_by` / `tally` | MISSING | — | Enumerable subset not covered. |
 | `merge` / `merge!` / `update` | MISSING | — | |
 | `transform_keys` / `transform_values` (+ `!`) | MISSING | — | |
@@ -452,7 +452,7 @@ Verified working: builders, `size`/`empty?`/`include?`, `to_a`, `union`/
 | `insert(x)` | DONE (Ruxen name) | `ruxen_set_insert` | |
 | `delete` | PARTIAL | `remove(x)` → `Bool` | Ruxen name. |
 | `include?` / `member?` / `===` | PARTIAL | `include?` DONE | `member?` alias MISSING. |
-| `size` / `length` / `count` | PARTIAL | `size` DONE | |
+| `size` / `length` / `count` | PARTIAL | `size` DONE; `count` `.rx` Enumerable (pin 1064) | `length` MISSING. `count` is an O(n) walk over `each`, not the `size` primitive. |
 | `empty?` | DONE | `ruxen_set_is_empty` | |
 | `to_a` | DONE | `ruxen_set_iter` → `Array[&T]` | |
 | `union` / `\|` / `+` | PARTIAL | `union(o)` DONE; operators broken | `s1 \| s2` ⇒ 0. |
@@ -463,6 +463,7 @@ Verified working: builders, `size`/`empty?`/`include?`, `to_a`, `union`/
 | `disjoint?` / `intersect?` | MISSING | — | |
 | `merge` | MISSING | — | |
 | `map` / `select` / `reject` / `find` / `reduce` / `all?` / `any?` / `partition` / `each` / `each_with_index` / `index` | DONE | Enumerable | |
+| `first` / `entries` / `take` / `drop` / `take_while` / `drop_while` / `flat_map` / `collect_concat` / `filter_map` / `find_index` / `each_slice` / `each_cons` / `each_with_object` / `cycle` / `reverse_each` | DONE | `.rx` Enumerable defaults (pin 1064) | `Set` iterates in hash-bucket order, NOT insertion order, so the order-sensitive members of this group differ from Ruby's insertion-ordered `Set`. |
 | `clear` | DONE | `ruxen_set_clear` | |
 | `to_set` / `dup` / `clone` / `freeze` / `==` | MISSING | — | |
 | `new` / `with_capacity` | DONE | builders | |
@@ -481,26 +482,27 @@ required `each`. It covers a **subset** of Ruby's ~60 Enumerable methods.
 | `select` / `filter` / `find_all` | DONE | `select`+`filter`+`find_all` all `.rx` Enumerable. |
 | `reject` | DONE | |
 | `find` / `detect` | PARTIAL | `find` DONE; no `detect`. |
-| `find_index` | MISSING (`index` is predicate-based) | |
+| `find_index` | PARTIAL | predicate form delegates to `index` (pin 1061); the value form needs `T` equality (B20). |
 | `index` | DONE | predicate form. |
 | `all?` / `any?` | DONE | closure form only (no arg/pattern form). |
-| `none?` / `one?` | MISSING | |
+| `none?` / `one?` | DONE | `.rx` defaults (pin 985). |
 | `partition` | DONE | |
 | `each_with_index` | DONE | |
 | `reduce` / `inject` | PARTIAL | `reduce(seed){}` DONE; no `inject`, no symbol/no-seed forms. |
-| `flat_map` / `collect_concat` | MISSING | |
-| `filter_map` | MISSING | |
+| `flat_map` / `collect_concat` | DONE | `.rx` defaults (pin 1061); one level deep. |
+| `filter_map` | DONE | `.rx` default (pin 1061); block returns `Option[U]`, `nil` skips. |
 | `min` / `max` / `minmax` / `min_by` / `max_by` / `minmax_by` | MISSING | |
 | `sort` / `sort_by` | MISSING (Enumerable) | (Array has its own.) |
-| `sum` / `count` / `tally` | MISSING (Enumerable) | (Array-specific only.) |
-| `group_by` / `chunk` / `chunk_while` / `slice_when` | MISSING | |
-| `each_slice` / `each_cons` / `each_with_object` | MISSING | |
-| `take` / `drop` / `take_while` / `drop_while` | MISSING (Enumerable) | (Array has `take`/`drop`.) |
-| `first` / `first(n)` | MISSING (Enumerable) | |
+| `sum` / `count` / `tally` | PARTIAL | `count` (no-arg) is an `.rx` default (pin 1060). `sum` / `tally` need `T` ordering / equality (B20). |
+| `group_by` / `chunk` / `chunk_while` / `slice_when` | MISSING | `group_by` / `tally` need `T` equality to key the result hash, so they are B20, not B07. |
+| `each_slice` / `each_cons` / `each_with_object` | DONE | `.rx` defaults (pin 1062, edges pin 1063). `each_with_object` threads the memo through the block. |
+| `take` / `drop` / `take_while` / `drop_while` | DONE | all four `.rx` defaults (pin 1060), so `Set` / `Hash` get them too. |
+| `first` / `first(n)` | PARTIAL | `first` DONE (pin 1060). `first(n)` MISSING: arity overloading does not reach a builtin head (verifier: `got 2, expected 1`); `take(n)` carries the behavior. |
 | `zip` | MISSING (Enumerable) | (Array has its own.) |
-| `to_a` / `entries` / `to_h` / `to_set` | MISSING (Enumerable) | |
+| `to_a` / `entries` / `to_h` / `to_set` | PARTIAL | `entries` DONE (pin 1060). `to_a` stays per-head (`Array` / `Set` / `Hash` each home their own with a head-specific element type); `to_h` / `to_set` MISSING. |
 | `include?` / `member?` | MISSING (Enumerable) | |
-| `uniq` / `flatten` / `reverse_each` / `cycle` / `lazy` / `chunk`/`grep`/`grep_v`/`flat_map` | MISSING | |
+| `reverse_each` / `cycle` | DONE | `.rx` defaults (pin 1062); `cycle(n)` counted form only. |
+| `uniq` / `flatten` / `lazy` / `chunk` / `grep` / `grep_v` | MISSING | `uniq` needs `T` equality (B20); `lazy` needs an enumerator protocol. |
 
 Note: all combinators take a `do |x| … end` block (Ruby-style). `{ }` blocks
 are *stored* closures, `do…end` are immediately-invoked (see workspace ledger).
@@ -528,24 +530,24 @@ ordering protocol. `clamp` is the remaining core method gap.
 |---|---|---|---|
 | `puts` | DONE | builtin | String/interp only. |
 | `print` | DONE | builtin | |
-| `p` | MISSING | — | `undefined variable p`. |
-| `pp` | MISSING | — | |
-| `print` to stderr / `warn` | PARTIAL | `eputs`, `eprintln` (Ruxen) | stderr writers exist under Ruxen names. |
+| `p` | PARTIAL | `.rx` free fn, one overload per type (pin 1180) | prints the INSPECT form (a `String` gets quotes) and RETURNS its argument, as in Ruby. Defined for `Int` / `Bool` / `String` only: Ruxen has no universal `to_s`, so `p` cannot be universal the way Ruby's is. No escaping of embedded quotes or newlines. |
+| `pp` | PARTIAL | `.rx` free fn (pin 1180) | identical output to `p`; the values reachable here have no nested structure to lay out. Same per-type limit as `p`. |
+| `print` to stderr / `warn` | DONE | `warn(msg)` `.rx` free fn over `eputs` (pin 1181) | writes to stderr with a newline, leaving stdout untouched. Ruby's `uplevel:` / `category:` keywords need kwargs and are not modelled. |
 | `puts`-family extras | DONE | `println`, `eputs`, `eprintln` | Ruxen-native. |
 | `gets` / `readline` | MISSING | — | `undefined variable gets`. |
 | `format` / `sprintf` | MISSING | use `"#{}"` interpolation | `undefined function`. |
 | `printf` | MISSING | — | |
-| `rand` / `srand` | MISSING (Kernel) | — | `undefined`. (A `std/rand` package exists; not exposed as bare Kernel fns.) |
+| `rand` / `srand` | PARTIAL | `rand(n)` `.rx` free fn over `Rand.random_u64` (pin 1181) | `rand(n)` returns `[0, n)`; the signed 64-bit draw is folded non-negative (twice, so `Int::MIN` cannot leak through) before the modulo. Ruby's arg-less `rand` returns a `Float` in `[0.0, 1.0)` and needs the `Float` ABI (B01), so `rand(0)` yields `0` here. `srand` MISSING and NOT shippable: `std/rand` exposes only OS entropy, with no seedable generator to make reproducible. |
 | `loop do…end` | COMPILE-TIME | keyword | language construct (see `language.md`); runtime behavior of the observed probe was inconclusive. |
 | `raise` / `fail` | MISSING | use `panic!(msg)` / `Result` + `?` | `raise` undefined; error model (exceptions vs `Result`) is a language-design call, see `language.md`, not a metaobject gap. |
 | `panic!(msg)` | DONE (Ruxen-native) | MIR intrinsic | aborts. |
-| `exit` / `exit!` | PARTIAL | `exit(code)` DONE | `exit!`/`abort` MISSING. |
-| `abort` | MISSING | — | |
-| `sleep` | MISSING (Kernel) | — | (async/time packages elsewhere.) |
-| `Integer()` / `Float()` | MISSING | use `String#parse_int`/`_float` | conversion functions absent. |
-| `String()` | MISSING | use `.to_s` | |
-| `Array()` / `Hash()` | MISSING | — | |
-| `inspect` | MISSING | `"#{x}"` via `Debug` derive | no `.inspect` method; `include Debug` gives structural render through interpolation/`to_s`. |
+| `exit` / `exit!` | PARTIAL | `exit(code)` DONE, a pre-existing bare FFI decl in `process/src/lib.rx` (pin 1183) | `exit!` MISSING and deliberately not shipped: a free function whose name ends in `!` compiles clean and then its CALL SITE does nothing (verified with `def shout!(x)…end; shout!(5)`), so `exit!` would have been a user-callable silent no-op. Ruxen has no at-exit registry, so `exit` and `exit!` would have had identical behavior anyway. |
+| `abort` | DONE | `.rx` free fn (pin 1182) | writes `msg` to stderr, then terminates with status 1. Returns `Never`. |
+| `sleep` | PARTIAL | `sleep(secs)` `.rx` free fn over `Thread.sleep` (pin 1181) | INTEGER seconds only. Ruby's fractional form needs a `Float` argument, which does not survive the current ABI (B01) and would silently sleep zero. Sub-second waits use `Thread.sleep(Duration.from_millis(n))`. |
+| `Integer()` / `Float()` | MISSING | use `"42".to_i` / `"1.5".to_f` | NOT shippable as written: a capitalized identifier lexes as a `TypeIdentifier`, so `def Integer(s)` is a parse error (`expected identifier, found TypeIdentifier("Integer")`). `Float()` additionally waits on the `Float` ABI (B01). |
+| `String()` | MISSING | use `.to_s` | same capitalized-name parse block as `Integer()`, plus it needs a universal `to_s`. |
+| `Array()` / `Hash()` | MISSING | — | same capitalized-name parse block as `Integer()`. |
+| `inspect` | MISSING | `p(x)` / `"#{x}"` via `Debug` derive | no `.inspect` METHOD: a `mixin Kernel` default would have to call `self.to_s`, which is not universal, and `mixin` defaults are emitted for every including head, so it would break every type without one. The inspect FORM is reachable through `p` / `pp` for the types those cover. |
 | `to_s` | DONE | per-type + `Debug`/`Displayable` derive | |
 | `class` | COMPILE-TIME | — | see Reflection cluster below; `x.class` also needs a surface spelling (`class` keyword parse-clash today). |
 | `is_a?` / `kind_of?` / `instance_of?` | COMPILE-TIME | — | static type + known `include` set → constant `Bool`. See Reflection cluster. |

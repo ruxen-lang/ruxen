@@ -401,10 +401,14 @@ ranks first and B71 second, both found after B01 to B05.
 - **Goal:** one implementation lands on `Array` + `Hash` + `Set` simultaneously. Highest leverage `.rx` batch in the queue.
 - **Methods** (all expressible with `each` + a closure + `push`, so no `T` dispatch): `flat_map`, `collect_concat`, `filter_map`, `take_while`, `drop_while`, `each_slice(n)`, `each_cons(n)`, `each_with_object(memo)`, `first`, `first(n)`, `take(n)`, `drop(n)`, `count` (no-arg), `cycle(n)`, `reverse_each`, `collect`, `find_index` (predicate form), `to_a`/`entries`.
 - **Files:** `library/std/core/src/lib.rx` (`mixin Enumerable[T]`).
-- **Status:** READY-NOW.
+- **Status:** **LANDED.** 16 of the 18 shipped as `mixin Enumerable[T]` defaults. Two did not, and neither is blocked on E1, so they are recorded here rather than moved to B20:
+  - `first(n)` — arity overloading does not reach a builtin head. With both `first` and `first(n)` defined, `a.first(2)` binds the ZERO-arg body and dies in the Cranelift verifier (`mismatched argument count ... got 2, expected 1`). Reproduced on `Set`, which homes no `first` of its own, so it is the overload and not the `Array` FFI decl. `take(n)` carries the behavior.
+  - `collect` — the name is intercepted for EVERY receiver by the iterator `collect[Target]` arm (`typeck/infer/expr.rs`, `mir/lower/expr/method_call.rs`) before method resolution runs. Ruby's `collect` needs that interception narrowed first.
+  - `to_a` is intentionally not a mixin default: `Array` / `Set` / `Hash` each home their own with a head-specific element type. `entries` ships instead.
+  - Required one compiler fix: `flat_map` was on the unimplemented-Vec blocklist in `codegen/lang_intrinsics.rs`, which made the emitted `Array_flat_map` body unreachable. Removed, exactly as `map` / `select` / `reduce` were when they migrated.
 - **Size:** 18 methods; large but uniform. Split at `each_with_object` if it runs long.
 - **Matrix rows:** `core.md` Enumerable (418-453), plus the Array rows it satisfies (257-286) and the Hash/Set rows (334-343, 411).
-- **Pins:** 1060-1069.
+- **Pins:** 1060-1064 (1065-1069 unused).
 
 ### B08 — String query and inspection
 - **Goal:** the read-only half of Ruby's `String` surface.
@@ -513,10 +517,15 @@ ranks first and B71 second, both found after B01 to B05.
 - **Goal:** the free-function ergonomics a Ruby script assumes.
 - **Methods:** `warn(msg)`, `abort(msg)`, `exit!`, `sleep(secs)`, `rand`/`srand` (expose the existing `library/std/rand` as bare Kernel functions), `Integer(str)`, `Float(str)`, `String(x)`, `Array(x)`, `p(x)` and `pp(x)` (over the `Debug`/`to_s` path), `inspect`.
 - **Files:** `library/std/core/src/lib.rx` (`mixin Kernel`, the universal include) plus a small free-function module.
-- **Status:** READY-NOW for `warn`/`abort`/`exit!`/`sleep`/`rand`/`srand`/`Integer()`/`Float()`/`String()`. **Flag:** `p`/`pp`/`inspect` are only universal for types that have a `to_s`; scope them to `Debug`-carrying types and record the limit in the row rather than shipping a partial universal. `format`/`sprintf` are **excluded**: they need E7 (`*args`), so they live in B27.
+- **Status:** **LANDED** for `warn`, `abort`, `sleep(secs)`, `rand(n)`, `p` and `pp`, all as stdlib FREE FUNCTIONS in `core/src/lib.rx` (they take no receiver, so a `mixin Kernel` default would be emitted once per head for nothing). Overload-by-argument-type on a free function resolves, which is how `p` / `pp` cover `Int` / `Bool` / `String`. Not shipped, each for a proven reason rather than as a stub:
+  - `exit!` — a free function whose name ends in `!` compiles clean and its CALL SITE then does nothing. Verified with `def shout!(x) ... end; shout!(5)`, which printed nothing and fell through. Shipping `exit!` over that would be a user-callable silent no-op. **This is a compiler bug worth its own batch.** Plain `exit(code)` needed no work: it is already a bare Kernel FFI decl in `library/std/process/src/lib.rx`, and Ruxen has no at-exit registry, so the two would have behaved identically anyway.
+  - `Integer()` / `Float()` / `String()` / `Array()` — a capitalized identifier lexes as a `TypeIdentifier`, so `def Integer(s)` is a parse error (`expected identifier, found TypeIdentifier("Integer")`). Not a shape `.rx` can express today.
+  - `srand` — `library/std/rand` exposes only OS entropy (`ruxen_rand_random_u64`) with no seedable generator, so `srand` could only lie about reproducibility.
+  - `inspect` — as a `mixin Kernel` default it would call `self.to_s`, which is not universal, and mixin defaults are emitted for every including head. The inspect FORM is reachable through `p` / `pp`.
+  - `rand` (arg-less) and fractional `sleep` need the `Float` ABI (B01).
 - **Size:** 11 methods plus 3 flagged.
 - **Matrix rows:** `core.md` Kernel/Object 473-513; `language.md` §12 (353-371).
-- **Pins:** 1180-1189.
+- **Pins:** 1180-1183 (1184-1189 unused).
 
 ---
 

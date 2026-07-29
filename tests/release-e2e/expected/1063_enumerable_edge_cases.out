@@ -1,0 +1,18 @@
+empty count 0
+empty entries 0
+empty take 0
+empty drop 0
+empty take_while 0
+empty drop_while 0
+empty flat_map 0
+empty first none
+one slice 1
+one cons1 1
+over take 3
+over drop 0
+zero take 0
+zero drop 3
+neg take 0
+even slice 2
+even slice 2
+done

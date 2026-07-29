@@ -1,0 +1,37 @@
+# Pins the B07 combinators that hand the block a WINDOW or thread a memo:
+# `each_slice` (non-overlapping runs, short trailing run still yielded),
+# `each_cons` (overlapping sliding windows), `cycle(n)`, `reverse_each`,
+# and `each_with_object`.
+def head_of(c: &Array[Int]) -> Int
+  var out: Int = 0
+  match c.first
+    Some(v) -> out = v
+    nil     -> out = 0
+  end
+  out
+end
+
+def main
+  let a = [1, 2, 3, 4, 5]
+
+  # 5 elements in runs of 2 → [1,2] [3,4] [5]; the remainder is yielded.
+  a.each_slice(2) { |c| puts "slice #{c.size} head #{head_of(c)}" }
+
+  # 5 elements in windows of 2 → 4 windows, sliding one at a time.
+  a.each_cons(2) { |c| puts "cons head #{head_of(c)}" }
+
+  # A window wider than the collection yields nothing.
+  a.each_cons(9) { |c| puts "wide #{c.size}" }
+
+  let two = [7, 8]
+  two.cycle(2) { |x| puts "cycle #{x}" }
+  two.cycle(0) { |x| puts "never #{x}" }
+
+  two.reverse_each { |x| puts "rev #{x}" }
+
+  # Ruby's `each_with_object` mutates a shared memo; Ruxen closures take
+  # their arguments by value, so the memo is threaded through and the
+  # block returns it. The argument ORDER matches Ruby: element, then memo.
+  let total = a.each_with_object(100) { |x, memo| memo + x }
+  puts "each_with_object #{total}"
+end

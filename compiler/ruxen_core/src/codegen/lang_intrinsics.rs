@@ -207,12 +207,19 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
             // these were always MIR-inlined and never emitted a call; that
             // assumption no longer holds for the Array head.)
             //
+            // `flat_map` / `collect_concat` joined that migrated set in
+            // B07: they are now `mixin Enumerable[T]` defaults with real
+            // bodies, so they too must fall through to `Ok(name)`. Leaving
+            // `flat_map` blocked here made the emitted `Array_flat_map`
+            // body unreachable and failed the build at its first call site.
+            //
             // Still-unimplemented Vec combinators stay blocked: `min` /
-            // `max` / `collect` / `flat_map` / `flatten`. (`zip` / `take` /
-            // `drop` / `chain` have FFI symbols and never reach this arm —
-            // rewritten via the alias map first — but stay listed
-            // defensively.)
-            "min" | "max" | "collect" | "flat_map" | "flatten" => {
+            // `max` / `collect` / `flatten`. They need `T` ordering or
+            // `to_s(T)`, so they wait on per-`T` monomorphization (E1).
+            // (`zip` / `take` / `drop` / `chain` have FFI symbols and never
+            // reach this arm — rewritten via the alias map first — but stay
+            // listed defensively.)
+            "min" | "max" | "collect" | "flatten" => {
                 Err(unresolved_method_error(name, "Vec"))
             }
             _ => Ok(name),
