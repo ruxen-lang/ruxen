@@ -1,0 +1,13 @@
+ord 97 90 55 32
+to_i 7 0 0 9
+chr a Z
+upcase A Z 7 !
+downcase a z 7
+digit? true false false
+alpha? true true false false
+alnum? true true false false
+space? true true false false
+whitespace? true false
+punct? true true false false false
+cmp 1 -1 0
+succ b 8 [

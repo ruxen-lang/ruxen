@@ -1,0 +1,49 @@
+# Ruby-parity batch B14 — `Integer#upto` / `#downto` / `#step` (both arities)
+# plus the pre-existing `#times`, all as `.rx` block-taking methods on the
+# scalar head (`&block: Fn[(Int) -> nil]` + `yield`).
+#
+# Empty ranges are the edge case: `3.upto(1)`, `1.downto(3)`, `0.times` and a
+# step that starts past its limit all yield NOTHING rather than looping once.
+# `step` with a zero step yields nothing too; CRuby raises ArgumentError there
+# (Ruxen has no `raise` yet), which the matrix row records.
+# Diffed against CRuby 3.3 except for that zero-step line.
+def main
+  1.upto(4) do |i|
+    puts("upto #{i}")
+  end
+  4.downto(1) do |i|
+    puts("downto #{i}")
+  end
+  3.times do |i|
+    puts("times #{i}")
+  end
+  1.step(10, 3) do |i|
+    puts("step3 #{i}")
+  end
+  10.step(1, -4) do |i|
+    puts("stepback #{i}")
+  end
+  1.step(4) do |i|
+    puts("step1 #{i}")
+  end
+  let three = 3
+  three.upto(1) do |i|
+    puts("empty-upto #{i}")
+  end
+  1.downto(3) do |i|
+    puts("empty-downto #{i}")
+  end
+  0.times do |i|
+    puts("empty-times #{i}")
+  end
+  5.step(1, 2) do |i|
+    puts("empty-step #{i}")
+  end
+  5.step(1, 0) do |i|
+    puts("zero-step #{i}")
+  end
+  2.upto(2) do |i|
+    puts("single #{i}")
+  end
+  puts("done")
+end

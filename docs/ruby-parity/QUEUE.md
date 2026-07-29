@@ -34,6 +34,11 @@ building a real app, then low risk before high risk.
 | **`alias` on a generic builtin head link-fails (Q58)** | Use a real delegating method (`def has_key?(k) = self.key?(k)`), not `alias`, until E2 lands. |
 | **Operators are just `.rx` methods now** | A non-comparison operator on a `String` / `Array` / `Hash` / `Set` receiver routes to the receiver's `.rx` `def OP` when one exists (builtin-head operator route). Define `def *`, `def +`, `def ^` and they dispatch. |
 | **Default args work on builtin heads** | `def ljust(w, pad = " ")` resolves on `String` / `Array` / `Hash` / `Set`. |
+| **Default-arg fill only covers the ALL-omitted call (scalar heads)** | Verified 2026-07-29 on `class Int`: `1234.truncate` against `truncate(ndigits = 0)` works, but `2.pow(10)` against `pow(exp, mod = 0)` type-checks and then fails CODEGEN (`mismatched argument count ... got 2, expected 3`). A defaulted parameter followed by a `&block` parameter is worse: `1.step(4)` against `step(limit, by = 1, &block)` fails in TYPECK (`no method step on type Int`). Workaround that works today: ship the two arities as two real `def`s (same name, different arity) — overload resolution by arity is fine, including next to an FFI-declared `to_s`. |
+| **`Option` RETURNS from a scalar method-home are unusable** | Verified 2026-07-29: a `def probe -> Option[Int]` on `class Int` types as `Int` at the call site (`no field present? on type Int`), even with an explicit `let o: Option[Int]` annotation. This is why `Integer#nonzero?` is MISSING rather than shipped. |
+| **Index (`[]`) never routes to a scalar head's `.rx` `def []`** | Verified 2026-07-29: with `def [](i)` on `class Int`, `n[0]` types as `<error>`. `Integer#[]` (bit reference) therefore ships as `bit(i)`. The builtin-head OPERATOR route does not cover indexing, nor the scalar heads. |
+| **A bare `self` body does not satisfy a `-> Char` return** | Inside `class Char`, `def chr -> Char; self; end` is `type mismatch: expected Char, found Char` (the FFI-shell / value split, same family as the `String` rule above). Round-trip it: `let n: Int = self as Int` then `n as Char`. Casts on a scalar `self` (`self as Int`, `n as Char`, `b as Int`) all work. |
+| **`<=>` as an OPERATOR does not reach an `.rx` `def <=>`** | Comparison operators keep their dedicated route: `c1 <=> c2` on `Char` is E0707 even with `def <=>(other: Char)` defined. The METHOD spelling `c1.<=>(c2)` dispatches fine. |
 | **Scalar `self` on the LEFT of arithmetic link-fails** | Verified 2026-07-29: inside `class Int`, `self % 2` and `self + 1` emit calls to nonexistent `Int_%` / `Int_+`. **Workaround that works today: rebox first,** `let n = 0 + self` (or `var a = 0 + self`), then use `n` freely. `self` on the RIGHT of a primitive-left operand (`0 - self`, `2 * self`) and all comparisons (`self < 0`, `self == 0`) work as-is. This is why the Integer batches are READY-NOW. Enabler E3 removes the reboxing. |
 | **`Float` `.rx` method bodies are BROKEN** | Verified 2026-07-29: inside `class Float`, `self` arrives truncated to an integer (`2.5.probe` sees `2`, and a computed Float receiver sees `0`). Returning a Float constant is fine, so it is a receiver-ABI bug, same family as the known "Float closure-arg passes as 0". **Do not write Float `.rx` methods until B01 lands.** |
 | **Char literal as a receiver mis-parses** | `?7.digit?` compiles but produces no output; `let c = ?7; c.digit?` works. Bind to a variable. |
@@ -244,7 +249,8 @@ below was found after B01 to B05 and ranks second.
 - **Matrix rows:** `core.md` String rows 118-127 (`scan`, `match`, `to_i`/`to_f`, `ord`/`chr`, `hex`/`oct`, `succ`) and the Regexp table row for `String#scan`/`#gsub(/re/)` (590).
 - **Pins:** 1100-1109.
 
-### B12 — Integer predicates, sign, rounding
+### B12 — Integer predicates, sign, rounding — **DONE**
+- **Landed:** all 18 methods; `nonzero?` is the one MISSING row (an `Option` return from a scalar method-home types as its payload at the call site). Pins `1110` (predicates/sign) and `1111` (rounding, incl. the negative-`ndigits` forms). Expected output diffed against CRuby 3.3.
 - **Goal:** the day-one-ergonomics half of `Integer`.
 - **Methods:** `abs`, `magnitude`, `even?`, `odd?`, `zero?`, `nonzero?`, `positive?`, `negative?`, `integer?`, `succ`, `next`, `pred`, `clamp(min, max)`, `between?(min, max)`, `ceil`, `floor`, `round`, `truncate` (the last four are identity or precision-argument forms on Integer).
 - **Files:** `library/std/scalar/src/lib.rx` (`class Int`).
@@ -253,7 +259,8 @@ below was found after B01 to B05 and ranks second.
 - **Matrix rows:** `core.md` Integer table 161-197.
 - **Pins:** 1110-1119.
 
-### B13 — Integer arithmetic and number theory
+### B13 — Integer arithmetic and number theory — **DONE**
+- **Landed:** `divmod`/`fdiv`/`div`/`modulo`/`remainder`/`gcd`/`lcm`/`gcdlcm`/`pow(n)`/`pow(n, mod)`/`bit_length`/`digits`/`Int.sqrt` (class method) and `~` (verified). `Integer#[]` ships as `bit(i)`: an index expression on a scalar head never reaches an `.rx` `def []`. Pins `1120` (division/modulo sign conventions) and `1121` (number theory). Expected output diffed against CRuby 3.3.
 - **Goal:** the arithmetic family Ruby developers reach for.
 - **Methods:** `divmod`, `fdiv`, `div`, `modulo`, `remainder`, `gcd`, `lcm`, `gcdlcm`, `pow(n)`, `pow(n, mod)` (modular exponentiation), `bit_length`, `digits(base = 10)`, `sqrt` (as `Integer.sqrt`, a class method), `[]` (bit reference), `~` verification.
 - **Files:** `library/std/scalar/src/lib.rx` (`class Int`).
@@ -262,7 +269,8 @@ below was found after B01 to B05 and ranks second.
 - **Matrix rows:** `core.md` Integer table 161-197; `stdlib.md` §31 rows that cross-reference core (785-788).
 - **Pins:** 1120-1129.
 
-### B14 — Integer iteration and base conversion
+### B14 — Integer iteration and base conversion — **DONE**
+- **Landed:** `upto`/`downto`/`step` (both arities, as two real `def`s) / `to_s(base)` (an arity-1 overload beside the FFI `to_s`) / `to_i` / `to_int` / `ord` / `chr`, plus the `times` pin. `coerce` is MISSING: nothing in the language dispatches on the `[other, self]` pair, so the method would have no caller. Pins `1130` (iteration, incl. empty ranges) and `1131` (base conversion, incl. i64-min). Expected output diffed against CRuby 3.3.
 - **Goal:** close the iterator family and stringification.
 - **Methods:** `upto(n)`, `downto(n)`, `step(limit, step)`, `to_s(base)`, `to_i`, `to_int`, `chr`, `ord`, `coerce` (decide and record), `times` (already DONE, verify and pin).
 - **Files:** `library/std/scalar/src/lib.rx` (`class Int`).
@@ -298,7 +306,8 @@ below was found after B01 to B05 and ranks second.
 - **Matrix rows:** `core.md` Set table 394-415; `stdlib.md` §2 (66-97).
 - **Pins:** 1160-1169.
 
-### B18 — Char and Bool scalar methods
+### B18 — Char and Bool scalar methods — **DONE**
+- **Landed:** the full `Char` surface plus `Bool#to_i`; `Bool`'s `&`/`|`/`^`/`!` needed no `.rx` (they are already the machine operators, non-short-circuiting as in Ruby) and are pinned against regression. `Char#<=>` works in METHOD spelling only, and `Char#succ` is the next codepoint (Ruby's `String#succ` carries). A `Char` table was added to `core.md`. Pins `1170` (Char) and `1171` (Bool). Expected output diffed against CRuby 3.3.
 - **Goal:** a usable `Char`, which every `String` char-by-char body depends on.
 - **Methods:** `Char#ord`, `#to_i`, `#chr`, `#upcase`, `#downcase`, `#digit?`, `#alpha?`, `#alnum?`, `#space?`/`whitespace?`, `#punct?`, `#<=>`, `#succ`; `Bool#&`, `#|`, `#^`, `#!`, `#to_i`.
 - **Files:** `library/std/scalar/src/lib.rx` (`class Char`, `class Bool`), plus `library/std/string/runtime/string.c` only if `ord` needs a shim.

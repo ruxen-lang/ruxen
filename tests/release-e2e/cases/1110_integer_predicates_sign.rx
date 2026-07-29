@@ -1,0 +1,25 @@
+# Ruby-parity batch B12 — `Integer` predicates, sign and the successor
+# family, implemented in `library/std/scalar/src/lib.rx`. Every body reboxes
+# `self` (`let n = 0 + self`) because a scalar method-home `self` on the LEFT
+# of an arithmetic operator link-fails.
+#
+# The expected output was diffed against CRuby 3.3 line for line; the negative
+# receivers are the interesting half (`-7.even?` is false, `-7.succ` is -6).
+# Note the receivers are let-bound: `-7.abs` would parse as `-(7.abs)`.
+def main
+  let neg = -7
+  let pos = 7
+  puts("abs #{neg.abs} #{pos.abs} #{0.abs}")
+  puts("magnitude #{neg.magnitude} #{pos.magnitude}")
+  puts("even? #{neg.even?} #{pos.even?} #{0.even?} #{4.even?}")
+  puts("odd? #{neg.odd?} #{pos.odd?} #{0.odd?} #{4.odd?}")
+  puts("zero? #{0.zero?} #{pos.zero?} #{neg.zero?}")
+  puts("positive? #{pos.positive?} #{neg.positive?} #{0.positive?}")
+  puts("negative? #{pos.negative?} #{neg.negative?} #{0.negative?}")
+  puts("integer? #{pos.integer?} #{0.integer?}")
+  puts("succ #{pos.succ} #{neg.succ} #{0.succ}")
+  puts("next #{pos.next} #{neg.next}")
+  puts("pred #{pos.pred} #{neg.pred} #{0.pred}")
+  puts("clamp #{15.clamp(1, 10)} #{0.clamp(1, 10)} #{5.clamp(1, 10)} #{neg.clamp(-10, -8)}")
+  puts("between? #{5.between?(1, 10)} #{0.between?(1, 10)} #{1.between?(1, 10)} #{10.between?(1, 10)}")
+end

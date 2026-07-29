@@ -1,0 +1,22 @@
+# Ruby-parity batch B18 — the `Bool` half. Ruby's `TrueClass` / `FalseClass`
+# carry `&`, `|`, `^` and `!`, and all four are ALREADY the machine operators
+# on a Ruxen `Bool`, non-short-circuiting exactly as in Ruby (`&&` / `||` are
+# the short-circuiting pair in both languages). This pin is the evidence for
+# that claim: nothing was added in `.rx` for the four operators, so the pin
+# guards them against regression.
+#
+# `Bool#to_i` IS new (Ruby has no `true.to_i`; the 1/0 mapping is what a Ruby
+# developer writes by hand as `flag ? 1 : 0`).
+# Diffed against CRuby 3.3.
+def main
+  let t = true
+  let f = false
+  puts("and #{t & t} #{t & f} #{f & t} #{f & f}")
+  puts("or #{t | t} #{t | f} #{f | t} #{f | f}")
+  puts("xor #{t ^ t} #{t ^ f} #{f ^ t} #{f ^ f}")
+  puts("not #{!t} #{!f}")
+  puts("andand #{t && f} #{t && t} #{f && t}")
+  puts("oror #{t || f} #{f || f} #{f || t}")
+  puts("to_s #{t.to_s} #{f.to_s}")
+  puts("to_i #{t.to_i} #{f.to_i}")
+end

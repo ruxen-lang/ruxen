@@ -1,0 +1,31 @@
+# Ruby-parity batch B14 — `Integer#to_s(base)` plus `#to_i` / `#to_int` /
+# `#ord` / `#chr`.
+#
+# `to_s(base)` is an arity-1 OVERLOAD sitting next to the FFI `to_s` (the C
+# fast path `ruxen_int_to_string`), so both spellings resolve: `42.to_s` and
+# `42.to_s(2)`. The digit accumulator runs negative so that the i64 minimum
+# converts without the negation wrapping back onto itself.
+#
+# CRuby raises ArgumentError for a base outside 2..36; Ruxen has no `raise`
+# yet, so an out-of-range base falls back to 10 (the `badbase` line, which is
+# the one line the CRuby mirror cannot produce).
+# Diffed against CRuby 3.3 otherwise.
+def main
+  let neg = -255
+  let min = -9223372036854775807 - 1
+  puts("to_s #{42.to_s} #{0.to_s} #{neg.to_s}")
+  puts("base2 #{255.to_s(2)} #{0.to_s(2)} #{1.to_s(2)}")
+  puts("base8 #{255.to_s(8)} #{8.to_s(8)}")
+  puts("base16 #{255.to_s(16)} #{4095.to_s(16)} #{16.to_s(16)}")
+  puts("base36 #{255.to_s(36)} #{35.to_s(36)} #{36.to_s(36)}")
+  puts("negative #{neg.to_s(16)} #{neg.to_s(2)} #{neg.to_s(10)}")
+  puts("i64-min #{min.to_s(10)} #{min.to_s(16)}")
+  puts("badbase #{255.to_s(1)} #{255.to_s(99)} #{255.to_s(0)}")
+  puts("to_i #{42.to_i} #{neg.to_i} #{0.to_i}")
+  puts("to_int #{42.to_int} #{neg.to_int}")
+  puts("ord #{65.ord} #{0.ord} #{neg.ord}")
+  let a = 65.chr
+  let z = 122.chr
+  let digit = 55.chr
+  puts("chr #{a} #{z} #{digit}")
+end
