@@ -240,6 +240,20 @@ ranks first and B71 second, both found after B01 to B05.
   - **Fixed-size array `[T; N]` index-assign with a COMPUTED index**
     (`var a: [Int; 3] = …; a[i] = 9`). The floor stores a `[T; N]` slot only for
     a literal index. Use an `Array` for a computed index.
+- **Adjacent PRE-EXISTING gap found while verifying the generality (needs its
+  own id).** The new route reaches any builtin head whose `.rx` CLASS method
+  home resolves `[]=`, which is how the whole stdlib is written (`class String`,
+  `class Array[T]`, `class Hash[K, V]`, `class Set[T]` all register their
+  methods under the BARE head name). It does NOT reach an `extension Array` /
+  `extension Hash` `def []=`: an `extension` on a GENERIC builtin head registers
+  its methods under an inference-suffixed parent spelling — `extension Array`
+  with `def []=` emits `Array[?T3522]_[]=`, verified via `--emit=mir` — which no
+  bare-base lookup can match. That is the same `Hash[K, V]`-versus-`Hash`
+  name-mismatch family as Q58, one layer further out (an unresolved `?T` rather
+  than a concrete arg), and it is NOT a regression: the pre-existing
+  builtin-head OPERATOR probe misses it identically, so `extension String` with
+  `def *` is equally unreachable today. Whoever picks it up should fix it where
+  the extension's parent name is FORMED, not by widening the lookups.
 - **Goal:** `h["a"] = 42` actually stores.
 - **Repro (verified 2026-07-29):**
 
