@@ -26,7 +26,7 @@ against the workspace stdlib with
 | `Instant` | `library/std/time/src/lib.rx` | Opaque monotonic sample, all FFI. Not a wall clock, anchor unspecified, only differences are meaningful. |
 | `Duration` | same | `nanos: Int` with `layout c`, pure `.rx` accessors (`as_secs`, `as_millis`, …) and FFI constructors and arithmetic. **Non-negative by contract**: `ruxen_duration_sub` saturates at zero. |
 | `Time.unix_ns` | same, backed by `runtime/time.c` | `CLOCK_REALTIME` nanoseconds since the Unix epoch, returned as a bare `Int`. Clamps to 0 on `clock_gettime` failure. |
-| TestClock seam | `library/std/future/runtime/test_clock.c` | `ruxen_test_clock_now_ns(real)` returns a virtual now when a `TestClock` is installed on the thread. Both the async sleep deadline and sync `Instant` already route through it. |
+| TestClock seam | `library/std/future/runtime/test_clock.c` | `ruxen_test_clock_now_ns(real)` returns a virtual now when a `TestClock` is installed on the thread. **It virtualizes the MONOTONIC clocks only**: `ruxen_time_now_ns` (async sleep deadline) and `ruxen_instant_now`/`_elapsed`. **`ruxen_time_unix_ns` (`CLOCK_REALTIME`) is deliberately NOT routed through it** (stated in `library/std/time/runtime/CLAUDE.md`), so the seam a wall clock needs does not yet exist. See §3.1. |
 
 No `localtime`, `gmtime`, `tm_gmtoff`, `strftime`, or `timezone` appears anywhere
 in `library/std/*/runtime/*.c` (grepped). The OS calendar surface is entirely
@@ -110,12 +110,36 @@ Exactly two facts come from outside the program.
 
 ### 3.1 Current instant
 
-`ruxen_time_unix_ns()` already provides it. `Time.now` must route through the
-**existing TestClock seam** (`ruxen_test_clock_now_ns`) the way `Instant.now`
-does, so that a test can freeze the clock. Without that, every test that touches
+`ruxen_time_unix_ns()` already provides it. `Time.now` must be virtualizable, so
+that a test can freeze the clock. Without that, every test that touches
 `Time.now` is nondeterministic, and the pinned cases in §10 become unwritable.
-This is a small amount of wiring, but it must land in the same sub-batch as
-`Time.now`, not later.
+Whatever shape it takes, it must land in the same sub-batch as `Time.now`, not
+later.
+
+**Correction to an earlier draft of this document: the seam this needs does NOT
+already exist, and `Time.now` cannot simply reuse `Instant.now`'s wiring.** The
+existing `ruxen_test_clock_now_ns` virtualizes the **monotonic** clocks only
+(`ruxen_time_now_ns`, `ruxen_instant_now`, `ruxen_instant_elapsed`).
+`ruxen_time_unix_ns` reads `CLOCK_REALTIME` directly and is **deliberately** left
+un-virtualized, which `library/std/time/runtime/CLAUDE.md` states outright. Two
+distinct reasons it is not a one-line reroute:
+
+1. **The existing seam carries a monotonic value.** Its virtual now is anchored
+   to a `CLOCK_MONOTONIC` sample whose epoch is explicitly unspecified. Feeding
+   that number to a wall clock yields a nonsense civil date, not a frozen one.
+2. **It is a deliberate contract, not an oversight.** Reusing the same
+   thread-local for both clocks would make installing a `TestClock` silently
+   shift wall-clock time too, coupling two clocks the runtime documents as
+   independent.
+
+So B35c needs a **realtime-specific** seam: either a second virtualized entry
+point (`ruxen_time_unix_ns` split into `_real` plus a seam-routed wrapper,
+mirroring the existing `ruxen_time_now_ns` / `ruxen_time_now_ns_real` split) with
+its own thread-local offset, or a `.rx`-level injection point that leaves the C
+alone. **Decide this before writing B35c** and record it in the module
+`CLAUDE.md`. This makes B35c strictly larger than "one new C function": it is the
+local-offset shim *plus* a realtime test seam. It is already the last sub-batch
+in the ship order, which is the right place for it.
 
 Note the existing contract: the C function clamps to `0` on `clock_gettime`
 failure rather than returning an error. Keep it. A `Result`-returning `Time.now`
@@ -492,7 +516,7 @@ follow-up. Mapped against CRuby's `Time`, `Date`, and `DateTime`.
 
 | Ruby | Status | Note |
 |---|---|---|
-| `Time.now` | v1 | Through the TestClock seam. Local offset attached. |
+| `Time.now` | v1 | Through a **new realtime** test seam (§3.1 — the existing one is monotonic-only). Local offset attached. |
 | `Time.at(secs)`, `Time.at(secs, subsec)` | v1 | |
 | `Time.utc(y,m,d,h,mi,s)` / `Time.gm` | v1 | |
 | `Time.local(...)` / `Time.mktime` | v1 | Ambiguity and gap policy per §6.3 and §6.4. |
