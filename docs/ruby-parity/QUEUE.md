@@ -50,7 +50,11 @@ building a real app, then low risk before high risk.
 
 1. The `.rx` methods (or the compiler mechanism) land.
 2. One or more pinned cases under `tests/release-e2e/cases/NNN_*.rx` plus `expected/NNN_*.out`.
-3. The matrix rows named in the batch are updated in the same commit.
+3. The matrix rows named in the batch are updated in the same commit. **The line
+   numbers in each batch's "Matrix rows" line are a hint recorded on 2026-07-29,
+   not an address.** Any batch that edits a matrix shifts them, and B06 rewrites
+   them wholesale. Locate rows by searching for the method name, never by
+   jumping to the cited line.
 4. A `CHANGELOG.md` entry under `[Unreleased]`.
 5. Reviewed under CLAUDE.md rule 44.
 
@@ -878,11 +882,24 @@ Pins: none.
 Counts overlap where a batch has both a ready half and a blocked half; the
 per-batch status line is authoritative.
 
-**Recommended first wave (parallel-safe, no shared files):** B06 (matrix sweep),
-B07 (Enumerable), B08 (String query), B12 (Integer predicates), B15 (Array
-slots), B16 (Hash), B17 (Set). Each touches a different file, so seven subagents
-can run at once. B01 and B02 (the two compiler bugs) should run alongside them
-since they gate B23 and every block-using pin.
+**Recommended first wave:** B07 (Enumerable), B08 (String query), B12 (Integer
+predicates), B15 (Array slots), B16 (Hash), B17 (Set). Each owns a different
+`library/std` file, so six subagents can run at once. B01 and B02 (the two
+compiler bugs) should run alongside them since they gate B23 and every
+block-using pin.
+
+**B06 must NOT run in this wave.** It is the only batch whose target files are
+the matrices themselves (`core.md`, `language.md`, `stdlib.md`), and every other
+batch has to update matrix rows in those same files on completion. Running B06
+concurrently conflicts with all of them, and because it rewrites rows wholesale
+it invalidates the line numbers every other batch cites. Run B06 alone, either
+before the wave or after it has merged.
+
+**Matrix-row conflicts are the one shared-file hazard.** Batches own disjoint
+`library/std` files, but their definition-of-done step 3 sends many of them into
+`core.md`. Either serialize the matrix edits (each agent updates rows only at
+merge time, not in its worktree), or accept that step 3 is where merge conflicts
+will land and resolve them by hand.
 
 ---
 
