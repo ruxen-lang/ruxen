@@ -8,6 +8,25 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **`String` conversion and the Regex bridge (Ruby-parity batch B11)** —
+  `to_i(base = 10)`, `to_f`, `hex`, `oct`, `ord`, `chr`, `to_str`, `dup`, and
+  the String-side regex spellings `match(re)`, `match?(re)`, `scan(re)`,
+  `sub(re, repl)`, `gsub(re, repl)`, `split(re)` and `index(re)`, added as
+  `.rx` methods on `class String`. `to_i` / `to_f` are Ruby's LENIENT
+  parsers: leading whitespace and a sign, `_` between digits, a `0x` / `0b` /
+  `0o` / `0d` prefix when it agrees with the base, scanning stops at the first
+  character that does not fit, and 0 when nothing parses. The strict
+  `Result`-returning `parse_int` / `parse_float` are untouched and remain the
+  spelling to reach for when "not a number" has to be distinguishable from
+  "zero". Each regex method is an overload selected by ARGUMENT TYPE against
+  its string-argument sibling from B10, so one Ruby name (`gsub`, `sub`,
+  `split`, `index`) covers both. Two gaps recorded rather than faked: `=~`
+  cannot be defined, because Ruxen's lexer has no such token (its match
+  operator is `~=`, a Bool-returning dedicated route), so Ruby's `=~` answer
+  is served by Ruby's other name for it, `index(regexp)`, which converts the
+  match's BYTE offset into a CHARACTER index; and `ord` on an empty receiver
+  aborts via `panic!`, since Ruby raises ArgumentError and Ruxen has no
+  exception surface. Pins `tests/release-e2e/cases/1100`-`1102`.
 - **`String` search and replace (Ruby-parity batch B10)** — `sub(pattern,
   replacement)`, `gsub(pattern, replacement)`, `partition(sep)`,
   `rpartition(sep)`, `slice(start, len)` and `split(sep, limit)`, added as

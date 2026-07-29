@@ -2770,6 +2770,80 @@ end
 generic suffix in the alias-canonicalization lookup (mirror the FFI-alias
 peel-and-retry), then these can revert to one-line `alias`es.
 
+## Q59 · S2/S3 — five `.rx`-authoring miscompiles and limits found building the String Ruby-parity batches (B08-B11)
+
+**OPEN.** Each has a clean workaround, all of them in use in
+`library/std/string/src/string.rx`. Grouped because they were all found in one
+pass and share a theme: a value that is correct when bound to an explicitly
+typed local is wrong when used inline. (If a parallel batch already claimed
+`Q59`, renumber; the content is what matters.)
+
+**(a) S2 — a NEGATIVE default argument does not fill on a builtin-head method.**
+```rx
+class String
+  def rindex(sub: &String, offset: Int = -1) -> Option[Int]
+    # ...
+  end
+end
+# "hello".rindex("l")  =>  Cranelift verifier: "mismatched argument count
+#                          for `v6 = call fn3(v3, v5)`: got 2, expected 3"
+```
+A POSITIVE default (`pad: String = " "`, `base: Int = 10`) fills correctly, and
+a negative default on a FREE function (`def neg(a: Int, b: Int = -1)`) also
+works, so the gap is the negated-literal default expression in the builtin-head
+fill path added by `09580b95` (`infer/expr.rs` `selected_method` +
+`append_method_default_args`). **Workaround:** declare two arities instead
+(`def rindex(sub)` delegating to `def rindex(sub, offset)`).
+
+**(b) S2 — indexing an `Array[Int]` / `Array[Char]` / `Array[UInt8]` returned
+INLINE by a call yields garbage.**
+```rx
+puts "#{"ab".chars[0]}"      # => 4352431440   (a pointer, not 'a')
+puts "#{"ab".bytes[0]}"      # => 45852142432
+let cs = "ab".chars
+puts "#{cs[0]}"              # => a            (correct once bound)
+```
+Pre-existing, not introduced by the String batches: it reproduces on the FFI
+`chars` / `bytes`. `Array[String]` is unaffected (`"a,b".split(",")[0]` is
+correct), so it looks like the scalar-element read off a temporary that has
+already been released. **Workaround:** bind the array to a local first.
+
+**(c) S2 — `<Char> as Int` mis-lowers in argument and tail-expression
+position.**
+```rx
+def pa -> Int
+  let c = self.chars[0]
+  c as Int                   # => 4337015680
+end
+out.push(c as Int)           # => pushes garbage
+let n: Int = c as Int        # => 65   (correct)
+```
+Same family as the "rebox a scalar `self` first" rule (`let n = 0 + self`).
+**Workaround:** always bind through an explicitly typed local.
+
+**(d) S2 — `String + &String` (a borrowed PARAMETER) concatenates garbage.**
+```rx
+def probe(other: &String) -> String
+  var r = ""
+  r = r + other              # => "AIySayAMGGARctFT"
+end
+```
+`r + "literal"`, `r + owned_string` and `r + "#{other}"` are all correct, so the
+gap is specifically the borrowed-parameter operand on the right of the concat
+route. **Workaround:** `r.push_str(other)`, which mutates `r` in place and is
+also cheaper than rebuilding.
+
+**(e) S3 — an untyped `[]` literal cannot disambiguate an overload.**
+```rx
+"hello".start_with?([])              # => true   (picks the &String overload)
+let none: Array[String] = []
+"hello".start_with?(none)            # => false  (correct)
+```
+Argument-type-based overload resolution otherwise works well (it is what lets
+`gsub` / `sub` / `split` / `index` take either a `&String` or a `&Regex` under
+one Ruby name), but an empty array literal carries no element type for it to
+match on. **Workaround:** bind a typed local.
+
 ## Where the workarounds live (grep-able)
 
 - `quiver/CLAUDE.md` — "Ruxen v1 landmines" section (the working ruleset)

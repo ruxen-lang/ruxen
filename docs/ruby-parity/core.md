@@ -115,15 +115,15 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 | `lines` | DONE | `ruxen_string_lines` | |
 | `each_char` / `each_line` / `each_byte` | PARTIAL | `.rx` block forms (pin 1073) | the block is required (no Enumerator return) and the return is `nil`, not `self`. `each_line` strips the line terminator, where CRuby keeps it. |
 | `each_grapheme_cluster` | MISSING | — | |
-| `scan` | MISSING | use `Regex#scan` | on `String`: absent. |
-| `match` / `match?` / `=~` | MISSING | use `Regex#find`/`is_match` / `~=` | no `String`-side regex methods; `~=` is the operator. |
-| `to_i` / `to_f` | PARTIAL | `parse_int` / `parse_float` | return `Result[…]` (not lenient like Ruby `to_i`); no radix. |
+| `scan` | PARTIAL | `.rx` `scan(re)` (pin 1101) | returns `Array[String]` of whole matches. Ruby's array-per-match form for a pattern WITH groups is absent: use `Regex#scan` and read `Match#group`. |
+| `match` / `match?` / `=~` | PARTIAL | `.rx` `match(re)` / `match?(re)` / `index(re)` (pin 1101) | `match` returns `Option[Match]`, `match?` a Bool. `=~` CANNOT be defined: Ruxen's lexer has no `=~` token (its match operator is `~=`, a Bool-returning dedicated route). Ruby's `=~` answer, the character index of the match, is available under Ruby's other name for it, `index(regexp)`. |
+| `to_i` / `to_f` | DONE | `.rx` `to_i(base = 10)` / `to_f` (pin 1100) | Ruby's lenient semantics: leading whitespace and sign, `_` between digits, a `0x` / `0b` / `0o` / `0d` prefix when it agrees with `base`, scanning stops at the first bad character, and 0 when nothing parses. The strict `Result`-returning `parse_int` / `parse_float` remain. |
 | `parse_int`/`parse_float`/`parse_uint` | DONE | `ruxen_string_parse_*` | Ruxen-native, `Result`-returning. |
 | `to_sym` / `intern` | MISSING | — | blocked on the Symbol type (a language-design decision), not a metaobject need. |
 | `to_r` / `to_c` | MISSING | — | no Rational/Complex. |
-| `to_s` / `to_str` | DONE / PARTIAL | `ruxen_string_to_string` | `to_s` DONE; `to_str` absent. |
-| `ord` / `chr` | MISSING | — | |
-| `hex` / `oct` | MISSING | — | |
+| `to_s` / `to_str` | DONE | `ruxen_string_to_string`, `.rx` `to_str` (pin 1102) | |
+| `ord` / `chr` | DONE | `.rx` (pin 1102) | `ord` on an EMPTY receiver aborts via `panic!`: Ruby raises ArgumentError and Ruxen has no exception surface, so aborting beats inventing a 0. |
+| `hex` / `oct` | DONE | `.rx` over `to_i(base)` (pin 1100) | `oct` reads the base from the receiver's own prefix (`0x`→16, `0b`→2, `0d`→10, otherwise 8), as in Ruby. |
 | `succ` / `next` | DONE | `.rx` (pin 1083) | full carry semantics: rightmost alphanumeric, carrying leftwards across alphanumerics and skipping non-alphanumerics, seeding `"1"` / `"a"` / `"A"` on overflow. The no-alphanumeric path carries at the CHARACTER level where CRuby carries at the BYTE level; the two agree for every ASCII string. |
 | `reverse` | DONE | `.rx` over `chars`+`Array#reverse` (pin 987). |
 | `insert` | PARTIAL | `insert(i, codepoint)` / `insert_str(i, s)` | Ruxen splits into codepoint- vs string-insert; arg is an Int codepoint, not a String, for `insert`. |
@@ -131,7 +131,7 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 | `delete_prefix` / `delete_suffix` | DONE | `.rx` (pin 1084) | |
 | `partition` / `rpartition` | DONE | `.rx` (pin 1091) | three-element `Array[String]`; string separators only. |
 | `freeze` / `frozen?` | MISSING | — | no freeze protocol on values. |
-| `dup` / `clone` | PARTIAL | `clone` | `clone` = borrow→owned copy (DONE); no `dup`. |
+| `dup` / `clone` | DONE | `clone`, `.rx` `dup` (pin 1102) | both are an owned copy. Ruby's `clone` also copies frozen state and singleton methods, neither of which Ruxen has. |
 | `hash` | MISSING | — | (`Hashable` mixin exists for user types; no `String#hash` surface.) |
 | `eql?` / `casecmp` / `casecmp?` | DONE | `.rx` (pin 1072) | `casecmp` returns -1/0/1, ASCII folding only (CRuby folds full Unicode). Ruby's nil-for-a-non-String return has no analogue: the parameter is statically `&String`. `<=>` on String is still absent. |
 | `encode`/`force_encoding`/`encoding`/`valid_encoding?`/`b`/`scrub` | MISSING | — | no encoding API (strings are UTF-8 bytes). |
@@ -587,7 +587,7 @@ literals, and the `~=` operator.
 | `match` | PARTIAL | `Regex#find` → `Option[Match]` | renamed (`match` is a keyword). |
 | `match?` | DONE | `Regex#is_match` → `Bool` | |
 | `scan` (on Regexp) | DONE | `Regex#scan` → `Array[Match]` | |
-| `String#scan` / `#gsub(/re/)` / `#sub(/re/)` / `#split(/re/)` | PARTIAL | `Regex#replace`/`replace_all`/`split` | regex ops live on `Regex`, not `String`. |
+| `String#scan` / `#gsub(/re/)` / `#sub(/re/)` / `#split(/re/)` | DONE | `.rx` overloads on `String` delegating to `Regex` (pin 1101) | all four now spell as in Ruby, selected by argument TYPE against their string-argument siblings; `String#match` / `#match?` / `#index(regexp)` too. The `Regex` methods remain the direct route. |
 | `Regexp.escape` / `.quote` / `.union` | MISSING | — | |
 | `Regexp#source` / `#options` / `#names` / `#casefold?` | MISSING | — | |
 | `MatchData#[]` / `#to_a` / `#captures` | PARTIAL | `Match#group(n)` / `#groups` | `group(0)`=whole; `groups`→`Array[Option[String]]`. |

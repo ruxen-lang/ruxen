@@ -1,0 +1,41 @@
+# Pins Ruby's LENIENT numeric conversions on String (batch B11): `to_i`,
+# `to_i(base)`, `to_f`, `hex` and `oct`. They read as much of a number as they
+# can from the front and answer 0 when there is nothing to read, unlike the
+# strict `parse_int` / `parse_float`, which keep returning a `Result`.
+def main
+  puts "to_i plain = #{"42".to_i}"
+  puts "to_i trailing junk = #{" 42abc".to_i}"
+  puts "to_i garbage = #{"abc".to_i}"
+  puts "to_i negative = #{"-5".to_i}"
+  puts "to_i plus = #{"+7".to_i}"
+  puts "to_i underscores = #{"1_000".to_i}"
+  puts "to_i empty = #{"".to_i}"
+  puts "to_i hex in base 10 = #{"0x1f".to_i}"
+
+  puts "to_i base 16 = #{"1f".to_i(16)}"
+  puts "to_i base 16 prefixed = #{"0x1f".to_i(16)}"
+  puts "to_i base 16 garbage = #{"zz".to_i(16)}"
+  puts "to_i base 16 negative = #{"-0x10".to_i(16)}"
+  puts "to_i base 2 = #{"0b101".to_i(2)}"
+
+  puts "hex bare = #{"1f".hex}"
+  puts "hex prefixed = #{"0x1f".hex}"
+  puts "hex garbage = #{"zz".hex}"
+
+  puts "oct bare = #{"17".oct}"
+  puts "oct leading zero = #{"010".oct}"
+  puts "oct hex prefix = #{"0x10".oct}"
+  puts "oct binary prefix = #{"0b10".oct}"
+  puts "oct decimal prefix = #{"0d19".oct}"
+  puts "oct not octal = #{"9".oct}"
+
+  puts "to_f plain = #{"3.5".to_f}"
+  puts "to_f integral = #{"3".to_f}"
+  puts "to_f garbage = #{"abc".to_f}"
+  puts "to_f empty = #{"".to_f}"
+  puts "to_f trailing junk = #{"-2.25xyz".to_f}"
+  puts "to_f exponent = #{"1e3".to_f}"
+  puts "to_f signed exponent = #{"1.5e-2".to_f}"
+  puts "to_f underscores = #{"1_000.5".to_f}"
+  puts "to_f dangling exponent = #{"1e".to_f}"
+end

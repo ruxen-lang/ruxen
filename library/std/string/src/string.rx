@@ -1090,4 +1090,371 @@ class String
     end
     out
   end
+
+  # ─────────────────────────────────────────────────────────────────────
+  # B11 — conversion and the Regex bridge
+  #
+  # `to_i` / `to_f` are Ruby's LENIENT parsers: they read as much of a number
+  # as they can from the front of the string and answer 0 when there is
+  # nothing to read. The `Result`-returning `parse_int` / `parse_float` stay
+  # as the strict spellings; reach for those when "not a number" has to be
+  # distinguishable from "zero".
+  #
+  # The regex methods delegate to `library/std/regex`. Each is an overload
+  # selected by ARGUMENT TYPE against its string-argument sibling from B10, so
+  # `gsub` takes either a `&String` or a `&Regex` under the one Ruby name.
+  # ─────────────────────────────────────────────────────────────────────
+
+  # Ruby `String#to_i` — the leading integer, or 0. Leading whitespace and a
+  # `+` / `-` sign are allowed, `_` may separate digits, a `0x` / `0b` / `0o` /
+  # `0d` prefix is consumed when it agrees with `base`, and scanning stops at
+  # the first character that is not a digit in `base`.
+  def to_i(base: Int = 10) -> Int
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    var i: Int = 0
+    var skipping = true
+    while skipping && i < n
+      let cp: Int = cs[i] as Int
+      if cp == 32 || cp == 9 || cp == 10 || cp == 13 || cp == 11 || cp == 12
+        i = i + 1
+      else
+        skipping = false
+      end
+    end
+    var negative = false
+    if i < n
+      let sign: Int = cs[i] as Int
+      if sign == 45
+        negative = true
+        i = i + 1
+      else
+        if sign == 43
+          i = i + 1
+        end
+      end
+    end
+    if i + 1 < n
+      let lead: Int = cs[i] as Int
+      if lead == 48
+        let tag: Int = cs[i + 1] as Int
+        var prefixed = false
+        if base == 16 && (tag == 120 || tag == 88)
+          prefixed = true
+        end
+        if base == 2 && (tag == 98 || tag == 66)
+          prefixed = true
+        end
+        if base == 8 && (tag == 111 || tag == 79)
+          prefixed = true
+        end
+        if base == 10 && (tag == 100 || tag == 68)
+          prefixed = true
+        end
+        if prefixed
+          i = i + 2
+        end
+      end
+    end
+    var value: Int = 0
+    var seen = false
+    var reading = true
+    while reading && i < n
+      let cp: Int = cs[i] as Int
+      if cp == 95 && seen
+        i = i + 1
+      else
+        var digit: Int = -1
+        if cp >= 48 && cp <= 57
+          digit = cp - 48
+        else
+          if cp >= 97 && cp <= 122
+            digit = cp - 87
+          else
+            if cp >= 65 && cp <= 90
+              digit = cp - 55
+            end
+          end
+        end
+        if digit < 0 || digit >= base
+          reading = false
+        else
+          value = value * base + digit
+          seen = true
+          i = i + 1
+        end
+      end
+    end
+    if negative
+      0 - value
+    else
+      value
+    end
+  end
+
+  # Ruby `String#to_f` — the leading float, or 0.0. Reads an optional sign, a
+  # digit run (`_` may separate digits), an optional fraction and an optional
+  # exponent, then hands the collected prefix to the strict `parse_float`.
+  def to_f -> Float
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    var i: Int = 0
+    var skipping = true
+    while skipping && i < n
+      let cp: Int = cs[i] as Int
+      if cp == 32 || cp == 9 || cp == 10 || cp == 13 || cp == 11 || cp == 12
+        i = i + 1
+      else
+        skipping = false
+      end
+    end
+    var buf = ""
+    if i < n
+      let sign: Int = cs[i] as Int
+      if sign == 45 || sign == 43
+        buf.push(cs[i])
+        i = i + 1
+      end
+    end
+    var seen = false
+    var reading = true
+    while reading && i < n
+      let cp: Int = cs[i] as Int
+      if cp >= 48 && cp <= 57
+        buf.push(cs[i])
+        seen = true
+        i = i + 1
+      else
+        if cp == 95 && seen
+          i = i + 1
+        else
+          reading = false
+        end
+      end
+    end
+    if i < n
+      let dot: Int = cs[i] as Int
+      if dot == 46
+        var fraction = ""
+        var j: Int = i + 1
+        var scanning = true
+        while scanning && j < n
+          let cp: Int = cs[j] as Int
+          if cp >= 48 && cp <= 57
+            fraction.push(cs[j])
+            j = j + 1
+          else
+            if cp == 95 && (fraction.size as Int) > 0
+              j = j + 1
+            else
+              scanning = false
+            end
+          end
+        end
+        if (fraction.size as Int) > 0 || seen
+          buf.push(cs[i])
+          buf.push_str(fraction.as_str)
+          seen = seen || (fraction.size as Int) > 0
+          i = j
+        end
+      end
+    end
+    if seen && i < n
+      let e: Int = cs[i] as Int
+      if e == 101 || e == 69
+        var exponent = ""
+        var j: Int = i + 1
+        if j < n
+          let sign: Int = cs[j] as Int
+          if sign == 45 || sign == 43
+            exponent.push(cs[j])
+            j = j + 1
+          end
+        end
+        var digits = 0
+        var scanning = true
+        while scanning && j < n
+          let cp: Int = cs[j] as Int
+          if cp >= 48 && cp <= 57
+            exponent.push(cs[j])
+            digits = digits + 1
+            j = j + 1
+          else
+            scanning = false
+          end
+        end
+        # A trailing `e` with no digits is not part of the number.
+        if digits > 0
+          buf.push(cs[i])
+          buf.push_str(exponent.as_str)
+          i = j
+        end
+      end
+    end
+    if !seen
+      return 0.0
+    end
+    match buf.parse_float
+      Ok(v)  -> v
+      Err(e) -> 0.0
+    end
+  end
+
+  # Ruby `String#hex` — the leading hexadecimal integer, or 0. An `0x` prefix
+  # is optional.
+  def hex -> Int
+    self.to_i(16)
+  end
+
+  # Ruby `String#oct` — the leading integer in the base its own PREFIX names:
+  # `0x` is 16, `0b` is 2, `0d` is 10, and everything else (including a bare
+  # `0`) is 8.
+  def oct -> Int
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    var i: Int = 0
+    var skipping = true
+    while skipping && i < n
+      let cp: Int = cs[i] as Int
+      if cp == 32 || cp == 9 || cp == 10 || cp == 13 || cp == 11 || cp == 12
+        i = i + 1
+      else
+        skipping = false
+      end
+    end
+    if i < n
+      let sign: Int = cs[i] as Int
+      if sign == 45 || sign == 43
+        i = i + 1
+      end
+    end
+    var base: Int = 8
+    if i + 1 < n
+      let lead: Int = cs[i] as Int
+      if lead == 48
+        let tag: Int = cs[i + 1] as Int
+        if tag == 120 || tag == 88
+          base = 16
+        end
+        if tag == 98 || tag == 66
+          base = 2
+        end
+        if tag == 100 || tag == 68
+          base = 10
+        end
+      end
+    end
+    self.to_i(base)
+  end
+
+  # Ruby `String#ord` — the codepoint of the FIRST character. Ruby raises
+  # ArgumentError on an empty receiver; Ruxen has no exception surface, so
+  # this aborts rather than inventing a value such as 0.
+  def ord -> Int
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    if n == 0
+      panic!("String#ord: empty string")
+    end
+    let cp: Int = cs[0] as Int
+    cp
+  end
+
+  # Ruby `String#chr` — the first character as a one-character `String`, or
+  # the empty string when the receiver is empty.
+  def chr -> String
+    self.take_chars(1)
+  end
+
+  # Ruby `String#to_str` — the implicit-conversion spelling of `to_s`.
+  def to_str -> String
+    self.drop_chars(0)
+  end
+
+  # Ruby `String#dup` — an owned copy. `clone` is the Ruxen-native spelling of
+  # the same thing (Ruby's `clone` also copies frozen state and singletons,
+  # neither of which Ruxen has).
+  def dup -> String
+    self.drop_chars(0)
+  end
+
+  # Ruby `String#match` — the first `Regex` match, with its capture data, or
+  # nil.
+  def match(re: &Regex) -> Option[Match]
+    re.find(self.as_str)
+  end
+
+  # Ruby `String#match?` — does `re` match anywhere? Same answer as the `~=`
+  # operator, under the Ruby name.
+  def match?(re: &Regex) -> Bool
+    re.is_match(self.as_str)
+  end
+
+  # Ruby `String#scan` — every non-overlapping match, left to right, as
+  # strings. Ruby's "array-per-match when the pattern has groups" form is not
+  # covered: use `Regex#scan` and read `Match#group` for captures.
+  def scan(re: &Regex) -> Array[String]
+    let found = re.scan(self.as_str)
+    var out: Array[String] = []
+    found.each do |m|
+      out.push(m.matched)
+    end
+    out
+  end
+
+  # Ruby `String#sub` / `#gsub` with a `Regex` pattern. The replacement
+  # supports PCRE2 back-reference syntax (`$1`, `${name}`), which is where
+  # Ruby writes `\1`.
+  def sub(re: &Regex, replacement: &String) -> String
+    re.replace(self.as_str, replacement)
+  end
+
+  def gsub(re: &Regex, replacement: &String) -> String
+    re.replace_all(self.as_str, replacement)
+  end
+
+  # Ruby `String#split` with a `Regex` separator.
+  def split(re: &Regex) -> Array[String]
+    re.split(self.as_str)
+  end
+
+  # Internal building block: turn a BYTE offset into the receiver into a
+  # CHARACTER index, by re-walking the characters and adding up their UTF-8
+  # widths. `Match#start_pos` is a byte offset; every Ruby index is a
+  # character index.
+  def char_index_of_byte(offset: Int) -> Int
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    var bytes: Int = 0
+    var idx: Int = 0
+    while idx < n && bytes < offset
+      let cp: Int = cs[idx] as Int
+      if cp < 128
+        bytes = bytes + 1
+      else
+        if cp < 2048
+          bytes = bytes + 2
+        else
+          if cp < 65536
+            bytes = bytes + 3
+          else
+            bytes = bytes + 4
+          end
+        end
+      end
+      idx = idx + 1
+    end
+    idx
+  end
+
+  # Ruby `String#index(regexp)` — the CHARACTER index where `re` first
+  # matches, or nil. This is also the answer Ruby's `=~` gives; `=~` itself
+  # cannot be defined, because Ruxen's lexer has no such token (it spells the
+  # match operator `~=`, which is a Bool-returning dedicated route).
+  def index(re: &Regex) -> Option[Int]
+    match re.find(self.as_str)
+      Some(m) -> Some(self.char_index_of_byte(m.start_pos))
+      nil     -> nil
+    end
+  end
 end

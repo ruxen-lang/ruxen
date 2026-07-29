@@ -1,0 +1,17 @@
+match? hit = true
+match? miss = false
+match capture = 42
+match miss = nil
+scan count = 2
+scan 0 = 1
+scan 1 = 22
+sub regex = a#b2
+gsub regex = a#b#
+split regex = [a] [b] [c]
+index regex = 3
+index regex miss = nil
+index regex utf8 = 5
+gsub string = a+b
+sub string = a+b-c
+split string = 2
+tilde-eq operator = true
