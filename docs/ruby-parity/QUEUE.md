@@ -86,7 +86,7 @@ taken; the next split batch starts at 1960.
 | id | Enabler | Where | Unblocks |
 |---|---|---|---|
 | **E1** | **Per-`T` monomorphization of generic-collection method bodies.** Extend the generic-CLASS mono (`mir/lower/monomorphize.rs`, which already clones user generic-class bodies per concrete receiver as `Box__mono__String_eq`) to emit `Array[Int]_join` / `Array[Int]_min` per concrete `T` at the call site, rewriting `T` to the concrete type in the body (the `trait_default.rs::rewrite_self_in_func` pattern applied to the element param). **In progress (agent `per-t-mono`).** | `compiler/ruxen_core/src/mir/lower/{monomorphize.rs,trait_default.rs}` | B20, B21, B23 (partly), and the element-typed half of B07/B15/B16 noted per batch |
-| **E2** | **Q58: `alias` to a method on a generic builtin head link-fails.** `mir/lower/mod.rs::select_method_symbol_name` compares `parent_def.name == class_name`, but the alias target's parent is the BARE class while `class_name` may carry the generic suffix. Strip `class_name`'s `[...]` there (`canonical_method_name` already strips). **In progress (agent `q58-alias`).** | `compiler/ruxen_core/src/mir/lower/mod.rs` | B22 (and lets several other batches collapse delegating methods back to one-line aliases) |
+| **E2** | **Q58: `alias` to a method on a generic builtin head link-fails.** `mir/lower/mod.rs::select_method_symbol_name` compares `parent_def.name == class_name`, but the alias target's parent is the BARE class while `class_name` may carry the generic suffix. Strip `class_name`'s `[...]` there (`canonical_method_name` already strips). **LANDED** (`7b1c1907`, merged `42008fa3`). | `compiler/ruxen_core/src/mir/lower/mod.rs` | B22 (and lets several other batches collapse delegating methods back to one-line aliases) |
 | **E3** | **Scalar method-home `self` does not reach the primitive arithmetic floor.** A scalar `self` is typed nominally as `Class[Int]`, so `self + 1` lowers to a method call `Int_+` that does not exist. Make a scalar-class `self` flow into the primitive `+`/`-`/`*`/`/`/`%` floor. | `typeck/infer/ops.rs`, `mir/lower/expr/binops.rs` | Not a hard blocker (rebox with `let n = 0 + self`), but it removes the workaround from B12/B13/B14 and is a prerequisite for clean `Float` bodies |
 | **E4** | **Float receiver ABI on `.rx` method homes and closure args.** A `Float` receiver reaching an `.rx` body is read from an integer slot (truncates, or reads 0 for a computed value). Same family as the closure-arg bug. Delivered by **B01**. | codegen receiver coercion (`primitive_ffi_receiver_ty` neighbourhood), closure arg marshalling | B23 (all `Float` methods), the `Array[Float]` half of B20 |
 | **E5** | **Symbol type (`:sym`).** A first-class `Symbol` value plus lexer token. Delivered by **B29**. | lexer, parser, typeck | Hash symbol shorthand `{a: 1}`, `%i[]`, `String#to_sym`, hash patterns, and the literal-symbol folding in B34 |
@@ -103,6 +103,11 @@ taken; the next split batch starts at 1960.
 These are correctness bugs that silently produce wrong answers or crash. They
 erode trust in the whole surface, so they lead the queue.
 
+**Order in this section is priority order, not id order.** Batch ids are stable
+identifiers (they own pin blocks that running agents already depend on), so a
+bug found later keeps its next-free id and is simply placed at its rank. B71
+below was found after B01 to B05 and ranks second.
+
 ### B01 — Float receiver ABI: `self` truncates, closure arg passes as 0
 - **Goal:** a `Float` value keeps its bits when it crosses into an `.rx` method body or a closure parameter.
 - **Repros (both verified at baseline):**
@@ -113,6 +118,36 @@ erode trust in the whole surface, so they lead the queue.
 - **Size:** one self-contained defect; expect it to be a register-class/width mistake, not a redesign.
 - **Matrix rows:** `core.md` Float table (200-224) and the Operator-reality note (44-68); `HANDOFF.md` "Known PRE-EXISTING bugs".
 - **Pins:** 1000-1009.
+
+### B71 — Non-scalar parameter default drops to the null sentinel on a paren-less call
+- **Goal:** `def show(prefix: String = "v=")` called as `p.show` uses the declared default instead of silently substituting the null sentinel.
+- **Repro (verified at baseline 2026-07-29, on a plain non-generic class, so not a Q58 regression):**
+
+  ```
+  class P
+    n: Int
+    def init(@n: Int) end
+    def show(prefix: String = "v=") -> String
+      "#{prefix}#{self.n}"
+    end
+  end
+  # p.show      => "3"     <- WRONG, the default vanished
+  # p.show()    => "v=3"   correct
+  # p.show("v=")=> "v=3"   correct
+  ```
+
+- **Cause:** `compiler/ruxen_core/src/mir/lower/mod.rs::default_expr_to_sentinel` maps only `nil`, Int, Bool, and Float. Every other default expression falls through to the null sentinel. Int, Bool, and Float defaults therefore land correctly, which is exactly what makes this easy to miss.
+- **Trigger surface, narrowed by probe (this is better news than it first looks):**
+  - **Paren-less calls only.** `p.show()` with empty parens is correct, so **adding parens is a complete workaround** for any call site.
+  - **The default-fill path itself is fine.** `"ab".ljust(6)` correctly pads with the declared `pad = " "` default on a builtin head (probed). So the already-shipped `ljust`/`rjust`/`center` from pins 988/989 are **not** broken: they take a required argument, so they are always called with parens.
+  - The exposed surface is therefore **methods whose arguments are all defaulted**, called Ruby-style without parens. That is a real and growing set: `chomp(suffix = "\n")` (B09), `join(sep = ", ")` (B20), `strftime(fmt = "%Y-%m-%d")` and `iso8601` (B35d), `inspect`, and every `to_s(base = 10)`-shaped method.
+- **Why it ranks second, above B02 to B05 and below B01:** it is a silent wrong answer on the *idiomatic* Ruby call form, and the root `CLAUDE.md` forbids a silent wrong answer for any user-callable surface outright. It sits below B01 because B01 is the same class of silent numeric corruption with **no** workaround and it blocks a whole batch (B23), while this one has a total workaround (parens). It sits above B02 because a segfault announces itself and this does not.
+- **Fix shape, and why this is probably an enabler rather than a bug fix:** extending the scalar whitelist to include String would make the repro pass and **move the same silent failure to the next unlisted type** (a const, an enum variant, `Array.new`, a computed expression such as `" " * 2`). That is the per-feature-special-case anti-pattern the root `CLAUDE.md` names. The real fix is to **lower an arbitrary default expression at the call site** the way an explicitly-passed argument is lowered, which is a reusable generic mechanism and would also make non-literal defaults work for the first time. Classified **NEEDS-COMPILER-FEATURE** on that basis. If the general lowering proves too large, a whitelist extension is acceptable *only* if the fall-through case becomes a hard compile error rather than a null sentinel, so the failure stops being silent.
+- **Files:** `compiler/ruxen_core/src/mir/lower/mod.rs` (`default_expr_to_sentinel` and the paren-less call path).
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Size:** one defect if whitelisted, one small generic mechanism if done properly. Budget for the latter.
+- **Pins:** 1700-1709. Pin **both** call forms (paren-less and parens) and at least one non-literal default, so a future whitelist regression is caught.
+- **Matrix rows:** `language.md` §4 (the `def f(x = 1)` default-args row, currently DONE and now known to be conditionally wrong); `HANDOFF.md` known-bugs list (lines 161-165), where it is already recorded.
 
 ### B02 — `do…end` block plus bare-variable `puts` segfaults
 - **Goal:** `arr.each { |x| puts(x) }` stops crashing.
@@ -304,11 +339,12 @@ erode trust in the whole surface, so they lead the queue.
 - **Pins:** 1200-1209.
 
 ### B22 — Collapse delegating methods back to `alias`
-- **Goal:** once Q58 is fixed, the Ruby-spelling synonyms become one-line aliases instead of hand-written delegating methods.
+- **Goal:** now that Q58 is fixed, the Ruby-spelling synonyms become one-line aliases instead of hand-written delegating methods.
 - **Scope:** revisit every `def x(...) = self.y(...)` delegator written for `Hash` (`has_key?`, `include?`, `member?`), `Array`, `Set`, and `String`, and replace with `alias`. Add the aliases that were skipped because of Q58 in the first place.
 - **Files:** `library/std/{map,array,set,string}/src/*.rx`.
-- **Status:** **BLOCKED-ON-Q58-ALIAS (E2).**
+- **Status:** **READY-NOW.** E2 landed (`7b1c1907`, merged `42008fa3`), so this is unblocked.
 - **Size:** small, mechanical; a good first batch for whoever follows the Q58 fix.
+- **Caution:** it touches four `library/std` files that first-wave batches own, so run it **after** the first wave has merged, not alongside it.
 - **Matrix rows:** wherever a row says "delegating method (pin 985/986)".
 - **Pins:** 1210-1219.
 
@@ -904,9 +940,9 @@ Pins: none.
 
 | Blocker status | Batches | Ids |
 |---|---|---|
-| **READY-NOW** | **31** | B06, B07, B08, B09, B10, B11, B12, B13, B14, B15, B16, B17, B18, B19, **B35a**, B38, B39, B40, B41, B42, B43, B47, B48, B49, B51, B52, B53, B54, B57, B62, B70 (note: B37, B44, B45, B50, B63, B65 are partly ready and counted under their blocker) |
+| **READY-NOW** | **32** | B06, B07, B08, B09, B10, B11, B12, B13, B14, B15, B16, B17, B18, B19, **B22**, **B35a**, B38, B39, B40, B41, B42, B43, B47, B48, B49, B51, B52, B53, B54, B57, B62, B70 (note: B37, B44, B45, B50, B63, B65 are partly ready and counted under their blocker) |
 | **BLOCKED-ON-PER-T-MONO (E1)** | 2 | B20, B21 |
-| **BLOCKED-ON-Q58-ALIAS (E2)** | 1 | B22 |
+| ~~BLOCKED-ON-Q58-ALIAS (E2)~~ | 0 | E2 landed (`7b1c1907`); **B22 is now READY-NOW** |
 | **BLOCKED-ON-B01 (Float ABI)** | 1 | B23 |
 | **BLOCKED-ON-B33 (codegen substrate)** | 5 | B34, B44 (derive half), B50 (3 of 4), B55, B63 (derive half) |
 | **BLOCKED-ON-B55 (Model synth)** | 4 | B56, B58, B59, B60 |
@@ -915,7 +951,7 @@ Pins: none.
 | **BLOCKED-ON-B44 (Serialize)** | 2 | B64, B67 |
 | **NEEDS-RUNTIME-C** | 6 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61 |
 | **BLOCKED within B35** | 5 | B35b, B35c, B35d, B35e, B35f (all on B35a or B35b; see §6) |
-| **NEEDS-COMPILER-FEATURE** | 17 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler) |
+| **NEEDS-COMPILER-FEATURE** | 18 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71** |
 
 Counts overlap where a batch has both a ready half and a blocked half; the
 per-batch status line is authoritative.
