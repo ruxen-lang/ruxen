@@ -1,0 +1,9 @@
+# Pins String#ljust / String#rjust (pad right / left to a width). `.rx` methods
+# built char-by-char over `chars` (self is never used directly as a String
+# value); pad is a required arg.
+def main
+  puts("ab".ljust(5, "-"))
+  puts("ab".rjust(5, "*"))
+  puts("abcdef".ljust(3, "-"))
+  puts("x".rjust(4, "0"))
+end

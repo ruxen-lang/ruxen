@@ -108,7 +108,7 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 | `rindex` | MISSING | — | |
 | `count` | MISSING | — | |
 | `delete` / `squeeze` | MISSING | — | |
-| `center` / `ljust` / `rjust` | MISSING | — | no padding methods. |
+| `center` / `ljust` / `rjust` | PARTIAL | `ljust`/`rjust` DONE (`.rx`, required pad; pin 988); `center` MISSING. |
 | `chars` | DONE | `ruxen_string_chars` → `Array[Char]` | |
 | `bytes` | DONE | `ruxen_string_bytes` → `Array[UInt8]` | |
 | `codepoints` | MISSING | — | |
