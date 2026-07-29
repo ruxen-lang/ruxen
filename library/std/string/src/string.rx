@@ -272,12 +272,28 @@ class String
   # Ruby `String#count` — how many characters belong to the tr-style set
   # `set` (`"lo"`, `"a-z"`, `"^aeiou"`). Ruby's multi-argument intersection
   # form takes one set here; see docs/ruby-parity/core.md.
+  #
+  # Membership is a codepoint scan over the expanded set, hoisted out of the
+  # loop, rather than `members.include?("#{c}")`: the interpolation would
+  # allocate a fresh one-character `String` for EVERY character tested. `tr` /
+  # `tr_s` / `delete` / `squeeze` all test membership the same way.
   def count(set: &String) -> Int
     let members = set.tr_set_expand
     let negated = set.tr_set_negated?
+    let ms = members.chars
+    let mn: Int = ms.size as Int
     var n: Int = 0
     self.chars.each do |c|
-      let present = members.include?("#{c}")
+      let cp: Int = c as Int
+      var present = false
+      var i: Int = 0
+      while i < mn
+        let m: Int = ms[i] as Int
+        if m == cp
+          present = true
+        end
+        i = i + 1
+      end
       if present != negated
         n = n + 1
       end
@@ -675,9 +691,20 @@ class String
   def delete(set: &String) -> String
     let members = set.tr_set_expand
     let negated = set.tr_set_negated?
+    let ms = members.chars
+    let mn: Int = ms.size as Int
     var out = ""
     self.chars.each do |c|
-      let present = members.include?("#{c}")
+      let cp: Int = c as Int
+      var present = false
+      var i: Int = 0
+      while i < mn
+        let m: Int = ms[i] as Int
+        if m == cp
+          present = true
+        end
+        i = i + 1
+      end
       if present == negated
         out.push(c)
       end
@@ -705,11 +732,21 @@ class String
   def squeeze(set: &String) -> String
     let members = set.tr_set_expand
     let negated = set.tr_set_negated?
+    let ms = members.chars
+    let mn: Int = ms.size as Int
     var out = ""
     var prev: Int = -1
     self.chars.each do |c|
       let cp: Int = c as Int
-      let present = members.include?("#{c}")
+      var present = false
+      var i: Int = 0
+      while i < mn
+        let m: Int = ms[i] as Int
+        if m == cp
+          present = true
+        end
+        i = i + 1
+      end
       if cp == prev && present != negated
         prev = cp
       else
@@ -1108,7 +1145,8 @@ class String
   # Ruby `String#to_i` — the leading integer, or 0. Leading whitespace and a
   # `+` / `-` sign are allowed, `_` may separate digits, a `0x` / `0b` / `0o` /
   # `0d` prefix is consumed when it agrees with `base`, and scanning stops at
-  # the first character that is not a digit in `base`.
+  # the first character that is not a digit in `base`. The accumulator is an
+  # `Int`, so a value past 64 bits WRAPS where CRuby promotes to a Bignum.
   def to_i(base: Int = 10) -> Int
     let cs = self.chars
     let n: Int = cs.size as Int
