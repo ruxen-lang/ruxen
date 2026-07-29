@@ -294,6 +294,50 @@ ranks first and B71 second, both found after B01 to B05.
 - **Status:** NEEDS-COMPILER-FEATURE.
 - **Pins:** 1730-1739. Pin a class with an `Int` field, a class with a `String` field, and an inherited field.
 
+### B79 — `_1` / `it` are invisible inside a string interpolation
+- **Goal:** `xs.each { puts "#{_1}" }` resolves.
+- **Repro (verified 2026-07-29):** `nums.each { puts "#{_1}" }` → `error: undefined variable '_1' (at 4:23)`; same for `it`. Outside interpolation both resolve fine (pin `943`).
+- **Cause:** `resolve/implicit_block_params.rs::Scan::expr` has no `InterpolatedString` arm, and this is STRUCTURAL rather than a missing match arm: `StringPart::Expr` (`lexer/token.rs:71`) holds UNPARSED `tokens`, so the scan physically cannot descend into it. A fix means parsing interpolation parts before the implicit-param scan, or re-running the scan after.
+- **Severity:** high. `language.md` §5 marks `_1` and `it` DONE, and per `HANDOFF.md` interpolation is the WORKING way to print from a block (bare-variable `puts` in a block segfaults), so this is exactly the spelling a Ruby developer reaches for first. The DONE row fails on its most idiomatic use.
+- **Related:** the same unparsed-tokens design causes the interpolation re-lexer trap in HANDOFF's probing rules (invalid syntax inside `"#{…}"` compiles and emits an empty string). A fix here should consider fixing both.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Pins:** 1790-1799. Pin `_1` and `it` inside interpolation, both alone and combined with `next`.
+
+### B80 — A synthesized `it` shadows an in-scope local named `it`
+- **Goal:** match Ruby 3.4, where an existing local named `it` WINS over the implicit block parameter.
+- **Repro (verified 2026-07-29):** `let it = 99; xs.map { it + 0 }` prints `1 2 3`; CRuby prints `99 99 99`.
+- **Cause:** `resolve/control_flow.rs:269` calls `implicit_param_names` with no scope lookup, so the synthesized `it` binds unconditionally.
+- **Severity:** medium. Wrong value, silently. Narrow trigger (a local actually named `it`), which is why it ranks below B79.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Pins:** 1800-1809.
+
+### B81 — `E1125` is emitted but unregistered and undocumented
+- **Goal:** satisfy the root `CLAUDE.md` convention that every emitted code is in `diagnostics::codes::REGISTRY` and has `docs/errors/E####.md`.
+- **Repro:** `E1125` is referenced at `hir/nodes.rs:241`, `parser/ast.rs:444`, `mir/lower/expr/control.rs:181`, but is absent from the registry and has no doc file. A registry test enforces this, so check why it did not fire.
+- **Also:** `resolve/control_flow.rs:400`'s doc comment says E1120 while `:418` emits `E1124`. Fix the comment in the same pass.
+- **Severity:** medium, and cheap.
+- **Status:** READY-NOW (no enabler needed).
+- **Pins:** 1810-1819, plus the registry test.
+
+### B82 — `drops.rs` rebuilds instructions without updating `inst_spans`, misattributing debug line info
+- **Goal:** debug line info stays aligned, or degrades to absent, never to WRONG.
+- **Cause:** `mir/lower/drops.rs:1126-1149` does `std::mem::take(&mut block.instructions)` and re-pushes with interleaved `MirInst::Assign` drop-flag updates via raw `push`, never touching `inst_spans` (`grep inst_spans drops.rs` → zero hits). The LLVM emitter reads spans POSITIONALLY (`codegen/llvm/emit/mod.rs:402`, `mir_block.span_at(inst_idx)`), so from the first inserted flag update onward every `!dbg` is attributed to an earlier unrelated instruction.
+- **Why it matters:** `mir/nodes.rs:290-298` documents the invariant that a mismatch "degrades to no line info, never a panic or a wrong-program bug". That holds for a SHORTER span vector and is false for a MISALIGNED one. Silently wrong line numbers are worse for a debugger user than absent ones, so the documented invariant is itself wrong and should be corrected alongside the fix.
+- **Coverage gap:** neither `llvm_debug_info.rs` test (hand-built `MirProgram`) nor `mir_debug_spans.rs` exercises a function that needs a drop flag.
+- **Severity:** medium. LLVM is not the default backend and DWARF is debug-only, which caps the blast radius.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Pins:** 1820-1829. Pin a function with a conditional drop, asserting span alignment after `insert_drops`.
+
+### B83 — Audit every `Return | Break` match arm for a missing `Next`
+- **Goal:** find and fix every scanner/walker that handles `Return`/`Break` and silently omits `Next`, which carries the identical `Option<Box<Expr>>` payload.
+- **Why this is a batch and not a one-off:** the omission has now been confirmed in one place and fixed (`resolve/implicit_block_params.rs::Scan::expr`, pin `1780`, where it made `xs.map { next _1 * 100 }` fail to resolve). At least two more sites have the same shape: `resolve/yield_scan.rs::find_first_yield_args_in_expr:141` and `typeck/mod.rs::resolve_expr_types:449`. `Next` was added by the Block Tier-2 batch AFTER these walkers were written, so the pattern is likely repeated wherever a walker predates it.
+- **Method:** `grep -rn "Return(.*) | Break(" compiler/ruxen_core/src` and check each hit. For each site, construct a REPRO first, then fix.
+- **⚠️ A candidate patch exists but is UNVERIFIED and was deliberately NOT committed:** `tmp/patches/next-arm-siblings.patch` (uncommitted work of unknown provenance, found in the working tree and reverted). It adds the `Next` arm to both sites above with plausible comments. It builds and the narrow gate stays at 655 passed / 0 failed, but **its stated repro does not reproduce**: `next yield v` cannot be exercised because `yield` inside a nested `do…end` block fails identically WITHOUT `next` (`error: function 'f' expects 0 arguments, got 1`), and `next` outside a block is `undefined variable 'next'`. So the patch may well be correct by symmetry, but nothing demonstrates it fixes a reachable bug, and this repo requires a pinned case per fix. Do not commit it until a real repro exists.
+- **Blocked-by note:** finding a repro for the `yield_scan` site probably requires `yield` inside a nested block to work first, which is a separate gap worth filing if confirmed.
+- **Severity:** medium. One confirmed instance was high and is fixed; the rest are latent.
+- **Status:** READY-NOW (audit), then NEEDS-COMPILER-FEATURE per site.
+- **Pins:** 1830-1839, one per site actually proven broken.
+
 ---
 
 ## 3. READY-NOW batches (`.rx` only, no enabler needed)
