@@ -164,4 +164,280 @@ class String
   def *(n: Int) -> String
     self.repeat(n)
   end
+
+  # ─────────────────────────────────────────────────────────────────────
+  # B08 — query and inspection
+  #
+  # Every body below follows the two `String` authoring rules: results are
+  # built char-by-char over `self.chars` (an `Array[Char]`), and `self` is
+  # never used as a `String` value in a `+` concatenation (it is the FFI
+  # shell). `self.as_str` (a borrow) IS safe as an FFI argument and on both
+  # sides of a comparison. A `Char` codepoint must be bound to an explicitly
+  # typed local (`let cp: Int = c as Int`) before use: the cast does not
+  # lower correctly in argument or tail-expression position.
+  # ─────────────────────────────────────────────────────────────────────
+
+  # Ruby `String#bytesize` — the length in BYTES, as opposed to `length` /
+  # `size`, which count characters. They differ for any non-ASCII text
+  # ("é" is one character, two bytes).
+  def bytesize -> Int
+    let n: Int = self.bytes.size as Int
+    n
+  end
+
+  # Ruby `String#codepoints` — the Unicode codepoint of every character.
+  def codepoints -> Array[Int]
+    var out: Array[Int] = []
+    self.chars.each do |c|
+      let cp: Int = c as Int
+      out.push(cp)
+    end
+    out
+  end
+
+  # Internal building block shared by `count` / `delete` / `squeeze` / `tr`:
+  # expand a Ruby tr-style set spec into the literal characters it denotes.
+  # `"a-e"` becomes `"abcde"`, a leading `^` (the negation marker, read by
+  # `tr_set_negated?`) is dropped, and `\x` escapes the character `x`. A lone
+  # `"^"` is a literal caret, matching Ruby.
+  def tr_set_expand -> String
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    var out = ""
+    var i: Int = 0
+    if n > 1
+      let first: Int = cs[0] as Int
+      if first == 94
+        i = 1
+      end
+    end
+    while i < n
+      let cp: Int = cs[i] as Int
+      if cp == 92 && i + 1 < n
+        out.push(cs[i + 1])
+        i = i + 2
+      else
+        var range = false
+        if i + 2 < n
+          let dash: Int = cs[i + 1] as Int
+          if dash == 45
+            range = true
+          end
+        end
+        if range
+          let lo: Int = cs[i] as Int
+          let hi: Int = cs[i + 2] as Int
+          var k: Int = lo
+          while k <= hi
+            out.push(k as Char)
+            k = k + 1
+          end
+          i = i + 3
+        else
+          out.push(cs[i])
+          i = i + 1
+        end
+      end
+    end
+    out
+  end
+
+  # Internal companion to `tr_set_expand`: does this tr-style set spec open
+  # with the `^` negation marker? A one-character `"^"` is a literal caret.
+  def tr_set_negated? -> Bool
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    if n > 1
+      let first: Int = cs[0] as Int
+      first == 94
+    else
+      false
+    end
+  end
+
+  # Ruby `String#count` — how many characters belong to the tr-style set
+  # `set` (`"lo"`, `"a-z"`, `"^aeiou"`). Ruby's multi-argument intersection
+  # form takes one set here; see docs/ruby-parity/core.md.
+  def count(set: &String) -> Int
+    let members = set.tr_set_expand
+    let negated = set.tr_set_negated?
+    var n: Int = 0
+    self.chars.each do |c|
+      let present = members.include?("#{c}")
+      if present != negated
+        n = n + 1
+      end
+    end
+    n
+  end
+
+  # Ruby `String#index` — the CHARACTER index of the first occurrence of
+  # `sub` at or after `offset`, or nil. A negative `offset` counts back from
+  # the end. (The pre-existing `find` reports a BYTE offset; `index` is the
+  # Ruby-semantics character-indexed spelling.)
+  def index(sub: &String, offset: Int = 0) -> Option[Int]
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    let ss = sub.chars
+    let m: Int = ss.size as Int
+    var start: Int = offset
+    if start < 0
+      start = n + start
+      if start < 0
+        return nil
+      end
+    end
+    if start > n
+      return nil
+    end
+    var i: Int = start
+    while i + m <= n
+      var hit = true
+      var j: Int = 0
+      while j < m
+        let a: Int = cs[i + j] as Int
+        let b: Int = ss[j] as Int
+        if a != b
+          hit = false
+        end
+        j = j + 1
+      end
+      if hit
+        return Some(i)
+      end
+      i = i + 1
+    end
+    nil
+  end
+
+  # Ruby `String#rindex` — the CHARACTER index of the LAST occurrence of
+  # `sub`, or nil. Ruby's default `offset` is the string's own length, which
+  # a default argument cannot spell (it cannot reference `self`), so the
+  # no-offset form is a separate arity that computes the bound itself.
+  # A negative default (`offset: Int = -1`) is NOT an option: default-argument
+  # fill on a builtin head mis-lowers a negated literal, leaving the call at
+  # the un-filled arity. See docs/dev/gui-stack-v1-issues.md.
+  def rindex(sub: &String) -> Option[Int]
+    let n: Int = self.chars.size as Int
+    self.rindex(sub, n)
+  end
+
+  # Ruby `String#rindex(sub, offset)` — as above, but the match must BEGIN at
+  # or before `offset`. A negative `offset` counts back from the end.
+  def rindex(sub: &String, offset: Int) -> Option[Int]
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    let ss = sub.chars
+    let m: Int = ss.size as Int
+    var last: Int = offset
+    if last < 0
+      last = n + last
+      if last < 0
+        return nil
+      end
+    end
+    if last > n - m
+      last = n - m
+    end
+    var i: Int = last
+    while i >= 0
+      var hit = true
+      var j: Int = 0
+      while j < m
+        let a: Int = cs[i + j] as Int
+        let b: Int = ss[j] as Int
+        if a != b
+          hit = false
+        end
+        j = j + 1
+      end
+      if hit
+        return Some(i)
+      end
+      i = i - 1
+    end
+    nil
+  end
+
+  # Ruby `String#casecmp` — case-insensitive three-way comparison, returning
+  # -1, 0 or 1. ASCII case folding only (it reuses `to_lower`), where CRuby
+  # folds the full Unicode range. Ruby's `nil`-for-a-non-String return has no
+  # analogue: the parameter is statically a `&String`.
+  def casecmp(other: &String) -> Int
+    let a = self.to_lower
+    let b = other.to_lower
+    if a == b
+      0
+    else
+      if a < b
+        -1
+      else
+        1
+      end
+    end
+  end
+
+  # Ruby `String#casecmp?` — case-insensitive equality. ASCII folding, as
+  # for `casecmp`.
+  def casecmp?(other: &String) -> Bool
+    self.casecmp(other) == 0
+  end
+
+  # Ruby `String#eql?` — true when both strings hold the same characters.
+  # For `String` receivers this is `==`; Ruby's "same class too" clause is
+  # already guaranteed by the static parameter type.
+  def eql?(other: &String) -> Bool
+    self.as_str == other
+  end
+
+  # Ruby `String#start_with?` / `#end_with?` with several candidates. Ruby
+  # spells this with a splat (`start_with?("a", "b")`); Ruxen has no splat,
+  # so the candidates arrive as an array. The one-argument `&String` forms
+  # are the FFI bindings above; these overloads are selected by argument
+  # type. An empty candidate list is false, as in Ruby.
+  def start_with?(prefixes: &Array[String]) -> Bool
+    var hit = false
+    prefixes.each do |p|
+      if self.starts_with(p)
+        hit = true
+      end
+    end
+    hit
+  end
+
+  def end_with?(suffixes: &Array[String]) -> Bool
+    var hit = false
+    suffixes.each do |s|
+      if self.ends_with(s)
+        hit = true
+      end
+    end
+    hit
+  end
+
+  # Ruby `String#each_char` — yield every character, as a one-character
+  # `String`. Ruby returns `self` for chaining and an Enumerator when called
+  # without a block; both need surface Ruxen does not have yet, so the block
+  # is required and the return is `nil`.
+  def each_char(&block: Fn[(String) -> nil]) -> nil
+    self.chars.each do |c|
+      yield "#{c}"
+    end
+  end
+
+  # Ruby `String#each_byte` — yield every byte.
+  def each_byte(&block: Fn[(UInt8) -> nil]) -> nil
+    self.bytes.each do |b|
+      yield b
+    end
+  end
+
+  # Ruby `String#each_line` — yield every line. Built on `lines`, which
+  # STRIPS the line terminator, where CRuby keeps it; see the PARTIAL row in
+  # docs/ruby-parity/core.md.
+  def each_line(&block: Fn[(String) -> nil]) -> nil
+    self.lines.each do |l|
+      yield l
+    end
+  end
 end

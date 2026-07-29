@@ -77,9 +77,9 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 
 | Ruby method | Status | Ruxen symbol / gap | Note |
 |---|---|---|---|
-| `length` | DONE | `ruxen_string_len` | Ruby `length` aliased to the same C symbol as `size`. Pin `972`. |
-| `size` | DONE | `ruxen_string_len` | |
-| `bytesize` | MISSING | — | no byte-length accessor. |
+| `length` | PARTIAL | `ruxen_string_len` | Ruby `length` aliased to the same C symbol as `size`. Pin `972`. **Counts BYTES, not characters**, so it diverges from CRuby for non-ASCII text (`"héllo".length` is 6, Ruby says 5). `chars.size` / `codepoints.size` are the character counts. Changing it is a cross-cutting call (HTTP framing in `library/std/http` relies on the byte semantics), so it is recorded here rather than changed inside a String batch. |
+| `size` | PARTIAL | `ruxen_string_len` | Same byte-vs-character divergence as `length`. |
+| `bytesize` | DONE | `.rx` over `bytes` (pin 1071) | byte length, distinct from the character count. |
 | `+` (concat) | DONE | operator | `"a"+"b"`. |
 | `*` (repeat) | DONE | `def *`→`repeat` (pin 984). |
 | `<<` / `concat` | MISSING (BUG) | use `push_str` | `<<` is a no-op. |
@@ -101,19 +101,19 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 | `downcase` | DONE | `to_lower` | Ruby `downcase` aliased to the same C symbol; `to_lower` also kept. Pin `972`. |
 | `capitalize` | DONE | `.rx` over `chars` + upcase/downcase (pin 987). `swapcase` MISSING. |
 | `upcase!`/`downcase!`/… | MISSING | — | no bang variants. |
-| `start_with?` | DONE | `ruxen_string_starts_with` | Ruby `start_with?` aliased; single string arg (no multi-arg / regex). Pin `975`. |
-| `end_with?` | DONE | `ruxen_string_ends_with` | Ruby `end_with?` aliased; single arg. Pin `975`. |
+| `start_with?` | PARTIAL | `ruxen_string_starts_with` + `.rx` array overload (pins 975, 1072) | single `&String` arg, plus an `&Array[String]` overload standing in for Ruby's splat. No regex form. An untyped `[]` literal cannot pick between the two overloads: use a typed local. |
+| `end_with?` | PARTIAL | `ruxen_string_ends_with` + `.rx` array overload (pins 975, 1072) | as `start_with?`. |
 | `include?` | DONE | `ruxen_string_contains` | |
-| `index` | PARTIAL | `find` | `find` → `Option[USize]`; no start-offset, no regex. |
-| `rindex` | MISSING | — | |
-| `count` | MISSING | — | |
+| `index` | DONE | `.rx` `index(sub, offset = 0)` (pin 1070) | CHARACTER index, `Option[Int]`, negative offset counts from the end. The pre-existing `find` stays as the BYTE-offset spelling. Regex form: see `match`. |
+| `rindex` | DONE | `.rx` `rindex(sub)` / `rindex(sub, offset)` (pin 1070) | two arities rather than a default argument: a NEGATIVE default argument mis-lowers on a builtin head. |
+| `count` | PARTIAL | `.rx` `count(set)` (pin 1071) | Ruby tr-style sets including `a-z` ranges, `^` negation and `\\` escapes. Ruby's multi-argument intersection form needs a splat Ruxen does not have. |
 | `delete` / `squeeze` | MISSING | — | |
 | `center` / `ljust` / `rjust` | PARTIAL | `ljust`/`rjust` DONE (`.rx`, `pad` defaults to space; pin 988/989); `center` MISSING. |
 | `chars` | DONE | `ruxen_string_chars` → `Array[Char]` | |
 | `bytes` | DONE | `ruxen_string_bytes` → `Array[UInt8]` | |
-| `codepoints` | MISSING | — | |
+| `codepoints` | DONE | `.rx` over `chars` (pin 1071) | |
 | `lines` | DONE | `ruxen_string_lines` | |
-| `each_char` / `each_line` / `each_byte` | MISSING | iterate `chars`/`lines`/`bytes` via `.each` | no direct `each_*`. |
+| `each_char` / `each_line` / `each_byte` | PARTIAL | `.rx` block forms (pin 1073) | the block is required (no Enumerator return) and the return is `nil`, not `self`. `each_line` strips the line terminator, where CRuby keeps it. |
 | `each_grapheme_cluster` | MISSING | — | |
 | `scan` | MISSING | use `Regex#scan` | on `String`: absent. |
 | `match` / `match?` / `=~` | MISSING | use `Regex#find`/`is_match` / `~=` | no `String`-side regex methods; `~=` is the operator. |
@@ -133,7 +133,7 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 | `freeze` / `frozen?` | MISSING | — | no freeze protocol on values. |
 | `dup` / `clone` | PARTIAL | `clone` | `clone` = borrow→owned copy (DONE); no `dup`. |
 | `hash` | MISSING | — | (`Hashable` mixin exists for user types; no `String#hash` surface.) |
-| `eql?` / `casecmp` / `casecmp?` | MISSING | `==` works | only `==`; no `<=>`, `casecmp`. |
+| `eql?` / `casecmp` / `casecmp?` | DONE | `.rx` (pin 1072) | `casecmp` returns -1/0/1, ASCII folding only (CRuby folds full Unicode). Ruby's nil-for-a-non-String return has no analogue: the parameter is statically `&String`. `<=>` on String is still absent. |
 | `encode`/`force_encoding`/`encoding`/`valid_encoding?`/`b`/`scrub` | MISSING | — | no encoding API (strings are UTF-8 bytes). |
 | `unpack` / `unpack1` | MISSING | — | |
 | `getbyte` / `setbyte` | MISSING | — | |

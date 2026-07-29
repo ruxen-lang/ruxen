@@ -8,6 +8,22 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **`String` query and inspection (Ruby-parity batch B08)** — `bytesize`,
+  `codepoints`, `count(set)`, `index(sub, offset = 0)`, `rindex(sub)` /
+  `rindex(sub, offset)`, `casecmp`, `casecmp?`, `eql?`, array-argument
+  `start_with?` / `end_with?`, and `each_char` / `each_byte` / `each_line`,
+  all added as `.rx` methods on `class String`
+  (`library/std/string/src/string.rx`). `count` understands Ruby's tr-style
+  set syntax (`a-z` ranges, a leading `^` negation, `\` escapes) through two
+  shared building blocks, `tr_set_expand` and `tr_set_negated?`, which the
+  B09 `delete` / `squeeze` / `tr` methods reuse. `index` / `rindex` report a
+  CHARACTER index, unlike the pre-existing `find`, which reports a BYTE
+  offset. Notable non-parity points, recorded on the matrix rows rather than
+  papered over: `each_*` requires a block and returns `nil` (Ruby returns
+  `self`, or an Enumerator without a block); `each_line` strips the line
+  terminator because it is built on `lines`; `casecmp` folds ASCII only; and
+  Ruby's splat forms of `start_with?` / `end_with?` are spelled with an
+  array. Pins `tests/release-e2e/cases/1070`-`1073`.
 - **`String#reverse` / `capitalize` / `ljust` / `rjust`** — added as `.rx`
   methods (`library/std/string/src/string.rx`) built char-by-char over `chars`.
   A `String` carries no generic element type, so unlike the generic-collection
