@@ -259,7 +259,7 @@ impl<'a> BorrowChecker<'a> {
         let send_required_params = self.lookup_send_required_params(callee_name, args.len());
         // A value passed to a `&T` / `&var T` parameter is auto-borrowed, not
         // moved — same reborrow rule as the method-call path.
-        let param_is_ref = self.lookup_param_is_ref(callee_name, args.len());
+        let param_is_ref = self.lookup_param_is_ref(callee_name, args.len(), None);
 
         for (idx, arg) in args.iter().enumerate() {
             self.check_expr(arg);
@@ -328,12 +328,47 @@ impl<'a> BorrowChecker<'a> {
     /// parameter is AUTO-BORROWED, not moved, so the borrow checker must not
     /// flag it as a move (false E1001). Resolved by callee name, like
     /// `lookup_send_required_params`. (Pin: release-e2e 649_ffi_borrowed_string_arg.)
-    pub(super) fn lookup_param_is_ref(&self, callee_name: &str, arg_len: usize) -> Vec<bool> {
+    /// `receiver_home`, when known, is the method home of the call's receiver
+    /// (`Char`, `String`, `Hash`, a user class name, …). It disambiguates a
+    /// method name that several classes define.
+    ///
+    /// Without it this scan took the FIRST def of that name in the whole
+    /// symbol table, so one class's signature silently governed every other
+    /// class's same-named method. That is not hypothetical: adding a by-value
+    /// `def <=>(other: Char)` to `class Char` made every `x.<=>(y)` in the
+    /// program look like a MOVE, and `965_comparable_spaceship` started
+    /// reporting a false `value used here after move` on an unrelated `Int`
+    /// receiver. Same root-cause family as Q58: a name-only lookup that
+    /// ignores which class the method lives on.
+    ///
+    /// The exact-home pass is a preference, never a restriction. When the
+    /// receiver is unknown (a free function) or no def is homed on it (a
+    /// mixin default, an inherited method), it falls back to the original
+    /// name-only scan, so previously-resolving calls resolve identically.
+    pub(super) fn lookup_param_is_ref(
+        &self,
+        callee_name: &str,
+        arg_len: usize,
+        receiver_home: Option<&str>,
+    ) -> Vec<bool> {
         let mut is_ref = vec![false; arg_len];
-        let Some(def) = self.symbols.iter().find(|def| {
+        let name_matches = |def: &&crate::resolve::symbols::Definition| {
             def.name == callee_name
                 && matches!(def.kind, DefKind::Function { .. } | DefKind::Method { .. })
-        }) else {
+        };
+        let homed = receiver_home.and_then(|home| {
+            self.symbols.iter().find(|def| {
+                name_matches(def)
+                    && match &def.kind {
+                        DefKind::Method { parent, .. } => self
+                            .symbols
+                            .get(*parent)
+                            .is_some_and(|p| p.name == home),
+                        _ => false,
+                    }
+            })
+        });
+        let Some(def) = homed.or_else(|| self.symbols.iter().find(name_matches)) else {
             return is_ref;
         };
         let signature = match &def.kind {
@@ -423,7 +458,12 @@ impl<'a> BorrowChecker<'a> {
         // value is auto-referenced to `&String` at the call site, never
         // consumed. (Pin: release-e2e 649_ffi_borrowed_string_arg + the
         // borrow-check pin in tests/q29_ffi_borrowed_string.rs.)
-        let param_is_ref = self.lookup_param_is_ref(method_name, args.len());
+        let receiver_home = {
+            let shown = object.ty.peel_refs().to_string();
+            shown.split('[').next().unwrap_or(&shown).to_string()
+        };
+        let param_is_ref =
+            self.lookup_param_is_ref(method_name, args.len(), Some(receiver_home.as_str()));
 
         // Check args
         for (idx, arg) in args.iter().enumerate() {
