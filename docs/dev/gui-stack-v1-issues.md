@@ -2741,6 +2741,35 @@ which fails for the same reason) as pure `.rx` mixin methods. It needs its own
 careful pass (typeck seam + MIR mono + the full gate + review); it is NOT a
 per-feature special-case.
 
+## Q58 · S3 — `alias` to a method on a GENERIC builtin head doesn't canonicalize through the generic suffix (link error)
+
+**OPEN** (low severity; clean workaround). An `alias new old` inside a generic
+builtin-head class (`class Hash[K, V]`, `class Array[T]` when the receiver
+carries concrete generic args) does not rewrite the call-site mangled name to
+the canonical method: `h.has_key?(k)` on a `Hash[String, Int]` mangles to
+`Hash[String, Int]_has_key?`, which never canonicalizes to `Hash_key?`, so the
+linker reports an undefined `_Hash[String, Int]_has_key?`. The non-generic
+alias path works (`Array`'s `alias to_a clone` resolves), and a NON-alias `.rx`
+delegating method on the same generic head resolves fine (`Hash#each`,
+`Hash#each_key`), so the gap is specifically the alias-name canonicalization
+(`select_method_symbol_name` / `canonical_method_name`) not stripping the
+`[...]` suffix before the alias lookup the way the FFI-alias path
+(`method_call.rs` peel-and-retry) does.
+
+Repro (link-fails):
+```rx
+class Hash[K, V]
+  # ... (stdlib) ...
+  alias has_key? key?
+end
+# h.has_key?("a")  =>  undefined _Hash[String, Int]_has_key?
+```
+**Workaround (in use, `library/std/map/src/lib.rx`):** define `has_key?` /
+`include?` / `member?` as real `.rx` delegating methods (`def has_key?(key: K)
+-> Bool; self.key?(key); end`) instead of `alias`. Fix direction: strip the
+generic suffix in the alias-canonicalization lookup (mirror the FFI-alias
+peel-and-retry), then these can revert to one-line `alias`es.
+
 ## Where the workarounds live (grep-able)
 
 - `quiver/CLAUDE.md` — "Ruxen v1 landmines" section (the working ruleset)

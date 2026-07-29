@@ -8,6 +8,14 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **`Hash` key-presence + entry-iteration methods** — `has_key?` / `include?` /
+  `member?` (KEY-membership synonyms of `key?`) and `each_key` / `each_value` /
+  `each_pair`, added as `.rx` methods on `class Hash[K, V]`
+  (`library/std/map/src/lib.rx`). The `each_*` bodies iterate `each` + tuple
+  access on the `(K, V)` pair. The key-presence methods are delegating methods
+  rather than `alias`es because of Q58 (alias-on-a-generic-builtin-head doesn't
+  canonicalize the generic suffix — link error). Pins
+  `tests/release-e2e/cases/986`.
 - **`Enumerable#find_all` / `none?` / `one?`** — added as `.rx` mixin-default
   bodies over `each`/`any?` (`library/std/core/src/lib.rx`), so every includer
   (Array/Set/Hash) gets them. `find_all` delegates to `select`; `none?` is

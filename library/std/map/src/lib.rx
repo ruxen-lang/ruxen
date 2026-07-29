@@ -67,4 +67,40 @@ class Hash[K, V]
     entries.each do |kv| f.(kv) end
     nil
   end
+
+  # Ruby key-presence synonyms of `key?` (`Hash#include?` / `#member?` test KEY
+  # membership in Ruby). Delegating methods rather than `alias`: an
+  # `alias`-to-method on a GENERIC builtin head (`Hash[K, V]`) does not
+  # canonicalize through the generic suffix at the call site (the mangled
+  # `Hash[String, Int]_has_key?` never rewrites to `Hash_key?`), so it
+  # link-fails; a real delegating body resolves like any other `.rx` method.
+  def has_key?(key: K) -> Bool
+    self.key?(key)
+  end
+
+  def include?(key: K) -> Bool
+    self.key?(key)
+  end
+
+  def member?(key: K) -> Bool
+    self.key?(key)
+  end
+
+  # Ruby `each_pair` is a synonym of `each` (both yield `(K, V)`).
+  def each_pair(f: any Fn[Fn((K, V)) -> nil]) -> nil
+    self.each(f)
+  end
+
+  # Ruby `each_key` / `each_value` — yield only the key / only the value of
+  # every entry. Expressed over `each` + tuple-field access on the `(K, V)`
+  # pair (`kv.0` / `kv.1`).
+  def each_key(f: any Fn[Fn(K) -> nil]) -> nil
+    self.each do |kv| f.(kv.0) end
+    nil
+  end
+
+  def each_value(f: any Fn[Fn(V) -> nil]) -> nil
+    self.each do |kv| f.(kv.1) end
+    nil
+  end
 end
