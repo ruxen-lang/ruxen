@@ -99,7 +99,7 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 | `chomp` / `chop` | MISSING | — | |
 | `upcase` | DONE | `to_upper` | Ruby `upcase` aliased to the same C symbol; `to_upper` also kept. Pin `972`. |
 | `downcase` | DONE | `to_lower` | Ruby `downcase` aliased to the same C symbol; `to_lower` also kept. Pin `972`. |
-| `capitalize` / `swapcase` | MISSING | — | |
+| `capitalize` | DONE | `.rx` over `chars` + upcase/downcase (pin 987). `swapcase` MISSING. |
 | `upcase!`/`downcase!`/… | MISSING | — | no bang variants. |
 | `start_with?` | DONE | `ruxen_string_starts_with` | Ruby `start_with?` aliased; single string arg (no multi-arg / regex). Pin `975`. |
 | `end_with?` | DONE | `ruxen_string_ends_with` | Ruby `end_with?` aliased; single arg. Pin `975`. |
@@ -125,7 +125,7 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 | `ord` / `chr` | MISSING | — | |
 | `hex` / `oct` | MISSING | — | |
 | `succ` / `next` | MISSING | — | |
-| `reverse` / `reverse!` | MISSING | — | (Array has `reverse`; String does not.) |
+| `reverse` | DONE | `.rx` over `chars`+`Array#reverse` (pin 987). |
 | `insert` | PARTIAL | `insert(i, codepoint)` / `insert_str(i, s)` | Ruxen splits into codepoint- vs string-insert; arg is an Int codepoint, not a String, for `insert`. |
 | `prepend` | MISSING | — | |
 | `delete_prefix` / `delete_suffix` | MISSING | — | |

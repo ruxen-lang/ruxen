@@ -1,0 +1,9 @@
+# Pins `String#reverse` and `String#capitalize`, added as `.rx` methods over
+# `chars` + interpolation (a String has no generic element type, so its `.rx`
+# bodies may dispatch on the concrete Char).
+def main
+  puts("hello".reverse)
+  puts("hello world".capitalize)
+  puts("ABC".capitalize)
+  puts("".capitalize)
+end

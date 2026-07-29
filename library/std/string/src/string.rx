@@ -93,6 +93,35 @@ class String
     def remove as "ruxen_string_remove"(i: Int) -> Int
   end
 
+  # Ruby `String#reverse` — the characters in reverse order. Built in `.rx`
+  # over `chars` + `Array#reverse`; each `Char` is appended via interpolation.
+  # (A `String` has no generic element type, so its `.rx` bodies MAY dispatch —
+  # `"#{c}"` picks `Char`'s `to_s` at a concrete type.)
+  def reverse -> String
+    var result = ""
+    self.chars.reverse.each do |c|
+      result = result + "#{c}"
+    end
+    result
+  end
+
+  # Ruby `String#capitalize` — first character upcased, the rest downcased.
+  def capitalize -> String
+    let cs = self.chars
+    let n: Int = cs.size as Int
+    if n == 0
+      ""
+    else
+      var result = "#{cs[0]}".upcase
+      var i: Int = 1
+      while i < n
+        result = result + "#{cs[i]}".downcase
+        i = i + 1
+      end
+      result
+    end
+  end
+
   # Ruby `String#*` — the string repeated `n` times (`"ab" * 3 == "ababab"`).
   # A `.rx` operator method delegating to `repeat`; the binop lowering routes
   # `s * n` here (builtin-head operator route) instead of the machine floor,

@@ -8,6 +8,11 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **`String#reverse` / `String#capitalize`** — added as `.rx` methods
+  (`library/std/string/src/string.rx`) over `chars` + interpolation. A `String`
+  carries no generic element type, so unlike the generic-collection combinators
+  its `.rx` bodies MAY dispatch on the concrete `Char`. Pins
+  `tests/release-e2e/cases/987`.
 - **`Hash` key-presence + entry-iteration methods** — `has_key?` / `include?` /
   `member?` (KEY-membership synonyms of `key?`) and `each_key` / `each_value` /
   `each_pair`, added as `.rx` methods on `class Hash[K, V]`
