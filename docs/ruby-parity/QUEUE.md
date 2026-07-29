@@ -47,6 +47,11 @@ building a real app, then low risk before high risk.
 
 - Toolchain build: `cargo build --release --bin ruxen` (binary at `target/release/ruxen`).
 - **Fast `.rx` iteration without rebuilding:** `RUXEN_STDLIB_PATH="$PWD/library/std" ./target/release/ruxen compile f.rx -o f && ./f`.
+- ⚠️ **`RUXEN_STDLIB_PATH` is NOT in the compile-cache key, so this loop silently replays stale objects.** The key covers the source hash, compiler version, target, the project's `runtime/*.c`, and a toolchain fingerprint (the binary's mtime and size), and **nothing about the stdlib the binary was pointed at** (verified in `src/ruxenc/src/compile.rs:200` and `cache/hash.rs`). Editing `library/std` and recompiling an **unchanged** `.rx` therefore hits the cache and reuses the old object, so your stdlib edit appears to do nothing, or an old result poses as a fresh pass.
+  - **Operating rule: wipe `<checkout>/target/ruxen/incremental` before any verification run that follows a stdlib edit.**
+  - **Treat an `Up to date` line in compile output as a red flag, not good news**, whenever you have just changed `library/std`.
+  - The embedded-stdlib path is fine: `cargo build` changes the binary, which changes the toolchain fingerprint, which misses the cache. Only the `RUXEN_STDLIB_PATH` loop is exposed.
+  - Tracked as **B75**. Until it lands, this is a manual discipline and it is easy to forget.
 - Narrow test loop for additive `.rx` work: `cargo test -p ruxen_core --lib` (~0.5s). That is the whole gate for a purely additive stdlib batch (global rule 42).
 - Full gate (compiler changes only, once per phase): `RUXEN_WORKSPACE="$PWD" PHASES=compile bash tests/release-e2e/run.sh`, ~5 to 6 min, cache to `tmp/test-cache/`.
 - **Do not edit `library/std` or run `cargo build` while a `RUXEN_WORKSPACE` e2e run is in flight.**
@@ -110,8 +115,22 @@ erode trust in the whole surface, so they lead the queue.
 
 **Order in this section is priority order, not id order.** Batch ids are stable
 identifiers (they own pin blocks that running agents already depend on), so a
-bug found later keeps its next-free id and is simply placed at its rank. B71
-below was found after B01 to B05 and ranks second.
+bug found later keeps its next-free id and is simply placed at its rank. B75
+ranks first and B71 second, both found after B01 to B05.
+
+### B75 — The compile cache omits stdlib identity, so a stdlib edit can be silently ignored
+- **Goal:** editing `library/std` invalidates the compiled objects that depend on it, without the caller having to remember an env var or a manual wipe.
+- **Cause (verified in the source, 2026-07-29):** the cache key is built in `src/ruxenc/src/compile.rs:200` as `backend`, `opt`, `release`, `runtime_c` (path plus content hash of the **project's** `runtime/*.c`), `link_args`, and `toolchain` (the running binary's mtime and size), combined in `cache/hash.rs::content_hash` with the source hash, compiler version, and target. **`RUXEN_STDLIB_PATH` appears nowhere in it**, and nowhere in `src/ruxenc/src/` at all.
+- **Consequence:** with an unchanged binary pointed at a workspace stdlib (the "fast `.rx` iteration" loop this file recommends in §0), editing `library/std` and recompiling an unchanged `.rx` produces an identical key and **replays the stale object**. The stdlib edit appears to do nothing, or an old result poses as a fresh pass.
+- **Why the embedded path is already safe, and why that matters:** `cargo build` changes the binary, so the `toolchain` fingerprint changes and the cache misses. The comment on that field says it was added **precisely** for this class of problem (Q24: "changing an embedded-stdlib `.rx`/`.c` leaves `compiler_version` unchanged"). So the design intent is already correct; the `RUXEN_STDLIB_PATH` case is simply an unhandled second door into the same room.
+- **Fix, with a precedent to copy:** fold the resolved `RUXEN_STDLIB_PATH` plus a content hash of its sources into `flags`, exactly as `runtime_c_fingerprint` already does for the project's C sources ("path + content hash ... so editing a project's `runtime/*.c` invalidates the cached binary even when no `.rx` source changed"). The mechanism, the placement, and the justifying comment all already exist; this extends them to one more input.
+- **Why it ranks first, above every other bug in this section:** it does not produce a wrong answer, it produces **an unreliable answer about whether anything is wrong**. A stale replay can hide a real defect or fabricate a passing test, so every other batch's evidence is only as trustworthy as this. It is also not a parallel-agent artifact: a single developer editing `library/std` hits it alone, on the loop the docs recommend, which makes it strictly more important than a coordination problem would be. It is the stdlib-side twin of the "CLI caches by source hash" warning already in the root `CLAUDE.md`.
+- **The anomaly that exposed it:** a bogus `mid used here after move` on `965_comparable_spaceship` mid-sweep, which passed on re-run with no code change. That is consistent with stale replay, so **the defect it appeared to show was never real**. Worth remembering as the signature: a failure that vanishes on re-run without an edit is a cache symptom, not a flake to shrug at.
+- **One narrow cross-agent path, for completeness:** the compile cache is project-local (`compile.rs:878` walks up for `Cargo.toml` or `ruxen.toml` and uses `<that dir>/target/ruxen`), so worktrees already have private caches. The only sharing risk is running with a working directory **outside** any checkout, where the walk finds no manifest and falls back to a relative `./target/ruxen`. Note that `XDG_CACHE_HOME` (`cache/store.rs:234`) resolves only the **global** cache behind `ruxen clean --global` and has no effect on the compile path, so it is not a workaround for any of this.
+- **Files:** `src/ruxenc/src/compile.rs` (the `flags` construction), `src/ruxenc/src/cache/hash.rs`.
+- **Status:** NEEDS-COMPILER-FEATURE (toolchain).
+- **Size:** small, and well precedented. The risk is not the change, it is choosing the fingerprint's granularity: hashing every stdlib source on every compile costs time on the hot path, so consider mtime plus size first and a content hash only when that is ambiguous.
+- **Pins:** 1740-1749. A pin cannot easily prove a cache miss from inside the e2e harness, so this most likely wants a Rust integration test under `src/ruxenc/tests/` asserting that two compiles of identical source with different `RUXEN_STDLIB_PATH` contents produce different cache keys.
 
 ### B01 — Float receiver ABI: `self` truncates, closure arg passes as 0
 - **Goal:** a `Float` value keeps its bits when it crosses into an `.rx` method body or a closure parameter.
@@ -1003,7 +1022,7 @@ Pins: none.
 | **BLOCKED-ON-B44 (Serialize)** | 2 | B64, B67 |
 | **NEEDS-RUNTIME-C** | 7 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61, **B73** |
 | **BLOCKED within B35** | 5 | B35b, B35c, B35d, B35e, B35f (all on B35a or B35b; see §6) |
-| **NEEDS-COMPILER-FEATURE** | 20 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B72**, **B74** |
+| **NEEDS-COMPILER-FEATURE** | 21 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B72**, **B74**, **B75** (toolchain) |
 
 Counts overlap where a batch has both a ready half and a blocked half; the
 per-batch status line is authoritative.

@@ -38,6 +38,16 @@ same commit as the fix.
   compile f.rx -o f` loads `.rx` from the workspace. `include_str!` re-embeds on
   every `cargo build`, so a rebuilt binary already has your `.rx` edits embedded
   (no env var needed then).
+- ⚠️ **That loop replays stale objects: `RUXEN_STDLIB_PATH` is NOT in the
+  compile-cache key** (source hash + compiler version + target + project
+  `runtime/*.c` + the binary's mtime/size, and nothing about the stdlib it was
+  pointed at). Editing `library/std` and recompiling an UNCHANGED `.rx` reuses
+  the old object, so the edit looks like a no-op or an old result poses as a
+  fresh pass. **Wipe `<checkout>/target/ruxen/incremental` before any
+  verification run that follows a stdlib edit, and treat an `Up to date` line as
+  a red flag.** The embedded path is safe (`cargo build` changes the binary, so
+  the toolchain fingerprint misses). A failure that vanishes on re-run with no
+  edit is this, not a flake. Tracked as **B75** in `QUEUE.md`.
 - **Narrow test loop:** `cargo test -p ruxen_core --lib` (≈650/0, ~0.5s). Additive
   `.rx` changes only need this (rule 42).
 - **Where the harness lives (repo-root relative, NOT under `compiler/`):**
