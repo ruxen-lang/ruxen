@@ -22,6 +22,7 @@ mod expr;
 mod function;
 mod impl_block;
 mod interpolation;
+mod key_desc;
 mod match_arms;
 mod monomorphize;
 pub mod runtime_abi;
@@ -982,6 +983,9 @@ impl<'a> Lowerer<'a> {
         // sees the same shape it sees for top-level methods.
         for mut closure_fn in std::mem::take(&mut self.pending_closures) {
             let return_locals = self.find_return_locals(&closure_fn);
+            // B73: a closure body constructs tables too — same post-pass,
+            // same reason. See `key_desc::install_key_descriptors`.
+            key_desc::install_key_descriptors(&mut closure_fn, self.symbols);
             crate::mir::lower::drops::insert_drops(
                 &mut closure_fn,
                 &return_locals,

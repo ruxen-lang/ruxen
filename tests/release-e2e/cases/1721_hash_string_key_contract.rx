@@ -1,0 +1,29 @@
+# B73: `Hash[String, V]` keeps comparing keys by CONTENT, not by pointer.
+#
+# This is the contract the key-kind protocol had to preserve while it
+# replaced the memory-probing heuristic. A string key must still be found
+# through a DIFFERENT `String` value with the same bytes (interpolation
+# builds a fresh buffer, so `"al" + "pha"` is not the literal's pointer),
+# and a non-matching lookup must still miss.
+def main
+  var h: Hash[String, Int] = Hash.new
+  h.insert("alpha", 1)
+  h.insert("beta", 2)
+  h.insert("alpha", 3)
+  puts "#{h.size}"
+  puts "#{h.key?("alpha")}"
+  puts "#{h.key?("gamma")}"
+
+  let built = "al" + "pha"
+  puts "#{h.key?(built)}"
+  match h.get(built)
+    Some(v) -> puts "got #{v}"
+    nil -> puts "missing"
+  end
+
+  # A map literal builds its table through a different lowering path than
+  # `Hash.new`; both must install the same descriptor.
+  let lit = { "x" => 10, "y" => 20 }
+  puts "#{lit.key?("x")}"
+  puts "#{lit.key?("z")}"
+end

@@ -1,0 +1,38 @@
+# B73: tables the C runtime builds INTERNALLY inherit their key kind.
+#
+# `union` / `intersection` / `difference` allocate a fresh set and populate
+# it inside the runtime, where the compiler cannot reach to hand over a
+# descriptor. They therefore copy it from an operand — and copy it BEFORE
+# the first insert, so the copied elements hash into the right buckets. A
+# result set that fell back to raw-bits hashing would compare its string
+# elements by pointer and report false for every `include?` below.
+#
+# `to_set` (a `from_iter` route) goes through the compiler's descriptor
+# plumbing on the general FFI-alias method path, which is a fifth distinct
+# construction site from the four `Hash` ones.
+def main
+  var a: Set[String] = Set.new
+  a.insert("red")
+  a.insert("green")
+
+  var b: Set[String] = Set.new
+  b.insert("green")
+  b.insert("blue")
+
+  let u = a.union(b)
+  puts "#{u.size} #{u.include?("red")} #{u.include?("blue")} #{u.include?("pink")}"
+
+  let i = a.intersection(b)
+  puts "#{i.size} #{i.include?("green")} #{i.include?("red")}"
+
+  let d = a.difference(b)
+  puts "#{d.size} #{d.include?("red")} #{d.include?("green")}"
+
+  let from_arr = ["one", "two", "two"].to_set
+  puts "#{from_arr.size} #{from_arr.include?("two")} #{from_arr.include?("nine")}"
+
+  # An empty operand must not erase the other side's descriptor.
+  var empty: Set[String] = Set.new
+  let with_empty = empty.union(a)
+  puts "#{with_empty.size} #{with_empty.include?("red")}"
+end
