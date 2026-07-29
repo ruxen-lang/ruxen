@@ -223,7 +223,12 @@ same commit as the fix.
   works today and is why pin `991` uses it throughout. This is the pre-existing
   Option-construct typing bug (`let o: Option[T] = Some(v)` has the same shape),
   and it means an `Option`-returning `.rx` method cannot be consumed the Ruby
-  way yet.
+  way yet. SAME defect as QUEUE.md's "`Option` RETURNS from a scalar
+  method-home are unusable" (verified 2026-07-29) and the reason
+  `Integer#nonzero?` is MISSING in core.md. Fix it once and update all three;
+  do not track them as separate bugs. Note that `unwrap` / `nil?` / `present?`
+  ARE declared (`library/std/option_result/src/lib.rx`), so the failure is the
+  discarded annotation, not a missing method.
 - `docs/dev/gui-stack-v1-issues.md` Q56 (async `block_on` client I/O no-ops) is
   the one live correctness bug tracked there. Q58 was added and FIXED this push.
 - A non-scalar param default (`prefix: String = "v="`) reached through a
