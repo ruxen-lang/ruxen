@@ -1,0 +1,49 @@
+# Pins the B07 combinators over a HEAP element type. `entries`,
+# `each_slice`, `each_cons` and `reverse_each` all materialise a buffer
+# and then read slots back out of it, so a `String` element's slot is
+# reachable from the receiver, the buffer and the yielded window at once.
+# This case exists to catch that going wrong: the receiver must still
+# iterate intact after every combinator has run.
+#
+# `Array[String]#drop(n)` is deliberately absent. It is the FFI
+# `ruxen_vec_skip`, not an `Enumerable` default, and it traps on a heap
+# element type (`["a", "b", "c"].drop(2)` alone aborts). That reproduces
+# on an unmodified toolchain, so it is a pre-existing bug this case routes
+# around rather than pins. Every result below is bound to a local before
+# it is iterated, for the same reason: chaining `.each` onto a combinator
+# temporary is separately unreliable today.
+def head_of(c: &Array[String]) -> String
+  var out: String = "?"
+  match c.first
+    Some(v) -> out = v
+    nil     -> out = "?"
+  end
+  out
+end
+
+def main
+  let a = ["alpha", "beta", "gamma"]
+
+  let e = a.entries
+  e.each { |s| puts "e #{s}" }
+
+  a.each_slice(2) { |c| puts "slice #{c.size} #{head_of(c)}" }
+  a.each_cons(2) { |c| puts "cons #{head_of(c)}" }
+  a.reverse_each { |s| puts "rev #{s}" }
+
+  let t = a.take(2)
+  t.each { |s| puts "t #{s}" }
+
+  let short = a.take_while { |s| s.size < 5 }
+  puts "take_while #{short.size}"
+
+  let rest = a.drop_while { |s| s.size < 5 }
+  puts "drop_while #{rest.size}"
+
+  let fm = a.flat_map { |s| [s, s] }
+  puts "flat_map #{fm.size}"
+
+  # The receiver is still whole after all of the above.
+  a.each { |s| puts "z #{s}" }
+  puts "ok"
+end

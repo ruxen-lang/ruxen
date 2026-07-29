@@ -1,0 +1,51 @@
+# Pins the CRuby edge-case behavior of the B07 combinators: an empty
+# receiver, a single-element receiver, counts larger than the collection,
+# and non-positive counts. These are the cases where a naive body loops
+# forever or yields a phantom empty chunk.
+def main
+  let empty: Array[Int] = Array.new
+  let one = [42]
+  let a = [1, 2, 3]
+
+  # Empty receiver: every combinator is a no-op producing an empty result.
+  puts "empty count #{empty.count}"
+  puts "empty entries #{empty.entries.size}"
+  puts "empty take #{empty.take(3).size}"
+  puts "empty drop #{empty.drop(3).size}"
+  puts "empty take_while #{empty.take_while { |x| true }.size}"
+  puts "empty drop_while #{empty.drop_while { |x| true }.size}"
+  puts "empty flat_map #{empty.flat_map { |x| [x] }.size}"
+  empty.each_slice(2) { |c| puts "empty slice #{c.size}" }
+  empty.each_cons(2) { |c| puts "empty cons #{c.size}" }
+  empty.reverse_each { |x| puts "empty rev #{x}" }
+  match empty.first
+    Some(v) -> puts "empty first #{v}"
+    nil     -> puts "empty first none"
+  end
+
+  # Single element: `each_cons(2)` needs two, so it yields nothing;
+  # `each_slice(2)` still yields the short run.
+  one.each_slice(2) { |c| puts "one slice #{c.size}" }
+  one.each_cons(2) { |c| puts "one cons #{c.size}" }
+  one.each_cons(1) { |c| puts "one cons1 #{c.size}" }
+
+  # Counts past the end saturate rather than erroring, as in Ruby.
+  puts "over take #{a.take(99).size}"
+  puts "over drop #{a.drop(99).size}"
+
+  # Non-positive counts: Ruby's `take(0)` / `drop(0)` are the empty and
+  # identity cases; `each_slice(0)` raises in Ruby, and here it yields
+  # nothing rather than looping forever.
+  puts "zero take #{a.take(0).size}"
+  puts "zero drop #{a.drop(0).size}"
+  puts "neg take #{a.take(-1).size}"
+  a.each_slice(0) { |c| puts "zero slice #{c.size}" }
+  a.each_cons(0) { |c| puts "zero cons #{c.size}" }
+  a.cycle(-1) { |x| puts "neg cycle #{x}" }
+
+  # A slice size that divides the length exactly leaves NO trailing run.
+  let four = [1, 2, 3, 4]
+  four.each_slice(2) { |c| puts "even slice #{c.size}" }
+
+  puts "done"
+end

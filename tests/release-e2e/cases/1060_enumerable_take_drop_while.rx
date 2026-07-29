@@ -1,0 +1,33 @@
+# Pins the B07 closure-only `Enumerable` combinators that walk a prefix or
+# a suffix of the collection: `take_while` / `drop_while` (predicate
+# latches), `take` / `drop` (counted), plus `first`, `count` and `entries`.
+# All of them are expressed over the one required primitive `each`, so a
+# single mixin default serves Array / Set / Hash.
+def main
+  let a = [1, 2, 3, 4, 1]
+
+  let tw = a.take_while { |x| x < 3 }
+  puts "take_while #{tw.size}"
+  tw.each { |x| puts "tw #{x}" }
+
+  # `drop_while` keeps the element that FAILED the predicate, and every
+  # element after it, including ones the predicate would have matched.
+  let dw = a.drop_while { |x| x < 3 }
+  puts "drop_while #{dw.size}"
+  dw.each { |x| puts "dw #{x}" }
+
+  let t = a.take(2)
+  puts "take #{t.size}"
+  let d = a.drop(3)
+  puts "drop #{d.size}"
+  d.each { |x| puts "d #{x}" }
+
+  puts "count #{a.count}"
+  puts "entries #{a.entries.size}"
+
+  let f = a.first
+  match f
+    Some(v) -> puts "first #{v}"
+    nil     -> puts "first none"
+  end
+end

@@ -1,0 +1,21 @@
+# Pins Kernel's `p` / `pp`: they print the INSPECT form (a `String` gets
+# quotes, which is exactly what separates `p "a"` from `puts "a"`) and
+# they RETURN their argument, so `p` can be dropped into an expression
+# without changing it.
+def main
+  let n = p(7)
+  puts "n #{n + 1}"
+
+  let b = p(true)
+  puts "b #{b}"
+
+  let s = p("hi")
+  puts "s #{s}"
+
+  pp(9)
+  pp(false)
+  pp("yo")
+
+  # The return value threads through a call chain untouched.
+  puts "chained #{p(3) * p(4)}"
+end

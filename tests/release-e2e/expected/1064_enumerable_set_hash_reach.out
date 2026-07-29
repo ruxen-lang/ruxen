@@ -1,0 +1,16 @@
+set count 3
+set entries 3
+set take 2
+set drop 1
+set flat_map 6
+set sum 60
+set slices 2
+set windows 2
+set reversed 3
+hash count 3
+hash entries 3
+hash take 1
+hash drop 2
+hash values 3
+hash sum 6
+hash big 2

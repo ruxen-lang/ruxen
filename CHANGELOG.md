@@ -8,6 +8,53 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **`Enumerable` closure-only combinators (batch B07)** — 16 methods added as
+  `mixin Enumerable[T]` defaults in `library/std/core/src/lib.rx`, so one
+  implementation lands on `Array`, `Set` and `Hash` at once (pin 1064 pins that
+  reach): `entries`, `count` (no-arg), `first`, `take(n)`, `drop(n)`,
+  `take_while`, `drop_while`, `flat_map`, `collect_concat`, `filter_map`,
+  `find_index` (predicate form), `each_with_object(memo)`, `each_slice(n)`,
+  `each_cons(n)`, `cycle(n)` and `reverse_each`.
+
+  Every body is expressed over the one required primitive `each` plus `push`
+  and closure calls, so none of them dispatches on the element type `T` and
+  each still lowers as a single opaque body per including head. Edge cases are
+  diffed against CRuby: an empty receiver, a single element, counts past the
+  end, `n <= 0`, a `each_cons` window wider than the collection, and a
+  `each_slice` remainder. Pins `tests/release-e2e/cases/1060` to `1064`.
+
+  Two deviations from Ruby, both deliberate: `each_with_object` threads the
+  memo THROUGH the block (which must return it) because Ruxen closures take
+  their arguments by value, though the Ruby argument order is kept; and
+  `filter_map`'s block returns `Option[U]`, `nil` being the typed form of
+  Ruby's falsy skip. `first(n)` and `collect` are NOT shipped, with reasons
+  recorded in `docs/ruby-parity/core.md`.
+- **`Kernel` conveniences (batch B19)** — `warn(msg)`, `abort(msg)`,
+  `sleep(secs)`, `rand(n)`, and `p` / `pp` as stdlib free functions in
+  `library/std/core/src/lib.rx`. (`exit(code)` was already a bare Kernel FFI
+  decl in `library/std/process/src/lib.rx` and is left alone.) `p` prints the inspect form (a
+  `String` gets quotes) and returns its argument, so it drops into an
+  expression without changing it; it ships as one overload per printable type
+  because Ruxen has no universal `to_s`. `rand(n)` folds the signed 64-bit
+  entropy draw non-negative before the modulo. Pins
+  `tests/release-e2e/cases/1180` to `1183`.
+
+  `srand`, `exit!`, `inspect` and the capitalized conversion functions
+  (`Integer()` / `Float()` / `String()` / `Array()`) are NOT shipped rather
+  than shipped as stubs; each row in `docs/ruby-parity/core.md` carries the
+  blocking reason.
+
+### Fixed
+- **`flat_map` on an `Array` receiver no longer fails codegen.** It sat on the
+  unimplemented-Vec-combinator blocklist in
+  `compiler/ruxen_core/src/codegen/lang_intrinsics.rs`, a list written when
+  those names had no `.rx` body. Now that B07 gives `flat_map` a real
+  `mixin Enumerable[T]` body, the emitted `Array_flat_map` function was
+  unreachable and the first call site died with "no runtime symbol for
+  `Vec::flat_map`". `flat_map` now falls through to the same arm as `map` /
+  `select` / `reduce`, which were unblocked the same way when they migrated.
+  `min` / `max` / `collect` / `flatten` stay blocked: they need per-`T`
+  monomorphization (enabler E1).
 - **`Integer` Ruby surface (batches B12 / B13 / B14)** — 40-plus methods added
   as `.rx` bodies on the `class Int` method-home
   (`library/std/scalar/src/lib.rx`), no new C symbol:

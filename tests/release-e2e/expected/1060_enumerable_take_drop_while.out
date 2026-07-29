@@ -1,0 +1,14 @@
+take_while 2
+tw 1
+tw 2
+drop_while 3
+dw 3
+dw 4
+dw 1
+take 2
+drop 2
+d 4
+d 1
+count 5
+entries 5
+first 1
