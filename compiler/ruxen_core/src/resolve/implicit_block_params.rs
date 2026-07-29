@@ -224,7 +224,13 @@ impl Scan {
                     self.expr(v);
                 }
             }
-            Return(x) | Break(x) => {
+            // `Next` carries the same `Option<Box<Expr>>` payload as `Return` /
+            // `Break` and must be scanned identically. Omitting it meant the two
+            // headline Block Tier-2 features did not compose: `xs.map { next _1 * 100 }`
+            // failed with `undefined variable '_1'`, because the numbered-param
+            // scan never descended into the `next` operand. The existing test
+            // used `next` and `_1` in two SEPARATE blocks, so it did not catch this.
+            Return(x) | Break(x) | Next(x) => {
                 if let Some(v) = x {
                     self.expr(v);
                 }
