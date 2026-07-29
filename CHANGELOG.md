@@ -28,6 +28,16 @@ once 1.0.0 ships.
   `!any?`; `one?` counts matches. Pins `tests/release-e2e/cases/985`.
 
 ### Fixed
+- **Default arguments now fill on a builtin-head (`String`/`Array`/`Hash`/`Set`)
+  method call.** The default-arg pass (`append_method_default_args`) + the
+  signature-based arg seeding ran only for nominal (`Class`/`Struct`/`Enum`)
+  receivers, so a `.rx` method with a default arg on a builtin head
+  (`String#ljust(width, pad = " ")`) verify/link-failed when the default was
+  omitted (`ljust(5)` passed one arg to a two-arg callee). Typeck now resolves
+  the selected method for builtin heads too (mapping `String`/`Array`/`Hash`/
+  `Set` to their `.rx` class name), WITHOUT pinning `*method` so the bridge +
+  FFI-alias dispatch/mangling is untouched. `ljust`/`rjust` regained their
+  `pad = " "` default. Pins `tests/release-e2e/cases/989`.
 - **Builtin-head collection/string operators that silently miscompiled now
   work, via `.rx` operator methods.** `"ab" * 3` (was empty/SIGSEGV), `[1,2] +
   [3,4]` (was `0`/garbage), and `Set` `|`/`&`/`-` (was garbage) previously fell

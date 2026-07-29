@@ -106,14 +106,14 @@ class String
   end
 
   # Ruby `String#ljust` / `rjust` — pad the string to at least `width`
-  # characters with `pad` on the right / left. `pad` is required (the compiler
-  # does not yet fill a default arg on a builtin-head method) and is appended
-  # whole per missing character, so a single-character `pad` (the common case)
-  # is exact; a multi-character `pad` may overshoot. Built char-by-char over
-  # `chars` (a `String` has no generic `T`, so its `.rx` bodies may dispatch on
-  # the concrete `Char`); `self` is never used directly as a `String` value
-  # (the FFI-shell receiver type does not compose with the `+` concat route).
-  def ljust(width: Int, pad: String) -> String
+  # characters with `pad` (default one space) on the right / left. `pad` is
+  # appended whole per missing character, so a single-character `pad` (the
+  # common case) is exact; a multi-character `pad` may overshoot. Built
+  # char-by-char over `chars` (a `String` has no generic `T`, so its `.rx`
+  # bodies may dispatch on the concrete `Char`); `self` is never used directly
+  # as a `String` value (the FFI-shell receiver type does not compose with the
+  # `+` concat route).
+  def ljust(width: Int, pad: String = " ") -> String
     var result = ""
     var len: Int = 0
     self.chars.each do |c|
@@ -127,7 +127,7 @@ class String
     result
   end
 
-  def rjust(width: Int, pad: String) -> String
+  def rjust(width: Int, pad: String = " ") -> String
     var result = ""
     var i: Int = self.chars.size as Int
     while i < width

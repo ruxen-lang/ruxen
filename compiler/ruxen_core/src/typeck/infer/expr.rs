@@ -637,15 +637,37 @@ impl<'a> InferenceEngine<'a> {
                 // static call (`C4.white()`) fell through to the lenient
                 // `resolve_method_call` fresh-var path and the result type
                 // stayed `?T`, breaking any chained `.field` / `.method`.
-                let selected_method = match &derefed {
+                // Builtin heads (`String`/`Array`/`Hash`/`Set`) home their `.rx`
+                // methods under the bare class name, so resolve the selected
+                // method for them too — this is what runs `append_method_default_args`
+                // (default-arg fill) and the signature-based arg seeding for a
+                // `.rx` method on a builtin head (e.g. `s.ljust(w)` filling a
+                // `pad = " "` default). We do NOT set `*method` for a builtin
+                // head, though: those dispatch/mangle through the bridge + FFI
+                // alias map (`String_ljust`), and pinning `*method` would divert
+                // them into the generic-method-mono path.
+                let is_nominal_head = matches!(
+                    &derefed,
+                    Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                );
+                let head_class_name: Option<String> = match &derefed {
                     Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => {
-                        self.select_class_method(name, method_name, args, block.is_some())
-                            .inspect(|selected| {
-                                *method = *selected;
-                            })
+                        Some(name.clone())
                     }
+                    Ty::String => Some("String".to_string()),
+                    Ty::Array(_) => Some("Array".to_string()),
+                    Ty::Map(_, _) => Some("Hash".to_string()),
+                    Ty::Set(_) => Some("Set".to_string()),
                     _ => None,
                 };
+                let selected_method = head_class_name.and_then(|name| {
+                    self.select_class_method(&name, method_name, args, block.is_some())
+                        .inspect(|selected| {
+                            if is_nominal_head {
+                                *method = *selected;
+                            }
+                        })
+                });
                 if let Some(selected) = selected_method {
                     // A trailing `do…end` / `{ }` block fills the method's final
                     // (block) parameter slot separately (appended below as
