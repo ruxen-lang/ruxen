@@ -262,10 +262,10 @@ Strongest core class. Verified working: builders, `size`/`count`/`capacity`/
 | `reject` | DONE | Enumerable | |
 | `filter_map` | MISSING | — | |
 | `find` / `detect` | PARTIAL | `find` DONE; `detect` MISSING | |
-| `find_all` | MISSING | use `select` | |
+| `find_all` | DONE | `.rx` Enumerable delegating to `select` (pin 985). |
 | `find_index` | MISSING | — | |
 | `all?` / `any?` | DONE | Enumerable | |
-| `none?` / `one?` | MISSING | — | |
+| `none?` / `one?` | DONE | `.rx` Enumerable defaults (pin 985). |
 | `count` | PARTIAL | `ruxen_vec_count` (no-arg) | `count {block}` / `count(obj)` MISSING (verifier error). |
 | `reduce` / `inject` | PARTIAL | `reduce(seed){}` DONE; `inject` MISSING | no symbol form `reduce(:+)`, no no-seed form. |
 | `sum` | PARTIAL | `ruxen_vec_sum` (`where T: Add`) | no `sum(init)` / `sum{block}`. |
@@ -334,7 +334,7 @@ combinators.
 | `map` / `select` / `filter` / `reject` | PARTIAL | `map`/`select`/`reject` DONE (Enumerable) | closure gets a `(K,V)` tuple; `filter` alias MISSING. |
 | `filter_map` / `flat_map` | MISSING | — | |
 | `find` / `detect` | PARTIAL | `find` DONE; `detect` MISSING | |
-| `all?` / `any?` / `none?` / `one?` | PARTIAL | `all?`/`any?` DONE; `none?`/`one?` MISSING | |
+| `all?` / `any?` / `none?` / `one?` | DONE | all four `.rx` Enumerable defaults (pin 985 for none?/one?). |
 | `reduce` / `inject` | PARTIAL | `reduce(seed){}` DONE | |
 | `partition` | DONE | Enumerable | |
 | `each_with_index` | DONE | Enumerable | |
@@ -424,7 +424,7 @@ required `each`. It covers a **subset** of Ruby's ~60 Enumerable methods.
 |---|---|---|
 | `each` (required) | DONE | the iteration primitive. |
 | `map` / `collect` | PARTIAL | `map` DONE; no `collect` alias. |
-| `select` / `filter` / `find_all` | PARTIAL | `select` DONE; no `filter`/`find_all` aliases. |
+| `select` / `filter` / `find_all` | DONE | `select`+`filter`+`find_all` all `.rx` Enumerable. |
 | `reject` | DONE | |
 | `find` / `detect` | PARTIAL | `find` DONE; no `detect`. |
 | `find_index` | MISSING (`index` is predicate-based) | |

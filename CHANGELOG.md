@@ -7,6 +7,12 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Added
+- **`Enumerable#find_all` / `none?` / `one?`** — added as `.rx` mixin-default
+  bodies over `each`/`any?` (`library/std/core/src/lib.rx`), so every includer
+  (Array/Set/Hash) gets them. `find_all` delegates to `select`; `none?` is
+  `!any?`; `one?` counts matches. Pins `tests/release-e2e/cases/985`.
+
 ### Fixed
 - **Builtin-head collection/string operators that silently miscompiled now
   work, via `.rx` operator methods.** `"ab" * 3` (was empty/SIGSEGV), `[1,2] +

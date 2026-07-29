@@ -266,6 +266,30 @@ mixin Enumerable[T]
   def inject[U](seed: U, f: any Fn[Fn(U, T) -> U]) -> U
     self.reduce(seed, f)
   end
+
+  # Ruby `find_all` — a synonym of `select` (keep elements where the
+  # predicate holds).
+  def find_all(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
+    self.select(pred)
+  end
+
+  # Ruby `none?` — true when NO element satisfies the predicate.
+  def none?(pred: any Fn[Fn(T) -> Bool]) -> Bool
+    !self.any?(pred)
+  end
+
+  # Ruby `one?` — true when EXACTLY one element satisfies the predicate.
+  # An external counter is bumped per matching element (same pattern as
+  # `each_with_index`).
+  def one?(pred: any Fn[Fn(T) -> Bool]) -> Bool
+    var n: Int = 0
+    self.each do |x|
+      if pred.(x)
+        n = n + 1
+      end
+    end
+    n == 1
+  end
 end
 
 mixin Copy

@@ -1,0 +1,10 @@
+# Pins the `.rx` Enumerable additions find_all / none? / one?, reused across
+# every includer (Array here). Pure mixin-default bodies over `each`/`any?`.
+def main
+  let xs = [1, 2, 3, 4]
+  puts(xs.find_all do |x| x > 2 end.size)
+  puts(xs.none? do |x| x > 10 end)
+  puts(xs.none? do |x| x > 2 end)
+  puts(xs.one? do |x| x == 3 end)
+  puts(xs.one? do |x| x > 2 end)
+end
