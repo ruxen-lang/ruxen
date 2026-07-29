@@ -52,7 +52,8 @@ same commit as the fix.
 - **Every fix:** `.rx` method (or generic mechanism) + a pinned
   `tests/release-e2e/cases/NNN_*.rx` + matching `expected/NNN_*.out` + update the
   matrix row + `CHANGELOG.md` `[Unreleased]`, in one commit. Next free pin
-  number: **990**. Review every change under CLAUDE.md rule 44.
+  number: **992** (`991` = per-`T` mono collections). Review every change under
+  CLAUDE.md rule 44.
 - `.gitignore`s all `CLAUDE.md` (root + per-module) — local docs, not committed.
 
 ## What's DONE this push (branch `feat/concurrency-adoption`)
@@ -90,12 +91,14 @@ same commit as the fix.
     (garbage). `self.clone`/`self.to_string` return the shell type too.
     Pattern that works: `var result = ""` then append each `"#{c}"` from
     `self.chars`.
-- **Generic-collection combinators (`Array`/`Set`/`Hash`) must NOT dispatch on
-  `T`** — they lower ONCE with `T` abstract (only `each`/`push`/closure-call).
-  So `join` (needs `to_s(T)`), `sum`/`min`/`max` (need `T` ordering), `uniq`
-  (needs `T` eq) canNOT be simple `.rx` bodies → they need per-`T` mono (below)
-  or a runtime C helper. Delegating methods that just move slots (`find_all`→
-  `select`, `has_key?`→`key?`) are fine.
+- **Generic-collection combinators (`Array`/`Set`/`Hash`) MAY now dispatch on
+  `T`** — per-`T` monomorphization landed (see "Next steps" 1). A body that
+  interpolates / orders / compares an element is specialized per concrete
+  element type; one that only pushes / iterates / closure-calls keeps a single
+  shared body. The one authoring rule: read the element into an ANNOTATED
+  binding (`var x: T = self[i]`) before dispatching on it. This applies to a
+  class's OWN body methods; a mixin DEFAULT included into a builtin head
+  (`Enumerable#sum`) is not specialized yet.
 - **`alias`-to-method on a GENERIC builtin head link-fails** (Q58) — use a real
   delegating method (`def has_key?(k) = self.key?(k)`), not `alias`.
 - Operator methods (`def *`, `def +`) only need to EXIST in `.rx`; the builtin-
@@ -103,15 +106,32 @@ same commit as the fix.
 
 ## Next steps (user chose "compiler enablers first")
 
-1. **Per-`T` monomorphization for collection methods (BIG, highest leverage).**
-   Unblocks `Array#min`/`max`/`uniq`/`flatten`/`join`, `Enumerable#sum`/`min_by`,
-   etc. Plan: extend the generic-CLASS mono (`mir/lower/monomorphize.rs`
-   "option 1", which already clones user generic-class method bodies per concrete
-   receiver as `Box__mono__String_eq`) to emit `Array[Int]_join` / `Array[Int]_min`
-   per concrete `T` at the call site, rewriting the method body's `T` → concrete
-   (like `trait_default.rs::rewrite_self_in_func` but for the element param). Then
-   these become normal `.rx` bodies that dispatch on `T`. Start fresh — it's
-   multi-hour and touches lowering.
+1. ~~**Per-`T` monomorphization for collection methods.**~~ **LANDED.** MIR
+   emits one specialized body per `(concrete receiver instantiation, method)`
+   seen at a call site (`Array__mono__String_join`) for the builtin-head shells,
+   and redirects those call sites to it
+   (`mir/lower/monomorphize.rs` → "Per-`T` monomorphization for BUILTIN-HEAD
+   generic classes"; call sites in `expr/{method_call,field_access}.rs`).
+   Eligibility is structural, never name-based: a body qualifies when it feeds a
+   type-parameter-typed value into interpolation, a binary operator, or a method
+   receiver, so the closure combinators keep their single shared body.
+   First users: `Array#join`/`min`/`max`/`uniq` (pin `991`).
+   **Authoring rules for a `T`-dispatching `.rx` body** (learned the hard way):
+   - Read the element into an ANNOTATED binding first — `var x: T = self[i]`.
+     `self[i]` itself types as an inference variable inside the shell body, so
+     `"#{self[i]}"` stays on the `Int_fmt` floor even after specialization; only
+     the annotated `let`'s `T` gets rewritten to the concrete element type.
+   - Everything else follows: `"#{x}"`, `x < y`, `x == y`, `x.method` all
+     dispatch concretely.
+   - Still open on top of this: mixin DEFAULTS included into a builtin head
+     (`Enumerable#sum`/`min_by`) are not specialized yet — they emit via a
+     different path (`lower_impl_block_with_outer_methods` → opaque
+     `Array_<m>`); extending the pass to those is the natural follow-up.
+   - `Array[Float]` elements are still wrong, for an UNRELATED pre-existing
+     reason: a `Float` crossing into an erased uniform word is `fcvt`-converted,
+     not bit-reinterpreted (`codegen/cranelift/emit.rs::coerce_value`), so
+     `[1.5][0]` is `1` even in plain user code. Needs a float-in-word ABI
+     decision (bitcast on push AND on read).
 2. **Q58 alias fix (SMALL, has workaround).** Root cause: `mir/lower/mod.rs::
    select_method_symbol_name` candidate scan compares `parent_def.name ==
    class_name`, but the alias target's parent is the BARE class while `class_name`
@@ -129,8 +149,8 @@ same commit as the fix.
   APIs/logs. Self-contained large feature.
 - **Missing stdlib packages:** `digest`+HMAC, `uri`, `openssl`/TLS, `csv`,
   `logger`, `optparse`, `stringio`, `bigdecimal`.
-- **Runtime/compiler-backed method bugs still open:** `Array[Int]#join` (empty;
-  needs per-`T` mono or C), `String[i]` indexing (returns null; needs a
+- **Runtime/compiler-backed method bugs still open:** `String[i]` indexing
+  (returns null; needs a
   `ruxen_string_char_at` runtime + Index-path arm in `mir/lower/expr/index.rs`),
   `String#<<`/`Array#<<` mutation semantics.
 - **Gems:** ActiveRecord/Sequel → a compile-time ORM; Rails/Sinatra → rondo. Both
@@ -138,8 +158,12 @@ same commit as the fix.
 
 ## Known PRE-EXISTING bugs (reproduce at baseline; not from this push)
 
-- Float closure-argument passes as `0`: `[2.5].map { |v| v + 0.5 }` → 0 (affects
-  `Array.map`, not just Kernel#then on Float).
+- Float-in-erased-word is `fcvt`-converted instead of bit-reinterpreted, so
+  every `Array[Float]` element read is truncated to an Int: `[1.5, 2.5][0]` ⇒
+  `1`, `each` yields `1`/`2`, and `[2.5].map { |v| v + 0.5 }` ⇒ 0. Reproduces on
+  the installed toolchain. One root cause
+  (`codegen/cranelift/emit.rs::coerce_value`'s int↔float arms), one fix: bitcast
+  at the erased-word boundary on BOTH push and read.
 - `arr.each { |x| puts(x) }` (do-end block + bare-var `puts`) segfaults;
   `arr.each { |n| puts "#{n}" }` (interpolation) works.
 - `docs/dev/gui-stack-v1-issues.md` Q56 (async `block_on` client I/O no-ops) is

@@ -1008,6 +1008,22 @@ impl<'a> Lowerer<'a> {
                     mangled
                 };
 
+                // Builtin-head per-`T` monomorphization: the receiver of a
+                // collection call is a structural head (`Ty::Array(Float)`),
+                // never `Ty::Class`, so `mono_base_for_ty` above never fires
+                // for it. Redirect to the specialized body when this exact
+                // `(instantiation, method)` was emitted; otherwise keep the
+                // opaque callee, which `resolve_ffi_alias_callee` routes to the
+                // FFI symbol or the shared `{Class}_{method}` body as before.
+                let mangled = if bufio_instance_suffix.is_none() {
+                    match self.builtin_head_mono_callee(&receiver_ty, lowered_method_name) {
+                        Some(specialized) => specialized,
+                        None => mangled,
+                    }
+                } else {
+                    mangled
+                };
+
                 // Q17b: specialize a generic METHOD over a mixin bound using
                 // the concrete types of its user arguments. The receiver is
                 // already the fixed first MIR argument (`self`); it does not

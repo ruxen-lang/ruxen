@@ -8,6 +8,32 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **Per-`T` monomorphization of builtin-head collection methods (compiler
+  enabler).** `Array[T]` / `Set[T]` / `Hash[K,V]` / `Option[T]` / `Result[T,E]`
+  are `.rx` classes whose instances are a structural `Ty` head, and they carry
+  `lib` blocks, so generic-CLASS monomorphization skipped them: every `.rx`
+  body method lowered ONCE with its type params abstract. Any body that
+  DISPATCHES on the element type therefore fell to the pointer-as-`Int` floor
+  (`["a","b"].join` printed buffer addresses). MIR now emits one specialized
+  body per `(concrete receiver instantiation, method)` observed at a call site
+  (`Array__mono__String_join`) and redirects those call sites to it
+  (`mir/lower/monomorphize.rs`, `expr/{method_call,field_access}.rs`).
+  Eligibility is structural, never name-based: a body qualifies only when it
+  feeds a type-parameter-typed value into one of MIR's three type-directed
+  lowerings (interpolation, binary operator, method receiver), so the
+  push/iterate/closure-call combinators (`map`, `select`, `reduce`, …) keep
+  their single shared body unchanged. Un-specialized instantiations still
+  resolve to that opaque body, so the pass adds capability without changing
+  any existing dispatch.
+- **`Array#join` / `min` / `max` / `uniq`** — real `.rx` bodies on
+  `class Array[T]` (`library/std/array/src/lib.rx`), the first users of the
+  per-`T` monomorphization above. Ruby semantics: `[].join == ""` with the
+  separator defaulting to `", "`; `min`/`max` return `nil` on an empty array
+  and order by the element type's own `<`/`>`; `uniq` keeps the first
+  occurrence of each distinct element by the element type's own `==` (content
+  equality for `String`, where the old shared body compared raw words). The
+  `ruxen_vec_join` FFI decl is retired — `join` now formats every element type,
+  not just `String`. Pins `tests/release-e2e/cases/991`.
 - **`String#reverse` / `capitalize` / `ljust` / `rjust`** — added as `.rx`
   methods (`library/std/string/src/string.rx`) built char-by-char over `chars`.
   A `String` carries no generic element type, so unlike the generic-collection

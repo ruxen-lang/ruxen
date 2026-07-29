@@ -59,8 +59,8 @@ baseline works; much of the rest **compiles but is broken**:
 | **Array `<<`** | **MISSING (BUG)** | no-op. Use `.push(x)`. |
 | **Set `\| & -`** | **DONE** | `.rx` `def \|`/`&`/`-`→`union`/`intersection`/`difference` (pin 984). **`^`** (symmetric diff) MISSING. |
 
-**Also broken:** `Array[Int]#join` returns empty; `Array[String]#join` works.
-`Range#map` returns empty (though `for x in a..b` iteration works).
+**Also broken:** `Range#map` returns empty (though `for x in a..b` iteration
+works). (`Array[Int]#join` is fixed — see `join` in the Array table.)
 
 These runtime-broken operators are recorded as MISSING (they are not usable),
 with the working method spelling noted. Fixing `**` and the collection
@@ -269,12 +269,14 @@ Strongest core class. Verified working: builders, `size`/`count`/`capacity`/
 | `count` | PARTIAL | `ruxen_vec_count` (no-arg) | `count {block}` / `count(obj)` MISSING (verifier error). |
 | `reduce` / `inject` | PARTIAL | `reduce(seed){}` DONE; `inject` MISSING | no symbol form `reduce(:+)`, no no-seed form. |
 | `sum` | PARTIAL | `ruxen_vec_sum` (`where T: Add`) | no `sum(init)` / `sum{block}`. |
-| `min` / `max` / `minmax` | MISSING | — | |
+| `min` / `max` | DONE | `.rx` body, per-`T` monomorphized (pin 991) | Ruby semantics: `nil` on empty. Orders by the element type's own `<` / `>` (numeric for Int, lexicographic for String). |
+| `minmax` | MISSING | — | |
 | `min_by` / `max_by` / `minmax_by` | MISSING | — | |
 | `sort` | DONE | `ruxen_vec_sort` | natural order. |
 | `sort!` | MISSING | — | |
 | `sort_by` | PARTIAL | `.rx` body | in-place comparator-closure `sort_by(cmp)`, signature differs from Ruby's key-extractor `sort_by{}` (returns nil, mutates). |
-| `uniq` / `uniq!` | MISSING | `dedup` (adjacent only) | `dedup` ≠ Ruby `uniq` (only removes consecutive dups). |
+| `uniq` | DONE | `.rx` body, per-`T` monomorphized (pin 991) | keeps the FIRST occurrence of each distinct element, in order, by the element type's own `==` (content equality for `String`). No block form (`uniq {}`). |
+| `uniq!` | MISSING | `dedup` (adjacent only) | `dedup` ≠ Ruby `uniq` (only removes consecutive dups). |
 | `flatten` / `flatten!` | MISSING | — | |
 | `compact` / `compact!` | MISSING | — | |
 | `zip` | DONE | `.rx` body → `Array[(T,U)]` | |
@@ -289,7 +291,7 @@ Strongest core class. Verified working: builders, `size`/`count`/`capacity`/
 | `sample` / `shuffle` / `shuffle!` | MISSING | — | (no PRNG surface, see Kernel.) |
 | `combination` / `permutation` / `product` | MISSING | — | |
 | `pack` | MISSING | — | |
-| `join` | PARTIAL (BUG) | `ruxen_vec_join` | works for `Array[String]`; **empty/broken for `Array[Int]`** and other element types. |
+| `join` | DONE | `.rx` body, per-`T` monomorphized (pin 991) | `[].join == ""`, separator defaults to `", "`. Formats every element type through its own display (`ruxen_vec_join` retired). Paren-less `a.join` still needs `a.join()`. Element type `Float` prints truncated — a pre-existing float-word ABI bug, not a `join` bug. |
 | `fill` | MISSING | — | |
 | `delete` / `delete_at` / `delete_if` / `keep_if` / `reject!` / `select!` | PARTIAL | `select!` has a resolver arm | most delete/keep ops MISSING; `select!` present via `collections.rs`. |
 | `insert(i,x)` | DONE | `ruxen_vec_insert` | single-element. |
@@ -642,8 +644,15 @@ These silently miscompile or crash today; they erode trust in the whole surface.
    distinct token + real pow lowering (Int + Float). *(Compiler.)*
 2. ~~**`<=>` spaceship**~~ **DONE** for primitive and user-defined comparison
    plus Comparable defaults (cases `959/965`).
-3. **`Array[Int]#join`**, returns empty for non-`String` element types; only
-   `Array[String]` works. Fix `ruxen_vec_join` element stringification.
+3. ~~**`Array[Int]#join`**~~ **DONE** — `join` is now a `.rx` body specialized
+   per concrete element type (pin `991`); `ruxen_vec_join` is retired. What
+   remains from this entry is a *different*, deeper bug: **`Array[Float]`
+   elements truncate to `Int`** (`[1.5][0]` ⇒ `1`, `each` yields `1`), because
+   a `Float` crossing into an erased uniform word is `fcvt`-converted rather
+   than bit-reinterpreted (`codegen/cranelift/emit.rs::coerce_value`). Fixing
+   it needs a float-in-word ABI decision (bitcast on push AND on read), not a
+   `join` fix; it also explains the "Float closure-argument passes as 0"
+   entry below.
 4. **Collection/String operators that crash or no-op**, `Array +/-/*/&/|/<<`,
    `String */<<`, `String[i]`, `Set |/&/-/^`, `Range#map`. Either implement or
    make them a compile error (never a silent crash). Prefer wiring the operators

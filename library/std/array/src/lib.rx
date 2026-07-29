@@ -81,7 +81,6 @@ class Array[T]
     def clone as "ruxen_vec_clone" -> Array[T]
     def reverse as "ruxen_vec_reverse" -> Array[T]
     def sort as "ruxen_vec_sort" -> Array[T]
-    def join as "ruxen_vec_join"(sep: &String) -> String
     def push as "ruxen_vec_push"(x: T)
     def pop as "ruxen_vec_pop" -> Option[T]
     def clear as "ruxen_vec_clear"
@@ -123,6 +122,12 @@ class Array[T]
   # `lib_body_methods` + `strip_generic_suffix`. `each` is the sole
   # iteration primitive kept hardcoded (MIR-inlined, closure_inline/
   # each.rs) — every combinator is expressed over it.
+  #
+  # A mixin default that DID need to dispatch on `T` would NOT be covered
+  # by the per-`T` monomorphization below: that pass specializes a class's
+  # OWN body methods, while an included default is emitted through
+  # `lower_impl_block_with_outer_methods`. Extending it to included
+  # defaults is what `Enumerable#sum` / `min_by` still wait on.
   include Enumerable[T]
 
   # Ruby `sort_by` — in-place comparator sort. The closure returns a
@@ -163,6 +168,99 @@ class Array[T]
     var i: Int = 0
     while i < limit
       out.push((self[i], other[i]))
+      i = i + 1
+    end
+    out
+  end
+
+  # ── per-`T` monomorphized combinators ──────────────────────────────
+  # These bodies DISPATCH on the element type — they interpolate an
+  # element, order two elements, or compare two elements — so MIR
+  # specializes one copy per concrete element type actually called
+  # (`Array__mono__String_join`). See `mir/lower/monomorphize.rs`
+  # "per-`T` monomorphization for BUILTIN-HEAD generic classes".
+  #
+  # The element must be read into a `var x: T` binding first: `self[i]`
+  # itself types as an inference variable inside the shell body, and only
+  # the annotated `let` carries the `T` that substitution rewrites to the
+  # concrete element type.
+
+  # Ruby `join` — concatenate every element's display form, separated by
+  # `sep`. `[].join == ""`, and the separator defaults to `", "`.
+  def join(sep: &String = ", ") -> String
+    var out: String = ""
+    var i: Int = 0
+    var n: Int = self.size as Int
+    while i < n
+      if i > 0
+        out = out + "#{sep}"
+      end
+      var x: T = self[i]
+      out = out + "#{x}"
+      i = i + 1
+    end
+    out
+  end
+
+  # Ruby `min` / `max` — the smallest / largest element by the element
+  # type's own ordering, or `nil` for an empty array.
+  def min -> Option[T]
+    var n: Int = self.size as Int
+    if n == 0
+      return nil
+    end
+    var best: T = self[0]
+    var i: Int = 1
+    while i < n
+      var x: T = self[i]
+      if x < best
+        best = x
+      end
+      i = i + 1
+    end
+    Option.Some(best)
+  end
+
+  def max -> Option[T]
+    var n: Int = self.size as Int
+    if n == 0
+      return nil
+    end
+    var best: T = self[0]
+    var i: Int = 1
+    while i < n
+      var x: T = self[i]
+      if x > best
+        best = x
+      end
+      i = i + 1
+    end
+    Option.Some(best)
+  end
+
+  # Ruby `uniq` — a fresh array keeping the FIRST occurrence of each
+  # distinct element, in original order. Membership is decided by the
+  # element type's own `==` (the specialization is what makes that
+  # compare contents rather than raw words).
+  def uniq -> Array[T]
+    var out: Array[T] = Array.new
+    var n: Int = self.size as Int
+    var i: Int = 0
+    while i < n
+      var x: T = self[i]
+      var seen: Bool = false
+      var j: Int = 0
+      var m: Int = out.size as Int
+      while j < m
+        var y: T = out[j]
+        if x == y
+          seen = true
+        end
+        j = j + 1
+      end
+      if seen == false
+        out.push(x)
+      end
       i = i + 1
     end
     out

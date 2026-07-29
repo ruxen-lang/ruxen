@@ -165,6 +165,17 @@ pub struct Lowerer<'a> {
     /// `Array[Int]_map`; `resolve_ffi_alias_callee` strips the generic
     /// suffix to reach the opaque body when the stripped name is in here.
     lib_body_methods: HashSet<String>,
+    /// Per-`T` monomorphization of BUILTIN-HEAD generic classes (`Array[T]`,
+    /// `Set[T]`, `Hash[K,V]`, `Option[T]`, `Result[T,E]`): the specializations
+    /// to emit, recorded by `collect_builtin_head_mono_instances` from the
+    /// receiver instantiations seen at call sites. Drained by
+    /// `emit_builtin_head_mono_instances` after `lower_items`.
+    builtin_head_mono_instances: Vec<monomorphize::BuiltinHeadMonoInstance>,
+    /// The mangled symbols the pass above emits (`Array__mono__String_join`). A
+    /// receiver-bearing call site is redirected only when its
+    /// `(instantiation, method)` is in here; every other call keeps the opaque
+    /// `{Class}_{method}` body reached through `lib_body_methods`.
+    builtin_head_mono_emitted: HashSet<String>,
     /// Q17: eligible generic FREE functions (≥1 mixin-bounded type param),
     /// keyed by function name. Populated by `collect_generic_fn_instances`.
     mono_fns: HashMap<String, crate::hir::nodes::HirFuncDef>,
@@ -290,6 +301,8 @@ impl<'a> Lowerer<'a> {
             mono_classes: HashMap::new(),
             mono_instances: HashMap::new(),
             mono_emitted: HashSet::new(),
+            builtin_head_mono_instances: Vec::new(),
+            builtin_head_mono_emitted: HashSet::new(),
             mono_fns: HashMap::new(),
             fn_mono_instances: HashMap::new(),
             fn_mono_emitted: HashMap::new(),
@@ -842,6 +855,16 @@ impl<'a> Lowerer<'a> {
         // FFI-shell generic classes (`Mutex[T]`, …) are excluded here.
         self.collect_mono_instances(program);
 
+        // Per-`T` monomorphization of the BUILTIN-HEAD generic classes the
+        // rule above excludes (`Array[T]` & friends carry `lib` blocks): record
+        // one specialization per `(concrete receiver instantiation, method)`
+        // for each `.rx` body method that dispatches on its element type, so
+        // `["a", "b"].join` formats the elements instead of printing their
+        // buffer addresses through the pointer-as-`Int` floor. Must run after
+        // `collect_mono_instances` (it reuses the same mangling) and before
+        // `lower_items` (call sites consult the emitted set while bodies lower).
+        self.collect_builtin_head_mono_instances(program);
+
         // Q17: record every concrete instantiation of an eligible generic
         // FREE function (mixin-bounded type param) seen at a call site, so a
         // dependency's generic (`paint_all[T: Paintable]`) can be specialized
@@ -906,6 +929,12 @@ impl<'a> Lowerer<'a> {
         // table are already in place. Call sites are redirected to these
         // specialized callees in `method_call.rs` via `mono_base_for_ty`.
         self.emit_mono_instances(&mut mir)?;
+
+        // Per-`T` builtin-head specializations (`Array__mono__String_join`).
+        // Same ordering rationale as `emit_mono_instances`: the opaque body
+        // every un-specialized instantiation still resolves to was emitted by
+        // `lower_items` above.
+        self.emit_builtin_head_mono_instances(&mut mir)?;
 
         // Q17: emit one specialized MIR copy of every eligible generic free
         // function, per recorded concrete instantiation, and record the
