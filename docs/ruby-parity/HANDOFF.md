@@ -40,6 +40,11 @@ same commit as the fix.
   (no env var needed then).
 - **Narrow test loop:** `cargo test -p ruxen_core --lib` (≈650/0, ~0.5s). Additive
   `.rx` changes only need this (rule 42).
+- **Where the harness lives (repo-root relative, NOT under `compiler/`):**
+  `tests/release-e2e/` holds `run.sh`, `cases/`, `expected/`, `scripts/`, and
+  `results/`. There is no `compiler/ruxen_core/tests/release-e2e/`;
+  `compiler/ruxen_core/tests/` is ordinary Rust integration tests
+  (`alias_keyword.rs`, `block_tier2.rs`, …), a different thing entirely.
 - **Full gate (once per phase / after any compiler change):**
   `RUXEN_WORKSPACE="$PWD" PHASES=compile bash tests/release-e2e/run.sh` — compiles
   AND runs each fixture, diffs stdout vs `expected/`. Currently **~504 cases, 0
@@ -51,8 +56,14 @@ same commit as the fix.
   is in flight** — it reads the workspace stdlib + the binary and will corrupt.
 - **Every fix:** `.rx` method (or generic mechanism) + a pinned
   `tests/release-e2e/cases/NNN_*.rx` + matching `expected/NNN_*.out` + update the
-  matrix row + `CHANGELOG.md` `[Unreleased]`, in one commit. Next free pin
-  number: **990**. Review every change under CLAUDE.md rule 44.
+  matrix row + `CHANGELOG.md` `[Unreleased]`, in one commit. Review every change
+  under CLAUDE.md rule 44.
+- **Pin numbers: do NOT use a single running counter.** Parallel batches would
+  collide on it. Take your block from the allocation rule in
+  [`QUEUE.md`](QUEUE.md) §0: batch `Bnn` owns pins `1000 + 10*(nn-1)` through
+  `+9`. Highest pre-existing case is `989`; `990` to `999` are reserved for the
+  in-flight per-`T` mono and Q58 work. Work with no batch id takes the next free
+  block above every allocated one and records it in `QUEUE.md`.
 - `.gitignore`s all `CLAUDE.md` (root + per-module) — local docs, not committed.
 
 ## What's DONE this push (branch `feat/concurrency-adoption`)
