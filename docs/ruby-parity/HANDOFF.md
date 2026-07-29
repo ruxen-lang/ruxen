@@ -210,6 +210,20 @@ same commit as the fix.
   at the erased-word boundary on BOTH push and read.
 - `arr.each { |x| puts(x) }` (do-end block + bare-var `puts`) segfaults;
   `arr.each { |n| puts "#{n}" }` (interpolation) works.
+- **Interpolating an `Option` prints its BOX POINTER, not the value.**
+  `"#{arr.min}"` renders something like `4376638048`. It is silent garbage from
+  a natural mistake (`min`/`max`/`find` all return `Option[T]`), it never warns,
+  and the number looks plausible enough to be mistaken for a result. Same family
+  as the `"#{self}"` pointer hazard inside a `String` body (QUEUE.md §0). Until
+  `Option` renders as its value or as an explicit `Some(x)`/`nil`, ALWAYS unwrap
+  before interpolating.
+- **`let x: Option[T] = <expr>` types `x` as `T`, not `Option[T]`.** The explicit
+  annotation is discarded, so `x.unwrap` / `x.nil?` / `x.present?` all fail with
+  `no field 'unwrap' on type Int`. `unwrap_or(default)` is the spelling that
+  works today and is why pin `991` uses it throughout. This is the pre-existing
+  Option-construct typing bug (`let o: Option[T] = Some(v)` has the same shape),
+  and it means an `Option`-returning `.rx` method cannot be consumed the Ruby
+  way yet.
 - `docs/dev/gui-stack-v1-issues.md` Q56 (async `block_on` client I/O no-ops) is
   the one live correctness bug tracked there. Q58 was added and FIXED this push.
 - A non-scalar param default (`prefix: String = "v="`) reached through a
