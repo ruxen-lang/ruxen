@@ -1,0 +1,29 @@
+# Pins the universal `Kernel` `tap`/`then` on generic/builtin heads and a user
+# class WITHOUT an explicit `include Kernel` — the receivers that have no `impl`
+# item, so their `{Type}_tap`/`{Type}_then` bodies come from
+# `emit_universal_kernel_bodies` (with the concrete `self` type pinned, since a
+# mangled `Array[Int]_tap` names no symbol-table class).
+class Point
+  x: Int
+  y: Int
+  def init(@x: Int, @y: Int)
+  end
+end
+
+def main
+  # Array receiver (generic head): tap returns the array, then transforms it.
+  let arr = [10, 20, 30].tap do |a|
+    puts(a.size)
+  end
+  puts(arr[1])
+  let total = [1, 2, 3].then do |a|
+    a.size
+  end
+  puts(total)
+
+  # user class, NO explicit `include Kernel`.
+  let p = Point.new(3, 4).tap do |pt|
+    puts(pt.x)
+  end
+  puts(p.y)
+end

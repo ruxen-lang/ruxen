@@ -58,6 +58,34 @@ mixin Comparable
   end
 end
 
+# `Kernel` — the universal object surface every Ruxen value carries, the
+# analogue of Ruby's `Kernel`/`Object`. It has NO required methods; its
+# defaults are expressed purely in terms of `self` and a block, so they are
+# sound for ANY receiver (primitive, string, collection, or user type). The
+# compiler includes `Kernel` implicitly on every type — these are not opt-in.
+mixin Kernel
+  # `tap` — run the block with `self`, then return `self`. Lets you thread a
+  # side effect (logging, mutation, assertion) into a call chain without
+  # breaking it: `x.tap { |v| puts v }` evaluates to `x`.
+  def tap(f: any Fn[Fn(&Self) -> nil]) -> Self
+    f.(self)
+    self
+  end
+
+  # `then` / `yield_self` — run the block with `self` and return the block's
+  # result, so a value can be transformed inline: `x.then { |v| v + 1 }`.
+  # `yield_self` is Ruby's older spelling of the same method; it is a real
+  # method here (not an `alias`) so it resolves through the universal-`Kernel`
+  # fallback on every receiver, which a type-keyed `alias` would not.
+  def then[U](f: any Fn[Fn(&Self) -> U]) -> U
+    f.(self)
+  end
+
+  def yield_self[U](f: any Fn[Fn(&Self) -> U]) -> U
+    f.(self)
+  end
+end
+
 # Marker mixins (no required methods).
 mixin Iterable
 

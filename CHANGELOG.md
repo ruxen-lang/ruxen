@@ -7,6 +7,31 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Changed
+- **`tap` / `then` / `yield_self` are now defined in `.rx` (`mixin Kernel`),
+  not a compiler special-case.** The universal Ruby object combinators moved
+  out of the ~60-line typeck+MIR interception (hardcoded method names + a
+  `__ruxen_builtin_*` marker the two stages had to keep in lockstep) and into
+  ordinary `.rx` mixin defaults on a new `mixin Kernel`
+  (`library/std/core/src/lib.rx`). Four generic mechanisms carry them:
+  (1) a **universal-`Kernel` include** — `MixinResolver::lookup_method_*` consult
+  `Kernel`'s defaults as a last resort for EVERY receiver (own/explicit methods
+  still win, so a user `def tap` overrides), so no per-type registration is
+  needed; (2) **per-receiver body synthesis** — `mir::lower::
+  emit_universal_kernel_bodies` records each `tap`/`then`/`yield_self` call site
+  during lowering and synthesizes the `{Type}_{method}` body (cloned `Kernel`
+  default, `Self` → the concrete receiver) for any primitive / builtin /
+  non-`include`-ing receiver that has no `impl` item to drive the usual
+  per-implementor monomorphization; (3) a codegen fix so a zero-sized
+  (`Unit`/`Never`) `self` param is skipped symmetrically in the signature AND
+  the param→value binding (previously a later real param read the wrong
+  incoming slot → garbage → segfault), which is what makes `puts(x).tap { … }`
+  on a unit receiver work; (4) the parser accepts the `then`/`match` contextual
+  keywords in `def`/`alias` NAME position. Works on `Int`/`Float`/`Bool`/`Char`,
+  `String`, `Array`, and user classes/structs/enums. The block-arity guard
+  (`tap`'s block takes at most one parameter) is now a generic check over any
+  mixin-default block method, not a `tap`/`then` special-case.
+
 ### Fixed
 - **Mixin-DEFAULT methods that take a block now resolve on user classes
   (closure-param `Self`-seeding + method-generic return harvest).** A mixin

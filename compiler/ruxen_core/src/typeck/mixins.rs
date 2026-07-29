@@ -650,7 +650,25 @@ impl MixinResolver {
                 }
             }
         }
-        None
+        self.universal_kernel_sig(method_name)
+    }
+
+    /// The universal `Kernel` include: every Ruxen value implicitly carries
+    /// `mixin Kernel`'s default methods (`tap` / `then` / `yield_self`), the
+    /// analogue of Ruby's `Kernel`/`Object`. This is the ONE compiler-side
+    /// universal-include MECHANISM — the methods themselves are ordinary `.rx`
+    /// (`library/std/core/src/lib.rx`). Consulted LAST by both method lookups,
+    /// so an own method, an explicit `impl`, or an explicitly-included mixin
+    /// default of the same name always wins (a user is free to define their
+    /// own `tap`). Returns `None` for any name `Kernel` does not declare, so it
+    /// is inert for every non-`Kernel` method. The returned signature still
+    /// carries `Self`; the call site substitutes it to the concrete receiver.
+    fn universal_kernel_sig(&self, method_name: &str) -> Option<FnSignature> {
+        self.trait_method_sigs
+            .get("Kernel")
+            .and_then(|methods| methods.get(method_name))
+            .and_then(|sigs| sigs.first())
+            .cloned()
     }
 
     /// The substitution a receiver's `include Mixin[Args]` chose for the
@@ -717,6 +735,19 @@ impl MixinResolver {
                     }
                 }
             }
+        }
+
+        // Universal `Kernel` include (`tap`/`then`/`yield_self`), consulted
+        // before the inheritance walk so it applies to every receiver but
+        // AFTER own/explicit-mixin methods above so a user override wins. See
+        // `universal_kernel_sig`.
+        if let Some(sig) = Self::select_signature(
+            self.trait_method_sigs
+                .get("Kernel")
+                .and_then(|methods| methods.get(method_name)),
+            args,
+        ) {
+            return Some(sig);
         }
 
         // Check parent class (inheritance)

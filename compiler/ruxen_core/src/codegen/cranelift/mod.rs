@@ -546,18 +546,36 @@ impl CodeGen {
                 builder.ins().call(env_init, &[argc, argv]);
             }
 
-            // Bind function parameters to their local variables.
+            // Bind function parameters to their local variables. `build_signature`
+            // SKIPS zero-sized (`Unit`/`Never`) params (`ty_to_cranelift` → None),
+            // so the block-param vector has no slot for them. Walk `params_vals`
+            // with an independent cursor that only advances for a real (sized)
+            // param — otherwise a `Unit` self at index 0 would consume the first
+            // incoming value and every later real param would read the wrong slot
+            // (or none), producing a garbage closure pointer → segfault. A
+            // zero-sized param still needs SOME binding because the body may name
+            // it (`f.(self)` in a universal `Kernel` body on a unit receiver), so
+            // bind it to a dummy 0.
             if func.name != "main" {
                 let params_vals = builder.block_params(entry_cl_block).to_vec();
-                for (i, &param_id) in func.params.iter().enumerate() {
-                    if i < params_vals.len() {
-                        def_local(
-                            &var_map,
-                            &stack_slots,
-                            &mut builder,
-                            param_id,
-                            params_vals[i],
-                        );
+                let mut value_idx = 0;
+                for &param_id in func.params.iter() {
+                    let has_abi_slot =
+                        ty_to_cranelift(&func.locals[param_id as usize].ty).is_some();
+                    if has_abi_slot {
+                        if value_idx < params_vals.len() {
+                            def_local(
+                                &var_map,
+                                &stack_slots,
+                                &mut builder,
+                                param_id,
+                                params_vals[value_idx],
+                            );
+                            value_idx += 1;
+                        }
+                    } else {
+                        let zero = builder.ins().iconst(types::I64, 0);
+                        def_local(&var_map, &stack_slots, &mut builder, param_id, zero);
                     }
                 }
             }

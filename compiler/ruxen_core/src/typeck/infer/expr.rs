@@ -347,106 +347,16 @@ impl<'a> InferenceEngine<'a> {
                 args,
                 block,
             } => {
-                // Ruby universal block methods `tap` / `then` (aka
-                // `yield_self`): `x.tap { |v| … }` runs the block with `v = x`
-                // and evaluates to `x`; `x.then { |v| … }` evaluates to the
-                // block's result. Intercepted here before ordinary resolution,
-                // but ONLY when the block is a literal closure and the receiver
-                // does not define its own `tap`/`then` method. Keeping these two
-                // conditions in LOCKSTEP with the MIR interception is essential:
-                // typeck must never accept a shape MIR then fails to lower (a
-                // forwarded `&block` is a `VarRef`, not a `Closure`; a
-                // user-defined `def tap` must win), or the call reaches the
-                // linker as a nonexistent `<Type>_tap` symbol.
-                // The already-marked names are matched too so this arm is
-                // IDEMPOTENT: a `puts(x)`/interpolation re-inference of an
-                // already-intercepted call (whose name is now the marker) must
-                // re-inline here rather than fall through to ordinary
-                // resolution (which would error on the reserved name).
-                if (method_name == "tap"
-                    || method_name == "then"
-                    || method_name == "yield_self"
-                    || method_name == "__ruxen_builtin_tap"
-                    || method_name == "__ruxen_builtin_then")
-                    && args.is_empty()
-                    && matches!(
-                        block.as_deref().map(|b| &b.kind),
-                        Some(HirExprKind::Closure { .. })
-                    )
-                {
-                    let is_tap = method_name == "tap" || method_name == "__ruxen_builtin_tap";
-                    let already_marked = method_name.starts_with("__ruxen_builtin_");
-                    self.infer_expr(object);
-                    let obj_ty = self.ctx.resolve(&object.ty);
-                    // `lookup_method_by_name` sees BOTH own-class and included-
-                    // mixin/default methods, so a user `tap`/`then` (however
-                    // provided) wins and we do NOT intercept.
-                    let has_user_method = self
-                        .traits
-                        .lookup_method_by_name(&obj_ty, method_name)
-                        .is_some();
-                    if !has_user_method {
-                        // A `tap`/`then` block takes at most one parameter (the
-                        // receiver). Reject a wider block cleanly on the first
-                        // pass — leaving extra params unbound would read an
-                        // uninitialized local at runtime.
-                        let too_many_params = matches!(
-                            block.as_deref().map(|b| &b.kind),
-                            Some(HirExprKind::Closure { params, .. }) if params.len() > 1
-                        );
-                        if too_many_params && !already_marked {
-                            self.error(
-                                "a `tap` / `then` / `yield_self` block takes at most one \
-                                 parameter (the receiver)"
-                                    .to_string(),
-                                &expr.span,
-                            );
-                        }
-                        let ret_var = self.ctx.fresh_type_var();
-                        let mut block_ret = ret_var.clone();
-                        if let Some(blk) = block.as_deref_mut() {
-                            let expected = Ty::Fn {
-                                params: vec![obj_ty.clone()],
-                                ret: Box::new(ret_var),
-                            };
-                            Self::seed_closure_param_types(blk, &expected);
-                            // Also pin the block param's type in the symbol table
-                            // so references to it inside the body (e.g. `x.to_s`
-                            // behind `puts(x)`) resolve to the receiver type.
-                            let param_def = match &blk.kind {
-                                HirExprKind::Closure { params, .. } => {
-                                    params.first().map(|p| p.def_id)
-                                }
-                                _ => None,
-                            };
-                            if let Some(def_id) = param_def {
-                                self.symbols.update_ty(def_id, obj_ty.clone());
-                            }
-                            self.infer_expr(blk);
-                            block_ret = match self.ctx.resolve(&blk.ty) {
-                                Ty::Fn { ret, .. }
-                                | Ty::FnMut { ret, .. }
-                                | Ty::FnOnce { ret, .. } => *ret,
-                                other => other,
-                            };
-                        }
-                        // Mark the call so MIR intercepts the builtin
-                        // UNCONDITIONALLY on this reserved name. typeck is the
-                        // SOLE decider (it alone consults own + mixin methods),
-                        // so the two interception sites can never disagree — a
-                        // user/mixin `tap`/`then` keeps its original name and
-                        // dispatches normally through MIR.
-                        *method_name = if is_tap {
-                            "__ruxen_builtin_tap".to_string()
-                        } else {
-                            "__ruxen_builtin_then".to_string()
-                        };
-                        expr.ty = if is_tap { obj_ty } else { block_ret };
-                        return;
-                    }
-                    // A user/mixin-provided `tap`/`then` exists — fall through to
-                    // the ordinary method resolution below (which dispatches to it).
-                }
+                // `tap` / `then` / `yield_self` are NO LONGER a compiler
+                // special-case: they are ordinary `.rx` mixin defaults on
+                // `mixin Kernel` (library/std/core/src/lib.rx), implicitly
+                // included on every type via the universal-`Kernel` fallback in
+                // `MixinResolver::lookup_method_*`. They resolve and lower
+                // through the normal method-call path below, and their bodies
+                // are synthesized per concrete receiver by
+                // `mir::lower::emit_universal_kernel_bodies`. A user-defined
+                // `tap`/`then` still wins (own/explicit methods are consulted
+                // before the Kernel fallback).
 
                 // ── Phase 2 stdlib (#04): HashMap.entry(K).or_insert(V) /
                 //    .or_insert_with(closure) chain.
@@ -624,6 +534,33 @@ impl<'a> InferenceEngine<'a> {
                                 if let Some((fn_params, _)) =
                                     Self::param_fn_signature(&subst_param_ty)
                                 {
+                                    // A block with MORE parameters than the
+                                    // method's closure parameter declares is an
+                                    // arity error: the extra params would never
+                                    // be seeded and would read an uninitialized
+                                    // local at runtime. (Fewer is tolerated —
+                                    // Ruby-lenient: a block may ignore trailing
+                                    // values.) This is the generic replacement
+                                    // for the removed `tap`/`then` special-case's
+                                    // "at most one parameter" check — it now
+                                    // covers every mixin-default block method,
+                                    // `Kernel#tap` (`Fn(&Self)`, 1 param)
+                                    // included.
+                                    if blk_params.len() > fn_params.len() {
+                                        self.error(
+                                            format!(
+                                                "this block takes at most {} parameter{}, but \
+                                                 declares {}: `{}` calls it with {} argument{}",
+                                                fn_params.len(),
+                                                if fn_params.len() == 1 { "" } else { "s" },
+                                                blk_params.len(),
+                                                method_name,
+                                                fn_params.len(),
+                                                if fn_params.len() == 1 { "" } else { "s" },
+                                            ),
+                                            &expr.span,
+                                        );
+                                    }
                                     for (blk_p, expected) in blk_params.iter().zip(fn_params.iter())
                                     {
                                         if !expected.is_infer() {

@@ -947,7 +947,7 @@ mod tests {
             result
                 .diagnostics
                 .iter()
-                .any(|d| d.message.contains("at most one parameter")),
+                .any(|d| d.message.contains("this block takes at most 1 parameter")),
             "expected an arity error for a 2-param tap/then block, got {:?}",
             result.diagnostics
         );

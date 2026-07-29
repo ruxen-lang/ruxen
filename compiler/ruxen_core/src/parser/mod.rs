@@ -573,8 +573,28 @@ impl Parser {
     /// NOTE: `**` (power) is intentionally absent: it lowers directly to
     /// numeric runtime helpers and is not user-definable.
     pub(crate) fn parse_def_name(&mut self) -> String {
-        self.try_parse_operator_name()
-            .unwrap_or_else(|| self.expect_identifier())
+        if let Some(op) = self.try_parse_operator_name() {
+            return op;
+        }
+        // Contextual keywords that are also valid Ruby method names —
+        // `then` (`Kernel#then`) and `match` (`Regex#match`). The method-CALL
+        // path already accepts them (`x.then { … }`, `re.match(s)`) via
+        // `expect_any_identifier`; accept them in `def`/`alias` NAME position
+        // too, so a `.rx` `def then` / `alias yield_self then` parses instead
+        // of failing with "expected identifier, found Then". Method-name
+        // position is unambiguous here (a def/alias name is never a
+        // control-flow `then`/`match`).
+        match self.current_kind() {
+            TokenKind::Then => {
+                self.advance();
+                "then".to_string()
+            }
+            TokenKind::Match => {
+                self.advance();
+                "match".to_string()
+            }
+            _ => self.expect_identifier(),
+        }
     }
 
     /// Recognise an operator-symbol method name at the cursor, consuming

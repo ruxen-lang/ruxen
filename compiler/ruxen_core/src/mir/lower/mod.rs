@@ -91,6 +91,24 @@ pub struct Lowerer<'a> {
     /// that each `impl Trait for Type` can monomorphize the default body
     /// for `Type` if the impl does not override the method itself.
     trait_default_methods: HashMap<String, HashMap<String, HirFuncDef>>,
+    /// Universal-`Kernel` call sites recorded during lowering:
+    /// `{Type}_{method}` mangled callee → (concrete receiver `Ty`,
+    /// canonical Kernel method name). Every Ruxen value implicitly carries
+    /// `mixin Kernel`'s defaults (`tap`/`then`), but a primitive / builtin /
+    /// non-`include`-ing receiver has no `impl` item to drive the usual
+    /// per-implementor default monomorphization. `emit_universal_kernel_bodies`
+    /// drains this map after `lower_items`, synthesizing each `{Type}_tap` /
+    /// `{Type}_then` body (cloned Kernel default, `Self` → the concrete
+    /// receiver) that a real own/`include` body did not already provide.
+    universal_kernel_needed: HashMap<String, (Ty, String)>,
+    /// Set transiently around a `lower_method` call to force the implicit
+    /// `self` param's type instead of re-deriving it from the mangled name.
+    /// `emit_universal_kernel_bodies` uses it: a synthesized callee like
+    /// `Array[Int]_tap` names no symbol-table class and no primitive, so the
+    /// name-based derivation would fall back to `Ty::Unit` (a zero-sized self
+    /// codegen elides — the arg-count mismatch at the call site). The synthesis
+    /// already knows the concrete receiver `Ty`, so it supplies it here.
+    self_ty_override: Option<Ty>,
     /// Set of class names that have a user-defined `def drop` (typically
     /// inside an `impl Drop` block). Consulted by `insert_drops` so that
     /// scope-exit cleanup of an instance of such a class emits a call to
@@ -261,6 +279,8 @@ impl<'a> Lowerer<'a> {
             const_values: HashMap::new(),
             into_impls: HashSet::new(),
             trait_default_methods: HashMap::new(),
+            universal_kernel_needed: HashMap::new(),
+            self_ty_override: None,
             user_drop_classes: HashSet::new(),
             capture_map: HashMap::new(),
             captures_ptr_local: None,
@@ -932,6 +952,15 @@ impl<'a> Lowerer<'a> {
             );
             mir.functions.push(closure_fn);
         }
+
+        // Universal `Kernel` (`tap`/`then`): synthesize `{Type}_{method}`
+        // bodies for every primitive / builtin / non-`include`-ing receiver
+        // that called one — the receivers that have no `impl` item to drive
+        // the per-implementor default monomorphization above. Runs AFTER the
+        // closure drain so `tap`/`then` calls INSIDE a `do…end` body (recorded
+        // while that closure was lowered) are covered too. See
+        // `emit_universal_kernel_bodies`.
+        self.emit_universal_kernel_bodies(&mut mir)?;
 
         // Mixin vtables Phase B-2/B-3: emit vtable + class_info metadata
         // for every class that includes any `dispatch runtime` mixin.

@@ -50,11 +50,19 @@ impl<'a> Lowerer<'a> {
             // Resolve by walking underscore positions right-to-left and
             // accepting the longest prefix that actually names a class
             // (or struct/enum, for methods on those) in the symbol table.
+            // A caller (currently only `emit_universal_kernel_bodies`) may pin
+            // the concrete `self` type when the mangled name cannot name it —
+            // e.g. a synthesized `Array[Int]_tap` whose `Array[Int]` prefix is
+            // neither a symbol-table class nor a primitive, so the derivation
+            // below would fall back to `Ty::Unit`.
             let self_ty = self
-                .class_name_from_mangled(name)
-                .map(|class_name| Ty::Class {
-                    name: class_name.to_string(),
-                    generic_args: vec![],
+                .self_ty_override
+                .clone()
+                .or_else(|| {
+                    self.class_name_from_mangled(name).map(|class_name| Ty::Class {
+                        name: class_name.to_string(),
+                        generic_args: vec![],
+                    })
                 })
                 .or_else(|| self.primitive_self_ty_from_mangled(name))
                 .unwrap_or(Ty::Unit);

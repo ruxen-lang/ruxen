@@ -115,41 +115,11 @@ impl<'a> Lowerer<'a> {
                     return self.lower_interpolation(&parts, &Ty::String);
                 }
 
-                // ── Ruby universal block methods `tap` / `then` / `yield_self` ─
-                // typeck rewrote the intercepted builtin to a reserved method
-                // name (`__ruxen_builtin_tap` / `__ruxen_builtin_then`) after
-                // deciding — using own + mixin method resolution — that no user
-                // method should win. So MIR intercepts UNCONDITIONALLY on that
-                // marker; a user/mixin `tap`/`then` keeps its original name and
-                // reaches ordinary dispatch below. `x.tap { |v| … }` returns the
-                // receiver; `x.then { |v| … }` returns the block's result. The
-                // block is inlined as a single invocation: bind its parameter to
-                // the receiver's local (when it names one), then lower the body.
-                if method_name == "__ruxen_builtin_tap" || method_name == "__ruxen_builtin_then" {
-                    if let Some(block_expr) = block {
-                        if let HirExprKind::Closure { params, body, .. } = &block_expr.kind {
-                            // Lower the receiver ONCE. A unit/void receiver
-                            // (e.g. `puts(x).tap { … }`) lowers to `None`; the
-                            // interception must STILL fire — typeck already
-                            // marked this call, so falling through here would
-                            // leak the reserved `__ruxen_builtin_*` name to the
-                            // linker. Bind the block param only when there is
-                            // both a receiver value and a named param.
-                            let obj = self.lower_expr(object)?;
-                            if let (Some(o), Some(param)) = (obj, params.first()) {
-                                self.def_to_local.insert(param.def_id, o);
-                            }
-                            let body_result = self.lower_expr(body)?;
-                            return Ok(if method_name == "__ruxen_builtin_tap" {
-                                // `tap` yields the receiver (`None` for a unit
-                                // receiver, which is itself unit-valued).
-                                obj
-                            } else {
-                                body_result
-                            });
-                        }
-                    }
-                }
+                // `tap` / `then` / `yield_self` are ordinary `.rx` `mixin
+                // Kernel` defaults now (universally included), not a compiler
+                // interception. They dispatch through the normal method-call
+                // path below to a `{Type}_{method}` body synthesized by
+                // `emit_universal_kernel_bodies`. No marker handling here.
 
                 // ── Phase C: dynamic dispatch on `&Mixin` / `&var Mixin` ─
                 // When the receiver is statically typed as a
@@ -858,10 +828,21 @@ impl<'a> Lowerer<'a> {
                     || receiver_is_class_identifier;
 
                 // Regular method call: object becomes the first argument (self).
+                // Still lowered (for its side effects) even when its value is
+                // dropped as a zero-sized self below.
                 let obj_local = self.lower_expr(object)?;
 
-                let mut arg_values = if is_static {
-                    // Static method: don't prepend self.
+                // A zero-sized (`Unit`/`Never`) receiver has no ABI self: codegen
+                // elides a `Unit` param from the callee signature
+                // (`ty_to_cranelift_type` → None), so prepending the self value
+                // (a `0` literal) here would make the call pass one more arg than
+                // the callee accepts ("got 2, expected 1"). This arises only for
+                // the universal `Kernel` methods on a unit-typed receiver
+                // (`puts(x).tap { … }`) — ordinary code never calls an instance
+                // method on `Unit`. Drop the self arg to match the param side.
+                let self_is_zero_sized = matches!(peel_refs(&receiver_ty), Ty::Unit | Ty::Never);
+                let mut arg_values = if is_static || self_is_zero_sized {
+                    // Static method (or zero-sized self): don't prepend self.
                     Vec::with_capacity(args.len())
                 } else {
                     vec![local_to_value(obj_local)]
@@ -1510,6 +1491,27 @@ impl<'a> Lowerer<'a> {
                     // After the exact-key lookup misses, peel the `[...]` segment
                     // from `mangled` and retry — that's the generic-stripped
                     // shape the alias map carries.
+                    // Universal-`Kernel` call-site recording: if this resolves
+                    // to one of `mixin Kernel`'s defaults (`tap`/`then`),
+                    // remember the concrete receiver so
+                    // `emit_universal_kernel_bodies` can synthesize
+                    // `{Type}_{method}` for a primitive / builtin / non-
+                    // `include`-ing receiver that has no `impl` item to drive
+                    // the usual per-implementor default monomorphization. A
+                    // receiver with its OWN body (own `def tap`, or an explicit
+                    // `include Kernel`) already emits `{mangled}`; the post-pass
+                    // skips any name already present, so an override wins.
+                    if self
+                        .trait_default_methods
+                        .get("Kernel")
+                        .is_some_and(|m| m.contains_key(lowered_method_name))
+                    {
+                        let self_ty = peel_refs(&receiver_ty).clone();
+                        self.universal_kernel_needed.insert(
+                            mangled.clone(),
+                            (self_ty, lowered_method_name.to_string()),
+                        );
+                    }
                     let callee = self.resolve_ffi_alias_callee(mangled);
                     self.emit(MirInst::Call {
                         dest,
