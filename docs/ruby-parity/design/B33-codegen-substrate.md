@@ -18,8 +18,9 @@ substrate must be **one generic mechanism** with **zero knowledge of `Model`,
 `Serializable`, or `FromParams`.**
 
 Everything marked **(probed)** was verified on 2026-07-29 by compiling with
-`./target/release/ruxen compile`. The probes are what shaped this design, and two
-of them ruled out the obvious approach.
+`./target/release/ruxen compile`. The probes are what shaped this design: two of
+them ruled out the obvious approach, and two more (P9, P10) forced a real
+capability out of v1.
 
 ---
 
@@ -34,6 +35,10 @@ of them ruled out the obvious approach.
 | **P7** | Can a *class* method generic over a reader construct `Self`? | **Yes.** A hand-written `def self.from_fields[R: FieldReader](r: &var R) -> User` calling `User.new(r.read_string("name"), r.read_int("age"))` compiles and runs. |
 | **P5** | What happens when two included mixins define the same method name? | A raw internal error: `Failed to define function 'C_tag': DuplicateDefinition("C_tag")`. **No error code, no source span, no mention of which two mixins collided.** |
 | **P8** | Does `include A, B` (the comma form the naming spec calls "the loud derive form") parse in a class body? | **No.** `error: expected field, method, or include directive in class body, found Comma`. One `include` per line. |
+| **P9** | Can a mixin declare a *generic* required method (`mixin Walkable; def accept[V: FieldVisitor](v: &var V)`)? | **No.** `error: undefined type 'V'` at the declaration. A required-method signature inside a mixin does not resolve its own type parameter, so `Walkable` cannot be used as a bound meaning "has an `accept`". |
+| **P10** | Can a synthesized `accept[V]` recurse into a nested walkable field by calling `self.addr.accept(v)`? | **No.** `MIR lowering error: cannot monomorphize generic method 'accept': its mixin-bound type argument did not resolve to a concrete type at this call site (generic-calling-generic across methods requires a concrete leaf)`, a documented limit (`docs/decisions/q17-cross-package-monomorphization.md`). |
+| **P11** | Does the same nested recursion work when the leaf is **concrete** (`self.addr.accept_dump(v)` where the visitor type is fixed)? | **Yes**, prints `name=ada;city=london;`. So the mechanism is sound and only the generic-to-generic forwarding is blocked. This is what a monomorphization-time synthesis would emit. |
+| **P12** | Does the read direction handle heap-owning and class-typed fields, and repeated reads from one reader? | **Yes.** `User.new(r.read_string("name"), r.read_addr("home"), r.read_addr("work"))` with `String` and two `Addr` fields compiles, runs, and prints correctly. No ownership obstacle found for these cases. |
 
 Two consequences settle the whole design:
 
@@ -121,11 +126,29 @@ This rule is knowledge about *the shape of a name*, not about any particular
 type or method, so it does not violate the acceptance grep: no stdlib class name
 is hardcoded, the slug is derived from whatever the field's type is called.
 
-**Open question (§11.1):** whether nested user-class fields should emit
-`visit_class[C](name, &self.field)` (one generic method, recursion handled by
-the visitor) or `visit_todo(...)` (a name per class, unresolvable in general).
-Recommendation: the generic form, so a visitor recurses by calling back into the
-nested value's own `accept`.
+**Nested user-class fields are refused in v1, and the reason is a hard compiler
+limit, not a preference.** The intended shape was that a field of walkable class
+type recurses through the nested value's own `accept`. Two probes closed it:
+
+- **P9:** a mixin cannot declare a generic required method (`undefined type 'V'`),
+  so there is no way to spell a `Walkable` bound meaning "has an `accept[V]`".
+- **P10:** even without the bound, a synthesized `accept[V]` calling
+  `self.addr.accept(v)` fails at MIR lowering, because forwarding a mixin-bound
+  type argument from one generic method into another has no concrete leaf. That
+  is the documented Q17 boundary, not a bug to fix in passing.
+
+**P11 shows the shape is sound once the leaf is concrete**, which is exactly what
+a monomorphization-time synthesis would emit (`self.addr.accept__mono__JsonWriter(v)`).
+So nested fields are not impossible, they are **deferred to the same sub-batch as
+generic including classes (B33f)**, where synthesis participates in
+monomorphization and both problems dissolve together. Until then a walkable field
+whose type is itself walkable is **E1206**, a clean refusal.
+
+**This is a real dent in the design and it is worth stating plainly.** `gems-web.md`
+§6 lists "the derive recurses into fields that are themselves `Serializable`" as a
+requirement, and v1 will not do it. What v1 does cover is flat classes, which is
+what folio models, params structs, and DTOs actually are. A nested value object
+must be flattened, or hand-write `accept` (§7.1 guarantees an own method wins).
 
 ---
 
@@ -287,6 +310,7 @@ E14xx, E16xx, E17xx). Proposed allocation:
 | **E1203** | A field-walk mixin is included on a type with no fields, or on an enum, where the walk is undefined | the `include` |
 | **E1204** | Synthesis requested on a generic class (the v1 restriction, §4) | the `include`, with a note naming the type parameter |
 | **E1205** | The read direction cannot construct `Self`: no `init` whose parameters match the walked field list | the `include`, with a note showing the field list and the constructors that were considered |
+| **E1206** | A walked field's type is itself walkable, which v1 cannot recurse into (P9 and P10, §2) | the **field declaration**, with a note that it is lifted by B33f and that hand-writing `accept` is the workaround |
 
 The most important of these is **E1201**, because it is the one a user hits by
 accident (adding a field of an unsupported type to a model that previously
@@ -512,11 +536,13 @@ B33b, not later.
 
 ## 11. Open questions
 
-1. **Nested user-class fields** (§2): emit one generic `visit_class[C](name,
-   &value)` that the visitor recurses through, or a per-class name? Recommend
-   the generic form. The tradeoff is that the visitor must then be able to call
-   `value.accept(...)` on an abstract `C`, which needs `C` bounded by the
-   walking mixin, so the bound has to propagate. Worth a probe before B33b.
+1. ~~**Nested user-class fields.**~~ **CLOSED by probes P9 and P10** (§2): a
+   mixin cannot declare a generic required method, and a synthesized `accept[V]`
+   cannot forward `V` into a nested `accept` (the Q17 concrete-leaf boundary).
+   Nested walkable fields are refused in v1 as **E1206** and move to B33f, where
+   synthesis happens at monomorphization time and P11 shows the concrete-leaf
+   form works. Recorded here because it is the one requirement in `gems-web.md`
+   §6 that v1 does not meet.
 2. **The opt-in spelling.** How does a class say "walk my fields"? Three options:
    (a) *shape recognition*, the compiler notices the class includes a mixin that
    requires a method matching the `accept` shape, which is implicit and magical;
@@ -545,10 +571,12 @@ B33b, not later.
    need Alternative B's field loop. Recommend building the visitor now and
    treating the loop as a possible future extension, since the visitor's
    synthesized `accept` remains valid either way.
-6. **Ownership in the read direction.** P7 worked with `Int` and `String`. A
-   field whose type is heap-owning and must be *moved* out of the reader into the
-   constructor is untested. Probe before B33c: this is the kind of thing that
-   compiles and then double-frees.
+6. ~~**Ownership in the read direction.**~~ **CLOSED by probe P12**: a
+   `from_fields` reading a `String` and two class-typed `Addr` fields from one
+   reader compiles, runs, and prints correctly, so heap-owning fields, nested
+   class values, and repeated reads are all fine. The residual risk is narrower
+   than feared but not zero: a field type with a user `Drop` was not tested, so
+   B33c should still pin one before shipping.
 
 ---
 
@@ -559,11 +587,11 @@ Each is one agent, one session, in dependency order.
 | Sub-batch | Goal | Depends on | Risk |
 |---|---|---|---|
 | **B33a: the walk and the metadata member** | Settle walk semantics (declaration order, inherited fields via the existing `collect_all_class_fields`, private fields, refusal on enums and field-less types) and synthesize `self.field_names` only. Plus the opt-in spelling from §11.2 and diagnostics E1203 and E1204. | nothing | **Low.** No visitor, no generics, no per-field typing. It is the cheapest place to get the walk semantics pinned, and everything later inherits them. |
-| **B33b: the write direction** | Synthesize `accept[V: FieldVisitor]`, the slug rule, E1201, and `--emit=synthesized`. First consumer is a trivial `.rx` dump visitor so it is testable without JSON. | B33a | **Medium.** The first place synthesized HIR must typecheck. |
-| **B33c: the read direction** | Synthesize `self.from_fields[R: FieldReader]`, E1205, and settle the ownership question (§11.6). | B33b | **Medium-high.** Constructing `Self` from moved-in values is where ownership bugs live, and they present as runtime memory corruption rather than compile errors. |
+| **B33b: the write direction** | Synthesize `accept[V: FieldVisitor]`, the slug rule, E1201, and the E1206 refusal of nested walkable fields (§2). Plus `--emit=synthesized`. First consumer is a trivial `.rx` dump visitor so it is testable without JSON. | B33a | **Medium.** The first place synthesized HIR must typecheck. |
+| **B33c: the read direction** | Synthesize `self.from_fields[R: FieldReader]` and E1205. | B33b | **Medium.** Downgraded from medium-high by probe P12: heap-owning fields, class-typed fields, and repeated reads from one reader all work. Still pin a field type with a user `Drop` before shipping, since that is the untested corner and it fails as memory corruption, not a compile error. |
 | **B33d: collisions and precedence** | E1202 replacing the raw `DuplicateDefinition` (following E0727's precedent), plus the precedence rules of §7, each pinned: own method beats synthesized, synthesized beats nothing, two walking mixins share one `accept`. | B33b | **Low**, and independently valuable: the current error is bad today. |
 | **B33e: the metadata hooks and the first real consumers** | The `.rx` side: overridable `column_name_for` / `json_key_for` / `skip_field?` defaults (§5) plus `Serializable` and `Deserializable` written as `.rx` visitors. This **is** B44's derive half, so it should land under B44's pins, not B33's. | B33c | **Low** (it is `.rx`), but it is the acceptance test for the whole design. If a real consumer does not fall out cleanly here, stop and revisit §2. |
-| **B33f: generic including classes** | Lift the E1204 restriction: synthesize per concrete `T` at monomorphization, two-axis with the visitor. | B33e **and** E1 (per-`T` mono) | **Highest in the batch.** Two-axis monomorphization, the code-size risk of §8, and it cannot even be attempted until E1 lands. Explicitly deferred, and it is fine if it never happens. |
+| **B33f: generic classes and nested walkable fields** | Lift **both** deferred restrictions, which dissolve together because both need synthesis to run at monomorphization time rather than at typeck: E1204 (generic including classes, synthesized per concrete `T`, two-axis with the visitor) and E1206 (nested walkable fields, emitting the concrete-leaf call P11 proved works). | B33e **and** E1 (per-`T` mono) | **Highest in the batch.** Two-axis monomorphization, the code-size risk of §8, and it moves synthesis out of the clean typeck-time position §3 argues for. Explicitly deferred. |
 
 **Ship order:** B33a, B33b, then B33d in parallel with B33c, then B33e. B33f only
 after E1.
