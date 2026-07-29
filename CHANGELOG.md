@@ -8,6 +8,22 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Added
+- **`String` transformation (Ruby-parity batch B09)** — `swapcase`, `chomp` /
+  `chomp(suffix)`, `chop`, `center(width, pad = " ")`, `delete_prefix`,
+  `delete_suffix`, `prepend`, `delete(set)`, `squeeze` / `squeeze(set)`,
+  `tr(from, to)`, `tr_s(from, to)`, and `succ` / `next`, added as `.rx`
+  methods on `class String`. `delete` / `squeeze` / `tr` / `tr_s` share the
+  tr-style set building blocks introduced with B08's `count`. `succ`
+  implements Ruby's full carry: the rightmost alphanumeric is incremented,
+  the carry runs leftwards across alphanumerics and skips non-alphanumerics,
+  and overflowing the leftmost one seeds a `"1"` / `"a"` / `"A"` in front
+  (`"1999zzz".succ` is `"2000aaa"`). Two internal building blocks,
+  `take_chars` and `drop_chars`, back the edge-trimming methods. Ruby's
+  `!`-suffixed in-place variants are deliberately NOT provided: inside
+  `class String` the receiver is the FFI shell, a buffer pointer held by
+  value, so a `.rx` body cannot rewrite the caller's string, and growing it
+  needs a realloc whose new pointer has nowhere to be stored. Pins
+  `tests/release-e2e/cases/1080`-`1084`.
 - **`String` query and inspection (Ruby-parity batch B08)** — `bytesize`,
   `codepoints`, `count(set)`, `index(sub, offset = 0)`, `rindex(sub)` /
   `rindex(sub, offset)`, `casecmp`, `casecmp?`, `eql?`, array-argument
@@ -44,6 +60,14 @@ once 1.0.0 ships.
   `!any?`; `one?` counts matches. Pins `tests/release-e2e/cases/985`.
 
 ### Fixed
+- **`String#ljust` / `#rjust` overshot the requested width with a
+  multi-character pad.** Both appended the pad WHOLE once per missing
+  character, so `"hi".ljust(7, "12")` produced eight characters
+  (`"hi12121212"`-style overshoot) where Ruby cycles the pad one character at
+  a time and guarantees exactly `max(width, length)`. Both now cycle, as does
+  the new `center`. Single-character pads (the common case, and everything the
+  pre-existing pins 988 / 989 covered) are unaffected. Pin
+  `tests/release-e2e/cases/1081`.
 - **Default arguments now fill on a builtin-head (`String`/`Array`/`Hash`/`Set`)
   method call.** The default-arg pass (`append_method_default_args`) + the
   signature-based arg seeding ran only for nominal (`Class`/`Struct`/`Enum`)

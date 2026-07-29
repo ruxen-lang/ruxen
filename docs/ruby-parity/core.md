@@ -89,26 +89,26 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 | `byteslice` | MISSING | — | |
 | `sub` / `sub!` | MISSING | — | no first-match replace. |
 | `gsub` / `gsub!` | PARTIAL | `replace(from,to)` | `replace` is literal replace-**all** (≈ `gsub` with a string arg); no regex/block form, no `sub`. |
-| `tr` / `tr_s` | MISSING | — | |
+| `tr` / `tr_s` | DONE | `.rx` (pin 1082) | tr-style sets with `a-z` ranges, `^` negation and `\\` escapes; a short `to` is padded with its last character and an empty `to` deletes. |
 | `replace` (whole-string) | PARTIAL | `ruxen_string_replace` | Ruxen `replace(from,to)` = substitute, NOT Ruby `replace(other)` (overwrite contents). Name collision. |
 | `split` | DONE | `ruxen_string_split` | string delimiter only; no regex/limit (see `splitn`). |
 | `splitn(n, delim)` | DONE | `ruxen_string_splitn` | Ruxen-specific limited split. |
 | `strip` | DONE | `ruxen_string_trim` | Ruby `strip` aliased to the same C symbol as `trim`. Pin `975`. |
 | `lstrip` / `rstrip` | DONE | `trim_start` / `trim_end` | Ruby spellings aliased to the same C symbols. Pin `975`. |
-| `strip!`/`lstrip!`/`rstrip!` | MISSING | — | no in-place variants. |
-| `chomp` / `chop` | MISSING | — | |
+| `strip!`/`lstrip!`/`rstrip!` | MISSING | — | no in-place variants, and none are expressible: inside `class String` the receiver is the FFI shell (a buffer pointer held BY VALUE), so a `.rx` body cannot rewrite the caller's string, and growing it needs a realloc whose new pointer has nowhere to go. Needs a `&var self` receiver. |
+| `chomp` / `chop` | DONE | `.rx` (pin 1080) | `chomp` has both arities (no-arg drops one `\r\n` / `\n` / `\r`; `chomp("")` drops every trailing terminator); `chop` counts a trailing `\r\n` as one character. |
 | `upcase` | DONE | `to_upper` | Ruby `upcase` aliased to the same C symbol; `to_upper` also kept. Pin `972`. |
 | `downcase` | DONE | `to_lower` | Ruby `downcase` aliased to the same C symbol; `to_lower` also kept. Pin `972`. |
-| `capitalize` | DONE | `.rx` over `chars` + upcase/downcase (pin 987). `swapcase` MISSING. |
-| `upcase!`/`downcase!`/… | MISSING | — | no bang variants. |
+| `capitalize` / `swapcase` | DONE | `.rx` over `chars` (pins 987, 1080) | `swapcase` is ASCII-only, matching `upcase` / `downcase`, which are per-byte C `toupper` / `tolower`. |
+| `upcase!`/`downcase!`/`capitalize!`/`swapcase!`/`squeeze!`/`sub!`/`gsub!`/… | MISSING | — | no `!` variant of ANY String method, and none are expressible for the same reason as `strip!` above. Every method here returns a new String. |
 | `start_with?` | PARTIAL | `ruxen_string_starts_with` + `.rx` array overload (pins 975, 1072) | single `&String` arg, plus an `&Array[String]` overload standing in for Ruby's splat. No regex form. An untyped `[]` literal cannot pick between the two overloads: use a typed local. |
 | `end_with?` | PARTIAL | `ruxen_string_ends_with` + `.rx` array overload (pins 975, 1072) | as `start_with?`. |
 | `include?` | DONE | `ruxen_string_contains` | |
 | `index` | DONE | `.rx` `index(sub, offset = 0)` (pin 1070) | CHARACTER index, `Option[Int]`, negative offset counts from the end. The pre-existing `find` stays as the BYTE-offset spelling. Regex form: see `match`. |
 | `rindex` | DONE | `.rx` `rindex(sub)` / `rindex(sub, offset)` (pin 1070) | two arities rather than a default argument: a NEGATIVE default argument mis-lowers on a builtin head. |
 | `count` | PARTIAL | `.rx` `count(set)` (pin 1071) | Ruby tr-style sets including `a-z` ranges, `^` negation and `\\` escapes. Ruby's multi-argument intersection form needs a splat Ruxen does not have. |
-| `delete` / `squeeze` | MISSING | — | |
-| `center` / `ljust` / `rjust` | PARTIAL | `ljust`/`rjust` DONE (`.rx`, `pad` defaults to space; pin 988/989); `center` MISSING. |
+| `delete` / `squeeze` | DONE | `.rx` (pin 1082) | tr-style sets, shared with `count` / `tr`. `squeeze` has both arities (no-arg collapses every run). |
+| `center` / `ljust` / `rjust` | DONE | `.rx` (pins 988, 989, 1081) | `pad` defaults to a space and is CYCLED one character at a time, so the result is exactly `max(width, length)` characters. A multi-character pad previously overshot the width. |
 | `chars` | DONE | `ruxen_string_chars` → `Array[Char]` | |
 | `bytes` | DONE | `ruxen_string_bytes` → `Array[UInt8]` | |
 | `codepoints` | DONE | `.rx` over `chars` (pin 1071) | |
@@ -124,11 +124,11 @@ working: `size`, `empty?`, `include?`, `starts_with`, `ends_with`, `find`,
 | `to_s` / `to_str` | DONE / PARTIAL | `ruxen_string_to_string` | `to_s` DONE; `to_str` absent. |
 | `ord` / `chr` | MISSING | — | |
 | `hex` / `oct` | MISSING | — | |
-| `succ` / `next` | MISSING | — | |
+| `succ` / `next` | DONE | `.rx` (pin 1083) | full carry semantics: rightmost alphanumeric, carrying leftwards across alphanumerics and skipping non-alphanumerics, seeding `"1"` / `"a"` / `"A"` on overflow. The no-alphanumeric path carries at the CHARACTER level where CRuby carries at the BYTE level; the two agree for every ASCII string. |
 | `reverse` | DONE | `.rx` over `chars`+`Array#reverse` (pin 987). |
 | `insert` | PARTIAL | `insert(i, codepoint)` / `insert_str(i, s)` | Ruxen splits into codepoint- vs string-insert; arg is an Int codepoint, not a String, for `insert`. |
-| `prepend` | MISSING | — | |
-| `delete_prefix` / `delete_suffix` | MISSING | — | |
+| `prepend` | PARTIAL | `.rx` (pin 1084) | returns a NEW String; Ruby mutates the receiver and returns self. |
+| `delete_prefix` / `delete_suffix` | DONE | `.rx` (pin 1084) | |
 | `partition` / `rpartition` | MISSING | — | |
 | `freeze` / `frozen?` | MISSING | — | no freeze protocol on values. |
 | `dup` / `clone` | PARTIAL | `clone` | `clone` = borrow→owned copy (DONE); no `dup`. |
