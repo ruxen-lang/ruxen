@@ -66,6 +66,19 @@ per-`T` mono and Q58 work. Every batch owns a block of ten:
 > **Batch `Bnn` owns pins `1000 + 10*(nn-1)` through `+9`.**
 > B01 → 1000-1009, B02 → 1010-1019, B07 → 1060-1069, B20 → 1190-1199, and so on.
 
+**The formula is not universal. It has one exception, and any batch that splits
+into sub-batches needs the same treatment:**
+
+| Exception | Allocation |
+|---|---|
+| **B35** (split into six sub-batches, §6) | The formula's block `1340-1349` is **abandoned, do not use it**. B35a → 1900-1909, B35b → 1910-1919, B35c → 1920-1929, B35d → 1930-1939, B35e → 1940-1949, B35f → 1950-1959. |
+
+A ten-pin block cannot hold a batch that splits. When a batch splits, take a
+fresh run of blocks from **1900 upward**, give each sub-batch ten, abandon the
+formula block rather than reusing it (a half-used block invites a later
+collision), and record the reallocation in this table. Blocks 1900-1959 are now
+taken; the next split batch starts at 1960.
+
 ---
 
 ## 1. Enablers (compiler mechanisms that unblock the BLOCKED batches)
@@ -400,23 +413,46 @@ Each of these is one package, one subagent, one session (or a scoped first
 slice of one). The scoping paragraph is the brief.
 
 ### B35 — Civil `Time` / `Date` / `DateTime` (P0, the biggest single gap)
-Ruxen ships only a monotonic `Instant`/`Duration` plus a raw `Time.unix_ns`. A
-real app cannot store a `created_at`, emit an ISO-8601 API field, write a log
-timestamp, or set a cookie expiry. Build a civil `Time` value carrying
-year/month/day/hour/minute/second/nanosecond plus a UTC offset, with
-epoch-to-civil and civil-to-epoch conversion (leap-year and day-of-week math in
-C for correctness and speed), then `Date` and `DateTime` on the same core. The
-minimum viable surface is: construction (`Time.now`, `Time.at`, `Time.utc`,
-`Time.new(y,m,d,…)`, `Date.new`, `Date.today`), field accessors (`year` through
-`nsec`, `wday`, `yday`), arithmetic (`+`/`-` seconds, `Date#+` days, `<<`/`>>`
-months, `next_day`, `next_month`), `Comparable` ordering, `strftime` with the
-full common directive set, `strptime`/`parse` for ISO-8601 and RFC-2822, and the
-canonical emitters (`iso8601`, `rfc2822`, `httpdate`, `rfc3339`) that `net/http`
-and `logger` require. Start with fixed-offset plus UTC plus local; full IANA
-timezone and DST is a follow-up. Files: a rebuilt `library/std/time` (`src/lib.rx`
-plus `runtime/`). Status: **NEEDS-RUNTIME-C** plus a large `.rx` surface.
-Matrix rows: `stdlib.md` §3 (112-166) end to end, `core.md` Time table (607-620).
-Pins: 1340-1349.
+
+**Designed. Read [`design/B35-time-date.md`](design/B35-time-date.md) before
+touching any sub-batch below.** It settles the representation, the timezone
+scope, the leap-second and DST policies, and the C boundary, and it records a
+probed trap (Ruxen integer division truncates toward zero, so every calendar
+formula needs an explicit floor-division helper or every pre-1970 date is off by
+one day while every post-1970 date is correct).
+
+Ruxen ships only a monotonic `Instant`/`Duration` plus a raw `Time.unix_ns`, so a
+real app cannot store a `created_at`, emit an ISO 8601 API field, write a log
+timestamp, or set a cookie expiry.
+
+**Split into six sub-batches, one agent each.** B35 as one batch is too large for
+a single session. Two corrections to the original scoping note, both from the
+design: the calendar math is **`.rx`, not C** (probed: a multi-`Int`-field class
+with field-read arithmetic works, so a C shim would be unjustifiable under the
+`.rx`-first rule), and the only new C is one function returning the local UTC
+offset for a given instant.
+
+| Sub-batch | Goal | Depends on | Status | Pins |
+|---|---|---|---|---|
+| **B35a** calendar kernel | `Calendar.fdiv`/`fmod` floor-division helpers, days-from-civil and civil-from-days, leap year, month lengths, day-of-week, day-of-year, and the `Date` type with day arithmetic and comparison. Pure `.rx`, **no OS, no C, no formatting** | nothing | **READY-NOW** | 1900-1909 |
+| **B35b** the `Time` value type | `Time` as `secs`/`nsec`/`utc_offset`, normalisation, construction from epoch and from civil fields (UTC and explicit-offset only), field accessors, `include Comparable`, seconds arithmetic, `Time`↔`Date` conversion. Still **no OS call** | B35a | BLOCKED-ON-B35a | 1910-1919 |
+| **B35c** the OS boundary | `Time.now` routed through the existing TestClock seam, the new `ruxen_time_local_offset_secs` C shim, `Time.local`/`#localtime`/`#getlocal`/`#utc`/`#zone`/`#utc_offset`/`#dst?`, and the ambiguous-time and gap policies | B35b | **NEEDS-RUNTIME-C**, BLOCKED-ON-B35b | 1920-1929 |
+| **B35d** formatting | `strftime` over the design's v1 directive set, plus `iso8601`, `xmlschema`, `rfc3339`, `rfc2822`, `httpdate`, `to_s`, `inspect` | B35b | BLOCKED-ON-B35b | 1930-1939 |
+| **B35e** parsing | `strptime`, `Time.iso8601`, `Date.iso8601`, the bounded `Time.parse`/`Date.parse` grammar, and the `TimeError` enum | B35d | BLOCKED-ON-B35d | 1940-1949 |
+| **B35f** calendar arithmetic | `>>`, `<<`, `next_month`, `prev_month`, `next_year`, `prev_year`, `next_day`, `prev_day`, `succ`, `step`, `upto`, `downto`, weekday predicates, `Date.jd`, and the `DateTime` delegation layer | B35a, B35b | BLOCKED-ON-B35b | 1950-1959 |
+
+**Ship order: B35a, then B35b, then B35d and B35f in parallel (they do not touch
+each other), then B35c, then B35e.**
+
+**B35c is the riskiest** and is deliberately last: it is the only sub-batch with
+new C, the only one whose behaviour depends on the host, and the one where the
+DST policies become real. Everything except local-zone rendering is useful
+without it, and most downstream consumers (B41 logger timestamps, B45 http date
+headers, B60 ORM timestamps) need only B35a plus B35b plus a slice of B35d.
+
+Files: `library/std/time` (`src/lib.rx` plus `runtime/time.c`). Matrix rows:
+`stdlib.md` §3 (112-166) end to end, `core.md` Time table (607-620). The
+formula's pin block `1340-1349` is **abandoned**; see the exception table in §0.
 
 ### B36 — `digest` plus HMAC plus the hex codec
 SHA-256, SHA-1, and MD5 (one-shot class methods and a streaming instance API:
@@ -867,7 +903,7 @@ Pins: none.
 
 | Blocker status | Batches | Ids |
 |---|---|---|
-| **READY-NOW** | **30** | B06, B07, B08, B09, B10, B11, B12, B13, B14, B15, B16, B17, B18, B19, B38, B39, B40, B41, B42, B43, B47, B48, B49, B51, B52, B53, B54, B57, B62, B70 (note: B37, B44, B45, B50, B63, B65 are partly ready and counted under their blocker) |
+| **READY-NOW** | **31** | B06, B07, B08, B09, B10, B11, B12, B13, B14, B15, B16, B17, B18, B19, **B35a**, B38, B39, B40, B41, B42, B43, B47, B48, B49, B51, B52, B53, B54, B57, B62, B70 (note: B37, B44, B45, B50, B63, B65 are partly ready and counted under their blocker) |
 | **BLOCKED-ON-PER-T-MONO (E1)** | 2 | B20, B21 |
 | **BLOCKED-ON-Q58-ALIAS (E2)** | 1 | B22 |
 | **BLOCKED-ON-B01 (Float ABI)** | 1 | B23 |
@@ -876,7 +912,8 @@ Pins: none.
 | **BLOCKED-ON-B36 (digest/HMAC)** | 3 | B37 (hex half), B66, B68 |
 | **BLOCKED-ON-B46 (TLS)** | 2 | B45 (HTTPS half), B69 |
 | **BLOCKED-ON-B44 (Serialize)** | 2 | B64, B67 |
-| **NEEDS-RUNTIME-C** | 6 | B03, B35, B36, B46, B52 (Tms row), B61 |
+| **NEEDS-RUNTIME-C** | 6 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61 |
+| **BLOCKED within B35** | 5 | B35b, B35c, B35d, B35e, B35f (all on B35a or B35b; see §6) |
 | **NEEDS-COMPILER-FEATURE** | 17 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler) |
 
 Counts overlap where a batch has both a ready half and a blocked half; the
@@ -887,6 +924,11 @@ predicates), B15 (Array slots), B16 (Hash), B17 (Set). Each owns a different
 `library/std` file, so six subagents can run at once. B01 and B02 (the two
 compiler bugs) should run alongside them since they gate B23 and every
 block-using pin.
+
+**B35a is a seventh parallel-safe candidate.** It owns `library/std/time`, which
+no other first-wave batch touches, it needs no OS call and no C, and it is the
+foundation the rest of the P0 date work rests on. Its correctness is also fully
+checkable against fixed inputs, so it is unusually cheap to verify.
 
 **B06 must NOT run in this wave.** It is the only batch whose target files are
 the matrices themselves (`core.md`, `language.md`, `stdlib.md`), and every other
