@@ -137,10 +137,16 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    /// Returns Some(struct_name) if `ty` (peeling refs/aliases) is a struct
-    /// whose declaration includes `derive Debug`; otherwise None.
+    /// Returns Some(type_name) if `ty` (peeling refs/aliases) is a struct
+    /// **or class** whose declaration includes `derive Debug` (explicitly
+    /// or structurally per ruby-naming.spec.md §3.6); otherwise None.
+    ///
+    /// Classes are included because `mir/lower/mod.rs` synthesises
+    /// `{ClassName}_to_debug` alongside the struct one — without that,
+    /// `"#{obj}"` on a class fell through every interpolation arm and
+    /// printed the receiver's heap address (B74).
     pub(super) fn struct_with_derive_debug(&self, ty: &Ty) -> Option<String> {
-        self.struct_with_derive_trait(ty, "Debug")
+        self.nominal_with_derive_trait(ty, "Debug")
     }
 
     /// Phase 2 #06.C2: like `struct_with_derive_debug` but for enums.
@@ -241,6 +247,37 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Like [`Self::struct_with_derive_trait`] but also accepts a
+    /// `class`. Use this at every site whose target derive IS
+    /// synthesised for classes — `Debug`, `PartialEq`, `Hashable`/`Hash`
+    /// (`mir/lower/mod.rs`, the `HirItem::Class` arm).
+    ///
+    /// `Ord` / `PartialOrd` / `Default` deliberately keep using the
+    /// struct-only helper: `{Class}_cmp` and `{Class}_default` are NOT
+    /// synthesised, so widening those call sites would turn a silent gap
+    /// into an undefined-symbol link failure. Widen a call site here only
+    /// together with the matching synthesiser.
+    pub(super) fn nominal_with_derive_trait(&self, ty: &Ty, trait_name: &str) -> Option<String> {
+        let mut cur = ty;
+        loop {
+            match cur {
+                Ty::Ref(inner)
+                | Ty::RefMut(inner)
+                | Ty::RefLifetime(_, inner)
+                | Ty::RefMutLifetime(_, inner) => cur = inner,
+                Ty::Alias { target, .. } => cur = target,
+                Ty::Newtype { inner, .. } => cur = inner,
+                Ty::Struct { name, .. } | Ty::Class { name, .. } => {
+                    if crate::resolve::symbols::ty_has_derive_trait(cur, self.symbols, trait_name) {
+                        return Some(name.clone());
+                    }
+                    return None;
+                }
+                _ => return None,
+            }
+        }
+    }
+
     pub(super) fn struct_with_derive_trait(&self, ty: &Ty, trait_name: &str) -> Option<String> {
         // Peel reference/alias/newtype layers, then consult
         // `ty_has_derive_trait` so implicit-include structural mixins
@@ -301,16 +338,21 @@ pub fn def_id_name(def_id: DefId, symbols: &SymbolTable) -> String {
         .unwrap_or_else(|| format!("_unknown_{}", def_id))
 }
 
-/// If `ty` (after peeling reference layers) is a struct that derives —
-/// explicitly or implicitly per ruby-naming.spec.md §3.6 — `PartialEq`,
-/// return the struct's name. Otherwise return `None`.
+/// If `ty` (after peeling reference layers) is a struct **or class**
+/// that derives — explicitly or implicitly per ruby-naming.spec.md §3.6
+/// — `PartialEq`, return the type's name. Otherwise return `None`.
+///
+/// B74: classes were absent here, so `a == b` on a class fell past the
+/// structural-equality route in `expr/binops.rs` and lowered to a raw
+/// `Compare` of two heap addresses — silently `false` for every pair of
+/// distinct allocations, however equal their fields.
 pub(super) fn struct_name_with_partial_eq(ty: &Ty, symbols: &SymbolTable) -> Option<String> {
     let mut cur = ty;
     loop {
         match cur {
             Ty::Ref(inner) | Ty::RefMut(inner) => cur = inner,
             Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => cur = inner,
-            Ty::Struct { name, .. } => {
+            Ty::Struct { name, .. } | Ty::Class { name, .. } => {
                 if crate::resolve::symbols::ty_has_derive_trait(cur, symbols, "PartialEq") {
                     return Some(name.clone());
                 }
@@ -352,12 +394,40 @@ pub(super) fn struct_name_with_ord(ty: &Ty, symbols: &SymbolTable) -> Option<(St
     }
 }
 
-/// Return the ordered `(field_index, field_ty)` list for a struct, or
-/// `None` if the name doesn't refer to a known struct.
+/// Number of header slots prepended to a class's allocation, addressed
+/// by name. Free-function twin of
+/// [`Lowerer::class_field_index_shift`] so the layout helpers below,
+/// which only have a `&SymbolTable`, agree with the `Lowerer` methods on
+/// where a class's first user field lives.
+pub(super) fn class_field_index_shift_in(class_name: &str, symbols: &SymbolTable) -> usize {
+    use crate::resolve::symbols::DefKind;
+    for def in symbols.iter() {
+        if def.name == class_name {
+            if let DefKind::Class { info } = &def.kind {
+                // v1 ships a single class_info_ptr header at slot 0.
+                return usize::from(!info.runtime_dispatch_includes.is_empty());
+            }
+        }
+    }
+    0
+}
+
+/// Return the ordered `(slot_index, field_ty)` list for a struct or a
+/// class, or `None` if the name doesn't refer to either.
+///
+/// For a class this is the FLATTENED chain — every ancestor's fields
+/// first, oldest ancestor first, then the class's own — shifted past the
+/// `class_info` header. That is the layout `alloc_size` budgets, so the
+/// inline structural-equality lowering reads the same slots the
+/// constructor wrote. Walking `info.fields` alone would compare a
+/// subclass's own fields and skip every inherited one.
 pub(super) fn struct_field_layout(name: &str, symbols: &SymbolTable) -> Option<Vec<(usize, Ty)>> {
     use crate::resolve::symbols::DefKind;
     for def in symbols.iter() {
         if def.name == name {
+            if let DefKind::Class { .. } = def.kind {
+                return class_field_layout(name, symbols);
+            }
             if let DefKind::Struct { ref info } = def.kind {
                 let mut out = Vec::with_capacity(info.fields.len());
                 for &fid in &info.fields {
@@ -371,6 +441,53 @@ pub(super) fn struct_field_layout(name: &str, symbols: &SymbolTable) -> Option<V
         }
     }
     None
+}
+
+/// `(slot_index, field_ty)` for a class, ancestors first.
+///
+/// Mirrors `derive.rs::collect_all_class_fields` + the header shift;
+/// they must stay in step, because the inline `==` lowering reads these
+/// slots while the synthesised `{Class}_eq` reads that one. `None` when
+/// `name` is not a class.
+fn class_field_layout(name: &str, symbols: &SymbolTable) -> Option<Vec<(usize, Ty)>> {
+    use crate::resolve::symbols::DefKind;
+
+    let find_class = |n: &str| {
+        symbols
+            .iter()
+            .find(|d| d.name == n && matches!(d.kind, DefKind::Class { .. }))
+    };
+
+    // Oldest ancestor first, so slot order matches `alloc_size`.
+    let mut chain: Vec<&str> = Vec::new();
+    let mut cur = Some(name.to_string());
+    while let Some(n) = cur.take() {
+        let def = find_class(&n)?;
+        chain.push(def.name.as_str());
+        if let DefKind::Class { info } = &def.kind {
+            cur = info
+                .parent
+                .and_then(|p| symbols.get(p))
+                .map(|d| d.name.clone());
+        }
+    }
+    chain.reverse();
+
+    let mut out = Vec::new();
+    let mut slot = class_field_index_shift_in(name, symbols);
+    for cls in chain {
+        let Some(def) = find_class(cls) else { continue };
+        let DefKind::Class { info } = &def.kind else {
+            continue;
+        };
+        for &fid in &info.fields {
+            if let Some(DefKind::Field { ty, .. }) = symbols.get(fid).map(|d| &d.kind) {
+                out.push((slot, ty.clone()));
+                slot += 1;
+            }
+        }
+    }
+    Some(out)
 }
 
 impl<'a> Lowerer<'a> {
@@ -464,21 +581,10 @@ impl<'a> Lowerer<'a> {
     }
 
     pub(super) fn class_field_index_shift(&self, class_name: &str) -> usize {
-        use crate::resolve::symbols::DefKind;
-        for def in self.symbols.iter() {
-            if def.name == class_name {
-                if let DefKind::Class { info } = &def.kind {
-                    if !info.runtime_dispatch_includes.is_empty() {
-                        // v1 ships a single class_info_ptr header at
-                        // slot 0; class_info itself widens for >1
-                        // mixin includes.
-                        return 1;
-                    }
-                    return 0;
-                }
-            }
-        }
-        0
+        // Single implementation, shared with the free-function layout
+        // helpers, so the two can never disagree on where a class's
+        // first user field lives.
+        class_field_index_shift_in(class_name, self.symbols)
     }
 
     /// Phase B-4 convenience: extract the class name from a Ty and

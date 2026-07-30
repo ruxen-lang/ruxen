@@ -757,8 +757,39 @@ impl<'a> Lowerer<'a> {
                         trait_name,
                     )
                 };
-                if module_path.is_empty() && class_has("Clone") {
-                    mir.functions.push(self.synthesize_class_clone(class));
+                // B74: a class gets the same structural derives a struct
+                // does. Before this, the arm synthesised Clone alone, so
+                // `a == b` compared heap addresses (silently `false`),
+                // `"#{a}"` printed one, and `a.hash_code` type-checked
+                // and then failed at LINK with an undefined
+                // `{Class}_hash_code`.
+                //
+                // `module_path.is_empty()` matches Clone's existing
+                // guard and `key_desc.rs`'s dotted-name skip: the
+                // synthesised symbols mangle from the BARE `class.name`
+                // while a module-nested use site's `Ty::Class` carries
+                // the qualified one, so emitting for a nested class
+                // would define a symbol no call site names.
+                //
+                // Ord / PartialOrd / Default are deliberately NOT here.
+                // They would need `{Class}_cmp` / `{Class}_default`
+                // bodies, which do not exist; the matching dispatch
+                // helpers stay struct-only to keep that a silent gap
+                // rather than a link error. Add a synthesiser and its
+                // dispatch site together, or neither.
+                if module_path.is_empty() {
+                    if class_has("Clone") {
+                        mir.functions.push(self.synthesize_class_clone(class));
+                    }
+                    if class_has("Debug") {
+                        mir.functions.push(self.synthesize_class_to_debug(class));
+                    }
+                    if class_has("PartialEq") {
+                        mir.functions.push(self.synthesize_class_eq(class));
+                    }
+                    if class_has("Hashable") || class_has("Hash") {
+                        mir.functions.push(self.synthesize_class_hash_code(class));
+                    }
                 }
 
                 // §4.1 Increment 2: state-indexed drop glue. A synthesised

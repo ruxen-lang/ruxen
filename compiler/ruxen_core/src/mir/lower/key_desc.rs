@@ -187,19 +187,26 @@ fn key_descriptor(key_ty: &Ty, symbols: &SymbolTable) -> KeyDesc {
     // half alone is worse than plain identity, so require the pair —
     // identity is also what Ruby's default `Object#hash` gives you.
     //
-    // A dotted name means a module-nested struct, whose synthesized
+    // A dotted name means a module-nested type, whose synthesized
     // functions `derive.rs` mangles from the BARE `s.name` while a use
-    // site's `Ty::Struct` may carry the qualified one. Rather than emit a
+    // site's `Ty` may carry the qualified one. Rather than emit a
     // `FuncAddr` to a symbol that might not exist and fail at link, fall
     // through to identity — the same semantics such a key already had.
-    if let Ty::Struct { name, .. } = peeled {
+    // For the same reason `mir/lower/mod.rs` only synthesises a class's
+    // derives at module_path root, so a nested class also lands here.
+    //
+    // B74: classes join structs here. `{Class}_hash_code` /
+    // `{Class}_eq` are synthesised from the identical mangling, so a
+    // class carrying Hashable + PartialEq keys a Hash/Set exactly as a
+    // struct does; before, it fell through to identity and two equal
+    // keys were distinct entries.
+    if let Ty::Struct { name, .. } | Ty::Class { name, .. } = peeled {
         let hashable = !name.contains('.')
             && (ty_has_derive_trait(peeled, symbols, "Hashable")
                 || ty_has_derive_trait(peeled, symbols, "Hash"));
         if hashable && ty_has_derive_trait(peeled, symbols, "PartialEq") {
             // The same mangling `derive.rs` builds its synthesized
-            // `synthesize_struct_hash_code` / `synthesize_struct_eq`
-            // function names from.
+            // `build_hash_code` / `build_eq` function names from.
             return KeyDesc::Custom {
                 hash_sym: format!("{}_hash_code", name),
                 eq_sym: format!("{}_eq", name),
