@@ -1,0 +1,26 @@
+# B85 — `take_while` / `drop_while` chained into `each`, both spellings. Like
+# `filter_map` these are `Enumerable[T]` mixin defaults, so they exercise the
+# `.rx`-bodied half of the chaining mechanism. Every count differs from the
+# receiver's own count (6).
+def main
+  let n = [1, 2, 3, 4, 5, 6]
+  puts("receiver=#{n.size}")
+
+  var tw = 0
+  n.take_while { |x| x < 4 }.each { |x| tw = tw + 1 }
+  puts("take_while-chained=#{tw}")
+
+  let taken = n.take_while { |x| x < 4 }
+  var twb = 0
+  taken.each { |x| twb = twb + 1 }
+  puts("take_while-bound=#{twb}")
+
+  var dw = 0
+  n.drop_while { |x| x < 4 }.each { |x| dw = dw + x }
+  puts("drop_while-chained-sum=#{dw}")
+
+  let dropped = n.drop_while { |x| x < 4 }
+  var dwb = 0
+  dropped.each { |x| dwb = dwb + x }
+  puts("drop_while-bound-sum=#{dwb}")
+end
