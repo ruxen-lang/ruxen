@@ -667,6 +667,69 @@ pub(super) fn coerce_value_signed<'ctx>(
     val // fallback: return unchanged
 }
 
+/// Move a value across an **erased uniform word** boundary (B01).
+///
+/// The LLVM twin of `cranelift::emit::coerce_erased_word`; see
+/// `codegen::is_erased_word_ty` for the ABI decision. A `Float` living in a
+/// uniform word is carried as its IEEE-754 bit pattern, never `fptosi`/
+/// `sitofp`-converted, and the width change is done in the INTEGER domain so
+/// an `f32` reaches a 64-bit word as `bitcast f32→i32` plus a zero-extend.
+///
+/// The two backends must agree here: a divergence would mean the same
+/// program prints different numbers depending on the backend, which is its
+/// own defect class.
+pub(super) fn coerce_erased_word<'ctx>(
+    val: BasicValueEnum<'ctx>,
+    target_ty: BasicTypeEnum<'ctx>,
+    builder: &Builder<'ctx>,
+    context: &'ctx Context,
+) -> BasicValueEnum<'ctx> {
+    if val.get_type() == target_ty {
+        return val;
+    }
+
+    // Float → word: reinterpret at the float's own width, then widen/narrow
+    // as an integer.
+    if let (BasicValueEnum::FloatValue(float_val), BasicTypeEnum::IntType(_)) = (val, target_ty) {
+        let src_bits = if float_val.get_type() == context.f32_type() {
+            32
+        } else {
+            64
+        };
+        let same_width_int: BasicTypeEnum = if src_bits == 32 {
+            context.i32_type().into()
+        } else {
+            context.i64_type().into()
+        };
+        let bits = builder
+            .build_bit_cast(float_val, same_width_int, "word_bits")
+            .unwrap();
+        return coerce_value(bits, target_ty, builder);
+    }
+
+    // Word → float: narrow/widen as an integer to the float's width, then
+    // reinterpret.
+    if let (BasicValueEnum::IntValue(_), BasicTypeEnum::FloatType(target_float)) = (val, target_ty)
+    {
+        let dst_bits = if target_float == context.f32_type() {
+            32
+        } else {
+            64
+        };
+        let same_width_int: BasicTypeEnum = if dst_bits == 32 {
+            context.i32_type().into()
+        } else {
+            context.i64_type().into()
+        };
+        let narrowed = coerce_value(val, same_width_int, builder);
+        return builder
+            .build_bit_cast(narrowed, target_ty, "word_float")
+            .unwrap();
+    }
+
+    coerce_value(val, target_ty, builder)
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 //  Shared helper functions
 // ═══════════════════════════════════════════════════════════════════════

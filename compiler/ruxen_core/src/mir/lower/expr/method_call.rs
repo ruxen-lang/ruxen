@@ -1482,14 +1482,49 @@ impl<'a> Lowerer<'a> {
                     } else {
                         arg_values
                     };
+                    // Closure word-ABI (B01), CALLER side. `lower_closure`
+                    // compiles a closure's float parameters and float return
+                    // as 64-bit uniform WORDS carrying the IEEE-754 bit
+                    // pattern, because a generic body invoking it through the
+                    // erased `Fn` box can only pass words. Mirror that here:
+                    // bit-reinterpret each float argument on the way in, and
+                    // the result on the way out.
+                    //
+                    // In a GENERIC body (`Array_map`, whose arg/result locals
+                    // are `TypeParam`) neither conversion fires — the values
+                    // are already words, which is exactly right. It fires at
+                    // a CONCRETE call site (`f.call(2.5)` on an
+                    // `Fn(Float) -> Float`), keeping both spellings on the
+                    // one ABI.
                     let mut indirect_args = Vec::with_capacity(user_args.len() + 1);
                     indirect_args.push(MirValue::Use(cap_ptr));
-                    indirect_args.extend(user_args);
+                    for arg in user_args {
+                        indirect_args.push(self.float_arg_to_word(arg));
+                    }
+
+                    // A float result comes back in a word, so the
+                    // `CallIndirect` destination must be word-typed and the
+                    // real destination filled by the inverse reinterpretation.
+                    let dest_is_float = dest
+                        .and_then(|d| self.fn_mut().locals.get(d as usize))
+                        .map(|l| crate::codegen::is_float_ty(&l.ty))
+                        .unwrap_or(false);
+                    let call_dest = if dest_is_float {
+                        Some(self.new_temp(Ty::Int))
+                    } else {
+                        dest
+                    };
                     self.emit(MirInst::CallIndirect {
-                        dest,
+                        dest: call_dest,
                         callee: fn_ptr,
                         args: indirect_args,
                     });
+                    if let (true, Some(word), Some(real)) = (dest_is_float, call_dest, dest) {
+                        self.emit(MirInst::BitsToFloat {
+                            dest: real,
+                            src: word,
+                        });
+                    }
                 } else {
                     // #06.8 Phase 3b: rewrite the mangled `ClassName_method`
                     // callee to the linked C symbol when this method came
@@ -1523,10 +1558,8 @@ impl<'a> Lowerer<'a> {
                         .is_some_and(|m| m.contains_key(lowered_method_name))
                     {
                         let self_ty = peel_refs(&receiver_ty).clone();
-                        self.universal_kernel_needed.insert(
-                            mangled.clone(),
-                            (self_ty, lowered_method_name.to_string()),
-                        );
+                        self.universal_kernel_needed
+                            .insert(mangled.clone(), (self_ty, lowered_method_name.to_string()));
                     }
                     let callee = self.resolve_ffi_alias_callee(mangled);
                     self.emit(MirInst::Call {

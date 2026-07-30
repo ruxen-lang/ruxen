@@ -123,6 +123,63 @@ fn ffi_link_name<'a>(program: &'a MirProgram, name: &str) -> Option<&'a str> {
     None
 }
 
+/// B01: per-parameter "declared slot is an erased uniform word" flags for a
+/// callee, resolved from the program's declared Ruxen `Ty`s.
+///
+/// The LLVM twin of `CodeGen::user_fn_param_word_slots`. Argument coercion
+/// needs it because an LLVM `i64` param could be either a declared `Int` (a
+/// float argument there is Ruxen's implicit numeric narrowing, keep `fptosi`)
+/// or an erased `T` (a float argument there is an erasure, bit-reinterpret).
+///
+/// `None` means "no declaration found" — the compiler-internal residual
+/// (`ruxen_vec_get`, `ruxen_hash_index`, …), whose `i64` slots are uniform
+/// words by construction, so callers treat a missing entry as "word".
+///
+/// The linear scan matches this backend's existing `ffi_link_name` lookup;
+/// the Cranelift backend precomputes the same information into a map at
+/// Pass 0/1, and the two MUST agree on the answer.
+pub(super) fn callee_param_word_slots(program: &MirProgram, name: &str) -> Option<Vec<bool>> {
+    for lib in &program.ffi_libs {
+        for ffi_fn in &lib.functions {
+            let qualified_match = !lib.name.is_empty()
+                && name
+                    .strip_prefix(&lib.name)
+                    .and_then(|rest| rest.strip_prefix('_'))
+                    == Some(ffi_fn.name.as_str());
+            if ffi_fn.name == name || ffi_fn.ruxen_name == name || qualified_match {
+                return Some(
+                    ffi_fn
+                        .param_types
+                        .iter()
+                        .filter(|t| occupies_abi_slot(t))
+                        .map(crate::codegen::is_erased_word_ty)
+                        .collect(),
+                );
+            }
+        }
+    }
+    for f in &program.functions {
+        if f.name == name {
+            return Some(
+                f.params
+                    .iter()
+                    .filter_map(|&id| f.locals.get(id as usize))
+                    .filter(|l| occupies_abi_slot(&l.ty))
+                    .map(|l| crate::codegen::is_erased_word_ty(&l.ty))
+                    .collect(),
+            );
+        }
+    }
+    None
+}
+
+/// Whether a `Ty` occupies an ABI parameter slot at all. `Unit` / `Never`
+/// are zero-sized and are skipped when a signature is built, so the word
+/// flags must skip them identically or every later index would be off by one.
+fn occupies_abi_slot(ty: &Ty) -> bool {
+    !matches!(ty, Ty::Unit | Ty::Never | Ty::Error | Ty::ConstArg(_))
+}
+
 /// Find a function whose name ends with the given suffix.
 /// Prefers the shortest match (most specific).
 pub(super) fn find_function_by_suffix<'ctx>(

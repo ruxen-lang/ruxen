@@ -49,6 +49,60 @@ fn shared_helpers_are_public() {
     );
 }
 
+// ── B01: the erased-uniform-word coercion is part of the shared surface ──────
+//
+// `coerce_erased_word` is deliberately a SEPARATE public helper from
+// `coerce_value`, not a flag on it. The two answer different questions:
+// `coerce_value` performs a NUMERIC conversion (`fcvt_*`), which is right for
+// Ruxen's implicit int↔float promotions; `coerce_erased_word` performs a BIT
+// REINTERPRETATION, which is the only thing that round-trips a `Float` through
+// a 64-bit uniform word. Collapsing them would silently reintroduce the whole
+// B01 defect class (`[1.5, 2.5][0]` printing `1`), so this pins that both
+// names exist and stay public.
+#[test]
+fn erased_word_coercion_is_public_and_distinct() {
+    use ruxen_core::codegen::cranelift::{coerce_erased_word, coerce_value};
+    use ruxen_core::codegen::is_erased_word_ty;
+    use ruxen_core::hir::types::Ty;
+
+    let _ = (coerce_value, coerce_erased_word);
+
+    // The predicate that tells an erasure from a numeric conversion. A
+    // declared scalar is CONCRETE (a float crossing into it is a real
+    // conversion); everything else is an opaque word (a float crossing into
+    // it is an erasure).
+    let _ = is_erased_word_ty as fn(&Ty) -> bool;
+    assert!(!is_erased_word_ty(&Ty::Int), "`Int` is a concrete scalar");
+    assert!(
+        !is_erased_word_ty(&Ty::Float),
+        "`Float` is a concrete scalar"
+    );
+    assert!(
+        !is_erased_word_ty(&Ty::Float32),
+        "`Float32` is a concrete scalar"
+    );
+    assert!(!is_erased_word_ty(&Ty::Bool), "`Bool` is a concrete scalar");
+    assert!(!is_erased_word_ty(&Ty::Char), "`Char` is a concrete scalar");
+    assert!(
+        is_erased_word_ty(&Ty::TypeParam {
+            name: "T".to_string(),
+            bounds: vec![],
+        }),
+        "a type parameter is the canonical erased word"
+    );
+    assert!(
+        is_erased_word_ty(&Ty::Class {
+            name: "Float".to_string(),
+            generic_args: vec![],
+        }),
+        "a scalar method home's `self` is the FFI class shell, i.e. a word"
+    );
+    assert!(
+        is_erased_word_ty(&Ty::String),
+        "a pointer-like type is a word"
+    );
+}
+
 // ── Task 4: the env / M-carrying helpers must also be reachable ───────────────
 //
 // build_signature / translate_instruction / translate_terminator carry

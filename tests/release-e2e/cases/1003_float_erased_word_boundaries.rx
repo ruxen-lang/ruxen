@@ -1,0 +1,70 @@
+# B01 — the remaining erased-word boundaries a `Float` can cross.
+#
+# The collection and closure pins (1000-1002) cover the reported symptoms.
+# This one sweeps every OTHER place codegen collapses a declared type to the
+# 64-bit uniform word, because a fix that covered only the reported three
+# would leave the same defect live on each of these:
+#
+#   * `Option[T]` / `Result[T, E]` — the payload slot is a word;
+#   * a generic function's `T` parameter and `T` return;
+#   * `&` / `&var` on a Float local — `Ref(Float)` is a word, and this one
+#     did not merely truncate, it PANICKED the Cranelift frontend with
+#     "declared type of variable varN doesn't match type of value vN";
+#   * a `Float32`, whose 32-bit pattern is zero-extended into the 64-bit
+#     word rather than sharing `Float64`'s layout;
+#   * a class field and a struct field.
+struct Pair
+  x: Float
+  y: Float32
+end
+
+class Holder
+  v: Float
+  def init(@v: Float) end
+  def get -> Float
+    self.v
+  end
+end
+
+def pick[T](a: T, b: T, first: Bool) -> T
+  if first
+    a
+  else
+    b
+  end
+end
+
+def peek(p: &var Float) -> Int
+  0
+end
+
+def main
+  # Option / Result payload words. (The bindings are `present` / `absent`
+  # rather than `some` / `none` because `some` is the existential-type
+  # keyword and cannot be a binding name.)
+  let present: Option[Float] = Some(1.25)
+  let absent: Option[Float] = nil
+  puts("opt=#{present.unwrap_or(0.0)} #{absent.unwrap_or(-2.5)}")
+  let ok: Result[Float, String] = Ok(0.1)
+  puts("res=#{ok.unwrap_or(0.0)}")
+
+  # A generic function erases its parameter AND its return to `T`.
+  puts("gen=#{pick(1.25, 1.75, true)} #{pick(1.25, 1.75, false)}")
+
+  # `&var` on a Float local. Before B01 this did not compile at all.
+  var q: Float = -2.5
+  puts("ref=#{peek(&var q)} #{q}")
+
+  # Float32 in a word: the 32-bit pattern, zero-extended — NOT Float64's.
+  var f32s: Array[Float32] = []
+  f32s.push(1.25 as Float32)
+  f32s.push(-2.5 as Float32)
+  puts("f32=#{f32s[0]} #{f32s[1]}")
+  let f32map: Array[Float32] = f32s.map { |v| v }
+  puts("f32map=#{f32map[0]} #{f32map[1]}")
+
+  # Fields.
+  let p = Pair.new(0.1, 1.25 as Float32)
+  puts("struct=#{p.x} #{p.y}")
+  puts("class=#{Holder.new(-2.5).get}")
+end

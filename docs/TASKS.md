@@ -17,6 +17,32 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
+B01 fixed 2026-07-30 (the **Float-in-erased-word ABI**, Ruby-parity queue B01,
+delivering enabler E4 and unblocking B23). Ruxen erases a value's static type to
+a 64-bit **uniform word** at six boundaries — a generic-collection slot
+(`RuxenVec` and the hash/set tables are `int64_t` regardless of `T`), an
+address-taken local's 8-byte stack slot plus the by-value `Ref`/`RefMut`/`Copy`/
+`Move` slot moves, a param/return whose declared `Ty` is opaque, a closure's
+params/return when reached through an erased `Fn` box, and a scalar method
+home's `self` (typed as the FFI shell `Class{"Float"}`), and an `Assign`
+into a word-typed local. Every one of those
+crossings ran through `coerce_value`'s `fcvt_*` arms, i.e. a NUMERIC conversion,
+so a `Float` silently arrived as a different number: `[1.5, 2.5][0]` printed
+`1`, `each` over an `Array[Float]` printed `1`/`2`, `[2.5].map { |v| v + 0.5 }`
+printed `0`, a `Hash[String, Float]` value truncated, two `Hash[Float, V]` keys
+that truncate to the same integer COLLIDED, a negative value came back `0` (the
+default was the *unsigned* saturating form), and `&var` on a `Float` local
+panicked the Cranelift frontend outright. A uniform word now carries the
+IEEE-754 **bit pattern**, reinterpreted symmetrically on write and read, via a
+named `coerce_erased_word` kept deliberately distinct from `coerce_value`; the
+closure half lives in MIR lowering (`FloatToBits` / the new `BitsToFloat`) so
+both backends inherit one implementation. The line that must not move: an
+implicit numeric conversion into a **declared** scalar param (`f(3)` where
+`def f(x: Float)`) is not an erasure, so the decision is keyed on the declared
+Ruxen type (`codegen::is_erased_word_ty`), never the machine type — pin `1004`
+guards that, `1000`-`1003` guard the erasure side. Caveat: the LLVM mirror is
+written but NOT compile-verified (LLVM 18 absent in the landing environment).
+
 B73 fixed 2026-07-29 (the `Hash` / `Set` key-kind protocol: the runtime decided
 how to hash and compare a key by DEREFERENCING it as a `char*` and scanning for
 a NUL, which SIGSEGV'd on any `Hash[Int, V]` key >= 4096, made user types

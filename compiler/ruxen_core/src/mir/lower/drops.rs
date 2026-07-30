@@ -360,6 +360,7 @@ fn defined_local(inst: &crate::mir::nodes::MirInst) -> Option<crate::mir::nodes:
         | MirInst::StringLiteral { dest, .. }
         | MirInst::FuncAddr { dest, .. }
         | MirInst::FloatToBits { dest, .. }
+        | MirInst::BitsToFloat { dest, .. }
         | MirInst::DataAddr { dest, .. } => Some(*dest),
         MirInst::Call { dest, .. } | MirInst::CallIndirect { dest, .. } => *dest,
         MirInst::SetField { .. } | MirInst::SetTag { .. } | MirInst::Drop { .. } | MirInst::Nop => {
@@ -541,6 +542,7 @@ fn instruction_initializes_local(inst: &MirInst, local: LocalId) -> bool {
         | MirInst::StringLiteral { dest, .. }
         | MirInst::FuncAddr { dest, .. }
         | MirInst::FloatToBits { dest, .. }
+        | MirInst::BitsToFloat { dest, .. }
         | MirInst::DataAddr { dest, .. } => *dest == local,
         MirInst::Call {
             dest: Some(dest), ..
@@ -609,7 +611,8 @@ fn instruction_mentions_local(inst: &MirInst, local: LocalId) -> bool {
         | MirInst::RefMut { dest, src }
         | MirInst::Copy { dest, src }
         | MirInst::Move { dest, src }
-        | MirInst::FloatToBits { dest, src } => *dest == local || *src == local,
+        | MirInst::FloatToBits { dest, src }
+        | MirInst::BitsToFloat { dest, src } => *dest == local || *src == local,
         MirInst::GetPayload { dest, src, .. } => *dest == local || *src == local,
         MirInst::Drop { local: candidate } => *candidate == local,
         MirInst::CallIndirect {
@@ -1430,6 +1433,7 @@ fn compute_dealloc_safe_locals(
                 | MirInst::StringLiteral { dest, .. }
                 | MirInst::FuncAddr { dest, .. }
                 | MirInst::FloatToBits { dest, .. }
+                | MirInst::BitsToFloat { dest, .. }
                 | MirInst::DataAddr { dest, .. } => {
                     // Phase B-5: a static data pointer (vtable /
                     // class_info) is not a heap allocation — taint

@@ -32,6 +32,29 @@ the platform linker), and the C runtime in `library/`. No upward edges.
 - Strict downward order: codegen is the bottom of `lexer→…→codegen`; never reach up.
 - ABI: everything crosses as `int64_t` except `Float` (C `double`); `&String` is
   `char*`. Changing a runtime signature means editing BOTH ABI tables + the C side.
+- **The erased uniform word (B01) — read before touching any float coercion.**
+  A value whose static type codegen cannot see lives in a 64-bit *uniform
+  word*: a generic-collection slot (`RuxenVec` / the hash+set tables are
+  `int64_t` regardless of `T`), an address-taken local's 8-byte stack slot, a
+  param/return whose declared `Ty` is opaque, a closure's params/return when
+  reached through an erased `Fn` box, and a scalar method home's `self` (typed
+  as the FFI shell `Class{"Float"}`). **A `Float` in a uniform word carries its
+  IEEE-754 bit pattern, never an `fcvt` numeric conversion** — `coerce_erased_word`,
+  not `coerce_value`. `Float32` is its own 32-bit pattern zero-extended into the
+  word. Both directions must move together; half the fix is worse than none.
+  - The distinction `coerce_value` CANNOT make: a declared `Int` param and an
+    erased `T` param are both `i64`. Implicit numeric conversion into a
+    *declared* scalar param (`f(3)` where `def f(x: Float)`) must stay `fcvt`.
+    So the decision is keyed on the DECLARED Ruxen type via
+    `codegen::is_erased_word_ty`, never on the machine type. Pin
+    `tests/release-e2e/cases/1004` guards that line; `1000`-`1003` guard the
+    erasure side.
+  - The CLOSURE half lives in MIR lowering (`mir/lower/expr/closure.rs` and
+    `expr/method_call.rs`, via `FloatToBits` / `BitsToFloat`), deliberately, so
+    both backends inherit one implementation instead of each re-deriving it.
+  - The LLVM mirror of `coerce_erased_word` was written but NOT compile-verified
+    (LLVM 18 absent where B01 landed; `llvm-sys` fails to build). Expect
+    mechanical fixes there on the first `--features llvm` build.
 - Cranelift is hard-blocked for wasm/embedded (`requires_llvm_backend()`); those
   targets force LLVM (`mod.rs` guard).
 - The wasm path (`compile_cross` → `target.is_wasm()`) now compiles a curated

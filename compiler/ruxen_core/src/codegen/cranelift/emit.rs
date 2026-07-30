@@ -57,6 +57,10 @@ pub fn build_signature<M: Module>(module: &M, func: &MirFunction) -> Signature {
 /// other locals it updates the Cranelift SSA variable as before. Stored
 /// values are always widened to I64 when going through a stack slot, since
 /// slots are uniformly 8 bytes wide to match the pointer representation.
+///
+/// B01: that 8-byte slot IS an erased uniform word, so a `Float` local is
+/// stored by its bit pattern (`coerce_erased_word`), not `fcvt`-converted.
+/// `use_local` performs the exact inverse.
 pub fn def_local(
     var_map: &HashMap<LocalId, Variable>,
     stack_slots: &HashMap<LocalId, StackSlot>,
@@ -65,7 +69,7 @@ pub fn def_local(
     val: cranelift_codegen::ir::Value,
 ) {
     if let Some(&slot) = stack_slots.get(&local_id) {
-        let widened = coerce_value(val, types::I64, builder);
+        let widened = coerce_erased_word(val, types::I64, builder);
         builder.ins().stack_store(widened, slot, 0);
     } else if let Some(&var) = var_map.get(&local_id) {
         builder.def_var(var, val);
@@ -78,14 +82,23 @@ pub fn def_local(
 /// that a mutation written through a `&mut` pointer (stored back via
 /// `ruxen_store_ptr`) is visible to subsequent uses. Everything else goes
 /// through the Cranelift SSA variable.
+///
+/// B01: the slot load yields the raw 8-byte word, so it is reinterpreted
+/// back to the local's DECLARED type — the inverse of `def_local`'s store.
+/// Without this a `Float` local that any `&var` made address-taken came back
+/// as an `i64`, which either mismatched the SSA variable's declared type
+/// (a `def_var` panic in the Cranelift frontend) or silently fed an integer
+/// bit pattern to a float consumer.
 pub fn use_local(
+    func: &MirFunction,
     var_map: &HashMap<LocalId, Variable>,
     stack_slots: &HashMap<LocalId, StackSlot>,
     builder: &mut FunctionBuilder,
     local_id: LocalId,
 ) -> cranelift_codegen::ir::Value {
     if let Some(&slot) = stack_slots.get(&local_id) {
-        builder.ins().stack_load(types::I64, slot, 0)
+        let word = builder.ins().stack_load(types::I64, slot, 0);
+        coerce_erased_word(word, local_cl_ty(func, local_id), builder)
     } else {
         let var = var_map[&local_id];
         builder.use_var(var)
@@ -112,6 +125,26 @@ pub fn translate_instruction<M: Module>(
                 .and_then(|l| ty_to_cranelift(&l.ty))
                 .unwrap_or(types::I64);
             let val_ty = builder.func.dfg.value_type(val);
+            // B01 — `Assign` is the home of Ruxen's numeric `as` cast, so it
+            // must NOT reinterpret by default. But it is also the general
+            // value-into-local move (the same operation as `Copy`/`Move`
+            // below), so it can carry an erased-word crossing too. The two
+            // are told apart by the DECLARED types, not the machine types:
+            // a cast has a concrete scalar on BOTH sides (`x as Float`,
+            // `f as Int`), whereas a crossing has an opaque word on one.
+            //
+            // The reachable case is assigning to a `&var Float` parameter
+            // (`p = 9.75`, dest `RefMut(Float)` — a word), which truncated.
+            // That write does not currently propagate to the caller, so the
+            // truncation is unobservable today; it is fixed here so that
+            // whoever makes scalar `&var` mutation propagate does not
+            // inherit a silent numeric corruption underneath it.
+            let dest_is_word = func
+                .locals
+                .get(*dest as usize)
+                .map(|l| crate::codegen::is_erased_word_ty(&l.ty))
+                .unwrap_or(false);
+            let value_is_word = mir_operand_is_erased_word(value, func);
             // Q5 — numeric int↔float casts need a signedness-correct fcvt,
             // and the signedness source differs by direction: int→float
             // reads the SOURCE operand's signedness (fcvt_from_sint/uint),
@@ -119,7 +152,12 @@ pub fn translate_instruction<M: Module>(
             // the signedness-aware path to those two cases only; every other
             // coercion (int↔int width, float↔float) keeps the existing
             // signedness-blind `coerce_value` behaviour unchanged.
-            let val = if val_ty.is_int() && dest_ty.is_float() {
+            let val = if dest_is_word || value_is_word {
+                // One side is opaque storage: reinterpret. Non-float
+                // crossings fall through to `coerce_value` inside, so every
+                // word→word assign behaves exactly as before.
+                coerce_erased_word(val, dest_ty, builder)
+            } else if val_ty.is_int() && dest_ty.is_float() {
                 coerce_value_signed(val, dest_ty, mir_arg_is_signed(value, func), builder)
             } else if val_ty.is_float() && dest_ty.is_int() {
                 let dest_signed = mir_arg_is_signed(&MirValue::Use(*dest), func);
@@ -134,8 +172,7 @@ pub fn translate_instruction<M: Module>(
             let l = gen_value(lhs, func, var_map, stack_slots, builder)?;
             let r = gen_value(rhs, func, var_map, stack_slots, builder)?;
             // Ensure both operands have the same type for binop.
-            let common_ty = builder.func.dfg.value_type(l);
-            let r = coerce_value(r, common_ty, builder);
+            let (l, r, _) = unify_binop_operands(l, r, lhs, rhs, func, builder);
             let result = emit_binop(*op, l, r, builder);
             let dest_ty = func
                 .locals
@@ -219,8 +256,7 @@ pub fn translate_instruction<M: Module>(
                 builder.ins().icmp(cc, cmp_result, zero)
             } else {
                 // Integer/pointer or float comparison — dispatch by operand type.
-                let common_ty = builder.func.dfg.value_type(l);
-                let r = coerce_value(r, common_ty, builder);
+                let (l, r, common_ty) = unify_binop_operands(l, r, lhs, rhs, func, builder);
                 if common_ty.is_float() {
                     let cc = cmpop_to_floatcc(*op);
                     builder.ins().fcmp(cc, l, r)
@@ -261,6 +297,7 @@ pub fn translate_instruction<M: Module>(
                 func,
                 actual_name,
                 env.user_fn_param_tys,
+                env.user_fn_param_word_slots,
                 builder,
             );
 
@@ -316,12 +353,18 @@ pub fn translate_instruction<M: Module>(
                     if let Some(dest_id) = dest {
                         let results = builder.inst_results(call);
                         if !results.is_empty() {
-                            let dest_ty = func
-                                .locals
-                                .get(*dest_id as usize)
-                                .and_then(|l| ty_to_cranelift(&l.ty))
-                                .unwrap_or(types::I64);
-                            let result = coerce_value(results[0], dest_ty, builder);
+                            let dest_ty = local_cl_ty(func, *dest_id);
+                            // B01: a call RESULT never carries an implicit
+                            // numeric conversion. MIR lowering gives the
+                            // dest temp the callee's own declared return
+                            // type; a widening like `let x: Float = f()`
+                            // where `f -> Int` lands in an `Int` temp and
+                            // promotes through a separate `Assign`. So an
+                            // int/float mismatch HERE can only mean the
+                            // callee's return slot is an erased word (a
+                            // `-> T` collection accessor such as
+                            // `ruxen_vec_get`), and must be reinterpreted.
+                            let result = coerce_erased_word(results[0], dest_ty, builder);
                             def_local(var_map, stack_slots, builder, *dest_id, result);
                         }
                     }
@@ -362,7 +405,7 @@ pub fn translate_instruction<M: Module>(
             base,
             field_index,
         } => {
-            let base_val = use_local(var_map, stack_slots, builder, *base);
+            let base_val = use_local(func, var_map, stack_slots, builder, *base);
             let offset = (*field_index as i64) * 8;
             let addr = builder.ins().iadd_imm(base_val, offset);
             // Load using the declared type of the destination local.
@@ -380,7 +423,7 @@ pub fn translate_instruction<M: Module>(
             field_index,
             value,
         } => {
-            let base_val = use_local(var_map, stack_slots, builder, *base);
+            let base_val = use_local(func, var_map, stack_slots, builder, *base);
             let val = gen_value(value, func, var_map, stack_slots, builder)?;
             let offset = (*field_index as i64) * 8;
             let addr = builder.ins().iadd_imm(base_val, offset);
@@ -388,19 +431,19 @@ pub fn translate_instruction<M: Module>(
         }
 
         MirInst::SetTag { dest, tag } => {
-            let ptr = use_local(var_map, stack_slots, builder, *dest);
+            let ptr = use_local(func, var_map, stack_slots, builder, *dest);
             let tag_val = builder.ins().iconst(types::I32, *tag as i64);
             builder.ins().store(MemFlags::new(), tag_val, ptr, 0);
         }
 
         MirInst::GetTag { dest, src } => {
-            let ptr = use_local(var_map, stack_slots, builder, *src);
+            let ptr = use_local(func, var_map, stack_slots, builder, *src);
             let tag_val = builder.ins().load(types::I32, MemFlags::new(), ptr, 0);
             def_local(var_map, stack_slots, builder, *dest, tag_val);
         }
 
         MirInst::GetPayload { dest, src, .. } => {
-            let ptr = use_local(var_map, stack_slots, builder, *src);
+            let ptr = use_local(func, var_map, stack_slots, builder, *src);
             let payload_ptr = builder.ins().iadd_imm(ptr, 8);
             def_local(var_map, stack_slots, builder, *dest, payload_ptr);
         }
@@ -410,7 +453,14 @@ pub fn translate_instruction<M: Module>(
             // purely to read, and keeping it cheap preserves existing
             // behaviour for fixtures that pass `&String`. Only `RefMut`
             // promotes to a real pointer-to-storage below.
-            let val = use_local(var_map, stack_slots, builder, *src);
+            //
+            // B01: `&T`'s destination is `Ref(T)`, a WORD, so a `Float`
+            // source has to be reinterpreted into it — and back out when the
+            // borrow is read. Without the coercion the raw `f64` was written
+            // straight into an `i64`-declared Cranelift variable, which
+            // panics the frontend with a declared-type mismatch.
+            let val = use_local(func, var_map, stack_slots, builder, *src);
+            let val = coerce_erased_word(val, local_cl_ty(func, *dest), builder);
             def_local(var_map, stack_slots, builder, *dest, val);
         }
 
@@ -425,19 +475,29 @@ pub fn translate_instruction<M: Module>(
             } else {
                 // Defensive fallback: if somehow the pre-scan missed this
                 // local, fall back to the old by-value semantics rather
-                // than panicking in codegen.
-                let val = use_local(var_map, stack_slots, builder, *src);
+                // than panicking in codegen. The pre-scan only promotes
+                // String-typed sources, so EVERY `&var` on a scalar reaches
+                // this arm — `&var <a Float local>` panicked the Cranelift
+                // frontend here before B01 (same word-crossing as `Ref`).
+                let val = use_local(func, var_map, stack_slots, builder, *src);
+                let val = coerce_erased_word(val, local_cl_ty(func, *dest), builder);
                 def_local(var_map, stack_slots, builder, *dest, val);
             }
         }
 
         MirInst::Copy { dest, src } => {
-            let val = use_local(var_map, stack_slots, builder, *src);
+            // B01: a copy/move between locals of DIFFERENT representations
+            // is a word crossing (e.g. a `Float` into a `T`/`Ref` slot), so
+            // it is reinterpreted, never numerically converted.
+            let val = use_local(func, var_map, stack_slots, builder, *src);
+            let val = coerce_erased_word(val, local_cl_ty(func, *dest), builder);
             def_local(var_map, stack_slots, builder, *dest, val);
         }
 
         MirInst::Move { dest, src } => {
-            let val = use_local(var_map, stack_slots, builder, *src);
+            // B01: same word crossing as `Copy` above.
+            let val = use_local(func, var_map, stack_slots, builder, *src);
+            let val = coerce_erased_word(val, local_cl_ty(func, *dest), builder);
             def_local(var_map, stack_slots, builder, *dest, val);
 
             let src_ty = func
@@ -464,19 +524,26 @@ pub fn translate_instruction<M: Module>(
         }
 
         MirInst::FloatToBits { dest, src } => {
-            // Reinterpret the float's bits as an integer of the same width.
-            // The destination local's declared type picks i32 (from f32) or
-            // i64 (from f64). `bitcast` is a pure reinterpretation — no
-            // numeric conversion — which is exactly what the derived hash
-            // mix needs so floats fold through `bxor`/`mul`.
-            let src_val = use_local(var_map, stack_slots, builder, *src);
-            let dest_ty = func
-                .locals
-                .get(*dest as usize)
-                .and_then(|l| ty_to_cranelift(&l.ty))
-                .unwrap_or(types::I64);
-            let bits = builder.ins().bitcast(dest_ty, MemFlags::new(), src_val);
+            // Reinterpret the float's bits as an integer. The destination
+            // local's declared type picks the width. `coerce_erased_word`
+            // is a pure reinterpretation — no numeric conversion — which is
+            // what the derived hash mix needs so floats fold through
+            // `bxor`/`mul`, and what the closure word-ABI needs on the
+            // outbound edge. It also handles a WIDTH change (`f32` into a
+            // 64-bit word) that a bare `bitcast` would reject.
+            let src_val = use_local(func, var_map, stack_slots, builder, *src);
+            let bits = coerce_erased_word(src_val, local_cl_ty(func, *dest), builder);
             def_local(var_map, stack_slots, builder, *dest, bits);
+        }
+
+        MirInst::BitsToFloat { dest, src } => {
+            // The exact inverse of `FloatToBits`: recover a float from the
+            // uniform word holding its bit pattern. Emitted by the closure
+            // word-ABI (B01) on the inbound edge of a float closure
+            // parameter and when reading a float closure result back.
+            let src_val = use_local(func, var_map, stack_slots, builder, *src);
+            let f = coerce_erased_word(src_val, local_cl_ty(func, *dest), builder);
+            def_local(var_map, stack_slots, builder, *dest, f);
         }
 
         MirInst::Nop => {}
@@ -505,7 +572,7 @@ pub fn translate_instruction<M: Module>(
         }
 
         MirInst::CallIndirect { dest, callee, args } => {
-            let callee_val = use_local(var_map, stack_slots, builder, *callee);
+            let callee_val = use_local(func, var_map, stack_slots, builder, *callee);
             let mut arg_vals = Vec::with_capacity(args.len());
             for arg in args {
                 arg_vals.push(gen_value(arg, func, var_map, stack_slots, builder)?);
@@ -541,7 +608,14 @@ pub fn translate_instruction<M: Module>(
                 let results = builder.inst_results(call);
                 if !results.is_empty() {
                     let dest_ty = dest_cl_ty.unwrap_or(types::I64);
-                    let result = coerce_value(results[0], dest_ty, builder);
+                    // B01: same reasoning as the direct-call result above.
+                    // Today this is a no-op — the imported signature's return
+                    // is BUILT from `dest_cl_ty`, so the types always agree —
+                    // but it must read the same as the direct-call arm and as
+                    // the LLVM backend's, or a later change to how the
+                    // indirect signature is derived reintroduces the defect
+                    // in one backend only.
+                    let result = coerce_erased_word(results[0], dest_ty, builder);
                     def_local(var_map, stack_slots, builder, *dest_id, result);
                 }
             }
@@ -572,7 +646,16 @@ pub fn translate_terminator<M: Module>(
                         let ret_val = gen_value(v, func, var_map, stack_slots, builder)?;
                         // Coerce to match function's return type.
                         if let Some(ret_ty) = ty_to_cranelift(&func.return_ty) {
-                            let ret_val = coerce_value(ret_val, ret_ty, builder);
+                            // B01: a generic body declared `-> T` returns
+                            // through an erased uniform word, so a float
+                            // result is reinterpreted rather than truncated.
+                            // A declared numeric return (`-> Int` handed a
+                            // float) keeps the numeric path.
+                            let ret_val = if crate::codegen::is_erased_word_ty(&func.return_ty) {
+                                coerce_erased_word(ret_val, ret_ty, builder)
+                            } else {
+                                coerce_value(ret_val, ret_ty, builder)
+                            };
                             builder.ins().return_(&[ret_val]);
                         } else {
                             builder.ins().return_(&[ret_val]);
@@ -671,7 +754,7 @@ pub fn gen_value(
                     local_id, func.name
                 ));
             }
-            Ok(use_local(var_map, stack_slots, builder, *local_id))
+            Ok(use_local(func, var_map, stack_slots, builder, *local_id))
         }
         MirValue::Unit => Ok(builder.ins().iconst(types::I64, 0)),
     }
@@ -847,6 +930,119 @@ pub fn coerce_value_signed(
     val
 }
 
+/// Move `val` across an **erased uniform word** boundary (B01).
+///
+/// See `codegen::is_erased_word_ty` for the full ABI decision. In short: a
+/// uniform word is 64 bits of opaque storage, and a `Float` living in one is
+/// carried as its IEEE-754 **bit pattern**, not as a numeric value. This is
+/// the ONLY coercion that round-trips: `coerce_value`'s `fcvt_*` arms are a
+/// numeric conversion, so `1.5` pushed into an `Array[Float]` slot came back
+/// as `1`, and `-2.5` came back as `0` (the default is the *unsigned*
+/// saturating form).
+///
+/// Width is handled in the integer domain on purpose: `bitcast` requires
+/// equal widths, so an `f32` reaches the 64-bit word as `bitcast f32→i32`
+/// followed by a zero-extend, and comes back by `ireduce` then `bitcast
+/// i32→f32`. Non-float crossings (int↔int width, float↔float) are already
+/// correct and delegate to `coerce_value`.
+pub fn coerce_erased_word(
+    val: cranelift_codegen::ir::Value,
+    target_ty: Type,
+    builder: &mut FunctionBuilder,
+) -> cranelift_codegen::ir::Value {
+    let val_ty = builder.func.dfg.value_type(val);
+    if val_ty == target_ty {
+        return val;
+    }
+
+    // Float → word: reinterpret at the float's own width, then widen/narrow
+    // as an integer.
+    if val_ty.is_float() && target_ty.is_int() {
+        let same_width_int = Type::int(val_ty.bits() as u16)
+            .expect("float width (32/64) always has an integer counterpart");
+        let bits = builder.ins().bitcast(same_width_int, MemFlags::new(), val);
+        return coerce_value(bits, target_ty, builder);
+    }
+
+    // Word → float: narrow/widen as an integer to the float's width, then
+    // reinterpret.
+    if val_ty.is_int() && target_ty.is_float() {
+        let same_width_int = Type::int(target_ty.bits() as u16)
+            .expect("float width (32/64) always has an integer counterpart");
+        let narrowed = coerce_value(val, same_width_int, builder);
+        return builder.ins().bitcast(target_ty, MemFlags::new(), narrowed);
+    }
+
+    coerce_value(val, target_ty, builder)
+}
+
+/// True when a MIR operand's DECLARED type is an erased uniform word.
+///
+/// Literals are never erased — an integer literal beside a float operand is
+/// Ruxen's implicit numeric promotion, not a bit pattern.
+fn mir_operand_is_erased_word(arg: &MirValue, func: &MirFunction) -> bool {
+    match arg {
+        MirValue::Use(id) => func
+            .locals
+            .get(*id as usize)
+            .map(|l| crate::codegen::is_erased_word_ty(&l.ty))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Bring a binary operation's two operands to a common Cranelift type,
+/// returning `(lhs, rhs, common_ty)`.
+///
+/// Normally the left operand's type wins and the right is `coerce_value`d to
+/// it, which is the numeric behaviour Ruxen wants for `0.0 + n` (`n: Int`).
+///
+/// B01 adds one case: when exactly one side is a FLOAT value and the other's
+/// DECLARED MIR type is an erased uniform word, the word is holding that
+/// float's bit pattern and must be reinterpreted, not `fcvt`-converted. This
+/// is what a scalar method home looks like — inside `class Float`, `self` is
+/// typed as the FFI shell `Class{"Float"}`, i.e. a word — so `0.0 + self`
+/// used to numerically convert `2.5`'s bit pattern and print `4.6e18`
+/// (and, before the bits were preserved at all, printed `2`).
+fn unify_binop_operands(
+    l: cranelift_codegen::ir::Value,
+    r: cranelift_codegen::ir::Value,
+    lhs: &MirValue,
+    rhs: &MirValue,
+    func: &MirFunction,
+    builder: &mut FunctionBuilder,
+) -> (
+    cranelift_codegen::ir::Value,
+    cranelift_codegen::ir::Value,
+    Type,
+) {
+    let l_ty = builder.func.dfg.value_type(l);
+    let r_ty = builder.func.dfg.value_type(r);
+
+    if l_ty.is_float() && r_ty.is_int() && mir_operand_is_erased_word(rhs, func) {
+        let r = coerce_erased_word(r, l_ty, builder);
+        return (l, r, l_ty);
+    }
+    if r_ty.is_float() && l_ty.is_int() && mir_operand_is_erased_word(lhs, func) {
+        // The float side wins the common type here: reinterpreting the word
+        // is only meaningful AS a float.
+        let l = coerce_erased_word(l, r_ty, builder);
+        return (l, r, r_ty);
+    }
+
+    let r = coerce_value(r, l_ty, builder);
+    (l, r, l_ty)
+}
+
+/// The Cranelift type of `local_id`'s declared MIR type, defaulting to the
+/// uniform word when the local has no runtime representation.
+fn local_cl_ty(func: &MirFunction, local_id: LocalId) -> Type {
+    func.locals
+        .get(local_id as usize)
+        .and_then(|l| ty_to_cranelift(&l.ty))
+        .unwrap_or(types::I64)
+}
+
 /// Widen narrow-integer call arguments to match the callee's expected
 /// parameter types.
 ///
@@ -863,12 +1059,35 @@ pub fn coerce_value_signed(
 /// (user-defined or FFI functions), we widen any sub-i64 integer argument
 /// to i64 as a safe default — this matches the default signature inference
 /// path in `get_or_declare_func`, which uses i64 everywhere.
+///
+/// B01 — the erased-word case. A `Float` argument landing in an `i64` param
+/// slot has two possible meanings, and the Cranelift types alone cannot tell
+/// them apart because a declared `Int` param and an erased uniform word are
+/// both `i64`:
+///
+///   * the slot is an **erased uniform word** (`def push as
+///     "ruxen_vec_push"(x: T)`) — the float must be reinterpreted, or
+///     `[1.5].push` stores `1`;
+///   * the slot is a **declared concrete integer** (`def f(x: Int)` called as
+///     `f(2.5)`) — Ruxen's implicit numeric narrowing, which must stay `fcvt`.
+///
+/// `param_word_slots` carries that distinction, computed from the DECLARED
+/// `Ty` at Pass 0/1 by `codegen::is_erased_word_ty`. An unknown callee
+/// defaults to "word", which is right for the compiler-internal residual
+/// (`ruxen_vec_get`, `ruxen_hash_index`, …): those are uniform-word helpers
+/// by construction.
+///
+/// The reverse direction (an integer value into a declared `Float` param, as
+/// in `def f(x: Float)` called as `f(3)`) is ALWAYS a numeric promotion — a
+/// declared float param is concrete, never an erased word — so it keeps the
+/// existing `fcvt` path.
 pub fn coerce_call_args(
     arg_vals: &mut [cranelift_codegen::ir::Value],
     args: &[MirValue],
     func: &MirFunction,
     callee: &str,
     user_fn_param_tys: &HashMap<String, Vec<Type>>,
+    param_word_slots: &HashMap<String, Vec<bool>>,
     builder: &mut FunctionBuilder,
 ) {
     // Resolve the callee's param widths in priority order. Post
@@ -909,6 +1128,21 @@ pub fn coerce_call_args(
 
         if val_ty == target_ty {
             continue;
+        }
+
+        // B01: a float crossing into an INTEGER slot that the callee declared
+        // opaquely is an erasure, not a narrowing — reinterpret its bits.
+        if val_ty.is_float() && target_ty.is_int() {
+            let slot_is_word = param_word_slots
+                .get(callee)
+                .and_then(|words| words.get(i).copied())
+                // No recorded declaration: the compiler-internal residual,
+                // whose i64 slots are uniform words by construction.
+                .unwrap_or(true);
+            if slot_is_word {
+                *arg_val = coerce_erased_word(*arg_val, target_ty, builder);
+                continue;
+            }
         }
 
         // Infer signedness from the MIR operand's type so that negative

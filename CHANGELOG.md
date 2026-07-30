@@ -45,6 +45,58 @@ once 1.0.0 ships.
   blocking reason.
 
 ### Fixed
+- **A `Float` crossing an erased uniform word keeps its bits (batch B01).** A
+  `Float` reaching any storage whose static type codegen cannot see was
+  `fcvt`-converted instead of bit-reinterpreted, so it silently arrived as a
+  different number. `[1.5, 2.5][0]` printed `1`; `each` over an `Array[Float]`
+  printed `1` / `2`; `[2.5].map { |v| v + 0.5 }` printed `0`; a
+  `Hash[String, Float]` value truncated; two `Hash[Float, V]` keys that
+  truncate to the same integer COLLIDED (`h[1.25]` returned the entry stored
+  under `1.75`), as did two such `Set[Float]` members; a negative value came
+  back as `0` rather than truncated, because the default conversion was the
+  *unsigned* saturating form; and `&var` on a `Float` local did not compile at
+  all, panicking the Cranelift frontend with `declared type of variable varN
+  doesn't match type of value vN`.
+
+  **The ABI decision.** Ruxen has one storage class for a value whose static
+  type is erased: a 64-bit **uniform word**. It appears at six boundaries — a
+  generic-collection slot (`RuxenVec` and the hash/set tables store `int64_t`
+  elements regardless of `T`), an address-taken local's 8-byte stack slot plus
+  the by-value `Ref` / `RefMut` / `Copy` / `Move` slot moves, a parameter or
+  return whose declared `Ty` is opaque, the parameters and return of a closure
+  reached through an erased `Fn` box, a scalar method home's `self` (typed as
+  the FFI shell `Class{"Float"}`), and an `Assign` into a word-typed local
+  (`p = 9.75` on a `&var Float` parameter). A `Float` in a uniform word
+  now travels as its IEEE-754 **bit pattern** and is recovered by the inverse
+  reinterpretation, symmetrically on write and on read — half the fix would be
+  worse than none. `Float32` occupies the low 32 bits of the word, its own
+  32-bit pattern zero-extended. Integer-class types (`Bool`, `Char`, narrow
+  ints) keep the existing width-extension: they already share the integer
+  register class with the word, which is exactly why only `Float` was
+  corrupted.
+
+  The one crossing that is NOT an erasure is Ruxen's implicit numeric
+  conversion into a **declared** scalar parameter (`def f(x: Float)` called as
+  `f(3)`, `def g(x: Int)` called as `g(2.5)`). Codegen cannot tell the two
+  apart from the machine type — a declared `Int` slot and an erased word are
+  both `i64` — so the decision is keyed on the DECLARED Ruxen type via the new
+  `codegen::is_erased_word_ty`. Pin 1004 is the negative pin that holds that
+  line.
+
+  The closure half is fixed in **MIR lowering**, not per backend: a float
+  closure parameter and return are lowered as uniform words with an explicit
+  `FloatToBits` / the new `BitsToFloat` at each edge, and the matching
+  reinterpretation is emitted at the `Fn`-box `CallIndirect`. Both backends
+  therefore inherit it identically. Everything else is a new, named
+  `coerce_erased_word` in each backend, deliberately distinct from
+  `coerce_value` so a numeric conversion can never be mistaken for an erasure.
+
+  This delivers enabler **E4** and unblocks **B23** (the `Float` method
+  family): a `Float` receiver reaching an `.rx` method body now reads as the
+  value it was called on. Pins `tests/release-e2e/cases/1000` to `1004`.
+
+  Not fixed, and unchanged by this: a whole `Float` still renders as `2` where
+  CRuby prints `2.0` (`ruxen_float_to_string`). That is formatting, not ABI.
 - **`flat_map` on an `Array` receiver no longer fails codegen.** It sat on the
   unimplemented-Vec-combinator blocklist in
   `compiler/ruxen_core/src/codegen/lang_intrinsics.rs`, a list written when

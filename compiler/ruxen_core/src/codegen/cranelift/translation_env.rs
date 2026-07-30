@@ -25,6 +25,11 @@ pub struct TranslationEnv<'a, M: Module> {
     /// `coerce_call_args` can apply the *real* narrow-int signature of
     /// known user fns instead of the default widen-to-i64 fallback.
     pub user_fn_param_tys: &'a HashMap<String, Vec<Type>>,
+    /// B01: per-callee, per-param "declared slot is an erased uniform word"
+    /// flags. Read-only. `coerce_call_args` consults it to tell a declared
+    /// `Int` param (implicit numeric narrowing) from an erased `T` param
+    /// (bit reinterpretation) — both are `i64` in Cranelift.
+    pub user_fn_param_word_slots: &'a HashMap<String, Vec<bool>>,
     /// Mixin vtables Phase B-5: pre-declared data symbol IDs for
     /// `__rx_vtable_*` and `__rx_classinfo_*`. Read-only —
     /// instruction lowering never declares new entries here. Used by

@@ -26,7 +26,16 @@ pub(super) fn translate_terminator<'ctx>(
                     Some(v) => {
                         let ret_val = gen_value(v, func, local_allocas, builder, context)?;
                         if let Some(ret_ty) = ty_to_llvm(&func.return_ty, context) {
-                            let ret_val = coerce_value(ret_val, ret_ty, builder);
+                            // B01: a generic body declared `-> T` returns
+                            // through an erased uniform word, so a float
+                            // result is reinterpreted rather than truncated.
+                            // A declared numeric return keeps the numeric
+                            // path. Mirrors the Cranelift terminator.
+                            let ret_val = if crate::codegen::is_erased_word_ty(&func.return_ty) {
+                                coerce_erased_word(ret_val, ret_ty, builder, context)
+                            } else {
+                                coerce_value(ret_val, ret_ty, builder)
+                            };
                             builder
                                 .build_return(Some(&ret_val))
                                 .map_err(|e| format!("Failed to build return: {:?}", e))?;
