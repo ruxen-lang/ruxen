@@ -48,7 +48,7 @@ baseline works; much of the rest **compiles but is broken**:
 | `&& \|\| !`, Bool `& \| ^` | **DONE** | correct. |
 | Int `<< >> & \| ^` (bitwise) | **DONE** | `1<<4`=16, `6&3`=2 correct. |
 | String `+`, String `==` | **DONE** | `"ab"+"cd"`="abcd". |
-| `Array[i]`, `Array[i]=`, `Hash[k]`, `Hash[k]=` | **DONE** | `a[1]`=20, `a[0]=9`, `h["a"]` all correct. |
+| `Array[i]`, `Array[i]=`, `Hash[k]`, `Hash[k]=` | **DONE** | `a[1]`=20, `a[0]=9`, `h["a"]` all correct. `Hash[k]=` was a SILENT NO-OP until B72 (pins `1710`/`1711`): the row claimed DONE while the store was discarded with no diagnostic. Both `Hash` construction spellings (`var h: Hash[K, V] = Hash.new` and `Hash[K, V].new`) are now pinned, `1728`/`1729`. |
 | `Array[range]` (e.g. `a[0..1]`) | DONE | compiles+runs. |
 | **`**` (power)** | **DONE** | `2**8`⇒256. `StarStar` token + `BinOp::Pow` → `ruxen_int_pow`/`ruxen_float_pow` (pin 952). |
 | **`<=>` (spaceship)** | **DONE** | Primitive Int/Float/String pin `959`; user method and Comparable dispatch pin `965`. |
@@ -559,8 +559,8 @@ ordering protocol. `clamp` is the remaining core method gap.
 | `freeze` / `frozen?` | MISSING | — | no value-freeze protocol. |
 | `dup` / `clone` | PARTIAL | `.clone` on String/Array/collections | universal `dup` MISSING; `clone` derive for user types via `include Clone`. |
 | `object_id` / `__id__` | MISSING | — | runtime identity; a pointer-identity intrinsic could supply it (not a metaobject need). |
-| `==` / `eql?` / `equal?` | PARTIAL | `==` for scalars/String | structural `==` for user types via `include PartialEq`/derive; `eql?`/`equal?` MISSING. |
-| `hash` | PARTIAL | `Hashable` mixin for user types | no universal `.hash` on values. |
+| `==` / `eql?` / `equal?` | PARTIAL | `==` for scalars/String | structural `==` works for a **`struct`** via `include PartialEq`/derive, and is BROKEN for a **`class`**: `C.new(1) == C.new(1)` is `false` with or without an explicit include (**B74**). Pin `133` only covers a struct, which is why it went unnoticed. `eql?`/`equal?` MISSING. |
+| `hash` | PARTIAL | `Hashable` mixin for user types | no universal `.hash` on values. A **`struct`** carrying `Hashable` + `PartialEq` now works as a `Hash`/`Set` KEY (B73, pin `1722`), routed through the synthesized `hash_code` and `eq`. A **`class`** key still compares by identity, blocked on B74. |
 | `nil?` | MISSING | use `match`/`Option` | `x.nil?` unresolved even on `Option` (drop-Some coercion). |
 | `!` / `!=` | DONE | operators | |
 | `__method__` / `__callee__` | COMPILE-TIME | compiler knows the enclosing method statically | fold to the method-name string literal at the call site. |
