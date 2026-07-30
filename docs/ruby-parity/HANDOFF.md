@@ -64,6 +64,21 @@ same commit as the fix.
     -delete; touch src/ruxen_repl/build.rs; cargo build --release -p ruxen_repl`.
 - **DO NOT edit `library/std` or `cargo build` while a `RUXEN_WORKSPACE` e2e run
   is in flight** — it reads the workspace stdlib + the binary and will corrupt.
+- ⚠️ **NEVER use `git stash` when more than one worktree is active.** The stash
+  is **NOT worktree-local**: every worktree shares `.git/refs/stash`, so a
+  `git stash push` in one worktree and a `git stash pop` in another operate on
+  the same stack. This bit us on 2026-07-30: one agent's bare `pop` applied and
+  DROPPED a different agent's 19-file WIP (`+599/-192` across `mir/lower`,
+  `codegen`, `borrow_check` and three `runtime/*.c` files). It was recovered
+  only because the agent noticed and ran `git stash store` to put it back.
+  - Worktree-local alternatives, use these instead: commit on your branch and
+    `git revert` to measure a before state; `git checkout <sha> -- <file>` to
+    restore one file; or copy the file to a scratchpad and edit in place.
+  - If you truly must stash, always `git stash apply <sha>` and **never a bare
+    `pop`**. Indices shift whenever ANY worktree pushes or drops, so
+    `stash@{0}` is not reliably yours.
+  - If files revert underneath you mid-session, do NOT redo the work. Check
+    `git stash list` for a recovered entry first.
 - **Every fix:** `.rx` method (or generic mechanism) + a pinned
   `tests/release-e2e/cases/NNN_*.rx` + matching `expected/NNN_*.out` + update the
   matrix row + `CHANGELOG.md` `[Unreleased]`, in one commit. Review every change
