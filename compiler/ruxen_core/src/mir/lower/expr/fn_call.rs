@@ -1,6 +1,58 @@
 use super::super::*;
 
 impl<'a> Lowerer<'a> {
+    /// The builtin I/O functions that take a single piece of TEXT and
+    /// write it out, i.e. the ones whose argument must already be a
+    /// `char*` by the time it reaches the runtime.
+    ///
+    /// Kept in step with the same list in
+    /// `typeck/infer/expr.rs`'s universal-`to_s` conversion — that pass
+    /// is the first line of defence and this is the backstop. They are
+    /// two names for one rule ("this callee needs text"), so a name added
+    /// to one belongs in the other.
+    fn is_io_text_builtin(&self, callee_name: &str, arg_count: usize) -> bool {
+        arg_count == 1
+            && matches!(
+                callee_name,
+                "puts" | "eputs" | "print" | "println" | "eprintln"
+            )
+    }
+
+    /// Ensure an already-lowered I/O argument is text, formatting it
+    /// through the Display ladder when it is not.
+    ///
+    /// The type consulted is the MIR local's, NOT `arg.ty`. See the call
+    /// site for why the HIR type cannot be trusted for this decision.
+    /// When the local is already string-like this returns it unchanged,
+    /// so the common `puts "literal"` path is bit-for-bit as before.
+    fn coerce_arg_to_display_text(
+        &mut self,
+        local: Option<LocalId>,
+        arg: &HirExpr,
+    ) -> Result<Option<LocalId>, String> {
+        let Some(lid) = local else {
+            return Ok(local);
+        };
+        let local_ty = self
+            .fn_mut()
+            .locals
+            .get(lid as usize)
+            .map(|l| l.ty.clone())
+            .unwrap_or_else(|| arg.ty.clone());
+        if crate::mir::lower::is_string_like(&local_ty) {
+            return Ok(local);
+        }
+        // An unresolved or abstract local carries no Display decision we
+        // can make here; leave it to the paths that specialize it rather
+        // than guessing a formatter for a type we cannot name.
+        if local_ty.is_infer() || local_ty.is_error() {
+            return Ok(local);
+        }
+        let spec = crate::lexer::token::FormatSpec::default();
+        let text = self.emit_display_to_string(Some(lid), &local_ty, &spec)?;
+        Ok(Some(text))
+    }
+
     pub(super) fn lower_fn_call(&mut self, expr: &HirExpr) -> Result<Option<LocalId>, String> {
         match &expr.kind {
             // ── Function call ───────────────────────────────────────
@@ -56,6 +108,34 @@ impl<'a> Lowerer<'a> {
                         // identifier resolving to a zero-arg function is invoked
                         // rather than passed as a function address.
                         self.lower_fn_arg(arg)?
+                    };
+                    // B02: `puts x` must print `x`, not dereference it.
+                    //
+                    // The IO builtins take a `char*`. Typeck normally
+                    // converts a non-String argument through its universal
+                    // `to_s` before we get here, but that decision is made
+                    // on the HIR type, and the HIR type can be WRONG: an
+                    // unseeded block parameter (`arr.each { |x| puts(x) }`)
+                    // gets `&String` back-propagated onto it from `puts`'s
+                    // own signature while the symbol table says `Int`. The
+                    // conversion then correctly declines to fire on what it
+                    // believes is already a String, and a raw `Int` reaches
+                    // `ruxen_puts`, which reads address 1 as a `char*`.
+                    //
+                    // So re-decide it here against the MIR local's type,
+                    // which is the one codegen will actually use, and route
+                    // through the SAME Display ladder interpolation uses.
+                    // That is what makes `puts x` and `puts "#{x}"` agree by
+                    // construction rather than by two paths happening to
+                    // reach the same answer — they did not.
+                    //
+                    // String-typed arguments are untouched, so the bare
+                    // string-literal zero-copy above still reaches `puts`
+                    // as a `.rodata` pointer.
+                    let local = if self.is_io_text_builtin(callee_name, args.len()) {
+                        self.coerce_arg_to_display_text(local, arg)?
+                    } else {
+                        local
                     };
                     arg_values.push(local_to_value(local));
                 }
