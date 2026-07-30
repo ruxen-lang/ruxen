@@ -327,6 +327,55 @@ mod tests {
     }
 
     #[test]
+    fn return_value_is_checked_against_the_declared_return_type() {
+        // B84. `return <value>` lands in the SAME slot as the body's tail
+        // expression, so it must run the same check. This arm used to call
+        // `unify` and DISCARD the result, so a bare `Int` returned from a
+        // `-> Result[Int, String]` function type-checked, skipped the `Ok`
+        // box the slot's layout requires, and SIGSEGV'd the caller — a
+        // silent miscompile with no diagnostic.
+        //
+        // The e2e harness has no compile-fail expectation, so the negative
+        // half of the B84 pins (cases 1850-1852) lives here.
+        let result = parse_and_check(
+            "def f(x: Int) -> Result[Int, String]\n  \
+             if x > 1\n    return x * 10\n  end\n  Err(\"small\")\nend",
+        );
+        let has_mismatch = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
+            .any(|d| d.message.contains("type mismatch"));
+        assert!(
+            has_mismatch,
+            "a bare `return <T>` from a `-> Result[T, E]` function must be a \
+             type mismatch, not a silent unboxed return; got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn return_of_a_bare_value_wraps_into_an_option_return_slot() {
+        // B84, the positive half: the "drop `Some`" sugar that the body's
+        // TAIL expression already got must also fire for an explicit
+        // `return`, otherwise the two spellings disagree about the value's
+        // representation. Must type-check clean.
+        let result = parse_and_check(
+            "def f(x: Int) -> Int?\n  \
+             if x > 1\n    return x * 10\n  end\n  nil\nend",
+        );
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "`return <T>` in a `-> T?` function must auto-wrap, not error: {errors:?}"
+        );
+    }
+
+    #[test]
     fn type_error_on_mismatch() {
         let result = parse_and_check("def test\n  let x: Int = true\nend");
         // Should produce a type error: Bool doesn't unify with Int

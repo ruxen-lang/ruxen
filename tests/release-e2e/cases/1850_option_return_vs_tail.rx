@@ -1,0 +1,74 @@
+# B84 — `return <value>` from an Option-returning function must produce the
+# SAME boxed `Option` the tail-expression spelling produces.
+#
+# Before the fix the `return` spelling type-checked (the `Return` arm called
+# `unify` and DISCARDED the result), skipped the implicit `Option::Some` wrap
+# the tail spelling gets for free, and handed the caller a RAW `Int` where it
+# dereferenced a tagged-enum pointer. Exit 139, SIGSEGV, from a silent
+# miscompile with no diagnostic.
+#
+# Both spellings are pinned SIDE BY SIDE deliberately: pin 1061 exercised only
+# the tail spelling and the whole batch went green while this crashed.
+
+# ── early `return`, bare value (the crashing spelling) ──
+def early_ret(x: Int) -> Int?
+  if x > 1
+    return x * 10
+  end
+  nil
+end
+
+# ── tail expression, bare value (the spelling that always worked) ──
+def tail_expr(x: Int) -> Int?
+  if x > 1
+    x * 10
+  else
+    nil
+  end
+end
+
+# ── the long `Option[T]` spelling of the same early return ──
+def early_ret_long(x: Int) -> Option[Int]
+  if x > 1
+    return x * 10
+  end
+  nil
+end
+
+# ── explicit `Some(...)` through `return` (already worked; pinned so a
+#    regression in the wrap cannot hide behind the implicit form) ──
+def early_ret_some(x: Int) -> Int?
+  if x > 1
+    return Some(x * 10)
+  end
+  nil
+end
+
+# ── `return nil` — the None side of the same slot ──
+def early_ret_nil(x: Int) -> Int?
+  if x > 1
+    return nil
+  end
+  Some(x)
+end
+
+# ── heap payload: the implicit wrap must box a `String` the same way, so the
+#    caller's drop of the payload stays balanced ──
+def early_ret_string(x: Int) -> String?
+  if x > 1
+    return "big"
+  end
+  nil
+end
+
+def main
+  puts "early_ret_hit=#{early_ret(5).unwrap_or(0)}"
+  puts "early_ret_miss=#{early_ret(0).unwrap_or(-1)}"
+  puts "tail_expr_hit=#{tail_expr(5).unwrap_or(0)}"
+  puts "tail_expr_miss=#{tail_expr(0).unwrap_or(-1)}"
+  puts "early_ret_long=#{early_ret_long(5).unwrap_or(0)}"
+  puts "early_ret_some=#{early_ret_some(5).unwrap_or(0)}"
+  puts "early_ret_nil=#{early_ret_nil(5).unwrap_or(-1)}"
+  puts "early_ret_string=#{early_ret_string(5).unwrap_or("none")}"
+  puts "early_ret_string_miss=#{early_ret_string(0).unwrap_or("none")}"
+end
