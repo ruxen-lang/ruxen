@@ -1491,13 +1491,40 @@ impl<'a> Lowerer<'a> {
                 field_index: *idx,
             });
 
+            // A field that is itself a nominal type with `PartialEq`
+            // must recurse into its own `{Type}_eq`. A bare `Compare`
+            // on such a slot compares the two heap ADDRESSES it holds,
+            // so `Outer.new(Inner.new(1)) == Outer.new(Inner.new(1))`
+            // was `false` even though `Inner.new(1) == Inner.new(1)`
+            // was `true` — the synthesized `{Type}_eq` has always
+            // recursed here, and this inline route silently did not.
+            //
+            // A dotted name is a module-nested type whose synthesized
+            // `_eq` mangles from the BARE name (`mir/lower/mod.rs`), so
+            // emitting a call would name a symbol that may not exist.
+            // Fall through to the address compare instead — the same
+            // semantics such a field already had, and not a link error
+            // (same reasoning as `key_desc.rs`'s dotted-name skip).
+            //
+            // `String` needs no arm: `Compare` on a `Ty::String` operand
+            // already lowers to a by-value comparison (pin 206).
+            let nested_eq = self
+                .nominal_with_derive_trait(field_ty, "PartialEq")
+                .filter(|name| !name.contains('.'));
             let field_eq = self.new_temp(Ty::Bool);
-            self.emit(MirInst::Compare {
-                dest: field_eq,
-                op: CmpOp::Eq,
-                lhs: MirValue::Use(lf),
-                rhs: MirValue::Use(rf),
-            });
+            match nested_eq {
+                Some(inner_name) => self.emit(MirInst::Call {
+                    dest: Some(field_eq),
+                    callee: format!("{}_eq", inner_name),
+                    args: vec![MirValue::Use(lf), MirValue::Use(rf)],
+                }),
+                None => self.emit(MirInst::Compare {
+                    dest: field_eq,
+                    op: CmpOp::Eq,
+                    lhs: MirValue::Use(lf),
+                    rhs: MirValue::Use(rf),
+                }),
+            }
 
             acc = Some(match acc {
                 None => field_eq,
