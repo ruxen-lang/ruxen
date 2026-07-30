@@ -535,6 +535,15 @@ ranks first and B71 second, both found after B01 to B05.
 - **Status:** NEEDS-COMPILER-FEATURE.
 - **Pins:** 1920-1929. Pin one-param and two-param side by side, assigning to a captured `var`, for `each_with_index` and `Hash#each_pair`.
 
+### B93 — Tight `a!=b` lexes as `a!` `=` `b`
+- **Goal:** `a!=b` means `a != b`, as in Ruby and as spaced `a != b` already does.
+- **Cause:** `compiler/ruxen_core/src/lexer/tokens.rs:363` absorbs a trailing `!` into an identifier with **no guard for a following `=`**. The `?` branch one line over already has the analogous `??` guard, so the omission is an oversight rather than a design choice, and the fix is small.
+- **Repro:** `a!=b` (no spaces) misparses; `a != b` (spaced) is correct.
+- **Current state after B87:** strictly improved but NOT resolved. Before B87 this was a silent miscompile, because `a!` was classified as a macro call and the call was dropped. B87 makes an unregistered `MacroCall` a hard **E1126**, so the program now fails loudly instead of computing the wrong thing. Loud beats silent, but correct beats loud.
+- **Why it was not folded into B87:** it is a lexer edit with its own pin, and the B87 agent deliberately declined to smuggle it into a parser/resolve batch. That was the right call.
+- **Status:** READY-NOW (no enabler needed, one guard in the lexer).
+- **Pins:** 1930-1939. Pin tight and spaced spellings side by side for `!=`, plus `a!` as a genuine method call followed by `=` on the next token boundary, so the guard cannot over-correct.
+
 ---
 
 ## 3. READY-NOW batches (`.rx` only, no enabler needed)
