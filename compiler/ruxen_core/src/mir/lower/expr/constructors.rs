@@ -261,6 +261,9 @@ impl<'a> Lowerer<'a> {
                 // bootstrap `class Map` shell.
                 let new_name =
                     self.resolve_ffi_alias_callee(format!("{}_new", type_name_from_ty(&map_ty)));
+                // B73: `dest` is typed `Map(K, V)`, which is what the
+                // `install_key_descriptors` post-pass reads to attach the
+                // key-kind descriptor to this constructor.
                 self.emit(MirInst::Call {
                     dest: Some(dest),
                     callee: new_name,

@@ -68,6 +68,40 @@ building a real app, then low risk before high risk.
 4. A `CHANGELOG.md` entry under `[Unreleased]`.
 5. Reviewed under CLAUDE.md rule 44.
 
+### ⚠️ Pin EVERY spelling, not the one you happened to write
+
+**A pin proves the spelling it uses, and nothing else.** Three separate defects
+this session hid behind single-spelling pins, each with a fully green suite:
+
+| Pin | What it spelled | What was broken and invisible |
+|---|---|---|
+| `1061` | `filter_map` via a TAIL-position helper | `return <v>` from an `Option` fn SEGFAULTS (**B84**, still open) |
+| `991` | `Option` read with `unwrap_or` | `let x: Option[T] = …` drops the annotation, so `unwrap` fails |
+| `1720`-`1727` | `var h: Hash[K, V] = Hash.new` | `Hash[K, V].new` panicked (and segfaulted before B73) |
+
+In every case the author picked one spelling, it worked, the suite went green,
+and the idiomatic alternative was broken. All three were caught by an
+integration probe written the way a USER would write it, never by the suite.
+
+So, when a feature has more than one surface spelling, pin **all** of them, side
+by side in one case. Specifically:
+
+- **Construction:** annotated binding (`var h: Hash[K, V] = Hash.new`) AND the
+  type on the constructor (`Hash[K, V].new`), plus `with_capacity`, a class
+  field, a function return, a closure body, and an element inside a collection.
+  Pin `1728` and `1729` are the worked example.
+- **Early return vs tail expression** for anything returning `Option`/`Result`.
+  These lower differently; a tail-position pin says nothing about `return`.
+- **Paren-less vs parens** (`a.join` vs `a.join()`), which differ in default-arg
+  fill on a builtin head.
+- **Operator vs method spelling** (`a <=> b` vs `a.<=>(b)`), which take different
+  routes.
+
+If a spelling genuinely cannot work yet, pin the one that does and record the
+other as a `MISSING`/`PARTIAL` row with the reason. What is forbidden is
+silently choosing the spelling that happens to pass, which converts a live bug
+into invisible tribal knowledge.
+
 ### Pin-number allocation (avoid collisions between parallel batches)
 
 Highest existing case is `989`. **`990` to `999` are reserved** for the in-flight
@@ -99,7 +133,7 @@ taken; the next split batch starts at 1960.
 | **E2** | **Q58: `alias` to a method on a generic builtin head link-fails.** `mir/lower/mod.rs::select_method_symbol_name` compares `parent_def.name == class_name`, but the alias target's parent is the BARE class while `class_name` may carry the generic suffix. Strip `class_name`'s `[...]` there (`canonical_method_name` already strips). **LANDED** (`7b1c1907`, merged `42008fa3`). | `compiler/ruxen_core/src/mir/lower/mod.rs` | B22 (and lets several other batches collapse delegating methods back to one-line aliases) |
 | **E3** | **Scalar method-home `self` does not reach the primitive arithmetic floor.** A scalar `self` is typed nominally as `Class[Int]`, so `self + 1` lowers to a method call `Int_+` that does not exist. Make a scalar-class `self` flow into the primitive `+`/`-`/`*`/`/`/`%` floor. | `typeck/infer/ops.rs`, `mir/lower/expr/binops.rs` | Not a hard blocker (rebox with `let n = 0 + self`), but it removes the workaround from B12/B13/B14 and is a prerequisite for clean `Float` bodies |
 | **E4** | **Float receiver ABI on `.rx` method homes and closure args.** A `Float` receiver reaching an `.rx` body is read from an integer slot (truncates, or reads 0 for a computed value). Same family as the closure-arg bug. Delivered by **B01**. | codegen receiver coercion (`primitive_ffi_receiver_ty` neighbourhood), closure arg marshalling | B23 (all `Float` methods), the `Array[Float]` half of B20 |
-| **E5** | **Symbol type (`:sym`).** A compile-time-closed primitive: a 64-bit id into a static intern table, no runtime interning. **Designed: [`design/B29-symbols.md`](design/B29-symbols.md).** Delivered by **B29**. Note `&:sym` already works without it, and `Hash[Symbol, V]` additionally needs **B73**. | lexer, parser, typeck, plus a `library/std/symbol` `.rx` surface | Hash symbol shorthand `{a: 1}`, `%i[]`, `String#to_sym`, hash patterns, and the literal-symbol folding in B34 |
+| **E5** | **Symbol type (`:sym`).** A compile-time-closed primitive: a 64-bit id into a static intern table, no runtime interning. **Designed: [`design/B29-symbols.md`](design/B29-symbols.md).** Delivered by **B29**. Note `&:sym` already works without it, and `Hash[Symbol, V]` additionally needed **B73**, which is now DONE — a `Symbol` joins the key-kind protocol as a plain `RUXEN_KEY_BITS` key (it is a 64-bit intern id), so B29c needs no further runtime work. | lexer, parser, typeck, plus a `library/std/symbol` `.rx` surface | Hash symbol shorthand `{a: 1}`, `%i[]`, `String#to_sym`, hash patterns, and the literal-symbol folding in B34 |
 | **E6** | **Field-walk synthesis substrate**: the compiler synthesizes three ordinary typed methods from a class's declared fields (`field_names`, `accept[V]`, `from_fields[R]`); every feature on top is an `.rx` visitor, so the compiler learns one mechanism and zero features. **Designed: [`design/B33-codegen-substrate.md`](design/B33-codegen-substrate.md).** Note the design places synthesis at the **end of typeck as HIR**, not in `mir/lower/derive.rs`, specifically to avoid adding a second typeck↔MIR lockstep. Delivered by **B33** (substrate) and **B55** (the `Model` consumer). | a new synthesis pass at the typeck boundary; `implicit_includes/mod.rs` for gating and diagnostics | B33, B34, B44, B55 to B60, B63, B64 (the whole ORM and serializer surface) |
 | **E7** | **Splat params `*args` / `**kwargs`.** Delivered by **B27**. | parser, typeck | `format`/`sprintf` free fns, `puts a, b`, variadic builders, `Set[a, b, c]` literal |
 | **E8** | **Range as a first-class Enumerable object.** Range is an iteration construct today (`Range#map` returns empty). Needs a real Range surface that can `include Enumerable`. Delivered by **B24**. | `library/std` (new `range` package) + typeck/MIR range lowering | B24, and Range rows across `core.md` |
@@ -315,7 +349,8 @@ ranks first and B71 second, both found after B01 to B05.
 - **Status:** NEEDS-COMPILER-FEATURE.
 - **Pins:** 1710-1719. Pin `[]=` followed by `size`, `key?`, and a subscript read, so a partial fix cannot pass.
 
-### B73 — The `Hash` key-kind protocol is a memory-probing heuristic
+### B73 — The `Hash` key-kind protocol is a memory-probing heuristic — **DONE**
+- **Status: DONE.** Landed as the key-kind descriptor protocol; `ruxen_hash_looks_like_string` is deleted. Pins `1720`-`1729`. **Landing it also required fixing `Hash[K, V].new`**: the parser discarded the explicit generic arguments on a static-call receiver, so that spelling produced a table typed with the declared rigid `K`/`V`. It had never been correctly typed (pre-B73 it SIGSEGV'd on `Hash[Int, Int].new` + `insert(5000, …)` and typed `h["a"]` as the abstract `V`); B73 turned the silent guess into a panic, which is what surfaced it. Both spellings of every construction form are now pinned side by side — the first eight pins all used the annotated-binding spelling, which is exactly why the suite stayed green while the other was broken. All three defects verified fixed; `Hash[UserType, V]` and `Set[UserType]` now work, which unblocks **B29c**. The descriptor is installed on two routes — at construction sites (rewritten to a `_keyed` form) and, idempotently, ahead of every key-addressed operation from the RECEIVER's type — so a table whose construction site cannot be typed is still keyed at its first use. Tables built entirely inside the C runtime (`Env.vars`, `Match#named_groups`, `clone`, the set algebra) name or inherit their own kind. See the CHANGELOG entry for the design. One residual: a table neither route can type keeps `RUXEN_KEY_UNSET` and the runtime panics on the first insert naming the protocol, rather than guessing a kind and mis-hashing. No shape in the workspace or the e2e suite reaches it.
 - **Goal:** a `Hash` key's comparison and hashing are decided by its **type**, not by guessing from its bit pattern.
 - **Cause:** `library/std/hash/runtime/hash.c` stores every key in an `int64_t` and resolves a tristate `string_keys` flag **on the first insert** via `ruxen_hash_looks_like_string`, which **dereferences the key value as a pointer** and scans up to 256 bytes for a NUL.
 - **Three defects, one root (all verified 2026-07-29):**
@@ -1226,7 +1261,7 @@ Pins: none.
 | **BLOCKED-ON-B36 (digest/HMAC)** | 3 | B37 (hex half), B66, B68 |
 | **BLOCKED-ON-B46 (TLS)** | 2 | B45 (HTTPS half), B69 |
 | **BLOCKED-ON-B44 (Serialize)** | 2 | B64, B67 |
-| **NEEDS-RUNTIME-C** | 7 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61, **B73** |
+| **NEEDS-RUNTIME-C** | 6 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61 (**B73** is DONE) |
 | **BLOCKED within B35** | 5 | B35b, B35c, B35d, B35e, B35f (all on B35a or B35b; see §6) |
 | **NEEDS-COMPILER-FEATURE** | 26 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B74**, **B75** (toolchain), **B76**, **B77** (enabler), **B78**, **B79**, **B80**, **B82** — **B72** landed |
 

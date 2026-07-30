@@ -289,6 +289,80 @@ impl Resolver {
                     }
                 }
             }
+            ast::ExprKind::GenericTypeRef { name, ty } => {
+                // `Hash[String, Int].new` — a type in value position with the
+                // generic arguments the author wrote. Resolve the written
+                // path through ordinary type resolution (which already knows
+                // `Hash[K, V]` is `Ty::Map`, `Set[T]` is `Ty::Set`, and how to
+                // handle a user generic), and give the receiver THAT type
+                // instead of the constructor entry's declared one.
+                //
+                // This is the whole fix: typeck's `substitute_generics_in_return`
+                // binds the class's declared params against the receiver's
+                // generic args, so a receiver of `Map(String, Int)` turns the
+                // declared `-> Hash[K, V]` into `Hash[String, Int]`. With the
+                // old `Identifier` receiver it bound `{K → K}` and the call's
+                // type stayed abstract forever.
+                // Only the BUILTIN type constructors need refining here.
+                // `register_type_constructors` registers `Array`/`Hash`/`Set`/
+                // … in VALUE scope as a `DefKind::Variable` holding the
+                // declared generic type, and that entry is the thing whose
+                // rigid parameters leak. A user generic class is a
+                // `DefKind::Class` reached through type scope, its `.new` goes
+                // down the constructor path, and `Pair[Int, String].new(42,
+                // "hi")` already infers its parameters from the constructor
+                // arguments. Refining those here would swap a `DefKind::Class`
+                // receiver for a synthetic `DefKind::Variable` and break
+                // constructor resolution, so they keep the path they have.
+                let is_builtin_ctor = self
+                    .scopes
+                    .lookup(name)
+                    .and_then(|id| self.symbols.get(id).map(|d| &d.kind))
+                    .is_some_and(|k| matches!(k, DefKind::Variable { .. }));
+                if !is_builtin_ctor {
+                    // Resolve exactly as the bare type name would, so every
+                    // non-builtin shape behaves precisely as before this node
+                    // existed — including the diagnostics for an undefined one.
+                    let bare = ast::Expr {
+                        kind: ast::ExprKind::Identifier(name.clone()),
+                        span: span.clone(),
+                    };
+                    return self.resolve_expr(&bare);
+                }
+                let resolved_ty = self.resolve_type_expr(ty);
+                // Setting `expr.ty` here would NOT survive: typeck's `VarRef`
+                // arm re-derives an expression's type from its `DefId`
+                // (`typeck/infer/expr.rs:125-130`) and would put the
+                // uninstantiated `Hash[K, V]` straight back. So register the
+                // INSTANTIATED constructor as its own def, which is exactly
+                // the shape `resolve/stdlib/type_constructors.rs` uses for the
+                // uninstantiated one. The type then survives by construction
+                // rather than by every later stage agreeing not to clobber it.
+                //
+                // Method lookup is unaffected: static-method resolution and
+                // MIR's callee mangling both key off the receiver's TYPE
+                // (`method_home_key(Ty::Map) == "Hash"`), never off this
+                // `DefId`. The def is deliberately NOT inserted into any
+                // scope — it is not name-addressable, it exists only to carry
+                // this occurrence's type. That means one extra symbol-table
+                // entry per written `Type[Args].method` expression, which is
+                // the same order as the temporaries every expression already
+                // allocates.
+                let def_id = self.symbols.define(
+                    name.clone(),
+                    DefKind::Variable {
+                        mutable: false,
+                        ty: resolved_ty.clone(),
+                    },
+                    Visibility::Public,
+                    span.clone(),
+                );
+                HirExpr {
+                    kind: HirExprKind::VarRef(def_id),
+                    ty: resolved_ty,
+                    span,
+                }
+            }
             ast::ExprKind::SelfRef => {
                 if let Some(def_id) = self.scopes.lookup("self") {
                     let ty = self.current_self_ty.clone().unwrap_or(Ty::Error);

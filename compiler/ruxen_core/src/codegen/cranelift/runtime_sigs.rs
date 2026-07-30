@@ -109,6 +109,28 @@ pub fn compiler_internal_signature(name: &str) -> Option<(Vec<Type>, Option<Type
         "ruxen_hash_index" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_set_eq" => Some((vec![types::I64, types::I64], Some(types::I8))),
 
+        // ── B73 key-kind protocol: descriptor-taking table constructors.
+        // The MIR rewrites `ruxen_hash_new` & co. to these and appends
+        // `(kind, hash_fn, eq_fn)`. No `.rx` decl names them, so the
+        // signature has to be pinned here.
+        "ruxen_hash_new_keyed" | "ruxen_set_new_keyed" => Some((
+            vec![types::I64, types::I64, types::I64],
+            Some(types::I64),
+        )),
+        "ruxen_hash_with_capacity_keyed"
+        | "ruxen_set_with_capacity_keyed"
+        | "ruxen_hash_from_iter_keyed"
+        | "ruxen_set_from_iter_keyed" => Some((
+            vec![types::I64, types::I64, types::I64, types::I64],
+            Some(types::I64),
+        )),
+        // The idempotent install the post-pass emits ahead of a
+        // key-addressed operation. Returns nothing.
+        "ruxen_hash_ensure_key_kind" | "ruxen_set_ensure_key_kind" => Some((
+            vec![types::I64, types::I64, types::I64, types::I64],
+            None,
+        )),
+
         // ── Indexing / element access emitted by `a[i]` lowering ─────
         // `Array#get` is `.rx`-declared as `ruxen_vec_get_opt`; the bare
         // `ruxen_vec_get` (+ mut variants) are the panic-on-OOB forms the

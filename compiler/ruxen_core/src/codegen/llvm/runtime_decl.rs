@@ -112,6 +112,47 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("ruxen_hash_index", i64_ty, [ptr_ty, i64_ty]);
     decl!("ruxen_set_eq", i8_ty, [ptr_ty, ptr_ty]);
 
+    // ── B73 key-kind protocol: the descriptor-taking table constructors.
+    //    The MIR rewrites `ruxen_hash_new` & co. to these and appends
+    //    `(kind, hash_fn, eq_fn)`. No `.rx` decl names them (the `.rx`
+    //    surface keeps the descriptor-free spelling), so they MUST be
+    //    declared here — the call-site fallback in `get_or_declare_runtime`
+    //    would otherwise infer a 1-param `ptr -> i64` shape and the module
+    //    would fail verification on the argument count.
+    decl!("ruxen_hash_new_keyed", ptr_ty, [i64_ty, i64_ty, i64_ty]);
+    decl!(
+        "ruxen_hash_with_capacity_keyed",
+        ptr_ty,
+        [i64_ty, i64_ty, i64_ty, i64_ty]
+    );
+    decl!(
+        "ruxen_hash_from_iter_keyed",
+        ptr_ty,
+        [ptr_ty, i64_ty, i64_ty, i64_ty]
+    );
+    decl!("ruxen_set_new_keyed", ptr_ty, [i64_ty, i64_ty, i64_ty]);
+    decl!(
+        "ruxen_set_with_capacity_keyed",
+        ptr_ty,
+        [i64_ty, i64_ty, i64_ty, i64_ty]
+    );
+    decl!(
+        "ruxen_set_from_iter_keyed",
+        ptr_ty,
+        [ptr_ty, i64_ty, i64_ty, i64_ty]
+    );
+    // The idempotent install emitted ahead of a key-addressed operation.
+    decl!(
+        "ruxen_hash_ensure_key_kind",
+        void_ty,
+        [ptr_ty, i64_ty, i64_ty, i64_ty]
+    );
+    decl!(
+        "ruxen_set_ensure_key_kind",
+        void_ty,
+        [ptr_ty, i64_ty, i64_ty, i64_ty]
+    );
+
     // ── Indexing / element access emitted by `a[i]` lowering ────────
     decl!("ruxen_vec_get", i64_ty, [ptr_ty, i64_ty]);
     decl!("ruxen_vec_get_mut", ptr_ty, [ptr_ty, i64_ty]);

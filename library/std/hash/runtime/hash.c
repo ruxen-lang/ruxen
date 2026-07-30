@@ -7,48 +7,15 @@
 
 /* Simple Hash: array of bucket linked lists, keyed by uintptr_t.
    Keys and values are both pointer-sized (stored as int64_t).
-   For string keys (char*), hashing walks the bytes. For integer keys,
-   the raw bits are hashed. Chained collisions handled via next pointer. */
+   Chained collisions handled via next pointer.
 
-#ifndef RUXEN_HASH_RUNTIME_STRUCTS
-#define RUXEN_HASH_RUNTIME_STRUCTS
-
-typedef struct RuxenHashEntry {
-    int64_t key;
-    int64_t value;
-    struct RuxenHashEntry *next;
-} RuxenHashEntry;
+   `RuxenHashEntry`, `struct RuxenHash`, the RUXEN_KEY_* kind constants
+   and the RuxenKeyHashFn / RuxenKeyEqFn callback types all live in
+   core/runtime/runtime.h — json.c walks the bucket chains too, and a
+   per-TU copy of the layout is an ODR hazard. The key-kind protocol
+   (B73) is documented there. */
 
 #define RUXEN_HASH_INITIAL_BUCKETS 16u
-
-struct RuxenHash {
-    /* Heap-allocated bucket array of length `bucket_count`. The
-       count starts at RUXEN_HASH_INITIAL_BUCKETS and doubles when
-       `len` would push the load factor past 0.75 — see
-       `ruxen_hash_maybe_grow` below. Keeping the count as a power
-       of two preserves a clean `% bucket_count` modulo without
-       biasing the splitmix/FNV hash distribution. */
-    RuxenHashEntry **buckets;
-    uint64_t bucket_count;
-    uint64_t len;
-    /* Flag set to 1 if keys should be compared/hashed as C strings. The
-       first inserted key decides: string pointers have the top bit clear
-       on practical platforms, but we can't reliably detect that. Instead,
-       we use a heuristic: if the first key, as a pointer, points to a
-       readable NUL-terminated region that is ASCII-ish, treat as string.
-       For simplicity and correctness, we always hash the low 8 bytes as
-       raw bits and only switch to strcmp if the caller uses the string
-       variant (see ruxen_hash_insert_str). v1 keeps a single code path
-       and treats keys by raw bits, relying on the fact that string
-       interning / stable pointers aren't assumed — callers using string
-       keys in the v1 runtime must pass pointers whose identity matches
-       the `ruxen_string_from`-returned pointer. Since hash!{} lowers to
-       insert calls on the same string literals, this works for the
-       common case where the same string constant pointer is reused. */
-    int8_t string_keys;
-};
-
-#endif
 
 static uint64_t ruxen_hash_bits(int64_t k) {
     /* splitmix64-ish finalizer for decent distribution on raw int bits. */
@@ -71,62 +38,58 @@ uint64_t ruxen_hash_str(const char *s) {
     return h;
 }
 
+/* Key equality, dispatched on the table's declared key kind. Never
+   dereferences a key unless the kind says the key IS a pointer. */
 static int ruxen_hash_keys_equal(const RuxenHash *h, int64_t a, int64_t b) {
+    /* Identical words are equal under every kind: same string pointer,
+       same integer, same object. This also keeps a lookup on a table
+       whose kind is still UNSET (an empty table — insert is what
+       installs entries, and insert requires a kind) from touching
+       memory, which is what fixed the empty-hash `key?`/`get` SIGSEGV
+       (Q25). */
     if (a == b) return 1;
-    /* `string_keys` is a TRISTATE int8: -1 unset, 0 int keys, 1 string
-       keys. It is resolved only on the first insert. Test `> 0`, NOT
-       plain truthiness — the unset sentinel -1 is C-truthy, so a lookup
-       on an empty hash (key kind never resolved) would otherwise take the
-       string path and `strcmp((char*)key)` an integer key, dereferencing a
-       small bogus address (e.g. (char*)9). That was the empty-hash
-       `key?`/`get` SIGSEGV (Q25). Raw-bits is the safe default; a string-
-       keyed hash always has `string_keys == 1` before any lookup because
-       the first insert sets it. */
-    if (h && h->string_keys > 0) {
+    if (!h) return 0;
+    switch (h->key_kind) {
+    case RUXEN_KEY_CSTR: {
         const char *sa = (const char *)a;
         const char *sb = (const char *)b;
         if (!sa || !sb) return 0;
         return strcmp(sa, sb) == 0;
     }
-    return 0;
+    case RUXEN_KEY_CUSTOM:
+        if (!h->key_eq) return 0;
+        return h->key_eq(a, b) != 0;
+    default:
+        /* RUXEN_KEY_BITS and RUXEN_KEY_UNSET: the `a == b` test above is
+           the whole relation. */
+        return 0;
+    }
 }
 
 static uint64_t ruxen_hash_key_hash(const RuxenHash *h, int64_t key) {
-    /* See ruxen_hash_keys_equal: `> 0`, not truthiness, so the -1 unset
-       sentinel hashes by raw bits instead of FNV-1a over `(char*)key`
-       (the empty-hash lookup SIGSEGV, Q25). */
-    if (h && h->string_keys > 0) {
+    if (!h) return ruxen_hash_bits(key);
+    switch (h->key_kind) {
+    case RUXEN_KEY_CSTR:
         return ruxen_hash_str((const char *)key);
+    case RUXEN_KEY_CUSTOM:
+        if (!h->key_hash) return ruxen_hash_bits(key);
+        /* Run the user hash through the bit finalizer as well: a
+           hand-written `hash_code` is free to return something with poor
+           low-bit entropy (an id, a small counter), and the bucket index
+           is a raw modulo. */
+        return ruxen_hash_bits(h->key_hash(key));
+    default:
+        return ruxen_hash_bits(key);
     }
-    return ruxen_hash_bits(key);
 }
 
-/* Heuristic: assume the key is a string if its value looks like a
-   valid pointer (non-zero, points to a readable byte region). This
-   is conservative — tests use literal string constants whose bits
-   are always >= 0x1000 on practical systems. Integers small enough
-   to be clearly non-pointers fall through to bit hashing. */
-static int ruxen_hash_looks_like_string(int64_t key) {
-    uintptr_t p = (uintptr_t)key;
-    /* Small non-pointer values. */
-    if (p < 0x1000) return 0;
-    /* Probe the first byte; if it's ASCII/UTF-8 and followed by a NUL
-       within a short window, treat as string. This is best-effort; we
-       accept false negatives (rare). */
-    const unsigned char *s = (const unsigned char *)p;
-    for (size_t i = 0; i < 256; i++) {
-        if (s[i] == 0) return i > 0;
-        if (s[i] < 0x09) return 0; /* control char — not a C string */
-    }
-    /* No NUL in 256 bytes — probably not a C string we care about. */
-    return 0;
-}
-
-RuxenHash *ruxen_hash_new(void) {
-    RuxenHash *h = (RuxenHash *)malloc(sizeof(RuxenHash));
-    if (!h) {
-        ruxen_panic("out of memory");
-    }
+/* Shared field init for a freshly-malloc'd table header. Used by both
+   the Hash and the Set constructors (a Set is a Hash whose values are
+   ignored), so the key-kind descriptor is installed in exactly one
+   place. */
+static void ruxen_hash_init_fields(RuxenHash *h, int32_t kind,
+                                   RuxenKeyHashFn hash_fn,
+                                   RuxenKeyEqFn eq_fn) {
     h->bucket_count = RUXEN_HASH_INITIAL_BUCKETS;
     /* Use malloc + explicit NULL init rather than calloc so the
        drop_fixtures leak harness (which rewrites `malloc(` →
@@ -143,8 +106,63 @@ RuxenHash *ruxen_hash_new(void) {
         h->buckets[i] = NULL;
     }
     h->len = 0;
-    h->string_keys = -1; /* unset — decided on first insert */
+    h->key_kind = kind;
+    h->key_hash = hash_fn;
+    h->key_eq = eq_fn;
+}
+
+static RuxenHash *ruxen_hash_alloc(int32_t kind, RuxenKeyHashFn hash_fn,
+                                   RuxenKeyEqFn eq_fn) {
+    RuxenHash *h = (RuxenHash *)malloc(sizeof(RuxenHash));
+    if (!h) {
+        ruxen_panic("out of memory");
+    }
+    ruxen_hash_init_fields(h, kind, hash_fn, eq_fn);
     return h;
+}
+
+/* The no-descriptor constructor. Reachable only from a caller that did
+   NOT go through the compiler's key-descriptor plumbing; the table comes
+   back with RUXEN_KEY_UNSET and `ruxen_hash_insert` refuses to populate
+   it. Lookups on it are safe and simply find nothing. Keeping this
+   entry point (rather than deleting it) preserves the `.rx` `Hash.new`
+   declaration, the backend runtime tables, and the REPL's symbol
+   registration; making it UNSET rather than silently BITS means a missed
+   descriptor site fails loudly instead of mis-hashing string keys. */
+RuxenHash *ruxen_hash_new(void) {
+    return ruxen_hash_alloc(RUXEN_KEY_UNSET, NULL, NULL);
+}
+
+/* The real constructor: the compiler emits this at every `Hash[K, V]`
+   construction site, with `kind`/`hash_fn`/`eq_fn` derived from the
+   static key type K. `hash_fn` and `eq_fn` are 0 for every kind but
+   RUXEN_KEY_CUSTOM. They cross the ABI as int64_t because that is how
+   the MIR passes a `FuncAddr` (same convention as the closure pointer
+   in `ruxen_thread_spawn`). */
+RuxenHash *ruxen_hash_new_keyed(int64_t kind, int64_t hash_fn,
+                                int64_t eq_fn) {
+    return ruxen_hash_alloc((int32_t)kind, (RuxenKeyHashFn)(uintptr_t)hash_fn,
+                            (RuxenKeyEqFn)(uintptr_t)eq_fn);
+}
+
+/* Install a key-kind descriptor on a table that does not have one yet.
+   No-op once the table is keyed, so it is safe to call before every
+   insert and it can never override what construction chose.
+
+   This is the second half of the key-kind protocol, and it exists because
+   the compiler cannot always type a table AT its construction site: a
+   static constructor has no receiver to substitute `-> Hash[K, V]`
+   against, so `f(Hash.new)` and `h.insert(k, Set.new)` build a table
+   whose key type is only known where it is USED. The MIR post-pass emits
+   this call before every insert whose RECEIVER has a concrete key type.
+   It is still the static type deciding — nothing here inspects a key. */
+void ruxen_hash_ensure_key_kind(RuxenHash *h, int64_t kind, int64_t hash_fn,
+                                int64_t eq_fn) {
+    if (!h) return;
+    if (h->key_kind != RUXEN_KEY_UNSET) return;
+    h->key_kind = (int32_t)kind;
+    h->key_hash = (RuxenKeyHashFn)(uintptr_t)hash_fn;
+    h->key_eq = (RuxenKeyEqFn)(uintptr_t)eq_fn;
 }
 
 /* Hash::clone — shallow copy: a new Hash with the same (key, value)
@@ -157,9 +175,11 @@ RuxenHash *ruxen_hash_new(void) {
    Pin: the compiler's `synthesize_clone_field` (mir/lower/derive.rs:647)
    names this symbol. */
 RuxenHash *ruxen_hash_clone(RuxenHash *h) {
-    RuxenHash *out = ruxen_hash_new();
-    if (!h) return out;
-    out->string_keys = h->string_keys;
+    /* The clone has the same key TYPE as its source, so it inherits the
+       descriptor — and inherits it BEFORE the first insert, which is
+       what keeps the copied entries landing in the same buckets. */
+    if (!h) return ruxen_hash_new();
+    RuxenHash *out = ruxen_hash_alloc(h->key_kind, h->key_hash, h->key_eq);
     for (uint64_t i = 0; i < h->bucket_count; i++) {
         for (RuxenHashEntry *e = h->buckets[i]; e; e = e->next) {
             ruxen_hash_insert(out, e->key, e->value);
@@ -305,8 +325,14 @@ static void ruxen_hash_maybe_grow(RuxenHash *h) {
 
 void ruxen_hash_insert(RuxenHash *h, int64_t key, int64_t value) {
     if (!h) return;
-    if (h->string_keys < 0) {
-        h->string_keys = ruxen_hash_looks_like_string(key) ? 1 : 0;
+    if (h->key_kind == RUXEN_KEY_UNSET) {
+        /* No key descriptor was installed, so we do not know how to hash
+           or compare this key. Populating the table anyway would give
+           silently wrong lookups (the pre-B73 failure mode). Fail loudly
+           and name the contract instead. */
+        ruxen_panic(
+            "hash insert: no key-kind descriptor on this table — the "
+            "compiler must construct it via ruxen_hash_new_keyed (B73)");
     }
     uint64_t bucket_idx = ruxen_hash_key_hash(h, key) % h->bucket_count;
     RuxenHashEntry *e = h->buckets[bucket_idx];
@@ -384,25 +410,35 @@ typedef struct {
     RuxenHash inner;
 } RuxenSet;
 
-RuxenSet *ruxen_set_new(void) {
+static RuxenSet *ruxen_set_alloc(int32_t kind, RuxenKeyHashFn hash_fn,
+                                 RuxenKeyEqFn eq_fn) {
     RuxenSet *s = (RuxenSet *)malloc(sizeof(RuxenSet));
     if (!s) {
         ruxen_panic("out of memory");
     }
-    s->inner.bucket_count = RUXEN_HASH_INITIAL_BUCKETS;
-    /* malloc + NULL-init for leak-harness counter parity with the
-       free() rewrite — see the comment in ruxen_hash_new. */
-    s->inner.buckets = (RuxenHashEntry **)malloc(
-        s->inner.bucket_count * sizeof(RuxenHashEntry *));
-    if (!s->inner.buckets) {
-        ruxen_panic("out of memory");
-    }
-    for (uint64_t i = 0; i < s->inner.bucket_count; i++) {
-        s->inner.buckets[i] = NULL;
-    }
-    s->inner.len = 0;
-    s->inner.string_keys = -1;
+    ruxen_hash_init_fields(&s->inner, kind, hash_fn, eq_fn);
     return s;
+}
+
+/* See `ruxen_hash_new`: the no-descriptor form yields an UNSET table
+   that refuses inserts. */
+RuxenSet *ruxen_set_new(void) {
+    return ruxen_set_alloc(RUXEN_KEY_UNSET, NULL, NULL);
+}
+
+/* The real constructor — see `ruxen_hash_new_keyed`. A Set's ELEMENT is
+   its key, so the element type drives the descriptor. */
+RuxenSet *ruxen_set_new_keyed(int64_t kind, int64_t hash_fn, int64_t eq_fn) {
+    return ruxen_set_alloc((int32_t)kind, (RuxenKeyHashFn)(uintptr_t)hash_fn,
+                           (RuxenKeyEqFn)(uintptr_t)eq_fn);
+}
+
+/* See `ruxen_hash_ensure_key_kind`. A Set's element IS its key, and a
+   `RuxenSet` is its `RuxenHash` header, so this just forwards. */
+void ruxen_set_ensure_key_kind(RuxenSet *s, int64_t kind, int64_t hash_fn,
+                               int64_t eq_fn) {
+    if (!s) return;
+    ruxen_hash_ensure_key_kind(&s->inner, kind, hash_fn, eq_fn);
 }
 
 void ruxen_set_insert(RuxenSet *s, int64_t item) {
@@ -416,9 +452,9 @@ void ruxen_set_insert(RuxenSet *s, int64_t item) {
    clone). Required for `derive Clone` on user classes with `Set[T]`
    fields — pin: `synthesize_clone_field` in mir/lower/derive.rs. */
 RuxenSet *ruxen_set_clone(RuxenSet *s) {
-    RuxenSet *out = ruxen_set_new();
-    if (!s) return out;
-    out->inner.string_keys = s->inner.string_keys;
+    if (!s) return ruxen_set_new();
+    RuxenSet *out = ruxen_set_alloc(s->inner.key_kind, s->inner.key_hash,
+                                    s->inner.key_eq);
     for (uint64_t i = 0; i < s->inner.bucket_count; i++) {
         for (RuxenHashEntry *e = s->inner.buckets[i]; e; e = e->next) {
             ruxen_hash_insert(&out->inner, e->key, e->value);
@@ -488,6 +524,12 @@ RuxenHash *ruxen_hash_with_capacity(int64_t cap) {
     return ruxen_hash_new();
 }
 
+RuxenHash *ruxen_hash_with_capacity_keyed(int64_t cap, int64_t kind,
+                                          int64_t hash_fn, int64_t eq_fn) {
+    (void)cap;
+    return ruxen_hash_new_keyed(kind, hash_fn, eq_fn);
+}
+
 /* HashMap.remove(&K) — return Option[V] (16-byte tagged union).
    tag=1 Some(prior_value), tag=0 None. Walks the bucket chain and
    unlinks the matching entry; the freed RuxenHashEntry must go
@@ -525,8 +567,10 @@ void *ruxen_hash_remove(RuxenHash *h, int64_t key) {
 }
 
 /* HashMap.clear — remove every entry. Frees per-bucket entry chains
-   then resets `len` to 0 and clears the string-key flag so the next
-   inserted key can re-decide. The spine itself is preserved. */
+   then resets `len` to 0. The spine is preserved, and so is the key-kind
+   descriptor: emptying a `Hash[String, V]` does not make it a
+   `Hash[Int, V]`. (Pre-B73 this reset the tristate flag, so the table
+   re-guessed its key kind from whatever was inserted next.) */
 void ruxen_hash_clear(RuxenHash *h) {
     if (!h) return;
     for (uint64_t i = 0; i < h->bucket_count; i++) {
@@ -539,7 +583,6 @@ void ruxen_hash_clear(RuxenHash *h) {
         h->buckets[i] = NULL;
     }
     h->len = 0;
-    h->string_keys = -1;
 }
 
 /* HashMap.keys -> Vec[&K]
@@ -645,6 +688,12 @@ RuxenSet *ruxen_set_with_capacity(int64_t cap) {
     return ruxen_set_new();
 }
 
+RuxenSet *ruxen_set_with_capacity_keyed(int64_t cap, int64_t kind,
+                                        int64_t hash_fn, int64_t eq_fn) {
+    (void)cap;
+    return ruxen_set_new_keyed(kind, hash_fn, eq_fn);
+}
+
 /* HashSet.remove(&T) -> Bool — true iff the element was present.
    Reuses `ruxen_hash_remove` for the unlink work, then collapses the
    resulting Option to a Bool via the tag word. */
@@ -673,8 +722,9 @@ RuxenVec *ruxen_set_iter(RuxenSet *s) {
    Each iter slot is a heap-allocated 2-tuple with field0 at +0 and
    field1 at +8, matching `ruxen_vec_zip`'s tuple layout and the
    compiler's generic tuple allocation rule. */
-RuxenHash *ruxen_hash_from_iter(RuxenVec *iter) {
-    RuxenHash *out = ruxen_hash_new();
+RuxenHash *ruxen_hash_from_iter_keyed(RuxenVec *iter, int64_t kind,
+                                      int64_t hash_fn, int64_t eq_fn) {
+    RuxenHash *out = ruxen_hash_new_keyed(kind, hash_fn, eq_fn);
     if (!iter) return out;
     for (uint64_t i = 0; i < iter->len; i++) {
         int64_t *pair = (int64_t *)iter->data[i];
@@ -684,14 +734,23 @@ RuxenHash *ruxen_hash_from_iter(RuxenVec *iter) {
     return out;
 }
 
+RuxenHash *ruxen_hash_from_iter(RuxenVec *iter) {
+    return ruxen_hash_from_iter_keyed(iter, RUXEN_KEY_UNSET, 0, 0);
+}
+
 /* HashSet.from_iter(iter[T]) / iter.collect[HashSet[T]]. */
-RuxenSet *ruxen_set_from_iter(RuxenVec *iter) {
-    RuxenSet *out = ruxen_set_new();
+RuxenSet *ruxen_set_from_iter_keyed(RuxenVec *iter, int64_t kind,
+                                    int64_t hash_fn, int64_t eq_fn) {
+    RuxenSet *out = ruxen_set_new_keyed(kind, hash_fn, eq_fn);
     if (!iter) return out;
     for (uint64_t i = 0; i < iter->len; i++) {
         ruxen_set_insert(out, iter->data[i]);
     }
     return out;
+}
+
+RuxenSet *ruxen_set_from_iter(RuxenVec *iter) {
+    return ruxen_set_from_iter_keyed(iter, RUXEN_KEY_UNSET, 0, 0);
 }
 
 /* HashSet.union(&Self) -> HashSet[T]
@@ -700,8 +759,24 @@ RuxenSet *ruxen_set_from_iter(RuxenVec *iter) {
    semantics dedup). The new set is registered as a fresh-alloc
    callee in mir/lower.rs::FRESH_ALLOC_CALLEES so its lifetime is
    the caller's drop frame. */
+/* The result of a set-algebra operation has the same ELEMENT type as its
+   operands, so it inherits their key descriptor. `ruxen_set_derived`
+   picks whichever operand actually carries one — an empty/UNSET operand
+   must not erase a real descriptor supplied by the other side. */
+static RuxenSet *ruxen_set_derived(const RuxenSet *a, const RuxenSet *b) {
+    const RuxenSet *src = NULL;
+    if (a && a->inner.key_kind != RUXEN_KEY_UNSET) {
+        src = a;
+    } else if (b && b->inner.key_kind != RUXEN_KEY_UNSET) {
+        src = b;
+    }
+    if (!src) return ruxen_set_new();
+    return ruxen_set_alloc(src->inner.key_kind, src->inner.key_hash,
+                           src->inner.key_eq);
+}
+
 RuxenSet *ruxen_set_union(RuxenSet *a, RuxenSet *b) {
-    RuxenSet *out = ruxen_set_new();
+    RuxenSet *out = ruxen_set_derived(a, b);
     if (a) {
         for (uint64_t i = 0; i < a->inner.bucket_count; i++) {
             for (RuxenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
@@ -721,7 +796,7 @@ RuxenSet *ruxen_set_union(RuxenSet *a, RuxenSet *b) {
 
 /* HashSet.intersection(&Self) -> HashSet[T] */
 RuxenSet *ruxen_set_intersection(RuxenSet *a, RuxenSet *b) {
-    RuxenSet *out = ruxen_set_new();
+    RuxenSet *out = ruxen_set_derived(a, b);
     if (!a || !b) return out;
     for (uint64_t i = 0; i < a->inner.bucket_count; i++) {
         for (RuxenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
@@ -735,7 +810,7 @@ RuxenSet *ruxen_set_intersection(RuxenSet *a, RuxenSet *b) {
 
 /* HashSet.difference(&Self) -> HashSet[T] — elements in `a` not in `b`. */
 RuxenSet *ruxen_set_difference(RuxenSet *a, RuxenSet *b) {
-    RuxenSet *out = ruxen_set_new();
+    RuxenSet *out = ruxen_set_derived(a, b);
     if (!a) return out;
     for (uint64_t i = 0; i < a->inner.bucket_count; i++) {
         for (RuxenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {

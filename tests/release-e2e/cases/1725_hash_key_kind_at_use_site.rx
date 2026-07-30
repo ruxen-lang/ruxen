@@ -1,0 +1,50 @@
+# B73: a table whose CONSTRUCTION site cannot be typed is still keyed
+# correctly, because the key kind is also installed at the USE site.
+#
+# `Hash.new` is declared `-> Hash[K, V]` and a static constructor has no
+# receiver to substitute those parameters against, so in argument position
+# the temp holding the new table keeps the rigid `K`/`V`. The construction
+# site therefore has nothing concrete to derive a descriptor from.
+#
+# The USE site does. Every key-addressed operation (`insert` / `get` /
+# `key?` / `remove` / `[]`) has a receiver whose type is concrete, and the
+# post-pass emits an idempotent `ensure_key_kind` in front of it. Without
+# that second route these programs abort with the protocol's own panic
+# ("no key-kind descriptor on this table"), which is how this pin fails.
+#
+# Pinned here: argument position for both a `Hash` and a `Set`, and a
+# table built by a helper whose return type is the only annotation. All
+# use `String` keys, because raw-bits hashing on a `String` key is exactly
+# the silent-wrong-answer the UNSET panic exists to prevent.
+def fill(h: Hash[String, Int]) -> Bool
+  h.insert("alpha", 1)
+  h.insert("beta", 2)
+  h.key?("alpha")
+end
+
+def mark(s: Set[String]) -> Bool
+  s.insert("red")
+  s.insert("red")
+  s.insert("green")
+  s.include?("red")
+end
+
+def build -> Hash[String, Int]
+  Hash.new
+end
+
+def main
+  puts "arg_hash=#{fill(Hash.new)}"
+  puts "arg_set=#{mark(Set.new)}"
+
+  var h = build
+  h.insert("gamma", 3)
+  puts "ret=#{h.key?("gamma")} #{h.key?("delta")}"
+
+  # `remove` and the panicking index read go through the same route.
+  match h.remove("gamma")
+    Some(v) -> puts "removed #{v}"
+    nil -> puts "removed nothing"
+  end
+  puts "after=#{h.key?("gamma")}"
+end

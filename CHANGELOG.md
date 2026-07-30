@@ -234,6 +234,130 @@ once 1.0.0 ships.
   `[T; N]` index-assign with a computed index (the floor stores a `[T; N]` slot
   only for a literal index). Neither ever produced a correct store. Pins
   `tests/release-e2e/cases/1710`, `1711`.
+- **`Hash` / `Set` decide a key's hashing and equality from its TYPE, not from
+  its bit pattern (B73).** `library/std/hash/runtime/hash.c` used to store every
+  key as an `int64_t` and resolve a tristate `string_keys` flag on the FIRST
+  insert by calling `ruxen_hash_looks_like_string`, which **dereferenced the key
+  value as a `char*`** and scanned up to 256 bytes for a NUL. Three defects, one
+  root:
+  1. **`Hash[Int, V]` SIGSEGV'd for any key >= 4096.** The probe short-circuited
+     below `0x1000`, so `h.insert(4095, v)` worked and `h.insert(5000, v)` died
+     with exit 139. Integer keys are ordinary — ids, ports, status codes, years —
+     so this was a crash on plausible input.
+  2. **A user type could not be a `Hash` key at all.** Keys were compared by
+     object identity, so `h.insert(P.new(1), v)` then `h.key?(P.new(1))` was
+     `false`; the `Hashable` mixin's `hash_code` and the structural `==` derive
+     were never consulted.
+  3. **The key kind latched on the first insert,** so a table's behavior depended
+     on its insertion order (a `Hash[String, V]` whose first key was `""` fell to
+     raw-bits hashing and missed every later content lookup).
+
+  The heuristic is **deleted**, replaced by a real protocol: the key kind travels
+  DOWN from the typed side. A MIR post-pass,
+  `mir/lower/key_desc.rs::install_key_descriptors`, derives `(kind, hash_fn,
+  eq_fn)` from a table's static key type — `String` → FNV-1a + `strcmp`, a struct
+  carrying both `Hashable` and `PartialEq` → its synthesized `<S>_hash_code` /
+  `<S>_eq` passed as `FuncAddr` words, everything else → the raw 64-bit value —
+  and installs it on **two routes**:
+
+  * **Construction sites** are rewritten to a `_keyed` form carrying the
+    descriptor. This is the only route that can serve a table the C runtime
+    populates internally, so the two `from_iter` collectors read their key type
+    off the SOURCE iterable rather than the result (`Array#to_h` is declared
+    `-> Int`, which says nothing about the key; the input `Array` says
+    everything).
+  * **Key-addressed operations** (`insert` / `get` / `key?` / `remove` / `[]`)
+    get an idempotent `ensure_key_kind` in front, chosen from the RECEIVER's key
+    type. A static constructor has no receiver to substitute `-> Hash[K, V]`
+    against, so `f(Hash.new)` cannot be typed where it is BUILT — but it is
+    typed perfectly well where it is USED, and this route generalizes over
+    syntactic position instead of needing one typeck refinement per position.
+
+  It is a post-pass rather than a per-call-site edit because tables are built
+  from more than two dozen `MirInst::Call` emission sites (paren-less
+  `Hash.new`, `Hash.new()`, a map literal, `collect`, `to_set`,
+  `with_capacity`, …); deciding once on the shape of the emitted MIR means a new
+  construction site cannot forget the descriptor. The classification is
+  structural (`Ty` variants plus the generic `ty_has_derive_trait` predicate), so
+  no stdlib type or method name is hardcoded in the compiler.
+
+  **`Hash[UserType, V]` and `Set[UserType]` now work**, which also unblocks
+  **B29c** (`Hash[Symbol, V]`): a symbol is a 64-bit intern id and joins as a
+  plain `RUXEN_KEY_BITS` key with no further runtime work. The kind set is open
+  by construction — adding one means adding a constant and a `switch` case, never
+  widening a range check on a key's value.
+
+  Supporting changes: `clear` no longer resets the key kind (emptying a table
+  does not change its key type); `clone` and the set-algebra operations inherit
+  the descriptor from their source *before* their first insert; `struct
+  RuxenHash` moved from two hand-synced per-TU copies (`hash.c` and `json.c`,
+  behind a shared `RUXEN_HASH_RUNTIME_STRUCTS` guard) into
+  `core/runtime/runtime.h`, since two copies of one layout is an ODR hazard, and
+  `json.c` now constructs its objects with an explicit `RUXEN_KEY_CSTR` instead
+  of poking the old flag.
+
+  Tables built entirely inside the C runtime are out of the post-pass's reach
+  and state or inherit their own kind: `Env.vars` and `Match#named_groups` are
+  `RUXEN_KEY_CSTR` by definition, and `clone` plus the set-algebra operations
+  copy the descriptor from a source table *before* their first insert.
+
+  **Typeck is untouched.** An earlier draft added a `refine_rigid_generics`
+  pass so a static constructor's own expression type would be precise
+  (`let h: Hash[String, Int] = Hash.new` leaves the initializer typed
+  `Hash[K, V]`, because a rigid parameter is not an inference variable and
+  unification has nothing to bind). The use-site route made it unnecessary, and
+  it was measured out rather than kept on faith: with it disabled the e2e stayed
+  at 551 pass / 0 fail and the narrow gate at 655 pass / 0 fail. Refining
+  expression types after unification touches every annotated binding in every
+  program, which is too much blast radius to carry for no measured benefit. The
+  underlying imprecision stays filed as GUI-stack ledger §Q60(a).
+
+  **One residual limit, loud rather than silent.** A table neither route can
+  type keeps `RUXEN_KEY_UNSET`, and the runtime **panics on the first insert**
+  naming the protocol rather than guessing a kind and mis-hashing. No shape in
+  the stdlib, the workspace, or the e2e suite reaches it. Pins
+  `tests/release-e2e/cases/1720`-`1729`.
+
+- **`Hash[K, V].new` now means what it says (found landing B73).** The parser
+  parsed the explicit generic arguments on a type used as a static-call
+  receiver and then **discarded** them
+  (`parse_type_expr_primary`: `let _generic_args = self.parse_generic_args();`),
+  on the reasoning that generic arguments are inferred from the call's
+  arguments anyway. That holds for `Point[Int].new(3)` and cannot hold for a
+  **no-argument** constructor: `Hash[String, Int].new` produced a receiver
+  carrying the declared rigid `K`/`V`, so the call's type stayed `Hash[K, V]`
+  and no later stage could recover what the author had written. Consequences,
+  all verified:
+  * `h["a"]` on such a table typed as the abstract `V`, not `Int`.
+  * `Hash[Int, Int].new` followed by `insert(5000, …)` **SIGSEGV'd** under the
+    old bit-pattern heuristic, while `insert(7, …)` worked, because the key
+    kind was being guessed rather than known.
+  * Under B73 the same tables became `RUXEN_KEY_UNSET` and panicked.
+
+  The written path is now carried through as `ExprKind::GenericTypeRef` and
+  resolved by ordinary type resolution, so `Hash` / `Array` / `Set` need no
+  per-collection special-casing. The refinement is scoped to the BUILTIN type
+  constructors, which are the ones whose value-scope entry leaks its declared
+  rigid parameters. A user generic class keeps the path it had: its `.new` goes
+  through constructor resolution and `Pair[Int, String].new(42, "hi")` already
+  infers its parameters from the arguments, so rerouting it would have swapped
+  a `DefKind::Class` receiver for a synthetic `DefKind::Variable` and broken
+  that path (caught by cases `65`, `73`, `101`, `990` on the first attempt).
+  The resolver registers
+  the INSTANTIATED constructor as its own def rather than refining the
+  expression's type in place, because typeck's `VarRef` arm re-derives an
+  expression's type from its `DefId` and would otherwise put the
+  uninstantiated type straight back. `ruxen fmt` prints the arguments back
+  (verified idempotent); dropping them there would have silently rewritten a
+  program into the shape whose type cannot be recovered, which is the
+  fmt-destructiveness class (Q23/Q30/Q34).
+
+  Both spellings of every construction form are now pinned side by side
+  (`1728`), along with the shapes that put the type somewhere other than the
+  constructor — class field, function return, closure body, array element
+  (`1729`). The previous eight B73 pins all happened to use the
+  annotated-binding spelling, which is why the suite stayed green while this
+  was broken.
 - **`alias` to a method on a GENERIC builtin head no longer link-fails (Q58).**
   `h.has_key?(k)` on a `Hash[String, Int]` emitted a bodiless
   `Hash[String, Int]_has_key?` and the linker rejected it. MIR's

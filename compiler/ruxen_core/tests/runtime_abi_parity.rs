@@ -155,7 +155,20 @@ fn ref_returns_fresh_alloc(c: &str) -> bool {
 }
 
 fn intentional_fresh_addition(c: &str) -> bool {
-    matches!(c, "ruxen_vec_skip")
+    matches!(
+        c,
+        "ruxen_vec_skip"
+            // B73: the `_keyed` table constructors return the same freshly
+            // allocated table their bare spellings do — only the argument
+            // list differs. Without Fresh here the new table is never freed
+            // at scope exit.
+            | "ruxen_hash_new_keyed"
+            | "ruxen_hash_with_capacity_keyed"
+            | "ruxen_hash_from_iter_keyed"
+            | "ruxen_set_new_keyed"
+            | "ruxen_set_with_capacity_keyed"
+            | "ruxen_set_from_iter_keyed"
+    )
 }
 
 fn ref_borrows_first_arg(c: &str) -> bool {
@@ -326,6 +339,16 @@ pub(crate) const SYMBOLS: &[&str] = &[
     "ruxen_vec_new",
     "ruxen_vec_skip",
     "ruxen_hash_new",
+    // B73 key-kind protocol: the descriptor-taking table constructors the
+    // MIR post-pass rewrites the six bare forms to. Listed here so the
+    // parity guard actively asserts their ownership rather than ignoring
+    // symbols it has never heard of.
+    "ruxen_hash_new_keyed",
+    "ruxen_hash_with_capacity_keyed",
+    "ruxen_hash_from_iter_keyed",
+    "ruxen_set_new_keyed",
+    "ruxen_set_with_capacity_keyed",
+    "ruxen_set_from_iter_keyed",
     "String_into_bytes",
     "ruxen_string_into_bytes",
     "String_push",

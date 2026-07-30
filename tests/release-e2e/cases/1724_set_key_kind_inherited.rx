@@ -1,0 +1,51 @@
+# B73: tables the C runtime builds INTERNALLY inherit their key kind.
+#
+# `union` / `intersection` / `difference` allocate a fresh set and
+# populate it inside the runtime, where the compiler cannot reach to hand
+# over a descriptor. They therefore copy it from an operand — and copy it
+# BEFORE the first insert, so the copied elements hash into the same
+# buckets they came from. A result set that fell back to raw-bits hashing
+# would compare these struct elements by pointer identity and report
+# `false` for every `include?` below.
+#
+# `to_set` is a `from_iter` route on the general FFI-alias method path, a
+# different construction site from `Set.new`; without a descriptor there
+# it would build an UNSET table and panic on its first insert.
+#
+# (The elements are a struct rather than a `String` on purpose. A
+#  set-algebra result shares its element pointers with its source, so a
+#  `Set[String]` result double-frees at scope exit. That is a separate,
+#  pre-existing defect in the drop glue, unrelated to the key kind, and
+#  this pin must not depend on it.)
+struct Tag
+  id: Int
+  label: String
+end
+
+def main
+  var a: Set[Tag] = Set.new
+  a.insert(Tag.new(1, "red"))
+  a.insert(Tag.new(2, "green"))
+
+  var b: Set[Tag] = Set.new
+  b.insert(Tag.new(2, "green"))
+  b.insert(Tag.new(3, "blue"))
+
+  let u = a.union(&b)
+  puts "#{u.size} #{u.include?(Tag.new(1, "red"))} #{u.include?(Tag.new(3, "blue"))} #{u.include?(Tag.new(9, "pink"))}"
+
+  let i = a.intersection(&b)
+  puts "#{i.size} #{i.include?(Tag.new(2, "green"))} #{i.include?(Tag.new(1, "red"))}"
+
+  let d = a.difference(&b)
+  puts "#{d.size} #{d.include?(Tag.new(1, "red"))} #{d.include?(Tag.new(2, "green"))}"
+
+  # An empty operand must not erase the other side's descriptor.
+  var empty: Set[Tag] = Set.new
+  let with_empty = empty.union(&a)
+  puts "#{with_empty.size} #{with_empty.include?(Tag.new(1, "red"))}"
+
+  # `to_set` — the from_iter construction site.
+  let from_arr = [10, 20, 20, 30].to_set
+  puts "#{from_arr.size} #{from_arr.include?(20)} #{from_arr.include?(99)}"
+end

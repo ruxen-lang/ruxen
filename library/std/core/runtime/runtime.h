@@ -155,10 +155,64 @@ typedef struct RuxenVec {
     uint64_t cap;
 } RuxenVec;
 
-/* Hash — opaque to non-owning TUs. Owner: library/std/hash/runtime/hash.c.
- * Bodies inside hash.c access fields directly; cross-file callers use
- * only `RuxenHash *` and the ruxen_hash_* functions. */
-typedef struct RuxenHash RuxenHash;
+/* Hash — chained-bucket table. Owner: library/std/hash/runtime/hash.c.
+ * Most cross-file callers use only `RuxenHash *` and the ruxen_hash_*
+ * functions, but json.c walks the bucket chains directly to stringify
+ * and look up a JSON object, so the body lives HERE rather than being
+ * duplicated per TU. It used to be copy-pasted into hash.c and json.c
+ * behind a shared `RUXEN_HASH_RUNTIME_STRUCTS` guard; the two copies
+ * were an ODR hazard, since a layout change in one silently corrupted
+ * the other. One definition, no drift.
+ *
+ * ── The key-kind protocol (B73) ─────────────────────────────────────
+ * How a key hashes and compares is a property of its TYPE, which the
+ * compiler knows statically. The kind is supplied at construction
+ * (`ruxen_hash_new_keyed` and friends) and is fixed for the table's
+ * life. It is NEVER inferred from a key's bit pattern: the pre-B73
+ * runtime dereferenced the first inserted key as a `char*` looking for
+ * a NUL, which SIGSEGV'd on `Hash[Int, V]` keys >= 0x1000, made user
+ * types unusable as keys, and made a table's behaviour depend on its
+ * insertion order. Do not reintroduce a memory probe under any name. */
+typedef struct RuxenHashEntry {
+    int64_t key;
+    int64_t value;
+    struct RuxenHashEntry *next;
+} RuxenHashEntry;
+
+/* Key kinds. An OPEN set — a new key representation adds a value here
+ * plus a case in hash.c's `ruxen_hash_key_hash` / `_keys_equal`, and
+ * never re-derives the kind from the key's bits. `Symbol` (B29c) joins
+ * as a plain RUXEN_KEY_BITS key, a symbol being a 64-bit intern id. */
+#define RUXEN_KEY_UNSET  (-1) /* no descriptor supplied — insert is a bug */
+#define RUXEN_KEY_BITS   0    /* raw 64-bit value: Int/USize/Char/Bool/… */
+#define RUXEN_KEY_CSTR   1    /* NUL-terminated C string: FNV-1a + strcmp */
+#define RUXEN_KEY_CUSTOM 2    /* user type: compiler-supplied hash + eq */
+
+/* Callbacks for RUXEN_KEY_CUSTOM. The signatures match the MIR
+ * functions `mir/lower/derive.rs` synthesizes for a struct that
+ * includes `Hashable` / `PartialEq`:
+ *   <Struct>_hash_code(self)        -> Int   (i64)
+ *   <Struct>_eq(self, other: &Self) -> Bool  (i8)
+ * Both take pointer-width key words, which is what the table stores. */
+typedef int64_t (*RuxenKeyHashFn)(int64_t);
+typedef int8_t (*RuxenKeyEqFn)(int64_t, int64_t);
+
+typedef struct RuxenHash {
+    /* Heap-allocated bucket array of length `bucket_count`, doubling
+     * when `len` would push the load factor past 0.75. The count is a
+     * power of two, so the `% bucket_count` modulo stays clean without
+     * biasing the splitmix/FNV distribution. */
+    RuxenHashEntry **buckets;
+    uint64_t bucket_count;
+    uint64_t len;
+    /* One of the RUXEN_KEY_* constants. Installed once, at construction,
+     * from the static key type. `clear` does NOT reset it: emptying a
+     * table does not change what its key type is. */
+    int32_t key_kind;
+    /* RUXEN_KEY_CUSTOM only; NULL otherwise. */
+    RuxenKeyHashFn key_hash;
+    RuxenKeyEqFn key_eq;
+} RuxenHash;
 
 /* RuxenSet is fully package-local to library/std/hash/runtime/hash.c
  * — no other TU dereferences or even references it. The typedef
@@ -252,6 +306,9 @@ void ruxen_vec_push(RuxenVec *v, int64_t item);
 /* ── Hash surface ─────────────────────────────────────────────────── */
 
 RuxenHash *ruxen_hash_new(void);
+RuxenHash *ruxen_hash_new_keyed(int64_t kind, int64_t hash_fn, int64_t eq_fn);
+void ruxen_hash_ensure_key_kind(RuxenHash *h, int64_t kind, int64_t hash_fn,
+                                int64_t eq_fn);
 void ruxen_hash_insert(RuxenHash *h, int64_t key, int64_t value);
 
 /* ── IO error helpers (cross-package) ──────────────────────────────── */

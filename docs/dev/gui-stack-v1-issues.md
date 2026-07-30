@@ -2868,6 +2868,149 @@ Argument-type-based overload resolution otherwise works well (it is what lets
 one Ruby name), but an empty array literal carries no element type for it to
 match on. **Workaround:** bind a typed local.
 
+## Q60 · S2/S3 — three limits found landing the `Hash` key-kind protocol (B73)
+
+Found while replacing the `Hash` / `Set` key-kind heuristic with a compiler-
+supplied descriptor (B73, CHANGELOG `[Unreleased]`, pins `1720`-`1724`). B73
+itself is FIXED; these are the neighbours it exposed. (If a parallel batch
+already claimed `Q60`, renumber; the content is what matters.)
+
+**(a) S2 — a static constructor on a generic builtin keeps its RIGID type
+parameters at the expression node.** `Hash.new` is declared
+`def self.new as "ruxen_hash_new" -> Hash[K, V]`. A static call has no receiver,
+so `substitute_generics_in_return` has nothing to substitute against, and the
+expression node's type stays `Hash[K, V]` even where the binding is concrete:
+
+```rx
+var h: Hash[String, Int] = Hash.new
+# local `h`   : Map(String, Int)      ← correct
+# the ctor's temp: Map(TypeParam K, TypeParam V)   ← imprecise
+```
+
+Unification does not object, because a rigid parameter is not an inference
+variable and there is nothing to bind. Anything downstream that reads the
+INITIALIZER's own type rather than the binding's therefore sees `K`, not
+`String`. The general fix is to thread an expected type through binding,
+argument and return checking, or to substitute a static ctor's return against
+the expected type at the call.
+
+**OPEN, and severity dropped from S2 to S3**, because B73 no longer depends on
+this being right. The key-kind protocol installs its descriptor at USE sites as
+well as construction sites (`mir/lower/key_desc.rs`, the `KEYED_TABLE_OPS`
+route), and an operation's RECEIVER is concretely typed in exactly the
+positions a constructor's result temp is not. `f(Hash.new)` is keyed by the
+`insert` inside `f`; pin `1725` holds that.
+
+**A `refine_rigid_generics` pass was written for this and then deliberately
+removed** — it refined the initializer from a concrete annotation on the `let`
+and assignment paths (~190 lines in `typeck/infer/`). It was measured to be
+non-load-bearing once the use-site route existed: with it disabled, release-e2e
+stayed at 551 pass / 0 fail and the narrow gate at 655 pass / 0 fail, including
+a `self.data = Hash.new` class-field-init probe. Refining expression types
+after unification touches every annotated binding in every program, which is a
+large blast radius to carry for no measured benefit. If a future consumer
+genuinely needs a static constructor's own expression type to be precise,
+reintroduce it deliberately with a test that fails without it — do not assume
+it is still needed because this entry mentions it.
+
+**(a2) S1, FIXED — the parser erased explicit generic arguments on a
+static-call receiver.** `parse_type_expr_primary`
+(`parser/expr/atoms.rs:471`) read the `[…]` after a type identifier and threw
+it away:
+
+```rust
+let _generic_args = self.parse_generic_args();
+// Fall through to normal handling as if we had just the TypeIdentifier.
+```
+
+The stated reasoning was that generic args are inferred from the
+constructor/method arguments. True for `Point[Int].new(3)`; false for any
+NO-ARGUMENT constructor. `Hash[String, Int].new` therefore produced a receiver
+typed with `class Hash[K, V]`'s declared rigid parameters, and
+`substitute_generics_in_return` bound the identity map `{K → K}`, so the call's
+type stayed abstract permanently. Verified consequences, all on the pre-B73
+build:
+
+* `Hash[Int, Int].new` then `insert(5000, …)` → **SIGSEGV**, while
+  `insert(7, …)` worked. The key kind was being guessed from the key's bits
+  because no static type was available.
+* `h["a"]` on such a table typed as the abstract `V` rather than `Int`.
+
+So this spelling was never correctly typed; B73 replaced the lucky guess with a
+demand for a real static type and turned it into a loud panic, which is how it
+was found. **Fixed** by carrying the written path as
+`ExprKind::GenericTypeRef { name, ty }` and resolving it through ordinary type
+resolution, so `Hash` / `Array` / `Set` need no per-collection special-casing.
+Three things worth knowing if you touch it:
+
+* The refinement is scoped to the BUILTIN type constructors (the
+  `DefKind::Variable` entries `register_type_constructors` installs in VALUE
+  scope). A user generic class is a `DefKind::Class` reached through type
+  scope; its `.new` goes down the constructor path and already infers its
+  parameters from the call's arguments. Routing it through the new node broke
+  cases `65`, `73`, `101` and `990` on the first attempt, so it falls back to
+  resolving exactly as the bare type name did. **`Pair[Int, String]` is
+  therefore still not refined as a TYPE** — it just does not need to be today,
+  because it always has arguments to infer from. A no-argument static method on
+  a user generic would hit the same class of problem.
+
+* The resolver registers the INSTANTIATED constructor as its own def rather
+  than setting `expr.ty`. Typeck's `VarRef` arm (`typeck/infer/expr.rs:125`)
+  re-derives an expression's type from its `DefId` unconditionally, so an
+  in-place refinement is discarded. Anything else that wants to refine a
+  `VarRef`'s type has the same problem and needs the same shape.
+* Both formatters print the arguments back (`ruxen fmt` verified idempotent).
+  Dropping them there would rewrite the program into the un-inferable shape,
+  which is the fmt-destructiveness class (Q23/Q30/Q34).
+
+Pins `1728` (both spellings × every key kind, `Set`, `with_capacity`) and
+`1729` (class field, function return, closure body, array element).
+
+**(b) S2 — `Set[String]` set-algebra results double-free at scope exit.**
+Verified 2026-07-29 and **pre-existing** (reproduces identically before B73):
+
+```rx
+var a: Set[String] = Set.new
+a.insert("red")
+var b: Set[String] = Set.new
+b.insert("blue")
+let u = a.union(&b)
+puts "#{u.size}"        # never prints — exit 133 (SIGTRAP, malloc abort)
+```
+
+`ruxen_set_union` / `_intersection` / `_difference` shallow-copy their element
+words, so the result set ALIASES its source's heap strings — the documented v1
+contract, same as `ruxen_hash_clone`. But the drop selector gives both the
+source and the result `ruxen_set_drop_string` (`drops.rs::heap_free_callee`,
+`Ty::Set(Ty::String)`), so every shared `char*` is freed twice. `Set[Int]` is
+fine (no per-element drop) and so is a `Set[UserStruct]` (the selector picks the
+spine-only `ruxen_set_free`); only heap-owning element types are exposed.
+**Workaround:** none at the `.rx` level. Pin `1724` deliberately uses a struct
+element rather than a `String` so it does not depend on this. The fix is either
+a deep copy in the three set-algebra helpers or an aliasing-aware drop.
+
+**(c) S4 — `Array#to_h`'s `lib` declaration launders its return through `Int`.**
+`library/std/array/src/lib.rx:106` reads
+`def to_h as "ruxen_hash_from_iter" -> Int`, with the header comment at
+`:49-50` explaining why: the result key/value types come from the receiver's
+TUPLE element and are "not expressible" in the current return-type surface.
+
+**The user-visible surface is fine** — the `collections.rs` resolver runs ahead
+of the builtin bridge and supplies the real `Hash[K, V]`, so `[("a", 1)].to_h`
+does have `size` / `key?` / `get` on it (pin `1726`). An earlier draft of this
+entry claimed the value arrives as a bare `Int` with no `Hash` methods; that is
+wrong, and the pin disproves it.
+
+What the laundered decl DID break was B73's descriptor: the construction site
+read the key type off the RESULT local, which for `to_h` is `Int` and says
+nothing about the key. Fixed by reading it off the SOURCE instead — a
+`from_iter` constructor's input is always a concrete `Array`, and collecting it
+is what fixes the key type (`key_desc.rs::key_ty_from_iterable`). That is the
+better witness for both `from_iter` forms regardless of the decl, because these
+two constructors populate their table INSIDE the C runtime, where no use-site
+`ensure` can reach it. The `-> Int` decl is still worth correcting when per-`T`
+mono (E1) allows it, but nothing depends on it now.
+
 ## Where the workarounds live (grep-able)
 
 - `quiver/CLAUDE.md` — "Ruxen v1 landmines" section (the working ruleset)

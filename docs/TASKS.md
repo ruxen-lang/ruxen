@@ -17,6 +17,23 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
+B73 fixed 2026-07-29 (the `Hash` / `Set` key-kind protocol: the runtime decided
+how to hash and compare a key by DEREFERENCING it as a `char*` and scanning for
+a NUL, which SIGSEGV'd on any `Hash[Int, V]` key >= 4096, made user types
+unusable as keys, and latched a table's behavior on its first insert. Replaced
+by a descriptor the compiler supplies from the static key type;
+`ruxen_hash_looks_like_string` deleted. `Hash[UserType, V]` now works, which
+unblocks B29c. Landing it also required fixing `Hash[K, V].new`, whose explicit
+generic arguments the parser discarded (§Q60(a2), pre-existing: that spelling
+SIGSEGV'd on a large integer key before B73). Pins `1720`-`1729`, which now
+cover BOTH constructor spellings — the first eight all used the
+annotated-binding form, which is why the suite stayed green while the turbofish
+form was broken. The neighbouring limits it exposed are filed
+as §Q60: a static ctor on a generic builtin keeps its rigid `K`/`V` in argument
+and return position (S3 — a typeck imprecision with no behavioural consequence,
+since the descriptor is also installed at use sites), `Set[String]` set-algebra
+results double-free at scope exit (S2, PRE-EXISTING and still open), and
+`Array#to_h`'s laundered `-> Int` decl (S4, cosmetic)).
 Q58 fixed 2026-07-29 (`alias` to a method on a GENERIC builtin head link-failed:
 MIR's `select_method_symbol_name` and `method_trailing_default_sentinels` both
 matched the parent def's BARE class name against the call site's INSTANTIATED

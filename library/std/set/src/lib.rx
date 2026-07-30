@@ -33,6 +33,15 @@
 ## is expressed over the FFI-on-self `self.to_a` (the materialized
 ## element vector), forwarding each element to the closure — the same
 ## shape as `Hash#each` (`605_generic_self_ffi_method`).
+##
+## ## The key-kind protocol (B73)
+##
+## A `Set` is a table whose values are ignored, so its ELEMENT `T` is its
+## key and the same key-kind descriptor applies. See the protocol section
+## in `library/std/map/src/lib.rx` — it is one mechanism serving both
+## heads. `union` / `intersection` / `difference` build their result set
+## inside the C runtime, out of the compiler's reach, so they inherit the
+## descriptor from an operand instead (`ruxen_set_derived`).
 class Set[T]
   lib "../hash/runtime/hash.c"
     def self.new as "ruxen_set_new" -> Set[T]

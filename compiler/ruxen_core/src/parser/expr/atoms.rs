@@ -467,12 +467,34 @@ impl Parser {
     fn parse_type_expr_primary(&mut self, name: String, start: Span) -> Expr {
         // Check for generic type arguments: Name[T, U].method(...)
         // Distinguish type-application from indexing: a type-application has
-        // one or more type-like tokens (TypeIdentifier/Self) inside. Generic
-        // args are erased — they're inferred from constructor/method args.
-        if self.at(TokenKind::LBracket) && self.looks_like_type_args() {
-            let _generic_args = self.parse_generic_args();
-            // Fall through to normal handling as if we had just the TypeIdentifier.
-        }
+        // one or more type-like tokens (TypeIdentifier/Self) inside.
+        //
+        // These used to be parsed and DROPPED, on the reasoning that generic
+        // args are inferred from the constructor/method arguments anyway.
+        // That holds for `Point[Int].new(3)` and fails for a constructor with
+        // no arguments to infer from: `Hash[String, Int].new` produced a
+        // receiver typed with the declared rigid `K`/`V`, so the call's
+        // return stayed `Hash[K, V]` and no later stage could recover what
+        // the author had literally written. Keep them and hand them to the
+        // static-receiver arm below.
+        let type_args = if self.at(TokenKind::LBracket) && self.looks_like_type_args() {
+            Some(self.parse_generic_args())
+        } else {
+            None
+        };
+        // The written path (`Hash[String, Int]`) as a type expression, so the
+        // resolver can run it through ordinary type resolution instead of
+        // this module learning what a `Hash` is.
+        let type_ref = |parser: &Self| {
+            type_args.as_ref().map(|args| {
+                TypeExpr::Named(TypePath {
+                    segments: vec![name.clone()],
+                    generic_args: Some(args.clone()),
+                    span: parser.span_from(&start),
+                    rooted: false,
+                })
+            })
+        };
 
         // Check if followed by `.` or Ruby's `::` namespace separator —
         // could be enum variant construction or a static method receiver.
@@ -604,10 +626,23 @@ impl Parser {
                     }
                     _ => {
                         // TypeName.method(...) or TypeName.field
-                        // Return the type as an identifier, postfix will handle .method
-                        Expr {
-                            kind: ExprKind::Identifier(name),
-                            span: start,
+                        // Return the type as a receiver, postfix will handle
+                        // .method. When the author wrote explicit generic
+                        // arguments, carry them: this is the one shape where
+                        // there may be no call arguments to infer them from
+                        // (`Hash[String, Int].new`).
+                        match type_ref(self) {
+                            Some(ty) => Expr {
+                                kind: ExprKind::GenericTypeRef {
+                                    name,
+                                    ty: Box::new(ty),
+                                },
+                                span: start,
+                            },
+                            None => Expr {
+                                kind: ExprKind::Identifier(name),
+                                span: start,
+                            },
                         }
                     }
                 }
