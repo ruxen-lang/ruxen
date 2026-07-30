@@ -2967,6 +2967,7 @@ Pins `1728` (both spellings × every key kind, `Set`, `with_capacity`) and
 `1729` (class field, function return, closure body, array element).
 
 **(b) S2 — `Set[String]` set-algebra results double-free at scope exit.**
+**FIXED (2026-07-30), together with B86 — they were the same defect.**
 Verified 2026-07-29 and **pre-existing** (reproduces identically before B73):
 
 ```rx
@@ -2988,6 +2989,28 @@ spine-only `ruxen_set_free`); only heap-owning element types are exposed.
 **Workaround:** none at the `.rx` level. Pin `1724` deliberately uses a struct
 element rather than a `String` so it does not depend on this. The fix is either
 a deep copy in the three set-algebra helpers or an aliasing-aware drop.
+
+**Resolution — the deep copy, and the diagnosis above generalizes.** This is
+not a `Set` bug; it is one instance of a contract violated by five helpers.
+Any callee listed in `FRESH_ALLOC_CALLEES` has its result deep-dropped by the
+helper `heap_free_callee` picks, so a result built from a borrowed source's
+element pointers is a double free by construction. `ruxen_vec_skip`
+(`Array#drop`, filed as B86), `ruxen_vec_chain` and `ruxen_set_from_iter`
+(`to_set`) were failing identically and were NOT filed anywhere.
+
+The three set-algebra helpers now insert through `ruxen_set_insert_owned`,
+which clones per the table's own B73 `key_kind` — a Set's element IS its key,
+so the descriptor needed was already on the table. The `Vec` side needed a new
+`RUXEN_ELEM_*` descriptor injected by MIR. Full audit table and per-helper
+verdicts are in `docs/ruby-parity/QUEUE.md` under B86; the ownership contract
+is now a doc comment on `FRESH_ALLOC_CALLEES` itself. Pins `1870` / `1871`.
+
+Note for whoever reads this next: the "aliasing-aware drop" alternative above
+was considered and rejected. Dropping a helper from `FRESH_ALLOC_CALLEES` (or
+making its result's drop spine-only) does stop the crash, but it converts it
+into a silent leak, and for a result derived from a TEMPORARY source
+(`["a","b","c"].drop(2)`) it would leave the result holding freed pointers —
+trading an abort for a use-after-free.
 
 **(c) S4 — `Array#to_h`'s `lib` declaration launders its return through `Int`.**
 `library/std/array/src/lib.rx:106` reads

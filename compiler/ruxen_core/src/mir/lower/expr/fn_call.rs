@@ -5,17 +5,13 @@ impl<'a> Lowerer<'a> {
     /// write it out, i.e. the ones whose argument must already be a
     /// `char*` by the time it reaches the runtime.
     ///
-    /// Kept in step with the same list in
-    /// `typeck/infer/expr.rs`'s universal-`to_s` conversion — that pass
-    /// is the first line of defence and this is the backstop. They are
-    /// two names for one rule ("this callee needs text"), so a name added
-    /// to one belongs in the other.
+    /// Shares ONE list with the universal-`to_s` conversion in
+    /// `typeck/infer/expr.rs` (`hir::IO_TEXT_BUILTINS`). That pass is the
+    /// first line of defence and this is the backstop; two matching
+    /// literals would be free to drift, and drift in either direction is
+    /// a bug. See the doc comment on the const.
     fn is_io_text_builtin(&self, callee_name: &str, arg_count: usize) -> bool {
-        arg_count == 1
-            && matches!(
-                callee_name,
-                "puts" | "eputs" | "print" | "println" | "eprintln"
-            )
+        arg_count == 1 && crate::hir::IO_TEXT_BUILTINS.contains(&callee_name)
     }
 
     /// Ensure an already-lowered I/O argument is text, formatting it
@@ -39,7 +35,18 @@ impl<'a> Lowerer<'a> {
             .get(lid as usize)
             .map(|l| l.ty.clone())
             .unwrap_or_else(|| arg.ty.clone());
-        if crate::mir::lower::is_string_like(&local_ty) {
+        // Already the `char*` the runtime wants — pass it straight through.
+        //
+        // `RawPtr(Char)` is NOT covered by `is_string_like` and must be
+        // tested separately: it is what `emit_raw_string_literal` produces
+        // for the bare-literal zero-copy path (`puts "ok"` lowers to the
+        // `.rodata` pointer, never a `String` — see the note on
+        // `Ty::RawPtr`). Missing it here sent every bare string literal
+        // through the Display ladder, which formatted the POINTER as an
+        // integer and printed an address instead of the text.
+        if crate::mir::lower::is_string_like(&local_ty)
+            || matches!(&local_ty, Ty::RawPtr(inner) if matches!(inner.as_ref(), Ty::Char))
+        {
             return Ok(local);
         }
         // An unresolved or abstract local carries no Display decision we

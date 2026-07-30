@@ -1,0 +1,63 @@
+# B86 — `Array#drop(n)` on a HEAP element type used to abort (exit 133).
+#
+# `ruxen_vec_skip` copied the source's element pointers into a result that
+# drop elaboration then deep-freed, while the source deep-freed the same
+# pointers at scope exit. Both owners, one `char*`.
+#
+# Pins all three element kinds side by side, because only the heap ones can
+# regress: an `Int` element is its own word and could never double-free, so
+# an `Int`-only pin would have gone green throughout the entire bug.
+#
+# Boundaries are pinned explicitly (`drop(0)`, `n == len`, `n > len`) since
+# they select different paths through the copy loop — `drop(0)` aliases EVERY
+# element and was the worst case, and the two overshoot cases return early
+# before the loop runs at all.
+
+class Tag
+  name: String
+
+  def init(@name: String)
+  end
+
+  def label -> &String
+    &self.name
+  end
+end
+
+def main
+  # ── String elements ────────────────────────────────────────────────
+  let s = ["a", "b", "c"]
+
+  let s2 = s.drop(2)
+  s2.each { |v| puts "s2 #{v}" }
+  puts "s2 size #{s2.size}"
+
+  # drop(0) aliases every element — the case that double-freed the most.
+  let s0 = s.drop(0)
+  puts "s0 size #{s0.size}"
+
+  # n == len and n > len both yield empty.
+  let sEq = s.drop(3)
+  puts "sEq size #{sEq.size}"
+  let sOver = s.drop(9)
+  puts "sOver size #{sOver.size}"
+
+  # The receiver must still be whole after every derive above.
+  s.each { |v| puts "s #{v}" }
+
+  # ── Int elements (the kind that never broke; pinned as the control) ──
+  let i = [1, 2, 3]
+  let i2 = i.drop(2)
+  i2.each { |v| puts "i2 #{v}" }
+  puts "i2 size #{i2.size}"
+  let i0 = i.drop(0)
+  puts "i0 size #{i0.size}"
+
+  # ── User-class elements ────────────────────────────────────────────
+  let t = [Tag.new("x"), Tag.new("y"), Tag.new("z")]
+  let t2 = t.drop(1)
+  t2.each { |v| puts "t2 #{v.label}" }
+  puts "t2 size #{t2.size}"
+
+  puts "ok"
+end

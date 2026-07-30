@@ -1,0 +1,15 @@
+s2 c
+s2 size 1
+s0 size 3
+sEq size 0
+sOver size 0
+s a
+s b
+s c
+i2 3
+i2 size 1
+i0 size 3
+t2 y
+t2 z
+t2 size 2
+ok
