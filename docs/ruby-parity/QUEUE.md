@@ -513,6 +513,28 @@ ranks first and B71 second, both found after B01 to B05.
 - **Status:** NEEDS-COMPILER-FEATURE.
 - **Pins:** 1900-1909 are taken by B35a; allocate a fresh block. Pin BOTH spellings (tail and `next`), plus the explicit `Some(...)` form that already works.
 
+### B90 — An unbound method-call temporary is never dropped (leak)
+- **Goal:** `a.select { … }.each { … }` drops its intermediate.
+- **Repro:** the temporary produced by a chained method call gets no `Drop` in MIR. **Proven pre-existing** by the B85 agent: MIR for `a.select{}.size` on the PRE-B85 binary is missing the same `Drop`, and that spelling never routed through the peeling helper B85 removed.
+- **Shape:** a general drop-elaboration gap for method-call temporaries, reachable today through every non-block chain terminal (`.size`, `.count`, `.join`, `.first`). A LEAK, not corruption, which is why it ranks below the crash batches.
+- **Files:** `mir/lower/drops.rs`, plus wherever method-call destinations are registered as droppable.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Pins:** 1900-1909. Pin a chain whose intermediate holds heap elements and assert via an RSS loop that repeated execution does not grow.
+
+### B91 — `Array#first` interpolates as a raw pointer
+- **Repro:** `"#{[1,2,3].first}"` renders a pointer, for `Int` and `String` alike, on a plain literal with no chaining. `.first.unwrap_or(0)` is correct; pin `1867` uses that form and says why.
+- **Cause:** `first` returns `Option[T]` and a bare `Option` interpolates its BOX. This is the same defect already recorded in `HANDOFF.md` known-bugs ("Interpolating an `Option` prints its BOX POINTER"), reached through a different method, which makes it a family rather than a one-off: EVERY `Option`-returning method is affected in interpolation (`min`, `max`, `find`, `find_index`, `first`).
+- **Fix shape:** make `Option` render as its value or as an explicit `Some(x)`/`nil` in the Display path, rather than as the box. That closes the whole family at once.
+- **Severity:** high. It is a silent wrong answer, the rendered number looks plausible, and it fires on the most idiomatic spelling.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Pins:** 1910-1919. Pin interpolation of `first`, `min`, `max`, `find`, for `Int` and `String`, plus a `nil` case.
+
+### B92 — A two-parameter block cannot assign to a captured `var`
+- **Repro:** `xs.each_with_index { |x, i| last = i }` is **E1009**, while single-parameter `xs.each { |x| last = x }` is fine. Pin `1869` prints instead of assigning and says why.
+- **Shape:** the borrow/capture analysis treats a two-parameter block's environment differently from a one-parameter block's. Ruby code assigns to captured locals from multi-param blocks constantly (`each_with_index`, `each_pair`, `reduce` with an index), so this blocks a common idiom.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Pins:** 1920-1929. Pin one-param and two-param side by side, assigning to a captured `var`, for `each_with_index` and `Hash#each_pair`.
+
 ---
 
 ## 3. READY-NOW batches (`.rx` only, no enabler needed)
