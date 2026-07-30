@@ -1,0 +1,58 @@
+# B84 — the same implicit `Option::Some` wrap on a `return` that is NESTED
+# inside a loop body or a `match` arm, not just directly under the function's
+# top-level `if`. These lower through different enclosing scopes but land in
+# the same return slot, so all of them segfaulted before the fix.
+
+# ── `return` from inside a `while` loop ──
+def first_multiple(limit: Int, factor: Int) -> Int?
+  var i = 1
+  while i < limit
+    if i % factor == 0
+      return i * 100
+    end
+    i = i + 1
+  end
+  nil
+end
+
+# ── `return` from inside a `for` loop ──
+def first_big(xs: Array[Int]) -> Int?
+  for x in xs
+    if x > 10
+      return x * 2
+    end
+  end
+  nil
+end
+
+# ── `return` from inside a `match` arm ──
+def code_of(x: Int) -> Int?
+  match x
+    1 -> return 11
+    2 -> return 22
+    _ -> return nil
+  end
+end
+
+# ── `return` nested two deep: a `match` arm inside a loop ──
+def scan(xs: Array[Int]) -> Int?
+  for x in xs
+    match x
+      7 -> return 700
+      _ -> nil
+    end
+  end
+  nil
+end
+
+def main
+  puts "first_multiple_hit=#{first_multiple(10, 3).unwrap_or(0)}"
+  puts "first_multiple_miss=#{first_multiple(3, 99).unwrap_or(-1)}"
+  puts "first_big_hit=#{first_big([1, 5, 42, 8]).unwrap_or(0)}"
+  puts "first_big_miss=#{first_big([1, 2, 3]).unwrap_or(-1)}"
+  puts "code_of_1=#{code_of(1).unwrap_or(0)}"
+  puts "code_of_2=#{code_of(2).unwrap_or(0)}"
+  puts "code_of_other=#{code_of(9).unwrap_or(-1)}"
+  puts "scan_hit=#{scan([1, 7, 9]).unwrap_or(0)}"
+  puts "scan_miss=#{scan([1, 2, 3]).unwrap_or(-1)}"
+end

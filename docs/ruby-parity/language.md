@@ -115,7 +115,7 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | Arithmetic `+ - * / %` | DONE | `BinOp`; case `02` | |
 | Power `**` | DONE | `StarStar` token; `BinOp::Pow`; case `952` | Right-associative, binds tighter than unary minus (`-2 ** 2 == -4`). `Int ** Int → Int` (`ruxen_int_pow`), any float operand → `Float` (`ruxen_float_pow`). Fixed the former silent misparse (`2 ** 8` was `16`). |
 | Comparison `< > <= >=` | DONE | cases `126/209/965` | Auto-`Ord` on structs/enums; user methods and `Comparable` defaults dispatch when available. |
-| Equality `== !=` | DONE | auto-`PartialEq`; cases `206/965` | User `def ==` dispatches; `!=` inverts it. |
+| Equality `== !=` | DONE (scalars, `struct`) | auto-`PartialEq`; cases `206/965` | User `def ==` dispatches; `!=` inverts it. Auto-`PartialEq` holds for a **`struct`** (case `206`); a **`class`** compares by identity (**B74**). |
 | Spaceship `<=>` | DONE | `Spaceship` token; `BinOp::Cmp`; cases `959/965` | Returns `Int` (-1 / 0 / 1) for Int, Float, String, and user-defined `def <=>`. |
 | Nil coalescing `??` | DONE | `QuestionQuestion`; `BinOp::NilCoalesce`; case `966` | Ruxen-specific `Option[T] ?? T -> T`. Right-associative, below `||` and above assignment; fallback is lazy. |
 | Logical `&& \|\| !` | DONE | `BinOp`/`UnaryOp`; case `955` | Now **short-circuit** (branch-CFG lowering). Was eagerly evaluating both operands (a correctness bug: `ptr != nil && ptr.field` touched `ptr.field` when nil); fixed 2026-07-23. |
@@ -277,7 +277,7 @@ the substitute is idiomatic but the sugar is not built.
 | Singleton method `def obj.x` | COMPILE-TIME | for a *type* → `extension`; per-instance singleton → not modeled (would need a per-object vtable) | Per-instance case is the rare, near-irreducible slice; the type-level case is `extension`. |
 | Class method `def self.x` | DONE | case `17` | |
 | Constants in class | DONE | case `44` | |
-| `attr`-style equality/hash/inspect | DONE (auto) | cases `133/207/139` | Auto `PartialEq`/`Hash`/`Debug`. |
+| `attr`-style equality/hash/inspect | PARTIAL (`struct` only) | cases `133/207/139` | Auto `PartialEq`/`Hash`/`Debug`. All three cases pin a **`struct`**. For a **`class`**, structural `==` returns `false` with or without an explicit `include PartialEq` (**B74**), so a `class` also cannot serve as a `Hash`/`Set` key. |
 | `to_s` universal | DONE | case `810` | User `to_s` overrides derived. |
 | `<=>` + `Comparable` (hand-written) | DONE (operators) | case `965` | Required `<=>` supplies default `==`, ordering operators, and `between?`; `clamp` remains an ownership-design follow-up. |
 | `Struct.new(:a, :b)` | COMPILE-TIME | a `Struct.new(...)` macro that expands to a `struct` with accessors + auto-derives | `struct` is the mechanism (case `63`); the `Struct.new` *surface* is a macro over it. |

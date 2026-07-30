@@ -1390,8 +1390,18 @@ impl<'a> InferenceEngine<'a> {
             HirExprKind::Return(value) => {
                 if let Some(ref mut val) = value {
                     self.infer_expr(val);
-                    if let Some(ref ret_ty) = self.current_return_ty {
-                        let _ = unify(ret_ty, &val.ty, self.ctx, &expr.span);
+                    // B84: `return <value>` targets the SAME slot as the
+                    // function body's tail expression, so it runs the SAME
+                    // pipeline — the contextual rewrites (notably the "drop
+                    // `Some`" wrap for a `-> T?` function) followed by a
+                    // REPORTED type check. This arm previously called bare
+                    // `unify` and threw the result away, which let a bare
+                    // `T` escape into an `Option[T]`/`Result[T, E]` return
+                    // slot unboxed and segfault the caller.
+                    if let Some(ret_ty) = self.current_return_ty.clone() {
+                        let span = expr.span.clone();
+                        let val_ty = self.coerce_and_check_return_value(&ret_ty, val, &span);
+                        self.check_declared_bounds(&ret_ty, &val_ty, &span);
                     }
                 }
                 expr.ty = Ty::Never;

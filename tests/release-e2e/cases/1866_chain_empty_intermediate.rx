@@ -1,0 +1,32 @@
+# B85 — a chain whose intermediate is EMPTY must iterate nothing. This is the
+# sharpest form of the bug: when the combinator was discarded, `a.select { … }`
+# with a predicate no element satisfies still iterated every element, so the
+# body ran N times instead of zero.
+def main
+  let n = [1, 2, 3, 4, 5, 6]
+  let a = ["alpha", "beta", "gamma", "delta"]
+
+  var e1 = 0
+  n.select { |x| x > 100 }.each { |x| e1 = e1 + 1 }
+  puts("empty-select=#{e1}")
+
+  var e2 = 0
+  a.reject { |s| s.size > 0 }.each { |s| e2 = e2 + 1 }
+  puts("empty-reject=#{e2}")
+
+  var e3 = 0
+  n.take_while { |x| x > 100 }.each { |x| e3 = e3 + 1 }
+  puts("empty-take_while=#{e3}")
+
+  # Empty intermediate in the MIDDLE of a three-link chain.
+  var e4 = 0
+  n.select { |x| x > 100 }.map { |x| x * 2 }.each { |x| e4 = e4 + 1 }
+  puts("empty-middle=#{e4}")
+
+  # Bound-first spellings of the same, for comparison.
+  let none = n.select { |x| x > 100 }
+  var e5 = 0
+  none.each { |x| e5 = e5 + 1 }
+  puts("empty-bound=#{e5}")
+  puts("empty-size=#{none.size}")
+end

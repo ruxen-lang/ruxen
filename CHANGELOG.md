@@ -96,6 +96,85 @@ once 1.0.0 ships.
   blocking reason.
 
 ### Fixed
+- **`return <value>` from an `Option`- or `Result`-returning function no longer
+  SEGFAULTS (batch B84).** A guard-clause early return —
+
+  ```
+  def f(x: Int) -> Int?
+    if x > 1
+      return x * 10
+    end
+    nil
+  end
+  ```
+
+  compiled clean and exited 139, while the tail-expression spelling of the same
+  function (`if x > 1 then x * 10 else nil end`) printed the right answer.
+
+  Cause: a function's return slot is fed by two syntactic positions — the
+  body's TAIL expression and an explicit `return` — and only the tail ran the
+  return-slot pipeline. `infer_function` applied `auto_call_fn_reference`, then
+  the "drop `Some`" wrap (`auto_wrap_option_some`, which rewrites a bare `T`
+  into an `Option::Some` HIR node that MIR lowers to `Alloc`/`SetTag`/
+  `SetField`), then a REPORTED `unify_or_coerce`. The `Return` arm of
+  `infer_expr` did none of it: it called `unify` and discarded the result, and
+  `unify` has no `(Option[T], T)` rule, so the mismatch was silently swallowed.
+  The bare `Int` was then handed to `Terminator::Return` unboxed and the caller
+  dereferenced it as a tagged-enum pointer.
+
+  Fix: both positions now go through one helper,
+  `InferenceEngine::coerce_and_check_return_value`
+  (`compiler/ruxen_core/src/typeck/infer/mod.rs`), which applies the same
+  rewrites and then the same reported check. The mechanism is generic over the
+  return type — it runs the existing contextual rewrites and a normal
+  `unify_or_coerce`, with no per-type special-casing in the `Return` arm.
+
+  Consequences, both intended: `-> T?` now auto-wraps a bare `return <T>`
+  exactly as the tail spelling does; and `-> Result[T, E]`, which has no
+  implicit `Ok` wrap in the language, now produces the SAME type-mismatch
+  diagnostic for `return <bare T>` that it already produced for the tail
+  spelling, instead of the identical silent miscompile it had before.
+
+  Pins `tests/release-e2e/cases/1850` to `1852` deliberately pin BOTH spellings
+  side by side (early `return` and tail expression, for `Option` and `Result`,
+  plus a `return` nested in a `while`/`for` loop and in a `match` arm, and a
+  heap `String` payload). The negative half — a bare `return <T>` into a
+  `-> Result[T, E]` slot must be a diagnostic — lives in
+  `compiler/ruxen_core/src/typeck/tests.rs`, since the e2e harness has no
+  compile-fail expectation. This defect had hidden behind pin `1061`, which
+  exercised only the tail spelling.
+- **Chaining off a combinator no longer iterates the ORIGINAL receiver (B85).**
+  `["alpha", "beta", "gamma"].select { |s| s.size > 4 }.each { … }` ran the
+  block on all three elements instead of the two selected, while the
+  bound-first spelling (`let big = a.select { … }; big.each { … }`) was
+  correct. No crash and no diagnostic, just a plausible wrong answer on Ruby's
+  single most characteristic idiom.
+
+  Cause: `mir/lower/closure_inline/mod.rs::lower_vec_source`. When an inlined
+  combinator's receiver was itself a method call, this helper matched on the
+  RECEIVER's method name and, for `"select" | "reject" | "where_matching"` with
+  a block, recursed into that call's own object instead of lowering the call,
+  discarding the combinator outright. Diffing MIR for the two spellings shows
+  it exactly: the chained form emits no `Array_select` call at all and its loop
+  reads the receiver local, where the bound form calls `Array_select` and loops
+  over its result.
+
+  The fix deletes the helper. An inlined combinator's receiver is an ordinary
+  expression and is now lowered by `lower_expr`, exactly as the bound-first
+  spelling already was, so the chain sees whatever the previous link returned.
+  This removes three hardcoded stdlib method names from the lowerer rather than
+  adding any (`docs/specs/system/generic-compiler.spec.md`), and the surviving
+  arms of the deleted helper were already plain `lower_expr` forwards left over
+  from the removed iterator machinery.
+
+  Verified across `select`, `map`, `reject`, `filter_map`, `take_while`,
+  `drop_while`, `each_with_index`, a user-defined collection method, non-block
+  terminals (`size` / `count` / `join` / `first` / `empty?` / `include?`),
+  three- and four-link chains, an EMPTY intermediate (which used to iterate the
+  full receiver rather than nothing), and a chain nested inside another block.
+  Pins `tests/release-e2e/cases/1860` to `1869`, each pinning the chained and
+  bound-first spellings side by side with counts that differ from the
+  receiver's own; 6 of the 10 fail against the pre-fix compiler.
 - **`flat_map` on an `Array` receiver no longer fails codegen.** It sat on the
   unimplemented-Vec-combinator blocklist in
   `compiler/ruxen_core/src/codegen/lang_intrinsics.rs`, a list written when
