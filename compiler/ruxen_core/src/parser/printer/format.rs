@@ -422,6 +422,10 @@ pub fn format_expr_short(e: &Expr) -> String {
             )
         }
 
+        // See the same arm in `formatter/format_expr.rs`: print the written
+        // path so the generic arguments survive a format round-trip.
+        ExprKind::GenericTypeRef { ty, .. } => format_type(ty),
+
         ExprKind::EnumVariant {
             type_path,
             variant,

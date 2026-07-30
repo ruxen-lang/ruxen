@@ -315,6 +315,29 @@ pub enum ExprKind {
 
     // Identifiers
     Identifier(String),
+    /// A type named in VALUE position with explicit generic arguments,
+    /// used as a static-call receiver: the `Hash[String, Int]` in
+    /// `Hash[String, Int].new`.
+    ///
+    /// A plain `Hash` receiver is `Identifier("Hash")`, which resolves to
+    /// the value-scope constructor entry whose type is the DECLARED
+    /// `Hash[K, V]` — rigid parameters and all. That is fine when the call
+    /// has arguments to infer from (`Point[Int].new(3)`), and it is not
+    /// fine for a no-argument constructor: `Hash[String, Int].new` used to
+    /// erase its arguments here and produce a `Hash[K, V]` that nothing
+    /// downstream could ever refine. Carrying the written type instead
+    /// lets the resolver hand back a concrete receiver type, which is all
+    /// `substitute_generics_in_return` needs to type the call properly.
+    ///
+    /// `name` is the base segment, kept separately because the resolver
+    /// still looks it up in value scope to find the constructor's `DefId`;
+    /// `ty` is the whole written path, resolved through the ordinary
+    /// type-expression path so `Hash` / `Array` / `Set` need no special
+    /// casing here.
+    GenericTypeRef {
+        name: String,
+        ty: Box<TypeExpr>,
+    },
     SelfRef,
     SelfType,
 

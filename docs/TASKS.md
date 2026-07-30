@@ -23,7 +23,12 @@ a NUL, which SIGSEGV'd on any `Hash[Int, V]` key >= 4096, made user types
 unusable as keys, and latched a table's behavior on its first insert. Replaced
 by a descriptor the compiler supplies from the static key type;
 `ruxen_hash_looks_like_string` deleted. `Hash[UserType, V]` now works, which
-unblocks B29c. Pins `1720`-`1727`. The neighbouring limits it exposed are filed
+unblocks B29c. Landing it also required fixing `Hash[K, V].new`, whose explicit
+generic arguments the parser discarded (§Q60(a2), pre-existing: that spelling
+SIGSEGV'd on a large integer key before B73). Pins `1720`-`1729`, which now
+cover BOTH constructor spellings — the first eight all used the
+annotated-binding form, which is why the suite stayed green while the turbofish
+form was broken. The neighbouring limits it exposed are filed
 as §Q60: a static ctor on a generic builtin keeps its rigid `K`/`V` in argument
 and return position (S3 — a typeck imprecision with no behavioural consequence,
 since the descriptor is also installed at use sites), `Set[String]` set-algebra

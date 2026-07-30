@@ -2913,6 +2913,59 @@ genuinely needs a static constructor's own expression type to be precise,
 reintroduce it deliberately with a test that fails without it — do not assume
 it is still needed because this entry mentions it.
 
+**(a2) S1, FIXED — the parser erased explicit generic arguments on a
+static-call receiver.** `parse_type_expr_primary`
+(`parser/expr/atoms.rs:471`) read the `[…]` after a type identifier and threw
+it away:
+
+```rust
+let _generic_args = self.parse_generic_args();
+// Fall through to normal handling as if we had just the TypeIdentifier.
+```
+
+The stated reasoning was that generic args are inferred from the
+constructor/method arguments. True for `Point[Int].new(3)`; false for any
+NO-ARGUMENT constructor. `Hash[String, Int].new` therefore produced a receiver
+typed with `class Hash[K, V]`'s declared rigid parameters, and
+`substitute_generics_in_return` bound the identity map `{K → K}`, so the call's
+type stayed abstract permanently. Verified consequences, all on the pre-B73
+build:
+
+* `Hash[Int, Int].new` then `insert(5000, …)` → **SIGSEGV**, while
+  `insert(7, …)` worked. The key kind was being guessed from the key's bits
+  because no static type was available.
+* `h["a"]` on such a table typed as the abstract `V` rather than `Int`.
+
+So this spelling was never correctly typed; B73 replaced the lucky guess with a
+demand for a real static type and turned it into a loud panic, which is how it
+was found. **Fixed** by carrying the written path as
+`ExprKind::GenericTypeRef { name, ty }` and resolving it through ordinary type
+resolution, so `Hash` / `Array` / `Set` need no per-collection special-casing.
+Three things worth knowing if you touch it:
+
+* The refinement is scoped to the BUILTIN type constructors (the
+  `DefKind::Variable` entries `register_type_constructors` installs in VALUE
+  scope). A user generic class is a `DefKind::Class` reached through type
+  scope; its `.new` goes down the constructor path and already infers its
+  parameters from the call's arguments. Routing it through the new node broke
+  cases `65`, `73`, `101` and `990` on the first attempt, so it falls back to
+  resolving exactly as the bare type name did. **`Pair[Int, String]` is
+  therefore still not refined as a TYPE** — it just does not need to be today,
+  because it always has arguments to infer from. A no-argument static method on
+  a user generic would hit the same class of problem.
+
+* The resolver registers the INSTANTIATED constructor as its own def rather
+  than setting `expr.ty`. Typeck's `VarRef` arm (`typeck/infer/expr.rs:125`)
+  re-derives an expression's type from its `DefId` unconditionally, so an
+  in-place refinement is discarded. Anything else that wants to refine a
+  `VarRef`'s type has the same problem and needs the same shape.
+* Both formatters print the arguments back (`ruxen fmt` verified idempotent).
+  Dropping them there would rewrite the program into the un-inferable shape,
+  which is the fmt-destructiveness class (Q23/Q30/Q34).
+
+Pins `1728` (both spellings × every key kind, `Set`, `with_capacity`) and
+`1729` (class field, function return, closure body, array element).
+
 **(b) S2 — `Set[String]` set-algebra results double-free at scope exit.**
 Verified 2026-07-29 and **pre-existing** (reproduces identically before B73):
 

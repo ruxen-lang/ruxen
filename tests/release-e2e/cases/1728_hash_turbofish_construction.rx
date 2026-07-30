@@ -1,0 +1,71 @@
+# B73: both spellings of a table constructor produce a keyed table.
+#
+# A `Hash` can be constructed two ways, and until this pin only ONE of them
+# was covered:
+#
+#     var a: Hash[String, Int] = Hash.new      # type on the BINDING
+#     var b = Hash[String, Int].new            # type on the CONSTRUCTOR
+#
+# The second erased its type arguments in the parser
+# (`parse_type_expr_primary` parsed them into `_generic_args` and dropped
+# them, on the reasoning that they are inferred from the call's arguments).
+# That reasoning holds for `Point[Int].new(3)` and cannot hold for a
+# NO-ARGUMENT constructor: there is nothing to infer from, so the receiver
+# kept the declared rigid `K`/`V` and the call's type stayed `Hash[K, V]`
+# forever. Pre-B73 the runtime covered for it by guessing the key kind from
+# the first key's bits, which was right for strings, right for small
+# integers, and a SIGSEGV for an integer key >= 4096.
+#
+# Both spellings are pinned side by side for every key kind, and for `Set`
+# and `with_capacity` too, so a fix that repairs one spelling and not the
+# other fails here.
+struct Tag
+  id: Int
+  label: String
+end
+
+def main
+  # ── String keys ────────────────────────────────────────────────
+  var a: Hash[String, Int] = Hash.new
+  a.insert("k", 1)
+  var b = Hash[String, Int].new
+  b["k"] = 1
+  puts "str=#{a.key?("k")} #{b.key?("k")} #{b.key?("nope")}"
+
+  # ── Integer keys, both sides of the old 0x1000 probe boundary ──
+  var c: Hash[Int, Int] = Hash.new
+  c.insert(7, 1)
+  c.insert(100000, 2)
+  var d = Hash[Int, Int].new
+  d.insert(7, 1)
+  d.insert(100000, 2)
+  puts "int=#{c.key?(100000)} #{d.key?(100000)} #{d.key?(4097)}"
+
+  # A turbofish table whose FIRST key is above the boundary. This exact
+  # program segfaulted before B73 (the heuristic dereferenced 5000).
+  var e = Hash[Int, Int].new
+  e.insert(5000, 1)
+  puts "first_big=#{e.size} #{e.key?(5000)}"
+
+  # ── User-type keys, through hash_code + the == derive ──────────
+  var f: Hash[Tag, Int] = Hash.new
+  f.insert(Tag.new(1, "a"), 1)
+  var g = Hash[Tag, Int].new
+  g.insert(Tag.new(1, "a"), 1)
+  puts "user=#{f.key?(Tag.new(1, "a"))} #{g.key?(Tag.new(1, "a"))} #{g.key?(Tag.new(2, "b"))}"
+
+  # ── Set, both spellings ────────────────────────────────────────
+  var h: Set[String] = Set.new
+  h.insert("s")
+  var i = Set[String].new
+  i.insert("s")
+  i.insert("s")
+  puts "set=#{h.include?("s")} #{i.size} #{i.include?("s")} #{i.include?("t")}"
+
+  # ── with_capacity, both spellings ──────────────────────────────
+  var j: Hash[String, Int] = Hash.with_capacity(8)
+  j.insert("k", 1)
+  var k = Hash[String, Int].with_capacity(8)
+  k.insert("k", 1)
+  puts "cap=#{j.key?("k")} #{k.key?("k")}"
+end

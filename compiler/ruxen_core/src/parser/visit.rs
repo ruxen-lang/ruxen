@@ -64,6 +64,9 @@ pub fn walk_expr<V: Visit>(v: &mut V, e: &Expr) {
         | ExprKind::BoolLiteral(_)
         | ExprKind::UnitLiteral
         | ExprKind::Identifier(_)
+        // Holds a TypeExpr, not an Expr; this walker does not descend into
+        // type expressions (see the doc comment above).
+        | ExprKind::GenericTypeRef { .. }
         | ExprKind::SelfRef
         | ExprKind::SelfType
         | ExprKind::Continue
@@ -393,6 +396,9 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, e: &mut Expr) {
         | ExprKind::BoolLiteral(_)
         | ExprKind::UnitLiteral
         | ExprKind::Identifier(_)
+        // Holds a TypeExpr, not an Expr; this walker does not descend into
+        // type expressions (see the doc comment above).
+        | ExprKind::GenericTypeRef { .. }
         | ExprKind::SelfRef
         | ExprKind::SelfType
         | ExprKind::Continue

@@ -315,8 +315,49 @@ once 1.0.0 ships.
   **One residual limit, loud rather than silent.** A table neither route can
   type keeps `RUXEN_KEY_UNSET`, and the runtime **panics on the first insert**
   naming the protocol rather than guessing a kind and mis-hashing. No shape in
-  the stdlib, the workspace, or the 551-case e2e suite reaches it. Pins
-  `tests/release-e2e/cases/1720`-`1727`.
+  the stdlib, the workspace, or the e2e suite reaches it. Pins
+  `tests/release-e2e/cases/1720`-`1729`.
+
+- **`Hash[K, V].new` now means what it says (found landing B73).** The parser
+  parsed the explicit generic arguments on a type used as a static-call
+  receiver and then **discarded** them
+  (`parse_type_expr_primary`: `let _generic_args = self.parse_generic_args();`),
+  on the reasoning that generic arguments are inferred from the call's
+  arguments anyway. That holds for `Point[Int].new(3)` and cannot hold for a
+  **no-argument** constructor: `Hash[String, Int].new` produced a receiver
+  carrying the declared rigid `K`/`V`, so the call's type stayed `Hash[K, V]`
+  and no later stage could recover what the author had written. Consequences,
+  all verified:
+  * `h["a"]` on such a table typed as the abstract `V`, not `Int`.
+  * `Hash[Int, Int].new` followed by `insert(5000, …)` **SIGSEGV'd** under the
+    old bit-pattern heuristic, while `insert(7, …)` worked, because the key
+    kind was being guessed rather than known.
+  * Under B73 the same tables became `RUXEN_KEY_UNSET` and panicked.
+
+  The written path is now carried through as `ExprKind::GenericTypeRef` and
+  resolved by ordinary type resolution, so `Hash` / `Array` / `Set` need no
+  per-collection special-casing. The refinement is scoped to the BUILTIN type
+  constructors, which are the ones whose value-scope entry leaks its declared
+  rigid parameters. A user generic class keeps the path it had: its `.new` goes
+  through constructor resolution and `Pair[Int, String].new(42, "hi")` already
+  infers its parameters from the arguments, so rerouting it would have swapped
+  a `DefKind::Class` receiver for a synthetic `DefKind::Variable` and broken
+  that path (caught by cases `65`, `73`, `101`, `990` on the first attempt).
+  The resolver registers
+  the INSTANTIATED constructor as its own def rather than refining the
+  expression's type in place, because typeck's `VarRef` arm re-derives an
+  expression's type from its `DefId` and would otherwise put the
+  uninstantiated type straight back. `ruxen fmt` prints the arguments back
+  (verified idempotent); dropping them there would have silently rewritten a
+  program into the shape whose type cannot be recovered, which is the
+  fmt-destructiveness class (Q23/Q30/Q34).
+
+  Both spellings of every construction form are now pinned side by side
+  (`1728`), along with the shapes that put the type somewhere other than the
+  constructor — class field, function return, closure body, array element
+  (`1729`). The previous eight B73 pins all happened to use the
+  annotated-binding spelling, which is why the suite stayed green while this
+  was broken.
 - **`alias` to a method on a GENERIC builtin head no longer link-fails (Q58).**
   `h.has_key?(k)` on a `Hash[String, Int]` emitted a bodiless
   `Hash[String, Int]_has_key?` and the linker rejected it. MIR's

@@ -404,6 +404,13 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
             format_type_expr(target_type, comments),
         ]),
 
+        // A type used as a static-call receiver with explicit generic
+        // arguments (`Hash[String, Int].new`). Print the written path, not
+        // the bare name: dropping the arguments here would silently rewrite
+        // the program into the shape whose type inference cannot recover
+        // them, which is the fmt-destructiveness class (Q23/Q30/Q34).
+        ExprKind::GenericTypeRef { ty, .. } => format_type_expr(ty, comments),
+
         // ── Enum variant construction ──
         ExprKind::EnumVariant {
             type_path,
