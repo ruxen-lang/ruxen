@@ -1,0 +1,42 @@
+# B87 — `!` and `?` in METHOD position. These take a different parser path
+# from a free function (`parse_postfix` reads the name after `.` verbatim, so
+# they never reached the macro interception) and were already correct. They are
+# pinned so the B87 fix, which changed how a `!` identifier is classified at
+# expression head, cannot regress the receiver form.
+#
+# Covered: `!` method with no arguments, `!` method with arguments, `!` method
+# used for its value, `?` predicate method, and a `!` STATIC method
+# (`Doc.make!`), which parses as a `.`-name on a type receiver.
+class Doc
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def self.make!(n: Int) -> Doc
+    Doc.new(n)
+  end
+
+  def save! -> Bool
+    puts "saved #{@n}"
+    true
+  end
+
+  def bump!(k: Int) -> Int
+    puts "bumped #{@n + k}"
+    @n + k
+  end
+
+  def positive? -> Bool
+    @n > 0
+  end
+end
+
+def main
+  let d = Doc.make!(7)
+  let s = d.save!
+  puts "s=#{s}"
+  let b = d.bump!(2)
+  puts "b=#{b}"
+  puts "pos=#{d.positive?}"
+end

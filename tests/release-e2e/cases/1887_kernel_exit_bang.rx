@@ -1,0 +1,15 @@
+# B87 payoff — Kernel `exit!(code)`. B19 could not ship this: a free function
+# named with a trailing `!` compiled clean and then did nothing at its call
+# site, so `exit!` would have been a user-callable silent no-op, which this
+# repo forbids outright.
+#
+# Ruby's `exit!` is the form that skips `at_exit` handlers and `ensure` blocks.
+# Ruxen has no at-exit registry, so it behaves as `exit(code)` does; it exists
+# for source parity. The assertion is that `after` never reaches stdout, which
+# is what separates a real process exit from a call that returns — and, since
+# B87, from a call that was dropped.
+def main
+  puts "before exit!"
+  exit!(3)
+  puts "after exit!"
+end

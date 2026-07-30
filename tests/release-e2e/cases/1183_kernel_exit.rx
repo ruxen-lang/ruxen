@@ -5,10 +5,10 @@
 # "after exit" never reaches stdout, which is what separates a real
 # process exit from a call that returns.
 #
-# Ruby's `exit!` (skip the at-exit handlers) has NO counterpart and is not
-# shippable: a free function named with a trailing `!` compiles clean and
-# then does nothing at its call site, so `exit!` would have been a
-# user-callable silent no-op.
+# Ruby's `exit!` (skip the at-exit handlers) was unshippable when this pin
+# was written, because a free function named with a trailing `!` compiled
+# clean and then did nothing at its call site. B87 fixed that; `exit!` now
+# ships and is pinned separately as case 1887.
 def main
   puts "before exit"
   exit(3)

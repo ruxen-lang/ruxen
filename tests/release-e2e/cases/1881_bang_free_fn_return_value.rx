@@ -1,0 +1,18 @@
+# B87 — a `!` function used for its VALUE, which failed worse than the
+# statement form: the dropped call left the destination local at its zero
+# initialiser, so `let r = twice!(3)` bound `0` with no diagnostic. A pin that
+# only checked "the program still runs" would have passed.
+#
+# Three value positions, because they lower differently: a `let` binding, an
+# arithmetic operand inside interpolation, and a `!` call nested as the
+# argument of another `!` call.
+def twice!(x: Int) -> Int
+  x * 2
+end
+
+def main
+  let r = twice!(3)
+  puts "r=#{r}"
+  puts "sum=#{twice!(3) + 1}"
+  puts "nest=#{twice!(twice!(2))}"
+end

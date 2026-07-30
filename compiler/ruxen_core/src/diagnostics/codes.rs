@@ -500,6 +500,21 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1124",
         title: "invalid `&`-block argument",
     },
+    // E1125 is NOT ours — it is referenced (in comments only) by the
+    // inlined-combinator `next` rejection and is being reconciled under
+    // B81. E1126 is the next free slot.
+    //
+    // E1126 closes the B87 silent-drop hole: a `name!(...)` that reached
+    // HIR as a `MacroCall` whose name is not in
+    // `parser::macros::BUILTIN_MACRO_NAMES` used to lower to nothing at
+    // all, so the call vanished from the program without a word. It is
+    // now a hard error. User-facing `name!` spellings never reach this
+    // code — the parser only builds a `MacroCall` for a registered macro
+    // — so it fires only if a macro is registered without a lowering.
+    CodeInfo {
+        code: "E1126",
+        title: "unknown macro",
+    },
     // ── no_std / embedded (E1400-E1499) ──────────────────────────────
     // Tier 4.04. E1400 fires when a no_std compilation unit constructs a
     // heap-allocated value (String/Array/Map/Set) — there is no global

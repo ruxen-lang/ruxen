@@ -337,6 +337,14 @@ impl Resolver {
             .push(Diagnostic::error(message, span.clone()));
     }
 
+    /// Same as [`Self::error`] but carries a registry code so
+    /// `ruxen explain E####` has something to say. `code` must appear in
+    /// `diagnostics::codes::REGISTRY` (a test enforces it).
+    pub(super) fn error_with_code(&mut self, message: String, span: &Span, code: &'static str) {
+        self.diagnostics
+            .push(Diagnostic::error_with_code(message, span.clone(), code));
+    }
+
     /// T2.02 S8.S4 follow-up: surface pure-literal overflow /
     /// div-zero in a `ConstExpr` as **E0703**.  Called immediately
     /// after the S8.S4 normal-form pass at every const-arg /

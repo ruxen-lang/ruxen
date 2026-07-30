@@ -3,6 +3,7 @@
 //! literals, and closures (`do…end` and `{…}`).
 
 use super::*;
+use crate::parser::macros;
 
 impl Parser {
     pub(super) fn parse_primary(&mut self) -> Expr {
@@ -157,13 +158,25 @@ impl Parser {
             TokenKind::Identifier(ref name) => {
                 let name = name.clone();
                 self.advance();
-                // Check for macro call: name!(...) — also handle ident ending with !
-                if name.ends_with('!') {
-                    // Already has !, parse macro args
-                    let trimmed = name.trim_end_matches('!').to_string();
-                    self.parse_macro_call_args(trimmed, start)
-                } else if self.at(TokenKind::Bang) {
-                    // name followed by !
+                // Macro call: `name!(...)` where `name` is one of the
+                // compiler's OWN macros (`parser::macros`). B87: every other
+                // trailing `!` belongs to a Ruby bang name (`save!`, `exit!`,
+                // `shout!`) — the lexer glued it onto the identifier, and we
+                // keep it there so the call resolves like any other call.
+                // Treating an arbitrary `name!` as a macro produced an
+                // unrecognised `MacroCall` that MIR then dropped on the floor,
+                // so the call compiled clean and did nothing.
+                let macro_head = name
+                    .strip_suffix('!')
+                    .filter(|base| macros::is_builtin_macro(base))
+                    .map(str::to_string);
+                if let Some(base) = macro_head {
+                    self.parse_macro_call_args(base, start)
+                } else if self.at(TokenKind::Bang) && macros::is_builtin_macro(&name) {
+                    // `panic !(...)` — a space split the `!` off the name, so
+                    // the lexer emitted two tokens. Only the built-in macros
+                    // take this path; for anything else the `!` starts a
+                    // negated bare argument (`f !flag`).
                     self.advance(); // consume !
                     self.parse_macro_call_args(name, start)
                 } else if self.at(TokenKind::LParen) {

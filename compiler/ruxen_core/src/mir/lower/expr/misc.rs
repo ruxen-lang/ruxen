@@ -120,7 +120,16 @@ impl<'a> Lowerer<'a> {
                     "array" | "vec" | "map" | "hash" | "set" => Err(format!(
                         "macro `{name}!` is retired — use the literal form per ruby-naming.spec §10a"
                     )),
-                    _ => Ok(None),
+                    // B87: this catch-all used to be `Ok(None)`, which lowered
+                    // an unrecognised macro to NOTHING — the call vanished
+                    // from the program with no diagnostic anywhere. Resolve
+                    // now rejects unregistered macro names (E1126), so
+                    // reaching here means a name was added to
+                    // `parser::macros::BUILTIN_MACRO_NAMES` without a lowering
+                    // arm above. Fail loudly rather than miscompile.
+                    _ => Err(format!(
+                        "macro `{name}!` is registered as a built-in but has no MIR lowering"
+                    )),
                 }
             }
 

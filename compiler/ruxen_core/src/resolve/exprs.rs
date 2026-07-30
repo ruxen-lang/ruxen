@@ -1122,6 +1122,27 @@ impl Resolver {
             }
             ast::ExprKind::MacroCall { name, args, .. } => {
                 let args_hir: Vec<HirExpr> = args.iter().map(|a| self.resolve_expr(a)).collect();
+                // B87: no unrecognised macro may survive past this point. It
+                // used to fall through to a fresh type var here and then to a
+                // `_ => Ok(None)` catch-all in MIR, which silently deleted the
+                // whole call. The parser only builds a `MacroCall` for a name
+                // in `parser::macros::BUILTIN_MACRO_NAMES`, so this fires only
+                // if a macro is registered without being lowered.
+                if !crate::parser::macros::is_builtin_macro(name) {
+                    self.error_with_code(
+                        format!(
+                            "unknown macro `{name}!` — the compiler has no lowering for it, so \
+                             the call would silently do nothing"
+                        ),
+                        &span,
+                        "E1126",
+                    );
+                    return HirExpr {
+                        kind: HirExprKind::Error,
+                        ty: Ty::Error,
+                        span,
+                    };
+                }
                 let ty = match name.as_str() {
                     // ruby-naming.spec.md §10a:
                     //   `vec![...]` → `array![...]`
