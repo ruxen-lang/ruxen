@@ -1,0 +1,9 @@
+receiver=4
+chained=3
+bound=3
+chained-elem=alpha
+chained-elem=gamma
+chained-elem=delta
+bound-elem=alpha
+bound-elem=gamma
+bound-elem=delta

@@ -45,6 +45,38 @@ once 1.0.0 ships.
   blocking reason.
 
 ### Fixed
+- **Chaining off a combinator no longer iterates the ORIGINAL receiver (B85).**
+  `["alpha", "beta", "gamma"].select { |s| s.size > 4 }.each { … }` ran the
+  block on all three elements instead of the two selected, while the
+  bound-first spelling (`let big = a.select { … }; big.each { … }`) was
+  correct. No crash and no diagnostic, just a plausible wrong answer on Ruby's
+  single most characteristic idiom.
+
+  Cause: `mir/lower/closure_inline/mod.rs::lower_vec_source`. When an inlined
+  combinator's receiver was itself a method call, this helper matched on the
+  RECEIVER's method name and, for `"select" | "reject" | "where_matching"` with
+  a block, recursed into that call's own object instead of lowering the call,
+  discarding the combinator outright. Diffing MIR for the two spellings shows
+  it exactly: the chained form emits no `Array_select` call at all and its loop
+  reads the receiver local, where the bound form calls `Array_select` and loops
+  over its result.
+
+  The fix deletes the helper. An inlined combinator's receiver is an ordinary
+  expression and is now lowered by `lower_expr`, exactly as the bound-first
+  spelling already was, so the chain sees whatever the previous link returned.
+  This removes three hardcoded stdlib method names from the lowerer rather than
+  adding any (`docs/specs/system/generic-compiler.spec.md`), and the surviving
+  arms of the deleted helper were already plain `lower_expr` forwards left over
+  from the removed iterator machinery.
+
+  Verified across `select`, `map`, `reject`, `filter_map`, `take_while`,
+  `drop_while`, `each_with_index`, a user-defined collection method, non-block
+  terminals (`size` / `count` / `join` / `first` / `empty?` / `include?`),
+  three- and four-link chains, an EMPTY intermediate (which used to iterate the
+  full receiver rather than nothing), and a chain nested inside another block.
+  Pins `tests/release-e2e/cases/1860` to `1869`, each pinning the chained and
+  bound-first spellings side by side with counts that differ from the
+  receiver's own; 6 of the 10 fail against the pre-fix compiler.
 - **`flat_map` on an `Array` receiver no longer fails codegen.** It sat on the
   unimplemented-Vec-combinator blocklist in
   `compiler/ruxen_core/src/codegen/lang_intrinsics.rs`, a list written when
