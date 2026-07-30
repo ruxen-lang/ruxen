@@ -355,6 +355,32 @@ mod tests {
     }
 
     #[test]
+    fn return_inside_a_block_still_targets_the_function_return_slot() {
+        // B84 follow-up. `current_return_ty` is set once per function and is
+        // NOT reset when inference descends into a block, so a `return`
+        // written inside `a.each do |x| … end` is checked against `scan`'s
+        // declared `Int?`. That is the correct target (a `return` in a Ruby
+        // block returns from the enclosing method), and it is what makes the
+        // escalation from a discarded `unify` to a REPORTED check safe here:
+        // the bare `x` auto-wraps into the `Option` slot exactly as it does
+        // at the top level, rather than becoming a false type mismatch.
+        let result = parse_and_check(
+            "def scan(a: Array[Int]) -> Int?\n  \
+             a.each do |x|\n    if x > 2\n      return x\n    end\n  end\n  nil\nend",
+        );
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "`return <T>` inside a block in a `-> T?` function must auto-wrap, \
+             not error: {errors:?}"
+        );
+    }
+
+    #[test]
     fn return_of_a_bare_value_wraps_into_an_option_return_slot() {
         // B84, the positive half: the "drop `Some`" sugar that the body's
         // TAIL expression already got must also fire for an explicit
