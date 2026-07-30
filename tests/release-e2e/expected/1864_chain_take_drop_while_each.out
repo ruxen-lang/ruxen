@@ -1,0 +1,5 @@
+receiver=6
+take_while-chained=3
+take_while-bound=3
+drop_while-chained-sum=15
+drop_while-bound-sum=15

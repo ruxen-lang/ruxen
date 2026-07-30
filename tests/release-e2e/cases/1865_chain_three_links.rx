@@ -1,0 +1,30 @@
+# B85 — a three-link chain. Every intermediate must be the previous link's
+# RESULT. `select` at the head is the shape that used to be discarded, so a
+# regression here shows up as the receiver's full contents flowing downstream.
+#
+# Receiver sum is 21; mapping ALL of it by *10 would give 210. The chain's
+# correct answer is 180, so the wrong-receiver answer is distinguishable.
+def main
+  let n = [1, 2, 3, 4, 5, 6]
+
+  var t = 0
+  n.select { |x| x > 2 }.map { |x| x * 10 }.each { |x| t = t + x }
+  puts("select-map-each=#{t}")
+
+  # Same chain, bound at every step.
+  let picked = n.select { |x| x > 2 }
+  let scaled = picked.map { |x| x * 10 }
+  var b = 0
+  scaled.each { |x| b = b + x }
+  puts("bound-bound-each=#{b}")
+
+  # Reversed order of the two filters, and a reject in the middle.
+  var u = 0
+  n.map { |x| x * 3 }.reject { |x| x > 12 }.each { |x| u = u + x }
+  puts("map-reject-each=#{u}")
+
+  # Four links.
+  var v = 0
+  n.select { |x| x > 1 }.reject { |x| x > 5 }.map { |x| x * 2 }.each { |x| v = v + x }
+  puts("four-links=#{v}")
+end

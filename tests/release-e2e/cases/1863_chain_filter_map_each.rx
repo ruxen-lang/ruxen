@@ -1,0 +1,32 @@
+# B85 — `filter_map` chained into `each`, both spellings. `filter_map` is an
+# `Enumerable[T]` mixin default (a real `.rx` body, not MIR-inlined), so its
+# chained result comes back through the normal call path; pinned so the general
+# chaining mechanism keeps covering `.rx`-bodied combinators too.
+#
+# The predicate helper is written in TAIL position deliberately: `return <v>`
+# from an `Option`-returning function segfaults (B84, open).
+def big_only(x: Int) -> Int?
+  if x > 4
+    Some(x)
+  else
+    nil
+  end
+end
+
+def main
+  let n = [1, 2, 3, 4, 5, 6]
+  puts("receiver=#{n.size}")
+
+  var chained = 0
+  n.filter_map { |x| big_only(x) }.each { |x| chained = chained + 1 }
+  puts("chained=#{chained}")
+
+  let picked = n.filter_map { |x| big_only(x) }
+  var counted = 0
+  picked.each { |x| counted = counted + 1 }
+  puts("bound=#{counted}")
+
+  var chained_sum = 0
+  n.filter_map { |x| big_only(x) }.each { |x| chained_sum = chained_sum + x }
+  puts("chained-sum=#{chained_sum}")
+end

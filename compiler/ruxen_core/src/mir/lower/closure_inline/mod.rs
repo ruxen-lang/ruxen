@@ -152,12 +152,21 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        // Determine the Vec source. For Vec/iterator types, peel through
-        // method call chains. For user-defined classes with known
-        // collection-wrapping methods (where_matching, display_all,
+        // Determine the Vec we iterate. For Vec/iterator types the receiver is
+        // an ordinary expression (a variable, a field, or a chained call whose
+        // RESULT is that Vec), so lower it normally. For user-defined classes
+        // with known collection-wrapping methods (where_matching, display_all,
         // into_filtered, each), access the class's first field (items Vec).
+        //
+        // Nothing here may inspect the receiver's own method name. A helper
+        // that did (`lower_vec_source`, deleted) matched `select`/`reject`/
+        // `where_matching` and recursed into THEIR object, so
+        // `a.select { … }.each { … }` dropped the `select` and iterated all of
+        // `a`. That was a silent wrong answer, while the bound-first spelling
+        // (`let b = a.select { … }; b.each { … }`) was correct (B85, pins
+        // 1860-1869).
         let vec_id = if is_vec_or_iterator_type(&object.ty) {
-            let vec_local = self.lower_vec_source(object)?;
+            let vec_local = self.lower_expr(object)?;
             vec_local.unwrap_or_else(|| self.new_temp(Ty::Int))
         } else if is_collection_method(method_name) {
             // User-defined class: lower the object and access its first
@@ -334,50 +343,4 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Emit an inlined `vec.retain { |item| pred }` — in-place filter.
-    /// Lower the "vec source" from a method call chain, peeling through
-    /// iterator adaptors and passthrough method calls to find the underlying
-    /// Vec local. E.g., `self.items.iter.filter { ... }` -> the local for
-    /// `self.items`.
-    pub(super) fn lower_vec_source(&mut self, expr: &HirExpr) -> Result<Option<LocalId>, String> {
-        match &expr.kind {
-            HirExprKind::MethodCall {
-                object,
-                method_name,
-                block,
-                ..
-            } => {
-                match method_name.as_str() {
-                    // (The `iter`/`into_iter`/`to_vec`/`enumerate`
-                    // passthrough peel was removed with the orphaned
-                    // iterator machinery — Phase B / Milestone 2. Nothing
-                    // produces those calls, so the `_ =>` arm below covers
-                    // any residual shape by lowering normally.)
-                    "select" | "reject" | "where_matching" if block.is_some() => {
-                        // A filter in the chain: inline it and return the
-                        // filtered vec as the source. This handles chained
-                        // `.filter { ... }.to_vec`.
-                        // For now, just peel through to the base object.
-                        self.lower_vec_source(object)
-                    }
-                    _ => {
-                        // Some other method — lower it normally.
-                        self.lower_expr(expr)
-                    }
-                }
-            }
-            HirExprKind::FieldAccess {
-                object: inner_obj,
-                field_name,
-                ..
-            } => {
-                // (`.iter`/`.into_iter`/`.to_vec`/`.enumerate` field-access
-                // peel removed with the orphaned iterator machinery —
-                // Phase B / Milestone 2.)
-                let _ = (inner_obj, field_name);
-                self.lower_expr(expr)
-            }
-            _ => self.lower_expr(expr),
-        }
-    }
 }
