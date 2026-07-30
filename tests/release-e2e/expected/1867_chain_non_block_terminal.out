@@ -1,0 +1,14 @@
+receiver-size=4
+chained-size=3
+bound-size=3
+chained-count=3
+chained-join=alpha,gamma,delta
+bound-join=alpha,gamma,delta
+chained-first=1
+bound-first=1
+chained-empty=true
+chained-nonempty=false
+chained-excludes-receiver-elem=false
+chained-includes-own-elem=true
+chained-map-size=6
+three-link-size=4

@@ -64,6 +64,37 @@ same commit as the fix.
     -delete; touch src/ruxen_repl/build.rs; cargo build --release -p ruxen_repl`.
 - **DO NOT edit `library/std` or `cargo build` while a `RUXEN_WORKSPACE` e2e run
   is in flight** — it reads the workspace stdlib + the binary and will corrupt.
+- ⚠️ **NEVER use `git stash` when more than one worktree is active.** The stash
+  is **NOT worktree-local**: every worktree shares `.git/refs/stash`, so a
+  `git stash push` in one worktree and a `git stash pop` in another operate on
+  the same stack. This bit us on 2026-07-30: one agent's bare `pop` applied and
+  DROPPED a different agent's 19-file WIP (`+599/-192` across `mir/lower`,
+  `codegen`, `borrow_check` and three `runtime/*.c` files). It was recovered
+  only because the agent noticed and ran `git stash store` to put it back.
+  - Worktree-local alternatives, use these instead: commit on your branch and
+    `git revert` to measure a before state; `git checkout <sha> -- <file>` to
+    restore one file; or copy the file to a scratchpad and edit in place.
+  - If you truly must stash, always `git stash apply <sha>` and **never a bare
+    `pop`**. Indices shift whenever ANY worktree pushes or drops, so
+    `stash@{0}` is not reliably yours.
+  - If files revert underneath you mid-session, do NOT redo the work. Check
+    `git stash list` for a recovered entry first.
+- ⚠️ **NEVER `pkill -f` on a path that is identical across worktrees.**
+  `pkill -f` matches the full command line, and every worktree invokes the
+  harness as the same relative `tests/release-e2e/run.sh`, so
+  `pkill -f "tests/release-e2e/run.sh"` targets EVERY in-flight sweep in the
+  repo, not just yours. Happened on 2026-07-30; `run.sh`'s SIGINT/SIGTERM trap
+  appears to have saved the other runs, but that is luck, not design.
+  - Resolve the process's working directory first, then kill by PID:
+    `lsof -a -d cwd -p <pid>`.
+  - A sweep that vanished or restarted is diagnosable: its log stops growing,
+    or gains a SECOND `== ruxen compile` header, or carries an `interrupted` /
+    `terminated` marker. If you see that, re-run it rather than debugging a
+    phantom regression.
+- **Both hazards above share one shape:** the worktrees are isolated for FILES
+  but not for repo-global state (the stash stack) or for process-name matching.
+  Before any command that selects by pattern rather than by path, ask what else
+  in the repo matches it.
 - **Every fix:** `.rx` method (or generic mechanism) + a pinned
   `tests/release-e2e/cases/NNN_*.rx` + matching `expected/NNN_*.out` + update the
   matrix row + `CHANGELOG.md` `[Unreleased]`, in one commit. Review every change
