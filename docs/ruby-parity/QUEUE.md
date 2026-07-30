@@ -391,7 +391,12 @@ Equality needed **two** fixes, and either alone leaves it broken: nothing synthe
 
 **Matrix corrections to apply** (not edited here, per the brief): the narrowed `core.md` Kernel row and `language.md` §9 auto-equality rows can be widened back to DONE for `class` as well as `struct`, citing `1730`-`1739`. Note the claim is now genuinely broader than before: nested nominal fields compare structurally for *both* shapes, which was never true.
 
-**Still open, reported not fixed:** a class with fields but no `def init` fails `C.new(1)` in the Cranelift verifier (`mismatched argument count … got 2, expected 1`) rather than with a diagnostic. Unrelated to the derives; a class needs an explicit `def init`, but the failure mode should be a typeck error.
+**A trap worth knowing before you widen any derive to classes.** `ty_has_derive_trait` decides the §3.6 implicit include with `fields.all(supports)`, which is vacuously TRUE for an empty field list — and every primitive method-home and FFI handle shell (`class Int`, `class Float`, `class Char`, `class Mutex[T]`, any `lib`-decl class) is fieldless. The first cut of this fix therefore gave all of them every derive: `"#{n.succ}"` printed `Int {}` (caught by `1110` and `100_where_clause`), and, caught by no case at all, the field-fold's empty-list branch returns a literal `true`, so two DIFFERENT `Mutex`es would have compared equal. `mir/lower/type_helpers.rs::nominal_derive_is_synthesized` now requires a class to have at least one field before any of this applies — a structural test, no type names. Route every new class-derive dispatch through it, not through `ty_has_derive_trait` directly.
+
+**Still open, reported not fixed:**
+- A class with fields but no `def init` fails `C.new(1)` in the **Cranelift verifier** (`mismatched argument count … got 2, expected 1`) rather than with a diagnostic. A class does need an explicit `def init`, but the failure mode should be a typeck error, not a backend assertion.
+- `ty_has_derive_trait` still reports `Clone` for a fieldless class, so `mir/lower/mod.rs` synthesizes a `{Class}_clone` that allocates a fresh EMPTY object — a `.clone` on an FFI handle returns a blank allocation rather than the handle. Left alone deliberately: it predates B74 and narrowing it would turn an existing `.clone` call site into a link error, so it wants its own change.
+- `derive.rs::collect_all_class_fields` walks the parent chain with no cycle guard (pre-existing; the two walks added here do have one). A malformed `class A < B` / `class B < A` would loop.
 
 ### B79 — `_1` / `it` are invisible inside a string interpolation
 - **Goal:** `xs.each { puts "#{_1}" }` resolves.
