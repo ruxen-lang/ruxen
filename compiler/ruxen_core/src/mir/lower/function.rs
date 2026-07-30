@@ -157,6 +157,13 @@ impl<'a> Lowerer<'a> {
         // referenced in such a terminator.
         let return_locals = self.find_return_locals(&mir_fn);
 
+        // B73: attach the key-kind descriptor to every `Hash` / `Set` this
+        // function constructs. Runs before drop elaboration, which keys on
+        // callee names — `runtime_abi::FRESH_ALLOC_CALLEES` lists both the
+        // bare and the `_keyed` spellings, so either order is correct, but
+        // rewriting first keeps the drop pass looking at final MIR.
+        super::key_desc::install_key_descriptors(&mut mir_fn, self.symbols);
+
         // Insert Drop instructions for Move-type locals before every Return.
         insert_drops(
             &mut mir_fn,

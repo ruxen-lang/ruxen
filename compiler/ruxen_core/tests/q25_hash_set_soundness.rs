@@ -5,6 +5,10 @@
 //!     and -1 is truthy, so an empty-table lookup took the string path and
 //!     `strcmp`'d an integer key as a `char*` (deref of a small bogus
 //!     address). Fixed in `library/std/hash/runtime/hash.c` to test `> 0`.
+//!     B73 later removed the tristate entirely — the key kind is supplied by
+//!     the compiler from the static key type — but the invariant these cases
+//!     pin is the same: a lookup must not dereference a key whose kind says
+//!     it is a plain word.
 //!     The runtime cases read the e2e fixtures (`617_*`, `618_*`).
 //!
 //! (b) `&Hash[K,V]` / `&Set[T]` by-ref params are SOUND (a pointer to the

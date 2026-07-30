@@ -1194,6 +1194,18 @@ impl<'a> InferenceEngine<'a> {
                     let value_ty = self.ctx.resolve(&value.ty);
                     let _ = unify(&target_ty, &value_ty, self.ctx, &expr.span);
 
+                    // Same refinement as the `let` path: a static
+                    // constructor on a generic builtin (`self.data =
+                    // Hash.new`) has no receiver to substitute its
+                    // declared `-> Hash[K, V]` against, so it arrives here
+                    // still carrying the rigid `K`/`V`. Unification is
+                    // happy (a rigid parameter is not a variable) and the
+                    // imprecise type would otherwise reach MIR. See
+                    // `super::refine_rigid_generics`.
+                    if let Some(refined) = super::refine_rigid_generics(&target_ty, &value_ty) {
+                        value.ty = refined;
+                    }
+
                     // Determine copy/move semantics
                     let resolved = self.ctx.resolve(&value_ty);
                     *semantics = resolved.move_semantics();

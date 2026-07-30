@@ -27,23 +27,11 @@
 
 #define RUXEN_JSON_MAX_DEPTH 512
 
-#ifndef RUXEN_HASH_RUNTIME_STRUCTS
-#define RUXEN_HASH_RUNTIME_STRUCTS
-
-typedef struct RuxenHashEntry {
-    int64_t key;
-    int64_t value;
-    struct RuxenHashEntry *next;
-} RuxenHashEntry;
-
-struct RuxenHash {
-    RuxenHashEntry **buckets;
-    uint64_t bucket_count;
-    uint64_t len;
-    int8_t string_keys;
-};
-
-#endif
+/* `RuxenHashEntry` / `struct RuxenHash` used to be copy-pasted here
+   behind a `RUXEN_HASH_RUNTIME_STRUCTS` guard shared with
+   hash/runtime/hash.c. Two hand-synced copies of one layout is an ODR
+   hazard, so the definition now lives once in core/runtime/runtime.h,
+   which this file already includes. */
 
 typedef struct {
     const char *cur;
@@ -133,9 +121,25 @@ void *ruxen_json_make_array(RuxenVec *items) {
     return json_value(RUXEN_JSON_ARRAY, (int64_t)(items ? items : ruxen_vec_new()));
 }
 
+/* A JSON object's keys are strings by definition, so its backing table
+   is always RUXEN_KEY_CSTR. A `fields` table handed in from Ruxen is a
+   `Hash[String, V]` and the compiler already keyed it that way; the
+   normalization below only rescues a table built without a descriptor,
+   and only while it is still empty (re-keying a populated table would
+   strand its entries in buckets computed under the old hash). */
+static void json_force_cstr_keys(RuxenHash *obj) {
+    if (!obj) return;
+    if (obj->key_kind == RUXEN_KEY_CSTR) return;
+    if (obj->len == 0) {
+        obj->key_kind = RUXEN_KEY_CSTR;
+        obj->key_hash = NULL;
+        obj->key_eq = NULL;
+    }
+}
+
 void *ruxen_json_make_object(RuxenHash *fields) {
-    RuxenHash *obj = fields ? fields : ruxen_hash_new();
-    obj->string_keys = 1;
+    RuxenHash *obj = fields ? fields : ruxen_hash_new_keyed(RUXEN_KEY_CSTR, 0, 0);
+    json_force_cstr_keys(obj);
     return json_value(RUXEN_JSON_OBJECT, (int64_t)obj);
 }
 
@@ -144,8 +148,7 @@ void *ruxen_json_make_empty_array(void) {
 }
 
 void *ruxen_json_make_empty_object(void) {
-    RuxenHash *obj = ruxen_hash_new();
-    obj->string_keys = 1;
+    RuxenHash *obj = ruxen_hash_new_keyed(RUXEN_KEY_CSTR, 0, 0);
     return json_value(RUXEN_JSON_OBJECT, (int64_t)obj);
 }
 
@@ -439,8 +442,7 @@ static void *parse_object(JsonParser *p, int depth) {
         json_parser_fail(p, RUXEN_JSON_ERROR_SYNTAX, "expected object");
         return NULL;
     }
-    RuxenHash *obj = ruxen_hash_new();
-    obj->string_keys = 1;
+    RuxenHash *obj = ruxen_hash_new_keyed(RUXEN_KEY_CSTR, 0, 0);
     skip_ws(p);
     if (p->error_message) return NULL;
     if (consume(p, '}')) return json_value(RUXEN_JSON_OBJECT, (int64_t)obj);

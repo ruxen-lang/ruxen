@@ -2868,6 +2868,75 @@ Argument-type-based overload resolution otherwise works well (it is what lets
 one Ruby name), but an empty array literal carries no element type for it to
 match on. **Workaround:** bind a typed local.
 
+## Q60 · S2/S3 — three limits found landing the `Hash` key-kind protocol (B73)
+
+Found while replacing the `Hash` / `Set` key-kind heuristic with a compiler-
+supplied descriptor (B73, CHANGELOG `[Unreleased]`, pins `1720`-`1724`). B73
+itself is FIXED; these are the neighbours it exposed. (If a parallel batch
+already claimed `Q60`, renumber; the content is what matters.)
+
+**(a) S2 — a static constructor on a generic builtin keeps its RIGID type
+parameters at the expression node.** `Hash.new` is declared
+`def self.new as "ruxen_hash_new" -> Hash[K, V]`. A static call has no receiver,
+so `substitute_generics_in_return` has nothing to substitute against, and the
+expression node's type stays `Hash[K, V]` even where the binding is concrete:
+
+```rx
+var h: Hash[String, Int] = Hash.new
+# local `h`   : Map(String, Int)      ← correct
+# the ctor's temp: Map(TypeParam K, TypeParam V)   ← imprecise
+```
+
+Unification does not object, because a rigid parameter is not an inference
+variable and there is nothing to bind. Anything downstream that reads the
+INITIALIZER's own type rather than the binding's therefore sees `K`, not
+`String`. **PARTIALLY FIXED:** `typeck/infer/mod.rs::refine_rigid_generics` now
+refines the initializer from a concrete annotation on the `let` path
+(`infer_statement`) and the assignment path (`HirExprKind::Assign`), which is
+what makes `self.data = Hash.new` inside an `init` work. **Still open for the
+argument and return positions** — `f(Hash.new)` against a `Hash[String, Int]`
+parameter, and `return Hash.new` against a declared return type, are not
+refined. The B73 runtime makes that loud rather than silent: such a table is
+built `RUXEN_KEY_UNSET` and panics on its first insert naming the protocol.
+The general fix is to thread an expected type through argument and return
+checking, or to substitute a static ctor's return against the expected type at
+the call.
+
+**(b) S2 — `Set[String]` set-algebra results double-free at scope exit.**
+Verified 2026-07-29 and **pre-existing** (reproduces identically before B73):
+
+```rx
+var a: Set[String] = Set.new
+a.insert("red")
+var b: Set[String] = Set.new
+b.insert("blue")
+let u = a.union(&b)
+puts "#{u.size}"        # never prints — exit 133 (SIGTRAP, malloc abort)
+```
+
+`ruxen_set_union` / `_intersection` / `_difference` shallow-copy their element
+words, so the result set ALIASES its source's heap strings — the documented v1
+contract, same as `ruxen_hash_clone`. But the drop selector gives both the
+source and the result `ruxen_set_drop_string` (`drops.rs::heap_free_callee`,
+`Ty::Set(Ty::String)`), so every shared `char*` is freed twice. `Set[Int]` is
+fine (no per-element drop) and so is a `Set[UserStruct]` (the selector picks the
+spine-only `ruxen_set_free`); only heap-owning element types are exposed.
+**Workaround:** none at the `.rx` level. Pin `1724` deliberately uses a struct
+element rather than a `String` so it does not depend on this. The fix is either
+a deep copy in the three set-algebra helpers or an aliasing-aware drop.
+
+**(c) S3 — `Array#to_h` is declared `-> Int`, so its result is not a `Hash`.**
+`library/std/array/src/lib.rx:106` reads
+`def to_h as "ruxen_hash_from_iter" -> Int`, with the header comment at
+`:49-50` explaining why: the result key/value types come from the receiver's
+TUPLE element and are "not expressible" in the current return-type surface.
+The value therefore arrives as a bare `Int` with no `Hash` methods on it. Under
+B73 this also means the key type is unknowable at the construction site, so
+`to_h` builds an `RUXEN_KEY_UNSET` table that panics on its first insert instead
+of silently mis-hashing. No e2e case exercises `to_h`, which is why it went
+unnoticed. Fixing the declaration (per-`T` mono, E1, is the likely enabler) also
+fixes the descriptor for free.
+
 ## Where the workarounds live (grep-able)
 
 - `quiver/CLAUDE.md` — "Ruxen v1 landmines" section (the working ruleset)

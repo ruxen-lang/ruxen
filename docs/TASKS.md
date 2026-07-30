@@ -17,6 +17,16 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
+B73 fixed 2026-07-29 (the `Hash` / `Set` key-kind protocol: the runtime decided
+how to hash and compare a key by DEREFERENCING it as a `char*` and scanning for
+a NUL, which SIGSEGV'd on any `Hash[Int, V]` key >= 4096, made user types
+unusable as keys, and latched a table's behavior on its first insert. Replaced
+by a descriptor the compiler supplies from the static key type;
+`ruxen_hash_looks_like_string` deleted. `Hash[UserType, V]` now works, which
+unblocks B29c. Pins `1720`-`1724`. The three neighbouring limits it exposed are
+filed as §Q60: a static ctor on a generic builtin keeps its rigid `K`/`V` in
+argument and return position, `Set[String]` set-algebra results double-free at
+scope exit (pre-existing), and `Array#to_h` is declared `-> Int`).
 Q58 fixed 2026-07-29 (`alias` to a method on a GENERIC builtin head link-failed:
 MIR's `select_method_symbol_name` and `method_trailing_default_sentinels` both
 matched the parent def's BARE class name against the call site's INSTANTIATED

@@ -234,6 +234,65 @@ once 1.0.0 ships.
   `[T; N]` index-assign with a computed index (the floor stores a `[T; N]` slot
   only for a literal index). Neither ever produced a correct store. Pins
   `tests/release-e2e/cases/1710`, `1711`.
+- **`Hash` / `Set` decide a key's hashing and equality from its TYPE, not from
+  its bit pattern (B73).** `library/std/hash/runtime/hash.c` used to store every
+  key as an `int64_t` and resolve a tristate `string_keys` flag on the FIRST
+  insert by calling `ruxen_hash_looks_like_string`, which **dereferenced the key
+  value as a `char*`** and scanned up to 256 bytes for a NUL. Three defects, one
+  root:
+  1. **`Hash[Int, V]` SIGSEGV'd for any key >= 4096.** The probe short-circuited
+     below `0x1000`, so `h.insert(4095, v)` worked and `h.insert(5000, v)` died
+     with exit 139. Integer keys are ordinary — ids, ports, status codes, years —
+     so this was a crash on plausible input.
+  2. **A user type could not be a `Hash` key at all.** Keys were compared by
+     object identity, so `h.insert(P.new(1), v)` then `h.key?(P.new(1))` was
+     `false`; the `Hashable` mixin's `hash_code` and the structural `==` derive
+     were never consulted.
+  3. **The key kind latched on the first insert,** so a table's behavior depended
+     on its insertion order (a `Hash[String, V]` whose first key was `""` fell to
+     raw-bits hashing and missed every later content lookup).
+
+  The heuristic is **deleted**, replaced by a real protocol: the key kind travels
+  DOWN from the typed side. A MIR post-pass,
+  `mir/lower/key_desc.rs::install_key_descriptors`, rewrites every table
+  constructor to a `_keyed` form and appends `(kind, hash_fn, eq_fn)` derived
+  from the constructed table's static key type — `String` → FNV-1a + `strcmp`, a
+  struct carrying both `Hashable` and `PartialEq` → its synthesized
+  `<S>_hash_code` / `<S>_eq` passed as `FuncAddr` words, everything else → the
+  raw 64-bit value. It is a post-pass rather than a per-call-site edit because
+  tables are built from more than two dozen `MirInst::Call` emission sites
+  (paren-less `Hash.new`, `Hash.new()`, a map literal, `collect`, `to_set`,
+  `with_capacity`, …); deciding once on the shape of the emitted MIR means a new
+  construction site cannot forget the descriptor. The classification is
+  structural (`Ty` variants plus the generic `ty_has_derive_trait` predicate), so
+  no stdlib type or method name is hardcoded in the compiler.
+
+  **`Hash[UserType, V]` and `Set[UserType]` now work**, which also unblocks
+  **B29c** (`Hash[Symbol, V]`): a symbol is a 64-bit intern id and joins as a
+  plain `RUXEN_KEY_BITS` key with no further runtime work. The kind set is open
+  by construction — adding one means adding a constant and a `switch` case, never
+  widening a range check on a key's value.
+
+  Supporting changes: `clear` no longer resets the key kind (emptying a table
+  does not change its key type); `clone` and the set-algebra operations inherit
+  the descriptor from their source *before* their first insert; `struct
+  RuxenHash` moved from two hand-synced per-TU copies (`hash.c` and `json.c`,
+  behind a shared `RUXEN_HASH_RUNTIME_STRUCTS` guard) into
+  `core/runtime/runtime.h`, since two copies of one layout is an ODR hazard, and
+  `json.c` now constructs its objects with an explicit `RUXEN_KEY_CSTR` instead
+  of poking the old flag. Typeck gained `refine_rigid_generics`: a static
+  constructor on a generic builtin has no receiver to substitute `-> Hash[K, V]`
+  against, so `let h: Hash[String, Int] = Hash.new` left the initializer typed
+  `Hash[K, V]`; the binding and assignment paths now refine it from the
+  annotation.
+
+  **Two residual limits, both loud rather than silent.** A table whose key type
+  is still a rigid type parameter at its construction site gets
+  `RUXEN_KEY_UNSET` and the runtime **panics on the first insert** naming the
+  protocol, rather than guessing a kind and mis-hashing; that covers
+  `Array#to_h`, which is declared `-> Int` (its key type is not expressible
+  today) and so is unusable until that declaration is fixed. Pins
+  `tests/release-e2e/cases/1720`-`1724`.
 - **`alias` to a method on a GENERIC builtin head no longer link-fails (Q58).**
   `h.has_key?(k)` on a `Hash[String, Int]` emitted a bodiless
   `Hash[String, Int]_has_key?` and the linker rejected it. MIR's

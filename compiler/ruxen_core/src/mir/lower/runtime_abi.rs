@@ -578,6 +578,16 @@ const FRESH_ALLOC_CALLEES: &[&str] = &[
     "ruxen_string_from_iter",
     "ruxen_hash_from_iter",
     "ruxen_set_from_iter",
+    // B73: the descriptor-taking table constructors the MIR rewrites the
+    // six bare forms to. Same freshly-allocated table, same ownership —
+    // only the argument list differs, so they must be listed alongside
+    // their bare spellings or the new table leaks at scope exit.
+    "ruxen_hash_new_keyed",
+    "ruxen_hash_with_capacity_keyed",
+    "ruxen_hash_from_iter_keyed",
+    "ruxen_set_new_keyed",
+    "ruxen_set_with_capacity_keyed",
+    "ruxen_set_from_iter_keyed",
     "Set_new",
     "HashSet_new",
     "ruxen_set_new",

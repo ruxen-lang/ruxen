@@ -50,6 +50,166 @@ mod ops;
 // (e.g. `typeck::method_resolvers` consumes them through that path).
 pub(super) use helpers::is_bufio_inner_supported;
 
+/// True when `ty` carries no rigid generic parameter and no unresolved
+/// inference variable anywhere inside it.
+fn is_fully_concrete(ty: &Ty) -> bool {
+    match ty {
+        Ty::TypeParam { .. } | Ty::Infer(_) => false,
+        Ty::Array(inner)
+        | Ty::Set(inner)
+        | Ty::Option(inner)
+        | Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner)
+        | Ty::Newtype { inner, .. }
+        | Ty::Alias { target: inner, .. } => is_fully_concrete(inner),
+        Ty::Map(a, b) | Ty::Result(a, b) => is_fully_concrete(a) && is_fully_concrete(b),
+        Ty::Tuple(items) => items.iter().all(is_fully_concrete),
+        Ty::Class { generic_args, .. }
+        | Ty::Struct { generic_args, .. }
+        | Ty::Enum { generic_args, .. } => generic_args.iter().all(is_fully_concrete),
+        _ => true,
+    }
+}
+
+/// Refine `val_ty` by filling its rigid generic-parameter slots from the
+/// matching positions in the concrete `declared` type.
+///
+/// This exists because a static constructor on a generic builtin has no
+/// receiver to substitute against: `Hash.new` is declared `-> Hash[K, V]`
+/// and inference leaves the rigid `K`/`V` in place, so the expression node
+/// says `Hash[K, V]` even where the binding says `Hash[String, Int]`.
+/// Unification does not object (a rigid parameter is not a variable, so
+/// there is nothing for it to bind), which is why the imprecision survives
+/// to MIR.
+///
+/// Deliberately conservative:
+/// * `declared` must be fully concrete — never propagate one unknown into
+///   another.
+/// * The two types must have the SAME SHAPE, differing only where `val_ty`
+///   has a type parameter. A shape mismatch means the annotation and the
+///   initializer are genuinely different types, which is unification's
+///   business (and its error to report), not this function's.
+/// * A BARE type parameter is left alone. `unify` treats a rigid parameter
+///   as unifying with anything and lets the concrete side win
+///   (`typeck/unify.rs:251-252`), so `let y: Int = t` where `t: T` passes
+///   silently today; rewriting that expression's type from `T` to `Int`
+///   would be a real semantic claim about an unrelated program, not the
+///   recovery of information the type already carried. Only parameters
+///   sitting INSIDE a container shape are refined — there the container
+///   itself has already told us what it holds.
+/// * Returns `None` when nothing would change, so the common path does no
+///   work and no existing type is rewritten.
+fn refine_rigid_generics(declared: &Ty, val_ty: &Ty) -> Option<Ty> {
+    if !is_fully_concrete(declared) || is_fully_concrete(val_ty) {
+        return None;
+    }
+    if matches!(peel_transparent(val_ty), Ty::TypeParam { .. }) {
+        return None;
+    }
+    refine_shape(declared, val_ty)
+}
+
+/// Peel the layers that do not change a value's runtime word.
+fn peel_transparent(ty: &Ty) -> &Ty {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner)
+            | Ty::Alias { target: inner, .. }
+            | Ty::Newtype { inner, .. } => cur = inner,
+            other => return other,
+        }
+    }
+}
+
+/// Structural walk behind `refine_rigid_generics`. `None` = shapes differ.
+fn refine_shape(declared: &Ty, val_ty: &Ty) -> Option<Ty> {
+    // A type parameter slot takes whatever the annotation has there.
+    if matches!(val_ty, Ty::TypeParam { .. }) {
+        return Some(declared.clone());
+    }
+    match (declared, val_ty) {
+        (Ty::Array(d), Ty::Array(v)) => Some(Ty::Array(Box::new(refine_shape(d, v)?))),
+        (Ty::Set(d), Ty::Set(v)) => Some(Ty::Set(Box::new(refine_shape(d, v)?))),
+        (Ty::Option(d), Ty::Option(v)) => Some(Ty::Option(Box::new(refine_shape(d, v)?))),
+        (Ty::Map(dk, dv), Ty::Map(vk, vv)) => Some(Ty::Map(
+            Box::new(refine_shape(dk, vk)?),
+            Box::new(refine_shape(dv, vv)?),
+        )),
+        (Ty::Result(dt, de), Ty::Result(vt, ve)) => Some(Ty::Result(
+            Box::new(refine_shape(dt, vt)?),
+            Box::new(refine_shape(de, ve)?),
+        )),
+        (Ty::Ref(d), Ty::Ref(v)) => Some(Ty::Ref(Box::new(refine_shape(d, v)?))),
+        (Ty::RefMut(d), Ty::RefMut(v)) => Some(Ty::RefMut(Box::new(refine_shape(d, v)?))),
+        (Ty::Tuple(ds), Ty::Tuple(vs)) if ds.len() == vs.len() => Some(Ty::Tuple(
+            ds.iter()
+                .zip(vs)
+                .map(|(d, v)| refine_shape(d, v))
+                .collect::<Option<Vec<_>>>()?,
+        )),
+        // Nominal types refine their argument lists only; the name must
+        // already agree, otherwise these are unrelated types.
+        (
+            Ty::Class {
+                name: dn,
+                generic_args: da,
+            },
+            Ty::Class {
+                name: vn,
+                generic_args: va,
+            },
+        ) if dn == vn && da.len() == va.len() => Some(Ty::Class {
+            name: vn.clone(),
+            generic_args: da
+                .iter()
+                .zip(va)
+                .map(|(d, v)| refine_shape(d, v))
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        (
+            Ty::Struct {
+                name: dn,
+                generic_args: da,
+            },
+            Ty::Struct {
+                name: vn,
+                generic_args: va,
+            },
+        ) if dn == vn && da.len() == va.len() => Some(Ty::Struct {
+            name: vn.clone(),
+            generic_args: da
+                .iter()
+                .zip(va)
+                .map(|(d, v)| refine_shape(d, v))
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        (
+            Ty::Enum {
+                name: dn,
+                generic_args: da,
+            },
+            Ty::Enum {
+                name: vn,
+                generic_args: va,
+            },
+        ) if dn == vn && da.len() == va.len() => Some(Ty::Enum {
+            name: vn.clone(),
+            generic_args: da
+                .iter()
+                .zip(va)
+                .map(|(d, v)| refine_shape(d, v))
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        _ => None,
+    }
+}
+
 /// The type inference engine — walks HIR and resolves all types.
 pub struct InferenceEngine<'a> {
     pub ctx: &'a mut TypeContext,
@@ -391,6 +551,25 @@ impl<'a> InferenceEngine<'a> {
                         self.type_error(e);
                     }
                     self.check_declared_bounds(ty, &val_ty, &val.span);
+                    // A static constructor on a generic builtin (`Hash.new`,
+                    // `Set.new`, `Hash.with_capacity`) has no receiver to
+                    // substitute its declared `-> Hash[K, V]` against, so it
+                    // comes out of inference still carrying the RIGID
+                    // parameters `K`/`V`. Unification accepts that against a
+                    // concrete annotation (a rigid param is not an inference
+                    // variable, so nothing gets bound) and the expression node
+                    // keeps the imprecise type. Refine it from the annotation:
+                    // `let h: Hash[String, Int] = Hash.new` makes the
+                    // initializer's type `Hash[String, Int]`, which is what it
+                    // actually is.
+                    //
+                    // Consumers that read the initializer's own type rather
+                    // than the binding's need this — B73's key-kind descriptor
+                    // is chosen from the constructed table's key type at the
+                    // construction site.
+                    if let Some(refined) = refine_rigid_generics(ty, &val_ty) {
+                        val.ty = refined;
+                    }
                 }
                 let resolved = self.ctx.resolve(ty);
                 *ty = resolved.clone();
