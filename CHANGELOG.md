@@ -294,16 +294,23 @@ once 1.0.0 ships.
   behind a shared `RUXEN_HASH_RUNTIME_STRUCTS` guard) into
   `core/runtime/runtime.h`, since two copies of one layout is an ODR hazard, and
   `json.c` now constructs its objects with an explicit `RUXEN_KEY_CSTR` instead
-  of poking the old flag. Typeck gained `refine_rigid_generics`: a static
-  constructor on a generic builtin has no receiver to substitute `-> Hash[K, V]`
-  against, so `let h: Hash[String, Int] = Hash.new` left the initializer typed
-  `Hash[K, V]`; the binding and assignment paths now refine it from the
-  annotation.
+  of poking the old flag.
 
   Tables built entirely inside the C runtime are out of the post-pass's reach
   and state or inherit their own kind: `Env.vars` and `Match#named_groups` are
   `RUXEN_KEY_CSTR` by definition, and `clone` plus the set-algebra operations
   copy the descriptor from a source table *before* their first insert.
+
+  **Typeck is untouched.** An earlier draft added a `refine_rigid_generics`
+  pass so a static constructor's own expression type would be precise
+  (`let h: Hash[String, Int] = Hash.new` leaves the initializer typed
+  `Hash[K, V]`, because a rigid parameter is not an inference variable and
+  unification has nothing to bind). The use-site route made it unnecessary, and
+  it was measured out rather than kept on faith: with it disabled the e2e stayed
+  at 551 pass / 0 fail and the narrow gate at 655 pass / 0 fail. Refining
+  expression types after unification touches every annotated binding in every
+  program, which is too much blast radius to carry for no measured benefit. The
+  underlying imprecision stays filed as GUI-stack ledger §Q60(a).
 
   **One residual limit, loud rather than silent.** A table neither route can
   type keeps `RUXEN_KEY_UNSET`, and the runtime **panics on the first insert**

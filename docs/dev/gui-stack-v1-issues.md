@@ -2890,25 +2890,28 @@ var h: Hash[String, Int] = Hash.new
 Unification does not object, because a rigid parameter is not an inference
 variable and there is nothing to bind. Anything downstream that reads the
 INITIALIZER's own type rather than the binding's therefore sees `K`, not
-`String`. **PARTIALLY FIXED:** `typeck/infer/mod.rs::refine_rigid_generics` now
-refines the initializer from a concrete annotation on the `let` path
-(`infer_statement`) and the assignment path (`HirExprKind::Assign`), which is
-what makes `self.data = Hash.new` inside an `init` work. **Still open for the
-argument and return positions** — `f(Hash.new)` against a `Hash[String, Int]`
-parameter, and `return Hash.new` against a declared return type, are not
-refined. The general fix is to thread an expected type through argument and
-return checking, or to substitute a static ctor's return against the expected
-type at the call.
+`String`. The general fix is to thread an expected type through binding,
+argument and return checking, or to substitute a static ctor's return against
+the expected type at the call.
 
-**Severity dropped from S2 to S3** once B73 stopped depending on this being
-right. The key-kind protocol installs the descriptor at USE sites as well as
-construction sites (`mir/lower/key_desc.rs`, the `KEYED_TABLE_OPS` route), and
-an operation's RECEIVER is concretely typed in exactly the positions a
-constructor's result temp is not. So `f(Hash.new)` is keyed correctly by the
-`insert` inside `f`, and pin `1725` holds that. What remains is a typeck
-imprecision with no known wrong-behaviour consequence, not a live defect —
-which is why it is filed rather than fixed here. Anything NEW that reads a
-static constructor's own expression type still needs to expect a rigid `K`.
+**OPEN, and severity dropped from S2 to S3**, because B73 no longer depends on
+this being right. The key-kind protocol installs its descriptor at USE sites as
+well as construction sites (`mir/lower/key_desc.rs`, the `KEYED_TABLE_OPS`
+route), and an operation's RECEIVER is concretely typed in exactly the
+positions a constructor's result temp is not. `f(Hash.new)` is keyed by the
+`insert` inside `f`; pin `1725` holds that.
+
+**A `refine_rigid_generics` pass was written for this and then deliberately
+removed** — it refined the initializer from a concrete annotation on the `let`
+and assignment paths (~190 lines in `typeck/infer/`). It was measured to be
+non-load-bearing once the use-site route existed: with it disabled, release-e2e
+stayed at 551 pass / 0 fail and the narrow gate at 655 pass / 0 fail, including
+a `self.data = Hash.new` class-field-init probe. Refining expression types
+after unification touches every annotated binding in every program, which is a
+large blast radius to carry for no measured benefit. If a future consumer
+genuinely needs a static constructor's own expression type to be precise,
+reintroduce it deliberately with a test that fails without it — do not assume
+it is still needed because this entry mentions it.
 
 **(b) S2 — `Set[String]` set-algebra results double-free at scope exit.**
 Verified 2026-07-29 and **pre-existing** (reproduces identically before B73):
