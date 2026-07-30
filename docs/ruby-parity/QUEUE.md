@@ -271,7 +271,7 @@ ranks first and B71 second, both found after B01 to B05.
   and `RawPtr(Char)` args pass through untouched, so the bare string-literal
   `.rodata` zero-copy is unchanged.
 - **Not fixed here, on purpose:** the upstream typeck mistyping. Filed as
-  **B90** below with the evidence; the existing comment in `expr.rs` warns that
+  **B95** below with the evidence; the existing comment in `expr.rs` warns that
   broader seeding was avoided for codegen reasons and that is a warning from
   someone who tried.
 - **Pins:** `1010` — every line in BOTH spellings side by side (`each`, `map`,
@@ -534,7 +534,7 @@ ranks first and B71 second, both found after B01 to B05.
 - **Status:** NEEDS-COMPILER-FEATURE.
 - **Pins:** 1880-1889. Cover a `!` free function, a `!` method, and a `!` function with a return value.
 
-### B89 — the derived-collection helpers that LEAK rather than crash
+### B94 — the derived-collection helpers that LEAK rather than crash
 - **Found by:** the B86 `FRESH_ALLOC_CALLEES` audit. These are the other half
   of the same contract, and none of them crashes, which is why nobody has hit
   them.
@@ -556,7 +556,7 @@ ranks first and B71 second, both found after B01 to B05.
 - **Status:** NEEDS-COMPILER-FEATURE (shape 2) + NEEDS-RUNTIME-C (shape 1).
 - **Pins:** 1900-1909. Measure with the leak tracker, not by eye.
 
-### B90 — typeck lets a consumer back-propagate a type onto an unseeded block param
+### B95 — typeck lets a consumer back-propagate a type onto an unseeded block param
 - **Found by:** B02, which was a segfault caused by exactly this.
 - **Evidence:** for `arr.each { |x| puts(x) }` with `arr: Array[Int]`, the HIR
   argument node is `ty: Ref(String)` while MIR's local for the same variable is

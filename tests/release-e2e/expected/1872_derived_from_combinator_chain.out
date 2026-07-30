@@ -1,0 +1,12 @@
+seld gamma
+seld delta
+md gamma!
+md delta!
+mc 8
+ss 3
+rd beta
+a alpha
+a beta
+a gamma
+a delta
+ok

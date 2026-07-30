@@ -314,21 +314,25 @@ pub(super) fn install_key_descriptors(func: &mut MirFunction, symbols: &SymbolTa
             //    appended, so the copy it makes is as deep as the drop
             //    the result will receive.
             //
-            //    The witness is the RESULT's type, not the source's: the
-            //    result is the local that will be handed to
-            //    `heap_free_callee`, so it is the one whose element type
-            //    decides what must be owned. Falling back to argument 0
-            //    covers a result temp that typeck could not name.
+            //    The witness is the RESULT's type, and ONLY the result's.
+            //    The result is the local that will be handed to
+            //    `heap_free_callee`, so its element type is the one that
+            //    decides what must be owned.
+            //
+            //    Deliberately NOT falling back to argument 0 when the
+            //    result cannot be typed. The source's element type is the
+            //    wrong witness for this question, and using it inverts the
+            //    bug instead of fixing it: an untypeable result gets no
+            //    deep drop from `heap_free_callee` either, so cloning for
+            //    it would allocate elements nothing ever frees. POD (alias)
+            //    is the correct answer for an unknown result — it is what
+            //    keeps the copy exactly as deep as the drop.
             if let Some(with_desc) = elem_derive_for(callee) {
-                let result_ty = dest
+                let kind = dest
                     .and_then(|d| local_tys.get(d as usize))
                     .filter(|ty| matches!(peel(ty), Ty::Array(_)))
-                    .or_else(|| {
-                        args.first()
-                            .and_then(as_local)
-                            .and_then(|l| local_tys.get(l as usize))
-                    });
-                let kind = result_ty.map(elem_kind_of).unwrap_or(ELEM_POD);
+                    .map(elem_kind_of)
+                    .unwrap_or(ELEM_POD);
                 let mut args = args.clone();
                 args.push(MirValue::Literal(Literal::Int(kind)));
                 rewritten.push(MirInst::Call {

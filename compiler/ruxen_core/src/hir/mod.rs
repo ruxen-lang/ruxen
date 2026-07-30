@@ -21,7 +21,7 @@ pub mod types;
 ///   * `mir::lower`'s `lower_fn_call` re-checks against the MIR local's type
 ///     and formats through the Display ladder — the backstop, which exists
 ///     because the HIR type the typeck pass consults can be wrong (B02, and
-///     see B90 for the underlying mistyping).
+///     see B95 for the underlying mistyping).
 ///
 /// Drift in EITHER direction is a bug, which is why this is one list rather
 /// than two matching literals. A name only this list's consumers know about
