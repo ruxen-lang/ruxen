@@ -14,9 +14,9 @@ def main
   puts "#{h.key?("alpha")}"
   puts "#{h.key?("gamma")}"
 
-  let built = "al" + "pha"
-  puts "#{h.key?(built)}"
-  match h.get(built)
+  # (`key?`/`get` take `K` by value, so each lookup gets its own copy.)
+  puts "#{h.key?("al" + "pha")}"
+  match h.get("al" + "pha")
     Some(v) -> puts "got #{v}"
     nil -> puts "missing"
   end

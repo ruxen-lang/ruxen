@@ -91,16 +91,40 @@ fn is_fully_concrete(ty: &Ty) -> bool {
 ///   has a type parameter. A shape mismatch means the annotation and the
 ///   initializer are genuinely different types, which is unification's
 ///   business (and its error to report), not this function's.
+/// * A BARE type parameter is left alone. `unify` treats a rigid parameter
+///   as unifying with anything and lets the concrete side win
+///   (`typeck/unify.rs:251-252`), so `let y: Int = t` where `t: T` passes
+///   silently today; rewriting that expression's type from `T` to `Int`
+///   would be a real semantic claim about an unrelated program, not the
+///   recovery of information the type already carried. Only parameters
+///   sitting INSIDE a container shape are refined — there the container
+///   itself has already told us what it holds.
 /// * Returns `None` when nothing would change, so the common path does no
 ///   work and no existing type is rewritten.
 fn refine_rigid_generics(declared: &Ty, val_ty: &Ty) -> Option<Ty> {
-    if std::env::var_os("RUXEN_B73_NO_REFINE").is_some() {
-        return None;
-    }
     if !is_fully_concrete(declared) || is_fully_concrete(val_ty) {
         return None;
     }
+    if matches!(peel_transparent(val_ty), Ty::TypeParam { .. }) {
+        return None;
+    }
     refine_shape(declared, val_ty)
+}
+
+/// Peel the layers that do not change a value's runtime word.
+fn peel_transparent(ty: &Ty) -> &Ty {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner)
+            | Ty::Alias { target: inner, .. }
+            | Ty::Newtype { inner, .. } => cur = inner,
+            other => return other,
+        }
+    }
 }
 
 /// Structural walk behind `refine_rigid_generics`. `None` = shapes differ.

@@ -307,6 +307,8 @@ void ruxen_vec_push(RuxenVec *v, int64_t item);
 
 RuxenHash *ruxen_hash_new(void);
 RuxenHash *ruxen_hash_new_keyed(int64_t kind, int64_t hash_fn, int64_t eq_fn);
+void ruxen_hash_ensure_key_kind(RuxenHash *h, int64_t kind, int64_t hash_fn,
+                                int64_t eq_fn);
 void ruxen_hash_insert(RuxenHash *h, int64_t key, int64_t value);
 
 /* ── IO error helpers (cross-package) ──────────────────────────────── */

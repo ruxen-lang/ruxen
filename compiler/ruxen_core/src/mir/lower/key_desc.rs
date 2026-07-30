@@ -123,9 +123,16 @@ fn key_descriptor(key_ty: &Ty, symbols: &SymbolTable) -> KeyDesc {
     // compare structurally but scatter equal keys across buckets. Either
     // half alone is worse than plain identity, so require the pair —
     // identity is also what Ruby's default `Object#hash` gives you.
+    //
+    // A dotted name means a module-nested struct, whose synthesized
+    // functions `derive.rs` mangles from the BARE `s.name` while a use
+    // site's `Ty::Struct` may carry the qualified one. Rather than emit a
+    // `FuncAddr` to a symbol that might not exist and fail at link, fall
+    // through to identity — the same semantics such a key already had.
     if let Ty::Struct { name, .. } = peeled {
-        let hashable = ty_has_derive_trait(peeled, symbols, "Hashable")
-            || ty_has_derive_trait(peeled, symbols, "Hash");
+        let hashable = !name.contains('.')
+            && (ty_has_derive_trait(peeled, symbols, "Hashable")
+                || ty_has_derive_trait(peeled, symbols, "Hash"));
         if hashable && ty_has_derive_trait(peeled, symbols, "PartialEq") {
             // The same mangling `derive.rs` builds its synthesized
             // `synthesize_struct_hash_code` / `synthesize_struct_eq`

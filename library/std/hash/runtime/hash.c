@@ -145,6 +145,26 @@ RuxenHash *ruxen_hash_new_keyed(int64_t kind, int64_t hash_fn,
                             (RuxenKeyEqFn)(uintptr_t)eq_fn);
 }
 
+/* Install a key-kind descriptor on a table that does not have one yet.
+   No-op once the table is keyed, so it is safe to call before every
+   insert and it can never override what construction chose.
+
+   This is the second half of the key-kind protocol, and it exists because
+   the compiler cannot always type a table AT its construction site: a
+   static constructor has no receiver to substitute `-> Hash[K, V]`
+   against, so `f(Hash.new)` and `h.insert(k, Set.new)` build a table
+   whose key type is only known where it is USED. The MIR post-pass emits
+   this call before every insert whose RECEIVER has a concrete key type.
+   It is still the static type deciding — nothing here inspects a key. */
+void ruxen_hash_ensure_key_kind(RuxenHash *h, int64_t kind, int64_t hash_fn,
+                                int64_t eq_fn) {
+    if (!h) return;
+    if (h->key_kind != RUXEN_KEY_UNSET) return;
+    h->key_kind = (int32_t)kind;
+    h->key_hash = (RuxenKeyHashFn)(uintptr_t)hash_fn;
+    h->key_eq = (RuxenKeyEqFn)(uintptr_t)eq_fn;
+}
+
 /* Hash::clone — shallow copy: a new Hash with the same (key, value)
    pairs. Mirrors the v1 contract of `ruxen_vec_clone` (vec.c:301-311):
    the entry slots are heap-owned i64 pointers; cloning shares storage
@@ -411,6 +431,14 @@ RuxenSet *ruxen_set_new(void) {
 RuxenSet *ruxen_set_new_keyed(int64_t kind, int64_t hash_fn, int64_t eq_fn) {
     return ruxen_set_alloc((int32_t)kind, (RuxenKeyHashFn)(uintptr_t)hash_fn,
                            (RuxenKeyEqFn)(uintptr_t)eq_fn);
+}
+
+/* See `ruxen_hash_ensure_key_kind`. A Set's element IS its key, and a
+   `RuxenSet` is its `RuxenHash` header, so this just forwards. */
+void ruxen_set_ensure_key_kind(RuxenSet *s, int64_t kind, int64_t hash_fn,
+                               int64_t eq_fn) {
+    if (!s) return;
+    ruxen_hash_ensure_key_kind(&s->inner, kind, hash_fn, eq_fn);
 }
 
 void ruxen_set_insert(RuxenSet *s, int64_t item) {

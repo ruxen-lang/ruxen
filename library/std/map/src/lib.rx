@@ -30,6 +30,26 @@
 ## No residuals — every Hash method has a real C symbol and a statically
 ## substitutable return.
 ##
+## ## The key-kind protocol (B73)
+##
+## `self.new` / `self.with_capacity` are declared here WITHOUT the key
+## descriptor, but that is not what reaches the linker. A MIR post-pass
+## (`mir/lower/key_desc.rs::install_key_descriptors`) rewrites every
+## table constructor to its `_keyed` form and appends
+## `(kind, hash_fn, eq_fn)`, chosen from the constructed table's static
+## key type: `String` → FNV-1a + `strcmp`, a struct with both `Hashable`
+## and `PartialEq` → its `<S>_hash_code` / `<S>_eq`, everything else →
+## the raw 64-bit word. The runtime therefore never inspects a key's
+## bits to decide what a key IS; it is told.
+##
+## Practical consequences for anyone editing this file:
+##   * A new constructor added to the `lib` block must be listed in
+##     `KEYED_TABLE_CTORS` if it both allocates AND populates a table.
+##   * A method that returns an EXISTING table needs nothing.
+##   * `K` must be concrete at the construction site. A `Hash.new` whose
+##     key type is still a rigid `K` builds an UNSET table and the
+##     runtime panics on the first insert rather than guessing.
+##
 ## The internal `Ty::Map` variant and the `ruxen_hash_*` runtime
 ## symbols keep their legacy names; only the surface spelling is
 ## Ruby (`Hash`, never the Rust `Map` / `HashMap`).
