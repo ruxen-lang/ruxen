@@ -45,6 +45,58 @@ once 1.0.0 ships.
   blocking reason.
 
 ### Fixed
+- **A `class` now gets the structural derives a `struct` already had (B74).**
+  `mir/lower/mod.rs`'s `HirItem::Class` arm synthesized `Clone` and nothing
+  else, so three things were broken and all three were invisible: `a == b`
+  lowered to a raw comparison of two heap ADDRESSES and answered `false` for
+  every pair of distinct allocations however equal their fields (with **and**
+  without an explicit `include PartialEq`); `"#{a}"` printed that address
+  instead of `Name { … }`; and `a.hash_code` type-checked and then failed at
+  LINK with an undefined `{Class}_hash_code`. Equality needed two fixes, not
+  one — nothing synthesized `{Class}_eq`, *and* `struct_name_with_partial_eq`
+  matched `Ty::Struct` only, so the structural route in `expr/binops.rs` was
+  never reached.
+
+  The derived bodies are now written once against a `&[DeriveField]` slot list
+  instead of twice against `HirStructDef` and `HirClassDef`; the shapes differ
+  only in how a slot index is computed, so a struct yields declaration indices
+  and a class yields its flattened parent-first chain shifted past the
+  `class_info` header. `Ord` / `PartialOrd` / `Default` are deliberately still
+  struct-only: their bodies do not exist for a class, and widening the
+  dispatch alone would turn a silent gap into a link error.
+
+  Downstream, `key_desc.rs` accepts a class key, so a class carrying
+  `Hashable` + `PartialEq` keys a `Hash` / `Set` through B73's protocol
+  instead of falling through to identity. Pins
+  `tests/release-e2e/cases/1730` to `1739`.
+
+  This survived because every pin cited for auto-equality (`133`, `206`,
+  `207`, `139`) spells a `struct` and none spells a `class`. The new pins
+  spell both.
+- **An inherited class field no longer shares a slot with the subclass's own.**
+  `typeck/infer/collect.rs::lookup_field_with_parents` returned
+  `DefKind::Field.index`, which is class-LOCAL and restarts at 0 per class,
+  while a class is laid out ancestors-first (what `alloc_size` budgets and
+  what `get_class_field_names` already returns for `def init(@x:)`
+  auto-assign). For `class Base { id: Int }` / `class Derived < Base { tag:
+  Int }`, `id` and `tag` both resolved to slot 0: `Derived.new(7, 42)` ran
+  `super(7)` writing the slot and `@tag = 42` overwriting it, so `d.id` read
+  back `42` and the last slot stayed uninitialised. The lookup now returns
+  `base + local` from an oldest-first chain walk, still searching
+  newest-class-first so a subclass field shadows an ancestor's of the same
+  name. `16_inheritance.rx` never caught it because `Cat < Animal` declares no
+  field of its own. Pinned by `1733`.
+- **`==` recurses into a nested struct/class field instead of comparing
+  addresses.** `lower_struct_partial_eq` — the inline route `expr/binops.rs`
+  takes for `a == b` — emitted a bare `Compare` per field, so a field that is
+  itself a nominal type compared the two heap addresses it holds:
+  `Inner.new(1) == Inner.new(1)` was `true` while
+  `Outer.new(Inner.new(1)) == Outer.new(Inner.new(1))` was `false`. The
+  synthesized `{Type}_eq` has always recursed; this second implementation of
+  the same fold silently did not. Not class-specific — struct-in-struct was
+  equally broken, and no pin nested a nominal field. A dotted (module-nested)
+  type name still falls back to the address compare rather than naming a
+  symbol that may not exist. Pinned by `1739`.
 - **`flat_map` on an `Array` receiver no longer fails codegen.** It sat on the
   unimplemented-Vec-combinator blocklist in
   `compiler/ruxen_core/src/codegen/lang_intrinsics.rs`, a list written when

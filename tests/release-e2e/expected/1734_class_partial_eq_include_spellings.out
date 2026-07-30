@@ -1,0 +1,6 @@
+explicit_eq=true
+explicit_ne=false
+explicit_bang=true
+implicit_eq=true
+implicit_ne=false
+implicit_bang=true

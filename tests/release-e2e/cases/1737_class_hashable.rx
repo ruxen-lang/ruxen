@@ -1,0 +1,72 @@
+# B74 adjacent derive: `Hashable` on a `class`.
+#
+# This half failed LOUDER than equality and was still invisible.
+# `mir/lower/mod.rs` never emitted `{Class}_hash_code`, but typeck
+# resolved `.hash_code` happily, so MIR emitted a call to a symbol
+# nothing defined and the program failed at LINK:
+#
+#     Undefined symbols for architecture arm64:
+#       "_K_hash_code", referenced from: ...
+#
+# Note the trap this pin exists to avoid: a probe that computes two
+# hashes and only compares them can have BOTH calls folded away as
+# dead, print `true`, and prove nothing. Every hash below is PRINTED
+# through a decision that depends on its value.
+class K
+  ns: Int
+  id: Int
+
+  def init(@ns: Int, @id: Int)
+  end
+end
+
+class WithString
+  name: String
+  n: Int
+
+  def init(@name: String, @n: Int)
+  end
+end
+
+class Base
+  id: Int
+
+  def init(@id: Int)
+  end
+end
+
+class Mid < Base
+  tag: Int
+
+  def init(id: Int, tag: Int)
+    super(id)
+    @tag = tag
+  end
+end
+
+def main
+  # Hashable's contract: equal values hash equal.
+  let a = K.new(7, 42)
+  let b = K.new(7, 42)
+  let c = K.new(7, 43)
+  puts "equal_values_equal_hash=#{a.hash_code() == b.hash_code()}"
+  puts "differing_values_differ=#{a.hash_code() != c.hash_code()}"
+  # Differing in the FIRST field must move the hash too, or a
+  # fold that only mixes the last field would pass the line above.
+  let d = K.new(8, 42)
+  puts "first_field_moves_hash=#{a.hash_code() != d.hash_code()}"
+
+  # A String field hashes by VALUE — distinct buffers, same characters.
+  let s1 = WithString.new("ada", 1)
+  let s2 = WithString.new("a" + "da", 1)
+  let s3 = WithString.new("ada", 2)
+  puts "string_field_equal=#{s1.hash_code() == s2.hash_code()}"
+  puts "string_field_differs=#{s1.hash_code() != s3.hash_code()}"
+
+  # An inherited field participates in the hash.
+  let m1 = Mid.new(1, 2)
+  let m2 = Mid.new(1, 2)
+  let m3 = Mid.new(9, 2)
+  puts "inherited_equal=#{m1.hash_code() == m2.hash_code()}"
+  puts "inherited_differs=#{m1.hash_code() != m3.hash_code()}"
+end

@@ -1,0 +1,12 @@
+size=2
+hit=true
+hit2=true
+miss_second_field=false
+miss_nothing_alike=false
+got 11
+set_size=2
+set_hit=true
+set_miss=false
+inherited_size=2
+inherited_hit=true
+inherited_miss=false
