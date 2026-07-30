@@ -254,14 +254,28 @@ once 1.0.0 ships.
 
   The heuristic is **deleted**, replaced by a real protocol: the key kind travels
   DOWN from the typed side. A MIR post-pass,
-  `mir/lower/key_desc.rs::install_key_descriptors`, rewrites every table
-  constructor to a `_keyed` form and appends `(kind, hash_fn, eq_fn)` derived
-  from the constructed table's static key type — `String` → FNV-1a + `strcmp`, a
-  struct carrying both `Hashable` and `PartialEq` → its synthesized
-  `<S>_hash_code` / `<S>_eq` passed as `FuncAddr` words, everything else → the
-  raw 64-bit value. It is a post-pass rather than a per-call-site edit because
-  tables are built from more than two dozen `MirInst::Call` emission sites
-  (paren-less `Hash.new`, `Hash.new()`, a map literal, `collect`, `to_set`,
+  `mir/lower/key_desc.rs::install_key_descriptors`, derives `(kind, hash_fn,
+  eq_fn)` from a table's static key type — `String` → FNV-1a + `strcmp`, a struct
+  carrying both `Hashable` and `PartialEq` → its synthesized `<S>_hash_code` /
+  `<S>_eq` passed as `FuncAddr` words, everything else → the raw 64-bit value —
+  and installs it on **two routes**:
+
+  * **Construction sites** are rewritten to a `_keyed` form carrying the
+    descriptor. This is the only route that can serve a table the C runtime
+    populates internally, so the two `from_iter` collectors read their key type
+    off the SOURCE iterable rather than the result (`Array#to_h` is declared
+    `-> Int`, which says nothing about the key; the input `Array` says
+    everything).
+  * **Key-addressed operations** (`insert` / `get` / `key?` / `remove` / `[]`)
+    get an idempotent `ensure_key_kind` in front, chosen from the RECEIVER's key
+    type. A static constructor has no receiver to substitute `-> Hash[K, V]`
+    against, so `f(Hash.new)` cannot be typed where it is BUILT — but it is
+    typed perfectly well where it is USED, and this route generalizes over
+    syntactic position instead of needing one typeck refinement per position.
+
+  It is a post-pass rather than a per-call-site edit because tables are built
+  from more than two dozen `MirInst::Call` emission sites (paren-less
+  `Hash.new`, `Hash.new()`, a map literal, `collect`, `to_set`,
   `with_capacity`, …); deciding once on the shape of the emitted MIR means a new
   construction site cannot forget the descriptor. The classification is
   structural (`Ty` variants plus the generic `ty_has_derive_trait` predicate), so
@@ -286,13 +300,16 @@ once 1.0.0 ships.
   `Hash[K, V]`; the binding and assignment paths now refine it from the
   annotation.
 
-  **Two residual limits, both loud rather than silent.** A table whose key type
-  is still a rigid type parameter at its construction site gets
-  `RUXEN_KEY_UNSET` and the runtime **panics on the first insert** naming the
-  protocol, rather than guessing a kind and mis-hashing; that covers
-  `Array#to_h`, which is declared `-> Int` (its key type is not expressible
-  today) and so is unusable until that declaration is fixed. Pins
-  `tests/release-e2e/cases/1720`-`1724`.
+  Tables built entirely inside the C runtime are out of the post-pass's reach
+  and state or inherit their own kind: `Env.vars` and `Match#named_groups` are
+  `RUXEN_KEY_CSTR` by definition, and `clone` plus the set-algebra operations
+  copy the descriptor from a source table *before* their first insert.
+
+  **One residual limit, loud rather than silent.** A table neither route can
+  type keeps `RUXEN_KEY_UNSET`, and the runtime **panics on the first insert**
+  naming the protocol rather than guessing a kind and mis-hashing. No shape in
+  the stdlib, the workspace, or the 551-case e2e suite reaches it. Pins
+  `tests/release-e2e/cases/1720`-`1727`.
 - **`alias` to a method on a GENERIC builtin head no longer link-fails (Q58).**
   `h.has_key?(k)` on a `Hash[String, Int]` emitted a bodiless
   `Hash[String, Int]_has_key?` and the linker rejected it. MIR's

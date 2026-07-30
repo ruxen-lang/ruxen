@@ -2896,11 +2896,19 @@ refines the initializer from a concrete annotation on the `let` path
 what makes `self.data = Hash.new` inside an `init` work. **Still open for the
 argument and return positions** — `f(Hash.new)` against a `Hash[String, Int]`
 parameter, and `return Hash.new` against a declared return type, are not
-refined. The B73 runtime makes that loud rather than silent: such a table is
-built `RUXEN_KEY_UNSET` and panics on its first insert naming the protocol.
-The general fix is to thread an expected type through argument and return
-checking, or to substitute a static ctor's return against the expected type at
-the call.
+refined. The general fix is to thread an expected type through argument and
+return checking, or to substitute a static ctor's return against the expected
+type at the call.
+
+**Severity dropped from S2 to S3** once B73 stopped depending on this being
+right. The key-kind protocol installs the descriptor at USE sites as well as
+construction sites (`mir/lower/key_desc.rs`, the `KEYED_TABLE_OPS` route), and
+an operation's RECEIVER is concretely typed in exactly the positions a
+constructor's result temp is not. So `f(Hash.new)` is keyed correctly by the
+`insert` inside `f`, and pin `1725` holds that. What remains is a typeck
+imprecision with no known wrong-behaviour consequence, not a live defect —
+which is why it is filed rather than fixed here. Anything NEW that reads a
+static constructor's own expression type still needs to expect a rigid `K`.
 
 **(b) S2 — `Set[String]` set-algebra results double-free at scope exit.**
 Verified 2026-07-29 and **pre-existing** (reproduces identically before B73):
@@ -2925,17 +2933,27 @@ spine-only `ruxen_set_free`); only heap-owning element types are exposed.
 element rather than a `String` so it does not depend on this. The fix is either
 a deep copy in the three set-algebra helpers or an aliasing-aware drop.
 
-**(c) S3 — `Array#to_h` is declared `-> Int`, so its result is not a `Hash`.**
+**(c) S4 — `Array#to_h`'s `lib` declaration launders its return through `Int`.**
 `library/std/array/src/lib.rx:106` reads
 `def to_h as "ruxen_hash_from_iter" -> Int`, with the header comment at
 `:49-50` explaining why: the result key/value types come from the receiver's
 TUPLE element and are "not expressible" in the current return-type surface.
-The value therefore arrives as a bare `Int` with no `Hash` methods on it. Under
-B73 this also means the key type is unknowable at the construction site, so
-`to_h` builds an `RUXEN_KEY_UNSET` table that panics on its first insert instead
-of silently mis-hashing. No e2e case exercises `to_h`, which is why it went
-unnoticed. Fixing the declaration (per-`T` mono, E1, is the likely enabler) also
-fixes the descriptor for free.
+
+**The user-visible surface is fine** — the `collections.rs` resolver runs ahead
+of the builtin bridge and supplies the real `Hash[K, V]`, so `[("a", 1)].to_h`
+does have `size` / `key?` / `get` on it (pin `1726`). An earlier draft of this
+entry claimed the value arrives as a bare `Int` with no `Hash` methods; that is
+wrong, and the pin disproves it.
+
+What the laundered decl DID break was B73's descriptor: the construction site
+read the key type off the RESULT local, which for `to_h` is `Int` and says
+nothing about the key. Fixed by reading it off the SOURCE instead — a
+`from_iter` constructor's input is always a concrete `Array`, and collecting it
+is what fixes the key type (`key_desc.rs::key_ty_from_iterable`). That is the
+better witness for both `from_iter` forms regardless of the decl, because these
+two constructors populate their table INSIDE the C runtime, where no use-site
+`ensure` can reach it. The `-> Int` decl is still worth correcting when per-`T`
+mono (E1) allows it, but nothing depends on it now.
 
 ## Where the workarounds live (grep-able)
 

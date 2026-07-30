@@ -105,7 +105,12 @@ void *ruxen_env_var(const char *name) {
 extern char **environ;
 
 void *ruxen_env_vars(void) {
-    RuxenHash *h = ruxen_hash_new();
+    /* Environment keys are `char*`, so this table is RUXEN_KEY_CSTR by
+       construction (B73). A table built inside the C runtime is out of
+       the compiler post-pass's reach and must state its own kind;
+       `ruxen_hash_new()` would leave it UNSET and the inserts below
+       would panic. */
+    RuxenHash *h = ruxen_hash_new_keyed(RUXEN_KEY_CSTR, 0, 0);
     if (!environ) {
         return h;
     }

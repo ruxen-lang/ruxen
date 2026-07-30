@@ -63,6 +63,44 @@ const KEYED_TABLE_CTORS: &[(&str, &str)] = &[
     ("ruxen_set_from_iter", "ruxen_set_from_iter_keyed"),
 ];
 
+/// Key-addressed operations, paired with the `ensure` entry point for the
+/// family they belong to. Every one of these hashes or compares a key, so
+/// the table it runs against must already know how. Their RECEIVER is
+/// argument 0, and unlike a constructor's result temp it is a real,
+/// concretely-typed local at nearly every call site.
+///
+/// This is the second half of the protocol and it is what makes the first
+/// half's failure recoverable rather than fatal. A construction site
+/// cannot always be typed — `f(Hash.new)` types the temp from the
+/// declared `-> Hash[K, V]`, since a static constructor has no receiver
+/// to substitute against — but the USE site inside `f` knows `K`
+/// perfectly well. Installing there is still the static type deciding;
+/// nothing inspects a key.
+///
+/// The list covers every key-addressed operation, not just the two
+/// `insert`s, and that redundancy is deliberate. You can argue the reads
+/// down: only an insert populates a table, an insert installs the kind,
+/// so a table with entries always has one, and a lookup on an empty table
+/// finds nothing under any kind. That argument is correct today and it is
+/// a WHOLE-PROGRAM argument — it breaks the moment some other path learns
+/// to add entries. Paying one no-op call per lookup keeps the invariant
+/// local and checkable at each site. If a profile ever shows it matters,
+/// narrowing to the inserts is the safe cut, but make that a measured
+/// decision and leave this reasoning with it.
+const KEYED_TABLE_OPS: &[(&str, &str)] = &[
+    ("ruxen_hash_insert", HASH_ENSURE),
+    ("ruxen_hash_get", HASH_ENSURE),
+    ("ruxen_hash_contains_key", HASH_ENSURE),
+    ("ruxen_hash_remove", HASH_ENSURE),
+    ("ruxen_hash_index", HASH_ENSURE),
+    ("ruxen_set_insert", SET_ENSURE),
+    ("ruxen_set_contains", SET_ENSURE),
+    ("ruxen_set_remove", SET_ENSURE),
+];
+
+const HASH_ENSURE: &str = "ruxen_hash_ensure_key_kind";
+const SET_ENSURE: &str = "ruxen_set_ensure_key_kind";
+
 /// The key type a constructed collection hashes on: a `Hash[K, V]` keys
 /// on `K`, a `Set[T]` keys on `T` (a set is a table whose values are
 /// ignored). Anything else is not a keyed table.
@@ -70,6 +108,31 @@ fn key_ty_of(result_ty: &Ty) -> Option<&Ty> {
     match peel(result_ty) {
         Ty::Map(k, _) => Some(k),
         Ty::Set(t) => Some(t),
+        _ => None,
+    }
+}
+
+/// The key type of a table built by collecting an iterable, read off the
+/// SOURCE rather than the result.
+///
+/// A `from_iter` constructor populates its table inside the C runtime,
+/// where no `ensure` at a later operation site can rescue it, so its
+/// descriptor has to be right at construction. The result type is the
+/// weaker witness of the two: `Array#to_h` is declared `-> Int` (a
+/// laundered residual decl — its true key type is not expressible on that
+/// `lib` line today), which says nothing at all. The source iterable is a
+/// concrete `Array[T]`, and collecting it is exactly what fixes the key
+/// type: a `Set` collects its elements, so `T` IS the key; a `Hash`
+/// collects `(K, V)` pairs, so the key is the pair's first field.
+fn key_ty_from_iterable(iter_ty: &Ty, collects_pairs: bool) -> Option<&Ty> {
+    let Ty::Array(elem) = peel(iter_ty) else {
+        return None;
+    };
+    if !collects_pairs {
+        return Some(elem);
+    }
+    match peel(elem) {
+        Ty::Tuple(fields) if fields.len() == 2 => Some(&fields[0]),
         _ => None,
     }
 }
@@ -158,12 +221,23 @@ fn key_descriptor(key_ty: &Ty, symbols: &SymbolTable) -> KeyDesc {
 /// cannot be added without the descriptor — there is nothing to
 /// remember.
 ///
-/// The key type comes from the constructed table's own local. Where that
-/// local is still generic — a static constructor has no receiver to
-/// substitute `-> Hash[K, V]` against — the descriptor is `UNSET` and the
-/// runtime panics on the first insert instead of mis-hashing in silence.
-/// Typeck's `refine_rigid_generics` is what keeps that from happening on
-/// the ordinary binding and assignment paths.
+/// Two routes, because one is not enough on its own:
+///
+/// * **Construction sites** get the descriptor baked into the call. This
+///   is the only route that can serve a table the C runtime populates
+///   internally (`from_iter`), and the only one that reaches a table
+///   nothing ever looks up.
+/// * **Operation sites** get an idempotent `ensure` in front, chosen from
+///   the RECEIVER's key type. This catches every table whose construction
+///   site could not be typed — `f(Hash.new)` types its temp from the
+///   declared `-> Hash[K, V]`, since a static constructor has no receiver
+///   to substitute against — and it generalizes over syntactic position
+///   (argument, field init, return, element) instead of needing one
+///   typeck refinement per position.
+///
+/// A table that neither route can type keeps `RUXEN_KEY_UNSET`, and the
+/// runtime panics on the first insert naming the protocol rather than
+/// guessing a kind and mis-hashing in silence.
 pub(super) fn install_key_descriptors(func: &mut MirFunction, symbols: &SymbolTable) {
     // Descriptors are chosen from local types, which the loop below does
     // not modify, so collect them first and keep the borrows disjoint.
@@ -175,7 +249,7 @@ pub(super) fn install_key_descriptors(func: &mut MirFunction, symbols: &SymbolTa
         let mut rewritten = Vec::with_capacity(block.instructions.len());
         for inst in block.instructions.drain(..) {
             let MirInst::Call {
-                dest: Some(dest),
+                ref dest,
                 ref callee,
                 ref args,
             } = inst
@@ -183,50 +257,56 @@ pub(super) fn install_key_descriptors(func: &mut MirFunction, symbols: &SymbolTa
                 rewritten.push(inst);
                 continue;
             };
-            let Some((_, keyed)) = KEYED_TABLE_CTORS.iter().find(|(base, _)| base == callee) else {
-                rewritten.push(inst);
-                continue;
-            };
-            let Some(key_ty) = local_tys.get(dest as usize).and_then(key_ty_of) else {
-                rewritten.push(inst);
-                continue;
-            };
 
-            let mut args = args.clone();
-            match key_descriptor(key_ty, symbols) {
-                KeyDesc::Plain(kind) => {
-                    args.push(MirValue::Literal(Literal::Int(kind)));
-                    args.push(MirValue::Literal(Literal::Int(0)));
-                    args.push(MirValue::Literal(Literal::Int(0)));
-                }
-                KeyDesc::Custom { hash_sym, eq_sym } => {
-                    // The two function slots travel as `Ty::Int` words
-                    // holding a `FuncAddr`, the same convention the
-                    // closure pointer uses in `ruxen_thread_spawn`.
-                    let hash_ptr = next_temp_id as LocalId;
-                    next_temp_id += 1;
-                    let eq_ptr = next_temp_id as LocalId;
-                    next_temp_id += 1;
-                    new_locals.push((hash_ptr, Ty::Int));
-                    new_locals.push((eq_ptr, Ty::Int));
-                    rewritten.push(MirInst::FuncAddr {
-                        dest: hash_ptr,
-                        func_name: hash_sym,
-                    });
-                    rewritten.push(MirInst::FuncAddr {
-                        dest: eq_ptr,
-                        func_name: eq_sym,
-                    });
-                    args.push(MirValue::Literal(Literal::Int(KEY_CUSTOM)));
-                    args.push(MirValue::Use(hash_ptr));
-                    args.push(MirValue::Use(eq_ptr));
+            // ── Route 1: a construction site becomes its `_keyed` form.
+            if let Some(keyed) = keyed_ctor_for(callee) {
+                let Some(desc) = ctor_descriptor(callee, dest, args, &local_tys, symbols) else {
+                    rewritten.push(inst);
+                    continue;
+                };
+                let mut args = args.clone();
+                args.extend(materialize(
+                    desc,
+                    &mut rewritten,
+                    &mut next_temp_id,
+                    &mut new_locals,
+                ));
+                rewritten.push(MirInst::Call {
+                    dest: *dest,
+                    callee: keyed.to_string(),
+                    args,
+                });
+                continue;
+            }
+
+            // ── Route 2: a key-addressed operation gets an `ensure` in
+            //    front, unless we cannot type its receiver either — an
+            //    `ensure` carrying UNSET would be a no-op call.
+            if let Some(ensure) = keyed_op_ensure(callee) {
+                let recv_key_ty = args
+                    .first()
+                    .and_then(as_local)
+                    .and_then(|l| local_tys.get(l as usize))
+                    .and_then(key_ty_of);
+                if let Some(key_ty) = recv_key_ty {
+                    let desc = key_descriptor(key_ty, symbols);
+                    if !matches!(desc, KeyDesc::Plain(KEY_UNSET)) {
+                        let mut ensure_args = vec![args[0].clone()];
+                        ensure_args.extend(materialize(
+                            desc,
+                            &mut rewritten,
+                            &mut next_temp_id,
+                            &mut new_locals,
+                        ));
+                        rewritten.push(MirInst::Call {
+                            dest: None,
+                            callee: ensure.to_string(),
+                            args: ensure_args,
+                        });
+                    }
                 }
             }
-            rewritten.push(MirInst::Call {
-                dest: Some(dest),
-                callee: (*keyed).to_string(),
-                args,
-            });
+            rewritten.push(inst);
         }
         block.instructions = rewritten;
     }
@@ -238,5 +318,124 @@ pub(super) fn install_key_descriptors(func: &mut MirFunction, symbols: &SymbolTa
             ty,
             mutable: false,
         });
+    }
+}
+
+fn keyed_ctor_for(callee: &str) -> Option<&'static str> {
+    KEYED_TABLE_CTORS
+        .iter()
+        .find(|(base, _)| *base == callee)
+        .map(|(_, keyed)| *keyed)
+}
+
+fn keyed_op_ensure(callee: &str) -> Option<&'static str> {
+    KEYED_TABLE_OPS
+        .iter()
+        .find(|(op, _)| *op == callee)
+        .map(|(_, ensure)| *ensure)
+}
+
+/// The local behind an argument, when there is one. Argument 0 of these
+/// calls is a table receiver or a source iterable, and both arrive as a
+/// plain local use — including a borrowed receiver (`&Hash[K, V]` param),
+/// since a borrow does not change the runtime word.
+fn as_local(arg: &MirValue) -> Option<LocalId> {
+    match arg {
+        MirValue::Use(l) => Some(*l),
+        _ => None,
+    }
+}
+
+/// The descriptor for a construction site, chosen from the best-informed
+/// witness available.
+///
+/// `None` means this is not a keyed table at all (no witness names a
+/// `Hash` or `Set`), and the caller leaves the call alone. `Some(UNSET)`
+/// means it IS one and we could not type it — that is a descriptor, and
+/// the runtime turns it into a panic on the first insert.
+///
+/// Two witnesses, in priority of INFORMATION rather than fixed order:
+///
+/// * The result local. Right for `new` / `with_capacity`.
+/// * The source iterable, for the two `from_iter` collectors, whose
+///   result type is the laundered one (`Array#to_h` is declared `-> Int`,
+///   which names no key) while their input is always a concrete `Array`.
+///
+/// Whichever yields a real kind wins. Ordering them by information rather
+/// than by position matters in both directions: inside a generic body the
+/// SOURCE is the abstract one (`Array[T]`) while a concrete annotation may
+/// have pinned the result, and for `to_h` it is the other way round.
+/// Taking a fixed side would throw away the witness that actually knew.
+fn ctor_descriptor(
+    callee: &str,
+    dest: &Option<LocalId>,
+    args: &[MirValue],
+    local_tys: &[Ty],
+    symbols: &SymbolTable,
+) -> Option<KeyDesc> {
+    let from_result = dest
+        .and_then(|d| local_tys.get(d as usize))
+        .and_then(key_ty_of);
+    let from_source = match callee {
+        "ruxen_hash_from_iter" => Some(true),
+        "ruxen_set_from_iter" => Some(false),
+        _ => None,
+    }
+    .and_then(|collects_pairs| {
+        args.first()
+            .and_then(as_local)
+            .and_then(|l| local_tys.get(l as usize))
+            .and_then(|t| key_ty_from_iterable(t, collects_pairs))
+    });
+
+    let mut fallback = None;
+    for key_ty in [from_source, from_result].into_iter().flatten() {
+        match key_descriptor(key_ty, symbols) {
+            KeyDesc::Plain(KEY_UNSET) => fallback = Some(KeyDesc::Plain(KEY_UNSET)),
+            desc => return Some(desc),
+        }
+    }
+    fallback
+}
+
+/// Turn a descriptor into the three trailing `(kind, hash_fn, eq_fn)`
+/// argument words, emitting the `FuncAddr` instructions a CUSTOM kind
+/// needs into `out` first.
+fn materialize(
+    desc: KeyDesc,
+    out: &mut Vec<MirInst>,
+    next_temp_id: &mut usize,
+    new_locals: &mut Vec<(LocalId, Ty)>,
+) -> Vec<MirValue> {
+    match desc {
+        KeyDesc::Plain(kind) => vec![
+            MirValue::Literal(Literal::Int(kind)),
+            MirValue::Literal(Literal::Int(0)),
+            MirValue::Literal(Literal::Int(0)),
+        ],
+        KeyDesc::Custom { hash_sym, eq_sym } => {
+            // The two function slots travel as `Ty::Int` words holding a
+            // `FuncAddr`, the same convention the closure pointer uses in
+            // `ruxen_thread_spawn`.
+            let hash_ptr = *next_temp_id as LocalId;
+            *next_temp_id += 1;
+            let eq_ptr = *next_temp_id as LocalId;
+            *next_temp_id += 1;
+            new_locals.push((hash_ptr, Ty::Int));
+            new_locals.push((eq_ptr, Ty::Int));
+            out.push(MirInst::FuncAddr {
+                dest: hash_ptr,
+                func_name: hash_sym,
+            });
+            out.push(MirInst::FuncAddr {
+                dest: eq_ptr,
+                func_name: eq_sym,
+            });
+            vec![
+                MirValue::Literal(Literal::Int(KEY_CUSTOM)),
+                MirValue::Use(hash_ptr),
+                MirValue::Use(eq_ptr),
+            ]
+        }
     }
 }

@@ -34,21 +34,27 @@
 ##
 ## `self.new` / `self.with_capacity` are declared here WITHOUT the key
 ## descriptor, but that is not what reaches the linker. A MIR post-pass
-## (`mir/lower/key_desc.rs::install_key_descriptors`) rewrites every
-## table constructor to its `_keyed` form and appends
-## `(kind, hash_fn, eq_fn)`, chosen from the constructed table's static
-## key type: `String` → FNV-1a + `strcmp`, a struct with both `Hashable`
-## and `PartialEq` → its `<S>_hash_code` / `<S>_eq`, everything else →
-## the raw 64-bit word. The runtime therefore never inspects a key's
-## bits to decide what a key IS; it is told.
+## (`mir/lower/key_desc.rs::install_key_descriptors`) derives
+## `(kind, hash_fn, eq_fn)` from the table's static key type — `String` →
+## FNV-1a + `strcmp`, a struct with both `Hashable` and `PartialEq` → its
+## `<S>_hash_code` / `<S>_eq`, everything else → the raw 64-bit word — and
+## installs it on two routes: it rewrites every CONSTRUCTOR to its
+## `_keyed` form, and it puts an idempotent `ensure_key_kind` ahead of
+## every key-addressed OPERATION, chosen from that operation's receiver.
+## The runtime therefore never inspects a key's bits to decide what a key
+## IS; it is told, from whichever of the two sites has a concrete type.
 ##
 ## Practical consequences for anyone editing this file:
 ##   * A new constructor added to the `lib` block must be listed in
 ##     `KEYED_TABLE_CTORS` if it both allocates AND populates a table.
+##   * A new method that HASHES or COMPARES a key must be listed in
+##     `KEYED_TABLE_OPS`. Missing it is safe when the table was already
+##     keyed at construction and a panic otherwise, never a wrong answer.
 ##   * A method that returns an EXISTING table needs nothing.
-##   * `K` must be concrete at the construction site. A `Hash.new` whose
-##     key type is still a rigid `K` builds an UNSET table and the
-##     runtime panics on the first insert rather than guessing.
+##   * `K` need not be concrete at the construction site — `f(Hash.new)`
+##     is keyed by the `insert` inside `f`. A table NEITHER site can type
+##     stays UNSET and the runtime panics on the first insert rather than
+##     guessing.
 ##
 ## The internal `Ty::Map` variant and the `ruxen_hash_*` runtime
 ## symbols keep their legacy names; only the surface spelling is

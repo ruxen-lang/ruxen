@@ -98,6 +98,8 @@ extern "C" {
         hash_fn: i64,
         eq_fn: i64,
     ) -> *mut u8;
+    fn ruxen_hash_ensure_key_kind(h: *mut u8, kind: i64, hash_fn: i64, eq_fn: i64);
+    fn ruxen_set_ensure_key_kind(s: *mut u8, kind: i64, hash_fn: i64, eq_fn: i64);
     fn ruxen_hash_insert(h: *mut u8, k: i64, v: i64);
     fn ruxen_hash_get(h: *mut u8, k: i64) -> i64;
     fn ruxen_hash_contains_key(h: *mut u8, k: i64) -> i8;
@@ -731,6 +733,8 @@ fn register_runtime_symbols(builder: &mut JITBuilder) {
     reg!(builder, ruxen_set_new_keyed);
     reg!(builder, ruxen_set_with_capacity_keyed);
     reg!(builder, ruxen_set_from_iter_keyed);
+    reg!(builder, ruxen_hash_ensure_key_kind);
+    reg!(builder, ruxen_set_ensure_key_kind);
     reg!(builder, ruxen_hash_insert);
     reg!(builder, ruxen_hash_get);
     reg!(builder, ruxen_hash_contains_key);

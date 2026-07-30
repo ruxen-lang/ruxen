@@ -141,6 +141,17 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
         ptr_ty,
         [ptr_ty, i64_ty, i64_ty, i64_ty]
     );
+    // The idempotent install emitted ahead of a key-addressed operation.
+    decl!(
+        "ruxen_hash_ensure_key_kind",
+        void_ty,
+        [ptr_ty, i64_ty, i64_ty, i64_ty]
+    );
+    decl!(
+        "ruxen_set_ensure_key_kind",
+        void_ty,
+        [ptr_ty, i64_ty, i64_ty, i64_ty]
+    );
 
     // ── Indexing / element access emitted by `a[i]` lowering ────────
     decl!("ruxen_vec_get", i64_ty, [ptr_ty, i64_ty]);

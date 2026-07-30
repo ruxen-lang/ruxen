@@ -124,6 +124,12 @@ pub fn compiler_internal_signature(name: &str) -> Option<(Vec<Type>, Option<Type
             vec![types::I64, types::I64, types::I64, types::I64],
             Some(types::I64),
         )),
+        // The idempotent install the post-pass emits ahead of a
+        // key-addressed operation. Returns nothing.
+        "ruxen_hash_ensure_key_kind" | "ruxen_set_ensure_key_kind" => Some((
+            vec![types::I64, types::I64, types::I64, types::I64],
+            None,
+        )),
 
         // ── Indexing / element access emitted by `a[i]` lowering ─────
         // `Array#get` is `.rx`-declared as `ruxen_vec_get_opt`; the bare
