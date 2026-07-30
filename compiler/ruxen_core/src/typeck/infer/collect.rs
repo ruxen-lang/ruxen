@@ -501,8 +501,15 @@ impl<'a> InferenceEngine<'a> {
         // `(class_name, base_slot)` oldest ancestor first, so `base_slot`
         // is the running count of every field declared before that class.
         let mut chain: Vec<(String, usize)> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut cur = Some(type_name.to_string());
         while let Some(name) = cur.take() {
+            // A malformed `class A < B` / `class B < A` cycle would spin
+            // here forever. Resolve should reject one, but this walk must
+            // terminate on its own rather than trust that.
+            if !seen.insert(name.clone()) {
+                break;
+            }
             let Some(def) = self
                 .symbols
                 .iter()
@@ -513,7 +520,21 @@ impl<'a> InferenceEngine<'a> {
             let DefKind::Class { info } = &def.kind else {
                 break;
             };
-            chain.push((name, info.fields.len()));
+            // Count only entries that really are fields — the same filter
+            // `mir/lower/type_helpers.rs::class_field_layout` applies when
+            // it assigns the slots. Counting `info.fields.len()` raw would
+            // let the two disagree and shift every descendant's base.
+            let field_count = info
+                .fields
+                .iter()
+                .filter(|fid| {
+                    matches!(
+                        self.symbols.get(**fid).map(|d| &d.kind),
+                        Some(DefKind::Field { .. })
+                    )
+                })
+                .count();
+            chain.push((name, field_count));
             cur = info
                 .parent
                 .and_then(|p| self.symbols.get(p))

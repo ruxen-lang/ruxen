@@ -258,23 +258,17 @@ impl<'a> Lowerer<'a> {
     /// into an undefined-symbol link failure. Widen a call site here only
     /// together with the matching synthesiser.
     pub(super) fn nominal_with_derive_trait(&self, ty: &Ty, trait_name: &str) -> Option<String> {
-        let mut cur = ty;
-        loop {
-            match cur {
-                Ty::Ref(inner)
-                | Ty::RefMut(inner)
-                | Ty::RefLifetime(_, inner)
-                | Ty::RefMutLifetime(_, inner) => cur = inner,
-                Ty::Alias { target, .. } => cur = target,
-                Ty::Newtype { inner, .. } => cur = inner,
-                Ty::Struct { name, .. } | Ty::Class { name, .. } => {
-                    if nominal_derive_is_synthesized(cur, self.symbols, trait_name) {
-                        return Some(name.clone());
-                    }
-                    return None;
-                }
-                _ => return None,
-            }
+        let nominal = peel_to_nominal(ty)?;
+        // Enums keep their own dispatch (`enum_with_derive_debug`); this
+        // helper is only for the two shapes `mod.rs` synthesises for.
+        let name = match nominal {
+            Ty::Struct { name, .. } | Ty::Class { name, .. } => name,
+            _ => return None,
+        };
+        if nominal_derive_is_synthesized(nominal, self.symbols, trait_name) {
+            Some(name.clone())
+        } else {
+            None
         }
     }
 
@@ -457,20 +451,11 @@ fn peel_to_nominal(ty: &Ty) -> Option<&Ty> {
 /// Used to check that two operands of a structural comparison really are
 /// the same nominal type before either is addressed slot-by-slot.
 pub(super) fn peeled_nominal_name(ty: &Ty) -> Option<String> {
-    let mut cur = ty;
-    loop {
-        match cur {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner)
-            | Ty::Newtype { inner, .. }
-            | Ty::Alias { target: inner, .. } => cur = inner,
-            Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. } => {
-                return Some(name.clone())
-            }
-            _ => return None,
+    match peel_to_nominal(ty)? {
+        Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. } => {
+            Some(name.clone())
         }
+        _ => None,
     }
 }
 
@@ -540,8 +525,14 @@ fn class_field_layout(name: &str, symbols: &SymbolTable) -> Option<Vec<(usize, T
 
     // Oldest ancestor first, so slot order matches `alloc_size`.
     let mut chain: Vec<&str> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut cur = Some(name.to_string());
     while let Some(n) = cur.take() {
+        // Terminate on a malformed `class A < B` / `class B < A` cycle
+        // rather than growing the chain forever.
+        if !seen.insert(n.clone()) {
+            break;
+        }
         let def = find_class(&n)?;
         chain.push(def.name.as_str());
         if let DefKind::Class { info } = &def.kind {
