@@ -1,0 +1,12 @@
+early_ret_hit=50
+early_ret_miss=-1
+early_ret_err_hit=-1
+early_ret_err_miss=0
+tail_expr_hit=50
+tail_expr_miss=-1
+first_multiple_hit=300
+first_multiple_miss=-1
+code_of_1=11
+code_of_other=-1
+label_hit=big
+label_miss=none

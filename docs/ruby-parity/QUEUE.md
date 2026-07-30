@@ -75,7 +75,7 @@ this session hid behind single-spelling pins, each with a fully green suite:
 
 | Pin | What it spelled | What was broken and invisible |
 |---|---|---|
-| `1061` | `filter_map` via a TAIL-position helper | `return <v>` from an `Option` fn SEGFAULTS (**B84**, still open) |
+| `1061` | `filter_map` via a TAIL-position helper | `return <v>` from an `Option` fn SEGFAULTS (**B84**, fixed 2026-07-30 — `Result` had the same hole and nobody had written the crashing spelling at all) |
 | `991` | `Option` read with `unwrap_or` | `let x: Option[T] = …` drops the annotation, so `unwrap` fails |
 | `1720`-`1727` | `var h: Hash[K, V] = Hash.new` | `Hash[K, V].new` panicked (and segfaulted before B73) |
 
@@ -418,7 +418,7 @@ ranks first and B71 second, both found after B01 to B05.
 - **Status:** READY-NOW (audit), then NEEDS-COMPILER-FEATURE per site.
 - **Pins:** 1830-1839, one per site actually proven broken.
 
-### B84 — `return <value>` from an Option-returning function SEGFAULTS
+### B84 — `return <value>` from an Option-returning function SEGFAULTS — ✅ DONE
 - **Goal:** a guard-clause early return works in an `Option`-returning function.
 - **Repro (verified 2026-07-29 on `4560d00b`, no collection method involved):**
 
@@ -439,12 +439,17 @@ ranks first and B71 second, both found after B01 to B05.
   1. **HIR shape.** Diffing `--emit=hir` for the two spellings: in the WORKING form the `if` is the block's TAIL (`Some(HirExpr…)`) and its then-branch `x * 10` is **retyped to `ty: Option(Int)`** even though its kind is a `BinaryOp` producing `Int`. In the CRASHING form the `if` is a STATEMENT containing `Return`, and no retype happens.
   2. **Why the retype is missed.** `typeck/infer/expr.rs:1397` (the `Return` arm) calls `unify(ret_ty, &val.ty, …)` and **DISCARDS the result** (`let _ = unify(…)`). `unify` has no `(Option[T], T)` rule (`typeck/unify.rs:113` handles only `Option`↔`Option`), so it silently fails and the value keeps its bare type. The tail path gets its retype for free because the two `if` branches unify against EACH OTHER (`Int` vs `nil`).
   3. **⚠️ Retyping in typeck alone does NOT fix it, verified by trying it.** Setting `val.ty = Option[T]` in the `Return` arm builds clean, keeps the narrow gate at 655, and STILL segfaults. So the box is not driven by the HIR `ty` at this site: MIR's `Return` lowering (`mir/lower/expr/control.rs:163`) lowers the operand to a local from the expression's KIND and hands it to `Terminator::Return` raw, and `mir/lower/function.rs:135-147` does the same for the implicit tail return. The real fix must emit the `Option` box in lowering (or wherever the tail path's box is emitted, which is NOT `function.rs` or `control.rs` and still needs locating), not merely relabel the type in typeck.
-- **Next step for whoever takes this:** find where the tail path's `Option` box is actually emitted, given neither `control.rs`'s `Return` arm nor `function.rs`'s implicit-return path emits one. Start by dumping MIR for both spellings and diffing, the way the HIR diff above localized layer 1.
-- **Severity: BLOCKER.** Guard-clause-plus-early-return is one of the most common shapes in both Ruby and Rust, `Option` returns are everywhere in the stdlib surface we are building (`min`, `max`, `find`, `find_index`, `filter_map`), and the failure is a hard crash produced by a silent miscompile rather than a diagnostic.
-- **How it evaded every gate:** pin `1061` exercises `filter_map` through a helper written in TAIL position (`only_odd`), so the whole B07 batch passed while the idiomatic early-return spelling crashes. This is the second pin this session that routed around a defect instead of exposing it (see also pin `991` and `unwrap_or`). When adding pins for `Option`-returning helpers, write BOTH spellings.
-- **Files:** the `Return` lowering path in `mir/lower/`, wherever the tail-expression path performs the `Option` wrap.
-- **Status:** NEEDS-COMPILER-FEATURE.
-- **Pins:** 1850-1859. Pin the early-return form directly, plus a nested `return` inside a loop, and the same for `Result`.
+- **RESOLUTION (2026-07-30). Layer 3 above was the wrong lead — the box is NOT emitted in MIR at all.** Diffing `--emit=mir` for the two spellings shows the working tail form's then-branch as `Alloc(Option(Int)) / SetTag 1 / GetPayload / BinOp Mul / SetField 0`, which is verbatim the `HirExprKind::EnumVariant` arm of `mir/lower/expr/constructors.rs:106`. Dumping `--emit=hir` confirms why: **the tail expression is not "retyped", it is REWRITTEN — typeck replaces the `BinaryOp` node with an `EnumVariant { type_name: "Option", variant_name: "Some", variant_idx: 1, fields: [<the BinaryOp>] }` wrapper.** That rewrite is `InferenceEngine::auto_wrap_option_some` (`typeck/infer/mod.rs`), the documented "drop `Some`" sugar. MIR then lowers an ordinary enum construction; it has no idea a coercion happened. So the earlier "set `val.ty` and it still segfaults" experiment was right but for a reason nobody had pinned down: setting the `ty` does nothing because the *kind* is what drives the box.
+- **The actual defect, stated generically:** a function's return slot is fed by TWO syntactic positions — the body's TAIL expression and an explicit `return` — and only the tail ran the return-slot pipeline. `infer_function` ran `auto_call_fn_reference` → `auto_wrap_option_some` → a REPORTED `unify_or_coerce`. The `Return` arm ran none of the three. It was the one value-into-a-typed-slot site in the inferencer with no coercion pass and no reported check (the `let`-binding site has the same three).
+- **Fix:** extract that pipeline into `InferenceEngine::coerce_and_check_return_value` (`typeck/infer/mod.rs`) and call it from BOTH `infer_function`'s tail check and the `Return` arm of `infer_expr`. No new type-specific logic, no MIR change, no `unify` rule added — the `Return` arm simply stopped being an exception. Net +49/−38 lines across two files.
+- **`Result` had the identical hole, confirmed.** `def g(x: Int) -> Result[Int, String]` with `return x * 10` also compiled clean and exited 139 pre-fix. It looked safe only because its TAIL spelling was already a type error, so nobody wrote the crashing form. Post-fix both spellings give the same `type mismatch: expected Result[Int, String], found Int` diagnostic. **No implicit `Ok` wrap was added** — that would be a new language feature (a "drop `Ok`" sugar) and is out of scope here; if it is wanted, it belongs in `auto_wrap_option_some`'s neighbourhood as a deliberate decision, not smuggled in through a crash fix.
+- **Deliberately NOT done:** making `unify` accept `(Option[T], T)`. That would let a bare `T` satisfy an `Option[T]` in every position, which is exactly the silent-acceptance class this bug came from.
+- **Severity: BLOCKER** (was). Guard-clause-plus-early-return is one of the most common shapes in both Ruby and Rust, `Option` returns are everywhere in the stdlib surface we are building (`min`, `max`, `find`, `find_index`, `filter_map`), and the failure was a hard crash produced by a silent miscompile rather than a diagnostic.
+- **How it evaded every gate:** pin `1061` exercises `filter_map` through a helper written in TAIL position (`only_odd`), so the whole B07 batch passed while the idiomatic early-return spelling crashed. This is the second pin this session that routed around a defect instead of exposing it (see also pin `991` and `unwrap_or`). When adding pins for `Option`-returning helpers, write BOTH spellings.
+- **Files:** `compiler/ruxen_core/src/typeck/infer/mod.rs`, `compiler/ruxen_core/src/typeck/infer/expr.rs`, `compiler/ruxen_core/src/typeck/tests.rs`.
+- **Status:** ✅ **DONE** (2026-07-30). Narrow gate 657 passed / 0 failed (655 baseline + 2 new typeck tests). Release-e2e `PHASES=compile`: 556 passed / 0 failed (553 baseline + 3 new pins).
+- **Pins:** `1850_option_return_vs_tail` (early `return` vs tail expression, `Int?` vs `Option[Int]`, explicit `Some`, `return nil`, and a heap `String` payload), `1851_option_return_nested` (`return` inside `while`, inside `for`, inside a `match` arm, and a `match` arm inside a loop), `1852_result_return_vs_tail` (the same grid for `Result`, with `Ok`/`Err` on both sides). The NEGATIVE half — a bare `return <T>` into a `-> Result[T, E]` slot must be a diagnostic — is a `ruxen_core` typeck unit test, because the e2e harness treats any compile failure as FAIL and has no compile-fail expectation. 1853-1859 remain free.
+- **Adjacent defect found while pinning, NOT fixed here (pre-existing, reproduced on the pre-fix compiler):** a function body that IS a `match` whose every arm diverges via `return` types as `()` rather than `Never`, so `-> Result[Int, String]` rejects it (`type mismatch: expected Result[Int, String], found ()`). The `Option` spelling only appears to survive it because `auto_wrap_option_some` stamps `Option[T]` over the `()` on its way past. Worth its own batch: the `Match` arm-type fold should collapse all-`Never` arms to `Never`. Pin `1852` works around it with a trailing `Err(...)` and says so inline.
 
 ### B85 — Chaining off an inlined combinator iterates the ORIGINAL receiver
 - **Goal:** `a.select { … }.each { … }` iterates the SELECTED elements.
@@ -479,6 +484,34 @@ ranks first and B71 second, both found after B01 to B05.
 - **Severity:** medium. Decide deliberately whether Ruxen's `Set` promises insertion order; if it does not, the matrices must say so rather than implying parity.
 - **Status:** NEEDS-RUNTIME-C (or a documented deviation).
 - **Pins:** 1890-1899.
+
+### B89 — A closure body is never wrapped into a declared `Fn(...) -> Option[T]` slot — SEGFAULTS
+- **Goal:** a closure whose declared slot returns `Option[T]` gets the same implicit `Some` box a function's return slot gets.
+- **Repro (verified 2026-07-30, crashes on BOTH the pre-B84 and post-B84 compiler, so it is PRE-EXISTING and NOT fixed by B84):**
+
+  ```
+  def apply(f: any Fn[Fn(Int) -> Option[Int]]) -> Int
+    let r = f.(4)
+    r.unwrap_or(-1)
+  end
+  def main
+    let g = { |x: Int|
+      if x % 2 == 0
+        x * 10
+      else
+        nil
+      end
+    }
+    puts "got=#{apply(g)}"
+  end
+  ```
+  Exits **139 (SIGSEGV)**.
+- **Found while fixing B84**, whose brief asked whether `Next` (the block-value form, which shares `Terminator::Return`) had the same hole. **It does not, and `next` is NOT the trigger:** the `next` spelling of the closure above crashes identically, and so does the plain tail-expression spelling shown here. The `Next` typeck arm is safe by construction because `collect_next_types` folds `next` values INTO the closure's inferred result type rather than checking them against a declared slot, so there is no slot to skip a wrap on. (`next` inside an INLINED combinator, e.g. `filter_map`, is separately rejected outright with E1125.)
+- **Cause:** the same class as B84 but a DIFFERENT site. `auto_wrap_option_some` (`typeck/infer/mod.rs`) is applied at the let-binding RHS and the function return slot (both spellings, since B84). It is NOT applied to a closure body checked against its expected `Fn` return type, nor to call ARGUMENTS — its own doc comment says so: *"Function arguments are NOT yet rewritten here — callers should write `Some(x)` explicitly at call sites for now; sweep planned."* The unwrapped `Int` is then read as a tagged-enum pointer.
+- **Severity: high.** Same silent-miscompile-to-SIGSEGV shape as B84, but narrower: it needs a closure passed into an explicitly `Option`-returning `Fn` slot. Every `.rx` combinator that takes an `Option`-returning block (`filter_map`) is exposed to it, and the workaround (write `Some(...)` explicitly) is invisible until you crash.
+- **Fix sketch:** run `auto_wrap_option_some` on a closure body against the expected `Fn` return type, and complete the promised argument-position sweep. Do it as one deliberate change with a full e2e sweep, not as a rider on another batch — the argument seam is much wider than the return seam B84 touched.
+- **Status:** NEEDS-COMPILER-FEATURE.
+- **Pins:** 1900-1909 are taken by B35a; allocate a fresh block. Pin BOTH spellings (tail and `next`), plus the explicit `Some(...)` form that already works.
 
 ---
 

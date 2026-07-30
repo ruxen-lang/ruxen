@@ -298,46 +298,20 @@ impl<'a> InferenceEngine<'a> {
         let old_return_ty = self.current_return_ty.replace(func.return_ty.clone());
         self.infer_expr(&mut func.body);
 
-        // Type-directed auto-call in return position: a bare nullary fn
-        // reference as the body's tail expression binds its RESULT against
-        // the declared return type (unless that type is a `Fn`). Runs
-        // before the Option-wrap, same ordering as the let-binding hook.
-        self.auto_call_fn_reference(&func.return_ty, &mut func.body);
-
-        // "Drop Some" sugar: when the declared return type is `T?`
-        // (= `Option[T]`) but the body's tail expression is a bare
-        // `T`, wrap the tail in `Option::Some` automatically. Same
-        // hook as let-binding RHS auto-wrap — see infer_statement.
-        self.auto_wrap_option_some(&func.return_ty, &mut func.body);
-
         // (One-string-type ADR: the Q39 tuple-element `&str`→`String`
         // promotion is gone — a string literal is born `Ty::String`, so a
         // `("", false)` tuple is already `(String, Bool)`. No coercion needed.)
 
-        // Check function body type against declared return type (with coercion)
-        let body_ty = self.ctx.resolve(&func.body.ty);
-        // Auto-ref for fluent/builder methods: a body whose tail expression
-        // is `self` (typed as the receiver class `T`) must satisfy a
-        // declared return type of `&T` or `&mut T`. Inside a `mut` method
-        // `self` is typed as the class itself, not a reference, so without
-        // this accommodation every builder declared `-> &mut Self` that
-        // ends in `self` fails type-checking.
-        let declared_ret = self.ctx.resolve(&func.return_ty);
-        let auto_ref_ok = match (&declared_ret, &body_ty) {
-            (Ty::Ref(inner), other) | (Ty::RefMut(inner), other) => {
-                unify(inner, other, self.ctx, &func.span).is_ok()
-            }
-            _ => false,
-        };
-        if !auto_ref_ok {
-            if let Err(e) = self.unify_or_coerce(&func.return_ty, &body_ty, &func.span) {
-                // Don't error if the body type is Unit and the return type is an infer variable
-                // (implicit unit return)
-                if !func.return_ty.is_infer() || body_ty != Ty::Unit {
-                    self.type_error(e);
-                }
-            }
-        }
+        // The body's tail expression is a value flowing into the function's
+        // return slot; run the shared return-slot pipeline on it. The
+        // explicit `return <value>` arm in `infer_expr` runs the SAME helper
+        // — see `coerce_and_check_return_value`.
+        let body_span = func.span.clone();
+        let body_ty = self.coerce_and_check_return_value(
+            &func.return_ty.clone(),
+            &mut func.body,
+            &body_span,
+        );
         self.check_declared_bounds(&func.return_ty, &body_ty, &func.span);
 
         // Resolve the return type now
@@ -678,6 +652,71 @@ impl<'a> InferenceEngine<'a> {
             fields: vec![("0".to_string(), inner_expr)],
         };
         val.ty = Ty::Option(Box::new(inner));
+    }
+
+    /// The single pipeline every value that flows into a function's RETURN
+    /// SLOT must go through: the type-directed rewrites, then the check
+    /// against the declared return type. Returns the resolved value type so
+    /// the caller can feed `check_declared_bounds`.
+    ///
+    /// Two syntactic positions land in the return slot and they must behave
+    /// identically: the function body's TAIL expression, and an explicit
+    /// `return <value>`. Before B84 only the tail ran this pipeline; the
+    /// `Return` arm called bare `unify` and DISCARDED the result. So
+    /// `def f(x: Int) -> Int?` with `return x * 10` type-checked, skipped
+    /// the `Option::Some` box the tail spelling gets, and handed the caller
+    /// a raw `Int` where it dereferenced a tagged-enum pointer — a SIGSEGV
+    /// from a silent miscompile. Routing both spellings through one helper
+    /// is what keeps them in lockstep; do not re-inline either side.
+    ///
+    /// Note the mechanism is generic over the return type: it applies the
+    /// existing contextual rewrites (`auto_call_fn_reference`, the "drop
+    /// `Some`" sugar) and then a normal `unify_or_coerce`. A return type
+    /// with no applicable rewrite (e.g. `Result[T, E]`, which has no
+    /// implicit `Ok` wrap in the language) therefore gets a type-mismatch
+    /// DIAGNOSTIC in both spellings rather than a miscompile in one.
+    pub(super) fn coerce_and_check_return_value(
+        &mut self,
+        ret_ty: &Ty,
+        val: &mut HirExpr,
+        span: &Span,
+    ) -> Ty {
+        // Type-directed auto-call in return position: a bare nullary fn
+        // reference binds its RESULT against the declared return type
+        // (unless that type is a `Fn`). Runs before the Option-wrap, same
+        // ordering as the let-binding hook.
+        self.auto_call_fn_reference(ret_ty, val);
+
+        // "Drop Some" sugar: when the declared return type is `T?`
+        // (= `Option[T]`) but the value is a bare `T`, wrap it in
+        // `Option::Some` automatically. Same hook as let-binding RHS
+        // auto-wrap — see infer_statement.
+        self.auto_wrap_option_some(ret_ty, val);
+
+        let val_ty = self.ctx.resolve(&val.ty);
+
+        // Auto-ref for fluent/builder methods: a value that is `self` (typed
+        // as the receiver class `T`) must satisfy a declared return type of
+        // `&T` or `&mut T`. Inside a `mut` method `self` is typed as the
+        // class itself, not a reference, so without this accommodation every
+        // builder declared `-> &mut Self` that ends in `self` fails.
+        let declared_ret = self.ctx.resolve(ret_ty);
+        let auto_ref_ok = match (&declared_ret, &val_ty) {
+            (Ty::Ref(inner), other) | (Ty::RefMut(inner), other) => {
+                unify(inner, other, self.ctx, span).is_ok()
+            }
+            _ => false,
+        };
+        if !auto_ref_ok {
+            if let Err(e) = self.unify_or_coerce(ret_ty, &val_ty, span) {
+                // Don't error if the value type is Unit and the return type
+                // is an infer variable (implicit unit return).
+                if !ret_ty.is_infer() || val_ty != Ty::Unit {
+                    self.type_error(e);
+                }
+            }
+        }
+        val_ty
     }
 
     fn find_option_enum_def_id(&self) -> Option<crate::hir::nodes::DefId> {

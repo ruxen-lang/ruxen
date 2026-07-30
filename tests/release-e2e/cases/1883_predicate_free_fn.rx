@@ -13,6 +13,13 @@
 # That is the general auto-call rule (`tests/autocall_fn_references.rs`) and it
 # behaves identically for a name without the `?`. Bind it first, or write the
 # parens, which is what this case does.
+#
+# Independently confirmed on unmodified head, BEFORE the B87 parser change: a
+# paren-less `?` reference in a `let` really does auto-call and run its side
+# effect (`def ready?() -> Bool; puts "SIDE EFFECT ran"; true; end` then
+# `let r = ready?` prints and binds `true`). So the `let bound = ready?` line
+# below pins a real call, and the interpolation limitation above is inherited,
+# not a regression this batch introduced.
 def valid?(x: Int) -> Bool
   x > 0
 end
