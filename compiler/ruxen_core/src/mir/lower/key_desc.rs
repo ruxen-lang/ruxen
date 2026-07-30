@@ -37,7 +37,8 @@
 
 use crate::hir::types::Ty;
 use crate::mir::nodes::{Literal, LocalId, MirFunction, MirInst, MirValue};
-use crate::resolve::symbols::{ty_has_derive_trait, SymbolTable};
+use crate::mir::lower::type_helpers::nominal_derive_is_synthesized;
+use crate::resolve::symbols::SymbolTable;
 
 /// Wire values. Must stay in step with the `RUXEN_KEY_*` constants in
 /// `library/std/core/runtime/runtime.h`.
@@ -200,11 +201,18 @@ fn key_descriptor(key_ty: &Ty, symbols: &SymbolTable) -> KeyDesc {
     // class carrying Hashable + PartialEq keys a Hash/Set exactly as a
     // struct does; before, it fell through to identity and two equal
     // keys were distinct entries.
+    //
+    // The predicate is `nominal_derive_is_synthesized`, not the raw
+    // `ty_has_derive_trait`, so this asks whether the two functions were
+    // actually EMITTED rather than whether the type nominally qualifies.
+    // A fieldless class satisfies the structural rule vacuously but has
+    // no synthesised `_hash_code` / `_eq`, so pointing the runtime at
+    // those symbols would fail at link.
     if let Ty::Struct { name, .. } | Ty::Class { name, .. } = peeled {
         let hashable = !name.contains('.')
-            && (ty_has_derive_trait(peeled, symbols, "Hashable")
-                || ty_has_derive_trait(peeled, symbols, "Hash"));
-        if hashable && ty_has_derive_trait(peeled, symbols, "PartialEq") {
+            && (nominal_derive_is_synthesized(peeled, symbols, "Hashable")
+                || nominal_derive_is_synthesized(peeled, symbols, "Hash"));
+        if hashable && nominal_derive_is_synthesized(peeled, symbols, "PartialEq") {
             // The same mangling `derive.rs` builds its synthesized
             // `build_hash_code` / `build_eq` function names from.
             return KeyDesc::Custom {

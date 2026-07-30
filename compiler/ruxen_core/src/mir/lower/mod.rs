@@ -757,6 +757,21 @@ impl<'a> Lowerer<'a> {
                         trait_name,
                     )
                 };
+                // The B74 derives use the FIELD-GATED predicate instead:
+                // a fieldless class (every primitive method-home and FFI
+                // handle shell — `class Int`, `class Mutex[T]`, any
+                // `lib`-decl class) satisfies the structural rule
+                // vacuously, and synthesising these for it is actively
+                // wrong. See `nominal_derive_is_synthesized`.
+                //
+                // `Clone` deliberately keeps the ungated predicate: it
+                // predates B74 and a fieldless class already gets a
+                // `{Class}_clone`, so narrowing it here would turn an
+                // existing `.clone` call site into a link error. That is
+                // a separate decision from this fix.
+                let class_derives = |trait_name: &str| -> bool {
+                    nominal_derive_is_synthesized(&class_ty, self.symbols, trait_name)
+                };
                 // B74: a class gets the same structural derives a struct
                 // does. Before this, the arm synthesised Clone alone, so
                 // `a == b` compared heap addresses (silently `false`),
@@ -781,13 +796,13 @@ impl<'a> Lowerer<'a> {
                     if class_has("Clone") {
                         mir.functions.push(self.synthesize_class_clone(class));
                     }
-                    if class_has("Debug") {
+                    if class_derives("Debug") {
                         mir.functions.push(self.synthesize_class_to_debug(class));
                     }
-                    if class_has("PartialEq") {
+                    if class_derives("PartialEq") {
                         mir.functions.push(self.synthesize_class_eq(class));
                     }
-                    if class_has("Hashable") || class_has("Hash") {
+                    if class_derives("Hashable") || class_derives("Hash") {
                         mir.functions.push(self.synthesize_class_hash_code(class));
                     }
                 }

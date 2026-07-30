@@ -1448,11 +1448,19 @@ impl<'a> Lowerer<'a> {
         dest
     }
 
-    /// Lower `lhs == rhs` (or `lhs != rhs`) for a struct that derives
-    /// `PartialEq`. Compares each field of the two structs in turn and
-    /// returns the AND of all field equalities (for `Eq`) or its negation
-    /// (for `NotEq`). Both sides must already have the struct shape
-    /// described by `fields` (`(index, field_ty)` pairs).
+    /// Lower `lhs == rhs` (or `lhs != rhs`) for a struct or class that
+    /// derives `PartialEq`. Compares each field of the two values in turn
+    /// and returns the AND of all field equalities (for `Eq`) or its
+    /// negation (for `NotEq`), from the `(slot_index, field_ty)` pairs in
+    /// `fields`.
+    ///
+    /// The caller selects this route from the LEFT operand's type alone,
+    /// so this checks the right operand is the SAME nominal type before
+    /// walking any slot. It very often is not: `m == 0` is the null-check
+    /// idiom for an FFI handle (`703_mutex_new_repro`), and reading
+    /// `Mutex`'s slots off an `Int` literal is nonsense. A mismatch falls
+    /// back to the plain whole-value comparison, which is the semantics
+    /// such a pairing has always had.
     pub(super) fn lower_struct_partial_eq(
         &mut self,
         lhs: &HirExpr,
@@ -1466,6 +1474,21 @@ impl<'a> Lowerer<'a> {
         let rhs_local = self
             .lower_expr(rhs)?
             .ok_or_else(|| "rhs of struct == has no value".to_string())?;
+
+        if peeled_nominal_name(&lhs.ty) != peeled_nominal_name(&rhs.ty) {
+            let dest = self.new_temp(Ty::Bool);
+            self.emit(MirInst::Compare {
+                dest,
+                op: if matches!(op, BinOp::NotEq) {
+                    CmpOp::NotEq
+                } else {
+                    CmpOp::Eq
+                },
+                lhs: MirValue::Use(lhs_local),
+                rhs: MirValue::Use(rhs_local),
+            });
+            return Ok(dest);
+        }
 
         if fields.is_empty() {
             let dest = self.new_temp(Ty::Bool);

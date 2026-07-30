@@ -268,7 +268,7 @@ impl<'a> Lowerer<'a> {
                 Ty::Alias { target, .. } => cur = target,
                 Ty::Newtype { inner, .. } => cur = inner,
                 Ty::Struct { name, .. } | Ty::Class { name, .. } => {
-                    if crate::resolve::symbols::ty_has_derive_trait(cur, self.symbols, trait_name) {
+                    if nominal_derive_is_synthesized(cur, self.symbols, trait_name) {
                         return Some(name.clone());
                     }
                     return None;
@@ -353,7 +353,7 @@ pub(super) fn struct_name_with_partial_eq(ty: &Ty, symbols: &SymbolTable) -> Opt
             Ty::Ref(inner) | Ty::RefMut(inner) => cur = inner,
             Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => cur = inner,
             Ty::Struct { name, .. } | Ty::Class { name, .. } => {
-                if crate::resolve::symbols::ty_has_derive_trait(cur, symbols, "PartialEq") {
+                if nominal_derive_is_synthesized(cur, symbols, "PartialEq") {
                     return Some(name.clone());
                 }
                 return None;
@@ -388,6 +388,86 @@ pub(super) fn struct_name_with_ord(ty: &Ty, symbols: &SymbolTable) -> Option<(St
                     return Some((name.clone(), true));
                 }
                 return None;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Does `ty` carry a SYNTHESISED structural derive for `trait_name`?
+///
+/// For a struct this is just [`ty_has_derive_trait`]. For a class it
+/// additionally requires at least one field, and that extra condition is
+/// load-bearing rather than cosmetic.
+///
+/// `ty_has_derive_trait` decides the implicit-include rule
+/// (ruby-naming.spec.md §3.6) with `fields.all(supports)`, which is
+/// vacuously TRUE for an empty field list. Ruxen's primitive
+/// method-homes and FFI handle shells — `class Int`, `class Float`,
+/// `class Char`, `class Mutex[T]`, every `lib`-decl class — are exactly
+/// the fieldless classes, so treating them as deriving everything is
+/// wrong in both directions:
+///
+/// * `"#{n.succ}"` would route to a synthesised `Int_to_debug` and print
+///   `Int {}` instead of the number (`1110_integer_predicates_sign`);
+/// * `m1 == m2` on two DIFFERENT `Mutex`es would take the field-fold's
+///   empty-list branch and answer a literal `true`.
+///
+/// A class with no fields has no structural content, so identity is the
+/// right answer for equality, hashing and formatting alike — which is
+/// also what Ruby's `Object#==` / `Object#hash` give. This is a
+/// structural test, not a list of type names: nothing here knows what
+/// `Int` or `Mutex` are.
+pub(super) fn nominal_derive_is_synthesized(
+    ty: &Ty,
+    symbols: &SymbolTable,
+    trait_name: &str,
+) -> bool {
+    if !crate::resolve::symbols::ty_has_derive_trait(ty, symbols, trait_name) {
+        return false;
+    }
+    match peel_to_nominal(ty) {
+        Some(Ty::Class { name, .. }) => {
+            class_field_layout(name, symbols).is_some_and(|fields| !fields.is_empty())
+        }
+        _ => true,
+    }
+}
+
+/// Peel references / aliases / newtypes down to the nominal `Ty`.
+fn peel_to_nominal(ty: &Ty) -> Option<&Ty> {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner)
+            | Ty::Newtype { inner, .. }
+            | Ty::Alias { target: inner, .. } => cur = inner,
+            Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => return Some(cur),
+            _ => return None,
+        }
+    }
+}
+
+/// The nominal type name behind `ty` after peeling references, aliases
+/// and newtypes, or `None` when `ty` is not a struct / class / enum.
+///
+/// Used to check that two operands of a structural comparison really are
+/// the same nominal type before either is addressed slot-by-slot.
+pub(super) fn peeled_nominal_name(ty: &Ty) -> Option<String> {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner)
+            | Ty::Newtype { inner, .. }
+            | Ty::Alias { target: inner, .. } => cur = inner,
+            Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. } => {
+                return Some(name.clone())
             }
             _ => return None,
         }
