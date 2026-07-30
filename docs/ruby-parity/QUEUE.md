@@ -120,8 +120,15 @@ into sub-batches needs the same treatment:**
 A ten-pin block cannot hold a batch that splits. When a batch splits, take a
 fresh run of blocks from **1900 upward**, give each sub-batch ten, abandon the
 formula block rather than reusing it (a half-used block invites a later
-collision), and record the reallocation in this table. Blocks 1900-1959 are now
-taken; the next split batch starts at 1960.
+collision), and record the reallocation in this table.
+
+The same escape hatch applies to a NON-split batch whose formula block has
+already been taken by a reallocation above: abandon the formula block and take
+the next free run. Blocks `1900-1959` (B35a-f) and `1960-1969` (B93), `1970-1979` (B89), `1980-1989` (B90),
+`1990-1999` (B91) and `2000-2009` (B92) are now taken; **the next reallocation
+starts at `2010`.** B89-B92 all had to be reallocated because they were first
+assigned formula blocks inside the B35 reservation, which is exactly the
+collision this rule exists to prevent.
 
 ---
 
@@ -511,7 +518,7 @@ ranks first and B71 second, both found after B01 to B05.
 - **Severity: high.** Same silent-miscompile-to-SIGSEGV shape as B84, but narrower: it needs a closure passed into an explicitly `Option`-returning `Fn` slot. Every `.rx` combinator that takes an `Option`-returning block (`filter_map`) is exposed to it, and the workaround (write `Some(...)` explicitly) is invisible until you crash.
 - **Fix sketch:** run `auto_wrap_option_some` on a closure body against the expected `Fn` return type, and complete the promised argument-position sweep. Do it as one deliberate change with a full e2e sweep, not as a rider on another batch — the argument seam is much wider than the return seam B84 touched.
 - **Status:** NEEDS-COMPILER-FEATURE.
-- **Pins:** 1900-1909 are taken by B35a; allocate a fresh block. Pin BOTH spellings (tail and `next`), plus the explicit `Some(...)` form that already works.
+- **Pins:** 1970-1979. (The formula block and `1900-1909` are both taken, `1900-1959` being the B35a-f reservation, so this takes a fresh run per the reallocation rule.) Pin BOTH spellings (tail and `next`), plus the explicit `Some(...)` form that already works.
 
 ### B90 — An unbound method-call temporary is never dropped (leak)
 - **Goal:** `a.select { … }.each { … }` drops its intermediate.
@@ -519,7 +526,7 @@ ranks first and B71 second, both found after B01 to B05.
 - **Shape:** a general drop-elaboration gap for method-call temporaries, reachable today through every non-block chain terminal (`.size`, `.count`, `.join`, `.first`). A LEAK, not corruption, which is why it ranks below the crash batches.
 - **Files:** `mir/lower/drops.rs`, plus wherever method-call destinations are registered as droppable.
 - **Status:** NEEDS-COMPILER-FEATURE.
-- **Pins:** 1900-1909. Pin a chain whose intermediate holds heap elements and assert via an RSS loop that repeated execution does not grow.
+- **Pins:** 1980-1989. (`1900-1909` is B35a; reallocated per the rule.) Pin a chain whose intermediate holds heap elements and assert via an RSS loop that repeated execution does not grow.
 
 ### B91 — `Array#first` interpolates as a raw pointer
 - **Repro:** `"#{[1,2,3].first}"` renders a pointer, for `Int` and `String` alike, on a plain literal with no chaining. `.first.unwrap_or(0)` is correct; pin `1867` uses that form and says why.
@@ -527,13 +534,13 @@ ranks first and B71 second, both found after B01 to B05.
 - **Fix shape:** make `Option` render as its value or as an explicit `Some(x)`/`nil` in the Display path, rather than as the box. That closes the whole family at once.
 - **Severity:** high. It is a silent wrong answer, the rendered number looks plausible, and it fires on the most idiomatic spelling.
 - **Status:** NEEDS-COMPILER-FEATURE.
-- **Pins:** 1910-1919. Pin interpolation of `first`, `min`, `max`, `find`, for `Int` and `String`, plus a `nil` case.
+- **Pins:** 1990-1999. (`1910-1919` is B35b; reallocated per the rule.) Pin interpolation of `first`, `min`, `max`, `find`, for `Int` and `String`, plus a `nil` case.
 
 ### B92 — A two-parameter block cannot assign to a captured `var`
 - **Repro:** `xs.each_with_index { |x, i| last = i }` is **E1009**, while single-parameter `xs.each { |x| last = x }` is fine. Pin `1869` prints instead of assigning and says why.
 - **Shape:** the borrow/capture analysis treats a two-parameter block's environment differently from a one-parameter block's. Ruby code assigns to captured locals from multi-param blocks constantly (`each_with_index`, `each_pair`, `reduce` with an index), so this blocks a common idiom.
 - **Status:** NEEDS-COMPILER-FEATURE.
-- **Pins:** 1920-1929. Pin one-param and two-param side by side, assigning to a captured `var`, for `each_with_index` and `Hash#each_pair`.
+- **Pins:** 2000-2009. (`1920-1929` is B35c; reallocated per the rule.) Pin one-param and two-param side by side, assigning to a captured `var`, for `each_with_index` and `Hash#each_pair`.
 
 ### B93 — Tight `a!=b` lexes as `a!` `=` `b`
 - **Goal:** `a!=b` means `a != b`, as in Ruby and as spaced `a != b` already does.
@@ -542,7 +549,7 @@ ranks first and B71 second, both found after B01 to B05.
 - **Current state after B87:** strictly improved but NOT resolved. Before B87 this was a silent miscompile, because `a!` was classified as a macro call and the call was dropped. B87 makes an unregistered `MacroCall` a hard **E1126**, so the program now fails loudly instead of computing the wrong thing. Loud beats silent, but correct beats loud.
 - **Why it was not folded into B87:** it is a lexer edit with its own pin, and the B87 agent deliberately declined to smuggle it into a parser/resolve batch. That was the right call.
 - **Status:** READY-NOW (no enabler needed, one guard in the lexer).
-- **Pins:** 1930-1939. Pin tight and spaced spellings side by side for `!=`, plus `a!` as a genuine method call followed by `=` on the next token boundary, so the guard cannot over-correct.
+- **Pins:** 1960-1969. The formula block for B93 is `1920-1929`, which is **already held by B35c**, so the formula block is abandoned (per the split-batch rule: never half-use a block). `1900-1959` is the B35 reservation, so this takes the next free run above it. Pin tight and spaced spellings side by side for `!=`, plus `a!` as a genuine method call followed by `=` on the next token boundary, so the guard cannot over-correct.
 
 ---
 
