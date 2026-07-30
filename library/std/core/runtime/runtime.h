@@ -188,6 +188,47 @@ typedef struct RuxenHashEntry {
 #define RUXEN_KEY_CSTR   1    /* NUL-terminated C string: FNV-1a + strcmp */
 #define RUXEN_KEY_CUSTOM 2    /* user type: compiler-supplied hash + eq */
 
+/* ── Element-kind descriptor (the DERIVED-COLLECTION ownership rule) ──
+ *
+ * A collection slot is a bare 64-bit word; the runtime cannot tell an
+ * `Int` from an owned `char*` by looking at it (and MUST NOT try — see
+ * the "do not reintroduce a memory probe" warning above). So any helper
+ * that builds a fresh OWNED collection by copying slots out of a
+ * borrowed source needs the caller to say what a slot holds.
+ *
+ * The obligation this exists to discharge is stated in full on
+ * `FRESH_ALLOC_CALLEES` (compiler/ruxen_core/src/mir/lower/runtime_abi.rs).
+ * In short: drop elaboration gives such a result the element-aware deep
+ * drop from `heap_free_callee`, so every slot the result will deep-free
+ * must be a slot the helper itself allocated. Copying a source's pointer
+ * into a slot the result will free is a double free by construction.
+ *
+ * The values deliberately COINCIDE with the RUXEN_KEY_* key kinds above
+ * (see the _Static_asserts below). A Set's element IS its key, so a Set
+ * or Hash passes its existing `key_kind` straight through as an element
+ * kind with no translation and no second vocabulary to drift out of
+ * sync. A Vec has no descriptor of its own, so the compiler injects one
+ * at the call site from the static element type — the same `Ty` ladder
+ * that picks the drop helper, so copy-depth and drop-depth cannot
+ * disagree. */
+#define RUXEN_ELEM_POD   0 /* slot is a value: Int/Float/Bool/Char/&T/… */
+#define RUXEN_ELEM_CSTR  1 /* slot OWNS a NUL-terminated heap string    */
+#define RUXEN_ELEM_VEC   3 /* slot OWNS a RuxenVec spine (one level)    */
+
+/* `RUXEN_ELEM_VEC` is 3, not 2, because 2 is RUXEN_KEY_CUSTOM: a Set of
+ * user-typed elements passes key_kind through here, and a custom key is
+ * a POD word as far as OWNERSHIP is concerned (its hash/eq callbacks say
+ * nothing about who frees it). Keeping 3 free of that collision is what
+ * lets the pass-through be a plain assignment. */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(RUXEN_ELEM_POD == RUXEN_KEY_BITS,
+               "element-kind/key-kind vocabularies must not drift");
+_Static_assert(RUXEN_ELEM_CSTR == RUXEN_KEY_CSTR,
+               "element-kind/key-kind vocabularies must not drift");
+_Static_assert(RUXEN_ELEM_VEC != RUXEN_KEY_CUSTOM,
+               "RUXEN_ELEM_VEC must not collide with a pass-through key kind");
+#endif
+
 /* Callbacks for RUXEN_KEY_CUSTOM. The signatures match the MIR
  * functions `mir/lower/derive.rs` synthesizes for a struct that
  * includes `Hashable` / `PartialEq`:
@@ -302,6 +343,29 @@ char *ruxen_char_to_string(int64_t codepoint);
 
 RuxenVec *ruxen_vec_new(void);
 void ruxen_vec_push(RuxenVec *v, int64_t item);
+RuxenVec *ruxen_vec_clone(RuxenVec *v);
+
+/* Deep-copy ONE collection slot according to its RUXEN_ELEM_* kind.
+ *
+ * OWNERSHIP CONTRACT
+ *   Allocates: a new heap object for RUXEN_ELEM_CSTR (a `char*` via
+ *     `ruxen_string_from`) and RUXEN_ELEM_VEC (a spine + backing array
+ *     via `ruxen_vec_clone`). Allocates NOTHING for RUXEN_ELEM_POD.
+ *   Frees: nothing, ever. `slot` is BORROWED for the call's duration and
+ *     is still owned by its original collection when this returns.
+ *   Caller may assume: the returned word is safe to store in a slot that
+ *     will later be deep-freed by the matching `heap_free_callee` helper
+ *     (`ruxen_vec_drop_string` / `ruxen_vec_drop_vec` / `ruxen_set_drop_string`)
+ *     WITHOUT disturbing the source. The copy depth is exactly the depth
+ *     those helpers free: one `char*` for CSTR, one spine for VEC. Any
+ *     deeper nesting (a `Vec[Vec[String]]`'s inner strings) is aliased by
+ *     BOTH — which is sound only because the drop helpers stop at the
+ *     same depth. Deepening one side without the other reintroduces the
+ *     double free this exists to prevent.
+ *   A NULL slot returns NULL for every kind. An unrecognised kind is
+ *     treated as POD, which aliases — so a new heap element kind MUST be
+ *     added here and to `heap_free_callee` in the same change. */
+int64_t ruxen_elem_clone(int64_t slot, int32_t elem_kind);
 
 /* ── Hash surface ─────────────────────────────────────────────────── */
 

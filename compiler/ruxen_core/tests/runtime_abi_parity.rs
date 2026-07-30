@@ -158,6 +158,14 @@ fn intentional_fresh_addition(c: &str) -> bool {
     matches!(
         c,
         "ruxen_vec_skip"
+            // B86: the element-descriptor-taking forms of the derived-array
+            // helpers. Same freshly allocated Array their bare spellings
+            // return — only the argument list differs — but they also
+            // deep-copy heap elements, which is what makes the Fresh
+            // classification honest for a `String` element type. Without
+            // Fresh here the new Array leaks at scope exit.
+            | "ruxen_vec_skip_elem"
+            | "ruxen_vec_chain_elem"
             // B73: the `_keyed` table constructors return the same freshly
             // allocated table their bare spellings do — only the argument
             // list differs. Without Fresh here the new table is never freed

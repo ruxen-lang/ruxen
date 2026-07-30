@@ -101,6 +101,37 @@ const KEYED_TABLE_OPS: &[(&str, &str)] = &[
 const HASH_ENSURE: &str = "ruxen_hash_ensure_key_kind";
 const SET_ENSURE: &str = "ruxen_set_ensure_key_kind";
 
+/// Wire values for the ELEMENT kind, matching the `RUXEN_ELEM_*` block in
+/// `library/std/core/runtime/runtime.h`. They coincide with the key kinds
+/// on purpose (a Set's element is its key); see that header for why.
+const ELEM_POD: i64 = 0;
+const ELEM_CSTR: i64 = 1;
+const ELEM_VEC: i64 = 3;
+
+/// `Vec` helpers that build a fresh OWNED array by copying slots out of a
+/// borrowed source, paired with the element-descriptor-taking form the
+/// lowerer rewrites them to.
+///
+/// A `Hash`/`Set` derive is absent from this table and that is not an
+/// oversight: those carry `key_kind` on the table itself, so `union`,
+/// `intersection`, `difference` and `from_iter` read the descriptor from
+/// their own source inside the C runtime. A `RuxenVec` has no such field,
+/// so its element kind has to be injected here, at the one place that
+/// still knows the static element type.
+///
+/// Membership is decided by the ownership obligation, not by which
+/// helpers happened to crash: any helper whose result is an owned
+/// `Array[T]` populated from a source it does not consume belongs here.
+/// `ruxen_vec_from_iter` does not, because it CONSUMES its source (it is
+/// an identity passthrough listed in `CONSUME_HELPERS`), and
+/// `ruxen_vec_take`/`ruxen_vec_clone` do not because they are not Fresh
+/// — see the note on `FRESH_ALLOC_CALLEES` about why that is a leak
+/// rather than a safe default.
+const ELEM_DERIVE_HELPERS: &[(&str, &str)] = &[
+    ("ruxen_vec_skip", "ruxen_vec_skip_elem"),
+    ("ruxen_vec_chain", "ruxen_vec_chain_elem"),
+];
+
 /// The key type a constructed collection hashes on: a `Hash[K, V]` keys
 /// on `K`, a `Set[T]` keys on `T` (a set is a table whose values are
 /// ignored). Anything else is not a keyed table.
@@ -279,6 +310,35 @@ pub(super) fn install_key_descriptors(func: &mut MirFunction, symbols: &SymbolTa
                 continue;
             }
 
+            // ── Route 3: a derived-array helper gets its element kind
+            //    appended, so the copy it makes is as deep as the drop
+            //    the result will receive.
+            //
+            //    The witness is the RESULT's type, not the source's: the
+            //    result is the local that will be handed to
+            //    `heap_free_callee`, so it is the one whose element type
+            //    decides what must be owned. Falling back to argument 0
+            //    covers a result temp that typeck could not name.
+            if let Some(with_desc) = elem_derive_for(callee) {
+                let result_ty = dest
+                    .and_then(|d| local_tys.get(d as usize))
+                    .filter(|ty| matches!(peel(ty), Ty::Array(_)))
+                    .or_else(|| {
+                        args.first()
+                            .and_then(as_local)
+                            .and_then(|l| local_tys.get(l as usize))
+                    });
+                let kind = result_ty.map(elem_kind_of).unwrap_or(ELEM_POD);
+                let mut args = args.clone();
+                args.push(MirValue::Literal(Literal::Int(kind)));
+                rewritten.push(MirInst::Call {
+                    dest: *dest,
+                    callee: with_desc.to_string(),
+                    args,
+                });
+                continue;
+            }
+
             // ── Route 2: a key-addressed operation gets an `ensure` in
             //    front, unless we cannot type its receiver either — an
             //    `ensure` carrying UNSET would be a no-op call.
@@ -318,6 +378,37 @@ pub(super) fn install_key_descriptors(func: &mut MirFunction, symbols: &SymbolTa
             ty,
             mutable: false,
         });
+    }
+}
+
+fn elem_derive_for(callee: &str) -> Option<&'static str> {
+    ELEM_DERIVE_HELPERS
+        .iter()
+        .find(|(base, _)| *base == callee)
+        .map(|(_, with_desc)| *with_desc)
+}
+
+/// How deep a copy the elements of `array_ty` need, expressed as a
+/// `RUXEN_ELEM_*` wire value.
+///
+/// DERIVED FROM THE DROP SELECTOR ON PURPOSE. The invariant that matters
+/// is copy-depth == drop-depth: whatever `heap_free_callee` will
+/// deep-free out of the result's slots is exactly what the derive has to
+/// have allocated, no more and no less. Re-implementing the `Ty` ladder
+/// here would be a second copy of that decision, free to drift from the
+/// first — which is the shape of the bug this whole mechanism exists to
+/// fix. So ask the drop selector what it is going to free, and copy that.
+///
+/// A new element-owning array type is therefore picked up by adding it to
+/// `heap_free_callee` (plus a `ruxen_elem_clone` case) and nothing else.
+/// An unrecognised drop helper falls to POD, which aliases — sound only
+/// because a helper this does not know about is one that frees nothing
+/// per-element.
+fn elem_kind_of(array_ty: &Ty) -> i64 {
+    match super::drops::heap_free_callee(peel(array_ty)) {
+        Some("ruxen_vec_drop_string") => ELEM_CSTR,
+        Some("ruxen_vec_drop_vec") => ELEM_VEC,
+        _ => ELEM_POD,
     }
 }
 

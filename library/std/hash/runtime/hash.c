@@ -447,6 +447,29 @@ void ruxen_set_insert(RuxenSet *s, int64_t item) {
     ruxen_hash_insert(&s->inner, item, 1);
 }
 
+/* Insert a COPY of `item` into `s`, deep-copying the element when `s`'s
+ * own key kind says the slot owns heap.
+ *
+ * OWNERSHIP CONTRACT
+ *   Allocates: one element copy, per `ruxen_elem_clone`, when the
+ *     destination's `key_kind` is a heap kind. Nothing otherwise.
+ *   Frees: nothing. `item` stays owned by the SOURCE collection.
+ *   Caller may assume: `s` now owns its copy outright, so `s` and the
+ *     source can be deep-dropped independently and in any order.
+ *
+ * This is the derive-side counterpart to `ruxen_set_insert`, which
+ * TRANSFERS its argument (arg_transfer_mask marks slot 1) and is what a
+ * user-level `s.insert(x)` lowers to. The two must not be confused: a
+ * derive that used the transferring form would alias, and a user insert
+ * that used this one would leak the caller's value. A Set's element IS
+ * its key, so `key_kind` doubles as the element kind with no
+ * translation — see the RUXEN_ELEM_* block in runtime.h. */
+static void ruxen_set_insert_owned(RuxenSet *s, int64_t item) {
+    if (!s) return;
+    ruxen_hash_insert(&s->inner,
+                      ruxen_elem_clone(item, s->inner.key_kind), 1);
+}
+
 /* Set::clone — shallow copy. Mirrors `ruxen_hash_clone` (same v1
    contract: heap-owned element slots are shared between source and
    clone). Required for `derive Clone` on user classes with `Set[T]`
@@ -738,13 +761,26 @@ RuxenHash *ruxen_hash_from_iter(RuxenVec *iter) {
     return ruxen_hash_from_iter_keyed(iter, RUXEN_KEY_UNSET, 0, 0);
 }
 
-/* HashSet.from_iter(iter[T]) / iter.collect[HashSet[T]]. */
+/* HashSet.from_iter(iter[T]) / iter.collect[HashSet[T]].
+ *
+ * OWNERSHIP CONTRACT
+ *   Allocates: the table, plus a copy of every element whose kind says
+ *     the slot owns heap.
+ *   Frees: nothing. `iter` is BORROWED — it is an ordinary owned
+ *     `Array[T]` local in the caller's frame (`a.to_set` leaves `a`
+ *     fully alive), and its scope-exit `ruxen_vec_drop_string` will
+ *     deep-free its own elements.
+ *   Caller may assume: source and result can be dropped independently.
+ *
+ * The elements are copied rather than aliased BECAUSE the source's drop
+ * is element-aware. This is the asymmetry with `ruxen_hash_from_iter_keyed`
+ * below, whose source is a `Vec` of tuples that drops spine-only. */
 RuxenSet *ruxen_set_from_iter_keyed(RuxenVec *iter, int64_t kind,
                                     int64_t hash_fn, int64_t eq_fn) {
     RuxenSet *out = ruxen_set_new_keyed(kind, hash_fn, eq_fn);
     if (!iter) return out;
     for (uint64_t i = 0; i < iter->len; i++) {
-        ruxen_set_insert(out, iter->data[i]);
+        ruxen_set_insert_owned(out, iter->data[i]);
     }
     return out;
 }
@@ -780,14 +816,14 @@ RuxenSet *ruxen_set_union(RuxenSet *a, RuxenSet *b) {
     if (a) {
         for (uint64_t i = 0; i < a->inner.bucket_count; i++) {
             for (RuxenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
-                ruxen_set_insert(out, e->key);
+                ruxen_set_insert_owned(out, e->key);
             }
         }
     }
     if (b) {
         for (uint64_t i = 0; i < b->inner.bucket_count; i++) {
             for (RuxenHashEntry *e = b->inner.buckets[i]; e; e = e->next) {
-                ruxen_set_insert(out, e->key);
+                ruxen_set_insert_owned(out, e->key);
             }
         }
     }
@@ -801,7 +837,7 @@ RuxenSet *ruxen_set_intersection(RuxenSet *a, RuxenSet *b) {
     for (uint64_t i = 0; i < a->inner.bucket_count; i++) {
         for (RuxenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
             if (ruxen_set_contains(b, e->key)) {
-                ruxen_set_insert(out, e->key);
+                ruxen_set_insert_owned(out, e->key);
             }
         }
     }
@@ -815,7 +851,7 @@ RuxenSet *ruxen_set_difference(RuxenSet *a, RuxenSet *b) {
     for (uint64_t i = 0; i < a->inner.bucket_count; i++) {
         for (RuxenHashEntry *e = a->inner.buckets[i]; e; e = e->next) {
             if (!b || !ruxen_set_contains(b, e->key)) {
-                ruxen_set_insert(out, e->key);
+                ruxen_set_insert_owned(out, e->key);
             }
         }
     }
