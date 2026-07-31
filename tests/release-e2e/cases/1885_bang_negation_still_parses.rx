@@ -1,0 +1,29 @@
+# B87 — the disambiguation target. `!` as a Ruby name suffix and `!` as
+# boolean negation are the same character, and the B87 fix changes which of the
+# two an identifier-adjacent `!` becomes. This pins the negation side so the
+# fix cannot buy bang-names at the cost of `not`.
+#
+# Covered: negating a variable, a `?` call, a `!` call's comparison, a
+# parenthesised comparison, and `!=` (which shares the leading `!` byte and is
+# lexed as its own token).
+def valid?(x: Int) -> Bool
+  x > 0
+end
+
+def twice!(x: Int) -> Int
+  x * 2
+end
+
+def main
+  let t = true
+  puts "a=#{!t}"
+  puts "b=#{!valid?(0)}"
+  puts "c=#{!(twice!(2) == 5)}"
+  puts "d=#{!(1 == 2)}"
+  puts "e=#{5 != 4}"
+  if !valid?(0)
+    puts "f=taken"
+  else
+    puts "f=missed"
+  end
+end

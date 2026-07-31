@@ -642,14 +642,20 @@ end
 # Kernel-level FFI decl in `library/std/process/src/lib.rx`
 # (`def exit as "ruxen_process_exit"`), so a body here would be a second
 # definition of the same name and signature.
+
+# Ruby `exit!(code)` — terminate the process immediately. In Ruby this is
+# the form that skips `at_exit` handlers and `ensure` blocks; Ruxen has no
+# at-exit registry, so it behaves identically to `exit(code)` and exists
+# for source parity with Ruby programs that spell the abrupt form.
 #
-# Ruby `exit!` is deliberately NOT defined either. A free function whose
-# name ends in `!` compiles clean and then its CALL SITE does nothing at
-# all: verified 2026-07-29 with `def shout!(x) ... end; shout!(5)`, which
-# printed nothing and fell through. Defining `exit!` over that would be a
-# user-callable silent no-op, which this repo forbids outright. Ruxen has
-# no at-exit registry, so `exit!` would have behaved identically to `exit`
-# in any case.
+# This could not ship before B87: a free function whose name ended in `!`
+# was parsed as a MACRO call, and the unrecognised macro was dropped
+# whole at MIR, so `exit!(1)` compiled clean and did nothing. `!` names
+# now resolve as ordinary calls, and an unlowerable one is a hard error
+# rather than a no-op.
+def exit!(code: Int) -> Never
+  Process.exit(code)
+end
 
 # Ruby `sleep(secs)` — block the calling thread for `secs` SECONDS.
 # Integer seconds only: Ruby's fractional form needs a `Float` argument,

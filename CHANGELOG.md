@@ -39,12 +39,49 @@ once 1.0.0 ships.
   entropy draw non-negative before the modulo. Pins
   `tests/release-e2e/cases/1180` to `1183`.
 
-  `srand`, `exit!`, `inspect` and the capitalized conversion functions
+  `srand`, `inspect` and the capitalized conversion functions
   (`Integer()` / `Float()` / `String()` / `Array()`) are NOT shipped rather
   than shipped as stubs; each row in `docs/ruby-parity/core.md` carries the
-  blocking reason.
+  blocking reason. `exit!` was on that list too and is now shipped, unblocked
+  by B87 (see Fixed); it is pinned as
+  `tests/release-e2e/cases/1887_kernel_exit_bang.rx`.
 
 ### Fixed
+- **A free function whose name ends in `!` no longer compiles to nothing
+  (batch B87).** `def shout!(x: Int) … end` followed by `shout!(5)` compiled
+  without a diagnostic and then did nothing at all — the program printed
+  `before` and `after` with the call silently missing. Used for its value it
+  was worse than a no-op: `let r = twice!(3)` bound `0`, because the dropped
+  call left the destination local at its zero initialiser. Paren-less `bare!`
+  vanished the same way. This is why `exit!` could not ship.
+
+  Root cause: `compiler/ruxen_core/src/parser/expr/atoms.rs` classified
+  **every** identifier ending in `!` as a macro call, stripped the `!`, and
+  emitted `ExprKind::MacroCall`. Nothing downstream recognised a name like
+  `shout`, and the macro lowering in
+  `compiler/ruxen_core/src/mir/lower/expr/misc.rs` ended in a `_ => Ok(None)`
+  catch-all that emitted no MIR — the silent-drop path.
+
+  "Is this a macro?" is now a **closed** question answered in exactly one
+  place, `compiler/ruxen_core/src/parser/macros.rs`. `name!` is a macro only
+  when `name` is in `BUILTIN_MACRO_NAMES` (`panic`, plus the five collection
+  macros retired by `ruby-naming.spec.md` §10a, kept so the old spellings keep
+  their migration message). Every other trailing `!` stays part of the
+  identifier, so the call resolves like any other call and an undefined one is
+  a hard `undefined function` error. Registering a name there now *reserves*
+  that spelling, which is why the list is deliberately minimal.
+
+  The silent-drop path is closed at both layers: `resolve` rejects a
+  `MacroCall` whose name is unregistered with the new **E1126**
+  (`docs/errors/E1126.md`), and the MIR catch-all is an `Err` instead of
+  `Ok(None)`, so a macro registered without a lowering fails loudly rather
+  than deleting the call. Verified across every position — free function with
+  parens, for its return value, paren-less with and without an argument,
+  instance method, method with arguments, static method, the `?` sibling
+  convention — and against the token it disambiguates from: `!x`, `!f(x)`,
+  `!(a == b)` and `!=` all still parse. Pins
+  `tests/release-e2e/cases/1880` to `1887` plus
+  `compiler/ruxen_core/tests/bang_names_are_calls.rs`.
 - **`return <value>` from an `Option`- or `Result`-returning function no longer
   SEGFAULTS (batch B84).** A guard-clause early return —
 

@@ -478,12 +478,18 @@ ranks first and B71 second, both found after B01 to B05.
 - **Status:** NEEDS-RUNTIME-C.
 - **Pins:** 1870-1879. Cover `String`, a user class, and `Int` elements.
 
-### B87 — A free function whose name ends in `!` is a silent no-op
+### B87 — A free function whose name ends in `!` is a silent no-op — **DONE**
 - **Repro (verified 2026-07-29):** `def shout!(x: Int) puts "shouting #{x}" end` then `shout!(5)` compiles clean, prints NOTHING, and falls through.
 - **Severity:** high, silent wrong answer. Ruby uses `!` names throughout (`save!`, `exit!`, `sort!`), so this will be hit constantly, and it fails silently rather than refusing to compile.
 - **Consequence:** this is why B19 could not ship `exit!`.
-- **Status:** NEEDS-COMPILER-FEATURE.
-- **Pins:** 1880-1889. Cover a `!` free function, a `!` method, and a `!` function with a return value.
+- **Status:** **DONE (2026-07-30).**
+- **Root cause:** `parser/expr/atoms.rs:161` classified EVERY identifier ending in `!` as a macro call, stripped the `!`, and emitted `ExprKind::MacroCall`. Nothing downstream recognised a name like `shout`, and `mir/lower/expr/misc.rs` ended its macro match in a `_ => Ok(None)` catch-all — the silent-drop path. The call therefore produced no MIR at all.
+- **Worse than reported:** the value form did not merely no-op, it produced a wrong answer. `let r = twice!(3)` left the destination local at its zero initialiser and bound `0`, silently. `bare!` (paren-less) vanished too.
+- **Fix:** "is this a macro?" is now a CLOSED question answered in one place, `parser/macros.rs` (`BUILTIN_MACRO_NAMES` = `panic` plus the five retired collection macros). `name!` is a macro only for those names; every other trailing `!` stays part of the identifier and the call resolves like any other call, so an undefined one is a hard `undefined function` error.
+- **Silent-drop path closed:** yes, at both layers. `resolve/exprs.rs` rejects a `MacroCall` whose name is unregistered with **E1126** (`docs/errors/E1126.md`), and the MIR catch-all is now `Err(...)` instead of `Ok(None)`, so a macro registered without a lowering fails loudly rather than deleting the call.
+- **Bonus shipped:** `exit!(code)` now exists in `library/std/core/src/lib.rx`. B19's blocker is gone. Ruxen has no at-exit registry, so it behaves as `exit(code)`; it is there for source parity.
+- **Not a `!` defect, recorded for honesty:** a paren-less call with a bare NON-string argument (`shout! 7`) is rejected with E0726 — but so is `shout 7` without the `!`. That is a pre-existing limit of paren-less calls generally, unchanged by this batch.
+- **Pins:** 1880 (`!` free fn, the exact repro), 1881 (`!` fn return value: `let` binding, arithmetic operand, nested call), 1882 (paren-less, zero-arg and bare-string-arg), 1883 (`?` sibling convention), 1884 (`!` method no-arg / with args / static `Doc.make!`, `?` method), 1885 (negation `!x`, `!f(x)`, `!(a == b)`, `!=` still parse), 1886 (`panic!` still routes as a macro), 1887 (`exit!`). Structural pins in `compiler/ruxen_core/tests/bang_names_are_calls.rs`.
 
 ### B88 — `Set` iterates in hash-bucket order, not insertion order
 - **Repro:** inserting 1, 2, 3 yields 3, 1, 2.

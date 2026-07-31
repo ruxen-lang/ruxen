@@ -1,0 +1,19 @@
+# B87 — the exact repro. A free function whose name ends in `!` used to be
+# parsed as a MACRO call (`parser/expr/atoms.rs` stripped the `!` and emitted
+# `ExprKind::MacroCall`), nothing downstream recognised the name, and MIR's
+# macro lowering ended in a `_ => Ok(None)` catch-all that emitted no code at
+# all. So `shout!(5)` compiled without a single diagnostic and the call
+# vanished: the program printed `before` then `after`.
+#
+# The pin is the middle line. If the call is ever dropped again the output
+# loses `shouting 5` while still "passing" compilation, which is exactly how
+# this defect survived.
+def shout!(x: Int)
+  puts "shouting #{x}"
+end
+
+def main
+  puts "before"
+  shout!(5)
+  puts "after"
+end

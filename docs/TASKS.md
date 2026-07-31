@@ -17,6 +17,19 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
+B87 fixed 2026-07-30 (a free function whose name ended in `!` compiled clean
+and then did nothing at its call site: `parser/expr/atoms.rs` classified EVERY
+identifier ending in `!` as a macro call, stripped the `!`, and emitted an
+`ExprKind::MacroCall` no stage recognised, and MIR's macro lowering ended in a
+`_ => Ok(None)` catch-all that emitted no code. The value form was worse than a
+no-op — `let r = twice!(3)` bound `0` off the destination local's zero
+initialiser. "Is this a macro?" is now a closed question answered in one place,
+`parser/macros.rs`; every other trailing `!` stays part of the identifier and
+resolves as an ordinary call. Both silent-drop layers are closed: unregistered
+macro names are rejected in resolve with the new **E1126**, and the MIR
+catch-all is an `Err`. Unblocked Kernel `exit!`, which B19 could not ship. Pins
+`1880`-`1887` plus `compiler/ruxen_core/tests/bang_names_are_calls.rs`.)
+
 B73 fixed 2026-07-29 (the `Hash` / `Set` key-kind protocol: the runtime decided
 how to hash and compare a key by DEREFERENCING it as a `char*` and scanning for
 a NUL, which SIGSEGV'd on any `Hash[Int, V]` key >= 4096, made user types

@@ -9,6 +9,7 @@ pub mod expr;
 pub mod ffi;
 pub mod implicit_main;
 pub mod items;
+pub mod macros;
 pub mod methods;
 pub mod patterns;
 pub mod printer;
