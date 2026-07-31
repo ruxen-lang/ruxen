@@ -22,7 +22,88 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 
+use crate::hir::types::Ty;
 use crate::mir::nodes::MirProgram;
+
+// ─── The erased uniform word (B01) ───────────────────────────────────────────
+//
+// Ruxen has ONE storage class for a value whose static type codegen cannot
+// see: a 64-bit **uniform word**. It appears at six boundaries:
+//
+//   1. a generic-collection slot — `RuxenVec` and the hash/set tables store
+//      `int64_t` elements regardless of `T`;
+//   2. an address-taken local's stack slot — uniformly 8 bytes wide so a
+//      `&var` can hand out a stable pointer;
+//   3. a parameter or return whose declared `Ty` is opaque (`TypeParam`,
+//      a class/ref/option/pointer, …), which `ty_to_cranelift` collapses to
+//      `I64`;
+//   4. the parameters and return of a closure reached through an erased
+//      `Fn` box — the generic body that invokes it was lowered ONCE with the
+//      element type abstract, so it can only pass words;
+//   5. a scalar method home's `self`, typed as the FFI shell
+//      `Class{"Float"}` rather than as `Float`;
+//   6. an `Assign` (or `Copy`/`Move`/`Ref`) into a word-typed local.
+//
+// **ABI decision:** a `Float` occupying a uniform word travels as its
+// IEEE-754 **bit pattern**, and is recovered by the inverse reinterpretation.
+// It is NEVER `fcvt`-converted. Getting only one side of that would be worse
+// than getting neither, so every crossing is symmetric: bitcast on write,
+// bitcast on read. `Float32` occupies the low 32 bits of the word, its own
+// 32-bit pattern zero-extended.
+//
+// Integer-class types (`Bool`/i8, `Char`/i32, `Int32`, …) keep the existing
+// width-extension: they already share the integer register class with the
+// word, which is precisely why only `Float` was corrupted.
+//
+// The one crossing that is NOT an erasure is Ruxen's implicit numeric
+// conversion into a **declared** scalar parameter (`def f(x: Float)` called
+// as `f(3)`, `def g(x: Int)` called as `g(2.5)`). Those must stay `fcvt`.
+// `is_erased_word_ty` is what tells the two apart, from the DECLARED `Ty` —
+// the Cranelift/LLVM type alone cannot, because a declared `Int` slot and an
+// erased word are both `i64`.
+
+/// True when a declared Ruxen type is stored as an OPAQUE 64-bit uniform
+/// word rather than as a value of its own numeric class.
+///
+/// Every primitive scalar (the integer family, the float family, `Bool`,
+/// `Char`) is concrete: its declared type IS its representation, so a
+/// mismatch against it is a real numeric conversion. Everything else —
+/// `TypeParam`, classes, refs, options, collections, function values,
+/// pointers — is an opaque word, so a mismatch against it is erasure and
+/// must be bit-reinterpreted.
+///
+/// `Alias` / `Newtype` are deliberately on the word side: they already lower
+/// to `I64` today, so treating them as concrete would change their ABI.
+pub fn is_erased_word_ty(ty: &Ty) -> bool {
+    !matches!(
+        ty,
+        Ty::Bool
+            | Ty::Int8
+            | Ty::UInt8
+            | Ty::Int16
+            | Ty::UInt16
+            | Ty::Int32
+            | Ty::UInt32
+            | Ty::Char
+            | Ty::Int
+            | Ty::Int64
+            | Ty::UInt
+            | Ty::UInt64
+            | Ty::ISize
+            | Ty::USize
+            | Ty::Float
+            | Ty::Float32
+            | Ty::Float64
+    )
+}
+
+/// True when a declared Ruxen type is a float, i.e. the only type whose
+/// uniform-word representation needs a REGISTER-CLASS change (SSE/vector →
+/// integer) rather than a width extension. Used by closure ABI erasure in
+/// MIR lowering.
+pub fn is_float_ty(ty: &Ty) -> bool {
+    matches!(ty, Ty::Float | Ty::Float32 | Ty::Float64)
+}
 
 /// Locate the stdlib package root containing per-package `runtime/*.c`
 /// trees. After #06.95 Phase B-2 each stdlib package owns its own

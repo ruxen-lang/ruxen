@@ -1,8 +1,55 @@
 //! Per-MirInst emission: arithmetic, comparisons, allocations,
 //! field access, calls, and assorted scalar/memory ops.
 
-use super::calls::{get_or_declare_func, get_or_declare_runtime};
+use super::calls::{callee_param_word_slots, get_or_declare_func, get_or_declare_runtime};
 use super::*;
+
+/// True when a MIR operand's DECLARED type is an erased uniform word (B01).
+/// Mirrors `cranelift::emit::mir_operand_is_erased_word`; literals are never
+/// erased.
+fn mir_operand_is_erased_word(arg: &MirValue, func: &MirFunction) -> bool {
+    match arg {
+        MirValue::Use(id) => func
+            .locals
+            .get(*id as usize)
+            .map(|l| crate::codegen::is_erased_word_ty(&l.ty))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Bring a binary operation's operands to a common LLVM type (B01).
+///
+/// Mirrors `cranelift::emit::unify_binop_operands` exactly: normally the left
+/// operand's type wins, but when one side is a FLOAT value and the other's
+/// declared MIR type is an erased uniform word, the word holds that float's
+/// bit pattern and is reinterpreted rather than numerically converted. This
+/// is the scalar-method-home case (`0.0 + self` inside `class Float`, where
+/// `self` is typed as the FFI shell `Class{"Float"}`).
+fn unify_binop_operands<'ctx>(
+    l: BasicValueEnum<'ctx>,
+    r: BasicValueEnum<'ctx>,
+    lhs: &MirValue,
+    rhs: &MirValue,
+    func: &MirFunction,
+    builder: &Builder<'ctx>,
+    context: &'ctx Context,
+) -> (
+    BasicValueEnum<'ctx>,
+    BasicValueEnum<'ctx>,
+    BasicTypeEnum<'ctx>,
+) {
+    if l.is_float_value() && r.is_int_value() && mir_operand_is_erased_word(rhs, func) {
+        let r = coerce_erased_word(r, l.get_type(), builder, context);
+        return (l, r, l.get_type());
+    }
+    if r.is_float_value() && l.is_int_value() && mir_operand_is_erased_word(lhs, func) {
+        let l = coerce_erased_word(l, r.get_type(), builder, context);
+        return (l, r, r.get_type());
+    }
+    let r = coerce_value(r, l.get_type(), builder);
+    (l, r, l.get_type())
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn translate_instruction<'ctx>(
@@ -21,11 +68,26 @@ pub(super) fn translate_instruction<'ctx>(
             let val = gen_value(value, func, local_allocas, builder, context)?;
             let dest_ty = ty_to_llvm(&func.locals[*dest as usize].ty, context)
                 .unwrap_or(context.i64_type().into());
+            // B01: `Assign` is both the home of the numeric `as` cast AND the
+            // general value-into-local move, so an int↔float mismatch is a
+            // cast only when BOTH declared sides are concrete scalars. If
+            // either side is an erased uniform word (e.g. assigning to a
+            // `&var Float` parameter, whose local is `RefMut(Float)`), it is
+            // a representation crossing and must reinterpret. Mirrors the
+            // Cranelift `Assign` arm.
+            let dest_is_word = func
+                .locals
+                .get(*dest as usize)
+                .map(|l| crate::codegen::is_erased_word_ty(&l.ty))
+                .unwrap_or(false);
+            let value_is_word = mir_operand_is_erased_word(value, func);
             // A Ruxen numeric `as` cast lowers to an Assign across types; the
             // int↔float direction needs a signedness-correct conversion (mirrors
             // the Cranelift `Assign` path). int→float reads the SOURCE operand's
             // signedness; float→int reads the DESTINATION local's.
-            let val = if val.is_int_value() && dest_ty.is_float_type() {
+            let val = if dest_is_word || value_is_word {
+                coerce_erased_word(val, dest_ty, builder, context)
+            } else if val.is_int_value() && dest_ty.is_float_type() {
                 coerce_value_signed(val, dest_ty, mir_arg_is_signed(value, func), builder)
             } else if val.is_float_value() && dest_ty.is_int_type() {
                 let dest_signed = mir_arg_is_signed(&MirValue::Use(*dest), func);
@@ -42,8 +104,9 @@ pub(super) fn translate_instruction<'ctx>(
             let l = gen_value(lhs, func, local_allocas, builder, context)?;
             let r = gen_value(rhs, func, local_allocas, builder, context)?;
 
-            // Coerce rhs to match lhs type
-            let r = coerce_value(r, l.get_type(), builder);
+            // Coerce rhs to match lhs type (B01: unless one side is an
+            // erased word holding a float's bits — then reinterpret).
+            let (l, r, _) = unify_binop_operands(l, r, lhs, rhs, func, builder, context);
 
             let result = emit_binop(*op, l, r, builder, context)?;
             let dest_ty = ty_to_llvm(&func.locals[*dest as usize].ty, context)
@@ -147,7 +210,11 @@ pub(super) fn translate_instruction<'ctx>(
                 // NOT route through `emit_binop`'s float path, so handle it here —
                 // otherwise the int/pointer branch's `into_int_value()` panics on
                 // a FloatValue. (tier 4.09)
-                let r = coerce_value(r, l.get_type(), builder);
+                //
+                // B01: when the OTHER side is an erased word holding a
+                // float's bits (a scalar method home's `self`), reinterpret
+                // it instead of numerically converting.
+                let (l, r, _) = unify_binop_operands(l, r, lhs, rhs, func, builder, context);
                 let fpred = match op {
                     CmpOp::Eq => inkwell::FloatPredicate::OEQ,
                     CmpOp::NotEq => inkwell::FloatPredicate::ONE,
@@ -255,7 +322,16 @@ pub(super) fn translate_instruction<'ctx>(
                         context,
                     )?;
 
-                    // Coerce arguments to match the declared parameter types
+                    // Coerce arguments to match the declared parameter types.
+                    //
+                    // B01: a float argument landing in an INTEGER slot is
+                    // either an erasure into a uniform word (`def push as
+                    // "ruxen_vec_push"(x: T)` — reinterpret) or Ruxen's
+                    // implicit narrowing into a declared `Int` param (keep
+                    // `fptosi`). The LLVM type is `i64` either way, so the
+                    // DECLARED `Ty` decides. Mirrors the Cranelift
+                    // `coerce_call_args` rule exactly.
+                    let word_slots = callee_param_word_slots(program, actual_name);
                     let mut coerced_args: Vec<BasicMetadataValueEnum> =
                         Vec::with_capacity(arg_vals.len());
                     for (i, arg) in arg_vals.iter().enumerate() {
@@ -263,7 +339,20 @@ pub(super) fn translate_instruction<'ctx>(
                             .try_into()
                             .unwrap_or(context.i64_type().const_int(0, false).into());
                         if let Some(param_ty) = callee_fn.get_type().get_param_types().get(i) {
-                            let coerced = coerce_value(arg_val, *param_ty, builder);
+                            let slot_is_word = word_slots
+                                .as_ref()
+                                .and_then(|w| w.get(i).copied())
+                                // Undeclared: the compiler-internal residual,
+                                // whose i64 slots are uniform words.
+                                .unwrap_or(true);
+                            let coerced = if arg_val.is_float_value()
+                                && param_ty.is_int_type()
+                                && slot_is_word
+                            {
+                                coerce_erased_word(arg_val, *param_ty, builder, context)
+                            } else {
+                                coerce_value(arg_val, *param_ty, builder)
+                            };
                             coerced_args.push(coerced.into());
                         } else {
                             coerced_args.push(arg_val.into());
@@ -280,7 +369,12 @@ pub(super) fn translate_instruction<'ctx>(
                         if let Some(result) = call.try_as_basic_value().left() {
                             let dest_ty = ty_to_llvm(&func.locals[*dest_id as usize].ty, context)
                                 .unwrap_or(context.i64_type().into());
-                            let result = coerce_value(result, dest_ty, builder);
+                            // B01: a call RESULT never carries an implicit
+                            // numeric conversion (MIR gives the dest temp the
+                            // callee's own return type; a promotion is a
+                            // separate `Assign`), so an int/float mismatch
+                            // here means the return slot is an erased word.
+                            let result = coerce_erased_word(result, dest_ty, builder, context);
                             builder
                                 .build_store(local_allocas[dest_id], result)
                                 .map_err(|e| format!("Failed to store call result: {:?}", e))?;
@@ -475,7 +569,11 @@ pub(super) fn translate_instruction<'ctx>(
                 .map_err(|e| format!("Failed to load ref src: {:?}", e))?;
             let dest_ty = ty_to_llvm(&func.locals[*dest as usize].ty, context)
                 .unwrap_or(context.i64_type().into());
-            let val = coerce_value(val, dest_ty, builder);
+            // B01: a slot-moving copy between locals of DIFFERENT
+            // representations is a word crossing (e.g. a `Float` into a
+            // `Ref`/`T` slot), so it is reinterpreted, never numerically
+            // converted.
+            let val = coerce_erased_word(val, dest_ty, builder, context);
             builder
                 .build_store(local_allocas[dest], val)
                 .map_err(|e| format!("Failed to store ref: {:?}", e))?;
@@ -489,7 +587,11 @@ pub(super) fn translate_instruction<'ctx>(
                 .map_err(|e| format!("Failed to load copy src: {:?}", e))?;
             let dest_ty = ty_to_llvm(&func.locals[*dest as usize].ty, context)
                 .unwrap_or(context.i64_type().into());
-            let val = coerce_value(val, dest_ty, builder);
+            // B01: a slot-moving copy between locals of DIFFERENT
+            // representations is a word crossing (e.g. a `Float` into a
+            // `Ref`/`T` slot), so it is reinterpreted, never numerically
+            // converted.
+            let val = coerce_erased_word(val, dest_ty, builder, context);
             builder
                 .build_store(local_allocas[dest], val)
                 .map_err(|e| format!("Failed to store copy: {:?}", e))?;
@@ -503,7 +605,11 @@ pub(super) fn translate_instruction<'ctx>(
                 .map_err(|e| format!("Failed to load move src: {:?}", e))?;
             let dest_ty = ty_to_llvm(&func.locals[*dest as usize].ty, context)
                 .unwrap_or(context.i64_type().into());
-            let val = coerce_value(val, dest_ty, builder);
+            // B01: a slot-moving copy between locals of DIFFERENT
+            // representations is a word crossing (e.g. a `Float` into a
+            // `Ref`/`T` slot), so it is reinterpreted, never numerically
+            // converted.
+            let val = coerce_erased_word(val, dest_ty, builder, context);
             builder
                 .build_store(local_allocas[dest], val)
                 .map_err(|e| format!("Failed to store move: {:?}", e))?;
@@ -611,7 +717,8 @@ pub(super) fn translate_instruction<'ctx>(
                 if let Some(result) = call.try_as_basic_value().left() {
                     let dest_ty = ty_to_llvm(&func.locals[*dest_id as usize].ty, context)
                         .unwrap_or(context.i64_type().into());
-                    let result = coerce_value(result, dest_ty, builder);
+                    // B01: same reasoning as the direct-call result above.
+                    let result = coerce_erased_word(result, dest_ty, builder, context);
                     builder
                         .build_store(local_allocas[dest_id], result)
                         .map_err(|e| format!("Failed to store indirect call result: {:?}", e))?;
@@ -620,18 +727,36 @@ pub(super) fn translate_instruction<'ctx>(
         }
 
         MirInst::FloatToBits { dest, src } => {
-            // Reinterpret a float's bits as a same-width integer (no numeric
+            // Reinterpret a float's bits as an integer (no numeric
             // conversion) so float fields can fold through the integer FNV
-            // mix in the derived Hashable impl.
+            // mix in the derived Hashable impl, and so a float closure
+            // result can leave through the uniform word (B01).
+            //
+            // Routed through `coerce_erased_word` rather than a bare
+            // `build_bit_cast` because the destination may be WIDER than the
+            // source (an `f32` into a 64-bit word), which a bitcast alone
+            // cannot express.
             let src_val = gen_value(&MirValue::Use(*src), func, local_allocas, builder, context)?;
             let dest_ty = ty_to_llvm(&func.locals[*dest as usize].ty, context)
                 .unwrap_or(context.i64_type().into());
-            let bits = builder
-                .build_bit_cast(src_val, dest_ty, "float_bits")
-                .map_err(|e| format!("Failed to bitcast float to bits: {:?}", e))?;
+            let bits = coerce_erased_word(src_val, dest_ty, builder, context);
             builder
                 .build_store(local_allocas[dest], bits)
                 .map_err(|e| format!("Failed to store float bits: {:?}", e))?;
+        }
+
+        MirInst::BitsToFloat { dest, src } => {
+            // The exact inverse of `FloatToBits` (B01): recover a float from
+            // the uniform word holding its bit pattern. Emitted on the
+            // inbound edge of a float closure parameter and when a caller
+            // reads a float closure result back out of the word.
+            let src_val = gen_value(&MirValue::Use(*src), func, local_allocas, builder, context)?;
+            let dest_ty = ty_to_llvm(&func.locals[*dest as usize].ty, context)
+                .unwrap_or(context.f64_type().into());
+            let f = coerce_erased_word(src_val, dest_ty, builder, context);
+            builder
+                .build_store(local_allocas[dest], f)
+                .map_err(|e| format!("Failed to store float from bits: {:?}", e))?;
         }
 
         MirInst::Nop => {}

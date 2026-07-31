@@ -1,0 +1,8 @@
+promote=3
+narrow=2
+cast=7 2
+ret=7
+mixed=7.5 3
+bool=false true
+char=a b
+int=6 8

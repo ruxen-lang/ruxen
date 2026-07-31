@@ -326,6 +326,48 @@ impl<'a> Lowerer<'a> {
             .new_temp(ty)
     }
 
+    /// Closure word-ABI (B01), caller side: pass a float argument as the
+    /// 64-bit uniform word holding its IEEE-754 bit pattern.
+    ///
+    /// A closure is only ever reached through the erased `Fn` box, and the
+    /// generic bodies that invoke it (`Array_map`, `Hash_each`, …) were
+    /// lowered once with the element type abstract, so they can only pass
+    /// words. `lower_closure` therefore compiles a float closure parameter as
+    /// a word and reinterprets on entry; this is the matching conversion on
+    /// the caller's side. Non-float operands are returned untouched: they
+    /// already share the integer register class with the word.
+    pub(super) fn float_arg_to_word(&mut self, arg: MirValue) -> MirValue {
+        let is_float = match &arg {
+            MirValue::Use(id) => self
+                .fn_mut()
+                .locals
+                .get(*id as usize)
+                .map(|l| crate::codegen::is_float_ty(&l.ty))
+                .unwrap_or(false),
+            MirValue::Literal(Literal::Float(_)) => true,
+            _ => false,
+        };
+        if !is_float {
+            return arg;
+        }
+        // `FloatToBits` reads a LOCAL, so a float literal is materialised
+        // into a temp first.
+        let src = match arg {
+            MirValue::Use(id) => id,
+            other => {
+                let tmp = self.new_temp(Ty::Float);
+                self.emit(MirInst::Assign {
+                    dest: tmp,
+                    value: other,
+                });
+                tmp
+            }
+        };
+        let word = self.new_temp(Ty::Int);
+        self.emit(MirInst::FloatToBits { dest: word, src });
+        MirValue::Use(word)
+    }
+
     /// Compute the allocation size for a type using the layout system.
     ///
     /// Classes and structs are stored field-by-field using fixed 8-byte

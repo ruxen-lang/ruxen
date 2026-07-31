@@ -1,0 +1,39 @@
+# B01 — the erased uniform word ABI, keyed-collection half.
+#
+# `ruxen_hash_insert(h, k, v)` and `ruxen_set_insert(s, x)` are `.rx`-declared
+# over `K` / `V` / `T`, so both the key and the value slots are erased uniform
+# words. Under the old numeric conversion:
+#   * a Float VALUE truncated — `h["k"] = 1.5` read back as `1`;
+#   * a Float KEY collided — `1.25` and `1.75` both became the key `1`, so
+#     `h2[1.25]` returned the entry stored under `1.75`.
+#
+# The key case is why this pin uses 1.25 / 1.75 rather than 1.5 / 2.5: two
+# keys that truncate to DIFFERENT integers still look correct under a
+# truncating bug, and that is exactly how this stayed invisible.
+def main
+  # Float VALUE.
+  var hv: Hash[String, Float] = Hash.new
+  hv["a"] = 1.25
+  hv["b"] = -2.5
+  hv["c"] = 0.1
+  puts("val=#{hv["a"]} #{hv["b"]} #{hv["c"]}")
+
+  # Float KEY — two keys that truncate to the same integer must stay distinct.
+  var hk: Hash[Float, String] = Hash.new
+  hk[1.25] = "lo"
+  hk[1.75] = "hi"
+  hk[-2.5] = "neg"
+  puts("key=#{hk[1.25]} #{hk[1.75]} #{hk[-2.5]} #{hk.size}")
+
+  # Float key AND Float value together.
+  var hkv: Hash[Float, Float] = Hash.new
+  hkv[0.1] = 1.25
+  hkv[0.2] = 1.75
+  puts("kv=#{hkv[0.1]} #{hkv[0.2]}")
+
+  # Set membership — same collision hazard as a Hash key.
+  var s: Set[Float] = Set.new
+  s.insert(1.25)
+  s.insert(-2.5)
+  puts("set=#{s.include?(1.25)} #{s.include?(1.75)} #{s.include?(-2.5)} #{s.size}")
+end

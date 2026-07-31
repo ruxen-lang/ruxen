@@ -434,7 +434,19 @@ pub enum MirInst {
     /// participate in the integer FNV mix (`bxor`/`mul`) — feeding a raw
     /// `f64` into an integer `BinOp` otherwise fails Cranelift verification.
     /// `dest`'s declared MIR type selects the integer width.
+    ///
+    /// Also the OUTBOUND edge of the closure word-ABI (B01): a closure whose
+    /// declared result is a float returns the bit pattern in a uniform word,
+    /// because the generic body that invokes it through an erased `Fn` box
+    /// can only receive words.
     FloatToBits { dest: LocalId, src: LocalId },
+    /// `dest = float-from-bits(src)` — the exact inverse of `FloatToBits`:
+    /// recover a float from the uniform word holding its bit pattern, with
+    /// no numeric conversion. `dest`'s declared MIR type selects the float
+    /// width. Emitted by the closure word-ABI (B01) on the INBOUND edge of a
+    /// float closure parameter, and when a caller reads a float closure
+    /// result back out of the word.
+    BitsToFloat { dest: LocalId, src: LocalId },
     /// No operation — placeholder / removed instruction.
     Nop,
 }

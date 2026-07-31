@@ -167,6 +167,11 @@ pub struct JITCodeGen {
     /// would produce) — without it, calling synthesized primitive
     /// formatters from the JIT trips Cranelift's verifier.
     user_fn_param_tys: HashMap<String, Vec<Type>>,
+    /// B01: per-callee "this param slot is an erased uniform word" flags,
+    /// the JIT twin of batch `CodeGen::user_fn_param_word_slots`. Lets
+    /// `coerce_call_args` tell a declared `Int` param (numeric narrowing)
+    /// from an erased `T` param (bit reinterpretation) - both are `i64`.
+    user_fn_param_word_slots: HashMap<String, Vec<bool>>,
 }
 
 impl JITCodeGen {
@@ -250,6 +255,7 @@ impl JITCodeGen {
             string_counter: 0,
             declared_fns: HashMap::new(),
             user_fn_param_tys: HashMap::new(),
+            user_fn_param_word_slots: HashMap::new(),
         })
     }
 
@@ -271,6 +277,8 @@ impl JITCodeGen {
         let param_tys: Vec<Type> = sig.params.iter().map(|p| p.value_type).collect();
         self.user_fn_param_tys
             .insert(mir_function.name.clone(), param_tys);
+        self.user_fn_param_word_slots
+            .insert(mir_function.name.clone(), param_word_slots(mir_function));
         self.declared_fns.insert(mir_function.name.clone(), func_id);
 
         // Define — on failure, drop the declared_fns entry so a retry
@@ -314,6 +322,8 @@ impl JITCodeGen {
         let param_tys: Vec<Type> = sig.params.iter().map(|p| p.value_type).collect();
         self.user_fn_param_tys
             .insert(mir_function.name.clone(), param_tys);
+        self.user_fn_param_word_slots
+            .insert(mir_function.name.clone(), param_word_slots(mir_function));
         self.declared_fns.insert(mir_function.name.clone(), func_id);
         Ok(func_id)
     }
@@ -539,6 +549,7 @@ impl JITCodeGen {
                 vtable_data: &self.vtable_data,
                 string_counter: &mut self.string_counter,
                 user_fn_param_tys: &self.user_fn_param_tys,
+                user_fn_param_word_slots: &self.user_fn_param_word_slots,
             };
 
             // Map MIR blocks → Cranelift blocks
@@ -959,4 +970,17 @@ mod symbol_allowlist_tests {
         assert!(!is_repl_symbol_allowed("read"));
         assert!(!is_repl_symbol_allowed("write"));
     }
+}
+
+/// B01: per-param "declared slot is an erased uniform word" flags for a MIR
+/// function, matching `build_signature`'s param filtering (zero-sized
+/// `Unit`/`Never` params get no ABI slot). The batch backend computes the
+/// same thing in `CodeGen::compile_program`.
+fn param_word_slots(func: &MirFunction) -> Vec<bool> {
+    func.params
+        .iter()
+        .filter_map(|&id| func.locals.get(id as usize))
+        .filter(|l| ty_to_cranelift(&l.ty).is_some())
+        .map(|l| ruxen_core::codegen::is_erased_word_ty(&l.ty))
+        .collect()
 }

@@ -40,7 +40,8 @@ building a real app, then low risk before high risk.
 | **A bare `self` body does not satisfy a `-> Char` return** | Inside `class Char`, `def chr -> Char; self; end` is `type mismatch: expected Char, found Char` (the FFI-shell / value split, same family as the `String` rule above). Round-trip it: `let n: Int = self as Int` then `n as Char`. Casts on a scalar `self` (`self as Int`, `n as Char`, `b as Int`) all work. |
 | **`<=>` as an OPERATOR does not reach an `.rx` `def <=>`** | Comparison operators keep their dedicated route: `c1 <=> c2` on `Char` is E0707 even with `def <=>(other: Char)` defined. The METHOD spelling `c1.<=>(c2)` dispatches fine. |
 | **Scalar `self` on the LEFT of arithmetic link-fails** | Verified 2026-07-29: inside `class Int`, `self % 2` and `self + 1` emit calls to nonexistent `Int_%` / `Int_+`. **Workaround that works today: rebox first,** `let n = 0 + self` (or `var a = 0 + self`), then use `n` freely. `self` on the RIGHT of a primitive-left operand (`0 - self`, `2 * self`) and all comparisons (`self < 0`, `self == 0`) work as-is. This is why the Integer batches are READY-NOW. Enabler E3 removes the reboxing. |
-| **`Float` `.rx` method bodies are BROKEN** | Verified 2026-07-29: inside `class Float`, `self` arrives truncated to an integer (`2.5.probe` sees `2`, and a computed Float receiver sees `0`). Returning a Float constant is fine, so it is a receiver-ABI bug, same family as the known "Float closure-arg passes as 0". **Do not write Float `.rx` methods until B01 lands.** |
+| **`Float` `.rx` method bodies WORK (B01 landed)** | Was: inside `class Float`, `self` arrived truncated (`2.5.probe` saw `2`, a computed receiver saw `0`). **Fixed by B01.** A scalar method home's `self` is typed as the FFI shell `Class{"Float"}`, i.e. an erased uniform word; codegen now bit-reinterprets it instead of numerically converting, so `let x = 0.0 + self` sees the real value (verified with a temporary `class Float` probe: `2.5` → `2.5`, `0.0 - 2.5` → `-2.5`, `0.1` → `0.1`). B23 is unblocked. Note the FLOAT-side rule only; `self` on the left of arithmetic still needs the rebox workaround from the `Int` row below (that is E3, unrelated). |
+| **A whole `Float` prints without `.0`** | `2.0` renders as `2`, `0.0` as `0`, where CRuby prints `2.0` / `0.0`. This is `ruxen_float_to_string` FORMATTING, not the B01 ABI, and B01 did not change it — every B01 pin's `expected/` file records the current spelling. Fixing it will shift those `expected/` files and several older Float fixtures. |
 | **Char literal as a receiver mis-parses** | `?7.digit?` compiles but produces no output; `let c = ?7; c.digit?` works. Bind to a variable. |
 
 ### Build / test loop
@@ -139,7 +140,7 @@ collision this rule exists to prevent.
 | **E1** | **Per-`T` monomorphization of generic-collection method bodies.** Extend the generic-CLASS mono (`mir/lower/monomorphize.rs`, which already clones user generic-class bodies per concrete receiver as `Box__mono__String_eq`) to emit `Array[Int]_join` / `Array[Int]_min` per concrete `T` at the call site, rewriting `T` to the concrete type in the body (the `trait_default.rs::rewrite_self_in_func` pattern applied to the element param). **In progress (agent `per-t-mono`).** | `compiler/ruxen_core/src/mir/lower/{monomorphize.rs,trait_default.rs}` | B20, B21, B23 (partly), and the element-typed half of B07/B15/B16 noted per batch |
 | **E2** | **Q58: `alias` to a method on a generic builtin head link-fails.** `mir/lower/mod.rs::select_method_symbol_name` compares `parent_def.name == class_name`, but the alias target's parent is the BARE class while `class_name` may carry the generic suffix. Strip `class_name`'s `[...]` there (`canonical_method_name` already strips). **LANDED** (`7b1c1907`, merged `42008fa3`). | `compiler/ruxen_core/src/mir/lower/mod.rs` | B22 (and lets several other batches collapse delegating methods back to one-line aliases) |
 | **E3** | **Scalar method-home `self` does not reach the primitive arithmetic floor.** A scalar `self` is typed nominally as `Class[Int]`, so `self + 1` lowers to a method call `Int_+` that does not exist. Make a scalar-class `self` flow into the primitive `+`/`-`/`*`/`/`/`%` floor. | `typeck/infer/ops.rs`, `mir/lower/expr/binops.rs` | Not a hard blocker (rebox with `let n = 0 + self`), but it removes the workaround from B12/B13/B14 and is a prerequisite for clean `Float` bodies |
-| **E4** | **Float receiver ABI on `.rx` method homes and closure args.** A `Float` receiver reaching an `.rx` body is read from an integer slot (truncates, or reads 0 for a computed value). Same family as the closure-arg bug. Delivered by **B01**. | codegen receiver coercion (`primitive_ffi_receiver_ty` neighbourhood), closure arg marshalling | B23 (all `Float` methods), the `Array[Float]` half of B20 |
+| **E4** | **Float receiver ABI on `.rx` method homes and closure args.** **LANDED (B01).** A `Float` crossing into any ERASED UNIFORM WORD — a generic-collection slot, a stack slot, a `TypeParam` param/return, a closure param/return, or a scalar method home's `self` — now carries its IEEE-754 bit pattern instead of being `fcvt`-converted. Five boundaries, one root cause. Read B01's entry in §2 for the ABI decision before touching a float/word crossing. | `codegen::is_erased_word_ty` + `coerce_erased_word` in both backends; the closure half in `mir/lower/expr/{closure,method_call}.rs` | B23 (all `Float` methods), the `Array[Float]` half of B20 — both now UNBLOCKED |
 | **E5** | **Symbol type (`:sym`).** A compile-time-closed primitive: a 64-bit id into a static intern table, no runtime interning. **Designed: [`design/B29-symbols.md`](design/B29-symbols.md).** Delivered by **B29**. Note `&:sym` already works without it, and `Hash[Symbol, V]` additionally needed **B73**, which is now DONE — a `Symbol` joins the key-kind protocol as a plain `RUXEN_KEY_BITS` key (it is a 64-bit intern id), so B29c needs no further runtime work. | lexer, parser, typeck, plus a `library/std/symbol` `.rx` surface | Hash symbol shorthand `{a: 1}`, `%i[]`, `String#to_sym`, hash patterns, and the literal-symbol folding in B34 |
 | **E6** | **Field-walk synthesis substrate**: the compiler synthesizes three ordinary typed methods from a class's declared fields (`field_names`, `accept[V]`, `from_fields[R]`); every feature on top is an `.rx` visitor, so the compiler learns one mechanism and zero features. **Designed: [`design/B33-codegen-substrate.md`](design/B33-codegen-substrate.md).** Note the design places synthesis at the **end of typeck as HIR**, not in `mir/lower/derive.rs`, specifically to avoid adding a second typeck↔MIR lockstep. Delivered by **B33** (substrate) and **B55** (the `Model` consumer). | a new synthesis pass at the typeck boundary; `implicit_includes/mod.rs` for gating and diagnostics | B33, B34, B44, B55 to B60, B63, B64 (the whole ORM and serializer surface) |
 | **E7** | **Splat params `*args` / `**kwargs`.** Delivered by **B27**. | parser, typeck | `format`/`sprintf` free fns, `puts a, b`, variadic builders, `Set[a, b, c]` literal |
@@ -195,16 +196,65 @@ ranks first and B71 second, both found after B01 to B05.
 - **Status:** NEEDS-COMPILER-FEATURE.
 - **Pins:** 1770-1779.
 
-### B01 — Float receiver ABI: `self` truncates, closure arg passes as 0
-- **Goal:** a `Float` value keeps its bits when it crosses into an `.rx` method body or a closure parameter.
-- **Repros (both verified at baseline):**
-  - `[2.5].map { |v| v + 0.5 }` yields `0` (affects `Array.map`, not just `Kernel#then`).
-  - A `def probe -> String` on `class Float` whose body is `let x = 0.0 + self; "#{x}"` prints `2` for receiver `2.5`, and `0` for a computed receiver such as `0.0 - 2.5`. Returning a Float *constant* from the same method is correct, so the defect is on the receiver/argument inbound path, not the return path.
-- **Files:** codegen receiver coercion (`primitive_ffi_receiver_ty` and the `coerce_value` call-site zero-extension neighbourhood), closure argument marshalling in `mir/lower`.
-- **Status:** NEEDS-COMPILER-FEATURE (E4).
-- **Size:** one self-contained defect; expect it to be a register-class/width mistake, not a redesign.
-- **Matrix rows:** `core.md` Float table (200-224) and the Operator-reality note (44-68); `HANDOFF.md` "Known PRE-EXISTING bugs".
-- **Pins:** 1000-1009.
+### B01 — Float receiver ABI: `self` truncates, closure arg passes as 0 — **DONE**
+- **Status: DONE.** Delivers enabler **E4** and unblocks **B23**. Pins `1000`-`1004`.
+- **The ABI decision (read this before touching any float/word crossing):**
+  Ruxen has ONE storage class for a value whose static type codegen cannot
+  see — a 64-bit **uniform word**. A `Float` in a uniform word travels as its
+  IEEE-754 **bit pattern** and is recovered by the inverse reinterpretation.
+  It is never `fcvt`-converted. Both directions moved together on purpose:
+  fixing one side alone is worse than fixing neither.
+- **What was actually wrong:** not one boundary but **six**, all the same
+  root cause (`coerce_value`'s int↔float arms are a NUMERIC conversion, and
+  every erasure went through them):
+  1. a generic-collection slot — `RuxenVec` and the hash/set tables store
+     `int64_t` elements regardless of `T`;
+  2. an address-taken local's 8-byte stack slot, plus the by-value
+     `Ref`/`RefMut`/`Copy`/`Move` slot moves;
+  3. a parameter or return whose declared `Ty` is opaque (`TypeParam`, a
+     class/ref/option/pointer);
+  4. the parameters and return of a closure reached through an erased `Fn`
+     box — the generic body invoking it was lowered ONCE with the element
+     type abstract, so it can only pass words;
+  5. a scalar method home's `self`, typed as the FFI shell `Class{"Float"}`,
+     i.e. a word — which is why `0.0 + self` numerically converted it;
+  6. `Assign` into a word-typed local — reachable as `p = 9.75` on a
+     `&var Float` parameter. That write does not propagate to the caller
+     today, so the truncation is unobservable; it was fixed anyway so that
+     whoever makes scalar `&var` mutation propagate does not inherit a silent
+     numeric corruption underneath it.
+- **Symptoms fixed, beyond the two originally reported:** `[1.5, 2.5][0]`
+  printed `1`; `each` over an `Array[Float]` printed `1`/`2`;
+  `[2.5].map { |v| v + 0.5 }` printed `0`; a Float closure RETURN came back
+  `0`; a `Hash[String, Float]` value truncated; **two `Hash[Float, V]` keys
+  that truncate to the same integer COLLIDED** (`h[1.25]` returned the entry
+  stored under `1.75`), as did two such `Set[Float]` members; a NEGATIVE value
+  came back `0` rather than truncated (the default conversion was the
+  *unsigned* saturating form); and `&var` on a `Float` local did not compile
+  at all, panicking the Cranelift frontend.
+- **The line that must not move:** an implicit numeric conversion into a
+  **declared** scalar parameter (`def f(x: Float)` called as `f(3)`,
+  `def g(x: Int)` called as `g(2.5)`) is NOT an erasure. A declared `Int` slot
+  and an erased word are both `i64`, so the decision is keyed on the DECLARED
+  Ruxen type (`codegen::is_erased_word_ty`), never on the machine type. **Pin
+  1004 is the negative pin that holds this line** — if a future change re-keys
+  the decision on the machine type, it fails immediately.
+- **Where it lives:** the closure half is in **MIR lowering**
+  (`mir/lower/expr/closure.rs` + `expr/method_call.rs`, using `FloatToBits`
+  and the new `BitsToFloat`), so BOTH backends inherit it identically rather
+  than each re-deriving it. Everything else is a named `coerce_erased_word` in
+  `codegen/cranelift/emit.rs` and `codegen/llvm/emit/mod.rs`, kept deliberately
+  distinct from `coerce_value` so an erasure can never be mistaken for a
+  numeric conversion. Shared predicate: `codegen::is_erased_word_ty`.
+- **Caveat on the LLVM half:** it mirrors the Cranelift change line for line
+  but is **not compile-verified** — `llvm-sys` needs LLVM 18, which is not
+  installed in the environment B01 was landed in (`cargo check --features
+  llvm` fails in `llvm-sys` before reaching our code). Whoever first builds
+  with `--features llvm` should expect to fix mechanical errors there, not
+  design ones.
+- **Matrix rows:** `core.md` Float table (200-224) and the Operator-reality
+  note (44-68); `HANDOFF.md` "Known PRE-EXISTING bugs".
+- **Pins:** 1000-1004 (1005-1009 unused).
 
 ### B71 — Non-scalar parameter default drops to the null sentinel on a paren-less call
 - **Goal:** `def show(prefix: String = "v=")` called as `p.show` uses the declared default instead of silently substituting the null sentinel.
@@ -737,7 +787,7 @@ ranks first and B71 second, both found after B01 to B05.
 - **Goal:** `class Float` reaches parity with `class Int`.
 - **Methods:** `abs`, `ceil`, `floor`, `round(n)`, `truncate`, `nan?`, `infinite?`, `finite?`, `zero?`, `positive?`, `negative?`, `nonzero?`, `divmod`, `modulo`, `quo`, `fdiv`, `to_f`, `clamp`, `between?`, `<=>`, `step`.
 - **Files:** `library/std/scalar/src/lib.rx` (`class Float`).
-- **Status:** **BLOCKED-ON-B01** (the Float receiver ABI). Writing these before B01 produces methods that compile and return wrong numbers, which is worse than not having them.
+- **Status:** **READY-NOW** — **B01 landed, so this is unblocked.** A `Float` receiver reaching an `.rx` body now reads as the value it was called on (verified with a temporary `class Float` probe: `2.5.probe` -> `2.5`, `(0.0 - 2.5).probe` -> `-2.5`, `0.1` -> `0.1`). Two things to know before writing the bodies: (a) `self` on the LEFT of arithmetic still link-fails on a scalar head, so rebox first (`let n = 0.0 + self`) exactly as the Integer batches do — that is E3, not the Float ABI; (b) a whole `Float` still PRINTS without `.0` (`2.0` renders as `2`), which is `ruxen_float_to_string` formatting and will shift `expected/` files when fixed, so do not encode `.0` in a new pin's expectation until that lands.
 - **Size:** 21 methods, all one-liners once unblocked.
 - **Matrix rows:** `core.md` Float table 204-224.
 - **Pins:** 1220-1229.
@@ -1338,7 +1388,7 @@ Pins: none.
 | **READY-NOW** | **32** | B06, B07, B08, B09, B10, B11, B12, B13, B14, B15, B16, B17, B18, B19, **B22**, **B35a**, B38, B39, B40, B41, B42, B43, B47, B48, B49, B51, B52, B53, B54, B57, B62, B70 (note: B37, B44, B45, B50, B63, B65 are partly ready and counted under their blocker) |
 | **BLOCKED-ON-PER-T-MONO (E1)** | 2 | B20, B21 |
 | ~~BLOCKED-ON-Q58-ALIAS (E2)~~ | 0 | E2 landed (`7b1c1907`); **B22 is now READY-NOW** |
-| **BLOCKED-ON-B01 (Float ABI)** | 1 | B23 |
+| ~~BLOCKED-ON-B01 (Float ABI)~~ -> READY-NOW | 0 | B23 unblocked, B01 landed |
 | **BLOCKED-ON-B33 (codegen substrate)** | 5 | B34, B44 (derive half), B50 (3 of 4), B55, B63 (derive half) |
 | **BLOCKED-ON-B55 (Model synth)** | 4 | B56, B58, B59, B60 |
 | **BLOCKED-ON-B36 (digest/HMAC)** | 3 | B37 (hex half), B66, B68 |

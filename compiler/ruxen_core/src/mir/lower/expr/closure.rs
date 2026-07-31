@@ -291,15 +291,61 @@ impl<'a> Lowerer<'a> {
                     Ty::Fn { ret, .. } => (**ret).clone(),
                     _ => body.ty.clone(),
                 };
-                let mut closure_fn = MirFunction::new(&closure_name, ret_ty);
+
+                // ── The closure word-ABI (B01) ───────────────────────────
+                //
+                // A closure is reached ONLY through the erased `Fn` box:
+                // `{fn_ptr, captures_ptr}`, invoked by `CallIndirect`. The
+                // generic body that invokes it (`Array_map`, `Hash_each`, …)
+                // was lowered ONCE with the element type abstract, so its
+                // argument and result locals are `TypeParam` — 64-bit
+                // uniform WORDS. It has no way to know a particular closure
+                // takes an `f64`.
+                //
+                // Every non-float type survives that: `Bool`/`Char`/narrow
+                // ints share the integer register class with the word, so a
+                // width mismatch is harmless. A FLOAT does not — it is
+                // passed in a vector register, so the callee read a
+                // register the caller never wrote, which is why
+                // `[2.5].map { |v| v + 0.5 }` produced `0`.
+                //
+                // So a closure's float parameters and float return use the
+                // uniform word, and the body reinterprets at the edges:
+                // `BitsToFloat` on entry, `FloatToBits` on the way out. The
+                // matching bitcasts on the CALLER's side live in
+                // `method_call.rs`, at the `Fn`-box `CallIndirect`. Both
+                // sides must move together — one alone is worse than
+                // neither.
+                let ret_is_float = crate::codegen::is_float_ty(&ret_ty);
+                let abi_ret_ty = if ret_is_float {
+                    Ty::Int
+                } else {
+                    ret_ty.clone()
+                };
+                let mut closure_fn = MirFunction::new(&closure_name, abi_ret_ty);
                 let cap_param = closure_fn.new_local("__captures".to_string(), Ty::Int, false);
                 closure_fn.params.push(cap_param);
+                // `closure_param_ids` are what the BODY sees (always the
+                // declared type). `float_param_words` records the
+                // (word_param, float_local) pairs that need a `BitsToFloat`
+                // emitted at the top of the body.
                 let mut closure_param_ids: Vec<LocalId> = Vec::with_capacity(params.len());
+                let mut float_param_words: Vec<(LocalId, LocalId)> = Vec::new();
                 for param in params {
-                    let local_id =
-                        closure_fn.new_local(param.name.clone(), param.ty.clone(), false);
-                    closure_fn.params.push(local_id);
-                    closure_param_ids.push(local_id);
+                    if crate::codegen::is_float_ty(&param.ty) {
+                        let word_id =
+                            closure_fn.new_local(format!("{}__word", param.name), Ty::Int, false);
+                        closure_fn.params.push(word_id);
+                        let float_id =
+                            closure_fn.new_local(param.name.clone(), param.ty.clone(), false);
+                        float_param_words.push((word_id, float_id));
+                        closure_param_ids.push(float_id);
+                    } else {
+                        let local_id =
+                            closure_fn.new_local(param.name.clone(), param.ty.clone(), false);
+                        closure_fn.params.push(local_id);
+                        closure_param_ids.push(local_id);
+                    }
                 }
 
                 // Save the current lowerer state, lower the closure body
@@ -342,6 +388,16 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
+                // Closure word-ABI, INBOUND edge: recover each float
+                // parameter from the uniform word it arrived in, before any
+                // body instruction can read it.
+                for &(word_id, float_id) in &float_param_words {
+                    self.emit(MirInst::BitsToFloat {
+                        dest: float_id,
+                        src: word_id,
+                    });
+                }
+
                 // Lower the closure body.
                 let body_result = self.lower_expr(body)?;
                 if matches!(body.ty, Ty::Never) {
@@ -359,7 +415,22 @@ impl<'a> Lowerer<'a> {
                 }
 
                 // Extract the completed closure function.
-                let completed_fn = self.current_fn.take().unwrap();
+                let mut completed_fn = self.current_fn.take().unwrap();
+
+                // Closure word-ABI, OUTBOUND edge: rewrite EVERY value
+                // return to hand back the float's bit pattern in the
+                // uniform word the signature now declares.
+                //
+                // Done as a post-pass over the finished body rather than at
+                // the tail expression, deliberately: a closure can also
+                // return from an early `return`, from a `next expr`, and
+                // from each arm of a diverging body. Patching only the tail
+                // would leave those paths returning a raw `f64` against an
+                // integer-word signature — a silent register-class
+                // mismatch, i.e. exactly the bug being fixed.
+                if ret_is_float {
+                    erase_float_returns_to_word(&mut completed_fn, &ret_ty);
+                }
                 let (closure_drop, owned_capture_slots) =
                     self.synthesize_closure_drop(&closure_name, &slots, &completed_fn, cap_param);
                 let closure_drop_name = closure_drop.name.clone();
@@ -552,5 +623,51 @@ impl<'a> Lowerer<'a> {
         drop_fn.blocks[pair_block].terminator = Terminator::Goto(return_block);
         drop_fn.blocks[return_block].terminator = Terminator::Return(None);
         (drop_fn, owned_capture_slots)
+    }
+}
+
+/// Closure word-ABI (B01), outbound edge.
+///
+/// Rewrite every `Return(Some(v))` in a float-returning closure so the value
+/// leaves as the IEEE-754 bit pattern in a 64-bit uniform word, matching the
+/// signature `lower_closure` declared. `float_ty` is the closure's ORIGINAL
+/// declared return type, used to give the intermediate temp the right float
+/// width so `FloatToBits` reinterprets at that width.
+///
+/// The caller side of this contract is the `Fn`-box `CallIndirect` in
+/// `method_call.rs`, which reads the word back with `BitsToFloat`. The two
+/// must always ship together.
+fn erase_float_returns_to_word(func: &mut MirFunction, float_ty: &Ty) {
+    for block_idx in 0..func.blocks.len() {
+        let ret_val = match &func.blocks[block_idx].terminator {
+            Terminator::Return(Some(v)) => v.clone(),
+            _ => continue,
+        };
+
+        // `FloatToBits` reads a LOCAL, so a literal (or any non-`Use`
+        // operand) is materialised into a float temp first. Routing a
+        // non-float operand through the same temp is deliberate: the
+        // `Assign` numeric path promotes it, which is what `-> Float`
+        // means for a body whose tail is an integer expression.
+        let src_local = match ret_val {
+            MirValue::Use(id) if func.locals[id as usize].ty == *float_ty => id,
+            other => {
+                let tmp = func.new_local("__ret_f".to_string(), float_ty.clone(), false);
+                func.blocks[block_idx].instructions.push(MirInst::Assign {
+                    dest: tmp,
+                    value: other,
+                });
+                tmp
+            }
+        };
+
+        let word = func.new_local("__ret_word".to_string(), Ty::Int, false);
+        func.blocks[block_idx]
+            .instructions
+            .push(MirInst::FloatToBits {
+                dest: word,
+                src: src_local,
+            });
+        func.blocks[block_idx].terminator = Terminator::Return(Some(MirValue::Use(word)));
     }
 }

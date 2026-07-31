@@ -32,8 +32,8 @@ pub use runtime_sigs::compiler_internal_signature;
 /// REPL JIT backend shares them verbatim rather than forking. Re-exported as
 /// `pub` (Phase 4); a regression to `pub(super)` breaks `cranelift_share_pin`.
 pub use emit::{
-    build_signature, coerce_call_args, coerce_value, coerce_value_signed, def_local, emit_binop,
-    gen_value, translate_instruction, translate_terminator, use_local,
+    build_signature, coerce_call_args, coerce_erased_word, coerce_value, coerce_value_signed,
+    def_local, emit_binop, gen_value, translate_instruction, translate_terminator, use_local,
 };
 pub use helpers::{
     cmpop_to_floatcc, cmpop_to_intcc, is_string_mir_ty, is_string_typed_value, simple_type_size,
@@ -87,6 +87,17 @@ pub struct CodeGen {
     /// `Bool_fmt` would be unconditionally widened to `i64` by the
     /// fallback widening rule and fail Cranelift IR verification.
     user_fn_param_tys: HashMap<String, Vec<Type>>,
+    /// B01 — per-callee, per-parameter "this slot is an ERASED UNIFORM
+    /// WORD" flags, computed from the DECLARED Ruxen `Ty` by
+    /// `codegen::is_erased_word_ty` alongside `user_fn_param_tys`.
+    ///
+    /// `coerce_call_args` needs it because the Cranelift type cannot tell a
+    /// declared `Int` param from an erased `T`: both are `i64`. A float
+    /// argument reaching the former is Ruxen's implicit numeric narrowing
+    /// (keep `fcvt`); reaching the latter it is an erasure (bit-reinterpret,
+    /// or `[1.5].push` stores `1`). A callee absent from this map defaults
+    /// to "word", which is correct for the compiler-internal residual.
+    user_fn_param_word_slots: HashMap<String, Vec<bool>>,
     /// Tier 4.04: lowered in no_std mode. When `true`, `translate_into_ctx`
     /// SKIPS the `ruxen_env_init(argc, argv)` injection into `main` — a no_std
     /// build has no `std.env` and no `ruxen_env_init` runtime symbol to call.
@@ -173,6 +184,7 @@ impl CodeGen {
             declared_fns: HashMap::new(),
             vtable_data: HashMap::new(),
             user_fn_param_tys: HashMap::new(),
+            user_fn_param_word_slots: HashMap::new(),
             no_std: false,
         })
     }
@@ -192,10 +204,16 @@ impl CodeGen {
                 let call_conv = self.module.isa().default_call_conv();
                 let mut sig = Signature::new(call_conv);
                 let mut param_tys: Vec<Type> = Vec::with_capacity(ffi_fn.param_types.len());
+                // B01: record, per surviving param slot, whether the
+                // DECLARED type is an opaque uniform word. Built here (not
+                // derived later) because this is the only place the
+                // `.rx` lib-decl `Ty`s are still in hand.
+                let mut param_words: Vec<bool> = Vec::with_capacity(ffi_fn.param_types.len());
                 for param_ty in &ffi_fn.param_types {
                     if let Some(cl_ty) = ty_to_cranelift(param_ty) {
                         sig.params.push(AbiParam::new(cl_ty));
                         param_tys.push(cl_ty);
+                        param_words.push(crate::codegen::is_erased_word_ty(param_ty));
                     }
                 }
                 if let Some(ref ret_ty) = ffi_fn.return_type {
@@ -217,17 +235,22 @@ impl CodeGen {
                 self.declared_fns.insert(ffi_fn.name.clone(), func_id);
                 self.user_fn_param_tys
                     .insert(ffi_fn.name.clone(), param_tys.clone());
+                self.user_fn_param_word_slots
+                    .insert(ffi_fn.name.clone(), param_words.clone());
                 if ffi_fn.ruxen_name != ffi_fn.name {
                     self.declared_fns.insert(ffi_fn.ruxen_name.clone(), func_id);
                     self.user_fn_param_tys
                         .insert(ffi_fn.ruxen_name.clone(), param_tys.clone());
+                    self.user_fn_param_word_slots
+                        .insert(ffi_fn.ruxen_name.clone(), param_words.clone());
                 }
 
                 // Also register with the lib-qualified name (e.g., "LibM.sin")
                 if !lib.name.is_empty() {
                     let qualified = format!("{}_{}", lib.name, ffi_fn.name);
                     self.declared_fns.insert(qualified.clone(), func_id);
-                    self.user_fn_param_tys.insert(qualified, param_tys);
+                    self.user_fn_param_tys.insert(qualified.clone(), param_tys);
+                    self.user_fn_param_word_slots.insert(qualified, param_words);
                 }
             }
         }
@@ -256,6 +279,17 @@ impl CodeGen {
             // legitimately take narrow params and must not be widened).
             let param_tys: Vec<Type> = sig.params.iter().map(|p| p.value_type).collect();
             self.user_fn_param_tys.insert(func.name.clone(), param_tys);
+            // B01: same word-slot flags for user MIR functions. `build_signature`
+            // skips zero-sized (`Unit`/`Never`) params, so filter identically.
+            let param_words: Vec<bool> = func
+                .params
+                .iter()
+                .filter_map(|&id| func.locals.get(id as usize))
+                .filter(|l| ty_to_cranelift(&l.ty).is_some())
+                .map(|l| crate::codegen::is_erased_word_ty(&l.ty))
+                .collect();
+            self.user_fn_param_word_slots
+                .insert(func.name.clone(), param_words);
 
             let func_id = self
                 .module
@@ -462,6 +496,7 @@ impl CodeGen {
                 string_data: &mut self.string_data,
                 string_counter: &mut self.string_counter,
                 user_fn_param_tys: &self.user_fn_param_tys,
+                user_fn_param_word_slots: &self.user_fn_param_word_slots,
                 vtable_data: &self.vtable_data,
             };
 
