@@ -1435,9 +1435,9 @@ Pins: none.
 | **BLOCKED-ON-B36 (digest/HMAC)** | 3 | B37 (hex half), B66, B68 |
 | **BLOCKED-ON-B46 (TLS)** | 2 | B45 (HTTPS half), B69 |
 | **BLOCKED-ON-B44 (Serialize)** | 2 | B64, B67 |
-| **NEEDS-RUNTIME-C** | 6 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61 (**B73** is DONE) |
+| **NEEDS-RUNTIME-C** | 6 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61 (**B73** and **B86** are DONE; B86 also closed Q60(b)) |
 | **BLOCKED within B35** | 5 | B35b, B35c, B35d, B35e, B35f (all on B35a or B35b; see §6) |
-| **NEEDS-COMPILER-FEATURE** | 26 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B74**, **B75** (toolchain), **B76**, **B77** (enabler), **B78**, **B79**, **B80**, **B82** — **B72** landed |
+| **NEEDS-COMPILER-FEATURE** | 25 | B01, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B74**, **B75** (toolchain), **B76**, **B77** (enabler), **B78**, **B79**, **B80**, **B82** — **B72** and **B02** landed |
 
 Counts overlap where a batch has both a ready half and a blocked half; the
 per-batch status line is authoritative.
