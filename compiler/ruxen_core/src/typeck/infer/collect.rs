@@ -445,16 +445,11 @@ impl<'a> InferenceEngine<'a> {
             // V directly. See lower.rs Index handler for the dispatch.
             Ty::Map(_, v) => *v.clone(),
             // Reference-to-HashMap also indexable (e.g. `&map[k]`).
-            Ty::Ref(inner) | Ty::RefMut(inner) => self.infer_index_ty(inner),
-            Ty::Tuple(elems) => {
-                // Dynamic index — can't know at compile time
-                if elems.is_empty() {
-                    Ty::Error
-                } else {
-                    elems[0].clone()
-                }
-            }
-            Ty::String => Ty::Char,
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => self.infer_index_ty(inner),
+            // No index lowering (tuples included): the caller reports E1128.
             _ => Ty::Error,
         }
     }

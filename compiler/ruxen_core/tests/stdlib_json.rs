@@ -1,8 +1,11 @@
 //! Focused tests for `library/std/json`.
 //!
-//! These tests drive the C ABI directly and compile only the runtime files
-//! this package uses. Release e2e fixtures cover the package surface through
-//! the Ruxen compiler.
+//! These tests drive the C ABI directly: the strict-warnings check compiles
+//! the runtime files this package uses, and the harnesses link the full
+//! runtime through `common::link_c_harness`. Release e2e fixtures cover the
+//! package surface through the Ruxen compiler.
+
+mod common;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -55,31 +58,8 @@ fn compile_objects(extra_flags: &[&str]) -> Vec<PathBuf> {
     objects
 }
 
-fn compile_harness(name: &str, source: &str) -> PathBuf {
-    let objects = compile_objects(&["-O2"]);
-    let suffix = unique_suffix();
-    let harness_c = std::env::temp_dir().join(format!("ruxen_json_{name}_{suffix}.c"));
-    let harness_bin = std::env::temp_dir().join(format!("ruxen_json_{name}_{suffix}"));
-    std::fs::write(&harness_c, source).expect("write harness");
-
-    let mut cmd = Command::new("cc");
-    cmd.arg(&harness_c);
-    for obj in &objects {
-        cmd.arg(obj);
-    }
-    cmd.arg("-o").arg(&harness_bin);
-    let status = cmd.status().expect("invoke cc for harness");
-
-    let _ = std::fs::remove_file(&harness_c);
-    for obj in &objects {
-        let _ = std::fs::remove_file(obj);
-    }
-    assert!(status.success(), "failed to compile harness {name}");
-    harness_bin
-}
-
 fn run_harness(name: &str, source: &str) {
-    let harness = compile_harness(name, source);
+    let harness = common::link_c_harness(name, source);
     let output = Command::new(&harness).output().expect("run harness");
     let _ = std::fs::remove_file(&harness);
     assert!(
@@ -183,7 +163,8 @@ typedef struct RuxenHash RuxenHash;
 
 RuxenVec *ruxen_vec_new(void);
 void ruxen_vec_push(RuxenVec *v, int64_t item);
-RuxenHash *ruxen_hash_new(void);
+RuxenHash *ruxen_hash_new_keyed(int64_t kind, int64_t hash_fn, int64_t eq_fn);
+#define RUXEN_KEY_CSTR 1
 void ruxen_hash_insert(RuxenHash *h, int64_t key, int64_t value);
 char *ruxen_string_from(const char *s);
 
@@ -205,7 +186,7 @@ int main(void) {
     ruxen_vec_push(items, (int64_t)ruxen_json_make_int(7));
     ruxen_vec_push(items, (int64_t)ruxen_json_make_bool(1));
 
-    RuxenHash *fields = ruxen_hash_new();
+    RuxenHash *fields = ruxen_hash_new_keyed(RUXEN_KEY_CSTR, 0, 0);
     ruxen_hash_insert(fields, (int64_t)ruxen_string_from("name"), (int64_t)ruxen_json_make_string("ruxen"));
     ruxen_hash_insert(fields, (int64_t)ruxen_string_from("items"), (int64_t)ruxen_json_make_array(items));
     ruxen_hash_insert(fields, (int64_t)ruxen_string_from("enabled"), (int64_t)ruxen_json_make_bool(1));

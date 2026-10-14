@@ -18,6 +18,8 @@
 //! `ruxen_hash_free`, the splice also injects per-helper counters so
 //! tests can assert which kind of free fired.
 
+mod common;
+
 use ruxen_core::codegen;
 use ruxen_core::lexer::Lexer;
 use ruxen_core::mir::lower::Lowerer;
@@ -25,7 +27,7 @@ use ruxen_core::parser::Parser;
 use ruxen_core::typeck;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 fn rx(name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -105,10 +107,10 @@ fn synthesize_unity_runtime() -> String {
         // the include path). The unity build below concatenates
         // every per-package .c into a single tempfile in `tmp/` and
         // hands that to `cc` with no such include path, so the
-        // include fails. The drop-elaboration suite never exercises
-        // regex anyway — the splices it injects target malloc/free
-        // patterns in core/string/vec/hash. Skip the regex package
-        // outright.
+        // include fails. The splices target malloc/free patterns in
+        // core/string/vec/hash, so the regex package is left out of the
+        // unity build and linked as separate objects instead (see
+        // `regex_runtime_link_flags`).
         .filter(|p| {
             p.file_name()
                 .and_then(|s| s.to_str())
@@ -409,6 +411,22 @@ fn inject_helper_counter(tracked: &str, header_old: &str, header_new: &str) -> S
     }
 }
 
+/// Objects for the regex package (and its vendored PCRE2), which the
+/// tracked unity build leaves out, passed to the link as extra inputs.
+/// Compiled once per process. Call with `RUXEN_RUNTIME_ENV_LOCK` held and
+/// `RUXEN_RUNTIME` unset, since source discovery reads that variable.
+fn regex_runtime_link_flags() -> &'static [String] {
+    static OBJECTS: OnceLock<Vec<String>> = OnceLock::new();
+    OBJECTS.get_or_init(|| {
+        let sources = common::package_runtime_sources(&["regex"]);
+        assert!(!sources.is_empty(), "no regex runtime sources found");
+        common::compile_runtime_objects(&sources)
+            .into_iter()
+            .map(|o| o.to_string_lossy().into_owned())
+            .collect()
+    })
+}
+
 fn compile_and_run_with_tracking(name: &str, source: &str) -> (String, String, Option<i32>) {
     let root = workspace_root();
     let tmp_dir = root.join("tmp");
@@ -444,8 +462,16 @@ fn compile_and_run_with_tracking(name: &str, source: &str) -> (String, String, O
         let _env_guard = RUXEN_RUNTIME_ENV_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
+        let regex_objects = regex_runtime_link_flags();
         std::env::set_var("RUXEN_RUNTIME", &runtime_path);
-        let result = codegen::compile(&mir, bin_path.to_str().unwrap());
+        let result = codegen::compile_with_options(
+            &mir,
+            bin_path.to_str().unwrap(),
+            false,
+            regex_objects,
+            &[],
+            codegen::Backend::Cranelift,
+        );
         std::env::remove_var("RUXEN_RUNTIME");
         result
     };

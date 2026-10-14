@@ -1,0 +1,11 @@
+# Float `%` is the truncated remainder (C `fmod`), the same on the
+# Cranelift and LLVM backends: the result takes the sign of the dividend.
+def rem(a: Float, b: Float) -> Float
+  a % b
+end
+
+def main
+  puts "#{rem(7.5, 2.0)}"
+  puts "#{rem(-7.5, 2.0)}"
+  puts "#{rem(1.25, 0.5)}"
+end

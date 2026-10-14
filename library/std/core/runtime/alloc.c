@@ -59,14 +59,6 @@ void ruxen_string_ORIG_FREE(char *s) {
     if (s) free(s);
 }
 
-void *ruxen_realloc(void *ptr, uint64_t new_size) {
-    void *new_ptr = realloc(ptr, (size_t)new_size);
-    if (!new_ptr && new_size > 0) {
-        ruxen_panic("out of memory");
-    }
-    return new_ptr;
-}
-
 /* ── Option / Result Helpers ──────────────────────────────────────── */
 
 /* Option unwrap_or: if tag==0 (None), return default_val; if tag==1 (Some), return payload */
@@ -75,29 +67,6 @@ int64_t ruxen_option_unwrap_or(void *opt, int64_t default_val) {
     int32_t tag = *(int32_t *)opt;
     if (tag == 0) return default_val; /* None */
     return ((int64_t *)opt)[1]; /* Some(payload) */
-}
-
-/* Result unwrap_or_else: if Ok (tag 0), return payload. If Err, call handler. */
-int64_t ruxen_result_unwrap_or_else(void *result, void (*handler)(int64_t)) {
-    if (!result) return 0;
-    int32_t tag = *(int32_t *)result;
-    if (tag == 0) return ((int64_t *)result)[1]; /* Ok */
-    /* Err — call handler with error payload if handler is non-null */
-    if (handler) {
-        int64_t err_payload = ((int64_t *)result)[1];
-        handler(err_payload);
-    }
-    return 0;
-}
-
-/* Result try_op (? operator): if Ok, return payload. If Err, propagate. */
-int64_t ruxen_result_try_op(void *result) {
-    if (!result) return 0;
-    int32_t tag = *(int32_t *)result;
-    if (tag == 0) return ((int64_t *)result)[1]; /* Ok */
-    /* Err — in a real implementation, this would propagate via a return.
-       For now, just return 0. */
-    return 0;
 }
 
 /* Result expect!(msg): if Ok, return payload; if Err, panic with `msg`. */
@@ -169,21 +138,6 @@ int64_t ruxen_result_unwrap_or(void *result, int64_t default_val) {
     return default_val;
 }
 
-/* Option ok_or(): Some(v) -> Ok(v); None -> Err(err_value). The error
-   value is supplied eagerly; for the closure-druxen variant use
-   `ok_or_else` (not yet implemented). */
-void *ruxen_option_ok_or(void *opt, int64_t err_value) {
-    int64_t *out = (int64_t *)ruxen_alloc(16);
-    if (opt && *(int32_t *)opt == 1) {
-        *(int32_t *)out = 0; /* Ok */
-        out[1] = ((int64_t *)opt)[1];
-    } else {
-        *(int32_t *)out = 1; /* Err */
-        out[1] = err_value;
-    }
-    return out;
-}
-
 /* Option / Result is_* predicates (return i8). */
 int8_t ruxen_option_is_some(void *opt) {
     return opt && *(int32_t *)opt == 1;
@@ -198,19 +152,14 @@ int8_t ruxen_result_is_err(void *result) {
     return !result || *(int32_t *)result == 1;
 }
 
-/* ── No-op Stubs ──────────────────────────────────────────────────── */
+/* ── Passthrough intrinsic ────────────────────────────────────────── */
 
-/* Pass through the first argument unchanged (for iterator wrappers etc.) */
+/* Pass through the first argument unchanged. The sanctioned
+ * `ruxen_noop_passthrough` intrinsic (docs/decisions/
+ * phase4-ruxen-noop-passthrough.md); backends inline it. */
 int64_t ruxen_noop_passthrough(int64_t val) {
     return val;
 }
-
-/* Return null (for find/position that return Option) */
-int64_t ruxen_noop_return_null(void) {
-    return 0;
-}
-
-void ruxen_noop(void) {}
 
 /* ── Panic ─────────────────────────────────────────────────────────── */
 

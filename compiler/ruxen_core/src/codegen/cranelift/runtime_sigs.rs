@@ -60,8 +60,6 @@ pub fn compiler_internal_signature(name: &str) -> Option<(Vec<Type>, Option<Type
         // `main` prologue calls this directly (see cranelift/mod.rs
         // entry-block setup); never `.rx`-declared.
         "ruxen_env_init" => Some((vec![types::I32, types::I64], None)),
-        "ruxen_env_args_count" => Some((vec![], Some(types::I64))),
-        "ruxen_env_args_at" => Some((vec![types::I64], Some(types::I64))),
         "args" | "ruxen_env_args" => Some((vec![], Some(types::I64))),
 
         // ── Implicit conversions (interpolation / `to_s` synthesis) ──
@@ -103,7 +101,6 @@ pub fn compiler_internal_signature(name: &str) -> Option<(Vec<Type>, Option<Type
         "ruxen_string_cmp" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_string_hash" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_string_from_iter" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_str_split" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_str_parse_uint" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_hash_index" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_set_eq" => Some((vec![types::I64, types::I64], Some(types::I8))),
@@ -135,8 +132,6 @@ pub fn compiler_internal_signature(name: &str) -> Option<(Vec<Type>, Option<Type
         // `ruxen_vec_get` (+ mut variants) are the panic-on-OOB forms the
         // index operator lowers to directly.
         "ruxen_vec_get" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_vec_get_mut" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_vec_get_mut_opt" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_vec_set" => Some((vec![types::I64, types::I64, types::I64], None)),
         "ruxen_vec_from_iter" => Some((vec![types::I64], Some(types::I64))),
 
@@ -147,7 +142,6 @@ pub fn compiler_internal_signature(name: &str) -> Option<(Vec<Type>, Option<Type
         // ── Allocation + panic (core language runtime) ───────────────
         "ruxen_alloc" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_dealloc" => Some((vec![types::I64], None)),
-        "ruxen_realloc" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_panic" => Some((vec![types::I64], None)),
 
         // ── Drop-glue selectors emitted by the MIR drop pass ─────────
@@ -166,8 +160,6 @@ pub fn compiler_internal_signature(name: &str) -> Option<(Vec<Type>, Option<Type
         "ruxen_vec_drop_vec" => Some((vec![types::I64], None)),
 
         // ── Result `?`-operator + closure-fallback helpers ───────────
-        "ruxen_result_try_op" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_result_unwrap_or_else" => Some((vec![types::I64, types::I64], Some(types::I64))),
 
         // ── Implicit accessor/conversion helpers without a `.rx` decl ─
         // FOLLOW-UP (coverage gap, not a language primitive): the
@@ -194,7 +186,6 @@ pub fn compiler_internal_signature(name: &str) -> Option<(Vec<Type>, Option<Type
         "ruxen_regex_compile_const" => Some((vec![types::I64, types::I64], Some(types::I64))),
 
         // ── No-op sentinel (declared via call-site inference) ────────
-        "ruxen_noop" => Some((vec![], None)),
         _ => None,
     }
 }

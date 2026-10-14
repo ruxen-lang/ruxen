@@ -98,12 +98,6 @@ pub struct CodeGen {
     /// or `[1.5].push` stores `1`). A callee absent from this map defaults
     /// to "word", which is correct for the compiler-internal residual.
     user_fn_param_word_slots: HashMap<String, Vec<bool>>,
-    /// Tier 4.04: lowered in no_std mode. When `true`, `translate_into_ctx`
-    /// SKIPS the `ruxen_env_init(argc, argv)` injection into `main` — a no_std
-    /// build has no `std.env` and no `ruxen_env_init` runtime symbol to call.
-    /// Set from `MirProgram::no_std` at the top of `compile_program`; `false`
-    /// on every hosted build (unchanged).
-    no_std: bool,
 }
 
 impl CodeGen {
@@ -185,7 +179,6 @@ impl CodeGen {
             vtable_data: HashMap::new(),
             user_fn_param_tys: HashMap::new(),
             user_fn_param_word_slots: HashMap::new(),
-            no_std: false,
         })
     }
 
@@ -195,9 +188,6 @@ impl CodeGen {
     /// FFI declarations from `lib` and `extern "C"` blocks are declared
     /// as imported functions so they can be called from user code.
     pub fn compile_program(&mut self, program: &MirProgram) -> Result<(), String> {
-        // Tier 4.04: carry no_std through to the entry-point lowering, which
-        // skips the `ruxen_env_init` injection into `main`.
-        self.no_std = program.no_std;
         // ── Pass 0: declare FFI functions ────────────────────────────────
         for lib in &program.ffi_libs {
             for ffi_fn in &lib.functions {
@@ -559,28 +549,6 @@ impl CodeGen {
             builder.switch_to_block(entry_cl_block);
             builder.append_block_params_for_function_params(entry_cl_block);
 
-            // Inject `ruxen_env_init(argc, argv)` at the top of `main` so
-            // `std.env` sees the process args — EXCEPT in a no_std build, which
-            // has no `std.env` and no `ruxen_env_init` runtime symbol.
-            if func.name == "main" && !self.no_std {
-                let params_vals = builder.block_params(entry_cl_block).to_vec();
-                let argc = params_vals
-                    .first()
-                    .copied()
-                    .ok_or_else(|| "missing argc param for main".to_string())?;
-                let argv = params_vals
-                    .get(1)
-                    .copied()
-                    .ok_or_else(|| "missing argv param for main".to_string())?;
-                let env_init = env.declare_runtime_func(
-                    "ruxen_env_init",
-                    &[types::I32, types::I64],
-                    None,
-                    &mut builder,
-                )?;
-                builder.ins().call(env_init, &[argc, argv]);
-            }
-
             // Bind function parameters to their local variables. `build_signature`
             // SKIPS zero-sized (`Unit`/`Never`) params (`ty_to_cranelift` → None),
             // so the block-param vector has no slot for them. Walk `params_vals`
@@ -591,27 +559,24 @@ impl CodeGen {
             // zero-sized param still needs SOME binding because the body may name
             // it (`f.(self)` in a universal `Kernel` body on a unit receiver), so
             // bind it to a dummy 0.
-            if func.name != "main" {
-                let params_vals = builder.block_params(entry_cl_block).to_vec();
-                let mut value_idx = 0;
-                for &param_id in func.params.iter() {
-                    let has_abi_slot =
-                        ty_to_cranelift(&func.locals[param_id as usize].ty).is_some();
-                    if has_abi_slot {
-                        if value_idx < params_vals.len() {
-                            def_local(
-                                &var_map,
-                                &stack_slots,
-                                &mut builder,
-                                param_id,
-                                params_vals[value_idx],
-                            );
-                            value_idx += 1;
-                        }
-                    } else {
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        def_local(&var_map, &stack_slots, &mut builder, param_id, zero);
+            let params_vals = builder.block_params(entry_cl_block).to_vec();
+            let mut value_idx = 0;
+            for &param_id in func.params.iter() {
+                let has_abi_slot = ty_to_cranelift(&func.locals[param_id as usize].ty).is_some();
+                if has_abi_slot {
+                    if value_idx < params_vals.len() {
+                        def_local(
+                            &var_map,
+                            &stack_slots,
+                            &mut builder,
+                            param_id,
+                            params_vals[value_idx],
+                        );
+                        value_idx += 1;
                     }
+                } else {
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    def_local(&var_map, &stack_slots, &mut builder, param_id, zero);
                 }
             }
 

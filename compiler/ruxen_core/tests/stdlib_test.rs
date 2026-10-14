@@ -159,6 +159,11 @@ fn tester_context_inherits_parent_hooks() {
         .expect("inner_before for inner case");
     assert!(inner_outer_before < inner_inner_before);
     assert!(inner_inner_before < inner_body_idx);
+    assert!(
+        stdout[inner_body_idx..].contains("outer_after"),
+        "context dropped the parent's after hook: {}",
+        stdout
+    );
     // 2 passing, 0 failing, 0 pending
     assert!(
         stdout.contains("2 passed, 0 failed, 0 pending"),
@@ -199,11 +204,11 @@ fn runner_fork_isolates_panic() {
 }
 
 #[test]
-fn it_panics_pass_when_body_panics_fail_when_not() {
+fn it_panics_passes_only_when_body_panics_with_expected_message() {
     let (stdout, _stderr, _ok) =
         compile_and_run(&rx("test_expect_panic"), "stdlib_test_expect_panic");
     assert!(
-        stdout.contains("1 passed, 1 failed, 0 pending"),
+        stdout.contains("1 passed, 2 failed, 0 pending"),
         "got: {}",
         stdout
     );

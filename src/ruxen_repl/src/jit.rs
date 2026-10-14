@@ -50,13 +50,11 @@ extern "C" {
     fn ruxen_string_chars(s: *const i8) -> *mut u8;
     fn ruxen_string_eq(a: *const i8, b: *const i8) -> i64;
     fn ruxen_string_cmp(a: *const i8, b: *const i8) -> i64;
-    fn ruxen_str_split(s: *const i8, d: *const i8) -> *const i8;
     fn ruxen_str_parse_uint(s: *const i8) -> i64;
     fn ruxen_deref_ptr(p: *const i8) -> *const i8;
     fn ruxen_store_ptr(p: *mut i8, v: *const i8);
     fn ruxen_alloc(size: i64) -> *mut u8;
     fn ruxen_dealloc(ptr: *mut u8);
-    fn ruxen_realloc(ptr: *mut u8, new_size: i64) -> *mut u8;
     fn ruxen_panic(msg: *const i8);
     fn ruxen_vec_new() -> *mut u8;
     fn ruxen_vec_push(v: *mut u8, item: i64);
@@ -64,8 +62,6 @@ extern "C" {
     fn ruxen_vec_len(v: *mut u8) -> i64;
     fn ruxen_vec_get(v: *mut u8, idx: i64) -> i64;
     fn ruxen_vec_get_opt(v: *mut u8, idx: i64) -> i64;
-    fn ruxen_vec_get_mut(v: *mut u8, idx: i64) -> i64;
-    fn ruxen_vec_get_mut_opt(v: *mut u8, idx: i64) -> i64;
     fn ruxen_vec_is_empty(v: *mut u8) -> i8;
     fn ruxen_vec_each(v: *mut u8, cb: *const u8);
     fn ruxen_hash_new() -> *mut u8;
@@ -115,8 +111,6 @@ extern "C" {
     fn ruxen_option_unwrap(opt: *mut u8) -> i64;
     fn ruxen_option_is_some(opt: *mut u8) -> i8;
     fn ruxen_option_is_none(opt: *mut u8) -> i8;
-    fn ruxen_result_unwrap_or_else(result: *mut u8, handler: *const u8) -> i64;
-    fn ruxen_result_try_op(result: *mut u8) -> i64;
     fn ruxen_result_expect(result: *mut u8, msg: *const i8) -> i64;
     fn ruxen_result_unwrap(result: *mut u8) -> i64;
     fn ruxen_result_is_ok(result: *mut u8) -> i8;
@@ -124,8 +118,6 @@ extern "C" {
     fn ruxen_result_ok(result: *mut u8) -> i64;
     fn ruxen_result_err(result: *mut u8) -> i64;
     fn ruxen_noop_passthrough(val: i64) -> i64;
-    fn ruxen_noop_return_null() -> i64;
-    fn ruxen_noop();
 
     // ruby-naming.spec.md §3.6 / #06.D interp routing: bare `"#{x}"`
     // for a primitive (Int/Float/Bool/Char) lowers through
@@ -719,13 +711,11 @@ fn register_runtime_symbols(builder: &mut JITBuilder) {
     reg!(builder, ruxen_string_chars);
     reg!(builder, ruxen_string_eq);
     reg!(builder, ruxen_string_cmp);
-    reg!(builder, ruxen_str_split);
     reg!(builder, ruxen_str_parse_uint);
     reg!(builder, ruxen_deref_ptr);
     reg!(builder, ruxen_store_ptr);
     reg!(builder, ruxen_alloc);
     reg!(builder, ruxen_dealloc);
-    reg!(builder, ruxen_realloc);
     reg!(builder, ruxen_panic);
     reg!(builder, ruxen_vec_new);
     reg!(builder, ruxen_vec_push);
@@ -733,8 +723,6 @@ fn register_runtime_symbols(builder: &mut JITBuilder) {
     reg!(builder, ruxen_vec_len);
     reg!(builder, ruxen_vec_get);
     reg!(builder, ruxen_vec_get_opt);
-    reg!(builder, ruxen_vec_get_mut);
-    reg!(builder, ruxen_vec_get_mut_opt);
     reg!(builder, ruxen_vec_is_empty);
     reg!(builder, ruxen_vec_each);
     reg!(builder, ruxen_hash_new);
@@ -761,8 +749,6 @@ fn register_runtime_symbols(builder: &mut JITBuilder) {
     reg!(builder, ruxen_option_unwrap);
     reg!(builder, ruxen_option_is_some);
     reg!(builder, ruxen_option_is_none);
-    reg!(builder, ruxen_result_unwrap_or_else);
-    reg!(builder, ruxen_result_try_op);
     reg!(builder, ruxen_result_expect);
     reg!(builder, ruxen_result_unwrap);
     reg!(builder, ruxen_result_is_ok);
@@ -770,8 +756,6 @@ fn register_runtime_symbols(builder: &mut JITBuilder) {
     reg!(builder, ruxen_result_ok);
     reg!(builder, ruxen_result_err);
     reg!(builder, ruxen_noop_passthrough);
-    reg!(builder, ruxen_noop_return_null);
-    reg!(builder, ruxen_noop);
     // Formatter family — ruby-naming.spec.md §3.6 / #06.D routes
     // primitive interpolations through these symbols.
     reg!(builder, ruxen_fmt_formatter_new);

@@ -347,7 +347,6 @@ mod tests {
             vtables: Vec::new(),
             class_infos: Vec::new(),
             wasm_exports: Vec::new(),
-            no_std: false,
         }
     }
 

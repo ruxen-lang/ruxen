@@ -279,6 +279,39 @@ fn q41_runtime_mixin_class_info_lowers_links_and_runs() {
     assert_eq!(exit, 0);
 }
 
+/// A no_std `main` has no `std.env`, so the LLVM build must not call
+/// `ruxen_env_init`: the object links with no stdlib runtime and runs.
+#[test]
+fn no_std_main_links_without_env_init() {
+    let source =
+        "def add(a: Int, b: Int) -> Int\n  a + b\nend\n\ndef main\n  let x = add(1, 2)\nend\n";
+    let tokens = Lexer::new(source).tokenize().expect("lex failed");
+    let program = Parser::new(tokens).parse().expect("parse failed");
+    let type_result = typeck::type_check_with_bootstrap_packages(&program, &[]);
+    assert!(
+        !type_result
+            .diagnostics
+            .iter()
+            .any(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error),
+        "type errors: {:#?}",
+        type_result.diagnostics
+    );
+    let mir_program = ruxen_core::mir::lower::Lowerer::new_no_std(&type_result.symbols)
+        .lower_program(&type_result.program)
+        .expect("MIR lowering failed");
+    let output_path = format!(
+        "{}/ruxen_test_{}_no_std.exe",
+        std::env::temp_dir().display(),
+        std::process::id()
+    );
+
+    codegen::compile_no_std(&mir_program, &output_path, Backend::Llvm { opt_level: 0 })
+        .expect("no_std LLVM build should link without ruxen_env_init");
+    let (_, exit) = run_exe(&output_path);
+
+    assert_eq!(exit, 0);
+}
+
 /// Test that all optimization levels produce correct output.
 #[test]
 fn all_opt_levels_correct() {

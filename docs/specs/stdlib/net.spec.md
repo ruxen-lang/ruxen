@@ -10,10 +10,9 @@
 are passed as `"host:port"` strings; the class wrappers own a POSIX
 fd and `close` it on drop. The flat fd-based `tcp_*` free functions
 from the prompt-#06.5-T5 predecessor (Phase 3) have been **removed**
-from the user-facing surface — the underlying C runtime symbols
-(`ruxen_tcp_connect`, `ruxen_tcp_listen`, …) are still linked and
-reused internally by `TcpListener` / `TcpStream`, but they are no
-longer Ruxen-callable.
+from the user-facing surface, and their C runtime symbols
+(`ruxen_tcp_connect`, `ruxen_tcp_listen`, …) were deleted from
+`tcp.c`.
 
 ---
 
@@ -121,9 +120,7 @@ through the new `ruxen_tcp_read_bytes(fd, buf, max)` runtime helper
 which writes each received byte into a fresh int64 slot, never
 treating the staging buffer as a C string. The legacy
 `ruxen_tcp_read(fd, max) -> char*` helper (which DID truncate on
-embedded NULs) is kept linked but no longer reachable from Ruxen —
-the flat-fn surface that exposed it was removed alongside the rest
-of the Phase-3 free fns.
+embedded NULs) was deleted with the rest of the Phase-3 free fns.
 
 ### C10 — `TcpStream.peer_addr() -> Result[String, IoError]`
 
@@ -199,8 +196,7 @@ A Ruxen program that writes `use std.net.tcp_connect` must fail at
 resolve time with "name not found in std.net". The 6 C runtime
 symbols (`ruxen_tcp_connect`, `ruxen_tcp_listen`,
 `ruxen_tcp_accept`, `ruxen_tcp_read`, `ruxen_tcp_write`,
-`ruxen_tcp_close`) remain linked and reused by the class wrappers;
-they are simply no longer reachable from Ruxen user code.
+`ruxen_tcp_close`) were deleted from the runtime.
 
 ---
 

@@ -25,10 +25,9 @@
 ## or wrap the future in their own helper. See executor.spec.md B1.
 ## Body is unreachable in well-formed compilations — the intrinsic
 ## rewriter in async_lowering replaces every call site BEFORE
-## resolve/typeck. Returning `future` unchanged is defensive: if a
-## future bug ever skips the rewrite, the value passes through
-## rather than misbehaving silently. The same scenario would also
-## trip the resolver's E1112 / type errors at the call site (a
-## `__FooFuture` doesn't satisfy `Int`), so the user sees a
-## diagnostic before this body could even matter.
-def block_on(future: Int) -> Int { future }
+## resolve/typeck. If a compiler bug ever skips the rewrite, the body
+## aborts loudly instead of passing the argument through as if it
+## were the future's output.
+def block_on(future: Int) -> Int
+  panic!("block_on: call site was not rewritten by async lowering (compiler bug)")
+end

@@ -87,6 +87,20 @@ impl<'a> Lowerer<'a> {
             self.def_to_local.insert(param.def_id, local);
         }
 
+        // The process entry point takes the C `main(argc, argv)` ABI and hands
+        // the arguments to `std.env` before the body runs. A no_std build has
+        // no `std.env` and no `ruxen_env_init`, so its `main` keeps no params.
+        if name == "main" && !has_self_param && !self.no_std {
+            let argc = self.fn_mut().new_local("__argc", Ty::Int32, false);
+            let argv = self.fn_mut().new_local("__argv", Ty::RawPtrVoid, false);
+            self.fn_mut().params.extend([argc, argv]);
+            self.emit(MirInst::Call {
+                dest: None,
+                callee: "ruxen_env_init".to_string(),
+                args: vec![MirValue::Use(argc), MirValue::Use(argv)],
+            });
+        }
+
         // Handle auto-assign params (@field) in init methods.
         // Generate SetField for each auto_assign param.
         // The field_index must match the class field order, not the param

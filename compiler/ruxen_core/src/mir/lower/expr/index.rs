@@ -10,9 +10,8 @@ use super::super::*;
 /// Shared with `assign.rs` (the `xs[i] = v` write path mirrors this read
 /// path), so it is `pub(super)`.
 pub(super) fn is_indexable_vec_ty(ty: &Ty) -> bool {
-    match ty {
+    match ty.peel_refs() {
         Ty::Array(_) => true,
-        Ty::Ref(inner) | Ty::RefMut(inner) => is_indexable_vec_ty(inner),
         Ty::Class { name, .. } => {
             let base = name.split('[').next().unwrap_or(name);
             matches!(base, "Vec" | "Array")
@@ -67,13 +66,7 @@ impl<'a> Lowerer<'a> {
                 // (mirrors `ruxen_vec_get_or_panic` for Vec). The
                 // surface type is V (set in typeck::infer_index_ty);
                 // runtime returns the raw 64-bit value slot.
-                if matches!(object.ty, Ty::Map(_, _))
-                    || matches!(
-                        &object.ty,
-                        Ty::Ref(inner) | Ty::RefMut(inner)
-                            if matches!(inner.as_ref(), Ty::Map(_, _))
-                    )
-                {
+                if matches!(object.ty.peel_refs(), Ty::Map(_, _)) {
                     let base_local = self.lower_expr(object)?;
                     let idx_local = self.lower_expr(index)?;
                     let base_val = local_to_value(base_local);
@@ -90,19 +83,11 @@ impl<'a> Lowerer<'a> {
                 // `a[i]` → `a.[](i)` on a NOMINAL receiver (user/stdlib
                 // class that defines `def []`). The builtin collection heads
                 // (Array/Vec FFI-shell above, Map above, FixedArray above)
-                // are already handled; this catches everything else nominal.
-                fn peel(t: &Ty) -> &Ty {
-                    match t {
-                        Ty::Ref(i)
-                        | Ty::RefMut(i)
-                        | Ty::RefLifetime(_, i)
-                        | Ty::RefMutLifetime(_, i) => peel(i),
-                        _ => t,
-                    }
-                }
+                // are already handled; this catches everything else nominal,
+                // plus `String` (`def []` in string.rx).
                 if matches!(
-                    peel(&object.ty),
-                    Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                    object.ty.peel_refs(),
+                    Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } | Ty::String
                 ) {
                     let synthetic = HirExpr {
                         kind: HirExprKind::MethodCall {
@@ -119,10 +104,9 @@ impl<'a> Lowerer<'a> {
                     return self.lower_method_call(&synthetic);
                 }
 
-                // Dynamic index / other collection kinds still need runtime
-                // support; fall through as a no-op.
-                let _ = (object, index);
-                Ok(None)
+                // Typeck rejects every other receiver with E1128; reaching
+                // here is a shape it missed, never a silent no-op.
+                Err(format!("cannot index a value of type `{}`", object.ty))
             }
 
             // ── Cast ────────────────────────────────────────────────

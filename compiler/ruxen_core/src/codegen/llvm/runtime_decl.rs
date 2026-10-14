@@ -64,8 +64,6 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("ruxen_stderr", ptr_ty, []);
     decl!("ruxen_print_int", void, [i64_ty]);
     decl!("ruxen_env_init", void, [context.i32_type(), ptr_ty]);
-    decl!("ruxen_env_args_count", i64_ty, []);
-    decl!("ruxen_env_args_at", ptr_ty, [i64_ty]);
 
     // ── Implicit conversions (interpolation / `to_s` synthesis) ─────
     decl!("ruxen_int_to_string", ptr_ty, [i64_ty]);
@@ -106,7 +104,6 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("ruxen_string_eq", i64_ty, [ptr_ty, ptr_ty]);
     decl!("ruxen_string_hash", i64_ty, [ptr_ty]);
     decl!("ruxen_string_from_iter", ptr_ty, [ptr_ty]);
-    decl!("ruxen_str_split", ptr_ty, [ptr_ty, ptr_ty]);
     decl!("ruxen_str_parse_uint", ptr_ty, [ptr_ty]);
     decl!("ruxen_hash_index", i64_ty, [ptr_ty, i64_ty]);
     decl!("ruxen_set_eq", i8_ty, [ptr_ty, ptr_ty]);
@@ -154,8 +151,6 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
 
     // ── Indexing / element access emitted by `a[i]` lowering ────────
     decl!("ruxen_vec_get", i64_ty, [ptr_ty, i64_ty]);
-    decl!("ruxen_vec_get_mut", ptr_ty, [ptr_ty, i64_ty]);
-    decl!("ruxen_vec_get_mut_opt", ptr_ty, [ptr_ty, i64_ty]);
     decl!("ruxen_vec_set", void, [ptr_ty, i64_ty, i64_ty]);
     decl!("ruxen_vec_from_iter", ptr_ty, [ptr_ty]);
 
@@ -177,7 +172,6 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     // ── Allocation + panic (core language runtime) ──────────────────
     decl!("ruxen_alloc", ptr_ty, [i64_ty]);
     decl!("ruxen_dealloc", void, [ptr_ty]);
-    decl!("ruxen_realloc", ptr_ty, [ptr_ty, i64_ty]);
     decl!("ruxen_panic", void, [ptr_ty]);
 
     // ── Drop-glue selectors emitted by the MIR drop pass ────────────
@@ -194,8 +188,6 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("ruxen_vec_drop_vec", void, [ptr_ty]);
 
     // ── Result `?`-operator + closure-fallback helpers ──────────────
-    decl!("ruxen_result_try_op", i64_ty, [ptr_ty]);
-    decl!("ruxen_result_unwrap_or_else", i64_ty, [ptr_ty, ptr_ty]);
 
     // ── Implicit accessor/conversion helpers without a `.rx` decl ───
     // FOLLOW-UP (coverage gap, not a language primitive): see the
@@ -216,5 +208,4 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("ruxen_regex_compile_const", ptr_ty, [ptr_ty, ptr_ty]);
 
     // ── No-op sentinel ──────────────────────────────────────────────
-    decl!("ruxen_noop", void, []);
 }

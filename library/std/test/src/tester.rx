@@ -32,6 +32,9 @@ class Tester
     for h in &self.hooks_before
       child.hooks_before.push(h)
     end
+    for h in &self.hooks_after
+      child.hooks_after.push(h)
+    end
     body.(&var child)
   end
 
@@ -44,8 +47,56 @@ class Tester
     if runner_addr == 0
       return
     end
+    let packed = self.run_case(body, "")
+    let r = Runner.from_handle(runner_addr)
+    if (packed & 1) == 1
+      r.passed = r.passed + 1
+      r.note_pass(name)
+    else
+      r.failed = r.failed + 1
+      r.note_fail(name)
+    end
+  end
+
+  ## Passes only when the body panics AND the panic output on stderr
+  ## contains `expected_substr`. The child's stderr is captured in a temp
+  ## file so the parent can check the message after the child exits.
+  def it_panics(name: &String, expected_substr: &String, body: any Fn[Fn() -> nil]) -> nil
+    let runner_addr = Runner.get_current
+    if runner_addr == 0
+      return
+    end
+    let dir = match get("TMPDIR")
+      Ok(v)  -> v
+      Err(_) -> "/tmp"
+    end
+    let capture = dir + "/ruxen-it-panics-" + random_u64().to_s + ".stderr"
+    let packed = self.run_case(body, &capture)
+    let output = match read_to_string(&capture)
+      Ok(text) -> text
+      Err(_)   -> ""
+    end
+    let _ = remove_file(&capture)
+    let r = Runner.from_handle(runner_addr)
+    if (packed & 1) == 0 && output.include?(expected_substr)
+      r.passed = r.passed + 1
+      r.note_pass(name)
+    else
+      eputs(&output)
+      r.failed = r.failed + 1
+      r.note_fail(name)
+    end
+  end
+
+  ## Runs one case in a forked child: before hooks, the body, after hooks.
+  ## The child exits 0 when no matcher failed. A non-empty `capture` path
+  ## receives the child's stderr. Returns the packed `Runner.wait` status.
+  def run_case(body: any Fn[Fn() -> nil], capture: &String) -> Int
     let pid = Runner.fork
     if pid == 0
+      if capture.length > 0
+        Tester.redirect_stderr(capture, capture.length)
+      end
       Runner.case_reset
       for hook in &self.hooks_before
         hook.()
@@ -61,44 +112,7 @@ class Tester
         end
       Runner.child_exit(code)
     end
-    let packed = Runner.wait(pid)
-    let pass_bit = packed & 1
-    let r = Runner.from_handle(runner_addr)
-    if pass_bit == 1
-      r.passed = r.passed + 1
-      r.note_pass(name)
-    else
-      r.failed = r.failed + 1
-      r.note_fail(name)
-    end
-  end
-
-  def it_panics(name: &String, expected_substr: &String, body: any Fn[Fn() -> nil]) -> nil
-    let runner_addr = Runner.get_current
-    if runner_addr == 0
-      return
-    end
-    let pid = Runner.fork
-    if pid == 0
-      Runner.case_reset
-      for hook in &self.hooks_before
-        hook.()
-      end
-      body.()
-      for hook in &self.hooks_after
-        hook.()
-      end
-      Runner.child_exit(0)
-    end
-    let packed = Runner.wait(pid)
-    let pass_bit = packed & 1
-    let signaled = packed >> 9 & 255
-    let r = Runner.from_handle(runner_addr)
-    if pass_bit == 1 && signaled == 0
-      r.failed = r.failed + 1
-    else
-      r.passed = r.passed + 1
-    end
+    Runner.wait(pid)
   end
 
   def xit(name: &String, body: any Fn[Fn() -> nil]) -> nil
@@ -112,4 +126,8 @@ class Tester
   end
 
   def expect[T](actual: T) -> Matcher[T] { Matcher.new(actual) }
+
+  lib "runtime/test.c"
+    def self.redirect_stderr as "ruxen_test_redirect_stderr"(path: &String, len: Int) -> Int
+  end
 end

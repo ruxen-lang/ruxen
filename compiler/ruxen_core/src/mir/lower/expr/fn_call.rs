@@ -86,6 +86,9 @@ impl<'a> Lowerer<'a> {
                         });
                         return Ok(None);
                     }
+                    // Resolve rejects `super` outside a subclass `init`
+                    // (E1127); reaching here means a shape it missed.
+                    return Err("`super` used outside the `init` of a subclass".to_string());
                 }
 
                 // Bare-literal zero-copy: a string literal passed DIRECTLY to a

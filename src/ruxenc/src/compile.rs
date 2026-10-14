@@ -38,7 +38,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     // Parse CLI options
     let mut output_path: Option<String> = None;
-    let mut emit_mode: Option<String> = None;
+    let mut emit_mode: Option<EmitMode> = None;
     let mut release_mode = false;
     let mut backend_override: Option<String> = None;
     let mut opt_level_override: Option<String> = None;
@@ -77,8 +77,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
             // `ruxen build` performs for a directly-declared dep (Q32).
             extra_link_args.push(args[i]["--link-arg=".len()..].to_string());
             i += 1;
-        } else if args[i].starts_with("--emit=") {
-            emit_mode = Some(args[i][7..].to_string());
+        } else if let Some(mode) = args[i].strip_prefix("--emit=") {
+            emit_mode = Some(EmitMode::parse(mode)?);
             i += 1;
         } else if args[i] == "--no-std" || args[i] == "--no_std" {
             // tier 4.04: no_std mode — don't bootstrap the hosted stdlib,
@@ -102,7 +102,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
             verbose = true;
             i += 1;
         } else {
-            i += 1;
+            return Err(format!(
+                "unknown `compile` option `{}` (expected -o <path>, --target <triple>, \
+                 --emit=<{}>, --release, --backend=, --opt-level=, --no-std, --runtime-c=, \
+                 --link-arg=, --force, --verbose)",
+                args[i],
+                EmitMode::NAMES.join("|")
+            ));
         }
     }
 
@@ -138,16 +144,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // Emit modes short-circuit the cache: they don't produce a binary, so
     // caching them is meaningless and would add complexity. Run the
     // classic single-shot pipeline for these.
-    if emit_mode.is_some() {
-        return run_compile_direct(
-            path,
-            &source,
-            &output_path,
-            emit_mode.as_deref(),
-            release_mode,
-            backend_override.as_deref(),
-            opt_level_override.as_deref(),
-        );
+    if let Some(mode) = emit_mode {
+        return run_compile_direct(&source, mode);
     }
 
     // ─── Cross-compilation path (tier 4.02) ──────────────────────────────
@@ -721,17 +719,39 @@ fn run_no_std_compile(
     Ok(())
 }
 
-/// Fallback pipeline used when the user passes an --emit flag. Doesn't touch
-/// the cache; emits to stdout and returns.
-fn run_compile_direct(
-    path: &str,
-    source: &str,
-    _output_path: &str,
-    emit_mode: Option<&str>,
-    release_mode: bool,
-    backend_override: Option<&str>,
-    opt_level_override: Option<&str>,
-) -> Result<(), String> {
+/// An `--emit=<mode>` value: which intermediate form to print to stdout
+/// instead of producing a binary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmitMode {
+    Tokens,
+    Ast,
+    Hir,
+    Mir,
+}
+
+impl EmitMode {
+    /// Every accepted `--emit=` value, in pipeline order.
+    const NAMES: [&'static str; 4] = ["tokens", "ast", "hir", "mir"];
+
+    /// Parse an `--emit=` value; an unknown one is an error, never a no-op.
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "tokens" => Ok(Self::Tokens),
+            "ast" => Ok(Self::Ast),
+            "hir" => Ok(Self::Hir),
+            "mir" => Ok(Self::Mir),
+            other => Err(format!(
+                "unknown --emit value `{}` (expected one of: {})",
+                other,
+                Self::NAMES.join(", ")
+            )),
+        }
+    }
+}
+
+/// Pipeline used when the user passes an --emit flag. Doesn't touch the
+/// cache; prints the requested stage to stdout and returns.
+fn run_compile_direct(source: &str, emit_mode: EmitMode) -> Result<(), String> {
     // Bootstrap the stdlib prelude before touching user source so the
     // emit modes downstream (hir / mir / object) see the prelude-merged
     // resolver state.
@@ -745,7 +765,7 @@ fn run_compile_direct(
             .join("\n")
     })?;
 
-    if emit_mode == Some("tokens") {
+    if emit_mode == EmitMode::Tokens {
         for token in &tokens {
             println!("{:?}", token);
         }
@@ -760,7 +780,7 @@ fn run_compile_direct(
             .join("\n")
     })?;
 
-    if emit_mode == Some("ast") {
+    if emit_mode == EmitMode::Ast {
         let printer = ruxen_core::parser::printer::PrettyPrinter::new();
         println!("{}", printer.print_program(&program));
         return Ok(());
@@ -778,7 +798,7 @@ fn run_compile_direct(
         return Err("Type checking failed.".into());
     }
 
-    if emit_mode == Some("hir") {
+    if emit_mode == EmitMode::Hir {
         for item in &type_result.program.items {
             println!("{:#?}", item);
         }
@@ -798,32 +818,24 @@ fn run_compile_direct(
         .lower_program(&type_result.program)
         .map_err(|e| format!("MIR lowering error: {}", e))?;
 
-    if emit_mode == Some("mir") {
-        for func in &mir_program.functions {
-            println!("=== MIR function: {} ===", func.name);
-            println!("  params: {:?}", func.params);
-            println!("  return_ty: {:?}", func.return_ty);
-            for local in &func.locals {
-                println!(
-                    "  local {}: {} ({:?}, mutable={})",
-                    local.id, local.name, local.ty, local.mutable
-                );
-            }
-            for block in &func.blocks {
-                println!("  block {}:", block.id);
-                for inst in &block.instructions {
-                    println!("    {:?}", inst);
-                }
-                println!("    terminator: {:?}", block.terminator);
-            }
+    for func in &mir_program.functions {
+        println!("=== MIR function: {} ===", func.name);
+        println!("  params: {:?}", func.params);
+        println!("  return_ty: {:?}", func.return_ty);
+        for local in &func.locals {
+            println!(
+                "  local {}: {} ({:?}, mutable={})",
+                local.id, local.name, local.ty, local.mutable
+            );
         }
-        return Ok(());
+        for block in &func.blocks {
+            println!("  block {}:", block.id);
+            for inst in &block.instructions {
+                println!("    {:?}", inst);
+            }
+            println!("    terminator: {:?}", block.terminator);
+        }
     }
-
-    let _ = path;
-    let _ = release_mode;
-    let _ = backend_override;
-    let _ = opt_level_override;
     Ok(())
 }
 
@@ -939,4 +951,29 @@ fn toolchain_fingerprint() -> u64 {
         }
     }
     h.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run;
+
+    fn args(extra: &[&str]) -> Vec<String> {
+        ["ruxenc", "missing.rx"]
+            .iter()
+            .chain(extra)
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn unknown_option_is_an_error() {
+        let err = run(&args(&["--bogus"])).expect_err("unknown flag accepted");
+        assert!(err.contains("unknown `compile` option `--bogus`"), "{err}");
+    }
+
+    #[test]
+    fn unknown_emit_value_is_an_error() {
+        let err = run(&args(&["--emit=object"])).expect_err("unknown --emit accepted");
+        assert!(err.contains("unknown --emit value `object`"), "{err}");
+    }
 }

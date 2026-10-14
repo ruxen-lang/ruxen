@@ -192,16 +192,6 @@ int64_t ruxen_vec_get(RuxenVec *v, uint64_t index) {
     return v->data[index];
 }
 
-/* get_mut: returns a POINTER to the element in the Vec's buffer.
-   This allows mutations through the returned reference to modify
-   the actual element in the Vec. Panics if out of bounds. */
-int64_t *ruxen_vec_get_mut(RuxenVec *v, uint64_t index) {
-    if (!v || index >= v->len) {
-        ruxen_panic("index out of bounds");
-    }
-    return &v->data[index];
-}
-
 /* get_opt: returns a proper Option tagged union (16 bytes):
    [tag: i32] [pad: i32] [payload: i64]
    tag=0 → None, tag=1 → Some(value) */
@@ -212,20 +202,6 @@ void *ruxen_vec_get_opt(RuxenVec *v, uint64_t index) {
     } else {
         *(int32_t *)result = 1; /* Some */
         result[1] = v->data[index];
-    }
-    return result;
-}
-
-/* get_mut_opt: like get_opt but returns a pointer to the element
-   instead of a copy, enabling mutation through the reference. */
-void *ruxen_vec_get_mut_opt(RuxenVec *v, uint64_t index) {
-    int64_t *result = (int64_t *)ruxen_alloc(16);
-    if (!v || index >= v->len) {
-        *(int32_t *)result = 0; /* None */
-    } else {
-        *(int32_t *)result = 1; /* Some */
-        /* Store pointer to element, not copy of element */
-        result[1] = (int64_t)&v->data[index];
     }
     return result;
 }
@@ -601,112 +577,6 @@ void ruxen_vec_drop_vec(RuxenVec *v) {
     ruxen_vec_ORIG_FREE(v);
 }
 
-/* ruxen_process_run uses fork/execvp/waitpid/_exit/fprintf — POSIX process
- * spawning that doesn't exist on wasm32. It's host-only (the `process` stdlib
- * module isn't bootstrapped for wasm), so gate it out of the wasm runtime build
- * (tier 4.09). */
-#if !defined(__wasm32__)
-/* ---------------------------------------------------------------------
- * std::process::run (Phase 3)
- *
- * Fork+execvp a child process inheriting stdin/stdout/stderr from the
- * parent and return its exit code. Output capture is intentionally out
- * of scope for v1 — that's a follow-up that needs a richer return type
- * (ProcessOutput { exit_code, stdout, stderr }) and pipe plumbing.
- *
- * `args` is a `Vec[String]` whose slots hold heap `char *` pointers
- * cast to int64 (see "Vec Operations" — every Vec slot is an int64,
- * the type is dictated by codegen). We borrow those pointers directly
- * into argv; we do NOT take ownership, so the caller's drop logic for
- * the Vec[String] still runs as expected.
- *
- * Return value:
- *   - normal child exit:   the exit code (0..=255)
- *   - signal termination:  128 + signal number (matches POSIX shells)
- *   - fork() failure:      127
- *   - malloc() failure:    127
- *   - execvp() failure:    127 (reported from child via _exit, see below)
- *
- * 127 is the conventional "command not found / could not exec" code
- * used by POSIX shells, so callers that just check `!= 0` will treat
- * exec failures the same as a missing binary.
- * --------------------------------------------------------------------- */
-int64_t ruxen_process_run(const char *cmd, RuxenVec *args) {
-    if (!cmd) {
-        return 127;
-    }
-
-    uint64_t arg_count = args ? args->len : 0;
-    /* argv layout: [cmd, arg0, arg1, ..., NULL] — so argc + 2 slots. */
-    size_t argv_slots;
-    if (__builtin_add_overflow(arg_count, (uint64_t)2, &argv_slots)) {
-        return 127;
-    }
-    char **argv = (char **)malloc(sizeof(char *) * argv_slots);
-    if (!argv) {
-        return 127;
-    }
-
-    /* execvp's prototype takes `char *const argv[]`, but POSIX guarantees
-       it does not modify the strings — the const-cast is the standard
-       idiom (see `man 3p execvp`). */
-    argv[0] = (char *)cmd;
-    for (uint64_t i = 0; i < arg_count; i++) {
-        argv[i + 1] = (char *)(uintptr_t)args->data[i];
-    }
-    argv[arg_count + 1] = NULL;
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        int saved = errno;
-        fprintf(stderr, "ruxen_process_run: fork failed: %s (errno=%d)\n",
-                strerror(saved), saved);
-        free(argv);
-        return 127;
-    }
-
-    if (pid == 0) {
-        /* Child: replace image. On success, execvp does not return.
-           On failure, write the cause to stderr (the parent's stderr
-           is inherited) so CI logs surface *why* exec failed instead
-           of just "child exited 127". Then `_exit` (not `exit`) so
-           the parent's atexit/stdio cleanup is not duplicated. */
-        execvp(cmd, argv);
-        int saved = errno;
-        fprintf(stderr,
-                "ruxen_process_run: execvp(\"%s\") failed: %s (errno=%d)\n",
-                cmd ? cmd : "(null)",
-                strerror(saved),
-                saved);
-        _exit(127);
-    }
-
-    /* Parent: free argv (the strings still belong to the Vec) and wait. */
-    free(argv);
-
-    int status = 0;
-    while (waitpid(pid, &status, 0) < 0) {
-        if (errno == EINTR) {
-            continue;
-        }
-        int saved = errno;
-        fprintf(stderr, "ruxen_process_run: waitpid failed: %s (errno=%d)\n",
-                strerror(saved), saved);
-        return 127;
-    }
-
-    if (WIFEXITED(status)) {
-        return (int64_t)WEXITSTATUS(status);
-    }
-    if (WIFSIGNALED(status)) {
-        return (int64_t)(128 + WTERMSIG(status));
-    }
-    /* Stopped/continued — shouldn't happen with the default waitpid
-       options. Treat as a generic failure. */
-    return 127;
-}
-#endif /* !__wasm32__ — ruxen_process_run */
-
 /* ── Vec[T] surface — Phase 2 stdlib batch 2 (#03) ──────────────────
  * `from_iter`, `dedup`, plus the consume-style `into_iter` whose
  * runtime side is identity (the v1 iterator representation IS a
@@ -752,43 +622,6 @@ void ruxen_vec_set(RuxenVec *v, uint64_t index, int64_t value) {
         ruxen_panic("vec set: index out of bounds");
     }
     v->data[index] = value;
-}
-
-/* Vec::join — concatenate string elements with a separator.
-   Treats each Vec slot as a `const char *`. Caller is responsible
-   for ensuring the elements are strings; non-String Vecs are
-   typeck-rejected upstream. */
-char *ruxen_vec_join(RuxenVec *v, const char *sep) {
-    if (!v || v->len == 0) return ruxen_string_from("");
-    const char *separator = sep ? sep : "";
-    size_t sep_len = strlen(separator);
-    size_t total = 0;
-    for (uint64_t i = 0; i < v->len; i++) {
-        const char *s = (const char *)v->data[i];
-        if (s) total += strlen(s);
-    }
-    if (v->len > 1) {
-        total += sep_len * (v->len - 1);
-    }
-    char *out = (char *)malloc(total + 1);
-    if (!out) {
-        ruxen_panic("out of memory");
-    }
-    char *cursor = out;
-    for (uint64_t i = 0; i < v->len; i++) {
-        const char *s = (const char *)v->data[i];
-        if (i > 0 && sep_len > 0) {
-            memcpy(cursor, separator, sep_len);
-            cursor += sep_len;
-        }
-        if (s) {
-            size_t slen = strlen(s);
-            memcpy(cursor, s, slen);
-            cursor += slen;
-        }
-    }
-    *cursor = '\0';
-    return out;
 }
 
 /* String::lines — split on '\n'. The trailing empty element after

@@ -173,7 +173,20 @@ pub fn translate_instruction<M: Module>(
             let r = gen_value(rhs, func, var_map, stack_slots, builder)?;
             // Ensure both operands have the same type for binop.
             let (l, r, _) = unify_binop_operands(l, r, lhs, rhs, func, builder);
-            let result = emit_binop(*op, l, r, builder);
+            // Cranelift has no float remainder instruction, so Float `%`
+            // calls libm `fmod`: the same truncated remainder as LLVM `frem`.
+            let result = if *op == BinOp::Mod && builder.func.dfg.value_type(l) == types::F64 {
+                let fmod = env.declare_runtime_func(
+                    "fmod",
+                    &[types::F64, types::F64],
+                    Some(types::F64),
+                    builder,
+                )?;
+                let call = builder.ins().call(fmod, &[l, r]);
+                builder.inst_results(call)[0]
+            } else {
+                emit_binop(*op, l, r, builder)
+            };
             let dest_ty = func
                 .locals
                 .get(*dest as usize)
@@ -319,30 +332,6 @@ pub fn translate_instruction<M: Module>(
                         def_local(var_map, stack_slots, builder, *dest_id, val);
                     }
                     // No actual call needed.
-                }
-                "ruxen_noop_return_null" => {
-                    // Return a null/zero pointer.
-                    if let Some(dest_id) = dest {
-                        let dest_ty = func
-                            .locals
-                            .get(*dest_id as usize)
-                            .and_then(|l| ty_to_cranelift(&l.ty))
-                            .unwrap_or(types::I64);
-                        let zero = builder.ins().iconst(dest_ty, 0);
-                        def_local(var_map, stack_slots, builder, *dest_id, zero);
-                    }
-                }
-                "ruxen_noop" => {
-                    // Do nothing, don't even set a result.
-                    if let Some(dest_id) = dest {
-                        let dest_ty = func
-                            .locals
-                            .get(*dest_id as usize)
-                            .and_then(|l| ty_to_cranelift(&l.ty))
-                            .unwrap_or(types::I64);
-                        let zero = builder.ins().iconst(dest_ty, 0);
-                        def_local(var_map, stack_slots, builder, *dest_id, zero);
-                    }
                 }
                 _ => {
                     // Normal function call via the runtime or user-defined function.
@@ -777,10 +766,9 @@ pub fn emit_binop(
             BinOp::Sub => builder.ins().fsub(lhs, rhs),
             BinOp::Mul => builder.ins().fmul(lhs, rhs),
             BinOp::Div => builder.ins().fdiv(lhs, rhs),
-            // Cranelift has no native float remainder; most languages don't
-            // expose `%` on floats. Fall back to int rem (will fail verifier
-            // if it ever actually runs — surfaced as a compiler error).
-            BinOp::Mod => builder.ins().srem(lhs, rhs),
+            // Float `%` needs a libm call, which `translate_instruction`
+            // emits before reaching here.
+            BinOp::Mod => unreachable!("Float `%` is lowered to an `fmod` call"),
             BinOp::Eq => builder.ins().fcmp(FloatCC::Equal, lhs, rhs),
             BinOp::NotEq => builder.ins().fcmp(FloatCC::NotEqual, lhs, rhs),
             BinOp::Lt => builder.ins().fcmp(FloatCC::LessThan, lhs, rhs),

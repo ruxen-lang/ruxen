@@ -82,6 +82,13 @@ pub struct Resolver {
     /// The current class DefId (for field/method resolution).
     pub(super) current_class_def: Option<DefId>,
 
+    /// Whether the class being resolved declares a parent (`class C < P`).
+    pub(super) current_class_is_subclass: bool,
+
+    /// Whether the body being resolved is the instance `init` of a
+    /// subclass, the only place `super(...)` may appear (E1127).
+    pub(super) in_subclass_init: bool,
+
     /// The current function's return type (for return statement checking).
     pub(super) current_return_ty: Option<Ty>,
 
@@ -220,6 +227,8 @@ impl Resolver {
             type_registry: HashMap::new(),
             current_self_ty: None,
             current_class_def: None,
+            current_class_is_subclass: false,
+            in_subclass_init: false,
             current_return_ty: None,
             current_impl_assoc_types: HashMap::new(),
             current_trait_context: None,

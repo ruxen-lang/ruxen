@@ -151,7 +151,11 @@ mod lowering_tests {
             .iter()
             .find(|f| f.name == "main")
             .expect("main not found");
-        assert_eq!(main_fn.params.len(), 0, "main takes no params");
+        assert_eq!(
+            main_fn.params.len(),
+            2,
+            "hosted main takes the C argc/argv params"
+        );
 
         // The entry block should have a Return(None) terminator.
         let entry = &main_fn.blocks[main_fn.entry_block];
@@ -160,6 +164,43 @@ mod lowering_tests {
             "empty main should end with Return(None), got {:?}",
             entry.terminator
         );
+        assert!(
+            matches!(
+                entry.instructions.first(),
+                Some(MirInst::Call { callee, args, .. }) if callee == "ruxen_env_init" && args.len() == 2
+            ),
+            "hosted main should start by calling ruxen_env_init(argc, argv), got {:?}",
+            entry.instructions
+        );
+    }
+
+    #[test]
+    fn no_std_main_skips_env_init() {
+        let symbols = SymbolTable::new();
+        let func = simple_func(
+            0,
+            "main",
+            vec![],
+            Ty::Unit,
+            expr(HirExprKind::Block(vec![], None), Ty::Unit),
+        );
+        let program = program_with_fn(func);
+
+        let mir = Lowerer::new_no_std(&symbols)
+            .lower_program(&program)
+            .expect("lowering failed");
+        let main_fn = mir
+            .functions
+            .iter()
+            .find(|f| f.name == "main")
+            .expect("main not found");
+
+        assert!(main_fn.params.is_empty(), "no_std main takes no params");
+        let calls_env_init =
+            main_fn.blocks.iter().flat_map(|b| &b.instructions).any(
+                |inst| matches!(inst, MirInst::Call { callee, .. } if callee == "ruxen_env_init"),
+            );
+        assert!(!calls_env_init, "no_std main must not call ruxen_env_init");
     }
 
     // ── Test 2: let x = 42 ─────────────────────────────────────────────

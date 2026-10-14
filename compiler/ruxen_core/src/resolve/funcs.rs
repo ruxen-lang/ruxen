@@ -311,11 +311,12 @@ impl Resolver {
         let mut generic_params = self.resolve_generic_params(&f.generic_params);
         // Merge `where T: Bound, ...` predicates into the matching generic
         // parameter's bounds. Predicates whose left-hand side is not a
-        // declared type parameter (e.g., associated-type constraints like
-        // `Iterable[Item = Int]`) are parsed and dropped for now — they
-        // require associated-type infrastructure not yet present.
+        // declared type parameter (e.g., associated-type constraints) are
+        // rejected with E0737 — they need associated-type infrastructure
+        // not yet present.
         if let Some(ref wc) = f.where_clause {
             for pred in &wc.predicates {
+                let mut attached = false;
                 if let ast::TypeExpr::Named(path) = &pred.type_expr {
                     if path.segments.len() == 1 && path.generic_args.is_none() {
                         let name = &path.segments[0];
@@ -338,6 +339,7 @@ impl Resolver {
                             // The predicate constrains one of THIS method's own
                             // generic params — merge into its bounds.
                             gp.bounds.extend(refs);
+                            attached = true;
                         } else if self
                             .scopes
                             .lookup_type(name)
@@ -363,11 +365,22 @@ impl Resolver {
                                 bounds: refs,
                                 span: pred.span.clone(),
                             });
+                            attached = true;
                         }
                     }
                 }
-                // TODO: associated-type bounds (e.g. `A: Iterable[Item = Int]`)
-                // are parsed but ignored until the type system models them.
+                // Any other subject (an associated type such as `A.Item`, a
+                // concrete type, an unknown name) has no bound to attach to.
+                if !attached {
+                    self.error_with_code(
+                        "`where` predicate must constrain a generic parameter of this \
+                         function or its enclosing type; associated-type and \
+                         concrete-type bounds are not supported"
+                            .to_string(),
+                        &pred.span,
+                        "E0737",
+                    );
+                }
             }
         }
 
@@ -560,9 +573,14 @@ impl Resolver {
         if f.is_async {
             self.async_scope_depth += 1;
         }
+        let old_in_subclass_init = std::mem::replace(
+            &mut self.in_subclass_init,
+            f.name == "init" && !f.is_class_method && self.current_class_is_subclass,
+        );
 
         let body = self.resolve_block_as_expr(&f.body);
 
+        self.in_subclass_init = old_in_subclass_init;
         self.async_scope_depth = old_async_scope_depth;
         self.current_return_ty = old_return_ty;
         self.scopes.pop();
@@ -749,22 +767,29 @@ impl Resolver {
                             self.scopes.insert(alias.clone(), final_id);
                             self.scopes.insert_type(alias.clone(), final_id);
                         }
-                        ast::UseKind::Group(_) => {
+                        ast::UseKind::Group(names) => {
                             // For grouped `use rondo.{Rondo, Request}`,
-                            // each name must already be top-level. Walk
-                            // and bind any that resolve; silently skip
-                            // those that don't (matches the existing
-                            // module-walk semantics).
-                            if let ast::UseKind::Group(names) = &use_decl.kind {
-                                for name in names {
-                                    let id = self
-                                        .scopes
-                                        .lookup_type(name)
-                                        .or_else(|| self.scopes.lookup(name));
-                                    if let Some(cid) = id {
-                                        self.scopes.insert(name.clone(), cid);
-                                        self.scopes.insert_type(name.clone(), cid);
-                                    }
+                            // each name must already be top-level. Bind
+                            // each one; a name that does not resolve is
+                            // an error (E0738), never a silent skip.
+                            for name in names {
+                                let id = self
+                                    .scopes
+                                    .lookup_type(name)
+                                    .or_else(|| self.scopes.lookup(name));
+                                if let Some(cid) = id {
+                                    self.scopes.insert(name.clone(), cid);
+                                    self.scopes.insert_type(name.clone(), cid);
+                                } else {
+                                    self.error_with_code(
+                                        format!(
+                                            "`{}` not found for `use {}.{{...}}`",
+                                            name,
+                                            path.join(".")
+                                        ),
+                                        &use_decl.span,
+                                        "E0738",
+                                    );
                                 }
                             }
                         }
@@ -955,4 +980,45 @@ impl Resolver {
     }
 
     // ─── Expression Resolution ──────────────────────────────────────
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+    use crate::resolve::Resolver;
+
+    fn resolve_codes(source: &str) -> Vec<String> {
+        let tokens = Lexer::new(source).tokenize().expect("lexer failed");
+        let program = Parser::new(tokens).parse().expect("parser failed");
+        Resolver::new()
+            .resolve(&program)
+            .diagnostics
+            .into_iter()
+            .filter_map(|d| d.code)
+            .collect()
+    }
+
+    #[test]
+    fn where_predicate_on_a_non_generic_subject_is_e0737() {
+        let codes = resolve_codes(
+            "mixin Add\nend\ndef total[T](items: &Array[T]) -> Int where Int: Add\n  0\nend\n",
+        );
+        assert_eq!(codes, vec!["E0737"]);
+    }
+
+    #[test]
+    fn where_predicate_on_an_own_generic_is_accepted() {
+        let codes = resolve_codes(
+            "mixin Add\nend\ndef total[T](items: &Array[T]) -> Int where T: Add\n  0\nend\n",
+        );
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    #[test]
+    fn use_group_miss_after_flat_merge_fallback_is_e0738() {
+        let codes =
+            resolve_codes("class Box\nend\nclass Holder\nend\nuse pkg.Holder.Box.{Box, Nope}\n");
+        assert!(codes.contains(&"E0738".to_string()), "{codes:?}");
+    }
 }

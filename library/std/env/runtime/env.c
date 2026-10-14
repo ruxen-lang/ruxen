@@ -48,18 +48,6 @@ void ruxen_env_init(int argc, char **argv) {
     }
 }
 
-int64_t ruxen_env_args_count(void) {
-    return (int64_t)ruxen_saved_argc;
-}
-
-char *ruxen_env_args_at(int64_t index) {
-    if (index < 0 || index >= ruxen_saved_argc || !ruxen_saved_argv) {
-        return NULL;
-    }
-
-    return ruxen_string_from(ruxen_saved_argv[index]);
-}
-
 void *ruxen_env_args(void) {
     RuxenVec *args = ruxen_vec_new();
 

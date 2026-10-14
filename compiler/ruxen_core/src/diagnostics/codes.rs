@@ -264,7 +264,7 @@ pub const REGISTRY: &[CodeInfo] = &[
     // page regardless of whether the failure is io, lexer, or parser.
     CodeInfo {
         code: "E0725",
-        title: "stdlib bootstrap failed (file missing / lex / parse error)",
+        title: "stdlib bootstrap failed (file missing / lex / parse error / unsupported item)",
     },
     // Type-directed auto-call: a bare reference to a function/method that
     // requires arguments, used in a value position whose expected type is
@@ -310,6 +310,29 @@ pub const REGISTRY: &[CodeInfo] = &[
     CodeInfo {
         code: "E0733",
         title: "bitwise complement requires an integer operand",
+    },
+    // E0734-E0738 (F-3, no dropped input): resolve / typeck errors that
+    // used to be uncoded or silently skipped. The REPL defers a definition
+    // on E0734/E0735/E0736 by code, never by message text.
+    CodeInfo {
+        code: "E0734",
+        title: "undefined variable",
+    },
+    CodeInfo {
+        code: "E0735",
+        title: "undefined function",
+    },
+    CodeInfo {
+        code: "E0736",
+        title: "could not infer a function's parameter or return type",
+    },
+    CodeInfo {
+        code: "E0737",
+        title: "`where` predicate does not constrain a generic parameter",
+    },
+    CodeInfo {
+        code: "E0738",
+        title: "name in a `use` group not found",
     },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
@@ -522,6 +545,20 @@ pub const REGISTRY: &[CodeInfo] = &[
     CodeInfo {
         code: "E1126",
         title: "unknown macro",
+    },
+    // E1127 (F-2, no silent stubs): `super(...)` outside the instance
+    // `init` of a class with a parent. It used to lower to a runtime no-op
+    // (`ruxen_noop`), silently skipping the call. Emitted by resolve.
+    CodeInfo {
+        code: "E1127",
+        title: "`super` outside the `init` of a subclass",
+    },
+    // E1128 (F-2): `x[i]` on a receiver with no index lowering (a tuple,
+    // a fixed-size array with a non-literal index, a scalar, ...). The MIR
+    // index catch-all used to yield an unset value. Emitted by typeck.
+    CodeInfo {
+        code: "E1128",
+        title: "value cannot be indexed",
     },
     // ── no_std / embedded (E1400-E1499) ──────────────────────────────
     // Tier 4.04. E1400 fires when a no_std compilation unit constructs a

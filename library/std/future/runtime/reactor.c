@@ -1172,9 +1172,11 @@ void ruxen_reactor_park_current(void) {
             (void)drain_rd;
             continue;
         }
-        if (!r->fd_slots) {
-            continue;
-        }
+        /* No `fd_slots` early-continue here: a timer-only reactor never
+         * allocates fd slots, and skipping would leave the timer slot
+         * un-fired and its task un-woken while the level-triggered
+         * timerfd keeps epoll_wait returning → a busy spin (fixture 416).
+         * `owns_fd_slot` already handles a NULL `fd_slots`. */
         if (ruxen_reactor_owns_fd_slot(r, p)) {
             RuxenReactorFdSlot *fd_slot = (RuxenReactorFdSlot *)p;
             fd_slot->fired = 1;

@@ -1586,13 +1586,30 @@ impl<'a> InferenceEngine<'a> {
                 let obj_ty = self.ctx.resolve(&object.ty);
                 // Operator → method desugar (Task OP, Step 3): `a[i]` →
                 // `a.[](i)` on a NOMINAL receiver (user/stdlib class with
-                // `def []`). Builtin collection heads (Array/Map/String/
-                // tuple) keep `infer_index_ty` (the machine floor).
-                expr.ty = if Self::is_nominal_operator_receiver(&obj_ty) {
+                // `def []`) and on `String` (`def []` in string.rx).
+                // Builtin collection heads (Array/Map/fixed array) keep
+                // `infer_index_ty` (the machine floor).
+                expr.ty = if Self::is_nominal_operator_receiver(&obj_ty)
+                    || matches!(obj_ty.peel_refs(), Ty::String)
+                {
                     let args = std::slice::from_ref(index.as_ref());
                     self.resolve_method_call(&obj_ty, "[]", args, &expr.span)
                 } else {
-                    self.infer_index_ty(&obj_ty)
+                    let ty = self.infer_index_ty(&obj_ty);
+                    // E1128: MIR lowers a fixed array only at a literal
+                    // index; every other receiver without an element type
+                    // has no index lowering at all.
+                    let dynamic_fixed = matches!(obj_ty.peel_refs(), Ty::FixedArray(..))
+                        && !matches!(index.kind, HirExprKind::IntLiteral(_));
+                    let unknown = matches!(obj_ty.peel_refs(), Ty::Error | Ty::Infer(_));
+                    if dynamic_fixed || (ty == Ty::Error && !unknown) {
+                        self.diagnostics.push(Diagnostic::error_with_code(
+                            format!("a value of type `{obj_ty}` cannot be indexed"),
+                            expr.span.clone(),
+                            "E1128",
+                        ));
+                    }
+                    ty
                 };
             }
 

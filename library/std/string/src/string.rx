@@ -1398,6 +1398,13 @@ class String
     cp
   end
 
+  ## `s[i]` — the character at index `i`. Aborts when `i` is out of range
+  ## (the `Array#[]` bounds check on `chars`).
+  def [](i: Int) -> Char
+    let cs = self.chars
+    cs[i]
+  end
+
   # Ruby `String#chr` — the first character as a one-character `String`, or
   # the empty string when the receiver is empty.
   def chr -> String

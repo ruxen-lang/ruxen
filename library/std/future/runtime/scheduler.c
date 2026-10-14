@@ -154,7 +154,6 @@ typedef struct RuxenTaskEntry {
  * the same task after the scheduler polls other entries. */
 static _Thread_local RuxenTaskEntry *t_queue_head = NULL;
 static _Thread_local int t_pump_in_progress = 0;
-static _Thread_local int t_wake_all_pending = 0;
 
 /* ---------------------------------------------------------------------
  * Spawn.
@@ -220,9 +219,6 @@ int64_t ruxen_executor_queue_nonempty(void) {
 }
 
 int64_t ruxen_executor_ready_nonempty(void) {
-    if (t_wake_all_pending && t_queue_head) {
-        return 1;
-    }
     RuxenTaskEntry *cur = t_queue_head;
     while (cur) {
         if (cur->ready) {
@@ -238,10 +234,6 @@ void ruxen_executor_wake_task(void *task_entry) {
         return;
     }
     ((RuxenTaskEntry *)task_entry)->ready = 1;
-}
-
-void ruxen_executor_wake_all_tasks(void) {
-    t_wake_all_pending = 1;
 }
 
 /* ---------------------------------------------------------------------
@@ -306,12 +298,10 @@ int64_t ruxen_executor_pump_tasks(void) {
     t_pump_in_progress = 1;
 
     int64_t completions = 0;
-    int wake_all = t_wake_all_pending;
-    t_wake_all_pending = 0;
     RuxenTaskEntry **prev_link = &t_queue_head;
     RuxenTaskEntry *cur = t_queue_head;
     while (cur) {
-        if (!wake_all && !cur->ready) {
+        if (!cur->ready) {
             prev_link = &cur->next;
             cur = cur->next;
             continue;

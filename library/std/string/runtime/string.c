@@ -848,34 +848,6 @@ RuxenVec *ruxen_string_into_bytes(char *s) {
 
 /* ── &str Operations ──────────────────────────────────────────────── */
 
-RuxenVec *ruxen_str_split(const char *s, const char *delimiter) {
-    RuxenVec *result = ruxen_vec_new();
-    if (!s) return result;
-    if (!delimiter || delimiter[0] == '\0') {
-        ruxen_vec_push(result, (int64_t)ruxen_string_from(s));
-        return result;
-    }
-    size_t dlen = strlen(delimiter);
-    const char *start = s;
-    while (1) {
-        const char *found = strstr(start, delimiter);
-        if (!found) {
-            ruxen_vec_push(result, (int64_t)ruxen_string_from(start));
-            break;
-        }
-        size_t part_len = (size_t)(found - start);
-        char *part = (char *)malloc(part_len + 1);
-        if (!part) {
-            ruxen_panic("out of memory");
-        }
-        memcpy(part, start, part_len);
-        part[part_len] = '\0';
-        ruxen_vec_push(result, (int64_t)part);
-        start = found + dlen;
-    }
-    return result;
-}
-
 /* Parse a string to an unsigned integer, returning a Result-like value.
    Returns a tagged union: tag=0 (Ok) with value, tag=1 (Err). */
 void *ruxen_str_parse_uint(const char *s) {

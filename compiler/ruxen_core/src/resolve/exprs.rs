@@ -104,6 +104,9 @@ impl Resolver {
                 span,
             },
             ast::ExprKind::Identifier(name) => {
+                if name == "super" {
+                    self.check_super_context(&span);
+                }
                 // `block_defined?` / `block_given?` (alias) — Ruby-block-semantics
                 // ADR D6. A no-receiver builtin predicate that is `true` iff the
                 // caller passed a block. Desugars to `__block != nil` (the null
@@ -280,7 +283,7 @@ impl Resolver {
                         }
                     }
                 } else {
-                    self.error(format!("undefined variable `{}`", name), &span);
+                    self.error_with_code(format!("undefined variable `{}`", name), &span, "E0734");
                     self.unresolved_names.push(name.to_string());
                     HirExpr {
                         kind: HirExprKind::Error,
@@ -571,6 +574,9 @@ impl Resolver {
                 // Try to resolve the callee
                 match &callee.kind {
                     ast::ExprKind::Identifier(name) => {
+                        if name == "super" {
+                            self.check_super_context(&span);
+                        }
                         if let Some(orig_def_id) = self.scopes.lookup(name) {
                             // A trailing `do…end` block on a call whose callee
                             // is a FUNCTION (a `def`, including yield-based
@@ -679,7 +685,11 @@ impl Resolver {
                                     };
                                 }
                             }
-                            self.error(format!("undefined function `{}`", name), &span);
+                            self.error_with_code(
+                                format!("undefined function `{}`", name),
+                                &span,
+                                "E0735",
+                            );
                             self.unresolved_names.push(name.to_string());
                             HirExpr {
                                 kind: HirExprKind::Error,
@@ -688,7 +698,11 @@ impl Resolver {
                             }
                         } else {
                             // Could be a type constructor: Type.new(...)
-                            self.error(format!("undefined function `{}`", name), &span);
+                            self.error_with_code(
+                                format!("undefined function `{}`", name),
+                                &span,
+                                "E0735",
+                            );
                             self.unresolved_names.push(name.to_string());
                             HirExpr {
                                 kind: HirExprKind::Error,
@@ -1351,31 +1365,15 @@ impl Resolver {
                 }
             }
             ast::ExprKind::UnsafeBlock(block) => {
-                // Resolve the unsafe block body just like a regular block.
-                self.scopes.push(ScopeKind::Block);
-                let mut stmts = Vec::new();
-                let mut tail_expr = None;
-                for (i, stmt) in block.statements.iter().enumerate() {
-                    let is_last = i == block.statements.len() - 1;
-                    match stmt {
-                        ast::Statement::Let(binding) => {
-                            stmts.push(self.resolve_let(binding));
-                        }
-                        ast::Statement::Expression(expr) => {
-                            let hir_expr = self.resolve_expr(expr);
-                            if is_last {
-                                tail_expr = Some(Box::new(hir_expr));
-                            } else {
-                                stmts.push(HirStatement::Expr(hir_expr));
-                            }
-                        }
-                    }
-                }
-                self.scopes.pop();
-                let ty = tail_expr.as_ref().map(|e| e.ty.clone()).unwrap_or(Ty::Unit);
+                // Same body resolution as a regular block (including bare
+                // `x = v` first-assignment bindings), rewrapped as unsafe.
+                let resolved = self.resolve_block_as_expr(block);
+                let HirExprKind::Block(stmts, tail_expr) = resolved.kind else {
+                    unreachable!("resolve_block_as_expr always yields HirExprKind::Block")
+                };
                 HirExpr {
                     kind: HirExprKind::UnsafeBlock(stmts, tail_expr),
-                    ty,
+                    ty: resolved.ty,
                     span,
                 }
             }
@@ -1390,4 +1388,40 @@ impl Resolver {
     }
 
     // ─── Block Resolution ───────────────────────────────────────────
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+    use crate::resolve::Resolver;
+
+    fn resolve_codes(source: &str) -> Vec<Option<String>> {
+        let tokens = Lexer::new(source).tokenize().expect("lexer failed");
+        let program = Parser::new(tokens).parse().expect("parser failed");
+        Resolver::new()
+            .resolve(&program)
+            .diagnostics
+            .into_iter()
+            .map(|d| d.code)
+            .collect()
+    }
+
+    #[test]
+    fn unsafe_block_binds_a_bare_assignment() {
+        let codes = resolve_codes("def main\n  unsafe\n    x = 5\n    x\n  end\nend\n");
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    #[test]
+    fn undefined_variable_is_e0734() {
+        let codes = resolve_codes("def main\n  totl\nend\n");
+        assert_eq!(codes, vec![Some("E0734".to_string())]);
+    }
+
+    #[test]
+    fn undefined_function_is_e0735() {
+        let codes = resolve_codes("def main\n  greet(1)\nend\n");
+        assert_eq!(codes, vec![Some("E0735".to_string())]);
+    }
 }

@@ -326,8 +326,8 @@ fn compile_function<'ctx>(
     // Create entry block for allocas
     let entry_bb = context.append_basic_block(llvm_fn, "entry");
     builder.position_at_end(entry_bb);
-    // Seed a location covering the entry-block allocas / param stores / the
-    // `ruxen_env_init` call in `main`, all built before the MIR block loop.
+    // Seed a location covering the entry-block allocas and param stores,
+    // all built before the MIR block loop.
     if let Some((dctx, sp)) = debug_scope {
         builder.set_current_debug_location(dctx.location(context, fn_line, 1, sp));
     }
@@ -343,33 +343,17 @@ fn compile_function<'ctx>(
     }
 
     // Store function parameters into their allocas
-    if func.name != "main" {
-        let mut param_idx = 0u32;
-        for &param_id in &func.params {
-            let param_ty = ty_to_llvm(&func.locals[param_id as usize].ty, context);
-            if param_ty.is_some() {
-                let param_val = llvm_fn.get_nth_param(param_idx).ok_or_else(|| {
-                    format!("Missing param {} for function '{}'", param_idx, func.name)
-                })?;
-                builder
-                    .build_store(local_allocas[&param_id], param_val)
-                    .map_err(|e| format!("Failed to store param: {:?}", e))?;
-                param_idx += 1;
-            }
+    let mut param_idx = 0u32;
+    for &param_id in &func.params {
+        if ty_to_llvm(&func.locals[param_id as usize].ty, context).is_some() {
+            let param_val = llvm_fn.get_nth_param(param_idx).ok_or_else(|| {
+                format!("Missing param {} for function '{}'", param_idx, func.name)
+            })?;
+            builder
+                .build_store(local_allocas[&param_id], param_val)
+                .map_err(|e| format!("Failed to store param: {:?}", e))?;
+            param_idx += 1;
         }
-    } else {
-        let env_init = module
-            .get_function("ruxen_env_init")
-            .ok_or_else(|| "missing runtime declaration for ruxen_env_init".to_string())?;
-        let argc = llvm_fn
-            .get_nth_param(0)
-            .ok_or_else(|| "missing argc param for main".to_string())?;
-        let argv = llvm_fn
-            .get_nth_param(1)
-            .ok_or_else(|| "missing argv param for main".to_string())?;
-        builder
-            .build_call(env_init, &[argc.into(), argv.into()], "")
-            .map_err(|e| format!("Failed to build ruxen_env_init call: {:?}", e))?;
     }
 
     // Create LLVM basic blocks for each MIR block
@@ -725,6 +709,17 @@ pub(super) fn coerce_erased_word<'ctx>(
         return builder
             .build_bit_cast(narrowed, target_ty, "word_float")
             .unwrap();
+    }
+
+    // A pointer-typed word (`&Float` lowers to `ptr`) carries the float's
+    // bits too: cross through `i64`, as Cranelift's i64 word does.
+    if val.is_float_value() && target_ty.is_pointer_type() {
+        let bits = coerce_erased_word(val, context.i64_type().into(), builder, context);
+        return coerce_value(bits, target_ty, builder);
+    }
+    if val.is_pointer_value() && target_ty.is_float_type() {
+        let bits = coerce_value(val, context.i64_type().into(), builder);
+        return coerce_erased_word(bits, target_ty, builder, context);
     }
 
     coerce_value(val, target_ty, builder)

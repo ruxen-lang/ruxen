@@ -6,7 +6,11 @@ def main
   Runner.set_current(r.handle_addr)
 
   Tester.describe("Panic-expecting tests") do |t: &var Tester|
-    t.it_panics("panics -> pass", "kaboom") do
+    t.it_panics("panics with the expected message -> pass", "simulated explosion") do
+      Runner.panic
+    end
+
+    t.it_panics("panics with another message -> fail", "kaboom") do
       Runner.panic
     end
 

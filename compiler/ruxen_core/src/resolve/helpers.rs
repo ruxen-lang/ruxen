@@ -337,6 +337,20 @@ impl Resolver {
             .push(Diagnostic::error(message, span.clone()));
     }
 
+    /// E1127: `super` only dispatches to the parent's `init`, so it is
+    /// valid only inside the instance `init` of a class with a parent.
+    /// Anywhere else it used to lower to a silent no-op.
+    pub(super) fn check_super_context(&mut self, span: &Span) {
+        if !self.in_subclass_init {
+            self.error_with_code(
+                "`super` is only allowed inside `init` of a class that has a parent class"
+                    .to_string(),
+                span,
+                "E1127",
+            );
+        }
+    }
+
     /// Same as [`Self::error`] but carries a registry code so
     /// `ruxen explain E####` has something to say. `code` must appear in
     /// `diagnostics::codes::REGISTRY` (a test enforces it).

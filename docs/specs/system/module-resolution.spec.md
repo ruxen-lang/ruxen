@@ -60,8 +60,9 @@ For modules with shipped runtime impls, a complete
 
 ## B5 — `main` shim initialises runtime argv
 
-Every Ruxen binary has a generated `main` shim that calls
-`ruxen_env_init(argc, argv)` before user code runs.  This lets
+Every hosted Ruxen binary's `main` calls `ruxen_env_init(argc, argv)`
+before user code runs (MIR lowering emits the call, so every backend gets
+it; a `--no-std` build skips it).  This lets
 `std.env.args()` return the right values from the first line of
 `main`.
 

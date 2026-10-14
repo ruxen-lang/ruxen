@@ -81,8 +81,7 @@ fn user_defined_methods_forward() {
 }
 
 #[test]
-fn yield_and_super_still_resolve() {
-    assert_eq!(runtime_name("super").unwrap(), "ruxen_noop");
+fn yield_still_resolves() {
     assert_eq!(runtime_name("yield").unwrap(), "ruxen_noop_passthrough");
     // (One-string-type ADR: the `&str_as_str` compiler-internal arm was
     // removed with the `&str` type. `as_str` is now an ordinary `class String`

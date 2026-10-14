@@ -66,9 +66,8 @@ void ruxen_process_exit(int64_t code) {
  *     linked into the produced binary the direct `extern` is fine on
  *     both platforms; we reuse the existing module-level declaration.
  *   - posix_spawn would be more portable but adds a second code path
- *     for env/cwd plumbing; we use fork+execve for parity with the
- *     existing `ruxen_process_run` and to keep the implementation
- *     focused. vfork is intentionally avoided (deprecated on macOS,
+ *     for env/cwd plumbing; we use fork+execve to keep the
+ *     implementation focused. vfork is intentionally avoided (deprecated on macOS,
  *     fragile around any allocation between fork and exec).
  *   - PATH lookup: `execvp` does PATH lookup, but `execve` (which we
  *     need for explicit envp) does NOT. We therefore require an
@@ -278,7 +277,7 @@ static char **ruxen_command_build_argv(RuxenCommand *c) {
 
 /* Pack a POSIX `waitpid` status into the v1 ExitStatus convention:
  *   normal exit:    0..=255
- *   signal:         128 + signum (matches `ruxen_process_run`)
+ *   signal:         128 + signum (matches POSIX shells)
  *   anything else:  127 (lump under the fork/exec failure code)
  */
 static int64_t ruxen_command_pack_status(int wstatus) {
@@ -310,8 +309,8 @@ static RuxenExitStatus *ruxen_exit_status_alloc(int64_t code) {
  *
  * fork failure / execve failure / waitpid failure all surface as
  * Result.Err(IoError::from_errno). The child reports execve failure
- * by exiting 127 with a diagnostic on inherited stderr, matching
- * `ruxen_process_run`'s contract.
+ * by exiting 127 with a diagnostic on inherited stderr (the POSIX
+ * shell "could not exec" code).
  */
 void *ruxen_command_status(RuxenCommand *c) {
     /* REPL replay-suppression: re-running a subprocess would emit

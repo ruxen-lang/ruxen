@@ -3,7 +3,9 @@
 //! These tests link against the compiled C runtime and verify that
 //! safety-critical operations behave correctly.
 
-use std::path::{Path, PathBuf};
+mod common;
+
+use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -17,8 +19,6 @@ fn unique_suffix() -> String {
     format!("{}_{}", std::process::id(), n)
 }
 
-/// Compile the C runtime to a fresh `.o` file. Each call produces a
-/// distinct path so parallel callers don't race on shared output.
 /// Walk `library/std/<pkg>/runtime/*.c` to collect every per-package
 /// C source. After #06.95 Phase B-2 each `.c` is a standalone TU; the
 /// runtime is no longer a single file.
@@ -42,12 +42,10 @@ fn collect_runtime_sources() -> Vec<std::path::PathBuf> {
         // `pcre2/pcre2.h` from the vendored PCRE2 tree, which only
         // resolves when the file is compiled in-place with the pcre2
         // dir on the include path (see `src/ruxen_repl/build.rs` and
-        // `codegen/object.rs`). This harness compiles each `.c` with a
-        // bare `cc` and links the objects standalone, so including
-        // `regex.c` drags in PCRE2 — undefined symbols at link time,
-        // plus warning noise under the `-Werror` strict-warnings test —
-        // for a package these ABI tests never exercise. Mirrors the
-        // same skip in `drop_fixtures.rs` (commit 20098e8).
+        // `codegen/object.rs`). The warning and sanitizer checks below
+        // compile each `.c` with a bare `cc`, so they leave out the vendored
+        // tree. Linked harnesses go through `common::link_c_harness`, which
+        // compiles the full runtime with the driver's flags.
         if pkg_path.file_name().and_then(|n| n.to_str()) == Some("regex") {
             continue;
         }
@@ -78,7 +76,9 @@ fn compile_runtime_objects(extra_flags: &[&str]) -> Vec<std::path::PathBuf> {
     let mut objects: Vec<std::path::PathBuf> = Vec::with_capacity(sources.len());
     for src in &sources {
         let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("rt");
-        let obj = std::env::temp_dir().join(format!("ruxen_{}_{}.o", stem, unique_suffix()));
+        // The `ruxen_safety_` prefix keeps these apart from the driver's
+        // `ruxen_<stem>_<pid>_<n>.o` objects built by `common::link_c_harness`.
+        let obj = std::env::temp_dir().join(format!("ruxen_safety_{}_{}.o", stem, unique_suffix()));
         let mut cmd = Command::new("cc");
         cmd.arg("-c").arg(src).arg("-o").arg(&obj);
         for f in extra_flags {
@@ -94,56 +94,6 @@ fn compile_runtime_objects(extra_flags: &[&str]) -> Vec<std::path::PathBuf> {
         objects.push(obj);
     }
     objects
-}
-
-fn compile_c_harness(name: &str, source: &str) -> PathBuf {
-    let runtime_objects = compile_runtime_objects(&["-O2"]);
-    let temp_dir = std::env::temp_dir();
-    let suffix = unique_suffix();
-    let harness_c = temp_dir.join(format!("{name}_{suffix}.c"));
-    let harness_exe = temp_dir.join(format!("{name}_{suffix}"));
-
-    // `library/std/future/runtime/scheduler.c` forward-declares
-    // `Future_dynamic_poll` (and, since concurrency §4.1, `Drop_dynamic_drop`)
-    // — symbols Ruxen codegen synthesises for every class that includes
-    // `Future`/`Stream dispatch runtime` (see `synthesize_dynamic_dispatch_helpers`
-    // + the narrow Drop vtable). Pure-C harnesses don't go through codegen, so
-    // the link step fails with "undefined symbol". Inject weak stubs that are
-    // overridden when Ruxen *does* define the symbols (the normal compile path).
-    let stub_prelude = "\
-__attribute__((weak)) long long Future_dynamic_poll(long long self, long long ctx) { \
-    (void)self; (void)ctx; return 0; \
-}\n\
-__attribute__((weak)) void Drop_dynamic_drop(long long self) { \
-    (void)self; \
-}\n";
-    let harness_source = format!("{}{}", stub_prelude, source);
-    std::fs::write(&harness_c, harness_source).expect("write harness");
-
-    // On macOS the runtime's CSPRNG (`library/std/rand/runtime/rand.c`)
-    // pulls in `SecRandomCopyBytes` + `kSecRandomDefault` from
-    // `Security.framework`. Without the framework flag the link
-    // step fails with "_SecRandomCopyBytes referenced from ...".
-    // On Linux the equivalents are statically resolved via libc /
-    // getentropy(3) — no extra flag needed.
-    let mut cmd = Command::new("cc");
-    cmd.arg(&harness_c);
-    for o in &runtime_objects {
-        cmd.arg(o);
-    }
-    cmd.arg("-o").arg(&harness_exe);
-    #[cfg(target_os = "macos")]
-    {
-        cmd.arg("-framework").arg("Security");
-    }
-    let status = cmd.status().expect("failed to invoke cc for harness");
-
-    let _ = std::fs::remove_file(&harness_c);
-    for o in &runtime_objects {
-        let _ = std::fs::remove_file(o);
-    }
-    assert!(status.success(), "failed to compile C harness {name}");
-    harness_exe
 }
 
 #[test]
@@ -168,7 +118,7 @@ fn runtime_compiles_with_sanitizers() {
 
 #[test]
 fn runtime_env_init_copies_argv_and_clones_reads() {
-    let harness = compile_c_harness(
+    let harness = common::link_c_harness(
         "ruxen_runtime_env_argv",
         r#"
 #include <stdint.h>
@@ -176,9 +126,9 @@ fn runtime_env_init_copies_argv_and_clones_reads() {
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct { int64_t *data; uint64_t len; uint64_t cap; } RuxenVec;
 void ruxen_env_init(int argc, char **argv);
-int64_t ruxen_env_args_count(void);
-char *ruxen_env_args_at(int64_t index);
+RuxenVec *ruxen_env_args(void);
 
 int main(void) {
     char arg0[] = "program";
@@ -188,12 +138,14 @@ int main(void) {
     ruxen_env_init(2, argv);
     arg1[0] = 'X';
 
-    if (ruxen_env_args_count() != 2) {
+    RuxenVec *read1 = ruxen_env_args();
+    RuxenVec *read2 = ruxen_env_args();
+    if (read1->len != 2 || read2->len != 2) {
         return 1;
     }
 
-    char *copy1 = ruxen_env_args_at(1);
-    char *copy2 = ruxen_env_args_at(1);
+    char *copy1 = (char *)read1->data[1];
+    char *copy2 = (char *)read2->data[1];
     if (!copy1 || !copy2) {
         return 2;
     }
@@ -202,9 +154,6 @@ int main(void) {
     }
     if (copy1 == copy2) {
         return 4;
-    }
-    if (ruxen_env_args_at(99) != NULL) {
-        return 5;
     }
     return 0;
 }
@@ -223,7 +172,7 @@ int main(void) {
 
 #[test]
 fn runtime_fs_env_and_process_helpers_match_expected_abi() {
-    let harness = compile_c_harness(
+    let harness = common::link_c_harness(
         "ruxen_runtime_fs_env_process",
         r#"
 #include <stdint.h>

@@ -209,9 +209,8 @@ pub struct Lowerer<'a> {
     /// Display helpers (`Int_fmt`/`Char_fmt`/…), which reference hosted runtime
     /// symbols (`ruxen_int_to_string`, `Formatter_write_str`) absent in a
     /// no_std build. Set via [`Lowerer::new_no_std`]; the default `new` leaves
-    /// it `false` so every existing caller is unchanged. Also surfaced on
-    /// `MirProgram::no_std` so the cranelift backend skips the `ruxen_env_init`
-    /// injection into `main`.
+    /// it `false` so every existing caller is unchanged. Also skips the
+    /// `ruxen_env_init(argc, argv)` call a hosted `main` starts with.
     no_std: bool,
 }
 
@@ -316,7 +315,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Construct a no_std lowerer (tier 4.04): suppresses the synthesized
-    /// primitive `*_fmt` Display helpers and marks `MirProgram::no_std`.
+    /// primitive `*_fmt` Display helpers and the `ruxen_env_init` call in `main`.
     pub fn new_no_std(symbols: &'a SymbolTable) -> Self {
         let mut lo = Self::new(symbols);
         lo.no_std = true;
@@ -925,7 +924,6 @@ impl<'a> Lowerer<'a> {
 
     pub fn lower_program(&mut self, program: &HirProgram) -> Result<MirProgram, String> {
         let mut mir = MirProgram::new();
-        mir.no_std = self.no_std;
 
         // Gather `impl Trait for Type` edges so method calls on generic
         // type parameters can dispatch to the unique implementor.

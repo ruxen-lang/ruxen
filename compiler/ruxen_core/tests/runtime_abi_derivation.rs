@@ -267,8 +267,6 @@ fn baseline_runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "ruxen_set_difference" => Some((vec![types::I64, types::I64], Some(types::I64))),
         // Option/Result helpers
         "ruxen_option_unwrap_or" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_result_unwrap_or_else" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_result_try_op" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_result_expect" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_result_unwrap" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_option_expect" => Some((vec![types::I64, types::I64], Some(types::I64))),
@@ -302,7 +300,6 @@ fn baseline_runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "ruxen_match_groups" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_match_named_groups" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_match_drop" => Some((vec![types::I64], None)),
-        "ruxen_noop" => Some((vec![], None)),
         _ => None,
     }
 }
@@ -584,8 +581,6 @@ fn table_symbols() -> &'static [&'static str] {
         "ruxen_set_intersection",
         "ruxen_set_difference",
         "ruxen_option_unwrap_or",
-        "ruxen_result_unwrap_or_else",
-        "ruxen_result_try_op",
         "ruxen_result_expect",
         "ruxen_result_unwrap",
         "ruxen_option_expect",
@@ -616,7 +611,6 @@ fn table_symbols() -> &'static [&'static str] {
         "ruxen_match_groups",
         "ruxen_match_named_groups",
         "ruxen_match_drop",
-        "ruxen_noop",
     ]
 }
 
@@ -711,5 +705,217 @@ fn derived_abi_widths_match_handrolled_table_for_shared_symbols() {
         "derived-vs-table ABI width mismatches ({}):\n{}",
         mismatches.len(),
         mismatches.join("\n")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Exported-symbol reachability guard (F-15)
+// ---------------------------------------------------------------------------
+
+/// Exported runtime symbols that are knowingly unreachable today. Each entry
+/// is a kept public API whose `.rx` side is not wired yet, so deleting the C
+/// body would lose the implementation rather than dead code. Shrink this
+/// list; never grow it to silence the guard.
+///
+///   * `ruxen_channel_*`: the `Sender[T]` / `Receiver[T]` constructor
+///     (`channel[T]()`, channel.spec.md B2) and the recv-result accessors
+///     have no `.rx` declaration yet.
+const KNOWN_UNWIRED_RUNTIME_SYMBOLS: &[&str] = &[
+    "ruxen_channel_new_pair",
+    "ruxen_channel_pair_sender",
+    "ruxen_channel_pair_receiver",
+    "ruxen_channel_recv_result_tag",
+    "ruxen_channel_recv_result_value",
+];
+
+/// Files that list runtime symbols without emitting calls to them: the
+/// residual ABI tables and the REPL's JIT symbol registrations. A symbol
+/// named only here has no producer, so these do not count as emitters.
+const NON_EMITTER_SOURCES: &[&str] = &["runtime_sigs.rs", "runtime_decl.rs", "jit.rs"];
+
+fn workspace_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root")
+}
+
+fn files_with_ext(dir: &std::path::Path, ext: &str, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files_with_ext(&path, ext, out);
+        } else if path.extension().is_some_and(|e| e == ext) {
+            out.push(path);
+        }
+    }
+}
+
+/// Blank out C comments, string literals and char literals so only code
+/// identifiers remain.
+fn strip_c_noise(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let rest = &src[i..];
+        if rest.starts_with("/*") {
+            let end = rest.find("*/").map_or(src.len(), |e| i + e + 2);
+            out.extend(src[i..end].chars().filter(|&c| c == '\n'));
+            i = end;
+        } else if rest.starts_with("//") {
+            i += rest.find('\n').unwrap_or(rest.len());
+        } else if bytes[i] == b'"' || bytes[i] == b'\'' {
+            let quote = bytes[i];
+            i += 1;
+            while i < bytes.len() && bytes[i] != quote && bytes[i] != b'\n' {
+                i += if bytes[i] == b'\\' { 2 } else { 1 };
+            }
+            i += 1;
+            out.push(' ');
+        } else {
+            let c = rest.chars().next().expect("non-empty");
+            out.push(c);
+            i += c.len_utf8();
+        }
+    }
+    out
+}
+
+/// Every `ruxen_*` identifier in `src`, in order.
+fn ruxen_identifiers(src: &str) -> Vec<&str> {
+    src.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| w.starts_with("ruxen_"))
+        .collect()
+}
+
+/// Non-`static` top-level `ruxen_*` function definitions in stripped C
+/// source: an identifier at brace depth 0 followed by `( … )` and `{`.
+fn exported_c_definitions(code: &str) -> Vec<String> {
+    let mut defs = Vec::new();
+    let bytes = code.as_bytes();
+    let mut depth = 0usize;
+    let mut decl_start = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    decl_start = i + 1;
+                }
+            }
+            b';' if depth == 0 => decl_start = i + 1,
+            b'#' if depth == 0 => {
+                // Preprocessor line: skip it and start a fresh declaration.
+                i += code[i..].find('\n').unwrap_or(code.len() - i);
+                decl_start = i;
+                continue;
+            }
+            b'r' if depth == 0 && code[i..].starts_with("ruxen_") => {
+                let ident_ok =
+                    i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+                let len = code[i..]
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .unwrap_or(code.len() - i);
+                let name = &code[i..i + len];
+                let after = code[i + len..].trim_start();
+                if ident_ok && after.starts_with('(') {
+                    let close = after.find(')').expect("unbalanced parameter list");
+                    let is_definition = after[close + 1..].trim_start().starts_with('{');
+                    let prefix = &code[decl_start..i];
+                    let is_static = prefix.split_whitespace().any(|w| w == "static");
+                    if is_definition && !is_static {
+                        defs.push(name.to_string());
+                    }
+                }
+                i += len;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    defs
+}
+
+/// Every non-`static` `ruxen_*` function a stdlib C runtime exports must be
+/// reachable: declared in a `.rx` `lib` block, emitted by the compiler, or
+/// called from other runtime C code. An exported symbol nothing reaches is
+/// dead runtime surface; delete it rather than keep a residual row or JIT
+/// registration alive for it.
+#[test]
+fn every_exported_runtime_symbol_has_a_declaration_or_emitter() {
+    let root = workspace_root();
+
+    let mut c_files = Vec::new();
+    files_with_ext(&root.join("library/std"), "c", &mut c_files);
+    c_files.retain(|p| p.parent().is_some_and(|d| d.ends_with("runtime")));
+    assert!(!c_files.is_empty(), "no stdlib runtime C files found");
+
+    let mut exported: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut c_uses: BTreeMap<String, usize> = BTreeMap::new();
+    for path in &c_files {
+        let code = strip_c_noise(&std::fs::read_to_string(path).expect("read runtime C"));
+        let rel = path
+            .strip_prefix(&root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        for name in exported_c_definitions(&code) {
+            exported.entry(name).or_default().push(rel.clone());
+        }
+        for ident in ruxen_identifiers(&code) {
+            *c_uses.entry(ident.to_string()).or_default() += 1;
+        }
+    }
+
+    let declared = derived_abi_map();
+
+    let mut rs_files = Vec::new();
+    files_with_ext(&root.join("compiler/ruxen_core/src"), "rs", &mut rs_files);
+    files_with_ext(&root.join("src"), "rs", &mut rs_files);
+    let mut emitted: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for path in &rs_files {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let in_tests = path.components().any(|c| c.as_os_str() == "tests");
+        if in_tests || name.starts_with("tests") || NON_EMITTER_SOURCES.contains(&name) {
+            continue;
+        }
+        let src = std::fs::read_to_string(path).expect("read compiler source");
+        for line in src.lines() {
+            let code = line.split("//").next().unwrap_or("");
+            emitted.extend(ruxen_identifiers(code).into_iter().map(str::to_string));
+        }
+    }
+
+    let mut unreachable = Vec::new();
+    for (name, files) in &exported {
+        let called_from_c = c_uses.get(name).copied().unwrap_or(0) > files.len();
+        if declared.contains_key(name)
+            || emitted.contains(name)
+            || called_from_c
+            || KNOWN_UNWIRED_RUNTIME_SYMBOLS.contains(&name.as_str())
+        {
+            continue;
+        }
+        unreachable.push(format!("  {name} ({})", files.join(", ")));
+    }
+
+    assert!(
+        exported.len() > 100,
+        "definition scan found only {} exported symbols; the scanner is broken",
+        exported.len()
+    );
+    assert!(
+        unreachable.is_empty(),
+        "exported runtime symbols with no .rx lib declaration, compiler emitter \
+         or C caller ({}):\n{}",
+        unreachable.len(),
+        unreachable.join("\n")
     );
 }

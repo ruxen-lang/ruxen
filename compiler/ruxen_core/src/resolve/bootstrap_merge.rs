@@ -102,6 +102,8 @@ impl Resolver {
         program: &ast::Program,
         bootstrap_programs: &[ast::Program],
     ) -> ResolveResult {
+        // Read before the post-merge fixup consumes the package list.
+        let package_aware = !self.bootstrap_auto_packages.is_empty();
         self.register_builtins();
 
         // Collected FFI library declarations (filled by the
@@ -213,6 +215,21 @@ impl Resolver {
                 if !Self::is_bootstrap_supported_item(item) {
                     continue;
                 }
+                if let ast::TopLevelItem::Use(use_decl) = item {
+                    // Every bootstrap item already shares the one prelude
+                    // scope, so a stdlib `use` imports nothing new. Check
+                    // the path in a throwaway scope: a bad path still
+                    // reports, but the binding cannot shadow a user
+                    // definition registered in pass 1. The legacy
+                    // package-less path never fills the `std.<pkg>` item
+                    // lists, so there is nothing to check the path against.
+                    if package_aware {
+                        self.scopes.push(ScopeKind::Block);
+                        self.resolve_use_decl(use_decl);
+                        self.scopes.pop();
+                    }
+                    continue;
+                }
                 if let Some(hir_item) = self.resolve_item(item) {
                     bootstrap_items.push(hir_item);
                 }
@@ -263,13 +280,10 @@ impl Resolver {
     /// (`register_top_level_type_with_ffi`) — there is no separate
     /// stdlib grammar, no separate resolver path, no special-casing.
     ///
-    /// Wave 1.5 only supports the variants needed by today's bootstrap
-    /// content (`Lib`, `Extern`, `Function`, `Class`, `Struct`, `Enum`,
-    /// `Const`). `Mixin`/`Impl`/`Module`/`Use`/`TypeAlias`/`Newtype`
-    /// inside a stdlib file are silently skipped for now — they will
-    /// land in Wave 2 when the first stdlib module that uses them
-    /// migrates. The conservative skip keeps the Phase 3 surface
-    /// minimal; adding them later is purely additive.
+    /// Supported item kinds are listed in
+    /// [`is_bootstrap_supported_item`](Self::is_bootstrap_supported_item);
+    /// any other top-level item in a stdlib file is an E0725 error, never
+    /// a silent skip.
     /// # Double-registration policy
     ///
     /// `register_builtins` (the Rust-side `resolve/stdlib/mod.rs`)
@@ -304,6 +318,26 @@ impl Resolver {
             for item in &program.items {
                 if Self::is_bootstrap_supported_item(item) {
                     self.register_top_level_type_with_ffi(item, ffi_libs, first_walk_ctx);
+                } else {
+                    let span = match item {
+                        ast::TopLevelItem::Impl(i) => i.span.clone(),
+                        ast::TopLevelItem::Alias(a) => a.span.clone(),
+                        ast::TopLevelItem::Expr(e) => e.span.clone(),
+                        _ => program.span.clone(),
+                    };
+                    let package = self
+                        .bootstrap_auto_packages
+                        .get(idx)
+                        .map_or("<unnamed>", |(name, _)| name.as_str());
+                    self.error_with_code(
+                        format!(
+                            "stdlib bootstrap failed in package `{package}`: a top-level \
+                             `impl`, `alias` or expression statement is not supported in a \
+                             stdlib file"
+                        ),
+                        &span,
+                        "E0725",
+                    );
                 }
             }
             // (Q37: stdlib `yield` helpers get their `__block` from their own
@@ -533,8 +567,84 @@ impl Resolver {
                 // this gate, the merger would silently skip every
                 // module item in the stdlib.
                 | ast::TopLevelItem::Module(_)
+                // A stdlib `use` is checked but binds nothing (every
+                // bootstrap item already shares the prelude scope).
+                | ast::TopLevelItem::Use(_)
+                | ast::TopLevelItem::TypeAlias(_)
+                | ast::TopLevelItem::Newtype(_)
         )
     }
 
     // ─── Builtin Registration ───────────────────────────────────────
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::hir::nodes::{HirExprKind, HirItem};
+    use crate::lexer::Lexer;
+    use crate::parser::ast::Program;
+    use crate::parser::Parser;
+    use crate::resolve::{ResolveResult, Resolver};
+
+    fn parse(source: &str) -> Program {
+        let tokens = Lexer::new(source).tokenize().expect("lexer failed");
+        Parser::new(tokens).parse().expect("parser failed")
+    }
+
+    fn resolve_with_stdlib(stdlib: &str, user: &str) -> ResolveResult {
+        Resolver::new()
+            .resolve_with_bootstrap_packages(&parse(user), &[("tools".into(), parse(stdlib))])
+    }
+
+    fn codes(result: &ResolveResult) -> Vec<&str> {
+        result
+            .diagnostics
+            .iter()
+            .filter_map(|d| d.code.as_deref())
+            .collect()
+    }
+
+    #[test]
+    fn stdlib_type_alias_and_newtype_are_loaded() {
+        let result = resolve_with_stdlib(
+            "type Meters = Int\nnewtype UserId(Int)\n",
+            "def main\n  let m: Meters = 3\n  let id: UserId = UserId(7)\nend\n",
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn stdlib_use_is_checked_and_does_not_shadow_user_definitions() {
+        let result = resolve_with_stdlib(
+            "def helper -> Int\n  1\nend\nmodule Tools\n  def helper -> Int\n    2\n  end\nend\nuse Tools.helper\nuse Tools.missing\n",
+            "\n\n\n\n\n\n\ndef helper -> Int\n  3\nend\ndef main\n  helper()\nend\n",
+        );
+        let messages: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(messages[0].contains("missing"), "{messages:?}");
+        let Some(HirItem::Function(main)) = result.program.items.last() else {
+            panic!("expected `main` last");
+        };
+        let HirExprKind::Block(_, Some(tail)) = &main.body.kind else {
+            panic!("expected a block body: {:?}", main.body.kind);
+        };
+        let HirExprKind::FnCall { callee, .. } = &tail.kind else {
+            panic!("expected a call: {:?}", tail.kind);
+        };
+        let callee_line = result.symbols.get(*callee).expect("callee def").span.line;
+        assert_eq!(callee_line, 8, "`helper()` bound to the stdlib def");
+    }
+
+    #[test]
+    fn unsupported_stdlib_item_is_e0725() {
+        let result = resolve_with_stdlib(
+            "def old_name -> Int\n  1\nend\nalias new_name old_name\n",
+            "def main\nend\n",
+        );
+        assert_eq!(codes(&result), vec!["E0725"], "{:?}", result.diagnostics);
+    }
 }

@@ -2,6 +2,8 @@
 
 Companion index for all tier-1 through tier-5 requirements docs. Read this first.
 
+> **Current work:** the debt cleanup and Ruby-only migration plan, with the owner's decisions, is tracked in [`TODO.md`](../../TODO.md) at the repo root. Read it before starting new work.
+
 ## Doc index (38 files)
 
 | Tier | Focus | Docs |

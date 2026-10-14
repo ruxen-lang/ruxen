@@ -124,7 +124,6 @@ fn add_program() -> MirProgram {
         vtables: vec![],
         class_infos: vec![],
         wasm_exports: vec![],
-        no_std: false,
     }
 }
 

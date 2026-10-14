@@ -675,19 +675,21 @@ fn validate_func(
     // Check that public functions have explicit annotations (already done in infer)
     // Check that no Infer types remain in the signature
     if !ctx.is_fully_resolved(&func.return_ty) {
-        diags.push(Diagnostic::error(
+        diags.push(Diagnostic::error_with_code(
             format!("could not infer return type for function `{}`", func.name),
             func.span.clone(),
+            "E0736",
         ));
     }
     for param in &func.params {
         if !ctx.is_fully_resolved(&param.ty) {
-            diags.push(Diagnostic::error(
+            diags.push(Diagnostic::error_with_code(
                 format!(
                     "could not infer type for parameter `{}` in function `{}`",
                     param.name, func.name
                 ),
                 param.span.clone(),
+                "E0736",
             ));
         }
     }

@@ -5,9 +5,8 @@
 //! 1:1 FFI alias. Two categories live here:
 //!
 //! 1. **Compiler-internal mangling.** `Fn(...)_call` /
-//!    `Fn[...]_call` (closure invocation), `super` (parent-init
-//!    dispatch in a constructor), `yield` (block-arg invocation
-//!    placeholder), `?T..._call` / `&any Fn(...)_call` (dyn-erased
+//!    `Fn[...]_call` (closure invocation), `yield` (block-arg
+//!    invocation placeholder), `?T..._call` / `&any Fn(...)_call` (dyn-erased
 //!    closure dispatch). These are not stdlib FFI — they are
 //!    intermediate codegen shapes that backends inline or rewrite
 //!    elsewhere.
@@ -55,12 +54,13 @@ use super::runtime::{extract_method_name, unresolved_method_error};
 pub fn runtime_name(name: &str) -> Result<&str, String> {
     // Compiler-injected pseudo-calls. These are not method calls;
     // the codegen treats them specially.
-    //   - `super` is a parent-init dispatch in a constructor.
     //   - `yield` is the per-call placeholder for invoking the
     //     block argument; backends inline the closure call
     //     elsewhere.
+    // (`super` never reaches codegen: MIR lowers it to the parent's
+    // `<Parent>_init`, and resolve rejects it outside a subclass
+    // `init` with E1127.)
     match name {
-        "super" => return Ok("ruxen_noop"),
         "yield" => return Ok("ruxen_noop_passthrough"),
         // Compiler-internal MIR-synthesised callees emitted by the
         // derive-Display lowering in `mir/lower/derive.rs:85-106`.
@@ -219,9 +219,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
             // (`zip` / `take` / `drop` / `chain` have FFI symbols and never
             // reach this arm — rewritten via the alias map first — but stay
             // listed defensively.)
-            "min" | "max" | "collect" | "flatten" => {
-                Err(unresolved_method_error(name, "Vec"))
-            }
+            "min" | "max" | "collect" | "flatten" => Err(unresolved_method_error(name, "Vec")),
             _ => Ok(name),
         };
     }
@@ -268,11 +266,10 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     // #06.8 T#17 migrated `unwrap_or`, `is_ok`, `is_err`,
     // `ok`, `err` into the same option_result.rx lib block.
     // The remaining arms below are non-aliasable (bang surface
-    // names, `try_op` which is also a MIR-special) and stay
-    // here.
+    // names) and stay here. `try_op` (the `?` operator) is lowered
+    // inline by MIR and never reaches codegen.
     if name.starts_with("Result") || name.contains("Result[") {
         return match method {
-            "try_op" => Ok("ruxen_result_try_op"),
             "expect!" => Ok("ruxen_result_expect"),
             "unwrap!" => Ok("ruxen_result_unwrap"),
             // Known unimplemented Result combinators.
@@ -290,9 +287,7 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     if name.starts_with("?T") || name.starts_with('?') {
         return match method {
             // Result/Option combinators with real symbols.
-            "try_op" => Ok("ruxen_result_try_op"),
             "unwrap_or" => Ok("ruxen_option_unwrap_or"),
-            "unwrap_or_else" => Ok("ruxen_result_unwrap_or_else"),
             // String operations. (`from` REMOVED — the surface `String.from`
             // static method was deleted; the borrow→owned spelling is `clone`,
             // which still backs onto the `ruxen_string_from` C symbol.)

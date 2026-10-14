@@ -321,7 +321,6 @@ int ruxen_repl_get_replaying(void);
 void ruxen_panic(const char *message);
 void *ruxen_alloc(uint64_t size);
 void ruxen_dealloc(void *ptr);
-void *ruxen_realloc(void *ptr, uint64_t size);
 
 /* ASM-labeled free helpers — drop_fixtures rewrites `free(` to
  * `ruxen_test_free(`, so the public link symbols carry the original

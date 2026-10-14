@@ -780,13 +780,10 @@ fn eval_top_level(session: &mut ReplSession, raw_input: &str, item: TopLevelItem
                     .diagnostics
                     .iter()
                     .filter(|d| d.level == DiagnosticLevel::Error)
-                    .all(|d| {
-                        let m = &d.message;
-                        m.contains("could not infer")
-                            || m.contains("type mismatch")
-                            || m.contains("undefined function")
-                            || m.contains("undefined variable")
-                    });
+                    // E0736 could not infer, E0735 undefined function,
+                    // E0734 undefined variable. Matched on the code, never
+                    // the message text, so a real type error is reported.
+                    .all(|d| matches!(d.code.as_deref(), Some("E0734" | "E0735" | "E0736")));
                 if only_deferrable {
                     session.func_defs.push(func_def);
                     session.record_input(raw_input);

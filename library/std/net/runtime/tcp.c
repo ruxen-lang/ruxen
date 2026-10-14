@@ -6,13 +6,8 @@
 /* ── std::net ──────────────────────────────────────────────────────────
  *
  * Phase 2 #06.5 T5 surface: class wrappers TcpListener / TcpStream
- * (owning fd, drop-closes) plus the Shutdown enum. The flat fd-based
- * free fns (ruxen_tcp_connect/listen/accept/read/write/close) that
- * preceded the class API are still defined here — the class methods
- * reuse them as building blocks, and removing the symbols would force
- * a runtime relink — but the Ruxen-facing surface no longer exposes
- * them. The legacy `ruxen_tcp_read` (NUL-terminated, not binary-safe)
- * is replaced by `ruxen_tcp_read_bytes` for any byte-array consumer.
+ * (owning fd, drop-closes) plus the Shutdown enum. Reads go through
+ * the binary-safe fd helper `ruxen_tcp_read_bytes`.
  *
  * Address parsing: we split the input on the *last* ':' so IPv6 literals
  * with embedded colons can be handled later (v1: IPv4/hostname only,
@@ -23,13 +18,6 @@
  * us with SIGPIPE. macOS/BSD lack `MSG_NOSIGNAL` (collapsed to 0 above)
  * but have the per-socket `SO_NOSIGPIPE` option, which we set via
  * `ruxen_tcp_set_nosigpipe()` after every `socket()` / `accept()`.
- *
- * v1 binary-safety caveat: `tcp_read` returns a NUL-terminated Ruxen
- * String. The buffer is malloc'd at `max+1` and the byte after the last
- * received byte is set to 0. If the *received* bytes contain embedded
- * NULs, callers will observe truncation at the first NUL when treating
- * the result as a C string. Full binary safety requires a `Bytes`
- * type — tracked as a follow-up.
  */
 
 /* Suppress SIGPIPE on this socket when the peer goes away. On Linux
@@ -63,167 +51,14 @@ static int ruxen_tcp_split_addr(const char *addr, char *host, size_t host_cap,
     return 0;
 }
 
-int64_t ruxen_tcp_connect(const char *addr) {
-    char host[256];
-    char port[16];
-    if (ruxen_tcp_split_addr(addr, host, sizeof host, port, sizeof port) != 0) {
-        return -1;
-    }
-
-    struct addrinfo hints;
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-
-    struct addrinfo *res = NULL;
-    const char *node = (host[0] == '\0') ? "127.0.0.1" : host;
-    if (getaddrinfo(node, port, &hints, &res) != 0 || !res) {
-        return -1;
-    }
-
-    int fd = -1;
-    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
-        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (fd < 0) continue;
-        ruxen_tcp_set_nosigpipe(fd);
-        if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
-            break;
-        }
-        close(fd);
-        fd = -1;
-    }
-
-    freeaddrinfo(res);
-    return (int64_t)fd;
-}
-
-int64_t ruxen_tcp_listen(const char *addr) {
-    char host[256];
-    char port[16];
-    if (ruxen_tcp_split_addr(addr, host, sizeof host, port, sizeof port) != 0) {
-        return -1;
-    }
-
-    int port_num = atoi(port);
-    if (port_num < 0 || port_num > 65535) {
-        return -1;
-    }
-
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
-    ruxen_tcp_set_nosigpipe(fd);
-
-    int one = 1;
-    /* SO_REUSEADDR so test runs can re-bind without TIME_WAIT delay. */
-    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-
-    struct sockaddr_in sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons((uint16_t)port_num);
-
-    if (host[0] == '\0' || strcmp(host, "0.0.0.0") == 0) {
-        sa.sin_addr.s_addr = htonl(INADDR_ANY);
-    } else if (inet_pton(AF_INET, host, &sa.sin_addr) != 1) {
-        /* Fall back to getaddrinfo for hostnames like "localhost". */
-        struct addrinfo hints, *res = NULL;
-        memset(&hints, 0, sizeof hints);
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        if (getaddrinfo(host, NULL, &hints, &res) != 0 || !res) {
-            close(fd);
-            return -1;
-        }
-        sa.sin_addr = ((struct sockaddr_in *)res->ai_addr)->sin_addr;
-        freeaddrinfo(res);
-    }
-
-    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
-        close(fd);
-        return -1;
-    }
-    if (listen(fd, 128) != 0) {
-        close(fd);
-        return -1;
-    }
-    return (int64_t)fd;
-}
-
-int64_t ruxen_tcp_accept(int64_t fd) {
-    if (fd < 0) return -1;
-    /* EINTR is propagated to the caller as `-1` rather than
-     * auto-retried internally — this lets cooperative shutdown
-     * loops notice a SIGINT and break out of their accept loop.
-     * Callers that want auto-retry can wrap with `while fd < 0
-     * { ... }` in Ruxen and check `signal_received_sigint()` on
-     * each iteration. */
-    int accepted = accept((int)fd, NULL, NULL);
-    if (accepted >= 0) {
-        ruxen_tcp_set_nosigpipe(accepted);
-    }
-    return (int64_t)accepted;
-}
-
-/* DEPRECATED in #06.5 T5: returns a NUL-terminated Ruxen String which
- * is not binary-safe (embedded 0x00 bytes look like a short read). The
- * TcpStream class surface and any new code should use
- * `ruxen_tcp_read_bytes` (below), which pushes each received byte as
- * an int64 slot into a caller-provided RuxenVec — matching
- * ruxen_file_read's contract. Kept linked because removing it would
- * require a runtime relink dance; no Ruxen-callable surface routes
- * here after #06.5 T5 dropped the flat tcp_read free fn. */
-char *ruxen_tcp_read(int64_t fd, int64_t max) {
-    if (fd < 0 || max <= 0) {
-        return ruxen_string_from("");
-    }
-    size_t cap = (size_t)max;
-    char *buf = (char *)malloc(cap + 1);
-    if (!buf) {
-        ruxen_panic("out of memory");
-    }
-    ssize_t n;
-    do {
-        n = recv((int)fd, buf, cap, 0);
-    } while (n < 0 && errno == EINTR);
-
-    if (n <= 0) {
-        free(buf);
-        return ruxen_string_from("");
-    }
-    buf[n] = '\0';
-    return buf;
-}
-
-int64_t ruxen_tcp_write(int64_t fd, const char *data) {
-    if (fd < 0 || !data) return -1;
-    size_t total = strlen(data);
-    size_t sent = 0;
-    while (sent < total) {
-        ssize_t n = send((int)fd, data + sent, total - sent, MSG_NOSIGNAL);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        sent += (size_t)n;
-    }
-    return (int64_t)sent;
-}
-
-void ruxen_tcp_close(int64_t fd) {
-    if (fd < 0) return;
-    /* Best-effort close — ignore EINTR/EBADF. */
-    (void)close((int)fd);
-}
-
-/* Binary-safe replacement for `ruxen_tcp_read` (Phase 2 #06.5 T5).
+/* Binary-safe fd read (Phase 2 #06.5 T5).
  * Reads up to `max` bytes into a stack staging buffer of up to 4096
  * bytes, then pushes each byte as an int64 slot into the caller's
  * RuxenVec — mirroring `ruxen_file_read` in io/file.c. Returns
  * Result[Int, IoError]: Ok(n) on n>=0 bytes (0 = EOF/peer-shutdown),
  * Err(IoError.*) on real failure. Retries on EINTR. The class-method
  * `TcpStream.read` calls this through `ruxen_tcp_stream_read` below
- * (which dereferences the RuxenTcpStream wrapper first); future
- * non-class callers can use this fd-based variant directly. */
+ * (which dereferences the RuxenTcpStream wrapper first). */
 void *ruxen_tcp_read_bytes(int64_t fd, RuxenVec *buf, int64_t max) {
     if (fd < 0 || !buf) {
         return ruxen_result_err_value(
@@ -363,17 +198,14 @@ static void *ruxen_tcp_stream_replay_sentinel(void) {
 
 /* ── TcpListener ─────────────────────────────────────────────────── */
 
-/* `TcpListener.bind(addr) -> Result[TcpListener, IoError]`. Reuses the
- * existing flat `ruxen_tcp_listen` for the actual socket() + bind() +
- * listen() flow; on -1 we map errno (captured immediately after the
- * call) to an `IoError` variant. On success we allocate the 8-byte
- * spine and wrap the fd. */
+/* `TcpListener.bind(addr) -> Result[TcpListener, IoError]`. Runs the
+ * socket() + bind() + listen() flow; on failure we map errno (captured
+ * immediately after the call) to an `IoError` variant. On success we
+ * allocate the 8-byte spine and wrap the fd. */
 void *ruxen_tcp_listener_bind(const char *addr) {
     if (ruxen_repl_is_replaying) return ruxen_tcp_listener_replay_sentinel();
     if (!addr) return ruxen_tcp_invalid_input();
-    /* Replicate the bind path inline so we can capture errno on each
-     * failure point rather than getting a meaningless ENOTSOCK / 0
-     * after the flat helper. */
+    /* Capture errno at each failure point. */
     char host[256];
     char port[16];
     if (ruxen_tcp_split_addr(addr, host, sizeof host, port, sizeof port) != 0) {
@@ -537,9 +369,9 @@ void ruxen_tcp_listener_drop(RuxenTcpListener *l) {
 
 /* ── TcpStream ───────────────────────────────────────────────────── */
 
-/* `TcpStream.connect(addr) -> Result[TcpStream, IoError]`. Same as
- * the flat `ruxen_tcp_connect` but we capture errno at each failure
- * point so we can return a typed IoError variant instead of -1. */
+/* `TcpStream.connect(addr) -> Result[TcpStream, IoError]`. Captures
+ * errno at each failure point so we can return a typed IoError
+ * variant. */
 void *ruxen_tcp_stream_connect(const char *addr) {
     if (ruxen_repl_is_replaying) return ruxen_tcp_stream_replay_sentinel();
     if (!addr) return ruxen_tcp_invalid_input();
@@ -607,7 +439,7 @@ void *ruxen_tcp_stream_read(RuxenTcpStream *s, RuxenVec *buf) {
 /* `TcpStream.write(bytes: &Array[U8]) -> Result[Int, IoError]`.
  * Single send() — partial writes surface as Ok(n<len); caller may
  * loop. EPIPE → IoError.BrokenPipe (the per-socket SO_NOSIGPIPE /
- * MSG_NOSIGNAL machinery from the flat helpers keeps a write to a
+ * MSG_NOSIGNAL machinery keeps a write to a
  * dead peer from killing us). */
 void *ruxen_tcp_stream_write(RuxenTcpStream *s, RuxenVec *bytes) {
     if (ruxen_repl_is_replaying) return ruxen_result_ok_value(0);

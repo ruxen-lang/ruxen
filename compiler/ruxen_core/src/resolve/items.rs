@@ -125,6 +125,8 @@ impl Resolver {
 
         let old_self_ty = self.current_self_ty.replace(self_ty.clone());
         let old_class_def = self.current_class_def.replace(def_id);
+        let old_is_subclass =
+            std::mem::replace(&mut self.current_class_is_subclass, class.parent.is_some());
 
         self.scopes.push(ScopeKind::Class);
 
@@ -312,6 +314,7 @@ impl Resolver {
         self.scopes.pop();
         self.current_self_ty = old_self_ty;
         self.current_class_def = old_class_def;
+        self.current_class_is_subclass = old_is_subclass;
 
         // Update the symbol table with full class info.  Pre-compute
         // generic_params (which needs `&mut self` for type-expr

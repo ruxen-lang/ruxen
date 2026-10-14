@@ -217,7 +217,7 @@ pub(super) fn translate_instruction<'ctx>(
                 let (l, r, _) = unify_binop_operands(l, r, lhs, rhs, func, builder, context);
                 let fpred = match op {
                     CmpOp::Eq => inkwell::FloatPredicate::OEQ,
-                    CmpOp::NotEq => inkwell::FloatPredicate::ONE,
+                    CmpOp::NotEq => inkwell::FloatPredicate::UNE,
                     CmpOp::Lt => inkwell::FloatPredicate::OLT,
                     CmpOp::LtEq => inkwell::FloatPredicate::OLE,
                     CmpOp::Gt => inkwell::FloatPredicate::OGT,
@@ -291,26 +291,6 @@ pub(super) fn translate_instruction<'ctx>(
                             .map_err(|e| format!("Failed to store noop passthrough: {:?}", e))?;
                     }
                 }
-                "ruxen_noop_return_null" => {
-                    if let Some(dest_id) = dest {
-                        let dest_ty = ty_to_llvm(&func.locals[*dest_id as usize].ty, context)
-                            .unwrap_or(context.i64_type().into());
-                        let zero = dest_ty.const_zero();
-                        builder
-                            .build_store(local_allocas[dest_id], zero)
-                            .map_err(|e| format!("Failed to store noop null: {:?}", e))?;
-                    }
-                }
-                "ruxen_noop" => {
-                    if let Some(dest_id) = dest {
-                        let dest_ty = ty_to_llvm(&func.locals[*dest_id as usize].ty, context)
-                            .unwrap_or(context.i64_type().into());
-                        let zero = dest_ty.const_zero();
-                        builder
-                            .build_store(local_allocas[dest_id], zero)
-                            .map_err(|e| format!("Failed to store noop: {:?}", e))?;
-                    }
-                }
                 _ => {
                     let callee_fn = get_or_declare_func(
                         actual_name,
@@ -345,9 +325,11 @@ pub(super) fn translate_instruction<'ctx>(
                                 // Undeclared: the compiler-internal residual,
                                 // whose i64 slots are uniform words.
                                 .unwrap_or(true);
+                            // A Float into a `ptr` param (`&Float`) is always
+                            // a word crossing.
                             let coerced = if arg_val.is_float_value()
-                                && param_ty.is_int_type()
-                                && slot_is_word
+                                && (param_ty.is_pointer_type()
+                                    || (param_ty.is_int_type() && slot_is_word))
                             {
                                 coerce_erased_word(arg_val, *param_ty, builder, context)
                             } else {
@@ -558,6 +540,15 @@ pub(super) fn translate_instruction<'ctx>(
             builder
                 .build_store(local_allocas[dest], payload_ptr)
                 .map_err(|e| format!("Failed to store payload ptr: {:?}", e))?;
+        }
+
+        MirInst::RefMut { dest, src } if is_string_mir_ty(&func.locals[*src as usize].ty) => {
+            // `&var` on a String takes the local's address, as Cranelift's
+            // stack slot does: the callee mutates through `ruxen_deref_ptr` /
+            // `ruxen_store_ptr`, so the caller sees a reallocated buffer.
+            builder
+                .build_store(local_allocas[dest], local_allocas[src])
+                .map_err(|e| format!("Failed to store ref_mut address: {:?}", e))?;
         }
 
         MirInst::Ref { dest, src } | MirInst::RefMut { dest, src } => {
@@ -793,7 +784,7 @@ pub(super) fn emit_binop<'ctx>(
             }
             BinOp::NotEq => {
                 let cmp = builder
-                    .build_float_compare(inkwell::FloatPredicate::ONE, l, r, "fne")
+                    .build_float_compare(inkwell::FloatPredicate::UNE, l, r, "fne")
                     .unwrap();
                 builder
                     .build_int_z_extend(cmp, context.i8_type(), "zext")
