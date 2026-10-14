@@ -11,7 +11,7 @@
 lowering. This sub-phase wires the single-threaded **block_on
 executor** so `block_on(future)` runs a future to completion.
 
-V1 scope is intentionally minimal — no real wake-druxen scheduling
+V1 scope is intentionally minimal — no real wake-driven scheduling
 yet. The wake mechanism only matters once there are concurrent
 tasks (sub-phase 5) or I/O events (sub-phase 4). With just `block_on`
 + user-written CPU-bound futures, a poll loop suffices.
@@ -90,7 +90,7 @@ The lib decls in `library/std/future/src/lib.rx` are updated so
 longer `ruxen_panic`). The "wake" channel is conceptually wired but
 mechanically inert until sub-phase 4.
 
-## B4 — `Context.waker(&self) -> &Waker` returns the executor's waker
+## B4 — `Context#waker -> &Waker` returns the executor's waker
 
 After this sub-phase, `Context.waker` returns a real waker (not the
 panic-stub from sub-phase 1). The waker is the executor's "wake-me"
@@ -178,7 +178,7 @@ that exactly one drop fires after `block_on` returns.
 
 ```rx
 def main
-  let mut i = 0
+  var i = 0
   while i < 1000
     let _ = block_on(make_int())
     i = i + 1

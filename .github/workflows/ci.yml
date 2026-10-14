@@ -27,8 +27,13 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@v2
 
-      - name: cargo build
-        run: cargo build --workspace --all-targets
+      # `cargo test` already builds the lib, bins, examples and every
+      # integration test, so a separate `cargo build --all-targets` only
+      # added the benches (criterion). Type-check those instead of
+      # building them; the step stays in this gating job so a broken
+      # bench still fails CI (the lint job is advisory).
+      - name: cargo check (benches)
+        run: cargo check --workspace --benches
 
       - name: cargo test
         run: cargo test --workspace --no-fail-fast

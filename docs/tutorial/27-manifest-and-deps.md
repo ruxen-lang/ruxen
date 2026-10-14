@@ -2,7 +2,7 @@
 
 Your project grew past one file. Maybe you want to pull in someone else's library, or split your code into modules, or have multiple executables in one place. That's where the **package manifest** comes in: a small `Ruxen.toml` file at your project root that tells the `ruxen` toolchain what to build, what to depend on, and how to organise the output. This chapter walks through the minimal manifest, then progressively adds dependencies, dev-only dependencies, multiple binaries, and libraries.
 
-If you've used Cargo (Rust), npm, or pip with `pyproject.toml`, the layout will look familiar.
+If you've used Bundler's `Gemfile`, npm, or pip with `pyproject.toml`, the layout will look familiar.
 
 ---
 

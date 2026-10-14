@@ -4,7 +4,7 @@
 [docs/requirements/tier1_01_stdlib.md §5.1](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 2 #04; method surface self-hosted in
-`library/std/src/array.rx` since #06.8 T#14.
+`library/std/array/src/lib.rx` since #06.8 T#14.
 
 `Array[T]` is a growable contiguous heap array with `O(1)` amortised
 push/pop and `O(1)` index access.  The C runtime stores
@@ -15,8 +15,8 @@ push/pop and `O(1)` index access.  The C runtime stores
 ## B1 — `Array.from(v: T)` is currently lenient at typeck
 
 The constructor `Array.from(...)` accepts any single value at typecheck
-time today (v1 simplification — strict `From` impls deferred to v2).
-A v2 cleanup will tighten this so that only `Array.from(iter)` etc. are
+time today (v1 simplification — strict conversion checks deferred to v2).
+A v2 cleanup will tighten this so that only collection arguments are
 accepted.  Until then, `Array.from(1)` typechecks (and the runtime will
 do its best at MIR-lowering time).
 
@@ -36,9 +36,9 @@ Like B1, `Array.with_capacity(...)` is currently lenient — passing a
 `String` typechecks (the runtime coerces).  Tightening to `Int`-only
 is a v2 cleanup.
 
-## B5 — `dedup()` typechecks as `Unit`
+## B5 — `dedup()` returns `nil`
 
-In-place dedup of consecutive equal elements.  Returns nothing.
+In-place dedup of consecutive equal elements.  Returns `nil`.
 
 ## B6 — `retain(|x| pred)` closure typechecks
 
@@ -60,6 +60,12 @@ collection with the Ruby `to_*` conversions instead: `[…].to_set`,
 
 Pairwise comparison of two arrays at corresponding indices.
 
+## B10 — `sort` returns a new array; `sort!` sorts in place
+
+Ruby parity. `sort` returns a NEW `Array[T]` in ascending order by the
+element type's own `<` (stable) and leaves the receiver unchanged.
+`sort!` sorts the receiver in place and returns `nil`.
+
 ---
 
 ## Pin tests
@@ -75,6 +81,7 @@ Pairwise comparison of two arrays at corresponding indices.
 | B7        | `vec_sort_by_closure_typechecks`                       | `stdlib_array_negatives.rs`  |
 | B8        | _removed — `from_iter` retired_                        | —                            |
 | B9        | `vec_equality_yields_bool`                             | `stdlib_array_negatives.rs`  |
+| B10       | `vec_sort_returns_new_array`, `vec_sort_bang_returns_nil` | `stdlib_array_negatives.rs` |
 
 Runtime round-trips covered by E2E fixtures
 `tests/release-e2e/cases/107_array_push_pop.rx` and the `60x_iter_*`

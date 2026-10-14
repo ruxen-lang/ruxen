@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Universal rules — read before every prompt
 
 These rules apply to **every** prompt in `docs/prompts/`. Each prompt

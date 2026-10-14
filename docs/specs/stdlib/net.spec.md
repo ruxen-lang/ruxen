@@ -27,21 +27,21 @@ ruxen_dealloc` at scope exit, idempotent with explicit `.close()`.
 ```
 class TcpListener
   def self.bind(addr: &String) -> Result[TcpListener, IoError]
-  def accept(self) -> Result[TcpStream, IoError]        # blocking
-  def local_addr(self) -> Result[String, IoError]
-  def set_nonblocking(self, v: Bool) -> Result[nil, IoError]
-  def close(self) -> Result[nil, IoError]                # also on drop
+  def accept -> Result[TcpStream, IoError]              # blocking
+  def local_addr -> Result[String, IoError]
+  def set_nonblocking(v: Bool) -> Result[nil, IoError]
+  def close -> Result[nil, IoError]                      # also on drop
 end
 
 class TcpStream
   def self.connect(addr: &String) -> Result[TcpStream, IoError]
-  def read(self, buf: &var Array[U8]) -> Result[Int, IoError]
-  def write(self, bytes: &Array[U8]) -> Result[Int, IoError]
-  def peer_addr(self) -> Result[String, IoError]
-  def shutdown(self, how: Shutdown) -> Result[nil, IoError]
-  def set_read_timeout(self, d: &Duration) -> Result[nil, IoError]
-  def set_write_timeout(self, d: &Duration) -> Result[nil, IoError]
-  def close(self) -> Result[nil, IoError]                # also on drop
+  def read(buf: &var Array[Int]) -> Result[Int, IoError]
+  def write(bytes: &Array[Int]) -> Result[Int, IoError]
+  def peer_addr -> Result[String, IoError]
+  def shutdown(how: Shutdown) -> Result[nil, IoError]
+  def set_read_timeout(d: &Duration) -> Result[nil, IoError]
+  def set_write_timeout(d: &Duration) -> Result[nil, IoError]
+  def close -> Result[nil, IoError]                      # also on drop
 end
 
 enum Shutdown
@@ -102,21 +102,21 @@ loops can break out.
 **Given** a peer is listening at `addr`
 **Then** the result is `Ok(stream)` with the connected client fd.
 
-### C8 — `TcpStream.write(bytes: &Array[U8]) -> Result[Int, IoError]`
+### C8 — `TcpStream.write(bytes: &Array[Int]) -> Result[Int, IoError]`
 
 Single `send(2)` call. Returns `Ok(n)` where `n` may be less than
 `bytes.size` on partial writes; caller may loop or use a future
 `write_all`. Returns `Err(IoError.BrokenPipe)` if the peer closed
 mid-write.
 
-### C9 — `TcpStream.read(buf: &var Array[U8]) -> Result[Int, IoError]`
+### C9 — `TcpStream.read(buf: &var Array[Int]) -> Result[Int, IoError]`
 
 Single `recv(2)` call. Returns `Ok(0)` on clean EOF, `Ok(n>0)`
 otherwise. Bytes are appended to `buf` (one int64 slot per byte,
-matching `File.read`'s Vec[U8] convention).
+matching `File.read`'s byte-array convention).
 
 **Binary-safety:** the read path is genuinely binary-safe — embedded
-`0x00` bytes round-trip via `Array[U8]`. The implementation routes
+`0x00` bytes round-trip via `Array[Int]`. The implementation routes
 through the new `ruxen_tcp_read_bytes(fd, buf, max)` runtime helper
 which writes each received byte into a fresh int64 slot, never
 treating the staging buffer as a C string. The legacy
@@ -158,13 +158,13 @@ streams must not exhaust fds.
 
 Tag values are pinned: `Read=0`, `Write=1`, `Both=2` — pin-tested
 against the runtime `RUXEN_SHUTDOWN_*` defines in
-`library/runtime/net/tcp.c`.
+`library/std/net/runtime/tcp.c`.
 
 ### C15 — Auto-import from prelude
 
 `TcpListener`, `TcpStream`, and `Shutdown` are importable via
 `use std.net.{TcpListener, TcpStream, Shutdown}`. The class
-declarations live in `library/std/src/net.rx` (declarative doc —
+declarations live in `library/std/net/src/lib.rx` (declarative doc —
 executable behavior is wired in resolve/typeck/codegen).
 
 ### C17 — `TcpStream.set_read_timeout(d: &Duration) -> Result[nil, IoError]`
@@ -172,8 +172,7 @@ executable behavior is wired in resolve/typeck/codegen).
 Sets the `SO_RCVTIMEO` socket option to the given Duration. Once the
 timeout fires a subsequent blocking `.read(...)` returns
 `Err(IoError.WouldBlock)` instead of blocking forever. Passing a
-Duration with `nanos == 0` clears the timeout (matches Rust's
-`set_read_timeout(None)` semantic). Sub-microsecond non-zero
+Duration with `nanos == 0` clears the timeout. Sub-microsecond non-zero
 Durations round up to 1µs so a "set as short as possible" intent
 isn't accidentally interpreted as "clear".
 
@@ -244,6 +243,5 @@ types).
 - `accept` returning the peer `SocketAddr` alongside the stream — the
   v1 method returns only the stream; `peer_addr` recovers the address
   on demand.
-- `TcpListener.incoming() -> Iterator[Result[TcpStream, IoError]]` —
-  ergonomic loop helper; user code today writes the explicit `loop
-  match listener.accept() ... end` form.
+- A block helper that yields each accepted connection — user code today
+  writes the explicit `loop match listener.accept ... end` form.

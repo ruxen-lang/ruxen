@@ -58,7 +58,7 @@ channel stays open as long as at least one sender is alive.
 
 **Given** an open channel
 **Then** `rx.try_recv()` returns `Some(value)` if one is available,
-`None` otherwise (non-blocking, no error path — channel-closed is
+`nil` otherwise (non-blocking, no error path — channel-closed is
 not surfaced).
 
 ## B7 — Drop semantics: receiver close → sender error

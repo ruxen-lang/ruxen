@@ -5,7 +5,7 @@
 ADR: [docs/decisions/one-string-type.md](../../decisions/one-string-type.md).
 
 **Status:** shipped Phase 2 #03-#04; ownership negatives Phase 2 #02;
-method surface self-hosted in `library/std/src/string.rx` since
+method surface self-hosted in `library/std/string/src/string.rx` since
 #06.8 T#13. `&str` removed 2026-06-11 (one-string-type ADR).
 
 Ruxen has exactly **one** string type pair: `String` (heap-owned UTF-8 buffer)
@@ -85,6 +85,5 @@ Pin tests for these live in the E2E fixture set
   the one-string-type ADR follow-up).
 - Grapheme clusters (`chars()` returns Unicode scalar values, not
   grapheme clusters).
-- Regex (separate `std.regex` module, deferred).
 - Copy-on-write strings — v1 chooses between an owned `String` and a `&String`
   borrow at the source level; no copy-on-write wrapper.

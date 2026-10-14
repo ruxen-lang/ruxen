@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # 20 — Phase 5: ruxendoc (T3.04)
 
 **Depends on:** P0.13 doc comments wired (✅ already done) + Phase 2

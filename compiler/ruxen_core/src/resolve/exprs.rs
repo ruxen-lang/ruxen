@@ -849,34 +849,34 @@ impl Resolver {
                 let iterable = self.resolve_expr(&for_expr.iterable);
                 self.scopes.push(ScopeKind::Loop);
                 let binding_name = self.pattern_binding_name(&for_expr.pattern);
-                let binding_ty = self.type_context.fresh_type_var();
-                let binding_def = self.symbols.define(
-                    binding_name.clone(),
-                    DefKind::Variable {
-                        mutable: false,
-                        ty: binding_ty.clone(),
-                    },
-                    Visibility::Private,
-                    for_expr.pattern.span().clone(),
-                );
-                self.scopes.insert(binding_name.clone(), binding_def);
-                // For tuple patterns like (i, result), also register each sub-binding
-                // and collect their DefIds so the MIR lowerer can destructure.
+                let pattern = self.resolve_pattern(&for_expr.pattern);
+                // A simple `for x in` (or `for &x in`) binds `x` directly.
+                // Any other pattern gets an unscoped def for the whole
+                // element, and a tuple pattern's sub-bindings are handed to
+                // the MIR lowerer.
                 let mut tuple_bindings = Vec::new();
-                if let ast::Pattern::Tuple { elements, .. } = &for_expr.pattern {
-                    self.register_pattern_bindings(
-                        &for_expr.pattern,
-                        false,
-                        for_expr.pattern.span(),
-                    );
-                    for elem in elements {
-                        if let ast::Pattern::Identifier { name, .. } = elem {
-                            if let Some(def_id) = self.scopes.lookup(name) {
-                                tuple_bindings.push((def_id, name.clone()));
+                let binding_def = match &pattern {
+                    HirPattern::Binding { def_id, .. } | HirPattern::Ref { def_id, .. } => *def_id,
+                    _ => {
+                        if let HirPattern::Tuple { elements, .. } = &pattern {
+                            for elem in elements {
+                                if let HirPattern::Binding { def_id, name, .. } = elem {
+                                    tuple_bindings.push((*def_id, name.clone()));
+                                }
                             }
                         }
+                        let binding_ty = self.type_context.fresh_type_var();
+                        self.symbols.define(
+                            binding_name.clone(),
+                            DefKind::Variable {
+                                mutable: false,
+                                ty: binding_ty,
+                            },
+                            Visibility::Private,
+                            for_expr.pattern.span().clone(),
+                        )
                     }
-                }
+                };
                 let body = self.resolve_block_as_expr(&for_expr.body);
                 self.scopes.pop();
                 HirExpr {

@@ -2,7 +2,7 @@
 
 Some behaviour cuts across types that have nothing else in common. A `User`, a `Robot`, and an `Animal` might all need a "say hello" method, but they aren't really the same kind of thing — making them all inherit from a shared parent would be a stretch. **Mixins** solve exactly this: a way to share method signatures and default bodies across unrelated types.
 
-If you've used Ruby's modules or Rust's traits, this will feel familiar. The vocabulary is "mixin," and it does two jobs at once:
+If you've used Ruby's modules, this will feel familiar. The vocabulary is "mixin," and it does two jobs at once:
 
 - **Contract** — declare methods an including type must provide.
 - **Provision** — supply default method bodies that the including type gets for free.
@@ -265,8 +265,7 @@ Two related "auto-mixins," `Send` and `Sync`, control whether a value is safe to
 | `Ord`        | Total ordering (`<`, `>`, `<=`, `>=`, `cmp`)           |
 | `PartialOrd` | Partial ordering (for types like `Float` with NaN)     |
 | `Eq`         | Equality                                               |
-| `Hashable`   | Can be a `Map` or `Set` key                            |
-| `Iterator`   | Can yield successive items via `def var next`          |
+| `Hashable`   | Can be a `Hash` key or `Set` element                   |
 | `Copy`       | Assignment duplicates instead of moving                |
 | `Clone`      | Explicit `.clone` deep copy                            |
 | `Default`    | Has a no-argument `.default` constructor               |
@@ -285,7 +284,7 @@ Two related "auto-mixins," `Send` and `Sync`, control whether a value is safe to
 
 ## Try it
 
-Define a mixin `Animal` with one required method `species -> &str` and one default `describe -> String { "a #{self.species}" }`. Then make `class Dog` and `class Spider` both include `Animal`. Print `dog.describe` and `spider.describe` and observe the default doing its job.
+Define a mixin `Animal` with one required method `species -> String` and one default `describe -> String { "a #{self.species}" }`. Then make `class Dog` and `class Spider` both include `Animal`. Print `dog.describe` and `spider.describe` and observe the default doing its job.
 
 Then add a function `def announce[T: Animal](a: &T)` that prints `a.describe`. Call it with both your `Dog` and `Spider` values.
 

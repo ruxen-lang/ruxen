@@ -10,7 +10,7 @@
 enum, `Context`/`Waker` shells. This sub-phase wires the **lowering**
 so `async def foo` and `expr.await` produce real state machines that
 implement Future. No executor yet (sub-phase 3) — but the lowered
-code can be poll-druxen by hand-written test harnesses to validate
+code can be poll-driven by hand-written test harnesses to validate
 shape.
 
 Two staged milestones inside this sub-phase:
@@ -47,7 +47,7 @@ non-async caller can poll it manually:
 
 ```rx
 def main
-  let mut fut = make_int()
+  var fut = make_int()
   # Hand-written Context for testing — see B6
   let ctx = Context.test_dummy
   match (&var fut).poll(&var ctx)
@@ -128,15 +128,14 @@ undefined-but-bounded behaviour. The spec REQUIRES one of:
 2. **Return `Pending` forever** — non-progressing but safe.
 
 Pick (2) for v1 to keep the lowering simple. Document the choice
-in the milestone 2A commit. (Rust's std picks "panic" but with
-`std::future::Fuse` for safe wrapping; we defer that ergonomics
-to v2.)
+in the milestone 2A commit. A panicking variant with a safe
+wrapper is deferred to v2.
 
-### B6 — Test harness: `Context.test_dummy` (#[cfg(test)] only)
+### B6 — Test harness: `Context.test_dummy` (test-only)
 
 Add a `Context.test_dummy` static method (in `library/std/future/src/lib.rx`)
 returning a `Context` whose `Waker` is a no-op stub. Lives behind a
-`# Test-only — see context.spec.md` comment. The hand-druxen poll
+`# Test-only — see context.spec.md` comment. The hand-driven poll
 loop in B1 uses it; no executor needed.
 
 Implementation: a static method that returns a heap-allocated

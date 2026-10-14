@@ -12,8 +12,8 @@ of scope, the value is dropped (destructor runs, memory freed)"
 (`docs/tutorial/04-ownership-and-borrowing.md:11`). Today that promise is
 **not kept at the code-generation level** — locals of heap-allocated types
 are marked with `MirInst::Drop` in MIR, but both backends turn `Drop` into
-a no-op (`crates/ruxen-core/src/codegen/cranelift.rs:692-698`,
-`crates/ruxen-core/src/codegen/llvm/emit.rs:790-792`), so every Ruxen
+a no-op (`compiler/ruxen_core/src/codegen/cranelift.rs:692-698`,
+`compiler/ruxen_core/src/codegen/llvm/emit.rs:790-792`), so every Ruxen
 program leaks memory until `exit(3)` reclaims it.
 
 This document specifies the `Drop`, `Copy` and `Clone` mixins, the
@@ -40,15 +40,15 @@ interdependent:
 
 ### 2.1 Types already know Copy vs. Move
 
-`Ty::is_copy` in `crates/ruxen-core/src/hir/types.rs:189-221` hard-codes
+`Ty::is_copy` in `compiler/ruxen_core/src/hir/types.rs:189-221` hard-codes
 the Copy set: all integer/float primitives, `Bool`, `Char`, `Unit`,
-`Never`, `&T` / `&a T` / `&str`, raw pointers, `Ty::Error`, plus tuples
+`Never`, `&T` / `&a T`, raw pointers, `Ty::Error`, plus tuples
 and fixed arrays whose elements are Copy. Everything else (including
-`String`, `Array[T]`, `Map[K,V]`, `Option[T]`, `Result[T,E]`, any user
+`String`, `Array[T]`, `Hash[K, V]`, `Option[T]`, `Result[T,E]`, any user
 `class`/`struct`/`enum`) reports `is_copy() == false`.
 
 `MoveSemantics { Copy, Move }` is defined at
-`crates/ruxen-core/src/hir/types.rs:178-182` and carried on every
+`compiler/ruxen_core/src/hir/types.rs:178-182` and carried on every
 `HirExprKind::Assign` (`hir/nodes.rs:148`). The type-checker fills it in
 from `Ty::move_semantics()`; the borrow checker uses it in
 `check_assign` (`borrow_check/mod.rs:440-487`).
@@ -84,8 +84,8 @@ explicit or implicit `include Copy` (per syntax spec §3.6), but:
 ### 2.3 MIR already inserts Drop (partially) — but codegen ignores it
 
 `MirInst::Drop { local: LocalId }` exists at
-`crates/ruxen-core/src/mir/nodes.rs:282-285`. `insert_drops` in
-`crates/ruxen-core/src/mir/lower.rs:3346-3407` runs once per function
+`compiler/ruxen_core/src/mir/nodes.rs:282-285`. `insert_drops` in
+`compiler/ruxen_core/src/mir/lower.rs:3346-3407` runs once per function
 after lowering and appends Drop instructions **before every
 `Terminator::Return`**, in reverse declaration order, for locals that:
 
@@ -137,7 +137,7 @@ call.
 
 ### 2.5 Runtime has allocation primitives but no typed free
 
-`crates/ruxen-core/runtime/runtime.c:144-163` provides:
+The pre-split `runtime.c:144-163` (now `library/std/<pkg>/runtime/*.c`) provides:
 
 ```c
 void *ruxen_alloc(uint64_t size);         // malloc + zero + panic-on-null
@@ -279,7 +279,7 @@ end
 ### 4.3 Semantics
 
 - **D1** — If `include Drop on T` exists, the compiler invokes the
-  `drop(&var self)` provision exactly once when a value of type `T` is
+  `def var drop` provision exactly once when a value of type `T` is
   dropped, before the
   recursive drop of `T`'s fields.
 - **D2** — Recursive field drops happen **after** the user-written
@@ -508,7 +508,7 @@ is a hard error:
 - `&T`: `(&T).clone() = *self` — references are Copy, Clone is
   trivial.
 - `Option[T]`, `Result[T, E]`: Clone iff inner(s) are Clone.
-- `Map[K, V]`, `Set[T]`: Clone iff inner(s) are Clone. Needs runtime
+- `Hash[K, V]`, `Set[T]`: Clone iff inner(s) are Clone. Needs runtime
   helper; not on the critical path for Drop.
 
 ### 6.5 Implicit-include synthesis for user types
@@ -729,7 +729,7 @@ Rust.
 | Change | File(s) |
 |---|---|
 | `TraitInfo { self_mode, is_marker }` | `resolve/symbols.rs:60-66` |
-| Built-in mixin metadata (Drop `&var self`, Copy marker/super=Clone, Clone `&self → Self`) | `resolve/mod.rs:138-151` |
+| Built-in mixin metadata (Drop `def var drop`, Copy marker/super=Clone, Clone `def clone -> Self`) | `resolve/mod.rs:138-151` |
 | Marker-mixin satisfaction rule | `typeck/traits.rs:85-133` |
 | `Ty::is_copy(resolver)` consults nominal Copy provisions | `hir/types.rs:189-221` |
 | Copy/Drop mutual exclusion check | new pass in `typeck/` (call it `mixin_consistency`) |
@@ -839,7 +839,7 @@ Each phase should be independently landable and testable.
 
 ## 11. Test Matrix
 
-Live in `crates/ruxen-core/tests/fixtures/` and unit tests in each
+Live in `compiler/ruxen_core/tests/fixtures/` and unit tests in each
 phase's module. Minimum coverage:
 
 ### 11.1 Drop semantics

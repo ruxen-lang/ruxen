@@ -1,13 +1,13 @@
 # Ruxen Specs
 
-Ruxen uses **Spec-Druxen Development (SDD)**.  Every feature flows:
+Ruxen uses **Spec-Driven Development (SDD)**.  Every feature flows:
 
 ```
 docs/requirements (or tutorial / prompts)
         ↓
 docs/specs/<area>/<feature>.spec.md         ← this directory
         ↓
-crates/ruxen-core/tests/*.rs (pin tests)
+compiler/ruxen_core/tests/*.rs (pin tests)
         ↓
 implementation
 ```
@@ -83,13 +83,13 @@ cross-link rather than duplicate.
 - [std.path](stdlib/path.spec.md) — POSIX path manipulation.
 - [std.time](stdlib/time.spec.md) — `unix_ns`, Instant, Duration.
 - [std.net](stdlib/net.spec.md) — minimal TCP surface.
-- [std.iter (Iterator)](stdlib/iterator.spec.md) — pipeline +
-  collect surface.
+- [std.iter (retired)](stdlib/iterator.spec.md) — block methods
+  (`each` / `map` / `select` / `reduce` / …) now live on `Array`.
 - [Hash](stdlib/map.spec.md) — separate-chaining hash table.
 - [Set](stdlib/set.spec.md) — `Hash[T, nil]` alias.
 - [Array](stdlib/array.spec.md) — growable contiguous array.
-- [String / &str](stdlib/string.spec.md) — UTF-8 owned + borrowed
-  string surface and ownership negatives.
+- [String](stdlib/string.spec.md) — UTF-8 owned (`String`) and
+  borrowed (`&String`) string surface and ownership negatives.
 - [Option / Result](stdlib/option_result.spec.md) — tagged-enum
   surface, `?` operator, `if let Some`, `expect!`, `unwrap_or`,
   `map`.

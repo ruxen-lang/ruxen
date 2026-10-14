@@ -5,7 +5,9 @@
 //! declared `def add_one as "ruxen_test_extern_add_one"(...)` must
 //! emit a direct call to `ruxen_test_extern_add_one`, and the linked
 //! binary must run the actual C function (this fixture's runtime
-//! symbol is in `library/std/core/runtime/test_extern.c`).
+//! symbol is in the test-only
+//! `library/test_std/bootstrap_smoke/runtime/test_extern.c`, which the
+//! link smoke passes explicitly as an extra runtime source).
 
 use ruxen_core::codegen;
 use ruxen_core::diagnostics::DiagnosticLevel;
@@ -13,6 +15,7 @@ use ruxen_core::lexer::Lexer;
 use ruxen_core::mir::lower::Lowerer;
 use ruxen_core::mir::nodes::MirInst;
 use ruxen_core::parser::Parser;
+use ruxen_core::resolve::bootstrap::test_stdlib_runtime_sources;
 use ruxen_core::resolve::symbols::DefKind;
 use ruxen_core::resolve::Resolver;
 use ruxen_core::typeck;
@@ -177,7 +180,7 @@ fn end_to_end_link_smoke() {
     // Compile + link + run a Ruxen program that calls an FFI-aliased
     // function. The exit code is 0 iff `ruxen_test_extern_add_one(41)`
     // returned 42 (i.e. the linker resolved the call to the actual C
-    // function in `library/std/core/runtime/test_extern.c`, NOT to the Ruxen
+    // function in `library/test_std/bootstrap_smoke/runtime/test_extern.c`, NOT to the Ruxen
     // name `add_one` which doesn't exist as a runtime symbol).
     let program = parse_fixture("ffi_c_symbol_link_smoke");
     let result = typeck::type_check(&program);
@@ -199,7 +202,16 @@ fn end_to_end_link_smoke() {
         ruxen_unique_id()
     ));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
-    codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
+    let test_runtime = test_stdlib_runtime_sources(&workspace_root().join("library/test_std"));
+    codegen::compile_with_options(
+        &mir,
+        bin_path.to_str().unwrap(),
+        false,
+        &[],
+        &test_runtime,
+        codegen::Backend::Cranelift,
+    )
+    .expect("codegen");
 
     let output = Command::new(&bin_path).output().expect("run binary");
     let _ = std::fs::remove_file(&bin_path);

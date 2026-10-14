@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # 23 — Phase 5: language reference (T5.01)
 
 **Depends on:** prompts 01-15 (every language feature must exist

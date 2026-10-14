@@ -10,17 +10,22 @@
 # Exit status is 0 if every test passes, 1 otherwise.
 #
 # Tuning knobs:
-#   JOBS=N         Worker count for the fixture loops. Default: 1 (serial).
-#                  Going parallel is unsafe with the current fixture set —
-#                  see the JOBS default comment below for the specific races.
+#   JOBS=N         Worker count for the fixture loops. Default: the CPU
+#                  count. The fixtures in SERIAL_CASES (fixed ports, fd
+#                  caps, child processes, fixed /tmp paths) always run
+#                  afterwards in a serial tail, whatever JOBS is.
 #   CASE_FILTER=…  Glob applied to cases/*.rx. Default: '*.rx'.
 #                  Example: CASE_FILTER='01_*.rx' to debug one fixture.
-#   PHASES=...     Comma-separated allow-list. Default: 'all'.
+#   PHASES=...     Comma-separated allow-list. Default: every phase
+#                  except the REPL fixture replay.
 #                  Recognised: binaries, compile, compile-flags, cli,
-#                  repl, lsp, parity, all.
+#                  repl-session, repl, lsp, parity, all.
+#                  `repl` = scripted session + the fixture replay (slow);
+#                  `repl-session` = the scripted session only;
+#                  `all` = every phase, including the replay.
 #                  Examples:
-#                    PHASES=compile         # just the 310 compile fixtures
-#                    PHASES=repl            # just the REPL parity sweep
+#                    PHASES=compile         # just the compile fixtures
+#                    PHASES=repl            # the REPL session + parity sweep
 #                    PHASES=parity          # just the fmt-binary syntax parity
 #                    PHASES=compile,cli     # both, skip repl/lsp/flags
 #
@@ -28,8 +33,11 @@
 #                  Tell `ruxen compile` to whole-archive a prebuilt
 #                  libruxenrt.a instead of forking cc once per stdlib
 #                  runtime .c. Auto-set to the ruxen_repl build artifact
-#                  when RUXEN_WORKSPACE is set; the auto-set gives ~46x
-#                  speedup per fixture.
+#                  of the cargo profile the `ruxen` binary comes from
+#                  (RUXEN_WORKSPACE's target/release, else
+#                  target/debug); the auto-set gives ~46x speedup per
+#                  fixture. An installed toolchain links its own
+#                  lib/libruxenrt.a.
 #   RUXEN_E2E_NO_FAST_AR=1
 #                  Disable the auto-set above and exercise the slow
 #                  cold-compile path (cc -c per .c file).
@@ -42,12 +50,20 @@ CASES="$HERE/cases"
 EXPECTED="$HERE/expected"
 SCRIPTS="$HERE/scripts"
 
+# Fixtures that use the test-only stdlib (`library/test_std`: fixture
+# packages and runtime C kept out of the production prelude and runtime).
+# Their compile opts in through RUXEN_TEST_STDLIB; the REPL sweep skips
+# them because the REPL links only the production runtime.
+TEST_STDLIB_CASES=":434_stream_drop_on_cancel:436_stream_chain_drop:750_foobar_zero_rust_pin:"
+export E2E_TEST_STDLIB_CASES="$TEST_STDLIB_CASES"
+export E2E_TEST_STDLIB_DIR="$(cd "$HERE/../../library/test_std" && pwd)"
+
 mkdir -p "$RESULTS"
 : > "$RESULTS/summary.txt"
 
-# Default worker count: serial (1).
+# Default worker count: one per CPU.
 #
-# Reason: fixtures that bind hardcoded TCP ports (727 → :31729,
+# Fixtures that bind hardcoded TCP ports (727 → :31729,
 # 727b → :31730), open file descriptors at resource caps
 # (518_file_drop_closes opens 1024 fds), spawn child processes
 # (508_command_status), or touch fixed `/tmp/ruxen_e2e_*` paths
@@ -55,27 +71,57 @@ mkdir -p "$RESULTS"
 # on the same port/fd cap/tmp path. The symptoms were classic
 # Heisenbugs — "sometimes pass, sometimes fail" 727s timing out
 # at 10s when system load delayed the async runtime past the
-# client's connect window.
-#
-# With the RUXEN_RUNTIME_AR fast path the per-fixture cost is
-# <0.1s anyway, so serial is fast enough (~30s for the whole 308-
-# fixture compile sweep). Override with JOBS=N if you genuinely
-# need parallelism and your filter excludes the racy fixtures.
-JOBS="${JOBS:-1}"
+# client's connect window. Those fixtures are listed in
+# SERIAL_CASES and run one at a time AFTER the parallel batch has
+# drained, so nothing else is running when they do. Add a fixture
+# here when it needs a fixed port, path or process-wide resource.
+_e2e_ncpu() {
+  getconf _NPROCESSORS_ONLN 2>/dev/null \
+    || sysctl -n hw.ncpu 2>/dev/null \
+    || echo 1
+}
+JOBS="${JOBS:-$(_e2e_ncpu)}"
 CASE_FILTER="${CASE_FILTER:-*.rx}"
+# Colon-delimited case stems (filename without `.rx`).
+SERIAL_CASES=":508_command_status:518_file_drop_closes:534_fs_canonicalize:536_fs_read_link:727_async_tcp_echo:727b_async_tcp_read_timeout:"
 
-# Selective phases. Comma-separated allow-list; default `all`. Use
-# this to skip the slow REPL parity sweep while iterating on the
-# compile path, or to drill into just one layer:
+# Run a per-fixture worker function over every case matching
+# CASE_FILTER: the parallel batch with $JOBS workers, then the
+# SERIAL_CASES tail with one worker. Worker TSV lines go to stdout.
+_e2e_run_cases() {
+  local worker="$1" f base
+  local parallel=() serial=()
+  while IFS= read -r -d '' f; do
+    base="$(basename "$f" .rx)"
+    case "$SERIAL_CASES" in
+      *":$base:"*) serial+=("$f") ;;
+      *)           parallel+=("$f") ;;
+    esac
+  done < <(find "$CASES" -maxdepth 1 -type f -name "$CASE_FILTER" -print0 | sort -z)
+  if [ "${#parallel[@]}" -gt 0 ]; then
+    printf '%s\0' "${parallel[@]}" \
+      | xargs -0 -P "$JOBS" -n 1 bash -c "$worker"' "$1"' _
+  fi
+  if [ "${#serial[@]}" -gt 0 ]; then
+    printf '%s\0' "${serial[@]}" \
+      | xargs -0 -P 1 -n 1 bash -c "$worker"' "$1"' _
+  fi
+}
+
+# Selective phases. Comma-separated allow-list. The default runs
+# every phase except the REPL fixture replay (it re-runs every
+# fixture through `ruxen repl` with a 15s timeout each and is the
+# slowest phase); ask for it with PHASES=repl or PHASES=all.
 #
-#   PHASES=compile          ./run.sh   # just the 310 compile fixtures
-#   PHASES=repl             ./run.sh   # just the REPL parity sweep
+#   PHASES=compile          ./run.sh   # just the compile fixtures
+#   PHASES=repl             ./run.sh   # REPL session + parity sweep
 #   PHASES=compile,cli      ./run.sh   # both, skip repl/lsp/flags
 #   PHASES=binaries,lsp     ./run.sh   # smoke + LSP only
 #
-# Recognised values: binaries, compile, compile-flags, cli, repl, lsp, parity, all.
+# Recognised values: binaries, compile, compile-flags, cli,
+# repl-session, repl, lsp, parity, all.
 # Unknown phases are flagged so typos don't silently skip everything.
-PHASES="${PHASES:-all}"
+PHASES="${PHASES:-binaries,compile,cli,compile-flags,repl-session,lsp,parity}"
 _e2e_phase_enabled() {
   local p="$1"
   case ",$PHASES," in
@@ -85,13 +131,13 @@ _e2e_phase_enabled() {
   esac
 }
 _e2e_validate_phases() {
-  local known=",binaries,compile,compile-flags,cli,repl,lsp,parity,all,"
+  local known=",binaries,compile,compile-flags,cli,repl-session,repl,lsp,parity,all,"
   local IFS=,
   for p in $PHASES; do
     [ -z "$p" ] && continue
     case "$known" in
       *,"$p",*) : ;;
-      *) printf "run.sh: unknown phase '%s' (known: binaries, compile, compile-flags, cli, repl, lsp, parity, all)\n" "$p" >&2
+      *) printf "run.sh: unknown phase '%s' (known: binaries, compile, compile-flags, cli, repl-session, repl, lsp, parity, all)\n" "$p" >&2
          exit 2 ;;
     esac
   done
@@ -110,19 +156,9 @@ _e2e_validate_phases
 # instead. Per-fixture wall-clock drops to <0.1s.
 #
 # Honor RUXEN_RUNTIME_AR if the user already exported one (e.g. from
-# a custom build); otherwise auto-discover the workspace artifact.
-# Set RUXEN_E2E_NO_FAST_AR=1 to bypass this and exercise the slow
-# path (useful when validating the cold-compile path itself).
-if [ -z "${RUXEN_RUNTIME_AR:-}" ] && [ -z "${RUXEN_E2E_NO_FAST_AR:-}" ]; then
-  if [ -n "${RUXEN_WORKSPACE:-}" ]; then
-    _ar=$(ls "$RUXEN_WORKSPACE"/target/release/build/ruxen_repl-*/out/libruxenrt.a 2>/dev/null | head -1)
-    if [ -n "$_ar" ] && [ -f "$_ar" ]; then
-      export RUXEN_RUNTIME_AR="$_ar"
-      printf "\033[2m[fast-path] linking via %s\033[0m\n" "$_ar" >&2
-    fi
-    unset _ar
-  fi
-fi
+# a custom build); otherwise it is auto-discovered right after PATH is
+# set up below. Set RUXEN_E2E_NO_FAST_AR=1 to bypass this and exercise
+# the slow path (useful when validating the cold-compile path itself).
 
 # Ctrl-C handling. Without this trap, bash's `for f in …; do …; done`
 # (and `xargs -P` when JOBS>1) absorbs SIGINT at iteration boundaries:
@@ -141,11 +177,36 @@ _e2e_interrupt() {
 
 RUXEN_HOME="${RUXEN_HOME:-$HOME/.ruxen}"
 # If RUXEN_WORKSPACE is set, prefer binaries built from source in that
-# workspace over the installed release. Useful for testing fixes.
-if [ -n "${RUXEN_WORKSPACE:-}" ] && [ -d "$RUXEN_WORKSPACE/target/release" ]; then
+# workspace over the installed release (target/release, else
+# target/debug). Useful for testing fixes.
+if [ -n "${RUXEN_WORKSPACE:-}" ] && [ -x "$RUXEN_WORKSPACE/target/release/ruxen" ]; then
   export PATH="$RUXEN_WORKSPACE/target/release:$PATH"
+elif [ -n "${RUXEN_WORKSPACE:-}" ] && [ -x "$RUXEN_WORKSPACE/target/debug/ruxen" ]; then
+  export PATH="$RUXEN_WORKSPACE/target/debug:$PATH"
 else
   export PATH="$RUXEN_HOME/bin:$PATH"
+fi
+
+# Fast-path archive discovery. The archive must come from the SAME build
+# as the `ruxen` binary: an installed binary linked against a newer
+# repo archive fails with undefined runtime symbols. So when the `ruxen`
+# on PATH lives in a cargo profile dir (`<repo>/target/<profile>/ruxen`,
+# which is the case when RUXEN_WORKSPACE is set), use that profile's
+# `ruxen_repl-*/out/libruxenrt.a`, the newest one if several hash dirs
+# exist. An installed toolchain is left alone: the binary already finds
+# its own `<install>/lib/libruxenrt.a`.
+if [ -z "${RUXEN_RUNTIME_AR:-}" ] && [ -z "${RUXEN_E2E_NO_FAST_AR:-}" ]; then
+  _bin="$(command -v ruxen 2>/dev/null || true)"
+  if [ -n "$_bin" ]; then
+    _bin_dir="$(cd "$(dirname "$_bin")" && pwd -P)"
+    # shellcheck disable=SC2012  # build-dir names are cargo hashes, no spaces
+    _ar=$(ls -t "$_bin_dir"/build/ruxen_repl-*/out/libruxenrt.a 2>/dev/null | head -1)
+    if [ -n "$_ar" ] && [ -f "$_ar" ]; then
+      export RUXEN_RUNTIME_AR="$_ar"
+      printf "\033[2m[fast-path] linking via %s\033[0m\n" "$_ar" >&2
+    fi
+  fi
+  unset _bin _bin_dir _ar
 fi
 
 # Per-run private temp dir under /tmp. Two reasons:
@@ -165,16 +226,33 @@ E2E_TMP_ROOT="$(mktemp -d "/tmp/ruxen-e2e-run.XXXXXX")"
 export TMPDIR="$E2E_TMP_ROOT"
 trap 'rm -rf "$E2E_TMP_ROOT" 2>/dev/null' EXIT
 
-# Cap `ruxen compile` memory at 8 GiB (RSS).
+# Cap `ruxen compile` memory at 8 GiB.
 # Compiler bugs have leaked 35 GB+ before being noticed.
-# macOS bash doesn't support `ulimit -v` (RLIMIT_AS), so we poll
-# the process's RSS and SIGKILL when it crosses the cap.
+#
+# Linux: `ulimit -v` (RLIMIT_AS) in the worker's own subshell. The
+# kernel enforces it, so there is no poll and no per-fixture latency;
+# a leaking compile dies on its first allocation past the cap (Rust
+# aborts with "memory allocation of N bytes failed", exit 134). The
+# limit is on address space, not RSS, which is the stricter reading
+# of the same cap.
+# macOS: bash can't set RLIMIT_AS there, so we poll the process's RSS
+# every 250ms and SIGKILL it when it crosses the cap.
 RUXENC_MEM_KB=$((8 * 1024 * 1024))
+if [ "$(uname -s)" = "Linux" ]; then
+  E2E_MEMCAP_MODE=ulimit
+else
+  E2E_MEMCAP_MODE=poll
+fi
+export E2E_MEMCAP_MODE
 
 run_with_memcap() {
   # Usage: run_with_memcap <cmd> [args...]
-  # Runs the command, polls RSS every 250ms, kills if it exceeds
-  # $RUXENC_MEM_KB. Returns the command's exit code, or 137 on kill.
+  # Runs the command under the memory cap. Returns the command's exit
+  # code, or 137 when the macOS poller kills it.
+  if [ "$E2E_MEMCAP_MODE" = ulimit ]; then
+    ( ulimit -v "$RUXENC_MEM_KB" && exec "$@" )
+    return
+  fi
   "$@" &
   local pid=$!
   while kill -0 "$pid" 2>/dev/null; do
@@ -269,10 +347,19 @@ _e2e_run_case_one() {
   work="$tmp/work-$base"
   mkdir -p "$work"
 
+  local test_std=""
+  case "$E2E_TEST_STDLIB_CASES" in
+    *":$base:"*) test_std="$E2E_TEST_STDLIB_DIR" ;;
+  esac
+
   # compile: 30s wall-clock cap + 8 GiB RSS cap
   # (catches pathological codegen and memory leaks like the 35GB incident)
-  if ! ( cd "$work" && timeout 30 bash -c '
+  if ! ( cd "$work" && RUXEN_TEST_STDLIB="$test_std" timeout 30 bash -c '
       RUXENC_MEM_KB='"$RUXENC_MEM_KB"'
+      if [ "$E2E_MEMCAP_MODE" = ulimit ]; then
+        ulimit -v "$RUXENC_MEM_KB" || exit 1
+        exec ruxen compile "$@"
+      fi
       ruxen compile "$@" &
       pid=$!
       while kill -0 "$pid" 2>/dev/null; do
@@ -317,6 +404,7 @@ _e2e_run_case_one() {
 
   # run (skip if no expected output file — compile-only test)
   if [ ! -f "$expect_file" ]; then
+    rm -rf "$tmp/$base.bin" "$tmp/$base.bin.o" "$work"
     _e2e_emit PASS "$name (compile-only)" ""
     return
   fi
@@ -350,6 +438,10 @@ _e2e_run_case_one() {
     cp "$tmp/$base.diff" "$E2E_RESULTS_DIR/$base.diff" 2>/dev/null
     _e2e_emit FAIL "$name" "output mismatch (exit=$rc)"
   fi
+  # The run's scratch lives on /tmp (often a small tmpfs); drop this
+  # fixture's binary and work dir now instead of holding every one
+  # until the whole sweep ends.
+  rm -rf "$tmp/$base.bin" "$tmp/$base.bin.o" "$work"
 }
 
 # stdout = machine-readable TSV (parent tallies these), stderr = live
@@ -385,9 +477,7 @@ test_cases() {
   # cancels the whole batch instead of being absorbed per-iteration
   # like the old `for` loop. -0 + find -print0 keeps filenames with
   # whitespace safe (none today, but cheap insurance).
-  find "$CASES" -maxdepth 1 -type f -name "$CASE_FILTER" -print0 \
-    | xargs -0 -P "$JOBS" -n 1 bash -c '_e2e_run_case_one "$1"' _ \
-    >> "$results"
+  _e2e_run_cases _e2e_run_case_one >> "$results"
 
   # Fold worker results into the script-level counters + summary file.
   while IFS=$'\t' read -r status name reason; do
@@ -714,6 +804,14 @@ _e2e_repl_case_one() {
     return
   }
 
+  case "$E2E_TEST_STDLIB_CASES" in
+    *":$base:"*)
+      printf 'SKIP\t%s\ttest-stdlib\n' "$name"
+      printf '  \033[33mSKIP\033[0m  %s  \033[2m(uses the test-only stdlib)\033[0m\n' "$name" >&2
+      return
+      ;;
+  esac
+
   if _e2e_is_repl_skipped "$base"; then
     printf 'SKIP\t%s\tknown-gap\n' "$name"
     printf '  \033[33mSKIP\033[0m  %s  \033[2m(known REPL gap)\033[0m\n' "$name" >&2
@@ -790,9 +888,7 @@ test_repl_cases() {
   done
   export E2E_REPL_SKIP="${skip_str%:}"
 
-  find "$CASES" -maxdepth 1 -type f -name "$CASE_FILTER" -print0 \
-    | xargs -0 -P "$JOBS" -n 1 bash -c '_e2e_repl_case_one "$1"' _ \
-    >> "$results"
+  _e2e_run_cases _e2e_repl_case_one >> "$results"
 
   local passed=0 failed=0 skipped=0 total=0
   while IFS=$'\t' read -r status name reason; do
@@ -953,14 +1049,14 @@ test_parity() {
 # Each phase is gated by PHASES (see header). The grouping is
 # coarser than the function list — `compile-flags` rolls together
 # the direct-driver flag matrix and the top-level-hang negative
-# test, `repl` covers both the scripted session and the 310-fixture
-# parity sweep, etc.
+# test, `repl` covers both the scripted session and the fixture
+# parity sweep (`repl-session` is the session alone), etc.
 _e2e_phase_enabled binaries      && test_binaries
 _e2e_phase_enabled compile       && test_cases
 _e2e_phase_enabled cli           && test_cli
 _e2e_phase_enabled compile-flags && test_ruxenc_flags
 _e2e_phase_enabled compile-flags && test_ruxenc_toplevel_hang
-_e2e_phase_enabled repl          && test_repl
+{ _e2e_phase_enabled repl || _e2e_phase_enabled repl-session; } && test_repl
 _e2e_phase_enabled repl          && test_repl_cases
 _e2e_phase_enabled lsp           && test_lsp
 _e2e_phase_enabled lsp           && test_lsp_features

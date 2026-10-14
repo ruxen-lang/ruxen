@@ -126,8 +126,8 @@ fine (literal narrows on assignment).
 
 ## Out of scope (v2)
 
-- Mixin-bound numeric primitives — Rust's `Num`, `One`, `Zero` mixins
-  don't exist in v1; arithmetic is hardwired.
+- Mixin-bound numeric primitives — numeric mixins (`Num`, `One`,
+  `Zero`) don't exist in v1; arithmetic is hardwired.
 - 128-bit integers (`Int128`, `UInt128`) and arbitrary-precision
   big-int.
 - Float NaN / Infinity literal syntax (`Float.NAN`, `Float.INFINITY`).

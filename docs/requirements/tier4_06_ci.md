@@ -28,25 +28,25 @@ Triggers on `push: tags: v*` and `workflow_dispatch`. Matrix of 4 triples (x86_6
   run: |
     cargo test --release --target ${{ matrix.target }} \
       -p ruxenc   --test installed_binary \
-      -p ruxen-cli --test installed_pkg_manager \
-      -p ruxen-repl --test installed_repl
+      -p ruxen_cli --test installed_pkg_manager \
+      -p ruxen_repl --test installed_repl
 ```
 
 So the *full* test suite never runs in CI. On anyone's machine.
 
 ### 2.3 Linting / formatting
 
-- `ruxenc fmt` exists (`crates/ruxenc/src/main.rs:28`) — the Ruxen source formatter.
+- `ruxenc fmt` exists (`src/ruxenc/src/main.rs:28`) — the Ruxen source formatter.
 - `ruxenc fmt --check` exists for CI mode.
 - But `cargo fmt` on the Rust code, `cargo clippy` on the Rust code — not enforced.
 
 ### 2.4 Coverage / fuzzing
 
-Neither exists. `Cargo.lock` shows `proptest` is a `[dev-dependencies]` entry in `ruxen-core/Cargo.toml:14` — used for property testing in typeck/lexer, but no fuzz harness.
+Neither exists. `Cargo.lock` shows `proptest` is a `[dev-dependencies]` entry in `ruxen_core/Cargo.toml:14` — used for property testing in typeck/lexer, but no fuzz harness.
 
 ### 2.5 MSRV
 
-No `rust-version` anywhere. `crates/ruxen-core/Cargo.toml:4` is `edition = "2021"` — every crate matches. Some deps (cranelift 0.130) require recent Rust; `inkwell 0.5` with `llvm18-0` requires Rust 1.76+.
+No `rust-version` anywhere. `compiler/ruxen_core/Cargo.toml:4` is `edition = "2021"` — every crate matches. Some deps (cranelift 0.130) require recent Rust; `inkwell 0.5` with `llvm18-0` requires Rust 1.76+.
 
 ### 2.6 Security
 
@@ -161,7 +161,7 @@ jobs:
       - name: ruxenc fmt --check on fixtures
         run: |
           cargo build -p ruxenc
-          ./target/debug/ruxenc fmt --check crates/ruxen-core/tests/fixtures/
+          ./target/debug/ruxenc fmt --check compiler/ruxen_core/tests/fixtures/
 
   cross:
     name: Cross-compile (${{ matrix.target }})
@@ -315,7 +315,7 @@ jobs:
 
 ```toml
 [workspace]
-members = ["crates/*"]
+members = ["compiler/*", "src/*"]
 resolver = "2"
 
 [workspace.package]
@@ -419,9 +419,9 @@ Pinning absolutely is Cargo's policy (`rust-version` in every crate that cares).
 
 CI flakes erode trust. Standing rules:
 
-1. **No network in tests.** Tests that touch the network are tagged `#[ignore]` and run in a separate job (for `ruxen-cli/tests/registry_mock.rs`, doc 01).
+1. **No network in tests.** Tests that touch the network are tagged `#[ignore]` and run in a separate job (for `ruxen_cli/tests/registry_mock.rs`, doc 01).
 2. **No `#[cfg(target_os = "linux")]` assumptions.** Tests must work on both Linux and macOS or be explicitly gated.
-3. **Temp files in `std.env.temp_dir()` with unique names.** Already the pattern (`crates/ruxen-cli/src/scaffold.rs:225-231`).
+3. **Temp files in `std.env.temp_dir()` with unique names.** Already the pattern (`src/ruxen_cli/src/scaffold.rs:225-231`).
 4. **No real git clones from `https://github.com/…` in tests.** Use `file://` local repos (tier 4.01 mock registry).
 5. **Timeouts on all async ops.** If a test hangs, fail fast with `cargo test --timeout 120`.
 
@@ -467,7 +467,7 @@ All parallel. Longest single job dictates wall time.
 - `.github/workflows/coverage.yml` — coverage upload.
 - `fuzz/Cargo.toml` — nested cargo-fuzz workspace.
 - `fuzz/fuzz_targets/lexer.rs`, `parser.rs`, `typeck.rs` — see §4.7.
-- `fuzz/corpus/lexer/`, `parser/`, `typeck/` — seeded from `crates/ruxen-core/tests/fixtures/*.rx`.
+- `fuzz/corpus/lexer/`, `parser/`, `typeck/` — seeded from `compiler/ruxen_core/tests/fixtures/*.rx`.
 - `fuzz/.gitignore`.
 - `codecov.yml` at repo root — coverage configuration (target %, status checks).
 - `clippy.toml` at repo root — lint config (any allowlisted lints documented inline).
@@ -476,7 +476,7 @@ All parallel. Longest single job dictates wall time.
 ### Touched files
 
 - `Cargo.toml` at repo root — add `[workspace.package] rust-version = "1.78"`.
-- Every `crates/*/Cargo.toml` — add `rust-version = "1.78"` under `[package]` (or `rust-version.workspace = true` once tier 4.01 §4.1 lands).
+- Every `compiler/*/Cargo.toml` and `src/*/Cargo.toml` — add `rust-version = "1.78"` under `[package]` (or `rust-version.workspace = true` once tier 4.01 §4.1 lands).
 - `README.md` — add MSRV line and CI badge.
 - `.github/workflows/release.yml:56-66` — delete the subset-test invocation once `ci.yml` supersedes it (they duplicate work, and the release matrix doesn't need to re-run tests).
 - `CONTRIBUTING.md` (doc 08) — document MSRV policy, PR checklist.

@@ -10,7 +10,7 @@ stdlib module landing.
 This spec covers the `use ...` import surface and the runtime-entry
 shim that bootstraps argv before user code runs.  Every numbered
 behaviour is pinned by an integration test in
-[`crates/ruxen-core/tests/std_use_resolution.rs`](../../../crates/ruxen-core/tests/std_use_resolution.rs).
+[`compiler/ruxen_core/tests/std_use_resolution.rs`](../../../compiler/ruxen_core/tests/std_use_resolution.rs).
 
 ---
 
@@ -75,7 +75,7 @@ entries (the program name plus the two user args).
 ## Pin tests
 
 All behaviours live in
-`crates/ruxen-core/tests/std_use_resolution.rs`:
+`compiler/ruxen_core/tests/std_use_resolution.rs`:
 
 | Behaviour | Test fn                                                 |
 |-----------|---------------------------------------------------------|

@@ -1,0 +1,9 @@
+include_apple=true
+include_kiwi=false
+eq=true
+ne=false
+dedup=pear,apple,fig,apple
+eq_after_dedup=false
+sort=apple,apple,fig,pear
+receiver=pear,apple,fig,apple
+sort_bang=apple,apple,fig,pear

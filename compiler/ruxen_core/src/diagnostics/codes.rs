@@ -56,6 +56,14 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0007",
         title: "malformed format spec",
     },
+    CodeInfo {
+        code: "E0008",
+        title: "`None` is not valid; use `nil`",
+    },
+    CodeInfo {
+        code: "E0009",
+        title: "`..=` is not valid range syntax; use `..`",
+    },
     // ── Reserved diagnostic-test code ────────────────────────────────
     // Used by `diagnostics::tests` to exercise the `code` field.
     CodeInfo {

@@ -178,10 +178,10 @@ A function that takes `SmallVec[Int, 3]` will refuse anything else — no runtim
 
 In case you're wondering whether some clever pattern works — these are non-goals for v1:
 
-- **General compile-time function evaluation** (`const fn`).
+- **General compile-time function evaluation** (running arbitrary methods at compile time).
 - **Floating-point const generics** — `NaN` breaks type equality.
 - **String const generics** — not in v1.
-- **Const-generic specialisation** — one impl for `N == 0`, another for `N > 0`.
+- **Const-generic specialisation** — one implementation for `N == 0`, another for `N > 0`.
 - **Defaults for const generics** (`const N: USize = 4`).
 - **Inference of const arguments** — always write them explicitly.
 

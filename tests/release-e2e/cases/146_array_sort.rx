@@ -1,3 +1,5 @@
+# Ruby parity: `sort` returns a NEW sorted array and leaves the
+# receiver unchanged; `sort!` sorts the receiver in place.
 def main
   var v: Array[Int] = Array.new
   v.push(3)
@@ -5,7 +7,10 @@ def main
   v.push(4)
   v.push(1)
   v.push(5)
-  v.sort
+  let s = v.sort
+  puts "sorted=#{s.join(",")}"
+  puts "receiver=#{v.join(",")}"
+  v.sort!
   for x in v
     puts "#{x}"
   end

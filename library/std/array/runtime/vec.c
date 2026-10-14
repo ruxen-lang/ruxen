@@ -243,17 +243,6 @@ void ruxen_vec_each(RuxenVec *v, void (*callback)(int64_t)) {
     }
 }
 
-/* Sum the elements of an Int Vec. The callee is responsible for ensuring
-   the elements are i64 — non-Int Vecs are typeck-rejected upstream. */
-int64_t ruxen_vec_sum(RuxenVec *v) {
-    if (!v) return 0;
-    int64_t total = 0;
-    for (uint64_t i = 0; i < v->len; i++) {
-        total += v->data[i];
-    }
-    return total;
-}
-
 /* `Vec::count` — alias for length. Kept as a separate symbol so the
    codegen can dispatch without a special case. */
 int64_t ruxen_vec_count(RuxenVec *v) {
@@ -442,32 +431,6 @@ RuxenVec *ruxen_vec_zip(RuxenVec *a, RuxenVec *b) {
     return out;
 }
 
-/* Vec::contains (Int) — linear scan for value equality.
-   Element type is opaque at runtime; we treat each slot as int64
-   bitwise-equal. For Vec[String]/Vec[&str] callers should use a
-   different path once a polymorphic `contains` lands. */
-int8_t ruxen_vec_contains_int(RuxenVec *v, int64_t needle) {
-    if (!v) return 0;
-    for (uint64_t i = 0; i < v->len; i++) {
-        if (v->data[i] == needle) return 1;
-    }
-    return 0;
-}
-
-static int ruxen_vec_int_cmp(const void *a, const void *b) {
-    int64_t x = *(const int64_t *)a;
-    int64_t y = *(const int64_t *)b;
-    return x < y ? -1 : (x > y ? 1 : 0);
-}
-
-/* Vec::sort (Int) — in-place ascending qsort. Returns the same
-   pointer for chaining. Non-Int Vecs are typeck-rejected upstream. */
-RuxenVec *ruxen_vec_sort(RuxenVec *v) {
-    if (!v || v->len < 2) return v;
-    qsort(v->data, (size_t)v->len, sizeof(int64_t), ruxen_vec_int_cmp);
-    return v;
-}
-
 /* ── Vec[T] surface — Phase 2 stdlib batch 1 (#03) ──────────────────
  * Constructors / inspectors / mutators that the v1 surface promises
  * but the runtime did not yet implement. All operate on the same
@@ -591,22 +554,6 @@ int64_t ruxen_vec_get_or_panic(RuxenVec *v, uint64_t i) {
 #endif
     }
     return v->data[i];
-}
-
-/* Vec[T] == Vec[T] — pairwise equality of slots. For primitive T
-   this is bitwise; for Vec[String] the typechecker will require
-   `T: PartialEq` and we still bitwise-compare slot pointers — true
-   structural string equality on Vec[String] will land alongside the
-   PartialEq trait dispatch in 05. v1 ships the integer-correct
-   version that the existing fixtures exercise. */
-int8_t ruxen_vec_eq(RuxenVec *a, RuxenVec *b) {
-    if (a == b) return 1;
-    if (!a || !b) return 0;
-    if (a->len != b->len) return 0;
-    for (uint64_t i = 0; i < a->len; i++) {
-        if (a->data[i] != b->data[i]) return 0;
-    }
-    return 1;
 }
 
 /* Vec[String] / Vec[Vec[T]] element-aware drop. The existing
@@ -805,21 +752,6 @@ void ruxen_vec_set(RuxenVec *v, uint64_t index, int64_t value) {
         ruxen_panic("vec set: index out of bounds");
     }
     v->data[index] = value;
-}
-
-/* Vec.dedup — remove consecutive duplicates. Mirrors Rust's
-   `Vec::dedup` for primitive slot equality (PartialEq required at the
-   type level; the runtime uses bitwise 64-bit slot compare). */
-void ruxen_vec_dedup(RuxenVec *v) {
-    if (!v || v->len < 2) return;
-    uint64_t write = 1;
-    for (uint64_t read = 1; read < v->len; read++) {
-        if (v->data[read] != v->data[write - 1]) {
-            v->data[write] = v->data[read];
-            write++;
-        }
-    }
-    v->len = write;
 }
 
 /* Vec::join — concatenate string elements with a separator.

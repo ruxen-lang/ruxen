@@ -19,20 +19,19 @@ when it lands."
 edition = "2026"
 ```
 
-The field is parsed and stored (`crates/ruxen-cli/src/manifest.rs:28-29`),
+The field is parsed and stored (`src/ruxen_cli/src/manifest.rs:28-29`),
 the scaffolder emits it (`scaffold.rs:145`), and tests assert its presence
 (`scaffold.rs:198`, `manifest.rs:329`). Every fixture crate declares
 `edition = "2026"` (`tests/fixtures/*/Ruxen.toml:4`).
 
-But the compiler never reads it. `grep edition` across `crates/ruxen-core`
-and `crates/ruxenc` turns up zero hits. There is no edition-gating, no
+But the compiler never reads it. `grep edition` across `compiler/ruxen_core/`
+and `src/ruxenc` turns up zero hits. There is no edition-gating, no
 version-check, no semantic effect.
 
 This is a ticking bug: every time we publish a library on the current
 edition, we lock in *whatever the compiler did at that time*, with no way
 to describe "this crate expects 2026 semantics." The first time we try to
-make a cleanup change (e.g. tier-1 B3's proposed `Hash` → `Map`
-rename), we'll either break everyone or shrug and accept a bad name.
+make a cleanup change (a stdlib rename, say), we'll either break everyone or shrug and accept a bad name.
 
 This doc specifies:
 - What editions mean for Ruxen (scope, cadence, lifespan).
@@ -46,7 +45,7 @@ This doc specifies:
 
 ### 2.1 Manifest field
 
-`crates/ruxen-cli/src/manifest.rs:23-47` (`Package` struct):
+`src/ruxen_cli/src/manifest.rs:23-47` (`Package` struct):
 
 ```rust
 pub struct Package {
@@ -154,7 +153,7 @@ Validation:
 | New syntax (new keyword) | **Yes**, but the keyword must already be reserved in the older edition (see §4.3). |
 | Deprecation of old syntax → warning | Yes (works for everyone, no edition needed). |
 | Deprecation of old syntax → error | **Edition only.** Old edition keeps the warning; new edition promotes to error. |
-| New semantic rule applying to existing syntax | **No.** E.g. changing `&String → &str` coercion to a different rule. |
+| New semantic rule applying to existing syntax | **No.** E.g. changing the `Option` covariance rule. |
 | New method resolution preference | **No.** Method resolution order is cross-edition stable. |
 | ABI / mangling changes | **No.** ABI is cross-edition stable (or explicitly opt-in via separate directive, not edition). |
 | Stdlib item rename/removal | **Yes**, new edition hides the old name. Cross-edition code calls it via a re-export shim. |
@@ -217,7 +216,7 @@ Detailed directive syntax lives in tier5_03.
 
 ### 4.6 The migrator: `ruxen fix`
 
-New CLI subcommand on `ruxen` (`crates/ruxen-cli`):
+New CLI subcommand on `ruxen` (`src/ruxen_cli`):
 
 ```
 ruxen fix [--edition=YYYY] [--dry-run] [--check]
@@ -252,7 +251,7 @@ suggestions the compiler would already offer. That way:
 
 ### 5.1 Edition representation in the compiler
 
-New module `crates/ruxen-core/src/edition.rs`:
+New module `compiler/ruxen_core/src/edition.rs`:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -285,7 +284,7 @@ edition), so it is passed into the entrypoint:
 
 - `ruxenc` CLI accepts `--edition=YYYY` (default: read from manifest if
   in a crate; fallback to `Edition::DEFAULT`).
-- `ruxen-cli` build loop reads it from the manifest and passes it to
+- `ruxen_cli` build loop reads it from the manifest and passes it to
   `ruxenc`.
 - `Lexer::new(source, edition)` replaces `Lexer::new(source)`
   (`lexer/mod.rs:1`). A new param.
@@ -295,7 +294,7 @@ edition), so it is passed into the entrypoint:
   rules.
 - Codegen doesn't care.
 
-New `EditionCtx` struct (`ruxen-core/src/edition.rs`):
+New `EditionCtx` struct (`ruxen_core/src/edition.rs`):
 
 ```rust
 pub struct EditionCtx {
@@ -325,14 +324,14 @@ pub fn keyword(ident: &str, edition: Edition) -> Option<TokenKind> {
 }
 ```
 
-On 2026, `try` remains an identifier — code calling `fn try(...)` keeps
-working. On 2027, `try` is a keyword — calling `fn try(...)` is an
-error, and `ruxen fix --edition=2027` rewrites it to `fn try_(...)` (or
+On 2026, `try` remains an identifier — code calling `def try(...)` keeps
+working. On 2027, `try` is a keyword — calling `def try(...)` is an
+error, and `ruxen fix --edition=2027` rewrites it to `def try_(...)` (or
 `r#try` if we adopt Rust-style raw identifiers; see OQ-3).
 
 ### 5.4 Per-edition lints / deprecation map
 
-A table in `ruxen-core` listing all **edition-migration lints**:
+A table in `ruxen_core` listing all **edition-migration lints**:
 
 ```rust
 pub struct EditionLint {
@@ -345,11 +344,11 @@ pub struct EditionLint {
 
 pub const EDITION_LINTS: &[EditionLint] = &[
     EditionLint {
-        name: "hash_to_map",
+        name: "old_name_to_new_name",
         from: Edition::E2026,
         to: Edition::E2027,
-        message: "type `Hash[K, V]` is renamed to `Map[K, V]`",
-        rewriter: rewrite_hash_to_map,
+        message: "type `OldName[K, V]` is renamed to `NewName[K, V]`",
+        rewriter: rewrite_old_name_to_new_name,
     },
     // ...
 ];
@@ -362,9 +361,9 @@ with the same suggestion.
 
 This is the hardest part.
 
-**Problem.** A library built on `"2026"` exports `Map[K, V]`. A
-`"2027"` binary wants to call into it. On 2027, `Map[K, V]` doesn't
-exist — it's `Map`.
+**Problem.** A library built on `"2026"` exports `OldName[K, V]`. A
+`"2027"` binary wants to call into it. On 2027, `OldName[K, V]` doesn't
+exist — it's `NewName`.
 
 **Solution.** At compile time of the library (2026), the compiler emits
 a symbol table metadata file (`*.ruxenmeta`) alongside the `*.rlib`.
@@ -372,30 +371,30 @@ The metadata records **canonical** names — the names used internally
 by the compiler across editions. Consumers see canonical names remapped
 through the consumer's edition.
 
-- `Map[K, V]` on 2026 → canonical `core.collections.Map[K, V]`.
-- `Map[K, V]` on 2027 → canonical `core.collections.Map[K, V]`.
+- `OldName[K, V]` on 2026 → canonical `core.collections.NewName[K, V]`.
+- `NewName[K, V]` on 2027 → canonical `core.collections.NewName[K, V]`.
 - Identical canonical → linkable.
 
 This implies:
 
 - A **canonical name table** is introduced early (even if there's only
   one edition today) so the 2027 migration doesn't require a retrofit.
-- `.ruxenmeta` is a new artifact; `crates/ruxenc/src/cache/` already has
+- `.ruxenmeta` is a new artifact; `src/ruxenc/src/cache/` already has
   a signature extraction step that we extend.
 - Incremental compilation (tier-1 project_phase13) fingerprints
   canonical names, not surface names, so cross-edition cache hits work.
 
 ### 5.6 Library consumers
 
-A crate on edition 2027 wants to `use foo.Hash` where `foo` is a 2026
+A crate on edition 2027 wants to `use foo.OldName` where `foo` is a 2026
 crate. Options:
 
 - **Canonicalize on import.** The 2027 compiler sees `foo`'s metadata,
-  knows `Map[K, V]` in 2026 is canonical `Map[K, V]`, and resolves
-  `foo.Hash` to the canonical. Downstream, the 2027 crate prefers
-  `Map` but `use foo.Hash as ThatHash` still works.
+  knows `OldName[K, V]` in 2026 is canonical `NewName[K, V]`, and resolves
+  `foo.OldName` to the canonical. Downstream, the 2027 crate prefers
+  `NewName` but `use foo.OldName as ThatName` still works.
 - This means **surface names are edition-local; canonical names are
-  cross-edition.** Same rule as Rust's paths-to-item resolution.
+  cross-edition.**
 
 ---
 
@@ -403,46 +402,46 @@ crate. Options:
 
 ### 6.1 New code
 
-- `crates/ruxen-core/src/edition.rs` — `Edition`, `EditionCtx`,
+- `compiler/ruxen_core/src/edition.rs` — `Edition`, `EditionCtx`,
   `KNOWN_EDITIONS`, helpers.
-- `crates/ruxen-core/src/edition_lints.rs` — `EditionLint` table and
+- `compiler/ruxen_core/src/edition_lints.rs` — `EditionLint` table and
   dispatch logic (invoked from typeck / resolve).
-- `crates/ruxen-core/src/canonical.rs` — canonical name table
+- `compiler/ruxen_core/src/canonical.rs` — canonical name table
   (initially maps every surface type to itself; grows per-edition).
-- `crates/ruxen-cli/src/fix.rs` — `ruxen fix` subcommand.
-- `crates/ruxenc/src/fix_mode.rs` — the in-compiler "rewrite mode"
+- `src/ruxen_cli/src/fix.rs` — `ruxen fix` subcommand.
+- `src/ruxenc/src/fix_mode.rs` — the in-compiler "rewrite mode"
   harness.
-- `crates/ruxen-cli/src/cli.rs:25-113` — add `Fix { edition: Option<String>, dry_run: bool, check: bool }` variant.
+- `src/ruxen_cli/src/cli.rs:25-113` — add `Fix { edition: Option<String>, dry_run: bool, check: bool }` variant.
 
 ### 6.2 Modified code
 
-- `crates/ruxen-core/src/lexer/mod.rs:70` (`Lexer::new`) — take
+- `compiler/ruxen_core/src/lexer/mod.rs:70` (`Lexer::new`) — take
   `EditionCtx`.
-- `crates/ruxen-core/src/lexer/token.rs:281` (`keyword`) — per-edition
+- `compiler/ruxen_core/src/lexer/token.rs:281` (`keyword`) — per-edition
   dispatch.
-- `crates/ruxen-core/src/parser/mod.rs:41` (`Parser::new`) — take
+- `compiler/ruxen_core/src/parser/mod.rs:41` (`Parser::new`) — take
   `EditionCtx`.
-- `crates/ruxen-core/src/typeck/mod.rs` — pass `&EditionCtx` through.
-- `crates/ruxen-core/src/resolve/mod.rs` — consult
+- `compiler/ruxen_core/src/typeck/mod.rs` — pass `&EditionCtx` through.
+- `compiler/ruxen_core/src/resolve/mod.rs` — consult
   `EditionCtx.features` when marking a use of an `unstable`-directive
   item.
-- `crates/ruxen-cli/src/manifest.rs` — validate `edition`, add `[features]`.
-- `crates/ruxen-cli/src/manifest.rs:184` (`validate`) — call
+- `src/ruxen_cli/src/manifest.rs` — validate `edition`, add `[features]`.
+- `src/ruxen_cli/src/manifest.rs:184` (`validate`) — call
   `Edition::from_str` and return `E4100` on unknown.
-- `crates/ruxen-cli/src/build.rs` — resolve features, pass to `ruxenc`.
-- `crates/ruxenc/src/main.rs:40-68` — `--edition=` flag.
-- `crates/ruxenc/src/cache/` — include `EditionCtx` fingerprint in the
+- `src/ruxen_cli/src/build.rs` — resolve features, pass to `ruxenc`.
+- `src/ruxenc/src/main.rs:40-68` — `--edition=` flag.
+- `src/ruxenc/src/cache/` — include `EditionCtx` fingerprint in the
   cache key so 2026 vs 2027 builds don't cache-hit each other.
 
 ### 6.3 Tests
 
-- `crates/ruxen-core/tests/edition_keyword_gating.rs` — `try` is ident
+- `compiler/ruxen_core/tests/edition_keyword_gating.rs` — `try` is ident
   on 2026, keyword on 2027.
-- `crates/ruxen-core/tests/edition_rewrites.rs` — `Map[…]` → `Map[…]`
+- `compiler/ruxen_core/tests/edition_rewrites.rs` — `OldName[…]` → `NewName[…]`
   suggestion fires on 2026, error on 2027.
-- `crates/ruxen-cli/tests/fix_migrator.rs` — run the migrator on a small
+- `src/ruxen_cli/tests/fix_migrator.rs` — run the migrator on a small
   fixture, assert the rewritten source compiles on the new edition.
-- `crates/ruxen-cli/tests/cross_edition_linking.rs` — fixture with two
+- `src/ruxen_cli/tests/cross_edition_linking.rs` — fixture with two
   crates: lib (2026), binary (2027); assert it builds and runs.
 
 ### 6.4 Documentation
@@ -465,9 +464,9 @@ crate. Options:
 - **Tier 5 doc 04 (error codes):** `E4100-E4199` reserved for
   edition/manifest errors (§5.1 of doc 04 also reserves this range).
 - **Tier 5 doc 01 (reference):** edition-scoped chapters.
-- **Tier 1 (stdlib):** stdlib-wide renames (e.g. `Map[K, V]` →
-  `Map[K, V]`) are edition lints. Tier-1 B3 is the first such
-  candidate.
+- **Tier 1 (stdlib):** stdlib-wide renames are edition lints. (Tier-1
+  B3 was the first candidate; it is dropped, since the collection keeps
+  Ruby's name `Hash[K, V]`.)
 - **Tier 1 concurrency / async:** reserved keywords (`async`, `await`,
   `actor`, `spawn`, `send`, `receive`) become real keywords on a future
   edition. Today they are reserved (tier1 B6).
@@ -483,7 +482,7 @@ crate. Options:
 1. `Edition` enum + `EditionCtx` + default values.
 2. Thread through `Lexer::new` and `Parser::new`. Default to
    `Edition::DEFAULT` from every call site.
-3. Read `package.edition` in `ruxen-cli/src/build.rs`; pass
+3. Read `package.edition` in `ruxen_cli/src/build.rs`; pass
    `--edition=...` to `ruxenc`.
 4. `ruxenc --edition=...` flag.
 5. Validation in `Manifest::validate` + `E4100` error code.
@@ -493,9 +492,11 @@ and is observable in `--emit=ast` output. Nothing changes semantically.
 
 ### Phase 2b: first edition-lint (1-2 weeks)
 
-Use B3 (Hash→Map) as the canary:
+Use the first edition-gated rename as the canary (the original candidate,
+tier-1 B3's `Hash`→`Map`, is dropped: the collection keeps Ruby's name
+`Hash[K, V]`):
 
-1. Land `Map[K, V]` as an alias of `Map[K, V]` — tier-1 B3.
+1. Land the new name as an alias of the old one.
 2. Register an `EditionLint { from: E2026, to: E2027, ... }` that warns
    on 2026 and errors on 2027.
 3. Add `Edition::E2027` to `KNOWN`. It's not the default.

@@ -22,14 +22,14 @@ The LSP consumes the suggestion as a **code action** — the user hits
 colourised `help:` line. All from one source of truth.
 
 Ruxen today has a primitive free-form `help: Vec<String>` on
-`BorrowError` (`crates/ruxen-core/src/borrow_check/errors.rs:61`):
+`BorrowError` (`compiler/ruxen_core/src/borrow_check/errors.rs:61`):
 
 ```rust
 help: vec![format!("consider cloning the value: `{}.clone`", name)]
 ```
 
 Good as human prose, useless as a machine-applicable fix. The LSP
-conversion (`crates/ruxen-ide/src/diagnostics.rs:30-60`) doesn't even
+conversion (`src/ruxen_ide/src/diagnostics.rs:30-60`) doesn't even
 propagate `help` into the LSP diagnostic — it's just dropped. No
 `textDocument/codeAction` integration is possible.
 
@@ -43,7 +43,7 @@ usage guidelines.
 
 ### 2.1 Existing "help" plumbing
 
-`crates/ruxen-core/src/borrow_check/errors.rs:50-62`:
+`compiler/ruxen_core/src/borrow_check/errors.rs:50-62`:
 
 ```rust
 pub struct SpanLabel {
@@ -71,7 +71,7 @@ applicability marker.
 
 ### 2.2 The LSP loses suggestions entirely
 
-`crates/ruxen-ide/src/diagnostics.rs:30-60`:
+`src/ruxen_ide/src/diagnostics.rs:30-60`:
 
 ```rust
 pub fn borrow_error_to_lsp(err, line_index, uri) -> LspDiagnostic {
@@ -86,7 +86,7 @@ Fix button.
 
 ### 2.3 `Diagnostic` top-level carrier
 
-`crates/ruxen-core/src/diagnostics/mod.rs:21-27`:
+`compiler/ruxen_core/src/diagnostics/mod.rs:21-27`:
 
 ```rust
 pub struct Diagnostic {
@@ -134,7 +134,7 @@ No help field at all. `BorrowError` has help; `Diagnostic` does not.
 ### 4.1 `Suggestion` type
 
 ```rust
-// crates/ruxen-core/src/diagnostics/suggestion.rs
+// compiler/ruxen_core/src/diagnostics/suggestion.rs
 
 /// A span-based, potentially-multi-part replacement.
 ///
@@ -211,7 +211,7 @@ pub struct Diagnostic {
 Two help channels intentionally:
 
 - `help: Vec<String>` for prose that has no span or replacement.
-  ("the borrow occurs because of Rust's lifetime rules; see…")
+  ("the borrow occurs because of the lifetime rules; see…")
 - `suggestions: Vec<Suggestion>` for actionable, span-based fixes.
 
 ### 4.4 Builder API
@@ -306,7 +306,7 @@ Multi-edit suggestions show all edits in the same block.
 
 ### 4.6 LSP mapping
 
-`crates/ruxen-ide/src/diagnostics.rs` gets a new function:
+`src/ruxen_ide/src/diagnostics.rs` gets a new function:
 
 ```rust
 pub fn diagnostic_to_lsp(
@@ -377,21 +377,21 @@ not using the LSP, linters, CI reporters) consume this.
 ### 5.1 File organization
 
 New:
-- `crates/ruxen-core/src/diagnostics/suggestion.rs` — `Suggestion`,
+- `compiler/ruxen_core/src/diagnostics/suggestion.rs` — `Suggestion`,
   `SuggestionEdit`, `Applicability`.
-- `crates/ruxen-core/src/diagnostics/render.rs` — terminal renderer
+- `compiler/ruxen_core/src/diagnostics/render.rs` — terminal renderer
   (multi-line, with source context). Moves the `Display` extension off the
   carrier.
-- `crates/ruxen-core/src/diagnostics/json.rs` — JSON serialization
+- `compiler/ruxen_core/src/diagnostics/json.rs` — JSON serialization
   behind a `json-output` feature flag.
 
 Modified:
-- `crates/ruxen-core/src/diagnostics/mod.rs` — `Diagnostic` carrier
+- `compiler/ruxen_core/src/diagnostics/mod.rs` — `Diagnostic` carrier
   gains `suggestions`, `secondary`, `notes`, `help`. Builder methods.
-- `crates/ruxen-ide/src/diagnostics.rs` — rewrite entirely once the
+- `src/ruxen_ide/src/diagnostics.rs` — rewrite entirely once the
   carriers merge; add code-action generation.
-- `crates/ruxen-lsp/src/server.rs` — handle `textDocument/codeAction`
-  by delegating to `ruxen-ide`.
+- `src/ruxen_lsp/src/server.rs` — handle `textDocument/codeAction`
+  by delegating to `ruxen_ide`.
 - Every existing `BorrowError` site in `borrow_check/mod.rs` (~15
   spots) — rewritten as `Diagnostic::error(code, primary).with_*()`
   chains.
@@ -406,7 +406,7 @@ Guidelines for the compiler's own code:
   - Adding `&` before an expression to make a borrow (`E1001` on
     some sites).
   - Renaming a typo to a known candidate with Levenshtein distance ≤ 1.
-  - Edition-migration rewrites (e.g. `Hash[K, V]` → `Map[K, V]`).
+  - Edition-migration rewrites (e.g. a renamed stdlib type).
 - **MaybeIncorrect** when the replacement compiles but the user's
   intent is ambiguous, e.g.:
   - Suggesting `.clone()` for a move error (the user might have
@@ -415,7 +415,7 @@ Guidelines for the compiler's own code:
 - **HasPlaceholders** when the replacement contains `_`, `TODO`, or
   typed-hole text the user must fill in, e.g.:
   - "add a type annotation here: `: <type>`".
-  - "provide the missing variant: `| Variant(...) => TODO`".
+  - "provide the missing variant: `in Variant(...) then ...`".
 
 ### 5.3 Multi-edit suggestions
 
@@ -509,8 +509,8 @@ Each suggestion is one PR with a fixture.
 
 ### 6.4 Phase 5d — LSP code actions (1 week)
 
-1. `ruxen-ide/src/diagnostics.rs` returns code actions.
-2. `ruxen-lsp/src/server.rs` implements
+1. `ruxen_ide/src/diagnostics.rs` returns code actions.
+2. `ruxen_lsp/src/server.rs` implements
    `textDocument/codeAction`.
 3. VSCode integration-test (manual): write a program with E1006, hit
    `Cmd-.`, assert the `let` → `var` fix applies.
@@ -518,7 +518,7 @@ Each suggestion is one PR with a fixture.
 ### 6.5 Phase 5e — JSON output + `ruxen fix` (2 weeks)
 
 1. `ruxenc --error-format=json` (also shared with tier5_04 phase 4e).
-2. `crates/ruxen-cli/src/fix.rs` — consumes JSON, applies
+2. `src/ruxen_cli/src/fix.rs` — consumes JSON, applies
    machine-applicable edits.
 3. Integration test: fixture crate with several E1006-type errors,
    `ruxen fix` rewrites and the crate compiles.
@@ -648,7 +648,7 @@ construct simply wouldn't be emitted on stable.
 ## 10. Acceptance criteria
 
 - [ ] `Suggestion`, `SuggestionEdit`, `Applicability` exist in
-      `crates/ruxen-core/src/diagnostics/suggestion.rs`.
+      `compiler/ruxen_core/src/diagnostics/suggestion.rs`.
 - [ ] `Diagnostic.suggestions: Vec<Suggestion>` is the canonical
       carrier.
 - [ ] Builder API (`suggest_replace`, `suggest_insert_before`,

@@ -139,12 +139,12 @@ def main
 end
 ```
 
-- `exit(code: Int) -> !` — never returns. The OS sees `code mod 256`.
+- `exit(code: Int) -> Never` — never returns. The OS sees `code mod 256`.
 - `Command.new(cmd)` — builder for a child process. Chain `.arg`, `.args`, `.env`, `.current_dir`.
 - `.status` — runs the child and returns `Result[ExitStatus, IoError]`. stdout/stderr are inherited from the parent.
 - `.output` — same, but captures the child's stdout / stderr into byte arrays.
 
-The `!` in `exit(code: Int) -> !` is the **never type**: this function does not return, ever.
+The `Never` in `exit(code: Int) -> Never` is the **never type**: this function does not return, ever.
 
 ---
 

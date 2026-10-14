@@ -887,11 +887,7 @@ impl Resolver {
     }
 
     pub(super) fn resolve_module(&mut self, m: &ast::ModuleDef) -> HirModule {
-        let def_id = self
-            .type_registry
-            .get(&m.name)
-            .copied()
-            .unwrap_or(UNRESOLVED_DEF);
+        let def_id = self.own_type_def(&m.name);
 
         self.scopes.push(ScopeKind::Module);
         // Track the module path so nested class/struct/enum resolution
@@ -902,6 +898,15 @@ impl Resolver {
         // land on a dangling DefId, surfacing as "no field x on type
         // Bar" inside method bodies). Pin: `rondo_v1_blockers.md` B12.
         self.current_module_path.push(m.name.clone());
+        // Pass 1 bound the bare `Enum.Variant` keys of the module's enums
+        // in a module frame that is gone now; re-bind them in this frame so
+        // the module body (and each enum's own methods) reach them.
+        for item in &m.items {
+            if let ast::TopLevelItem::Enum(e) = item {
+                let key = self.qualified_type_key(&e.name);
+                self.bind_enum_variants(&key, &e.name);
+            }
+        }
 
         let mut items = Vec::new();
         for item in &m.items {

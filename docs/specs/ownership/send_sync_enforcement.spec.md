@@ -110,8 +110,7 @@ arbitrary closure construction. Closures used in `Array.each`,
 
 When a closure captures `foo` by reference (rather than by move),
 the check requires `&Foo: Send` — which for v1 means `Foo: Sync`.
-This is because `&T: Send` iff `T: Sync` (Rust's rule, kept for
-v1 as the natural fit).
+This is because `&T: Send` iff `T: Sync`.
 
 E1100 diagnostic distinguishes by-ref vs by-move in the note:
 ```
@@ -158,11 +157,11 @@ of B3-B8.
 
 (Already shipped — pinned here.)
 
-## B12 — `unsafe impl Send` escape hatch
+## B12 — `unsafe include Send` escape hatch
 
 ```rx
 class WrapsRawPointer
-  include unsafe Send   # asserts safety manually
+  unsafe include Send   # asserts safety manually
 end
 ```
 

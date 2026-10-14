@@ -18,7 +18,8 @@ same compiler-generated method body.
 
 `Send` and `Sync` are auto-mixins handled by the same field-rule;
 they are never written explicitly with `include` in ordinary code.
-Users opt out via `exclude Send` / `exclude Sync` in the body, or
+Users opt out via `include !Send` / `include !Sync` in the body (a
+single `exclude Send` spelling is proposed but not implemented), or
 opt in for inference-incompatible structures via
 `unsafe include Send` / `unsafe include Sync` (the only legal use
 of `unsafe include`).
@@ -29,7 +30,7 @@ of `unsafe include`).
 
 **Given** `struct Point` with fields `x: Int, y: Int` (no explicit
 `include Debug`)
-**When** the program evaluates `"#{p:?}"` for `p = Point { x: 1, y: 2 }`
+**When** the program evaluates `"#{p:?}"` for `p = Point.new(1, 2)`
 **Then** the result is `"Point { x: 1, y: 2 }"`.
 
 ## B2 — Implicit `Debug` on a unit-variant enum prints variant name
@@ -70,7 +71,7 @@ and an implicit `Eq` is suppressed when the rule fails.
 
 ## B8 — Implicit `Hashable` synthesises a hash body
 
-Allows the type to be used as a `Map` / `Set` key.  FNV mixer over
+Allows the type to be used as a `Hash` key / `Set` element.  FNV mixer over
 fields in source order.
 
 ## B9 — Implicit `Default` synthesises `Type.default()` class method
@@ -109,7 +110,7 @@ at compile time).
 | E0617  | `include Ord` on struct with non-Ord field               |
 | E0618  | `include PartialOrd` on struct with non-PartialOrd field |
 
-## B13 — Generated impls dispatch through mixin bounds
+## B13 — Generated bodies dispatch through mixin bounds
 
 Generic code constrained by `T: Ord` / `T: Hashable` / `T: Clone` /
 `T: PartialEq` etc. resolves correctly when called with a type
@@ -117,8 +118,8 @@ that picks up the mixin implicitly.
 
 ## B14 — Implicit `Default` emits a concrete class-level method
 
-`Type.default()` is callable directly without `any`-mixin machinery
-(matches Rust's "associated function" emission).
+`Type.default()` is callable directly as a class method, without
+`any`-mixin machinery.
 
 ## B15 — User override wins over implicit body
 

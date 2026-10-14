@@ -11,7 +11,7 @@ matrices. Read `README.md` first for the three-tier framework.
 | `DONE` | Ruby syntax/semantics work as-is in Ruxen. |
 | `PARTIAL` | Some of the feature works; a real sub-case is missing or spelled differently. |
 | `MISSING` | Direct-parity feature that is expressible in Ruxen's model but not yet built. A burn-down item. |
-| `COMPILE-TIME` | The right tier is Ruxen compile-time machinery (`derive`, mixins, `extension`, a macro, attribute-driven codegen, a `match` over a fixed set). Ergonomics match Ruby; mechanism is codegen, never runtime self-mutation. Some rows are already built (`derive`, `extension`); others name the design still to build (see Backlog B). Never "out of scope". |
+| `COMPILE-TIME` | The right tier is Ruxen compile-time machinery (mixins, `extension`, a macro, attribute-driven codegen, a `match` over a fixed set). Ergonomics match Ruby; mechanism is codegen, never runtime self-mutation. Some rows are already built (mixins, `extension`); others name the design still to build (see Backlog B). Never "out of scope". |
 | `OUT-OF-SCOPE` | Irreducibly runtime (needs an interpreter/metaobject runtime). Tracked with WHY + substitute. |
 
 **How this was audited.** Read of the compiler (`lexer/token.rs`,
@@ -29,7 +29,7 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 - **Control-flow keyword ergonomics and literals are Direct parity.** Many cheap,
   common Ruby surfaces are now built; symbols, keyword operators, richer splat
   forms, and percent literals remain in the direct-parity burn-down.
-- **Ruby's load-time metaprogramming is re-expressed at compile time** (`derive` / mixins / `extension` / a new macro / attribute-driven codegen / a `match` over a fixed method set). `define_method`, `method_missing`, `attr_accessor`, `send`, `respond_to?`, `Struct`, delegation, and reopening-to-add-methods all get a **compile-time design that produces the same result** so the compiled program never mutates itself at runtime. These are `COMPILE-TIME` (a design + build task), not out-of-scope.
+- **Ruby's load-time metaprogramming is re-expressed at compile time** (mixins / `extension` / a new macro / attribute-driven codegen / a `match` over a fixed method set). `define_method`, `method_missing`, `attr_accessor`, `send`, `respond_to?`, `Struct`, delegation, and reopening-to-add-methods all get a **compile-time design that produces the same result** so the compiled program never mutates itself at runtime. These are `COMPILE-TIME` (a design + build task), not out-of-scope.
 - **Only the irreducibly-runtime slice is `OUT-OF-SCOPE`**: `eval` of a string unknown until runtime, `binding`, `TracePoint`, `ObjectSpace` heap-walking, and live monkey-patching of *already-compiled* third-party code. Each such row still names the closest compile-time design that covers the real use case.
 - **Ruby's exception model is a deliberate design substitution**, not a gap: `Result` + `?` + `Drop` + `panic!`. A `begin/rescue/ensure` *surface* could be offered later as compile-time sugar over that machinery.
 
@@ -79,7 +79,7 @@ runtime class mutation, no `eval` of runtime strings. The strategy is to do at
 | Endless range `(1..)` | DONE | probe PASS | |
 | Beginless range `(..5)` | MISSING | probe: `found DotDot` | |
 | `true` / `false` | DONE | case `04` | |
-| `nil` | DONE | `lexer`; replaces `None`/`null` | `nil` is Option::None and raw-null; `None` is a hard `E0008`. |
+| `nil` | DONE | `lexer`; replaces `None`/`null` | `nil` is the absent value of `T?` and raw-null; `None` is a hard `E0008`. |
 | `__FILE__` / `__LINE__` | MISSING | probe: undefined variable | |
 | `__method__` | MISSING | probe: undefined variable | |
 | `__dir__` | MISSING | — | |
@@ -268,7 +268,7 @@ the substitute is idiomatic but the sugar is not built.
 |---|---|---|---|
 | `class Name ... end` | DONE | case `14` | |
 | Fields | DONE | `name: T` decls; case `72` | No `attr_*`; visibility via sections. |
-| `attr_accessor/reader/writer` | COMPILE-TIME | macro/`derive` that emits reader+writer methods for the listed fields | probe: keyword not parsed. Cheap codegen sugar over existing fields; a clear build item. |
+| `attr_accessor/reader/writer` | COMPILE-TIME | compile-time codegen that emits reader+writer methods for the listed fields | probe: keyword not parsed. Cheap codegen sugar over existing fields; a clear build item. |
 | Inheritance `<` | DONE | case `16` | |
 | `super(args)` | DONE / PARTIAL | §4 | Delegation DONE; super-as-value PARTIAL. |
 | Open class / reopening — **add methods** | COMPILE-TIME | `extension Type ... end` adds methods to a type from outside (compile-time "monkey-patch") | Partly DONE via `extension`. Reopening the *same* `class` name is `E0727`; the sanctioned surface is `extension`. |
@@ -280,8 +280,8 @@ the substitute is idiomatic but the sugar is not built.
 | `attr`-style equality/hash/inspect | PARTIAL (`struct` only) | cases `133/207/139` | Auto `PartialEq`/`Hash`/`Debug`. All three cases pin a **`struct`**. For a **`class`**, structural `==` returns `false` with or without an explicit `include PartialEq` (**B74**), so a `class` also cannot serve as a `Hash`/`Set` key. |
 | `to_s` universal | DONE | case `810` | User `to_s` overrides derived. |
 | `<=>` + `Comparable` (hand-written) | DONE (operators) | case `965` | Required `<=>` supplies default `==`, ordering operators, and `between?`; `clamp` remains an ownership-design follow-up. |
-| `Struct.new(:a, :b)` | COMPILE-TIME | a `Struct.new(...)` macro that expands to a `struct` with accessors + auto-derives | `struct` is the mechanism (case `63`); the `Struct.new` *surface* is a macro over it. |
-| `Data.define(:a, :b)` | COMPILE-TIME | macro → immutable `struct` (no writers) + value semantics + auto-derives | Same design as `Struct.new`, writers omitted. |
+| `Struct.new(:a, :b)` | COMPILE-TIME | a `Struct.new(...)` macro that expands to a `struct` with accessors + auto-included mixins | `struct` is the mechanism (case `63`); the `Struct.new` *surface* is a macro over it. |
+| `Data.define(:a, :b)` | COMPILE-TIME | macro → immutable `struct` (no writers) + value semantics + auto-included mixins | Same design as `Struct.new`, writers omitted. |
 | `Comparable` protocol (auto) | DONE | case `126/209` | Via derived `Ord`. |
 | `Enumerable` protocol | DONE | cases `612/613/936` | `include Enumerable`. |
 
@@ -315,7 +315,7 @@ feature below gets a **compile-time design that produces the identical result**
 without the program mutating itself at runtime. The recurring moves are: (a) a
 **literal symbol/name folds to a direct reference** at compile time; (b) a
 **bounded, compile-time-known method/field set** becomes generated real methods
-or a `match`; (c) a **schema/attribute** drives codegen (`derive` / a macro /
+or a `match`; (c) a **schema/attribute** drives codegen (mixins / a macro /
 attribute-driven expansion). Only string-`eval`, `binding`, `TracePoint`,
 `ObjectSpace`, and repatching already-compiled code are irreducible.
 
@@ -326,13 +326,13 @@ standalone and emit empty output at runtime. They are not functional today; the
 
 | Ruby feature | Status | Compile-time design that delivers the same result | Note / irreducible edge |
 |---|---|---|---|
-| `define_method(:m) { ... }` | COMPILE-TIME | attribute/macro that expands a declarative spec into concrete `def`s at compile time (the "dynamic finders / generated accessors" use case); `derive` for the standard families | Body known at compile time → real methods. probe: `found LParen`. |
+| `define_method(:m) { ... }` | COMPILE-TIME | attribute/macro that expands a declarative spec into concrete `def`s at compile time (the "dynamic finders / generated accessors" use case); mixins for the standard families | Body known at compile time → real methods. probe: `found LParen`. |
 | `method_missing` | COMPILE-TIME | for delegation/proxy/dynamic-attr (the real uses), a macro that enumerates the fixed, schema-derived name set and emits forwarding methods; a `Hash`-backed dynamic object for open key access | Genuinely-unbounded `obj.anything` with no schema is the only irreducible edge. probe: needs `Symbol`. |
 | `respond_to_missing?` | COMPILE-TIME | pairs with the above: the generated method set is known, so membership is a compile-time constant | |
 | `send(:m, ...)` / `public_send` | COMPILE-TIME | literal symbol → direct call `obj.m(...)`; runtime symbol from a bounded set → generated `match sym { :m -> obj.m(...) , ... }` | Unbounded runtime symbol → the `match` still covers any declared method. |
 | `respond_to?(:m)` | COMPILE-TIME | literal symbol → constant-fold `true`/`false` from the static type; dynamic → `match` over the known method set | Method set is a compile-time fact. |
 | `instance_variable_get/set(:@x)` | COMPILE-TIME | literal name → field access `obj.x`; dynamic name → `match` over the fixed field set, or a `Hash`-backed object for open attributes | Field set is fixed and known. probe: empty at runtime today. |
-| `.class` / `.class.name` | COMPILE-TIME | emit the static type name as a compile-time `&str` const; a `TypeId`-style value for comparisons | No reflective mutable class object; the *name/identity* use case folds to a const. |
+| `.class` / `.class.name` | COMPILE-TIME | emit the static type name as a compile-time `String` constant; a `TypeId`-style value for comparisons | No reflective mutable class object; the *name/identity* use case folds to a const. |
 | `is_a?` / `kind_of?` / `instance_of?` | COMPILE-TIME | literal type → constant-fold from the static type; sum-type dispatch → `match` over enum variants | Static types make the answer a compile-time fact. probe: `no method is_a?`. |
 | `const_get` / `const_set` | COMPILE-TIME | literal name → direct constant reference; dynamic over a known module → generated `match`; `const_set` of a *new* name → not expressible (use a macro to declare it) | Declaring a brand-new constant from runtime data is the irreducible edge. |
 | `define_singleton_method` | COMPILE-TIME | type-level → `extension`/macro emitting the method; per-instance → not modeled | Per-instance singleton is the rare irreducible edge (needs per-object vtable). |
@@ -352,7 +352,7 @@ standalone and emit empty output at runtime. They are not functional today; the
 
 | Ruby feature | Status | Ruxen location or gap | Note |
 |---|---|---|---|
-| `puts` / `print` accept any value | DONE | typeck `to_s` conversion; case `956` | A non-String arg is converted through its universal `to_s` (HIR only, so the AST and `ruxen fmt` are unchanged). A value with no `to_s` (Array, Option, tuple, a struct without a Debug/Display derive) gives a clean compile error, not a link error. |
+| `puts` / `print` accept any value | DONE | typeck `to_s` conversion; case `956` | A non-String arg is converted through its universal `to_s` (HIR only, so the AST and `ruxen fmt` are unchanged). A value with no `to_s` (Array, Option, tuple, a struct without a `Debug`/`Display` include) gives a clean compile error, not a link error. |
 | `puts a, b` (multi-arg) | MISSING | probe: `found Comma` | Single arg only; multi-arg is a follow-up. |
 | String `%` formatting `"%05d" % x` | DONE | probe PASS | |
 | `format` / `sprintf` | MISSING | probe: undefined function | `%` operator works; the functions do not. |

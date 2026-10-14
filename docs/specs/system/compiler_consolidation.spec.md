@@ -23,7 +23,7 @@ Today three branches handle `expr.method(args)` lowering:
 
 1. `is_collection_ctor` fast path (for `.new`, `.with_capacity`, etc.) — keyed on a hardcoded class-name allowlist.
 2. `is_user_static_method` branch (for `def self.X` lib decls).
-3. Instance-method branch (for `def X(self, ...)` lib decls).
+3. Instance-method branch (for instance-method `def X` lib decls).
 
 Commit `8d5f10a` had to patch TWO of them to consult the FFI alias map; future contributors will face the same fan-out.
 
@@ -41,7 +41,7 @@ The three pre-existing branches become callers of this function, OR (preferred) 
 
 Task #14 commit `793751c` rewrote `is_send_strict_with` as a generic walker. But `is_send_with` (the looser variant for user-class auto-derive) still exists alongside it.
 
-**Fix:** one entry point `is_send(ty, symbols) -> bool` with the rules druxen by mixin-membership data in the resolver:
+**Fix:** one entry point `is_send(ty, symbols) -> bool` with the rules driven by mixin-membership data in the resolver:
 - `include !Send` → false.
 - `include unsafe Send` → true (escape hatch).
 - `include Send` → recursive walker (generic args + fields, with `subst_type_params` for substituting at call sites).

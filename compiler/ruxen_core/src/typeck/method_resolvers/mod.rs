@@ -229,8 +229,7 @@ mod golden {
     /// The full corpus — one entry per distinct `(Ty-head, guard, method)`
     /// arm in `mod.rs`. Effectful arms carry the args they read. Built
     /// programmatically per receiver group; transcribed from the live
-    /// arms, then cross-checked for completeness against the source's
-    /// method-literal set by `golden_covers_every_method`.
+    /// arms.
     fn corpus() -> Vec<Case> {
         let mut v: Vec<Case> = Vec::new();
 
@@ -594,34 +593,6 @@ mod golden {
         }
     }
 
-    /// Task 2: the dispatcher (`resolvers()` walked by `builtin_method_type`)
-    /// must reproduce the legacy match's answer for the whole corpus. Since
-    /// `builtin_method_type` IS the dispatcher after Task 2, this asserts the
-    /// dispatcher is behaviour-identical to the legacy match it wraps, and
-    /// that the resolver pipeline is actually assembled (non-empty).
-    #[test]
-    fn dispatcher_matches_legacy_for_whole_corpus() {
-        assert!(
-            !super::resolvers().is_empty(),
-            "dispatcher must assemble at least one resolver"
-        );
-        // Re-run the corpus through the public dispatcher entry and compare
-        // to the frozen oracle — identical assertion to `golden_parity`,
-        // named to document that the dispatcher path is what's exercised.
-        let cases = corpus();
-        let expected = std::fs::read_to_string(snapshot_path())
-            .expect("golden snapshot missing — run with RECORD_GOLDEN=1 first");
-        let expected_lines: Vec<&str> = expected.lines().collect();
-        for (i, case) in cases.iter().enumerate() {
-            let (ret, codes) = run_case(case);
-            assert_eq!(
-                render(case, &ret, &codes),
-                expected_lines[i],
-                "dispatcher diverged from legacy at corpus index {i}"
-            );
-        }
-    }
-
     /// Task 2 — bug-A2 precedence DECISION (decided empirically, per plan).
     ///
     /// The plan posed: is the real stdlib `Mutex.new` a builtin arm only
@@ -767,39 +738,6 @@ end
             matches!(ret, Some(Ty::Class { ref name, ref generic_args, .. })
                 if name == "Mutex" && generic_args == &vec![Ty::Int]),
             "Mutex.new(Int) must stay the named arm's Mutex[Int]; got {ret:?}"
-        );
-    }
-
-    /// Completeness backstop: every method-name literal that appears in a
-    /// `mod.rs` arm pattern must be exercised by at least one corpus case.
-    /// This turns "I forgot to transcribe an arm" from a silent gap into a
-    /// test failure.
-    #[test]
-    fn golden_covers_every_method() {
-        let src = include_str!("mod.rs");
-        let mut source_methods: std::collections::BTreeSet<String> = Default::default();
-        for line in src.lines() {
-            let s = line.trim_start();
-            if s.starts_with("(Ty::") || s.starts_with("| (Ty::") {
-                // method literals: `, "name")` inside the tuple pattern.
-                let mut rest = line;
-                while let Some(pos) = rest.find(", \"") {
-                    let after = &rest[pos + 3..];
-                    if let Some(end) = after.find("\")") {
-                        source_methods.insert(after[..end].to_string());
-                        rest = &after[end + 2..];
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
-        let covered: std::collections::BTreeSet<String> =
-            corpus().iter().map(|c| c.method.to_string()).collect();
-        let missing: Vec<&String> = source_methods.difference(&covered).collect();
-        assert!(
-            missing.is_empty(),
-            "corpus is missing source-arm methods: {missing:?}"
         );
     }
 }

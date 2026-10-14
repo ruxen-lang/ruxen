@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Agent prelude — read this before every spawned task
 
 This file is appended to every coder/tester/architect agent spawn for

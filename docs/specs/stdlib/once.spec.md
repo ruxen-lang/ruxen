@@ -25,7 +25,7 @@ guard + Mutex initialiser" by hiding the state machine.
 | Call                              | Returns       |
 |-----------------------------------|---------------|
 | `Once.new()`                      | `Once`        |
-| `o.call_once(closure)`            | `()`          |
+| `o.call_once(closure)`            | `nil`         |
 | `o.is_completed()`                | `Bool`        |
 
 **Given** an `Once` and N threads concurrently calling
@@ -33,7 +33,7 @@ guard + Mutex initialiser" by hiding the state machine.
 **Then** the closure executes exactly once; every other caller
 blocks until the first call completes, then returns immediately.
 - Closure panic does NOT mark the Once as completed (subsequent
-  callers retry; same as `std::sync::Once` in Rust).
+  callers retry).
 
 ## B3 — `OnceLock[T]` API
 
@@ -46,7 +46,7 @@ blocks until the first call completes, then returns immediately.
 
 - `set` returns `Err(value)` if the cell was already populated,
   giving the caller their value back instead of dropping it.
-- `get` is non-blocking; returns `None` if uninitialised.
+- `get` is non-blocking; returns `nil` if uninitialised.
 - `get_or_init` blocks until initialisation completes (closure runs
   exactly once across all threads, same discipline as `Once`).
 
@@ -56,7 +56,7 @@ blocks until the first call completes, then returns immediately.
 
 ```rx
 ol = OnceLock[Int].new()
-assert_eq(ol.get, None)
+assert_eq(ol.get, nil)
 ol.set(42).ok!
 assert_eq(ol.get, Some(42))
 assert(ol.set(99).err?)   # already populated

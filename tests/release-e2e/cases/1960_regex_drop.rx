@@ -1,0 +1,51 @@
+## Regex, Match and RegexError run their declared drop hook once per
+## scope exit: every helper call below frees its handles exactly once
+## (no leak, no double free), including a Match that escapes its helper.
+
+def find_digits(text: &String) -> Option[Match]
+  match Regex.new("(?<n>\\d+)-(\\w+)", "")
+    Ok(re) -> re.find(text)
+    Err(_) -> nil
+  end
+end
+
+def start_of_digits(text: &String) -> Int
+  match find_digits(text)
+    Some(m) -> m.start_pos
+    nil -> -1
+  end
+end
+
+def error_offset -> Int
+  match Regex.new("(unclosed", "")
+    Ok(_) -> -1
+    Err(e) -> e.offset
+  end
+end
+
+def literal_end(text: &String) -> Int
+  let lit = /b+/
+  match lit.find(text)
+    Some(m) -> m.end_pos
+    nil -> -1
+  end
+end
+
+def main
+  let mut i = 0
+  let mut starts = 0
+  let mut offsets = 0
+  let mut ends = 0
+  while i < 2000
+    let s = start_of_digits("id 42-abc here")
+    let o = error_offset()
+    let e = literal_end("abbcbbbd")
+    starts = starts + s
+    offsets = offsets + o
+    ends = ends + e
+    i = i + 1
+  end
+  puts starts
+  puts offsets
+  puts ends
+end

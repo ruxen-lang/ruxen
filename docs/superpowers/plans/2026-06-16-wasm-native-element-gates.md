@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # WASM Native-Element Gates — De-Risk Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

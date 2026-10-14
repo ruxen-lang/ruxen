@@ -13,7 +13,7 @@ values used in every table below:
 | **DONE** | Full parity exists in Ruxen today (module named). |
 | **PARTIAL** | Some parity exists; the gap is spelled out in the Note. |
 | **MISSING** | Not implemented. The row scopes what a parity module must provide. |
-| **COMPILE-TIME** | Ruby does it with load-time/runtime metaprogramming; Ruxen re-expresses it with compile-time synthesis (`derive`/macro/mixin/codegen). The row names the mechanism. |
+| **COMPILE-TIME** | Ruby does it with load-time/runtime metaprogramming; Ruxen re-expresses it with compile-time synthesis (macro/mixin/codegen). The row names the mechanism. |
 | **OUT-OF-SCOPE** | Needs a live runtime Ruxen deliberately lacks (`eval`/`binding`/reflection/GC). The row names the tier-2 substitute. |
 
 **What exists today** (`library/std/`): `json`, `set`, `time` (Instant/Duration
@@ -47,8 +47,8 @@ object↔JSON mapping (which is a compile-time serializer job, cross-ref
 | `JSON.dump(obj[, io[, limit]])` | MISSING | alias of `stringify` | Add `JSON.dump` alias; `io`/`limit` args need `StringIO`/`File` sink. |
 | `JSON.load(source[, proc[, opts]])` | MISSING | alias of `parse` | Add `JSON.load`; `proc` transform + `create_additions` out of scope. |
 | `JSON.load_file(path)` / `JSON.dump_file` | MISSING | — | Compose `fs.read_to_string` + `parse`; add convenience. |
-| `Object#to_json` | COMPILE-TIME | — | Derive `to_json` per struct/enum from fields (serde-style codegen). |
-| `String#to_json`, `Integer#to_json`, … (core `to_json`) | COMPILE-TIME | — | Same derive; primitives map to `JSON.make_*`. |
+| `Object#to_json` | COMPILE-TIME | — | Generate `to_json` per struct/enum from fields (compile-time codegen). |
+| `String#to_json`, `Integer#to_json`, … (core `to_json`) | COMPILE-TIME | — | Same codegen; primitives map to `JSON.make_*`. |
 | `JSON[str]` / `JSON[obj]` (round-trip shortcut) | MISSING | — | Sugar over parse/generate. |
 | `JSON.generator` / `JSON.parser` / `JSON.create_id` | OUT-OF-SCOPE | — | Pluggable backend selection; not applicable to a single C backend. |
 | Node inspection: `.kind`, `.is_*`, `.as_*`, `.array_len/get`, `.object_len/has/get` | DONE | `JSON.*` facade | Richer than Ruby (Ruby returns plain `Hash`/`Array`); Ruxen keeps a typed node. |
@@ -101,7 +101,7 @@ whole `Enumerable` surface (Ruby's `Set` includes `Enumerable`).
 ## 3. `date` / `time` — MISSING (large) · `library/std/time` has monotonic clock only
 
 **The biggest single stdlib gap.** Ruxen's `time` module provides only
-`Instant`/`Duration` (a Rust-style *monotonic* clock) and `Time.unix_ns` (a raw
+`Instant`/`Duration` (a *monotonic* clock) and `Time.unix_ns` (a raw
 wall-clock nanosecond count). There is **no calendar `Date`, no `DateTime`, no
 civil `Time`, no `strftime`/`strptime`, no timezone handling, no calendar
 arithmetic**. A parity module must build all of it. This is P0 for any real app
@@ -419,7 +419,7 @@ the awkward case (no runtime field insertion) — substitute a compile-time
 
 | Ruby API | Status | Ruxen module or gap | Note |
 |----------|--------|---------------------|------|
-| `Struct.new(:a, :b) { … }` → class | COMPILE-TIME | `derive`/macro | Generate a nominal struct with the named fields + a block of methods. |
+| `Struct.new(:a, :b) { … }` → class | COMPILE-TIME | macro/codegen | Generate a nominal struct with the named fields + a block of methods. |
 | `Struct.new(:a, keyword_init: true)` | COMPILE-TIME | — | Keyword ctor variant. |
 | accessors `#a` / `#a=` | COMPILE-TIME | — | Generated getter/setter per member. |
 | `#[](name_or_idx)` / `#[]=` | COMPILE-TIME | — | By-name/index access (index needs a generated match). |
@@ -614,7 +614,7 @@ substitute is "forward the statically known method set of the wrapped type."
 ## 23. `observer` — MISSING · no module (buildable in pure Ruxen)
 
 The Observable mixin is plain runtime state (a list of callbacks) — no
-metaprogramming needed. Buildable directly as a mixin holding a `Vec` of
+metaprogramming needed. Buildable directly as a mixin holding an `Array` of
 observer closures.
 
 | Ruby API | Status | Ruxen module or gap | Note |
@@ -908,13 +908,13 @@ date/time unblocks records + serialization).
    `escape`/`unescape`.
 10. **`csv` (§11)** — import/export; the standard data-exchange format.
 11. **`yaml` safe subset (§12)** — config/fixtures (`safe_load` + `dump`).
-12. **`json` option gaps + `to_json` derive (§1)** — object↔JSON mapping
+12. **`json` option gaps + generated `to_json` (§1)** — object↔JSON mapping
     (compile-time serializer) so structs round-trip without hand-built nodes.
 
 **P2 — ergonomics + completeness:**
 13. **`set` completion (§2)** — subset/superset/`^`/merge + Enumerable mixin.
 14. **`Struct`/`Data` codegen (§14)** + **`forwardable` (§15)** + **`singleton`
-    (§16)** — the compile-time-synthesis batch (shared `derive`/macro machinery,
+    (§16)** — the compile-time-synthesis batch (shared macro/codegen machinery,
     also used by ostruct/delegate).
 15. **`stringio` (§17)** — in-memory IO; unblocks clean csv/erb/json string
     output.

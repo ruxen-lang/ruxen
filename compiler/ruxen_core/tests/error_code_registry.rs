@@ -4,7 +4,7 @@
 //! `ruxen_core::diagnostics::codes::REGISTRY`.
 //!
 //! When this test fails:
-//!  1. Either add the new code to `crates/ruxen-core/src/diagnostics/codes.rs`
+//!  1. Either add the new code to `compiler/ruxen_core/src/diagnostics/codes.rs`
 //!     with a one-line title, or
 //!  2. Reuse an existing code if the situation is the same.
 
@@ -16,12 +16,16 @@ fn workspace_root() -> PathBuf {
     crate_dir.parent().unwrap().parent().unwrap().to_path_buf()
 }
 
-/// Walk `crates/` and collect every `"EXXXX"` literal that appears
-/// within five lines after a line containing `error_with_code(`.
+/// Walk `compiler/` and `src/` and collect every `"EXXXX"` literal that
+/// appears within fourteen lines after a line containing `error_with_code`.
 fn collect_emitted_codes() -> Vec<(String, PathBuf, usize)> {
     let mut hits = Vec::new();
-    let crates_dir = workspace_root().join("crates");
-    visit_dir(&crates_dir, &mut hits);
+    for dir in ["compiler", "src"] {
+        let root = workspace_root().join(dir);
+        assert!(root.is_dir(), "scan root {} does not exist", root.display());
+        visit_dir(&root, &mut hits);
+    }
+    assert!(!hits.is_empty(), "scan found no error_with_code call sites");
     hits
 }
 

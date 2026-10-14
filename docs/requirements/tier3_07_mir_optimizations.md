@@ -8,12 +8,12 @@ Blocks: nothing hard; improves Cranelift debug build output quality and LLVM IR 
 
 ## 1. Summary & motivation
 
-Ruxen's MIR is produced by `crates/ruxen-core/src/mir/lower.rs` (3415
+Ruxen's MIR is produced by `compiler/ruxen_core/src/mir/lower.rs` (3415
 lines) and handed directly to codegen — Cranelift (`codegen/cranelift.rs`,
 1127 lines) or LLVM (`codegen/llvm/emit.rs`, 1345 lines). There are **no
 optimization passes between lowering and codegen**:
 
-```
+```rust
 // mir/mod.rs
 pub mod nodes;
 pub mod lower;
@@ -50,7 +50,7 @@ where they run, how they compose, and which ones are v1 vs deferred.
 ### 2.1 MIR module structure
 
 ```
-crates/ruxen-core/src/mir/
+compiler/ruxen_core/src/mir/
 ├── mod.rs        (4 lines — just re-exports)
 ├── lower.rs      (3415 lines — HIR → MIR)
 ├── nodes.rs      (367 lines — MIR AST)
@@ -77,7 +77,7 @@ passes see less redundancy.
 ### 2.3 No CFG simplification, no constant folding, no DCE
 
 Grep for `simplify_cfg`, `const_fold`, `const_prop`, `dce`, `dead_code`
-under `crates/ruxen-core/src/mir/` — zero matches. The lowerer
+under `compiler/ruxen_core/src/mir/` — zero matches. The lowerer
 produces unoptimized CFG, including:
 
 - Empty basic blocks whose only purpose is to jump to another block
@@ -123,7 +123,7 @@ Not sufficient to replace MIR-level opts.
 
 ### Goals
 
-1. A pass-manager in `crates/ruxen-core/src/mir/` with a pluggable
+1. A pass-manager in `compiler/ruxen_core/src/mir/` with a pluggable
    pipeline.
 2. v1 passes: `const_fold`, `simplify_cfg`, `dce`, `copy_propagation`.
 3. Passes run at all opt levels, but with different intensities
@@ -196,7 +196,7 @@ pub trait MirPass: Send + Sync {
 
 ### 4.3 Pass invocation in the compiler
 
-`crates/ruxen-core/src/codegen/mod.rs::compile_with_options`
+`compiler/ruxen_core/src/codegen/mod.rs::compile_with_options`
 (`:86-129`) is the current boundary where MIR leaves and codegen
 begins. Insert the pass manager there:
 
@@ -361,15 +361,15 @@ still eligible.
 
 | Phase | File | Change |
 |---|---|---|
-| 1 | `crates/ruxen-core/src/mir/mod.rs:1-4` | Export `pub mod optimize` |
-| 1 | `crates/ruxen-core/src/mir/optimize/mod.rs` *new* | `PassManager` + `MirPass` mixin |
-| 1 | `crates/ruxen-core/src/mir/optimize/simplify_cfg.rs` *new* | ~200 lines |
-| 2 | `crates/ruxen-core/src/mir/optimize/const_fold.rs` *new* | ~150 lines |
-| 2 | `crates/ruxen-core/src/mir/optimize/dce.rs` *new* | ~150 lines |
-| 3 | `crates/ruxen-core/src/mir/optimize/copy_prop.rs` *new* | ~100 lines |
-| 4 | `crates/ruxen-core/src/codegen/mod.rs:86-129` | Call pass manager |
-| 4 | `crates/ruxenc/src/main.rs` | Add `--mir-opts=off`; add `--emit=mir-raw` |
-| 5 | `crates/ruxen-core/src/mir/optimize/tests.rs` *new* | Per-pass unit tests |
+| 1 | `compiler/ruxen_core/src/mir/mod.rs:1-4` | Export `pub mod optimize` |
+| 1 | `compiler/ruxen_core/src/mir/optimize/mod.rs` *new* | `PassManager` + `MirPass` mixin |
+| 1 | `compiler/ruxen_core/src/mir/optimize/simplify_cfg.rs` *new* | ~200 lines |
+| 2 | `compiler/ruxen_core/src/mir/optimize/const_fold.rs` *new* | ~150 lines |
+| 2 | `compiler/ruxen_core/src/mir/optimize/dce.rs` *new* | ~150 lines |
+| 3 | `compiler/ruxen_core/src/mir/optimize/copy_prop.rs` *new* | ~100 lines |
+| 4 | `compiler/ruxen_core/src/codegen/mod.rs:86-129` | Call pass manager |
+| 4 | `src/ruxenc/src/main.rs` | Add `--mir-opts=off`; add `--emit=mir-raw` |
+| 5 | `compiler/ruxen_core/src/mir/optimize/tests.rs` *new* | Per-pass unit tests |
 
 ### Phase breakdown
 

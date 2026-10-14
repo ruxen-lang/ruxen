@@ -21,6 +21,7 @@ use ruxen_core::lexer::Lexer;
 use ruxen_core::mir::lower::Lowerer;
 use ruxen_core::parser::ast::Program;
 use ruxen_core::parser::Parser;
+use ruxen_core::resolve::bootstrap::test_stdlib_runtime_sources;
 use ruxen_core::typeck;
 use std::path::PathBuf;
 use std::process::Command;
@@ -69,7 +70,17 @@ fn class_inside_module_resolves_via_qualified_path() {
         ruxen_unique_id()
     ));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
-    codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
+    // `ruxen_test_extern_*` lives in the test-only stdlib, linked explicitly.
+    let test_runtime = test_stdlib_runtime_sources(&workspace_root().join("library/test_std"));
+    codegen::compile_with_options(
+        &mir,
+        bin_path.to_str().unwrap(),
+        false,
+        &[],
+        &test_runtime,
+        codegen::Backend::Cranelift,
+    )
+    .expect("codegen");
 
     let output = Command::new(&bin_path)
         .output()

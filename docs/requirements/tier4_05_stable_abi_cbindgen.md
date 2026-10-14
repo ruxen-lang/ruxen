@@ -2,7 +2,7 @@
 
 ## 1. Summary & Motivation
 
-Ruxen can *consume* C via `lib "name" ... end` blocks (`crates/ruxen-core/src/parser/mod.rs:1636-1723`, documented in `docs/tutorial/14-ffi.md`). What Ruxen cannot do is *produce* a C-consumable header. A user who writes a Ruxen library and wants to expose it to C, Python (`ctypes`), Ruby (`fiddle`), Node (N-API), Go (`cgo`), Swift, Kotlin, or anything else that speaks the C ABI has no way to tell those languages what Ruxen's public C-ABI `def foo(...)` signatures look like.
+Ruxen can *consume* C via `lib "name" ... end` blocks (`compiler/ruxen_core/src/parser/mod.rs:1636-1723`, documented in `docs/tutorial/14-ffi.md`). What Ruxen cannot do is *produce* a C-consumable header. A user who writes a Ruxen library and wants to expose it to C, Python (`ctypes`), Ruby (`fiddle`), Node (N-API), Go (`cgo`), Swift, Kotlin, or anything else that speaks the C ABI has no way to tell those languages what Ruxen's public C-ABI `def foo(...)` signatures look like.
 
 This document specifies a header-emission subsystem: a `ruxenc --emit=c-header` mode that walks the typed HIR, finds every public C-ABI function and `layout c` struct in the compilation unit, and writes a valid `.h` file. It also specifies the **stability rules** — what can safely appear in a Ruxen public C ABI, what can't, and what the compiler must reject.
 
@@ -38,14 +38,14 @@ None of that is acceptable for an ABI promise.
 Ruxen parses `layout c` on struct/class declarations (`parser/mod.rs:499-503`), but:
 
 - The directive args are stuffed into `HirStructDef::derive_traits: Vec<String>` along with structural-mixin includes (tier-1 B2).
-- No layout machinery consumes the directive. Structs are always laid out via the compiler's own rules (`crates/ruxen-core/src/codegen/layout.rs`).
+- No layout machinery consumes the directive. Structs are always laid out via the compiler's own rules (`compiler/ruxen_core/src/codegen/layout.rs`).
 - So `layout c` is a lie today. A struct declared `layout c` on the Ruxen side has the *same* layout as one without — which is not guaranteed to match C's layout rules.
 
 **Tier 5's cbindgen cannot start until B2 is fixed and `layout c` actually produces C-layout.**
 
 ### 2.4 No `--emit=c-header` flag
 
-`ruxenc` (`crates/ruxenc/src/main.rs:40-67`) lists `--emit=tokens|ast|hir|mir` but nothing ABI-related.
+`ruxenc` (`src/ruxenc/src/main.rs:40-67`) lists `--emit=tokens|ast|hir|mir` but nothing ABI-related.
 
 ### 2.5 Tutorial claims FFI works in both directions
 
@@ -61,7 +61,7 @@ Ruxen parses `layout c` on struct/class declarations (`parser/mod.rs:499-503`), 
 4. A `no_mangle` directive (doc 04 §4.2) carries over: a public C-ABI `def foo` with in-body `no_mangle` exposes literally `foo`.
 5. Stability rules: reject Ruxen-only types (`Option`, `Result`, closures, references with lifetimes, generics) at C-ABI boundaries.
 6. A compile-baked `ruxen_abi_version()` function consumers call to detect mismatches.
-7. `Ruxen.toml`-druxen integration: `[package.cbindgen] generate = true` + `output = "include/lib.h"` produces the header as a build step.
+7. `Ruxen.toml`-driven integration: `[package.cbindgen] generate = true` + `output = "include/lib.h"` produces the header as a build step.
 8. Round-trip test: a Ruxen library + generated header + a tiny C main that links against it + invokes the exported function.
 
 ### Non-Goals
@@ -280,7 +280,7 @@ def ruxen_abi_version -> UInt32
 end
 ```
 
-Version is computed as `(major << 16) | (minor << 8) | patch` from `crates/ruxen-cli/src/version.rs`. Consumers that link dynamically can check at runtime:
+Version is computed as `(major << 16) | (minor << 8) | patch` from `src/ruxen_cli/src/version.rs`. Consumers that link dynamically can check at runtime:
 
 ```c
 if (ruxen_abi_version() != RUXEN_EXPECTED_ABI_VERSION) {
@@ -293,7 +293,7 @@ if (ruxen_abi_version() != RUXEN_EXPECTED_ABI_VERSION) {
 
 ### 5.1 Where the emitter lives
 
-`crates/ruxen-core/src/cbindgen/` — new module. Exposes `pub fn emit_header(program: &HirProgram, opts: &CbindgenOpts) -> Result<String, Vec<Diagnostic>>`.
+`compiler/ruxen_core/src/cbindgen/` — new module. Exposes `pub fn emit_header(program: &HirProgram, opts: &CbindgenOpts) -> Result<String, Vec<Diagnostic>>`.
 
 Not a separate crate in v1 (no external surface yet). Could extract later if we want the `cbindgen` binary to work standalone.
 
@@ -369,33 +369,33 @@ A printed contract users can rely on. Recommend shipping this as `docs/c-abi.md`
 
 ### New files
 
-- `crates/ruxen-core/src/cbindgen/mod.rs` — main emit entry point.
-- `crates/ruxen-core/src/cbindgen/types.rs` — Ruxen-to-C type mapper + error messages.
-- `crates/ruxen-core/src/cbindgen/validate.rs` — signature validation.
-- `crates/ruxen-core/src/cbindgen/layout.rs` — C-compatible layout (or extend `codegen/layout.rs`).
-- `crates/ruxen-core/src/cbindgen/emit.rs` — header-text generation.
+- `compiler/ruxen_core/src/cbindgen/mod.rs` — main emit entry point.
+- `compiler/ruxen_core/src/cbindgen/types.rs` — Ruxen-to-C type mapper + error messages.
+- `compiler/ruxen_core/src/cbindgen/validate.rs` — signature validation.
+- `compiler/ruxen_core/src/cbindgen/layout.rs` — C-compatible layout (or extend `codegen/layout.rs`).
+- `compiler/ruxen_core/src/cbindgen/emit.rs` — header-text generation.
 - `docs/c-abi.md` — the printed contract.
 
 ### Touched files
 
-- `crates/ruxen-core/src/parser/mod.rs:499-503` — untangle `layout c` from `derive_traits` (tier-1 B2 prework).
-- `crates/ruxen-core/src/parser/mod.rs:1572-1610` — parse `no_mangle`, `cbindgen_alias "..."`, `layout opaque` directives.
-- `crates/ruxen-core/src/hir/nodes.rs` — `HirStructDef` / `HirClassDef` / `HirEnumDef` gain `repr: Option<Repr>` (`C`, `Rust`, `Transparent`, `Opaque`, etc.).
-- `crates/ruxen-core/src/hir/nodes.rs` — `HirFunction` gains `is_no_mangle: bool`, `abi: Option<String>`, `c_alias: Option<String>`.
-- `crates/ruxen-core/src/codegen/layout.rs` — C-layout variant when `repr == Repr::C`.
-- `crates/ruxen-core/src/codegen/cranelift.rs` + `llvm/emit.rs` — respect `is_no_mangle` / `abi == "c"` in linkage and symbol naming.
-- `crates/ruxenc/src/main.rs:27-67` — new `--emit=c-header` handling.
-- `crates/ruxen-cli/src/manifest.rs` — `CbindgenConfig` struct nested under `[package]`.
-- `crates/ruxen-cli/src/build.rs` — call cbindgen step when `[package.cbindgen].generate = true`.
+- `compiler/ruxen_core/src/parser/mod.rs:499-503` — untangle `layout c` from `derive_traits` (tier-1 B2 prework).
+- `compiler/ruxen_core/src/parser/mod.rs:1572-1610` — parse `no_mangle`, `cbindgen_alias "..."`, `layout opaque` directives.
+- `compiler/ruxen_core/src/hir/nodes.rs` — `HirStructDef` / `HirClassDef` / `HirEnumDef` gain `repr: Option<Repr>` (`C`, `Rust`, `Transparent`, `Opaque`, etc.).
+- `compiler/ruxen_core/src/hir/nodes.rs` — `HirFunction` gains `is_no_mangle: bool`, `abi: Option<String>`, `c_alias: Option<String>`.
+- `compiler/ruxen_core/src/codegen/layout.rs` — C-layout variant when `repr == Repr::C`.
+- `compiler/ruxen_core/src/codegen/cranelift.rs` + `llvm/emit.rs` — respect `is_no_mangle` / `abi == "c"` in linkage and symbol naming.
+- `src/ruxenc/src/main.rs:27-67` — new `--emit=c-header` handling.
+- `src/ruxen_cli/src/manifest.rs` — `CbindgenConfig` struct nested under `[package]`.
+- `src/ruxen_cli/src/build.rs` — call cbindgen step when `[package.cbindgen].generate = true`.
 
 ### Tests
 
-- `crates/ruxen-core/tests/cbindgen_basic.rs` — simple struct + function, verify header text.
-- `crates/ruxen-core/tests/cbindgen_reject.rs` — a public `def f(s: String)` with `abi "c"` errors with the §4.5 message.
-- `crates/ruxen-core/tests/cbindgen_layout.rs` — `struct Point` with `layout c` + `Float32` fields has sizeof 8 on x86_64 and aarch64 (match what the C compiler would produce).
-- `crates/ruxen-core/tests/cbindgen_round_trip.rs` — build a tiny Ruxen lib, generate header, compile a C main with `cc` linking against the `.rlib`, run, assert behavior.
-- `crates/ruxen-core/tests/cbindgen_opaque.rs` — `layout opaque` emits forward decl only.
-- `crates/ruxen-core/tests/cbindgen_abi_version.rs` — `ruxen_abi_version()` is auto-exported and returns the expected constant.
+- `compiler/ruxen_core/tests/cbindgen_basic.rs` — simple struct + function, verify header text.
+- `compiler/ruxen_core/tests/cbindgen_reject.rs` — a public `def f(s: String)` with `abi "c"` errors with the §4.5 message.
+- `compiler/ruxen_core/tests/cbindgen_layout.rs` — `struct Point` with `layout c` + `Float32` fields has sizeof 8 on x86_64 and aarch64 (match what the C compiler would produce).
+- `compiler/ruxen_core/tests/cbindgen_round_trip.rs` — build a tiny Ruxen lib, generate header, compile a C main with `cc` linking against the `.rlib`, run, assert behavior.
+- `compiler/ruxen_core/tests/cbindgen_opaque.rs` — `layout opaque` emits forward decl only.
+- `compiler/ruxen_core/tests/cbindgen_abi_version.rs` — `ruxen_abi_version()` is auto-exported and returns the expected constant.
 
 ## 7. Interactions with Other Tiers
 

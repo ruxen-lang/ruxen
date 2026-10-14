@@ -149,8 +149,8 @@ behind.
       type ≠ derivable ABI width — no single `.rx` decl expresses both):
       `remove` (Char/I32 surface vs C 16-byte struct-pointer/I64 holding the
       removed codepoint + rewritten buffer) and the mutation methods
-      `push`/`push_str`/`insert`/`insert_str` (surface `Unit` — the MIR
-      special-case does the `&mut String` deref/store dance and returns no
+      `push`/`push_str`/`insert`/`insert_str` (surface `nil` — the MIR
+      special-case does the `&var String` deref/store dance and returns no
       value, pin `48_borrow_var` — vs C `char*` the dance must capture, so
       `.rx` declares `-> String`). Pins: `630_string_insert_char`,
       `631_string_push_str`, `632_str_to_lower_upper`, `633_str_parse_uint`

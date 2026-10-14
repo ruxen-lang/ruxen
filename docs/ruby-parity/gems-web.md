@@ -23,8 +23,8 @@ Every area is a table:
 
 `rondo status`: **HAS** (in `src/*.rx` today), **PARTIAL** (a piece exists),
 **MISSING**. `Needs` names the concrete unit of work: a `rondo .rx` change, a
-`compiler synthesis` (a new mixin + auto-derive-walker target, the Ruxen
-equivalent of a Rust `derive`), a `toolchain` build step (a new `ruxen`
+`compiler synthesis` (a new mixin + auto-derive-walker target, synthesized
+at compile time from an `include`), a `toolchain` build step (a new `ruxen`
 subcommand / preprocessor), or a `stdlib` dependency (cross-ref
 [`stdlib.md`](stdlib.md)).
 
@@ -140,7 +140,7 @@ generates these bindings, so the wiring is written once.
 | Controller class + action methods | **MISSING** (rondo handlers are closures/free fns) | `class UsersController` with `def show(req: &Request) -> Response`. Route binds the method: `app.get(&"/users/:id") { \|r\| UsersController.new(r).show }` (W4-thin closure). `resources` emits these bindings. Dispatch is a direct call, not a name lookup. | `rondo .rx` (a `Controller` base mixin) |
 | Action selected by `params[:action]` | **OUT-OF-SCOPE (tier 3) → fixed dispatch** | The route already knows its action at registration, so no runtime string→method dispatch is needed. Where an app truly needs "action name from a fixed set", it is a `match action_name; "show" -> ...; "edit" -> ...` over the known set, not `send`. | — |
 | Merged `params` (route+query+body) | **PARTIAL** | Route+query already merged into `req.params` (`dispatch`). Body params via `req.form` (urlencoded + multipart, `request.rx:137`). Provide `req.params_all` merging `form` over `params` so a controller reads one map, Sinatra-style. | `rondo .rx` |
-| Strong params `require`/`permit` | **MISSING** | Lever 5: a per-action **typed params struct**. `struct UserParams { name: String; email: String; bio: Option[String] }` with `include FromParams` synthesizing `UserParams.from(req) -> Result[UserParams, ParamError]`. `permit` = the field set; `require(:user)` = a non-`Option` nested struct; unpermitted keys are dropped by construction. Compile-time-checked shape, no `permit!` escape hatch to misuse (global rule 4). Coercion/validation cross-refs `gems-db.md`. | `compiler synthesis` (`FromParams` derive) |
+| Strong params `require`/`permit` | **MISSING** | Lever 5: a per-action **typed params struct**. `struct UserParams` (fields `name: String`, `email: String`, `bio: Option[String]`) with `include FromParams` synthesizing `UserParams.from(req) -> Result[UserParams, ParamError]`. `permit` = the field set; `require(:user)` = a non-`Option` nested struct; unpermitted keys are dropped by construction. Compile-time-checked shape, no `permit!` escape hatch to misuse (global rule 4). Coercion/validation cross-refs `gems-db.md`. | `compiler synthesis` (`FromParams` derive) |
 | `before_action` / `after_action` | **PARTIAL** | rondo has **global** `before`/`after` hooks (`rondo.rx:116-126`). Per-controller filters = methods a `Controller` mixin calls around the action: the generated action wrapper runs `before_action` methods (each returning `Option[Response]` to halt), the action, then `after_action`. `only:`/`except:` are compile-time lists on the controller. | `rondo .rx` (`Controller` mixin) |
 | `around_action` | **MISSING** | An around filter is a method taking the action as a `&block`: `def with_timing(req, &block) -> Response`. Ruby-block semantics support this today (`&block: Fn[(...) -> Response]`, yielding the action). | `rondo .rx` |
 | `skip_before_action` | **MISSING** | Compile-time: the filter list is per-controller data; "skip" omits the entry for that action's `only:`/`except:` set. No runtime removal. | `rondo .rx` |
@@ -186,7 +186,7 @@ paths, offered in order of increasing Rails-fidelity.
 
 | Feature | rondo status | Compile-time Ruxen design | Needs |
 |---|---|---|---|
-| HTML rendering | **PARTIAL** | `Response.html(&str)` HAS (`response.rx:40`). The v1 path is a **Ruxen builder DSL**: `tag.div(class: "card") { tag.span(user.name) }` producing an escaped `String`, escaping by construction (global rule 13, no `raw`). Same shape as quiver's builder DSL. Works today via blocks. | `rondo .rx` (an `Html` builder module) |
+| HTML rendering | **PARTIAL** | `Response.html(&String)` HAS (`response.rx:40`). The v1 path is a **Ruxen builder DSL**: `tag.div(class: "card") { tag.span(user.name) }` producing an escaped `String`, escaping by construction (global rule 13, no `raw`). Same shape as quiver's builder DSL. Works today via blocks. | `rondo .rx` (an `Html` builder module) |
 | ERB / Slim templates | **MISSING** | The Rails-ergonomic path: a `toolchain` **template compiler**. `ruxen build` preprocesses `app/views/**/*.rhtml` into render fns: `<%= expr %>` → an **escaped** append, `<%== %>` → raw append (opt-in), `<% stmt %>` → control flow, yielding `def render(<typed locals>) -> String`. Escaping is guaranteed at compile time; a typo in a local is a **compile error**, not a runtime `NoMethodError`. | `toolchain` (new `.rhtml`→`.rx` compiler) |
 | Layouts | **MISSING** | A layout is a render fn taking the inner content as a `&block`/String: `Layout.render(title) { inner }`. `yield` in ERB → the block. Composes in both the builder and template-compiler paths. | as above |
 | Partials `render "form"` | **MISSING** | A partial is just another compiled render fn called by name; `locals:` are its typed parameters. Collection partials = a loop calling it. | as above |
@@ -233,7 +233,7 @@ model structs.
 
 | Feature | rondo status | Compile-time Ruxen design | Needs |
 |---|---|---|---|
-| `model.to_json` | **PARTIAL** (`std/json` builds values manually) | `include Serializable` on a struct → synthesized `to_json -> Json` iterating declared fields into `Json.object` (`std/json`). The Ruxen `derive(Serialize)`. | `compiler synthesis` (`Serialize` derive) over `std/json` |
+| `model.to_json` | **PARTIAL** (`std/json` builds values manually) | `include Serializable` on a struct → synthesized `to_json -> Json` iterating declared fields into `Json.object` (`std/json`). | `compiler synthesis` (`Serialize` derive) over `std/json` |
 | `JSON.parse` → struct | **PARTIAL** | `include Deserializable` → synthesized `from_json(&Json) -> Result[Self, JsonError]`, field-typed, missing/typed-wrong = `Err`. Powers request bodies + upstream API responses. | `compiler synthesis` (`Deserialize` derive) |
 | `only:` / `except:` / `methods:` | **MISSING** | Attribute selection = a serializer *view struct* (a projection struct with only the exposed fields) or a generated `to_json_only(fields)`. Explicit projection over runtime key-filtering. | `compiler synthesis` |
 | Custom serializer class | **MISSING** | A dedicated `UserSerializer` struct with a hand-written `to_json` when the derive is not enough (computed fields, renames via a field attribute). | `rondo .rx` (per-model) |
@@ -304,7 +304,7 @@ and interacts with the open reactor-waker work in `remaining-tasks.md`.
 | Feature | rondo status | Compile-time Ruxen design | Needs |
 |---|---|---|---|
 | **WebSocket** protocol | **MISSING** (rondo TODO) | HTTP `Upgrade` handshake: `Sec-WebSocket-Accept = base64(SHA1(key + GUID))`, then RFC 6455 frame parse/encode on the kept-alive socket via the reactor. Protocol-level, dedicated effort. | `stdlib`: `digest`(SHA1)+`base64`; `rondo .rx` (framing) + reactor |
-| ActionCable (pub/sub channels) | **MISSING** | On top of WebSocket: a `Channel` struct with `subscribed`/`receive`; a broadcast registry (a `Sync` `Map[channel, Array[conn]]`) fanning messages to subscribers. | WebSocket (above) + shared registry |
+| ActionCable (pub/sub channels) | **MISSING** | On top of WebSocket: a `Channel` struct with `subscribed`/`receive`; a broadcast registry (a `Sync` `Hash[channel, Array[conn]]`) fanning messages to subscribers. | WebSocket (above) + shared registry |
 | **SSE** (`text/event-stream`) | **MISSING** | Simpler than WS: a streaming `Response` (area 3) that writes `data:` frames and flushes; no handshake. Good first streaming target. | `rondo .rx` (async writer) + reactor |
 | Live/`ActionController::Live` | **MISSING** | Same streaming-response primitive. | streaming (above) |
 | Turbo Streams (over WS/SSE) | **MISSING** | Once WS/SSE + the view compiler land, broadcast rendered HTML fragments. Ties into `gems-frontend.md`. | WS/SSE + view compiler; cross-ref `gems-frontend.md` |
@@ -376,7 +376,7 @@ generation (`toolchain`), each added when a concrete app demands it.
 rondo surface verified against `~/.projects/rondo/src/{rondo,request,response,route,router,helpers}.rx`
 and `docs/remaining-tasks.md` (2026-07-23). Compile-time levers verified against
 `ruxen/docs/decisions/ruby-block-semantics.md`, the retired-`@[...]`-attribute
-note (`ruby-naming.spec.md §10a`), and the `std/hash` auto-derive walker.
+note (`ruby-naming.spec.md` §16 and §21 item 16), and the `std/hash` auto-derive walker.
 stdlib gaps verified against the `library/std/` module list (`json`, `http`,
 `net`, `regex`, `time`, `rand` present; no `digest`/`hmac`/`base64`/`openssl`/
 `uri`/`net-smtp`). Cross-refs [`gems-db.md`](gems-db.md),

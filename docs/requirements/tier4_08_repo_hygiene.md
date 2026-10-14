@@ -36,7 +36,7 @@ This document is the smallest of the tier-4 docs because the actual work is most
 
 ### 2.3 Author metadata
 
-`crates/*/Cargo.toml` files have no `authors = [...]` field, no `license = "..."` field, no `repository = "..."` field, no `description = "..."` field. `cargo publish --dry-run` on any crate would warn about missing metadata. (Publishing them to crates.io is out of scope — they're internal-only — but we still want the metadata for searchability and consistency.)
+`compiler/*/Cargo.toml` and `src/*/Cargo.toml` files have no `authors = [...]` field, no `license = "..."` field, no `repository = "..."` field, no `description = "..."` field. `cargo publish --dry-run` on any crate would warn about missing metadata. (Publishing them to crates.io is out of scope — they're internal-only — but we still want the metadata for searchability and consistency.)
 
 ### 2.4 The silent license trap
 
@@ -50,7 +50,7 @@ If `LICENSE` doesn't exist, the command fails, `2>/dev/null` hides it, `|| true`
 
 ### 2.5 .gitignore
 
-Scaffold generates a per-project `.gitignore` (`crates/ruxen-cli/src/scaffold.rs:154-159`):
+Scaffold generates a per-project `.gitignore` (`src/ruxen_cli/src/scaffold.rs:154-159`):
 
 ```
 /target
@@ -302,8 +302,8 @@ All notable changes to Ruxen are documented here. The format follows [Keep a Cha
 - Compiler with lexer, parser, resolver, type inference, borrow checker, MIR lowering, Cranelift backend, LLVM backend (feature-gated).
 - `ruxen` package-manager CLI (new, build, run, check, clean, add, remove, update, tree, verify).
 - `ruxenc` standalone compiler with `--emit={tokens,ast,hir,mir}` and `fmt`.
-- `ruxen-lsp` server with hover, goto-definition, diagnostics, semantic tokens.
-- `ruxen-repl` with Cranelift JIT.
+- `ruxen_lsp` server with hover, goto-definition, diagnostics, semantic tokens.
+- `ruxen_repl` with Cranelift JIT.
 - VSCode extension.
 
 [Unreleased]: https://github.com/ruxen-lang/ruxen/compare/v0.1.0...HEAD
@@ -411,14 +411,14 @@ Fixes #<issue-number>
 *                           @sherazp995
 
 # Subsystem-specific owners (add as maintainers grow):
-# crates/ruxen-core/        @parser-team
-# crates/ruxen-lsp/         @ide-team
+# compiler/ruxen_core/        @parser-team
+# src/ruxen_lsp/         @ide-team
 # docs/                     @docs-team
 ```
 
 ### 4.13 Per-crate `Cargo.toml` metadata
 
-For each of `ruxen-core`, `ruxenc`, `ruxen-cli`, `ruxen-lsp`, `ruxen-ide`, `ruxen-repl`, add to `[package]`:
+For each of `ruxen_core`, `ruxenc`, `ruxen_cli`, `ruxen_lsp`, `ruxen_ide`, `ruxen_repl`, add to `[package]`:
 
 ```toml
 description = "<one-line description of this crate's role>"
@@ -517,7 +517,7 @@ Five is a reasonable ceiling. Recommend: CI, MSRV, license. Omit: crates.io vers
 
 - `README.md:294-296` — replace `TBD` with the dual-license block from §4.3.
 - `README.md:3` (after tagline) — badges.
-- `crates/*/Cargo.toml` — metadata per §4.13.
+- `compiler/*/Cargo.toml` and `src/*/Cargo.toml` — metadata per §4.13.
 - `.github/workflows/release.yml:96` — `cp README.md LICENSE-MIT LICENSE-APACHE "${STAGE}/"` (no wildcard + 2>/dev/null).
 - `docs/` README / tutorial pages: link to CONTRIBUTING from where appropriate.
 
@@ -546,7 +546,7 @@ This is a single 0.5-week push, best done before anything else in tier 4.
 2. Commit `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `CHANGELOG.md`.
 3. Commit `.github/ISSUE_TEMPLATE/*`, `PULL_REQUEST_TEMPLATE.md`, `CODEOWNERS`.
 4. Update `README.md` license section + add badges.
-5. Update every `crates/*/Cargo.toml` with metadata.
+5. Update every `compiler/*/Cargo.toml` and `src/*/Cargo.toml` with metadata.
 6. Fix the release workflow's `cp LICENSE*` to not silently succeed.
 7. Enable GitHub's built-in Security Advisories in repo settings (one-time toggle).
 8. Configure branch protection on `master` (doc 06's requirement).
@@ -592,8 +592,8 @@ This is a single 0.5-week push, best done before anything else in tier 4.
 - [ ] `.github/ISSUE_TEMPLATE/bug_report.md`, `feature_request.md`, `config.yml` exist.
 - [ ] `.github/PULL_REQUEST_TEMPLATE.md` exists.
 - [ ] `CODEOWNERS` exists with at least one owner entry.
-- [ ] Every `crates/*/Cargo.toml` has `description`, `authors`, `license = "MIT OR Apache-2.0"`, `repository`, `rust-version`.
-- [ ] `cargo publish --dry-run -p ruxen-core` passes the metadata-completeness check.
+- [ ] Every `compiler/*/Cargo.toml` and `src/*/Cargo.toml` has `description`, `authors`, `license = "MIT OR Apache-2.0"`, `repository`, `rust-version`.
+- [ ] `cargo publish --dry-run -p ruxen_core` passes the metadata-completeness check.
 - [ ] `.github/workflows/release.yml:96` uses an explicit `cp README.md LICENSE-MIT LICENSE-APACHE "${STAGE}/"` (no silent failure).
 - [ ] Release tarballs contain `LICENSE-MIT` and `LICENSE-APACHE` at their root.
 - [ ] Root `.gitignore` excludes `target/`, `fuzz/target/`, `fuzz/corpus/`, `fuzz/artifacts/`, `.DS_Store`, common editor dirs.

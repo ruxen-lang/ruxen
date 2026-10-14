@@ -12,7 +12,7 @@ future language lawyering.
 ## 1. Summary & motivation
 
 Ruxen has no reference. There is a tutorial (`docs/tutorial/01-16`) aimed
-at readers, and an implementation (`crates/ruxen-core`) that is the
+at readers, and an implementation (`compiler/ruxen_core/`) that is the
 **only** authoritative description of what the language accepts. That is a
 failure mode:
 
@@ -22,7 +22,7 @@ failure mode:
   short of a diff tells us that precedence changed.
 - Compiler contributors cannot know which behaviours are contractual.
   `typeck/coerce.rs:49-82` encodes specific coercion rules (`&var T → &T`,
-  `&String → &str`, int widening, Option-covariance, class subtyping). Any
+  int widening, Option-covariance, class subtyping). Any
   of these could be "stable" or "I tried this and it worked"; there is no
   way to tell today.
 - Users hit subtle behaviours (e.g. newline-as-terminator in
@@ -45,7 +45,7 @@ sync-with-the-compiler discipline for a Ruxen Language Reference.
   user-oriented prose. No grammar, no precedence table, no normative
   sections. Examples but no counter-examples of rejected programs.
 - **Inline doc comments** on many functions, particularly in
-  `crates/ruxen-core/src/parser/` and `hir/types.rs`.
+  `compiler/ruxen_core/src/parser/` and `hir/types.rs`.
 - **`docs/requirements/tier1_*.md`** (which you're reading the tier-5
   sibling of) — design intent, not reference material.
 
@@ -60,24 +60,24 @@ Directories that do **not** exist:
 The following files are the **de facto** grammar today. They need to be
 extracted into normative form:
 
-- **Lexer.** `crates/ruxen-core/src/lexer/mod.rs` (842 lines) and
-  `crates/ruxen-core/src/lexer/token.rs` (414 lines). Token set at
+- **Lexer.** `compiler/ruxen_core/src/lexer/mod.rs` (842 lines) and
+  `compiler/ruxen_core/src/lexer/token.rs` (414 lines). Token set at
   `token.rs:56-222`. Line-continuation rules at `token.rs:227-266`.
   Keyword table at `token.rs:281-311`.
-- **Parser.** `crates/ruxen-core/src/parser/mod.rs` (1791 lines, top-level
+- **Parser.** `compiler/ruxen_core/src/parser/mod.rs` (1791 lines, top-level
   items), `parser/expr.rs` (1544 lines, expressions + precedence),
   `parser/types.rs` (473 lines, type-expression grammar),
   `parser/patterns.rs` (479 lines, patterns).
 - **Precedence.** `parser/expr.rs:10-51` — 12 levels, binding-power pairs.
-- **Postfix operators.** `parser/expr.rs:98-104` — `.`, `?.`, `[...]`,
+- **Postfix operators.** `parser/expr.rs:98-104` — `.`, `&.`, `[...]`,
   `?`, `(...)`.
 - **Attribute syntax.** `parser/mod.rs:1572-1610` (`parse_attributes`) and
   `parser/mod.rs:473-511` (dispatch).
-- **Resolution rules.** `crates/ruxen-core/src/resolve/mod.rs` (2861
+- **Resolution rules.** `compiler/ruxen_core/src/resolve/mod.rs` (2861
   lines) — scope, shadowing, visibility.
-- **Type rules.** `crates/ruxen-core/src/typeck/` (coerce 172 lines, infer
+- **Type rules.** `compiler/ruxen_core/src/typeck/` (coerce 172 lines, infer
   1015 lines, unify 269 lines, traits 285 lines).
-- **Ownership / borrow rules.** `crates/ruxen-core/src/borrow_check/` —
+- **Ownership / borrow rules.** `compiler/ruxen_core/src/borrow_check/` —
   regions (`regions.rs`), NLL (`borrows.rs`), elision
   (`lifetimes.rs:55-85`).
 
@@ -240,7 +240,7 @@ Conventions:
 - Grammar tables: **normative**.
 - Examples: **informative** unless introduced with "**Example (normative):**".
 - "Implementation note:" callouts: **informative** — describe a current
-  `ruxen-core` design choice, not a mandated behaviour.
+  `ruxen_core` design choice, not a mandated behaviour.
 - Error codes in prose: referenced by `E????` and linked into
   `docs/errors/`.
 
@@ -279,7 +279,7 @@ written anyway.
 
 **Option B — test-fixture backing, prose written by humans. [RECOMMENDED]**
 Every grammar production has at least one `.rx` fixture under
-`crates/ruxen-core/tests/reference/<chapter>/`. A dedicated integration
+`compiler/ruxen_core/tests/reference/<chapter>/`. A dedicated integration
 test `tests/reference_coverage.rs` does two things:
 
 1. Runs each fixture through the pipeline and asserts the expected
@@ -331,7 +331,7 @@ reachable at `docs/reference/07-editions/01-edition-2026.md`-linked URLs.
 
 For chapters that change between editions, the delta is documented in
 `07-editions/NN-edition-YYYY.md` as a bullet list ("new keyword `foo`",
-"stdlib name `Map[K, V]` removed, use `Map[K, V]`").
+"stdlib name `OldName` removed, use `NewName`").
 
 ### 5.5 Worked examples embedded as fixtures
 
@@ -358,8 +358,8 @@ version committed; CI verifies expansion is up to date.
 
 - `docs/reference/README.md`, full chapter tree (~35 files — one per §4.1
   entry).
-- `crates/ruxen-core/tests/reference/` — fixture tree mirroring chapters.
-- `crates/ruxen-core/tests/reference_coverage.rs` — anchor-to-fixture
+- `compiler/ruxen_core/tests/reference/` — fixture tree mirroring chapters.
+- `compiler/ruxen_core/tests/reference_coverage.rs` — anchor-to-fixture
   cross-check.
 - `tools/refgen/` (tiny Rust binary) — fixture include expansion, anchor
   lint.
@@ -367,7 +367,7 @@ version committed; CI verifies expansion is up to date.
 
 ### 6.2 Code changes
 
-- `crates/ruxen-core/src/lib.rs` — expose a `reference_anchors()` helper
+- `compiler/ruxen_core/src/lib.rs` — expose a `reference_anchors()` helper
   that returns the full list of anchor IDs referenced by the compiler's
   error-reporting code (so `refgen` can fail-fast on typos). Optional; not
   blocking.

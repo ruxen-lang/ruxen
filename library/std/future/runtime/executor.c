@@ -201,10 +201,6 @@ void *ruxen_context_test_dummy(void) {
     return cx;
 }
 
-void ruxen_waker_test_noop(void *waker) {
-    (void)waker;
-}
-
 /* Waker.wake / wake_by_ref — real implementation.
  *
  * The waker pointer points at a `RuxenWakerCell` inlined in the owning

@@ -169,12 +169,12 @@ The trio-leak detector. Add a fresh dummy package
       self.payload = value
     end
 
-    def get(self) -> T
+    def get -> T
       self.payload
     end
 
     lib "runtime/foobar.c"
-      def drop as "ruxen_foobar_drop"(self) -> nil
+      def drop as "ruxen_foobar_drop" -> nil
     end
   end
   ```

@@ -656,35 +656,6 @@ RuxenVec *ruxen_hash_entries(RuxenHash *h) {
     return out;
 }
 
-/* HashMap == HashMap — pairwise key/value equality. Mirrors
-   `ruxen_vec_eq` in spirit: returns 1 iff both maps have the same
-   length and every key in `a` maps to a value structurally equal
-   (bitwise on slot ints; for String values the slot pointers are
-   compared, which is correct only for interned-pointer use cases
-   today — full structural value-eq lands with the trait dispatch
-   in #05, the same caveat documented on `ruxen_vec_eq`). */
-int8_t ruxen_hash_eq(RuxenHash *a, RuxenHash *b) {
-    if (a == b) return 1;
-    if (!a || !b) return 0;
-    if (a->len != b->len) return 0;
-    for (uint64_t i = 0; i < a->bucket_count; i++) {
-        for (RuxenHashEntry *e = a->buckets[i]; e; e = e->next) {
-            if (!ruxen_hash_contains_key(b, e->key)) return 0;
-            uint64_t bj = ruxen_hash_key_hash(b, e->key) % b->bucket_count;
-            int matched = 0;
-            for (RuxenHashEntry *f = b->buckets[bj]; f; f = f->next) {
-                if (ruxen_hash_keys_equal(b, f->key, e->key)) {
-                    if (f->value != e->value) return 0;
-                    matched = 1;
-                    break;
-                }
-            }
-            if (!matched) return 0;
-        }
-    }
-    return 1;
-}
-
 /* HashMap[&K] — panicking indexed read used by IndexOp lowering for
    HashMap receivers. Mirrors `ruxen_vec_get_or_panic`: missing key
    triggers a ruxen panic. Returns the value slot directly (raw 8

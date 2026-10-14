@@ -45,12 +45,9 @@ use crate::resolve::stdlib_embedded;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// The stdlib bootstrap file list. Wave 1.5 (#06.8 Phase 3) shipped one
-/// proof-of-life file — `_bootstrap_smoke.rx` — that declares a single
-/// FFI alias against the runtime test symbol `ruxen_test_extern_add_one`.
-/// Wave 2 (#06.8) starts the actual stdlib migration; `rand.rx` is the
-/// first module whose surface lives entirely in the .rx source rather
-/// than in the Rust `resolve/stdlib/mod.rs` registrations.
+/// The production stdlib bootstrap file list. Test-only fixture packages
+/// are NOT listed here; they live in [`TEST_BOOTSTRAP_FILES`] and load only
+/// when a process opts in through [`TEST_STDLIB_ENV`].
 ///
 /// Paths are relative to `<sysroot>/library/std/`.
 /// Files are loaded in the order listed. Cross-file type dependencies
@@ -88,7 +85,6 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     // surfacing E0608 until B5 of
     // docs/specs/system/zero_rust_stdlib_classes.spec.md tracked it down.
     "core/src/lib.rx",
-    "bootstrap_smoke/src/lib.rx",
     // io ships IoError + IoErrorKind which rand/env/fs/net reference.
     "io/src/lib.rx",
     "rand/src/lib.rx",
@@ -163,14 +159,6 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     "http/src/lib.rx",
     // base64 — Base64 encode/decode. String-only surface + a C runtime.
     "base64/src/lib.rx",
-    // _pin_zero_rust_stdlib — trio-leak pin fixture (B5 of
-    // docs/specs/system/zero_rust_stdlib_classes.spec.md). Adding a
-    // stdlib class via a fresh package MUST require ONLY this entry in
-    // `compiler/ruxen_core/src/`. Anything else is an auto-connect gap to
-    // fix in the bootstrap pipeline, not in this list. The first path
-    // segment drives the `std.<pkg>` namespace, so this package is
-    // reachable as `std._pin_zero_rust_stdlib`.
-    "_pin_zero_rust_stdlib/src/lib.rx",
     // regex — PCRE2-backed `Regex`, `Match`, `RegexError` classes.
     // Depends on string/array/map/option_result for return types
     // (`Array[Match]`, `HashMap[String, String]`, `Option[String]`,
@@ -196,7 +184,69 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
     "test/src/lib.rx",
 ];
 
-/// Derive the ordered list of package names from [`BOOTSTRAP_FILES`].
+/// Test-only fixture packages, relative to `library/test_std/`. They never
+/// load in production: a process opts in by pointing [`TEST_STDLIB_ENV`] at
+/// that directory, which appends these packages after [`BOOTSTRAP_FILES`]
+/// (so they may depend on any production package) and lets the driver link
+/// their `runtime/*.c` (see [`test_stdlib_runtime_sources`]).
+///
+/// - `bootstrap_smoke` — #06.8 Phase 3 proof-of-life FFI aliases over
+///   `runtime/test_extern.c`.
+/// - `_pin_zero_rust_stdlib` — trio-leak pin fixture (B5 of
+///   docs/specs/system/zero_rust_stdlib_classes.spec.md): adding a stdlib
+///   package must need only a bootstrap-list entry in
+///   `compiler/ruxen_core/src/`. Reachable as `std._pin_zero_rust_stdlib`.
+pub const TEST_BOOTSTRAP_FILES: &[&str] = &[
+    "bootstrap_smoke/src/lib.rx",
+    "_pin_zero_rust_stdlib/src/lib.rx",
+];
+
+/// Env var that opts a process into the test-only stdlib: the path of the
+/// `library/test_std/` directory. Unset (or not a directory) in production.
+pub const TEST_STDLIB_ENV: &str = "RUXEN_TEST_STDLIB";
+
+/// The opted-in test stdlib root, when [`TEST_STDLIB_ENV`] names a directory.
+pub fn test_stdlib_root() -> Option<PathBuf> {
+    std::env::var_os(TEST_STDLIB_ENV)
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+}
+
+/// Every `<root>/<pkg>/runtime/*.c` under a test stdlib root, sorted. The
+/// caller links them as extra runtime sources; the production runtime
+/// (`library/std/*/runtime`) never contains them.
+pub fn test_stdlib_runtime_sources(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(pkgs) = std::fs::read_dir(root) else {
+        return out;
+    };
+    for pkg in pkgs.flatten() {
+        let Ok(files) = std::fs::read_dir(pkg.path().join("runtime")) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let path = file.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("c") {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The bootstrap list this process loads: [`BOOTSTRAP_FILES`], plus
+/// [`TEST_BOOTSTRAP_FILES`] when the test stdlib is opted in.
+fn active_bootstrap_files() -> Vec<&'static str> {
+    let mut files = BOOTSTRAP_FILES.to_vec();
+    if test_stdlib_root().is_some() {
+        files.extend_from_slice(TEST_BOOTSTRAP_FILES);
+    }
+    files
+}
+
+/// Derive the ordered list of package names from [`BOOTSTRAP_FILES`]
+/// (plus [`TEST_BOOTSTRAP_FILES`] when opted in).
 /// The first path segment of each entry is the package name (e.g.
 /// `"io/src/lib.rx"` → `"io"`), matching the per-package layout
 /// `library/std/<pkg>/src/lib.rx`. Duplicates in BOOTSTRAP_FILES are
@@ -210,8 +260,8 @@ pub const BOOTSTRAP_FILES: &[&str] = &[
 /// is therefore a one-line BOOTSTRAP_FILES edit: `std.<new>.X`
 /// resolution comes along automatically.
 pub fn bootstrap_package_names() -> Vec<&'static str> {
-    BOOTSTRAP_FILES
-        .iter()
+    active_bootstrap_files()
+        .into_iter()
         .filter_map(|rel| rel.split('/').next())
         .collect()
 }
@@ -241,7 +291,14 @@ static BOOTSTRAP_CACHE: OnceLock<(Vec<Program>, Vec<Diagnostic>)> = OnceLock::ne
 pub fn run_bootstrap(diagnostics: &mut Vec<Diagnostic>) -> Vec<Program> {
     let (programs, diags) = BOOTSTRAP_CACHE.get_or_init(|| {
         let mut d = Vec::new();
-        let p = run_bootstrap_with_files(BOOTSTRAP_FILES, None, &mut d);
+        let mut p = run_bootstrap_with_files(BOOTSTRAP_FILES, None, &mut d);
+        if let Some(root) = test_stdlib_root() {
+            p.extend(run_bootstrap_with_files(
+                TEST_BOOTSTRAP_FILES,
+                Some(&root),
+                &mut d,
+            ));
+        }
         (p, d)
     });
     // Replay any parse diagnostics so callers see them on every call, not just
@@ -259,8 +316,8 @@ pub fn run_bootstrap_with_package_names(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<(String, Program)> {
     let programs = run_bootstrap(diagnostics);
-    BOOTSTRAP_FILES
-        .iter()
+    active_bootstrap_files()
+        .into_iter()
         .zip(programs)
         .filter_map(|(rel, p)| {
             // First path segment is the package name.

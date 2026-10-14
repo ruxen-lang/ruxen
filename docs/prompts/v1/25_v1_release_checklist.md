@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # 25 — v1.0.0 release checklist
 
 **Depends on:** prompts 01-24 all complete.

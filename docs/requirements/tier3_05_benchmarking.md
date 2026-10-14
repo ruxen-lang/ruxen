@@ -33,7 +33,7 @@ resolution.
 
 ### 2.2 No `ruxen bench` subcommand
 
-`crates/ruxen-cli/src/cli.rs:25-114` has no `Bench` variant.
+`src/ruxen_cli/src/cli.rs:25-114` has no `Bench` variant.
 
 ### 2.3 No harness
 
@@ -142,12 +142,12 @@ ruxen bench --bin foo                # limit to a specific binary
 # In std.test.bench (same module as test-directive helpers)
 
 class Bencher
-  def iter[F](f: F) where F: Fn -> Unit
+  def iter[F](f: F) where F: Fn -> nil
     # Internally: warmup + sample loop + timing
   end
 
   def iter_with_setup[F, G, S](setup: G, run: F)
-    where G: Fn -> S, F: Fn(S) -> Unit
+    where G: Fn -> S, F: Fn(S) -> nil
     # Amortize setup cost
   end
 end
@@ -321,16 +321,16 @@ Rust behavior).
 | Phase | File | Change |
 |---|---|---|
 | 1 | *shared with doc 03* | Directive pipeline for `bench` — same change as the `test` directive; if doc 03 lands first, this is a one-line directive-name addition |
-| 2 | `crates/ruxen-cli/src/cli.rs:25-114` | Add `Bench` command |
-| 2 | `crates/ruxen-cli/src/bench.rs` *new* | Parallel to `test.rs`; ~300 lines |
-| 2 | `crates/ruxen-cli/src/main.rs` | Wire `Command::Bench` |
-| 2 | `crates/ruxen-cli/src/test_harness.rs` *new* (refactor) | Shared discovery + build logic between test and bench |
+| 2 | `src/ruxen_cli/src/cli.rs:25-114` | Add `Bench` command |
+| 2 | `src/ruxen_cli/src/bench.rs` *new* | Parallel to `test.rs`; ~300 lines |
+| 2 | `src/ruxen_cli/src/main.rs` | Wire `Command::Bench` |
+| 2 | `src/ruxen_cli/src/test_harness.rs` *new* (refactor) | Shared discovery + build logic between test and bench |
 | 3 | `stdlib/test/bench.rx` *new* | `Bencher` class + `iter` method |
-| 3 | `crates/ruxen-core/src/resolve/mod.rs` | Register `black_box` builtin |
-| 3 | `crates/ruxen-core/src/codegen/llvm/emit.rs` | Emit volatile asm for `black_box` calls |
-| 3 | `crates/ruxen-core/src/codegen/cranelift.rs` | Same for Cranelift |
-| 4 | `crates/ruxen-core/runtime/runtime.c` | Add `ruxen_bench_now_ns` if tier-1 stdlib hasn't shipped |
-| 4 | `crates/ruxen-cli/src/bench.rs` | Sampling + stats + comparison |
+| 3 | `compiler/ruxen_core/src/resolve/mod.rs` | Register `black_box` builtin |
+| 3 | `compiler/ruxen_core/src/codegen/llvm/emit.rs` | Emit volatile asm for `black_box` calls |
+| 3 | `compiler/ruxen_core/src/codegen/cranelift.rs` | Same for Cranelift |
+| 4 | `library/std/bench/runtime/bench.c` | Add `ruxen_bench_now_ns` if tier-1 stdlib hasn't shipped |
+| 4 | `src/ruxen_cli/src/bench.rs` | Sampling + stats + comparison |
 | 5 | Docs, scaffold, distribution | `ruxen new` adds a `benches/` example |
 
 ### Phase breakdown
@@ -363,7 +363,7 @@ Total: ~7 engineer-days after doc 03.
 ## 7. Interactions with other tier-3 items
 
 - **Doc 03 (test).** Shared directive pipeline and harness. Extract
-  shared code into `crates/ruxen-cli/src/test_harness.rs`.
+  shared code into `src/ruxen_cli/src/test_harness.rs`.
 - **Doc 07 (MIR opts).** `black_box` correctness must be preserved
   through any MIR optimization. Any new opt pass must not see through
   `black_box`. Write an integration test.

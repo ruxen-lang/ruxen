@@ -10,7 +10,7 @@ This spec describes the **observable behaviour** of `std.fmt` — the
 `Display` and `Debug` mixins, the `Formatter` class, the string-
 interpolation lowering, and the format-spec surface (`width`, `align`,
 `fill`, `precision`, `:?`).  Each behaviour is numbered and pinned by
-one or more Rust integration tests in `crates/ruxen-core/tests/`.
+one or more Rust integration tests in `compiler/ruxen_core/tests/`.
 
 ---
 
@@ -28,12 +28,12 @@ formatter's accumulated buffer as the interpolated text.
 
 `std.fmt.Debug` is resolvable with the same signature as `Display`.
 The implicit `include Debug` on a struct or enum synthesises a
-`T_to_debug(self) -> String` MIR function whose output shape matches
-Rust's derived Debug (`Name { field1: <fmt(field1)>, ... }` for
-structs; `Variant(<payload>)` / `Variant { .. }` for enums).
+`T_to_debug(self) -> String` MIR function whose output shape is
+`Name { field1: <fmt(field1)>, ... }` for structs and
+`Variant(<payload>)` / `Variant { .. }` for enums.
 
 **Given** `struct Point` with fields `x: Int`, `y: Int` (implicit `Debug`)
-**When** `"#{p:?}"` is evaluated for `p = Point { x: 1, y: 2 }`
+**When** `"#{p:?}"` is evaluated for `p = Point.new(1, 2)`
 **Then** the output is `Point { x: 1, y: 2 }`.
 
 ## B3 — `Formatter` runtime surface
@@ -43,7 +43,7 @@ structs; `Variant(<payload>)` / `Variant { .. }` for enums).
 | Method                                          | Returns                  |
 |-------------------------------------------------|--------------------------|
 | `Formatter.new()`                               | `Formatter`              |
-| `f.write_str(s: &str)`                          | `Result[nil, FmtError]`   |
+| `f.write_str(s: &String)`                       | `Result[nil, FmtError]`   |
 | `f.write_char(c: Char)`                         | `Result[nil, FmtError]`   |
 | `f.buffer()`                                    | `String` (consumes `f`)  |
 | `f.size()`                                      | `Int`                    |
@@ -123,7 +123,7 @@ Precision is type-specific:
 |----------|----------------------------------------------------------|
 | `Float`  | decimal digits via `snprintf("%.*f", prec, value)`       |
 | `String` | UTF-8 char-count truncate (boundary-safe)                |
-| `Int`    | ignored (matches Rust)                                   |
+| `Int`    | ignored                                                  |
 | `Bool`   | ignored                                                  |
 | `Char`   | ignored                                                  |
 
@@ -175,7 +175,7 @@ inside `_buffer` itself.
 | B4        | `synth_primitive_fmt_functions_emitted`                          | `stdlib_fmt_display_dispatch.rs`      |
 | B4        | `interpolation_primitive_goes_through_display`                   | `stdlib_fmt_display_dispatch.rs`      |
 | B5        | implicit-Debug fixtures + existing interp E2E in `05_string_interp.rx` | `tests/release-e2e/cases/`      |
-| B6        | `lex_format_spec_*` (8 tests)                                    | `crates/ruxen-core/src/lexer/tests.rs`|
+| B6        | `lex_format_spec_*` (8 tests)                                    | `compiler/ruxen_core/src/lexer/tests.rs`|
 | B6        | `width_and_precision_specs_typecheck`                            | `stdlib_fmt.rs`                       |
 | B7        | `interpolation_width_right_align_pads_int`                       | `stdlib_fmt_runtime.rs`               |
 | B7        | `interpolation_width_left_align_pads_int`                        | `stdlib_fmt_runtime.rs`               |

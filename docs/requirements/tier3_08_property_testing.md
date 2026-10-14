@@ -11,7 +11,7 @@ Blocks: nothing; this is a documentation-correctness + coverage item
 `CLAUDE.md` (the workspace-level instructions file at
 `/home/sheraz/Documents/ruxen/CLAUDE.md`) claims:
 
-> The project uses `proptest` for property-based testing in `ruxen-core`.
+> The project uses `proptest` for property-based testing in `ruxen_core`.
 
 This doc verifies that claim and recommends an action. Ground truth:
 the dependency *exists* but is effectively unused. Of the two
@@ -26,7 +26,7 @@ v1 property set.
 
 ### 2.1 Dependency declaration
 
-`crates/ruxen-core/Cargo.toml:16-17`:
+`compiler/ruxen_core/Cargo.toml:16-17`:
 
 ```
 [dev-dependencies]
@@ -34,15 +34,15 @@ proptest = "1"
 ```
 
 Present. No workspace-level `proptest` in `Cargo.toml`, just the
-`ruxen-core` dev-dep.
+`ruxen_core` dev-dep.
 
 ### 2.2 Usage sites — two and only two
 
 Grep `use proptest|proptest!\s*\{|proptest::` across the whole repo:
 
 ```
-crates/ruxen-core/tests/runtime_safety.rs:61:    use proptest::prelude::*;
-crates/ruxen-core/tests/runtime_safety.rs:68:    proptest! {
+compiler/ruxen_core/tests/runtime_safety.rs:61:    use proptest::prelude::*;
+compiler/ruxen_core/tests/runtime_safety.rs:68:    proptest! {
 ```
 
 One file, one `proptest!` block. That block contains two tests
@@ -84,7 +84,7 @@ test doesn't actually call the C runtime).
 
 ### 2.3 What the CLAUDE.md claim implies vs reality
 
-Claim: "property-based testing in ruxen-core."
+Claim: "property-based testing in ruxen_core."
 Reality: two placeholder tests that assert tautologies. Property
 testing as an engineering practice is not happening.
 
@@ -183,7 +183,7 @@ format(src) = format(format(src))
 That is, running the formatter twice produces identical output.
 
 **Generator.** Either (a) a corpus of existing fixtures
-(`crates/ruxen-core/tests/fixtures/*.rx`) — then this is not strictly
+(`compiler/ruxen_core/tests/fixtures/*.rx`) — then this is not strictly
 a property but a deterministic roundtrip; or (b) a generator that
 produces random well-formed Ruxen AST via a recursive-descent
 proptest strategy.
@@ -267,16 +267,16 @@ Easy to test; catches a whole class of bugs cheaply.
 
 | File | Change |
 |---|---|
-| `crates/ruxen-core/tests/runtime_safety.rs:57-87` | Delete placeholder proptest block |
-| `crates/ruxen-core/tests/proptest_lexer.rs` *new* | P1 tests (~50 lines) |
-| `crates/ruxen-core/tests/proptest_parser.rs` *new* | P2 tests (~80 lines, includes `arb_token` strategy) |
-| `crates/ruxen-core/tests/proptest_formatter.rs` *new* | P3 + P4 tests (~100 lines) |
-| `crates/ruxen-core/tests/proptest_cache.rs` *new* (or in `ruxenc/tests/`) | P5 tests (~40 lines) |
-| `crates/ruxen-core/tests/proptest_borrow.rs` *new* | P6 tests (~50 lines) |
-| `crates/ruxen-core/Cargo.toml` | (no change — `proptest` already declared) |
+| `compiler/ruxen_core/tests/runtime_safety.rs:57-87` | Delete placeholder proptest block |
+| `compiler/ruxen_core/tests/proptest_lexer.rs` *new* | P1 tests (~50 lines) |
+| `compiler/ruxen_core/tests/proptest_parser.rs` *new* | P2 tests (~80 lines, includes `arb_token` strategy) |
+| `compiler/ruxen_core/tests/proptest_formatter.rs` *new* | P3 + P4 tests (~100 lines) |
+| `compiler/ruxen_core/tests/proptest_cache.rs` *new* (or in `ruxenc/tests/`) | P5 tests (~40 lines) |
+| `compiler/ruxen_core/tests/proptest_borrow.rs` *new* | P6 tests (~50 lines) |
+| `compiler/ruxen_core/Cargo.toml` | (no change — `proptest` already declared) |
 | `CLAUDE.md` | Update claim to be accurate: "property-based testing for lexer, parser, formatter roundtrip, and cache keys via proptest" |
-| `crates/ruxen-core/src/CLAUDE.md` (if present) | Same update |
-| `README.md` or `CONTRIBUTING.md` | Brief note on running proptest: `cargo test -p ruxen-core --test proptest_*` |
+| `compiler/ruxen_core/src/CLAUDE.md` (if present) | Same update |
+| `README.md` or `CONTRIBUTING.md` | Brief note on running proptest: `cargo test -p ruxen_core --test proptest_*` |
 
 ### Phase breakdown
 
@@ -415,14 +415,14 @@ themselves. Coverage:
 | P6 | Borrow-check order dependency |
 
 Each property lives in its own `tests/proptest_*.rs` file. Each file
-is runnable independently (`cargo test -p ruxen-core --test
-proptest_lexer`). Running all six: `cargo test -p ruxen-core --test
+is runnable independently (`cargo test -p ruxen_core --test
+proptest_lexer`). Running all six: `cargo test -p ruxen_core --test
 'proptest_*'`.
 
 One smoke test confirms the property-test infrastructure works:
 
 ```rust
-// crates/ruxen-core/tests/proptest_smoke.rs
+// compiler/ruxen_core/tests/proptest_smoke.rs
 #[test]
 fn proptest_framework_available() {
     use proptest::prelude::*;
@@ -446,8 +446,8 @@ and Ruxen's are young enough that bugs are likely present.
 
 If the project lead prefers Option A, the minimal edits are:
 
-- Delete `crates/ruxen-core/tests/runtime_safety.rs:57-87`.
-- Delete `crates/ruxen-core/Cargo.toml:16-17` (the `proptest` dev-dep).
+- Delete `compiler/ruxen_core/tests/runtime_safety.rs:57-87`.
+- Delete `compiler/ruxen_core/Cargo.toml:16-17` (the `proptest` dev-dep).
 - Update `CLAUDE.md` to drop the claim.
 - Total effort: 5 minutes.
 

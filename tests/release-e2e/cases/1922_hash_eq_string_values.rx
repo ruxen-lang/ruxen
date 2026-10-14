@@ -1,0 +1,18 @@
+# F-4: Hash == compares VALUES by the value type's own ==. String
+# values built at run time live in distinct allocations, so a raw-word
+# compare of the value slots answers `false` for equal maps.
+def main
+  let o = "o"
+  var a: Hash[Int, String] = Hash.new
+  a.insert(1, "#{o}ne")
+  a.insert(2, "tw#{o}")
+  var b: Hash[Int, String] = Hash.new
+  b.insert(2, "tw#{o}")
+  b.insert(1, "#{o}ne")
+  var c: Hash[Int, String] = Hash.new
+  c.insert(1, "#{o}ne")
+  c.insert(2, "deux")
+  puts "a_eq_b=#{a == b}"
+  puts "a_eq_c=#{a == c}"
+  puts "a_ne_c=#{a != c}"
+end

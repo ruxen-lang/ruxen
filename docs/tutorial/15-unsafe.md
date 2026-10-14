@@ -129,7 +129,7 @@ No `unsafe` in sight at the call site.
 
 ## Try it
 
-Take the `SafeBuffer` example and add a `set(index: Int, value: UInt8) -> Result[nil, &str]` method. Bounds-check; on success, write through the pointer in an `unsafe` block. Use it from `main` and try writing to an out-of-range index — the `Result` should report the error without crashing.
+Take the `SafeBuffer` example and add a `set(index: Int, value: UInt8) -> Result[nil, String]` method. Bounds-check; on success, write through the pointer in an `unsafe` block. Use it from `main` and try writing to an out-of-range index — the `Result` should report the error without crashing.
 
 ## Recap
 

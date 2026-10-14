@@ -39,7 +39,7 @@ i64-payload ABI.
 | Call                          | Returns  |
 |-------------------------------|----------|
 | `a.load()`                    | inner T  |
-| `a.store(v: T)`               | `()`     |
+| `a.store(v: T)`               | `nil`    |
 
 Load is `__atomic_load_n(..., __ATOMIC_SEQ_CST)`. Store is the
 matching `__atomic_store_n`.

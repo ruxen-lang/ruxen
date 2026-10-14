@@ -538,11 +538,7 @@ impl Resolver {
     ) {
         match item {
             ast::TopLevelItem::Class(class) => {
-                let lookup_key = if module_path.is_empty() {
-                    class.name.clone()
-                } else {
-                    format!("{}.{}", module_path.join("."), class.name)
-                };
+                let lookup_key = Self::qualified_key(module_path, &class.name);
                 if let Some(&id) = self.type_registry.get(&lookup_key) {
                     self.register_class_body_lib_decls(class, id, ffi_libs, module_path);
                 }
@@ -555,6 +551,26 @@ impl Resolver {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Bind every enum nested anywhere under `items` (declared at
+    /// `module_path`) by its fully qualified `A.B.Enum.Variant` key in the
+    /// current scope, so code outside the module reaches its variants.
+    fn bind_nested_enum_variants(&mut self, items: &[ast::TopLevelItem], module_path: &[String]) {
+        for item in items {
+            match item {
+                ast::TopLevelItem::Enum(e) => {
+                    let key = Self::qualified_key(module_path, &e.name);
+                    self.bind_enum_variants(&key, &key);
+                }
+                ast::TopLevelItem::Module(m) => {
+                    let mut nested = module_path.to_vec();
+                    nested.push(m.name.clone());
+                    self.bind_nested_enum_variants(&m.items, &nested);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -576,12 +592,8 @@ impl Resolver {
     /// reference the type via the qualified path.
     fn insert_type_qualified(&mut self, name: &str, id: DefId, module_path: &[String]) {
         self.scopes.insert_type(name.to_string(), id);
-        if module_path.is_empty() {
-            self.type_registry.insert(name.to_string(), id);
-        } else {
-            let qualified = format!("{}.{}", module_path.join("."), name);
-            self.type_registry.insert(qualified, id);
-        }
+        self.type_registry
+            .insert(Self::qualified_key(module_path, name), id);
     }
 
     /// Public entry into Pass 1 type registration. Top-level call
@@ -682,7 +694,7 @@ impl Resolver {
                     if module_path.is_empty() {
                         self.scopes.lookup_type(&class.name)
                     } else {
-                        let qualified = format!("{}.{}", module_path.join("."), class.name);
+                        let qualified = Self::qualified_key(module_path, &class.name);
                         self.type_registry.get(&qualified).copied()
                     }
                 } else {
@@ -845,10 +857,7 @@ impl Resolver {
                         let try_keys: Vec<String> = if inner.trait_name.segments.len() > 1 {
                             vec![written.clone()]
                         } else if !module_path.is_empty() {
-                            vec![
-                                format!("{}.{}", module_path.join("."), written),
-                                written.clone(),
-                            ]
+                            vec![Self::qualified_key(module_path, &written), written.clone()]
                         } else {
                             vec![written.clone()]
                         };
@@ -1199,6 +1208,9 @@ impl Resolver {
                     self.register_top_level_type_with_ffi_in(sub_item, ffi_libs, &nested_path, ctx);
                 }
                 self.scopes.pop();
+                if module_path.is_empty() {
+                    self.bind_nested_enum_variants(&m.items, &nested_path);
+                }
             }
             ast::TopLevelItem::Function(f) => {
                 // Forward-declare top-level functions so they can be referenced

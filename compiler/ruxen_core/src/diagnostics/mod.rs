@@ -113,16 +113,6 @@ mod tests {
         assert!(diag.code.is_none());
     }
 
-    // NOTE: `Diagnostic::info` was listed in the test spec but does not exist
-    // on the current `Diagnostic` struct; the module only supports Error,
-    // Warning, and a Help variant (no corresponding constructor). See the
-    // `DiagnosticLevel` enum in this module.
-    #[test]
-    #[ignore = "Diagnostic::info does not exist in the current API"]
-    fn info_constructor_missing() {
-        // Intentionally left ignored — no `Diagnostic::info` constructor.
-    }
-
     #[test]
     fn error_with_code_sets_code_field() {
         let diag = Diagnostic::error_with_code("bad thing", sample_span(), "E0042");
@@ -130,17 +120,6 @@ mod tests {
         assert_eq!(diag.message, "bad thing");
         assert_eq!(diag.code.as_deref(), Some("E0042"));
     }
-
-    // NOTE: The spec asked for `error_with_note` / `error_with_help` but these
-    // constructors do not exist, and the struct has no `note`/`help` fields.
-    // Only `level`, `message`, `span`, and `code` are present today.
-    #[test]
-    #[ignore = "Diagnostic has no `note` field or `error_with_note` constructor"]
-    fn error_with_note_missing() {}
-
-    #[test]
-    #[ignore = "Diagnostic has no `help` field or `error_with_help` constructor"]
-    fn error_with_help_missing() {}
 
     #[test]
     fn code_field_defaults_to_none() {

@@ -301,11 +301,16 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     // User-side runtime C (`--runtime-c=`): always compiled, independent of
     // the prebuilt stdlib archive — these are project sources, not stdlib.
-    if !extra_runtime_c.is_empty() {
-        let extra_paths: Vec<std::path::PathBuf> = extra_runtime_c
-            .iter()
-            .map(std::path::PathBuf::from)
-            .collect();
+    // A process that opts into the test-only stdlib (`RUXEN_TEST_STDLIB`)
+    // links that stdlib's fixture runtime C the same way.
+    let mut extra_paths: Vec<std::path::PathBuf> = extra_runtime_c
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+    if let Some(root) = ruxen_core::resolve::bootstrap::test_stdlib_root() {
+        extra_paths.extend(ruxen_core::resolve::bootstrap::test_stdlib_runtime_sources(&root));
+    }
+    if !extra_paths.is_empty() {
         let extra_objects =
             ruxen_core::codegen::object::compile_runtime_sources(&extra_paths, false)
                 .map_err(|e| format!("Failed to compile project runtime C: {}", e))?;
@@ -324,6 +329,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
             link_flags.push("-Wl,--whole-archive".to_string());
             link_flags.push(ar_str);
             link_flags.push("-Wl,--no-whole-archive".to_string());
+        }
+    }
+    // The stdlib's own `[system_libs]` (`-lc -lm`, ...), after the runtime
+    // archive that needs them, as `codegen::compile_with_options` does.
+    if let Ok(system_flags) = ruxen_core::codegen::collect_system_lib_flags() {
+        for flag in system_flags {
+            if !link_flags.contains(&flag) {
+                link_flags.push(flag);
+            }
         }
     }
 

@@ -1,7 +1,9 @@
 # Tier 3.03 — Test Framework (`test` in-body directive + `ruxen test`)
 
-Status: draft
-Depends (soft): Tier-1 doc 05 (macros) for assertion macros; Tier-1 doc 01 (stdlib) for `fmt::Debug`; Tier-1 doc 04 (Drop) for non-leaking tests
+Status: draft. What shipped instead is `ruxen test` running `tests/**.rx` with the
+`Tester` DSL (`Tester.describe` / `t.it` / `t.expect`, `library/std/test/`); see
+`docs/tutorial/19-writing-and-running-tests.md`.
+Depends (soft): Tier-1 doc 01 (stdlib) for `fmt::Debug`; Tier-1 doc 04 (Drop) for non-leaking tests
 Depends (hard): compiler-builtin `test` in-body directive recognition is the only hard requirement
 Blocks: doc 05 (bench) shares 90% of the harness
 
@@ -10,7 +12,7 @@ Blocks: doc 05 (bench) shares 90% of the harness
 ## 1. Summary & motivation
 
 Ruxen has no way to write tests in Ruxen. Everything under
-`crates/ruxen-core/tests/` is Rust `#[test]` — that tests the *compiler*,
+`compiler/ruxen_core/tests/` is Rust `#[test]` — that tests the *compiler*,
 not programs written in Ruxen. The tutorial never discusses testing
 (`docs/tutorial/` has no `testing.md`). A user building a Ruxen project
 with `ruxen new foo` gets a `src/main.rx` — no `tests/` directory,
@@ -35,7 +37,7 @@ identifier reference and fails resolution.
 
 ### 2.2 No `ruxen test` subcommand
 
-`ruxen-cli`'s `Command` enum (`crates/ruxen-cli/src/cli.rs:25-114`) has
+`ruxen_cli`'s `Command` enum (`src/ruxen_cli/src/cli.rs:25-114`) has
 no `Test`, `Bench`, or `Doc` variant. Only `New`, `Init`, `Build`, `Run`,
 `Check`, `Clean`, `Add`, `Remove`, `Update`, `Tree`, `Verify`.
 
@@ -43,7 +45,7 @@ no `Test`, `Bench`, or `Doc` variant. Only `New`, `Init`, `Build`, `Run`,
 
 There is no code anywhere in the workspace that collects functions
 tagged with an attribute and emits them into a test binary. The MIR
-lowerer (`crates/ruxen-core/src/mir/lower.rs`) walks `HirProgram.items`
+lowerer (`compiler/ruxen_core/src/mir/lower.rs`) walks `HirProgram.items`
 and lowers every function present, emitting `main` as the entry point.
 Test entry-point generation requires a new code path.
 
@@ -61,7 +63,7 @@ here.
   `include`, `layout`).
 - Doc comments are `##` (§doc 04).
 - Function definitions are `def name(args) -> Ret ... end`.
-- `ruxen-cli` uses clap; `Build` takes `--release` and `--bin`.
+- `ruxen_cli` uses clap; `Build` takes `--release` and `--bin`.
 - The cache (`ruxenc/src/cache/driver.rs`) produces per-file
   `CompileOutput` — reusable for test-build caching.
 
@@ -172,18 +174,18 @@ ruxen test --bin main                       # limit to tests in a specific binar
 
 ### 4.3 Assertion API
 
-Ship as compiler-builtin function calls in v1; migrate to macros (tier-1
-doc 05) in v2 so that stringification of the expression works.
+Ship as compiler-builtin function calls. There are no user macros, so
+stringifying the asserted expression needs compiler support.
 
 v1 functions (in `std.test` module once stdlib ships; before that
 as builtins registered by `resolve::mod::register_builtins`):
 
 ```
 def assert(cond: Bool)
-def assert_msg(cond: Bool, msg: &str)
+def assert_msg(cond: Bool, msg: &String)
 def assert_eq[T](actual: T, expected: T)  where T: Debug + Eq
 def assert_ne[T](actual: T, expected: T)  where T: Debug + Eq
-def fail(msg: &str) -> Never
+def fail(msg: &String) -> Never
 ```
 
 Failure message format:
@@ -195,9 +197,8 @@ assertion failed: actual != expected
   at tests/foo.rx:12:5
 ```
 
-v1 compromise: without macros, `assert_eq` cannot stringify the
-expression text. Accept the slight degradation. v2 upgrades to
-`assert_eq!(actual, expected)` with full stringification.
+v1 compromise: `assert_eq` cannot stringify the expression text.
+Accept the slight degradation.
 
 ### 4.4 Output format
 
@@ -289,7 +290,7 @@ metadata). Also threads through `resolve/mod.rs` and the formatter.
 **Typechecker.** No change needed — `test`-directive functions are
 regular functions with signature `def name()` (no args, no return value
 beyond Unit). A validator (new module
-`crates/ruxen-core/src/typeck/test_check.rs`) emits a diagnostic if a
+`compiler/ruxen_core/src/typeck/test_check.rs`) emits a diagnostic if a
 `test` directive is on a function with non-empty parameters or a
 non-Unit/Never return type.
 
@@ -305,7 +306,7 @@ See §5.3 for the harness generation mechanics.
 
 ### 5.2 CLI plumbing — `ruxen test`
 
-Add to `crates/ruxen-cli/src/cli.rs::Command`:
+Add to `src/ruxen_cli/src/cli.rs::Command`:
 
 ```rust
 Test {
@@ -322,7 +323,7 @@ Test {
 },
 ```
 
-New module `crates/ruxen-cli/src/test.rs`:
+New module `src/ruxen_cli/src/test.rs`:
 
 ```rust
 pub fn test(opts: TestOptions) -> Result<(), String> {
@@ -412,19 +413,19 @@ objects. No new cache logic needed.
 
 | Phase | File | Change |
 |---|---|---|
-| 1 | `crates/ruxen-core/src/parser/ast.rs` (FuncDef) | Add `test_directives: Vec<TestDirective>` |
-| 1 | `crates/ruxen-core/src/parser/mod.rs` (parse_func_body) | Recognize `test`/`ignore`/`should_panic`/`only`/`bench` at body head |
-| 1 | `crates/ruxen-core/src/hir/nodes.rs` (HirFuncDef) | Add `test_directives: Vec<TestDirective>` |
-| 1 | `crates/ruxen-core/src/resolve/mod.rs` | Thread directives from ast → hir |
-| 1 | `crates/ruxen-core/src/typeck/test_check.rs` *new* | Validate `test`-directive functions have no params, return Unit |
-| 1 | `crates/ruxen-core/src/formatter/format_items.rs` | Round-trip `test`-directive body in formatter |
-| 2 | `crates/ruxen-cli/src/cli.rs:25-114` | Add `Test` command |
-| 2 | `crates/ruxen-cli/src/test.rs` *new* | Discovery, harness gen, build, run (~400 lines) |
-| 2 | `crates/ruxen-cli/src/main.rs:7-52` | Wire `Command::Test` |
-| 2 | `crates/ruxen-cli/src/module_discovery.rs` | Extend to walk `tests/**.rx` |
-| 3 | `crates/ruxen-core/runtime/runtime.c` | Add `ruxen_test_panic` entry point (longjmp or plain exit) |
+| 1 | `compiler/ruxen_core/src/parser/ast.rs` (FuncDef) | Add `test_directives: Vec<TestDirective>` |
+| 1 | `compiler/ruxen_core/src/parser/mod.rs` (parse_func_body) | Recognize `test`/`ignore`/`should_panic`/`only`/`bench` at body head |
+| 1 | `compiler/ruxen_core/src/hir/nodes.rs` (HirFuncDef) | Add `test_directives: Vec<TestDirective>` |
+| 1 | `compiler/ruxen_core/src/resolve/mod.rs` | Thread directives from ast → hir |
+| 1 | `compiler/ruxen_core/src/typeck/test_check.rs` *new* | Validate `test`-directive functions have no params, return Unit |
+| 1 | `compiler/ruxen_core/src/formatter/format_items.rs` | Round-trip `test`-directive body in formatter |
+| 2 | `src/ruxen_cli/src/cli.rs:25-114` | Add `Test` command |
+| 2 | `src/ruxen_cli/src/test.rs` *new* | Discovery, harness gen, build, run (~400 lines) |
+| 2 | `src/ruxen_cli/src/main.rs:7-52` | Wire `Command::Test` |
+| 2 | `src/ruxen_cli/src/module_discovery.rs` | Extend to walk `tests/**.rx` |
+| 3 | `library/std/test/runtime/test.c` | Add `ruxen_test_panic` entry point (longjmp or plain exit) |
 | 3 | `stdlib/test/mod.rx` *new* | `TestCase`, `run_all`, `assert*` helpers (builtin registration first; real stdlib once tier-1 doc 01 lands) |
-| 4 | `crates/ruxen-cli/src/scaffold.rs:29-50` | `ruxen new` scaffolds a `tests/hello.rx` with one example |
+| 4 | `src/ruxen_cli/src/scaffold.rs:29-50` | `ruxen new` scaffolds a `tests/hello.rx` with one example |
 | 4 | `docs/tutorial/17-testing.md` *new* | Tutorial page |
 
 ### Phase breakdown
@@ -458,7 +459,7 @@ Total: 9 engineer-days for a v1 that covers 90% of day-to-day usage.
 
 - **Doc 05 (bench).** Shares 90% of the harness: same discovery, same
   CLI skeleton, same output plumbing. Implement bench after test so
-  the shared code in `ruxen-cli/src/test.rs` is factored cleanly.
+  the shared code in `ruxen_cli/src/test.rs` is factored cleanly.
   Expected extraction: `test_harness::{discover, build, run}` common
   to both.
 - **Doc 04 (docs).** `ruxendoc` should emit per-function test counts
@@ -474,8 +475,6 @@ Total: 9 engineer-days for a v1 that covers 90% of day-to-day usage.
 
 ### Tier-1 dependencies
 
-- **Tier-1 doc 05 (macros).** Real stringifying `assert_eq!`
-  (macro) replaces the builtin function `assert_eq` in v2.
 - **Tier-1 doc 01 (stdlib).** `fmt::Debug` is needed to print actual /
   expected values. Until it lands, v1 assertions render `actual = <opaque>`
   for non-primitive types.
@@ -508,9 +507,9 @@ Total: 9 engineer-days for a v1 that covers 90% of day-to-day usage.
    substring (matches Rust's `should_panic(expected = "...")`).
 3. **OQ-3 — `fail(msg)` return type `Never`.**
    Requires `Ty::Never` plumbed through the typechecker. Is it?
-   (Quick check: `ruxen-core/src/hir/types.rs` has a `Never` variant;
+   (Quick check: `ruxen_core/src/hir/types.rs` has a `Never` variant;
    verify it's usable as function return type.) If not, use
-   `-> Unit` with an internal never-returning marker.
+   `-> nil` with an internal never-returning marker.
 4. **OQ-4 — Test path separator.**
    `tests.arith.adds` (Ruxen uses `.` everywhere — `std.io`,
    `package.utils`). Recommend `.` to match module-path conventions.
@@ -562,6 +561,6 @@ Total: 9 engineer-days for a v1 that covers 90% of day-to-day usage.
 | Second `ruxen test` with no changes | Uses cache; fast |
 | Forked test crashes via OOB access | Reported as failed, not a runner crash |
 
-These live under `crates/ruxen-cli/tests/test_runner.rs` as
+These live under `src/ruxen_cli/tests/test_runner.rs` as
 integration tests that invoke `ruxen test` on fixture projects in
-`crates/ruxen-cli/tests/fixtures/tests-*/`.
+`src/ruxen_cli/tests/fixtures/tests-*/`.

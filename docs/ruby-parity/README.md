@@ -20,7 +20,7 @@ program is fully formed and never mutates itself. Three tiers:
    methods, control flow, modules/mixins, exceptions). Implement fully.
 2. **Compile-time parity (the main lever)** — everything Ruby does with load-time
    OR runtime metaprogramming is re-expressed with Ruxen's compile-time
-   machinery: `derive`, mixins, and (where needed, new) macros / codegen /
+   machinery: mixins, `extension`, and (where needed, new) macros / codegen /
    attribute-driven synthesis. `attr_accessor`, `define_method`,
    `method_missing`-style dynamic dispatch, ActiveRecord attribute/finder
    methods, Rails routing DSLs, serializers, validations, delegation

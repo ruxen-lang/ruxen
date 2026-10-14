@@ -4,7 +4,7 @@
 `Int`, `Float`, `Bool` — should be written in `.rx` stdlib source, not
 hard-wired through the compiler and C runtime.**
 
-Ruxen is compiled and statically dispatched (Rust-like), so it does *not*
+Ruxen is compiled and statically dispatched, so it does *not*
 box values into heap objects the way Ruby does. But it gives every type a
 Ruby-like method surface: you can attach methods to primitives with an
 `extension` block, and the compiler resolves and lowers them exactly like
@@ -49,11 +49,12 @@ Only for **irreducible primitive operations** that cannot be expressed in
 - Performance-critical kernels where a function-call-per-element in `.rx`
   is unacceptable.
 
-These get a `ruxen_*` C helper **plus** matching entries in the C-ABI table
-(`codegen/cranelift/runtime_sigs.rs`), the LLVM declarations
-(`codegen/llvm/runtime_decl.rs`), and the symbol list
-(`codegen/runtime/symbols/`). Keep that set **small and stable**; build the
-ergonomic surface on top of it in `.rx`.
+These get a `ruxen_*` C helper in the package's `runtime/*.c` **plus** a
+declaration in that package's `.rx` `lib` block; the Cranelift and LLVM ABI
+is derived from that declaration (do not add it to the residual tables in
+`codegen/cranelift/runtime_sigs.rs` or `codegen/llvm/runtime_decl.rs`).
+Keep that set **small and stable**; build the ergonomic surface on top of
+it in `.rx`.
 
 > Historical note: `Int.to_f` / `Float.to_i` / the universal `to_s` shipped
 > via the C-helper path (`ruxen_int_to_f`, `ruxen_float_to_i`, the

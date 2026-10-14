@@ -105,7 +105,8 @@ int64_t ruxen_test_clock_virtual_now(void);
  * handles which are either positive timerfds (Linux) or positive
  * ident counters (macOS). `check_fired` / `deregister` route on sign. */
 typedef struct RuxenReactorFdSlot {
-    int fd;        /* 0 = free slot; -1 also free (we use >0 to mean live) */
+    int fd;        /* the user's fd; 0 is a real fd (stdin), so liveness is `live` */
+    int live;      /* 1 while registered with the OS queue, 0 = free slot */
     int mode;      /* 0 = read, 1 = write */
     int fired;     /* set by park_current when the OS reports readiness */
     void *task;    /* scheduler task to mark ready when this fd fires */
@@ -339,7 +340,7 @@ static int ruxen_reactor_find_slot(RuxenReactor *r, int64_t ident) {
  * as the macOS timer slots array. */
 static int ruxen_reactor_alloc_fd_slot(RuxenReactor *r) {
     for (int i = 0; i < r->fd_slots_len; i++) {
-        if (!r->fd_slots[i] || r->fd_slots[i]->fd == 0) {
+        if (!r->fd_slots[i] || !r->fd_slots[i]->live) {
             if (!r->fd_slots[i]) {
                 r->fd_slots[i] = (RuxenReactorFdSlot *)calloc(1, sizeof(*r->fd_slots[i]));
                 if (!r->fd_slots[i]) {
@@ -397,7 +398,7 @@ static RuxenReactorFdSlot *ruxen_reactor_find_fd_slot(RuxenReactor *r,
     if (idx < 0 || idx >= r->fd_slots_len) {
         return NULL;
     }
-    if (!r->fd_slots[idx] || r->fd_slots[idx]->fd <= 0) {
+    if (!r->fd_slots[idx] || !r->fd_slots[idx]->live) {
         return NULL;
     }
     return r->fd_slots[idx];
@@ -490,6 +491,7 @@ static int64_t ruxen_reactor_register_fd_internal(int64_t reactor_handle,
     }
 #endif
 
+    fd_slot->live = 1;
     r->registered_count++;
     return (int64_t)(-(slot + 1));
 }
@@ -563,6 +565,7 @@ static int64_t ruxen_reactor_register_fd_persistent_internal(int64_t reactor_han
     }
 #endif
 
+    fd_slot->live = 1;
     r->registered_count++;
     return (int64_t)(-(slot + 1));
 }
@@ -910,6 +913,7 @@ void ruxen_reactor_deregister(int64_t reactor_handle, int64_t handle) {
         (void)epoll_ctl(r->fd, EPOLL_CTL_DEL, user_fd, NULL);
 #endif
         slot->fd = 0;
+        slot->live = 0;
         slot->mode = 0;
         slot->fired = 0;
         slot->task = NULL;

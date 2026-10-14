@@ -34,6 +34,8 @@ class AsyncReadLineFuture
         let fd = ruxen_async_stdin_state_get_fd(self.state_ptr)
         self.handle = ruxen_reactor_register_fd_read(ruxen_reactor_current_handle(), fd)
       end
+      let w = cx.waker
+      ruxen_reactor_set_waker(ruxen_reactor_current_handle(), self.handle, w)
       return Poll.Pending
     end
     # step == 2 (line/EOF) or step == 3 (error) — both Ready paths.

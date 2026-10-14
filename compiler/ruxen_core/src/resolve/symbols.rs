@@ -1009,11 +1009,4 @@ mod tests {
         assert_eq!(table.get(b).unwrap().visibility, Visibility::Public);
         assert_eq!(table.get(c).unwrap().visibility, Visibility::Protected);
     }
-
-    // NOTE: The task spec mentions "Clear/reset behavior if exposed" — the
-    // current `SymbolTable` does not expose `clear` or `reset`; definitions
-    // are append-only for the lifetime of the table. Documented as ignored.
-    #[test]
-    #[ignore = "SymbolTable exposes no clear/reset API; table is append-only"]
-    fn clear_reset_not_exposed() {}
 }

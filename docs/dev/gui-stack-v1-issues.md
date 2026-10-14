@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Ruxen v1 issues found building the GUI stack (quiver / canvas / tally)
 
 Catalog of compiler/toolchain bugs hit while implementing quiver (L2 reactive

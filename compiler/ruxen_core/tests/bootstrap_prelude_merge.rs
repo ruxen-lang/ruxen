@@ -4,9 +4,10 @@
 //! `run_bootstrap` loader to the resolver via
 //! `Resolver::merge_bootstrap_programs` (and the typeck convenience
 //! wrapper `type_check_with_bootstrap`), and ships one proof-of-life
-//! stdlib file — `library/std/bootstrap_smoke/src/lib.rx` — that
-//! declares `bootstrap_smoke_add_one` aliased to the runtime test
-//! symbol `ruxen_test_extern_add_one`.
+//! test-only stdlib file — `library/test_std/bootstrap_smoke/src/lib.rx` —
+//! that declares `bootstrap_smoke_add_one` aliased to the runtime test
+//! symbol `ruxen_test_extern_add_one`. The tests below load it explicitly
+//! (`TEST_BOOTSTRAP_FILES` from `library/test_std`); production never does.
 //!
 //! These tests pin the three invariants the Phase-3 brief requires:
 //!
@@ -16,7 +17,8 @@
 //!    diagnostics, and the MIR call site carries the aliased C
 //!    symbol).
 //! 2. The Wave-1.5 smoke file compiles + links + runs end-to-end
-//!    against the runtime symbol from `library/std/core/runtime/test_extern.c`.
+//!    against the runtime symbol from
+//!    `library/test_std/bootstrap_smoke/runtime/test_extern.c`.
 //! 3. A deliberately broken stdlib file produces E0725 diagnostics
 //!    through the same loader the driver calls — proving the
 //!    "stdlib bootstrap failed → fatal" policy is wired.
@@ -28,7 +30,9 @@ use ruxen_core::mir::lower::Lowerer;
 use ruxen_core::mir::nodes::MirInst;
 use ruxen_core::parser::ast::Program;
 use ruxen_core::parser::Parser;
-use ruxen_core::resolve::bootstrap::{run_bootstrap_with_files, BOOTSTRAP_FILES};
+use ruxen_core::resolve::bootstrap::{
+    run_bootstrap_with_files, test_stdlib_runtime_sources, BOOTSTRAP_FILES, TEST_BOOTSTRAP_FILES,
+};
 use ruxen_core::resolve::symbols::DefKind;
 use ruxen_core::resolve::Resolver;
 use ruxen_core::typeck;
@@ -40,6 +44,33 @@ use std::process::Command;
 fn workspace_root() -> PathBuf {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir.parent().unwrap().parent().unwrap().to_path_buf()
+}
+
+/// Production stdlib plus the explicitly opted-in test-only packages.
+fn bootstrap_with_test_stdlib(diags: &mut Vec<Diagnostic>) -> Vec<Program> {
+    let root = workspace_root();
+    let mut programs =
+        run_bootstrap_with_files(BOOTSTRAP_FILES, Some(&root.join("library/std")), diags);
+    programs.extend(run_bootstrap_with_files(
+        TEST_BOOTSTRAP_FILES,
+        Some(&root.join("library/test_std")),
+        diags,
+    ));
+    programs
+}
+
+/// Link against the production runtime plus the test-only fixture C.
+fn compile_with_test_runtime(mir: &ruxen_core::mir::nodes::MirProgram, bin_path: &Path) {
+    let extra = test_stdlib_runtime_sources(&workspace_root().join("library/test_std"));
+    codegen::compile_with_options(
+        mir,
+        bin_path.to_str().unwrap(),
+        false,
+        &[],
+        &extra,
+        codegen::Backend::Cranelift,
+    )
+    .expect("codegen");
 }
 
 fn parse_fixture(name: &str) -> Program {
@@ -187,14 +218,13 @@ fn bootstrap_program_injects_def_into_user_scope() {
 
 #[test]
 fn bootstrap_smoke_e2e_via_runtime_file() {
-    // Drive the loader directly against the production stdlib root so
-    // this test exercises EXACTLY the path the driver takes (parse
-    // `library/std/bootstrap_smoke/src/lib.rx`, merge into resolver,
+    // Drive the loader directly against the stdlib roots so this test
+    // exercises the path the driver takes (parse
+    // `library/test_std/bootstrap_smoke/src/lib.rx`, merge into resolver,
     // compile a user .rx that calls `bootstrap_smoke_add_one`, link
     // against the runtime, run the binary, expect exit 0). If this
     // test passes, the whole "stdlib self-hosting" architecture is
     // proven for Wave 1.5.
-    let stdlib_root = workspace_root().join("library/std");
     let mut diags = Vec::<Diagnostic>::new();
     // Load the full BOOTSTRAP_FILES list (not just bootstrap_smoke) so the
     // resulting binary can link against fmt's `Formatter_write_str` and
@@ -205,18 +235,15 @@ fn bootstrap_smoke_e2e_via_runtime_file() {
     // package-owned FFI bindings; the test still proves the same invariant
     // because `bootstrap_smoke_add_one` (defined in the smoke file) must be
     // callable from user code with no extra wiring.
-    let bootstrap_programs =
-        run_bootstrap_with_files(BOOTSTRAP_FILES, Some(&stdlib_root), &mut diags);
+    let bootstrap_programs = bootstrap_with_test_stdlib(&mut diags);
     assert!(
         diags.is_empty(),
         "BOOTSTRAP_FILES must parse cleanly; got: {:?}",
         diags
     );
-    assert!(
-        bootstrap_programs
-            .len()
-            .checked_sub(BOOTSTRAP_FILES.len())
-            .is_some(),
+    assert_eq!(
+        bootstrap_programs.len(),
+        BOOTSTRAP_FILES.len() + TEST_BOOTSTRAP_FILES.len(),
         "expected one parsed program per bootstrap file"
     );
 
@@ -244,7 +271,7 @@ fn bootstrap_smoke_e2e_via_runtime_file() {
         ruxen_unique_id()
     ));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
-    codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
+    compile_with_test_runtime(&mir, &bin_path);
 
     let output = Command::new(&bin_path)
         .output()
@@ -267,14 +294,12 @@ fn bootstrap_class_method_e2e_via_runtime_file() {
     // code with no extra wiring. This is the load-bearing test for
     // "stdlib self-hosting works" — the architecture that's needed
     // for Wave 2+ migrations of real stdlib classes.
-    let stdlib_root = workspace_root().join("library/std");
     let mut diags = Vec::<Diagnostic>::new();
     // See sibling test for why the full BOOTSTRAP_FILES list is required:
     // codegen-synthesised primitive `_fmt` shells + executor pump reference
     // package-owned FFI symbols (`Formatter_write_str`, `Future_dynamic_poll`)
     // that don't exist until their respective stdlib packages are loaded.
-    let bootstrap_programs =
-        run_bootstrap_with_files(BOOTSTRAP_FILES, Some(&stdlib_root), &mut diags);
+    let bootstrap_programs = bootstrap_with_test_stdlib(&mut diags);
     assert!(diags.is_empty(), "bootstrap parse: {:?}", diags);
 
     let user_program = parse_fixture("bootstrap_class_method_caller");
@@ -301,7 +326,7 @@ fn bootstrap_class_method_e2e_via_runtime_file() {
         ruxen_unique_id()
     ));
     let _ = std::fs::create_dir_all(bin_path.parent().unwrap());
-    codegen::compile(&mir, bin_path.to_str().unwrap()).expect("codegen");
+    compile_with_test_runtime(&mir, &bin_path);
 
     let output = Command::new(&bin_path)
         .output()
@@ -405,6 +430,38 @@ fn bootstrap_program_with_mixin_registers_trait_in_prelude() {
         "expected DefKind::Trait for bootstrap-loaded mixin; got {:?}",
         mixin.kind
     );
+}
+
+// ─── Test 5: test fixtures stay out of the production stdlib ───────────
+
+#[test]
+fn production_stdlib_ships_no_test_fixtures() {
+    // The production prelude must not load the fixture packages, and the
+    // production runtime sources must not define the fixture symbols.
+    // Tests reach them only through `RUXEN_TEST_STDLIB` / `library/test_std`.
+    for rel in BOOTSTRAP_FILES {
+        assert!(
+            !rel.starts_with("bootstrap_smoke/") && !rel.starts_with("_pin_zero_rust_stdlib/"),
+            "test fixture package `{rel}` is in the production BOOTSTRAP_FILES"
+        );
+    }
+    let fixture_symbols = [
+        "ruxen_test_extern_",
+        "ruxen_foobar_",
+        "ruxen_stream_res_",
+        "ruxen_stream_live_count",
+        "ruxen_waker_test_noop",
+    ];
+    for src in codegen::find_runtime_sources().expect("production runtime sources") {
+        let text = std::fs::read_to_string(&src).unwrap_or_default();
+        for sym in fixture_symbols {
+            assert!(
+                !text.contains(sym),
+                "production runtime {} still carries test symbol `{sym}`",
+                src.display()
+            );
+        }
+    }
 }
 
 fn ruxen_unique_id() -> u64 {

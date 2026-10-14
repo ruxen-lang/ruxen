@@ -23,7 +23,6 @@ inserted; no double-slash).
 **Given** `a = "/etc"`, `b = "/usr/bin"`
 **When** the program calls `path_join(&a, &b)`
 **Then** the result is `"/usr/bin"` (b's leading `/` overrides a).
-Matches Rust's `Path::join` semantics.
 
 ## B3 — `path_parent(p) -> String` strips the final component
 

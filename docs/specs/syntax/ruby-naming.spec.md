@@ -1,1732 +1,788 @@
-# Spec — Ruxen Surface Syntax (Ruby Flavor)
+# Spec: Ruxen Language Surface (Ruby)
 
-Status: Draft (2026-05-16)
+Status: Canonical (rewritten 2026-10-15; replaces the 2026-05-16 draft)
 Owner: language
-Scope: end-state surface syntax — keywords, declaration forms,
-       visibility, mixins, attributes, stdlib type names.
-       Internal compiler naming (HIR/MIR/codegen) follows the same
-       vocabulary but is incidental — covered in implementation
-       phases, not here.
+Scope: everything a user types: files, bindings, literals, methods,
+       blocks, control flow, absence, errors, classes, value types,
+       modules, typing annotations, the ownership surface, FFI, and
+       the naming policy for the standard library.
 
-When any other document in the repo (tutorial, stdlib spec,
-requirements doc, fixture) disagrees with this file on a surface
-form, this file wins and the other should be updated.
-
-This document is the **canonical source** for what Ruxen looks like
-on the page. Every tutorial, requirements doc, fixture, and example
-conforms to the forms below.
+**This file is the source of truth for how Ruxen looks on the page.**
+When a tutorial, stdlib spec, requirements doc, error doc, fixture or
+example disagrees with it, this file wins and the other one is updated.
 
 ---
 
-## 1. Motivation
+## 0. The rule
 
-Ruxen's tagline is *reads like Ruby, compiles like Rust*. The first
-half is the design promise the user makes a hiring decision on; the
-second half is what the implementation provides. Where the two
-collide on a naming choice, the surface bends toward Ruby — the
-compile-time guarantees survive in semantics, not in spelling.
+**Ruxen is Ruby, statically typed and compiled to native code.** The goal
+is full Ruby parity. Ruxen adds two things to Ruby and nothing else:
 
-The forms below pick the Ruby-flavored spelling at every decision
-point, retaining the Rust-flavored spelling **only when the concept
-itself is foreign to Ruby** (lifetimes, mixin existential types) and
-no Ruby idiom maps cleanly.
+1. **Static types** (the Ruxen addition to Ruby): `name: Type` annotations
+   on parameters and fields, `-> Type` return annotations, generic
+   parameters `[T]` with RBS-style bounds `[T < Bound]`, and `T?` for
+   "a `T` or `nil`". Everything else is inferred.
+2. **Ownership** (the one thing taken from Rust): moves, borrows `&x` /
+   `&var x`, receiver modes `def var` / `def consume`, `move` closures,
+   lifetimes as a rare escape hatch, `Clone`/`Drop`, `Send`/`Sync`,
+   `Box`/`SharedSync`. This is how Ruxen runs without a garbage collector.
+   Section 15 lists the full surface.
 
----
+Any other Rust syntax or vocabulary in the language is a mistake made by
+earlier drafts and is being removed. Docs must not teach it.
 
-## 2. Goals & Non-goals
+### 0.1 Status tags
 
-### Goals
+Every construct below carries one tag:
 
-- **G1.** A Ruby developer can read any Ruxen source file without a
-  Rust dictionary.
-- **G2.** Declaration metadata lives **in the body of the thing it
-  modifies**, the way `private`, `attr_accessor`, and `include` live
-  in Ruby class bodies. No prefix-annotation syntax.
-- **G3.** Visibility follows Ruby's section-marker model:
-  public-by-default, `private` / `protected` directives gate
-  subsequent declarations until the next marker.
-- **G4.** Mixins do two jobs that classical Ruby modules do — they
-  carry method bodies (provision) AND declare required methods
-  (contract). Same keyword, both jobs.
-- **G5.** Existential parameter types use `some Mixin` (one concrete
-  type, picked by the compiler per call site) and `any Mixin` (any
-  conforming type, dispatched at runtime through a vtable). The
-  words are chosen for English readability, not protocol-language
-  precedent.
-- **G6.** Stdlib type names use the Ruby word where one exists
-  (`Array`, `Set`, `Hash`), the descriptive English word where Ruby
-  has no analogue (`Shared`, `SharedSync`), and the existing name
-  where Ruxen made a deliberate semantic departure (`Option`,
-  `Result`, `Box`, `String`, `&str`).
-- **G7.** Lifetime parameters appear in the same `[...]` slot as
-  type parameters, lowercase-named, no sigil.
+| Tag | Meaning |
+|---|---|
+| **[implemented]** | The lexer and parser accept it today. Verified by reading `compiler/ruxen_core/src/lexer` and `parser` (and the cited resolver, typeck or stdlib file where the meaning lives there) on 2026-10-15. Appendix A lists the evidence. |
+| **[planned]** | Decided by the owner, not built yet. Docs may show it only when marked as planned. |
+| **[deprecated]** | A Rust form still accepted during the migration. The entry names its replacement. It will first get a warning with a fix-it, then become an error. |
+| **[retired]** | Already rejected by the compiler. Listed only so docs stop teaching it. |
 
-### Non-goals
+A tag followed by "(OQ-n)" means the form exists but its future is still
+an open question (section 20).
 
-- **NG1.** Changing what the language *means* — ownership, borrow
-  checking, monomorphization, vtable layout, drop semantics are all
-  untouched. This is a surface-syntax pass.
-- **NG2.** Adding parallel old-form syntax as a transition. Old
-  spellings stop parsing the day the rename lands. No deprecation
-  warnings — the build either takes the new form or fails.
-- **NG3.** Renaming internal compiler structs/enums except where it
-  reduces friction for contributors reading both the source and the
-  user-facing docs.
+### 0.2 Migration policy
+
+This reverses the old draft's "no deprecation, old spellings stop parsing
+the day the rename lands". The migration is:
+
+1. Add the Ruby form ([planned] becomes [implemented]), with an e2e fixture
+   and a negative test, in the compiler, REPL, LSP, IDE and formatter alike.
+2. `ruxen fmt` learns to print the Ruby form, so it doubles as the codemod.
+3. Rewrite the stdlib, fixtures and examples.
+4. The Rust form gets a registered deprecation warning with a fix-it, then
+   becomes an error.
+
+**Stdlib methods are the exception:** a Rust-named method that has a Ruby
+twin (`len` next to `size`, `to_string` next to `to_s`) becomes a
+deprecated alias. It is never deleted.
 
 ---
 
-## 3. End-state syntax
+## 1. Programs and files
 
-### 3.1 Variable bindings
+| Construct | Ruby form | Status |
+|---|---|---|
+| Entry point | Top-level statements run in order; there is no `main`. | [implemented] (the parser moves top-level expression statements into a synthesized `main`) |
+| Explicit entry point | `def main ... end` | [deprecated], replace with top-level statements |
+| Loading code | `require "lib/thing"`, `require_relative "../thing"` | [implemented] |
+| Importing names | `use std.io.Stdout`, `use a.b.{C, D}`, `use x as y` | [deprecated], replace with `require` and qualified names (`IO::Stdout`) |
+| "This package" path root | `package.utils` | [deprecated], replace with `require_relative` |
+| Namespace separator (expressions) | `Http::Request.new`, `Color::Red` | [implemented] (`.` is also accepted today) |
+| Namespace separator (type positions) | `req: Http::Request` | [planned]; today only `Http.Request` parses, plus a leading `::` for a root path |
+| Line comment | `# text` | [implemented] |
+| Doc comment | `## text` on the line(s) before an item | [implemented] |
+| Block comment | `=begin ... =end` | [planned] |
+| Block comment (Ruxen form) | `#= ... =#` (nestable) | [implemented]; kept until `=begin` lands, then (OQ-12) |
 
-Two keywords. `let` is immutable, `var` is mutable. No two-word
-forms.
+```ruby
+require_relative "models/user"
 
-```ruxen
-let name = "Ruxen"
-let pi = 3.14
+## Greets everyone on the list.
+def greet_all(names: Array[String])
+  names.each { |n| puts "Hello, #{n}!" }
+end
 
-var counter = 0
-counter = counter + 1
-counter += 1
+greet_all(["Ada", "Matz"])
 ```
 
-Reassignment to a `let` is a compile error.
+---
 
-Type annotations attach the same way:
+## 2. Variables and constants
 
-```ruxen
-let x: Float = 42
-var bytes: Array[UInt8] = Array.new
+| Construct | Ruby form | Status |
+|---|---|---|
+| Local variable | `count = 0`; later `count += 1` | [implemented] on this branch: an assignment to an undeclared name declares a mutable local (`resolve/control_flow.rs`) |
+| Typed local (Ruxen addition) | `bytes: Array[UInt8] = []` | [planned]; today write `let bytes: Array[UInt8] = []` |
+| Immutable / mutable binding keywords | `let x = 1`, `var x = 1` | [deprecated], replace with `x = 1`. Ruby locals are always reassignable. |
+| Constant | `MAX_RETRIES = 3` at top level or in a class/module body | [planned]; today `const MAX_RETRIES = 3` |
+| `const` item | `const NAME: Type = value` | [deprecated], replace with `NAME = value` |
+| Parallel assignment | `a, b = 1, 2`; swap `a, b = b, a`; splat `first, *rest = xs` | [implemented] (the splat target must be a pre-declared Array of Copy elements today) |
+| Destructuring a returned pair | `q, r = divmod(17, 5)` | [planned]; today a single right-hand value destructures only from an Array, and pairs use `let (q, r) = ...` |
+| Tuple / struct destructuring with `let` | `let (a, b) = pair`, `let Point { x, y } = p` | [deprecated], replace with `a, b = pair` and `case p in {x:, y:}` |
+| Conditional and compound assignment | `x ||= 1`, `x &&= y`, `+=`, `-=`, `<<=` and the rest | [implemented] |
+
+A local's type is fixed by its first assignment (static typing). Assigning
+a value of another type later is a type error, not a new binding. A local
+that may be absent is typed `T?` (section 7).
+
+---
+
+## 3. Literals
+
+| Construct | Ruby form | Status |
+|---|---|---|
+| Absence / truth | `nil`, `true`, `false` | [implemented] |
+| Integers | `42`, `1_000_000` | [implemented] (hex, binary and octal prefixes: see the lexer before documenting) |
+| Floats | `3.14` | [implemented] |
+| Interpolated string | `"hi #{name}\n"` | [implemented] |
+| Literal string | `'C:\Users\me'` (no interpolation, no escapes) | [implemented] |
+| Multi-line string | `<<~EOS ... EOS` | [planned]; today `"""..."""` is the multi-line form |
+| Character | `?a`, `?\n` (type `Char`, a Ruxen addition) | [implemented] |
+| Word array | `%w[a b c]` | [implemented] |
+| Symbol | `:active`, `%i[a b]` | [planned]. Today a `:name` token is read only in `private :a, :b` and `&:upcase`. |
+| Array | `[1, 2, 3]` | [implemented] |
+| Hash | `{ "k" => 1 }` | [implemented] |
+| Hash with symbol keys | `{ name: "Ada", age: 36 }` | [planned] |
+| Empty Hash | `{}` | [planned]; today `{}` parses as an empty block, so write `Hash.new` |
+| Ranges | `0..3` (inclusive), `0...3` (exclusive) | [implemented] |
+| Regex | `/ab+c/i` | [implemented] |
+| Regex match operator | `str =~ /re/` | [planned]; today the operator is spelled `~=` |
+| Numeric suffixes | `200u8`, `3.14f32` | [implemented] (OQ-8) |
+| Rust format specs in interpolation | `"#{x:?}"`, `"#{n:>5}"` | [deprecated], replace with `x.inspect`, `n.to_s.rjust(5)` or `format("%5d", n)` |
+| `None`, `r"..."`, `'\r'` char, `'\u{...}'`, `..=`, `()` | | [retired] (E0008, E0009 and parse errors): use `nil`, `'...'`, `?\r`, `"\u{...}"`, `..`, `nil` |
+
+Every string literal is an owned `String`. There is no `str` or `&str`
+type (E0730); a borrowed string is `&String`.
+
+---
+
+## 4. Methods
+
+| Construct | Ruby form | Status |
+|---|---|---|
+| Definition | `def area(w: Float, h: Float) -> Float ... end` | [implemented] (annotations are the Ruxen addition) |
+| Default argument | `def greet(name: String = "you")` | [implemented] |
+| Endless method | `def double(x: Int) = x * 2` | [implemented] |
+| Brace body | `def f -> T { expr }` | [deprecated], replace with the endless form |
+| Implicit return | the last expression is the value; `return x` also works | [implemented] |
+| Predicate and bang names | `def empty?`, `def save!` | [implemented]. User methods may end in `!` (B87); only `panic!` and the retired collection macros are compiler macros. |
+| Operator methods | `def +(o: Vec2) -> Vec2`, `def ==`, `def <=>`, `def [](i: Int)`, `def []=`, `def <<`, unary `def -@` | [implemented] |
+| Class methods | `def self.parse(s: String) -> Version` | [implemented] |
+| Aliases | `alias size length` (space form, no comma) | [implemented] |
+| `alias_method :new, :old` | | [planned] |
+| Visibility | `private` / `protected` / `public` as section markers, and `private :a, :b` | [implemented] |
+| Protected semantics | Ruby's: callable with an explicit receiver of the same class family from inside it | [planned]; the 2026-05 draft specified subclass-only visibility, so check behaviour against this |
+| Calls without parentheses | `puts "hi"`, `box.button "Save" do ... end` | [implemented] |
+| Keyword arguments at call sites | `connect(host: "x", port: 80)` | [planned] (OQ-4 for the definition syntax) |
+| Rest arguments | `def log(*parts: String)`, `**opts` | [planned] |
+| Inline hint (Ruxen addition) | `inline def fast(x: Int) -> Int` | [implemented] |
+| Explicit receiver parameter | `def m(&self)`, `def m(self, x)` | [retired] outside `lib` blocks (`parse_param` requires `name: Type`) |
+
+---
+
+## 5. Blocks, procs and lambdas
+
+| Construct | Ruby form | Status |
+|---|---|---|
+| Block with a call | `xs.each { \|x\| puts x }`, `xs.each do \|x\| ... end` | [implemented] |
+| `yield` | `yield`, `yield x, y` inside a method that receives a block | [implemented] |
+| Named block parameter | `def each(&block: Fn[(T) -> nil])` | [implemented] (block type spelling: OQ-5) |
+| `block_given?` | | [implemented] (alias of `block_defined?`) |
+| Symbol to proc | `names.map(&:upcase)` | [implemented] |
+| Block forwarding | `@items.each(&block)` | [implemented] (`&block` / bare `&` in argument position; the receiving parameter still needs its type, `&block: Fn[...]`) |
+| `next` | ends the current block iteration, optionally with a value | [implemented] inside blocks only; see section 6 for loops |
+| Calling a stored block | `blk.(x)` | [implemented] |
+| `blk.call(x)`, `blk[x]` | | [planned]; confirm against the resolver's closure-variable `call` path before documenting as working |
+| Lambda | `double = ->(x: Int) { x * 2 }` | [planned] |
+| `lambda { \|x\| ... }`, `proc { \|x\| ... }` | | [planned] |
+| Closure type, square form | `Fn[(Int) -> Int]` | [implemented] (OQ-5: whether to rename to `Proc[...]`) |
+| Closure type, paren form | `Fn(Int) -> Int`, `\|Int\| -> Bool` | [deprecated], replace with `Fn[(Int) -> Int]` |
+| Capture-capability types | `FnMut(...)`, `FnOnce(...)` bounds | [implemented] (OQ-5) |
+| Empty pipes | `{ \|\| work }` | [deprecated], replace with `{ work }` |
+| `move` capture | `move { \|x\| x + n }`, `move do ... end` | [implemented]; ownership surface, see section 15 |
+
+---
+
+## 6. Control flow
+
+| Construct | Ruby form | Status |
+|---|---|---|
+| Conditionals | `if` / `elsif` / `else` / `end`, `unless ... else ... end` | [implemented] |
+| Loops | `while`, `until`, `for x in xs` | [implemented] |
+| Statement modifiers | `return if done`, `x += 1 while x < 10`, `unless`, `until` | [implemented] |
+| Ternary | `ok ? "yes" : "no"` | [implemented] |
+| Low-precedence logic | `and`, `or`, `not` | [implemented] |
+| Value dispatch | `case x when 1, 2 then ... when 3..9 then ... else ... end` | [implemented] |
+| Pattern matching | `case v in pattern [if guard] then ... else ... end` | [implemented] (`then` or a newline separates the pattern from the body) |
+| `->` arm separator inside `case/in` | `in 1 -> "one"` | [deprecated], replace with `then` or a newline |
+| `match` expression | `match v; pat -> expr; end` | [deprecated], replace with `case/in`. Frees the name for `String#match`. |
+| `if let` / `while let` | `if let Some(x) = opt` | [deprecated], replace with `if (x = opt)` [planned] or `case opt in nil ... in x ...` [implemented] |
+| Infinite loop | `loop do ... end` (a `Kernel` method taking a block) | [planned]; today the `loop ... end` keyword form, which is [deprecated] |
+| Skip to next iteration | `next` in `while`, `until`, `for` | [planned]; `next` only works inside blocks today |
+| `continue` | | [deprecated], replace with `next` |
+| `break` with optional value | | [implemented] |
+| Truthiness of `T?` | `if user`, `user \|\| default` | [planned]; today `&&`, `\|\|`, `and`, `or` require `Bool` operands (E0731) |
+
+### 6.1 Patterns (`case/in`)
+
+| Pattern | Example | Status |
+|---|---|---|
+| Literal, range of literals | `in 0`, `in "x"`, `in true` | [implemented] |
+| `nil` | `in nil` | [implemented] |
+| Binding, wildcard | `in n`, `in _` | [implemented] |
+| Alternatives | `in 1 \| 2` | [implemented] |
+| Guard | `in n if n > 10` | [implemented] |
+| Typed record pattern | `in Point(x:, y:)`, `in Shape::Circle(radius:)` | [planned]; today `TypeName(field: pat)` and `Enum.Variant(pat)` parse |
+| Array pattern | `in [first, *rest]` | [planned] |
+| Hash pattern | `in {name: String => name}` | [planned] |
+| Class check with binding | `in Integer => n` | [planned] |
+| Pin | `in ^expected` | [planned] |
+| `Some(x)`, `Ok(v)`, `Err(e)` patterns | | [deprecated], replace with `in nil` / `in x` for absence, and `rescue` for errors |
+
+---
+
+## 7. Absence: `T?` and `nil`
+
+There is one way to say "maybe missing": the type `T?` and the value `nil`.
+
+| Construct | Ruby form | Status |
+|---|---|---|
+| Optional type | `def find(id: Int) -> User?` | [implemented] |
+| Absent value | `nil` | [implemented] |
+| Present value | the value itself: `return user` in a `-> User?` method | [implemented] for typed bindings, the tail expression and `return` (automatic wrapping) |
+| Safe navigation | `user&.name&.upcase` | [implemented] |
+| Default when nil | `name = user&.name \|\| "guest"` | [planned] (needs truthiness, section 6) |
+| Narrowing | `if (user = find(id))` ... `user` is `User` inside | [planned] |
+| Must be present | `find(id) or raise NotFound` | [planned] (needs section 8) |
+| `Some(x)` constructor | | [deprecated], replace with `x` |
+| `Option[T]` in user code | | [deprecated], replace with `T?` |
+| `??` operator | `a ?? b` | [deprecated], replace with `a \|\| b` |
+| `?.` | `find(1)?.name` (today: try operator, then a call) | [deprecated], replace with `&.` |
+| `unwrap!`, `expect!("...")`, `unwrap_or`, `ok_or`, `map_err`, `and_then` | | [deprecated], replace with `x \|\| default`, `x or raise ...`, `hash.fetch(k)`, `case/in` |
+| `nil` as the raw-pointer null in FFI | `ptr == nil` inside a `lib` wrapper | [implemented] |
+
+References (`&T`, `&var T`) are never `nil`.
+
+`Option` remains the compiler's internal representation of `T?`. Users do
+not write it.
+
+---
+
+## 8. Errors: Ruby exceptions
+
+Errors are Ruby exceptions, checked statically. The compiler lowers them
+to `Result`-shaped returns internally, so there is no stack unwinding and
+no hidden runtime cost. Users never write `Result`, `Ok`, `Err` or `?`.
+
+| Construct | Ruby form | Status |
+|---|---|---|
+| Raise | `raise "boom"` (a `RuntimeError`), `raise NotFound, "no user #{id}"`, `raise NotFound.new(id)` | [planned]. The parser already takes `raise` as a paren-less call name, but nothing defines it. |
+| Re-raise | bare `raise` inside `rescue` | [planned] |
+| Handle | `begin ... rescue NotFound => e ... rescue => e ... else ... ensure ... end` | [planned] |
+| Method-level handlers | `def load ... rescue IOError => e ... ensure ... end` | [planned] |
+| Retry | `retry` inside `rescue` restarts the `begin` body | [planned] |
+| Exception classes | `class NotFound < StandardError; end` with `message` | [planned]; replaces `mixin Error` (`def message`) in `std/core` |
+| Abort the process | `abort "msg"`, `exit 1`, `exit! 1` | [implemented] (`std/core`, `std/process`) |
+| `panic!("msg")` | | [deprecated], replace with `raise "msg"` (recoverable) or `abort "msg"` (not recoverable) |
+| `Result[T, E]` return types, `Ok(v)`, `Err(e)` | | [deprecated], replace with returning `T` and raising |
+| Postfix `?` try operator | `read(path)?` | [deprecated], replace with nothing: exceptions propagate on their own |
+| `Into[T]` error conversion for `?` | | [deprecated] with `?` |
+
+Static rules:
+
+- Each method has a **raise set**: the exception classes it can raise and
+  does not rescue, including the raise sets of the methods it calls. The
+  compiler infers it; it is part of the method's type. (Whether a method
+  may also declare it explicitly is OQ-2.)
+- A `rescue` clause narrows the raise set of its `begin` body. `rescue => e`
+  with no class catches `StandardError`, as in Ruby.
+- `ensure` runs on both the normal and the raising exit. It lowers onto
+  the same cleanup path as `drop` (section 15).
+- An exception that escapes the top level prints its message and class to
+  STDERR and exits with status 1, as Ruby does.
+
+```ruby
+class NotFound < StandardError
+end
+
+def find_user(id: Int) -> User
+  users.find { |u| u.id == id } or raise NotFound, "no user #{id}"
+end
+
+attempts = 0
+begin
+  user = find_user(42)
+  puts user.name
+rescue NotFound => e
+  attempts += 1
+  retry if attempts < 3
+  warn e.message
+ensure
+  log.close
+end
 ```
 
-#### Module-level `let` as a constant
+---
 
-Module-level `let` bindings serve as program-wide constants —
-naming convention is `SCREAMING_SNAKE_CASE`:
+## 9. Classes
 
-```ruxen
-let MAX_RETRIES = 3
-let DEFAULT_PORT: UInt16 = 8080
-```
+Classes are heap objects with identity.
 
-A module-level `let` whose initializer is a const-evaluable
-expression (literal or arithmetic on literals — the same expression
-language the const-generic argument position accepts) is usable in
-type-level positions: const-generic arguments, fixed array sizes,
-pattern guards. The compiler validates const-evaluability at the
-*use site* that requires it — there is no separate `const` keyword
-to declare the intent up front. Use sites that need a compile-time
-value emit `E-NOT-CONST-EVAL` when given a `let` whose RHS isn't
-const-evaluable.
+| Construct | Ruby form | Status |
+|---|---|---|
+| Class and inheritance | `class Admin < User ... end` | [implemented] |
+| Construction | `User.new("Ada")` | [implemented] |
+| Constructor | `def initialize(name: String)` | [planned]; today the constructor is `def init` |
+| `def init` | | [deprecated], replace with `def initialize` |
+| Instance variables | `@name` (read), `@name = v` (write) | [implemented] (sugar for the field) |
+| Assigning parameters to ivars | `def initialize(@name: String, @age: Int)` | [implemented] in the `def init(@name: String)` spelling |
+| `self.name` field access inside the class | | [deprecated], replace with `@name` |
+| Ivar type declaration (Ruxen addition) | `name: String` in the class body | [implemented] (OQ-3: possible RBS-style `@name: String`) |
+| Accessors | `attr_reader :name`, `attr_writer :name`, `attr_accessor :name` | [planned] |
+| Ivar privacy | ivars are private; reach them from outside through accessors | [planned]; today declared fields are public by default and readable as `obj.name` |
+| `super` | `super`, `super(args)` | [implemented] |
+| Reopening a class | `class String; def shout = upcase + "!"; end` | [planned]. Today a second `class String` collides with the stdlib type (E0727). |
+| Nested classes and constants in a class body | `class Http; class Request; end; TIMEOUT = 30; end` | [planned]; today nest inside `module` |
+| `Self` in signatures (Ruxen addition) | `def <=>(other: &Self) -> Int` | [implemented] |
+| `layout c` (FFI, Ruxen addition) | first line of the class body | [implemented] |
 
-#### Shadowing
-
-A `let` or `var` may shadow a same-named binding from an enclosing
-scope. The new binding takes a fresh type; the old binding is
-unreachable until the new binding goes out of scope.
-
-```ruxen
-let x = 1            # x: Int
-let x = "two"        # x: &str — shadows
-puts "#{x}"
-```
-
-#### Destructuring
-
-`let` and `var` accept irrefutable destructuring patterns:
-
-```ruxen
-let (a, b) = pair                  # tuple
-let Point { x, y } = origin        # struct
-```
-
-Refutable patterns (`Some(x)`, `Ok(v)`, enum variants) must use
-`if let`, `while let`, or `match` — a bare `let Some(x) = opt` is a
-compile error because the match could fail.
-
-### 3.2 Visibility
-
-Public by default. Three section markers — `public`, `private`,
-`protected` — gate subsequent declarations within `class`, `struct`,
-`module`, and `mixin` bodies. Each marker stays in effect until the
-next marker or the end of the body:
-
-```ruxen
+```ruby
 class Account
-  balance: Int                  # public field (default)
+  balance: Int
+  attr_reader :balance
 
-  def init(@balance: Int) end
+  def initialize(@balance: Int)
+  end
 
-  def get_balance -> Int        # public method
-    self.balance
+  def var deposit(amount: Int)
+    @balance += amount
   end
 
   private
 
-  def normalize_balance         # private — until next marker
-    self.balance.max(0)
-  end
-
-  protected
-
-  def admin_dump -> String      # protected — subclass-visible
-    "Account(#{self.balance})"
-  end
-
-  public                        # switch back to public
-
-  def freeze -> Account         # public again
-    Account.new(self.balance)
-  end
+  def audit = puts "balance is #{@balance}"
 end
 ```
 
-Field visibility uses the same markers:
-
-```ruxen
-class User
-  name: String                  # public field
-  email: String                 # public field
-
-  private
-  audit_id: Int                 # private field
-  audit_log: Array[String]      # private field
-end
-```
-
-A method-name-list form is also accepted, matching Ruby:
-
-```ruxen
-class User
-  def helper_a; ...; end
-  def helper_b; ...; end
-  def public_thing; ...; end
-
-  private :helper_a, :helper_b
-end
-```
-
-This form is applied as a final pass after the body is parsed — it
-re-marks the listed methods, overriding any section marker they
-were under. Useful for forward-declared visibility when readability
-benefits from defining helpers near where they're used. The list
-form may only re-mark items declared in the same immediate body —
-it cannot reach across `module` or `extension` boundaries.
-
-#### Scopes of visibility
-
-A `private` declaration is visible only within the body of its
-immediate container:
-
-| Container body                  | `private` means visible inside…                            |
-|---------------------------------|------------------------------------------------------------|
-| `class C` / `struct C` / `enum C` | That type's body and any `extension` blocks on the same type, in any file of the same package. |
-| `mixin M`                       | That mixin's body only.                                    |
-| `module M`                      | That module's body across every file that re-opens it (within the same package). |
-| Package root (no enclosing item) | That package only — invisible to dependent packages.       |
-
-`protected` is **subclass-visible** (Java / C# / Swift semantics —
-not Ruby's per-instance protected). A `protected` method is callable
-on `self` and on any instance of a subclass of the declaring class
-through `self`. It is not callable on an unrelated instance of the
-same class from outside the type hierarchy.
-
-`public` is the default and the most permissive — anything that can
-name the item can call it. The `public` keyword as a section marker
-exists only to flip back from a prior `private`/`protected` section.
-
-### 3.3 Lifetimes
-
-Lifetimes are generic parameters in the same `[...]` slot as types.
-**Lowercase identifier = lifetime, uppercase = type.** No sigil.
-
-There is **no `'a` sigil** (G7). A leading `'` always opens a raw
-string (§3.10a); a stray `'a` is rejected as an unterminated raw
-string (E0002), not read as a lifetime.
-
-```ruxen
-def longest[a](x: &a String, y: &a String) -> &a String
-  if x.size > y.size; x; else; y; end
-end
-
-class Slice[T, a]
-  data: &a Array[T]
-  start: USize
-  len: USize
-end
-```
-
-The vast majority of code never names a lifetime — elision rules
-infer them. Explicit lifetimes are an escape hatch for the cases
-elision can't resolve.
-
-#### Where lifetime identifiers are recognized
-
-A lowercase identifier is read as a lifetime **only** in these
-positions:
-
-- Inside a generic-parameter list: `def f[a, T](...)`, `class C[T, a]`.
-- After a reference marker: `&a String`, `&a var T`.
-- In a `where` clause referencing a lifetime parameter already
-  declared in the enclosing `[...]`.
-
-Everywhere else, a lowercase identifier is a value binding. A user
-variable named `a` does not collide with a lifetime parameter named
-`a` — the two live in disjoint syntactic positions and the parser
-never has to guess.
-
-#### The `static` lifetime
-
-`static` is the one named lifetime that exists without being
-declared in a `[...]` slot. It means "outlives every other scope."
-References to compiled-in constants (string literals, `const` items)
-have lifetime `static` by default. A bound `T: static` on a type
-parameter means "the type contains no non-`static` references."
-
-```ruxen
-let s: &static str = "compiled-in literal"
-def spawn[T: static](value: T) -> JoinHandle[T] ...
-```
-
-### 3.4 Mixins
-
-A `mixin` is the contract-and-provision unit. Methods inside a
-mixin body come in two flavors:
-
-- **Required** — signature with no body. Including class must
-  provide.
-- **Default** — signature with body. Including class gets the body
-  for free, may override.
-
-```ruxen
-mixin Greetable
-  def name -> String                  # required
-  
-  def greet -> String                 # default
-    "Hello, #{self.name}!"
-  end
-end
-```
-
-A class adopts a mixin with `include`. Required methods become
-obligations the compiler checks; default methods are pulled into
-the class as if defined inline; class-defined methods with the same
-name override the mixin's default.
-
-```ruxen
-class User
-  name: String
-  def init(@name: String) end
-  
-  include Greetable                   # name satisfied by field; greet inherited
-end
-
-class FormalUser
-  name: String
-  def init(@name: String) end
-  
-  include Greetable
-  
-  def greet -> String                 # overrides default
-    "Good day, #{self.name}."
-  end
-end
-```
-
-Multiple includes stack; order is source order. The class's own
-definition of a method always beats every included mixin's default.
-If two included mixins each provide a default for the same method
-name and the class itself has no override, the compiler rejects
-with `E-MIX-AMBIGUOUS-DEFAULT` and requires the class to define
-its own method to disambiguate. A required method may be satisfied
-by any included mixin's default.
-
-#### `super` inside an override
-
-Inside a method that overrides a mixin's default, `super` calls
-that mixin's default body. If the class also inherits from a
-superclass that defines the same method, the superclass override
-takes precedence — `super` reaches the superclass first; the mixin
-default is reached only when no superclass implementation exists in
-the chain.
-
-Mixins support inheritance: `mixin Sortable: Ord` means
-`Sortable`'s contract extends `Ord`'s. A class that
-`include Sortable` must satisfy both.
-
-Mixins support associated types:
-
-```ruxen
-mixin Iterator
-  type Item
-  def var next -> Option[Self.Item]
-end
-```
-
-#### Existentials: `some Mixin`, `any Mixin`
-
-A function parameter or return type may reference a mixin in one of
-two ways:
-
-**`some Mixin`** — the compiler picks one concrete conforming type
-per call site. The function body is monomorphized; the receiver
-type is not visible to callers but is fixed for any given call.
-Zero runtime cost. Methods may inline.
-
-```ruxen
-def print_it(item: &some Greetable)
-  puts item.greet
-end
-
-print_it(&User.new("Alice"))   # specialized for User
-print_it(&Robot.new(42))       # specialized for Robot
-```
-
-**`any Mixin`** — the value carries a vtable at runtime; one
-function body handles all conforming types. Required for
-heterogeneous collections.
-
-```ruxen
-def shout_all(crowd: &Array[Box[any Greetable]])
-  for member in crowd
-    puts member.greet.upcase
-  end
-end
-```
-
-Coercions to existential types happen implicitly at assignment and
-call boundaries. Accepted sites:
-
-| From            | To                      | When                                              |
-|-----------------|-------------------------|---------------------------------------------------|
-| `&T`            | `&some Mixin`           | `T` satisfies the mixin (structurally or via `include`) |
-| `&T`            | `&any Mixin`            | `T` includes the mixin nominally                  |
-| `Box[T]`        | `Box[any Mixin]`        | `T` includes the mixin nominally                  |
-| `Shared[T]`     | `Shared[any Mixin]`     | same                                              |
-| `SharedSync[T]` | `SharedSync[any Mixin]` | same                                              |
-
-Existentials are read-only views or owned values — there is **no**
-`&var some Mixin` or `&var any Mixin`. If you need to mutate
-through an existential receiver, take ownership (`Box[any Mixin]`,
-`Shared[any Mixin]`, etc.) and call writing methods on it; if you
-need exclusive writable access to a value, name its concrete type.
-
-Container generics over a non-existential `T` are **invariant** —
-`Array[T1]` does not coerce to `Array[T2]` even when `T1: T2`, and
-`Array[T] → Array[any Mixin]` is rejected. Wrap each element with
-`Box.new(...)` first and use `Array[Box[any Mixin]]`.
-
-A mixin is *object-safe* (usable through `any`) if every method
-satisfies: no `Self`-by-value in arg/return, no per-method generic
-parameters, no class-method (`def self.foo`) entries, no
-`consume self` receiver. Associated types must be bound at the use
-site: `any Iterator[Item = Int]` is OK; `any Iterator` is not.
-
-Structural satisfaction is accepted for `some Mixin` only. `any
-Mixin` requires an explicit `include Mixin` directive in the
-implementing class.
-
-The default lifetime of an unannotated `any Mixin` value follows the
-container: `&any Mixin` borrows for the surrounding reference's
-lifetime; `Box[any Mixin]` / `Shared[any Mixin]` / `SharedSync[any
-Mixin]` default to `static` for their inner-type bound (the contained
-concrete type must itself satisfy `static`).
-
-### 3.4a Methods on a type
-
-Method names may carry Ruby's conventional suffixes: `?` for
-predicates (`empty?`, `include?`, `any?`) and `!` for in-place / bang
-variants (`sort!`). The suffix is part of the name. Because `?`
-belongs to method names, **safe navigation is `&.`** (Ruby), not
-`?.`: `user&.name&.upcase`. (The standalone `?` after a call is still
-the try operator: `parse(s)?`; uppercase `T?` is still an optional
-type.)
-
-A class, struct, or enum's methods live inside the type body — there
-are no separate "methods-for-this-type" blocks for the common case:
-
-```ruxen
-class Container[T]
-  items: Array[T]
-
-  def init
-    self.items = Array.new
-  end
-
-  def count -> Int
-    self.items.size
-  end
-end
-```
-
-For methods that should exist **only when a type parameter satisfies
-a bound**, use an `extension` block:
-
-```ruxen
-extension Container[T] where T: Display
-  def print_all
-    for item in self.items
-      puts item.to_display
-    end
-  end
-end
-```
-
-An `extension` may also add methods unconditionally to a foreign or
-generic type, without re-opening the original definition. The same
-syntax applies; the `where` clause is optional.
-
-The body of a `class`, `struct`, `enum`, or `extension` block may
-also carry `include` directives. The destructor pattern is one
-example:
-
-```ruxen
-class SafeBuffer
-  ptr: *var UInt8
-  len: USize
-
-  def init(size: USize)
-    unsafe
-      self.ptr = malloc(size) as *var UInt8
-      self.size = size
-    end
-  end
-
-  include Drop
-
-  def var drop
-    unsafe
-      free(self.ptr as *var Void)
-    end
-  end
-end
-```
-
-`include Drop` declares the type as a `Drop` participant. The
-mixin requires a `def var drop` method; the class provides one.
-Same `include` directive, same scattered-method rule as §3.4.
-
-### 3.5 Layout directives
-
-`struct` bodies may carry a `layout` directive at the top of the
-body. Three forms:
-
-```ruxen
-struct Point
-  layout c                    # field order preserved, native align,
-                              # ABI-compatible with C struct
-  x: Int
-  y: Int
-end
-
-struct Header
-  layout packed               # no inter-field padding
-  kind: UInt8
-  flags: UInt32
-  length: UInt64
-end
-
-struct UserId
-  layout transparent          # single-field newtype, inherits inner layout
-  inner: Int
-end
-```
-
-`layout transparent` is rejected on multi-field structs.
-
-Without a `layout` directive, the compiler may reorder fields for
-size optimization (declaration order is **not** guaranteed).
-
-### 3.6 Implicit includes for structural mixins
-
-`Debug`, `Clone`, `Eq`, `Hash`, etc. are mixins. The `include`
-directive (§3.4) is the only mechanism for adopting a mixin —
-there is no separate auto-synthesis concept and no `derive` keyword.
-
-For a fixed set of **structural mixins**, `include` is **implicit**.
-The compiler treats the class as if `include` had been written, when
-the fields structurally support the mixin. The implicit-include set
-and its rule:
-
-| Mixin       | Implicit when…                                              |
-|-------------|-------------------------------------------------------------|
-| `Debug`     | Always — formats as `TypeName(field=value, ...)`.           |
-| `Clone`     | Every field is `Clone`.                                     |
-| `Eq`        | Every field is `Eq`. Field-wise `==`.                       |
-| `PartialEq` | Same as `Eq`, partial.                                      |
-| `Hashable`  | Every field is `Hashable`. FNV mixer over fields in source order. |
-| `Default`   | Every field has a default value.                            |
-| `Ord`       | Every field is `Ord`. Lexicographic by source order.        |
-| `PartialOrd`| Same as `Ord`, partial.                                     |
-| `Send`      | Every field is `Send`. Auto-mixin (see note).                |
-| `Sync`      | Every field is `Sync`. Auto-mixin (see note).                |
-
-`Copy` is structural and ownership-affecting:
-
-- A `struct` whose every field is `Copy` implicitly `include`s `Copy`.
-- A `struct` with any non-`Copy` field does not.
-- A `class` never implicitly `include`s `Copy` (reference semantics).
-
-For any **other** mixin — `Display`, `Greetable`, `Drawable`, custom
-mixins — `include` is required at the use site.
-
-#### `Send` and `Sync` are auto-mixins
-
-`Send` and `Sync` differ from the other structural mixins on the
-table: they are **never written explicitly with `include`** in
-ordinary code. The compiler infers them per the field-rule in
-`docs/requirements/tier1_02_concurrency.md §4.2`. A type opts out
-with `exclude Send` / `exclude Sync` in its body. A type opts in for
-an inference-incompatible structure (e.g. a hand-rolled lock-free
-queue) via `unsafe include Send` / `unsafe include Sync` — the only
-legal use of `unsafe include`.
-
-```ruxen
-class RawHandle
-  fd: *var Void
-  exclude Send       # opt out — inference would also reach !Send
-  exclude Sync
-end
-```
-
-The canonical names of the structural mixins above are also the
-names exposed by `std.prelude` — see
-`docs/specs/stdlib/prelude.spec.md` for the auto-import list. Names
-no longer accepted: `Hash` (use `Hashable`), `Displayable` (use
-`Display`), `Comparable` (use `Ord` and/or `PartialOrd`), `Iterable`
-(absorbed into `Iterator`).
-
-#### Writing the include explicitly
-
-For documentation clarity or when you want the inclusion to fail
-loudly if the rule no longer applies, write it:
-
-```ruxen
-struct Point
-  x: Int
-  y: Int
-  include Debug, Clone, Eq, Hashable    # all four are also implicit; loud form
-end
-```
-
-If an explicit `include Hashable` is written and a field doesn't
-support `Hashable`, the error fires at the **include site** (early).
-With implicit-only, the same error fires at the **use site** (later,
-but still caught at compile time).
-
-#### Overriding a default method
-
-Default methods of any included mixin (implicit or explicit) can be
-overridden by defining the method in the class body:
-
-```ruxen
-struct Point
-  x: Int
-  y: Int
-
-  def to_debug -> String              # overrides implicit Debug
-    "(#{self.x}, #{self.y})"
-  end
-end
-```
-
-The user's definition wins; the implicit `include` does not provide
-a duplicate.
-
-### 3.7 FFI
-
-External libraries are declared with `lib`. The string after `lib`
-is the link name. Options follow as keyword arguments:
-
-```ruxen
-lib "m"
-  def sin(x: Float) -> Float
-  def cos(x: Float) -> Float
-end
-
-lib "sqlite3", version: "3"
-  def sqlite3_open(path: *UInt8, db: *var *Void) -> Int32
-end
-
-lib "c", path: "/usr/lib"
-  def malloc(n: USize) -> *var Void
-end
-```
-
-No separate `extern` block keyword. Every FFI declaration goes
-inside a `lib "..." ... end` block.
-
-Calls into a `lib` block are inherently unsafe (the compiler can't
-verify the C side); they must appear inside `unsafe` blocks.
-
-#### Pointer ownership at FFI signatures
-
-Pointer types at FFI signatures are **non-owning by default**. A
-`*UInt8` parameter is borrowed for the duration of the call; the
-called C function must not retain it beyond that call. To transfer
-ownership across the boundary, the wrapper must spell the transfer
-out — e.g. `String.from_raw(ptr, len)` to take ownership of a
-returned C buffer, or `Box.from_raw(ptr)` for a single allocation.
-Ruxen does not insert any implicit drop for raw pointers — the FFI
-boundary is where the user takes responsibility for memory.
-
-Strings cross the FFI boundary in one of three forms:
-
-| Ruxen type        | C side                                                  |
-|-------------------|---------------------------------------------------------|
-| `&str`            | `const char *` — borrowed, valid for the call           |
-| `String`          | C must not retain after call returns                    |
-| `*UInt8` (raw)    | bare read-only pointer; ownership convention is whatever the wrapper documents |
-| `*var UInt8`      | writable raw pointer; same convention rule              |
-
-#### Variadic C functions
-
-The parser accepts a trailing `...` inside `lib` block `def`
-signatures:
-
-```ruxen
-lib "c"
-  def printf(fmt: *UInt8, ...) -> Int32
-end
-```
-
-The variadic arguments at a call site must be primitive scalars or
-pointer values — aggregate types passed through `...` produce a
-typeck error.
-
-### 3.8 Inline
-
-`inline` is a modifier on a `def` declaration:
-
-```ruxen
-inline def fast_path(x: Int) -> Int
-  x * 2 + 1
-end
-```
-
-Or, Ruby-style, a directive that names a previously defined method:
-
-```ruxen
-def fast_path(x: Int) -> Int
-  x * 2 + 1
-end
-inline :fast_path
-```
-
-`inline` is a hint, not a guarantee. The codegen backend treats it
-as `alwaysinline` when LLVM is wired (v2); Cranelift currently
-ignores it.
-
-### 3.9 Packages and module paths
-
-The compilation unit is a **package**. `package` is the keyword
-that refers to "this package" in import paths:
-
-```ruxen
-use package.utils.format
-use package.models.User
-```
-
-`use` is unchanged — the same `use` Ruby and Swift readers expect
-for namespace imports.
-
-The path separator is `.` (a single dot) **everywhere** — `use`
-paths (`std.io.Stdout`), qualified type names, enum variants
-(`Color.Red`), and class methods (`Array.new`). The `::` separator
-is not accepted. Any older spec or test fixture that still uses `::`
-is out of date.
-
-Group imports and aliases:
-
-```ruxen
-use std.io.{ Stdin, Stdout, Stderr }
-use std.io.Stdout as Out
-use std.collections.{ Hash, Set }
-```
-
-### 3.9a User modules
-
-A `module Name ... end` block declares a namespace inside a file.
-Items inside the body follow the same visibility rules as top-level
-items (§3.2). Nested modules are legal. The body may carry any
-top-level item: `class`, `struct`, `enum`, `mixin`, `extension`,
-`def`, `use`, `type`, `newtype`, `let`, `lib`.
-
-```ruxen
-module Http
-  class Request
-    url: String
-    def init(@url: String) end
-  end
-
-  def get(url: &str) -> Result[Response, HttpError]
-    # ...
-  end
-end
-
-use Http.Request
-```
-
-> **Implementation status (v1):** the parser accepts user modules
-> fully; the resolver handles `std.*` paths and direct same-file
-> nested access. Cross-file user-module path resolution (`use
-> mymod.X` where `mymod` is user-defined) is partial — see
-> `docs/specs/system/user-modules.spec.md` for the current envelope.
-> The full resolver lands in v1.1. Until then, code that needs
-> cross-file modularity should organize by file/`use` rather than
-> nested user `module` blocks.
-
-### 3.10 Nil — the universal absence literal
-
-`nil` is the **single empty literal**. It is polymorphic across three
-syntactic positions:
-
-1. The absence case of `Option[T]` (safe code):
-   ```ruxen
-   def find(id: Int) -> Option[User]
-     if id < 0; return nil; end
-     # ...
-   end
-   ```
-2. The raw-pointer null literal at `*T` / `*var T` (FFI / unsafe):
-   ```ruxen
-   unsafe
-     let ptr: *var UInt8 = nil
-     if some_ptr == nil; return Err("got null"); end
-   end
-   ```
-3. The unit value and the unit return type — "this carries / returns
-   nothing":
-   ```ruxen
-   def log(msg: &String) -> nil
-     puts msg
-     nil
-   end
-   let r: Result[nil, String] = Ok(nil)
-   ```
-
-**`None` is not a valid spelling.** There is no `None` keyword or
-identifier; writing `None` is rejected at lex time with `E0008`
-("use `nil`"). The empty case of an `Option[T]` is always `nil`.
-
-**`()` is not a valid spelling either.** The Rust-style unit literal /
-unit type `()` is rejected by the parser in both positions (a fix-it
-points at `nil`). Write `nil` for the unit type (`def f -> nil`,
-`Result[nil, E]`) and the unit value (`Ok(nil)`).
-
-Equality comparisons (`==` / `!=`) with `nil` pick whichever of the
-two domains matches the other operand's type.
-
-#### Inference rule (resolved priority order)
-
-The type of a `nil` literal is determined by the surrounding
-expected-type context in this priority order:
-
-1. The declared type of the binding or parameter (`let ptr: *var UInt8 = nil`).
-2. The ambient return type when `nil` appears in a return position
-   (`return nil` inside a `def f -> Option[User]`).
-3. The peer type of an `==` / `!=` comparison (`x == nil` where
-   `x: Option[T]` → `nil: Option[T]`).
-4. The function-parameter type at a call site (`f(nil)` where `f`
-   takes `*var Void` → `nil: *var Void`).
-
-If two or more of these contexts produce *different* candidate
-types that are simultaneously well-typed (e.g. a function returning
-`Option[*var T]` evaluating `return nil` — both `Option::None` and
-`Some(*var T)`'s null payload would type-check), the compiler emits
-`E-NIL-AMBIGUOUS` and requires the user to disambiguate explicitly
-(`Some(nil)`, `nil as *var T`, or refactor the signature).
-
-A pointer-typed `nil` is itself only legal inside an `unsafe`
-block — a bare `nil` resolving to a pointer type outside `unsafe`
-emits `E-NIL-RAW-OUTSIDE-UNSAFE`. The `Option[T]` use case never
-triggers either diagnostic.
-
-`Some(value)` remains the present-case constructor for `Option[T]`.
-The asymmetry is intentional — presence has to wrap a value;
-absence is just `nil`.
-
-Ruxen references (`&T`, `&var T`) cannot be `nil` — they are valid
-by construction. If you want a possibly-missing reference, use
-`Option[&T]`.
-
-Array literals use bare `[...]` and produce an `Array[T]` (see
-§4.4). Hash literals use bare `{ k => v, ... }` and produce a
-`Hash[K, V]`. There is no dedicated `Set` literal — use
-`[…].to_set` since `{…}` is reserved for `Hash` (the parser
-distinguishes the struct/enum literal form `Path { field: value }`
-from a Hash literal by the presence of a leading identifier or path —
-see §3.22).
-
-### 3.10a String and character literals
-
-Ruxen has three text-literal forms, distinguished by their delimiter:
-
-| Form        | Delimiter | Escapes | `#{}` interpolation | Notes |
-|-------------|-----------|---------|---------------------|-------|
-| Interpolated string | `"…"` | yes | yes | the default string form |
-| Raw string  | `'…'`     | no      | no    | content verbatim; can hold `"` but not `'` |
-| Character   | `?c`      | via `?\…` | n/a | a single `Char` (Unicode scalar) |
-
-```ruxen
-let greeting = "hi #{name}\n"     # interpolated: name spliced in, \n is newline
-let path     = 'C:\Users\me'      # raw: backslashes literal, no interpolation
-let newline  = ?\n                # Char (the newline scalar)
-let letter   = ?A                 # Char
-```
-
-Rationale and rules:
-
-- **Single quotes are raw strings, not char literals.** The Rust-style
-  `r"…"` / `r#"…"#` raw-string prefix is retired — single quotes cover
-  the raw case. A raw string cannot contain a `'`; reach for a `"…"`
-  string (escaping as needed) when you need one.
-- **Character literals use the `?c` form** (Ruby-style): `?a`, `?\n`,
-  `?\t`, `?\\`, `?\'`, `?\u{1F600}`. A `?` is only read as a char
-  literal in an *expression-context* position so postfix `?` (try),
-  `?.` (safe-navigation), and optional-type `T?` keep their operator
-  meaning.
-- **Lifetimes** still use the leading-quote form (`'a`, `'input`): a
-  single quote with no closing quote on the same line is a lifetime,
-  not a raw string.
-
-### 3.10b Ranges
-
-Ranges follow **Ruby** semantics, not Rust's:
-
-| Form     | Meaning   | Example   | Iterates |
-|----------|-----------|-----------|----------|
-| `a..b`   | inclusive | `0..3`    | 0, 1, 2, 3 |
-| `a...b`  | exclusive | `0...3`   | 0, 1, 2 |
-
-```ruxen
-for i in 0..n      # inclusive: 0 through n
-for i in 0...n     # exclusive: 0 through n-1
-```
-
-The Rust `..=` inclusive form **does not exist** — `..=` is rejected
-at lex time (E0009) with a fix-it pointing at `..`. (The `..` rest
-pattern in array/struct destructuring is unchanged; it's not a range.)
-
-### 3.11 Stdlib type names
-
-| Type            | Role                                     |
-|-----------------|-------------------------------------------|
-| `Array[T]`      | Growable heap-allocated sequence          |
-| `Set[T]`        | Hash-based unique set                     |
-| `Hash[K, V]`    | Hash-based key-value map (Ruby's `Hash`)  |
-| `Option[T]`     | `Some(v)` or `nil` — replaces nullability  |
-| `Result[T, E]`  | `Ok(v)` or `Err(e)` — replaces exceptions |
-| `Box[T]`        | Owning heap pointer                       |
-| `Shared[T]`     | Reference-counted, single-threaded        |
-| `SharedSync[T]` | Atomically reference-counted, thread-safe |
-| `String`        | Owned, heap-allocated, growable string    |
-| `&str`          | Borrowed string slice (UTF-8 view)        |
-
-Stdlib import paths and constructor names follow:
-
-```ruxen
-let words: Array[String] = Array.new
-let seen: Set[Int] = Set.new
-let counts: Hash[String, Int] = Hash.new
-let boxed: Box[Point] = Box.new(Point.new(1, 2))
-let shared: Shared[Counter] = Shared.new(Counter.new)
-let cross: SharedSync[State] = SharedSync.new(State.new)
-```
-
-The canonical constructor convention:
-
-- `.new(args)` — no-conversion constructor; arguments are stored as-is
-  (`Array.new`, `Hash.new`, `User.new("alice")`).
-- `.from(value)` — conversion constructor; takes a value of a related
-  type and converts it (`String.from_bytes(&Array[Int])`, `Box.new(point)`
-  — note: `Box` uses `.new` because no conversion is implied). (The bare
-  `String.from(&String)` static method was REMOVED — a string literal is
-  already owned, and `b.clone` / `s.to_string` cover borrow→owned.)
-- Ruby `to_*` conversions build one collection from another — there is
-  no `.from_iter` (the iterator layer is gone): `[1, 2, 3].to_set`,
-  `pairs.to_h`, `chars.join("")`.
-- `.with_capacity(n)` — pre-allocate a heap-backed collection of size
-  `n` (`Array.with_capacity(64)`).
-
-A type may expose more than one. Tutorials and stdlib specs must
-pick the canonical form per type and use it consistently.
-
-The complete list of prelude-imported type and mixin names (the
-names available without any `use`) lives in
-`docs/specs/stdlib/prelude.spec.md`. The table above is the
-syntax-level subset that this spec pins.
-
-### 3.12 Self-mode terminology
-
-A method's relationship to its receiver is one of four modes:
-
-| Form              | Mode       | Meaning                                |
-|-------------------|------------|----------------------------------------|
-| `def m`           | reading    | Receiver is read-only (default).       |
-| `def var m`       | writing    | Receiver is writable; method may mutate `self`. |
-| `def consume m`   | consuming  | Takes ownership; receiver is moved.    |
-| `def self.m`      | class      | No receiver — module-style call.       |
-
-`var` here is the same keyword as the binding form `var x = ...` —
-it consistently means "writable." A `let`-bound value cannot
-receive a `def var` method call; a `var`-bound value can.
-
-Tutorials and specs describe these in mode terms ("a reading
-method", "a writing method", "a consuming method"). The internal
-references-to-self notation is not user-facing.
-
-### 3.13 The `!` macro suffix
-
-Methods ending in `!` follow Ruby's convention for danger/mutation:
-
-```ruxen
-let value = option.unwrap!
-let value = result.expect!("must be present")
-panic!("unrecoverable")
-```
-
-Reserved for compiler-aware forms. User-defined methods may not end
-in `!`.
-
-### 3.14 Reserved keywords
-
-| Category       | Keywords                                                                 |
-|----------------|--------------------------------------------------------------------------|
-| Binding        | `let`, `var`, `move`, `ref`                                              |
-| Types          | `class`, `struct`, `enum`, `mixin`, `newtype`, `type`                    |
-| Functions      | `def`, `init`, `self`, `Self`, `super`, `return`, `yield`                |
-| Modes          | `consume`, `inline`                                                      |
-| Control flow   | `if`, `elsif`, `else`, `match`, `while`, `for`, `in`, `loop`, `do`, `end`, `break`, `continue` |
-| Type system    | `where`, `as`, `some`, `any`, `static`, `const`, `layout`, `include`, `exclude`, `extension` |
-| Visibility     | `public`, `private`, `protected`                                         |
-| Modules        | `module`, `use`, `package`                                               |
-| Safety         | `unsafe`                                                                 |
-| Literals       | `true`, `false`, `nil`, `Some`, `Ok`, `Err`                              |
-| FFI            | `lib`                                                                    |
-| Async (reserved) | `async`, `await`                                                       |
-| Actor (reserved, v2) | `spawn`, `actor`, `send`, `receive`                                |
-
-Keywords are lowercase by convention. Type-level identifiers (`Self`,
-`String`, the auto-mixin names `Send` / `Sync`) are capitalized and
-live in a separate namespace — the keyword `send` and the auto-mixin
-`Send` do not collide at the lexer.
-
-The keyword `var` plays four positional roles, all of them meaning
-"writable":
-
-- Binding: `var x = 0`
-- Reference type: `&var T`
-- Raw pointer type: `*var T`
-- Method receiver: `def var bump`
-
-The opposite "read-only" is the absence of `var` in each position
-(`let x`, `&T`, `*T`, `def m`). There is no separate `mut`
-keyword.
-
-`static` is a keyword only inside type-system positions (lifetime
-names and lifetime bounds). It is not an item-level storage class —
-process-global state is expressed through module-level `let`
-bindings for compile-time-known values (see §3.1) and through
-library types (`SharedSync[Mutex[T]]`, `Once`) for runtime state.
-
-`const` is a keyword only inside generic-parameter lists, marking
-a const-generic parameter: `[T, const N: USize]`. There is no
-`const` binding form for ordinary values — module-level `let` is
-the binding form for constants.
-
-### 3.15 Comments
-
-Three comment forms:
-
-```ruxen
-# line comment — runs to end of line
-let x = 1  # inline comment
-
-#= block comment
-   may span multiple lines
-   #= nested block comments are legal =#
-=#
-
-## Doc comment — attaches to the following item.
-##
-## Supports Markdown. Captured into HIR for documentation generation
-## and LSP hover; the first paragraph is the summary.
-def find_user(id: Int) -> Option[&User]
-  # ...
-end
-```
-
-Doc comments (`##`) attach to the next item in the same file. They
-are not retained on expressions — only on items (`def`, `class`,
-`struct`, `enum`, `mixin`, `type`, `newtype`, `module`,
-`extension`, `lib`).
-
-### 3.16 String literals
-
-Four forms:
-
-```ruxen
-let plain  = "hello"                # &str literal — borrows compiled-in bytes
-let interp = "hi #{name}"           # interpolation — produces an owned String
-let raw    = r"no\escape\here"      # raw string — no escape processing
-let raw_q  = r#"can have "quotes""# # raw with explicit `#` delimiter
-
-let multi = """
-  Indented multiline string.
-  The leading indentation is stripped to the closing delimiter's
-  column.
-"""
-```
-
-Interpolation `#{...}` is accepted in `"..."` and `"""..."""` but
-not in raw strings. The interpolated expression routes through the
-`Display.fmt` dispatch path (§3.6). Format specs use the syntax
-`"#{expr:[<fill><align>][<width>][.<precision>][?]}"` documented in
-`docs/specs/stdlib/fmt.spec.md`.
-
-Plain `"..."` literals have type `&static str`. Any operation that
-produces new bytes (`+`, interpolation, `.to_string`, `.clone`)
-returns an owned `String`.
-
-Standard character escapes inside `"..."`: `\n`, `\r`, `\t`, `\\`,
-`\"`, `\'`, `\0`, `\u{XXXX}` for arbitrary Unicode scalars up to
-`U+10FFFF`.
-
-### 3.17 Closures
-
-One closure concept, two syntactic spellings (single-line brace
-form and multi-line `do`/`end` form) producing identical values:
-
-```ruxen
-let double = { |x: Int| x * 2 }         # brace form
-let total = nums.fold(0) do |acc, n|
-  acc + n
-end                                     # do/end form (trailing)
-```
-
-A closure value is called with `.(...)`:
-
-```ruxen
-let result = double.(10)                # 20
-```
-
-Closure types name the call-capacity, capitalized type-level
-identifiers:
-
-| Type                | Meaning                                                |
-|---------------------|--------------------------------------------------------|
-| `Fn(A, B) -> R`     | Callable any number of times; captures borrowed read-only. |
-| `FnVar(A, B) -> R`  | Callable any number of times; captures borrowed writably.  |
-| `FnOnce(A, B) -> R` | Callable once; consumes its captures.                  |
-
-The pipe form `|A, B| -> R` is an equivalent short spelling of
-`Fn(A, B) -> R` in parameter and return positions. The two forms
-compile to the same type; both `def f(pred: |Int| -> Bool)` and
-`def f(pred: Fn(Int) -> Bool)` are accepted.
-
-Captures are inferred per use. A `move` prefix forces every capture
-to be owned (used when the closure must outlive the captured scope
-— e.g. crossing a thread boundary):
-
-```ruxen
-def make_adder(n: Int) -> some Fn(Int) -> Int
-  move { |x| x + n }
-end
-```
-
-A trailing-block call passes the closure as the last argument:
-
-```ruxen
-nums.each do |n|
-  puts n
-end
-
-# is equivalent to:
-nums.each({ |n| puts n })
-```
-
-Inside a method body, the keyword `yield` invokes the implicit
-trailing-block argument:
-
-```ruxen
-def with_timing
-  let start = Instant.now
-  yield
-  puts "took #{start.elapsed.as_nanos} ns"
-end
-```
-
-`yield` is *only* legal where the caller passed a trailing block;
-calling a `yield`-using method without a block is a compile error.
-
-### 3.18 Tuples
-
-Fixed-arity heterogeneous values, written `(a, b, ...)`. Type form
-is `(T1, T2, ...)`. Single-element tuple is `(T,)` (with trailing
-comma — `(T)` is a parenthesized expression).
-
-```ruxen
-let point: (Int, Int) = (3, 4)
-let (x, y) = point                      # destructuring
-
-def divmod(a: Int, b: Int) -> (Int, Int)
-  (a / b, a % b)
-end
-```
-
-Tuples participate in the structural mixin rules of §3.6: a tuple of
-`Copy` / `Clone` / `Eq` / etc. elements is itself `Copy` / `Clone` /
-`Eq` / etc. Tuple field access is positional via `.0`, `.1`, ….
-
-The unit type `()` is the zero-arity tuple. It is the implicit
-return type of any `def` that has no `-> T` annotation; it is the
-`Unit` referenced in stdlib specs.
-
-### 3.19 Newtype
-
-`newtype Name(InnerType)` declares a single-field wrapper that is
-type-distinct from its inner type but shares its representation
-(equivalent to `struct Name; layout transparent; inner: InnerType;
-end`).
-
-```ruxen
-newtype UserId(Int)
-newtype Email(String)
-
-let id   = UserId(42)                   # constructor — same name as the newtype
-let raw  = id.0                         # positional inner access
-```
-
-A newtype inherits its inner type's `Copy` / `Clone` status. It
-does **not** inherit any other mixin includes — adopt them
-explicitly with `include` in an `extension` block:
-
-```ruxen
-extension UserId
-  include Display
-
-  def fmt(f: &var Formatter) -> Result[(), FmtError]
-    f.write_str("user/#{self.0}")
-  end
-end
-```
-
-### 3.20 Numeric literal coercion
-
-A bare numeric literal (`42`, `3.14`) has a default type but
-participates in inference for its assignment context:
-
-| Context                   | Result                                            |
-|---------------------------|---------------------------------------------------|
-| `let x = 42`              | `x: Int` (default `Int64`)                        |
-| `let x = 3.14`            | `x: Float` (default `Float64`)                    |
-| `let x: Float = 42`       | literal narrows; `x: Float = 42.0`                |
-| `let x: UInt8 = 200`      | literal narrows; legal because `200 < 256`        |
-| `let x: UInt8 = 300`      | compile error `E-NUM-OVERFLOW` (out of range)     |
-| `let x: Int8 = -200`      | compile error `E-NUM-OVERFLOW`                    |
-
-Implicit widening across already-typed *values* is not performed:
-`let a: Int8 = 1; let b: Int64 = a` is rejected — write `a as Int64`.
-The `as` cast is the only narrowing/widening conversion among
-numeric types.
-
-Suffix forms (`i8`, `i16`, `i32`, `i64`, `u`, `u8`, `u16`, `u32`,
-`u64`, `isize`, `usize`, `f32`, `f64`) pin a literal's type:
-
-```ruxen
-let b: UInt8 = 200u8
-let pi32     = 3.14f32                  # Float32
-```
-
-Integer literal prefixes: `0x` hex, `0b` binary, `0o` octal.
-Underscores `_` are accepted as digit separators (`1_000_000`).
-
-### 3.21 `for` loops
-
-The `for x in iter` loop expects `iter` to satisfy `Iterator` (its
-required method is `def var next -> Option[Self.Item]`). The loop
-desugars to:
-
-```ruxen
-var __it = <iter expression>
-loop
-  match __it.next
-    Some(x) -> # loop body
-    nil    -> break
-  end
-end
-```
-
-For ergonomics on collections, the binding mode follows the
-borrow on the source expression. There is no `.iter` / `.into_iter`
-desugaring (the iterator layer is gone — see §3.23); the loop reads
-the collection's backing directly:
-
-| Source                     | How elements bind              |
-|----------------------------|---------------------------------|
-| `for x in collection`      | moves the collection; elements bind by value |
-| `for x in &collection`     | read-only borrow; elements bind as `&T` |
-| `for x in &var collection` | writable borrow; elements bind as `&var T` |
-
-`for i in 0..10` uses the inclusive range form `..`, covering `0`
-through `10`. `0...10` is the exclusive form, covering `0` through
-`9`.
-
-### 3.22 Struct and enum literals
-
-A struct or enum value may be constructed with `.new(...)`
-(positional) or with the field-literal form (named):
-
-```ruxen
-let p1 = Point.new(1, 2)                # positional
-let p2 = Point { x: 1, y: 2 }           # named — same value
-
-let c  = Color.Red                      # unit variant
-let m  = Color.Custom { r: 1, g: 2, b: 3 }  # enum struct-variant
-let s  = Some(42)                       # enum tuple-variant
-```
-
-The named form is **disambiguated from `Hash` literals** by what
-precedes the opening `{`:
-
-- `{ ... }` with no preceding identifier or path → `Hash` literal
-  (`{ "k" => v }`).
-- `Capitalized.Path { field: value, ... }` → struct or enum
-  literal.
-
-Field order in the named form is irrelevant; every field must
-appear exactly once. Functional-update / `..rest` syntax is
-deferred to v2.
-
-The `Path.new(...)` form remains the canonical constructor for stdlib
-types and for any type that has a custom `def init(...)` body
-(constructors may run logic; the field-literal form bypasses
-`init`). The field-literal form is preferred for the round-trip with
-`Debug` output and for simple data structs without an explicit
-`init`.
-
-### 3.23 Collections are Ruby `Enumerable`-shaped (no `.iter`)
-
-There is no iterator layer. `Array`, `Hash`, and `Set` expose the
-Ruby `Enumerable` surface **directly** — there is no `.iter` /
-`.into_iter` / `.iter_mut` / `.collect` / `from_iter`. The block
-combinators are methods on the collection and take a **trailing
-block**:
-
-```ruxen
-let evens = a.select { |x| x % 2 == 0 }      # was a.iter().filter(...)
-let total = a.reduce(0) { |acc, x| acc + x } # was a.iter().fold(...)
-a.each { |x| puts "#{x}" }
-a.each_with_index { |x, i| puts "#{i}: #{x}" }
-let doubled = a.map { |x| x * 2 }
-```
-
-The combinator vocabulary is Ruby, not Rust:
-
-| Rust iterator           | Ruxen (direct on the collection) |
-|-------------------------|----------------------------------|
-| `.iter().filter { }`    | `.select { }`                    |
-| (negated filter)        | `.reject { }`                    |
-| `.iter().fold(i) { }`   | `.reduce(i) { }`                 |
-| `.iter().position { }`  | `.index { }`                     |
-| `.retain { }`           | `.select! { }`                   |
-| `.iter().all(...)`      | `.all? { }`                      |
-| `.iter().any(...)`      | `.any? { }`                      |
-| `.skip(n)` / `.take(n)` | `.drop(n)` / `.take(n)`          |
-| `.contains(x)`          | `.include?(x)`                   |
-| `.len()` / `.is_empty()`| `.size` / `.empty?`              |
-| `.enumerate()`          | `.each_with_index { \|x, i\| }`  |
-
-Conversions build one collection from another via Ruby `to_*`
-methods rather than `collect` / `from_iter`:
-
-```ruxen
-let s = [1, 2, 2, 3].to_set            # Array -> Set
-let m: Hash[Int, Int] = pairs.to_h     # Array[(K, V)] -> Hash
-let joined = words.join(", ")          # Array[String] -> String
-let pairs = h.to_a                     # Hash -> Array[(K, V)]
-```
-
-`for x in collection` (§3.21) iterates the collection's backing
-directly; it does not desugar through an iterator object.
+(`def var` marks a method that changes the receiver; it is part of the
+ownership surface, section 15.)
 
 ---
 
-## 4. Worked examples
+## 10. Value types: `Struct.new` and `Data.define`
 
-### 4.1 A class with a mixin and visibility
+Small values without identity are Ruby `Struct` (mutable) and `Data`
+(immutable). Both are [planned]. The typed spelling below is the proposed
+form (OQ-1); the owner decision is "value types are `Struct.new` /
+`Data.define`".
 
-```ruxen
-mixin Ord
-  def cmp(other: &Self) -> Ordering
-
-  def less_than(other: &Self) -> Bool
-    self.cmp(other) == Ordering.Less
-  end
+```ruby
+Point = Data.define(x: Int, y: Int)          # immutable value
+Point = Data.define(x: Int, y: Int) do       # with methods
+  def +(o: Point) -> Point = Point.new(x: x + o.x, y: y + o.y)
 end
 
+Pixel = Struct.new(x: Int, y: Int)           # mutable value
+
+p = Point.new(x: 1, y: 2)                    # or Point.new(1, 2)
+q = p.with(y: 5)
+p.x                                          # reader
+```
+
+| Construct | Ruby form | Status |
+|---|---|---|
+| Immutable value type | `Point = Data.define(x: Int, y: Int)` | [planned] |
+| Mutable value type | `Pixel = Struct.new(x: Int, y: Int)` | [planned] |
+| Copy semantics | a `Data` value whose fields are all Copy is Copy | [planned]; today Copy requires `struct` (E0603) |
+| `struct Name ... end` | | [deprecated], replace with `Data.define` or `Struct.new` |
+| `newtype UserId(Int)` | | [deprecated], replace with `UserId = Data.define(value: Int)` |
+| Tuples `(a, b)`, tuple types `(Int, String)`, `.0` access | | [deprecated], replace with arrays `[a, b]`, the tuple type `[Int, String]` [planned, RBS style], indexing `pair[0]` and `a, b = pair` |
+| Struct literal `Point { x: 1, y: 2 }` | | [retired]: never implemented (no AST node), remove from docs |
+| `layout c` / `layout packed` / `layout transparent` | in a `struct` body | [implemented] for FFI; moves to `Data.define` bodies with `Data` (OQ-9) |
+
+---
+
+## 11. Enums: `Data` variants and symbols
+
+Both forms are [planned]. Pick symbols for plain tags and `Data` variants
+when a case carries values. Match either one with `case/in`.
+
+```ruby
+# Plain tags: symbols
+status = :active
+case status
+in :active then start
+in :paused | :stopped then idle
+end
+
+# Cases with data: one Data type per variant, grouped in a module
+module Shape
+  Circle = Data.define(radius: Float)
+  Square = Data.define(side: Float)
+end
+
+def area(s: Shape) -> Float
+  case s
+  in Shape::Circle(radius:) then 3.14159 * radius * radius
+  in Shape::Square(side:) then side * side
+  end
+end
+```
+
+| Construct | Status |
+|---|---|
+| Symbol tags matched with `case/in` | [planned] (needs symbols, section 3) |
+| `Data` variants grouped in a module and used as one type (`s: Shape`) with exhaustive `case/in` | [planned] (OQ-1: how the closed set of variants is declared) |
+| `enum Color ... end`, payload variants `Circle(radius: Float)`, `Color.Red` | [deprecated], replace with the forms above |
+
+---
+
+## 12. Modules and mixins
+
+| Construct | Ruby form | Status |
+|---|---|---|
+| Namespace | `module Http ... end`; refer to members as `Http::Request` | [implemented] |
+| Mixin module | `module Greetable ... end`, then `include Greetable` in a class | [planned]; today the mixin is declared with `mixin Greetable` |
+| `mixin Name ... end` | | [deprecated], replace with `module Name ... end` |
+| Required method (Ruxen addition) | a signature with no body inside the module: `def name -> String` | [implemented] in `mixin` bodies; carries over to `module` |
+| Default method | a full `def` inside the module | [implemented] in `mixin` bodies |
+| `include` | `include Comparable` | [implemented] |
+| Several modules at once | `include A, B` | [planned]; today one `include` per module |
+| `extend` (class-level methods from a module) | `extend Forwardable` | [planned] |
+| Adding methods to an existing class | reopen it: `class Array ... end` | [planned] |
+| `extension Type ... end` | | [deprecated], replace with reopening the class |
+| Methods that exist only when a type argument meets a bound | reopen with a bound: `class Box[T < Comparable] ... end` | [planned] (OQ-6) |
+| `extension C[T] where T: B` | | [deprecated], replace with the line above |
+| Mixin inheritance `mixin A: B` | | [deprecated], replace with `include B` inside `module A` |
+| Two included modules defining the same method | Ruby's rule: the module included last wins; the class's own method beats both | [planned]; the 2026-05 draft made this an error (OQ-7) |
+| `super` from an override | reaches the superclass method first, then the module default (Ruby's lookup order) | `super` parses [implemented]; this lookup rule was specified by the 2026-05 draft and was not re-verified for this rewrite |
+
+### 12.1 The core modules
+
+| Module | You provide | You get | Status |
+|---|---|---|---|
+| `Comparable` | `def <=>(other: &Self) -> Int` | `<`, `<=`, `==`, `>`, `>=`, `between?`, `clamp` | [implemented] (`std/core`, declared with `mixin` today) |
+| `Enumerable` | `def each(f: any Fn[Fn(T) -> nil]) -> nil` today; `def each(&block: Fn[(T) -> nil])` is the target | `map`, `select`, `reverse_each`, `entries` and the rest of the combinator family defined once in `std/core` | [implemented] as `include Enumerable[T]`; plain `include Enumerable` with `T` inferred from `each` is [planned] |
+| `Kernel` | nothing (included everywhere) | `tap`, `then`, `yield_self`, plus the free functions `puts`, `print`, `p`, `warn`, `abort`, `exit`, `sleep` | [implemented] (`p` covers only `Int`, `Bool` and `String` today) |
+
+```ruby
 class Version
+  include Comparable
+
   major: Int
   minor: Int
-  patch: Int
 
-  def init(@major: Int, @minor: Int, @patch: Int) end
-
-  include Ord
-
-  def cmp(other: &Version) -> Ordering
-    let m = self.major.cmp(&other.major)
-    if m != Ordering.Equal; return m; end
-    let n = self.minor.cmp(&other.minor)
-    if n != Ordering.Equal; return n; end
-    self.patch.cmp(&other.patch)
+  def initialize(@major: Int, @minor: Int)
   end
 
-  private
-
-  def self.parse(s: &str) -> Result[Version, ParseError]
-    # ...
+  def <=>(other: &Version) -> Int
+    [major, minor] <=> [other.major, other.minor]
   end
 end
 
-let a = Version.new(1, 2, 3)
-let b = Version.new(1, 3, 0)
-if a.less_than(&b)
-  puts "a < b"
-end
+Version.new(1, 2) < Version.new(1, 3)   # => true
 ```
 
-Note: `Ord` (full order) is the loud form of the same `cmp` method
-shape — see §3.6 for the structural-mixin table. The example
-re-declares `mixin Ord` for clarity; in normal user code, `Ord` is
-auto-included by §3.6 whenever every field is `Ord`, and the
-`cmp` method is supplied by the type itself.
+(Array `<=>` and implicit-self calls such as bare `major` in this example
+are target forms; check them before relying on the example as a fixture.)
 
-### 4.2 Heterogeneous collection with `any`
+---
 
-```ruxen
-mixin Drawable
-  def draw -> String
+## 13. The object protocol
+
+Ruby's method names replace the Rust trait vocabulary.
+
+| Purpose | Ruby form | Status | Replaces ([deprecated]) |
+|---|---|---|---|
+| Human text | `def to_s -> String`; used by `puts` and `"#{x}"` | [implemented]: a user `to_s` wins; every value has a default | `Display`, `Displayable`, `to_display`, `to_string` |
+| Debug text | `def inspect -> String`; used by `p x` | [planned] | `Debug`, `to_debug`, `#{x:?}` |
+| Default rendering | `#<data Point x=3, y=4>`, `#<struct Pixel x=1, y=2>`, `#<Account @balance=10>` | [planned]; today the default prints the Rust shape `Point { x: 3, y: 4 }` | Rust `Debug` output |
+| Equality | `def ==(other: &Self) -> Bool` | [implemented] | `PartialEq`, `Eq`, `eq` |
+| Hash-key identity | `def eql?(other) -> Bool` and `def hash -> Int` | [planned] for user types (`String#eql?` exists) | `Hashable`, the `Hash` mixin |
+| Ordering | `include Comparable` and `def <=>` | [implemented] | `Ord`, `PartialOrd`, `cmp`, `partial_cmp` |
+| Arithmetic | `def +(o)`, `def -(o)`, `def *(o)`, ... | [implemented] | `Add` and the other operator mixins |
+| Conversion | `to_s`, `to_i`, `to_f`, `to_a`, `to_h`, `to_set` | `to_s`, `to_i`, `to_f` [implemented]; the collection conversions per the stdlib specs | `Into[T]`, `From`, `from_iter`, `collect` |
+| Copying a value | `dup` (shallow) and `clone` | `clone` [implemented]; `dup` [implemented] on `String` only | (`Clone` stays as the ownership marker, section 15) |
+| Default value | arguments with defaults, or `initialize` with no parameters | [implemented] | `Default`, `default` |
+
+The marker modules `Copy`, `Clone`, `Drop`, `Send` and `Sync` are not on
+this list; they belong to ownership (section 15).
+
+---
+
+## 14. Static typing (the Ruxen addition to Ruby)
+
+Ruby has no type annotations. Ruxen adds the smallest set it needs; every
+other type is inferred.
+
+| Construct | Ruxen form | Status |
+|---|---|---|
+| Parameter and return annotations | `def f(x: Int) -> String` | [implemented] |
+| Field (ivar) types | `name: String` in a class body | [implemented] |
+| Typed local | `x: Int = 0` | [planned] (section 2) |
+| Optional | `T?` | [implemented] |
+| Generic class or method | `class Stack[T]`, `def first[T](xs: Array[T]) -> T?` | [implemented] |
+| Bound on a type parameter (RBS style) | `[T < Comparable]` | [planned] |
+| Several bounds | `[T < Comparable & Hashable]` | [planned] |
+| `[T: Bound]`, `T: A + B` | | [deprecated], replace with `[T < Bound]`, `[T < A & B]` |
+| `where` clauses | `where T: Display` | [deprecated], replace with bounds in the `[...]` list |
+| Tuple type | `[Int, String]` (RBS) | [planned]; `(Int, String)` is [deprecated] |
+| Type alias | `Id = Int` | [planned]; `type Id = Int` is [deprecated] (OQ-10 for generic aliases) |
+| Bottom type | `Never` (for `abort`, `exit`, `raise`) | [implemented] |
+| Existentials | `some Mixin`, `any Mixin`, `Box[any Mixin]` | [implemented] (OQ-11) |
+| Associated types | `type Item` in a mixin, `Iterator[Item = Int]` | [implemented] (OQ-11) |
+| Fixed arrays and const generics | `[T; N]`, `[T, const N: USize]` | [implemented] (OQ-8) |
+| Numeric types | `Int` and `Float` everyday; sized types (`Int8` ... `UInt64`, `USize`, `Float32`) | [implemented]; sized types for FFI and storage only (OQ-8) |
+| Numeric conversion | `x.to_i`, `x.to_f` | [implemented] |
+| Sized conversion | `x.to_i8`, `x.to_u8`, `x.to_i32`, ... | [planned] |
+| `as` cast | `n as UInt8` | [deprecated], replace with `n.to_u8` |
+| `size` / `length` result type | `Int` | [planned]; today `USize`, which forces about 67 `as Int` casts in the stdlib |
+| `str`, `&str` | | [retired] (E0730): use `String` / `&String` |
+| HRTB `for[a]`, GATs, specialization | | [retired]: never implemented, remove from docs |
+
+---
+
+## 15. Kept from Rust: ownership
+
+This is the entire Rust surface Ruxen keeps. Each item is spelled to read
+like Ruby.
+
+| # | Feature | Ruxen spelling | Status |
+|---|---|---|---|
+| 1 | Borrows | `&x` (read), `&var x` (write); types `&T`, `&var T`. `&mut` is never used. | [implemented]. Auto-borrowing at call sites (`f("x")` for a `&String` parameter) is OQ-13. |
+| 2 | Receiver modes | `def m` reads `self`; `def var m` may change `self`; `def consume m` takes ownership of `self` | [implemented] |
+| 3 | Mutability | Ruby locals are always reassignable, so `var` survives only in `&var`, `*var` and `def var` | target; `var x = ...` as a binding is [deprecated] (section 2) |
+| 4 | `move` closures | `move { \|x\| x + n }`, `move do ... end`: every capture is owned (needed when a block outlives its scope, such as a thread body) | [implemented] |
+| 5 | Lifetimes | rare escape hatch: lowercase names in the generic list and after `&`: `def longest[a](x: &a String, y: &a String) -> &a String`. Elision is the default. | [implemented]. The `'a` sigil is [retired] (it lexes as an unterminated string, E0002). |
+| 6 | `Copy`, `Clone`, `Drop` | values of Copy types are copied; `clone` (Ruby twin `dup`) makes an explicit copy; `def drop` is the destructor (see `docs/decisions/drop-elaboration.md`) | [implemented]. `ensure` and block-scoped resources (`File.open(path) do \|f\| ... end`) lowering onto drop is [planned]. |
+| 7 | `Send`, `Sync` | thread-safety markers; opt out with `include !Send`, opt in for a hand-checked type with `unsafe include Send` | both spellings parse [implemented]. OQ-14: pick one opt-out spelling (`exclude Send` is proposed, not implemented) and settle whether the markers are inferred or written by hand (current docs disagree). |
+| 8 | Owning pointers | `Box[T]` (single owner, heap), `SharedSync[T]` (atomic reference count, thread-safe) | [implemented]. `Shared[T]` (single-threaded reference count) is [planned]: the stdlib does not define it. Names: OQ-15. |
+| 9 | Binding modes in patterns | `ref name`, `ref var name` | [implemented] (OQ-16) |
+
+Raw pointers `*T` and `*var T` exist only for FFI (section 16).
+
+```ruby
+def longest[a](x: &a String, y: &a String) -> &a String
+  x.size > y.size ? x : y
 end
 
-class Square
-  side: Float
-  def init(@side: Float) end
-  include Drawable
-  def draw -> String; "square(#{self.side})"; end
+def var rename(name: String)    # may change self
+  @name = name
 end
 
-class Circle
-  radius: Float
-  def init(@radius: Float) end
-  include Drawable
-  def draw -> String; "circle(#{self.radius})"; end
+def consume into_bytes -> Array[UInt8]   # takes ownership of self
+  # ...
 end
 
-def render_scene(shapes: &Array[Box[any Drawable]])
-  for shape in shapes
-    puts shape.draw
-  end
-end
-
-var scene: Array[Box[any Drawable]] = Array.new
-scene.push(Box.new(Square.new(1.0)))
-scene.push(Box.new(Circle.new(2.5)))
-render_scene(&scene)
+total = 0
+add = move { |x: Int| x + total }        # captures are owned
 ```
 
-### 4.3 FFI with `lib` options
+---
 
-```ruxen
-lib "c"
-  def malloc(n: USize) -> *var Void
-  def free(p: *var Void)
-end
+## 16. FFI
 
-lib "ssl", version: "3"
-  def SSL_new(ctx: *var Void) -> *var Void
-  def SSL_free(s: *var Void)
-end
+FFI stays as Ruxen's own `lib` block, which reads like Ruby FFI's
+`attach_function`.
 
-def allocate(size: USize) -> Result[*var UInt8, AllocError]
-  unsafe
-    let raw = malloc(size)
-    if raw == nil
-      Err(AllocError.OutOfMemory)
-    else
-      Ok(raw as *var UInt8)
-    end
-  end
-end
-```
-
-### 4.4 Generic function with bound and lifetime
-
-```ruxen
-def first_match[T, a](haystack: &a Array[T], pred: |&T| -> Bool) -> Option[&a T]
-  for item in haystack
-    if pred(item); return Some(item); end
-  end
-  nil
-end
-
-let words = ["alpha", "beta", "gamma"]
-let found = first_match(&words, |w| w.starts_with("b"))
-```
-
-### 4.5 Layout — derives are automatic
-
-```ruxen
-struct Header
-  layout c
-  magic: UInt32
-  version: UInt16
-  flags: UInt16
-  payload_len: UInt64
-end
-```
-
-`Debug`, `Clone`, and `Copy` are auto-synthesized for this struct
-(every field is a primitive integer; primitives satisfy all three).
-No declaration needed.
+| Construct | Form | Status |
+|---|---|---|
+| Library block | `lib "m" ... end`, `lib "ssl", version: "3" ... end` | [implemented] (the trailing options are parsed and ignored today) |
+| Renamed C symbol | `def open as "ruxen_file_open"(path: &String) -> Int` | [implemented]. This `as` is the C symbol name, not a cast; it stays. |
+| Library block inside a class | `class File; lib "ruxen_runtime" ... end; end` | [implemented] |
+| Variadic C function | `def printf(fmt: *UInt8, ...) -> Int32` | [implemented] |
+| Raw pointers | `*UInt8`, `*var Void`; null is `nil` | [implemented] |
+| `unsafe ... end` blocks | | [implemented] (OQ-9) |
+| `extern "C"`, `@[link(...)]`, `@[repr(C)]` | | [retired] (E0607 for `@[...]`) |
 
 ---
 
-## 5. Diagnostics surface
+## 17. Concurrency and async
 
-Error code naming follows the new vocabulary. The prefix families:
-
-- **Existentials** — `E-ANY-*` (object safety, missing assoc-type
-  binding, multi-mixin, GAT, etc.) and `E-SOME-*` for the
-  `some Mixin` side.
-- **Layout** — `E-LAYOUT-*` (`E-LAYOUT-TRANSPARENT-MULTI`,
-  `E-LAYOUT-PACKED-BORROW`).
-- **Implicit-include** — implicit-include validators keep their
-  existing E06xx numbering; message text uses the new vocabulary.
-- **Visibility** — `E-VIS-PRIVATE`, `E-VIS-PROTECTED`.
-- **Lifetime** — `E-LIFE-*` (no sigil change in error messages —
-  lowercase generic param names appear as written).
-- **Mixin defaults** — `E-MIX-AMBIGUOUS-DEFAULT` (§3.4),
-  `E-MIX-MISSING` (required-method not satisfied).
-- **Nil polymorphism** — `E-NIL-AMBIGUOUS` (§3.10 priority rule
-  produced two well-typed candidates), `E-NIL-RAW-OUTSIDE-UNSAFE`
-  (pointer-typed `nil` reached outside an `unsafe` block).
-- **Const evaluability** — `E-NOT-CONST-EVAL` (a use site that
-  requires a compile-time value received a `let` whose RHS is not
-  const-evaluable; see §3.1).
-- **Numeric literal range** — `E-NUM-OVERFLOW` (literal narrows to
-  a type that can't hold it; §3.20).
-
-Specific code allocations land in the diagnostics module during
-implementation; this spec fixes the prefixes only. The full error
-registry lives in `docs/errors/`.
+| Construct | Form | Status |
+|---|---|---|
+| `async def`, `expr.await` | | [implemented]. Kept for now: it is the working model today. |
+| Fiber scheduler | `Async do ... end`, `task.wait` (Ruby's `Fiber.scheduler` model) | [planned, later]. When it lands, `async def` / `.await` become [deprecated]. |
+| `Future`, `Poll`, `Waker`, `block_on` in user code | | to be [deprecated] together with `async def` |
+| Threads | `Thread.new { ... }.value`, `Mutex#synchronize`, `Thread::Queue`, `Thread.current[:key]` | [planned] (stdlib) |
+| `JoinHandle`, `MutexGuard`, `lock() -> Result`, atomics with `Ordering`, mpsc channels, `thread_local!` | | [deprecated] as the user-facing shape, replaced by the line above |
 
 ---
 
-## 6. Object-safety rules
+## 18. Standard library naming
 
-A mixin is object-safe (usable through `any`) iff every method
-satisfies:
+1. **Ruby names are canonical.** Use the Ruby class and method name
+   wherever Ruby has one: `Array`, `Hash`, `Set`, `String`, `Integer`
+   methods on `Int`, `Range`, `Regexp` methods on `Regex`, `File`, `Dir`,
+   `ENV`, `ARGV`, `Time`, `Thread`, `Mutex`.
+2. **Rust-named twins are deprecated aliases, never deleted.** They keep
+   working and the deprecation warning names the Ruby method.
+3. **No iterator layer.** Collections are `Enumerable`. There is no
+   `iter`, `into_iter`, `iter_mut`, `collect`, `from_iter` or `Iterator`
+   (the dead `mixin Iterable` in `std/core` goes too).
+4. Per-module status lives in the stdlib specs (`docs/specs/stdlib/`), not
+   here.
 
-- **S1.** No `Self`-by-value in arg or return position. `&Self`,
-  `&var Self`, `Box[Self]`, `&any Mixin` are fine.
-- **S2.** No additional generic parameters on the method.
-- **S3.** Not a class method (`def self.m`).
-- **S4.** Not consuming (`def consume m`).
-- **S5.** Associated types must be bound at the `any` use site:
-  `any Iterator[Item = Int]` works, `any Iterator` does not.
-- **S6.** No generic associated types (GATs).
-- **S7.** Every parent mixin must itself be object-safe, with its
-  associated types bound.
-
-Violations are caught at mixin declaration time (the trait is
-either object-safe or not, once) and at `any` use sites (missing
-associated-type bindings).
-
----
-
-## 7. Vtable layout (informational)
-
-`any Mixin` is a fat pointer: `(data_ptr, vtable_ptr)`, 16 bytes,
-8-byte align on 64-bit targets.
-
-Each `any Mixin` value points to a vtable with this fixed prefix:
-
-| Slot | Field      | Purpose                                  |
-|------|------------|------------------------------------------|
-| 0    | drop       | fn(*var u8) — drop glue for the value    |
-| 1    | size       | usize — bytes to dealloc                 |
-| 2    | align      | usize — alignment for dealloc            |
-| 3..  | methods    | mixin methods, in source declaration order |
-
-This is not stable ABI for FFI use. Internal layout only.
+| Rust name ([deprecated] alias) | Ruby name |
+|---|---|
+| `len`, `is_empty` | `size` / `length`, `empty?` |
+| `to_string` | `to_s` |
+| `push_str` | `<<` |
+| `to_upper`, `to_lower` | `upcase`, `downcase` |
+| `starts_with`, `ends_with`, `contains` | `start_with?`, `end_with?`, `include?` |
+| `trim` | `strip` |
+| `with_capacity` | `Array.new` (capacity is an implementation detail) |
+| `get`, `insert`, `get_mut` | `[]`, `[]=`, `fetch` |
+| `filter`, `fold`, `position`, `retain`, `all`, `any`, `skip`, `enumerate` | `select`, `reduce`, `index`, `select!`, `all?`, `any?`, `drop`, `each_with_index` |
+| `fs.read_to_string(path)` | `File.read(path)` |
+| `path.join(a, b)` | `File.join(a, b)` |
+| `env.args`, `env.var` | `ARGV`, `ENV[...]` |
+| `process.command` | `system`, backticks |
+| `Instant.now`, `Duration.from_millis` | `Time.now`, numeric seconds (`sleep 0.5`) |
+| `Map[K, V]`, `HashMap`, `HashSet`, `Vec`, `Rc`, `Arc` | `Hash[K, V]`, `Hash`, `Set`, `Array`, `Shared`, `SharedSync` |
 
 ---
 
-## 8. What this spec deliberately does not say
+## 19. Reserved words
 
-- Internal HIR/MIR struct names — implementation choice. May or
-  may not mirror the user-facing words.
-- Specific token names in the lexer — implementation choice. The
-  *keywords the user types* are listed in §3.14; the enum variants
-  in the lexer are an internal detail.
-- Phasing of the migration — covered in a separate implementation
-  plan that is deleted once the migration is complete.
+**Target keyword set:** Ruby's keywords (`alias and begin break case class
+def defined? do else elsif end ensure false for if in module next nil not
+or redo rescue retry return self super then true undef unless until when
+while yield`) plus these Ruxen additions:
 
----
+| Word | Why |
+|---|---|
+| `var`, `consume`, `move`, `ref` | ownership (section 15) |
+| `lib`, `unsafe` | FFI (section 16; `unsafe` is OQ-9) |
+| `layout`, `inline` | FFI layout and the inline hint |
+| `Self` | static typing |
+| `some`, `any` | existential types (OQ-11) |
+| `async`, `await` | until the Fiber scheduler replaces them (section 17) |
 
-## 9. Test matrix
+**Keywords to free** (all [deprecated] or [retired] above): `let`,
+`match`, `struct`, `enum`, `newtype`, `type`, `mixin`, `extension`, `use`,
+`package`, `const`, `static`, `macro`, `where`, `as` (except in `lib`
+blocks), `continue`, `init`, `Some`, `Ok`, `Err`, and `loop` (which becomes
+a `Kernel` method). Freeing `match`, `where`, `any`, `type` and `use` lets
+Ruby method names such as `String#match` and `Relation#where` work.
+`macro`, `static` and `package` are reserved today but parse nothing.
 
-### 9.1 Parser-level
-
-- T-PARSE-01: `let x = 5` parses, immutable binding.
-- T-PARSE-02: `var x = 5; x = 6` parses, mutable binding.
-- T-PARSE-03: `class C; private; def f; end; end` makes `f` private.
-- T-PARSE-04: `def f[a](x: &a Int)` parses, `a` is a lifetime param.
-- T-PARSE-05: `mixin M; def f; end; end` parses with default body.
-- T-PARSE-06: `include M` inside class body parses.
-- T-PARSE-07: `&some M`, `&any M`, `Box[any M]` parse.
-- T-PARSE-08: `layout c`, `layout packed`, `layout transparent` parse.
-- T-PARSE-09: `derive` keyword is rejected as an unknown identifier.
-- T-PARSE-10: `lib "c", version: "1"` parses with options.
-- T-PARSE-11: `inline def f` and standalone `inline :f` parse.
-- T-PARSE-12: `use package.x.y` parses.
-- T-PARSE-13: `nil` parses as raw-pointer literal in unsafe context.
-
-### 9.2 Semantic
-
-- T-SEM-01: Including a mixin pulls in default methods.
-- T-SEM-02: Required-but-missing methods produce E-MIX-MISSING.
-- T-SEM-03: Class-defined method overrides mixin default.
-- T-SEM-04: Object-safety check rejects `any GenericMethod`.
-- T-SEM-05: `any Mixin` requires an explicit `include` block;
-  structural match alone is rejected.
-- T-SEM-06: `some Mixin` accepts structural match.
-- T-SEM-07: `layout transparent` on multi-field rejected.
-- T-SEM-08: Using a struct with a non-`Hashable` field as a `Hash` key is rejected with a use-site error naming the offending field.
-- T-SEM-09: Private method called outside class rejected.
-- T-SEM-10: Protected method callable from subclass.
-- T-SEM-11: Lowercase `a` in `[a]` slot is a lifetime, not a type.
-
-### 9.3 End-to-end
-
-- T-E2E-01: A program defining `mixin Drawable`, two implementing
-  classes, and `Array[Box[any Drawable]]` runs and prints both
-  shapes.
-- T-E2E-02: An `unsafe` FFI block calls `malloc`, checks `nil`,
-  and frees.
-- T-E2E-03: A class with `private` section can still be constructed
-  through public `def init`.
-- T-E2E-04: Inline-modifier method behaves identically to non-inline
-  under Cranelift (semantic test; LLVM-specific test waits for v2).
-- T-E2E-05: A struct with all-Clone fields auto-synthesizes `Clone` and round-trips through `.clone()` with no declaration.
+`include`, `extend`, `private`, `protected`, `public`, `raise`, `require`,
+`attr_reader` and `loop` are methods in Ruby. Ruxen may treat some of them
+as keywords internally, but users must be able to read them as Ruby calls.
 
 ---
 
-## 10. Open questions
+## 20. Open questions
 
-- **OQ-1.** Should `inline` accept a numeric hint (`inline 3`,
-  cost-based)? Defer to v2.
-- **OQ-2.** Resolved (2026-05-16). `nil` is a single token; type is
-  determined by the priority rule in §3.10. A pointer-typed
-  resolution outside `unsafe` is its own diagnostic
-  (`E-NIL-RAW-OUTSIDE-UNSAFE`).
-- **OQ-3.** Resolved (2026-05-16). Inside a method that overrides a
-  mixin default, `super` calls the mixin default. When the class
-  also inherits from a superclass that overrides the same method,
-  the superclass wins. Spec'd in §3.4 under "`super` inside an
-  override."
-- **OQ-4.** Resolved (2026-05-16). Promoted into §3.4: ambiguous
-  stacked-mixin defaults are an error
-  (`E-MIX-AMBIGUOUS-DEFAULT`); the class must define its own
-  implementation to disambiguate.
-- **OQ-5.** Should the `..rest` functional-update syntax for struct
-  literals ship in v1? Recommendation: defer to v2 — the
-  disambiguation rules around range expressions inside `{}` blocks
-  are more nuance than v1 needs.
-- **OQ-6.** Should the `actor` / `spawn` / `send` / `receive`
-  keywords be unreserved if the actor model never ships? Status:
-  reserved for v2 per §3.14. Re-evaluate at v2 planning.
+| # | Question | Default until decided |
+|---|---|---|
+| OQ-1 | Typed spelling of `Struct.new` / `Data.define` (`Data.define(x: Int, y: Int)` proposed), and how a module declares the closed set of `Data` variants for exhaustive `case/in` | the proposal in sections 10 and 11 |
+| OQ-2 | Can a method declare its raise set explicitly, and how? | inferred only |
+| OQ-3 | Ivar type declarations: keep `name: Type` in the class body, or the RBS form `@name: Type`? | `name: Type` |
+| OQ-4 | Keyword parameters in definitions: Ruby's `def f(host:, port: 80)` collides with `name: Type` annotations | positional parameters with defaults |
+| OQ-5 | Block and proc types: rename `Fn[(A) -> R]` to `Proc[(A) -> R]`? Infer `FnMut` / `FnOnce` capture capability instead of naming it? | `Fn[(A) -> R]` |
+| OQ-6 | Conditional methods via a bounded reopen (`class Box[T < Comparable]`): exact rule | as in section 12 |
+| OQ-7 | Two included modules with the same default method: Ruby's "last include wins", or keep an error? | Ruby's rule is the target |
+| OQ-8 | Sized integers: FFI and storage only? Literal suffixes (`200u8`) kept or replaced by `200.to_u8`? `[T; N]` and const generics kept (perhaps as `StaticArray[T, N]`) or dropped? | unchanged |
+| OQ-9 | `unsafe ... end`: keep, or limit raw pointers to `lib` blocks? `layout c` versus `layout :c` | unchanged |
+| OQ-10 | Generic type aliases (`type Pair[T] = ...` in RBS) | `X = Y` for plain aliases |
+| OQ-11 | `some` / `any` existentials and associated types: keep, or is a plain module-typed parameter enough? (Associated types exist mainly for the retired iterator layer and `Future::Output`.) | unchanged |
+| OQ-12 | `#= ... =#` block comments once `=begin ... =end` exists | keep both |
+| OQ-13 | Auto-borrow at call sites so `f("x")` passes `&"x"` | explicit `&` |
+| OQ-14 | One opt-out spelling for `Send` / `Sync` (`exclude Send` proposed) | `include !Send` |
+| OQ-15 | Names of the ownership types (`Box`, `Shared`, `SharedSync`; `Send` / `Sync`, for example `Shareable` after Ractor) | unchanged |
+| OQ-16 | `ref` / `ref var` patterns, or default binding modes | unchanged |
 
 ---
 
-## 10a. Migration mapping (working reference)
+## 21. Migration table: Rust form to Ruby form
 
-For the duration of the rename, the following equivalences apply.
-Once §11 cleanup is done, this section is deleted along with any
-mention of the prior forms.
+Item numbers follow the 2026-10 Rust-ism audit inventory. "Status" is the
+status of the Ruby replacement.
 
-| Prior form                          | New form                                                 |
-|-------------------------------------|-----------------------------------------------------------|
-| `let mut x = ...`                   | `var x = ...`                                             |
-| `pub` prefix on item                | omit (public is default); use `private` / `protected` section markers |
-| `trait T ... end`                   | `mixin T ... end`                                         |
-| `impl T for U ... end` (block)      | `include T` directive in `U`'s body; methods scattered    |
-| `impl U ... end` (inherent block)   | move methods into `U`'s body directly                     |
-| `impl[T: B] C[T] ... end`           | `extension C[T] where T: B ... end`                       |
-| `impl Drop ... end` inside class    | `include Drop` + `def var drop` in class body             |
-| `&impl T` (param/return type)       | `&some T`                                                 |
-| `&dyn T` (param/return type)        | `&any T`                                                  |
-| `'a` lifetime sigil                 | bare lowercase identifier in `[...]`: `[a]`, `&a T`       |
-| `@[derive(D1, D2)]`                 | DELETE — structural mixins are implicitly included (§3.6); user override wins; loud form is `include D1, D2` |
-| `derive D1, D2` in-body             | `include D1, D2` (if you want the loud form); else DELETE  |
-| `None` (`Option` variant constructor) | `nil`                                                   |
-| `@[repr(C)]`                        | `layout c` at top of type body                            |
-| `@[repr(packed)]`                   | `layout packed`                                           |
-| `@[repr(transparent)]`              | `layout transparent`                                      |
-| `@[link(name = "x")]`               | options on `lib`: `lib "x", ...`                          |
-| `@[inline]`                         | `inline def f` modifier; or `inline :f` directive         |
-| `@[...]` syntax overall             | retired                                                   |
-| `@[test]` / `@[ignore]` / `@[should_panic]` | in-body `test` / `ignore` / `should_panic` directives in a test fn's body |
-| `@[bench]`                          | in-body `bench` directive                                 |
-| `@[deprecated]` / `@[stable]` / `@[unstable]` | in-body `deprecated` / `stable` / `unstable` directives |
-| `@[no_std]`                         | package-level `no_std` directive (one line at the top of the package root) |
-| `@[opt_out_send]` / `@[unsafe_impl_send]` | body-level `opt_out_send` / `unsafe_impl_send` directives |
-| `extern "C" ... end`                | `lib "<linkname>" ... end`                                |
-| `crate` (in path or keyword)        | `package`                                                 |
-| `null` (FFI null literal)           | `nil`                                                     |
-| `Vec[T]`                            | `Array[T]`                                                |
-| `HashMap[K, V]` / `Map[K, V]`       | `Hash[K, V]`                                              |
-| `HashSet[T]`                        | `Set[T]`                                                  |
-| `Rc[T]`                             | `Shared[T]`                                               |
-| `Arc[T]`                            | `SharedSync[T]`                                           |
-| `[…]` macro                     | bare `[…]` literal — produces an `Array[T]`               |
-| `{…}` macro                    | bare `{ k => v, … }` literal — produces a `Hash[K, V]`    |
-| `set!{…}` macro                     | `[…].to_set` (no dedicated literal — `{…}` is reserved for `Hash`) |
-| `::` path separator                 | `.` everywhere (`std.io`, `Color.Red`, `package.utils`)   |
-| `extern "C" ... end` with no link name | `lib "c" ... end`                                      |
-| tutorial language `&self` / `&mut self` | "reading method" / "writing method"                   |
-| `Hash` (mixin name)                 | `Hashable`                                                |
-| `Displayable` (mixin name)          | `Display`                                                 |
-| `Comparable` (mixin name)           | `Ord` (full order) and/or `PartialOrd` (partial order)    |
-| `Iterable` / `Iterator` (mixin name) | retired — collections are Ruby `Enumerable`-shaped; the block combinators work directly on `Array` (see §3.23) |
-| `derive` keyword                    | DELETE — implicit-include for structural mixins (§3.6); loud form is `include D1, D2` |
-| `@[derive(D1, D2)]` prefix attribute | same as above                                           |
-| `T::method` qualified call          | `T.method`                                                |
-| `'a` lifetime sigil in error text   | bare `a` (no sigil — error messages show the identifier as written) |
-| `None` literal                      | `nil`                                                     |
-| `null` literal (FFI)                | `nil` (the same token; context disambiguates per §3.10)   |
-| `Hash` (as a derivable-trait / mixin noun) | `Hashable` — the bare word `Hash` now names the **map type** `Hash[K, V]` (Ruby's `Hash`); the hashing mixin is `Hashable` |
-| `HashSet[T]` / `HashMap[K, V]` / `Map[K, V]` | `Set[T]` / `Hash[K, V]` (the public names; internal compiler type names like `Ty::Map` are unchanged) |
-| `File.read_string(path)`            | `fs.read_to_string(path)` (canonical stdlib spelling)     |
-| `String.new(s)` (for converting from `&str`) | `s.to_string` (`&str`→owned) / `b.clone` (`String`/`&String`→owned). `String.new` is the no-arg / pre-allocated constructor; the old `String.from(s)` static method was REMOVED (a bare literal is already owned). |
-| `def mut foo`                       | `def var foo` — method's receiver is writable                |
-| `&mut T` (reference type)           | `&var T`                                                  |
-| `*mut T` (raw pointer)              | `*var T`                                                  |
-| `for x in &mut coll`                | `for x in &var coll`                                      |
-| `iter_mut()` (method name)          | `iter_var()`                                              |
-| `deref_mut()` (method name)         | `deref_var()`                                             |
-| `FnMut(...) -> R` (closure type)    | `FnVar(...) -> R`                                         |
-| `mut` keyword (anywhere)            | DELETE — `var` covers every "writable" position           |
+| # | Rust form | Ruby form | Status of Ruby form |
+|---|---|---|---|
+| 1 | `let x = 1`, `var x = 1` | `x = 1`; constants `MAX = 3` | `x = 1` [implemented]; constants [planned] |
+| 2 | `Option[T]`, `Some(x)` | `T?`, `nil`, the bare value | [implemented] |
+| 3 | `Result[T, E]`, `Ok`, `Err`, "no exceptions" | `raise`, `begin/rescue/ensure`, `retry` | [planned] |
+| 4 | postfix `?` | exceptions propagate on their own | [planned] (with item 3) |
+| 5 | `?.` taught as safe navigation | `&.` | [implemented] |
+| 6 | `match ... pat -> expr ... end` | `case ... in ... then ... end` | [implemented] |
+| 7 | `if let` / `while let` | `if (x = opt)`, `while (x = q.pop)`, `case/in` | `case/in` [implemented]; assignment-in-condition narrowing [planned] |
+| 8 | `panic!` and the `!` macro convention | `raise "msg"`, `abort "msg"` | `abort` [implemented]; `raise` [planned] |
+| 9 | `unwrap!`, `expect!`, `unwrap_or`, `ok_or`, `map_err`, `and_then` | `x \|\| default`, `fetch`, `x or raise` | [planned] |
+| 10 | `struct`, `Point { x: 1 }` literals | `class`, `Struct.new`, `Data.define`, `Point.new(x: 1)` | `class` [implemented]; the rest [planned] |
+| 11 | `enum` with payload variants | `Data.define` per variant, symbols, `case/in` | [planned] |
+| 12 | `newtype`, tuples with `.0`, `type X =` | one-field `Data`, arrays and `a, b = pair`, `X = Y` | [planned] |
+| 13 | unit `()`, `Result[(), E]` | `nil` | [implemented] (`()` is [retired]) |
+| 14 | `[T; N]`, const generics, `const NAME =` | `MAX = 3`; maybe `StaticArray[T, N]` | [planned] (OQ-8) |
+| 15 | `Display`, `Debug`, `PartialEq`, `Eq`, `Ord`, `PartialOrd`, `Default`, `Into`, `Add`, `Hashable` | `to_s`, `inspect`, `==`, `eql?` + `hash`, `include Comparable` + `<=>`, defaults, `to_*`, `def +` | mixed, see section 13 |
+| 16 | `derive`, `@[attr]`, `#[attr]` | implicit includes, body directives | [implemented] (the attribute forms are [retired], E0607) |
+| 17 | `iter`, `into_iter`, `collect`, `Iterator`, `FromIterator`, `type Item` | `Enumerable` (`each`, `map`, `to_a`) | [implemented] |
+| 18 | `len`, `is_empty`, `to_string`, `push_str`, `to_upper`, `starts_with`, `trim`, `with_capacity`, `get_mut`, `insert`/`get` | `size`, `empty?`, `to_s`, `<<`, `upcase`, `start_with?`, `strip`, `[]`, `[]=` | mostly [implemented]; Rust names become [deprecated] aliases |
+| 19 | Rust `std::io/fs/env/process/path/time/net` shapes | `File.read`, `File.join`, `ARGV`, `ENV`, `system`, `Time.now`, `TCPServer` | [planned] (stdlib) |
+| 20 | `JoinHandle`, `MutexGuard`, `lock() -> Result`, atomics with `Ordering`, mpsc, `thread_local!` | `Thread.new { }.value`, `Mutex#synchronize`, `Thread::Queue`, `Thread.current[:x]` | [planned] (stdlib) |
+| 21 | `println!`, `format!`, `dbg!`, `assert!` with `{}` | `puts`, `p`, `format("%d", n)` | `puts` [implemented]; `p` partial; `format` [planned] |
+| 22 | `#{x:?}`, `#{n:>5}`, Debug output `Foo { x: 1 }` | `inspect`, `rjust`, `format`, `#<Foo x=1>` | `rjust` [implemented]; the rest [planned] |
+| 23 | `&str`, `str`, `&static str` | `String`, `&String` | [implemented] (`str` is [retired], E0730) |
+| 24 | `Fn(A) -> R`, `FnMut`, `FnOnce`, `FnVar`, `{ \|\| }`, bare `\|x\| e` | `&block` with `yield`, `Fn[(A) -> R]` (or `Proc`), `->(x) { }` | `&block`/`yield`/`Fn[...]` [implemented]; lambdas [planned] |
+| 25 | `(&self)`, `(self, ...)`, `self: &Self` receivers | `def m`, `def var m`, `def consume m` | [implemented] |
+| 26 | `use a.b.{C, D}` | `require`, `require_relative` | [implemented] |
+| 27 | `as` numeric casts | `to_i`, `to_f`, `to_i8`-style methods | `to_i`/`to_f` [implemented]; sized [planned] |
+| 28 | `USize`, `UInt8`, ... everywhere; `255u8` suffixes | `Int`/`Float`; sized types for FFI only | [planned] (OQ-8) |
+| 29 | `some`/`any`, `[T: B]`, `where`, associated types, GAT, HRTB, specialization | `[T < B]`; no GAT, HRTB or specialization | [planned] (OQ-11 for `some`/`any`) |
+| 30 | `async def`, `.await`, `Future`, `Poll`, `Waker`, `block_on` | Fiber scheduler, `Async do ... end`, `task.wait` | [planned, later] |
+| 31 | `unsafe` blocks and modifiers | `lib` FFI only | OQ-9 |
+| 32 | `loop ... end`, `continue`, `next` only in blocks | `loop do ... end`, `next` in every loop | [planned] |
+| 33 | `def f -> T { e }` | `def f = e` | [implemented] |
+| 34 | `mixin`, `extension`; reopening a class is an error | `module` with `include`; reopening a `class` | [planned] |
+| 35 | `init`, `self.field`, no `attr_*` | `initialize`, `@x`, `attr_reader` | `@x` [implemented]; `initialize`, `attr_*` [planned] |
+| 36 | explicit `def main` | top-level statements | [implemented] |
+| 37 | keywords that block Ruby method names (`match`, `where`, `any`, `loop`, `type`, `use`, `static`, `macro`, `package`); `~=` | free them; `=~` | [planned] |
+| 38 | `fn`, `pub`, `impl`, `mod`, `::<>`, `Box<dyn>`, `Lazy<T>`, `Vec`, `Arc` in examples | `def`, `include`, `Array`, `SharedSync` | Ruby forms [implemented]; Rust forms never parsed (docs only) |
+| 39 | `Map[K, V]` | `Hash[K, V]` | [implemented] |
+| 40 | `None`, `r"..."`, `'\r'`, `'\u{...}'`, `..=` | `nil`, `'...'`, `?\r`, `"\u{...}"`, `..` | [implemented] (Rust forms [retired]) |
+| 41 | editions, `no_std`, `cfg(feature)`, stability attributes, `r#ident`, `macro_rules!` | semver, Bundler-style groups, deprecation warnings | not language syntax; remove from language docs (`no_std` lives in `docs/decisions/phase4-no-std-wasm.md`) |
+| 42 | Rust prose and compiler internals in user docs ("matches Rust's ...", `Ty::Infer`, `crates/` paths) and Rust wording in `##` comments | Ruby and Ruxen wording | docs rule |
+| 43 | dead plumbing: `TokenKind::Lifetime` / `Mut` / `AmpMut`, empty `derive_traits`, unparsed `macro`/`static`/`package` keywords, formatter printing `'a` | delete | compiler cleanup |
 
-## 11. Implementation handoff
+---
 
-The migration plan (which references both end-state and prior
-forms for the duration of the work) lives in
-`docs/specs/syntax/_migration-plan.md` and is deleted on
-completion. After deletion, no document in the repo references
-prior syntax forms — Ruxen source files, tutorials, requirements
-docs, examples, and orchestration prompts all conform to this
-spec.
+## 22. Conformance
+
+- Every [implemented] form has at least one positive e2e fixture in
+  `tests/release-e2e/cases/`, and parses identically in the compiler, REPL,
+  LSP, IDE and formatter (`compiler/ruxen_core/tests/parser_feature_parity.rs`).
+- A [planned] form moves to [implemented] only with a positive fixture, a
+  negative unit test asserting its error code, and an update to this file.
+- A [deprecated] form gets a registered warning code with a `docs/errors/`
+  page and a fix-it that produces the Ruby form.
+- Diagnostic code ranges come from `compiler/ruxen_core/src/diagnostics/codes.rs`.
+  The old draft's placeholder names (`E-NIL-AMBIGUOUS`, `E-MIX-MISSING`,
+  ...) were never registered and are not used.
+
+---
+
+## Appendix A. Status evidence (2026-10-15)
+
+Paths are relative to `compiler/ruxen_core/src/` unless they start with
+`library/` or `tests/`.
+
+| Claim | Evidence |
+|---|---|
+| Keyword set (`let`, `var`, `match`, `loop`, `continue`, `struct`, `enum`, `newtype`, `type`, `mixin`, `extension`, `use`, `package`, `const`, `static`, `macro`, `where`, `as`, `some`, `any`, `init`, `Some`, `Ok`, `Err`, `async`, `await`, `unsafe`); no `begin`, `rescue`, `ensure`, `retry` | `lexer/token.rs`, `lookup_keyword` |
+| Top-level statements become `main` | `parser/implicit_main.rs`; `parser/items.rs` (top-level expression arm) |
+| `x = 1` declares a local | `resolve/control_flow.rs`, `resolve_bare_assignment_binding` |
+| `require` / `require_relative` | `module_loader.rs` (`parse_requirement`) |
+| `const` item; top-level `let` is not an item | `parser/items.rs` (`parse_top_level_item`, `parse_const_def`) |
+| Parallel assignment and splat target | `parser/methods.rs` (statement parser); `typeck/infer/expr.rs` (Copy-element and Array rules) |
+| `@x` read/write; `@param` auto-assign; `&block:` parameter | `parser/expr/atoms.rs` (`TokenKind::At`); `parser/methods.rs` (`parse_param`) |
+| Endless and brace-bodied `def` | `parser/methods.rs` (body parsing after the signature) |
+| `case/when`, `case/in`, `->` still accepted in `case/in` | `parser/expr/case_expr.rs` |
+| `match`, `if let`, `while let`, `loop ... end`, `unless`, `until`, ternary | `parser/expr/match_expr.rs`, `parser/expr/control_flow.rs` |
+| `next` only inside blocks; `{}` is an empty block | `parser/expr/atoms.rs` (`closure_depth > 0`; `parse_brace_map_or_closure`) |
+| `&.`, postfix `?` try, `.await` | `parser/expr/calls.rs` |
+| `??`; `&&`/`\|\|` need `Bool` (E0731) | `parser/expr/mod.rs`; `typeck/infer/ops.rs` |
+| `~=` match operator; `%w[...]`; `'...'` raw strings; `?c` chars; `"""` strings; `#= =#` comments | `lexer/token.rs`; `lexer/tokens.rs`; `lexer/strings.rs`; `lexer/mod.rs` |
+| No symbol literal node | `parser/ast.rs` (no symbol variant; `:name` handled only in `parse_visibility_name_list` and `try_parse_block_pass`) |
+| `T?` desugars to `Option[T]`; automatic wrapping of bare values | `parser/types.rs` (`parse_type`); `typeck/infer/mod.rs` (`auto_wrap_option_some`); `typeck/tests.rs` (B84 tests) |
+| Generic params `[T: B]`, `const N`, bare lowercase lifetimes | `parser/types.rs` (`parse_generic_param`) |
+| `::` in expressions; type paths use `.` | `parser/expr/atoms.rs`; `parser/types.rs` (`parse_type_path`) |
+| Class body accepts fields, `def`, `include` (single, `!`, `unsafe`), `lib`, `layout`, `alias`, `type X =` | `parser/classes.rs` (`parse_class_def`); `parser/methods.rs` (`parse_include_directive`) |
+| Built-in macros `panic`, `array`, `vec`, `map`, `hash`, `set` | `parser/macros.rs` (`BUILTIN_MACRO_NAMES`) |
+| `unwrap!` / `expect!` intrinsics | `mir/lower/expr/field_access.rs` |
+| `raise` only allowed as a paren-less call name | `parser/expr/calls.rs` (`is_bare_call_fn`) |
+| `block_given?` | `resolve/exprs.rs` |
+| `Comparable` (`<=>`), `Kernel`, `Enumerable[T]` (`each`), dead `Iterable`, `Error`, Rust-named marker mixins, `abort`, `exit!`, `p` overloads | `library/std/core/src/lib.rx` |
+| User `include Comparable` + `def <=>`; user `include Enumerable[Int]` + `def each`; user `to_s` wins over the default | `tests/release-e2e/cases/965_comparable_spaceship.rx`, `982_user_class_enumerable_map.rx`, `810_to_s_universal.rx` |
+| Default `to_s` prints `Point { x: 3, y: 4 }` | `tests/release-e2e/expected/810_to_s_universal.out`; `mir/lower/expr/method_call.rs` |
+| `String#size` returns `USize`; `String#dup`, `rjust`, `eql?` | `library/std/string/src/string.rx` |
+| `Box` type; `SharedSync` class; no `Shared` class | `resolve/types.rs`; `library/std/sync/src/shared_sync.rx` |
+| Redefining a stdlib class name is E0727 | `docs/errors/E0727.md` |
+| `@[...]` attributes rejected with E0607 | `parser/items.rs` |

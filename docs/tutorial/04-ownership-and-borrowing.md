@@ -118,7 +118,7 @@ A **writable borrow**, written `&var T`, gives exclusive read-write access:
 
 ```ruxen
 def append_bang(s: &var String)
-  s.push('!')
+  s.push_str("!")
 end
 
 def main
@@ -137,7 +137,7 @@ Two important details:
 # This won't compile:
 var data = "hi"
 let view = &data            # read-only borrow
-data.push('!')              # ERROR: tried to mutate while `view` is alive
+data.push_str("!")              # ERROR: tried to mutate while `view` is alive
 puts view
 ```
 
@@ -147,7 +147,7 @@ Fix: let the read-only borrow finish first. The compiler is smart about lifetime
 var data = "hi"
 let view = &data
 puts view                   # last use of view — borrow ends here
-data.push('!')              # OK
+data.push_str("!")              # OK
 ```
 
 ## Dangling references are impossible
@@ -184,9 +184,9 @@ Methods carry the same borrow rules as functions, just spelled differently:
 
 | Declaration | What it borrows | When to use |
 |-------------|-----------------|-------------|
-| `def method` | `&self` — read-only | Most methods that just look at state |
-| `def var method` | `&var self` — writable | Methods that change a field |
-| `def consume method` | `self` — owned | Methods that retire the value (e.g. `into_*`) |
+| `def method` | the receiver, read-only | Most methods that just look at state |
+| `def var method` | the receiver, writable | Methods that change a field |
+| `def consume method` | the receiver, owned | Methods that retire the value (e.g. `into_*`) |
 | `def self.method` | nothing | Class methods — no receiver at all |
 
 You met these in Chapter 3; they're the same rules from this chapter applied to `self`.

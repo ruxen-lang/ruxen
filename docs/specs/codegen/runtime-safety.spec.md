@@ -5,7 +5,8 @@
 
 **Status:** shipped Phase 1-2 (runtime sanitizer build + ABI pins).
 
-The C runtime (`crates/ruxen-core/runtime/runtime.c`) is the only
+The C runtime (per-package `library/std/<pkg>/runtime/*.c`, sharing
+`library/std/core/runtime/runtime.h`) is the only
 unsafe-by-default part of the Ruxen compiler.  This spec captures
 the structural guarantees the test harness enforces on it.
 
@@ -42,8 +43,8 @@ the build.
 ## B5 — Static assertions enforce 64-bit pointer width
 
 `_Static_assert(sizeof(void *) == 8)` and
-`_Static_assert(sizeof(void *) == sizeof(int64_t))` at the top of
-`runtime.c` reject 32-bit builds.  Ruxen assumes 64-bit pointers
+`_Static_assert(sizeof(void *) == sizeof(int64_t))` in the shared
+`runtime.h` header reject 32-bit builds.  Ruxen assumes 64-bit pointers
 throughout the MIR + codegen.
 
 (C tokens `void *` / `int64_t` above are C source — not Ruxen
@@ -59,7 +60,7 @@ surface syntax — and stay as written.)
 | B2        | `runtime_compiles_with_sanitizers`                     | `runtime_safety.rs`   |
 | B3        | `runtime_env_init_copies_argv_and_clones_reads`        | `runtime_safety.rs`   |
 | B4        | `runtime_fs_env_and_process_helpers_match_expected_abi`| `runtime_safety.rs`   |
-| B5        | compile-time `_Static_assert`s in `runtime.c`           | (build-time)          |
+| B5        | compile-time `_Static_assert`s in `runtime.h`           | (build-time)          |
 
 ---
 

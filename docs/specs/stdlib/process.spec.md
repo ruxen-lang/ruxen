@@ -15,7 +15,7 @@ once `Command.{status, output}` covered every use case.
 
 ---
 
-## B1 — `process.exit(code: Int) -> !`
+## B1 — `process.exit(code: Int) -> Never`
 
 Terminates the current process with the given exit code.  Returns the
 never-type `!` — control never returns to the caller.
@@ -23,7 +23,7 @@ never-type `!` — control never returns to the caller.
 `code` is widened to the OS-native exit code (8 bits on POSIX).
 Caller-side encoding (e.g. `exit(-1)` → `255`) follows libc semantics.
 
-## B2 — `Command.new(program: &str) -> Command`
+## B2 — `Command.new(program: &String) -> Command`
 
 Constructs a child-process builder.  No process is spawned until one
 of the terminal methods (`.status`, `.output`) is called.  The
@@ -34,10 +34,10 @@ it without calling a terminal is a no-op.
 
 | Method | Effect |
 |--------|--------|
-| `.arg(s: &str) -> Command`             | Append one argv slot. |
-| `.args(xs: Array[String]) -> Command`  | Append every slot in order. |
-| `.env(k: &str, v: &str) -> Command`    | Add / overwrite an env entry. |
-| `.current_dir(p: &str) -> Command`     | Set the child's cwd. |
+| `.arg(s: &String) -> Command`               | Append one argv slot. |
+| `.args(xs: Array[String]) -> Command`       | Append every slot in order. |
+| `.env(k: &String, v: &String) -> Command`   | Add / overwrite an env entry. |
+| `.current_dir(p: &String) -> Command`       | Set the child's cwd. |
 
 All builder methods return `Command` so the chain composes
 left-to-right.  Implementations must be order-preserving (argv slots
@@ -123,5 +123,5 @@ same `ExitStatus` shape as `.status`.
 ## Out of scope (v2)
 
 - `Command.spawn() -> Child` (async / non-blocking spawn).
-- Stdin piping (`.stdin(Stdio::piped()).input(...)`).
+- Stdin piping (`.stdin(Stdio.piped).input(...)`).
 - Windows support — POSIX-only in v1 (tier4_04 carve-out).

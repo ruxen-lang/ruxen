@@ -21,11 +21,11 @@ mixins ships." This spec is the "ships" half.
 
 ```rx
 mixin Comparable
-  def compare(other)        # required, no body
-  def less_than(self, other) -> Bool
+  def compare(other: &Self) -> Int        # required, no body
+  def less_than(other: &Self) -> Bool
     self.compare(other) < 0
   end
-  def greater_than(self, other) -> Bool
+  def greater_than(other: &Self) -> Bool
     self.compare(other) > 0
   end
 end
@@ -43,7 +43,7 @@ class Money
   amount: Int
   include Comparable
 
-  def compare(other)        # required — must implement
+  def compare(other: &Money) -> Int      # required — must implement
     self.amount - other.amount
   end
   # No less_than / greater_than — inherited from Comparable.
@@ -67,12 +67,12 @@ class FastInt
   value: Int
   include Comparable
 
-  def compare(other)
+  def compare(other: &FastInt) -> Int
     self.value - other.value
   end
 
   # Override less_than with a more efficient implementation:
-  def less_than(self, other) -> Bool
+  def less_than(other: &FastInt) -> Bool
     self.value < other.value    # skips the .compare indirection
   end
 end
@@ -120,25 +120,18 @@ required OR default. Resolution happens at the class level after
 synthesis:
 
 ```rx
-mixin Iterable
-  def next                  # required
-  def each(self, f)         # default — uses next + a loop
-    loop
-      match self.next
-        Some(v) -> f.(v)
-        None -> break
-      end
-    end
+mixin Describable
+  def name -> String        # required
+  def title -> String       # default — uses name
+    "Dr. #{self.name}"
   end
-  def map(self, f)          # default — uses each
-    let result = []
-    self.each { |x| result.push(f.(x)) }
-    result
+  def greeting -> String    # default — uses title
+    "Hello, #{self.title}"
   end
 end
 ```
 
-Resolution chain: `map` → `each` → `next`. As long as `next` is
+Resolution chain: `greeting` → `title` → `name`. As long as `name` is
 provided by the implementor (or by another default), every default
 resolves cleanly.
 
@@ -146,21 +139,21 @@ resolves cleanly.
 
 ```rx
 mixin Foo
-  def bar(self, x: Int) -> Bool
+  def bar(x: Int) -> Bool
     true
   end
 end
 
 class Bad
   include Foo
-  def bar(self, x: String) -> Bool   # wrong param type
+  def bar(x: String) -> Bool   # wrong param type
     true
   end
 end
 ```
 
 → `[E0613] override of mixin method 'bar' signature mismatches:
-expected (self, x: Int) -> Bool, found (self, x: String) -> Bool`.
+expected (x: Int) -> Bool, found (x: String) -> Bool`.
 Existing E0613 — reused.
 
 ---
@@ -169,14 +162,11 @@ Existing E0613 — reused.
 
 | Behaviour | Test fn                                              | File                            |
 |-----------|------------------------------------------------------|---------------------------------|
-| B1        | `mixin_with_default_body_parses`                     | `tests/mixin_defaults.rs`       |
-| B2        | `implementor_inherits_default_body_dispatch`         | `tests/mixin_defaults.rs`       |
-| B3        | `implementor_override_dispatches_locally`            | `tests/mixin_defaults.rs`       |
-| B4        | `missing_required_method_rejected_e0612`             | `tests/mixin_defaults.rs`       |
-| B6        | `default_body_calls_required_and_default_chain`      | `tests/mixin_defaults.rs`       |
-| B7        | `override_signature_mismatch_rejected_e0613`         | `tests/mixin_defaults.rs`       |
-| B2 e2e    | e2e `cases/760_mixin_default_method_dispatch.rx`    | release-e2e                     |
-| B3 e2e    | e2e `cases/761_mixin_default_method_override.rx`    | release-e2e                     |
+| B1, B2    | `mixin_default_body_with_string_interp_typechecks_and_runs` | `tests/mixin_defaults.rs` |
+| B2 e2e    | e2e `cases/22_mixin_default.rx`, `cases/86_mixin_default_method_used.rx` | release-e2e |
+| B2 e2e    | e2e `cases/980_mixin_default_block_self_param.rx`, `cases/981_mixin_default_block_generic_return.rx` | release-e2e |
+
+B3, B4, B6 and B7 have no dedicated pin yet.
 
 ---
 
@@ -185,7 +175,6 @@ Existing E0613 — reused.
 Once this ships, `library/std/core/src/lib.rx`'s mixin declarations
 can grow richer defaults. Candidates (separate prompt, not this
 task's scope):
-- `Iterable`: `each`, `map`, `filter`, `count`, `collect` on top of `next`.
 - `PartialOrd`: `<`, `<=`, `>`, `>=` on top of `partial_cmp`.
 - `Ord`: `min`, `max`, `clamp` on top of `cmp`.
 - `Comparable`: `less_than`, `greater_than`, `between` on top of `compare`.
@@ -195,7 +184,7 @@ That's task #19's polish-pass.
 
 ## Out of scope
 
-- **Mixin generics** (`mixin Iterator[T]`) — not in this task.
+- **Mixin generics** (`mixin Container[T]`) — not in this task.
 - **Mixin associated types** (`type Output` on Future) — already supported.
 - **Specialization** — overriding a default with a different
   signature variant (e.g. for performance) is allowed via B3; full

@@ -5,10 +5,9 @@
 
 **Status:** shipped Phase 2 #02-#03; integration via
 `option_result_runtime.rs`; helper-method surface self-hosted in
-`library/std/src/option_result.rx` since #06.8 T#17.
+`library/std/option_result/src/lib.rx` since #06.8 T#17.
 
-Ruxen's `Option` and `Result` mirror Rust's modulo a few v1
-simplifications.  Both are tagged enums whose payload reaches the
+`Option` and `Result` are tagged enums whose payload reaches the
 runtime as `int64_t`s (tag in the low half, payload pointer / scalar
 in the high half) so they pass cleanly through the C ABI.
 
@@ -26,7 +25,7 @@ Same as B1 for `Result`.
 
 ## B3 — `?` operator on `Result`
 
-**Given** a fn returning `Result[T, E]` and a sub-call
+**Given** a method returning `Result[T, E]` and a sub-call
 `x?` where `x: Result[T, E]`
 **When** `x = Err(e)`
 **Then** the enclosing function returns `Err(e)` immediately; `T` is
@@ -34,7 +33,7 @@ bound to the unwrapped value on the `Ok` path.
 
 ## B4 — `if let Some(x) = opt` pattern matching
 
-`if let Some(x) = opt { ... } else { ... }` binds `x` to the payload
+`if let Some(x) = opt … else … end` binds `x` to the payload
 on the `Some` arm; the `else` arm has no binding.
 
 ## B5 — Generic enum usage with payload
@@ -45,8 +44,7 @@ instantiation.
 
 ## B6 — `.expect!(msg)` panics on `nil` / `Err` with `msg`
 
-`expect!` is the v1 name for Rust's `expect` (the `!` marks it as
-panicking).  On `Some(x)` / `Ok(x)` it returns `x`; on `nil` /
+The `!` marks `expect!` as panicking.  On `Some(x)` / `Ok(x)` it returns `x`; on `nil` /
 `Err(_)` it panics with `msg`.
 
 ## B7 — `.unwrap_or(default)` falls back
@@ -64,7 +62,7 @@ present and pass through `nil` / `Err` unchanged.
 ## Pin tests
 
 All B1–B8 are covered by the integration test
-`crates/ruxen-core/tests/option_result_runtime.rs` which compiles +
+`compiler/ruxen_core/tests/option_result_runtime.rs` which compiles +
 runs E2E fixtures:
 
 | Behaviour | E2E fixture                                | Pin fn                  |
@@ -88,4 +86,3 @@ runs E2E fixtures:
 - `Option.and_then` / `Option.or_else` / `Option.flatten`.
 - `Try` mixin that user types can implement (the `?` operator is
   hard-wired to `Option` and `Result` in v1).
-- `Result[T, !]` (`Infallible` payload type).

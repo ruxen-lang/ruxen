@@ -186,7 +186,16 @@ fn compile_and_run(case_name: &str, bootstrap_packages: &[(String, Program)]) ->
         }
     };
 
-    if let Err(e) = codegen::compile(&mir, bin_path.to_str().unwrap()) {
+    let test_runtime =
+        ruxen_core::resolve::bootstrap::test_stdlib_runtime_sources(&root.join("library/test_std"));
+    if let Err(e) = codegen::compile_with_options(
+        &mir,
+        bin_path.to_str().unwrap(),
+        false,
+        &[],
+        &test_runtime,
+        codegen::Backend::Cranelift,
+    ) {
         return CaseOutcome {
             name: case_name.to_string(),
             ok: false,
@@ -383,6 +392,14 @@ fn release_e2e_all_fixtures() {
     // Load BOOTSTRAP_FILES ONCE up-front. `type_check` would otherwise
     // re-parse the entire stdlib (~27 files) for every fixture — a
     // ~6-minute fixed cost on the 291-fixture sweep.
+    //
+    // Some fixtures (434/436 stream drop, 750 trio-leak pin) use the
+    // test-only stdlib; this sweep opts into it for every case, and
+    // `compile_and_run` links its runtime C. `run.sh` opts in per case.
+    std::env::set_var(
+        ruxen_core::resolve::bootstrap::TEST_STDLIB_ENV,
+        workspace_root().join("library/test_std"),
+    );
     let mut bootstrap_diagnostics: Vec<Diagnostic> = Vec::new();
     let bootstrap_packages = ruxen_core::resolve::bootstrap::run_bootstrap_with_package_names(
         &mut bootstrap_diagnostics,

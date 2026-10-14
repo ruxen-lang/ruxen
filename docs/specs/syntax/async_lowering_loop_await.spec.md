@@ -232,7 +232,7 @@ expression (e.g. `0`), the lowering emits that as
 `Poll.Ready(<tail>)` after the loop exits cond-false.
 
 If the async fn body ends with the `while` itself and no tail, the
-return type must be `()` (or default-initialisable). Same as the
+return type must be `nil` (or default-initialisable). Same as the
 existing single-await terminal rule.
 
 ## 3. Implementation plan

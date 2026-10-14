@@ -39,8 +39,8 @@ C symbol; only the *reported* surface type changes.
 class-relative surface return
 
 **Given** a generic class `Foo[T]` with a lib decl
-`def bar as "ruxen_foo_bar"(self) -> Int` inside its lib block,
-AND a co-located lib decl `def baz as "ruxen_foo_baz"(self) -> Bar[T]`
+`def bar as "ruxen_foo_bar" -> Int` inside its lib block,
+AND a co-located lib decl `def baz as "ruxen_foo_baz" -> Bar[T]`
 **When** the user writes `f.bar` on `f: Foo[T]`
 **Then** the return type is reported as the **declared** surface
 type. If the lib decl says `-> Int`, the return is Int (B2 doesn't
@@ -59,8 +59,8 @@ Authors who want a typed return write it explicitly:
 class Mutex[T]
   lib "runtime/mutex.c"
     def self.new as "ruxen_mutex_new"(initial: T) -> Mutex[T]
-    def lock_raw as "ruxen_mutex_lock"(self) -> MutexGuard[T]
-    def get as "ruxen_mutex_guard_get"(self) -> T  # on MutexGuard
+    def lock_raw as "ruxen_mutex_lock" -> MutexGuard[T]
+    def get as "ruxen_mutex_guard_get" -> T  # on MutexGuard
   end
 end
 ```
@@ -83,7 +83,7 @@ the class's declared generic params.
 
 ## B4 — T binding from class-generic context
 
-**Given** an instance method declared as `def baz as "..."(self) -> T`
+**Given** an instance method declared as `def baz as "..." -> T`
 inside `class Foo[T]`
 **When** called on `f: Foo[String]`
 **Then** the return type is `String`.

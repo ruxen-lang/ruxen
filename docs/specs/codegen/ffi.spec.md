@@ -13,7 +13,7 @@ what the layout rules guarantee.
 
 ---
 
-## B1 — `unsafe { ... }` block parses
+## B1 — `unsafe ... end` block parses
 
 ```ruxen
 unsafe
@@ -54,7 +54,7 @@ the canonical spelling for the C standard library.
 
 ## B5 — `Void` return type
 
-FFI defs may return `Void` (mapped to Ruxen's `Unit`).
+FFI defs may return `Void` (mapped to `nil`).
 
 ## B6 — Multi-parameter FFI
 
@@ -120,20 +120,20 @@ Ruxen does not insert any implicit drop for raw pointers.
 | Behaviour | Test fn                                       | File             |
 |-----------|-----------------------------------------------|------------------|
 | B1        | `parse_unsafe_block` + `parse_unsafe_block_with_statements` | `phase7_ffi.rs` |
-| B2        | `parse_null_literal` + `parse_raw_pointer_type` + `parse_raw_mut_pointer_type` | `phase7_ffi.rs` |
-| B3        | `parse_lib_block` + `parse_lib_block_with_link_attr` | `phase7_ffi.rs` |
-| B4        | `parse_extern_block`                          | `phase7_ffi.rs`  |
+| B2        | `parse_null_literal` + `parse_raw_pointer_type` + `parse_raw_var_pointer_type` | `phase7_ffi.rs` |
+| B3        | `parse_lib_block` + `parse_lib_block_with_link_name` | `phase7_ffi.rs` |
+| B4        | `parse_lib_block_replaces_extern`             | `phase7_ffi.rs`  |
 | B5        | `parse_ffi_void_return`                       | `phase7_ffi.rs`  |
 | B6        | `parse_ffi_multiple_params`                   | `phase7_ffi.rs`  |
 | B7        | (variadic FFI parser pin — to land alongside B7 implementation) | `phase7_ffi.rs` |
-| B8        | `parse_repr_c_struct` + `c_struct_layout_matches_regular` | `phase7_ffi.rs` |
-| B9        | `parse_derive_attr_on_struct` + `parse_derive_attr_on_class` + `parse_derive_attr_on_enum` | `phase7_ffi.rs` |
-| B10       | `parse_inbody_derive_on_class` + `parse_inbody_derive_on_enum` | `phase7_ffi.rs` |
+| B8        | `parse_layout_c_struct` + `c_struct_layout_matches_regular` | `phase7_ffi.rs` |
+| B9        | `parse_include_on_struct` + `parse_include_on_class` + `parse_include_on_enum` | `phase7_ffi.rs` |
+| B10       | `parse_inbody_include_on_class` | `phase7_ffi.rs` |
 | B11 ptr   | `raw_pointer_layout`                          | `phase7_ffi.rs`  |
 | B11 packed| `packed_struct_layout`                        | `phase7_ffi.rs`  |
 | B11 trans | `transparent_struct_layout` + `transparent_struct_rejects_multiple_fields` | `phase7_ffi.rs` |
 
-<!-- TODO(migration): pin-test fn names still mention `null` / `mut` / `extern` / `derive` / `repr_c`. Internal Rust identifiers — rename when in scope. -->
+<!-- TODO(migration): pin-test fn `parse_null_literal` still says `null` (the literal is `nil`); rename when in scope. -->
 
 ---
 

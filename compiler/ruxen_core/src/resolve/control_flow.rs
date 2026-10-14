@@ -88,29 +88,22 @@ impl Resolver {
 
         let value = binding.value.as_ref().map(|v| self.resolve_expr(v));
 
-        let pattern = self.resolve_pattern_with_type(&binding.pattern, &ty);
+        let pattern = self.resolve_let_pattern(&binding.pattern, &ty, binding.mutable);
 
-        // Register the binding
-        let name = self.pattern_binding_name(&binding.pattern);
-        let def_id = self.symbols.define(
-            name,
-            DefKind::Variable {
-                mutable: binding.mutable,
-                ty: ty.clone(),
-            },
-            Visibility::Private,
-            binding.span.clone(),
-        );
-
-        // Insert into current scope
-        if let ast::Pattern::Identifier { name, .. } = &binding.pattern {
-            self.scopes.insert(name.clone(), def_id);
-        } else if let ast::Pattern::Tuple { .. } = &binding.pattern {
-            // For tuple destructuring, register each element
-            self.register_pattern_bindings(&binding.pattern, binding.mutable, &binding.span);
-        } else {
-            self.register_pattern_bindings(&binding.pattern, binding.mutable, &binding.span);
-        }
+        // A simple binding's def is the let's def. Any other pattern binds
+        // its names above and gets an unscoped def for the whole value.
+        let def_id = match &pattern {
+            HirPattern::Binding { def_id, .. } | HirPattern::Ref { def_id, .. } => *def_id,
+            _ => self.symbols.define(
+                self.pattern_binding_name(&binding.pattern),
+                DefKind::Variable {
+                    mutable: binding.mutable,
+                    ty: ty.clone(),
+                },
+                Visibility::Private,
+                binding.span.clone(),
+            ),
+        };
 
         HirStatement::Let {
             def_id,
@@ -175,7 +168,6 @@ impl Resolver {
 
         self.scopes.push(ScopeKind::Block);
         let pattern = self.resolve_pattern(&if_let.pattern);
-        self.register_pattern_bindings(&if_let.pattern, false, &if_let.span);
         let then_body = self.resolve_block_as_expr(&if_let.then_body);
         self.scopes.pop();
 
@@ -226,7 +218,6 @@ impl Resolver {
         for arm in &match_expr.arms {
             self.scopes.push(ScopeKind::Match);
             let pattern = self.resolve_pattern(&arm.pattern);
-            self.register_pattern_bindings(&arm.pattern, false, &arm.span);
             let guard = arm.guard.as_ref().map(|g| Box::new(self.resolve_expr(g)));
             let body = match &arm.body {
                 ast::MatchArmBody::Expr(e) => self.resolve_expr(e),
@@ -355,11 +346,7 @@ impl Resolver {
     /// the call's block slot.
     ///   - `&:sym`  → the closure `{ |__proc_arg| __proc_arg.sym }`.
     ///   - `&block` / `&` → a reference to the enclosing function's block slot.
-    pub(super) fn resolve_block_pass(
-        &mut self,
-        bp: &ast::BlockPassKind,
-        span: &Span,
-    ) -> HirExpr {
+    pub(super) fn resolve_block_pass(&mut self, bp: &ast::BlockPassKind, span: &Span) -> HirExpr {
         match bp {
             ast::BlockPassKind::ToProc(method_name) => {
                 // Build `{ |__proc_arg| __proc_arg.<method_name> }` and resolve

@@ -20,7 +20,7 @@ Tiers 1-4 fill functional gaps: stdlib, concurrency, async, LSP, macros, and so
 on. Tier 5 is about **what a language needs to survive past v1**:
 
 - A **normative reference** so an independent implementer could build a
-  conforming compiler without reverse-engineering `ruxen-core`.
+  conforming compiler without reverse-engineering `ruxen_core`.
 - A **stability and versioning story** so libraries written today keep
   compiling tomorrow, and breaking improvements can still ship.
 - **Deprecation and feature-gating attributes** so stdlib can grow without
@@ -59,24 +59,24 @@ The fine-grained citations are in the per-doc §2 sections. Top-level status:
   informative-only and incomplete even as a tutorial (e.g. precedence is
   never shown; only hinted at in `docs/tutorial/02-variables-and-types.md`).
 - **Editions**: the field `package.edition: Option<String>` exists
-  (`crates/ruxen-cli/src/manifest.rs:29`) and `"2026"` is written by the
+  (`src/ruxen_cli/src/manifest.rs:29`) and `"2026"` is written by the
   scaffolder (`scaffold.rs:145`). It is **never read** by the compiler —
-  grep `edition` across `crates/ruxen-core` returns zero matches outside of
+  grep `edition` across `compiler/ruxen_core/` returns zero matches outside of
   Rust's own `Cargo.toml` files. No edition-gating logic exists.
 - **Deprecation / stability attributes**: no attribute named `deprecated`,
-  `stable`, or `unstable` is recognised. `parse_attributes` only
-  dispatches `@[link]` and `@[repr]` (`parser/mod.rs:473-511`). No warning
+  `stable`, or `unstable` is recognised. The `@[...]` prefix-attribute
+  parser was retired; body-level directives are the only form. No warning
   infrastructure for "use of deprecated X."
 - **Error codes**: partial. `BorrowError` has `ErrorCode::E1001..E1010`
   (`borrow_check/errors.rs:6-16`) and renders `error[E1001]:` headers
   (`:66`). `Diagnostic::error_with_code` exists (`diagnostics/mod.rs:39`) but
   **no other subsystem uses it** — the typeck emits plain `Diagnostic::error`
   with no code. No `--explain` subcommand anywhere in `ruxenc` or
-  `ruxen-cli/src/cli.rs:25-113`. No error-explanation registry.
+  `ruxen_cli/src/cli.rs:25-113`. No error-explanation registry.
 - **Diagnostic suggestions**: ad-hoc. `BorrowError.help: Vec<String>`
   (`borrow_check/errors.rs:61`) is free-form prose. No span-based
   replacement, no machine-applicability level, no structured suggestion
-  type. The LSP (`ruxen-ide/src/diagnostics.rs:30-60`) only maps primary
+  type. The LSP (`ruxen_ide/src/diagnostics.rs:30-60`) only maps primary
   span + secondary "related information"; `help` entries are lost in the
   LSP conversion (`:47-58` does not touch `err.help`).
 
@@ -128,9 +128,9 @@ The fine-grained citations are in the per-doc §2 sections. Top-level status:
 | Tier 5 doc | Interacts with |
 |------------|----------------|
 | 01 Language reference | **All tiers.** Parser (tier 2 if any), typeck, borrow check, stdlib (tier 1). The reference must be updated whenever surface changes. |
-| 02 Editions | **Tier 1** (stdlib — old-edition shims); **Tier 3** (LSP — edition-aware diagnostics); **Tier 4** (`ruxen-cli` — manifest). |
+| 02 Editions | **Tier 1** (stdlib — old-edition shims); **Tier 3** (LSP — edition-aware diagnostics); **Tier 4** (`ruxen_cli` — manifest). |
 | 03 Attributes | **Tier 1** (implicit-include for structural mixins — `derive`/`@[...]` retired; see tier1_05); **Tier 1.05** (stability directives on every stdlib item); **Tier 3** (LSP — hover shows stability). |
-| 04 Error codes | **Tier 3** (LSP — `diag.code` already flows through `ruxen-ide/src/diagnostics.rs:22`); all phases that emit errors. |
+| 04 Error codes | **Tier 3** (LSP — `diag.code` already flows through `ruxen_ide/src/diagnostics.rs:22`); all phases that emit errors. |
 | 05 Suggestions | **Tier 3** (LSP code actions = quick fix); **tier 5 doc 02** (`ruxen fix` migrator reuses machine-applicable suggestions). |
 
 ---
@@ -146,14 +146,14 @@ Unblocks tier-1 B2 (derive attribute untangling) and all other Tier-5 docs.
 **Phase B — diagnostic infrastructure unification (1-2 weeks).**
 Doc 04 phases 4a-4b and doc 05 phases 5a-5b, interleaved:
 
-1. Introduce `ruxen-core::diagnostics::v2::Diagnostic` with codes,
+1. Introduce `ruxen_core::diagnostics::v2::Diagnostic` with codes,
    primary/secondary labels, suggestions.
 2. Migrate `BorrowError` into it; delete `BorrowError` as a separate type
    (or keep as `pub use` alias for now).
 3. Introduce `ErrorCode` as a crate-wide enum covering typeck, borrow check,
    resolve, parser, lexer.
 4. `ruxen --explain` subcommand in `ruxenc/src/main.rs` (and mirror in
-   `ruxen-cli`).
+   `ruxen_cli`).
 
 **Phase C — error-code population (2-3 weeks).**
 Doc 04 phase 4c. Every `self.error(…)` site in resolve/typeck/parser/lexer
@@ -173,8 +173,9 @@ structured suggestions:
 **Phase E — edition infrastructure (2-3 weeks).**
 Doc 02 phases 2a-2b. Wire `package.edition` through the pipeline; introduce
 `EditionCtx`; add the first edition-gated feature (something cheap — e.g.
-rename `Map[K,V]` to `Map[K,V]` on 2027 only, issue deprecation on
-2026). Implement `ruxen fix --edition=2027` driver that applies machine-
+a rename that is an error on 2027 only, with a deprecation on
+2026; the earlier `Hash[K,V]` → `Map[K,V]` candidate is dropped, since the
+collection keeps Ruby's name `Hash[K, V]`). Implement `ruxen fix --edition=2027` driver that applies machine-
 applicable suggestions across the whole crate.
 
 **Phase F — language reference drafting (4-6 weeks).**
@@ -295,7 +296,7 @@ Items below survived the docs and need the project lead's call:
   and `ruxen` (build tool / `cargo` equivalent). Doc 04 §OQ-2 recommends
   both, with `ruxen explain` being the canonical user-facing name.
 - **Public-ID vs private-ID for spans in serialized diagnostics.** JSON-out
-  for `ruxen-ide` needs a stable shape if people build tooling on it;
+  for `ruxen_ide` needs a stable shape if people build tooling on it;
   today `Span` includes byte offsets, which are source-version-sensitive.
   Doc 05 §OQ-3.
 
@@ -310,12 +311,12 @@ Tier 5 is "done" when:
       backing every rule.
 - [ ] `ruxen --explain E1001` prints a paragraph of Markdown-rendered prose
       and an example; same for every other registered code.
-- [ ] Every `Diagnostic::error(...)` call in `ruxen-core` carries an
+- [ ] Every `Diagnostic::error(...)` call in `ruxen_core` carries an
       `ErrorCode`.
 - [ ] `deprecated` on a stdlib item causes call sites to produce a
       warning diagnostic with the `note` and a suggestion to migrate.
 - [ ] In-body `stable since: "0.2.0"` and `unstable feature: "foo"` directives are
-      parsed, stored on items, and queryable from `ruxen-ide` hovers.
+      parsed, stored on items, and queryable from `ruxen_ide` hovers.
 - [ ] Two editions (`"2026"`, `"2027"`) are live; a crate on `"2026"` can
       be linked against from a crate on `"2027"`; a 2027-only feature is
       gated out when the manifest says `edition = "2026"`.

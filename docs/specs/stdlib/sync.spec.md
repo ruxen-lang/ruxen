@@ -31,7 +31,7 @@ The following types are resolvable at the type level via
 | `ThreadId`              | Opaque thread identifier                        |
 | `Mutex[T]`              | Mutual-exclusion wrapper                        |
 | `MutexGuard[T]`         | RAII guard returned by `Mutex.lock`             |
-| `SharedSync[T]`         | Atomic reference-counted shared owner (Arc)     |
+| `SharedSync[T]`         | Atomic reference-counted shared owner           |
 | `PoisonError`           | Error from a poisoned mutex                     |
 | `ThreadPanic`           | Error from a panicked spawned thread            |
 
@@ -47,7 +47,7 @@ calling thread via POSIX `nanosleep`.
 ## B3 — `Thread.yield_now()` runtime helper
 
 **Given** `Thread.yield_now()`
-**Then** the runtime calls `sched_yield(3)` and returns `()`.
+**Then** the runtime calls `sched_yield(3)` and returns `nil`.
 
 (Already shipped Phase 1.)
 
@@ -101,7 +101,7 @@ if `.join()` was never called.
 The Mutex stores `{ pthread_mutex_t, int64_t payload }`. The payload
 carries either T inline (if T fits in 8 bytes per the existing ABI)
 or a heap pointer to T. The same i64-payload pattern as
-`Array[T]`/`Vec[T]` — see `library/std/array/src/lib.rx` for the
+`Array[T]` — see `library/std/array/src/lib.rx` for the
 canonical comment.
 
 **Poison rule:** if the thread holding the lock panics, the mutex
@@ -270,4 +270,4 @@ bench fails the spec.
 - **`Barrier`, `Semaphore`, `CondVar`.** Out of MVP per the
   primitive-scope decision.
 - **Mutex/SharedSync interior storing > 8 bytes inline.** Same ABI
-  limit as `Vec[T]`: users wrap big payloads in `Box[T]` first.
+  limit as `Array[T]`: users wrap big payloads in `Box[T]` first.

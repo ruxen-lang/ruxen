@@ -9,7 +9,7 @@ linked by codegen.
   growable `int64_t`-slot array used everywhere), and the core function decls.
 - `alloc.c` — `ruxen_alloc` (zeroing `malloc` wrapper, panic-on-OOM) and
   `ruxen_string_ORIG_FREE` / free helpers. The single allocation seam.
-- `repl_replay.c` — REPL JIT replay support. `test_extern.c` — test-only externs.
+- `repl_replay.c` — REPL JIT replay support. (Test-only externs live in `library/test_std/`, outside the production runtime.)
 
 ## Public surface
 `ruxen_alloc`, the `Ruxen*` struct layouts (esp. `RuxenVec { int64_t* data; len; cap }`),

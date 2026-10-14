@@ -8,6 +8,12 @@ Blocks: `LendingIterator`, `StreamingIterator`, `Pool` /
         `Collection` mixins that return borrowed views, any mixin with
         an associated type that itself takes a lifetime
 
+> **Note.** The stdlib `Iterator` / `IntoIterator` / `FromIterator` layer
+> that these examples assume was dropped: Ruxen iteration is
+> `Enumerable[T]` over a single `each` method (`library/std/core/src/lib.rx`).
+> `Iterator` (and `LendingIterator`) below is an illustrative mixin with an associated type,
+> not shipped or planned stdlib API.
+
 ## 1. Summary & Motivation
 
 A *generic associated type* is an associated type that takes its own
@@ -17,7 +23,7 @@ canonical example:
 ```ruxen
 mixin LendingIterator
   type Item[a]
-  def var next[a](self: &a var Self) -> Option[Self.Item[a]]
+  def var next[a] -> Option[Self.Item[a]]
 end
 ```
 
@@ -28,7 +34,7 @@ A class body for `WindowIter` over a slice:
 class WindowIter[Int]
   include LendingIterator
   type Item[a] = &a [Int]
-  def var next[a](self: &a var Self) -> Option[&a [Int]] ...
+  def var next[a] -> Option[&a [Int]] ...
 end
 ```
 
@@ -43,11 +49,11 @@ class body would have to promote items to owned types.
 1. **Pools of borrowed resources.** `struct Pool[T]; pool.acquire -> some Handle[_ Pool]`
    where the handle's lifetime is tied to the pool.
 2. **Streaming parsers.** A parser that yields borrowed slices from
-   an input buffer — cannot be expressed as `Iterator[Item = &Str]`
+   an input buffer — cannot be expressed as `Iterator[Item = &String]`
    with a fixed lifetime.
 3. **Cursor-like APIs.** `Array.chunks_mut[N]` returns a lending
    iterator of `&var [T; N]`.
-4. **Async iteration.** `async fn next` on a stream is an associated
+4. **Async iteration.** `async def next` on a stream is an associated
    type generic over the output future (blocks tier-1 async doc 03).
 
 GATs took six years to stabilize in Rust (RFC 1598 in 2016; stable in
@@ -76,7 +82,7 @@ extend every part with a generic-args slot.
 
 - **G1.** `mixin T; type A[a]; type B[U, a]` — associated types
   with lifetime and type parameters.
-- **G2.** `class S; include T; type A[a] = &a Str; type B[U, a] = Map[a, U]`
+- **G2.** `class S; include T; type A[a] = &a String; type B[U, a] = Hash[a, U]`
   — class bodies bind the generic associated type.
 - **G3.** Use-site projection with generic args: `<Self as T>.A[b]`,
   `I.A[x]`, `I.B[Int, x]`.
@@ -104,13 +110,13 @@ extend every part with a generic-args slot.
 ```ruxen
 mixin LendingIterator
   type Item[a]
-  def var next[a](self: &a var Self) -> Option[Self.Item[a]]
+  def var next[a] -> Option[Self.Item[a]]
 end
 
 mixin Collection
   type Iter[a]: Iterator[Item = &a Self.Elem]
   type Elem
-  def iter[a](self: &a Self) -> Self.Iter[a]
+  def iter[a] -> Self.Iter[a]
 end
 ```
 
@@ -137,7 +143,7 @@ class WindowIter[T]
 
   include LendingIterator
   type Item[a] = &a [T]
-  def var next[a](self: &a var Self) -> Option[&a [T]]
+  def var next[a] -> Option[&a [T]]
     if self.pos + self.width > self.data.len
       return nil
     end
@@ -229,7 +235,7 @@ pub struct ImplInfo {
 }
 ```
 
-A `type Item[a] = &a Str` binding is stored as:
+A `type Item[a] = &a String` binding is stored as:
 
 ```
 AssocBinding {

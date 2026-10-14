@@ -17,7 +17,7 @@ Returns the process's command-line argv as an `Array[String]`.  Element 0
 is the program name; subsequent elements are user arguments.  Always
 non-empty (at least the program name is present).
 
-## B2 — `var(name: &str) -> Result[String, VarError]`
+## B2 — `var(name: &String) -> Result[String, VarError]`
 
 Looks up a single environment variable.
 

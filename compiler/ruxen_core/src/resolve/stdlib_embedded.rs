@@ -24,10 +24,6 @@ pub const BOOTSTRAP_EMBEDDED: &[(&str, &str)] = &[
         include_str!("../../../../library/std/core/src/lib.rx"),
     ),
     (
-        "bootstrap_smoke/src/lib.rx",
-        include_str!("../../../../library/std/bootstrap_smoke/src/lib.rx"),
-    ),
-    (
         "io/src/lib.rx",
         include_str!("../../../../library/std/io/src/lib.rx"),
     ),
@@ -130,10 +126,6 @@ pub const BOOTSTRAP_EMBEDDED: &[(&str, &str)] = &[
     (
         "base64/src/lib.rx",
         include_str!("../../../../library/std/base64/src/lib.rx"),
-    ),
-    (
-        "_pin_zero_rust_stdlib/src/lib.rx",
-        include_str!("../../../../library/std/_pin_zero_rust_stdlib/src/lib.rx"),
     ),
     (
         "regex/src/lib.rx",
@@ -488,6 +480,42 @@ mod tests {
                 !BOOTSTRAP_EMBEDDED[i].1.is_empty(),
                 "embedded source for `{}` is empty",
                 rel
+            );
+        }
+    }
+
+    /// The filesystem loader concatenates `lib.rx` with every sibling
+    /// `.rx` in the package's `src/`; the embedded table must hold the
+    /// same set, and each listed package's `lib.rx` must be embedded.
+    #[test]
+    fn multi_file_pkg_lib_present_when_siblings_listed() {
+        let std_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../library/std");
+        for (lib_rel, _) in BOOTSTRAP_EMBEDDED {
+            let src_dir = std_root.join(lib_rel).parent().unwrap().to_path_buf();
+            let mut on_disk: Vec<String> = std::fs::read_dir(&src_dir)
+                .unwrap_or_else(|e| panic!("read {}: {e}", src_dir.display()))
+                .flatten()
+                .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|n| n.ends_with(".rx") && n != "lib.rx")
+                .collect();
+            on_disk.sort();
+            let mut listed: Vec<String> = BOOTSTRAP_EMBEDDED_SIBLINGS
+                .iter()
+                .find(|(p, _)| p == lib_rel)
+                .map(|(_, sibs)| sibs.iter().map(|(n, _)| n.to_string()).collect())
+                .unwrap_or_default();
+            listed.sort();
+            assert_eq!(
+                listed,
+                on_disk,
+                "embedded siblings for `{lib_rel}` differ from {}",
+                src_dir.display()
+            );
+        }
+        for (lib_rel, _) in BOOTSTRAP_EMBEDDED_SIBLINGS {
+            assert!(
+                embedded_source(lib_rel).is_some(),
+                "`{lib_rel}` lists siblings but its lib.rx is not in BOOTSTRAP_EMBEDDED"
             );
         }
     }

@@ -368,6 +368,19 @@ fn test_comment_collector_multiple() {
     assert_eq!(comments.len(), 2);
 }
 
+/// An interpolated string passed as an argument INSIDE another string's
+/// `#{...}` is a single `InterpolatedString` token in the outer part's token
+/// list. It must be reconstructed as source (`"a#{p}ple"`), not printed with
+/// its Rust `Debug` form, which re-lexes as garbage (`None` → E0008).
+#[test]
+fn test_nested_interpolated_string_arg() {
+    let source = fmt_fixture("test_nested_interpolated_string_arg");
+    let result = format(&source);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert_eq!(result.output, source, "\nGot:\n{}", result.output);
+    assert_idempotent(&source);
+}
+
 #[test]
 fn test_comment_inside_interpolation_ignored() {
     let source = fmt_fixture("test_comment_inside_interpolation_ignored");

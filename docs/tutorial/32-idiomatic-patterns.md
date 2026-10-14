@@ -111,7 +111,7 @@ class Url
   def init(@raw: String)
   end
 
-  def self.from(s: &str) -> Url
+  def self.from(s: &String) -> Url
     Url.new(s.to_string)
   end
 end
@@ -139,7 +139,7 @@ class Port
     Err("not a number")
   end
 
-  def self.from_str(s: &str) -> Result[Port, String]
+  def self.from_str(s: &String) -> Result[Port, String]
     match s.parse_int
       Ok(n)  -> Port.classify(n)
       Err(_) -> Port.not_a_number
@@ -165,11 +165,11 @@ The strict pattern that pervades the standard library: any operation that *can* 
 ```ruxen
 # YES
 def find_user(id: Int) -> Option[User]
-def parse_port(s: &str) -> Result[Port, String]
+def parse_port(s: &String) -> Result[Port, String]
 
 # NO
 def find_user(id: Int) -> User              # what does "not found" return?
-def parse_port(s: &str) -> Int              # what does -1 mean? 0?
+def parse_port(s: &String) -> Int              # what does -1 mean? 0?
 ```
 
 At the call site, `match` exhaustively or compose with `?`:

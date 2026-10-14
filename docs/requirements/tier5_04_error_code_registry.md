@@ -37,7 +37,7 @@ What's missing:
 - No registry; codes live in scattered enums per-subsystem.
 - No long-form explanations.
 - Most diagnostics don't have codes: lexer, parser, resolver, typeck,
-  MIR — `grep -r error_with_code crates/ruxen-core` returns zero non-
+  MIR — `grep -r error_with_code compiler/ruxen_core/` returns zero non-
   test hits.
 
 This doc specifies the code-namespace policy, the registration
@@ -50,7 +50,7 @@ how to roll out codes across the compiler.
 
 ### 2.1 Existing error code enum
 
-`crates/ruxen-core/src/borrow_check/errors.rs:5-48`:
+`compiler/ruxen_core/src/borrow_check/errors.rs:5-48`:
 
 ```rust
 pub enum ErrorCode {
@@ -77,7 +77,7 @@ variants.
 
 ### 2.2 Diagnostic carrier (top-level)
 
-`crates/ruxen-core/src/diagnostics/mod.rs:21-56`:
+`compiler/ruxen_core/src/diagnostics/mod.rs:21-56`:
 
 ```rust
 pub struct Diagnostic {
@@ -96,7 +96,7 @@ impl Diagnostic {
 
 `BorrowError` is a **separate** struct (not a `Diagnostic`)
 with its own `Display` extension (`borrow_check/errors.rs:64-77`). They
-render differently. The IDE glue at `crates/ruxen-ide/src/diagnostics.
+render differently. The IDE glue at `src/ruxen_ide/src/diagnostics.
 rs:30-60` has two different conversion functions.
 
 ### 2.3 Reserved codes from tier-1 docs
@@ -109,8 +109,8 @@ rs:30-60` has two different conversion functions.
 
 ### 2.4 What's absent
 
-- No `ruxen --explain X` in `crates/ruxenc/src/main.rs:40-68` nor
-  `crates/ruxen-cli/src/cli.rs:25-113`.
+- No `ruxen --explain X` in `src/ruxenc/src/main.rs:40-68` nor
+  `src/ruxen_cli/src/cli.rs:25-113`.
 - No `docs/errors/` directory.
 - No central `ErrorCode` enum spanning the whole compiler. Per-
   subsystem enums will multiply (doc 05 adds more, tier1 adds more).
@@ -123,7 +123,7 @@ rs:30-60` has two different conversion functions.
 
 ### 3.1 Goals
 
-- A **single, crate-wide** `ErrorCode` enum in `ruxen-core` naming
+- A **single, crate-wide** `ErrorCode` enum in `ruxen_core` naming
   every error code in the compiler.
 - Every error-level `Diagnostic` emitted by the compiler carries an
   `ErrorCode` (no more bare `.error(msg, span)` in end-user output).
@@ -189,7 +189,7 @@ zeros (`E0001`, `E0308`, `E1001`). Padded so sorts are natural and
 
 ### 4.3 Registry module
 
-New module `crates/ruxen-core/src/error_codes.rs`:
+New module `compiler/ruxen_core/src/error_codes.rs`:
 
 ```rust
 //! Central registry of all error codes emitted by the Ruxen compiler.
@@ -295,7 +295,7 @@ duplication for marginal safety.
 ### 4.5 Diagnostic unification
 
 **This is a prerequisite.** `BorrowError` and `Diagnostic` should
-merge. Proposed new carrier in `crates/ruxen-core/src/diagnostics/
+merge. Proposed new carrier in `compiler/ruxen_core/src/diagnostics/
 mod.rs`:
 
 ```rust
@@ -463,12 +463,12 @@ shape; we generalize it to all `Diagnostic` values.
 
 ### 5.1 Where `ErrorCode` lives
 
-`crates/ruxen-core/src/error_codes.rs` — new module.
+`compiler/ruxen_core/src/error_codes.rs` — new module.
 
-`crates/ruxen-core/src/diagnostics/mod.rs` — imports `ErrorCode`, uses
+`compiler/ruxen_core/src/diagnostics/mod.rs` — imports `ErrorCode`, uses
 in `Diagnostic.code: Option<ErrorCode>`.
 
-`crates/ruxen-core/src/borrow_check/errors.rs` — the local
+`compiler/ruxen_core/src/borrow_check/errors.rs` — the local
 `ErrorCode` enum is deleted; replaced with re-export:
 `pub use crate::error_codes::ErrorCode;`. All existing call sites keep
 compiling.
@@ -489,7 +489,7 @@ docs/errors/
 
 ### 5.3 Build-time inclusion
 
-`build.rs` in `ruxen-core` scans `docs/errors/*.md`, fails the build if
+`build.rs` in `ruxen_core` scans `docs/errors/*.md`, fails the build if
 any file-to-variant or variant-to-file mismatch, and emits an
 `include!()`-friendly `$OUT_DIR/error_explanations.rs`:
 
@@ -508,7 +508,7 @@ distributed compiler).
 
 ### 5.4 `ruxen explain` subcommand
 
-`crates/ruxen-cli/src/cli.rs:25-113` — add:
+`src/ruxen_cli/src/cli.rs:25-113` — add:
 
 ```rust
 Explain {
@@ -523,15 +523,15 @@ Explain {
 },
 ```
 
-Handler in `ruxen-cli/src/main.rs` calls into
+Handler in `ruxen_cli/src/main.rs` calls into
 `ruxen_core::error_codes::ErrorCode::explain(...)`.
 
 For `ruxenc` the flag is `--explain EXXXX`, parsed in
-`crates/ruxenc/src/main.rs:27-37`.
+`src/ruxenc/src/main.rs:27-37`.
 
 ### 5.5 CI lint for registry coverage
 
-Test `crates/ruxen-core/tests/error_code_registry.rs`:
+Test `compiler/ruxen_core/tests/error_code_registry.rs`:
 
 ```rust
 #[test]
@@ -567,7 +567,7 @@ fn title_matches_md_h1() {
 
 ### 5.6 Populating codes — the migration
 
-Running `grep 'diag.*error(' crates/ruxen-core/src` across the parser,
+Running `grep 'diag.*error(' compiler/ruxen_core/src` across the parser,
 resolver, typeck, MIR, etc., turns up on the order of 300-400 call
 sites. Each needs a code.
 
@@ -598,17 +598,17 @@ This is mechanical and can be done incrementally across several PRs.
    `E0500` type mismatch; etc.).
 2. Replace `Diagnostic.code: Option<String>` with
    `Option<ErrorCode>`. Update the LSP conversion in
-   `ruxen-ide/src/diagnostics.rs:11-28`.
+   `ruxen_ide/src/diagnostics.rs:11-28`.
 3. Migrate `BorrowError` to a factory over the new `Diagnostic`. Kill
    the `BorrowError` struct or keep it as a compat alias. Delete
-   `ruxen-ide/src/diagnostics.rs:30-60` once merge is complete.
+   `ruxen_ide/src/diagnostics.rs:30-60` once merge is complete.
 4. `Diagnostic` renderer in the rustc-alike multi-line shape (§4.8).
 
 ### 6.2 Phase 4b — `--explain` scaffolding (1 week)
 
 1. `docs/errors/` with `_template.md`, `README.md`, and `.md` files
    for the ten existing `E1001-E1010` codes.
-2. `build.rs` in `ruxen-core` generates `EXPLANATIONS` table.
+2. `build.rs` in `ruxen_core` generates `EXPLANATIONS` table.
 3. `ruxen explain X` / `ruxenc --explain X` subcommands.
 4. Registry-coverage tests.
 
@@ -650,7 +650,7 @@ Already planned in tier5_05 §5.6; this phase is the joint deliverable.
   suppress by code too.
 - **Tier 5 doc 05 (suggestions):** `Diagnostic.suggestions` field
   added in phase 4a.
-- **Tier 3 (LSP):** `ruxen-ide/src/diagnostics.rs:22` already maps
+- **Tier 3 (LSP):** `ruxen_ide/src/diagnostics.rs:22` already maps
   `diag.code` to `NumberOrString`. Once unified, this mapping drops
   the `BorrowError` branch.
 - **Tier 1 concurrency (doc 02) / derive (doc 05):** both pre-
@@ -760,7 +760,7 @@ new uses after phase 4c.
 
 ## 10. Acceptance criteria
 
-- [ ] `crates/ruxen-core/src/error_codes.rs` exists with a single
+- [ ] `compiler/ruxen_core/src/error_codes.rs` exists with a single
       `ErrorCode` enum.
 - [ ] `Diagnostic.code: Option<ErrorCode>` replaces `Option<String>`.
 - [ ] `BorrowError` is either deleted or re-implemented as a
@@ -776,7 +776,7 @@ new uses after phase 4c.
       `.md` file has a variant.
 - [ ] Title-match test: `# EXXXX: title` in `.md` matches
       `ErrorCode::title()`.
-- [ ] Every end-user diagnostic in `ruxen-core` has an `ErrorCode`.
+- [ ] Every end-user diagnostic in `ruxen_core` has an `ErrorCode`.
 - [ ] Multi-line rustc-alike rendering for all diagnostics.
 - [ ] LSP `diag.code` field flows through (already works; verify no
       regressions).

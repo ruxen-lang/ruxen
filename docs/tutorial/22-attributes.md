@@ -17,9 +17,9 @@ struct Point
 end
 
 def main
-  let p = Point { x: 1, y: 2 }
+  let p = Point.new(1, 2)
   puts "#{p:?}"
-  puts "#{p == Point { x: 1, y: 2 }}"
+  puts "#{p == Point.new(1, 2)}"
 end
 ```
 
@@ -89,10 +89,10 @@ Now `"#{p:?}"` prints `(1, 2)` instead of `Point { x: 1, y: 2 }`.
 
 ### When a field doesn't support a mixin
 
-If `Point` had a field whose type isn't `Hashable`, the implicit `Hashable` include wouldn't fire. You'd find out at the **use site** — typically when you try to use a `Point` as a `Map` key — with an error that names the offending field:
+If `Point` had a field whose type isn't `Hashable`, the implicit `Hashable` include wouldn't fire. You'd find out at the **use site** — typically when you try to use a `Point` as a `Hash` key — with an error that names the offending field:
 
 ```
-error: cannot use `Point` as a `Map` key
+error: cannot use `Point` as a `Hash` key
   `Point.handle: Resource` is not Hashable
 help: implement Hashable for Point manually, or wrap the offending field
 ```
@@ -183,14 +183,11 @@ inline :fast_path
 
 ---
 
-## 5. The `!` macro suffix convention
+## 5. The `!` suffix convention
 
-A method name ending in `!` signals two things:
+As in Ruby, a method name ending in `!` marks the "dangerous" variant: it may panic (or otherwise do something dramatic) on failure.
 
-1. **It may panic** (or otherwise do something dramatic) on failure.
-2. **It's compiler-aware** — the parser may accept argument forms a regular call would reject (like format strings).
-
-Today's `!`-suffix methods:
+The built-in `!`-suffix forms, which the compiler handles specially:
 
 | Method                 | What it does                                |
 |------------------------|---------------------------------------------|
@@ -198,13 +195,13 @@ Today's `!`-suffix methods:
 | `expect!(msg)`         | On `Option` / `Result`: unwrap or panic     |
 | `unwrap!()`            | On `Option` / `Result`: unwrap or panic     |
 
-The convention is reserved for compiler-aware forms — don't define your own `!`-suffix methods.
+You can also define your own Ruby-style bang methods (`def save!`, `def shout!(x: Int)`); they are ordinary methods called with the `!` attached. Follow the Ruby convention and use the `!` for the "dangerous" variant of a method.
 
 ---
 
 ## 6. Why "in-body" instead of "in front of"?
 
-A handful of languages put metadata in *front* of the thing (Java's `@Override`, Rust's `#[derive(...)]`). Ruxen takes the other path — borrowed from Ruby — and puts it *inside* the body. The win is that a type's complete contract is visible in one place: open the body, read top-to-bottom, and you see every directive, every field, and every method together.
+Some languages put metadata in *front* of the thing (Java's `@Override` annotation). Ruxen follows Ruby and puts it *inside* the body. The win is that a type's complete contract is visible in one place: open the body, read top-to-bottom, and you see every directive, every field, and every method together.
 
 ```ruxen
 struct Header
@@ -222,9 +219,9 @@ end
 - **Forgetting `layout c` before passing a struct to C.** Without it, the compiler may reorder the fields and your C code reads garbage. Add it the moment a struct crosses an FFI boundary.
 - **Expecting `layout packed` to be free.** It saves bytes but every unaligned read costs cycles, and writing through `&var` can fail outright. Use it only for serialisation buffers, not for general-purpose data.
 - **Treating `inline` as a guarantee.** It's a hint. If you measured and your hot loop didn't inline, look at smaller fixes (shorter body, fewer parameters) before reaching for it.
-- **Trying to use `derive` syntax.** Ruxen has no `derive` — the implicit-include rules cover what `derive Debug, Clone` would do in other languages, and the loud form is `include Debug, Clone` inside the type body.
+- **Looking for an annotation to opt in to `Debug` or `Clone`.** There is none — the implicit-include rules cover it, and the loud form is `include Debug, Clone` inside the type body.
 
-> **Try it:** add a `Resource` field to `Point` that doesn't implement `Hashable`, then try to use the point as a `Map` key. Read the resulting compile error carefully — it tells you exactly which field is the problem.
+> **Try it:** add a `Resource` field to `Point` that doesn't implement `Hashable`, then try to use the point as a `Hash` key. Read the resulting compile error carefully — it tells you exactly which field is the problem.
 
 ---
 
@@ -234,6 +231,6 @@ end
 - The compiler implicitly includes `Debug`, `Clone`, `Eq`, `Hashable`, `Default`, `Ord`, `Send`, `Sync` when fields allow.
 - `layout c`, `layout packed`, `layout transparent` pin memory representation.
 - `inline def f` or `inline :f` hints the optimiser.
-- `!`-suffix methods signal compiler-aware, possibly-panicking operations.
+- `!`-suffix methods signal the dangerous variant: the built-in ones may panic, and your own bang methods follow the same Ruby convention.
 
-**Next:** [Chapter 23 — Implementing Iterator for Your Own Type](23-implementing-iterator.md).
+**Next:** [Chapter 24 — Async](24-async.md).

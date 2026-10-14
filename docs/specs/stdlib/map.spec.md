@@ -4,7 +4,7 @@
 [docs/requirements/tier1_01_stdlib.md §5.2](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 2 #04-#05; method surface self-hosted in
-`library/std/src/map.rx` since #06.8 T#15.
+`library/std/map/src/lib.rx` since #06.8 T#15.
 
 `Hash` is a separate-chaining hash table over keys that satisfy
 `Hashable + Eq`.  The runtime uses FNV-style hashing; collisions resolve
@@ -22,20 +22,21 @@ both construct the same type at type-check time.
 `insert` is the primary write entry point.  Returns `Option.Some(old)`
 when the key was present, `nil` otherwise.
 
-(v1 simplification: the type system reports `insert` as `Unit` today;
+(v1 simplification: the type system reports `insert` as returning `nil` today;
 the runtime returns the old value.  Tracked as a v2 cleanup.)
 
 ## B3 — `remove(k)` returns `Option[V]`
 
 Removes the entry if present; returns the removed value.
 
-## B4 — `keys()`, `values()`, `iter()` typecheck as `*Iter[…]`
+## B4 — `keys`, `values`, `to_a` return arrays
 
-Each returns an iterator that yields keys, values, or `(K, V)` pairs.
+`keys` returns `Array[&K]`, `values` returns `Array[&V]`, and `to_a`
+returns the `(K, V)` pairs as `Array[(K, V)]`.
 
-## B5 — `clear()` typechecks as `Unit`
+## B5 — `clear` returns `nil`
 
-`clear` removes all entries.  Returns nothing (Unit).
+`clear` removes all entries and returns `nil`.
 
 ## B6 — Equality (`==`) yields `Bool`
 
@@ -89,21 +90,20 @@ on a plain `Hash` receiver.  Same for `or_insert_with`.
 | B10       | `hashmap_or_insert_on_non_entry_receiver_rejected` | `stdlib_map_negatives.rs` |
 | B11       | `hashmap_entry_then_or_insert_split_is_rejected` | `stdlib_map_negatives.rs` |
 
-Runtime round-trips covered by E2E fixtures `104_hash_basic.rx` and
-`610_iter_collect_map.rx`.
+Runtime round-trips covered by E2E fixtures `104_map_basic.rx` and
+`613_hash_enumerable.rx`.
 
 ---
 
 ## Gaps
 
 - B2: dedicated `hashmap_insert_returns_option` pin is missing
-  (typeck reports `Unit` today; v2 cleanup will surface the old
+  (typeck reports `nil` today; v2 cleanup will surface the old
   value through typeck too).
 
 ## Out of scope (v2)
 
-- `BTreeMap` / ordered map variant.
+- A sorted-key map variant.
 - Custom hasher selection (FNV is the v1 default; no SipHash, no
   user-pluggable hashers).
-- `Drain`, `IntoIter`, `retain`, `extend` — wired piecemeal as
-  needed.
+- `delete_if`, `keep_if`, `merge` — wired piecemeal as needed.

@@ -116,11 +116,9 @@ void ruxen_executor_context_drop(void *cx);
  *   offset 8: payload (i64; for Ready arms only)
  * Ruxen enums with payloads are heap-allocated as a 16-byte block.
  * Future_dynamic_poll returns the heap pointer as i64 at the FFI
- * boundary. We don't free the Poll block here — accepting a
- * 16-byte leak per Pending poll for v1 (the Ready arm's payload
- * gets stored into the TaskHandle and the Poll header block stays
- * leaked too; total leak is bounded by total polls, not total
- * lifetime). Tracked. */
+ * boundary; ruxen_poll_is_ready frees that 16-byte box once decoded.
+ * The Ready payload is NOT freed: it moves into the TaskHandle / race
+ * winner slot. */
 #define RUXEN_POLL_READY_TAG   0
 #define RUXEN_POLL_PENDING_TAG 1
 
@@ -247,24 +245,11 @@ void ruxen_executor_wake_all_tasks(void) {
 }
 
 /* ---------------------------------------------------------------------
- * Decode a Poll[T] return value. Ruxen tagged enums with payloads
- * are returned as heap pointers to {tag: i64, payload: i64}. We do
- * NOT free the pointer here — Ruxen's existing drop discipline on
- * tagged enums handles that. We read tag + payload then leak our
- * local view (the actual heap block will be GC'd or drop-elaborated
- * by the surrounding match arm in the inline poll loop — but in the
- * scheduler's case, no surrounding match exists; the Poll value is
- * an internal artifact we discard). For v1, accepting the leak of
- * one 16-byte block per Pending poll is the right ship — fixing it
- * properly requires either a dedicated `Future_dynamic_poll_raw`
- * variant that returns by-value, or wiring ruxen_dealloc here.
- *
- * UPDATE: the existing inline block_on loop's match-on-Poll fully
- * consumes the Poll value (Ready arm extracts payload, Pending arm
- * is empty), so the Poll heap block IS dropped by the match's
- * drop-elaboration pass. Our scheduler doesn't get the same
- * elaboration since we're calling Future_dynamic_poll from C —
- * accept the leak for now. Tracked.
+ * Decode and consume a Poll[T] returned by Future_dynamic_poll. The C
+ * caller is the Poll's only owner (no Ruxen match drop-elaborates it),
+ * so the 16-byte box is freed here after the tag and payload are read.
+ * Only the box: the Ready payload (possibly a heap pointer) is moved
+ * out to `*out_payload` and owned by the caller from then on.
  */
 static int ruxen_poll_is_ready(int64_t poll_val, int64_t *out_payload) {
     if (poll_val == 0) {
@@ -278,13 +263,12 @@ static int ruxen_poll_is_ready(int64_t poll_val, int64_t *out_payload) {
      * 4 bytes of uninitialised slop after the tag word. */
     char *p = (char *)(uintptr_t)poll_val;
     int32_t tag = *(int32_t *)(p + 0);
-    if (tag == RUXEN_POLL_READY_TAG) {
-        if (out_payload) {
-            *out_payload = *(int64_t *)(p + 8);
-        }
-        return 1;
+    int ready = tag == RUXEN_POLL_READY_TAG;
+    if (ready && out_payload) {
+        *out_payload = *(int64_t *)(p + 8);
     }
-    return 0;
+    ruxen_dealloc(p);
+    return ready;
 }
 
 /* ---------------------------------------------------------------------

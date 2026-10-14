@@ -4,7 +4,13 @@ Status: Draft (requirements)
 Owner: compiler
 Depends on: nothing in tier-2; consumes tier-1 drop/copy/clone for
             correct field-drop of projected types
-Blocks: GATs (doc 05), stdlib Iterator (tier-1 doc 01 phase 1a)
+Blocks: GATs (doc 05)
+
+> **Note.** The stdlib `Iterator` / `IntoIterator` / `FromIterator` layer
+> that these examples assume was dropped: Ruxen iteration is
+> `Enumerable[T]` over a single `each` method (`library/std/core/src/lib.rx`).
+> `Iterator` (with `IntoIterator` / `FromIterator`) below is an illustrative mixin with an associated type,
+> not shipped or planned stdlib API.
 
 ## 1. Summary & Motivation
 
@@ -475,7 +481,7 @@ New pass `typeck/check_impls.rs`, runs after `TraitResolver::collect_impls`:
 | Impl-completeness pass | new `typeck/check_impls.rs` |
 | Error variants | `diagnostics/` |
 | MIR: projections erased by monomorphization | `mir/lower.rs` post-M2 |
-| Fixture tests | `crates/ruxen-core/tests/fixtures/assoc_*.rx` |
+| Fixture tests | `compiler/ruxen_core/tests/fixtures/assoc_*.rx` |
 
 ### 6.2 Phasing
 
@@ -646,7 +652,7 @@ See §6.2. Summary:
   `mixin DoubleEndedIterator: Iterator`; extension verifies `Self.Item`
   matches the parent binding.
 - T5: equality-constraint sugar: `where I: Iterator[Item = String]`
-  accepts iterators over `String`, rejects iterators over `&str`.
+  accepts iterators over `String`, rejects iterators over `&String`.
 - T6: `IntoIterator` with a bound on `IntoIter`: `type IntoIter:
   Iterator[Item = Self.Item]` — verify the extension's binding satisfies
   the bound.

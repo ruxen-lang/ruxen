@@ -55,27 +55,17 @@ impl Drop for TempDir {
 }
 
 #[test]
-fn bootstrap_files_list_includes_smoke_and_wave_2_migrations() {
-    // Wave 1.5 (#06.8 Phase 3) shipped a proof-of-life
-    // `_bootstrap_smoke.rx`. Wave 2 starts the actual stdlib
-    // migration; `rand.rx` is the first module to live in `.rx`
-    // form. The smoke file must load early — but `core/src/lib.rx`
-    // (which carries the 16 builtin mixins every other file
-    // references) reclaimed the absolute-first slot after B5 of
-    // `docs/specs/system/zero_rust_stdlib_classes.spec.md`. Pin
-    // ordering as: `core` MUST be first, the smoke file MUST come
-    // immediately after, and `rand` MUST be present.
+fn bootstrap_files_list_starts_with_core_and_has_wave_2_migrations() {
+    // `core/src/lib.rx` (which carries the 16 builtin mixins every other
+    // file references) holds the first slot after B5 of
+    // `docs/specs/system/zero_rust_stdlib_classes.spec.md`, and `rand`
+    // (the first Wave-2 `.rx` migration) must be present. The Wave-1.5
+    // `bootstrap_smoke` proof-of-life is test-only now
+    // (`TEST_BOOTSTRAP_FILES`, opted into by the tests that need it).
     assert_eq!(
         BOOTSTRAP_FILES.first(),
         Some(&"core/src/lib.rx"),
         "BOOTSTRAP_FILES must start with core/src/lib.rx (16 builtin mixins); got {:?}",
-        BOOTSTRAP_FILES
-    );
-    assert_eq!(
-        BOOTSTRAP_FILES.get(1),
-        Some(&"bootstrap_smoke/src/lib.rx"),
-        "BOOTSTRAP_FILES must place the Wave-1.5 proof-of-life file \
-         right after core (E2E tests depend on it); got {:?}",
         BOOTSTRAP_FILES
     );
     assert!(

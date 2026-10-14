@@ -55,7 +55,8 @@ const BUILTIN_HEAD_HOMES: &[&str] = &["Array", "Set", "Hash", "Option", "Result"
 
 /// A builtin-head class shell's per-`T`-monomorphizable surface: the class's
 /// generic parameter names (declaration order, so they zip against a head's
-/// generic args) and the body methods that dispatch on them.
+/// generic args) and the body methods that dispatch on them, directly or
+/// through a call to another such method of the same shell.
 struct BuiltinHeadShell {
     params: Vec<String>,
     methods: Vec<HirFuncDef>,
@@ -63,6 +64,8 @@ struct BuiltinHeadShell {
 
 /// One `(receiver instantiation, method)` specialization to emit.
 pub(super) struct BuiltinHeadMonoInstance {
+    /// The owning shell's name (`Array`), the key into the eligible shells.
+    class: &'static str,
     /// The owning shell's generic parameter names, in declaration order.
     params: Vec<String>,
     /// The receiver's concrete generic arguments, in the same order.
@@ -589,7 +592,8 @@ impl<'a> Lowerer<'a> {
         // 1. Eligible methods: a body method (never an FFI `lib` decl —
         //    those live in `program.ffi_libs`, not `class.methods`) on a
         //    builtin-head class shell, whose body dispatches on one of the
-        //    class's own type params.
+        //    class's own type params. `collect` gathers every body method;
+        //    step 1b filters to the eligible ones.
         fn collect(
             item: &HirItem,
             handled_by_class_mono: &HashMap<String, HirClassDef>,
@@ -623,9 +627,7 @@ impl<'a> Lowerer<'a> {
                                 _ => None,
                             }),
                     ) {
-                        if dispatches_on_type_param(m, &params) {
-                            methods.push(m.clone());
-                        }
+                        methods.push(m.clone());
                     }
                     if !methods.is_empty() {
                         let shell = out
@@ -657,6 +659,61 @@ impl<'a> Lowerer<'a> {
         for item in &program.items {
             collect(item, &handled_by_class_mono, &mut shells);
         }
+
+        // 1b. Close eligibility over calls within the shell. A method that
+        //     dispatches on `T` only by calling an eligible method of its own
+        //     shell on a receiver that carries the shell's type params
+        //     (`sort` building `out: Array[T]` and calling `out.sort!`) must
+        //     be specialized too: its opaque body would call the opaque
+        //     callee, whose element compare is a raw-word compare. Grows
+        //     monotonically over a finite method set, so it terminates.
+        for (class, shell) in shells.iter_mut() {
+            let mut eligible: HashSet<String> = shell
+                .methods
+                .iter()
+                .filter(|m| dispatches_on_type_param(m, &shell.params))
+                .map(|m| m.name.clone())
+                .collect();
+            loop {
+                let mut grew = false;
+                for m in &shell.methods {
+                    if eligible.contains(&m.name) {
+                        continue;
+                    }
+                    let mut calls_eligible = false;
+                    walk_dispatch_sites_in_expr(&m.body, &mut |site| {
+                        let DispatchSite::Receiver(recv_ty, name) = site else {
+                            return;
+                        };
+                        let Some((recv_class, recv_args)) = builtin_head_home(recv_ty) else {
+                            return;
+                        };
+                        if recv_class != class.as_str()
+                            || !recv_args
+                                .iter()
+                                .any(|a| mentions_type_param(a, &shell.params))
+                        {
+                            return;
+                        }
+                        let canonical = self.symbols.canonical_method_name(class, name);
+                        let overload_prefix = format!("{canonical}__overload");
+                        calls_eligible = calls_eligible
+                            || eligible
+                                .iter()
+                                .any(|e| e == canonical || e.starts_with(&overload_prefix));
+                    });
+                    if calls_eligible {
+                        eligible.insert(m.name.clone());
+                        grew = true;
+                    }
+                }
+                if !grew {
+                    break;
+                }
+            }
+            shell.methods.retain(|m| eligible.contains(&m.name));
+        }
+        shells.retain(|_, shell| !shell.methods.is_empty());
         if shells.is_empty() {
             return;
         }
@@ -666,13 +723,16 @@ impl<'a> Lowerer<'a> {
         //    fully-concrete builtin head whose class has an eligible method
         //    of that (alias-canonical) name, record one specialization.
         //
-        //    Discovery is one pass over the SOURCE program — it is not run to
-        //    a fixpoint over the substituted bodies. A specialized body that
-        //    calls an eligible method on a DIFFERENT instantiation than any
-        //    source call site uses (only reachable through a nested head such
-        //    as `Array[Array[Int]]`) keeps the opaque callee, i.e. today's
+        //    Discovery starts from the SOURCE program, then follows calls
+        //    inside each recorded specialization only while they stay on the
+        //    SAME instantiation (`Array[Float]#sort` calling `out.sort!` on
+        //    its `out: Array[Float]`). A specialized body that calls an
+        //    eligible method on a DIFFERENT instantiation than any source call
+        //    site uses (only reachable through a nested head such as
+        //    `Array[Array[Int]]`) keeps the opaque callee, i.e. today's
         //    behavior. That keeps this pass terminating by construction: no
-        //    specialization can breed a fresh element type.
+        //    specialization can breed a fresh element type, and each
+        //    (instantiation, method) symbol is recorded at most once.
         let mut instances: Vec<BuiltinHeadMonoInstance> = Vec::new();
         let mut emitted: HashSet<String> = HashSet::new();
         for_each_fn_body(program, &mut |body, _| {
@@ -686,45 +746,114 @@ impl<'a> Lowerer<'a> {
                 if !args.iter().all(is_fully_concrete) {
                     return;
                 }
-                let Some(shell) = shells.get(class) else {
-                    return;
-                };
-                if shell.params.len() != args.len() {
-                    return;
-                }
-                // Ruby `alias new old` on the shell resolves to the canonical
-                // body name, exactly as the call site's mangling does.
-                let canonical = self.symbols.canonical_method_name(class, name);
-                let overload_prefix = format!("{canonical}__overload");
-                // Normalize the pinned `self` type to the STRUCTURAL head
-                // rather than reusing the call site's spelling: the nominal
-                // `Ty::Class { name: "Array" }` spelling reaches the same
-                // symbol, and whichever call site happened to be visited first
-                // would otherwise decide the specialized body's `self` type.
-                let Some(self_ty) = builtin_head_ty(class, &args) else {
-                    return;
-                };
-                for def in &shell.methods {
-                    if def.name != canonical && !def.name.starts_with(&overload_prefix) {
-                        continue;
-                    }
-                    let symbol = format!("{}_{}", mono_base(class, &args), def.name);
-                    if !emitted.insert(symbol.clone()) {
-                        continue;
-                    }
-                    instances.push(BuiltinHeadMonoInstance {
-                        params: shell.params.clone(),
-                        args: args.clone(),
-                        self_ty: self_ty.clone(),
-                        symbol,
-                        def: def.clone(),
-                    });
-                }
+                self.record_builtin_head_instances(
+                    &shells,
+                    class,
+                    &args,
+                    name,
+                    &mut instances,
+                    &mut emitted,
+                );
             });
         });
+        let mut next = 0;
+        while next < instances.len() {
+            let class = instances[next].class;
+            let args = instances[next].args.clone();
+            let subst: HashMap<String, Ty> = instances[next]
+                .params
+                .iter()
+                .cloned()
+                .zip(args.iter().cloned())
+                .collect();
+            let body = instances[next].def.body.clone();
+            next += 1;
+            let mut same_instantiation_calls: Vec<String> = Vec::new();
+            walk_dispatch_sites_in_expr(&body, &mut |call| {
+                let DispatchSite::Receiver(recv_ty, name) = call else {
+                    return;
+                };
+                let Some((recv_class, recv_args)) = builtin_head_home(recv_ty) else {
+                    return;
+                };
+                if recv_class != class {
+                    return;
+                }
+                let recv_args: Vec<Ty> = recv_args
+                    .into_iter()
+                    .map(|mut a| {
+                        crate::mir::lower::trait_default::subst_type_params_in_ty(&mut a, &subst);
+                        a
+                    })
+                    .collect();
+                if recv_args == args {
+                    same_instantiation_calls.push(name.to_string());
+                }
+            });
+            for name in &same_instantiation_calls {
+                self.record_builtin_head_instances(
+                    &shells,
+                    class,
+                    &args,
+                    name,
+                    &mut instances,
+                    &mut emitted,
+                );
+            }
+        }
 
         self.builtin_head_mono_instances = instances;
         self.builtin_head_mono_emitted = emitted;
+    }
+
+    /// Record one specialization per eligible `shells[class]` method that a
+    /// call to `name` on the fully-concrete instantiation `class[args]`
+    /// reaches (the alias-canonical body plus its overloads), skipping
+    /// symbols already in `emitted`.
+    fn record_builtin_head_instances(
+        &self,
+        shells: &HashMap<String, BuiltinHeadShell>,
+        class: &'static str,
+        args: &[Ty],
+        name: &str,
+        instances: &mut Vec<BuiltinHeadMonoInstance>,
+        emitted: &mut HashSet<String>,
+    ) {
+        let Some(shell) = shells.get(class) else {
+            return;
+        };
+        if shell.params.len() != args.len() {
+            return;
+        }
+        // Ruby `alias new old` on the shell resolves to the canonical body
+        // name, exactly as the call site's mangling does.
+        let canonical = self.symbols.canonical_method_name(class, name);
+        let overload_prefix = format!("{canonical}__overload");
+        // Normalize the pinned `self` type to the STRUCTURAL head rather than
+        // reusing the call site's spelling: the nominal `Ty::Class { name:
+        // "Array" }` spelling reaches the same symbol, and whichever call site
+        // happened to be visited first would otherwise decide the specialized
+        // body's `self` type.
+        let Some(self_ty) = builtin_head_ty(class, args) else {
+            return;
+        };
+        for def in &shell.methods {
+            if def.name != canonical && !def.name.starts_with(&overload_prefix) {
+                continue;
+            }
+            let symbol = format!("{}_{}", mono_base(class, args), def.name);
+            if !emitted.insert(symbol.clone()) {
+                continue;
+            }
+            instances.push(BuiltinHeadMonoInstance {
+                class,
+                params: shell.params.clone(),
+                args: args.to_vec(),
+                self_ty: self_ty.clone(),
+                symbol,
+                def: def.clone(),
+            });
+        }
     }
 
     /// Emit the specialized bodies recorded above. Runs after `lower_items`,
@@ -1535,7 +1664,13 @@ fn walk_dispatch_sites_in_expr(expr: &HirExpr, f: &mut impl FnMut(DispatchSite<'
                 walk_dispatch_sites_in_expr(b, f);
             }
         }
-        HirExprKind::BinaryOp { left, right, .. } => {
+        HirExprKind::BinaryOp { op, left, right } => {
+            // `binops.rs` lowers an operator on a builtin head to the head's
+            // `.rx` operator method (`Array#==`), so the left operand is that
+            // call's receiver.
+            if let Some(method) = op.method_name() {
+                f(DispatchSite::Receiver(&left.ty, method));
+            }
             f(DispatchSite::Operand(&left.ty));
             f(DispatchSite::Operand(&right.ty));
             walk_dispatch_sites_in_expr(left, f);

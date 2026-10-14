@@ -1,7 +1,5 @@
-#include "runtime.h"
-
-// Tiny C symbol used by #06.8 Phase 2 link-smoke tests
-// (compiler/ruxen_core/tests/ffi_c_symbol_wired.rs).
+// Test-only C symbols used by #06.8 Phase 2 link-smoke tests
+// (compiler/ruxen_core/tests/ffi_c_symbol_wired.rs and siblings).
 //
 // `def add_one as "ruxen_test_extern_add_one"(x: I64) -> I64` in a Ruxen
 // fixture binds the Ruxen-side name `add_one` to the linker symbol
@@ -9,10 +7,9 @@
 // the call site emits a direct C call to this function and that the
 // returned value rolls back through the Ruxen program correctly.
 //
-// Kept under the unity-build include block in runtime.c so the runtime
-// `.o` always carries this symbol — production binaries pay zero cost
-// (the symbol is small and unused outside tests), and the test path
-// does not need a separate compile/link dance.
+// Lives under `library/test_std/`, outside the production runtime: a
+// test links it explicitly (`RUXEN_TEST_STDLIB` for `ruxen compile`, or
+// `test_stdlib_runtime_sources` passed as extra runtime sources).
 
 #include <stdint.h>
 

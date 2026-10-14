@@ -547,19 +547,19 @@ ordering protocol. `clamp` is the remaining core method gap.
 | `Integer()` / `Float()` | MISSING | use `"42".to_i` / `"1.5".to_f` | NOT shippable as written: a capitalized identifier lexes as a `TypeIdentifier`, so `def Integer(s)` is a parse error (`expected identifier, found TypeIdentifier("Integer")`). `Float()` additionally waits on the `Float` ABI (B01). |
 | `String()` | MISSING | use `.to_s` | same capitalized-name parse block as `Integer()`, plus it needs a universal `to_s`. |
 | `Array()` / `Hash()` | MISSING | — | same capitalized-name parse block as `Integer()`. |
-| `inspect` | MISSING | `p(x)` / `"#{x}"` via `Debug` derive | no `.inspect` METHOD: a `mixin Kernel` default would have to call `self.to_s`, which is not universal, and `mixin` defaults are emitted for every including head, so it would break every type without one. The inspect FORM is reachable through `p` / `pp` for the types those cover. |
-| `to_s` | DONE | per-type + `Debug`/`Displayable` derive | |
+| `inspect` | MISSING | `p(x)` / `"#{x}"` via `include Debug` | no `.inspect` METHOD: a `mixin Kernel` default would have to call `self.to_s`, which is not universal, and `mixin` defaults are emitted for every including head, so it would break every type without one. The inspect FORM is reachable through `p` / `pp` for the types those cover. |
+| `to_s` | DONE | per-type + `include Debug`/`Displayable` | |
 | `class` | COMPILE-TIME | — | see Reflection cluster below; `x.class` also needs a surface spelling (`class` keyword parse-clash today). |
 | `is_a?` / `kind_of?` / `instance_of?` | COMPILE-TIME | — | static type + known `include` set → constant `Bool`. See Reflection cluster. |
 | `respond_to?` (literal method) | COMPILE-TIME | — | fixed method set → constant-fold. See Reflection cluster. |
 | `send` / `public_send` / `__send__` (literal name) | COMPILE-TIME | — | constant name → static dispatch. See Reflection cluster. |
-| `define_method` / `method` / `methods` / `instance_variable_*` | COMPILE-TIME | — | derive/codegen + fn references. See Reflection cluster. |
+| `define_method` / `method` / `methods` / `instance_variable_*` | COMPILE-TIME | — | mixin codegen + fn references. See Reflection cluster. |
 | `tap` | DONE | `.rx` `mixin Kernel` (universal include), pin 973/983. |
 | `then` / `yield_self` | DONE | `.rx` `mixin Kernel` (universal include); `yield_self` a real method, pin 973. |
 | `freeze` / `frozen?` | MISSING | — | no value-freeze protocol. |
-| `dup` / `clone` | PARTIAL | `.clone` on String/Array/collections | universal `dup` MISSING; `clone` derive for user types via `include Clone`. |
+| `dup` / `clone` | PARTIAL | `.clone` on String/Array/collections | universal `dup` MISSING; `clone` for user types via `include Clone`. |
 | `object_id` / `__id__` | MISSING | — | runtime identity; a pointer-identity intrinsic could supply it (not a metaobject need). |
-| `==` / `eql?` / `equal?` | PARTIAL | `==` for scalars/String | structural `==` works for a **`struct`** via `include PartialEq`/derive, and is BROKEN for a **`class`**: `C.new(1) == C.new(1)` is `false` with or without an explicit include (**B74**). Pin `133` only covers a struct, which is why it went unnoticed. `eql?`/`equal?` MISSING. |
+| `==` / `eql?` / `equal?` | PARTIAL | `==` for scalars/String | structural `==` works for a **`struct`** via `include PartialEq`, and is BROKEN for a **`class`**: `C.new(1) == C.new(1)` is `false` with or without an explicit include (**B74**). Pin `133` only covers a struct, which is why it went unnoticed. `eql?`/`equal?` MISSING. |
 | `hash` | PARTIAL | `Hashable` mixin for user types | no universal `.hash` on values. A **`struct`** carrying `Hashable` + `PartialEq` now works as a `Hash`/`Set` KEY (B73, pin `1722`), routed through the synthesized `hash_code` and `eq`. A **`class`** key still compares by identity, blocked on B74. |
 | `nil?` | MISSING | use `match`/`Option` | `x.nil?` unresolved even on `Option` (drop-Some coercion). |
 | `!` / `!=` | DONE | operators | |
@@ -572,7 +572,7 @@ ordering protocol. `clamp` is the remaining core method gap.
 compiler: every type, field, and method is fully known at compile time, so the
 *results* Ruby computes at runtime are computable at compile time. These are
 tier-2 (compile-time) parity, delivered by a `match` over the fixed type/method
-set, `derive`/mixin codegen, or a macro, not a runtime metaobject:
+set, mixin codegen, or a macro, not a runtime metaobject:
 
 | Ruby reflective method | Status | Compile-time design that delivers it |
 |---|---|---|
@@ -581,10 +581,10 @@ set, `derive`/mixin codegen, or a macro, not a runtime metaobject:
 | `respond_to?(:m)` (literal `m`) | COMPILE-TIME | the method set of every type is fixed at compile time → constant-fold to `true`/`false`. |
 | `send(:m, …)` / `public_send` (literal `m`) | COMPILE-TIME | a constant method name folds to direct static dispatch (`x.send("foo")` ≡ `x.foo`). |
 | `send(name, …)` (name unknown until runtime) | OUT-OF-SCOPE | closest substitute: a `match` over the finite set of valid names dispatching statically. |
-| `define_method` / `attr_accessor`-style | COMPILE-TIME | codegen: a `derive`/mixin or macro synthesizes the method bodies (the tier-2 mechanism the README describes for ORMs/DSLs). |
+| `define_method` / `attr_accessor`-style | COMPILE-TIME | codegen: a mixin or macro synthesizes the method bodies (the tier-2 mechanism the README describes for ORMs/DSLs). |
 | `method(:m)` / `instance_method(:m)` | COMPILE-TIME | a first-class function/closure reference to the method (Ruxen already has fn references + `.()`); no `UnboundMethod` object. |
 | `methods` / `instance_methods` | COMPILE-TIME | the method set is a compile-time-known list; emit it as a literal array. |
-| `instance_variables` / `_get` / `_set` (literal name) | COMPILE-TIME | fields are statically known; enumerate via derive; `instance_variable_get("@x")` with a constant folds to field access. Runtime-unknown name → OUT-OF-SCOPE (substitute: `match` over the known field set). |
+| `instance_variables` / `_get` / `_set` (literal name) | COMPILE-TIME | fields are statically known; enumerate at compile time; `instance_variable_get("@x")` with a constant folds to field access. Runtime-unknown name → OUT-OF-SCOPE (substitute: `match` over the known field set). |
 
 Genuinely irreducible (tier-3, need an interpreter/live metaobject Ruxen omits):
 `eval`/`binding`/`instance_eval`, `ObjectSpace`, `TracePoint`, `caller`, and
@@ -772,7 +772,7 @@ DONE for `< <= == > >= between?` over required `<=>` (case `965`). `clamp`
 remains staged until its ownership-safe return contract is chosen.
 
 ### P8, Kernel conveniences
-`p`/`pp` (debug-print, over the `Debug` derive), `format`/`sprintf` (or bless
+`p`/`pp` (debug-print, over `include Debug`), `format`/`sprintf` (or bless
 priority given interpolation), `rand`/`srand` (expose `std/rand`), `Integer()`/
 `Float()`/`String()` conversion fns, `tap`/`then`.
 
@@ -784,7 +784,7 @@ set; `class`/`.class.name` lowered to the receiver's static type token (needs a
 non-keyword surface spelling); `send(:m,…)`/`public_send` with a literal name →
 static dispatch; `method(:m)` → a first-class fn reference; `methods`/
 `instance_variables` → compile-time-known literal lists; `define_method`-style
-generation via `derive`/mixin/macro. Only a name unknown until runtime falls
+generation via mixin/macro. Only a name unknown until runtime falls
 back to a `match` over the finite valid-name set.
 
 ### Deferred / language-identity decisions (tier 3, tracked not scheduled)

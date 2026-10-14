@@ -169,7 +169,7 @@ fn vec_sort_by_closure_typechecks() {
 /// materialises a Vec from any iterator-producing expression. Pins the
 /// typeck contract: it lives on `Vec` like `new` / `with_capacity`.
 /// Vec equality — `==` on two Vec[Int] must typecheck and yield Bool.
-/// This pins the BinaryOp::Eq → ruxen_vec_eq routing added in batch 1.
+/// `==` lowers to `class Array[T]`'s `.rx` `def ==` (element-wise `T ==`).
 #[test]
 fn vec_equality_yields_bool() {
     let source = rx("vec_equality_yields_bool");
@@ -178,6 +178,36 @@ fn vec_equality_yields_bool() {
     assert!(
         errs.is_empty(),
         "Vec[T] == Vec[T] should typecheck as Bool; got errors: {:#?}",
+        errs
+    );
+}
+
+/// Ruby `sort` returns a NEW `Array[T]` and leaves the receiver unchanged,
+/// so its result binds to an `Array[Int]`. The runtime semantics (receiver
+/// untouched, stable order) are pinned by `146_array_sort.rx`.
+#[test]
+fn vec_sort_returns_new_array() {
+    let source = rx("vec_sort_returns_new_array");
+    let diags = typecheck_diagnostics(&source);
+    let errs = errors(&diags);
+    assert!(
+        errs.is_empty(),
+        "Array#sort must typecheck as Array[T]; got errors: {:#?}",
+        errs
+    );
+}
+
+/// Ruby `sort!` sorts in place and returns `nil`, so binding its result to an
+/// `Array[Int]` is a type mismatch. Asserted by message: the typeck
+/// type-mismatch diagnostic is emitted without a registered code today.
+#[test]
+fn vec_sort_bang_returns_nil() {
+    let source = rx("vec_sort_bang_returns_nil");
+    let diags = typecheck_diagnostics(&source);
+    let errs = errors(&diags);
+    assert!(
+        errs.iter().any(|d| d.message.contains("type mismatch")),
+        "Array#sort! returns nil; binding it to Array[Int] must be a type mismatch. got: {:#?}",
         errs
     );
 }

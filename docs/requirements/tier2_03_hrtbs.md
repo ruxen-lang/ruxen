@@ -6,16 +6,22 @@ Depends on: named lifetimes (M0 in overview); variance (M1 / doc 07)
 Blocks: fluent closure APIs that accept any input lifetime;
         `some Fn(&_ T) -> &_ T` style returns at the boundary
 
+> **Note.** The stdlib `Iterator` layer that some examples below assume
+> was dropped: Ruxen iteration is `Enumerable[T]` over a single `each`
+> method (`library/std/core/src/lib.rx`). `Iterator` (and `StreamingIterator`) here is an
+> illustrative mixin with an associated type, not shipped or planned
+> stdlib API.
+
 ## 1. Summary & Motivation
 
 A higher-ranked mixin bound says "for any lifetime a, this type
 satisfies the bound." The canonical example:
 
 ```ruxen
-def filter_all[F: for[a] Fn(&a Str) -> Bool](
+def filter_all[F: for[a] Fn(&a String) -> Bool](
   list: &Array[String], f: F
-) -> Array[&Str]
-  list.iter.filter(f).to_vec
+) -> Array[&String]
+  list.select(f)
 end
 ```
 
@@ -29,10 +35,10 @@ throw at it.*
 
 1. **Closure adapters.** Any function that forwards a borrow to a
    user-supplied closure with a lifetime shorter than the function's
-   body (`Array.iter.filter(|x| predicate(x))`) needs the closure to
+   body (`array.select { |x| predicate(x) }`) needs the closure to
    be polymorphic in the argument lifetime — that's HRTBs.
-2. **Mixin-object closures.** `Box[any Fn(&Str) -> Bool]` is
-   sugar for `Box[any for[a] Fn(&a Str) -> Bool]`. Without HRTBs
+2. **Mixin-object closures.** `Box[any Fn(&String) -> Bool]` is
+   sugar for `Box[any for[a] Fn(&a String) -> Bool]`. Without HRTBs
    the elided syntax has no elaboration target.
 3. **Stdlib methods that take an `FnVar` over references.** Every
    iterator combinator that takes `&T` (e.g., `.find`, `.any`, `.all`,
@@ -81,7 +87,7 @@ rules:
 
 - Rule 1: every input ref gets a distinct lifetime (implicit).
 - Rule 2: exactly one input ref → output gets that lifetime.
-- Rule 3: `&self` or `&var self` → output gets `self`'s lifetime.
+- Rule 3: a `def` or `def var` method (borrowed receiver) → output gets `self`'s lifetime.
 
 **What Ruxen currently *cannot* express:**
 
@@ -112,8 +118,8 @@ token is `[` / `<` not an identifier.
   quantifier: `for[a] F: Fn(&a T) -> &a T`.
 - **G2.** The borrow checker correctly treats HRTB-qualified bounds:
   the closure may be called with *any* caller-chosen lifetime.
-- **G3.** HRTBs compose with closures: `Fn(&Str) -> Bool` auto-elides
-  to `for[a] Fn(&a Str) -> Bool` at use-sites that require it.
+- **G3.** HRTBs compose with closures: `Fn(&String) -> Bool` auto-elides
+  to `for[a] Fn(&a String) -> Bool` at use-sites that require it.
 - **G4.** HRTBs on `any Mixin` are legal and produce the correct
   vtable (trivially — the vtable doesn't change; the type of the
   mixin existential does).
@@ -141,18 +147,18 @@ token is `[` / `<` not an identifier.
 **Full form:**
 
 ```ruxen
-def each_line[F: for[a] Fn(&a Str)](source: &String, f: F) ...
+def each_line[F: for[a] Fn(&a String)](source: &String, f: F) ...
 ```
 
 **Elided form:**
 
 ```ruxen
-def each_line[F: Fn(&Str)](source: &String, f: F) ...
+def each_line[F: Fn(&String)](source: &String, f: F) ...
 ```
 
-The elided form's `&Str` is equivalent to `for[a] &a Str` *when
+The elided form's `&String` is equivalent to `for[a] &a String` *when
 the closure's lifetime does not escape the signature* — which for
-`Fn(&Str)` passed to `each_line` is always. This is the same
+`Fn(&String)` passed to `each_line` is always. This is the same
 elision rule Rust uses for closure-typed function arguments.
 
 ### 4.2 `for[...]` vs `for<...>`
@@ -173,7 +179,7 @@ end
 ### 4.3 Multi-lifetime HRTBs
 
 ```ruxen
-def both[F: for[a, 'b] Fn(&a Str, &'b Str) -> Bool](f: F) ...
+def both[F: for[a, b] Fn(&a String, &b String) -> Bool](f: F) ...
 ```
 
 Rare but legal. The quantifier binds both lifetimes.
@@ -181,17 +187,17 @@ Rare but legal. The quantifier binds both lifetimes.
 ### 4.4 HRTBs on mixin existentials
 
 ```ruxen
-type LineProcessor = Box[any for[a] Fn(&a Str) -> Result[(), Error]]
+type LineProcessor = Box[any for[a] Fn(&a String) -> Result[nil, Error]]
 
 # Elided equivalent:
-type LineProcessor = Box[any Fn(&Str) -> Result[(), Error]]
+type LineProcessor = Box[any Fn(&String) -> Result[nil, Error]]
 ```
 
 ### 4.5 HRTBs in mixin bodies
 
 ```ruxen
 mixin Parser
-  def parse[R](self, input: &Str, reducer: some for[a] Fn(&a Str) -> R) -> R
+  def consume parse[R](input: &String, reducer: some for[a] Fn(&a String) -> R) -> R
 end
 ```
 
@@ -214,10 +220,10 @@ wrapping the bound in `for[...]`.
 
 ```ruxen
 # Written:
-def each[F: Fn(&Str)](items: &Array[String], f: F) ...
+def each[F: Fn(&String)](items: &Array[String], f: F) ...
 
 # Elaborated:
-def each[F: for[a] Fn(&a Str)](items: &Array[String], f: F) ...
+def each[F: for[a] Fn(&a String)](items: &Array[String], f: F) ...
 ```
 
 This covers the majority of closure bounds in the stdlib.
@@ -232,19 +238,19 @@ This covers the majority of closure bounds in the stdlib.
   elsewhere in the signature: explicit HRTBs (or named lifetimes) are
   needed.
 - The closure's argument lifetime must *escape* through a return:
-  `Fn(&a Str) -> &a Str` in a situation where `a` is fixed to an
+  `Fn(&a String) -> &a String` in a situation where `a` is fixed to an
   input lifetime — again, named lifetimes.
 - The user wants to write `for[a]` to document intent: permitted,
   not required.
 
 ### 5.4 Lifetime-elision rule 3 extension
 
-Today rule 3 (`borrow_check/lifetimes.rs:63-64`) gives `&self` /
-`&var self` methods their output lifetime from self. Extend to:
+Today rule 3 (`borrow_check/lifetimes.rs:63-64`) gives `def` /
+`def var` methods their output lifetime from self. Extend to:
 
 - If the method has exactly one input reference of a *user-defined*
-  reference type (a struct containing a reference, say), and one
-  `&self`, prefer `self`'s lifetime for the return.
+  reference type (a struct containing a reference, say), and a
+  borrowed receiver (`def` / `def var`), prefer `self`'s lifetime for the return.
 - If the method returns `some Iterator[Item = &T]`, the `&T` gets
   the same lifetime as the receiver.
 
@@ -326,8 +332,8 @@ bind at call entry, release at call exit.
 
 For an HRTB-qualified bound, the implementer (the closure) must
 satisfy the bound for every lifetime, not just one. The subtyping
-rule: `F: for[a] Fn(&a T) -> U` → `F: Fn(&'b T) -> U` for any
-specific `'b`. This is a *decreasing* subtype — HRTB is strictly
+rule: `F: for[a] Fn(&a T) -> U` → `F: Fn(&b T) -> U` for any
+specific `b`. This is a *decreasing* subtype — HRTB is strictly
 stronger than a monomorphic closure bound. In the Rust terminology,
 HRTBs are covariant in quantified lifetimes.
 
@@ -350,7 +356,7 @@ you have named lifetimes.*
 | Change | File(s) |
 |---|---|
 | AST `TraitBound.higher_ranked: Vec<String>` | `parser/ast.rs:100-104` |
-| Parse `for[a, 'b] ...` in bounds | `parser/types.rs:400-405` |
+| Parse `for[a, b] ...` in bounds | `parser/types.rs:400-405` |
 | HIR `TraitRef.higher_ranked` | `hir/types.rs:14-18` |
 | Resolve propagates quantifier through | `resolve/mod.rs` (mixin-bound walker) |
 | M0 lifetime infrastructure | `resolve/mod.rs:2679-2682`, `resolve/symbols.rs`, `borrow_check/regions.rs` |
@@ -386,7 +392,7 @@ signature and no explicit lifetime annotations.
 
 9. HRTBs on non-`Fn` mixins: `T: for[a] Iterator[Item = &a U]`.
    Requires GATs (doc 05) to express the quantified projection.
-10. HRTBs with outlives bounds: `for[a: 'b] Fn(&a T)`.
+10. HRTBs with outlives bounds: `for[a: b] Fn(&a T)`.
 11. `some Mixin` return with HRTB: `-> some for[a] Fn(&a T)`. Rare
     in practice, deferred.
 
@@ -409,7 +415,7 @@ GATs + HRTBs is the "streaming iterator" pattern:
 ```ruxen
 mixin StreamingIterator
   type Item[a]
-  def var next[a](self: &a var Self) -> Option[Self.Item[a]]
+  def var next[a] -> Option[Self.Item[a]]
 end
 
 def take_three[S: for[a] StreamingIterator](s: &var S) ...
@@ -454,17 +460,17 @@ case. Explicit HRTBs on `some Mixin` are legal.
   `Fn`-family. Recommendation: limit to `Fn`/`FnVar`/`FnOnce` in
   phase 03a. A general rule can be added later.
 - **OQ-3: error messaging.** "The closure `|x| x.len` does not live
-  long enough to satisfy `for[a] Fn(&a Str) -> USize`" is a
+  long enough to satisfy `for[a] Fn(&a String) -> USize`" is a
   user-hostile message. Mitigate by explaining: "your closure
   captures `x` but the bound requires a closure that does not
   capture references tied to its input."
 - **OQ-4: what if the user writes `for[]` (empty quantifier)?**
   Semantically equivalent to no HRTB. Accept and warn.
-- **OQ-5: `for['static]`.** Redundant (`'static` is universally
+- **OQ-5: `for[static]`.** Redundant (`static` is universally
   available). Reject with E-HRTB-STATIC.
 - **R-1: elision magic is hard to teach.** Users who type
-  `fn f[F: Fn(&Str)]` will be surprised that it compiles where
-  `fn f[F: Fn(&a Str)]` does not. Document in the tutorial.
+  `def f[F: Fn(&String)]` will be surprised that it compiles where
+  `def f[F: Fn(&a String)]` does not. Document in the tutorial.
 - **R-2: borrow-check skolemization is a well-known source of
   compiler bugs in Rust.** Mitigation: test matrix N4-N7 (below)
   targets the known-hard cases.
@@ -477,32 +483,32 @@ case. Explicit HRTBs on `some Mixin` are legal.
 
 ### 10.1 Positive tests
 
-- T1: `def each[F: Fn(&Str)](items: &Array[String], f: F)` — elided
+- T1: `def each[F: Fn(&String)](items: &Array[String], f: F)` — elided
   HRTB. Call with a closure `|s| puts s`.
-- T2: Explicit HRTB: `def each[F: for[a] Fn(&a Str)](...)`.
+- T2: Explicit HRTB: `def each[F: for[a] Fn(&a String)](...)`.
   Verify equivalence to T1.
-- T3: Multi-lifetime HRTB: `for[a, 'b] Fn(&a Str, &'b Str) -> Bool`.
-- T4: `any Fn(&Str) -> Bool` accepts a mixin-existential closure without
+- T3: Multi-lifetime HRTB: `for[a, b] Fn(&a String, &b String) -> Bool`.
+- T4: `any Fn(&String) -> Bool` accepts a mixin-existential closure without
   explicit lifetimes.
-- T5: `Box[any for[a] Fn(&a Str) -> Bool]` stored in a field,
+- T5: `Box[any for[a] Fn(&a String) -> Bool]` stored in a field,
   invoked with a borrow.
 - T6: HRTB on an `some Mixin` argument: `def each(items: &Array[String],
-  f: some Fn(&Str))`.
+  f: some Fn(&String))`.
 
 ### 10.2 Negative tests
 
 - N1: closure returns a borrow of a local:
-  `fn bad() -> Fn(&Str) -> &Str { |s| &String.from(s) }` →
+  `def bad -> Fn(&String) -> &String; { |s| &String.from(s) }; end` →
   E-HRTB-RETURN-LOCAL.
 - N2: HRTB where the quantified lifetime is also a parameter of the
   enclosing function → E-HRTB-SHADOW.
 - N3: `for[]` with no lifetimes → warn (W-HRTB-EMPTY).
-- N4 (skolemization): closure signature claims `for[a] Fn(&a Str)
-  -> &a Str` but the implementation captures a `&'static Str` and
-  returns it → must be accepted (the `'static` is a specific
+- N4 (skolemization): closure signature claims `for[a] Fn(&a String)
+  -> &a String` but the implementation captures a `&static String` and
+  returns it → must be accepted (the `static` is a specific
   lifetime that *is* `a` for every caller).
-- N5 (skolemization): closure requires `F: for[a] Fn(&a Str)`,
-  but the caller passes `|s: &'outer Str| ...` where `'outer` is a
+- N5 (skolemization): closure requires `F: for[a] Fn(&a String)`,
+  but the caller passes `{ |s: &outer String| ... }` where `outer` is a
   specific parameter of the caller → E-HRTB-NOT-POLY.
 - N6 (rule 4 elision): a closure that captures a borrow:
   `let outer = String.new; each(&items, |x| outer.contains(&x))` —
@@ -516,7 +522,7 @@ case. Explicit HRTBs on `some Mixin` are legal.
 - `tests/fixtures/hrtb_closure_arg.rx` — elided; uses `Array.filter`
   with a closure taking `&T`.
 - `tests/fixtures/hrtb_explicit.rx` — explicit `for[a]` syntax.
-- `tests/fixtures/hrtb_dyn.rx` — `Box[any Fn(&Str)]` stored in a
+- `tests/fixtures/hrtb_dyn.rx` — `Box[any Fn(&String)]` stored in a
   struct and called repeatedly.
 - `tests/fixtures/hrtb_error_non_poly.rx` — negative: closure tied
   to a specific lifetime where HRTB was required.

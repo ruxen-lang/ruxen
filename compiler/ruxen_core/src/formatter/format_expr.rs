@@ -532,10 +532,18 @@ fn format_char_literal(c: char) -> String {
 }
 
 fn format_interpolated_string(parts: &[StringPart]) -> Doc {
-    let mut segments = vec![text("\"")];
+    text(interpolated_string_source(parts))
+}
+
+/// Source form of an interpolated string, quotes included. Shared by the
+/// expression formatter and `token_to_source`, which meets the same parts as
+/// one `InterpolatedString` token when such a string is an argument inside
+/// another string's `#{...}` (`"#{a.include?("a#{p}ple")}"`).
+fn interpolated_string_source(parts: &[StringPart]) -> String {
+    let mut out = String::from("\"");
     for part in parts {
         match part {
-            StringPart::Literal(s) => segments.push(text(escape_string(s))),
+            StringPart::Literal(s) => out.push_str(&escape_string(s)),
             StringPart::Expr { tokens, spec } => {
                 // Reconstruct the interpolation expression from its tokens.
                 // Operators get surrounding spaces so the result re-lexes to
@@ -555,12 +563,12 @@ fn format_interpolated_string(parts: &[StringPart]) -> Doc {
                     content.push_str(&src);
                 }
                 let spec_str = format_spec_to_source(spec);
-                segments.push(text(format!("#{{{}{}}}", content, spec_str)));
+                out.push_str(&format!("#{{{}{}}}", content, spec_str));
             }
         }
     }
-    segments.push(text("\""));
-    concat(segments)
+    out.push('"');
+    out
 }
 
 /// Phase 2 #06.B: reconstruct a `FormatSpec` to its source form.
@@ -641,6 +649,7 @@ fn token_to_source(token: &crate::lexer::token::Token) -> String {
             }
         }
         TokenKind::StringLiteral(s) => format!("\"{}\"", s),
+        TokenKind::InterpolatedString(parts) => interpolated_string_source(parts),
         TokenKind::CharLiteral(c) => format_char_literal(*c),
         TokenKind::DocComment(s) => format!("## {}", s),
         TokenKind::Dot => ".".to_string(),

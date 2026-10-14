@@ -20,15 +20,15 @@ The research agents independently uncovered broken or aspirational-but-nonfuncti
 |---|----------|-------------|----------|-----|
 | **P0.1** | Legal | `README.md:294-296` says "License: TBD"; release workflow already ships tarballs. `release.yml:96` silently no-ops on missing `LICENSE*`. | root | tier4_08 |
 | ~~**P0.2**~~ | ~~Correctness~~ | **RESOLVED (stale).** Real drop elaboration landed: `insert_drops` (`mir/lower/drops.rs`) emits per-type free + user-destructor calls at scope exit, gated by the `compute_dealloc_safe_locals` ownership analysis (no drop-after-move). `MirInst::Drop` is an intentional inert marker in both backends. Cited paths are stale (backends split into `codegen/cranelift/`, `codegen/llvm/emit/`). Proof: `drop_fixtures.rs` + `user_drop_runs.rs` (19/19, `outstanding == 0`). See `docs/decisions/drop-elaboration.md`. Open remainder: drop flags for conditional moves, drop-on-unwind, Copy/Clone (tier1_04). | `mir/lower/drops.rs`, `codegen/cranelift/emit.rs:452`, `codegen/llvm/emit/instructions.rs:472` | tier1_04 |
-| **P0.3** | Correctness | The body-level `derive Mixin` directive is parsed but no pass consumes it. `Ty::is_copy()` ignores `derive_traits`. | `parser/mod.rs:473-511`, `hir/types.rs:189-221` | tier1_05 |
-| **P0.4** | Design | `layout` storage and `derive Mixin` storage share the same `Vec<String>` field. | `parser/mod.rs:499-503` | tier1_05 |
+| ~~**P0.3**~~ | ~~Correctness~~ | **RESOLVED.** The `derive` directive was removed from the parser. Structural mixins (`Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `Hashable`, `Default`, `Ord`, `PartialOrd`) are implicit includes, with an explicit `include X` as the loud form. See `docs/specs/mixins/implicit_includes.spec.md`. | `parser/classes.rs` | tier1_05 |
+| ~~**P0.4**~~ | ~~Design~~ | **RESOLVED.** `layout` directive args have their own `layout: Vec<String>` field on the struct, class and enum AST nodes. | `parser/ast.rs` | tier1_05 |
 | **P0.5** | Correctness | `?T..._method` codegen fallback maps unresolved generic method calls to `ruxen_noop_passthrough`. Some currently-passing tests are no-ops. | `codegen/runtime.rs` | tier1_01 |
-| **P0.6** | Design | `Map[K,V]` collection name collides with the conventional `Hash` mixin. Both stdlib and derive docs recommend renaming to `Map`. | `resolve/mod.rs:200` | tier1_01 / tier1_05 |
+| **P0.6** | Design | The `Hash[K,V]` collection name collided with a hashing mixin also called `Hash`. Resolved: the collection keeps Ruby's name `Hash[K, V]`; the hashing mixin is `Hashable`. No rename. | `resolve/mod.rs:200` | tier1_01 / tier1_05 |
 | **P0.7** | Correctness | String literals flow as `Ty::String`; lowering `String::drop` to `free()` would double-free. | `mir/lower.rs` + runtime | tier1_04 |
-| **P0.8** | UX | Manifest parses registry dependencies (`manifest.rs:51-57`) but `resolve_deps.rs:100-108` hard-rejects them with "not yet supported". | `crates/ruxen-cli/src/` | tier4_01 |
+| **P0.8** | UX | Manifest parses registry dependencies (`manifest.rs:51-57`) but `resolve_deps.rs:100-108` hard-rejects them with "not yet supported". | `src/ruxen_cli/src/` | tier4_01 |
 | **P0.9** | Policy | `Cargo.toml` workspace root is 4 lines with no `rust-version`. Contributor can land nightly-only Rust. | root | tier4_06 |
 | **P0.10** | Docs | `CLAUDE.md` claims proptest coverage. The only two proptest uses are `prop_assert!(expected_len <= 100)` and `prop_assert_eq!(n, n)` tautologies. | `tests/runtime_safety.rs:68-86` | tier3_08 |
-| **P0.11** | Dead code | `package.edition` field exists and is tested, but `grep edition` across `ruxen-core` returns zero hits — entirely inert. | `crates/ruxen-cli/src/manifest.rs:29` | tier5_02 |
+| **P0.11** | Dead code | `package.edition` field exists and is tested, but `grep edition` across `ruxen_core` returns zero hits — entirely inert. | `src/ruxen_cli/src/manifest.rs:29` | tier5_02 |
 | **P0.12** | Dead code | `async`/`await`/`spawn`/`actor`/`send`/`receive` reserved in lexer but never consumed by the parser. | `lexer/token.rs:83-85,:127-130` | tier1_02 / tier1_03 |
 | **P0.13** | UX | Doc comments `##` are lexed as `TokenKind::DocComment` but discarded at four parser sites. | `parser/mod.rs:455-458,:884-887,:1112-1115,:1187-1190` | tier3_04 |
 | **P0.14** | Correctness | `DWARF` emission is a 3-line stub. `--backend=llvm` debug builds have no line info. | `codegen/llvm/debug.rs:1-3` | tier3_02 |
@@ -40,8 +40,8 @@ The research agents independently uncovered broken or aspirational-but-nonfuncti
                             ┌──────────────────────────────────┐
                             │ Phase 0 — pre-flight fixes       │
                             │ P0.1 LICENSE, P0.2 Drop,         │
-                            │ P0.3-P0.4 derive untangle,       │
-                            │ P0.5 ?T..., P0.6 Hash rename,    │
+                            │ P0.3-P0.4 directive untangle,    │
+                            │ P0.5 ?T..., P0.6 Hash naming,    │
                             │ P0.9 MSRV, P0.13 doc comments    │
                             └──────────┬───────────────────────┘
                                        │
@@ -49,7 +49,7 @@ The research agents independently uncovered broken or aspirational-but-nonfuncti
            ▼                           ▼                            ▼
   ┌──────────────┐          ┌──────────────────┐          ┌─────────────────┐
   │ T4 CI        │          │ T1 Drop/Copy/    │          │ T5 error-code   │
-  │ (ships day 1)│          │    Clone + Derive│          │    registry     │
+  │ (ships day 1)│          │    Clone+includes│          │    registry     │
   └──────┬───────┘          └────────┬─────────┘          └──────┬──────────┘
          │                           │                           │
          ▼                           ▼                           ▼
@@ -89,9 +89,9 @@ The research agents independently uncovered broken or aspirational-but-nonfuncti
 
 Critical orderings extracted from the individual docs:
 
-- **Drop must work before stdlib ships.** Every heap-backed stdlib type (`String`, `Array`, `Map`, `File`, `TcpStream`) leaks until exit without P0.2 fixed.
-- **Derive must work before stdlib ships.** Users hand-writing a `Debug` `include` for every struct is a non-starter.
-- **Associated types before `Iterator`.** Tier-1 stdlib's `Iterator` mixin needs tier-2.01. These land together in practice.
+- **Drop must work before stdlib ships.** Every heap-backed stdlib type (`String`, `Array`, `Hash`, `File`, `TcpStream`) leaks until exit without P0.2 fixed.
+- **Implicit includes must work before stdlib ships.** Users hand-writing a `Debug` `include` for every struct is a non-starter. (Shipped: structural mixins are implicit includes.)
+- **No `Iterator` layer.** Iteration is Ruby's `Enumerable` over `each` (`map`, `select`, `to_a`, …), so tier-1 stdlib does not wait on tier-2.01 associated types.
 - **Incremental compile before LSP completion.** LSP can ship with debounced full-file re-analysis first (tier-3.01 phase 1), then migrate to the tier-3.06 query layer.
 - **no_std before WASM.** `wasm32-unknown-unknown` is a special case of no_std — tier-4.04 before tier-4.03.
 - **CI before everything else tier-4.** `ci.yml` is a 0.5-week task that catches regressions for every subsequent subsystem.
@@ -107,8 +107,8 @@ Fixes P0.1, P0.3, P0.4, P0.6, P0.9, P0.10, P0.11, P0.13 — anything that's eith
 1. **License** (P0.1): pick MIT OR Apache-2.0 (tier-4.08 recommends dual), add `LICENSE-MIT` + `LICENSE-APACHE`, fix README.
 2. **MSRV** (P0.9): pin `rust-version = "1.78"` at workspace root, add MSRV check to CI.
 3. **CI bootstrap** (tier-4.06 phase 1): ship `ci.yml` running `cargo test` + `cargo clippy` + MSRV check. 0.5 weeks.
-4. **Directive untangle** (P0.3, P0.4): wire body-level `derive` dispatch, widen the storage from `Vec<String>` to a structured form, separate `derive_traits` from `layout` storage, add `derive_traits` to class/enum.
-5. **Hash rename** (P0.6): `Map[K,V]` → `Map[K,V]`. Update tutorial + fixtures. First `EditionLint` canary once tier-5.02 ships.
+4. **Directive untangle** (P0.3, P0.4): done. `derive` is retired in favour of implicit includes, and `layout` has its own storage.
+5. **Hash naming** (P0.6): keep `Hash[K, V]` as the collection (Ruby's name) and `Hashable` as the hashing mixin. No rename, so no edition canary from this item.
 6. **Doc-comment capture** (P0.13): stop discarding `##` at 4 parser sites; thread into HIR. Unblocks both tier-3.04 (ruxendoc) and tier-3.01 hover enrichment.
 7. **Edition removal or wiring** (P0.11): either delete the inert `edition` field from the manifest or gate a single behavior on it as a smoke test.
 8. **Proptest cleanup** (P0.10): either add real properties per tier-3.08, or remove the claim from `CLAUDE.md`.
@@ -119,15 +119,15 @@ Fixes the remaining P0s that are actual semantic bugs, and lands the mixin infra
 
 1. Tier-1.04 Drop infrastructure + MIR drop elaboration + real codegen (P0.2). Closes the heap-leak hole.
 2. Tier-1.04 Copy/Clone mixins + `Ty::is_copy_with(&SymbolTable)`.
-3. Tier-1.05 builtin-derive infrastructure + `derive Debug, Clone` + `derive Copy, PartialEq`.
+3. Tier-1.05 implicit includes for `Debug`, `Clone`, `Copy`, `PartialEq` (shipped).
 4. Tier-1.04 phase 4d: built-in drops for `String`/`Array`/`Option`/`Result` (requires P0.7 string-literal-ownership fix first).
-5. Tier-1.05 phase 5c: remaining derives (`Eq`/`Hash`/`Default`/`Ord`/`PartialOrd`).
+5. Tier-1.05 phase 5c: remaining implicit includes (`Eq`/`Hashable`/`Default`/`Ord`/`PartialOrd`) (shipped).
 6. Tier-5.04 error-code registry bootstrap (unifies diagnostic namespaces).
 7. P0.5 `?T..._method` removal — accept test regressions, fix them.
 
 ### Phase 2 — stdlib (6-8 weeks)
 
-Tier-1.01 phases 1a, 1b, 1c. Overlap tier-2.01 (associated types) to land `Iterator` with a real `Item` type. Write stdlib in Ruxen-plus-FFI as the docs specify. Keep key types int64-slot-erased until monomorphization lands (tier-2.02 const-generics dependency — noted).
+Tier-1.01 phases 1a, 1b, 1c. Iteration is `Enumerable` over `each`; there is no `Iterator` mixin. Write stdlib in Ruxen-plus-FFI as the docs specify. Keep key types int64-slot-erased until monomorphization lands (tier-2.02 const-generics dependency — noted).
 
 Overlaps nicely with tier-3.03 (test framework) because now users have a stdlib to test *and* a test framework to drive it.
 
@@ -204,5 +204,5 @@ Consolidated from all five tier overviews:
 1. **The research surfaced 15 pre-existing issues that none of the individual tier conversations would have exposed.** Phase 0 is not overhead — it's debt repayment that unblocks everything else.
 2. **Tiers are not strictly ordered.** Tier-4 CI must ship in Phase 0. Tier-5 error-code registry must ship before tier-1 diagnostic work. Tier-3 LSP wiring the existing `formatter` is a 30-line tier-3.01 win that should land in Phase 0.
 3. **Three reserved-but-unused design primitives** (`async`/`await`, `actor`/`spawn`/`send`/`receive`, `edition`) hint at design intent that has not been delivered. Either commit or un-reserve.
-4. **Several fixes unlock disproportionate value.** Fixing the `derive` wiring (P0.3) unblocks tier-1.04 Copy/Clone, tier-1.05 derive, tier-4.05 cbindgen, and part of tier-5.03 stability attrs.
+4. **Several fixes unlock disproportionate value.** Untangling the body directives (P0.3, now done: `derive` retired for implicit includes) unblocked tier-1.04 Copy/Clone, tier-1.05 implicit includes, tier-4.05 cbindgen, and part of tier-5.03 stability directives.
 5. **Total scope is tractable.** ~6-8 months with a small team is a realistic path from current-state to a language users can write production code in — provided the open decisions above are made soon.

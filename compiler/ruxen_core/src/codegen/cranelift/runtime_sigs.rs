@@ -105,7 +105,6 @@ pub fn compiler_internal_signature(name: &str) -> Option<(Vec<Type>, Option<Type
         "ruxen_string_from_iter" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_str_split" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_str_parse_uint" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_hash_eq" => Some((vec![types::I64, types::I64], Some(types::I8))),
         "ruxen_hash_index" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_set_eq" => Some((vec![types::I64, types::I64], Some(types::I8))),
 
@@ -173,14 +172,13 @@ pub fn compiler_internal_signature(name: &str) -> Option<(Vec<Type>, Option<Type
         // ── Implicit accessor/conversion helpers without a `.rx` decl ─
         // FOLLOW-UP (coverage gap, not a language primitive): the
         // Duration `as_*` accessors, fs `Metadata` accessors, regex
-        // `compile_const`/`drop`/`error_drop`, `match_drop`, the
-        // ExitStatus accessors, and the thread-sleep helper below are
-        // stdlib runtime functions the compiler currently emits
-        // implicitly rather than routing through an `.rx`-declared
-        // method. They are residual only because no `.rx` lib block
-        // declares the linked symbol; a follow-up should declare them so
-        // they too become derived. See the migration report's residual
-        // bucketing.
+        // `compile_const`, the ExitStatus accessors, and the thread-sleep
+        // helper below are stdlib runtime functions the compiler
+        // currently emits implicitly rather than routing through an
+        // `.rx`-declared method. They are residual only because no `.rx`
+        // lib block declares the linked symbol; a follow-up should
+        // declare them so they too become derived. See the migration
+        // report's residual bucketing.
         "ruxen_duration_as_secs"
         | "ruxen_duration_as_millis"
         | "ruxen_duration_as_micros"
@@ -194,9 +192,6 @@ pub fn compiler_internal_signature(name: &str) -> Option<(Vec<Type>, Option<Type
         "ruxen_exit_status_code" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_exit_status_success" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_regex_compile_const" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_regex_drop" => Some((vec![types::I64], None)),
-        "ruxen_regex_error_drop" => Some((vec![types::I64], None)),
-        "ruxen_match_drop" => Some((vec![types::I64], None)),
 
         // ── No-op sentinel (declared via call-site inference) ────────
         "ruxen_noop" => Some((vec![], None)),

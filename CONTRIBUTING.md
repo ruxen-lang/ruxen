@@ -17,7 +17,7 @@ shift between commits.
   approach. For small fixes (typos, obvious bugs, docs) just send a PR.
 - Branch from `master`. Keep PRs focused — one logical change per PR.
 - Add tests for new behavior. The compiler has integration suites under
-  `crates/*/tests/` and `tests/release-e2e/`.
+  `compiler/ruxen_core/tests/`, `src/*/tests/` and `tests/release-e2e/`.
 - Run `cargo test --workspace` locally before pushing. CI will run the
   same plus an MSRV check (Rust 1.91).
 - `cargo fmt --all` and `cargo clippy --workspace` are advisory today
@@ -36,9 +36,11 @@ fix(mir): close P0.2 Drop gaps for reassignment and loop bodies
 ## Error codes
 
 Every diagnostic emitted via `Diagnostic::error_with_code` must have
-an entry in `crates/ruxen-core/src/diagnostics/codes.rs`. The
-`tests/error_code_registry.rs` integration test will fail the build
-if a code is used without a registry entry.
+an entry in `compiler/ruxen_core/src/diagnostics/codes.rs` and a
+`docs/errors/<code>.md` page (`ruxen explain` picks it up). The
+`compiler/ruxen_core/tests/error_code_registry.rs` integration test
+checks that every registered code has a doc and every doc a registry
+entry.
 
 Reserved namespaces (see `docs/requirements/ROADMAP.md`):
 
@@ -55,7 +57,7 @@ Reserved namespaces (see `docs/requirements/ROADMAP.md`):
 running it on large or untrusted sources:
 
 ```
-scripts/ruxenc-rss-cap.sh -- <args>
+RUXENC_BIN=target/debug/ruxen scripts/ruxenc-rss-cap.sh compile <file.rx>
 ```
 
 It SIGKILLs the child if RSS exceeds 8 GiB.

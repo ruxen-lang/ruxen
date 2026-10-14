@@ -108,7 +108,6 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("ruxen_string_from_iter", ptr_ty, [ptr_ty]);
     decl!("ruxen_str_split", ptr_ty, [ptr_ty, ptr_ty]);
     decl!("ruxen_str_parse_uint", ptr_ty, [ptr_ty]);
-    decl!("ruxen_hash_eq", i8_ty, [ptr_ty, ptr_ty]);
     decl!("ruxen_hash_index", i64_ty, [ptr_ty, i64_ty]);
     decl!("ruxen_set_eq", i8_ty, [ptr_ty, ptr_ty]);
 
@@ -170,7 +169,6 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("ruxen_vec_push", void, [ptr_ty, i64_ty]);
     decl!("ruxen_vec_pop", ptr_ty, [ptr_ty]);
     decl!("ruxen_vec_len", i64_ty, [ptr_ty]);
-    decl!("ruxen_vec_sum", i64_ty, [ptr_ty]);
 
     // ── Pointer indirection helpers (`&mut T` mutation lowering) ────
     decl!("ruxen_deref_ptr", ptr_ty, [ptr_ty]);
@@ -216,9 +214,6 @@ pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Con
     decl!("ruxen_exit_status_code", i64_ty, [ptr_ty]);
     decl!("ruxen_exit_status_success", i64_ty, [ptr_ty]);
     decl!("ruxen_regex_compile_const", ptr_ty, [ptr_ty, ptr_ty]);
-    decl!("ruxen_regex_drop", void, [ptr_ty]);
-    decl!("ruxen_regex_error_drop", void, [ptr_ty]);
-    decl!("ruxen_match_drop", void, [ptr_ty]);
 
     // ── No-op sentinel ──────────────────────────────────────────────
     decl!("ruxen_noop", void, []);

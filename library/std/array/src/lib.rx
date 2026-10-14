@@ -51,7 +51,6 @@
 ##     as a static declared return — so the resolver arm computes it.
 ##     Their decls stay for the FFI alias (`ruxen_vec_zip` /
 ##     `ruxen_hash_from_iter` emit real calls).
-##   * `sum`: carries the E0700 non-numeric-element typeck check.
 ##   * `get_mut` / `get_var`: alias `ruxen_vec_get_opt` with a `&var T`
 ##     return that differs from `get`'s `&T`; a second `.rx` alias for
 ##     the same C symbol with a different wire shape trips E0722. Kept as
@@ -77,10 +76,8 @@ class Array[T]
     def get_var as "ruxen_vec_get_opt"(i: Int) -> Option[&var T]
     def first as "ruxen_vec_first" -> Option[T]
     def last as "ruxen_vec_last" -> Option[T]
-    def include? as "ruxen_vec_contains_int"(x: T) -> Bool
     def clone as "ruxen_vec_clone" -> Array[T]
     def reverse as "ruxen_vec_reverse" -> Array[T]
-    def sort as "ruxen_vec_sort" -> Array[T]
     def push as "ruxen_vec_push"(x: T)
     def pop as "ruxen_vec_pop" -> Option[T]
     def clear as "ruxen_vec_clear"
@@ -89,7 +86,6 @@ class Array[T]
     def insert as "ruxen_vec_insert"(i: Int, x: T)
     def remove as "ruxen_vec_remove"(i: Int) -> T
     def extend as "ruxen_vec_extend"(other: Array[T])
-    def dedup as "ruxen_vec_dedup"
     # Ruby `take(n)` / `drop(n)` eager-materialise a fresh Array.
     def take as "ruxen_vec_take"(n: Int) -> Array[T]
     def drop as "ruxen_vec_skip"(n: Int) -> Array[T]
@@ -100,7 +96,6 @@ class Array[T]
     # ── residual: laundered `Int` decls kept ONLY for the FFI alias;
     #    the collections.rs resolver (ahead of the bridge) supplies the
     #    user-visible return type. See header.
-    def sum as "ruxen_vec_sum" -> Int where T: Add
     def each as "ruxen_vec_each" -> Int
     def to_h as "ruxen_hash_from_iter" -> Int
   end
@@ -264,6 +259,107 @@ class Array[T]
       i = i + 1
     end
     out
+  end
+
+  # Ruby `include?` — true when some element is `==` to `x`, by the
+  # element type's own equality (String by content, Float by value).
+  def include?(x: T) -> Bool
+    var n: Int = self.size as Int
+    var i: Int = 0
+    while i < n
+      var y: T = self[i]
+      if y == x
+        return true
+      end
+      i = i + 1
+    end
+    false
+  end
+
+  # Ruby `==` — same length and pairwise `==` elements, by the element
+  # type's own equality.
+  def ==(other: Array[T]) -> Bool
+    var n: Int = self.size as Int
+    if n != other.size as Int
+      return false
+    end
+    var i: Int = 0
+    while i < n
+      var x: T = self[i]
+      var y: T = other[i]
+      if x != y
+        return false
+      end
+      i = i + 1
+    end
+    true
+  end
+
+  # Ruby `sort` — a NEW array of the elements in ascending order by the
+  # element type's own `<` (stable); the receiver is left unchanged.
+  def sort -> Array[T]
+    var out: Array[T] = Array.new
+    var n: Int = self.size as Int
+    var i: Int = 0
+    while i < n
+      var x: T = self[i]
+      out.push(x)
+      i = i + 1
+    end
+    out.sort!
+    out
+  end
+
+  # Ruby `sort!` — sort the receiver in place, ascending by the element
+  # type's own `<` (insertion sort over `swap`, so it is stable).
+  def sort! -> nil
+    var n: Int = self.size as Int
+    var i: Int = 1
+    while i < n
+      var j: Int = i
+      while j > 0
+        var a: T = self[j - 1]
+        var b: T = self[j]
+        if b < a
+          self.swap(j - 1, j)
+          j = j - 1
+        else
+          j = 0
+        end
+      end
+      i = i + 1
+    end
+    nil
+  end
+
+  # Rust-style `dedup` — remove consecutive `==` duplicates in place,
+  # keeping the first of each run.
+  def dedup -> nil
+    var i: Int = 1
+    while i < self.size as Int
+      var a: T = self[i - 1]
+      var b: T = self[i]
+      if a == b
+        self.remove(i)
+      else
+        i = i + 1
+      end
+    end
+    nil
+  end
+
+  # Ruby `sum` — the elements added with the element type's own `+`,
+  # starting from zero (`[].sum == 0`).
+  def sum -> T where T: Add
+    var total: T = 0
+    var n: Int = self.size as Int
+    var i: Int = 0
+    while i < n
+      var x: T = self[i]
+      total = total + x
+      i = i + 1
+    end
+    total
   end
 
   # Ruby `to_a` is a synonym of `clone` (both shallow-copy via

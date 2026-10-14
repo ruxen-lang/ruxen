@@ -15,12 +15,6 @@
  */
 #include <stdint.h>
 
-/* The runtime header (library/std/core/runtime/runtime.h) is included
- * by every per-package C compile so cross-package types resolve. Not
- * strictly needed here since we only use stdint types, but kept for
- * consistency with peer packages. */
-#include "../../core/runtime/runtime.h"
-
 int64_t ruxen_foobar_drop_count = 0;
 
 int64_t ruxen_foobar_runtime_double(int64_t x) {

@@ -8,15 +8,19 @@
  * package — see commit 12e24ce (Phase 0 of the std.regex plan)
  * for the vendoring rationale.
  *
- * All ruxen_regex_* / ruxen_match_* / ruxen_regex_error_* symbols
- * here are wired through compiler/ruxen_core/src/codegen/cranelift/
- * runtime_sigs.rs in Phase 2; this TU just produces them.
+ * Every symbol here except ruxen_regex_compile_const is declared in a
+ * `lib "runtime/regex.c"` block in ../src/lib.rx, which derives its ABI.
  *
  * Match handle ownership: every successful match() / scan() copies
  * the subject string + ovector + named-table into a fresh RuxenMatch
  * so the Ruxen caller can drop the original subject String and still
- * query the match. Drop is auto-synthesised on the class Match in
- * lib.rx and routes to ruxen_match_drop here.
+ * query the match.
+ *
+ * Drop contract: Regex, Match and RegexError each declare
+ * `def drop as "ruxen_*_drop"` in lib.rx. At scope exit the MIR drop
+ * elaborator calls that hook and THEN `ruxen_dealloc`s the handle
+ * itself, so each hook frees only what the handle points to, never
+ * the handle.
  *
  * Replay-flag interaction: regex helpers are idempotent (pure
  * compile + match + replace) and do NOT check ruxen_repl_is_replaying.
@@ -90,8 +94,8 @@ static uint32_t flags_to_pcre2(const char *flags) {
  * + named-table so the caller can drop the original subject String
  * and still read groups out of the Match.
  *
- * Allocated via ruxen_alloc; freed in ruxen_match_drop (which Ruxen's
- * implicit_includes synth-Drop calls when a Match goes out of scope).
+ * Allocated via ruxen_alloc. ruxen_match_drop frees the three copies;
+ * the drop elaborator's trailing ruxen_dealloc frees the struct.
  * ovector_count is the *pair* count (PCRE2's `rc` from pcre2_match_8);
  * indexing uses ovector_copy[n*2] / [n*2+1] for start/end of group n. */
 typedef struct RuxenMatch {
@@ -109,7 +113,9 @@ void ruxen_match_drop(RuxenMatch *m) {
     if (m->subject_copy)     ruxen_dealloc(m->subject_copy);
     if (m->ovector_copy)     ruxen_dealloc(m->ovector_copy);
     if (m->named_table_copy) ruxen_dealloc(m->named_table_copy);
-    ruxen_dealloc(m);
+    m->subject_copy = NULL;
+    m->ovector_copy = NULL;
+    m->named_table_copy = NULL;
 }
 
 /* ── Compile-time literal path ───────────────────────────────────── */
@@ -130,14 +136,19 @@ pcre2_code_8 *ruxen_regex_compile_const(const char *pattern, const char *flags) 
     return re;
 }
 
+/* A compiled pattern is a single block from PCRE2's default allocator
+ * (malloc): regex.c never JIT-compiles or deserialises a pattern, the only
+ * cases where pcre2_code_free_8 releases anything beyond that block. The
+ * drop elaborator's trailing ruxen_dealloc (free) releases the block, so
+ * calling pcre2_code_free_8 here would free it twice. */
 void ruxen_regex_drop(pcre2_code_8 *r) {
-    if (r) pcre2_code_free_8(r);
+    (void)r;
 }
 
 /* ── Runtime compile path + RegexError ───────────────────────────── */
 
 /* Wire form of RegexError. Single-shot — created by ruxen_regex_new
- * on the Err path, freed by the auto-synth Drop on RegexError. */
+ * on the Err path, its message freed by ruxen_regex_error_drop. */
 typedef struct RuxenRegexError {
     char    *message;          /* allocated, NUL-terminated */
     int64_t  offset;           /* byte offset into pattern */
@@ -146,7 +157,7 @@ typedef struct RuxenRegexError {
 void ruxen_regex_error_drop(RuxenRegexError *e) {
     if (!e) return;
     if (e->message) ruxen_dealloc(e->message);
-    ruxen_dealloc(e);
+    e->message = NULL;
 }
 
 char *ruxen_regex_error_message(RuxenRegexError *e) {

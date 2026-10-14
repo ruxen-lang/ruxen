@@ -4,7 +4,7 @@
 [docs/requirements/tier1_04_drop_copy_clone.md](../../requirements/tier1_04_drop_copy_clone.md),
 [docs/dev/](../../dev/) (borrow-check notes).
 
-**Status:** shipped Phase 2 #02 (Rust-style borrow check on MIR).
+**Status:** shipped Phase 2 #02 (ownership and borrow check on MIR).
 
 Ruxen's borrow checker runs after typeck on the MIR.  It rejects
 use-after-move, mutable aliasing, and dangling borrows.  This spec
@@ -30,12 +30,12 @@ a caller `let x = "hi"; f(x); f(x);`
 **Then** the second `f(x)` is rejected as use-after-move.
 
 (Same behaviour applies to any non-`Copy` owned type — `Array`,
-`Map`, etc.)
+`Hash`, etc.)
 
 ## B3 — `into_*` (consuming) methods consume the receiver
 
-`String.into_bytes`, `Array.into_iter`, and any other method whose
-receiver is `consume self` (not a reading or writing method)
+`String.into_bytes` and any other method declared `def consume`
+(not a reading or `def var` writing method)
 consumes the receiver.  Subsequent use of the original binding is
 rejected.
 
@@ -62,10 +62,10 @@ sites.  Both must agree.
 
 - The borrow checker has many internal rules (NLL-style two-phase
   borrows, conditional moves, partial moves through struct fields)
-  that today are pinned by unit tests inside `crates/ruxen-core/src/`
+  that today are pinned by unit tests inside `compiler/ruxen_core/src/`
   rather than at the integration boundary.  Listing them here would
   duplicate the unit suite — point readers to
-  `crates/ruxen-core/src/borrow_check/tests.rs` and only surface
+  `compiler/ruxen_core/src/borrow_check/tests.rs` and only surface
   observable rejection-envelope behaviours at the integration layer.
 
 ## Out of scope (v2)

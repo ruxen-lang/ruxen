@@ -94,6 +94,36 @@ class Hash[K, V]
     nil
   end
 
+  # Ruby `==` — same size and every key of `self` maps, in `other`, to a
+  # value `==` to its own, by the value type's own equality (String by
+  # content, Float by value). Key lookup uses the table's key kind.
+  def ==(other: Hash[K, V]) -> Bool
+    if self.size != other.size
+      return false
+    end
+    let ks = self.keys
+    let n: Int = ks.size as Int
+    var i: Int = 0
+    while i < n
+      let k = ks[i]
+      var same: Bool = false
+      match self.get(k)
+        Some(x) -> match other.get(k)
+          Some(y) -> if x == y
+            same = true
+          end
+          nil -> same = false
+        end
+        nil -> same = false
+      end
+      if !same
+        return false
+      end
+      i = i + 1
+    end
+    true
+  end
+
   # Ruby `h[k] = v`. The subscript-assign lowering routes `o[i] = v` to the
   # receiver's `[]=` for any builtin head that resolves one, so this one line is
   # the whole of `Hash[k] = v` (B72 — before it, the store type-checked and was

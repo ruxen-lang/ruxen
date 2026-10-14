@@ -204,6 +204,34 @@ impl<'a> Lowerer<'a> {
         Some(d)
     }
 
+    /// Peel a reference off a binary operand whose pointee is a numeric scalar,
+    /// so the operator dispatches on the pointee type rather than the ref.
+    ///
+    /// A `&Float` (or `&Int32`, or a generic `&T` specialized to one) is not a
+    /// pointer at run time: it is an erased uniform word carrying the scalar's
+    /// bits (`codegen::is_erased_word_ty`). Left as a `Ref(..)` local, codegen
+    /// sees two `i64` words and emits an integer `icmp`/`iadd`, so `0.0 ==
+    /// -0.0` was false, `NaN == NaN` true, `-1.5 < -0.5` false and `1.5 + 2.25`
+    /// garbage. Routing the operand through a pointee-typed `Assign` invokes
+    /// both backends' erased-word reinterpret (Cranelift and LLVM `Assign`
+    /// arms), after which `Compare`/`BinOp` see a real float. Non-scalar
+    /// pointees (String, collections, nominal types) are left untouched: they
+    /// have their own routes above and below.
+    fn peel_scalar_ref_operand(&mut self, local: Option<LocalId>) -> Option<LocalId> {
+        let l = local?;
+        let ty = self.fn_ref().locals.get(l as usize).map(|x| x.ty.clone())?;
+        let pointee = unwrap_ref(&ty);
+        if *pointee == ty || numeric_kind(pointee).is_none() {
+            return Some(l);
+        }
+        let d = self.new_temp(pointee.clone());
+        self.emit(MirInst::Assign {
+            dest: d,
+            value: MirValue::Use(l),
+        });
+        Some(d)
+    }
+
     /// Short-circuit lowering for `&&` / `||`. Builds a branch CFG (mirroring
     /// the `if` lowering in `control.rs`) so the RHS is evaluated ONLY on the
     /// path where the LHS did not already decide the result: `a && b` skips `b`
@@ -393,17 +421,17 @@ impl<'a> Lowerer<'a> {
                 // operators the machine floor can't express on a heap
                 // collection. Route to the method when the `.rx` class declares
                 // it — the builtin-head analogue of the nominal route above,
-                // and the generic-compiler end-state. Comparison/equality and
-                // `~=`/`??` keep their dedicated routes below, and a head with
-                // no such method falls through to the existing hardcoded
-                // runtime routes / machine floor. Runs before operand lowering,
-                // so the synthetic call re-lowers the operands exactly once.
+                // and the generic-compiler end-state. `==` / `!=` route to a
+                // declared `def ==` (Array / Hash compare elements by their own
+                // `==`), `!=` negating it. Ordering and `~=`/`??` keep their
+                // dedicated routes below, and a head with no such method falls
+                // through to the existing hardcoded runtime routes / machine
+                // floor. Runs before operand lowering, so the synthetic call
+                // re-lowers the operands exactly once.
                 if !lhs_nominal
                     && !matches!(
                         op,
-                        BinOp::Eq
-                            | BinOp::NotEq
-                            | BinOp::Lt
+                        BinOp::Lt
                             | BinOp::Gt
                             | BinOp::LtEq
                             | BinOp::GtEq
@@ -428,7 +456,16 @@ impl<'a> Lowerer<'a> {
                                     ty: expr.ty.clone(),
                                     span: expr.span.clone(),
                                 };
-                                return self.lower_method_call(&synthetic);
+                                let result = self.lower_method_call(&synthetic)?;
+                                if let (BinOp::NotEq, Some(src)) = (op, result) {
+                                    let dest = self.new_temp(Ty::Bool);
+                                    self.emit(MirInst::Not {
+                                        dest,
+                                        operand: MirValue::Use(src),
+                                    });
+                                    return Ok(Some(dest));
+                                }
+                                return Ok(result);
                             }
                         }
                     }
@@ -489,6 +526,8 @@ impl<'a> Lowerer<'a> {
 
                 let lhs_local = self.lower_expr(left)?;
                 let rhs_local = self.lower_expr(right)?;
+                let lhs_local = self.peel_scalar_ref_operand(lhs_local);
+                let rhs_local = self.peel_scalar_ref_operand(rhs_local);
                 let lhs_val = local_to_value(lhs_local);
                 let rhs_val = local_to_value(rhs_local);
 
@@ -572,57 +611,6 @@ impl<'a> Lowerer<'a> {
                     return Ok(Some(dest));
                 }
 
-                // ── Phase 2 stdlib batch 1 (#03): Vec[T] == Vec[T] ──
-                // The default integer Compare would compare heap
-                // pointers, returning false for any two distinct
-                // allocations even when their elements match. Route
-                // through `ruxen_vec_eq` for both `==` and `!=`.
-                if matches!(op, BinOp::Eq | BinOp::NotEq)
-                    && matches!(left.ty, Ty::Array(_))
-                    && matches!(right.ty, Ty::Array(_))
-                {
-                    let cmp = self.new_temp(Ty::Bool);
-                    self.emit(MirInst::Call {
-                        dest: Some(cmp),
-                        callee: "ruxen_vec_eq".to_string(),
-                        args: vec![lhs_val, rhs_val],
-                    });
-                    if matches!(op, BinOp::Eq) {
-                        return Ok(Some(cmp));
-                    }
-                    let dest = self.new_temp(Ty::Bool);
-                    self.emit(MirInst::Not {
-                        dest,
-                        operand: MirValue::Use(cmp),
-                    });
-                    return Ok(Some(dest));
-                }
-
-                // ── Phase 2 stdlib (#04): HashMap == HashMap ──
-                // Same justification as Vec equality above — default
-                // integer compare on the spine pointers is meaningless
-                // across allocations. Route through `ruxen_hash_eq`.
-                if matches!(op, BinOp::Eq | BinOp::NotEq)
-                    && matches!(left.ty, Ty::Map(_, _))
-                    && matches!(right.ty, Ty::Map(_, _))
-                {
-                    let cmp = self.new_temp(Ty::Bool);
-                    self.emit(MirInst::Call {
-                        dest: Some(cmp),
-                        callee: "ruxen_hash_eq".to_string(),
-                        args: vec![lhs_val, rhs_val],
-                    });
-                    if matches!(op, BinOp::Eq) {
-                        return Ok(Some(cmp));
-                    }
-                    let dest = self.new_temp(Ty::Bool);
-                    self.emit(MirInst::Not {
-                        dest,
-                        operand: MirValue::Use(cmp),
-                    });
-                    return Ok(Some(dest));
-                }
-
                 // ── Phase 2 stdlib (#04): HashSet == HashSet ──
                 if matches!(op, BinOp::Eq | BinOp::NotEq)
                     && matches!(left.ty, Ty::Set(_))
@@ -671,7 +659,15 @@ impl<'a> Lowerer<'a> {
                     return Ok(Some(dest));
                 }
 
-                let dest = self.new_temp(expr.ty.clone());
+                // Typeck gives `a + b` on two `&Float` the operand type `&Float`;
+                // the operands were peeled to the pointee above, so the result is
+                // that scalar VALUE, not a ref word (a word dest would `fcvt` the
+                // float sum to an integer). Comparisons already produce `Bool`.
+                let result_ty = match unwrap_ref(&expr.ty) {
+                    pointee if numeric_kind(pointee).is_some() => pointee.clone(),
+                    _ => expr.ty.clone(),
+                };
+                let dest = self.new_temp(result_ty);
 
                 if is_comparison(*op) {
                     // Q33: re-materialize a mismatched numeric operand pair to a

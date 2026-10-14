@@ -1,0 +1,11 @@
+plain_zero=true
+ref_zero=true
+ref_zero_ne=false
+ref_nan=false
+ref_nan_ne=true
+ref_one=true
+ref_mixed=true
+ref_lt=true
+ref_add=3.75
+hash_zero=true
+hash_nan=false

@@ -26,11 +26,7 @@ impl Resolver {
                 Some(HirItem::Function(self.resolve_func_def(f, None)))
             }
             ast::TopLevelItem::TypeAlias(ta) => {
-                let def_id = self
-                    .type_registry
-                    .get(&ta.name)
-                    .copied()
-                    .unwrap_or(UNRESOLVED_DEF);
+                let def_id = self.own_type_def(&ta.name);
                 let ty = self.resolve_type_expr(&ta.type_expr);
                 Some(HirItem::TypeAlias(HirTypeAlias {
                     def_id,
@@ -40,11 +36,7 @@ impl Resolver {
                 }))
             }
             ast::TopLevelItem::Newtype(nt) => {
-                let def_id = self
-                    .type_registry
-                    .get(&nt.name)
-                    .copied()
-                    .unwrap_or(UNRESOLVED_DEF);
+                let def_id = self.own_type_def(&nt.name);
                 let inner_ty = self.resolve_type_expr(&nt.inner_type);
                 Some(HirItem::Newtype(HirNewtype {
                     def_id,
@@ -106,30 +98,12 @@ impl Resolver {
     // ─── Class Resolution ───────────────────────────────────────────
 
     pub(super) fn resolve_class(&mut self, class: &ast::ClassDef) -> HirClassDef {
-        // When this class is nested inside one or more `module` blocks,
-        // pass-1 registered the type under its qualified name (e.g.
-        // `"foo.Bar"`). Look up using the same key first, falling back
-        // to the bare name for top-level classes (or for cases where
-        // pass-1 only registered the unqualified spelling). Without
-        // this, nested classes resolve to `UNRESOLVED_DEF` and their
-        // methods can't see their own fields ("no field x on type
-        // Bar"). Pin: `docs/rondo_v1_blockers.md` B12.
-        let qualified_key = if self.current_module_path.is_empty() {
-            class.name.clone()
-        } else {
-            format!("{}.{}", self.current_module_path.join("."), class.name)
-        };
-        let def_id = self
-            .type_registry
-            .get(&qualified_key)
-            .or_else(|| self.type_registry.get(&class.name))
-            .copied()
-            .unwrap_or(UNRESOLVED_DEF);
-        if !self.current_module_path.is_empty() {
-            if let Some(def) = self.symbols.get_mut(def_id) {
-                def.name = qualified_key.clone();
-            }
-        }
+        // A class nested in `module` blocks was registered by pass 1
+        // under its qualified name (`"foo.Bar"`); without it the methods
+        // can't see their own fields. Pin: `docs/rondo_v1_blockers.md` B12.
+        let qualified_key = self.qualified_type_key(&class.name);
+        let def_id = self.own_type_def(&class.name);
+        self.name_def_qualified(def_id, &class.name);
 
         let generic_params = self.resolve_generic_params(&class.generic_params);
 
@@ -146,13 +120,7 @@ impl Resolver {
         // on type Signal" (Q15). Top-level classes keep their bare name.
         let self_ty = Ty::Class {
             name: qualified_key.clone(),
-            generic_args: generic_params
-                .iter()
-                .map(|gp| Ty::TypeParam {
-                    name: gp.name.clone(),
-                    bounds: gp.bounds.clone(),
-                })
-                .collect(),
+            generic_args: Self::generic_param_args(&generic_params),
         };
 
         let old_self_ty = self.current_self_ty.replace(self_ty.clone());
@@ -478,12 +446,24 @@ impl Resolver {
     // ─── Struct Resolution ──────────────────────────────────────────
 
     pub(super) fn resolve_struct(&mut self, s: &ast::StructDef) -> HirStructDef {
-        let def_id = self
-            .type_registry
-            .get(&s.name)
-            .copied()
-            .unwrap_or(UNRESOLVED_DEF);
+        let def_id = self.own_type_def(&s.name);
+        self.name_def_qualified(def_id, &s.name);
         let generic_params = self.resolve_generic_params(&s.generic_params);
+
+        // The struct's own generic params are in scope for its field types
+        // and method signatures, as for classes and enums.
+        self.scopes.push(ScopeKind::Class);
+        for gp in &generic_params {
+            let gp_def = self.symbols.define(
+                gp.name.clone(),
+                DefKind::TypeParam {
+                    bounds: gp.bounds.clone(),
+                },
+                Visibility::Private,
+                gp.span.clone(),
+            );
+            self.scopes.insert_type(gp.name.clone(), gp_def);
+        }
 
         let mut fields = Vec::new();
         let mut field_def_ids = Vec::new();
@@ -544,8 +524,8 @@ impl Resolver {
         // and `include Mixin` directives.
         let old_self_ty = self.current_self_ty.take();
         let self_ty = Ty::Struct {
-            name: s.name.clone(),
-            generic_args: vec![],
+            name: self.qualified_type_key(&s.name),
+            generic_args: Self::generic_param_args(&generic_params),
         };
         self.current_self_ty = Some(self_ty.clone());
         let methods = s
@@ -561,6 +541,8 @@ impl Resolver {
             let method_names = self.visible_method_names(&methods, &s.inner_impls, &[]);
             self.record_method_aliases(&s.name, &s.aliases, &method_names);
         }
+
+        self.scopes.pop();
 
         HirStructDef {
             def_id,
@@ -664,11 +646,8 @@ impl Resolver {
     }
 
     pub(super) fn resolve_enum(&mut self, e: &ast::EnumDef) -> HirEnumDef {
-        let def_id = self
-            .type_registry
-            .get(&e.name)
-            .copied()
-            .unwrap_or(UNRESOLVED_DEF);
+        let def_id = self.own_type_def(&e.name);
+        self.name_def_qualified(def_id, &e.name);
         let generic_params = self.resolve_generic_params(&e.generic_params);
 
         // Push a scope so enum generic params are visible while resolving
@@ -765,8 +744,8 @@ impl Resolver {
         // and `include Mixin` directives.
         let old_self_ty = self.current_self_ty.take();
         let self_ty = Ty::Enum {
-            name: e.name.clone(),
-            generic_args: vec![],
+            name: self.qualified_type_key(&e.name),
+            generic_args: Self::generic_param_args(&generic_params),
         };
         self.current_self_ty = Some(self_ty.clone());
         let methods = e
@@ -801,11 +780,7 @@ impl Resolver {
     // ─── Trait Resolution ───────────────────────────────────────────
 
     pub(super) fn resolve_trait(&mut self, t: &ast::MixinDef) -> HirMixinDef {
-        let def_id = self
-            .type_registry
-            .get(&t.name)
-            .copied()
-            .unwrap_or(UNRESOLVED_DEF);
+        let def_id = self.own_type_def(&t.name);
         let generic_params = self.resolve_generic_params(&t.generic_params);
 
         self.scopes.push(ScopeKind::Trait);

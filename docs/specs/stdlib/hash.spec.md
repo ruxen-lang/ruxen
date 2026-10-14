@@ -31,17 +31,17 @@ end
 **Then** the result is a deterministic `Int` that depends only on
 the bytes of `x` reachable through `&T`.
 
-The mixin is registered as a built-in by `Resolver::register_builtins`
-(see `crates/ruxen-core/src/resolve/mod.rs:179-186`); user code
+The mixin is declared in `library/std/hash/src/lib.rx` and merged
+into every program by the stdlib bootstrap; user code
 needs no `import` to refer to it.
 
 ## B2 — Primitive keys hash via the runtime, not a user-callable method
 
 `Int`, `Int8`/`Int16`/`Int32`/`Int64`, `UInt8`/`UInt16`/`UInt32`/
-`UInt64`, `USize`/`ISize`, `Bool`, `Char`, `String`, and `&str` are
+`UInt64`, `USize`/`ISize`, `Bool`, `Char`, `String`, and `&String` are
 all valid `Hash` keys / `Set` elements: the runtime hashes
 them with a stable 64-bit FNV-style mix
-(`runtime/runtime.c::ruxen_hash_bits` for ints, `ruxen_hash_str` for
+(`library/std/hash/runtime/hash.c::ruxen_hash_bits` for ints, `ruxen_hash_str` for
 strings; bool / char widen into `ruxen_hash_bits`).
 
 In the v1 surface this is a runtime-internal capability — there is
@@ -67,7 +67,7 @@ Implicit `include Hashable` on a `struct` / `class` / `enum` synthesises
 `hash_code` by hashing each field in declaration order and folding
 the partial hashes through a `combine` mix.  Every field's type
 must itself be `Hashable`; the per-field validator at
-`crates/ruxen-core/src/implicit_includes/mod.rs::validate_per_field_traits`
+`compiler/ruxen_core/src/implicit_includes/mod.rs::validate_per_field_traits`
 emits **E0615** when any field violates the bound (e.g. a struct
 field of type `Array[Int]` rejects implicit `Hashable` because `Array`
 isn't `Hashable`).

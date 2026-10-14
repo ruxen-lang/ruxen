@@ -15,11 +15,11 @@ mod yield_scan;
 mod aliases;
 mod bootstrap_merge;
 mod control_flow;
-mod implicit_block_params;
 mod exprs;
 mod ffi_registration;
 mod funcs;
 mod helpers;
+mod implicit_block_params;
 mod items;
 mod patterns;
 mod types;
@@ -256,6 +256,79 @@ impl Resolver {
             .map(|(sym, (sig, _span))| (sym.as_str(), sig))
     }
 
+    /// The `type_registry` key pass 1 gives a type `name` declared at
+    /// `module_path`: the bare name at top level, `A.B.name` inside
+    /// `module A { module B { ... } }`.
+    pub(super) fn qualified_key(module_path: &[String], name: &str) -> String {
+        if module_path.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}.{}", module_path.join("."), name)
+        }
+    }
+
+    /// `qualified_key` for a type declared in the module currently
+    /// being resolved (`current_module_path`).
+    pub(super) fn qualified_type_key(&self, name: &str) -> String {
+        Self::qualified_key(&self.current_module_path, name)
+    }
+
+    /// The `DefId` pass 1 registered for the type item `name` being
+    /// resolved in the current module, or `UNRESOLVED_DEF`. Every
+    /// `resolve_*` for a type-level item looks itself up here so a
+    /// module-nested item finds its qualified entry.
+    pub(super) fn own_type_def(&self, name: &str) -> DefId {
+        self.type_registry
+            .get(&self.qualified_type_key(name))
+            .copied()
+            .unwrap_or(UNRESOLVED_DEF)
+    }
+
+    /// Rename a class, struct or enum def to its qualified key, the name
+    /// its `self` type carries, so field and method lookups on `self` in
+    /// a module-nested type find it.
+    /// Top-level defs keep their (possibly anchored builtin) name.
+    pub(super) fn name_def_qualified(&mut self, def_id: DefId, name: &str) {
+        if self.current_module_path.is_empty() {
+            return;
+        }
+        let key = self.qualified_type_key(name);
+        if let Some(def) = self.symbols.get_mut(def_id) {
+            def.name = key;
+        }
+    }
+
+    /// A type item's own generic params as the `generic_args` of its
+    /// `self` type (`Boxed[T]` -> `[TypeParam T]`).
+    pub(super) fn generic_param_args(generic_params: &[HirGenericParam]) -> Vec<Ty> {
+        generic_params
+            .iter()
+            .map(|gp| Ty::TypeParam {
+                name: gp.name.clone(),
+                bounds: gp.bounds.clone(),
+            })
+            .collect()
+    }
+
+    /// Bind `<prefix>.<Variant>` in the current value scope for every
+    /// variant pass 1 registered on the enum `type_key`. Pass 1 binds the
+    /// bare `Enum.Variant` keys of a module-nested enum in a module frame
+    /// that is gone by pass 2, so the module re-binds them through here.
+    pub(super) fn bind_enum_variants(&mut self, type_key: &str, prefix: &str) {
+        let Some(&enum_id) = self.type_registry.get(type_key) else {
+            return;
+        };
+        let variants = match self.symbols.get(enum_id).map(|d| &d.kind) {
+            Some(DefKind::Enum { info }) => info.variants.clone(),
+            _ => return,
+        };
+        for vid in variants {
+            if let Some(name) = self.symbols.get(vid).map(|d| d.name.clone()) {
+                self.scopes.insert(format!("{}.{}", prefix, name), vid);
+            }
+        }
+    }
+
     /// #06.95 Phase A pre-flight: walk every top-level item in
     /// `programs` and snapshot each mixin's `lib_decls` into
     /// `self.mixin_lib_decls`. Walks `Module` items recursively so
@@ -288,11 +361,7 @@ impl Resolver {
             match item {
                 ast::TopLevelItem::Mixin(m) => {
                     if !m.lib_decls.is_empty() {
-                        let key = if module_path.is_empty() {
-                            m.name.clone()
-                        } else {
-                            format!("{}.{}", module_path.join("."), m.name)
-                        };
+                        let key = Self::qualified_key(module_path, &m.name);
                         out.entry(key)
                             .or_default()
                             .extend(m.lib_decls.iter().cloned());
@@ -349,6 +418,34 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let program = parser.parse().expect("parser failed");
         Resolver::new().resolve(&program)
+    }
+
+    #[test]
+    fn module_nested_struct_enum_mixin_resolve_to_their_own_defs() {
+        let result = resolve_source(
+            "module Geo\n  struct Point\n    x: Int\n    y: Int\n  end\n  enum Shape\n    Dot\n  end\n  mixin Named\n    def name -> String\n  end\nend\n",
+        );
+        let Some(HirItem::Module(geo)) = result.program.items.first() else {
+            panic!("expected module Geo first");
+        };
+        for item in &geo.items {
+            let (name, def_id) = match item {
+                HirItem::Struct(s) => (&s.name, s.def_id),
+                HirItem::Enum(e) => (&e.name, e.def_id),
+                HirItem::Mixin(t) => (&t.name, t.def_id),
+                _ => continue,
+            };
+            assert_ne!(def_id, super::UNRESOLVED_DEF, "`{name}` lost its def");
+        }
+        let point = result
+            .symbols
+            .iter()
+            .find(|d| d.name == "Geo.Point")
+            .expect("Geo.Point def");
+        let DefKind::Struct { info } = &point.kind else {
+            panic!("Geo.Point is not a struct: {:?}", point.kind);
+        };
+        assert_eq!(info.fields.len(), 2);
     }
 
     #[test]
