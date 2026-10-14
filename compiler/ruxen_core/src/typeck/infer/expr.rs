@@ -772,10 +772,7 @@ impl<'a> InferenceEngine<'a> {
                 // silently passed through unify (which allows arbitrary
                 // integers or function references to reach the runtime),
                 // and the resulting binary crashes or prints `(nil)`.
-                if matches!(
-                    callee_name.as_str(),
-                    "puts" | "eputs" | "print" | "println" | "eprintln"
-                ) && args.len() == 1
+                if crate::hir::IO_TEXT_BUILTINS.contains(&callee_name.as_str()) && args.len() == 1
                 {
                     let arg_ty = self.ctx.resolve(&args[0].ty);
                     if !Self::is_puts_compatible(&arg_ty) {

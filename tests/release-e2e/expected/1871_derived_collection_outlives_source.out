@@ -1,0 +1,18 @@
+kept beta
+kept gamma
+kept size 2
+both p
+both q
+both r
+both size 3
+ints 8
+ints 9
+ints size 2
+union 3
+inter 1
+diff 1
+inter has two true
+diff has one true
+to_set 2
+to_set has green true
+ok

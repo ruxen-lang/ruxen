@@ -540,6 +540,48 @@ fn has_runtime_prefix(c: &str) -> bool {
 
 /// Callees returning a fresh heap allocation owned by `dest`.
 /// Old: drops.rs:694-934 `FRESH_ALLOC_CALLEES`.
+///
+/// # The obligation you take on by adding a name here
+///
+/// A helper listed here must return a value the destination owns
+/// **completely**: for a collection that means the spine, the backing
+/// array, AND every heap element reachable from a slot. Drop elaboration
+/// will hand that destination the element-aware deep drop chosen by
+/// [`heap_free_callee`](super::drops::heap_free_callee), so a slot the
+/// helper did not itself allocate is a **double free by construction**.
+/// Copying a borrowed source's element pointer into a slot the result
+/// will deep-free is exactly that mistake.
+///
+/// This is not hypothetical. `ruxen_vec_skip` (`Array#drop`),
+/// `ruxen_vec_chain`, `ruxen_set_union` / `_intersection` / `_difference`
+/// and `ruxen_set_from_iter` were all listed here while only aliasing
+/// their source's elements, and every one of them aborted on a `String`
+/// element type the moment both owners went out of scope. They now
+/// deep-copy per the `RUXEN_ELEM_*` descriptor (see `runtime.h`), which
+/// is what makes the membership below honest.
+///
+/// # Leaving a helper OUT is not a safe default either
+///
+/// The tempting fix for the above is to drop the name from this list:
+/// with no Fresh classification the destination is tainted, no drop is
+/// emitted, and nothing double-frees. That trades a crash for a silent
+/// leak of the spine and backing array, and it is why `ruxen_vec_take`
+/// and `ruxen_vec_clone` leak today — they are the same aliasing shape as
+/// `skip`, and the only reason they never crashed is that they are absent
+/// here. Neither membership nor absence is automatically correct. The
+/// question to answer is "does this helper allocate everything its result
+/// will be asked to free", and if the answer is no, fix the helper rather
+/// than adjusting its classification to route around the symptom.
+///
+/// # Helpers returning a borrowed VIEW are fine
+///
+/// `ruxen_hash_keys` / `_values` / `ruxen_set_iter` alias their source's
+/// elements deliberately and are still correctly listed here. They are
+/// typed `Array[&T]`, and `Ty::Ref(_)` elements make `heap_free_callee`
+/// select the spine-only `ruxen_vec_free` — so the result owns its spine
+/// (which this list frees) and borrows its elements (which it does not).
+/// The element type carrying the borrow is what keeps them honest; a view
+/// helper retyped to return owned elements would become a violator.
 const FRESH_ALLOC_CALLEES: &[&str] = &[
     "String_from",
     "Vec_new",
@@ -549,7 +591,12 @@ const FRESH_ALLOC_CALLEES: &[&str] = &[
     "ruxen_string_concat",
     "ruxen_vec_new",
     // `ruxen_vec_skip` materializes the splatted tail into a new Array.
+    // The `_elem` spelling is what MIR actually emits (key_desc.rs Route
+    // 3 appends the element kind); the bare name stays classified because
+    // it is still a valid POD-element entry point and the rewrite is not
+    // the only way a call can reach the linker.
     "ruxen_vec_skip",
+    "ruxen_vec_skip_elem",
     "ruxen_hash_new",
     // `String_into_bytes` / `ruxen_string_into_bytes` are in BOTH this list and
     // CONSUME_HELPERS, and this is NOT a contradiction — they are load-bearing
@@ -623,6 +670,7 @@ const FRESH_ALLOC_CALLEES: &[&str] = &[
     "ruxen_set_intersection",
     "ruxen_set_difference",
     "ruxen_vec_chain",
+    "ruxen_vec_chain_elem",
     "ruxen_vec_zip",
     "Command_new",
     "ruxen_command_new",

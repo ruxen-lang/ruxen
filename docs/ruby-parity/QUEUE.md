@@ -307,14 +307,36 @@ ranks first and B71 second, both found after B01 to B05.
 - **Status:** NEEDS-COMPILER-FEATURE.
 - **Pins:** 1750-1759. Pin all four call forms from the repro, since three of them differ only in whether the default was supplied.
 
-### B02 — `do…end` block plus bare-variable `puts` segfaults
-- **Goal:** `arr.each { |x| puts(x) }` stops crashing.
-- **Repro:** `arr.each { |x| puts(x) }` segfaults; `arr.each { |n| puts "#{n}" }` (interpolation) works. So the bare-variable `puts` path inside a block passes the wrong thing.
-- **Files:** `typeck/infer/expr.rs` (the `puts` universal-`to_s` conversion added by pin 956) plus `mir/lower` block-parameter binding.
-- **Status:** NEEDS-COMPILER-FEATURE.
-- **Size:** one defect.
-- **Matrix rows:** `language.md` §12 (353-371, the `puts` row); `HANDOFF.md` bug list.
-- **Pins:** 1010-1019.
+### B02 — `do…end` block plus bare-variable `puts` segfaults — **DONE**
+- **Repro:** `arr.each { |x| puts(x) }` segfaults; `arr.each { |n| puts "#{n}" }` (interpolation) works.
+- **The filed diagnosis was WRONG, and it matters.** This was attributed to the
+  `puts` universal-`to_s` conversion in `typeck/infer/expr.rs`. That pass is
+  innocent: it is given `Ref(String)` and correctly declines to convert what it
+  believes is already a String. Proven from the HIR dump — the argument node is
+  literally `ty: Ref(String)` while MIR's local for the same variable is `Int`.
+- **Actual cause:** the block parameter of `each` is never seeded from the
+  receiver's element type (`typeck/infer/expr.rs` seeds only
+  `map|filter|find|all|any`), so it reaches the body unconstrained and
+  inference back-propagates `puts`'s own `&String` parameter onto it. MIR uses
+  the real type from the symbol table and hands a raw `Int` to `ruxen_puts`,
+  which reads address 1 as a `char*`. Interpolation survived only because
+  `lower_interpolation` already distrusts the HIR type and prefers the MIR
+  local's (`interpolation.rs`, "may have stale or unresolved types").
+- **Landed:** the Display ladder is extracted as `emit_display_to_string` and
+  BOTH spellings route through it, so `puts x` and `puts "#{x}"` agree by
+  construction instead of by two paths coincidentally agreeing. String-typed
+  and `RawPtr(Char)` args pass through untouched, so the bare string-literal
+  `.rodata` zero-copy is unchanged.
+- **Not fixed here, on purpose:** the upstream typeck mistyping. Filed as
+  **B95** below with the evidence; the existing comment in `expr.rs` warns that
+  broader seeding was avoided for codegen reasons and that is a warning from
+  someone who tried.
+- **Pins:** `1010` — every line in BOTH spellings side by side (`each`, `map`,
+  nested blocks, paren-less `puts x`), over `Int`, `String` and `Bool`
+  elements, plus a bare string literal. `Float` is excluded on purpose: it
+  arrives truncated to an integer (B01), both spellings agree on the wrong
+  value, and pinning it would cement B01 into an expected file.
+- **Status:** DONE.
 
 ### B03 — `String[i]` / `[i, n]` / `[range]` indexing returns null
 - **Goal:** Ruby's `String#[]` and `#slice` family work.
@@ -547,11 +569,45 @@ Equality needed **two** fixes, and either alone leaves it broken: nothing synthe
 - **Status:** **DONE.** Narrow gate 655 passed / 0 failed; e2e compile sweep 563 pass / 0 fail (baseline 553, +10 new pins).
 - **Pins:** 1860-1869, chained and bound-first side by side, every count differing from the receiver's own. `1860` select, `1861` map, `1862` reject, `1863` filter_map, `1864` take_while/drop_while, `1865` three- and four-link chains, `1866` EMPTY intermediate, `1867` non-block terminals (`size`/`count`/`join`/`first`/`empty?`/`include?`), `1868` user-defined collection method, `1869` `each_with_index` plus a chain nested in another block. 6 of the 10 fail against the pre-fix compiler.
 
-### B86 — `Array[String]#drop(n)` traps
+### B86 — `Array[String]#drop(n)` traps — **DONE**
 - **Repro (verified 2026-07-29):** `let d = ["a","b","c"].drop(2)` alone aborts (Trace/BPT trap 5, exit 133). `Int` elements are fine, so it is `ruxen_vec_skip` on a heap element type.
-- **Severity:** high (crash on ordinary input). Pin `1065` currently routes around it.
-- **Status:** NEEDS-RUNTIME-C.
-- **Pins:** 1870-1879. Cover `String`, a user class, and `Int` elements.
+- **Landed:** it was never only `drop`. The defect is that a helper listed in
+  `FRESH_ALLOC_CALLEES` gets its result the element-aware deep drop from
+  `heap_free_callee`, and five of them built that result by copying their
+  SOURCE's element pointers — so both owners deep-freed the same `char*`.
+  A full audit of the list found every violator; the verdict table is below.
+  Fixed by making the copies deep, NOT by removing names from the list:
+  absence is what `take`/`clone` do, and it buys safety with a silent leak.
+  - `Set`/`Hash` already carry B73's `key_kind` and `ruxen_set_derived`
+    already propagates it, so set algebra and `from_iter` clone using a
+    descriptor they already had — no new plumbing.
+  - `RuxenVec` has no descriptor, so MIR injects one: `RUXEN_ELEM_*` in
+    `runtime.h` plus `_elem` forms of `ruxen_vec_skip`/`_chain`, rewritten in
+    by `key_desc.rs` Route 3 (B73's mechanism). The element kind is derived
+    FROM `heap_free_callee`, not from a second `Ty` ladder, so copy-depth and
+    drop-depth cannot drift.
+  - The ownership contract is now a doc comment on `FRESH_ALLOC_CALLEES`,
+    including the not-Fresh-leaks corollary.
+- **Audit verdict, every element-bearing entry:**
+
+  | helper | verdict | why |
+  |---|---|---|
+  | `ruxen_vec_skip` (`drop`) | **was violating, FIXED** | owned `Array[T]` result, aliased elements |
+  | `ruxen_vec_chain` | **was violating, FIXED** | same; was not filed anywhere |
+  | `ruxen_set_union`/`_intersection`/`_difference` | **was violating, FIXED** | Q60(b), same cause |
+  | `ruxen_set_from_iter(_keyed)` (`to_set`) | **was violating, FIXED** | source `Array[T]` drops element-aware; was not filed |
+  | `ruxen_hash_keys` / `_values` / `ruxen_set_iter` | correct as-is | return `Array[&T]`; `Ty::Ref(_)` selects the spine-only free, so they own the spine and borrow elements |
+  | `ruxen_hash_from_iter(_keyed)` | correct as-is | its source is a `Vec` of tuples, which drops spine-only, so cloning would LEAK |
+  | `ruxen_vec_from_iter` | correct as-is | identity passthrough, source is in `CONSUME_HELPERS` |
+  | `ruxen_string_from_iter`, `String_*`, empty ctors | correct as-is | allocate fresh, or have no elements to alias |
+  | `Command_*`/`File_*`/`OpenOptions_*`/`Mutex_*` | correct as-is | opaque handles, not element-bearing |
+  | `ruxen_vec_zip`, `ruxen_hash_entries` | **pre-existing LEAK, not a crash** | allocate 16-byte pairs into an `Array[(A,B)]`, whose drop is spine-only, so the pairs are never freed. Out of scope for a crash fix; filed as **B89** below. |
+  | `ruxen_vec_take`, `ruxen_vec_clone` | **pre-existing LEAK, not a crash** | same aliasing shape as `skip` but absent from `FRESH_ALLOC_CALLEES`, so the spine + backing array leak. Filed as **B89**. |
+- **Pins:** `1870` (all three element kinds; `drop(0)`, `n == len`, `n > len`),
+  `1871` (every fixed helper with the result OUTLIVING its source, the shape a
+  same-scope test cannot catch). Pin `1065`'s work-around note is now stale —
+  `drop` works; left as-is since the case still passes.
+- **Status:** DONE.
 
 ### B87 — A free function whose name ends in `!` is a silent no-op — **DONE**
 - **Repro (verified 2026-07-29):** `def shout!(x: Int) puts "shouting #{x}" end` then `shout!(5)` compiles clean, prints NOTHING, and falls through.
@@ -565,6 +621,54 @@ Equality needed **two** fixes, and either alone leaves it broken: nothing synthe
 - **Bonus shipped:** `exit!(code)` now exists in `library/std/core/src/lib.rx`. B19's blocker is gone. Ruxen has no at-exit registry, so it behaves as `exit(code)`; it is there for source parity.
 - **Not a `!` defect, recorded for honesty:** a paren-less call with a bare NON-string argument (`shout! 7`) is rejected with E0726 — but so is `shout 7` without the `!`. That is a pre-existing limit of paren-less calls generally, unchanged by this batch.
 - **Pins:** 1880 (`!` free fn, the exact repro), 1881 (`!` fn return value: `let` binding, arithmetic operand, nested call), 1882 (paren-less, zero-arg and bare-string-arg), 1883 (`?` sibling convention), 1884 (`!` method no-arg / with args / static `Doc.make!`, `?` method), 1885 (negation `!x`, `!f(x)`, `!(a == b)`, `!=` still parse), 1886 (`panic!` still routes as a macro), 1887 (`exit!`). Structural pins in `compiler/ruxen_core/tests/bang_names_are_calls.rs`.
+
+### B94 — the derived-collection helpers that LEAK rather than crash
+- **Found by:** the B86 `FRESH_ALLOC_CALLEES` audit. These are the other half
+  of the same contract, and none of them crashes, which is why nobody has hit
+  them.
+- **Two shapes:**
+  1. `ruxen_vec_take` and `ruxen_vec_clone` alias their source's elements
+     exactly the way `ruxen_vec_skip` did, and are safe only because they are
+     ABSENT from `FRESH_ALLOC_CALLEES` — so no drop is emitted and the result's
+     spine + backing array leak on every call. `take` is on the common path
+     (`Enumerable#take`, and `first(n)`'s stand-in), so this leaks in ordinary
+     loops.
+  2. `ruxen_vec_zip` and `ruxen_hash_entries` (`to_a`) allocate a fresh 16-byte
+     tuple per element into an `Array[(A, B)]`, whose `heap_free_callee` is the
+     spine-only `ruxen_vec_free` — so every pair allocation leaks.
+- **Why it was not folded into B86:** B86 fixed the entries that DOUBLE-FREE.
+  Fixing these means either giving them honest Fresh membership with a deep
+  copy (shape 1) or teaching `heap_free_callee` about tuple elements (shape 2),
+  and shape 2 is a new element kind in the drop selector, not a C-side change.
+- **Severity:** medium. Unbounded growth in a loop, no wrong answers.
+- **Status:** NEEDS-COMPILER-FEATURE (shape 2) + NEEDS-RUNTIME-C (shape 1).
+- **Pins:** 1900-1909. Measure with the leak tracker, not by eye.
+
+### B95 — typeck lets a consumer back-propagate a type onto an unseeded block param
+- **Found by:** B02, which was a segfault caused by exactly this.
+- **Evidence:** for `arr.each { |x| puts(x) }` with `arr: Array[Int]`, the HIR
+  argument node is `ty: Ref(String)` while MIR's local for the same variable is
+  `Int`. The block parameter of `each` is never seeded from the receiver's
+  element type — `typeck/infer/expr.rs` seeds only `map|filter|find|all|any` —
+  so it arrives unconstrained and unifies with `puts`'s own `&String`
+  parameter. Whatever the body happens to pass the parameter to gets to decide
+  its type.
+- **Why this is worth its own batch:** MIR and HIR disagreeing about a local's
+  type is a general hazard, not a `puts` quirk. `lower_interpolation` already
+  carries a standing workaround for it ("the HIR expression type may have stale
+  or unresolved types from type inference", `interpolation.rs`), and B02's fix
+  adds a second consumer of that workaround. Every other consumer of a block
+  parameter's HIR type is a latent instance.
+- **Do not fix blind.** The comment at `typeck/infer/expr.rs` records that
+  broader closure-param seeding was deliberately avoided because current
+  codegen relies on the param staying `Infer` (the mangled-symbol suffix
+  matcher), and that generic trait-bound element types would start emitting
+  unresolvable `T: Bound_method` symbols. That is a warning from someone who
+  tried it. Reproduce those two failures first, then decide whether the fix is
+  seeding, or refusing the back-propagation, or making MIR the single source.
+- **Severity:** high (it produced a segfault once already, silently).
+- **Status:** NEEDS-COMPILER-FEATURE, investigation-heavy.
+- **Pins:** 1910-1919.
 
 ### B88 — `Set` iterates in hash-bucket order, not insertion order
 - **Repro:** inserting 1, 2, 3 yields 3, 1, 2.
@@ -1419,9 +1523,9 @@ Pins: none.
 | **BLOCKED-ON-B36 (digest/HMAC)** | 3 | B37 (hex half), B66, B68 |
 | **BLOCKED-ON-B46 (TLS)** | 2 | B45 (HTTPS half), B69 |
 | **BLOCKED-ON-B44 (Serialize)** | 2 | B64, B67 |
-| **NEEDS-RUNTIME-C** | 6 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61 (**B73** is DONE) |
+| **NEEDS-RUNTIME-C** | 6 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61 (**B73** and **B86** are DONE; B86 also closed Q60(b)) |
 | **BLOCKED within B35** | 5 | B35b, B35c, B35d, B35e, B35f (all on B35a or B35b; see §6) |
-| **NEEDS-COMPILER-FEATURE** | 25 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B75** (toolchain), **B76**, **B77** (enabler), **B78**, **B79**, **B80**, **B82** — **B72** and **B74** landed |
+| **NEEDS-COMPILER-FEATURE** | 23 | B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B75** (toolchain), **B76**, **B77** (enabler), **B78**, **B79**, **B80**, **B82** — **B01**, **B02**, **B72** and **B74** landed |
 
 Counts overlap where a batch has both a ready half and a blocked half; the
 per-batch status line is authoritative.

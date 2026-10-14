@@ -1,0 +1,34 @@
+# Post-B85 re-audit: chaining off a combinator now actually reaches the
+# runtime helpers (B85 deleted `lower_vec_source`, which used to peel
+# select/reject straight through to the base object and discard the
+# combinator). So these call shapes are newly reachable with heap elements.
+def main
+  let a = ["alpha", "beta", "gamma", "delta"]
+
+  # select -> drop (skip) on String elements
+  let sel = a.select { |s| s.size > 4 }
+  let seld = sel.drop(1)
+  seld.each { |s| puts "seld #{s}" }
+
+  # map -> drop
+  let m = a.map { |s| s + "!" }
+  let md = m.drop(2)
+  md.each { |s| puts "md #{s}" }
+
+  # map -> chain
+  let mc = m.chain(&a)
+  puts "mc #{mc.size}"
+
+  # select -> to_set
+  let ss = sel.to_set
+  puts "ss #{ss.size}"
+
+  # reject -> drop
+  let rej = a.reject { |s| s.size > 4 }
+  let rd = rej.drop(0)
+  rd.each { |s| puts "rd #{s}" }
+
+  # sources still intact
+  a.each { |s| puts "a #{s}" }
+  puts "ok"
+end

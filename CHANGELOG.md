@@ -7,6 +7,57 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Fixed
+- **A derived collection now OWNS its elements instead of aliasing them
+  (batches B86, Q60(b)).** `["a","b","c"].drop(2)` aborted with a double free
+  (Trace/BPT trap 5, exit 133), and so did `Set[String]` `union` /
+  `intersection` / `difference`, `Array[String]#chain`, and
+  `Array[String]#to_set`. One cause, five entry points, three of which were
+  not filed anywhere.
+
+  A helper listed in `FRESH_ALLOC_CALLEES` has its result deep-dropped at
+  scope exit by the element-aware helper `heap_free_callee` selects. All five
+  copied their SOURCE's element pointers into that result, so both owners
+  freed the same `char*`. `Array#take` and `Array#clone` are the same aliasing
+  shape and never crashed only because they are absent from that list, which
+  buys safety with a silent leak rather than fixing anything — so the fix
+  makes the copies deep instead of adjusting classifications.
+
+  `Set` and `Hash` already carry the B73 `key_kind` descriptor and
+  `ruxen_set_derived` already propagates it, so those paths clone using a
+  descriptor they had all along. `RuxenVec` has none, so MIR injects one
+  (`key_desc.rs` Route 3, the rewrite mechanism B73 established): the new
+  `RUXEN_ELEM_*` element kinds in `runtime.h`, and `_elem` forms of
+  `ruxen_vec_skip` / `ruxen_vec_chain`. The element kind is derived FROM
+  `heap_free_callee` rather than from a second copy of the `Ty` ladder,
+  because the invariant is copy-depth == drop-depth and two copies of that
+  decision are free to drift.
+
+  The full ownership contract, including the corollary that omitting a helper
+  from the list is not a safe default, is now a doc comment on
+  `FRESH_ALLOC_CALLEES` itself. `Hash#keys` / `#values` / `Set#iter` were
+  audited and are correct as they stand: they return `Array[&T]`, and
+  `Ty::Ref(_)` elements make `heap_free_callee` pick the spine-only free, so
+  they own their spine and borrow their elements. Pins
+  `tests/release-e2e/cases/1870` and `1871`.
+- **`puts x` and `puts "#{x}"` now share one lowering (batch B02).**
+  `arr.each { |x| puts(x) }` segfaulted while `arr.each { |n| puts "#{n}" }`
+  worked. The cause was not the `puts` universal-`to_s` conversion, which
+  behaves correctly given what it is told: an unseeded block parameter has
+  `&String` back-propagated onto it from `puts`'s own signature, so the HIR
+  says `Ref(String)` for a local the symbol table types `Int`, the conversion
+  declines to fire on an apparent String, and MIR hands a raw `Int` to
+  `ruxen_puts`, which reads address 1 as a `char*`. Interpolation survived
+  only because `lower_interpolation` already distrusts the HIR type.
+
+  The Display ladder is now extracted as `emit_display_to_string` and both
+  spellings route through it, so they agree by construction rather than by two
+  paths coincidentally reaching the same answer. String-typed and
+  `RawPtr(Char)` arguments pass through untouched, keeping the bare
+  string-literal `.rodata` zero-copy intact. The upstream typeck mistyping is
+  filed as its own batch rather than fixed blind. Pin
+  `tests/release-e2e/cases/1010`.
+
 ### Added
 - **`Enumerable` closure-only combinators (batch B07)** — 16 methods added as
   `mixin Enumerable[T]` defaults in `library/std/core/src/lib.rx`, so one
