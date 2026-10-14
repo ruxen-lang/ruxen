@@ -1,0 +1,6 @@
+slot_id=7
+slot_tag=42
+same=true
+diff_inherited=false
+diff_own=false
+bang_diff_inherited=true

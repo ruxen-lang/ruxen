@@ -474,26 +474,91 @@ impl<'a> InferenceEngine<'a> {
         None
     }
 
-    /// Look up a field by name, also checking parent classes in the inheritance chain.
+    /// Look up a field by name, also checking parent classes in the
+    /// inheritance chain, and return its type plus its **absolute slot
+    /// index** in `type_name`'s layout.
+    ///
+    /// Absolute, not class-local, is the whole point. A class is laid out
+    /// ancestors-first — oldest ancestor's fields, then the next, then
+    /// its own — which is what `alloc_size` (`mir/lower/emit.rs`) budgets
+    /// and what `get_class_field_names` (`mir/lower/mod.rs`) already
+    /// returns for `def init(@x:)` auto-assign. `DefKind::Field.index`,
+    /// however, is CLASS-LOCAL: it restarts at 0 for every class. So
+    /// returning it verbatim gave `class Derived < Base` — `Base { id }`,
+    /// `Derived { tag }` — slot 0 for BOTH `id` and `tag`, and `@tag = t`
+    /// silently overwrote the inherited `id` while the last slot stayed
+    /// uninitialised. `16_inheritance.rx` did not catch it because `Cat <
+    /// Animal` declares no field of its own.
+    ///
+    /// The header shift for a runtime-dispatch class is NOT applied here;
+    /// every MIR consumer of `field_idx` adds it via
+    /// `class_field_shift_for_ty`.
     pub(super) fn lookup_field_with_parents(
         &self,
         type_name: &str,
         field_name: &str,
     ) -> Option<(Ty, usize)> {
-        // First try the type itself
-        if let Some(result) = self.lookup_field(type_name, field_name) {
-            return Some(result);
+        // `(class_name, base_slot)` oldest ancestor first, so `base_slot`
+        // is the running count of every field declared before that class.
+        let mut chain: Vec<(String, usize)> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut cur = Some(type_name.to_string());
+        while let Some(name) = cur.take() {
+            // A malformed `class A < B` / `class B < A` cycle would spin
+            // here forever. Resolve should reject one, but this walk must
+            // terminate on its own rather than trust that.
+            if !seen.insert(name.clone()) {
+                break;
+            }
+            let Some(def) = self
+                .symbols
+                .iter()
+                .find(|d| d.name == name && matches!(d.kind, DefKind::Class { .. }))
+            else {
+                break;
+            };
+            let DefKind::Class { info } = &def.kind else {
+                break;
+            };
+            // Count only entries that really are fields — the same filter
+            // `mir/lower/type_helpers.rs::class_field_layout` applies when
+            // it assigns the slots. Counting `info.fields.len()` raw would
+            // let the two disagree and shift every descendant's base.
+            let field_count = info
+                .fields
+                .iter()
+                .filter(|fid| {
+                    matches!(
+                        self.symbols.get(**fid).map(|d| &d.kind),
+                        Some(DefKind::Field { .. })
+                    )
+                })
+                .count();
+            chain.push((name, field_count));
+            cur = info
+                .parent
+                .and_then(|p| self.symbols.get(p))
+                .map(|d| d.name.clone());
         }
-        // Walk the parent chain
-        for def in self.symbols.iter() {
-            if def.name == type_name {
-                if let DefKind::Class { info } = &def.kind {
-                    if let Some(parent_id) = info.parent {
-                        if let Some(parent_def) = self.symbols.get(parent_id) {
-                            return self.lookup_field_with_parents(&parent_def.name, field_name);
-                        }
-                    }
-                }
+        if chain.is_empty() {
+            // Not a class (a struct, or an unknown name): slot index is
+            // the declaration index, exactly as before.
+            return self.lookup_field(type_name, field_name);
+        }
+        chain.reverse();
+        let mut base = 0usize;
+        for (_, count) in chain.iter_mut() {
+            let own = *count;
+            *count = base;
+            base += own;
+        }
+
+        // Search newest class first so a subclass field shadows an
+        // ancestor's of the same name, preserving the previous
+        // self-before-parents order.
+        for (name, base) in chain.iter().rev() {
+            if let Some((ty, local)) = self.lookup_field(name, field_name) {
+                return Some((ty, base + local));
             }
         }
         None

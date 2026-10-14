@@ -1,0 +1,6 @@
+user_eq_same_major=true
+user_eq_diff_major=false
+user_bang_same_major=false
+user_bang_diff_major=true
+method_same_major=true
+method_diff_major=false

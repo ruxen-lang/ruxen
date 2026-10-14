@@ -1,0 +1,7 @@
+eq_distinct_buffers=true
+ne_last=false
+ne_first=false
+bang_eq=false
+bang_ne=true
+empty_eq=true
+empty_vs_set=false

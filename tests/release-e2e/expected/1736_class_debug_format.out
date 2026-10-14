@@ -1,0 +1,4 @@
+Point { x: 1, y: 2 }
+Tagged { label: hi, count: 7 }
+Mid { id: 7, tag: 42 }
+$4250

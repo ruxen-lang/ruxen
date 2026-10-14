@@ -1,0 +1,9 @@
+class_in_class_eq=true
+class_in_class_ne=false
+struct_in_class_ne=false
+nested_hash_eq=true
+nested_hash_ne=true
+nested_debug=OuterClass { a: Inner { v: 1 }, b: SInner { v: 2 } }
+class_in_struct_eq=true
+class_in_struct_ne=false
+class_in_struct_debug=OuterStruct { a: Inner { v: 5 } }

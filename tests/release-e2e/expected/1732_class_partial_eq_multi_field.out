@@ -1,0 +1,6 @@
+same=true
+diff_first=false
+diff_middle=false
+diff_last=false
+diff_all=false
+bang_diff_middle=true

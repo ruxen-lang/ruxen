@@ -1,0 +1,7 @@
+equal_values_equal_hash=true
+differing_values_differ=true
+first_field_moves_hash=true
+string_field_equal=true
+string_field_differs=true
+inherited_equal=true
+inherited_differs=true

@@ -1,0 +1,54 @@
+# B74: structural `==` over an INHERITED field — the shape a `struct`
+# cannot have, so the shape struct-derived logic is likeliest to get
+# wrong.
+#
+# Two distinct defects meet here and the pin covers both:
+#
+#  1. The derived body must walk the FLATTENED chain (ancestor fields
+#     first, then the class's own), not `c.fields`, or it compares the
+#     subclass's own field and silently ignores every inherited one.
+#
+#  2. `lookup_field_with_parents` used to return `DefKind::Field.index`,
+#     which is CLASS-LOCAL and restarts at 0 per class. `Base.id` and
+#     `Mid.tag` both resolved to slot 0, so `super(id)` wrote the slot
+#     and `@tag = tag` immediately overwrote it: `d.id` read back the
+#     tag and the last slot stayed uninitialised. The first two lines
+#     below pin the slots apart, because equality over a layout that
+#     loses a field is meaningless however carefully it folds.
+#
+# `16_inheritance.rx` never caught (2): `Cat < Animal` declares no field
+# of its own, so nothing collides.
+class Base
+  id: Int
+
+  def init(@id: Int)
+  end
+end
+
+class Mid < Base
+  tag: Int
+
+  def init(id: Int, tag: Int)
+    super(id)
+    @tag = tag
+  end
+end
+
+def main
+  let probe = Mid.new(7, 42)
+  puts "slot_id=#{probe.id}"
+  puts "slot_tag=#{probe.tag}"
+
+  let a = Mid.new(1, 2)
+  let same = Mid.new(1, 2)
+  # Differs ONLY in the inherited field. A body that walked `c.fields`
+  # alone would call this pair equal.
+  let diff_inherited = Mid.new(9, 2)
+  # Differs ONLY in the class's own field.
+  let diff_own = Mid.new(1, 9)
+
+  puts "same=#{a == same}"
+  puts "diff_inherited=#{a == diff_inherited}"
+  puts "diff_own=#{a == diff_own}"
+  puts "bang_diff_inherited=#{a != diff_inherited}"
+end

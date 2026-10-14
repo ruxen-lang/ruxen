@@ -427,8 +427,33 @@ ranks first and B71 second, both found after B01 to B05.
 - **Why it went unnoticed:** pin `133_implicit_partial_eq.rx` covers a **`struct`**. There is no class-equality pin.
 - **Refutes a matrix claim:** `core.md`'s Kernel row says "structural `==` for user types via `include PartialEq`/derive" and `language.md` §9 lists auto equality as DONE (cases 133/207/139). Both are true for `struct` and false for `class`. **Record the narrowing in `core.md` and `language.md` when those files are free.**
 - **Files:** `compiler/ruxen_core/src/mir/lower/derive.rs` (`synthesize_struct_eq` and the class path), `resolve/symbols.rs::ty_has_derive_trait`.
-- **Status:** NEEDS-COMPILER-FEATURE.
+- **Status:** **DONE** (pins 1730-1739).
 - **Pins:** 1730-1739. Pin a class with an `Int` field, a class with a `String` field, and an inherited field.
+
+**Outcome.** Of the three candidate failure shapes it was the first: the class path **synthesized nothing at all**. `mir/lower/mod.rs`'s `HirItem::Class` arm emitted `Clone` and stopped, while the `HirItem::Struct` arm emitted the full set. `ty_has_derive_trait` was NOT at fault — it already answered correctly for a class.
+
+Equality needed **two** fixes, and either alone leaves it broken: nothing synthesized `{Class}_eq`, *and* `type_helpers.rs::struct_name_with_partial_eq` matched `Ty::Struct` only, so `expr/binops.rs`'s structural route was never reached and `==` fell through to a raw address compare.
+
+**Both adjacent derives had the same hole**, as suspected, and one failed louder than equality:
+- `Debug` — `"#{obj}"` on a class printed the receiver's heap address instead of `Name { … }`.
+- `Hashable` — typeck resolved `.hash_code` and MIR emitted a call to `{Class}_hash_code`, which nothing defined: **link failure**, not a wrong answer. It first looked like it passed because a probe that only compares two hashes lets both calls fold away as dead. Pin `1737` prints through a value-dependent decision for that reason.
+
+`Ord` / `PartialOrd` / `Default` remain struct-only and are deliberately NOT wired: `{Class}_cmp` / `{Class}_default` have no bodies, and widening the dispatch helpers alone would convert a silent gap into an undefined-symbol link error. Hence `nominal_with_derive_trait` (struct|class) used only at the synthesized sites, alongside the unchanged struct-only `struct_with_derive_trait`. **Add a synthesiser and its dispatch site together, or neither.**
+
+**Downstream unlock confirmed.** A class carrying `Hashable` + `PartialEq` now works as a `Hash` and `Set` key through B73's protocol (`key_desc.rs` accepts `Ty::Class`): dedup on re-insert, hit through a distinct instance, and both kinds of miss. Pin `1738`, the same battery `1722` runs for a struct.
+
+**Two further defects found while pinning, both fixed here, both pre-existing and NEITHER class-specific:**
+1. **Inherited class fields shared a slot with the subclass's own.** `typeck/infer/collect.rs::lookup_field_with_parents` returned the class-LOCAL `DefKind::Field.index`, so `class Base { id }` / `class Derived < Base { tag }` put both on slot 0 — `super(id)` wrote it and `@tag = t` overwrote it, so `d.id` read back the tag. This is data corruption independent of equality; `16_inheritance.rx` missed it because `Cat < Animal` adds no field. Pin `1733` asserts the slots apart before it asserts equality.
+2. **`==` compared a nested nominal field by address.** `lower_struct_partial_eq` emitted a bare `Compare` per field, so `Outer.new(Inner.new(1)) == Outer.new(Inner.new(1))` was `false` while `Inner.new(1) == Inner.new(1)` was `true`. The synthesized `{Type}_eq` had always recursed; the inline route silently did not. **Struct-in-struct was equally broken** — no pin nested a nominal field. Pin `1739`.
+
+**Matrix corrections to apply** (not edited here, per the brief): the narrowed `core.md` Kernel row and `language.md` §9 auto-equality rows can be widened back to DONE for `class` as well as `struct`, citing `1730`-`1739`. Note the claim is now genuinely broader than before: nested nominal fields compare structurally for *both* shapes, which was never true.
+
+**A trap worth knowing before you widen any derive to classes.** `ty_has_derive_trait` decides the §3.6 implicit include with `fields.all(supports)`, which is vacuously TRUE for an empty field list — and every primitive method-home and FFI handle shell (`class Int`, `class Float`, `class Char`, `class Mutex[T]`, any `lib`-decl class) is fieldless. The first cut of this fix therefore gave all of them every derive: `"#{n.succ}"` printed `Int {}` (caught by `1110` and `100_where_clause`), and, caught by no case at all, the field-fold's empty-list branch returns a literal `true`, so two DIFFERENT `Mutex`es would have compared equal. `mir/lower/type_helpers.rs::nominal_derive_is_synthesized` now requires a class to have at least one field before any of this applies — a structural test, no type names. Route every new class-derive dispatch through it, not through `ty_has_derive_trait` directly.
+
+**Still open, reported not fixed:**
+- A class with fields but no `def init` fails `C.new(1)` in the **Cranelift verifier** (`mismatched argument count … got 2, expected 1`) rather than with a diagnostic. A class does need an explicit `def init`, but the failure mode should be a typeck error, not a backend assertion.
+- `ty_has_derive_trait` still reports `Clone` for a fieldless class, so `mir/lower/mod.rs` synthesizes a `{Class}_clone` that allocates a fresh EMPTY object — a `.clone` on an FFI handle returns a blank allocation rather than the handle. Left alone deliberately: it predates B74 and narrowing it would turn an existing `.clone` call site into a link error, so it wants its own change.
+- `derive.rs::collect_all_class_fields` walks the parent chain with no cycle guard (pre-existing; the two walks added here do have one). A malformed `class A < B` / `class B < A` would loop.
 
 ### B79 — `_1` / `it` are invisible inside a string interpolation
 - **Goal:** `xs.each { puts "#{_1}" }` resolves.
@@ -1396,7 +1421,7 @@ Pins: none.
 | **BLOCKED-ON-B44 (Serialize)** | 2 | B64, B67 |
 | **NEEDS-RUNTIME-C** | 6 | B03, **B35c** (one function; the rest of B35 is `.rx`), B36, B46, B52 (Tms row), B61 (**B73** is DONE) |
 | **BLOCKED within B35** | 5 | B35b, B35c, B35d, B35e, B35f (all on B35a or B35b; see §6) |
-| **NEEDS-COMPILER-FEATURE** | 26 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B74**, **B75** (toolchain), **B76**, **B77** (enabler), **B78**, **B79**, **B80**, **B82** — **B72** landed |
+| **NEEDS-COMPILER-FEATURE** | 25 | B01, B02, B04, B05, B24, B25, B26, B27, B28, B29, B30, B31, B32, B33, B34, B55, B65 (template compiler), **B71**, **B75** (toolchain), **B76**, **B77** (enabler), **B78**, **B79**, **B80**, **B82** — **B72** and **B74** landed |
 
 Counts overlap where a batch has both a ready half and a blocked half; the
 per-batch status line is authoritative.
