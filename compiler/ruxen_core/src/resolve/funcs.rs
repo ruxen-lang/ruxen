@@ -1,18 +1,12 @@
-#![allow(unused_imports)]
-
-use std::collections::HashMap;
-
 use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
+use crate::hir::types::{MixinRef, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::{self, Visibility};
 
-use super::const_helpers;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
+use super::scope::ScopeKind;
 use super::symbols::*;
-use super::{ClosureCaptureContext, ResolveResult, Resolver};
+use super::Resolver;
 
 impl Resolver {
     fn overload_accepts_arg_count(&self, def_id: DefId, arg_count: usize) -> bool {
@@ -308,6 +302,19 @@ impl Resolver {
         f: &ast::FuncDef,
         parent: Option<DefId>,
     ) -> HirFuncDef {
+        // E0739: the process entry point has the fixed C `main(argc, argv)`
+        // ABI; user parameters would mismatch it in codegen. Read program
+        // arguments through `std.env` instead.
+        let is_entry_main = f.name == "main"
+            && self.current_self_ty.is_none()
+            && self.current_module_path.is_empty();
+        if let Some(first) = f.params.first().filter(|_| is_entry_main) {
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "`main` cannot take parameters; read program arguments with `Env.args`".to_string(),
+                first.span.clone(),
+                "E0739",
+            ));
+        }
         let mut generic_params = self.resolve_generic_params(&f.generic_params);
         // Merge `where T: Bound, ...` predicates into the matching generic
         // parameter's bounds. Predicates whose left-hand side is not a
@@ -980,45 +987,4 @@ impl Resolver {
     }
 
     // ─── Expression Resolution ──────────────────────────────────────
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::lexer::Lexer;
-    use crate::parser::Parser;
-    use crate::resolve::Resolver;
-
-    fn resolve_codes(source: &str) -> Vec<String> {
-        let tokens = Lexer::new(source).tokenize().expect("lexer failed");
-        let program = Parser::new(tokens).parse().expect("parser failed");
-        Resolver::new()
-            .resolve(&program)
-            .diagnostics
-            .into_iter()
-            .filter_map(|d| d.code)
-            .collect()
-    }
-
-    #[test]
-    fn where_predicate_on_a_non_generic_subject_is_e0737() {
-        let codes = resolve_codes(
-            "mixin Add\nend\ndef total[T](items: &Array[T]) -> Int where Int: Add\n  0\nend\n",
-        );
-        assert_eq!(codes, vec!["E0737"]);
-    }
-
-    #[test]
-    fn where_predicate_on_an_own_generic_is_accepted() {
-        let codes = resolve_codes(
-            "mixin Add\nend\ndef total[T](items: &Array[T]) -> Int where T: Add\n  0\nend\n",
-        );
-        assert!(codes.is_empty(), "{codes:?}");
-    }
-
-    #[test]
-    fn use_group_miss_after_flat_merge_fallback_is_e0738() {
-        let codes =
-            resolve_codes("class Box\nend\nclass Holder\nend\nuse pkg.Holder.Box.{Box, Nope}\n");
-        assert!(codes.contains(&"E0738".to_string()), "{codes:?}");
-    }
 }

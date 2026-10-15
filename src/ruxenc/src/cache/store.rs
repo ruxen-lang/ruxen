@@ -101,8 +101,7 @@ impl CacheStore {
         atomic_write(&self.manifest_path(), &bytes)
     }
 
-    /// Delete the entire `incremental/` tree. Used on corruption and
-    /// `ruxen clean`.
+    /// Delete the entire `incremental/` tree. Used on corruption.
     pub fn clear(&self) -> std::io::Result<()> {
         let dir = self.incremental_dir();
         match fs::remove_dir_all(&dir) {
@@ -217,32 +216,6 @@ pub fn unix_now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
-}
-
-/// Delete the global cache directory. Used by `ruxen clean --global`.
-///
-/// Honors `XDG_CACHE_HOME` on Linux, falling back to `$HOME/.cache/ruxen/`.
-pub fn clear_global_cache() -> std::io::Result<()> {
-    let dir = global_cache_dir();
-    match fs::remove_dir_all(&dir) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
-    }
-}
-
-/// Resolve the global cache directory: `$XDG_CACHE_HOME/ruxen/` or
-/// `$HOME/.cache/ruxen/`.
-pub fn global_cache_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("ruxen");
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".cache").join("ruxen");
-    }
-    PathBuf::from(".cache").join("ruxen")
 }
 
 #[cfg(test)]

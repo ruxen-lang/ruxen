@@ -1,18 +1,12 @@
-#![allow(unused_imports)]
-
-use std::collections::HashMap;
-
 use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
+use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 use crate::parser::ast::{self, Visibility};
 
-use super::const_helpers;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
+use super::scope::{ScopeId, ScopeKind};
 use super::symbols::*;
-use super::{ClosureCaptureContext, ResolveResult, Resolver};
+use super::{ClosureCaptureContext, Resolver};
 
 impl Resolver {
     pub(super) fn resolve_block_as_expr(&mut self, block: &ast::Block) -> HirExpr {

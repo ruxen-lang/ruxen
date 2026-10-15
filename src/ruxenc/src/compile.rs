@@ -210,7 +210,6 @@ pub fn run(args: &[String]) -> Result<(), String> {
         target: cache::default_target().to_string(),
         opt_level: opt_level_label.to_string(),
         flags,
-        parallel: false,
     };
 
     let backend_override_owned = backend_override.clone();
@@ -371,10 +370,6 @@ fn report_statuses(statuses: &std::collections::HashMap<String, FileStatus>, ver
                 "[cache] {}: recompiled (output_changed={})",
                 p, output_changed
             ),
-            FileStatus::InvalidatedByDependency { output_changed } => eprintln!(
-                "[cache] {}: invalidated by dep (output_changed={})",
-                p, output_changed
-            ),
         }
     }
 }
@@ -525,13 +520,9 @@ fn compile_to_object(
         }
     };
 
-    // Dependencies: today ruxenc is single-file, so the dep list is empty.
-    // When multi-file support is added, extract cross-file imports from the
-    // resolver's type registry here.
     Ok(CompileOutput {
         object_bytes,
         signature,
-        dependencies: Vec::new(),
     })
 }
 

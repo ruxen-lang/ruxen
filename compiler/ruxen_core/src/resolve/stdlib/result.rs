@@ -28,7 +28,6 @@ pub(super) fn register_result(r: &mut Resolver) {
                     GenericParamInfo::type_param("E".to_string(), vec![]),
                 ],
                 variants: vec![], // will be filled below
-                derive_traits: vec![],
                 opt_out_send: false,
                 opt_out_sync: false,
                 manual_send: false,

@@ -735,7 +735,7 @@ impl<'a> Lowerer<'a> {
         //    (instantiation, method) symbol is recorded at most once.
         let mut instances: Vec<BuiltinHeadMonoInstance> = Vec::new();
         let mut emitted: HashSet<String> = HashSet::new();
-        for_each_fn_body(program, &mut |body, _| {
+        for_each_fn_body(program, &mut |body| {
             walk_dispatch_sites_in_expr(body, &mut |call| {
                 let DispatchSite::Receiver(recv_ty, name) = call else {
                     return;
@@ -978,24 +978,8 @@ impl<'a> Lowerer<'a> {
         //    guarantees termination (finitely many concrete instantiations).
         let mut seen: HashMap<String, BTreeSet<String>> = HashMap::new();
         let mut instances: HashMap<String, Vec<MonoKey>> = HashMap::new();
-        // Set of (fn name) for which we saw at least one call we could NOT
-        // monomorphize (a generic-through-generic shape with a non-concrete
-        // leaf in the SOURCE program). Its opaque body must be kept so that
-        // call resolves (and devirtualizes via `unique_bound_impl`, or errors).
-        // A call inside a SPECIALIZED body does not taint the opaque body — it
-        // is resolved by the specialized copy — so the recursive scans below
-        // do NOT contribute to `needs_opaque`.
-        let mut needs_opaque: HashSet<String> = HashSet::new();
-
         // Recover the concrete instantiation for one call, if fully concrete.
-        // `taint` is set only for source-program scans (not specialized-body
-        // scans): an unresolvable arg in the source means the opaque body is
-        // referenced and must stay.
-        let recover = |callee_name: &str,
-                       arg_tys: &[Ty],
-                       needs_opaque: &mut HashSet<String>,
-                       taint: bool|
-         -> Option<(String, MonoKey)> {
+        let recover = |callee_name: &str, arg_tys: &[Ty]| -> Option<(String, MonoKey)> {
             let def = fns.get(callee_name)?;
             let param_names: Vec<String> =
                 def.generic_params.iter().map(|g| g.name.clone()).collect();
@@ -1007,9 +991,6 @@ impl<'a> Lowerer<'a> {
                 .iter()
                 .all(|n| subst.get(n).map(is_fully_concrete).unwrap_or(false));
             if !all_concrete {
-                if taint {
-                    needs_opaque.insert(callee_name.to_string());
-                }
                 return None;
             }
             let arg_vec: MonoKey = param_names
@@ -1019,27 +1000,17 @@ impl<'a> Lowerer<'a> {
             Some((callee_name.to_string(), arg_vec))
         };
 
-        // Seed the worklist from the source program's call sites. Only a call
-        // from a NON-GENERIC context (`taint = true`) can force a callee's
-        // opaque body to stay: a generic fn's own opaque body is suppressed
-        // when it is fully monomorphized, so an opaque call living INSIDE
-        // another generic fn's body is unreachable (its enclosing opaque body
-        // is gone) and must not pin the callee's opaque body. This is what
-        // lets `render_twice[T] { render(d) }` suppress BOTH opaque bodies
-        // once every concrete call is monomorphized (Q17 generic-calling-
-        // generic). The fixpoint below re-discovers `render`'s real
-        // instantiations through the specialized `render_twice` copies.
+        // Seed the worklist from the source program's call sites. The
+        // fixpoint below re-discovers instantiations reached only through
+        // specialized generic bodies (Q17 generic-calling-generic).
         let mut worklist: Vec<(String, MonoKey)> = Vec::new();
         let seed = |callee_name: &str,
                     args: &[HirExpr],
-                    enclosing_is_generic: bool,
-                    needs_opaque: &mut HashSet<String>,
                     seen: &mut HashMap<String, BTreeSet<String>>,
                     instances: &mut HashMap<String, Vec<MonoKey>>,
                     worklist: &mut Vec<(String, MonoKey)>| {
             let arg_tys: Vec<Ty> = args.iter().map(|a| a.ty.clone()).collect();
-            if let Some(inst) = recover(callee_name, &arg_tys, needs_opaque, !enclosing_is_generic)
-            {
+            if let Some(inst) = recover(callee_name, &arg_tys) {
                 let key = mono_base(&inst.0, &inst.1);
                 if seen.entry(inst.0.clone()).or_default().insert(key) {
                     instances
@@ -1050,18 +1021,10 @@ impl<'a> Lowerer<'a> {
                 }
             }
         };
-        for_each_fn_body(program, &mut |body, enclosing_is_generic| {
+        for_each_fn_body(program, &mut |body| {
             walk_dispatch_sites_in_expr(body, &mut |call| {
                 if let DispatchSite::Function(callee_name, args) = call {
-                    seed(
-                        callee_name,
-                        args,
-                        enclosing_is_generic,
-                        &mut needs_opaque,
-                        &mut seen,
-                        &mut instances,
-                        &mut worklist,
-                    );
+                    seed(callee_name, args, &mut seen, &mut instances, &mut worklist);
                 }
             });
         });
@@ -1085,15 +1048,13 @@ impl<'a> Lowerer<'a> {
                 .collect();
             let mut cloned = def.clone();
             crate::mir::lower::trait_default::subst_type_params_in_func(&mut cloned, &subst);
-            // Scan the substituted body's calls. `taint = false`: a call here
-            // is resolved by THIS specialized copy, so an unresolvable arg
-            // (should not happen post-substitution) does not force the
-            // callee's opaque body to be referenced.
+            // Scan the substituted body's calls; their arg types are concrete
+            // after substitution.
             let mut discovered: Vec<(String, MonoKey)> = Vec::new();
             walk_dispatch_sites_in_expr(&cloned.body, &mut |call| {
                 if let DispatchSite::Function(callee_name, call_args) = call {
                     let arg_tys: Vec<Ty> = call_args.iter().map(|a| a.ty.clone()).collect();
-                    if let Some(inst) = recover(callee_name, &arg_tys, &mut needs_opaque, false) {
+                    if let Some(inst) = recover(callee_name, &arg_tys) {
                         discovered.push(inst);
                     }
                 }
@@ -1146,14 +1107,11 @@ impl<'a> Lowerer<'a> {
         //     is resolved by THAT enclosing fn's own specialized copy — the
         //     opaque enclosing body is itself suppressed, so the abstract call
         //     is never lowered.
-        // `needs_opaque` therefore feeds the call-site diagnostic, not opaque
-        // emission. `keeps_opaque` stays empty: `generic_fn_keeps_opaque`
-        // returns false for every eligible generic fn, suppressing all of them.
-        let _ = (&needs_opaque, &emitted);
+        // `generic_fn_keeps_opaque` returns false for every eligible generic
+        // fn, suppressing all of them.
 
         self.mono_fns = fns;
         self.fn_mono_instances = instances;
-        self.fn_mono_needs_opaque = needs_opaque;
         self.fn_mono_emitted = emitted;
     }
 
@@ -1222,7 +1180,7 @@ impl<'a> Lowerer<'a> {
 
         let mut seen: HashMap<DefId, BTreeSet<String>> = HashMap::new();
         let mut instances: HashMap<DefId, Vec<MonoKey>> = HashMap::new();
-        for_each_fn_body(program, &mut |body, _enclosing_is_generic| {
+        for_each_fn_body(program, &mut |body| {
             walk_dispatch_sites_in_expr(body, &mut |call| {
                 let DispatchSite::Method(method_id, args) = call else {
                     return;
@@ -1548,41 +1506,37 @@ fn unify_collect_type_params(decl: &Ty, actual: &Ty, out: &mut HashMap<String, T
     }
 }
 
-/// Invoke `f(body, enclosing_is_generic)` for every function / method body in
-/// the program, reporting whether the enclosing function declares any generic
-/// params. Used by Q17 collection so a call inside a generic body is treated
-/// differently from one in a concrete (non-generic) body for opaque-body
-/// retention.
-fn for_each_fn_body(program: &HirProgram, f: &mut impl FnMut(&HirExpr, bool)) {
-    fn visit(item: &HirItem, f: &mut impl FnMut(&HirExpr, bool)) {
+/// Invoke `f(body)` for every function / method body in the program.
+fn for_each_fn_body(program: &HirProgram, f: &mut impl FnMut(&HirExpr)) {
+    fn visit(item: &HirItem, f: &mut impl FnMut(&HirExpr)) {
         match item {
-            HirItem::Function(func) => f(&func.body, !func.generic_params.is_empty()),
+            HirItem::Function(func) => f(&func.body),
             HirItem::Class(c) => {
                 for m in &c.methods {
-                    f(&m.body, !m.generic_params.is_empty());
+                    f(&m.body);
                 }
                 for b in &c.impl_blocks {
                     for it in &b.items {
                         if let HirImplItem::Method(m) = it {
-                            f(&m.body, !m.generic_params.is_empty());
+                            f(&m.body);
                         }
                     }
                 }
             }
             HirItem::Struct(s) => {
                 for m in &s.methods {
-                    f(&m.body, !m.generic_params.is_empty());
+                    f(&m.body);
                 }
             }
             HirItem::Enum(e) => {
                 for m in &e.methods {
-                    f(&m.body, !m.generic_params.is_empty());
+                    f(&m.body);
                 }
             }
             HirItem::Impl(b) => {
                 for it in &b.items {
                     if let HirImplItem::Method(m) = it {
-                        f(&m.body, !m.generic_params.is_empty());
+                        f(&m.body);
                     }
                 }
             }
@@ -1591,13 +1545,11 @@ fn for_each_fn_body(program: &HirProgram, f: &mut impl FnMut(&HirExpr, bool)) {
                     visit(sub, f);
                 }
             }
-            // A const initializer / mixin default body is a concrete context
-            // (no enclosing generic fn params).
-            HirItem::Const(c) => f(&c.value, false),
+            HirItem::Const(c) => f(&c.value),
             HirItem::Mixin(m) => {
                 for it in &m.items {
                     if let HirMixinItem::DefaultMethod(func) = it {
-                        f(&func.body, !func.generic_params.is_empty());
+                        f(&func.body);
                     }
                 }
             }

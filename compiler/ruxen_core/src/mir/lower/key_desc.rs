@@ -36,8 +36,8 @@
 //! range check on a key's value.
 
 use crate::hir::types::Ty;
-use crate::mir::nodes::{Literal, LocalId, MirFunction, MirInst, MirValue};
 use crate::mir::lower::type_helpers::nominal_derive_is_synthesized;
+use crate::mir::nodes::{Literal, LocalId, MirFunction, MirInst, MirValue};
 use crate::resolve::symbols::SymbolTable;
 
 /// Wire values. Must stay in step with the `RUXEN_KEY_*` constants in
@@ -240,9 +240,8 @@ fn key_descriptor(key_ty: &Ty, symbols: &SymbolTable) -> KeyDesc {
     // no synthesised `_hash_code` / `_eq`, so pointing the runtime at
     // those symbols would fail at link.
     if let Ty::Struct { name, .. } | Ty::Class { name, .. } = peeled {
-        let hashable = !name.contains('.')
-            && (nominal_derive_is_synthesized(peeled, symbols, "Hashable")
-                || nominal_derive_is_synthesized(peeled, symbols, "Hash"));
+        let hashable =
+            !name.contains('.') && nominal_derive_is_synthesized(peeled, symbols, "Hashable");
         if hashable && nominal_derive_is_synthesized(peeled, symbols, "PartialEq") {
             // The same mangling `derive.rs` builds its synthesized
             // `build_hash_code` / `build_eq` function names from.

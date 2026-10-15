@@ -44,7 +44,7 @@ impl Parser {
             TokenKind::Type => Some(TopLevelItem::TypeAlias(self.parse_type_alias())),
             TokenKind::Newtype => Some(TopLevelItem::Newtype(self.parse_newtype_def())),
             TokenKind::Const => Some(TopLevelItem::Const(self.parse_const_def())),
-            TokenKind::Lib => Some(TopLevelItem::Lib(self.parse_lib_decl(vec![]))),
+            TokenKind::Lib => Some(TopLevelItem::Lib(self.parse_lib_decl())),
             TokenKind::At => {
                 // ruby-naming.spec.md §10a: the `@[...]` prefix-attribute
                 // surface is retired. `@[derive(...)]` → in-body `include
@@ -75,7 +75,7 @@ impl Parser {
                 Some(TopLevelItem::Alias(self.parse_alias_item()))
             }
             TokenKind::Protected => {
-                let vis = self.parse_visibility();
+                let vis = self.parse_visibility().unwrap_or(Visibility::Private);
                 match self.current_kind() {
                     TokenKind::Def | TokenKind::Async => {
                         Some(TopLevelItem::Function(self.parse_func_def(vis)))
@@ -184,13 +184,15 @@ impl Parser {
         }
     }
 
-    pub(super) fn parse_visibility(&mut self) -> Visibility {
+    /// The explicit `protected` prefix on a `def`, or `None` when the
+    /// declaration has no prefix and takes its context's visibility.
+    pub(super) fn parse_visibility(&mut self) -> Option<Visibility> {
         match self.current_kind() {
             TokenKind::Protected => {
                 self.advance();
-                Visibility::Protected
+                Some(Visibility::Protected)
             }
-            _ => Visibility::Private,
+            _ => None,
         }
     }
 
@@ -212,6 +214,9 @@ impl Parser {
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
             let __progress = self.pos;
             self.skip_newlines();
+            // Leading `##` docs go to the next item via `take_pending_docs()`.
+            let docs = self.collect_doc_comments();
+            self.pending_doc_comments.extend(docs);
             if self.at(TokenKind::End) {
                 break;
             }
@@ -261,23 +266,16 @@ impl Parser {
                     }
                     // else: fall through and let parse_top_level_item handle it.
                 }
+                // An unprefixed `def` takes the current section's visibility.
+                TokenKind::Def | TokenKind::Async => {
+                    items.push(TopLevelItem::Function(self.parse_func_def(current_vis)));
+                    self.ensure_loop_progress(__progress);
+                    continue;
+                }
                 _ => {}
             }
             if let Some(item) = self.parse_top_level_item() {
-                // Stamp section visibility onto items that did not carry
-                // an explicit prefix. Items without a visibility field
-                // (e.g. nested types) are unaffected here — their own
-                // body parsers apply section markers internally.
-                let stamped = match item {
-                    TopLevelItem::Function(mut f) => {
-                        if f.visibility == Visibility::Private {
-                            f.visibility = current_vis;
-                        }
-                        TopLevelItem::Function(f)
-                    }
-                    other => other,
-                };
-                items.push(stamped);
+                items.push(item);
             } else {
                 self.synchronize();
             }

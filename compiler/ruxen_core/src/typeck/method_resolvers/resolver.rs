@@ -36,23 +36,17 @@ pub(super) struct MethodResolver {
 }
 
 /// The stdlib `Class` names that own a NAMED `new` arm performing
-/// payload-inference and/or a Send/E0714 construction check
-/// (`mod.rs` arms at `Mutex.new` / `Arc`+`SharedSync.new` /
+/// payload-inference and an E0714 construction check (`io.rs` arms at
 /// `BufReader.new` / `BufWriter.new`). The declared-method tier (tier 1)
 /// MUST skip these names for `new`: their named arm is the authoritative
-/// constructor typing (E1101/E1102/E0714 + arg-based payload), and it
-/// must keep winning over `lookup_class_method_return` exactly as it did
-/// when the named arm sat positionally before the generic
-/// `(Ty::Class, "new")` declared-lookup arm (legacy `mod.rs:1214`).
+/// constructor typing (E0714 + arg-based payload), and it must keep
+/// winning over `lookup_class_method_return`.
 ///
-/// This is the empirically-forced refinement of the plan's
-/// `STDLIB_TYPE_NAMES` idea (Task 2 probe): the real stdlib `Mutex`
-/// declares its own FFI `new`, so an unscoped tier-1-first would override
-/// the named arm. Scoping the skip to exactly the names with a named
-/// `new` arm is the minimal rule that (a) preserves stdlib behaviour and
-/// (b) lets a user class with any OTHER stdlib-shaped name (e.g. `File`,
-/// `TcpStream`, `Command`) honour its declared `new` — fixing bug A2.
-const STDLIB_NEW_ARM_NAMES: &[&str] = &["Mutex", "Arc", "SharedSync", "BufReader", "BufWriter"];
+/// Scoping the skip to exactly the names with a named `new` arm is the
+/// minimal rule that (a) preserves stdlib behaviour and (b) lets a user
+/// class with any OTHER stdlib-shaped name (e.g. `File`, `TcpStream`,
+/// `Command`) honour its declared `new` — fixing bug A2.
+const STDLIB_NEW_ARM_NAMES: &[&str] = &["BufReader", "BufWriter"];
 
 /// TIER 1 — declared-method resolver (the bug-A2 fix).
 ///

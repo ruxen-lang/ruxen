@@ -9,7 +9,7 @@ pub const MAGIC: [u8; 4] = *b"RUXC";
 
 /// Cache format version. **Bump this on ANY breaking change** to a cached
 /// structure — a bump forces every cached artifact to be discarded on load.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Header prefixing every cache artifact on disk.
 ///
@@ -70,8 +70,6 @@ pub struct CachedFile {
 pub struct CacheManifest {
     pub header: CacheHeader,
     pub files: Vec<CachedFile>,
-    /// Adjacency list encoded as `(file_index, deps_indices)`.
-    pub dependency_graph: Vec<(usize, Vec<usize>)>,
 }
 
 /// The outcome of loading a manifest from disk.
@@ -95,7 +93,6 @@ impl CacheManifest {
         Self {
             header: CacheHeader::current(target, flags),
             files: Vec::new(),
-            dependency_graph: Vec::new(),
         }
     }
 
@@ -179,7 +176,6 @@ mod tests {
             object_file: Some("obj".into()),
             last_compiled: 42,
         });
-        m.dependency_graph.push((0, vec![]));
 
         let bytes = m.to_bytes().unwrap();
         match CacheManifest::from_bytes(&bytes, "x86_64-linux", "debug") {

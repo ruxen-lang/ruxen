@@ -456,7 +456,7 @@ impl MixinResolver {
         //     `Debug`/`PartialEq`/`PartialOrd` — the `SUPPORTED_DERIVES` set):
         //     the ruby-naming §3.6 structural auto-derive (primitives +
         //     containers trivially; structs/enums when every field supports it;
-        //     incl. the Hash↔Hashable / Eq↔PartialEq naming duality). Without
+        //     incl. the Eq↔PartialEq naming duality). Without
         //     this a struct that auto-derives Hashable but never writes
         //     `include Hashable` is wrongly rejected (E1015) — regressing every
         //     Map-key / derived-Ord program. These run BEFORE `require_nominal`
@@ -581,7 +581,7 @@ impl MixinResolver {
                         found = Some(sig);
                     }
                 }
-            } else if matches!(b.name.as_str(), "Hashable" | "Hash") && method_name == "hash_code" {
+            } else if b.name == "Hashable" && method_name == "hash_code" {
                 providers.push(b.name.clone());
                 if found.is_none() {
                     found = Some(FnSignature {
@@ -958,14 +958,6 @@ impl MixinResolver {
                     }
                 }
                 self.register_impl(&type_name, None, methods);
-                self.register_derived_impls(
-                    &type_name,
-                    &Ty::Class {
-                        name: type_name.clone(),
-                        generic_args: vec![],
-                    },
-                    &class.derive_traits,
-                );
 
                 // Register inner impl blocks
                 for imp in &class.impl_blocks {
@@ -1002,14 +994,6 @@ impl MixinResolver {
                     .map(|method| (method.name.clone(), self.func_to_sig(method)))
                     .collect();
                 self.register_impl(&type_name, None, methods);
-                self.register_derived_impls(
-                    &type_name,
-                    &Ty::Struct {
-                        name: type_name.clone(),
-                        generic_args: vec![],
-                    },
-                    &strukt.derive_traits,
-                );
 
                 // Struct-body `include Mixin` blocks are nominal impls just
                 // like class-body includes. Recording the edge here is what
@@ -1051,14 +1035,6 @@ impl MixinResolver {
                     .map(|method| (method.name.clone(), self.func_to_sig(method)))
                     .collect();
                 self.register_impl(&type_name, None, methods);
-                self.register_derived_impls(
-                    &type_name,
-                    &Ty::Enum {
-                        name: type_name.clone(),
-                        generic_args: vec![],
-                    },
-                    &enm.derive_traits,
-                );
 
                 // Enums carry the same HIR impl-block shape as classes and
                 // structs, so keep nominal bound satisfaction symmetric.
@@ -1127,107 +1103,6 @@ impl MixinResolver {
                 }
             }
             _ => {}
-        }
-    }
-
-    fn register_derived_impls(
-        &mut self,
-        type_name: &str,
-        target_ty: &Ty,
-        derive_traits: &[String],
-    ) {
-        for trait_name in derive_traits {
-            let methods = match trait_name.as_str() {
-                "Clone" => vec![(
-                    "clone".to_string(),
-                    FnSignature {
-                        self_mode: Some(HirSelfMode::Ref),
-                        is_class_method: false,
-                        is_async: false,
-                        generic_params: vec![],
-                        params: vec![],
-                        return_ty: target_ty.clone(),
-                        c_symbol: None,
-                    },
-                )],
-                "PartialEq" => vec![(
-                    "eq".to_string(),
-                    FnSignature {
-                        self_mode: Some(HirSelfMode::Ref),
-                        is_class_method: false,
-                        is_async: false,
-                        generic_params: vec![],
-                        params: vec![crate::resolve::symbols::ParamInfo {
-                            name: "other".to_string(),
-                            ty: Ty::Ref(Box::new(target_ty.clone())),
-                            auto_assign: false,
-                            default: None,
-                        }],
-                        return_ty: Ty::Bool,
-                        c_symbol: None,
-                    },
-                )],
-                "Hashable" | "Hash" => vec![(
-                    "hash_code".to_string(),
-                    FnSignature {
-                        self_mode: Some(HirSelfMode::Ref),
-                        is_class_method: false,
-                        is_async: false,
-                        generic_params: vec![],
-                        params: vec![],
-                        return_ty: Ty::Int,
-                        c_symbol: None,
-                    },
-                )],
-                "Default" => vec![(
-                    "default".to_string(),
-                    FnSignature {
-                        self_mode: None,
-                        is_class_method: true,
-                        is_async: false,
-                        generic_params: vec![],
-                        params: vec![],
-                        return_ty: target_ty.clone(),
-                        c_symbol: None,
-                    },
-                )],
-                "Ord" => vec![(
-                    "cmp".to_string(),
-                    FnSignature {
-                        self_mode: Some(HirSelfMode::Ref),
-                        is_class_method: false,
-                        is_async: false,
-                        generic_params: vec![],
-                        params: vec![crate::resolve::symbols::ParamInfo {
-                            name: "other".to_string(),
-                            ty: Ty::Ref(Box::new(target_ty.clone())),
-                            auto_assign: false,
-                            default: None,
-                        }],
-                        return_ty: Ty::Int,
-                        c_symbol: None,
-                    },
-                )],
-                "PartialOrd" => vec![(
-                    "partial_cmp".to_string(),
-                    FnSignature {
-                        self_mode: Some(HirSelfMode::Ref),
-                        is_class_method: false,
-                        is_async: false,
-                        generic_params: vec![],
-                        params: vec![crate::resolve::symbols::ParamInfo {
-                            name: "other".to_string(),
-                            ty: Ty::Ref(Box::new(target_ty.clone())),
-                            auto_assign: false,
-                            default: None,
-                        }],
-                        return_ty: Ty::Int,
-                        c_symbol: None,
-                    },
-                )],
-                _ => vec![],
-            };
-            self.register_impl(type_name, Some(trait_name), methods);
         }
     }
 

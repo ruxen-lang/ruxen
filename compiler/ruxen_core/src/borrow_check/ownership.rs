@@ -7,8 +7,6 @@ pub enum BindingState {
     Owned,
     Moved { target: DefId, span: Span },
     MovedIntoCall { callee: String, span: Span },
-    Uninitialized,
-    PartiallyMoved { moved_fields: Vec<String> },
 }
 
 #[derive(Debug, Clone)]
@@ -33,10 +31,6 @@ impl OwnershipState {
         self.bindings.insert(def_id, BindingState::Owned);
     }
 
-    pub fn declare_uninitialized(&mut self, def_id: DefId) {
-        self.bindings.insert(def_id, BindingState::Uninitialized);
-    }
-
     pub fn record_move(&mut self, source: DefId, target: DefId, span: Span) {
         self.bindings
             .insert(source, BindingState::Moved { target, span });
@@ -45,24 +39,6 @@ impl OwnershipState {
     pub fn record_move_into_call(&mut self, source: DefId, callee: String, span: Span) {
         self.bindings
             .insert(source, BindingState::MovedIntoCall { callee, span });
-    }
-
-    pub fn record_partial_move(&mut self, source: DefId, field: String) {
-        match self.bindings.get_mut(&source) {
-            Some(BindingState::PartiallyMoved { moved_fields }) => {
-                if !moved_fields.contains(&field) {
-                    moved_fields.push(field);
-                }
-            }
-            _ => {
-                self.bindings.insert(
-                    source,
-                    BindingState::PartiallyMoved {
-                        moved_fields: vec![field],
-                    },
-                );
-            }
-        }
     }
 
     pub fn reinitialize(&mut self, def_id: DefId) {
@@ -80,35 +56,6 @@ impl OwnershipState {
         )
     }
 
-    pub fn is_partially_moved(&self, def_id: DefId) -> bool {
-        matches!(
-            self.bindings.get(&def_id),
-            Some(BindingState::PartiallyMoved { .. })
-        )
-    }
-
-    pub fn is_uninitialized(&self, def_id: DefId) -> bool {
-        matches!(
-            self.bindings.get(&def_id),
-            Some(BindingState::Uninitialized)
-        )
-    }
-
-    pub fn state_of(&self, def_id: DefId) -> Option<&BindingState> {
-        self.bindings.get(&def_id)
-    }
-
-    /// Returns (callee_or_target_name, span) for error reporting on moved values.
-    pub fn move_info(&self, def_id: DefId) -> Option<(String, Span)> {
-        match self.bindings.get(&def_id)? {
-            BindingState::Moved { target, span } => {
-                Some((format!("variable {}", target), span.clone()))
-            }
-            BindingState::MovedIntoCall { callee, span } => Some((callee.clone(), span.clone())),
-            _ => None,
-        }
-    }
-
     pub fn snapshot(&self) -> Self {
         self.clone()
     }
@@ -121,30 +68,8 @@ impl OwnershipState {
         let mut result = branches[0].clone();
         for branch in &branches[1..] {
             for (def_id, state) in &branch.bindings {
-                match state {
-                    BindingState::Moved { .. } | BindingState::MovedIntoCall { .. } => {
-                        if result.is_owned(*def_id) {
-                            result.bindings.insert(*def_id, state.clone());
-                        }
-                    }
-                    BindingState::PartiallyMoved { moved_fields } => {
-                        match result.bindings.get_mut(def_id) {
-                            Some(BindingState::PartiallyMoved {
-                                moved_fields: existing,
-                            }) => {
-                                for f in moved_fields {
-                                    if !existing.contains(f) {
-                                        existing.push(f.clone());
-                                    }
-                                }
-                            }
-                            Some(BindingState::Owned) => {
-                                result.bindings.insert(*def_id, state.clone());
-                            }
-                            _ => {}
-                        }
-                    }
-                    _ => {}
+                if !matches!(state, BindingState::Owned) && result.is_owned(*def_id) {
+                    result.bindings.insert(*def_id, state.clone());
                 }
             }
         }
@@ -187,14 +112,6 @@ mod tests {
     }
 
     #[test]
-    fn uninitialized_is_not_owned() {
-        let mut state = OwnershipState::new();
-        state.declare_uninitialized(10);
-        assert!(!state.is_owned(10));
-        assert!(!state.is_moved(10));
-    }
-
-    #[test]
     fn snapshot_and_merge_conservative() {
         let mut state = OwnershipState::new();
         state.declare(10);
@@ -215,18 +132,5 @@ mod tests {
             "moved on any branch → moved after merge"
         );
         assert!(state.is_owned(20), "untouched → still owned");
-    }
-
-    #[test]
-    fn move_info_preserved() {
-        let mut state = OwnershipState::new();
-        state.declare(10);
-        let s = Span::new(50, 55, 7, 3);
-        state.record_move_into_call(10, "process".into(), s);
-        let info = state.move_info(10);
-        assert!(info.is_some());
-        let (callee, move_span) = info.unwrap();
-        assert_eq!(callee, "process");
-        assert_eq!(move_span.line, 7);
     }
 }

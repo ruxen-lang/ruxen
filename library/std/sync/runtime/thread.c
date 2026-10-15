@@ -218,3 +218,12 @@ int64_t ruxen_thread_current_id(void) {
     pthread_t t = pthread_self();
     return (int64_t)(uintptr_t)t;
 }
+
+/* JoinHandle.thread_id_raw -> i64 (opaque ThreadId of the spawned
+ * thread). Same encoding as `ruxen_thread_current_id`, so the id a
+ * thread reads for itself equals the one its handle reports. */
+int64_t ruxen_thread_join_handle_id(int64_t handle_ptr) {
+    RuxenJoinHandle *jh = (RuxenJoinHandle *)(uintptr_t)handle_ptr;
+    if (!jh) ruxen_panic("JoinHandle.thread_id: null handle");
+    return (int64_t)(uintptr_t)jh->tid;
+}

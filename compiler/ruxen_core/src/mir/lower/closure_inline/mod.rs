@@ -342,5 +342,4 @@ impl<'a> Lowerer<'a> {
             _ => Ok(None), // Not a recognized closure method.
         }
     }
-
 }

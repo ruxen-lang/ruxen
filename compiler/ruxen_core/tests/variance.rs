@@ -2,8 +2,7 @@
 //! constructors (P0.15).
 //!
 //! Variance is the rule that decides whether a coercion through a generic
-//! constructor is allowed. The Ruxen compiler currently encodes these
-//! rules in [`ruxen_core::typeck::coerce::try_coerce`] and the matching
+//! constructor is allowed. The Ruxen compiler encodes these rules in the
 //! [`ruxen_core::typeck::unify::can_coerce`] predicate, but as of the
 //! P0.15 audit two of the three rules existed only as a comment near
 //! `coerce.rs:108-109`:

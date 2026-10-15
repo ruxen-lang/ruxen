@@ -131,7 +131,6 @@ mod tests {
                 info: StructInfo {
                     generic_params: vec![],
                     fields: vec![],
-                    derive_traits: vec!["Copy".to_string(), "Clone".to_string()],
                     layout: vec![],
                     opt_out_send: false,
                     opt_out_sync: false,
@@ -216,7 +215,6 @@ mod tests {
                 info: StructInfo {
                     generic_params: vec![],
                     fields: vec![safe_field],
-                    derive_traits: vec![],
                     layout: vec![],
                     opt_out_send: false,
                     opt_out_sync: false,
@@ -244,7 +242,6 @@ mod tests {
                 info: StructInfo {
                     generic_params: vec![],
                     fields: vec![bad_field],
-                    derive_traits: vec![],
                     layout: vec![],
                     opt_out_send: false,
                     opt_out_sync: false,
@@ -304,7 +301,6 @@ mod tests {
                 info: EnumInfo {
                     generic_params: vec![],
                     variants: vec![ok_variant, bad_variant],
-                    derive_traits: vec![],
                     opt_out_send: false,
                     opt_out_sync: false,
                     manual_send: false,
@@ -344,7 +340,6 @@ mod tests {
                 info: StructInfo {
                     generic_params: vec![],
                     fields: vec![ptr_field],
-                    derive_traits: vec![],
                     layout: vec![],
                     opt_out_send: false,
                     opt_out_sync: false,
@@ -385,7 +380,6 @@ mod tests {
                 info: StructInfo {
                     generic_params: vec![],
                     fields: vec![value_field],
-                    derive_traits: vec![],
                     layout: vec![],
                     opt_out_send: true,
                     opt_out_sync: true,

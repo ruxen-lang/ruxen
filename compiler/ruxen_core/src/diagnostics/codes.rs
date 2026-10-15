@@ -334,6 +334,12 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0738",
         title: "name in a `use` group not found",
     },
+    // E0739: the entry point has the fixed C `main(argc, argv)` ABI; user
+    // parameters on a free `def main` used to reach codegen and panic it.
+    CodeInfo {
+        code: "E0739",
+        title: "`main` cannot take parameters",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker maintains a parallel `ErrorCode` enum in
     // `borrow_check/errors.rs`; titles below mirror its `title()`
@@ -405,6 +411,14 @@ pub const REGISTRY: &[CodeInfo] = &[
     CodeInfo {
         code: "E1015",
         title: "type does not satisfy declared mixin bound",
+    },
+    // E1017 — `include X` in a class/struct/enum body where `X` names a
+    // class, struct, enum or type alias rather than a mixin (Ruby:
+    // `TypeError`, expected Module). E1016 stays reserved for the
+    // MutexGuard check in tier1_02_concurrency.md. Emitted by resolve.
+    CodeInfo {
+        code: "E1017",
+        title: "`include` of a type that is not a mixin",
     },
     // Send/Sync enforcement at thread-boundary construction sites
     // (docs/specs/ownership/send_sync_enforcement.spec.md). E1011 / E1012
@@ -539,9 +553,10 @@ pub const REGISTRY: &[CodeInfo] = &[
     // HIR as a `MacroCall` whose name is not in
     // `parser::macros::BUILTIN_MACRO_NAMES` used to lower to nothing at
     // all, so the call vanished from the program without a word. It is
-    // now a hard error. User-facing `name!` spellings never reach this
-    // code — the parser only builds a `MacroCall` for a registered macro
-    // — so it fires only if a macro is registered without a lowering.
+    // now a hard error. The parser only builds a `MacroCall` for a
+    // registered macro, so it fires for the retired collection macros
+    // (`vec!`, `array!`, `map!`, `hash!`, `set!`) and for a macro
+    // registered without a lowering.
     CodeInfo {
         code: "E1126",
         title: "unknown macro",

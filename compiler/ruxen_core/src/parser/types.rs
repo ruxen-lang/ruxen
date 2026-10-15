@@ -115,13 +115,6 @@ impl Parser {
                 self.parse_named_type()
             }
 
-            // Lifetime in a type position (e.g., in trait bounds)
-            TokenKind::Lifetime(_) => {
-                // This shouldn't happen in normal type position, but handle gracefully
-                self.error("unexpected lifetime in type position");
-                TypeExpr::Inferred { span: start }
-            }
-
             // Lowercase identifiers that can be used as types (e.g., `str`)
             TokenKind::Identifier(ref name) if is_primitive_type_name(name) => {
                 self.parse_named_type_from_identifier()
@@ -158,15 +151,9 @@ impl Parser {
         let mutable;
 
         // ruby-naming.spec.md §3.3: lifetime names in type position are
-        // lowercase bare identifiers (`&a String`). Accept both the
-        // legacy `Lifetime("a")` token and a bare `Identifier` whose
-        // next token starts a type (uppercase TypeIdentifier or `mut`).
+        // lowercase bare identifiers (`&a String`): a bare `Identifier`
+        // whose next token starts a type (uppercase TypeIdentifier or `var`).
         let try_take_lifetime = |this: &mut Self| -> Option<String> {
-            if let TokenKind::Lifetime(ref lt) = this.current_kind().clone() {
-                let n = lt.clone();
-                this.advance();
-                return Some(n);
-            }
             if let TokenKind::Identifier(ref n) = this.current_kind().clone() {
                 if matches!(
                     this.peek_kind(),
@@ -542,12 +529,7 @@ impl Parser {
             return GenericParam::Const { name, ty, span };
         }
 
-        if let TokenKind::Lifetime(ref name) = self.current_kind().clone() {
-            let name = name.clone();
-            self.advance();
-            let span = self.span_from(&start);
-            GenericParam::Lifetime { name, span }
-        } else if let TokenKind::TypeIdentifier(ref name) = self.current_kind().clone() {
+        if let TokenKind::TypeIdentifier(ref name) = self.current_kind().clone() {
             let name = name.clone();
             self.advance();
             let bounds = if self.eat(TokenKind::Colon) {
@@ -560,9 +542,7 @@ impl Parser {
         } else if let TokenKind::Identifier(ref name) = self.current_kind().clone() {
             // ruby-naming.spec.md §3.3: a bare lowercase identifier
             // inside the `[...]` slot is a lifetime parameter
-            // (uppercase = type, lowercase = lifetime, no sigil). The
-            // legacy `'a` syntax still produces TokenKind::Lifetime
-            // above; this branch handles the new bare form.
+            // (uppercase = type, lowercase = lifetime, no sigil).
             let name = name.clone();
             self.advance();
             let span = self.span_from(&start);

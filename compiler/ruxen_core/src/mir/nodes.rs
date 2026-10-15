@@ -104,8 +104,6 @@ impl MirClassInfo {
 pub struct FfiLib {
     /// Library name (e.g., "LibM") or empty for anonymous `lib` blocks.
     pub name: String,
-    /// Linker flags (e.g., "-lm").
-    pub link_flags: Vec<String>,
     /// Declared functions.
     pub functions: Vec<FfiFuncDecl>,
 }

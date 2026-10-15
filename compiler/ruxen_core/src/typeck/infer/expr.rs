@@ -13,9 +13,7 @@ use crate::resolve::symbols::DefKind;
 
 use super::super::coerce::auto_deref;
 use super::super::unify::unify;
-use super::helpers::{
-    collect_break_types, container_elem_ty, infer_user_enum_generic_args, map_kv_tys,
-};
+use super::helpers::{collect_break_types, infer_user_enum_generic_args};
 use super::InferenceEngine;
 
 impl<'a> InferenceEngine<'a> {
@@ -734,7 +732,7 @@ impl<'a> InferenceEngine<'a> {
                 } else if method_name == "new" {
                     self.infer_constructor_call(&derefed, method_name, args, &expr.span)
                 } else if let Some(selected) = selected_method {
-                    self.infer_selected_method(selected, &derefed, args, &expr.span)
+                    self.infer_selected_method(selected, &derefed, effective_args, &expr.span)
                 } else {
                     // Regular method call — substitute TypeParam in the
                     // return type using the object's generic args. Pass
@@ -772,8 +770,7 @@ impl<'a> InferenceEngine<'a> {
                 // silently passed through unify (which allows arbitrary
                 // integers or function references to reach the runtime),
                 // and the resulting binary crashes or prints `(nil)`.
-                if crate::hir::IO_TEXT_BUILTINS.contains(&callee_name.as_str()) && args.len() == 1
-                {
+                if crate::hir::IO_TEXT_BUILTINS.contains(&callee_name.as_str()) && args.len() == 1 {
                     let arg_ty = self.ctx.resolve(&args[0].ty);
                     if !Self::is_puts_compatible(&arg_ty) {
                         // Ruby-parity: `puts x` accepts any value by converting it
@@ -850,6 +847,7 @@ impl<'a> InferenceEngine<'a> {
                             for (arg, param) in args.iter().zip(&signature.params) {
                                 let _ = unify(&arg.ty, &param.ty, self.ctx, &expr.span);
                                 self.check_declared_bounds(&param.ty, &arg.ty, &arg.span);
+                                self.check_send_required_closure(&param.ty, arg, None);
                             }
                         }
                         // Generic free-function call inference: when the
@@ -1706,42 +1704,9 @@ impl<'a> InferenceEngine<'a> {
                 expr.ty = Ty::String;
             }
 
-            HirExprKind::MacroCall { name, args } => {
+            HirExprKind::MacroCall { args, .. } => {
                 for arg in args.iter_mut() {
                     self.infer_expr(arg);
-                }
-                // ruby-naming.spec.md §10a macros (`array!` / `vec!`,
-                // `map!` / `hash!`, `set!`) compute their result type
-                // at resolve time from `args_hir[0].ty`. That field is
-                // a fresh inference variable at resolve time (the
-                // resolver assigns `Ty::Infer(N)` to method calls,
-                // function calls, etc.), and the typeck reassigns the
-                // CALL expression's `.ty` to the resolved return type
-                // without unifying with the original Infer var. So the
-                // macro's stored element type stays unbound. Re-unify
-                // here against each arg's freshly-inferred type so the
-                // container's element / key / value types resolve.
-                match name.as_str() {
-                    "vec" | "array" | "set" => {
-                        if let Some(elem_ty) = container_elem_ty(&expr.ty) {
-                            for arg in args.iter() {
-                                let arg_ty = self.ctx.resolve(&arg.ty);
-                                let _ = unify(&elem_ty, &arg_ty, self.ctx, &expr.span);
-                            }
-                        }
-                    }
-                    "hash" | "map" => {
-                        if let Some((k_ty, v_ty)) = map_kv_tys(&expr.ty) {
-                            let mut it = args.iter();
-                            while let (Some(k), Some(v)) = (it.next(), it.next()) {
-                                let k_arg = self.ctx.resolve(&k.ty);
-                                let v_arg = self.ctx.resolve(&v.ty);
-                                let _ = unify(&k_ty, &k_arg, self.ctx, &expr.span);
-                                let _ = unify(&v_ty, &v_arg, self.ctx, &expr.span);
-                            }
-                        }
-                    }
-                    _ => {}
                 }
                 expr.ty = self.ctx.resolve(&expr.ty);
             }
@@ -1817,7 +1782,12 @@ impl<'a> InferenceEngine<'a> {
             }
         }
         if let Ty::Class { name, generic_args } | Ty::Struct { name, generic_args } = derefed {
-            if generic_args.is_empty() {
+            // A bare stdlib head (`Mutex.new(x)`) arrives carrying its own
+            // unapplied params (`Mutex[T]`); infer those from the args too.
+            let unapplied = generic_args
+                .iter()
+                .all(|arg| matches!(arg, Ty::TypeParam { .. }));
+            if unapplied {
                 if let Some(inferred) = self.infer_class_generics(name, args) {
                     let result = if matches!(derefed, Ty::Struct { .. }) {
                         Ty::Struct {
@@ -1873,7 +1843,7 @@ impl<'a> InferenceEngine<'a> {
     /// C[T: Bound]` is instantiated as `C[Concrete]`, check each declared
     /// generic-param bound against the corresponding concrete arg. The
     /// owner is the class itself, so `class Mutex[T: Send]` reports E1101
-    /// and `Arc`/`SharedSync` report E1102 via the preserved-code bridge.
+    /// and `SharedSync` reports E1102 via the preserved-code bridge.
     /// Reads the bounds from the class definition — no hardcoded type
     /// names. Only bounded params fire (zero-regression).
     fn check_constructor_generic_bounds(&mut self, result: &Ty, span: &Span) {
@@ -1934,10 +1904,12 @@ impl<'a> InferenceEngine<'a> {
         let Some(signature) = sig_opt else {
             return self.ctx.fresh_type_var();
         };
+        let owner = Self::bound_owner_name(derefed);
         for (arg, param) in args.iter().zip(&signature.params) {
             let param_ty = self.substitute_generics_in_return(derefed, &param.ty);
             let _ = unify(&arg.ty, &param_ty, self.ctx, span);
             self.check_declared_bounds(&param_ty, &arg.ty, &arg.span);
+            self.check_send_required_closure(&param_ty, arg, owner.as_deref());
         }
         let ret = self.wrap_async_return(&signature);
         // First substitute the receiver's generic args (handles
@@ -1948,7 +1920,6 @@ impl<'a> InferenceEngine<'a> {
         // generic bounds against the harvested bindings. The owner is the
         // receiver class (so `class Mutex[T: Send]` reports E1101, etc. via
         // the preserved-code bridge). Only bounded params fire.
-        let owner = Self::bound_owner_name(derefed);
         let (subst_ty, bindings) = self.harvest_and_subst_generics_bindings(&signature, args, &ret);
         self.check_generic_param_bounds(
             &signature.generic_params,

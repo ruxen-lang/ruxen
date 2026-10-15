@@ -56,11 +56,26 @@ fn collect(expr: &HirExpr, out: &mut Vec<String>) {
 }
 
 #[test]
-fn array_vec_resolve_to_ty_array() {
-    let tys = let_types("def main\n  let a: Array[Int] = []\n  let v: Vec[Int] = []\nend");
-    assert_eq!(
-        tys,
-        vec!["Array[Int]".to_string(), "Array[Int]".to_string()]
+fn array_resolves_to_ty_array() {
+    // `Array[T]` is the Ruby spelling; the Rust `Vec` is gone
+    // (ruby-naming.spec.md).
+    let tys = let_types("def main\n  let a: Array[Int] = []\nend");
+    assert_eq!(tys, vec!["Array[Int]".to_string()]);
+}
+
+#[test]
+fn vec_is_an_undefined_type() {
+    let tokens = Lexer::new("def main\n  let v: Vec[Int] = []\nend")
+        .tokenize()
+        .expect("lex");
+    let prog = Parser::new(tokens).parse().expect("parse");
+    let result = typeck::type_check(&prog);
+    assert!(
+        result.diagnostics.iter().any(|d| d.level
+            == ruxen_core::diagnostics::DiagnosticLevel::Error
+            && d.message.contains("undefined type `Vec`")),
+        "{:?}",
+        result.diagnostics
     );
 }
 

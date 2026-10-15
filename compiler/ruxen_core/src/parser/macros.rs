@@ -32,9 +32,13 @@
 /// * `panic` — lowers to `ruxen_panic(msg)` + `Terminator::Unreachable`.
 /// * `array` / `vec` / `map` / `hash` / `set` — retired by
 ///   `ruby-naming.spec.md` §10a in favour of the literal forms. They stay
-///   registered so the old spellings keep producing the migration diagnostic
-///   instead of a bare "undefined function".
+///   registered so the old spellings reach resolve, which rejects them with
+///   E1126 and a migration message (see [`RETIRED_MACRO_NAMES`]).
 pub const BUILTIN_MACRO_NAMES: &[&str] = &["panic", "array", "vec", "map", "hash", "set"];
+
+/// The registered macro names that are retired: resolve rejects each with
+/// E1126 instead of lowering it.
+pub const RETIRED_MACRO_NAMES: &[&str] = &["array", "vec", "map", "hash", "set"];
 
 /// True when `name` (the identifier with any trailing `!` already stripped)
 /// is one of the compiler's built-in macros.

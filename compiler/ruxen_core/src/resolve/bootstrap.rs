@@ -25,9 +25,7 @@
 //!    Detected by walking up from `CARGO_MANIFEST_DIR` until a
 //!    `library/std/` directory containing the per-package layout
 //!    (e.g. `io/src/lib.rx`) is found. Matches how
-//!    `error_code_registry.rs` finds `docs/errors/`. The pre-#06.95
-//!    `library/std/_legacy/src/` and `library/std/src/` flat layouts
-//!    remain as transitional fallbacks.
+//!    `error_code_registry.rs` finds `docs/errors/`.
 //! 3. **Exe-adjacent install layout** — when running an installed
 //!    `ruxenc`, `<exe>/../library/std/` is the conventional sysroot
 //!    location.
@@ -67,11 +65,6 @@ use std::sync::OnceLock;
 /// earlier. The ordering mirrors the topological layering described in
 /// `docs/prompts/v1/06_95_stdlib_packagization.md` (Layer 0 first, then
 /// Layer 1, …).
-///
-/// During the transition the legacy fallback path
-/// (`library/std/_legacy/src/<file>.rx`) is preserved at the loader
-/// level via `resolve_stdlib_root` — checkouts still on the flat layout
-/// keep working.
 pub const BOOTSTRAP_FILES: &[&str] = &[
     // std-core ships the 16 builtin mixins (Send / Sync / Clone / Copy /
     // Displayable / Comparable / PartialEq / Eq / Hash / Default / Ord /
@@ -452,8 +445,8 @@ fn missing_stdlib_diagnostic(rel: &str) -> Diagnostic {
 
 /// Resolve the stdlib source root, in order:
 ///   1. `$RUXEN_STDLIB_PATH`
-///   2. workspace `library/std/src/` (walk up from `CARGO_MANIFEST_DIR`)
-///   3. `<exe-dir>/../library/std/src/`
+///   2. workspace `library/std/` (walk up from `CARGO_MANIFEST_DIR`)
+///   3. `<exe-dir>/../library/std/`
 ///
 /// Returns `None` only when every option fails — at which point the
 /// caller emits an E0725 against an empty span (there is no source
@@ -470,23 +463,13 @@ pub fn resolve_stdlib_root() -> Option<PathBuf> {
     // owns its own directory under `library/std/` with a `Ruxen.toml`
     // manifest, a `src/lib.rx` surface, and a `runtime/` C-source
     // tree. The bootstrap root is `library/std/` itself; the loader
-    // walks that directory looking for sub-package manifests. The
-    // legacy `_legacy/src/` and `src/` paths are kept as fallbacks
-    // during the transition.
+    // walks that directory looking for sub-package manifests.
     if let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") {
         let mut cur = PathBuf::from(manifest_dir);
         for _ in 0..5 {
             let pkg_root = cur.join("library/std");
             if pkg_root.join("io/src/lib.rx").is_file() {
                 return Some(pkg_root);
-            }
-            let legacy = cur.join("library/std/_legacy/src");
-            if legacy.is_dir() {
-                return Some(legacy);
-            }
-            let flat = cur.join("library/std/src");
-            if flat.is_dir() {
-                return Some(flat);
             }
             if !cur.pop() {
                 break;
@@ -500,14 +483,6 @@ pub fn resolve_stdlib_root() -> Option<PathBuf> {
             let pkg_root = exe_dir.join("../library/std");
             if pkg_root.join("io/src/lib.rx").is_file() {
                 return Some(pkg_root);
-            }
-            let legacy = exe_dir.join("../library/std/_legacy/src");
-            if legacy.is_dir() {
-                return Some(legacy);
-            }
-            let flat = exe_dir.join("../library/std/src");
-            if flat.is_dir() {
-                return Some(flat);
             }
         }
     }
@@ -638,7 +613,7 @@ fn load_stdlib_file(root: &Path, rel: &str) -> Result<Program, Diagnostic> {
     // first by filename, because the same file mixes a class and a
     // free function. Stable sort by item-category keeps siblings'
     // intra-file order intact while floating Function/Lib items to
-    // the back. Use/Const/Extern stay at the front to match historical
+    // the back. Use/Const stay at the front to match historical
     // single-file layout. See multi-file package loader above.
     program.items.sort_by_key(item_load_priority);
     Ok(program)
@@ -685,7 +660,7 @@ fn load_embedded_multi_file(
 ///   1 — Module/Class/Struct/Enum/Mixin/TypeAlias/Newtype (types and
 ///       namespaces — register names so later signatures resolve)
 ///   2 — Impl (extension of an already-registered class)
-///   3 — Function/Lib/Extern/Const (consume types in their signatures)
+///   3 — Function/Lib/Const (consume types in their signatures)
 fn item_load_priority(item: &ast::TopLevelItem) -> u8 {
     match item {
         ast::TopLevelItem::Use(_) => 0,
@@ -699,7 +674,6 @@ fn item_load_priority(item: &ast::TopLevelItem) -> u8 {
         ast::TopLevelItem::Impl(_) => 2,
         ast::TopLevelItem::Function(_)
         | ast::TopLevelItem::Lib(_)
-        | ast::TopLevelItem::Extern(_)
         | ast::TopLevelItem::Const(_)
         // A top-level expression loads last, like a function body. User
         // programs normally move these into implicit `main` before resolve;

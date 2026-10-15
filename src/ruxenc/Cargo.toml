@@ -14,7 +14,6 @@ ruxen_core = { path = "../../compiler/ruxen_core" }
 sha2 = "0.10"
 postcard = { version = "1.1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
-rayon = "1.10"
 
 [dev-dependencies]
 # Pull in the unified `ruxen` driver so integration tests can resolve

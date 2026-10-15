@@ -188,12 +188,6 @@ pub struct Lowerer<'a> {
     /// free-fn call site is redirected to the mangled monomorphic callee only
     /// when its recovered type-args match an entry here.
     fn_mono_emitted: HashMap<String, Vec<(monomorphize::MonoKey, String)>>,
-    /// Q17: generic fns that saw at least one call we could NOT monomorphize
-    /// (a generic-through-generic shape with a non-concrete leaf). Their
-    /// opaque abstract body must still be emitted by the normal `lower_item`
-    /// path so that call resolves (and devirtualizes via `unique_bound_impl`,
-    /// or surfaces a clear error).
-    fn_mono_needs_opaque: HashSet<String>,
     /// Q17b: eligible generic METHODS (methods with at least one
     /// mixin-bounded type parameter), keyed by their resolved DefId. The
     /// stored owner-qualified symbol keeps same-named methods on different
@@ -306,7 +300,6 @@ impl<'a> Lowerer<'a> {
             mono_fns: HashMap::new(),
             fn_mono_instances: HashMap::new(),
             fn_mono_emitted: HashMap::new(),
-            fn_mono_needs_opaque: HashSet::new(),
             mono_methods: HashMap::new(),
             method_mono_instances: HashMap::new(),
             method_mono_emitted: HashMap::new(),
@@ -801,7 +794,7 @@ impl<'a> Lowerer<'a> {
                     if class_derives("PartialEq") {
                         mir.functions.push(self.synthesize_class_eq(class));
                     }
-                    if class_derives("Hashable") || class_derives("Hash") {
+                    if class_derives("Hashable") {
                         mir.functions.push(self.synthesize_class_hash_code(class));
                     }
                 }
@@ -863,7 +856,7 @@ impl<'a> Lowerer<'a> {
                 if has("PartialEq") {
                     mir.functions.push(self.synthesize_struct_eq(s));
                 }
-                if has("Hashable") || has("Hash") {
+                if has("Hashable") {
                     mir.functions.push(self.synthesize_struct_hash_code(s));
                 }
                 if has("Default") {
@@ -999,7 +992,6 @@ impl<'a> Lowerer<'a> {
             }
             mir.ffi_libs.push(crate::mir::nodes::FfiLib {
                 name: hir_lib.name.clone(),
-                link_flags: hir_lib.link_flags.clone(),
                 functions: funcs,
             });
         }
@@ -1103,6 +1095,10 @@ impl<'a> Lowerer<'a> {
         // the call returns its receiver. See `drops::elide_returns_self_realloc`
         // for the detection details and the minimum reproducer.
         crate::mir::lower::drops::elide_returns_self_realloc(&mut mir);
+
+        // A generic `&var T` FFI return is a slot address; load through it
+        // where the concrete `T` is passed by value. See `mir::refmut_abi`.
+        crate::mir::refmut_abi::load_generic_refmut_returns(&mut mir);
 
         Ok(mir)
     }

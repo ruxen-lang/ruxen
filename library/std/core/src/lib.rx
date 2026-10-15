@@ -573,14 +573,6 @@ mixin Eq
 
 end
 
-# `Hash` here is the historic trait NAME (one method `hash`). The
-# Ruby-naming canonical name is `Hashable` (in library/std/hash/);
-# the `Hash → Hashable` alias is re-established by the resolver's
-# TYPE_ALIASES table after bootstrap merge.
-mixin Hash
-  def hash
-end
-
 mixin Default
   def default
 end

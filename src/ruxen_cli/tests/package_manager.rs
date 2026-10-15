@@ -294,15 +294,6 @@ fn test_rlib_create_and_load() {
         compiler_version: COMPILER_VERSION.to_string(),
         name: "test".to_string(),
         version: "1.0.0".to_string(),
-        exports: Exports {
-            functions: vec![ExportedFunction {
-                name: "hello".to_string(),
-                params: vec![],
-                return_type: "String".to_string(),
-                visibility: "public".to_string(),
-            }],
-            ..Default::default()
-        },
     };
 
     create_rlib(&rlib_path, "test", b"object-code", &metadata, "sha256:abc").unwrap();
@@ -311,8 +302,6 @@ fn test_rlib_create_and_load() {
     let loaded = load_rlib_metadata(&rlib_path).unwrap();
     assert_eq!(loaded.name, "test");
     assert_eq!(loaded.version, "1.0.0");
-    assert_eq!(loaded.exports.functions.len(), 1);
-    assert_eq!(loaded.exports.functions[0].name, "hello");
 
     let obj = extract_object_code(&rlib_path).unwrap();
     assert_eq!(obj, b"object-code");
@@ -334,7 +323,6 @@ fn test_rmeta_creation() {
         compiler_version: COMPILER_VERSION.to_string(),
         name: "test".to_string(),
         version: "0.1.0".to_string(),
-        exports: Exports::default(),
     };
 
     create_rmeta(&rmeta_path, &metadata).unwrap();

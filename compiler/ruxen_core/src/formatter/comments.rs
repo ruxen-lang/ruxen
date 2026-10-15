@@ -728,12 +728,6 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                         self.add(&f.span);
                     }
                 }
-                TopLevelItem::Extern(e) => {
-                    self.add(&e.span);
-                    for f in &e.functions {
-                        self.add(&f.span);
-                    }
-                }
                 // Q23b: a top-level expression statement. Register its span
                 // (and recurse into the expression) so comments attach to it
                 // correctly, the same way an in-body statement expr does.

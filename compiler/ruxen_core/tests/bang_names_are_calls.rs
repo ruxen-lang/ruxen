@@ -188,3 +188,22 @@ fn every_registered_macro_name_is_bang_free() {
         );
     }
 }
+
+#[test]
+fn a_retired_collection_macro_is_rejected_with_e1126() {
+    // F-14: `vec!` / `array!` / `map!` / `hash!` / `set!` are retired in
+    // favour of the literal forms. They must fail in resolve with a coded
+    // diagnostic, not survive to an uncoded MIR error.
+    for name in ["vec", "array", "map", "hash", "set"] {
+        let program = parse(&format!("def main\n  {name}!(1, 2)\nend\n"));
+        let diags = diagnostics(&program);
+        assert!(
+            diags
+                .iter()
+                .any(|(m, code)| code.as_deref() == Some("E1126")
+                    && m.contains(&format!("`{name}!`"))
+                    && m.contains("retired")),
+            "`{name}!` must be E1126 with a migration message, got: {diags:#?}"
+        );
+    }
+}

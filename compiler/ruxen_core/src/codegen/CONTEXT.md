@@ -20,7 +20,7 @@ to an executable / `.wasm`. Two backends behind one `Backend` enum.
 - `layout.rs` — type/struct layout. `lang_intrinsics.rs` — compiler-known intrinsics.
 
 ## Public surface
-`codegen::compile_*` entry points called by `ruxen_driver`. The two runtime ABI
+`codegen::compile_*` entry points called by `src/ruxenc`. The two runtime ABI
 tables (`cranelift/runtime_sigs.rs`, `llvm/runtime_decl.rs`) are an ABI **contract**
 with the C runtime — every signature must match the C functions in `library/`.
 
@@ -31,7 +31,9 @@ the platform linker), and the C runtime in `library/`. No upward edges.
 ## Invariants & gotchas
 - Strict downward order: codegen is the bottom of `lexer→…→codegen`; never reach up.
 - ABI: everything crosses as `int64_t` except `Float` (C `double`); `&String` is
-  `char*`. Changing a runtime signature means editing BOTH ABI tables + the C side.
+  `char*`. A `&var T` is a slot address only for String, else the value's own
+  word: ask `mir::refmut_abi::refmut_is_slot_address` (Cranelift, LLVM and the
+  REPL JIT `RefMut` pre-scans all do). Changing a runtime signature means editing BOTH ABI tables + the C side.
 - **The erased uniform word (B01) — read before touching any float coercion.**
   A value whose static type codegen cannot see lives in a 64-bit *uniform
   word*: a generic-collection slot (`RuxenVec` / the hash+set tables are

@@ -21,8 +21,8 @@ use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 // ruxen_core::codegen::cranelift and is driven here via the generic
 // TranslationEnv (M = JITModule).
 use ruxen_core::codegen::cranelift::{
-    build_signature, def_local, is_string_mir_ty, translate_instruction, translate_terminator,
-    ty_to_cranelift, TranslationEnv,
+    build_signature, def_local, translate_instruction, translate_terminator, ty_to_cranelift,
+    TranslationEnv,
 };
 use ruxen_core::mir::nodes::*;
 
@@ -69,31 +69,11 @@ extern "C" {
     // its descriptor-taking form, so the JIT has to be able to resolve
     // these or a REPL line containing a `Hash` / `Set` fails to link.
     fn ruxen_hash_new_keyed(kind: i64, hash_fn: i64, eq_fn: i64) -> *mut u8;
-    fn ruxen_hash_with_capacity_keyed(
-        cap: i64,
-        kind: i64,
-        hash_fn: i64,
-        eq_fn: i64,
-    ) -> *mut u8;
-    fn ruxen_hash_from_iter_keyed(
-        iter: *mut u8,
-        kind: i64,
-        hash_fn: i64,
-        eq_fn: i64,
-    ) -> *mut u8;
+    fn ruxen_hash_with_capacity_keyed(cap: i64, kind: i64, hash_fn: i64, eq_fn: i64) -> *mut u8;
+    fn ruxen_hash_from_iter_keyed(iter: *mut u8, kind: i64, hash_fn: i64, eq_fn: i64) -> *mut u8;
     fn ruxen_set_new_keyed(kind: i64, hash_fn: i64, eq_fn: i64) -> *mut u8;
-    fn ruxen_set_with_capacity_keyed(
-        cap: i64,
-        kind: i64,
-        hash_fn: i64,
-        eq_fn: i64,
-    ) -> *mut u8;
-    fn ruxen_set_from_iter_keyed(
-        iter: *mut u8,
-        kind: i64,
-        hash_fn: i64,
-        eq_fn: i64,
-    ) -> *mut u8;
+    fn ruxen_set_with_capacity_keyed(cap: i64, kind: i64, hash_fn: i64, eq_fn: i64) -> *mut u8;
+    fn ruxen_set_from_iter_keyed(iter: *mut u8, kind: i64, hash_fn: i64, eq_fn: i64) -> *mut u8;
     fn ruxen_hash_ensure_key_kind(h: *mut u8, kind: i64, hash_fn: i64, eq_fn: i64);
     fn ruxen_set_ensure_key_kind(s: *mut u8, kind: i64, hash_fn: i64, eq_fn: i64);
     fn ruxen_hash_insert(h: *mut u8, k: i64, v: i64);
@@ -559,7 +539,8 @@ impl JITCodeGen {
                 var_map.insert(local.id, var);
             }
 
-            // Pre-scan: allocate a stack slot for each String-typed local whose
+            // Pre-scan (rule: `mir::refmut_abi::refmut_is_slot_address`):
+            // allocate a stack slot for each String-typed local whose
             // address is taken via `&mut src`. The pointer we hand out to the
             // callee must remain valid and observers must see buffer
             // reallocations written through it. See cranelift.rs for details.
@@ -568,7 +549,7 @@ impl JITCodeGen {
                 for inst in &block.instructions {
                     if let MirInst::RefMut { src, .. } = inst {
                         if let Some(local) = func.locals.get(*src as usize) {
-                            if is_string_mir_ty(&local.ty) {
+                            if ruxen_core::mir::refmut_abi::refmut_is_slot_address(&local.ty) {
                                 address_taken.insert(*src);
                             }
                         }

@@ -654,7 +654,6 @@ mod lowering_tests {
                 info: crate::resolve::symbols::StructInfo {
                     generic_params: vec![],
                     fields: vec![],
-                    derive_traits: vec!["Copy".to_string(), "Clone".to_string()],
                     layout: vec![],
                     opt_out_send: false,
                     opt_out_sync: false,
@@ -760,7 +759,6 @@ mod lowering_tests {
                 info: crate::resolve::symbols::StructInfo {
                     generic_params: vec![],
                     fields: vec![string_field],
-                    derive_traits: vec![],
                     layout: vec![],
                     opt_out_send: false,
                     opt_out_sync: false,

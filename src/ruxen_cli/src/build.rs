@@ -16,7 +16,7 @@ use crate::lock::LockFile;
 use crate::manifest::Manifest;
 use crate::module_discovery::ModuleTree;
 use crate::resolve_deps;
-use crate::rlib::{self, Exports, TypeMetadata};
+use crate::rlib::{self, TypeMetadata};
 
 /// `ruxen build [--release] [--locked] [--bin <name>] [--target <triple>]`
 pub fn build(
@@ -296,10 +296,11 @@ pub fn check(target: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// `ruxen clean` — remove the target/ directory.
+/// `ruxen clean` — remove the project's target root (the workspace
+/// `target/` when run inside a member), incremental cache included.
 pub fn clean() -> Result<(), String> {
     let project_dir = find_project_root()?;
-    let target_dir = project_dir.join("target");
+    let target_dir = find_target_root(&project_dir).join("target");
 
     if target_dir.exists() {
         fs::remove_dir_all(&target_dir)
@@ -356,11 +357,7 @@ pub fn find_target_root(project_dir: &Path) -> PathBuf {
 }
 
 /// Compile a single .rx file through the full pipeline: lex → parse → typecheck → borrow check → MIR → codegen.
-fn compile_single_file(
-    source: &str,
-    _file_path: &Path,
-    release: bool,
-) -> Result<(Vec<u8>, TypeMetadata), String> {
+fn compile_single_file(source: &str, _file_path: &Path, release: bool) -> Result<Vec<u8>, String> {
     // Phase 1: Lexing
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize().map_err(|diagnostics| {
@@ -438,10 +435,7 @@ fn compile_single_file(
         }
     };
 
-    // Build type metadata from HIR
-    let metadata = build_metadata_from_hir(&type_result);
-
-    Ok((object_bytes, metadata))
+    Ok(object_bytes)
 }
 
 /// Type-check a single file (no codegen).
@@ -733,11 +727,12 @@ fn compile_piece(
     };
     let bundle = gather_project_bundle(source_dir, &entry_file, dep_source_dirs, name)?;
     let combined = bundle.source;
-    let (object_bytes, mut metadata) = compile_single_file(&combined, &entry_file, release)?;
-
-    // Set the piece metadata
-    metadata.name = name.to_string();
-    metadata.version = version.to_string();
+    let object_bytes = compile_single_file(&combined, &entry_file, release)?;
+    let metadata = TypeMetadata {
+        compiler_version: rlib::COMPILER_VERSION.to_string(),
+        name: name.to_string(),
+        version: version.to_string(),
+    };
 
     let source_hash = rlib::hash_bytes(combined.as_bytes());
     rlib::create_rlib(rlib_path, name, &object_bytes, &metadata, &source_hash)?;
@@ -948,136 +943,6 @@ fn compile_project(
     )?;
 
     Ok(())
-}
-
-/// Build type metadata from the HIR type checking result.
-fn build_metadata_from_hir(type_result: &typeck::TypeCheckResult) -> TypeMetadata {
-    use ruxen_core::hir::nodes::{HirItem, HirMixinItem};
-
-    let mut exports = Exports::default();
-
-    for item in &type_result.program.items {
-        match item {
-            HirItem::Function(func) => {
-                if func.visibility == ruxen_core::parser::ast::Visibility::Public {
-                    exports.functions.push(rlib::ExportedFunction {
-                        name: func.name.clone(),
-                        params: func
-                            .params
-                            .iter()
-                            .map(|p| rlib::ExportedParam {
-                                name: p.name.clone(),
-                                ty: format!("{:?}", p.ty),
-                            })
-                            .collect(),
-                        return_type: format!("{:?}", func.return_ty),
-                        visibility: "public".to_string(),
-                    });
-                }
-            }
-            HirItem::Class(class) => {
-                exports.types.push(rlib::ExportedType {
-                    name: class.name.clone(),
-                    kind: "class".to_string(),
-                    fields: class
-                        .fields
-                        .iter()
-                        .map(|f| rlib::ExportedField {
-                            name: f.name.clone(),
-                            ty: format!("{:?}", f.ty),
-                            visibility: format!("{:?}", f.visibility),
-                        })
-                        .collect(),
-                    methods: class
-                        .methods
-                        .iter()
-                        .filter(|m| m.visibility == ruxen_core::parser::ast::Visibility::Public)
-                        .map(|m| rlib::ExportedFunction {
-                            name: m.name.clone(),
-                            params: m
-                                .params
-                                .iter()
-                                .map(|p| rlib::ExportedParam {
-                                    name: p.name.clone(),
-                                    ty: format!("{:?}", p.ty),
-                                })
-                                .collect(),
-                            return_type: format!("{:?}", m.return_ty),
-                            visibility: "public".to_string(),
-                        })
-                        .collect(),
-                });
-            }
-            HirItem::Struct(s) => {
-                exports.types.push(rlib::ExportedType {
-                    name: s.name.clone(),
-                    kind: "struct".to_string(),
-                    fields: s
-                        .fields
-                        .iter()
-                        .map(|f| rlib::ExportedField {
-                            name: f.name.clone(),
-                            ty: format!("{:?}", f.ty),
-                            visibility: format!("{:?}", f.visibility),
-                        })
-                        .collect(),
-                    methods: vec![],
-                });
-            }
-            HirItem::Mixin(t) => {
-                let methods = t
-                    .items
-                    .iter()
-                    .filter_map(|item| match item {
-                        HirMixinItem::MethodSig {
-                            name,
-                            params,
-                            return_ty,
-                            ..
-                        } => Some(rlib::ExportedFunction {
-                            name: name.clone(),
-                            params: params
-                                .iter()
-                                .map(|p| rlib::ExportedParam {
-                                    name: p.name.clone(),
-                                    ty: format!("{:?}", p.ty),
-                                })
-                                .collect(),
-                            return_type: format!("{:?}", return_ty),
-                            visibility: "public".to_string(),
-                        }),
-                        HirMixinItem::DefaultMethod(func) => Some(rlib::ExportedFunction {
-                            name: func.name.clone(),
-                            params: func
-                                .params
-                                .iter()
-                                .map(|p| rlib::ExportedParam {
-                                    name: p.name.clone(),
-                                    ty: format!("{:?}", p.ty),
-                                })
-                                .collect(),
-                            return_type: format!("{:?}", func.return_ty),
-                            visibility: "public".to_string(),
-                        }),
-                        _ => None,
-                    })
-                    .collect();
-
-                exports.traits.push(rlib::ExportedTrait {
-                    name: t.name.clone(),
-                    methods,
-                });
-            }
-            _ => {}
-        }
-    }
-
-    TypeMetadata {
-        compiler_version: rlib::COMPILER_VERSION.to_string(),
-        name: String::new(),
-        version: String::new(),
-        exports,
-    }
 }
 
 #[cfg(test)]

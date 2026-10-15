@@ -17,8 +17,8 @@
 //!     (the `Hash → Hashable` mixin-alias collision) while a method accepted
 //!     it. Resolution (sound + minimal): a generic-args-bearing collection
 //!     builtin in `&Name[..]` position resolves to the COLLECTION type in both
-//!     positions; the bare `&Hash` / `&Set` (= the `Hashable` mixin, no args)
-//!     is still correctly rejected with E1118. (`619_*` exercises the runtime
+//!     positions; a bare static-dispatch mixin ref (`&Hashable`) is still
+//!     correctly rejected with E1118. (`619_*` exercises the runtime
 //!     side; the two compile-time pins below assert the diagnostic boundary.)
 
 use ruxen_core::lexer::Lexer;
@@ -115,31 +115,32 @@ fn hash_ref_param_consistent_and_sound() {
     run_case("619_hash_ref_param.rx", "q25_hash_ref");
 }
 
-/// (b) The bare `&Hash` (no generic args = the `Hashable` mixin, static
-/// dispatch) is STILL rejected with E1118 — both as a free fn …
+/// (b) A bare `&Hashable` (static-dispatch mixin) is STILL rejected with
+/// E1118 — both as a free fn …
 #[test]
-fn bare_hash_mixin_ref_rejected_free_fn() {
-    let errs = error_messages("def f(h: &Hash) -> Int\n  0\nend\ndef main\n  puts \"x\"\nend\n");
+fn bare_hashable_mixin_ref_rejected_free_fn() {
+    let errs =
+        error_messages("def f(h: &Hashable) -> Int\n  0\nend\ndef main\n  puts \"x\"\nend\n");
     assert!(
         errs.iter()
             .any(|m| m.contains("E1118") || m.contains("does not use runtime dispatch")),
-        "expected E1118 for bare `&Hash`; got {errs:?}"
+        "expected E1118 for bare `&Hashable`; got {errs:?}"
     );
 }
 
-/// … and as a method. The method path resolves `&Hash` through a different
+/// … and as a method. The method path resolves `&Hashable` through a different
 /// route than the free fn, so it surfaces a *different* diagnostic ("could
 /// not infer type for parameter") rather than E1118 — but the key soundness
-/// property holds: the bare `&Hash` mixin ref is REJECTED AT COMPILE TIME in
+/// property holds: the bare `&Hashable` mixin ref is REJECTED AT COMPILE TIME in
 /// both positions, never compiled to a silent runtime miscompile. (Unifying
 /// the two diagnostics is a DX follow-up, not a soundness gap.)
 #[test]
-fn bare_hash_mixin_ref_rejected_method() {
+fn bare_hashable_mixin_ref_rejected_method() {
     let errs = error_messages(
-        "class C\n  t: Int\n  def init; self.t = 0; end\n  def f(h: &Hash) -> Int\n    0\n  end\nend\ndef main\n  puts \"x\"\nend\n",
+        "class C\n  t: Int\n  def init; self.t = 0; end\n  def f(h: &Hashable) -> Int\n    0\n  end\nend\ndef main\n  puts \"x\"\nend\n",
     );
     assert!(
         !errs.is_empty(),
-        "expected a compile-time rejection for bare `&Hash` method param; got none"
+        "expected a compile-time rejection for bare `&Hashable` method param; got none"
     );
 }

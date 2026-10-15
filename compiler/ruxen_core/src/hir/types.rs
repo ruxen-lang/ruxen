@@ -401,15 +401,6 @@ pub enum Ty {
     Error,
 }
 
-/// Metadata about a type's properties.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TypeInfo {
-    pub is_copy: bool,
-    pub is_drop: bool,
-    pub size: Option<usize>,
-    pub alignment: Option<usize>,
-}
-
 /// Whether a value is copied or moved on assignment/passing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveSemantics {
@@ -1260,6 +1251,17 @@ impl Ty {
                 t.peel_refs()
             }
             other => other,
+        }
+    }
+
+    /// Whether this is a String, looking through references (`&String`,
+    /// `&var String`). The one String-form test shared by MIR and both
+    /// codegen backends.
+    pub fn is_string_form(&self) -> bool {
+        match self.peel_refs() {
+            Ty::String => true,
+            Ty::Class { name, .. } => name == "String",
+            _ => false,
         }
     }
 }

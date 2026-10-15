@@ -124,7 +124,6 @@ stdlib_pkg_tests() {
 crate_of_dir() {
   case "$1" in
     compiler/ruxen_core) echo ruxen_core ;;
-    compiler/ruxen_driver) echo ruxen_driver ;;
     src/*) basename "$1" ;;
   esac
 }
@@ -196,7 +195,6 @@ while IFS= read -r path; do
       add CRATE_TESTS "$(crate_of_dir "$dir") $(basename "$path" .rs)" ;;
 
     # ── other crates ───────────────────────────────────────────────
-    compiler/ruxen_driver/*) add CRATES ruxen_driver ;;
     src/ruxen_lsp/*) add CRATES ruxen_lsp; add CRATES ruxen_ide ;;
     src/ruxen_ide/*|src/ruxen_cli/*|src/ruxenc/*|src/ruxen_repl/*)
       crate="${path#src/}"; add CRATES "${crate%%/*}" ;;

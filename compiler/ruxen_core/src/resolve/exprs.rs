@@ -1,19 +1,12 @@
-#![allow(unused_imports)]
-
-use std::collections::HashMap;
-
 use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
-use crate::lexer::token::Span;
+use crate::hir::types::{MoveSemantics, Ty};
 use crate::parser::ast::{self, Visibility};
 
-use super::const_helpers;
 use super::implicit_block_params::split_trailing_block_pass;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
+use super::scope::ScopeKind;
 use super::symbols::*;
-use super::{ClosureCaptureContext, PatternSpan, ResolveResult, Resolver};
+use super::{PatternSpan, Resolver};
 
 impl Resolver {
     pub(super) fn resolve_expr(&mut self, expr: &ast::Expr) -> HirExpr {
@@ -51,19 +44,13 @@ impl Resolver {
                     .iter()
                     .map(|p| {
                         match p {
-                            crate::lexer::token::StringPart::Literal(s) => {
-                                HirInterpolationPart::Literal(s.clone())
-                            }
-                            crate::lexer::token::StringPart::Expr { tokens, spec } => {
-                                // Parse the interpolation tokens as an expression.
-                                // The format spec (Phase 2 #06.B) is threaded through
-                                // unchanged to MIR — Phase C/D consume it.
-                                let inner_expr = self.resolve_interpolation_tokens(tokens, &span);
-                                HirInterpolationPart::Expr {
-                                    expr: inner_expr,
-                                    spec: spec.clone(),
-                                }
-                            }
+                            ast::StringPart::Literal(s) => HirInterpolationPart::Literal(s.clone()),
+                            // The format spec (Phase 2 #06.B) is threaded through
+                            // unchanged to MIR — Phase C/D consume it.
+                            ast::StringPart::Expr { expr, spec } => HirInterpolationPart::Expr {
+                                expr: self.resolve_expr(expr),
+                                spec: spec.clone(),
+                            },
                         }
                     })
                     .collect();
@@ -1140,17 +1127,25 @@ impl Resolver {
                 // used to fall through to a fresh type var here and then to a
                 // `_ => Ok(None)` catch-all in MIR, which silently deleted the
                 // whole call. The parser only builds a `MacroCall` for a name
-                // in `parser::macros::BUILTIN_MACRO_NAMES`, so this fires only
-                // if a macro is registered without being lowered.
-                if !crate::parser::macros::is_builtin_macro(name) {
-                    self.error_with_code(
-                        format!(
-                            "unknown macro `{name}!` — the compiler has no lowering for it, so \
-                             the call would silently do nothing"
-                        ),
-                        &span,
-                        "E1126",
-                    );
+                // in `parser::macros::BUILTIN_MACRO_NAMES`; of those, the
+                // retired collection macros (ruby-naming.spec.md §10a) are
+                // rejected here with a migration message.
+                let message = if crate::parser::macros::RETIRED_MACRO_NAMES.contains(&name.as_str())
+                {
+                    Some(format!(
+                        "macro `{name}!` is retired: use the literal form \
+                         (`[a, b]`, `{{ k => v }}`, `[a, b].to_set`)"
+                    ))
+                } else if !crate::parser::macros::is_builtin_macro(name) {
+                    Some(format!(
+                        "unknown macro `{name}!` — the compiler has no lowering for it, so \
+                         the call would silently do nothing"
+                    ))
+                } else {
+                    None
+                };
+                if let Some(message) = message {
+                    self.error_with_code(message, &span, "E1126");
                     return HirExpr {
                         kind: HirExprKind::Error,
                         ty: Ty::Error,
@@ -1158,39 +1153,6 @@ impl Resolver {
                     };
                 }
                 let ty = match name.as_str() {
-                    // ruby-naming.spec.md §10a:
-                    //   `vec![...]` → `array![...]`
-                    //   `hash!{...}` → `map!{...}`
-                    //   `set!{...}` (unchanged)
-                    // Both old and new macro names produce identical HIR
-                    // while sources transition.
-                    "vec" | "array" => {
-                        let elem_ty = if args_hir.is_empty() {
-                            self.type_context.fresh_type_var()
-                        } else {
-                            args_hir[0].ty.clone()
-                        };
-                        Ty::Array(Box::new(elem_ty))
-                    }
-                    "hash" | "map" => {
-                        let (k, v) = if args_hir.len() >= 2 {
-                            (args_hir[0].ty.clone(), args_hir[1].ty.clone())
-                        } else {
-                            (
-                                self.type_context.fresh_type_var(),
-                                self.type_context.fresh_type_var(),
-                            )
-                        };
-                        Ty::Map(Box::new(k), Box::new(v))
-                    }
-                    "set" => {
-                        let elem = if args_hir.is_empty() {
-                            self.type_context.fresh_type_var()
-                        } else {
-                            args_hir[0].ty.clone()
-                        };
-                        Ty::Set(Box::new(elem))
-                    }
                     "panic" => Ty::Never,
                     _ => self.type_context.fresh_type_var(),
                 };

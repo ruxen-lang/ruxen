@@ -1,9 +1,8 @@
 //! Integration tests for the incremental cache.
 //!
 //! These exercise the driver API end-to-end with a mock `CompileFn`, covering
-//! multi-file dependency scenarios that are hard to unit-test in isolation.
+//! multi-file scenarios that are hard to unit-test in isolation.
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -26,7 +25,6 @@ fn opts() -> BuildOptions {
         target: "x86_64-linux".into(),
         opt_level: "debug".into(),
         flags: String::new(),
-        parallel: false,
     }
 }
 
@@ -50,25 +48,17 @@ fn src(path: &str, body: &str) -> SourceFile {
     }
 }
 
-/// Build a deterministic project of N files arranged as a chain:
-/// f0 -> f1 -> ... -> fN-1. The last file has no dependencies.
-fn chain_project(n: usize) -> (Vec<SourceFile>, HashMap<String, Vec<String>>) {
-    let mut files = Vec::with_capacity(n);
-    let mut deps: HashMap<String, Vec<String>> = HashMap::new();
-    for i in 0..n {
-        let path = format!("f{}.rx", i);
-        files.push(src(&path, &format!("fn f{}() {{}}", i)));
-        if i + 1 < n {
-            deps.insert(path.clone(), vec![format!("f{}.rx", i + 1)]);
-        }
-    }
-    (files, deps)
+/// Build a deterministic project of N files `f0.rx` .. `fN-1.rx`.
+fn project(n: usize) -> Vec<SourceFile> {
+    (0..n)
+        .map(|i| src(&format!("f{}.rx", i), &format!("fn f{}() {{}}", i)))
+        .collect()
 }
 
 #[test]
-fn ten_file_chain_cold_then_warm() {
+fn ten_files_cold_then_warm() {
     let (_td, store) = tmp_store();
-    let (files, deps_map) = chain_project(10);
+    let files = project(10);
 
     let calls = AtomicUsize::new(0);
     let compile = |f: &SourceFile| {
@@ -76,7 +66,6 @@ fn ten_file_chain_cold_then_warm() {
         Ok(CompileOutput {
             object_bytes: format!("OBJ<{}>", f.source).into_bytes(),
             signature: sig_fn(&f.path, "Int"),
-            dependencies: deps_map.get(&f.path).cloned().unwrap_or_default(),
         })
     };
 
@@ -100,27 +89,23 @@ fn ten_file_chain_cold_then_warm() {
 }
 
 #[test]
-fn leaf_body_edit_recompiles_only_leaf() {
+fn one_file_edit_recompiles_only_that_file() {
     let (_td, store) = tmp_store();
-    let (files, deps_map) = chain_project(5);
+    let files = project(5);
 
     let calls = Mutex::new(Vec::<String>::new());
-    // Signature is stable per-path; body change in leaf doesn't change its
-    // signature, and the object bytes are identical (we key bytes on path
-    // only). So the cascade must stop at the leaf.
     let compile = |f: &SourceFile| {
         calls.lock().unwrap().push(f.path.clone());
         Ok(CompileOutput {
             object_bytes: format!("OBJ<{}>", f.path).into_bytes(), // bytes depend only on path
             signature: sig_fn(&f.path, "Int"),
-            dependencies: deps_map.get(&f.path).cloned().unwrap_or_default(),
         })
     };
 
     build(files.clone(), &store, &opts(), &compile).unwrap();
     calls.lock().unwrap().clear();
 
-    // Edit the leaf's body (source changes, but signature+bytes don't).
+    // Edit one file's source.
     let mut modified = files.clone();
     modified
         .iter_mut()
@@ -134,63 +119,8 @@ fn leaf_body_edit_recompiles_only_leaf() {
     for other in &["f0.rx", "f1.rx", "f2.rx", "f3.rx"] {
         assert!(
             !recorded.contains(&(*other).to_string()),
-            "{} should NOT be recompiled on a leaf body edit, but it was",
+            "{} should NOT be recompiled when only f4.rx changed, but it was",
             other
-        );
-    }
-}
-
-#[test]
-fn signature_edit_on_leaf_cascades_through_chain() {
-    let (_td, store) = tmp_store();
-    let (files, deps_map) = chain_project(5);
-
-    let version = Mutex::new(1u32);
-    let calls = Mutex::new(Vec::<String>::new());
-    let compile = |f: &SourceFile| {
-        calls.lock().unwrap().push(f.path.clone());
-        let v = *version.lock().unwrap();
-        // Leaf f4's signature depends on the global version; every other
-        // file has a stable signature. Object bytes depend on both path AND
-        // version so output_changed=true propagates.
-        let sig = if f.path == "f4.rx" {
-            sig_fn(&f.path, if v == 1 { "Int" } else { "String" })
-        } else {
-            sig_fn(&f.path, "Int")
-        };
-        Ok(CompileOutput {
-            object_bytes: format!("OBJ<{}-v{}>", f.path, v).into_bytes(),
-            signature: sig,
-            dependencies: deps_map.get(&f.path).cloned().unwrap_or_default(),
-        })
-    };
-
-    build(files.clone(), &store, &opts(), &compile).unwrap();
-    calls.lock().unwrap().clear();
-
-    *version.lock().unwrap() = 2;
-    // Only change f4's source so only f4 is naturally dirty.
-    let mut modified = files.clone();
-    modified
-        .iter_mut()
-        .find(|f| f.path == "f4.rx")
-        .unwrap()
-        .source = "# v2".into();
-    build(modified, &store, &opts(), &compile).unwrap();
-
-    let recorded = calls.lock().unwrap().clone();
-    // f4 source changed -> f4 recompiles (signature flipped Int -> String).
-    // f3 is the direct dependent of f4 -> gets invalidated and recompiles.
-    // f3's OWN signature is stable, so the cascade STOPS at f3 — f2/f1/f0
-    // keep their cached artifacts. This is the whole point of dep-aware
-    // invalidation: signature-stable intermediaries block transitive cascades.
-    assert!(recorded.contains(&"f4.rx".to_string()));
-    assert!(recorded.contains(&"f3.rx".to_string()));
-    for blocked in &["f2.rx", "f1.rx", "f0.rx"] {
-        assert!(
-            !recorded.contains(&(*blocked).to_string()),
-            "{} should NOT cascade through — f3 has a stable signature and blocks further invalidation",
-            blocked
         );
     }
 }
@@ -198,14 +128,13 @@ fn signature_edit_on_leaf_cascades_through_chain() {
 #[test]
 fn force_recompiles_the_whole_project() {
     let (_td, store) = tmp_store();
-    let (files, deps_map) = chain_project(5);
+    let files = project(5);
     let calls = AtomicUsize::new(0);
     let compile = |f: &SourceFile| {
         calls.fetch_add(1, Ordering::SeqCst);
         Ok(CompileOutput {
             object_bytes: format!("OBJ<{}>", f.path).into_bytes(),
             signature: sig_fn(&f.path, "Int"),
-            dependencies: deps_map.get(&f.path).cloned().unwrap_or_default(),
         })
     };
 
@@ -219,54 +148,15 @@ fn force_recompiles_the_whole_project() {
 }
 
 #[test]
-fn parallel_and_sequential_produce_identical_objects() {
-    let (_td1, store_seq) = tmp_store();
-    let (_td2, store_par) = tmp_store();
-    // Wide, shallow project: one root depending on many independent leaves.
-    let mut files = Vec::new();
-    let mut deps: HashMap<String, Vec<String>> = HashMap::new();
-    let leaves: Vec<String> = (0..8).map(|i| format!("leaf{}.rx", i)).collect();
-    for l in &leaves {
-        files.push(src(l, l));
-    }
-    files.push(src("root.rx", "root"));
-    deps.insert("root.rx".into(), leaves.clone());
-
-    let compile = |f: &SourceFile| {
-        Ok(CompileOutput {
-            object_bytes: format!("OBJ<{}>", f.path).into_bytes(),
-            signature: sig_fn(&f.path, "Int"),
-            dependencies: deps.get(&f.path).cloned().unwrap_or_default(),
-        })
-    };
-
-    let seq = build(files.clone(), &store_seq, &opts(), &compile).unwrap();
-    let mut par_opts = opts();
-    par_opts.parallel = true;
-    let par = build(files, &store_par, &par_opts, &compile).unwrap();
-
-    let read = |items: &[(String, std::path::PathBuf)]| -> Vec<(String, Vec<u8>)> {
-        let mut out: Vec<(String, Vec<u8>)> = items
-            .iter()
-            .map(|(p, path)| (p.clone(), std::fs::read(path).unwrap()))
-            .collect();
-        out.sort();
-        out
-    };
-    assert_eq!(read(&seq.objects), read(&par.objects));
-}
-
-#[test]
 fn corrupt_object_causes_recompile_without_panic() {
     let (_td, store) = tmp_store();
-    let (files, deps_map) = chain_project(3);
+    let files = project(3);
     let calls = AtomicUsize::new(0);
     let compile = |f: &SourceFile| {
         calls.fetch_add(1, Ordering::SeqCst);
         Ok(CompileOutput {
             object_bytes: format!("OBJ<{}>", f.path).into_bytes(),
             signature: sig_fn(&f.path, "Int"),
-            dependencies: deps_map.get(&f.path).cloned().unwrap_or_default(),
         })
     };
 

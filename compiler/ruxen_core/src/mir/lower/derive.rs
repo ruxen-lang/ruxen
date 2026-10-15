@@ -528,10 +528,7 @@ impl<'a> Lowerer<'a> {
             None,
             init,
             |mir_fn, _slot, field_ty, field_local, _rhs| {
-                if let Some(inner_name) = self
-                    .nominal_with_derive_trait(field_ty, "Hashable")
-                    .or_else(|| self.nominal_with_derive_trait(field_ty, "Hash"))
-                {
+                if let Some(inner_name) = self.nominal_with_derive_trait(field_ty, "Hashable") {
                     let dest = mir_fn.new_temp(Ty::Int);
                     mir_fn.blocks[entry].instructions.push(MirInst::Call {
                         dest: Some(dest),
@@ -773,8 +770,6 @@ impl<'a> Lowerer<'a> {
     ///   * `Vec[_]`                   → `ruxen_vec_clone(src)`.
     ///   * `HashMap[_, _]`            → `ruxen_hash_clone(src)`.
     ///   * `Set[_]`                   → `ruxen_set_clone(src)`.
-    ///   * Struct/Class/Enum that itself derives Clone → recursive
-    ///     `<Type>_clone(src)`.
     ///   * Anything else falls back to a bitwise reuse — drop
     ///     elaboration in `implicit_includes/mod.rs::validate_clone_requirements`
     ///     ensures the fallback only triggers for types with E0610
@@ -827,54 +822,11 @@ impl<'a> Lowerer<'a> {
             });
             return dest;
         }
-        if let Some(inner_name) = self.user_type_with_derive_clone(field_ty) {
-            let dest = mir_fn.new_temp(field_ty.clone());
-            mir_fn.blocks[block].instructions.push(MirInst::Call {
-                dest: Some(dest),
-                callee: format!("{}_clone", inner_name),
-                args: vec![MirValue::Use(src)],
-            });
-            return dest;
-        }
         // Fallback: bitwise reuse. The companion validator in
         // `implicit_includes/mod.rs` will already have surfaced E0610 for this
         // path, so the resulting MIR exists only to keep the rest of
         // codegen consistent during the same compilation unit.
         src
-    }
-
-    /// Look up a user-defined type by name and return the type name
-    /// when the underlying definition (struct / class / enum) carries
-    /// `derive Clone`.
-    pub(super) fn user_type_with_derive_clone(&self, ty: &Ty) -> Option<String> {
-        use crate::resolve::symbols::DefKind;
-        let name = match ty {
-            Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. } => {
-                name.clone()
-            }
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => return self.user_type_with_derive_clone(inner),
-            Ty::Alias { target, .. } => return self.user_type_with_derive_clone(target),
-            Ty::Newtype { inner, .. } => return self.user_type_with_derive_clone(inner),
-            _ => return None,
-        };
-        for def in self.symbols.iter() {
-            if def.name != name {
-                continue;
-            }
-            let derives = match &def.kind {
-                DefKind::Struct { info } => &info.derive_traits,
-                DefKind::Class { info } => &info.derive_traits,
-                DefKind::Enum { info } => &info.derive_traits,
-                _ => continue,
-            };
-            if derives.iter().any(|t| t == "Clone") {
-                return Some(name);
-            }
-        }
-        None
     }
 
     /// Synthesise `{StructName}_clone(self) -> StructName` for a

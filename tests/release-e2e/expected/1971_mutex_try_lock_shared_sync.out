@@ -1,0 +1,5 @@
+try_lock while held: busy
+deref: 41
+try_lock when free: 1
+counts: 2 0
+shared deref: 5

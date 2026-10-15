@@ -151,8 +151,7 @@ impl<'a> Lowerer<'a> {
 
     /// Phase 2 #06.C2: like `struct_with_derive_debug` but for enums.
     /// Returns the enum's name when `ty` resolves (through refs/
-    /// aliases/newtypes) to an enum whose `derive_traits` contains
-    /// `Debug`.
+    /// aliases/newtypes) to an enum that structurally includes `Debug`.
     pub(super) fn enum_with_derive_debug(&self, ty: &Ty) -> Option<String> {
         self.enum_with_derive_trait(ty, "Debug")
     }
@@ -249,7 +248,7 @@ impl<'a> Lowerer<'a> {
 
     /// Like [`Self::struct_with_derive_trait`] but also accepts a
     /// `class`. Use this at every site whose target derive IS
-    /// synthesised for classes — `Debug`, `PartialEq`, `Hashable`/`Hash`
+    /// synthesised for classes — `Debug`, `PartialEq`, `Hashable`
     /// (`mir/lower/mod.rs`, the `HirItem::Class` arm).
     ///
     /// `Ord` / `PartialOrd` / `Default` deliberately keep using the
@@ -275,7 +274,7 @@ impl<'a> Lowerer<'a> {
     pub(super) fn struct_with_derive_trait(&self, ty: &Ty, trait_name: &str) -> Option<String> {
         // Peel reference/alias/newtype layers, then consult
         // `ty_has_derive_trait` so implicit-include structural mixins
-        // (spec §3.6) are honoured alongside explicit `derive_traits`.
+        // (spec §3.6) are honoured.
         let mut cur = ty;
         loop {
             match cur {

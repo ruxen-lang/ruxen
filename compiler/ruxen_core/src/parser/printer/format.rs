@@ -6,7 +6,6 @@
 //! cheap textual rendering of AST fragments (e.g. the formatter).
 
 use super::super::ast::*;
-use crate::lexer::token::StringPart;
 
 pub(super) fn format_visibility(vis: Visibility) -> &'static str {
     // §3.2: `public` is the default and the section marker for switching back

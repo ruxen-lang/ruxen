@@ -39,18 +39,18 @@ use super::InferenceEngine;
 ///
 /// **This is the preserved-code bridge** for Feature B. The whole reason it
 /// exists: the SAME `Send` bound must report E1011 on a free function
-/// parameter but E1101 when it sits on `class Mutex[T: Send]`, and E1102 on
-/// `Arc`/`SharedSync`. The code is therefore a function of *where the bound
-/// is declared*, which the `.rx` surface does not (yet) carry — so the small
-/// owner→code table lives here. It is deliberately the ONLY place a stdlib
-/// class name maps to a diagnostic code in the bound-checker, and it
-/// REPLACES (does not add to) the per-arm hardcoding the `concurrency.rs`
-/// E1101/E1102 / `collections.rs` E0700 arms used to do. When a future phase
-/// gives the `.rx` bound syntax a code annotation, this table dissolves.
+/// parameter but E1101 when it sits on `class Mutex[T: Send]`, E1102 on
+/// `SharedSync`, and E1100 on a closure handed to `Thread.spawn`. The code is
+/// therefore a function of *where the bound is declared*, which the `.rx`
+/// surface does not (yet) carry — so the small owner→code table lives here.
+/// It is deliberately the ONLY place a stdlib class name maps to a diagnostic
+/// code in the bound-checker. When a future phase gives the `.rx` bound
+/// syntax a code annotation, this table dissolves.
 fn bound_diagnostic_code(owner: Option<&str>, bound_name: &str) -> &'static str {
     match (owner, bound_name) {
+        (Some("Thread"), "Send") => "E1100",
         (Some("Mutex"), "Send") => "E1101",
-        (Some("Arc"), "Send") | (Some("SharedSync"), "Send") => "E1102",
+        (Some("SharedSync"), "Send") => "E1102",
         (_, "Send") => "E1011",
         (_, "Sync") => "E1012",
         // `def sum -> T where T: Add` and any other numeric/element `Add` bound.
@@ -261,6 +261,77 @@ impl<'a> InferenceEngine<'a> {
             };
             self.diagnostics
                 .push(Diagnostic::error_with_code(message, span.clone(), code));
+        }
+    }
+
+    /// Send-required closure seam: a closure literal passed to a parameter
+    /// whose declared type carries a `Send` bound (`f: any Fn[Fn() -> T] +
+    /// Send`, `[F: Send] (f: F)`) may only move `Send` values in and only
+    /// borrow `Sync` ones (spec B6/B7 of `send_sync_enforcement.spec.md`).
+    /// One diagnostic per offending capture; the code comes from
+    /// `bound_diagnostic_code`, so `Thread.spawn` reports E1100 and a free
+    /// function reports E1011.
+    pub(super) fn check_send_required_closure(
+        &mut self,
+        param_ty: &Ty,
+        arg: &crate::hir::nodes::HirExpr,
+        owner: Option<&str>,
+    ) {
+        let requires_send = matches!(
+            self.ctx.resolve(param_ty),
+            Ty::TypeParam { ref bounds, .. } | Ty::SomeMixin(ref bounds) | Ty::AnyMixin(ref bounds)
+                if bounds.iter().any(|b| b.name == "Send")
+        );
+        let crate::hir::nodes::HirExprKind::Closure {
+            captures, is_move, ..
+        } = &arg.kind
+        else {
+            return;
+        };
+        if !requires_send {
+            return;
+        }
+        for cap in captures {
+            // The stored `cap.ty` is the resolve-time snapshot (often
+            // `Ty::Infer` for an un-annotated `let`); typeck updates the
+            // binding's def type in place, so re-read it from there.
+            let cap_ty = self.ctx.resolve(&cap.current_ty(self.symbols));
+            // A non-Copy class/struct/enum value is moved into the closure
+            // even without an explicit `move`; primitives are Copy and Send,
+            // so the distinction does not matter for them.
+            let by_move = cap.by_move
+                || *is_move
+                || matches!(
+                    cap_ty,
+                    Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                );
+            let satisfied = if by_move {
+                cap_ty.is_send_with(self.symbols)
+            } else {
+                // B7 — a by-reference capture needs `&T: Send`, i.e. `T: Sync`.
+                cap_ty.is_sync_with(self.symbols)
+            };
+            if satisfied {
+                continue;
+            }
+            let message = if by_move {
+                format!(
+                    "captured value `{}` of type `{}` is not `Send`. \
+                     Add `include Send` to the type if it is safe to share across threads.",
+                    cap.name, cap_ty
+                )
+            } else {
+                format!(
+                    "captured value `{}` is held by reference; the closure \
+                     requires `&{}: Send`, which means `{}` must implement `Sync`.",
+                    cap.name, cap_ty, cap_ty
+                )
+            };
+            self.diagnostics.push(Diagnostic::error_with_code(
+                message,
+                arg.span.clone(),
+                bound_diagnostic_code(owner, "Send"),
+            ));
         }
     }
 

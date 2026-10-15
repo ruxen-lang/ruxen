@@ -22,6 +22,8 @@ mod helpers;
 mod implicit_block_params;
 mod items;
 mod patterns;
+#[cfg(test)]
+mod tests_funcs;
 mod types;
 
 use std::collections::HashMap;
@@ -244,25 +246,6 @@ impl Resolver {
             emitted_e1118_spans: std::collections::HashSet::new(),
             method_aliases: HashMap::new(),
         }
-    }
-
-    /// Test-only accessor for the lib-decl-derived FFI symbol table.
-    ///
-    /// Exposes the `c_symbol → FnSignature` map that
-    /// `register_class_lib_method_in` / the `Lib` / `Extern` arms
-    /// populate from the `.rx` declared types. The codegen-ABID
-    /// derivation migration (`docs/specs/system/zero_rust_stdlib_classes.spec.md`)
-    /// uses this as the authoritative set of "symbols whose C-ABI is
-    /// declared in a `.rx` lib block" to diff against the residual
-    /// compiler-internal signature table. `#[doc(hidden)]` so it is not
-    /// part of the stable resolver API, but `pub` so the
-    /// `runtime_abi_derivation` integration test (a separate crate) can
-    /// reach it after driving a full bootstrap merge.
-    #[doc(hidden)]
-    pub fn extern_symbols(&self) -> impl Iterator<Item = (&str, &FnSignature)> {
-        self.extern_symbol_table
-            .iter()
-            .map(|(sym, (sig, _span))| (sym.as_str(), sig))
     }
 
     /// The `type_registry` key pass 1 gives a type `name` declared at

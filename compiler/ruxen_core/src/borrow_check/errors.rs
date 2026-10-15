@@ -6,11 +6,8 @@ pub enum ErrorCode {
     E1001, // use after move
     E1002, // can't borrow writably while borrowed read-only
     E1003, // can't borrow read-only while borrowed writably
-    E1004, // can't move out of borrowed reference
-    E1005, // borrow outlives owner
     E1006, // assign to `let` binding
     E1007, // can't borrow `let` binding writably
-    E1008, // value moved into closure
     E1009, // can't move while borrowed
     E1010, // returned reference outlives local
     E1011, // value is not Send
@@ -25,11 +22,8 @@ impl ErrorCode {
             ErrorCode::E1001 => "value used after move",
             ErrorCode::E1002 => "cannot borrow writably — already borrowed read-only",
             ErrorCode::E1003 => "cannot borrow read-only — already borrowed writably",
-            ErrorCode::E1004 => "cannot move out of borrowed reference",
-            ErrorCode::E1005 => "borrow outlives owner",
             ErrorCode::E1006 => "cannot assign to `let` binding",
             ErrorCode::E1007 => "cannot borrow `let` binding writably",
-            ErrorCode::E1008 => "value moved into closure, cannot be used outside",
             ErrorCode::E1009 => "cannot move value — currently borrowed",
             ErrorCode::E1010 => "returned reference outlives local value",
             ErrorCode::E1011 => "value is not `Send`",
@@ -44,11 +38,8 @@ impl ErrorCode {
             ErrorCode::E1001 => "E1001",
             ErrorCode::E1002 => "E1002",
             ErrorCode::E1003 => "E1003",
-            ErrorCode::E1004 => "E1004",
-            ErrorCode::E1005 => "E1005",
             ErrorCode::E1006 => "E1006",
             ErrorCode::E1007 => "E1007",
-            ErrorCode::E1008 => "E1008",
             ErrorCode::E1009 => "E1009",
             ErrorCode::E1010 => "E1010",
             ErrorCode::E1011 => "E1011",
@@ -139,11 +130,8 @@ mod tests {
         ErrorCode::E1001,
         ErrorCode::E1002,
         ErrorCode::E1003,
-        ErrorCode::E1004,
-        ErrorCode::E1005,
         ErrorCode::E1006,
         ErrorCode::E1007,
-        ErrorCode::E1008,
         ErrorCode::E1009,
         ErrorCode::E1010,
         ErrorCode::E1011,

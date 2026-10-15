@@ -7,7 +7,52 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Changed
+- **Concurrency methods are real `.rx` code.** `Thread`, `Mutex`, `Channel` and
+  friends are implemented as stdlib extensions instead of hardcoded Rust method
+  resolvers; `typeck/method_resolvers/concurrency.rs` is gone and the `Send`
+  check has a single owner in `typeck/infer/ops.rs`.
+- **String interpolation is parsed as expressions.** `#{...}` is parsed into
+  `Expr` nodes at parse time instead of carrying raw tokens.
+- **The formatter round-trips.** Every `format_*` function destructures its AST
+  node exhaustively, so a new AST field cannot be silently dropped, and retired
+  syntax is no longer emitted. Fixes the `1101_string_regex_bridge.rx`
+  idempotence failure.
+- **Retired syntax removed from the AST and lexer** (`derive_traits`,
+  extern/attribute nodes, `link_attrs`, lifetime tokens); retired macros report
+  E1126. `Hashable` is the only hashing mixin and the dual-name checks are gone.
+  Public stdlib methods are unchanged.
+- **`ruxen clean` removes the whole project target root.**
+
+### Removed
+- Dead Rust code: the `ruxen_driver` crate, `borrow_check/lifetimes.rs`, the
+  `ruxenc` cache graph, and dead internal runtime C symbols (a guard now checks
+  every exported runtime symbol has a declaration or an emitter).
+
 ### Fixed
+- **Silent stubs removed and dropped input diagnosed.** `?`, `unwrap_or_else`,
+  `super`, `block_on`, the index catch-all and the REPL stubs no longer silently
+  succeed. Bootstrap items, `ruxen compile` flags, `--emit` and the Tester's
+  `expected_substr` now report coded diagnostics (E0734 to E0738, E1127, E1128).
+- **`include` of a non-mixin is E1017.** `include Bar` where `Bar` is a class,
+  struct, enum or type alias used to compile and do nothing; it is now an error,
+  and `include Hash` suggests `include Hashable`.
+- **`def main` with parameters is E0739.** The entry point has the fixed C
+  `main(argc, argv)` ABI; `def main(x: Int)` used to panic Cranelift. Read
+  program arguments with `Env.args`.
+- **`MutexGuard#deref_mut` / `#deref_var` write through the lock.** They were
+  bound to the payload getter, so a write through the `&var T` segfaulted; they
+  now return the payload slot's address, and the compiler loads through it
+  when `T` is not a String (an FFI `-> &var T` for a type parameter `T` is a
+  slot address; `mir::refmut_abi` owns the rule), so `deref_mut` on a
+  `Mutex[Array[Int]]` or `Mutex[Int]` gives the array or the value, not the
+  mutex field's address. `Mutex.new` and `MutexGuard#set` move
+  their value into the mutex, so the caller no longer frees a payload the mutex
+  still holds (a heap payload leaks at mutex drop until typed drop lands).
+- **Cranelift/LLVM drift** (`ruxen_env_init`, Float `%`, `RefMut`) and the LLVM
+  Float-to-`&Float` argument bug are fixed.
+- **Test link helper and reactor.** `drop_fixtures`, `runtime_safety` and
+  `stdlib_json` link again; e2e `416_scope_collect_reactor_child` no longer times out.
 - **A derived collection now OWNS its elements instead of aliasing them
   (batches B86, Q60(b)).** `["a","b","c"].drop(2)` aborted with a double free
   (Trace/BPT trap 5, exit 133), and so did `Set[String]` `union` /

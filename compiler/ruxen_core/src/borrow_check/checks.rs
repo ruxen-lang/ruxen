@@ -69,7 +69,6 @@ impl<'a> BorrowChecker<'a> {
         &mut self,
         def_id: DefId,
         pattern: &HirPattern,
-        ty: &Ty,
         value: Option<&HirExpr>,
         mutable: bool,
         span: &Span,
@@ -100,8 +99,7 @@ impl<'a> BorrowChecker<'a> {
         }
 
         // Register the new binding
-        self.register_binding(def_id, ty, mutable, span.clone());
-        self.lifetimes.register_local(def_id, self.scopes.current());
+        self.register_binding(def_id, mutable, span.clone());
 
         // Process pattern bindings (for destructuring)
         self.process_pattern(pattern);
@@ -360,10 +358,9 @@ impl<'a> BorrowChecker<'a> {
             self.symbols.iter().find(|def| {
                 name_matches(def)
                     && match &def.kind {
-                        DefKind::Method { parent, .. } => self
-                            .symbols
-                            .get(*parent)
-                            .is_some_and(|p| p.name == home),
+                        DefKind::Method { parent, .. } => {
+                            self.symbols.get(*parent).is_some_and(|p| p.name == home)
+                        }
                         _ => false,
                     }
             })
@@ -381,6 +378,10 @@ impl<'a> BorrowChecker<'a> {
         is_ref
     }
 
+    /// A send-required closure (passed to a `Send`-bounded parameter) may
+    /// not borrow stack locals: it can outlive the caller's frame (E1013).
+    /// Whether the captured VALUES are `Send` is typeck's job
+    /// (`InferenceEngine::check_send_required_closure`), not checked here.
     pub(super) fn check_send_required_closure(
         &mut self,
         captures: &[Capture],
@@ -388,44 +389,23 @@ impl<'a> BorrowChecker<'a> {
         span: &Span,
     ) {
         for cap in captures {
-            // `cap.ty` is a resolve-time snapshot (often Ty::Infer for
-            // values whose type wasn't pinned yet); refetch from the
-            // symbol table to get the post-typeck type. See
-            // `Capture::current_ty` docs.
-            let live_ty = cap.current_ty(self.symbols);
             if cap.by_move || is_move {
-                if !live_ty.is_send_with(self.symbols) {
-                    self.errors.push(BorrowError {
-                        code: ErrorCode::E1011,
-                        primary: SpanLabel {
-                            span: span.clone(),
-                            label: format!(
-                                "captured value `{}` of type `{}` is not `Send`",
-                                cap.name, live_ty
-                            ),
-                        },
-                        secondary: vec![],
-                        help: vec![
-                            "move only `Send` values into send-required closures".to_string()
-                        ],
-                    });
-                }
-            } else {
-                self.errors.push(BorrowError {
-                    code: ErrorCode::E1013,
-                    primary: SpanLabel {
-                        span: span.clone(),
-                        label: format!(
-                            "closure captures local `{}` by borrow and is not `'static`",
-                            cap.name
-                        ),
-                    },
-                    secondary: vec![],
-                    help: vec![
-                        "use a `move` closure or avoid capturing stack-local borrows".to_string(),
-                    ],
-                });
+                continue;
             }
+            self.errors.push(BorrowError {
+                code: ErrorCode::E1013,
+                primary: SpanLabel {
+                    span: span.clone(),
+                    label: format!(
+                        "closure captures local `{}` by borrow and is not `'static`",
+                        cap.name
+                    ),
+                },
+                secondary: vec![],
+                help: vec![
+                    "use a `move` closure or avoid capturing stack-local borrows".to_string(),
+                ],
+            });
         }
     }
 

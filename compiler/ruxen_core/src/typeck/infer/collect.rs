@@ -118,6 +118,14 @@ impl<'a> InferenceEngine<'a> {
         // would reject every `expr.await` whose future is not the bridge
         // `Future` class.
         if method_name == "await" {
+            // The bridge `Future[T]` an `async def` call returns awaits to `T`.
+            if let Ty::Class { name, generic_args } = obj_ty {
+                if name == "Future" {
+                    if let Some(output) = generic_args.first() {
+                        return output.clone();
+                    }
+                }
+            }
             return self.ctx.fresh_type_var();
         }
 
@@ -972,23 +980,15 @@ impl<'a> InferenceEngine<'a> {
     }
 
     /// The positional constructor parameter types for a class/struct: the
-    /// `init` method's params if declared, else the type's declared field
-    /// types (the implicit all-fields `.new`). Used to harvest generic-param
-    /// bindings from constructor arguments.
+    /// `init` method's params if declared, else a declared `self.new`'s
+    /// params (an FFI constructor such as `Mutex.new(initial: T)`), else the
+    /// type's declared field types (the implicit all-fields `.new`). Used to
+    /// harvest generic-param bindings from constructor arguments.
     fn constructor_param_types(&self, type_name: &str) -> Vec<Ty> {
-        // Prefer an explicit `init` method's params.
-        for def in self.symbols.iter() {
-            if def.name == "init" {
-                if let DefKind::Method { parent, signature } = &def.kind {
-                    if self
-                        .symbols
-                        .get(*parent)
-                        .map(|p| p.name == type_name)
-                        .unwrap_or(false)
-                    {
-                        return signature.params.iter().map(|p| p.ty.clone()).collect();
-                    }
-                }
+        // Prefer an explicit `init` method's params, then a declared `new`.
+        for ctor in ["init", "new"] {
+            if let Some(params) = self.own_method_param_types(type_name, ctor) {
+                return params;
             }
         }
         // Fall back to the declared fields (positional `.new`).
@@ -1011,6 +1011,23 @@ impl<'a> InferenceEngine<'a> {
             }
         }
         Vec::new()
+    }
+
+    /// The parameter types of the method `method` declared directly on
+    /// `type_name`, or `None` when the type declares no such method.
+    fn own_method_param_types(&self, type_name: &str, method: &str) -> Option<Vec<Ty>> {
+        self.symbols.iter().find_map(|def| match &def.kind {
+            DefKind::Method { parent, signature }
+                if def.name == method
+                    && self
+                        .symbols
+                        .get(*parent)
+                        .is_some_and(|p| p.name == type_name) =>
+            {
+                Some(signature.params.iter().map(|p| p.ty.clone()).collect())
+            }
+            _ => None,
+        })
     }
 
     /// Walk a parameter type and an argument type in parallel, capturing

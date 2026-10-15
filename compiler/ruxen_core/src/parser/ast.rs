@@ -3,7 +3,7 @@
 //! Every node carries a `Span` for error reporting. The AST is untyped —
 //! no semantic information is attached at this stage.
 
-use crate::lexer::token::{NumericSuffix, Span, StringPart};
+use crate::lexer::token::{FormatSpec, NumericSuffix, Span};
 
 // ─── Visibility ──────────────────────────────────────────────────────
 
@@ -40,7 +40,6 @@ pub enum TopLevelItem {
     Newtype(NewtypeDef),
     Const(ConstDef),
     Lib(LibDecl),
-    Extern(ExternBlock),
     /// `alias new_name old_name` at top level / module scope — a Ruby-style
     /// free-function synonym. Both names resolve to ONE callable DefId; no
     /// new body is emitted (ADR: docs/decisions/alias-keyword.md, D2).
@@ -295,6 +294,14 @@ pub enum LiteralValue {
 }
 
 // ─── Expressions ─────────────────────────────────────────────────────
+
+/// One part of an interpolated string literal: literal text, or a parsed
+/// `#{expr}` with its optional format spec (`#{x:>8.2}`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum StringPart {
+    Literal(String),
+    Expr { expr: Box<Expr>, spec: FormatSpec },
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
@@ -831,11 +838,6 @@ pub struct ClassDef {
     pub fields: Vec<FieldDecl>,
     pub methods: Vec<FuncDef>,
     pub inner_impls: Vec<InnerImpl>,
-    /// Traits declared via `@[derive(...)]` at class top level or via an
-    /// in-body `derive Trait1, Trait2` line. Consumed by the tier-1 derive
-    /// expander (pillar 05 phase 5a+). Empty for v1 classes that do not
-    /// opt in.
-    pub derive_traits: Vec<String>,
     /// In-body `layout <kind>` directive args captured at parse time.
     /// Wave 1 (#06.8 T0c) recognises `flat_heap_struct` here, marking a
     /// class whose runtime instances follow the flat-heap-struct C
@@ -876,10 +878,6 @@ pub struct StructDef {
     /// Inline `impl Trait for Self` blocks and bare `include Mixin`
     /// directives inside the struct body. Mirrors `ClassDef::inner_impls`.
     pub inner_impls: Vec<InnerImpl>,
-    /// Traits declared via `@[derive(...)]` at top level or via an in-body
-    /// `derive Trait1, Trait2` line. Does NOT include `layout` args —
-    /// those live on `layout`.
-    pub derive_traits: Vec<String>,
     /// In-body `layout <kind>` directive args (ruby-naming.spec.md §3.5):
     /// `c`, `packed`, `transparent`. Kept as raw argument strings for v1;
     /// a real `Layout` enum arrives with the tier-4 stable-ABI / cbindgen
@@ -907,8 +905,6 @@ pub struct EnumDef {
     /// Inline `impl Trait for Self` blocks and bare `include Mixin`
     /// directives inside the enum body. Mirrors `ClassDef::inner_impls`.
     pub inner_impls: Vec<InnerImpl>,
-    /// Traits declared via `@[derive(...)]` or in-body `derive Trait` line.
-    pub derive_traits: Vec<String>,
     /// In-body `layout <kind>` directive args captured at parse time.
     /// Wave 1 (#06.8 T0c) recognises `tagged` here, which pins variant
     /// declaration order as the runtime tag assignment (the pattern
@@ -1098,15 +1094,6 @@ pub struct ConstDef {
 pub struct LibDecl {
     pub name: String,
     pub functions: Vec<FfiFunction>,
-    pub link_attrs: Vec<LinkAttr>,
-    pub span: Span,
-}
-
-/// An `extern "C" ... end` block (anonymous lib).
-#[derive(Debug, Clone, PartialEq)]
-pub struct ExternBlock {
-    pub abi: String,
-    pub functions: Vec<FfiFunction>,
     pub span: Span,
 }
 
@@ -1150,59 +1137,6 @@ pub struct FfiFunction {
 pub struct FfiParam {
     pub name: String,
     pub type_expr: TypeExpr,
-    pub span: Span,
-}
-
-/// A `@[link]` attribute for library linking.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LinkAttr {
-    pub name: String,
-    pub kind: LinkKind,
-}
-
-/// How to link a library.
-#[derive(Debug, Clone, PartialEq)]
-pub enum LinkKind {
-    Dynamic,
-    Static,
-    Framework,
-}
-
-// ─── Attributes ────────────────────────────────────────────────────
-
-/// A single argument inside an `@[name(args)]` attribute list.
-///
-/// Widened from `String` in tier-1 B2 so downstream passes can distinguish
-/// identifiers (`C` in `@[repr(C)]`) from string literals (`"libc"` in
-/// `@[link("libc")]`). Tier-2 may extend this with key/value and nested
-/// forms; for v1 only the two leaf shapes exist.
-#[derive(Debug, Clone, PartialEq)]
-pub enum AttrArg {
-    /// Bare identifier: `@[repr(C)]` → `Ident("C")`.
-    Ident(String, Span),
-    /// String literal: `@[link("libc")]` → `Str("libc")`.
-    Str(String, Span),
-}
-
-impl AttrArg {
-    pub fn as_str(&self) -> &str {
-        match self {
-            AttrArg::Ident(s, _) | AttrArg::Str(s, _) => s,
-        }
-    }
-
-    pub fn span(&self) -> &Span {
-        match self {
-            AttrArg::Ident(_, s) | AttrArg::Str(_, s) => s,
-        }
-    }
-}
-
-/// A general attribute: `@[name(args)]`
-#[derive(Debug, Clone, PartialEq)]
-pub struct Attribute {
-    pub name: String,
-    pub args: Vec<AttrArg>,
     pub span: Span,
 }
 

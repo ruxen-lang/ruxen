@@ -154,7 +154,7 @@ pub(super) fn ty_is_valid_hash_key(
         Ty::Alias { target, .. } => ty_is_valid_hash_key(target, symbols),
         Ty::Newtype { inner, .. } => ty_is_valid_hash_key(inner, symbols),
         Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => {
-            ty_has_derive_trait(ty, symbols, "Hash") || ty_has_derive_trait(ty, symbols, "Hashable")
+            ty_has_derive_trait(ty, symbols, "Hashable")
         }
         // Type-vars / param types: assume satisfiable (typeck unifies later).
         // Returning true here keeps generic code (e.g. `def f[K]`) compiling;

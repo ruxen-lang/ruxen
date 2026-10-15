@@ -127,15 +127,7 @@ pub fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool {
 /// byte-identical strings compare unequal, silently breaking every URL
 /// match / header lookup / response comparison in real server code.
 pub fn is_string_mir_ty(ty: &Ty) -> bool {
-    match ty {
-        Ty::String => true,
-        Ty::Class { name, .. } if name == "String" => true,
-        Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) => is_string_mir_ty(inner),
-        _ => false,
-    }
+    ty.is_string_form()
 }
 
 /// Size estimate for heap allocation.

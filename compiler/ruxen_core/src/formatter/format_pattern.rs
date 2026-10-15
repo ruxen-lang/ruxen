@@ -7,9 +7,13 @@ use super::format_expr::format_expr;
 
 pub fn format_pattern(pat: &Pattern, comments: &CommentMap) -> Doc {
     match pat {
-        Pattern::Literal { expr, .. } => format_expr(expr, comments),
+        Pattern::Literal { expr, span: _ } => format_expr(expr, comments),
 
-        Pattern::Identifier { mutable, name, .. } => {
+        Pattern::Identifier {
+            mutable,
+            name,
+            span: _,
+        } => {
             if *mutable {
                 concat(vec![text("var "), text(name.clone())])
             } else {
@@ -17,9 +21,9 @@ pub fn format_pattern(pat: &Pattern, comments: &CommentMap) -> Doc {
             }
         }
 
-        Pattern::Wildcard { .. } => text("_"),
+        Pattern::Wildcard { span: _ } => text("_"),
 
-        Pattern::Tuple { elements, .. } => {
+        Pattern::Tuple { elements, span: _ } => {
             let items: Vec<Doc> = elements
                 .iter()
                 .map(|e| format_pattern(e, comments))
@@ -42,7 +46,7 @@ pub fn format_pattern(pat: &Pattern, comments: &CommentMap) -> Doc {
             path,
             variant,
             fields,
-            ..
+            span: _,
         } => {
             // The Option::None variant is spelled `nil` on the surface
             // (ruby-naming.spec.md §3.10); its internal variant name is
@@ -81,27 +85,36 @@ pub fn format_pattern(pat: &Pattern, comments: &CommentMap) -> Doc {
         }
 
         Pattern::Struct {
-            path, fields, rest, ..
+            path,
+            fields,
+            rest,
+            span: _,
         } => {
             let path_str = path.join(".");
             let mut field_docs: Vec<Doc> = fields
                 .iter()
-                .map(|f| {
-                    match &f.name {
-                        Some(name) => {
-                            // Named field: `name: pattern`
-                            concat(vec![
-                                text(name.clone()),
-                                text(": "),
-                                format_pattern(&f.pattern, comments),
-                            ])
+                .map(
+                    |PatternField {
+                         name,
+                         pattern,
+                         span: _,
+                     }| {
+                        match name {
+                            Some(name) => {
+                                // Named field: `name: pattern`
+                                concat(vec![
+                                    text(name.clone()),
+                                    text(": "),
+                                    format_pattern(pattern, comments),
+                                ])
+                            }
+                            None => {
+                                // Shorthand: just the pattern
+                                format_pattern(pattern, comments)
+                            }
                         }
-                        None => {
-                            // Shorthand: just the pattern
-                            format_pattern(&f.pattern, comments)
-                        }
-                    }
-                })
+                    },
+                )
                 .collect();
 
             if *rest {
@@ -119,7 +132,7 @@ pub fn format_pattern(pat: &Pattern, comments: &CommentMap) -> Doc {
             ]))
         }
 
-        Pattern::Or { patterns, .. } => {
+        Pattern::Or { patterns, span: _ } => {
             let pat_docs: Vec<Doc> = patterns
                 .iter()
                 .map(|p| format_pattern(p, comments))
@@ -127,7 +140,11 @@ pub fn format_pattern(pat: &Pattern, comments: &CommentMap) -> Doc {
             join(text(" | "), pat_docs)
         }
 
-        Pattern::Ref { mutable, name, .. } => {
+        Pattern::Ref {
+            mutable,
+            name,
+            span: _,
+        } => {
             if *mutable {
                 concat(vec![text("ref var "), text(name.clone())])
             } else {
@@ -135,7 +152,7 @@ pub fn format_pattern(pat: &Pattern, comments: &CommentMap) -> Doc {
             }
         }
 
-        Pattern::Rest { .. } => text(".."),
+        Pattern::Rest { span: _ } => text(".."),
     }
 }
 

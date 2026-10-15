@@ -59,10 +59,11 @@ impl<'a> Lowerer<'a> {
                 .self_ty_override
                 .clone()
                 .or_else(|| {
-                    self.class_name_from_mangled(name).map(|class_name| Ty::Class {
-                        name: class_name.to_string(),
-                        generic_args: vec![],
-                    })
+                    self.class_name_from_mangled(name)
+                        .map(|class_name| Ty::Class {
+                            name: class_name.to_string(),
+                            generic_args: vec![],
+                        })
                 })
                 .or_else(|| self.primitive_self_ty_from_mangled(name))
                 .unwrap_or(Ty::Unit);
@@ -87,6 +88,11 @@ impl<'a> Lowerer<'a> {
             self.def_to_local.insert(param.def_id, local);
         }
 
+        // Resolve rejects user params on `main` (E0739); never lower them
+        // against the fixed C entry signature.
+        if name == "main" && !has_self_param && !func.params.is_empty() {
+            return Err("`main` cannot take parameters (E0739)".to_string());
+        }
         // The process entry point takes the C `main(argc, argv)` ABI and hands
         // the arguments to `std.env` before the body runs. A no_std build has
         // no `std.env` and no `ruxen_env_init`, so its `main` keeps no params.

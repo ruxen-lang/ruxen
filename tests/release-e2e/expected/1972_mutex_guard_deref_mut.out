@@ -1,0 +1,6 @@
+deref_mut: hello!
+deref_var: hello!!
+deref: hello!!
+set: bye
+int get: 41
+int deref: 41

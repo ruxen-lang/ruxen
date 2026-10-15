@@ -12,7 +12,7 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
             lifetime,
             mutable,
             inner,
-            ..
+            span: _,
         } => {
             let mut parts = vec![text("&")];
             if let Some(lt) = lifetime {
@@ -25,7 +25,7 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
             concat(parts)
         }
 
-        TypeExpr::Tuple { elements, .. } => {
+        TypeExpr::Tuple { elements, span: _ } => {
             if elements.is_empty() {
                 // ruby-naming.spec.md §3.10: the unit type is spelled `nil`,
                 // not `()`. The parser maps both spellings to an empty-tuple
@@ -52,7 +52,11 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
             }
         }
 
-        TypeExpr::Array { element, size, .. } => {
+        TypeExpr::Array {
+            element,
+            size,
+            span: _,
+        } => {
             let mut parts = vec![text("[")];
             parts.push(format_type_expr(element, _comments));
             if let Some(sz) = size {
@@ -67,7 +71,7 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
             params,
             return_type,
             bracketed,
-            ..
+            span: _,
         } => {
             let param_docs: Vec<Doc> = params
                 .iter()
@@ -104,42 +108,48 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
             }
         }
 
-        TypeExpr::SomeMixin { bounds, .. } => {
-            let bound_docs: Vec<Doc> = bounds.iter().map(|b| format_type_path(&b.path)).collect();
-            concat(vec![text("some "), join(text(" + "), bound_docs)])
+        TypeExpr::SomeMixin { bounds, span: _ } => {
+            concat(vec![text("some "), format_trait_bounds(bounds)])
         }
 
-        TypeExpr::AnyMixin { bounds, .. } => {
-            let bound_docs: Vec<Doc> = bounds.iter().map(|b| format_type_path(&b.path)).collect();
-            concat(vec![text("any "), join(text(" + "), bound_docs)])
+        TypeExpr::AnyMixin { bounds, span: _ } => {
+            concat(vec![text("any "), format_trait_bounds(bounds)])
         }
 
         // The only surface spelling the type parser accepts is `Never`
         // (`parse_type` matches the `Never` TypeIdentifier); `!` is not a valid
         // type token and fails to re-parse ("expected type, found Bang").
-        TypeExpr::Never { .. } => text("Never"),
+        TypeExpr::Never { span: _ } => text("Never"),
 
-        TypeExpr::Inferred { .. } => text("_"),
+        TypeExpr::Inferred { span: _ } => text("_"),
 
-        TypeExpr::RawPointer { mutable, inner, .. } => {
+        TypeExpr::RawPointer {
+            mutable,
+            inner,
+            span: _,
+        } => {
             let prefix = if *mutable { "*var " } else { "*" };
             concat(vec![text(prefix), format_type_expr(inner, _comments)])
         }
 
-        TypeExpr::ConstLit { value, .. } => text(value.to_string()),
-        // For now route ConstExprArg through the parser's
-        // short-printer; a Doc-native printer for arithmetic in
-        // const-arg position can come later when formatting
-        // const-generic arithmetic gets style attention.
-        TypeExpr::ConstExprArg { expr, .. } => {
-            text(crate::parser::printer::format_expr_short(expr))
+        TypeExpr::ConstLit { value, span: _ } => text(value.to_string()),
+        TypeExpr::ConstExprArg { expr, span: _ } => {
+            super::format_expr::format_expr(expr, _comments)
         }
     }
 }
 
 pub fn format_type_path(path: &TypePath) -> Doc {
-    let segments_doc = text(path.segments.join("."));
-    match &path.generic_args {
+    let TypePath {
+        segments,
+        generic_args,
+        span: _,
+        rooted,
+    } = path;
+    // `::Name` anchors the lookup at the root scope.
+    let root = if *rooted { "::" } else { "" };
+    let segments_doc = text(format!("{root}{}", segments.join(".")));
+    match generic_args {
         None => segments_doc,
         Some(args) if args.is_empty() => segments_doc,
         Some(args) => {
@@ -165,25 +175,27 @@ pub fn format_type_path(path: &TypePath) -> Doc {
 }
 
 pub fn format_generic_params(gp: &GenericParams) -> Doc {
-    let param_docs: Vec<Doc> = gp
-        .params
+    let GenericParams { params, span: _ } = gp;
+    let param_docs: Vec<Doc> = params
         .iter()
         .map(|p| match p {
-            GenericParam::Lifetime { name, .. } => text(name.clone()),
-            GenericParam::Type { name, bounds, .. } => {
+            GenericParam::Lifetime { name, span: _ } => text(name.clone()),
+            GenericParam::Type {
+                name,
+                bounds,
+                span: _,
+            } => {
                 if bounds.is_empty() {
                     text(name.clone())
                 } else {
-                    let bound_docs: Vec<Doc> =
-                        bounds.iter().map(|b| format_type_path(&b.path)).collect();
                     concat(vec![
                         text(name.clone()),
                         text(": "),
-                        join(text(" + "), bound_docs),
+                        format_trait_bounds(bounds),
                     ])
                 }
             }
-            GenericParam::Const { name, ty, .. } => concat(vec![
+            GenericParam::Const { name, ty, span: _ } => concat(vec![
                 text("const "),
                 text(name.clone()),
                 text(": "),
@@ -206,45 +218,39 @@ pub fn format_generic_params(gp: &GenericParams) -> Doc {
     ]))
 }
 
+/// ` where T: A + B, N > 0` on the header line. Trait predicates come
+/// before const predicates, which is how the parser splits them anyway.
 pub fn format_where_clause(wc: &WhereClause) -> Doc {
-    let pred_docs: Vec<Doc> = wc
-        .predicates
-        .iter()
-        .map(|p| {
-            let bound_docs: Vec<Doc> = p.bounds.iter().map(|b| format_type_path(&b.path)).collect();
-            concat(vec![
-                format_type_expr(&p.type_expr, &CommentMap::new()),
-                text(": "),
-                join(text(" + "), bound_docs),
-            ])
-        })
-        .collect();
-
-    if pred_docs.len() == 1 {
-        // Short where clause on same line
-        group(concat(vec![
-            text(" where "),
-            pred_docs.into_iter().next().unwrap(),
-        ]))
-    } else {
-        // Multi-predicate: one per line
-        group(concat(vec![
-            hardline(),
-            text("where"),
-            nest(
-                INDENT_WIDTH,
-                concat(
-                    pred_docs
-                        .into_iter()
-                        .map(|p| concat(vec![hardline(), p, text(",")]))
-                        .collect(),
-                ),
-            ),
-        ]))
-    }
+    let WhereClause {
+        predicates,
+        const_predicates,
+        span: _,
+    } = wc;
+    let comments = CommentMap::new();
+    let trait_docs = predicates.iter().map(|p| {
+        let WherePredicate {
+            type_expr,
+            bounds,
+            span: _,
+        } = p;
+        concat(vec![
+            format_type_expr(type_expr, &comments),
+            text(": "),
+            format_trait_bounds(bounds),
+        ])
+    });
+    let const_docs = const_predicates.iter().map(|p| {
+        let ConstPredicate { expr, span: _ } = p;
+        super::format_expr::format_expr(expr, &comments)
+    });
+    let pred_docs: Vec<Doc> = trait_docs.chain(const_docs).collect();
+    concat(vec![text(" where "), join(text(", "), pred_docs)])
 }
 
 pub fn format_trait_bounds(bounds: &[MixinBound]) -> Doc {
-    let docs: Vec<Doc> = bounds.iter().map(|b| format_type_path(&b.path)).collect();
+    let docs: Vec<Doc> = bounds
+        .iter()
+        .map(|MixinBound { path, span: _ }| format_type_path(path))
+        .collect();
     join(text(" + "), docs)
 }

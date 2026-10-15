@@ -14,6 +14,12 @@
  * "everything is i64 by reference" simplicity. Optimisation
  * deferred — keeps codegen unchanged.
  *
+ * Ownership: the mutex owns its payload (`ruxen_mutex_new` and
+ * `ruxen_mutex_guard_set` are arg-transfer callees in
+ * mir/lower/runtime_abi.rs). The C side has no element type, so
+ * `ruxen_mutex_drop` cannot free a heap payload yet; it leaks rather
+ * than double-frees.
+ *
  * Poison: a panic while holding the lock would normally set
  * `poisoned`. Until unwind support lands, that path is exercised
  * only via the `poison_for_testing` test hook.
@@ -136,6 +142,17 @@ int64_t ruxen_mutex_guard_get(int64_t guard_ptr) {
     return g->parent->payload;
 }
 
+/* MutexGuard.deref_mut / deref_var -> &var T: the ADDRESS of the payload
+ * slot, not its value. This C side cannot know T, so it always returns the
+ * slot; the compiler (mir/refmut_abi.rs) loads through it at call sites
+ * where T is not a String. For String, callee writes (e.g. `String#push`
+ * through a `&var String`) land in the guarded payload. */
+int64_t ruxen_mutex_guard_payload_ptr(int64_t guard_ptr) {
+    RuxenMutexGuard *g = (RuxenMutexGuard *)guard_ptr;
+    if (!g || !g->parent) ruxen_panic("MutexGuard.deref_mut: null guard");
+    return (int64_t)&g->parent->payload;
+}
+
 /* MutexGuard.set(v) — write through the guard.
  *
  * Ruxen-side deref_var assignment lowers to this.
@@ -144,6 +161,12 @@ void ruxen_mutex_guard_set(int64_t guard_ptr, int64_t value) {
     RuxenMutexGuard *g = (RuxenMutexGuard *)guard_ptr;
     if (!g || !g->parent) ruxen_panic("MutexGuard.set: null guard");
     g->parent->payload = value;
+}
+
+/* MutexGuard.held? -> Bool. `ruxen_mutex_try_lock` returns a null
+ * guard when the lock was busy; `Mutex#try_lock` maps that to nil. */
+int8_t ruxen_mutex_guard_held(int64_t guard_ptr) {
+    return guard_ptr != 0;
 }
 
 /* MutexGuard drop — release the lock ONLY. The malloc'd

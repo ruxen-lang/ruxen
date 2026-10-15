@@ -14,8 +14,15 @@ class SharedSync[T: Send]
   lib "runtime/sharedsync.c"
     def self.new as "ruxen_sharedsync_new"(initial: T) -> SharedSync[T]
     def clone as "ruxen_sharedsync_clone" -> SharedSync[T]
-    def strong_count as "ruxen_sharedsync_strong_count" -> Int
+    def strong_count as "ruxen_sharedsync_strong_count" -> USize
     def get as "ruxen_sharedsync_get" -> T
+    def deref as "ruxen_sharedsync_get" -> &T
     def drop as "ruxen_sharedsync_drop" -> nil
+  end
+
+  ## Weak references do not exist yet (there is no `downgrade`), so the
+  ## weak count of a live `SharedSync` is always 0.
+  def weak_count -> USize
+    0 as USize
   end
 end

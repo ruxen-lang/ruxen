@@ -179,6 +179,18 @@ fn intentional_fresh_addition(c: &str) -> bool {
     )
 }
 
+/// Reviewed post-extraction transfer deltas. A `Mutex[T]` owns its payload:
+/// `Mutex.new(v)` moves `v` in (arg0) and `MutexGuard#set(v)` moves the new
+/// value in (arg1). Borrowing them let the caller free a heap payload the
+/// mutex still held, which double-freed after a `deref_mut` write.
+fn intentional_transfer_addition(c: &str) -> &'static [usize] {
+    match c {
+        "ruxen_mutex_new" => &[0],
+        "ruxen_mutex_guard_set" => &[1],
+        _ => &[],
+    }
+}
+
 fn ref_borrows_first_arg(c: &str) -> bool {
     // VERBATIM from drops.rs:967-984.
     c.ends_with("_init")
@@ -472,6 +484,9 @@ pub(crate) const SYMBOLS: &[&str] = &[
     "Mutex_try_lock_raw",
     "ruxen_mutex_lock",
     "ruxen_mutex_try_lock",
+    // intentional transfer deltas (Mutex owns its payload)
+    "ruxen_mutex_new",
+    "ruxen_mutex_guard_set",
     // borrows_first_arg / consume helpers (967-984, 1003-1043)
     "ruxen_dealloc",
     "ruxen_string_free",
@@ -594,6 +609,7 @@ fn expected_arg_mask(c: &str) -> ArgMask {
     if ref_is_pointer_store_helper(c) && !idxs.contains(&1) {
         idxs.push(1);
     }
+    idxs.extend_from_slice(intentional_transfer_addition(c));
     match idxs.as_slice() {
         [] => ArgMask::none(),
         [i] => ArgMask::single(*i),

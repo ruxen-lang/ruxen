@@ -1,18 +1,12 @@
-#![allow(unused_imports)]
-
-use std::collections::HashMap;
-
 use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
+use crate::hir::types::{MixinRef, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::{self, Visibility};
 
-use super::const_helpers;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
+use super::scope::ScopeKind;
 use super::symbols::*;
-use super::{ClosureCaptureContext, ResolveResult, Resolver};
+use super::Resolver;
 
 /// Caller-identity arguments threaded into Pass 1 type registration.
 ///
@@ -497,13 +491,7 @@ impl Resolver {
         self.scopes.insert_type("Self".to_string(), self_def);
 
         let mut hir_fns: Vec<HirFfiFunc> = Vec::new();
-        let mut link_flags: Vec<String> = Vec::new();
         for lib in &class.lib_decls {
-            for flag in lib.link_attrs.iter().map(|a| format!("-l{}", a.name)) {
-                if !link_flags.contains(&flag) {
-                    link_flags.push(flag);
-                }
-            }
             for ffi_fn in &lib.functions {
                 self.register_class_lib_method_in(
                     id,
@@ -518,7 +506,6 @@ impl Resolver {
         if !hir_fns.is_empty() {
             ffi_libs.push(HirFfiLib {
                 name: class.name.clone(),
-                link_flags,
                 functions: hir_fns,
             });
         }
@@ -756,7 +743,6 @@ impl Resolver {
                                 parent: None,
                                 fields: vec![],
                                 methods: vec![],
-                                derive_traits: class.derive_traits.clone(),
                                 opt_out_send: false,
                                 opt_out_sync: false,
                                 manual_send: false,
@@ -786,7 +772,6 @@ impl Resolver {
                                 parent: None,
                                 fields: vec![],
                                 methods: vec![],
-                                derive_traits: class.derive_traits.clone(),
                                 opt_out_send: false,
                                 opt_out_sync: false,
                                 manual_send: false,
@@ -885,7 +870,6 @@ impl Resolver {
                     if !hir_fns.is_empty() {
                         ffi_libs.push(HirFfiLib {
                             name: class.name.clone(),
-                            link_flags: Vec::new(),
                             functions: hir_fns,
                         });
                     }
@@ -899,7 +883,6 @@ impl Resolver {
                         info: StructInfo {
                             generic_params: struct_gp,
                             fields: vec![],
-                            derive_traits: s.derive_traits.clone(),
                             layout: s.layout.clone(),
                             opt_out_send: false,
                             opt_out_sync: false,
@@ -941,7 +924,6 @@ impl Resolver {
                         info: EnumInfo {
                             generic_params: enum_gp,
                             variants: vec![],
-                            derive_traits: e.derive_traits.clone(),
                             opt_out_send: false,
                             opt_out_sync: false,
                             manual_send: false,
@@ -1129,13 +1111,7 @@ impl Resolver {
                 // `ClassName.method(...)` call surface.
                 if !t.lib_decls.is_empty() {
                     let mut hir_fns: Vec<HirFfiFunc> = Vec::new();
-                    let mut link_flags: Vec<String> = Vec::new();
                     for lib in &t.lib_decls {
-                        for flag in lib.link_attrs.iter().map(|a| format!("-l{}", a.name)) {
-                            if !link_flags.contains(&flag) {
-                                link_flags.push(flag);
-                            }
-                        }
                         for ffi_fn in &lib.functions {
                             self.register_class_lib_method_in(
                                 id,
@@ -1149,7 +1125,6 @@ impl Resolver {
                     if !hir_fns.is_empty() {
                         ffi_libs.push(HirFfiLib {
                             name: t.name.clone(),
-                            link_flags,
                             functions: hir_fns,
                         });
                     }
@@ -1344,81 +1319,6 @@ impl Resolver {
                 }
                 ffi_libs.push(HirFfiLib {
                     name: lib.name.clone(),
-                    link_flags: lib
-                        .link_attrs
-                        .iter()
-                        .map(|a| format!("-l{}", a.name))
-                        .collect(),
-                    functions: hir_fns,
-                });
-            }
-            ast::TopLevelItem::Extern(ext) => {
-                let mut hir_fns: Vec<HirFfiFunc> = Vec::with_capacity(ext.functions.len());
-                for ffi_fn in &ext.functions {
-                    let param_tys: Vec<Ty> = ffi_fn
-                        .params
-                        .iter()
-                        .map(|p| self.resolve_type_expr(&p.type_expr))
-                        .collect();
-                    let params: Vec<ParamInfo> = ffi_fn
-                        .params
-                        .iter()
-                        .zip(param_tys.iter().cloned())
-                        .map(|(p, ty)| ParamInfo {
-                            name: p.name.clone(),
-                            ty,
-                            auto_assign: false,
-                            default: None,
-                        })
-                        .collect();
-                    let return_ty = ffi_fn
-                        .return_type
-                        .as_ref()
-                        .map(|t| self.resolve_type_expr(t))
-                        .unwrap_or(Ty::Unit);
-                    let return_ty_for_hir = if ffi_fn.return_type.is_some() {
-                        Some(return_ty.clone())
-                    } else {
-                        None
-                    };
-                    let signature = FnSignature {
-                        self_mode: None,
-                        is_class_method: false,
-                        is_async: false,
-                        generic_params: vec![],
-                        params,
-                        return_ty,
-                        c_symbol: ffi_fn.c_symbol.clone(),
-                    };
-                    let link_symbol = ffi_fn
-                        .c_symbol
-                        .clone()
-                        .unwrap_or_else(|| ffi_fn.name.clone());
-                    self.check_ffi_signature_conflict(&link_symbol, &signature, &ffi_fn.span);
-                    let id = self.symbols.define(
-                        ffi_fn.name.clone(),
-                        DefKind::Function {
-                            signature: signature.clone(),
-                        },
-                        Visibility::Public,
-                        ffi_fn.span.clone(),
-                    );
-                    self.extern_symbol_table
-                        .entry(link_symbol)
-                        .or_insert_with(|| (signature, ffi_fn.span.clone()));
-                    self.scopes.insert(ffi_fn.name.clone(), id);
-                    hir_fns.push(HirFfiFunc {
-                        ruxen_name: ffi_fn.name.clone(),
-                        c_symbol: ffi_fn.c_symbol.clone(),
-                        parent_type: None,
-                        param_types: param_tys,
-                        return_type: return_ty_for_hir,
-                        is_variadic: ffi_fn.is_variadic,
-                    });
-                }
-                ffi_libs.push(HirFfiLib {
-                    name: ext.abi.clone(),
-                    link_flags: vec![],
                     functions: hir_fns,
                 });
             }

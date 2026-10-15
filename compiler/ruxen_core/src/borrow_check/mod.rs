@@ -1,6 +1,5 @@
 pub mod borrows;
 pub mod errors;
-pub mod lifetimes;
 pub mod moves;
 pub mod ownership;
 pub mod regions;
@@ -20,10 +19,9 @@ use crate::resolve::symbols::{ty_is_effectively_copy, DefKind, SymbolTable};
 
 use self::borrows::{BorrowKind, BorrowSet};
 use self::errors::{BorrowError, ErrorCode, SpanLabel};
-use self::lifetimes::LifetimeChecker;
 use self::moves::MoveChecker;
 use self::ownership::OwnershipState;
-use self::regions::{ScopeKind, ScopeStack};
+use self::regions::ScopeStack;
 
 // ─── Public entry point ────────────────────────────────────────────────
 
@@ -44,7 +42,6 @@ struct BorrowChecker<'a> {
     ownership: OwnershipState,
     borrows: BorrowSet,
     moves: MoveChecker,
-    lifetimes: LifetimeChecker,
     /// Tracks whether each DefId is mutable (let mut) or immutable (let).
     mutability: HashMap<DefId, bool>,
     /// Maps reference variables to the place they borrow from.
@@ -61,7 +58,6 @@ impl<'a> BorrowChecker<'a> {
             ownership: OwnershipState::new(),
             borrows: BorrowSet::new(),
             moves: MoveChecker::new(),
-            lifetimes: LifetimeChecker::new(),
             mutability: HashMap::new(),
             ref_bindings: HashMap::new(),
             errors: Vec::new(),
@@ -71,10 +67,9 @@ impl<'a> BorrowChecker<'a> {
     // ─── Helpers ───────────────────────────────────────────────────
 
     /// Register a new binding across all sub-analyzers.
-    fn register_binding(&mut self, def_id: DefId, ty: &Ty, mutable: bool, span: Span) {
-        self.scopes.register_binding(def_id);
+    fn register_binding(&mut self, def_id: DefId, mutable: bool, span: Span) {
         self.ownership.declare(def_id);
-        self.moves.declare(def_id, ty.clone(), span);
+        self.moves.declare(def_id, span);
         self.mutability.insert(def_id, mutable);
     }
 
@@ -106,8 +101,8 @@ impl<'a> BorrowChecker<'a> {
 
     /// Returns `true` if the given value should be copied (not moved) on
     /// assignment or argument passing.  Extends `Ty::is_copy` by consulting
-    /// the `derive_traits` list on user-defined structs — a struct with
-    /// `derive Copy` behaves like a primitive for move analysis.
+    /// the symbol table, so a structurally Copy user struct behaves like a
+    /// primitive for move analysis.
     fn ty_is_effectively_copy(&self, ty: &Ty) -> bool {
         ty_is_effectively_copy(ty, self.symbols)
     }

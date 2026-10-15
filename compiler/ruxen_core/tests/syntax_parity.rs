@@ -332,7 +332,6 @@ fn guard_top_level_item(it: &TopLevelItem) {
         TopLevelItem::Newtype(_) => {}
         TopLevelItem::Const(_) => {}
         TopLevelItem::Lib(_) => {}
-        TopLevelItem::Extern(_) => {}
         TopLevelItem::Alias(_) => {}
         // Parser, formatter, and compiler all accept this. The compile
         // pipeline moves it into implicit `main` unless one already exists.
@@ -465,7 +464,6 @@ fn item_span(item: &TopLevelItem) -> &Span {
         TopLevelItem::Newtype(nt) => &nt.span,
         TopLevelItem::Const(c) => &c.span,
         TopLevelItem::Lib(l) => &l.span,
-        TopLevelItem::Extern(e) => &e.span,
         TopLevelItem::Expr(e) => &e.span,
         TopLevelItem::Alias(a) => &a.span,
     }

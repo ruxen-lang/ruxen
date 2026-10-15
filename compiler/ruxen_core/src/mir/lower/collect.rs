@@ -47,11 +47,6 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 HirItem::Class(class) => {
-                    for derive_trait in &class.derive_traits {
-                        map.entry(derive_trait.clone())
-                            .or_default()
-                            .push(class.name.clone());
-                    }
                     for inner in &class.impl_blocks {
                         if let Some(ref trait_ref) = inner.trait_ref {
                             map.entry(trait_ref.name.clone())
@@ -67,11 +62,6 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 HirItem::Struct(strukt) => {
-                    for derive_trait in &strukt.derive_traits {
-                        map.entry(derive_trait.clone())
-                            .or_default()
-                            .push(strukt.name.clone());
-                    }
                     // ruby-naming.spec.md §3.4a: in-body `include Mixin`
                     // directives on structs register the same impl edges
                     // an `impl Mixin for Strukt` block would.
@@ -90,11 +80,6 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 HirItem::Enum(enm) => {
-                    for derive_trait in &enm.derive_traits {
-                        map.entry(derive_trait.clone())
-                            .or_default()
-                            .push(enm.name.clone());
-                    }
                     // Same rule as Struct above.
                     for inner in &enm.impl_blocks {
                         if let Some(ref trait_ref) = inner.trait_ref {

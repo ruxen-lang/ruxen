@@ -17,8 +17,8 @@
 //!   * `Some(vec![one_edit])` replacing the whole document otherwise.
 //!
 //! - `format_range(source, range)`: the underlying formatter does not
-//!   support partial input (`format_range` in `ruxen_core` simply
-//!   formats the whole file). Per the task brief, when partial
+//!   support partial input (`ruxen_core` only formats whole files).
+//!   Per the task brief, when partial
 //!   formatting is rejected we fall back to formatting the whole
 //!   document and return a single edit that covers the **entire
 //!   document** — the formatted text does not align line-by-line with

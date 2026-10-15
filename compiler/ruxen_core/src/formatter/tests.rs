@@ -369,9 +369,7 @@ fn test_comment_collector_multiple() {
 }
 
 /// An interpolated string passed as an argument INSIDE another string's
-/// `#{...}` is a single `InterpolatedString` token in the outer part's token
-/// list. It must be reconstructed as source (`"a#{p}ple"`), not printed with
-/// its Rust `Debug` form, which re-lexes as garbage (`None` → E0008).
+/// `#{...}` (`"#{a.include?("a#{p}ple")}"`) round-trips unchanged.
 #[test]
 fn test_nested_interpolated_string_arg() {
     let source = fmt_fixture("test_nested_interpolated_string_arg");
@@ -390,42 +388,20 @@ fn test_comment_inside_interpolation_ignored() {
     assert_eq!(comments[0].kind, comments::CommentKind::Line);
 }
 
-// ─── Import Sorting Tests ───────────────────────────────────────────
+// ─── Import Tests ───────────────────────────────────────────────────
 
 #[test]
-fn test_import_sorting_groups() {
-    use super::format_imports::format_sorted_imports;
+fn test_group_names_keep_source_order() {
     use crate::lexer::token::Span;
     use crate::parser::ast::{UseDecl, UseKind};
 
-    let imports = vec![
-        UseDecl {
-            path: vec!["Http".into(), "Client".into()],
-            kind: UseKind::Simple,
-            span: Span::new(0, 0, 1, 1),
-        },
-        UseDecl {
-            path: vec!["Std".into(), "IO".into(), "File".into()],
-            kind: UseKind::Simple,
-            span: Span::new(0, 0, 1, 1),
-        },
-        UseDecl {
-            path: vec!["app".into(), "models".into()],
-            kind: UseKind::Simple,
-            span: Span::new(0, 0, 1, 1),
-        },
-    ];
-
-    let doc = format_sorted_imports(&imports);
-    let rendered = doc::render(&doc);
-    let lines: Vec<&str> = rendered.lines().collect();
-
-    // Std should come first
-    assert!(
-        lines[0].contains("Std"),
-        "First line should be Std import: {}",
-        lines[0]
-    );
+    let u = UseDecl {
+        path: vec!["Std".into(), "IO".into()],
+        kind: UseKind::Group(vec!["File".into(), "BufReader".into()]),
+        span: Span::new(0, 0, 1, 1),
+    };
+    let rendered = doc::render(&format_items::format_use(&u));
+    assert!(rendered.contains("{File, BufReader}"), "{}", rendered);
 }
 
 // ─── Semantic round-trip regressions (fmt-in-sync-with-parser) ──────
@@ -574,4 +550,42 @@ fn multi_statement_match_arm_has_no_end() {
         "spurious arm `end`:\n{}",
         out
     );
+}
+
+/// Parse `src` and return its AST `Debug` text with every `Span` blanked.
+fn ast_without_spans(src: &str) -> String {
+    let tokens = crate::lexer::Lexer::new(src)
+        .tokenize()
+        .expect("fixture lexes");
+    let program = crate::parser::Parser::new(tokens)
+        .parse()
+        .unwrap_or_else(|d| panic!("parse failed: {:?}\n---\n{}", d, src));
+    let debug = format!("{program:?}");
+    let mut out = String::new();
+    let mut rest = debug.as_str();
+    while let Some(pos) = rest.find("Span { start: ") {
+        out.push_str(&rest[..pos]);
+        let close = rest[pos..].find('}').expect("closed Span");
+        rest = &rest[pos + close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// F-5: each construct in the fixture used to be dropped or corrupted by
+/// `ruxen fmt` (interpolations re-emitted from tokens, `@[repr]`/`derive`,
+/// lost defaults, `where`, `layout`, `async` sigs, `unsafe extension`,
+/// operator receivers, single-statement `do` blocks).
+#[test]
+fn f5_formatter_preserves_ast() {
+    let src = fmt_fixture("f5_formatter_preserves_ast");
+    let out = assert_reparses(&src);
+    assert_eq!(
+        ast_without_spans(&out),
+        ast_without_spans(&src),
+        "AST changed:\n{}",
+        out
+    );
+    assert!(!out.contains("@["), "retired attribute emitted:\n{}", out);
+    assert_eq!(out.matches("protected").count(), 1, "{}", out);
 }

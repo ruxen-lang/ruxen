@@ -506,6 +506,7 @@ impl CodeGen {
             }
 
             // ── Pre-scan for address-taken locals ────────────────────────
+            // The rule is owned by `mir::refmut_abi::refmut_is_slot_address`.
             // Any local whose address is taken via `&mut src` (RefMut) and
             // whose type is `String`/`Str` must live in a stack slot rather
             // than a Cranelift SSA variable, so the pointer we hand out
@@ -525,7 +526,7 @@ impl CodeGen {
                 for inst in &block.instructions {
                     if let MirInst::RefMut { src, .. } = inst {
                         if let Some(local) = func.locals.get(*src as usize) {
-                            if is_string_mir_ty(&local.ty) {
+                            if crate::mir::refmut_abi::refmut_is_slot_address(&local.ty) {
                                 address_taken.insert(*src);
                             }
                         }

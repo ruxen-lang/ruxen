@@ -38,6 +38,10 @@ impl Parser {
             TokenKind::InterpolatedString(ref parts) => {
                 let parts = parts.clone();
                 self.advance();
+                let parts = parts
+                    .into_iter()
+                    .map(|part| self.parse_string_part(part, &start))
+                    .collect();
                 Expr {
                     kind: ExprKind::InterpolatedString(parts),
                     span: start,
@@ -423,6 +427,55 @@ impl Parser {
         }
     }
 
+    /// Parse one lexed string part. A `#{...}` part's tokens are parsed as a
+    /// single expression statement by a sub-parser whose diagnostics are
+    /// forwarded; an empty `#{}` is the empty string.
+    fn parse_string_part(
+        &mut self,
+        part: crate::lexer::token::StringPart,
+        string_span: &Span,
+    ) -> StringPart {
+        let (tokens, spec) = match part {
+            crate::lexer::token::StringPart::Literal(s) => return StringPart::Literal(s),
+            crate::lexer::token::StringPart::Expr { tokens, spec } => (tokens, spec),
+        };
+        let expr = match tokens.first() {
+            None => Expr {
+                kind: ExprKind::StringLiteral(String::new()),
+                span: string_span.clone(),
+            },
+            Some(first) => {
+                let first_span = first.span.clone();
+                let mut tokens = tokens;
+                let end_span = tokens.last().map_or(first_span.clone(), |t| t.span.clone());
+                tokens.push(crate::lexer::token::Token::new(TokenKind::Eof, end_span));
+                let mut sub = Parser::new(tokens);
+                sub.closure_depth = self.closure_depth;
+                let expr = match sub.parse_statement() {
+                    Statement::Expression(expr) => expr,
+                    _ => {
+                        sub.error_at("expected an expression in `#{...}`", first_span.clone());
+                        Expr {
+                            kind: ExprKind::Identifier("_error".to_string()),
+                            span: first_span,
+                        }
+                    }
+                };
+                sub.skip_newlines();
+                if !sub.at_eof() {
+                    let found = format!("{:?}", sub.current_kind());
+                    sub.error(&format!("unexpected {found} in `#{{...}}` interpolation"));
+                }
+                self.diagnostics.append(&mut sub.diagnostics);
+                expr
+            }
+        };
+        StringPart::Expr {
+            expr: Box::new(expr),
+            spec,
+        }
+    }
+
     /// Heuristic: the current `[` opens a list of type arguments, not an
     /// indexing expression. True when the token immediately after `[` is a
     /// TypeIdentifier, Self, or a lifetime and the matching `]` is followed
@@ -448,7 +501,6 @@ impl Parser {
             first,
             TokenKind::TypeIdentifier(_)
                 | TokenKind::SelfType
-                | TokenKind::Lifetime(_)
                 | TokenKind::Amp
                 | TokenKind::AmpMut
                 | TokenKind::IntLiteral(_, _)

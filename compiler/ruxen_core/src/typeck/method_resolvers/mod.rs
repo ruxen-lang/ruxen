@@ -13,9 +13,8 @@
 //!   1. declared-method (`resolver::declared_method_resolvers`) — a user
 //!      class's own `new` beats a builtin (bug A2 fix), scoped away from
 //!      the stdlib types that own a payload-inferring named `new` arm.
-//!   2. named-stdlib — `concurrency`/`fmt`/`io`/`fs`/`process`/`net`/
-//!      `time`, each a `resolvers()` table keyed on the receiver class
-//!      name (incl. the E1100/E1101/E1102/E0714 construction checks).
+//!   2. named-stdlib — `io` (BufReader/BufWriter), keyed on the receiver
+//!      class name (incl. the E0714 construction check).
 //!   3. structural — `strings`/`collections`/`numeric`/`iter` (keyed on
 //!      `Ty` shape) + `resolver::structural_fallback_resolvers` (the
 //!      generic Class/Struct/Enum `to_s`/`clone`/`new`/`default` tail).
@@ -32,7 +31,6 @@ use super::infer::{is_bufio_inner_supported, InferenceEngine};
 
 mod builtin_bridge;
 mod collections;
-mod concurrency;
 mod io;
 mod numeric;
 mod resolver;
@@ -80,14 +78,12 @@ fn resolvers() -> &'static [MethodResolver] {
         let mut v = Vec::new();
         v.extend(resolver::declared_method_resolvers()); // TIER 1 — fixes A2
                                                          // TIER 2 — named-stdlib residual. After the zero-Rust-stdlib
-                                                         // migration (Phase B), only the resolvers carrying genuine
-                                                         // compiler logic remain:
-                                                         //   * `concurrency` — Mutex/Arc/JoinHandle generic-payload
-                                                         //     substitution + the E1100/E1101/E1102 Send construction
-                                                         //     checks (Problem-3 residual, not a static `.rx` return).
+                                                         // migration (Phase B), only the resolver carrying genuine
+                                                         // compiler logic remains:
                                                          //   * `io` — BufReader/BufWriter `new`/`with_capacity` E0714
                                                          //     inner-type check + their generic-representation methods.
-        v.extend(concurrency::resolvers());
+                                                         // The concurrency surface (Thread/JoinHandle/Mutex/
+                                                         // SharedSync/…) resolves from `library/std/sync/src/*.rx`.
         v.extend(io::resolvers());
         // TIER 3 — structural RESIDUAL resolvers. After the
         // zero-Rust-stdlib migration these carry ONLY the arms that
@@ -180,10 +176,8 @@ mod golden {
     }
 
     /// An argument expression whose `.ty` is what the effectful arms read
-    /// (e.g. `Mutex.new` reads `args[0].ty`). The `kind` is irrelevant to
-    /// the resolvers except `Thread.spawn`'s closure-capture scan, which
-    /// is exercised with a dedicated closure-free arg below (a non-closure
-    /// arg simply skips the E1100 capture loop).
+    /// (e.g. `BufReader.new` reads `args[0].ty`). The `kind` is irrelevant
+    /// to the resolvers.
     fn arg(ty: Ty) -> HirExpr {
         HirExpr {
             kind: HirExprKind::UnitLiteral,
@@ -348,40 +342,12 @@ mod golden {
             v.push(c(res(), m));
         }
 
-        // ── concurrency (TIER 2) ───────────────────────────────────
-        v.push(c(class("Future", vec![Ty::Int]), "await"));
-        // Thread.spawn with a non-closure arg (skips the E1100 loop, hits
-        // the fresh-var output fallback).
-        v.push(c_args(class("Thread", vec![]), "spawn", vec![arg(Ty::Int)]));
-        v.push(c(class("Thread", vec![]), "current"));
-        v.push(c(class("Thread", vec![]), "sleep"));
-        v.push(c(class("Thread", vec![]), "yield_now"));
-        v.push(c(class("Thread", vec![]), "id"));
-        v.push(c(class("Thread", vec![]), "name"));
-        v.push(c(class("JoinHandle", vec![Ty::Int]), "join"));
-        v.push(c(class("JoinHandle", vec![Ty::Int]), "join!"));
-        v.push(c(class("JoinHandle", vec![Ty::Int]), "thread_id"));
-        v.push(c(class("ThreadPanic", vec![]), "message"));
-        // Mutex.new with a Send payload (Int) — no E1101.
-        v.push(c_args(class("Mutex", vec![]), "new", vec![arg(Ty::Int)]));
-        v.push(c(class("Mutex", vec![Ty::Int]), "lock"));
-        v.push(c(class("Mutex", vec![Ty::Int]), "lock!"));
-        v.push(c(class("Mutex", vec![Ty::Int]), "try_lock"));
-        v.push(c(class("Mutex", vec![Ty::Int]), "into_inner"));
-        v.push(c(class("MutexGuard", vec![Ty::Int]), "deref"));
-        v.push(c(class("MutexGuard", vec![Ty::Int]), "deref_mut"));
-        v.push(c(class("MutexGuard", vec![Ty::Int]), "deref_var"));
-        // Arc / SharedSync.new with a Send payload (Int) — no E1102.
-        v.push(c_args(class("Arc", vec![]), "new", vec![arg(Ty::Int)]));
-        v.push(c_args(
-            class("SharedSync", vec![]),
-            "new",
-            vec![arg(Ty::Int)],
-        ));
-        v.push(c(class("Arc", vec![Ty::Int]), "deref"));
-        v.push(c(class("Arc", vec![Ty::Int]), "clone"));
-        v.push(c(class("Arc", vec![Ty::Int]), "strong_count"));
-        v.push(c(class("Arc", vec![Ty::Int]), "weak_count"));
+        // ── concurrency migrated to .rx ────────────────────────────
+        // Thread/JoinHandle/ThreadPanic/Mutex/MutexGuard/SharedSync resolve
+        // from `library/std/sync/src/*.rx`; the concurrency resolver was
+        // deleted. Typing and the E1100/E1101/E1102 checks are pinned by
+        // `std_use_resolution.rs`, `sync_extras_typeck.rs` and
+        // `concurrency_negative.rs` (which load stdlib).
 
         // ── fmt (Formatter) migrated to .rx ────────────────────────
         // Resolve from `library/std/fmt/src/lib.rx` via
@@ -476,31 +442,6 @@ mod golden {
         // of the effectful arms, so the oracle captures the error code
         // AND the `Some(Ty::Error)` return.
         //
-        // Mutex/SharedSync/Arc `new(NotSend)` now record `diag=[]` here:
-        // the E1101/E1102 payload-Send check MIGRATED (Feature B) to the
-        // `.rx` bounds `class Mutex[T: Send]` / `class SharedSync[T: Send]`
-        // and fires from the CONSTRUCTION-SEAM check (`check_constructor_
-        // generic_bounds`, typeck/infer/expr.rs), which needs the `.rx`
-        // class definition loaded. The golden runs with an EMPTY symbol
-        // table (no `.rx`), so the bound isn't visible and no diagnostic
-        // fires here — the resolver arm only TYPES the constructor now.
-        // End-to-end E1101/E1102 enforcement is pinned by the
-        // `concurrency_negative.rs` integration tests (which load stdlib).
-        v.push(c_args(
-            class("Mutex", vec![]),
-            "new",
-            vec![arg(class("NotSend", vec![]))],
-        ));
-        v.push(c_args(
-            class("SharedSync", vec![]),
-            "new",
-            vec![arg(class("NotSend", vec![]))],
-        ));
-        v.push(c_args(
-            class("Arc", vec![]),
-            "new",
-            vec![arg(class("NotSend", vec![]))],
-        ));
         // BufReader / BufWriter with an unsupported inner (Int) → E0714.
         v.push(c_args(
             class("BufReader", vec![]),
@@ -593,52 +534,6 @@ mod golden {
         }
     }
 
-    /// Task 2 — bug-A2 precedence DECISION (decided empirically, per plan).
-    ///
-    /// The plan posed: is the real stdlib `Mutex.new` a builtin arm only
-    /// (no symbol-table `DefKind::Method`)? If so, tier-1-first would be
-    /// safe. This test records the empirical answer: it is NOT — the
-    /// stdlib `class Mutex[T]` in `library/std/sync/src/mutex.rx` declares
-    /// `def self.new as "ruxen_mutex_new"(initial: T) -> Mutex[T]`, so
-    /// `lookup_class_method_return("Mutex", "new")` returns `Some(Mutex[T])`.
-    ///
-    /// CONSEQUENCE (load-bearing for Task 3): tier-1-first is UNSAFE — a
-    /// declared-method resolver running before the named-stdlib arms would
-    /// return the unsubstituted `Mutex[T]` instead of the named arm's
-    /// payload-inferred `Mutex[<args[0].ty>]` + E1101 Send check, changing
-    /// stdlib behaviour and breaking the golden corpus. Therefore tier 1
-    /// (declared-method) MUST be scoped to USER-DEFINED receivers only: it
-    /// skips any receiver whose name is in the stdlib type-name set
-    /// (`resolver::STDLIB_TYPE_NAMES`). This test pins that precondition so
-    /// a future change to the stdlib surface that removed the declared
-    /// `new` would re-open the tier-1-first option deliberately.
-    #[test]
-    fn stdlib_mutex_new_is_a_declared_method_so_tier1_is_user_scoped() {
-        let mut bootstrap_diagnostics = Vec::new();
-        let bootstrap_packages =
-            crate::resolve::bootstrap::run_bootstrap_with_package_names(&mut bootstrap_diagnostics);
-        // A trivial user program; we only need the stdlib symbols loaded.
-        let src = "def main\nend\n";
-        let mut lx = crate::lexer::Lexer::new(src);
-        let toks = lx.tokenize().expect("lex");
-        let mut p = crate::parser::Parser::new(toks);
-        let prog = p.parse().expect("parse");
-        let resolver = crate::resolve::Resolver::new();
-        let result = resolver.resolve_with_bootstrap_packages(&prog, &bootstrap_packages);
-
-        let mut ctx = result.type_context;
-        let mut symbols = result.symbols;
-        let traits = MixinResolver::new();
-        let eng = InferenceEngine::new(&mut ctx, &mut symbols, &traits);
-        let mutex_new = eng.lookup_class_method_return("Mutex", "new");
-        assert!(
-            matches!(mutex_new, Some(Ty::Class { ref name, .. }) if name == "Mutex"),
-            "stdlib Mutex declares its own `new` (FFI) returning Mutex[T]; \
-             tier-1 must therefore be scoped to user-defined receivers only. \
-             got {mutex_new:?}"
-        );
-    }
-
     /// Resolve `builtin_method_type(receiver, method, [])` against a real
     /// engine built from the given user `src` (no stdlib prelude — the
     /// program is self-contained), so a user-declared `new` is present in
@@ -713,31 +608,6 @@ end
         assert!(
             matches!(ret2, Some(Ty::Result(..))),
             "user-declared `Config.new -> Result` must be honoured; got {ret2:?}"
-        );
-    }
-
-    /// Counterpart to A2: a stdlib type that owns a payload-inferring named
-    /// `new` arm (`Mutex`) must keep that arm's behaviour — the named arm
-    /// wins over the declared-method tier, so `Mutex.new(7)` is still
-    /// `Mutex[Int]` (not the unsubstituted declared `Mutex[T]`). This is
-    /// the non-contradiction the corpus and A2 must both satisfy.
-    #[test]
-    fn stdlib_named_new_arm_still_wins_over_declared() {
-        let mut ctx = TypeContext::new();
-        let mut symbols = SymbolTable::new();
-        let traits = MixinResolver::new();
-        let mut eng = InferenceEngine::new(&mut ctx, &mut symbols, &traits);
-        let ret = builtin_method_type(
-            &mut eng,
-            &class("Mutex", vec![]),
-            "new",
-            &[arg(Ty::Int)],
-            &span(),
-        );
-        assert!(
-            matches!(ret, Some(Ty::Class { ref name, ref generic_args, .. })
-                if name == "Mutex" && generic_args == &vec![Ty::Int]),
-            "Mutex.new(Int) must stay the named arm's Mutex[Int]; got {ret:?}"
         );
     }
 }

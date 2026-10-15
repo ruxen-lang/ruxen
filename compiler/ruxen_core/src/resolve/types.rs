@@ -1,23 +1,16 @@
-#![allow(unused_imports)]
-
-use std::collections::HashMap;
-
 use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
-use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
+use crate::hir::types::{MixinRef, Ty};
 use crate::lexer::token::Span;
-use crate::parser::ast::{self, Visibility};
+use crate::parser::ast::{self};
 
 use super::const_helpers;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
 use super::symbols::*;
-use super::{ClosureCaptureContext, ResolveResult, Resolver};
+use super::Resolver;
 
 /// The built-in collection type names. These are NOT registered as classes
 /// in the type scope by `register_builtins`; their type resolution is the
 /// three hardcoded arms in [`Resolver::resolve_type_expr`] below
-/// (`"Array" | "Vec"` → `Ty::Array`, `"Hash"` → `Ty::Map`,
+/// (`"Array"` → `Ty::Array`, `"Hash"` → `Ty::Map`,
 /// `"Set"` → `Ty::Set`, the last two with E0615 hash-key
 /// validation). The const is the single source of truth shared with
 /// `ffi_registration.rs`'s anchor-only-builtin check, so the membership
@@ -27,7 +20,7 @@ use super::{ClosureCaptureContext, ResolveResult, Resolver};
 /// `resolve_type_expr` collection arms. It de-dups the ffi `matches!`; it
 /// does NOT (and cannot) collapse those three arms, which each produce a
 /// different `Ty` and carry distinct validation.
-pub(crate) const COLLECTION_BUILTINS: &[&str] = &["Array", "Vec", "Hash", "Set"];
+pub(crate) const COLLECTION_BUILTINS: &[&str] = &["Array", "Hash", "Set"];
 
 /// The primitive type names whose method-home `.rx` class is anchored onto
 /// their `register_primitives` `TypeAlias` DefId (then stomped to `Class`),
@@ -453,10 +446,7 @@ impl Resolver {
 
         // Check built-in generic types
         match name.as_str() {
-            // `Array[T]` was `Vec[T]` pre-Ruby-naming. The legacy spelling
-            // is kept as an alias so older sources still resolve while
-            // the new vocabulary settles.
-            "Array" | "Vec" => {
+            "Array" => {
                 let elem = generic_args
                     .into_iter()
                     .next()
@@ -724,17 +714,16 @@ impl Resolver {
         let name = &path.segments[0];
         // A name carrying generic args in a `&Name[..]` position is the
         // PARAMETERIZED COLLECTION type, not a bare mixin reference — even
-        // when the bare name also denotes a mixin. `Hash` is the canonical
-        // collision: the TEC-13 `Hash → Hashable` alias makes `Hash` resolve
-        // to the static-dispatch `Hashable` mixin, so `&Hash[Int, Int]` was
-        // mis-rejected with E1118 in free-fn position (a false positive),
+        // when the bare name also denotes a mixin. `Hash` was the canonical
+        // collision: the retired `Hash` mixin made `Hash` resolve to a
+        // static-dispatch mixin, so `&Hash[Int, Int]` was mis-rejected with E1118 in free-fn position (a false positive),
         // while the method path happened to resolve it to the `Hash[K,V]`
         // collection and compiled. `&Hash[K,V]` / `&Set[T]` are sound by-ref
         // collection params — exactly like the widely-used `&Array[Int]` —
         // so a generic-args-bearing collection builtin must fall through to
         // ordinary collection-ref resolution, making free fns and methods
-        // consistent. The bare `&Hash` (no args, = the `Hashable` mixin) is
-        // still correctly rejected below. (Q25b.)
+        // consistent. A bare static-dispatch mixin ref (`&Hashable`) is
+        // still rejected below. (Q25b.)
         if path.generic_args.is_some() && COLLECTION_BUILTINS.contains(&name.as_str()) {
             return None;
         }

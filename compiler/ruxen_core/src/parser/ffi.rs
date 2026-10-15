@@ -6,7 +6,7 @@ use crate::parser::Parser;
 
 impl Parser {
     /// Parse `lib Name ... end`
-    pub(super) fn parse_lib_decl(&mut self, link_attrs: Vec<LinkAttr>) -> LibDecl {
+    pub(super) fn parse_lib_decl(&mut self) -> LibDecl {
         let start = self.current_span();
         self.advance(); // consume `lib`
         self.skip_newlines();
@@ -90,7 +90,6 @@ impl Parser {
         LibDecl {
             name,
             functions,
-            link_attrs,
             span,
         }
     }

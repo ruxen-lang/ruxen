@@ -1,18 +1,13 @@
-#![allow(unused_imports)]
-
-use std::collections::HashMap;
-
 use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
+use crate::hir::types::{MixinRef, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::{self, Visibility};
 
 use super::const_helpers;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
+use super::scope::ScopeKind;
 use super::symbols::*;
-use super::{ClosureCaptureContext, ResolveResult, Resolver};
+use super::Resolver;
 
 impl Resolver {
     pub(super) fn resolve_item(&mut self, item: &ast::TopLevelItem) -> Option<HirItem> {
@@ -73,7 +68,7 @@ impl Resolver {
             // (`bind_free_fn_alias`) so call sites resolve during body
             // resolution; it produces no HIR item (docs/decisions/alias-keyword.md).
             ast::TopLevelItem::Alias(_) => None,
-            ast::TopLevelItem::Lib(_) | ast::TopLevelItem::Extern(_) => {
+            ast::TopLevelItem::Lib(_) => {
                 // FFI declarations are handled during codegen — they don't produce
                 // HIR items. The functions they declare are resolved by name at
                 // call sites during codegen (via runtime_name / get_or_declare_func).
@@ -200,6 +195,7 @@ impl Resolver {
         // Resolve inner impl blocks
         let mut impl_blocks = Vec::new();
         for inner in &class.inner_impls {
+            self.check_include_names_mixin(inner);
             let trait_ref = MixinRef {
                 name: inner.trait_name.segments.join("."),
                 generic_args: inner
@@ -368,7 +364,6 @@ impl Resolver {
                     parent: parent_def,
                     fields: field_def_ids,
                     methods: method_def_ids,
-                    derive_traits: class.derive_traits.clone(),
                     opt_out_send,
                     opt_out_sync,
                     manual_send,
@@ -401,7 +396,6 @@ impl Resolver {
             fields,
             methods,
             impl_blocks,
-            derive_traits: class.derive_traits.clone(),
             doc_comments: class.doc_comments.clone(),
             span: class.span.clone(),
         }
@@ -512,7 +506,6 @@ impl Resolver {
                 info: StructInfo {
                     generic_params: struct_generic_param_infos,
                     fields: field_def_ids,
-                    derive_traits: s.derive_traits.clone(),
                     layout: s.layout.clone(),
                     opt_out_send: false,
                     opt_out_sync: false,
@@ -554,7 +547,6 @@ impl Resolver {
             fields,
             methods,
             impl_blocks,
-            derive_traits: s.derive_traits.clone(),
             layout: s.layout.clone(),
             doc_comments: s.doc_comments.clone(),
             span: s.span.clone(),
@@ -562,6 +554,51 @@ impl Resolver {
     }
 
     // ─── Enum Resolution ────────────────────────────────────────────
+
+    /// E1017: an in-body `include X` must name a mixin. Ruby raises
+    /// `TypeError` for `include SomeClass`; without this check the include
+    /// was accepted and gave the type nothing (`include Hash`, the retired
+    /// spelling of `include Hashable`, silently became a no-op). A name
+    /// that does not resolve at all is left to E0608. The collection
+    /// builtins (`Array`, `Hash`, `Set`) are not in the type scope (see
+    /// `COLLECTION_BUILTINS`), so they are matched by name.
+    ///
+    /// The name is looked up lexically, innermost module first, as Ruby
+    /// does: inside `module BufReader`, `include Reader` means the mixin
+    /// `BufReader.Reader` even when the program also has a top-level
+    /// `class Reader`.
+    fn check_include_names_mixin(&mut self, inner: &ast::InnerImpl) {
+        let name = inner.trait_name.segments.join(".");
+        let path = &self.current_module_path;
+        let def = (0..=path.len())
+            .rev()
+            .find_map(|n| {
+                self.type_registry
+                    .get(&Self::qualified_key(&path[..n], &name))
+                    .copied()
+            })
+            .or_else(|| self.scopes.lookup_type(&name))
+            .and_then(|id| self.symbols.get(id));
+        let kind = match def.map(|d| &d.kind) {
+            Some(DefKind::Struct { .. }) => "struct",
+            Some(DefKind::Enum { .. }) => "enum",
+            Some(DefKind::Class { .. } | DefKind::TypeAlias { .. } | DefKind::Newtype { .. }) => {
+                "class"
+            }
+            None if super::types::COLLECTION_BUILTINS.contains(&name.as_str()) => "class",
+            _ => return,
+        };
+        let hint = if name == "Hash" {
+            "; did you mean `include Hashable`?"
+        } else {
+            ""
+        };
+        self.diagnostics.push(Diagnostic::error_with_code(
+            format!("cannot include `{name}`: `{name}` is a {kind}, not a mixin{hint}"),
+            inner.span.clone(),
+            "E1017",
+        ));
+    }
 
     /// Lower a list of AST `InnerImpl` directives (collected from a
     /// struct or enum body under ruby-naming.spec.md §3.4a) into HIR
@@ -576,6 +613,7 @@ impl Resolver {
     ) -> Vec<HirImplBlock> {
         let mut impl_blocks = Vec::new();
         for inner in inner_impls {
+            self.check_include_names_mixin(inner);
             let trait_ref = MixinRef {
                 name: inner.trait_name.segments.join("."),
                 generic_args: inner
@@ -733,7 +771,6 @@ impl Resolver {
                 info: EnumInfo {
                     generic_params: enum_generic_param_infos,
                     variants: variant_def_ids,
-                    derive_traits: e.derive_traits.clone(),
                     opt_out_send: false,
                     opt_out_sync: false,
                     manual_send: false,
@@ -774,7 +811,6 @@ impl Resolver {
             variants,
             methods,
             impl_blocks,
-            derive_traits: e.derive_traits.clone(),
             doc_comments: e.doc_comments.clone(),
             span: e.span.clone(),
         }

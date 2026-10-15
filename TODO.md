@@ -2,7 +2,7 @@
 
 This is the working plan for cleaning up Ruxen and moving it to Ruby syntax. A future agent can read this file and continue the work. Tick a box only when its check passes, and record new decisions in the Decisions section in the same commit.
 
-Started 2026-10-14 on branch `feat/concurrency-adoption` (worktree `../ruxen-concurrency-adoption`). Last updated 2026-10-15, 02:05.
+Started 2026-10-14 on branch `feat/concurrency-adoption` (worktree `../ruxen-concurrency-adoption`). Last updated 2026-10-16.
 
 ## Evidence
 
@@ -46,6 +46,7 @@ Language decisions:
   - Keep FFI `lib "…"` blocks.
   - `size`/`length` return `Int`, and `to_i8`-style methods replace `as`.
   - Ownership type names stay as they are for now.
+  - `%` is Ruby's floored modulo for Int and Float (`-7 % 3` is 2), with `remainder` for the truncated result (decided 2026-10-16).
 - **Open:** 16 questions, OQ-1 to OQ-16, in spec section 20. Each has a default that applies until it is decided.
 
 Process rules:
@@ -82,17 +83,17 @@ Phases A to C, part 2. The build workflow was stopped on purpose on 2026-10-15 a
 - [x] c15 (F-15): dead internal runtime C symbols removed, with the guard "every exported runtime symbol has a declaration or an emitter". Public stdlib surface is kept.
 - [x] c17 (was failing before this work): one shared test link helper (`compiler/ruxen_core/tests/common/`) includes the regex runtime and `-lm`. `drop_fixtures`, `runtime_safety` and `stdlib_json` link again.
 - [x] c18 (was failing before this work): e2e `416_scope_collect_reactor_child` no longer times out (`library/std/future/runtime/reactor.c`).
-- [ ] c10 (F-10): the concurrency methods become real `.rx` code, and `typeck/method_resolvers/concurrency.rs` is deleted.
-- [ ] c5 (F-5): the formatter round-trips. `#{…}` is parsed as an expression, every `format_*` destructures exhaustively, and retired syntax is no longer emitted. Also fixes the `1101_string_regex_bridge.rx` idempotence failure and the `syntax_parity` failures.
-- [ ] c13 (F-13): dead Rust code deleted (after c5, c10).
-- [ ] c14 (F-14): retired syntax removed; `Hashable` only (after c13).
-- [ ] c16: CHANGELOG and `CONTEXT.md` for everything since `65aab1c` (after c14).
-- [ ] Targeted end check:
+- [x] c10 (F-10): the concurrency methods become real `.rx` code, and `typeck/method_resolvers/concurrency.rs` is deleted.
+- [x] c5 (F-5): the formatter round-trips. `#{…}` is parsed as an expression, every `format_*` destructures exhaustively, and retired syntax is no longer emitted. Also fixes the `1101_string_regex_bridge.rx` idempotence failure and the `syntax_parity` failures.
+- [x] c13 (F-13): dead Rust code deleted (after c5, c10). Two leftovers are under Known issues.
+- [x] c14 (F-14): retired syntax removed; `Hashable` only (after c13).
+- [x] c16: CHANGELOG and `CONTEXT.md` for everything since `65aab1c` (after c14).
+- [x] Targeted end check (passed 2026-10-16: 672/672 e2e, 655 core lib tests, affected tests green):
   - `cargo build --workspace --all-targets`
   - `cargo test -p ruxen_core --lib`
   - `scripts/affected-tests.sh 1759633`
   - the full default e2e sweep, which must show 0 failures
-- [ ] Independent `general-review` of everything since `1759633`, with fixes.
+- [x] Independent `general-review` of everything since `1759633`, with fixes: 3 rounds; its remaining findings predate this work and are under Known issues.
 
 To resume, use the doing-substantial-work skill's build workflow (`~/.claude1/skills/doing-substantial-work/build-workflow.js`) with:
 - `base: "1759633"`
@@ -178,7 +179,8 @@ Order from [the Rust-isms audit](docs/audits/2026-10-rust-isms.md), section 6. R
   - `=~` (spelled `~=` today)
   - `||` and `&&` on `T?`
   - `exclude Send`
-- [ ] d: `ruxen fmt` prints the canonical Ruby forms: `@x`, no `let`, `case/in`, `require`, endless `def`, no `'a`. Add a `ruxen fix --ruby` codemod built on the same formatter.
+- [ ] d: `ruxen fmt` prints the canonical Ruby forms: `@x`, no `let`, `case/in`, `require`, endless `def`, no `'a`.
+  - Calls keep the parentheses the author wrote: `puts "x"` stays `puts "x"` and `x.map { }` stays `x.map { }`, never `x.map() { }`. Today the formatter always prints `()` because the AST does not record whether a call had them. Record that in the parser's call nodes first; F-19 then carries it into the HIR. Add a `ruxen fix --ruby` codemod built on the same formatter.
 - [ ] c: rewrite with the codemod, per module, with tests green after each:
   - the stdlib (90 files), the 595 fixtures and the examples
   - then canvas, quiver and rondo, which were not audited; read `rondo/docs/ruxen-issues.md` first
@@ -186,6 +188,7 @@ Order from [the Rust-isms audit](docs/audits/2026-10-rust-isms.md), section 6. R
 - [ ] b2 and b3: warn on Rust forms (new coded diagnostics with fix-its), lowest usage first, ending with `use`, `match` and `let`. Then make them errors.
 - [ ] a2: the second docs pass. Rewrite the tutorial (33 chapters), README, error docs and requirement tiers to the spec.
 - [ ] Update code comments that cite old `ruby-naming.spec.md` section numbers (§3.x, §10a).
+- [ ] Make `%` floored for Int and Float on both backends and the REPL, add `remainder`, and update e2e 1950.
 - [ ] Later: the Fiber scheduler replaces `async`/`await`.
 
 ## Known issues and loose ends
@@ -195,4 +198,18 @@ Order from [the Rust-isms audit](docs/audits/2026-10-rust-isms.md), section 6. R
 - [ ] The installed toolchain (`~/.ruxen/bin/ruxen`) is from June and cannot parse newer fixtures. Run `ruxen upgrade --from-source ~/Documents/ruxen-lang/ruxen` once this branch lands.
 - [ ] Unconfirmed: on the first run, 4 `ruxen test` dependency-linking tests failed (`consumer_test_runs_dep_generic_over_two_implementors`, `library_test_sees_dependency_symbol_and_runs`, `non_ffi_dep_test_still_links`, `test_links_flat_merged_ffi_dep_runtime`). They may have been environmental, so recheck them.
 - [ ] `docs/specs/syntax/ruby-naming.spec.md` appendix A lists things not yet verified on a fresh binary: the `super` lookup order, `.call` on a stored block, hex/binary/octal literals, and `protected`.
+- [ ] `typeck::type_check_with_bootstrap` (the non-package bootstrap path) is used only by 4 integration tests (`bootstrap_class_bodies`, `bootstrap_prelude_merge`, `no_std_e1400`, `wasm_codegen`). Port them to the package-aware path, then delete it. It cannot go behind `cfg(test)` because integration tests do not see `cfg(test)` items.
+- [ ] The `ruxen_driver` crate is deleted on this branch. Drop its mentions in `../CLAUDE.md` and `ruxen/CLAUDE.md` (both git-ignored, outside this worktree) when the branch merges.
+- [ ] `ruxenc::compile::project_target_ruxen` looks for `ruxen.toml` or `Cargo.toml`, not `Ruxen.toml`, so a project's incremental cache can land in `./target/ruxen` of the current directory.
+- [ ] **High:** `ruxen fmt` silently deletes comments on statements, fields, mixin signatures and module or extension items.
+- [ ] **High:** a guard from `Mutex#lock!` taken in a helper or as a temporary is never released, so the next lock deadlocks.
+- [ ] **High:** reading a `&var String` (interpolation, `.size`, passing it to a `&String` parameter) treats the slot address as the string. Reads through `MutexGuard#get` are fine.
+- [ ] **High:** a scalar `&var` (Int, Float, Bool) is passed by value, so a write through it never reaches the caller. This includes `MutexGuard#deref_mut` on `Mutex[Int]`.
+- [ ] Interpolating a `&Float`, `&var Float` or `&var Bool` prints the raw machine word, not the value.
+- [ ] A local named `args` is shadowed by the global `args` function.
+- [ ] `Mutex.new` and `MutexGuard#set` take ownership of the payload and never free it (needs typed drop).
+- [ ] `String#[]` builds the char array on every call, aborts on a negative index and returns `Char`, not a `String`.
+- [ ] E1017 calls a type alias or newtype a `class`, and rejects an alias of a mixin.
+- [ ] REGISTRY rows and docs for E1004, E1005 and E1008 remain, but nothing emits them any more.
+- [ ] CHANGELOG [Unreleased] overstates a few things: Channel and "stdlib extensions", and "the formatter round-trips" (it still drops some comments). It also lacks Removed and Added entries.
 - [ ] Release: the owner pushes and merges `feat/concurrency-adoption` into master.

@@ -13,7 +13,6 @@
 pub mod comments;
 pub mod doc;
 pub mod format_expr;
-pub mod format_imports;
 pub mod format_items;
 pub mod format_pattern;
 pub mod format_type;
@@ -41,15 +40,6 @@ pub struct FormatResult {
     pub changed: bool,
     /// Any errors encountered (syntax errors in the input).
     pub errors: Vec<Diagnostic>,
-}
-
-/// A byte range within a source file (for range formatting).
-#[derive(Debug, Clone)]
-pub struct TextRange {
-    pub start_line: u32,
-    pub start_column: u32,
-    pub end_line: u32,
-    pub end_column: u32,
 }
 
 /// Format a complete Ruxen source file.
@@ -125,12 +115,6 @@ pub fn format(source: &str) -> FormatResult {
         changed,
         errors: vec![],
     }
-}
-
-/// Format a range within a Ruxen source file (for LSP rangeFormatting).
-pub fn format_range(source: &str, _range: TextRange) -> FormatResult {
-    // For now, format the entire file. Range formatting can be refined later.
-    format(source)
 }
 
 /// Receiver mode for [`render_fn_signature`].

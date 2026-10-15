@@ -2239,4 +2239,35 @@ end";
             }
         }
     }
+
+    /// F-5: `#{...}` is parsed into an expression by the parser.
+    #[test]
+    fn interpolation_parses_to_expression() {
+        let expr = parse_expr("\"#{a <=> b}\"");
+        let ExprKind::InterpolatedString(parts) = expr.kind else {
+            panic!("expected InterpolatedString, got {:?}", expr.kind);
+        };
+        match &parts[..] {
+            [StringPart::Expr { expr, .. }] => assert!(
+                matches!(expr.kind, ExprKind::BinaryOp { op: BinOp::Cmp, .. }),
+                "got {:?}",
+                expr.kind
+            ),
+            other => panic!("expected one expression part, got {other:?}"),
+        }
+    }
+
+    /// F-5: a malformed `#{...}` is a parse error, not a silently dropped
+    /// expression.
+    #[test]
+    fn malformed_interpolation_is_reported() {
+        let diags = parse_err("def f\n  \"#{1 +}\"\nend\n");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("expected expression")),
+            "got {:?}",
+            diags.iter().map(|d| d.to_string()).collect::<Vec<_>>()
+        );
+    }
 }

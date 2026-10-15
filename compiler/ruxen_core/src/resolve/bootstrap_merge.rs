@@ -1,18 +1,11 @@
-#![allow(unused_imports)]
-
 use std::collections::HashMap;
 
-use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
-use crate::lexer::token::Span;
-use crate::parser::ast::{self, Visibility};
+use crate::parser::ast::{self};
 
-use super::const_helpers;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
+use super::scope::ScopeKind;
 use super::symbols::*;
-use super::{ClosureCaptureContext, ResolveResult, Resolver};
+use super::{ResolveResult, Resolver};
 
 impl Resolver {
     pub fn resolve(self, program: &ast::Program) -> ResolveResult {
@@ -107,7 +100,7 @@ impl Resolver {
         self.register_builtins();
 
         // Collected FFI library declarations (filled by the
-        // `Lib`/`Extern` arms in `register_top_level_type`). Surfaced
+        // `Lib` arms in `register_top_level_type`). Surfaced
         // on `HirProgram::ffi_libs` so MIR lowering can populate
         // `MirProgram::ffi_libs` and rewrite call-site callees to the
         // declared C symbol. The bootstrap merge below contributes to
@@ -490,46 +483,9 @@ impl Resolver {
     }
 
     pub(super) fn fixup_bootstrapped_stdlib_modules(&mut self) {
-        // Generic per-package auto-population first; cross-package
-        // FIXUPS (below) only handle re-exports that span packages.
+        // Phase D of #06.95: each `std.<pkg>` submodule's `items` are
+        // derived from the matching `library/std/<pkg>/src/lib.rx`.
         self.auto_populate_std_submodules_from_packages();
-
-        // (stdlib-module-name, &[item-names-the-.rx-defines])
-        //
-        // `register_builtins` inserts the outer `std` module into the
-        // type scope (so `std.X` resolution works) but does NOT
-        // insert submodules (`std.rand`, `std.io`, …) into any scope —
-        // they are only reachable by walking `std`'s `items` list.
-        // The fixup therefore looks each `module_name` up by walking
-        // `std`'s items rather than calling `scopes.lookup_type`
-        // directly.
-        //
-        // Phase D of #06.95: the bulk per-package FIXUPS table is
-        // gone. `auto_populate_std_submodules_from_packages` above
-        // derives each `std.<pkg>` submodule's `items` from the
-        // matching `library/std/<pkg>/src/lib.rx`. The only
-        // remaining responsibility here is the small TYPE_ALIASES
-        // table below.
-
-        // Wave 2 (#06.8): re-establish stdlib type aliases whose target
-        // moved from a Rust registration to a bootstrap-loaded `.rx`
-        // file. Today this is just `Hash → Hashable` (the TEC-13
-        // deprecation alias).
-        //
-        // The `Hash[K, V]` collection type has its OWN type-position
-        // resolver path (see `resolve_type_path`'s explicit `Hash` /
-        // `Vec` / `Set` arms) and is unaffected by this alias.
-        const TYPE_ALIASES: &[(&str, &str)] = &[("Hash", "Hashable")];
-        for (alias, target) in TYPE_ALIASES {
-            if let Some(target_id) = self.scopes.lookup_type(target) {
-                // Only insert when missing — never overwrite a real
-                // scope entry.
-                if self.scopes.lookup_type(alias).is_none() {
-                    self.scopes.insert_type(alias.to_string(), target_id);
-                    self.type_registry.insert(alias.to_string(), target_id);
-                }
-            }
-        }
     }
 
     /// Whitelist of `TopLevelItem` variants the bootstrap merge path
@@ -552,7 +508,6 @@ impl Resolver {
         matches!(
             item,
             ast::TopLevelItem::Lib(_)
-                | ast::TopLevelItem::Extern(_)
                 | ast::TopLevelItem::Function(_)
                 | ast::TopLevelItem::Class(_)
                 | ast::TopLevelItem::Struct(_)

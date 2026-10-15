@@ -124,7 +124,6 @@ fn item_span(item: &TopLevelItem) -> &crate::lexer::token::Span {
         TopLevelItem::Newtype(nt) => &nt.span,
         TopLevelItem::Const(c) => &c.span,
         TopLevelItem::Lib(l) => &l.span,
-        TopLevelItem::Extern(e) => &e.span,
         TopLevelItem::Expr(e) => &e.span,
         TopLevelItem::Alias(a) => &a.span,
     }
@@ -140,13 +139,12 @@ fn format_top_level_item(item: &TopLevelItem, comments: &CommentMap) -> Doc {
         TopLevelItem::Enum(e) => format_enum(e, comments),
         TopLevelItem::Mixin(t) => format_trait(t, comments),
         TopLevelItem::Impl(i) => format_impl(i, comments),
-        TopLevelItem::Function(f) => format_func_def(f, comments),
+        TopLevelItem::Function(f) => format_prefixed_func(f, comments),
         TopLevelItem::Use(u) => format_use(u),
         TopLevelItem::TypeAlias(ta) => format_type_alias(ta, comments),
         TopLevelItem::Newtype(nt) => format_newtype(nt, comments),
         TopLevelItem::Const(c) => format_const(c, comments),
         TopLevelItem::Lib(l) => format_lib(l, comments),
-        TopLevelItem::Extern(e) => format_extern(e, comments),
         // A top-level expression statement (Q23b — test-file
         // `Tester.describe(...) do … end`). Format it exactly like an
         // in-body statement expression so the test file round-trips.
@@ -158,8 +156,13 @@ fn format_top_level_item(item: &TopLevelItem, comments: &CommentMap) -> Doc {
 /// Format a Ruby `alias new_name old_name` item byte-stably: the keyword, the
 /// new name, the old name, single-spaced, no normalization
 /// (docs/decisions/alias-keyword.md, D10).
-fn format_alias(a: &crate::parser::ast::AliasDef) -> Doc {
-    text(format!("alias {} {}", a.new_name, a.old_name))
+fn format_alias(a: &AliasDef) -> Doc {
+    let AliasDef {
+        new_name,
+        old_name,
+        span: _,
+    } = a;
+    text(format!("alias {} {}", new_name, old_name))
 }
 
 /// Check if a single-statement function body is simple enough for inline `{ }` form.
@@ -200,42 +203,61 @@ fn is_simple_expr(kind: &ExprKind) -> bool {
 /// dropped (Q23a — `ruxen fmt` wiped every `##` doc on a class method).
 /// Mirrors the class-body `lib "..."` FFI-def doc handling in `format_lib`.
 pub fn format_func_with_leading_comments(func: &FuncDef, comments: &CommentMap) -> Doc {
+    with_leading_comments(func.span.start, format_func_def(func, comments), comments)
+}
+
+/// `doc` preceded by the comments that lead the source offset `start`.
+fn with_leading_comments(start: usize, doc: Doc, comments: &CommentMap) -> Doc {
     let mut parts: Vec<Doc> = Vec::new();
-    for comment in comments.leading_comments(func.span.start) {
+    for comment in comments.leading_comments(start) {
         parts.push(format_comment(comment));
         parts.push(hardline());
     }
-    parts.push(format_func_def(func, comments));
+    parts.push(doc);
     concat(parts)
 }
 
-pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
-    let mut sig_parts = Vec::new();
-
-    // Visibility
-    // TODO(migration): per-def `pub`/`protected`/`private` prefixes are not
-    // valid Ruxen surface syntax (§3.2). Visibility lives in section markers
-    // (`private` / `protected` / `public`) inside the type body. Formatter
-    // needs to be reworked to emit section markers instead of per-method
-    // keywords. For now, emit nothing for Public (which is the default) and
-    // emit the legacy keyword for Protected/Private so we round-trip.
+/// A function or method in a context with no visibility sections (top level,
+/// `extension` bodies): `protected` is written as an inline prefix.
+fn format_prefixed_func(func: &FuncDef, comments: &CommentMap) -> Doc {
+    let def = format_func_def(func, comments);
     match func.visibility {
-        Visibility::Public => {}
-        Visibility::Protected => sig_parts.push(text("protected ")),
-        Visibility::Private => {}
+        Visibility::Protected => concat(vec![text("protected "), def]),
+        Visibility::Public | Visibility::Private => def,
     }
+}
+
+/// A `def` without any visibility keyword: type, mixin and module bodies
+/// express visibility with section markers, other contexts through
+/// `format_prefixed_func`.
+pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
+    let FuncDef {
+        visibility: _,
+        is_async,
+        self_mode,
+        is_class_method,
+        name,
+        generic_params,
+        params,
+        return_type,
+        where_clause,
+        body,
+        doc_comments: _,
+        span,
+    } = func;
+    let mut sig_parts = Vec::new();
 
     // `async def` — the async modifier precedes `def` (surface spelling
     // `async def name`). Dropping it silently rewrites an async function into
     // a synchronous one (a semantic change + reparse-identity break).
-    if func.is_async {
+    if *is_async {
         sig_parts.push(text("async "));
     }
 
     sig_parts.push(text("def "));
 
     // Self mode
-    if let Some(self_mode) = &func.self_mode {
+    if let Some(self_mode) = self_mode {
         match self_mode {
             SelfMode::Mutable => sig_parts.push(text("var ")),
             SelfMode::Consuming => sig_parts.push(text("consume ")),
@@ -244,26 +266,22 @@ pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
     }
 
     // Class method marker
-    if func.is_class_method {
+    if *is_class_method {
         sig_parts.push(text("self."));
     }
 
-    sig_parts.push(text(func.name.clone()));
+    sig_parts.push(text(name.clone()));
 
     // Generic params
-    if let Some(gp) = &func.generic_params {
+    if let Some(gp) = generic_params {
         sig_parts.push(format_generic_params(gp));
     }
 
     // Parameters
-    if func.params.is_empty() && func.self_mode.is_none() {
+    if params.is_empty() && self_mode.is_none() {
         // No params at all — some functions have no parens
     } else {
-        let param_docs: Vec<Doc> = func
-            .params
-            .iter()
-            .map(|p| format_param(p, comments))
-            .collect();
+        let param_docs: Vec<Doc> = params.iter().map(|p| format_param(p, comments)).collect();
         if param_docs.is_empty() {
             // Has self_mode but no explicit params — no parens needed
         } else {
@@ -272,22 +290,22 @@ pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
     }
 
     // Return type
-    if let Some(rt) = &func.return_type {
+    if let Some(rt) = return_type {
         sig_parts.push(text(" -> "));
         sig_parts.push(format_type_expr(rt, comments));
     }
 
     // Where clause
-    if let Some(wc) = &func.where_clause {
+    if let Some(wc) = where_clause {
         sig_parts.push(format_where_clause(wc));
     }
 
     let sig = group(concat(sig_parts));
 
     // Body
-    if func.body.statements.is_empty() {
+    if body.statements.is_empty() {
         // Dangling comments in empty body
-        let dangling = comments.dangling_comments(func.span.start);
+        let dangling = comments.dangling_comments(span.start);
         if dangling.is_empty() {
             concat(vec![sig, hardline(), text("end")])
         } else {
@@ -310,8 +328,8 @@ pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
     } else {
         // Check for single-expression inline body: `pub def id -> Int { self.id }`
         // Only use inline form for simple expressions (not control flow).
-        if func.body.statements.len() == 1 && is_simple_inline_body(&func.body) {
-            let body_doc = format_block_body(&func.body, comments);
+        if body.statements.len() == 1 && is_simple_inline_body(body) {
+            let body_doc = format_block_body(body, comments);
             let inline = group(concat(vec![
                 sig.clone(),
                 text(" { "),
@@ -329,10 +347,10 @@ pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
             // Use IfBreak: try inline first, fall back to expanded
             group(if_break(expanded, inline))
         } else {
-            let body = format_block_body(&func.body, comments);
+            let body_doc = format_block_body(body, comments);
             concat(vec![
                 sig,
-                nest(INDENT_WIDTH, concat(vec![hardline(), body])),
+                nest(INDENT_WIDTH, concat(vec![hardline(), body_doc])),
                 hardline(),
                 text("end"),
             ])
@@ -341,34 +359,80 @@ pub fn format_func_def(func: &FuncDef, comments: &CommentMap) -> Doc {
 }
 
 fn format_param(param: &Param, comments: &CommentMap) -> Doc {
+    let Param {
+        auto_assign,
+        name,
+        type_expr,
+        default,
+        span: _,
+    } = param;
     let mut parts = Vec::new();
-    if param.auto_assign {
+    if *auto_assign {
         parts.push(text("@"));
     }
-    parts.push(text(param.name.clone()));
+    parts.push(text(name.clone()));
     parts.push(text(": "));
-    parts.push(format_type_expr(&param.type_expr, comments));
+    parts.push(format_type_expr(type_expr, comments));
+    if let Some(default) = default {
+        parts.push(text(" = "));
+        parts.push(format_expr(default, comments));
+    }
     concat(parts)
 }
 
 // ─── Classes ────────────────────────────────────────────────────────
 
-fn format_class(class: &ClassDef, comments: &CommentMap) -> Doc {
-    let mut header = vec![text("class "), text(class.name.clone())];
+/// The `layout <kind>` directives that open a type body (ruby-naming.spec.md
+/// §3.5), one per line. The parser stores `layout c` as `C`.
+fn format_layout(layout: &[String]) -> Option<Doc> {
+    if layout.is_empty() {
+        return None;
+    }
+    let lines = layout
+        .iter()
+        .map(|kind| {
+            let kind = if kind == "C" { "c" } else { kind.as_str() };
+            text(format!("layout {kind}"))
+        })
+        .collect();
+    Some(join(hardline(), lines))
+}
 
-    if let Some(gp) = &class.generic_params {
+fn format_class(class: &ClassDef, comments: &CommentMap) -> Doc {
+    let ClassDef {
+        name,
+        generic_params,
+        parent,
+        fields,
+        methods,
+        inner_impls,
+        layout,
+        lib_decls,
+        doc_comments: _,
+        where_clause,
+        aliases,
+        span: _,
+    } = class;
+    let mut header = vec![text("class "), text(name.clone())];
+
+    if let Some(gp) = generic_params {
         header.push(format_generic_params(gp));
     }
 
-    if let Some(parent) = &class.parent {
+    if let Some(parent) = parent {
         header.push(text(" < "));
         header.push(format_type_path(parent));
     }
 
+    if let Some(wc) = where_clause {
+        header.push(format_where_clause(wc));
+    }
+
     let mut body_parts: Vec<Doc> = Vec::new();
+    body_parts.extend(format_layout(layout));
 
     // Fields — one per line, no blank lines between them
-    let field_docs = format_field_section(&class.fields, comments);
+    let field_docs = format_field_section(fields, comments);
     if !field_docs.is_empty() {
         body_parts.push(join(hardline(), field_docs));
     }
@@ -377,32 +441,32 @@ fn format_class(class: &ClassDef, comments: &CommentMap) -> Doc {
     // (ruby-naming.spec.md §3.2) so a `private`/`protected` method round-trips
     // with its visibility intact instead of silently re-parsing as public.
     let mut running = Visibility::Public;
-    body_parts.extend(format_method_section(
-        &class.methods,
-        comments,
-        &mut running,
-    ));
+    body_parts.extend(format_method_section(methods, comments, &mut running));
     if running != Visibility::Public {
         body_parts.push(text("public"));
     }
 
     // Inner impls
-    for imp in &class.inner_impls {
+    for imp in inner_impls {
         body_parts.push(format_inner_impl(imp, comments));
     }
 
     // In-body `lib "X" ... end` FFI blocks (#06.8 follow-up). Reuses
     // `format_lib` so a class-scoped FFI block round-trips identically
     // to a top-level one.
-    for lib in &class.lib_decls {
-        body_parts.push(format_lib(lib, comments));
+    for lib in lib_decls {
+        body_parts.push(with_leading_comments(
+            lib.span.start,
+            format_lib(lib, comments),
+            comments,
+        ));
     }
 
     // Ruby `alias new old` synonyms (docs/decisions/alias-keyword.md, D10).
-    if !class.aliases.is_empty() {
+    if !aliases.is_empty() {
         body_parts.push(join(
             hardline(),
-            class.aliases.iter().map(format_alias).collect::<Vec<_>>(),
+            aliases.iter().map(format_alias).collect::<Vec<_>>(),
         ));
     }
 
@@ -423,10 +487,16 @@ fn format_field_decl(field: &FieldDecl, comments: &CommentMap) -> Doc {
     // surface syntax — `pub` is not even a keyword, only `public` is). Field
     // visibility is expressed through section markers in the type body, which
     // `format_field_section` emits. A field declaration is just `name: Type`.
+    let FieldDecl {
+        visibility: _,
+        name,
+        type_expr,
+        span: _,
+    } = field;
     concat(vec![
-        text(field.name.clone()),
+        text(name.clone()),
         text(": "),
-        format_type_expr(&field.type_expr, comments),
+        format_type_expr(type_expr, comments),
     ])
 }
 
@@ -492,60 +562,59 @@ fn format_method_section(
 // ─── Structs ────────────────────────────────────────────────────────
 
 fn format_struct(s: &StructDef, comments: &CommentMap) -> Doc {
-    let mut prelude: Vec<Doc> = Vec::new();
-    // Pre-existing formatter output uses the retired `@[repr(...)]` syntax;
-    // a separate follow-up will migrate it to in-body `layout <kind>` per
-    // ruby-naming.spec.md §3.5. For now only the field access changes name.
-    for arg in &s.layout {
-        prelude.push(concat(vec![text(format!("@[repr({})]", arg)), hardline()]));
-    }
+    let StructDef {
+        name,
+        generic_params,
+        fields,
+        methods,
+        inner_impls,
+        layout,
+        doc_comments: _,
+        where_clause,
+        aliases,
+        span: _,
+    } = s;
+    let mut header = vec![text("struct "), text(name.clone())];
 
-    let mut header = vec![text("struct "), text(s.name.clone())];
-
-    if let Some(gp) = &s.generic_params {
+    if let Some(gp) = generic_params {
         header.push(format_generic_params(gp));
     }
 
-    // Fields (joined without blank lines), then methods/inner_impls,
-    // each separated by a blank line — mirrors `format_class`.
-    let mut body_parts: Vec<Doc> = Vec::new();
+    if let Some(wc) = where_clause {
+        header.push(format_where_clause(wc));
+    }
 
-    let field_docs = format_field_section(&s.fields, comments);
+    // Layout, then fields (joined without blank lines), then
+    // methods/inner_impls, each separated by a blank line — mirrors
+    // `format_class`.
+    let mut body_parts: Vec<Doc> = Vec::new();
+    body_parts.extend(format_layout(layout));
+
+    let field_docs = format_field_section(fields, comments);
     if !field_docs.is_empty() {
         body_parts.push(join(hardline(), field_docs));
     }
 
-    if !s.derive_traits.is_empty() {
-        body_parts.push(concat(vec![
-            text("derive "),
-            join(
-                concat(vec![text(","), space()]),
-                s.derive_traits.iter().map(|t| text(t.clone())).collect(),
-            ),
-        ]));
-    }
-
     let mut running = Visibility::Public;
-    body_parts.extend(format_method_section(&s.methods, comments, &mut running));
+    body_parts.extend(format_method_section(methods, comments, &mut running));
     if running != Visibility::Public {
         body_parts.push(text("public"));
     }
 
-    for imp in &s.inner_impls {
+    for imp in inner_impls {
         body_parts.push(format_inner_impl(imp, comments));
     }
 
-    if !s.aliases.is_empty() {
+    if !aliases.is_empty() {
         body_parts.push(join(
             hardline(),
-            s.aliases.iter().map(format_alias).collect::<Vec<_>>(),
+            aliases.iter().map(format_alias).collect::<Vec<_>>(),
         ));
     }
 
     let body = join(concat(vec![hardline(), hardline()]), body_parts);
 
     concat(vec![
-        concat(prelude),
         concat(header),
         nest(INDENT_WIDTH, concat(vec![hardline(), body])),
         hardline(),
@@ -556,18 +625,35 @@ fn format_struct(s: &StructDef, comments: &CommentMap) -> Doc {
 // ─── Enums ──────────────────────────────────────────────────────────
 
 fn format_enum(e: &EnumDef, comments: &CommentMap) -> Doc {
-    let mut header = vec![text("enum "), text(e.name.clone())];
+    let EnumDef {
+        name,
+        generic_params,
+        variants,
+        methods,
+        inner_impls,
+        layout,
+        doc_comments: _,
+        where_clause,
+        aliases,
+        span: _,
+    } = e;
+    let mut header = vec![text("enum "), text(name.clone())];
 
-    if let Some(gp) = &e.generic_params {
+    if let Some(gp) = generic_params {
         header.push(format_generic_params(gp));
     }
 
-    // Variants joined on hardlines (no blank between), then methods /
-    // inner-impls each separated by a blank line — mirrors `format_class`.
-    let mut body_parts: Vec<Doc> = Vec::new();
+    if let Some(wc) = where_clause {
+        header.push(format_where_clause(wc));
+    }
 
-    let variant_docs: Vec<Doc> = e
-        .variants
+    // Layout, then variants joined on hardlines (no blank between), then
+    // methods / inner-impls each separated by a blank line — mirrors
+    // `format_class`.
+    let mut body_parts: Vec<Doc> = Vec::new();
+    body_parts.extend(format_layout(layout));
+
+    let variant_docs: Vec<Doc> = variants
         .iter()
         .map(|v| format_variant(v, comments))
         .collect();
@@ -575,30 +661,20 @@ fn format_enum(e: &EnumDef, comments: &CommentMap) -> Doc {
         body_parts.push(join(hardline(), variant_docs));
     }
 
-    if !e.derive_traits.is_empty() {
-        body_parts.push(concat(vec![
-            text("derive "),
-            join(
-                concat(vec![text(","), space()]),
-                e.derive_traits.iter().map(|t| text(t.clone())).collect(),
-            ),
-        ]));
-    }
-
     let mut running = Visibility::Public;
-    body_parts.extend(format_method_section(&e.methods, comments, &mut running));
+    body_parts.extend(format_method_section(methods, comments, &mut running));
     if running != Visibility::Public {
         body_parts.push(text("public"));
     }
 
-    for imp in &e.inner_impls {
+    for imp in inner_impls {
         body_parts.push(format_inner_impl(imp, comments));
     }
 
-    if !e.aliases.is_empty() {
+    if !aliases.is_empty() {
         body_parts.push(join(
             hardline(),
-            e.aliases.iter().map(format_alias).collect::<Vec<_>>(),
+            aliases.iter().map(format_alias).collect::<Vec<_>>(),
         ));
     }
 
@@ -613,102 +689,102 @@ fn format_enum(e: &EnumDef, comments: &CommentMap) -> Doc {
 }
 
 fn format_variant(variant: &Variant, comments: &CommentMap) -> Doc {
-    let name = text(variant.name.clone());
-    match &variant.fields {
-        VariantKind::Unit => name,
-        VariantKind::Tuple(fields) => {
-            let field_docs: Vec<Doc> = fields
-                .iter()
-                .map(|f| {
-                    if let Some(n) = &f.name {
-                        concat(vec![
-                            text(n.clone()),
-                            text(": "),
-                            format_type_expr(&f.type_expr, comments),
-                        ])
-                    } else {
-                        format_type_expr(&f.type_expr, comments)
-                    }
-                })
-                .collect();
-            group(concat(vec![
-                name,
-                text("("),
-                nest(
-                    INDENT_WIDTH,
-                    concat(vec![
-                        softline(),
-                        join(concat(vec![text(","), line()]), field_docs),
-                    ]),
-                ),
+    let Variant {
+        name,
+        fields,
+        span: _,
+    } = variant;
+    let name = text(name.clone());
+    // Tuple and named-field variants are both written with parentheses.
+    let field_list = match fields {
+        VariantKind::Unit => return name,
+        VariantKind::Tuple(fields) | VariantKind::Struct(fields) => fields,
+    };
+    let field_docs: Vec<Doc> = field_list
+        .iter()
+        .map(
+            |VariantField {
+                 name,
+                 type_expr,
+                 span: _,
+             }| {
+                let ty = format_type_expr(type_expr, comments);
+                match name {
+                    Some(n) => concat(vec![text(n.clone()), text(": "), ty]),
+                    None => ty,
+                }
+            },
+        )
+        .collect();
+    group(concat(vec![
+        name,
+        text("("),
+        nest(
+            INDENT_WIDTH,
+            concat(vec![
                 softline(),
-                text(")"),
-            ]))
-        }
-        VariantKind::Struct(fields) => {
-            let field_docs: Vec<Doc> = fields
-                .iter()
-                .map(|f| {
-                    if let Some(n) = &f.name {
-                        concat(vec![
-                            text(n.clone()),
-                            text(": "),
-                            format_type_expr(&f.type_expr, comments),
-                        ])
-                    } else {
-                        format_type_expr(&f.type_expr, comments)
-                    }
-                })
-                .collect();
-            // Use parentheses for named-field variants (Ruxen convention)
-            group(concat(vec![
-                name,
-                text("("),
-                nest(
-                    INDENT_WIDTH,
-                    concat(vec![
-                        softline(),
-                        join(concat(vec![text(","), line()]), field_docs),
-                    ]),
-                ),
-                softline(),
-                text(")"),
-            ]))
-        }
-    }
+                join(concat(vec![text(","), line()]), field_docs),
+            ]),
+        ),
+        softline(),
+        text(")"),
+    ]))
 }
 
 // ─── Traits ─────────────────────────────────────────────────────────
 
 fn format_trait(t: &MixinDef, comments: &CommentMap) -> Doc {
-    let mut header = vec![text("mixin "), text(t.name.clone())];
+    let MixinDef {
+        name,
+        generic_params,
+        super_traits,
+        items,
+        lib_decls,
+        doc_comments: _,
+        dispatch_mode,
+        span: _,
+    } = t;
+    let mut header = vec![text("mixin "), text(name.clone())];
 
-    if let Some(gp) = &t.generic_params {
+    if let Some(gp) = generic_params {
         header.push(format_generic_params(gp));
     }
 
     // Mixin vtables spec §B1: `dispatch runtime` modifier sits after the
     // mixin name + generics, before any `: Super` bounds. Skipped when
     // dispatch_mode is the (default) Static.
-    if matches!(t.dispatch_mode, DispatchMode::Runtime) {
-        header.push(text(" dispatch runtime"));
+    match dispatch_mode {
+        DispatchMode::Runtime => header.push(text(" dispatch runtime")),
+        DispatchMode::Static => {}
     }
 
-    if !t.super_traits.is_empty() {
+    if !super_traits.is_empty() {
         header.push(text(": "));
-        header.push(format_trait_bounds(&t.super_traits));
+        header.push(format_trait_bounds(super_traits));
     }
 
-    let mut body_parts: Vec<Doc> = t
-        .items
-        .iter()
-        .map(|ti| format_trait_item(ti, comments))
-        .collect();
+    // Default methods carry visibility; it is written with section markers
+    // (ruby-naming.spec.md §3.2), as in class bodies.
+    let mut body_parts: Vec<Doc> = Vec::new();
+    let mut running = Visibility::Public;
+    for item in items {
+        if let MixinItem::DefaultMethod(func) = item {
+            if func.visibility != running {
+                body_parts.push(text(visibility_marker(func.visibility)));
+                running = func.visibility;
+            }
+        }
+        body_parts.push(format_trait_item(item, comments));
+    }
 
     // In-body `lib "X" ... end` FFI blocks (#06.8 follow-up). Mirrors
     // the class-body emission so a mixin-scoped FFI block round-trips.
-    for lib in &t.lib_decls {
-        body_parts.push(format_lib(lib, comments));
+    for lib in lib_decls {
+        body_parts.push(with_leading_comments(
+            lib.span.start,
+            format_lib(lib, comments),
+            comments,
+        ));
     }
 
     let body = join(hardline(), body_parts);
@@ -723,7 +799,7 @@ fn format_trait(t: &MixinDef, comments: &CommentMap) -> Doc {
 
 fn format_trait_item(item: &MixinItem, comments: &CommentMap) -> Doc {
     match item {
-        MixinItem::AssocType { name, .. } => text(format!("type {}", name)),
+        MixinItem::AssocType { name, span: _ } => text(format!("type {}", name)),
         MixinItem::MethodSig(sig) => format_method_sig(sig, comments),
         MixinItem::DefaultMethod(func) => format_func_with_leading_comments(func, comments),
         MixinItem::Alias(a) => format_alias(a),
@@ -731,14 +807,27 @@ fn format_trait_item(item: &MixinItem, comments: &CommentMap) -> Doc {
 }
 
 fn format_method_sig(sig: &MethodSig, comments: &CommentMap) -> Doc {
+    let MethodSig {
+        is_async,
+        self_mode,
+        is_class_method,
+        name,
+        generic_params,
+        params,
+        return_type,
+        span: _,
+    } = sig;
     let mut parts = Vec::new();
+    if *is_async {
+        parts.push(text("async "));
+    }
 
     // Keyword order matches `format_func_def`: `def` first, then the self-mode
     // modifier (`var` / `consume`). Emitting `var def` instead of `def var`
     // does not parse — the mixin-body parser expects `def`/`type` to lead.
     parts.push(text("def "));
 
-    if let Some(self_mode) = &sig.self_mode {
+    if let Some(self_mode) = self_mode {
         match self_mode {
             SelfMode::Mutable => parts.push(text("var ")),
             SelfMode::Consuming => parts.push(text("consume ")),
@@ -746,26 +835,22 @@ fn format_method_sig(sig: &MethodSig, comments: &CommentMap) -> Doc {
         }
     }
 
-    if sig.is_class_method {
+    if *is_class_method {
         parts.push(text("self."));
     }
 
-    parts.push(text(sig.name.clone()));
+    parts.push(text(name.clone()));
 
-    if let Some(gp) = &sig.generic_params {
+    if let Some(gp) = generic_params {
         parts.push(format_generic_params(gp));
     }
 
-    let param_docs: Vec<Doc> = sig
-        .params
-        .iter()
-        .map(|p| format_param(p, comments))
-        .collect();
+    let param_docs: Vec<Doc> = params.iter().map(|p| format_param(p, comments)).collect();
     if !param_docs.is_empty() {
         parts.push(format_call_args(param_docs));
     }
 
-    if let Some(rt) = &sig.return_type {
+    if let Some(rt) = return_type {
         parts.push(text(" -> "));
         parts.push(format_type_expr(rt, comments));
     }
@@ -785,29 +870,41 @@ fn format_method_sig(sig: &MethodSig, comments: &CommentMap) -> Doc {
 // `include` / `extension` blocks.
 
 fn format_impl(imp: &ImplBlock, comments: &CommentMap) -> Doc {
+    let ImplBlock {
+        generic_params,
+        is_unsafe,
+        negative_trait,
+        trait_name,
+        target_type,
+        items,
+        span: _,
+    } = imp;
     // ruby-naming.spec.md §3.4a: the block opener is `extension` — `impl` was
     // retired and is now lexed as a bare identifier, so emitting `impl ...` no
     // longer parses ("expected top-level declaration, found Identifier").
-    let mut header = vec![text("extension ")];
+    let mut header = Vec::new();
+    if *is_unsafe {
+        header.push(text("unsafe "));
+    }
+    header.push(text("extension "));
 
-    if imp.negative_trait {
+    if *negative_trait {
         header.push(text("!"));
     }
 
-    if let Some(gp) = &imp.generic_params {
+    if let Some(gp) = generic_params {
         header.push(format_generic_params(gp));
         header.push(text(" "));
     }
 
-    if let Some(trait_name) = &imp.trait_name {
+    if let Some(trait_name) = trait_name {
         header.push(format_type_path(trait_name));
         header.push(text(" for "));
     }
 
-    header.push(format_type_expr(&imp.target_type, comments));
+    header.push(format_type_expr(target_type, comments));
 
-    let item_docs: Vec<Doc> = imp
-        .items
+    let item_docs: Vec<Doc> = items
         .iter()
         .map(|item| format_impl_item(item, comments))
         .collect();
@@ -824,19 +921,25 @@ fn format_impl(imp: &ImplBlock, comments: &CommentMap) -> Doc {
 fn format_impl_item(item: &ImplItem, comments: &CommentMap) -> Doc {
     match item {
         ImplItem::AssocType {
-            name, type_expr, ..
+            name,
+            type_expr,
+            span: _,
         } => concat(vec![
             text("type "),
             text(name.clone()),
             text(" = "),
             format_type_expr(type_expr, comments),
         ]),
-        ImplItem::Method(func) => format_func_with_leading_comments(func, comments),
+        ImplItem::Method(func) => with_leading_comments(
+            func.span.start,
+            format_prefixed_func(func, comments),
+            comments,
+        ),
         ImplItem::Include {
             is_unsafe,
             negative_trait,
             trait_name,
-            ..
+            span: _,
         } => {
             let mut parts = Vec::new();
             if *is_unsafe {
@@ -854,26 +957,32 @@ fn format_impl_item(item: &ImplItem, comments: &CommentMap) -> Doc {
 }
 
 fn format_inner_impl(imp: &InnerImpl, comments: &CommentMap) -> Doc {
+    let InnerImpl {
+        is_unsafe,
+        negative_trait,
+        trait_name,
+        items,
+        span: _,
+    } = imp;
     // An InnerImpl with no items represents the bare `include Mixin`
     // directive (see `Parser::parse_include_directive`). Emit the
     // original directive form so the formatter round-trips cleanly.
-    if imp.items.is_empty() {
+    if items.is_empty() {
         let mut parts = Vec::new();
-        if imp.is_unsafe {
+        if *is_unsafe {
             parts.push(text("unsafe "));
         }
         parts.push(text("include "));
-        if imp.negative_trait {
+        if *negative_trait {
             parts.push(text("!"));
         }
-        parts.push(format_type_path(&imp.trait_name));
+        parts.push(format_type_path(trait_name));
         return concat(parts);
     }
 
-    let header = vec![text("impl "), format_type_path(&imp.trait_name)];
+    let header = vec![text("impl "), format_type_path(trait_name)];
 
-    let item_docs: Vec<Doc> = imp
-        .items
+    let item_docs: Vec<Doc> = items
         .iter()
         .map(|item| format_impl_item(item, comments))
         .collect();
@@ -890,19 +999,32 @@ fn format_inner_impl(imp: &InnerImpl, comments: &CommentMap) -> Doc {
 // ─── Modules ────────────────────────────────────────────────────────
 
 fn format_module(m: &ModuleDef, comments: &CommentMap) -> Doc {
-    let mut body_parts: Vec<Doc> = Vec::new();
-    for (i, item) in m.items.iter().enumerate() {
-        if i > 0 {
-            body_parts.push(hardline());
-            body_parts.push(hardline());
+    let ModuleDef {
+        name,
+        items,
+        span: _,
+    } = m;
+    // Module functions carry their section's visibility (ruby-naming.spec.md
+    // §3.2); it is written back with section markers.
+    let mut item_docs: Vec<Doc> = Vec::new();
+    let mut running = Visibility::Public;
+    for item in items {
+        match item {
+            TopLevelItem::Function(f) => {
+                if f.visibility != running {
+                    item_docs.push(text(visibility_marker(f.visibility)));
+                    running = f.visibility;
+                }
+                item_docs.push(format_func_def(f, comments));
+            }
+            other => item_docs.push(format_top_level_item(other, comments)),
         }
-        body_parts.push(format_top_level_item(item, comments));
     }
-    let body = concat(body_parts);
+    let body = join(concat(vec![hardline(), hardline()]), item_docs);
 
     concat(vec![
         text("module "),
-        text(m.name.clone()),
+        text(name.clone()),
         nest(INDENT_WIDTH, concat(vec![hardline(), body])),
         hardline(),
         text("end"),
@@ -912,8 +1034,13 @@ fn format_module(m: &ModuleDef, comments: &CommentMap) -> Doc {
 // ─── Use Declarations ───────────────────────────────────────────────
 
 pub fn format_use(u: &UseDecl) -> Doc {
-    let path_str = u.path.join(".");
-    match &u.kind {
+    let UseDecl {
+        path,
+        kind,
+        span: _,
+    } = u;
+    let path_str = path.join(".");
+    match kind {
         UseKind::Simple => concat(vec![text("use "), text(path_str)]),
         UseKind::Alias(alias) => concat(vec![
             text("use "),
@@ -922,9 +1049,8 @@ pub fn format_use(u: &UseDecl) -> Doc {
             text(alias.clone()),
         ]),
         UseKind::Group(names) => {
-            let mut sorted_names = names.clone();
-            sorted_names.sort();
-            let name_docs: Vec<Doc> = sorted_names.iter().map(|n| text(n.clone())).collect();
+            // Source order is kept: the names are part of the AST.
+            let name_docs: Vec<Doc> = names.iter().map(|n| text(n.clone())).collect();
             group(concat(vec![
                 text("use "),
                 text(path_str),
@@ -946,21 +1072,32 @@ pub fn format_use(u: &UseDecl) -> Doc {
 // ─── Type Aliases & Newtypes ────────────────────────────────────────
 
 fn format_type_alias(ta: &TypeAliasDef, comments: &CommentMap) -> Doc {
-    let mut parts = vec![text("type "), text(ta.name.clone())];
-    if let Some(gp) = &ta.generic_params {
+    let TypeAliasDef {
+        name,
+        generic_params,
+        type_expr,
+        span: _,
+    } = ta;
+    let mut parts = vec![text("type "), text(name.clone())];
+    if let Some(gp) = generic_params {
         parts.push(format_generic_params(gp));
     }
     parts.push(text(" = "));
-    parts.push(format_type_expr(&ta.type_expr, comments));
+    parts.push(format_type_expr(type_expr, comments));
     group(concat(parts))
 }
 
 fn format_newtype(nt: &NewtypeDef, comments: &CommentMap) -> Doc {
+    let NewtypeDef {
+        name,
+        inner_type,
+        span: _,
+    } = nt;
     concat(vec![
         text("newtype "),
-        text(nt.name.clone()),
+        text(name.clone()),
         text("("),
-        format_type_expr(&nt.inner_type, comments),
+        format_type_expr(inner_type, comments),
         text(")"),
     ])
 }
@@ -968,16 +1105,23 @@ fn format_newtype(nt: &NewtypeDef, comments: &CommentMap) -> Doc {
 // ─── Constants ──────────────────────────────────────────────────────
 
 fn format_const(c: &ConstDef, comments: &CommentMap) -> Doc {
-    let mut parts = vec![text("const "), text(c.name.clone())];
+    let ConstDef {
+        name,
+        type_expr,
+        value,
+        doc_comments: _,
+        span: _,
+    } = c;
+    let mut parts = vec![text("const "), text(name.clone())];
     // An omitted const type parses to `TypeExpr::Inferred`. Re-emitting it as
     // `: _` does not parse (`expected type, found _`), so only render the
     // annotation when the source actually wrote one.
-    if !matches!(c.type_expr, TypeExpr::Inferred { .. }) {
+    if !matches!(type_expr, TypeExpr::Inferred { span: _ }) {
         parts.push(text(": "));
-        parts.push(format_type_expr(&c.type_expr, comments));
+        parts.push(format_type_expr(type_expr, comments));
     }
     parts.push(text(" = "));
-    parts.push(format_expr(&c.value, comments));
+    parts.push(format_expr(value, comments));
     group(concat(parts))
 }
 
@@ -1010,9 +1154,14 @@ fn is_bare_type_identifier(s: &str) -> bool {
 }
 
 fn format_lib(l: &LibDecl, comments: &CommentMap) -> Doc {
+    let LibDecl {
+        name,
+        functions,
+        span: _,
+    } = l;
     let mut body_parts: Vec<Doc> = Vec::new();
 
-    for func in &l.functions {
+    for func in functions {
         // Emit `##` doc comments attached above each FFI `def` — stdlib
         // packages document every FFI alias, and dropping the comment here
         // would make `ruxen fmt` silently delete documentation the parser
@@ -1028,50 +1177,9 @@ fn format_lib(l: &LibDecl, comments: &CommentMap) -> Doc {
 
     let body = join(hardline(), body_parts);
 
-    let mut header_parts = vec![text("lib "), text(format_lib_name(&l.name))];
-
-    // Link attrs
-    for attr in &l.link_attrs {
-        let kind_str = match attr.kind {
-            LinkKind::Dynamic => "dynamic",
-            LinkKind::Static => "static",
-            LinkKind::Framework => "framework",
-        };
-        header_parts.push(hardline());
-        header_parts.push(text(format!("  @[link({}, {})]", attr.name, kind_str)));
-    }
-
     concat(vec![
-        concat(header_parts),
-        nest(INDENT_WIDTH, concat(vec![hardline(), body])),
-        hardline(),
-        text("end"),
-    ])
-}
-
-// TODO(migration): the `extern "C" ... end` block is retired (§10a, §3.7).
-// The replacement is `lib "<linkname>" ... end`. The AST still distinguishes
-// `Lib` and `Extern` variants during the transition; once `Extern` parsing is
-// removed, this function and the `ExternBlock` AST node should be deleted.
-// Until then we emit the legacy form so a parse → format → parse round-trip
-// on an `extern` block doesn't silently change semantics.
-fn format_extern(e: &ExternBlock, comments: &CommentMap) -> Doc {
-    let mut body_parts: Vec<Doc> = Vec::new();
-
-    for func in &e.functions {
-        let mut entry: Vec<Doc> = Vec::new();
-        for comment in comments.leading_comments(func.span.start) {
-            entry.push(format_comment(comment));
-            entry.push(hardline());
-        }
-        entry.push(format_ffi_function(func, comments));
-        body_parts.push(concat(entry));
-    }
-
-    let body = join(hardline(), body_parts);
-
-    concat(vec![
-        text(format!("extern \"{}\"", e.abi)),
+        text("lib "),
+        text(format_lib_name(name)),
         nest(INDENT_WIDTH, concat(vec![hardline(), body])),
         hardline(),
         text("end"),
@@ -1079,16 +1187,31 @@ fn format_extern(e: &ExternBlock, comments: &CommentMap) -> Doc {
 }
 
 fn format_ffi_function(func: &FfiFunction, comments: &CommentMap) -> Doc {
-    let param_docs: Vec<Doc> = func
-        .params
+    let FfiFunction {
+        name,
+        is_class_method,
+        c_symbol,
+        params,
+        return_type,
+        where_clause,
+        is_variadic,
+        span: _,
+    } = func;
+    let param_docs: Vec<Doc> = params
         .iter()
-        .map(|p| {
-            concat(vec![
-                text(p.name.clone()),
-                text(": "),
-                format_type_expr(&p.type_expr, comments),
-            ])
-        })
+        .map(
+            |FfiParam {
+                 name,
+                 type_expr,
+                 span: _,
+             }| {
+                concat(vec![
+                    text(name.clone()),
+                    text(": "),
+                    format_type_expr(type_expr, comments),
+                ])
+            },
+        )
         .collect();
 
     let mut parts = vec![text("def ")];
@@ -1096,29 +1219,33 @@ fn format_ffi_function(func: &FfiFunction, comments: &CommentMap) -> Doc {
     // `def self.NAME` marks a class method (ruby-naming.spec.md §3.4a). The
     // parser records this in `FfiFunction.is_class_method`; emit it back so a
     // static FFI decl does not silently become an instance method on re-parse.
-    if func.is_class_method {
+    if *is_class_method {
         parts.push(text("self."));
     }
-    parts.push(text(func.name.clone()));
+    parts.push(text(name.clone()));
 
     // Preserve the `as "<c-symbol>"` rename clause when present so the
     // formatter round-trips per-decl C-symbol aliases (#06.8).
-    if let Some(sym) = &func.c_symbol {
+    if let Some(sym) = c_symbol {
         parts.push(text(" as "));
         parts.push(text(format!("\"{}\"", sym)));
     }
 
-    if !param_docs.is_empty() || func.is_variadic {
+    if !param_docs.is_empty() || *is_variadic {
         let mut all_params = param_docs;
-        if func.is_variadic {
+        if *is_variadic {
             all_params.push(text("..."));
         }
         parts.push(format_call_args(all_params));
     }
 
-    if let Some(rt) = &func.return_type {
+    if let Some(rt) = return_type {
         parts.push(text(" -> "));
         parts.push(format_type_expr(rt, comments));
+    }
+
+    if let Some(wc) = where_clause {
+        parts.push(format_where_clause(wc));
     }
 
     group(concat(parts))

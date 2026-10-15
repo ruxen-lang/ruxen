@@ -98,8 +98,12 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
         }
 
         // Entry seed: each parameter aliases itself.
-        let entry_in: std::collections::HashMap<crate::mir::nodes::LocalId, usize> =
-            func.params.iter().enumerate().map(|(i, &p)| (p, i)).collect();
+        let entry_in: std::collections::HashMap<crate::mir::nodes::LocalId, usize> = func
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| (p, i))
+            .collect();
 
         // Forward dataflow to a fixpoint. `outs[b]` is the provenance map at the
         // END of block `b` (its state at the terminator / return point). The
@@ -117,7 +121,11 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
                 // IN[bi] = meet (intersection with agreement) over predecessor
                 // OUTs, seeded with the parameter map for the entry block.
                 let mut acc: Option<std::collections::HashMap<crate::mir::nodes::LocalId, usize>> =
-                    if bi == 0 { Some(entry_in.clone()) } else { None };
+                    if bi == 0 {
+                        Some(entry_in.clone())
+                    } else {
+                        None
+                    };
                 for &p in &preds[bi] {
                     let po = &outs[p];
                     match acc.as_mut() {
@@ -208,11 +216,10 @@ pub fn elide_returns_self_realloc(mir: &mut crate::mir::nodes::MirProgram) {
                                                 // captures_ptr; `R` aliasing ANY
                                                 // user arg means the closure may
                                                 // hand it back.
-                                                call_args.iter().skip(1).any(|a| {
-                                                    matches!(a, MirValue::Use(l) if l == r)
-                                                })
-                                            } else if let Some(&k) =
-                                                returns_param.get(callee_name)
+                                                call_args.iter().skip(1).any(
+                                                    |a| matches!(a, MirValue::Use(l) if l == r),
+                                                )
+                                            } else if let Some(&k) = returns_param.get(callee_name)
                                             {
                                                 // Direct: elide only when `R` is
                                                 // the arg at the position the

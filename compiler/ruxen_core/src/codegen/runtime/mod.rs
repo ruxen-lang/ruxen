@@ -13,9 +13,6 @@ mod tests_migrated;
 #[cfg(test)]
 mod tests_resolve;
 
-/// Path to the C runtime source file, relative to the ruxenc crate root.
-pub const RUNTIME_C_SOURCE: &str = "runtime/runtime.c";
-
 /// Extract the method name from a mangled `TypeName_method` string.
 ///
 /// Handles generic types like `Vec[T]_push` by finding `]_` as the

@@ -109,7 +109,6 @@ pub enum NumericSuffix {
 pub enum TokenKind {
     // ── Keywords: Variable & Binding ──
     Let,
-    Mut,
     Move,
     Ref,
     Var, // `var` — mutable binding (replaces `let mut`)
@@ -293,9 +292,6 @@ pub enum TokenKind {
     // ── Identifiers ──
     Identifier(String),
     TypeIdentifier(String),
-
-    // ── Lifetime ──
-    Lifetime(String), // 'a, 'input — lifetime parameters
 
     // ── Comments ──
     DocComment(String),

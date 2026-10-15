@@ -647,7 +647,6 @@ fn lower_async_fn_via_cfg(
         fields,
         methods: vec![init_method, poll_method],
         inner_impls: vec![include_future],
-        derive_traits: Vec::new(),
         layout: Vec::new(),
         lib_decls: Vec::new(),
         doc_comments: vec![format!(
@@ -1152,7 +1151,6 @@ fn lower_loop_via_cfg(
         fields,
         methods: vec![init_method, poll_method],
         inner_impls: vec![include_future],
-        derive_traits: Vec::new(),
         layout: Vec::new(),
         lib_decls: Vec::new(),
         doc_comments: vec![format!(

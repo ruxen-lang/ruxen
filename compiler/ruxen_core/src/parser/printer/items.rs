@@ -25,13 +25,6 @@ impl PrettyPrinter {
             TopLevelItem::Lib(l) => {
                 self.line(&format!("lib {} ({} functions)", l.name, l.functions.len()));
             }
-            TopLevelItem::Extern(e) => {
-                self.line(&format!(
-                    "extern \"{}\" ({} functions)",
-                    e.abi,
-                    e.functions.len()
-                ));
-            }
             TopLevelItem::Expr(e) => {
                 self.line(&format!(
                     "top-level expr stmt: {}",
@@ -82,12 +75,7 @@ impl PrettyPrinter {
 
     fn print_struct(&mut self, s: &StructDef) {
         let generics = format_opt_generic_params(&s.generic_params);
-        let derives = if s.derive_traits.is_empty() {
-            String::new()
-        } else {
-            format!(" include({})", s.derive_traits.join(", "))
-        };
-        self.line(&format!("Struct {}{}{}", s.name, generics, derives));
+        self.line(&format!("Struct {}{}", s.name, generics));
         self.indent();
         for f in &s.fields {
             self.print_field_decl(f);

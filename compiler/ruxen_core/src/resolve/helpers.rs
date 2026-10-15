@@ -1,18 +1,12 @@
-#![allow(unused_imports)]
-
-use std::collections::HashMap;
-
 use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
+use crate::hir::types::{MixinRef, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::{self, Visibility};
 
 use super::const_helpers;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
 use super::symbols::*;
-use super::{ClosureCaptureContext, ResolveResult, Resolver};
+use super::Resolver;
 
 impl Resolver {
     /// Tier-2 const generics S5: walk the AST `GenericParams` and
@@ -239,96 +233,6 @@ impl Resolver {
             ast::Pattern::Tuple { .. } => "_tuple".to_string(),
             ast::Pattern::Ref { name, .. } => name.clone(),
             _ => "_".to_string(),
-        }
-    }
-
-    pub(super) fn resolve_interpolation_tokens(
-        &mut self,
-        tokens: &[crate::lexer::token::Token],
-        span: &Span,
-    ) -> HirExpr {
-        // The lexer gives us pre-tokenized expression tokens from #{...}
-        // We need to parse them as an expression.
-        // Wrap in a function body so the parser can handle them.
-        if tokens.is_empty() {
-            return HirExpr {
-                kind: HirExprKind::StringLiteral(String::new()),
-                ty: Ty::String,
-                span: span.clone(),
-            };
-        }
-
-        // Build a synthetic token stream: def _interp_ \n <tokens> \n end
-        use crate::lexer::token::{Token, TokenKind};
-        let dummy_span = Span {
-            start: 0,
-            end: 0,
-            line: 0,
-            column: 0,
-        };
-        let mut wrapped_tokens = vec![
-            Token {
-                kind: TokenKind::Def,
-                span: dummy_span.clone(),
-            },
-            Token {
-                kind: TokenKind::Identifier("_interp_".to_string()),
-                span: dummy_span.clone(),
-            },
-            Token {
-                kind: TokenKind::Newline,
-                span: dummy_span.clone(),
-            },
-        ];
-        wrapped_tokens.extend(tokens.iter().cloned());
-        wrapped_tokens.push(Token {
-            kind: TokenKind::Newline,
-            span: dummy_span.clone(),
-        });
-        wrapped_tokens.push(Token {
-            kind: TokenKind::End,
-            span: dummy_span.clone(),
-        });
-        wrapped_tokens.push(Token {
-            kind: TokenKind::Newline,
-            span: dummy_span.clone(),
-        });
-        wrapped_tokens.push(Token {
-            kind: TokenKind::Eof,
-            span: dummy_span.clone(),
-        });
-
-        let mut parser = crate::parser::Parser::new(wrapped_tokens);
-        if let Ok(program) = parser.parse() {
-            if let Some(ast::TopLevelItem::Function(f)) = program.items.first() {
-                if let Some(ast::Statement::Expression(expr)) = f.body.statements.first() {
-                    return self.resolve_expr(expr);
-                }
-            }
-        }
-
-        // Fallback: if we can't parse, try a simple identifier lookup
-        // (handles the common `#{variable}` case)
-        if tokens.len() == 1 {
-            if let TokenKind::Identifier(ref name) = tokens[0].kind {
-                if let Some(def_id) = self.scopes.lookup(name) {
-                    let ty = self
-                        .symbols
-                        .def_ty(def_id)
-                        .unwrap_or_else(|| self.type_context.fresh_type_var());
-                    return HirExpr {
-                        kind: HirExprKind::VarRef(def_id),
-                        ty,
-                        span: span.clone(),
-                    };
-                }
-            }
-        }
-
-        HirExpr {
-            kind: HirExprKind::Error,
-            ty: Ty::String,
-            span: span.clone(),
         }
     }
 

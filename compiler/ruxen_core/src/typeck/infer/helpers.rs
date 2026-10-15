@@ -219,35 +219,6 @@ fn substitute_generic_params(ty: &Ty, generic_params: &[String], generic_args: &
     }
 }
 
-/// Whether `*Iter[T].sum` should be accepted at typeck.
-///
-/// The runtime path is `ruxen_vec_sum`, an integer-only summation over
-/// the raw 64-bit slot. Allowing only `Add`-style numeric Items here
-/// matches that runtime contract: any pointer-shaped Item (String,
-/// Vec, HashMap, custom class) would silently produce nonsense.
-///
-/// `Ty::Infer` and `Ty::Error` pass through — they will be either
-/// pinned to a numeric type by a downstream constraint or already
-/// surfaced as a separate diagnostic. Phase 2 stdlib (#05 batch 3).
-///
-/// Extract the element type from a container type produced by a v1
-/// collection macro: `Array[T]`, `Set[T]`, or `FixedArray[T; N]`.
-pub(super) fn container_elem_ty(ty: &Ty) -> Option<Ty> {
-    match ty {
-        Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => Some((**elem).clone()),
-        Ty::FixedArray(elem, _) => Some((**elem).clone()),
-        _ => None,
-    }
-}
-
-/// Extract `(K, V)` from a `Map[K, V]` type.
-pub(super) fn map_kv_tys(ty: &Ty) -> Option<(Ty, Ty)> {
-    match ty {
-        Ty::Map(k, v) => Some(((**k).clone(), (**v).clone())),
-        _ => None,
-    }
-}
-
 /// Phase 2 #06.5 T6: BufReader[R] / BufWriter[W] restrict R/W to the
 /// closed set {File, TcpStream}. v1 deliberately ships no formal
 /// Read/Write trait (deferred to v1.5 with the Iterator mixin); the

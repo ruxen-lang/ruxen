@@ -19,11 +19,9 @@ impl<'a> Lowerer<'a> {
     /// (parallel assignment), so its refusal names the real limitation.
     fn index_assign_routes_to_method(&self, object_ty: &Ty) -> bool {
         let head = super::binops::unwrap_ref(object_ty);
-        matches!(
-            head,
-            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
-        ) || (super::binops::is_builtin_op_head(head)
-            && self.builtin_head_has_op_method(head, "[]="))
+        matches!(head, Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. })
+            || (super::binops::is_builtin_op_head(head)
+                && self.builtin_head_has_op_method(head, "[]="))
     }
 
     /// Store an already-lowered value `val` into an assignment target place

@@ -87,8 +87,7 @@ pub(super) fn register_type_constructors(r: &mut Resolver) {
 
     let type_constructors: Vec<(&str, Ty)> = {
         let mut v: Vec<(&str, Ty)> = vec![
-            ("Array", array_ty.clone()),
-            ("Vec", array_ty),
+            ("Array", array_ty),
             ("Hash", map_ty),
             ("Set", set_ty),
             ("String", Ty::String),

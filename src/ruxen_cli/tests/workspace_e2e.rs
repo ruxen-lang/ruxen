@@ -230,3 +230,26 @@ fn workspace_circular_path_dep_emits_e1601() {
         err
     );
 }
+
+/// `ruxen clean` run inside a member removes the shared workspace
+/// `target/` (where builds write), not just the incremental cache.
+#[test]
+fn clean_in_member_removes_workspace_target_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    build_two_member_workspace(root);
+    write(&root.join("target/ruxen/incremental/manifest.bin"), "x");
+    write(&root.join("target/debug/pkg-a"), "x");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_ruxen"))
+        .arg("clean")
+        .current_dir(root.join("pkg-a"))
+        .output()
+        .expect("run ruxen clean");
+    assert!(
+        out.status.success(),
+        "ruxen clean failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!root.join("target").exists(), "workspace target/ remains");
+}

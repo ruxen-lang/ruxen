@@ -28,7 +28,7 @@ pub struct HirProgram {
     /// Ruxen-side name AND optional `c_symbol` alias. MIR lowering uses
     /// this to populate `MirProgram::ffi_libs`, and call-site lowering
     /// uses it to rewrite a Ruxen name → its C symbol when an alias is
-    /// present. Top-level `Lib`/`Extern` items themselves do not become
+    /// present. Top-level `Lib` items themselves do not become
     /// `HirItem`s (they emit no executable code), so we surface them
     /// here as a side-channel on the program.
     pub ffi_libs: Vec<HirFfiLib>,
@@ -46,11 +46,8 @@ pub struct HirProgram {
 /// #06.8 Phase 2: a single FFI library declaration carried on `HirProgram`.
 #[derive(Debug, Clone)]
 pub struct HirFfiLib {
-    /// Link name (e.g. `"m"` for `lib "m" ... end`). Empty for anonymous
-    /// `extern "C"` blocks.
+    /// Link name (e.g. `"m"` for `lib "m" ... end`).
     pub name: String,
-    /// Linker flags collected from `@[link]` attributes on this block.
-    pub link_flags: Vec<String>,
     pub functions: Vec<HirFfiFunc>,
 }
 
@@ -517,7 +514,6 @@ pub struct HirClassDef {
     pub fields: Vec<HirFieldDef>,
     pub methods: Vec<HirFuncDef>,
     pub impl_blocks: Vec<HirImplBlock>,
-    pub derive_traits: Vec<String>,
     pub doc_comments: Vec<String>,
     pub span: Span,
 }
@@ -546,7 +542,6 @@ pub struct HirStructDef {
     /// Inline `include Mixin` directives in the struct body
     /// (ruby-naming.spec.md §3.4a).
     pub impl_blocks: Vec<HirImplBlock>,
-    pub derive_traits: Vec<String>,
     /// In-body `layout <kind>` directive args (ruby-naming.spec.md §3.5),
     /// e.g. `["c"]`, `["packed"]`, `["transparent"]`.
     pub layout: Vec<String>,
@@ -568,7 +563,6 @@ pub struct HirEnumDef {
     /// Inline `include Mixin` directives in the enum body
     /// (ruby-naming.spec.md §3.4a).
     pub impl_blocks: Vec<HirImplBlock>,
-    pub derive_traits: Vec<String>,
     pub doc_comments: Vec<String>,
     pub span: Span,
 }

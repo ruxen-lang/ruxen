@@ -137,9 +137,9 @@ fn parse_lib_block_with_link_name() {
 
 // ruby-naming.spec.md §3.7 / §10a: `extern "X" ... end` blocks are
 // retired; FFI declarations live inside a `lib "X" ... end` block. The
-// AST node these tests previously asserted (`TopLevelItem::Extern`) is
-// no longer produced; the equivalent `TopLevelItem::Lib` carries the
-// same function signatures.
+// AST variant these tests previously asserted (`TopLevelItem::Extern`) is
+// gone; the equivalent `TopLevelItem::Lib` carries the same function
+// signatures.
 
 #[test]
 fn parse_lib_block_replaces_extern() {
@@ -205,11 +205,6 @@ fn parse_layout_c_struct() {
             "layout c should populate layout, got: {:?}",
             s.layout
         );
-        assert!(
-            s.derive_traits.is_empty(),
-            "layout must not leak into derive_traits: {:?}",
-            s.derive_traits
-        );
     } else {
         panic!("expected Struct item");
     }
@@ -219,8 +214,7 @@ fn parse_layout_c_struct() {
 // ruby-naming.spec.md §3.6 / §10a: `@[derive(D1, D2)]` is retired.
 // In-body `include D1` / `include D2` (loud form) is the new surface
 // for explicit mixin inclusion. Each `include` becomes an `InnerImpl`
-// entry on the type's AST node (`derive_traits` stays empty — the old
-// field is only populated by the retired attribute path).
+// entry on the type's AST node.
 
 #[test]
 fn parse_include_on_struct() {
@@ -270,9 +264,6 @@ fn parse_include_on_enum() {
             .collect();
         assert_eq!(traits, vec!["Debug".to_string(), "Clone".to_string()]);
         assert_eq!(e.variants.len(), 3);
-        // Legacy `derive_traits` field stays empty under the new
-        // in-body `include` surface.
-        assert!(e.derive_traits.is_empty());
     } else {
         panic!("expected Enum item");
     }

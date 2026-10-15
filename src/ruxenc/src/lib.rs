@@ -11,7 +11,6 @@
 
 pub mod bench;
 pub mod cache;
-pub mod clean;
 pub mod compile;
 pub mod fmt;
 pub mod test_output;

@@ -1,0 +1,27 @@
+## `MutexGuard#deref_mut` and `#deref_var` hand out the address of the
+## guarded payload, so a write through the `&var T` lands in the mutex
+## (they used to return the payload value and crash on write). The mutex
+## owns its payload, so the caller no longer frees the moved-in String.
+
+def append_bang(s: &var String)
+  s.push(?\u{21})
+end
+
+def main
+  m = Mutex.new("hello")
+  g = m.lock!
+  append_bang(g.deref_mut)
+  puts "deref_mut: #{g.get}"
+  append_bang(g.deref_var)
+  puts "deref_var: #{g.get}"
+  let r: &String = g.deref
+  puts "deref: #{r}"
+  g.set("bye")
+  puts "set: #{g.get}"
+
+  c = Mutex.new(41)
+  h = c.lock!
+  puts "int get: #{h.get}"
+  let i: &Int = h.deref
+  puts "int deref: #{i}"
+end

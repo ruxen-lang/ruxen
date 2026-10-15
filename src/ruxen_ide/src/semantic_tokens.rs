@@ -88,7 +88,6 @@ fn classify_token_kind(kind: &TokenKind) -> (Option<u32>, u32) {
     match kind {
         // Keywords
         TokenKind::Let
-        | TokenKind::Mut
         | TokenKind::Move
         | TokenKind::Ref
         | TokenKind::Class

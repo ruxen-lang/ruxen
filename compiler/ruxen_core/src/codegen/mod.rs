@@ -328,17 +328,6 @@ fn probe_runtime_archive(env_ar: Option<&str>, exe: Option<&Path>) -> Option<Pat
     None
 }
 
-/// Backward-compatibility shim — returns the first stdlib runtime
-/// source as a single path. Pre-B-2 callers that expected a single
-/// `runtime.c` should migrate to [`find_runtime_sources`].
-#[deprecated(note = "use find_runtime_sources — per-package compilation replaces the unity build")]
-pub fn find_runtime_c() -> Result<PathBuf, String> {
-    find_runtime_sources()?
-        .into_iter()
-        .next()
-        .ok_or_else(|| "no runtime sources".to_string())
-}
-
 /// Locate every `<dir>/runtime/*.c` source file under a single project
 /// or path-dependency directory.
 ///
@@ -696,13 +685,6 @@ pub fn compile_with_options_for_target(
             }
         }
     }
-    for lib in &program.ffi_libs {
-        for flag in &lib.link_flags {
-            if !all_link_flags.contains(flag) {
-                all_link_flags.push(flag.clone());
-            }
-        }
-    }
 
     // Step 3b: When the fast path is active, whole-archive the prebuilt
     // runtime so every `ruxen_*` symbol survives the link. The linker
@@ -858,13 +840,6 @@ fn compile_cross(
         for flag in system_flags {
             if !all_link_flags.contains(&flag) {
                 all_link_flags.push(flag);
-            }
-        }
-    }
-    for lib in &program.ffi_libs {
-        for flag in &lib.link_flags {
-            if !all_link_flags.contains(flag) {
-                all_link_flags.push(flag.clone());
             }
         }
     }

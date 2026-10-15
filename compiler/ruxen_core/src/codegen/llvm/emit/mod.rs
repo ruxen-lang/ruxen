@@ -748,15 +748,7 @@ pub(super) fn is_string_typed_value(val: &MirValue, func: &MirFunction) -> bool 
 /// pointer-eq on `def f(s: String, t: String) -> Bool s == t end` style
 /// code.
 fn is_string_mir_ty(ty: &Ty) -> bool {
-    match ty {
-        Ty::String => true,
-        Ty::Class { name, .. } if name == "String" => true,
-        Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) => is_string_mir_ty(inner),
-        _ => false,
-    }
+    ty.is_string_form()
 }
 
 /// Size estimate for heap allocation (mirrors Cranelift backend).

@@ -6,13 +6,12 @@ use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 use crate::resolve::symbols::{ty_has_derive_trait, ty_is_effectively_copy, SymbolTable};
 
-const SUPPORTED_DERIVES: [&str; 10] = [
+const SUPPORTED_DERIVES: [&str; 9] = [
     "Debug",
     "Clone",
     "Copy",
     "PartialEq",
     "Eq",
-    "Hash",
     "Hashable",
     "Default",
     "Ord",
@@ -50,19 +49,11 @@ fn validate_item(item: &HirItem, symbols: &SymbolTable, diags: &mut Vec<Diagnost
     }
 }
 
-/// Merge the legacy `derive_traits` field with the new in-body
-/// `include` directives. Post ruby-naming.spec.md §10a the loud form
-/// for opting into a structural mixin is `include <Mixin>` (one per
-/// line) inside the type body; the parser routes those into
-/// `impl_blocks`, leaving `derive_traits` empty. The validator must
-/// see both — under transition some types still carry legacy
-/// `derive_traits` entries from the (also retired) attribute-prefix
-/// path.
-fn collected_derives(
-    legacy: &[String],
-    impl_blocks: &[crate::hir::nodes::HirImplBlock],
-) -> Vec<String> {
-    let mut out: Vec<String> = legacy.to_vec();
+/// The structural mixins a type opts into: its in-body `include <Mixin>`
+/// directives (ruby-naming.spec.md §10a), which the parser routes into
+/// `impl_blocks`.
+fn collected_derives(impl_blocks: &[crate::hir::nodes::HirImplBlock]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
     for block in impl_blocks {
         if block.negative_trait {
             continue;
@@ -96,7 +87,7 @@ fn name_resolves_to_type(symbols: &SymbolTable, name: &str) -> bool {
 }
 
 fn validate_class(class: &HirClassDef, symbols: &SymbolTable, diags: &mut Vec<Diagnostic>) {
-    let derives = collected_derives(&class.derive_traits, &class.impl_blocks);
+    let derives = collected_derives(&class.impl_blocks);
     validate_common_traits("class", &class.name, &derives, &class.span, symbols, diags);
 
     if has_derive(&derives, "Copy") {
@@ -136,7 +127,7 @@ fn validate_class(class: &HirClassDef, symbols: &SymbolTable, diags: &mut Vec<Di
 }
 
 fn validate_struct(strukt: &HirStructDef, symbols: &SymbolTable, diags: &mut Vec<Diagnostic>) {
-    let derives = collected_derives(&strukt.derive_traits, &strukt.impl_blocks);
+    let derives = collected_derives(&strukt.impl_blocks);
     validate_common_traits(
         "struct",
         &strukt.name,
@@ -183,7 +174,7 @@ fn validate_struct(strukt: &HirStructDef, symbols: &SymbolTable, diags: &mut Vec
 }
 
 fn validate_enum(enm: &HirEnumDef, symbols: &SymbolTable, diags: &mut Vec<Diagnostic>) {
-    let derives = collected_derives(&enm.derive_traits, &enm.impl_blocks);
+    let derives = collected_derives(&enm.impl_blocks);
     validate_common_traits("enum", &enm.name, &derives, &enm.span, symbols, diags);
 
     if has_derive(&derives, "Default") {
@@ -454,7 +445,7 @@ fn ty_is_effectively_clone(ty: &Ty, symbols: &SymbolTable) -> bool {
 /// requires per-field bounds:
 ///
 ///   * `PartialEq`  → E0613 if a field is not PartialEq.
-///   * `Hash` / `Hashable` → E0615 if a field is not Hashable.
+///   * `Hashable` → E0615 if a field is not Hashable.
 ///   * `Ord`        → E0617 if a field is not Ord.
 ///   * `PartialOrd` → E0618 if a field is not PartialOrd.
 ///
@@ -476,7 +467,7 @@ fn validate_per_field_traits<'a>(
     diags: &mut Vec<Diagnostic>,
 ) {
     let want_partial_eq = has_derive(derive_traits, "PartialEq");
-    let want_hash = has_derive(derive_traits, "Hash") || has_derive(derive_traits, "Hashable");
+    let want_hash = has_derive(derive_traits, "Hashable");
     let want_ord = has_derive(derive_traits, "Ord");
     let want_partial_ord = has_derive(derive_traits, "PartialOrd");
     if !(want_partial_eq || want_hash || want_ord || want_partial_ord) {
@@ -494,7 +485,7 @@ fn validate_per_field_traits<'a>(
                 "E0613",
             ));
         }
-        if want_hash && !ty_satisfies_named_trait(field_ty, "Hash", symbols) {
+        if want_hash && !ty_satisfies_named_trait(field_ty, "Hashable", symbols) {
             diags.push(Diagnostic::error_with_code(
                 format!(
                     "cannot auto-synthesize Hash on {} `{}` because field `{}` has type `{}` which is not hashable",
@@ -533,14 +524,11 @@ fn validate_per_field_traits<'a>(
 /// themselves carry the matching `derive`. References / aliases /
 /// newtypes are looked through.
 ///
-/// `trait_name` is one of `"PartialEq" | "Eq" | "Hash" | "Hashable" |
-/// "Ord" | "PartialOrd"`. `Eq` collapses to `PartialEq` (Eq is a
-/// marker), and `Hash` is treated identically to `Hashable` to keep
-/// the TEC-13 rename working through the transition release.
+/// `trait_name` is one of `"PartialEq" | "Eq" | "Hashable" | "Ord" |
+/// "PartialOrd"`. `Eq` collapses to `PartialEq` (Eq is a marker).
 pub(crate) fn ty_satisfies_named_trait(ty: &Ty, trait_name: &str, symbols: &SymbolTable) -> bool {
     let canonical = match trait_name {
         "Eq" => "PartialEq",
-        "Hashable" => "Hash",
         other => other,
     };
 
@@ -570,14 +558,7 @@ pub(crate) fn ty_satisfies_named_trait(ty: &Ty, trait_name: &str, symbols: &Symb
         Ty::Alias { target, .. } => ty_satisfies_named_trait(target, canonical, symbols),
         Ty::Newtype { inner, .. } => ty_satisfies_named_trait(inner, canonical, symbols),
         Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => {
-            // Hash accepts either the new name or the legacy spelling;
-            // every other trait must match exactly.
-            if canonical == "Hash" {
-                ty_has_derive_trait(ty, symbols, "Hash")
-                    || ty_has_derive_trait(ty, symbols, "Hashable")
-            } else {
-                ty_has_derive_trait(ty, symbols, canonical)
-            }
+            ty_has_derive_trait(ty, symbols, canonical)
         }
         _ => false,
     }

@@ -21,8 +21,8 @@
 //!   checks.
 //! - `collect.rs` — method-call resolution, iterator/`collect` typing,
 //!   field lookup, generic substitution.
-//! - `helpers.rs` — free helper functions (`container_elem_ty`,
-//!   `map_kv_tys`, `is_bufio_inner_supported`, `peel_refs`,
+//! - `helpers.rs` — free helper functions (`is_bufio_inner_supported`,
+//!   `peel_refs`,
 //!   `is_iter_sum_compatible`, `infer_user_enum_generic_args`,
 //!   `record_tyvar_binding`, `collect_break_types`).
 //!
@@ -129,16 +129,6 @@ impl<'a> InferenceEngine<'a> {
         }
     }
 
-    pub(super) fn result_ty(ok: Ty, err_name: &str) -> Ty {
-        Ty::Result(
-            Box::new(ok),
-            Box::new(Ty::Class {
-                name: err_name.to_string(),
-                generic_args: vec![],
-            }),
-        )
-    }
-
     pub(super) fn option_ty(inner: Ty) -> Ty {
         Ty::Option(Box::new(inner))
     }
@@ -147,19 +137,6 @@ impl<'a> InferenceEngine<'a> {
         Ty::Class {
             name: name.to_string(),
             generic_args,
-        }
-    }
-
-    pub(super) fn callable_return_ty(ty: &Ty) -> Option<Ty> {
-        match ty {
-            Ty::Fn { ret, .. } | Ty::FnMut { ret, .. } | Ty::FnOnce { ret, .. } => {
-                Some((**ret).clone())
-            }
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => Self::callable_return_ty(inner),
-            _ => None,
         }
     }
 
@@ -307,11 +284,8 @@ impl<'a> InferenceEngine<'a> {
         // explicit `return <value>` arm in `infer_expr` runs the SAME helper
         // — see `coerce_and_check_return_value`.
         let body_span = func.span.clone();
-        let body_ty = self.coerce_and_check_return_value(
-            &func.return_ty.clone(),
-            &mut func.body,
-            &body_span,
-        );
+        let body_ty =
+            self.coerce_and_check_return_value(&func.return_ty.clone(), &mut func.body, &body_span);
         self.check_declared_bounds(&func.return_ty, &body_ty, &func.span);
 
         // Resolve the return type now

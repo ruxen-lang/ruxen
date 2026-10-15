@@ -60,13 +60,11 @@ impl<'a> BorrowChecker<'a> {
 
     pub(super) fn check_function(&mut self, func: &HirFuncDef) {
         // Push function scope
-        let scope_id = self.scopes.push(ScopeKind::Function);
-        self.lifetimes.clear_locals();
+        let scope_id = self.scopes.push();
 
         // Register parameters
         for param in &func.params {
-            self.register_binding(param.def_id, &param.ty, true, param.span.clone());
-            self.lifetimes.register_local(param.def_id, scope_id);
+            self.register_binding(param.def_id, true, param.span.clone());
         }
 
         // Walk the body
@@ -308,7 +306,7 @@ impl<'a> BorrowChecker<'a> {
     // ─── Block ─────────────────────────────────────────────────────
 
     pub(super) fn check_block(&mut self, stmts: &[HirStatement], tail: Option<&HirExpr>) {
-        let scope_id = self.scopes.push(ScopeKind::Block);
+        let scope_id = self.scopes.push();
 
         for stmt in stmts {
             self.check_statement(stmt);
@@ -330,12 +328,12 @@ impl<'a> BorrowChecker<'a> {
             HirStatement::Let {
                 def_id,
                 pattern,
-                ty,
+                ty: _,
                 value,
                 mutable,
                 span,
             } => {
-                self.check_let(*def_id, pattern, ty, value.as_ref(), *mutable, span);
+                self.check_let(*def_id, pattern, value.as_ref(), *mutable, span);
             }
             HirStatement::Expr(expr) => {
                 self.check_expr(expr);
@@ -402,7 +400,7 @@ impl<'a> BorrowChecker<'a> {
             self.borrows.restore(&borrows_snap);
 
             // Enter arm scope
-            let scope_id = self.scopes.push(ScopeKind::MatchArm);
+            let scope_id = self.scopes.push();
 
             // Process pattern bindings
             self.process_pattern(&arm.pattern);
@@ -430,7 +428,7 @@ impl<'a> BorrowChecker<'a> {
     // ─── Loop ──────────────────────────────────────────────────────
 
     pub(super) fn check_loop(&mut self, body: &HirExpr) {
-        let scope_id = self.scopes.push(ScopeKind::Loop);
+        let scope_id = self.scopes.push();
 
         self.check_expr(body);
 
@@ -443,7 +441,7 @@ impl<'a> BorrowChecker<'a> {
     pub(super) fn check_while(&mut self, condition: &HirExpr, body: &HirExpr) {
         self.check_expr(condition);
 
-        let scope_id = self.scopes.push(ScopeKind::Loop);
+        let scope_id = self.scopes.push();
 
         self.check_expr(body);
 
@@ -456,11 +454,11 @@ impl<'a> BorrowChecker<'a> {
     pub(super) fn check_for(&mut self, binding: DefId, iterable: &HirExpr, body: &HirExpr) {
         self.check_expr(iterable);
 
-        let scope_id = self.scopes.push(ScopeKind::Loop);
+        let scope_id = self.scopes.push();
 
         // Register the loop variable as mutable (for-loop bindings are implicitly let)
         // The type comes from the iterable's element type; we use a simplified approach
-        self.register_binding(binding, &Ty::Infer(0), false, iterable.span.clone());
+        self.register_binding(binding, false, iterable.span.clone());
 
         self.check_expr(body);
 
@@ -514,11 +512,11 @@ impl<'a> BorrowChecker<'a> {
             }
         }
 
-        let scope_id = self.scopes.push(ScopeKind::Closure);
+        let scope_id = self.scopes.push();
 
         // Register closure params
         for param in params {
-            self.register_binding(param.def_id, &param.ty, false, param.span.clone());
+            self.register_binding(param.def_id, false, param.span.clone());
         }
 
         // Q4: a move-captured value is owned by the closure, so the BODY may
@@ -549,9 +547,7 @@ impl<'a> BorrowChecker<'a> {
                 span,
                 ..
             } => {
-                // Register from the symbol table type if available, else use Infer
-                let ty = self.symbols.def_ty(*def_id).unwrap_or(Ty::Infer(0));
-                self.register_binding(*def_id, &ty, *mutable, span.clone());
+                self.register_binding(*def_id, *mutable, span.clone());
             }
             HirPattern::Tuple { elements, .. } => {
                 for elem in elements {
@@ -579,8 +575,7 @@ impl<'a> BorrowChecker<'a> {
                 span,
                 ..
             } => {
-                let ty = self.symbols.def_ty(*def_id).unwrap_or(Ty::Infer(0));
-                self.register_binding(*def_id, &ty, *mutable, span.clone());
+                self.register_binding(*def_id, *mutable, span.clone());
             }
             HirPattern::Wildcard { .. } | HirPattern::Literal { .. } | HirPattern::Rest { .. } => {}
         }

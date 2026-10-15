@@ -31,7 +31,6 @@ impl Parser {
         let mut variants = Vec::new();
         let mut methods: Vec<FuncDef> = Vec::new();
         let mut inner_impls: Vec<InnerImpl> = Vec::new();
-        let derive_traits = Vec::new();
         // #06.8 T0c: in-body `layout <kind>` directive. The only kind
         // currently accepted on an enum body is `tagged`, which pins
         // variant declaration order as the runtime tag assignment.
@@ -80,7 +79,7 @@ impl Parser {
                     let next = self.peek_kind();
                     let prefix_form = matches!(next, TokenKind::Def | TokenKind::Async);
                     if prefix_form {
-                        let vis = self.parse_visibility();
+                        let vis = self.parse_visibility().unwrap_or(current_vis);
                         if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
                             methods.push(self.parse_func_def(vis));
                         } else {
@@ -191,7 +190,6 @@ impl Parser {
             variants,
             methods,
             inner_impls,
-            derive_traits,
             layout,
             doc_comments,
             where_clause,
@@ -331,7 +329,6 @@ impl Parser {
         let mut fields = Vec::new();
         let mut methods: Vec<FuncDef> = Vec::new();
         let mut inner_impls: Vec<InnerImpl> = Vec::new();
-        let derive_traits = Vec::new();
         // ruby-naming.spec.md §3.5: `layout c` / `layout packed` /
         // `layout transparent` directives populate this list (replaces
         // the retired `@[repr(...)]` prefix attribute).
@@ -384,7 +381,7 @@ impl Parser {
                         TokenKind::Def | TokenKind::Async | TokenKind::Identifier(_)
                     );
                     if prefix_form {
-                        let vis = self.parse_visibility();
+                        let vis = self.parse_visibility().unwrap_or(current_vis);
                         if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
                             methods.push(self.parse_func_def(vis));
                         } else {
@@ -488,7 +485,6 @@ impl Parser {
             fields,
             methods,
             inner_impls,
-            derive_traits,
             layout,
             doc_comments,
             where_clause,
@@ -540,12 +536,11 @@ impl Parser {
         // mirror the class-body form. Parser-only plumbing.
         let mut lib_decls: Vec<LibDecl> = Vec::new();
         // ruby-naming.spec.md §3.2: mixin (= `trait` token) body honours
-        // section markers. Default is Public. The trait-item parser
-        // (`parse_trait_item`) does not see the section state, so we
-        // overwrite the visibility on default-method items after the
-        // sub-parser returns. MethodSig items in traits are signatures
-        // only; for mixins (no `visibility` field on MethodSig) the
-        // resolver synthesizes visibility from the section as needed.
+        // section markers. Default is Public. The trait-item parser gives an
+        // unprefixed default method the current section's visibility.
+        // MethodSig items in traits are signatures only; for mixins (no
+        // `visibility` field on MethodSig) the resolver synthesizes
+        // visibility from the section as needed.
         let mut current_vis = Visibility::Public;
         let mut name_list_overrides: Vec<(Visibility, Vec<String>)> = Vec::new();
         while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
@@ -587,7 +582,7 @@ impl Parser {
                     let next = self.peek_kind();
                     let prefix_form = matches!(next, TokenKind::Def | TokenKind::Async);
                     if prefix_form {
-                        let item = self.parse_trait_item();
+                        let item = self.parse_trait_item(current_vis);
                         items.push(item);
                     } else {
                         self.advance();
@@ -602,7 +597,7 @@ impl Parser {
                 // ── #06.8 follow-up: in-body `lib "X" ... end` block ──
                 // Mirrors the class-body arm. Reuses `parse_lib_decl`.
                 TokenKind::Lib => {
-                    lib_decls.push(self.parse_lib_decl(vec![]));
+                    lib_decls.push(self.parse_lib_decl());
                 }
                 // `alias new old` synonym inside a mixin body. Checked
                 // before the catch-all `parse_trait_item` so `alias` is not
@@ -611,16 +606,7 @@ impl Parser {
                     items.push(MixinItem::Alias(self.parse_alias_item()));
                 }
                 _ => {
-                    let mut item = self.parse_trait_item();
-                    // Apply section visibility to default methods that did
-                    // not have an explicit `pub` / `protected` prefix
-                    // (which `parse_visibility` would have set to non-Private).
-                    if let MixinItem::DefaultMethod(func) = &mut item {
-                        if func.visibility == Visibility::Private {
-                            func.visibility = current_vis;
-                        }
-                    }
-                    items.push(item);
+                    items.push(self.parse_trait_item(current_vis));
                 }
             }
             self.skip_newlines();
@@ -652,7 +638,7 @@ impl Parser {
         }
     }
 
-    fn parse_trait_item(&mut self) -> MixinItem {
+    fn parse_trait_item(&mut self, section_vis: Visibility) -> MixinItem {
         // Doc comments accumulated by `parse_trait_def`'s body loop apply to
         // the next inner item. They flow through `take_pending_docs()` to
         // any `FuncDef` we build below.
@@ -667,9 +653,9 @@ impl Parser {
             return MixinItem::AssocType { name, span };
         }
 
-        // Method signature or default method
-        // Could have visibility
-        let vis = self.parse_visibility();
+        // Method signature or default method, with an optional `protected`
+        // prefix; unprefixed methods take the section's visibility.
+        let vis = self.parse_visibility().unwrap_or(section_vis);
         // Should be `def`
         if !matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
             self.error("expected `def` or `type` in mixin body");
@@ -893,7 +879,7 @@ impl Parser {
             return ImplItem::Alias(self.parse_alias_item());
         }
 
-        let vis = self.parse_visibility();
+        let vis = self.parse_visibility().unwrap_or(Visibility::Private);
         let func = self.parse_func_def(vis);
         ImplItem::Method(func)
     }
@@ -929,7 +915,6 @@ impl Parser {
         let mut fields = Vec::new();
         let mut methods = Vec::new();
         let mut inner_impls = Vec::new();
-        let derive_traits = Vec::new();
         // #06.8 follow-up: in-body `lib "X" ... end` FFI blocks. Each
         // block's `FfiFunction`s are scoped to this class (e.g. `File.open`).
         // Reuses `parse_lib_decl` verbatim — no fork.
@@ -1006,7 +991,7 @@ impl Parser {
                     );
                     if prefix_form {
                         // Treat as explicit prefix on the next decl.
-                        let vis = self.parse_visibility();
+                        let vis = self.parse_visibility().unwrap_or(current_vis);
                         if matches!(self.current_kind(), TokenKind::Def | TokenKind::Async) {
                             methods.push(self.parse_func_def(vis));
                         } else {
@@ -1048,7 +1033,7 @@ impl Parser {
                 // `<ClassName>.<ruxen_name>` lands in the follow-up
                 // commit, not here.
                 TokenKind::Lib => {
-                    lib_decls.push(self.parse_lib_decl(vec![]));
+                    lib_decls.push(self.parse_lib_decl());
                 }
                 // `alias new old` synonym — must be checked before the field
                 // arm, since `alias` lexes as an Identifier. A real field
@@ -1158,7 +1143,6 @@ impl Parser {
             fields,
             methods,
             inner_impls,
-            derive_traits,
             layout,
             lib_decls,
             doc_comments,

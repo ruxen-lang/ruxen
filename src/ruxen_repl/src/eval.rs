@@ -365,13 +365,9 @@ fn replay_region_mutates_slot(stmts: &[Statement], slot_name: &str) -> bool {
                     MatchArmBody::Block(b) => walk_block(b, name),
                 })
             }
-            // InterpolatedString carries raw lexer tokens for each `#{}`
-            // expression — the AST doesn't expose a parsed Expr we can
-            // walk. Conservative read-only assumption: any mutation in
-            // an interpolated expression would be highly unusual
-            // (`"#{x = y}"`-style), and missing those false negatives
-            // only loses a refresh that wouldn't matter for the
-            // read-only display path. Treat as no-mutation.
+            // InterpolatedString holds parsed `StringPart`s, but a mutation
+            // inside `#{}` (`"#{x = y}"`) would be highly unusual and only
+            // affects the read-only display refresh. Treat as no-mutation.
             ExprKind::InterpolatedString(_) => false,
             ExprKind::Borrow(inner) | ExprKind::BorrowMut(inner) => walk_expr(inner, name),
             ExprKind::Await(inner) => walk_expr(inner, name),
@@ -2045,7 +2041,6 @@ fn get_item_span(item: &TopLevelItem) -> ruxen_core::lexer::token::Span {
         TopLevelItem::Newtype(n) => n.span.clone(),
         TopLevelItem::Const(c) => c.span.clone(),
         TopLevelItem::Lib(l) => l.span.clone(),
-        TopLevelItem::Extern(e) => e.span.clone(),
         TopLevelItem::Expr(e) => e.span.clone(),
         TopLevelItem::Alias(a) => a.span.clone(),
     }

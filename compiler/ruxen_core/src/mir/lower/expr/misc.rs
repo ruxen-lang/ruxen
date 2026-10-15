@@ -113,13 +113,6 @@ impl<'a> Lowerer<'a> {
                         self.current_block = dead;
                         Ok(None)
                     }
-                    // ruby-naming.spec.md §10a: the collection macros
-                    // are retired. Spell `array!` / `vec!` as `[…]`,
-                    // `map!` / `hash!` as `{ k => v, … }`, and `set!`
-                    // as `Set.from_iter([…])`.
-                    "array" | "vec" | "map" | "hash" | "set" => Err(format!(
-                        "macro `{name}!` is retired — use the literal form per ruby-naming.spec §10a"
-                    )),
                     // B87: this catch-all used to be `Ok(None)`, which lowered
                     // an unrecognised macro to NOTHING — the call vanished
                     // from the program with no diagnostic anywhere. Resolve

@@ -26,7 +26,6 @@ pub(super) fn register_option(r: &mut Resolver) {
             info: EnumInfo {
                 generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
                 variants: vec![], // will be filled below
-                derive_traits: vec![],
                 opt_out_send: false,
                 opt_out_sync: false,
                 manual_send: false,

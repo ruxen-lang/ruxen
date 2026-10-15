@@ -80,7 +80,6 @@ pub struct ClassInfo {
     pub parent: Option<DefId>,
     pub fields: Vec<DefId>,
     pub methods: Vec<DefId>,
-    pub derive_traits: Vec<String>,
     pub opt_out_send: bool,
     pub opt_out_sync: bool,
     pub manual_send: bool,
@@ -115,7 +114,6 @@ pub struct ClassInfo {
 pub struct StructInfo {
     pub generic_params: Vec<GenericParamInfo>,
     pub fields: Vec<DefId>,
-    pub derive_traits: Vec<String>,
     pub layout: Vec<String>,
     pub opt_out_send: bool,
     pub opt_out_sync: bool,
@@ -159,7 +157,6 @@ pub enum ConstPredOp {
 pub struct EnumInfo {
     pub generic_params: Vec<GenericParamInfo>,
     pub variants: Vec<DefId>,
-    pub derive_traits: Vec<String>,
     pub opt_out_send: bool,
     pub opt_out_sync: bool,
     pub manual_send: bool,
@@ -438,11 +435,9 @@ pub fn ty_is_effectively_copy(ty: &Ty, symbols: &SymbolTable) -> bool {
 /// user-defined type carries the requested derive trait.
 ///
 /// Post ruby-naming.spec.md §3.6: structural mixins (`Copy`, `Clone`,
-/// `Debug`, `Eq`, `Hash`, `PartialEq`, `Default`, `Ord`, `PartialOrd`)
+/// `Debug`, `Eq`, `Hashable`, `PartialEq`, `Default`, `Ord`, `PartialOrd`)
 /// are *implicitly* included when the type's fields structurally
-/// support them. This helper checks the explicit `derive_traits` first
-/// for backwards compatibility, then falls back to the spec's
-/// implicit-include rule when applicable.
+/// support them; this helper applies that implicit-include rule.
 pub fn ty_has_derive_trait(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
     ty_has_derive_trait_seen(
         ty,
@@ -498,9 +493,6 @@ fn ty_has_derive_trait_seen(
         }
         match &def.kind {
             DefKind::Class { info } => {
-                if info.derive_traits.iter().any(|t| t == trait_name) {
-                    return true;
-                }
                 // ruby-naming.spec.md §3.6: a `class` never implicitly
                 // includes `Copy` (reference semantics). For all other
                 // structural mixins, treat them as implicitly included
@@ -511,15 +503,9 @@ fn ty_has_derive_trait_seen(
                 struct_or_class_fields_all_support(symbols, &info.fields, trait_name, seen)
             }
             DefKind::Struct { info } => {
-                if info.derive_traits.iter().any(|t| t == trait_name) {
-                    return true;
-                }
                 struct_or_class_fields_all_support(symbols, &info.fields, trait_name, seen)
             }
             DefKind::Enum { info } => {
-                if info.derive_traits.iter().any(|t| t == trait_name) {
-                    return true;
-                }
                 // ruby-naming.spec.md §3.6: structural mixins apply to
                 // enums too — Debug always; Clone/Eq/Hash/Ord when
                 // every variant field structurally supports them.
@@ -656,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn derive_copy_struct_is_effectively_copy() {
+    fn fieldless_struct_is_effectively_copy() {
         let mut symbols = SymbolTable::new();
         symbols.define(
             "Point".to_string(),
@@ -664,7 +650,6 @@ mod tests {
                 info: StructInfo {
                     generic_params: Vec::new(),
                     fields: Vec::new(),
-                    derive_traits: vec!["Copy".to_string(), "Clone".to_string()],
                     layout: Vec::new(),
                     opt_out_send: false,
                     opt_out_sync: false,
@@ -700,7 +685,6 @@ mod tests {
                 parent: None,
                 fields: Vec::new(),
                 methods: Vec::new(),
-                derive_traits: Vec::new(),
                 opt_out_send: false,
                 opt_out_sync: false,
                 manual_send: false,

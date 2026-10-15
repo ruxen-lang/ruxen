@@ -53,13 +53,18 @@ pub fn walk_stmt<V: Visit>(v: &mut V, s: &Statement) {
 
 pub fn walk_expr<V: Visit>(v: &mut V, e: &Expr) {
     match &e.kind {
-        // Leaves — no nested AST node to visit. `InterpolatedString` holds
-        // `StringPart`s whose `Expr` variant carries raw lexer tokens, not a
-        // parsed `Expr`, so there is nothing to recurse into here.
+        ExprKind::InterpolatedString(parts) => {
+            for part in parts {
+                match part {
+                    StringPart::Literal(_) => {}
+                    StringPart::Expr { expr, spec: _ } => v.visit_expr(expr),
+                }
+            }
+        }
+        // Leaves — no nested AST node to visit.
         ExprKind::IntLiteral(..)
         | ExprKind::FloatLiteral(..)
         | ExprKind::StringLiteral(_)
-        | ExprKind::InterpolatedString(_)
         | ExprKind::CharLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::UnitLiteral
@@ -388,10 +393,17 @@ pub fn walk_stmt_mut<V: VisitMut>(v: &mut V, s: &mut Statement) {
 /// expressions (`VisitMut` has no method for those).
 pub fn walk_expr_mut<V: VisitMut>(v: &mut V, e: &mut Expr) {
     match &mut e.kind {
+        ExprKind::InterpolatedString(parts) => {
+            for part in parts {
+                match part {
+                    StringPart::Literal(_) => {}
+                    StringPart::Expr { expr, spec: _ } => v.visit_expr_mut(expr),
+                }
+            }
+        }
         ExprKind::IntLiteral(..)
         | ExprKind::FloatLiteral(..)
         | ExprKind::StringLiteral(_)
-        | ExprKind::InterpolatedString(_)
         | ExprKind::CharLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::UnitLiteral
