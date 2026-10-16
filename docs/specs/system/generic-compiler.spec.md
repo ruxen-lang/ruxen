@@ -152,9 +152,8 @@ behind.
       `push`/`push_str`/`insert`/`insert_str` (surface `nil` — the MIR
       special-case does the `&var String` deref/store dance and returns no
       value, pin `48_borrow_var` — vs C `char*` the dance must capture, so
-      `.rx` declares `-> String`). Pins: `630_string_insert_char`,
-      `631_string_push_str`, `632_str_to_lower_upper`, `633_str_parse_uint`
-      (+ existing `311`/`313`/`315`/`45`/`113`). `strings.rs` residual count:
+      `.rx` declares `-> String`). Pins: `library/std/string/tests/build_test.rx`
+      and `convert_test.rx`. `strings.rs` residual count:
       5 `String` arms (`remove`+4 mutation), 0 `Str` arms.
 - [~] Feature B: trait-bound enforcement. DONE: generalized
       `check_concurrency_bounds` → `check_declared_bounds` +
@@ -247,6 +246,5 @@ behind.
   `Option_map`/`Result_map` body. (3) typeck: `Result#map` dropped the err type
   (returned `Result[U, Error]` not `Result[U, E]`) and `map_err` had ok/err
   swapped; the `map_err` closure-return harvest was missing in
-  `infer_combinator_block`. Pins: `99_map_option` / `115_option_map_chain` /
-  `118_option_map_unwrap_or` (now over `.rx` Option.map) +
-  `tests/release-e2e/cases/606_result_map_chain.rx`.
+  `infer_combinator_block`. Pins:
+  `library/std/option_result/tests/{option,result}_test.rx` (over `.rx` Option.map).

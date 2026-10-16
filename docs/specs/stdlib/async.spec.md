@@ -229,10 +229,10 @@ in Ruxen (lowering passes, codegen, FFI registration).
 
 | Behaviour | Test fn                                              | File                                |
 |-----------|------------------------------------------------------|-------------------------------------|
-| B1        | `future_mixin_has_associated_output_and_poll`        | `tests/async_surface.rs`            |
-| B2        | `poll_enum_registered_with_ready_pending_variants`   | `tests/async_surface.rs`            |
+| B1        | e2e `720_handwritten_future_typechecks.rx`, `721`-`731` | release-e2e                     |
+| B2        | e2e `721`-`731` (every hand-poll matches `Poll.Ready`/`Poll.Pending`) | release-e2e |
 | B2 (tag)  | `poll_tag_layout_stability`                          | `tests/async_surface.rs`            |
-| B3        | `context_and_waker_classes_resolve`                  | `tests/async_surface.rs`            |
+| B3        | e2e `2066_block_on_typed_output_and_waker.rx`        | release-e2e                         |
 | B4        | e2e `tests/release-e2e/cases/720_handwritten_future_typechecks.rx` (no execution — just compile) | release-e2e |
 | B5        | `include_future_without_output_rejected_e0612`       | `tests/async_negative.rs`           |
 | B6        | `poll_signature_mismatch_rejected_e0613`             | `tests/async_negative.rs`           |

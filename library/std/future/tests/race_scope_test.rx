@@ -1,0 +1,57 @@
+use std.time.Duration
+
+class Quick
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(p: Int)
+    self.payload = p
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Ready(self.payload)
+  end
+end
+
+class Slow
+  tag: Int
+  include Future
+  type Output = Int
+
+  def init(t: Int)
+    self.tag = t
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Pending
+  end
+end
+
+def describe_race(r: Race2) -> String
+  match r
+    Race2.First(p) -> "first #{p}"
+    Race2.Second(p) -> "second #{p}"
+  end
+end
+
+Tester.describe("Race.of") do |t: &var Tester|
+  t.it("returns the first arm when it wins") do
+    let r = block_on(Race.of(Quick.new(11), Slow.new(99)))
+    t.expect(describe_race(r)).to_eq("first 11")
+  end
+
+  t.it("returns the second arm when it wins") do
+    let r = block_on(Race.of(Slow.new(99), Quick.new(22)))
+    t.expect(describe_race(r)).to_eq("second 22")
+  end
+end
+
+Tester.describe("Scope") do |t: &var Tester|
+  t.it("collect drives a reactor-backed child to completion") do
+    Scope.open do |s|
+      s.spawn(Async.sleep(Duration.from_millis(30)))
+      t.expect(s.collect).to_eq(0)
+    end
+  end
+end

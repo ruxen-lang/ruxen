@@ -1,0 +1,123 @@
+def read_locked(m: &Mutex[String]) -> String
+  match m.lock
+    Ok(g) -> g.get.clone
+    Err(_) -> "poisoned"
+  end
+end
+
+def append_bang(s: &var String)
+  s.push(?\u{21})
+end
+
+class Cell
+  m: Mutex[String]
+  include Send
+  include Sync
+
+  def init(@m: Mutex[String])
+  end
+
+  def write(s: String) -> nil
+    match self.m.lock
+      Ok(g) -> g.set(s)
+      Err(_) -> nil
+    end
+  end
+
+  def read -> String
+    match self.m.lock
+      Ok(g) -> g.get.clone
+      Err(_) -> "poisoned"
+    end
+  end
+end
+
+Tester.describe("Mutex") do |t: &var Tester|
+  t.it("reads the value through lock_raw") do
+    let m = Mutex.new(10)
+    let g = m.lock_raw
+    t.expect(g.get).to_eq(10)
+  end
+
+  t.it("locks a Mutex[String] through a borrow") do
+    let m = Mutex.new("hello world")
+    t.expect(read_locked(&m)).to_eq("hello world")
+  end
+
+  t.it("unlocks a guard bound in a closure's match arm") do
+    let m = Mutex.new("twice")
+    let reader = { ||
+      match m.lock
+        Ok(g) -> g.get.clone
+        Err(_) -> "poisoned"
+      end
+    }
+    t.expect(reader.()).to_eq("twice")
+    t.expect(reader.()).to_eq("twice")
+  end
+
+  t.it("try_lock is busy while held and acquires when free") do
+    m = Mutex.new(41)
+    guard = m.lock!
+    var busy = false
+    match m.try_lock
+      Some(_) -> busy = false
+      nil -> busy = true
+    end
+    t.expect(busy).to_eq(true)
+    let r: &Int = guard.deref
+    t.expect(*r).to_eq(41)
+    free = Mutex.new(1)
+    var got = 0
+    match free.try_lock
+      Some(g) -> got = g.get
+      nil -> got = -1
+    end
+    t.expect(got).to_eq(1)
+  end
+
+  t.it("writes through deref_mut and deref_var") do
+    m = Mutex.new("hello")
+    g = m.lock!
+    append_bang(g.deref_mut)
+    t.expect(g.get).to_eq("hello!")
+    append_bang(g.deref_var)
+    t.expect(g.get).to_eq("hello!!")
+    let r: &String = g.deref
+    t.expect(r.clone).to_eq("hello!!")
+    g.set("bye")
+    t.expect(g.get).to_eq("bye")
+    c = Mutex.new(41)
+    h = c.lock!
+    t.expect(h.get).to_eq(41)
+  end
+end
+
+Tester.describe("SharedSync") do |t: &var Tester|
+  t.it("shares one value between clones") do
+    let s = SharedSync.new(100)
+    let s2 = s.clone
+    t.expect(s.strong_count).to_eq(2)
+    t.expect(s.weak_count).to_eq(0)
+    t.expect(s.get).to_eq(100)
+    t.expect(s2.get).to_eq(100)
+    let v: &Int = s2.deref
+    t.expect(*v).to_eq(100)
+  end
+
+  t.it("round-trips a Mutex[String] between closures") do
+    let cell = SharedSync.new(Cell.new(Mutex.new("init")))
+    let writer = { || cell.get.write("payload-xyz") }
+    let reader = { || cell.get.read }
+    writer.()
+    t.expect(reader.()).to_eq("payload-xyz")
+  end
+end
+
+Tester.describe("AtomicI64") do |t: &var Tester|
+  t.it("fetch_add returns the previous value") do
+    let a = AtomicI64.new(0)
+    t.expect(a.fetch_add(5)).to_eq(0)
+    t.expect(a.load).to_eq(5)
+  end
+end

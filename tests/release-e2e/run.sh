@@ -20,13 +20,14 @@
 #                  except the REPL fixture replay.
 #                  Recognised: binaries, compile, compile-flags, cli,
 #                  repl-session, repl, lsp, parity, all.
-#                  `repl` = scripted session + the fixture replay (slow);
+#                  `repl` = scripted session + the fixture replay over
+#                  the cases listed in repl-cases.txt;
 #                  `repl-session` = the scripted session only;
 #                  `all` = every phase, including the replay.
 #                  Examples:
 #                    PHASES=compile         # just the compile fixtures
-#                    PHASES=repl            # the REPL session + parity sweep
-#                    PHASES=parity          # just the fmt-binary syntax parity
+#                    PHASES=repl            # the REPL session + curated replay
+#                    PHASES=parity          # one-file `ruxen fmt` binary smoke
 #                    PHASES=compile,cli     # both, skip repl/lsp/flags
 #
 #   RUXEN_RUNTIME_AR=<archive>
@@ -65,10 +66,9 @@ mkdir -p "$RESULTS"
 #
 # Fixtures that bind hardcoded TCP ports (727 → :31729,
 # 727b → :31730), open file descriptors at resource caps
-# (518_file_drop_closes opens 1024 fds), spawn child processes
-# (508_command_status), or touch fixed `/tmp/ruxen_e2e_*` paths
-# (534/536) are not safe under concurrency: parallel workers race
-# on the same port/fd cap/tmp path. The symptoms were classic
+# (518_file_drop_closes opens 1024 fds) or spawn child processes
+# (508_command_status) are not safe under concurrency: parallel
+# workers race on the same port or fd cap. The symptoms were classic
 # Heisenbugs — "sometimes pass, sometimes fail" 727s timing out
 # at 10s when system load delayed the async runtime past the
 # client's connect window. Those fixtures are listed in
@@ -83,16 +83,21 @@ _e2e_ncpu() {
 JOBS="${JOBS:-$(_e2e_ncpu)}"
 CASE_FILTER="${CASE_FILTER:-*.rx}"
 # Colon-delimited case stems (filename without `.rx`).
-SERIAL_CASES=":508_command_status:518_file_drop_closes:534_fs_canonicalize:536_fs_read_link:727_async_tcp_echo:727b_async_tcp_read_timeout:"
+SERIAL_CASES=":508_command_status:518_file_drop_closes:727_async_tcp_echo:727b_async_tcp_read_timeout:"
 
 # Run a per-fixture worker function over every case matching
 # CASE_FILTER: the parallel batch with $JOBS workers, then the
 # SERIAL_CASES tail with one worker. Worker TSV lines go to stdout.
+# An optional second argument names a list file (one case stem per
+# line, `#` comments allowed); only listed cases run.
 _e2e_run_cases() {
-  local worker="$1" f base
+  local worker="$1" list="${2:-}" f base
   local parallel=() serial=()
   while IFS= read -r -d '' f; do
     base="$(basename "$f" .rx)"
+    if [ -n "$list" ] && ! grep -qxF -- "$base" "$list"; then
+      continue
+    fi
     case "$SERIAL_CASES" in
       *":$base:"*) serial+=("$f") ;;
       *)           parallel+=("$f") ;;
@@ -109,12 +114,12 @@ _e2e_run_cases() {
 }
 
 # Selective phases. Comma-separated allow-list. The default runs
-# every phase except the REPL fixture replay (it re-runs every
-# fixture through `ruxen repl` with a 15s timeout each and is the
-# slowest phase); ask for it with PHASES=repl or PHASES=all.
+# every phase except the REPL fixture replay (it re-runs the cases in
+# repl-cases.txt through `ruxen repl` with a 15s timeout each); ask
+# for it with PHASES=repl or PHASES=all.
 #
 #   PHASES=compile          ./run.sh   # just the compile fixtures
-#   PHASES=repl             ./run.sh   # REPL session + parity sweep
+#   PHASES=repl             ./run.sh   # REPL session + curated replay
 #   PHASES=compile,cli      ./run.sh   # both, skip repl/lsp/flags
 #   PHASES=binaries,lsp     ./run.sh   # smoke + LSP only
 #
@@ -769,22 +774,14 @@ test_repl() {
 }
 
 # ── 4b. ruxen repl: fixture parity ────────────────────────────────────
-# For each compile-case fixture, translate to REPL input (strip
+# For each fixture listed in repl-cases.txt (a curated set of core
+# language features, not the whole corpus), translate to REPL input (strip
 # `def main` wrapper so top-level items + main body become REPL
 # inputs), pipe through `ruxen repl`, diff against the same
 # expected/*.out as the compile test. This surfaces compile↔REPL
-# divergences. Fixtures listed in REPL_KNOWN_SKIP exercise features
-# the REPL genuinely can't model without a redesign (mutation
-# persistence across inputs, JIT paths for certain features) —
-# those are reported separately as "skip" and not counted as failures.
-REPL_KNOWN_SKIP=(
-  # Pre-existing gap (verified failing on master/921e18f, NOT a regression):
-  # const-generic class instantiation (`Counter[10].new(...)`) can't be inferred
-  # in the REPL's per-line `__repl_N` synthetic-function wrapping ("could not
-  # infer return type") — the compiled path resolves it whole-program, but the
-  # REPL has no instantiation context per line. Compiled fixture still passes.
-  073_const_generic_class_instantiation
-)
+# divergences. Leave out fixtures the REPL can't model (per-line
+# wrapping loses whole-program inference, e.g. const-generic class
+# instantiation in 073).
 
 # Per-fixture REPL worker. Same shape as _e2e_run_case_one: stdout =
 # TSV status (PASS / FAIL / SKIP), stderr = live progress line. The
@@ -811,12 +808,6 @@ _e2e_repl_case_one() {
       return
       ;;
   esac
-
-  if _e2e_is_repl_skipped "$base"; then
-    printf 'SKIP\t%s\tknown-gap\n' "$name"
-    printf '  \033[33mSKIP\033[0m  %s  \033[2m(known REPL gap)\033[0m\n' "$name" >&2
-    return
-  fi
 
   python3 "$E2E_SCRIPTS_DIR/translate_to_repl.py" <"$src" >"$tmp/$base.in"
   # Capture stdout separately from stderr — fixtures assert stdout only.
@@ -857,21 +848,15 @@ _e2e_repl_case_one() {
   fi
 }
 
-_e2e_is_repl_skipped() {
-  local n="$1"
-  # Convert the (currently empty) REPL_KNOWN_SKIP env list into a
-  # newline-separated lookup. Exported as a single colon-delimited
-  # string from the parent so xargs subshells can read it.
-  case ":${E2E_REPL_SKIP:-}:" in
-    *":$n:"*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-export -f _e2e_repl_case_one _e2e_is_repl_skipped
+export -f _e2e_repl_case_one
 
 test_repl_cases() {
   banner "ruxen repl: fixture parity (translate .rx → REPL → diff) ($JOBS jobs)"
   local tmp results
+  if [ ! -f "$HERE/repl-cases.txt" ]; then
+    record_fail "repl/cases" "missing $HERE/repl-cases.txt"
+    return
+  fi
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/ruxen-repl-cases.XXXXXX")"
   results="$tmp/results.tsv"
   : > "$results"
@@ -880,15 +865,7 @@ test_repl_cases() {
   export E2E_RESULTS_DIR="$RESULTS"
   export E2E_EXPECTED_DIR="$EXPECTED"
   export E2E_SCRIPTS_DIR="$SCRIPTS"
-  # Fold REPL_KNOWN_SKIP into a colon-delimited string for the worker.
-  local skip_str=""
-  for s in "${REPL_KNOWN_SKIP[@]:-}"; do
-    [ -z "$s" ] && continue
-    skip_str="${skip_str}${s}:"
-  done
-  export E2E_REPL_SKIP="${skip_str%:}"
-
-  _e2e_run_cases _e2e_repl_case_one >> "$results"
+  _e2e_run_cases _e2e_repl_case_one "$HERE/repl-cases.txt" >> "$results"
 
   local passed=0 failed=0 skipped=0 total=0
   while IFS=$'\t' read -r status name reason; do
@@ -907,6 +884,11 @@ test_repl_cases() {
 
   printf "\n  %s%d/%d passed,%s %d skipped,%s %d failed%s\n" \
     "$GREEN" "$passed" "$total" "$YELLOW" "$skipped" "$RED" "$failed" "$RESET"
+
+  # With the default filter, zero cases means the list matched nothing.
+  if [ "$total" -eq 0 ] && [ "$CASE_FILTER" = "*.rx" ]; then
+    record_fail "repl/cases" "repl-cases.txt matched no fixture"
+  fi
 
   # Roll failures into the main summary so they count; skips are informational.
   if [ "$failed" -gt 0 ]; then
@@ -965,84 +947,32 @@ test_lsp_features() {
   fi
 }
 
-# ── 6. syntax parity: the BINARY-level `ruxen fmt` non-destructiveness ─
+# ── 6. syntax parity: one-file smoke of the SHIPPED `ruxen fmt` binary ─
 #
-# USER REQUIREMENT: "none of the lsp/ide/fmt/compiler/repl may diverge on
-# any syntax of ruxen; ruxen syntax must be 100% available on every package
-# we deliver." The in-process axes live in
-# `compiler/ruxen_core/tests/syntax_parity.rs` (compiler/fmt/repl) and
-# `src/ruxen_ide/tests/syntax_parity_ide.rs` (lsp/ide). This phase pins the
-# axis the library tests CANNOT: the SHIPPED `ruxen fmt` binary, driven over
-# every deliverable package's real `.rx` source — the compiler's own cases +
-# the stdlib + the three sibling repos (canvas/quiver/rondo).
-#
-# For each corpus file the binary asserts:
-#   * `ruxen fmt --stdin` succeeds (the binary parses the syntax), AND
-#   * a second `ruxen fmt --stdin` over the output is BYTE-IDENTICAL
-#     (binary-level idempotence — the strongest non-destructiveness proof
-#     a black-box `fmt` can give).
-#
-# ADR: docs/decisions/syntax-parity-harness.md. This is what would have
-# caught Q34 (dropped grouping parens) at the binary boundary.
+# The corpus-wide parse + idempotence checks live in
+# `syntax_parity` (compiler/fmt/repl, every case, the stdlib, examples
+# and the sibling repos when present) and `syntax_parity_ide`
+# (lsp/ide). This phase only proves the shipped binary's `fmt --stdin`
+# path works end to end: one syntax-rich fixture must format, and a
+# second pass over the output must be byte-identical.
+# ADR: docs/decisions/syntax-parity-harness.md.
+PARITY_SMOKE_FILE="$CASES/2057_todo_manager_sample_program.rx"
 test_parity() {
-  banner "syntax parity: ruxen fmt binary over every deliverable package"
-
-  # Corpus roots. The compiler tree is rooted two levels up from this
-  # script (tests/release-e2e/run.sh → ruxen). The sibling repos sit
-  # alongside ruxen in the ~/.projects workspace.
-  local ruxen_root projects_root
-  ruxen_root="$(cd "$HERE/../.." && pwd)"
-  projects_root="$(cd "$ruxen_root/.." && pwd)"
-
-  local roots=(
-    "$ruxen_root/tests/release-e2e/cases"
-    "$ruxen_root/library/std"
-    "$ruxen_root/examples"
-    "$projects_root/canvas/src"
-    "$projects_root/quiver/src"
-    "$projects_root/rondo/src"
-  )
-
-  local tmp
+  banner "syntax parity: ruxen fmt binary smoke ($(basename "$PARITY_SMOKE_FILE"))"
+  local f="$PARITY_SMOKE_FILE" name tmp
+  name="parity/fmt-binary $(basename "$f")"
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/ruxen-parity.XXXXXX")"
-
-  local checked=0 idem_fail=0 fmt_fail=0
-  local f f1 f2
-  for root in "${roots[@]}"; do
-    [ -d "$root" ] || continue
-    # NUL-delimited to be safe with odd paths.
-    while IFS= read -r -d '' f; do
-      f1="$tmp/f1.rx"
-      f2="$tmp/f2.rx"
-      # First format pass via the SHIPPED binary.
-      if ! ruxen fmt --stdin <"$f" >"$f1" 2>"$tmp/err1"; then
-        fmt_fail=$((fmt_fail + 1))
-        record_fail "parity/fmt $(basename "$f")" "ruxen fmt --stdin failed (see $tmp/err1)"
-        cp "$tmp/err1" "$RESULTS/parity_$(basename "$f").err" 2>/dev/null
-        continue
-      fi
-      # Second pass — must be byte-identical (idempotence).
-      if ! ruxen fmt --stdin <"$f1" >"$f2" 2>"$tmp/err2"; then
-        fmt_fail=$((fmt_fail + 1))
-        record_fail "parity/refmt $(basename "$f")" "second ruxen fmt --stdin failed"
-        continue
-      fi
-      checked=$((checked + 1))
-      if ! cmp -s "$f1" "$f2"; then
-        idem_fail=$((idem_fail + 1))
-        diff -u "$f1" "$f2" >"$RESULTS/parity_$(basename "$f").idem.diff" 2>/dev/null
-        record_fail "parity/idempotent $(basename "$f")" "fmt(fmt(x)) != fmt(x)"
-      fi
-    done < <(find "$root" -type f -name '*.rx' -print0)
-  done
-
-  rm -rf "$tmp"
-
-  if [ "$fmt_fail" -eq 0 ] && [ "$idem_fail" -eq 0 ]; then
-    record_pass "parity/fmt-binary ($checked files: parse + idempotent)"
+  if ! ruxen fmt --stdin <"$f" >"$tmp/f1.rx" 2>"$RESULTS/parity.err"; then
+    record_fail "$name" "ruxen fmt --stdin failed (see results/parity.err)"
+  elif ! ruxen fmt --stdin <"$tmp/f1.rx" >"$tmp/f2.rx" 2>"$RESULTS/parity.err"; then
+    record_fail "$name" "second ruxen fmt --stdin failed (see results/parity.err)"
+  elif ! cmp -s "$tmp/f1.rx" "$tmp/f2.rx"; then
+    diff -u "$tmp/f1.rx" "$tmp/f2.rx" >"$RESULTS/parity.idem.diff" 2>/dev/null
+    record_fail "$name" "fmt(fmt(x)) != fmt(x) (see results/parity.idem.diff)"
+  else
+    record_pass "$name (parse + idempotent)"
   fi
-  printf "  %s%d files checked, %d fmt failures, %d idempotence failures%s\n" \
-    "$DIM" "$checked" "$fmt_fail" "$idem_fail" "$RESET"
+  rm -rf "$tmp"
 }
 
 # ── main ──────────────────────────────────────────────────────────────

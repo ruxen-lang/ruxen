@@ -162,7 +162,7 @@ Existing E0613 — reused.
 
 | Behaviour | Test fn                                              | File                            |
 |-----------|------------------------------------------------------|---------------------------------|
-| B1, B2    | `mixin_default_body_with_string_interp_typechecks_and_runs` | `tests/mixin_defaults.rs` |
+| B1, B2    | e2e `cases/86_mixin_default_method_used.rx` (default body interpolates `self`) | release-e2e |
 | B2 e2e    | e2e `cases/22_mixin_default.rx`, `cases/86_mixin_default_method_used.rx` | release-e2e |
 | B2 e2e    | e2e `cases/980_mixin_default_block_self_param.rx`, `cases/981_mixin_default_block_generic_return.rx` | release-e2e |
 

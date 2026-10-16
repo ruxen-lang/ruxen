@@ -23,6 +23,21 @@ once 1.0.0 ships.
   E1126. `Hashable` is the only hashing mixin and the dual-name checks are gone.
   Public stdlib methods are unchanged.
 - **`ruxen clean` removes the whole project target root.**
+- **The test suite is smaller and faster.** Integration tests are one `it`
+  binary per crate (`release_e2e_smoke` stays separate). Stdlib behaviour tests
+  moved into `library/std/<pkg>/tests/*.rx` and run with `scripts/test-stdlib.sh`,
+  since `ruxen test` now works for stdlib packages. Duplicate Rust tests and e2e
+  fixtures are deleted where another test covers the same behaviour, and
+  `scripts/affected-tests.sh` runs only the tests a change needs.
+- **`tests/release-e2e/run.sh` is quicker.** It runs fixtures in parallel, links
+  the prebuilt runtime archive, replays only the cases in `repl-cases.txt`
+  through the REPL (outside the default phases), and its `parity` phase formats
+  one fixture with the binary; `syntax_parity` covers the whole corpus.
+- **CI has a fast and a slow lane.** `ci.yml` runs on every push: workspace
+  tests, a filtered `release_e2e_smoke` and the stdlib package tests.
+  `pr-ready.yml` adds the full smoke on Linux and macOS, the `llvm` feature
+  tests and the `run.sh` binaries, cli and lsp phases. Criterion's `plotters`
+  feature is off.
 
 ### Removed
 - Dead Rust code: the `ruxen_driver` crate, `borrow_check/lifetimes.rs`, the

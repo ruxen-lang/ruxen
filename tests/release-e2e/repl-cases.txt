@@ -1,0 +1,32 @@
+# Cases the REPL fixture replay (run.sh PHASES=repl) runs: one per core
+# language feature. Every case here must pass through `ruxen repl` with
+# the same stdout as its compiled run. Add a case when the REPL gains a
+# feature; the compile phase still runs every case.
+01_hello
+02_int_arith
+03_float_arith
+04_bool_logic
+05_string_interp
+06_var
+07_if_elsif_else
+08_while
+09_for_range
+10_match_int
+11_match_guards
+12_functions
+13_recursion
+14_classes
+16_inheritance
+18_enums_simple
+19_enums_data
+20_enum_methods
+21_mixins
+22_mixin_default
+25_question_op
+28_closures
+30_generics_fn
+31_tuples
+34_char_literal
+121_match_as_expr
+123_tuple_destructure_return
+128_let_shadowing

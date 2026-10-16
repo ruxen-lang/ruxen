@@ -1,7 +1,0 @@
-retry start
-p1=-2
-p2=-2
-p3=-2
-p4=7
-slots_after=0
-retry done

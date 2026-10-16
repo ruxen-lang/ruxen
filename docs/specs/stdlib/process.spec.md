@@ -93,15 +93,15 @@ same `ExitStatus` shape as `.status`.
 | B1 one    | `process_exit_one_returns_one`                | `stdlib_process.rs`        |
 | B1 42     | `process_exit_forty_two_returns_forty_two`    | `stdlib_process.rs`        |
 | B1 23     | `std_process_exit_round_trip`                 | `std_use_resolution.rs`    |
-| B4 zero   | `command_status_true_returns_zero`            | `stdlib_process.rs`        |
-| B4 one    | `command_status_false_returns_one`            | `stdlib_process.rs`        |
-| B3 arg    | `command_arg_passes_through`                  | `stdlib_process.rs`        |
-| B3 args   | `command_args_bulk`                           | `stdlib_process.rs`        |
-| B3 env    | `command_env_visible_to_child`                | `stdlib_process.rs`        |
-| B3 cwd    | `command_current_dir_changes_cwd`             | `stdlib_process.rs`        |
-| B4 enoent | `command_nonexistent_binary_returns_err`      | `stdlib_process.rs`        |
-| B5 stdout | `command_output_captures_stdout`              | `stdlib_process.rs`        |
-| B5 stderr | `command_output_captures_stderr`              | `stdlib_process.rs`        |
+| B4 zero   | "returns the child's exit code from status" | `library/std/process/tests/command_test.rx` |
+| B4 one    | "returns the child's exit code from status" | `library/std/process/tests/command_test.rx` |
+| B3 arg    | "passes arg and args to the child" | `library/std/process/tests/command_test.rx` |
+| B3 args   | "passes arg and args to the child" | `library/std/process/tests/command_test.rx` |
+| B3 env    | "shows an env var to the child" | `library/std/process/tests/command_test.rx` |
+| B3 cwd    | "runs the child in current_dir" | `library/std/process/tests/command_test.rx` |
+| B4 enoent | "returns Err for a binary that does not exist" | `library/std/process/tests/command_test.rx` |
+| B5 stdout | "passes arg and args to the child" | `library/std/process/tests/command_test.rx` |
+| B5 stderr | "captures stderr and the status in output" | `library/std/process/tests/command_test.rx` |
 | B4 signal | gap — see below                               |                            |
 
 ---

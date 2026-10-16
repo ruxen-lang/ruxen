@@ -60,10 +60,9 @@ The string surface includes:
 - `parse[T]() -> Result[T, ParseError]` for primitive `T`
 - `truncate(n)` (in-place; byte-count)
 
-Pin tests for these live in the E2E fixture set
-(`106_string_chars.rx`, `108_string_split.rx`,
-`112_string_trim.rx`, `113_string_methods_chain.rx`,
-`05_string_interp.rx`, `114_string_interp_mixed.rx`).
+Tests for these live in `library/std/string/tests/*.rx` (run with
+`scripts/test-stdlib.sh string`); interpolation stays in the E2E fixtures
+`05_string_interp.rx` and `114_string_interp_mixed.rx`.
 
 ---
 

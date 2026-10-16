@@ -1,4 +1,5 @@
-//! Shared C-runtime link helper for integration tests that build native
+//! Shared helpers for the integration tests: compile-and-run of a Ruxen
+//! program, and the C-runtime link helper for tests that build native
 //! binaries outside `codegen::compile`.
 //!
 //! Sources, compile flags and system libraries come from the same driver
@@ -12,6 +13,11 @@
 #![allow(dead_code)]
 
 use ruxen_core::codegen;
+use ruxen_core::diagnostics::DiagnosticLevel;
+use ruxen_core::lexer::Lexer;
+use ruxen_core::mir::lower::Lowerer;
+use ruxen_core::parser::Parser;
+use ruxen_core::typeck;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,9 +38,7 @@ fn unique_suffix() -> String {
 }
 
 /// Runtime sources the driver links, limited to the named stdlib
-/// packages (including their vendored subdirectories). Reads
-/// `RUXEN_RUNTIME` like the driver does, so callers that set it must
-/// call this before setting it.
+/// packages (including their vendored subdirectories).
 pub fn package_runtime_sources(packages: &[&str]) -> Vec<PathBuf> {
     codegen::find_runtime_sources()
         .expect("find runtime sources")
@@ -109,4 +113,51 @@ __attribute__((weak)) void Drop_dynamic_drop(long long self) { \
     let _ = std::fs::remove_file(&harness_c);
     assert!(status.success(), "failed to link C harness {name}");
     harness_exe
+}
+
+/// Lex, parse, typecheck (asserting no errors), lower and compile `source`
+/// with the default runtime. Returns the executable, written under the
+/// workspace `tmp/` so it never lands on the system tmpfs; the caller
+/// runs and removes it.
+pub fn compile_program(source: &str, name: &str) -> PathBuf {
+    let tmp_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp");
+    std::fs::create_dir_all(&tmp_dir).expect("create workspace tmp dir");
+    let bin_path = tmp_dir.join(format!(
+        "{name}-{}-{}.bin",
+        std::process::id(),
+        unique_suffix()
+    ));
+
+    let tokens = Lexer::new(source).tokenize().expect("lex");
+    let program = Parser::new(tokens).parse().expect("parse");
+    let result = typeck::type_check(&program);
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .map(|d| &d.message)
+        .collect();
+    assert!(errors.is_empty(), "typecheck errors for {name}: {errors:?}");
+
+    let mir = Lowerer::new(&result.symbols)
+        .lower_program(&result.program)
+        .unwrap_or_else(|e| panic!("MIR lowering for {name}: {e}"));
+    codegen::compile(&mir, bin_path.to_str().unwrap())
+        .unwrap_or_else(|e| panic!("codegen for {name}: {e}"));
+    bin_path
+}
+
+/// [`compile_program`], run the executable, remove it, and return its
+/// `(stdout, stderr, exit code)`.
+pub fn compile_and_run(source: &str, name: &str) -> (String, String, Option<i32>) {
+    let bin_path = compile_program(source, name);
+    let output = Command::new(&bin_path)
+        .output()
+        .unwrap_or_else(|e| panic!("run {name}: {e}"));
+    let _ = std::fs::remove_file(&bin_path);
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        output.status.code(),
+    )
 }

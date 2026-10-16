@@ -1,0 +1,268 @@
+# ---- from 1730_class_partial_eq_int_field ----
+# B74: structural `==` on a `class` with a single `Int` field.
+#
+# Before the fix `mir/lower/mod.rs`'s `HirItem::Class` arm synthesized
+# `Clone` and nothing else, AND `struct_name_with_partial_eq` matched
+# `Ty::Struct` only — so `a == b` on a class skipped the structural
+# route in `expr/binops.rs` and lowered to a raw `Compare` of two heap
+# ADDRESSES. Every pair of distinct allocations was `false`, however
+# equal their fields.
+#
+# The struct half is pinned alongside on purpose. Every pin cited for
+# auto-equality (133 / 206 / 207 / 139) spells a `struct` and none
+# spells a `class`, which is exactly how this survived; keeping both
+# spellings in one case means neither half can regress unnoticed.
+struct SP
+  x: Int
+end
+
+class C
+  x: Int
+
+  def init(@x: Int)
+  end
+end
+
+def run_1730
+  puts "s_eq=#{SP.new(1) == SP.new(1)}"
+  puts "s_ne=#{SP.new(1) == SP.new(2)}"
+
+  let a = C.new(1)
+  let b = C.new(1)
+  let c = C.new(2)
+  puts "c_eq=#{a == b}"
+  puts "c_ne=#{a == c}"
+  # `!=` must invert the SAME structural answer, not fall back to
+  # address inequality (which was `true` for every pair).
+  puts "c_bang_eq=#{a != b}"
+  puts "c_bang_ne=#{a != c}"
+  # An alias of one allocation stays equal — the fix must not overshoot
+  # into "always compare unequal".
+  puts "c_self=#{a == a}"
+  # Equality is symmetric in BOTH directions — a fold that reads the
+  # lhs's slots against the rhs's would still pass a one-sided check.
+  puts "c_sym_eq=#{b == a}"
+  puts "c_sym_ne=#{c == a}"
+end
+
+# ---- from 1731_class_partial_eq_string_field ----
+# B74: structural `==` on a `class` holding `String` fields.
+#
+# A `String` field is a heap buffer, so a slot-by-slot compare of the
+# raw words is a POINTER compare and would report two equal-by-value
+# names unequal. The derived body routes a `String` slot through the
+# value comparison instead.
+#
+# Every compared string on the right-hand side is BUILT BY
+# CONCATENATION rather than written as a literal, so the two objects
+# genuinely hold distinct buffers. A pin that wrote `"Ada"` on both
+# sides could pass on literal sharing alone and prove nothing.
+class Name
+  first: String
+  last: String
+
+  def init(@first: String, @last: String)
+  end
+end
+
+def run_1731
+  let a = Name.new("Ada", "Lovelace")
+  let b = Name.new("Ad" + "a", "Love" + "lace")
+  let c = Name.new("Ada", "Byron")
+  let d = Name.new("Grace", "Lovelace")
+
+  puts "eq_distinct_buffers=#{a == b}"
+  puts "ne_last=#{a == c}"
+  puts "ne_first=#{a == d}"
+  puts "bang_eq=#{a != b}"
+  puts "bang_ne=#{a != c}"
+
+  # An empty string is a value like any other, not a null slot.
+  let e = Name.new("", "")
+  let f = Name.new("", "")
+  puts "empty_eq=#{e == f}"
+  puts "empty_vs_set=#{e == a}"
+end
+
+# ---- from 1732_class_partial_eq_multi_field ----
+# B74: a `class` with several fields where exactly ONE differs.
+#
+# This is the case that separates a real per-field fold from a
+# regression that compares only the first slot (or only the last, or
+# folds with `||` instead of `&&`). Each variant below differs from the
+# base in exactly one position, so every slot must be able to decide
+# the answer on its own.
+class Rec
+  a: Int
+  b: String
+  c: Int
+
+  def init(@a: Int, @b: String, @c: Int)
+  end
+end
+
+def run_1732
+  let base = Rec.new(1, "mid", 3)
+  let same = Rec.new(1, "mid", 3)
+  let diff_first = Rec.new(9, "mid", 3)
+  let diff_middle = Rec.new(1, "other", 3)
+  let diff_last = Rec.new(1, "mid", 9)
+  let diff_all = Rec.new(9, "other", 9)
+
+  puts "same=#{base == same}"
+  puts "diff_first=#{base == diff_first}"
+  puts "diff_middle=#{base == diff_middle}"
+  puts "diff_last=#{base == diff_last}"
+  puts "diff_all=#{base == diff_all}"
+  puts "bang_diff_middle=#{base != diff_middle}"
+end
+
+# ---- from 1733_class_partial_eq_inherited_field ----
+# B74: structural `==` over an INHERITED field — the shape a `struct`
+# cannot have, so the shape struct-derived logic is likeliest to get
+# wrong.
+#
+# Two distinct defects meet here and the pin covers both:
+#
+#  1. The derived body must walk the FLATTENED chain (ancestor fields
+#     first, then the class's own), not `c.fields`, or it compares the
+#     subclass's own field and silently ignores every inherited one.
+#
+#  2. `lookup_field_with_parents` used to return `DefKind::Field.index`,
+#     which is CLASS-LOCAL and restarts at 0 per class. `Base.id` and
+#     `Mid.tag` both resolved to slot 0, so `super(id)` wrote the slot
+#     and `@tag = tag` immediately overwrote it: `d.id` read back the
+#     tag and the last slot stayed uninitialised. The first two lines
+#     below pin the slots apart, because equality over a layout that
+#     loses a field is meaningless however carefully it folds.
+#
+# `16_inheritance.rx` never caught (2): `Cat < Animal` declares no field
+# of its own, so nothing collides.
+class Base
+  id: Int
+
+  def init(@id: Int)
+  end
+end
+
+class Mid < Base
+  tag: Int
+
+  def init(id: Int, tag: Int)
+    super(id)
+    @tag = tag
+  end
+end
+
+def run_1733
+  let probe = Mid.new(7, 42)
+  puts "slot_id=#{probe.id}"
+  puts "slot_tag=#{probe.tag}"
+
+  let a = Mid.new(1, 2)
+  let same = Mid.new(1, 2)
+  # Differs ONLY in the inherited field. A body that walked `c.fields`
+  # alone would call this pair equal.
+  let diff_inherited = Mid.new(9, 2)
+  # Differs ONLY in the class's own field.
+  let diff_own = Mid.new(1, 9)
+
+  puts "same=#{a == same}"
+  puts "diff_inherited=#{a == diff_inherited}"
+  puts "diff_own=#{a == diff_own}"
+  puts "bang_diff_inherited=#{a != diff_inherited}"
+end
+
+# ---- from 1734_class_partial_eq_include_spellings ----
+# B74: both SPELLINGS of asking for structural equality on a `class`
+# must agree — an explicit `include PartialEq`, and the implicit
+# structural include (ruby-naming.spec.md §3.6) you get by writing no
+# include at all.
+#
+# The bug reproduced under BOTH, so pinning only one would leave half
+# the surface unproven. They are side by side here so a fix that wires
+# up only the explicit path (the obvious one to notice) fails loudly.
+class Explicit
+  include PartialEq
+
+  x: Int
+  y: String
+
+  def init(@x: Int, @y: String)
+  end
+end
+
+class Implicit
+  x: Int
+  y: String
+
+  def init(@x: Int, @y: String)
+  end
+end
+
+def run_1734
+  let e1 = Explicit.new(1, "a")
+  let e2 = Explicit.new(1, "a")
+  let e3 = Explicit.new(1, "b")
+  puts "explicit_eq=#{e1 == e2}"
+  puts "explicit_ne=#{e1 == e3}"
+  puts "explicit_bang=#{e1 != e3}"
+
+  let i1 = Implicit.new(1, "a")
+  let i2 = Implicit.new(1, "a")
+  let i3 = Implicit.new(1, "b")
+  puts "implicit_eq=#{i1 == i2}"
+  puts "implicit_ne=#{i1 == i3}"
+  puts "implicit_bang=#{i1 != i3}"
+end
+
+# ---- from 1735_class_user_eq_beats_derive ----
+# B74: a user-written `def ==` on a `class` still WINS over the
+# synthesized structural one.
+#
+# `expr/binops.rs` tries the operator-to-method desugar before the
+# structural-derive route, so adding class synthesis must not shadow a
+# hand-written `==`. The class below deliberately compares only ONE of
+# its two fields, so the two answers are distinguishable: structural
+# equality would say `false` for `a == b` (the minors differ) while the
+# user's method says `true`. A regression that reorders the routes
+# flips these lines rather than merely changing a message.
+#
+# `!=` is pinned too: it must invert the USER's answer, not compute a
+# separate structural one.
+class Ver
+  major: Int
+  minor: Int
+
+  def init(@major: Int, @minor: Int)
+  end
+
+  def ==(other: Ver) -> Bool
+    self.major == other.major
+  end
+end
+
+def run_1735
+  let a = Ver.new(1, 0)
+  let b = Ver.new(1, 9)
+  let c = Ver.new(2, 0)
+
+  puts "user_eq_same_major=#{a == b}"
+  puts "user_eq_diff_major=#{a == c}"
+  puts "user_bang_same_major=#{a != b}"
+  puts "user_bang_diff_major=#{a != c}"
+
+  # The METHOD spelling takes a different route through the lowerer
+  # than the OPERATOR spelling, so pin both (QUEUE.md §0).
+  puts "method_same_major=#{a.==(b)}"
+  puts "method_diff_major=#{a.==(c)}"
+end
+
+def main
+  run_1730
+  run_1731
+  run_1732
+  run_1733
+  run_1734
+  run_1735
+end

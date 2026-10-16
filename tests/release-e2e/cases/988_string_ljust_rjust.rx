@@ -1,9 +1,0 @@
-# Pins String#ljust / String#rjust (pad right / left to a width) and the
-# default-arg fill on a builtin-head method: `ljust(w)` fills pad = " ".
-def main
-  puts("ab".ljust(5) + "|")
-  puts("ab".ljust(5, "-"))
-  puts("ab".rjust(5) + "|")
-  puts("ab".rjust(5, "*"))
-  puts("abcdef".ljust(3, "-"))
-end

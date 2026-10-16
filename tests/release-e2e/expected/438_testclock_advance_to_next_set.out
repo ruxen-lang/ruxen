@@ -1,9 +1,0 @@
-atn start
-a1=pending
-b1=pending
-d1=10000000000
-a2=ready
-d2=15000000000
-b2=ready
-d3=-1
-atn done

@@ -57,7 +57,7 @@ Task #14 commit `b74546d` ran `resolve_item` over bootstrap programs in pass 2. 
 
 **Fix:** make registration genuinely path-agnostic. The function should take the symbol-table state as input, not assume "user-program mode" vs "bootstrap mode". Eliminate any branches inside that check which caller invoked it. The work in `bootstrap_merge.rs` should be reduced to "set up the cumulative symbol table, then route through the same registration path the user program uses."
 
-**Acceptance:** `register_top_level_type_with_ffi_in` has no conditional logic on caller identity. The full type-registration flow can be exercised by a fresh `.rx` package without any bootstrap-specific glue. The bootstrap_class_bodies pin test (added in #14) still passes.
+**Acceptance:** `register_top_level_type_with_ffi_in` has no conditional logic on caller identity. The full type-registration flow can be exercised by a fresh `.rx` package without any bootstrap-specific glue. The e2e suite (518 and the async 721-731 cases) still passes.
 
 ## B4 — Drop registration: `def drop` and `include Drop` agree
 

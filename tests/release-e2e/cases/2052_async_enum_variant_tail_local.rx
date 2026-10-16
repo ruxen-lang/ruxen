@@ -1,0 +1,47 @@
+# An enum-variant tail expression, and pre-await locals, that cross a suspend
+# point. (`Option.Some(f.await)` with the await inside the constructor does not
+# link yet: see TODO note in the card report.)
+class Ready
+  value: Int
+  ticks: Int
+  include Future
+  type Output = Int
+
+  def init(v: Int)
+    self.value = v
+    self.ticks = 1
+  end
+
+  def self.make(v: Int) -> Ready
+    Ready.new(v)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.ticks == 0
+      Poll.Ready(self.value)
+    else
+      self.ticks = self.ticks - 1
+      Poll.Pending
+    end
+  end
+end
+
+async def wrap() -> Option[Int]
+  let tag: Int = 1
+  let v = Ready.make(42).await
+  Option.Some(v + tag)
+end
+
+async def handler(req: Int) -> Int
+  let x: Int = req * 2
+  let r = Ready.make(10).await
+  x + r
+end
+
+def main
+  match block_on(wrap())
+    Some(v) -> puts "some=#{v}"
+    nil -> puts "none"
+  end
+  puts "handler=#{block_on(handler(4))}"
+end

@@ -109,21 +109,22 @@ Card details are in [the code-debt audit](docs/audits/2026-10-code-debt.md), fam
 
 Steps 2 to 7 of [the test-suite audit](docs/audits/2026-10-test-suite.md).
 
-- [ ] Make `ruxen test` work for stdlib packages:
+- [x] Make `ruxen test` work for stdlib packages:
   - Fix `src/ruxenc/src/test_runner.rs:307` so it skips the `src/lib.rx` merge for std packages.
   - Wire `RUXEN_STDLIB_PATH`.
   - Add `scripts/test-stdlib.sh` and a CI step.
-- [ ] Add the e2e fixtures that replace Rust stdout tests:
+- [x] Add the e2e fixtures that replace Rust stdout tests:
   - Promote `fixtures/sample_program.rx`.
   - Fold the `do _1` case into 1780.
   - Add an `.out` for the duplicate `213_` case.
-- [ ] Delete about 130 duplicate or vacuous tests. The audit table names what still covers each one. Keep 422, 576, 577, 728d and the `stdlib_file` truncation test.
-- [ ] Move the 24 `stdlib_*.rs` files and about 225 stdlib e2e fixtures into `library/std/<pkg>/tests/*.rx`, one package at a time. Delete a source test only after its new `.rx` test is green.
-- [ ] Merge the 178 integration-test binaries into about 6 (`tests/it/main.rs` per crate, `autotests = false`). Fix the process-wide env vars first, then adopt nextest.
-- [ ] CI lanes:
+- [x] Delete about 130 duplicate or vacuous tests. The audit table names what still covers each one. Keep 422, 576, 577, 728d and the `stdlib_file` truncation test.
+- [x] Move the 24 `stdlib_*.rs` files and about 225 stdlib e2e fixtures into `library/std/<pkg>/tests/*.rx`, one package at a time. Delete a source test only after its new `.rx` test is green.
+- [x] Merge the 178 integration-test binaries into about 6 (`tests/it/main.rs` per crate, `autotests = false`). Fix the process-wide env vars first.
+  - Decision (owner): nextest was not adopted. With one `it` binary per crate, libtest already runs each binary's tests in parallel, and shared process state is fixed in the tests (explicit paths, `OnceLock`) rather than by a process per test. nextest would add a tool to install without a further speedup.
+- [x] CI lanes:
   - Fast lane on every push: unit tests, `it`, the filtered smoke and `test-stdlib`.
   - Slow lane when a PR is ready: full smoke on both OSes, LLVM, and the `run.sh` cli and lsp phases.
-- [ ] Cut the e2e parity phase to a one-file smoke, and limit the REPL replay to a curated list.
+- [x] Cut the e2e parity phase to a one-file smoke, and limit the REPL replay to a curated list.
 
 ### Code-debt Phases D to G
 
@@ -212,4 +213,35 @@ Order from [the Rust-isms audit](docs/audits/2026-10-rust-isms.md), section 6. R
 - [ ] E1017 calls a type alias or newtype a `class`, and rejects an alias of a mixin.
 - [ ] REGISTRY rows and docs for E1004, E1005 and E1008 remain, but nothing emits them any more.
 - [ ] CHANGELOG [Unreleased] overstates a few things: Channel and "stdlib extensions", and "the formatter round-trips" (it still drops some comments). It also lacks Removed and Added entries.
+- [ ] `Option.Some(f.await)` (an `.await` inside an enum-variant constructor argument) typechecks but fails to link: `Ready_await` and `Future_poll` are undefined. Covered only by the Rust test using `fixtures/ruxen/async_await_in_enum_variant.rx`; add an e2e case once it links.
+- [ ] `hash_code` on `Int` and `String` through a `Hashable` generic bound typechecks but fails to link (`Int_hash_code`, `String_hash_code` undefined). No test covers this gap: the never-run `#[ignore]` pin was deleted. Repro: `def hash_it[T: Hashable](a: &T) -> Int` returning `a.hash_code`, called with `&42` and `&"hello"`.
+- [x] e2e 2057 (the promoted `sample_program.rx`) printed created todo ids #1 to #5 but listed them as #0 to #4. The fixture was wrong, not the compiler: it gave each `Todo` a 0-based id while `Repository#add` returns 1-based ids. The fixture now uses the repository's id.
+- [ ] No test covers comparing an FFI handle with an `Int` (`Mutex.new(7) == 0`, the null-check route in `mir/lower/derive.rs`); e2e 703 and 710 were both deleted. Add an e2e case.
 - [ ] Release: the owner pushes and merges `feat/concurrency-adoption` into master.
+- [ ] Async spec gaps that had only empty `#[ignore]` placeholder tests (removed):
+  - `async_lowering.spec.md` B11: `.await` inside `if` or `match` arms does not lower.
+  - B13: a `&` or `&var` borrow held across `.await` is not rejected (should reuse E1010).
+  - B14: dropping a state machine mid-run drops every field, not only the current state's.
+  - `executor.spec.md` B9: no runtime check that `block_on` drops the future exactly once.
+  - B10: no runtime check that repeated `block_on` does not leak (the `Context` still leaks 8 bytes per call).
+  - `async.spec.md` B5: `include Future` without `type Output = T` is accepted.
+  - B6: a `poll` with the wrong return type is accepted on an `include Future` class.
+- [ ] Send/Sync spec gaps that had only empty `#[ignore]` placeholder tests (removed): B5, no `channel[T]()` constructor, so `Sender`/`Receiver` non-Send rejection is untested; B7, `Thread.spawn` does not tell move from by-reference captures, so "by-reference capture needs Sync" is untested.
+- [ ] The `type_check_with_bootstrap` line above is stale: `bootstrap_class_bodies` is deleted, and `llvm_backend` and `release_e2e_smoke` also call it.
+- [ ] `Result#expect!` and `IoError#message()` results lose their type when used without a typed binding. `t.expect(FS.read_to_string(p).expect!("r")).to_eq("x")` compares String pointers and fails, and `let f = File.open(p).expect!("o")` then `f.read_to_string()` fails codegen with "no runtime symbol for `?T::read_to_string`". The std package tests work around it with `let s: String = ...` and `let f: File = ...`.
+- [ ] A parenless `e.message` or `e.kind` on an `IoError` value is rejected as "cannot access field `message` on enum `IoError`"; only `e.message()` works. Ruby parity wants the parenless call.
+- [ ] The `std::net` blocking echo server with a SIGINT shutdown stays a Rust test (`stdlib_net.rs`) because a `.rx` test cannot signal its own blocked `accept`. Move it once `ruxen test` can drive a child process.
+- [ ] A class whose implicit init (from its fields) is called only inside a block fails to link (`Point_init` undefined). `library/std/fmt/tests/fmt_test.rx` gives `Point` an explicit init to work around it.
+- [ ] `.unwrap` or `.nil?` on an `Option[C]` returned by a stdlib method, where `C` is a class (`JSON.object_get`, `Regex#find`, `Mutex#try_lock`), fails typeck with "no field `unwrap` on type `Json`". `.unwrap_or` works.
+- [ ] `Some(3) == Some(3)` is `false`: Option equality compares pointers, so `t.expect(opt).to_eq(Some(x))` always fails.
+- [ ] `Formatter#write_str` and `#write_char` return a null pointer for success, so `.ok?` on their result is `false`.
+- [ ] `.await` on a hand-written `include Future` class passed as an `async def` parameter fails to link (`CountDown_await`, `Future_poll` undefined).
+- [ ] `"#{x:?}"` ignores a user `include Debug` `fmt` and prints the derived `Tag { name: x }` form. Check whether that is intended (`fmt.spec.md` B2).
+- [ ] `t.expect(x).to_eq(y)` compares pointers when `x` is an `Array[String]`, an `Option`, or a `String` from a destructured tuple (`let (evens, odds) = v.partition { ... }`, then `evens.join(",")`), so equal values fail. The std package tests compare `join` strings or bind a typed `let s: String`.
+- [ ] A block that assigns a captured `var` without reading it (`last = x` inside `[1, 2].each do |x| ... end`) is rejected with E1009 "cannot assign to `last` — currently borrowed". `last += x` and `last = last + x` compile.
+- [ ] A class with its own `def hash_code` fails codegen once used as a `Hash` key: `DuplicateDefinition("Ticket_hash_code")`.
+- [ ] A parenless `a.hash_code` on a class with derived `Hashable` is rejected as "no field `hash_code`"; only `a.hash_code()` works.
+- [ ] `Array.from(123)` is accepted at typeck and fails only at link time (the old `vec_from_int_is_currently_accepted_at_typeck` pin), and `Array.with_capacity` does not check that its argument is an `Int`.
+- [ ] `ruxen test` has no stdout capture, so Kernel `p` / `pp` (e2e 1180) and `warn` (e2e 1181) stay e2e fixtures instead of `library/std/core/tests`.
+- [ ] `case opt in nil ... in x` on an `Option[Int]` binds `x` to the Option pointer, not the payload, so `puts "#{x}"` prints an address (the ruby-naming spec marks this form [implemented]). `in Some(x)` works; e2e 2079 uses it.
+- [ ] `Task.join(h).await` inside `block_on` hangs: the deferred e2e cases `728_async_spawn_join_basic` and `728c_async_spawn_loop` (removed; never run) compiled but did not finish within 10 s. Add an e2e case once spawned tasks join.

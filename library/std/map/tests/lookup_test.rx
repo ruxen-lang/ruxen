@@ -1,0 +1,106 @@
+def count_entries(h: &Hash[Int, Int]) -> Int
+  h.size as Int
+end
+
+class Reader
+  tag: Int
+  def init; self.tag = 0; end
+  def look(h: &Hash[Int, Int]) -> Int
+    match h.get(1)
+      Some(v) -> v
+      nil -> -1
+    end
+  end
+end
+
+Tester.describe("Hash lookup") do |t: &var Tester|
+  t.it("get on a literal hash") do
+    let h = { "a" => 1, "b" => 2 }
+    t.expect(h.get("a").unwrap_or(-1)).to_eq(1)
+    t.expect(h.get("b").unwrap_or(-1)).to_eq(2)
+    t.expect(h.size).to_eq(2)
+  end
+
+  t.it("key? and its aliases") do
+    let h = { "a" => 1, "b" => 2 }
+    t.expect(h.key?("a")).to_eq(true)
+    t.expect(h.key?("z")).to_eq(false)
+    t.expect(h.has_key?("a")).to_eq(true)
+    t.expect(h.include?("z")).to_eq(false)
+    t.expect(h.member?("b")).to_eq(true)
+  end
+
+  t.it("lookups on an empty hash miss until a key is inserted") do
+    var h: Hash[Int, Int] = Hash.new
+    t.expect(h.key?(9)).to_eq(false)
+    t.expect(h.get(9).unwrap_or(-1)).to_eq(-1)
+    h.insert(9, 99)
+    t.expect(h.key?(9)).to_eq(true)
+    t.expect(h.get(9).unwrap_or(-1)).to_eq(99)
+  end
+
+  t.it("index operator reads a value") do
+    var h: Hash[Int, Int] = Hash.new
+    h.insert(1, 10)
+    h.insert(2, 20)
+    h.insert(3, 30)
+    t.expect(h[1]).to_eq(10)
+    t.expect(h[2]).to_eq(20)
+    t.expect(h[3]).to_eq(30)
+  end
+
+  t.it("keys and values") do
+    var h: Hash[Int, Int] = Hash.new
+    h.insert(1, 10)
+    h.insert(2, 20)
+    h.insert(3, 30)
+    t.expect(h.keys.size).to_eq(3)
+    t.expect(h.values.size).to_eq(3)
+    let pairs: Array[(Int, Int)] = h.to_a
+    t.expect(pairs.size).to_eq(3)
+    var total = 0
+    for (k, v) in pairs
+      total = total + k * v
+    end
+    t.expect(total).to_eq(140)
+  end
+
+  t.it("a borrowed hash reads through a function and a method") do
+    var m: Hash[Int, Int] = Hash.new
+    m.insert(1, 99)
+    t.expect(count_entries(&m)).to_eq(1)
+    var r = Reader.new
+    t.expect(r.look(&m)).to_eq(99)
+  end
+
+  t.it("== compares entries regardless of insertion order") do
+    var a: Hash[Int, Int] = Hash.new
+    a.insert(1, 10)
+    a.insert(2, 20)
+    var b: Hash[Int, Int] = Hash.new
+    b.insert(2, 20)
+    b.insert(1, 10)
+    var c: Hash[Int, Int] = Hash.new
+    c.insert(1, 99)
+    c.insert(2, 20)
+    t.expect(a == b).to_eq(true)
+    t.expect(a == c).to_eq(false)
+    t.expect(a != c).to_eq(true)
+  end
+
+  t.it("== compares String values by content") do
+    let o = "o"
+    var a: Hash[Int, String] = Hash.new
+    a.insert(1, "#{o}ne")
+    a.insert(2, "tw#{o}")
+    var b: Hash[Int, String] = Hash.new
+    b.insert(2, "tw#{o}")
+    b.insert(1, "#{o}ne")
+    var c: Hash[Int, String] = Hash.new
+    c.insert(1, "#{o}ne")
+    c.insert(2, "deux")
+    t.expect(a == b).to_eq(true)
+    t.expect(a == c).to_eq(false)
+    t.expect(a != c).to_eq(true)
+  end
+end

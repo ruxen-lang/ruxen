@@ -199,8 +199,7 @@ The last assertion is the test that closes the trio-leak structurally.
 
 | Behaviour | Test fn                                              | File                               |
 |-----------|------------------------------------------------------|------------------------------------|
-| B1        | `bootstrap_class_body_def_init_resolves`             | `tests/bootstrap_class_bodies.rs`  |
-| B1        | `bootstrap_class_body_def_var_poll_resolves`         | `tests/bootstrap_class_bodies.rs`  |
+| B1        | e2e `518_file_drop_closes.rx` and the async e2e `721`-`731` | release-e2e      |
 | B2        | `transitive_send_iff_all_generic_params_send`        | `tests/auto_derive_send_sync.rs`   |
 | B2        | `transitive_sync_iff_all_generic_params_sync`        | `tests/auto_derive_send_sync.rs`   |
 | B2        | `include_negative_send_overrides_transitive`         | `tests/auto_derive_send_sync.rs`   |

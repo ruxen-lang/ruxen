@@ -1,9 +1,0 @@
-s_eq=true
-s_ne=false
-c_eq=true
-c_ne=false
-c_bang_eq=false
-c_bang_ne=true
-c_self=true
-c_sym_eq=true
-c_sym_ne=false

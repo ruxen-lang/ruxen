@@ -1,0 +1,129 @@
+use std.json.JSON
+use std.json.Json
+use std.json.JsonKind
+
+def relaxed_source -> String
+  """
+    {
+      // comment
+      "name": "ruxen",
+      "answer": 42,
+      "items": [1, 2,],
+      /* block */
+    }
+  """
+end
+
+# `JSON.object_get(...).unwrap` fails typeck ("no field `unwrap` on type
+# `Json`"), so these helpers match instead; see TODO.md Known issues.
+def field(root: &Json, key: &String) -> Json
+  match JSON.object_get(root, key)
+    Some(v) -> v
+    nil -> JSON.null_value()
+  end
+end
+
+def element(arr: &Json, i: Int) -> Json
+  match JSON.array_get(arr, i)
+    Some(v) -> v
+    nil -> JSON.null_value()
+  end
+end
+
+Tester.describe("JSON.parse") do |t: &var Tester|
+  t.it("accepts comments and trailing commas") do
+    let source = relaxed_source()
+    let root = JSON.parse(&source).unwrap
+    t.expect(JSON.is_object(&root)).to_eq(true)
+    let is_object_kind = match JSON.kind(&root)
+      JsonKind.Object -> true
+      _ -> false
+    end
+    t.expect(is_object_kind).to_eq(true)
+    t.expect(JSON.object_has(&root, "name")).to_eq(true)
+    t.expect(JSON.object_has(&root, "missing")).to_eq(false)
+    t.expect(JSON.object_len(&root).unwrap_or(-1)).to_eq(3)
+    let answer = field(&root, "answer")
+    t.expect(JSON.as_int(&answer).unwrap_or(-1)).to_eq(42)
+    let name = field(&root, "name")
+    t.expect(JSON.as_string(&name).unwrap_or("")).to_eq("ruxen")
+    let items = field(&root, "items")
+    t.expect(JSON.is_array(&items)).to_eq(true)
+    t.expect(JSON.array_len(&items).unwrap_or(-1)).to_eq(2)
+  end
+
+  t.it("reports a non-matching kind as false") do
+    let root = JSON.parse(&"{}").unwrap
+    t.expect(JSON.is_null(&root)).to_eq(false)
+    t.expect(JSON.is_bool(&root)).to_eq(false)
+    t.expect(JSON.is_int(&root)).to_eq(false)
+    t.expect(JSON.is_float(&root)).to_eq(false)
+    t.expect(JSON.is_string(&root)).to_eq(false)
+  end
+
+  t.it("reads array elements and returns nil out of range") do
+    let root = JSON.parse(&"{\"xs\":[10,20,30]}").unwrap
+    let xs = field(&root, "xs")
+    t.expect(JSON.array_len(&xs).unwrap_or(-1)).to_eq(3)
+    let el = element(&xs, 1)
+    t.expect(JSON.as_int(&el).unwrap_or(-1)).to_eq(20)
+    let missing = element(&xs, 9)
+    t.expect(JSON.is_null(&missing)).to_eq(true)
+  end
+end
+
+Tester.describe("JSON.parse_strict") do |t: &var Tester|
+  t.it("rejects comments and trailing commas") do
+    let source = relaxed_source()
+    t.expect(JSON.parse_strict(&source).err?).to_eq(true)
+    t.expect(JSON.parse_strict(&"// comment\n{\"a\": 1}").err?).to_eq(true)
+    t.expect(JSON.parse_strict(&"{\"a\": 1,}").err?).to_eq(true)
+    t.expect(JSON.parse_strict(&"[1, 2,]").err?).to_eq(true)
+  end
+
+  t.it("accepts plain JSON") do
+    t.expect(JSON.parse_strict(&"{\"a\": [1, 2]}").ok?).to_eq(true)
+  end
+end
+
+Tester.describe("JSON builders") do |t: &var Tester|
+  t.it("round-trips scalar values") do
+    let n = JSON.null_value()
+    t.expect(JSON.is_null(&n)).to_eq(true)
+    t.expect(JSON.as_bool(&JSON.bool(true)).unwrap_or(false)).to_eq(true)
+    t.expect(JSON.as_int(&JSON.int(7)).unwrap_or(-1)).to_eq(7)
+    t.expect(JSON.as_float(&JSON.float(1.5)).unwrap_or(0.0)).to_eq(1.5)
+    t.expect(JSON.as_string(&JSON.string("hi")).unwrap_or("")).to_eq("hi")
+  end
+
+  t.it("stringifies arrays compact and pretty") do
+    var items: Array[Json] = Array.new
+    items.push(JSON.int(7))
+    items.push(JSON.bool(true))
+    let arr = JSON.array(items)
+    t.expect(JSON.array_len(&arr).unwrap_or(-1)).to_eq(2)
+    t.expect(JSON.stringify(&arr).unwrap).to_eq("[7,true]")
+    t.expect(JSON.stringify_pretty(&arr, 2).unwrap).to_eq("[\n  7,\n  true\n]")
+  end
+
+  t.it("builds an object from a hash") do
+    var items: Array[Json] = Array.new
+    items.push(JSON.int(7))
+    var fields: Hash[String, Json] = Hash.new
+    fields.insert("title", JSON.string("hi"))
+    fields.insert("items", JSON.array(items))
+    let obj = JSON.object(fields)
+    t.expect(JSON.is_object(&obj)).to_eq(true)
+    t.expect(JSON.object_len(&obj).unwrap_or(-1)).to_eq(2)
+    let title = field(&obj, "title")
+    t.expect(JSON.as_string(&title).unwrap_or("")).to_eq("hi")
+    let rendered = JSON.stringify(&obj).unwrap
+    t.expect(rendered.include?("\"title\":\"hi\"")).to_eq(true)
+    t.expect(rendered.include?("\"items\":[7]")).to_eq(true)
+  end
+
+  t.it("stringifies empty containers") do
+    t.expect(JSON.stringify(&JSON.empty_array()).unwrap).to_eq("[]")
+    t.expect(JSON.stringify(&JSON.empty_object()).unwrap).to_eq("{}")
+  end
+end

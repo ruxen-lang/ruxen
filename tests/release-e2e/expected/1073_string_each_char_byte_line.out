@@ -1,8 +1,0 @@
-char a
-char b
-char c
-byte 104
-byte 105
-line one
-line two
-done

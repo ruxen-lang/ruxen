@@ -1,0 +1,80 @@
+Tester.describe("String conversions") do |t: &var Tester|
+  t.it("to_i parses a leading decimal integer") do
+    t.expect("42".to_i).to_eq(42)
+    t.expect(" 42abc".to_i).to_eq(42)
+    t.expect("abc".to_i).to_eq(0)
+    t.expect("-5".to_i).to_eq(-5)
+    t.expect("+7".to_i).to_eq(7)
+    t.expect("1_000".to_i).to_eq(1000)
+    t.expect("".to_i).to_eq(0)
+    t.expect("0x1f".to_i).to_eq(0)
+  end
+
+  t.it("to_i with a base, hex and oct") do
+    t.expect("1f".to_i(16)).to_eq(31)
+    t.expect("0x1f".to_i(16)).to_eq(31)
+    t.expect("zz".to_i(16)).to_eq(0)
+    t.expect("-0x10".to_i(16)).to_eq(-16)
+    t.expect("0b101".to_i(2)).to_eq(5)
+    t.expect("1f".hex).to_eq(31)
+    t.expect("0x1f".hex).to_eq(31)
+    t.expect("zz".hex).to_eq(0)
+    t.expect("17".oct).to_eq(15)
+    t.expect("010".oct).to_eq(8)
+    t.expect("0x10".oct).to_eq(16)
+    t.expect("0b10".oct).to_eq(2)
+    t.expect("0d19".oct).to_eq(19)
+    t.expect("9".oct).to_eq(0)
+  end
+
+  t.it("to_f parses a leading float") do
+    t.expect("3.5".to_f).to_eq(3.5)
+    t.expect("3".to_f).to_eq(3.0)
+    t.expect("abc".to_f).to_eq(0.0)
+    t.expect("".to_f).to_eq(0.0)
+    t.expect("-2.25xyz".to_f).to_eq(-2.25)
+    t.expect("1e3".to_f).to_eq(1000.0)
+    t.expect("1.5e-2".to_f).to_eq(0.015)
+    t.expect("1_000.5".to_f).to_eq(1000.5)
+    t.expect("1e".to_f).to_eq(1.0)
+  end
+
+  t.it("ord, chr, to_str and dup") do
+    t.expect("A".ord).to_eq(65)
+    t.expect("abc".ord).to_eq(97)
+    t.expect("é".ord).to_eq(233)
+    t.expect("hello".chr).to_eq("h")
+    t.expect("étude".chr).to_eq("é")
+    t.expect("".chr).to_eq("")
+    t.expect("hi".to_str).to_eq("hi")
+    t.expect("".to_str).to_eq("")
+    t.expect("hi".dup).to_eq("hi")
+    t.expect("".dup).to_eq("")
+    var copy = "hello".dup
+    copy.push_str(" world")
+    t.expect(copy).to_eq("hello world")
+  end
+
+  t.it("parse_int and parse_uint return a Result") do
+    let ok = match "42".parse_int
+      Ok(v)  -> v
+      Err(_) -> -1
+    end
+    t.expect(ok).to_eq(42)
+    let bad = match "xyz".parse_int
+      Ok(v)  -> v
+      Err(_) -> -1
+    end
+    t.expect(bad).to_eq(-1)
+    let uok = match "123".parse_uint
+      Ok(v)  -> "#{v}"
+      Err(_) -> "err"
+    end
+    t.expect(uok).to_eq("123")
+    let ubad = match "xyz".parse_uint
+      Ok(v)  -> "#{v}"
+      Err(_) -> "err"
+    end
+    t.expect(ubad).to_eq("err")
+  end
+end

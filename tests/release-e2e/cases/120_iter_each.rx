@@ -1,5 +1,0 @@
-def main
-  let v = [10, 20, 30]
-  v.each { |n| puts "n=#{n}" }
-  v.each { |n| puts "v=#{n}" }
-end

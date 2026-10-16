@@ -1,4 +1,0 @@
-
-struct Buf
-  data: [Int; 4]
-end

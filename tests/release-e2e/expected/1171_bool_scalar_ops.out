@@ -1,8 +1,0 @@
-and true false false false
-or true true true false
-xor false true true false
-not false true
-andand false true false
-oror true false true
-to_s true false
-to_i 1 0

@@ -1,6 +1,0 @@
-def main
-  let s = "a,b,c,d,e"
-  var count = 0
-  s.splitn(3, ",").each { |_| count += 1 }
-  puts "count=#{count}"
-end

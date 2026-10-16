@@ -30,7 +30,7 @@ pub use runtime_sigs::compiler_internal_signature;
 /// Module-agnostic Cranelift lowering helpers. These take only
 /// `&mut FunctionBuilder` or pure values and never touch the module, so the
 /// REPL JIT backend shares them verbatim rather than forking. Re-exported as
-/// `pub` (Phase 4); a regression to `pub(super)` breaks `cranelift_share_pin`.
+/// `pub` (Phase 4); a regression to `pub(super)` breaks the `ruxen_repl` JIT build.
 pub use emit::{
     build_signature, coerce_call_args, coerce_erased_word, coerce_value, coerce_value_signed,
     def_local, emit_binop, gen_value, translate_instruction, translate_terminator, use_local,
@@ -630,7 +630,7 @@ impl CodeGen {
 
 /// Test-only hook: compile a single MIR function through the batch
 /// `CodeGen` (ObjectModule) and return its Cranelift IR text. Used by the
-/// `cranelift_share_pin` both-backends parity test. `#[doc(hidden)]` so it
+/// both-backends parity test `ruxen_repl` `tests::cranelift_share_parity`. `#[doc(hidden)]` so it
 /// is not part of the stable public API, but `pub` so the cross-crate test
 /// can reach it. Drives the SAME `translate_into_ctx` lowering as the real
 /// batch path — it does not fork it.

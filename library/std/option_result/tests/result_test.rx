@@ -1,0 +1,42 @@
+def divide(a: Int, b: Int) -> Result[Int, String]
+  if b == 0
+    Err("divide by zero")
+  else
+    Ok(a / b)
+  end
+end
+
+def work(n: Int) -> Result[Int, String]
+  Ok(n + 1)
+end
+
+def show(r: Result[Int, String]) -> String
+  match r
+    Ok(v)  -> "ok #{v}"
+    Err(e) -> "err #{e}"
+  end
+end
+
+Tester.describe("Result") do |t: &var Tester|
+  t.it("map chains on Ok and passes Err through") do
+    t.expect(show(divide(20, 2).map { |n| n + 1 }.map { |n| n * 10 })).to_eq("ok 110")
+    t.expect(show(divide(5, 0).map { |n| n + 1 })).to_eq("err divide by zero")
+  end
+
+  t.it("map can change the Ok type") do
+    t.expect(show(divide(20, 2).map { |n| "got#{n}" }.map { |s| s.size })).to_eq("ok 5")
+    t.expect(show(divide(5, 0).map { |n| "got#{n}" }.map { |s| s.size })).to_eq("err divide by zero")
+  end
+
+  t.it("map_err rewrites the error") do
+    t.expect(show(divide(5, 0).map_err { |_e| "wrapped" })).to_eq("err wrapped")
+  end
+
+  t.it("unwrap_or_else and expect!") do
+    let ok_v: Result[Int, Int] = Result.Ok(3)
+    t.expect(ok_v.unwrap_or_else do |e| e + 1000 end).to_eq(3)
+    let err_v: Result[Int, Int] = Result.Err(5)
+    t.expect(err_v.unwrap_or_else do |e| e + 1000 end).to_eq(1005)
+    t.expect(work(5).expect!("must succeed")).to_eq(6)
+  end
+end

@@ -1,6 +1,0 @@
-stream start
-got 10
-got 20
-got 30
-sum=60
-stream done

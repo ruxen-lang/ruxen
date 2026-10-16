@@ -413,7 +413,7 @@ fn strip_call_suffixes(callee: &str) -> &str {
 ///  1. The universal `.new` rule: `method_name == "new"` is a static ctor for
 ///     ANY type. This is the behaviour `method_call.rs::is_collection_ctor`
 ///     actually ships (line 197); `util.rs` did NOT have it. The union keeps
-///     it — verified against ffi_alias_single_entry + the broad suite that it
+///     it — verified against the broad suite that it
 ///     does not reroute a user class with a real `init` (the method_call.rs
 ///     fast path still gates on `lookup_ffi_alias` / the base-type allowlist
 ///     downstream, and the field_access/method_call `is_static` checks OR in

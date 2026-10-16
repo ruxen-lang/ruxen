@@ -1,5 +1,0 @@
-dereg start
-a_fired=1
-count_after_dereg=1
-b_fired=1
-dereg done

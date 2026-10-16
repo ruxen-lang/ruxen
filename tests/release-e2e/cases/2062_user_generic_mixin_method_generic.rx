@@ -1,0 +1,36 @@
+# A user generic mixin's default method with its own type parameter
+# (`map[U]`) composes with closure-return inference through `include`.
+mixin Enumerable[T]
+  def each(f: any Fn[Fn(T) -> nil]) -> nil
+
+  def map[U](f: any Fn[Fn(T) -> U]) -> Array[U]
+    var out: Array[U] = Array.new
+    self.each do |x| out.push(f.(x)) end
+    out
+  end
+end
+
+class Box[T]
+  items: Array[T]
+
+  def init(@items: Array[T])
+  end
+
+  include Enumerable[T]
+
+  def each(f: any Fn[Fn(T) -> nil]) -> nil
+    let data: Array[T] = self.items
+    var i = 0
+    while i < data.size
+      f.(data[i])
+      i = i + 1
+    end
+    nil
+  end
+end
+
+def main
+  let b = Box.new([1, 2, 3])
+  let strs: Array[String] = b.map do |x| x.to_s end
+  strs.each do |s| puts s end
+end

@@ -3,8 +3,8 @@
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §5.4–5.5](../../requirements/tier1_01_stdlib.md).
 
-**Status:** shipped Phase 2 #02-#03; integration via
-`option_result_runtime.rs`; helper-method surface self-hosted in
+**Status:** shipped Phase 2 #02-#03; covered by release-e2e fixtures and
+the `option_result` package tests; helper-method surface self-hosted in
 `library/std/option_result/src/lib.rx` since #06.8 T#17.
 
 `Option` and `Result` are tagged enums whose payload reaches the
@@ -61,21 +61,20 @@ present and pass through `nil` / `Err` unchanged.
 
 ## Pin tests
 
-All B1–B8 are covered by the integration test
-`compiler/ruxen_core/tests/option_result_runtime.rs` which compiles +
-runs E2E fixtures:
+All B1–B8 are covered by release-e2e fixtures (run by
+`release_e2e_smoke`) and the `option_result` package tests:
 
-| Behaviour | E2E fixture                                | Pin fn                  |
+| Behaviour | Fixture                                    | Test                    |
 |-----------|--------------------------------------------|-------------------------|
-| B1        | `23_option.rx`                            | `e2e_23_option`         |
-| B2        | `24_result.rx`                            | `e2e_24_result`         |
-| B3        | `25_question_op.rx`                       | `e2e_25_question_op`    |
-| B4        | `56_if_let_some.rx`                       | `e2e_56_if_let_some`    |
-| B5        | `73_enum_generic.rx`                      | `e2e_73_enum_generic`   |
-| B5        | `19_enums_data.rx` + `18_enums_simple.rx`| `e2e_19_enums_data` + `e2e_18_enums_simple` |
-| B6        | `97_expect_ok.rx`                         | `e2e_97_expect_ok`      |
-| B7        | `98_unwrap_or.rx`                         | `e2e_98_unwrap_or`      |
-| B8        | `99_map_option.rx`                        | `e2e_99_map_option`     |
+| B1        | `23_option.rx`                            | release-e2e             |
+| B2        | `24_result.rx`                            | release-e2e             |
+| B3        | `25_question_op.rx`                       | release-e2e             |
+| B4        | `56_if_let_some.rx`                       | release-e2e             |
+| B5        | `73_enum_generic.rx`                      | release-e2e             |
+| B5        | `19_enums_data.rx` + `18_enums_simple.rx`| release-e2e |
+| B6        | `library/std/option_result/tests/result_test.rx` | "unwrap_or_else and expect!" |
+| B7        | `library/std/option_result/tests/option_test.rx` | "unwrap_or, unwrap_or_else and expect!" |
+| B8        | `library/std/option_result/tests/option_test.rx` | "map chains on Some and skips on nil" |
 
 ---
 

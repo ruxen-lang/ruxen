@@ -1,5 +1,0 @@
-def main
-  let s = "a;b;c"
-  let parts = s.split(";")
-  puts "len=#{parts.size}"
-end

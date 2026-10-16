@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+autotests = false
 
 [features]
 llvm = ["ruxen_core/llvm"]
@@ -21,7 +22,7 @@ serde = { version = "1", features = ["derive"] }
 # binary users get from `install.sh`.
 ruxen_cli = { path = "../ruxen_cli" }
 tempfile = "3"
-criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]
 name = "cache_bench"
@@ -60,3 +61,8 @@ path = "benches/codegen_bench.rs"
 
 [lints]
 workspace = true
+
+# One integration-test binary: tests/it, one module per file.
+[[test]]
+name = "it"
+path = "tests/it/main.rs"

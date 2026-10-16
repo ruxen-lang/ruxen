@@ -356,8 +356,7 @@ impl Resolver {
             // empty generic args to return `Ty::String` (the primitive
             // head) even when the DefKind is `Class`, so `let s: String`,
             // string literals, and the C ABI / runtime repr are unchanged.
-            // Pin: `string_is_class_but_resolves_to_primitive_ty` in
-            // `builtin_anchor_class.rs`.
+            // Covered by every e2e program that types a `String`.
             def.kind = DefKind::Class {
                 info: ClassInfo {
                     generic_params: class_generic_param_infos,

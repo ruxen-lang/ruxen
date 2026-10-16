@@ -1,0 +1,54 @@
+Tester.describe("String split and slice") do |t: &var Tester|
+  t.it("split on a separator") do
+    t.expect("a,b,c".split(",").size).to_eq(3)
+    t.expect("a,b,,".split(",").join("|")).to_eq("a|b||")
+  end
+
+  t.it("split with a limit") do
+    t.expect("a,b,,".split(",", 0).join("|")).to_eq("a|b")
+    t.expect("a,b,,".split(",", -1).join("|")).to_eq("a|b||")
+    t.expect("a,b,c".split(",", 2).join("|")).to_eq("a|b,c")
+    t.expect("a,b,c".split(",", 1).join("|")).to_eq("a,b,c")
+  end
+
+  t.it("slice takes a start and a length") do
+    t.expect("hello".slice(1, 3).unwrap_or("nil")).to_eq("ell")
+    t.expect("hello".slice(0, 0).unwrap_or("nil")).to_eq("")
+    t.expect("hello".slice(5, 1).unwrap_or("nil")).to_eq("")
+    t.expect("hello".slice(9, 1).unwrap_or("nil")).to_eq("nil")
+    t.expect("hello".slice(-2, 2).unwrap_or("nil")).to_eq("lo")
+    t.expect("hello".slice(-9, 1).unwrap_or("nil")).to_eq("nil")
+    t.expect("hello".slice(1, -1).unwrap_or("nil")).to_eq("nil")
+    t.expect("hello".slice(2, 99).unwrap_or("nil")).to_eq("llo")
+    t.expect("".slice(0, 0).unwrap_or("nil")).to_eq("")
+  end
+
+  t.it("partition splits around the first match") do
+    t.expect("hello".partition("l").join("|")).to_eq("he|l|lo")
+    t.expect("hello".partition("ll").join("|")).to_eq("he|ll|o")
+    t.expect("hello".partition("z").join("|")).to_eq("hello||")
+    t.expect("hello".partition("").join("|")).to_eq("||hello")
+    t.expect("".partition("a").join("|")).to_eq("||")
+  end
+
+  t.it("rpartition splits around the last match") do
+    t.expect("hello".rpartition("l").join("|")).to_eq("hel|l|o")
+    t.expect("hello".rpartition("ll").join("|")).to_eq("he|ll|o")
+    t.expect("hello".rpartition("z").join("|")).to_eq("||hello")
+    t.expect("hello".rpartition("").join("|")).to_eq("hello||")
+    t.expect("".rpartition("a").join("|")).to_eq("||")
+  end
+
+  t.it("lines strips the terminators") do
+    var seen = ""
+    for line in "alpha\nbeta\ngamma".lines
+      seen = seen + line + "|"
+    end
+    t.expect(seen).to_eq("alpha|beta|gamma|")
+  end
+
+  t.it("splitn caps the number of parts") do
+    t.expect("a,b,c,d,e".splitn(3, ",").size).to_eq(3)
+    t.expect("a;b;c".split(";").size).to_eq(3)
+  end
+end

@@ -224,9 +224,7 @@ generated MIR.
 > `let x = call().await` statement in an async fn body). Each
 > per-branch continuation needing its own state-id allocation, and
 > the live-set analysis for locals introduced inside a branch but
-> used after the merge, is its own slice. The test
-> `await_in_if_match_branches_lower` in `tests/async_lowering.rs`
-> is `#[ignore]`d with a reason pointer.
+> used after the merge, is its own slice. No test pins it yet.
 
 
 
@@ -276,9 +274,7 @@ closure provides an async context for its body.
 > borrow-invalidating boundaries is its own slice — the obvious
 > wiring (mark every `.await` site as a borrow flush) interacts
 > with the multi-arm `match` shape the lowering emits and needs a
-> bespoke pin-test surface. The test
-> `borrow_across_suspend_rejected_e1010` in `tests/async_lowering.rs`
-> is `#[ignore]`d with a reason pointer.
+> bespoke pin-test surface. No test pins it yet.
 
 
 
@@ -312,8 +308,7 @@ Captures by move that cross suspends are fine (they become fields).
 > optimisation lands when sub-future construction moves from `init`
 > to per-state (which is also a prerequisite for lazy-arg sub-
 > futures, and for hoisting non-primitive locals across suspends).
-> The test `state_machine_drop_only_active_fields` in
-> `tests/async_lowering.rs` is `#[ignore]`d with a reason pointer.
+> No test pins it yet.
 
 
 
@@ -336,18 +331,18 @@ Pin test: a state machine in state 1 holds `__sub_0` Ready and
 | Behaviour | Test fn                                                | File                          |
 |-----------|--------------------------------------------------------|-------------------------------|
 | B1 (2A)   | `async_def_signature_lifts_to_some_future`             | `tests/async_lowering.rs`     |
-| B2 (2A)   | `async_def_generates_state_machine_class`              | `tests/async_lowering.rs`     |
-| B3 (2A)   | `async_def_args_become_state_machine_fields`           | `tests/async_lowering.rs`     |
-| B5 (2A)   | `poll_after_ready_returns_pending`                     | `tests/async_lowering.rs`     |
-| B6 (2A)   | `context_test_dummy_constructs`                        | `tests/async_lowering.rs`     |
+| B2 (2A)   | covered by the B1-B6 e2e row                           | —                             |
+| B3 (2A)   | covered by the B1-B6 e2e row                           | —                             |
+| B5 (2A)   | covered by the B1-B6 e2e row                           | —                             |
+| B6 (2A)   | covered by the B1-B6 e2e row                           | —                             |
 | B1-B6 e2e | `cases/721_async_def_no_await_handpoll.rx`            | release-e2e                   |
-| B7 (2B)   | `await_desugars_to_poll_match_pending_return`          | `tests/async_lowering.rs`     |
-| B8 (2B)   | `local_live_across_await_promoted_to_field`            | `tests/async_lowering.rs`     |
-| B10 (2B)  | `chained_awaits_generate_n_plus_1_states`              | `tests/async_lowering.rs`     |
-| B11 (2B)  | `await_in_if_match_branches_lower`                     | `tests/async_lowering.rs`     |
+| B7 (2B)   | covered by the B7-B14 e2e row                          | —                             |
+| B8 (2B)   | covered by the B7-B14 e2e row                          | —                             |
+| B10 (2B)  | covered by the B7-B14 e2e row                          | —                             |
+| B11 (2B)  | none (deferred, see above)                             | —                             |
 | B12 (2B)  | `await_outside_async_context_rejected_e1110`           | `tests/async_negative.rs`     |
-| B13 (2B)  | `borrow_across_suspend_rejected_e1010`                 | `tests/async_negative.rs`     |
-| B14 (2B)  | `state_machine_drop_only_active_fields`                | `tests/async_lowering.rs`     |
+| B13 (2B)  | none (deferred, see above)                             | —                             |
+| B14 (2B)  | none (deferred, see above)                             | —                             |
 | B7-B14 e2e| `cases/722_async_def_chained_await_handpoll.rx`       | release-e2e                   |
 
 ---

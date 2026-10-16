@@ -134,20 +134,19 @@ include does not provide a duplicate body.
 
 | Behaviour | Test fn                                       | File                                     |
 |-----------|-----------------------------------------------|------------------------------------------|
-| B1        | `struct_with_derive_debug_prints_named_fields`| `implicit_debug_formats_struct.rs`         |
-| B2        | `enum_with_derive_debug_unit_variant_prints_name` | `implicit_debug_formats_enum.rs`       |
-| B3        | `enum_with_derive_debug_named_field_variant_prints_braces` | `implicit_debug_formats_enum.rs` |
-| B4        | `enum_with_derive_debug_explicit_debug_spec_dispatches` | `implicit_debug_formats_enum.rs`  |
+| B1        | E2E `139_implicit_debug_format.rx`            | `tests/release-e2e/cases/`               |
+| B2        | E2E `200_implicit_debug_enum_unit.rx`         | `tests/release-e2e/cases/`               |
+| B3        | E2E `210_implicit_debug_enum_tuple.rx`        | `tests/release-e2e/cases/`               |
+| B4        | E2E `212_implicit_debug_enum_explicit_q.rx`   | `tests/release-e2e/cases/`               |
 | B5        | E2E `202_implicit_clone_struct_primitive.rx` + 203/204/205 | `tests/release-e2e/cases/` |
-| B6        | `derive_partial_eq_compares_fields_struct`    | `implicit_partial_eq_returns_correct.rs`   |
-| B6        | E2E `206_implicit_partial_eq.rx` + `133_implicit_partial_eq.rx` | `tests/release-e2e/cases/` |
-| B8        | `derive_hashable_dispatches_through_trait_bounds` | `implicit_mixin_dispatch.rs`           |
-| B8        | E2E `207_implicit_hash.rx` + `132_implicit_hashable.rx` | `tests/release-e2e/cases/`   |
-| B9, B14   | `derive_default_emits_concrete_static_method` | `implicit_mixin_dispatch.rs`               |
+| B6        | E2E `206_implicit_partial_eq.rx`              | `tests/release-e2e/cases/`               |
+| B8        | E2E `2051_derived_ord_hashable_generic_bound.rx` | `tests/release-e2e/cases/`               |
+| B8        | E2E `207_implicit_hashable.rx`                | `tests/release-e2e/cases/`               |
+| B9, B14   | E2E `2069_implicit_default_struct.rx`         | `tests/release-e2e/cases/`               |
 | B9        | E2E `208_implicit_default.rx`                | `tests/release-e2e/cases/`               |
-| B10       | `derive_ord_and_partial_ord_dispatch_through_trait_bounds` | `implicit_mixin_dispatch.rs` |
-| B10       | E2E `126_implicit_ord_compare.rx` + `209_implicit_ord.rx` | `tests/release-e2e/cases/` |
-| B11       | E2E `131_implicit_copy.rx` + `derive_copy_clone_fixture_typechecks_cleanly` | `implicit_diagnostics.rs` |
+| B10       | E2E `2051_derived_ord_hashable_generic_bound.rx` | `tests/release-e2e/cases/`               |
+| B10       | E2E `126_implicit_ord.rx`                     | `tests/release-e2e/cases/`               |
+| B11       | E2E `50_implicit_copy.rx`                     | `tests/release-e2e/cases/`               |
 | B12 E0607 | `derive_invalid_target_reports_e0607`         | `implicit_diagnostics.rs`                  |
 | B12 E0610/E0611 | `derive_clone_on_struct_with_non_clone_field_emits_e0610_or_e0611` + enum equivalent | `implicit_negatives.rs` |
 | B12 E0613 | `derive_partial_eq_on_struct_with_non_eq_field_emits_e0613` | `implicit_negatives.rs`        |

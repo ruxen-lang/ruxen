@@ -54,16 +54,14 @@ hashable)
 
 | Behaviour | Test fn                                       | File                          |
 |-----------|-----------------------------------------------|-------------------------------|
-| B1        | `hashset_alias_constructs_via_either_name`    | `stdlib_set.rs`           |
-| B2        | `hashset_insert_typechecks_as_unit_today`     | `stdlib_set.rs`           |
-| B3        | `hashset_remove_returns_bool`                 | `stdlib_set.rs`           |
-| B4        | `hashset_set_ops_return_fresh_set`            | `stdlib_set.rs`           |
-| B5        | `hashset_iter_returns_vec`                    | `stdlib_set.rs`           |
-| B6        | `hashset_equality_yields_bool`                | `stdlib_set.rs`           |
+| B1, B2    | "ignores a duplicate insert"                  | `library/std/set/tests/set_test.rx` |
+| B3        | "reports whether remove found the item"       | `library/std/set/tests/set_test.rx` |
+| B4        | "combines sets with union, intersection and difference" | `library/std/set/tests/set_test.rx` |
+| B5        | "to_set from an array and to_a back"          | `library/std/set/tests/set_test.rx` |
+| B6        | "== ignores insertion order"                  | `library/std/set/tests/set_test.rx` |
 | B7        | `hashset_with_non_hash_element_emits_e0615` + `hashset_of_hashmap_emits_e0615` | `stdlib_map_negatives.rs` |
 
-Runtime round-trips covered by E2E fixtures `105_set_basic.rx`,
-`611_iter_collect_set.rx` and `612_set_enumerable.rx`.
+The `.rx` tests run with `scripts/test-stdlib.sh set`.
 
 ---
 

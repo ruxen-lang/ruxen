@@ -1,0 +1,183 @@
+# ---- from 1723_hash_key_kind_not_latched ----
+# B73: a table's behaviour does not depend on WHICH key was inserted first.
+#
+# The pre-B73 runtime resolved the key kind on the first insert. For a
+# `Hash[String, V]` whose first key was the EMPTY string, the heuristic
+# reported "not a string" (it required at least one byte before the NUL),
+# latched the table to raw-bits hashing, and every later lookup by content
+# missed. Same program, keys swapped, different answer.
+#
+# Both tables below hold the same three entries and differ only in
+# insertion order, so every pair of lines must agree.
+def run_1723
+  var a: Hash[String, Int] = Hash.new
+  a.insert("one", 1)
+  a.insert("", 9)
+  a.insert("two", 2)
+
+  var b: Hash[String, Int] = Hash.new
+  b.insert("", 9)
+  b.insert("two", 2)
+  b.insert("one", 1)
+
+  puts "#{a.size} #{b.size}"
+  puts "#{a.key?("one")} #{b.key?("one")}"
+  puts "#{a.key?("two")} #{b.key?("two")}"
+  puts "#{a.key?("")} #{b.key?("")}"
+  puts "#{a.key?("three")} #{b.key?("three")}"
+
+  # `clear` empties a table; it does not change what its key type is.
+  # (Pre-B73 it reset the tristate flag so the table re-guessed.)
+  a.clear
+  a.insert("", 7)
+  a.insert("one", 1)
+  puts "#{a.size} #{a.key?("one")} #{a.key?("")}"
+end
+
+# ---- from 1724_set_key_kind_inherited ----
+# B73: tables the C runtime builds INTERNALLY inherit their key kind.
+#
+# `union` / `intersection` / `difference` allocate a fresh set and
+# populate it inside the runtime, where the compiler cannot reach to hand
+# over a descriptor. They therefore copy it from an operand — and copy it
+# BEFORE the first insert, so the copied elements hash into the same
+# buckets they came from. A result set that fell back to raw-bits hashing
+# would compare these struct elements by pointer identity and report
+# `false` for every `include?` below.
+#
+# `to_set` is a `from_iter` route on the general FFI-alias method path, a
+# different construction site from `Set.new`; without a descriptor there
+# it would build an UNSET table and panic on its first insert.
+#
+# (The elements are a struct rather than a `String` on purpose. A
+#  set-algebra result shares its element pointers with its source, so a
+#  `Set[String]` result double-frees at scope exit. That is a separate,
+#  pre-existing defect in the drop glue, unrelated to the key kind, and
+#  this pin must not depend on it.)
+struct Tag
+  id: Int
+  label: String
+end
+
+def run_1724
+  var a: Set[Tag] = Set.new
+  a.insert(Tag.new(1, "red"))
+  a.insert(Tag.new(2, "green"))
+
+  var b: Set[Tag] = Set.new
+  b.insert(Tag.new(2, "green"))
+  b.insert(Tag.new(3, "blue"))
+
+  let u = a.union(&b)
+  puts "#{u.size} #{u.include?(Tag.new(1, "red"))} #{u.include?(Tag.new(3, "blue"))} #{u.include?(Tag.new(9, "pink"))}"
+
+  let i = a.intersection(&b)
+  puts "#{i.size} #{i.include?(Tag.new(2, "green"))} #{i.include?(Tag.new(1, "red"))}"
+
+  let d = a.difference(&b)
+  puts "#{d.size} #{d.include?(Tag.new(1, "red"))} #{d.include?(Tag.new(2, "green"))}"
+
+  # An empty operand must not erase the other side's descriptor.
+  var empty: Set[Tag] = Set.new
+  let with_empty = empty.union(&a)
+  puts "#{with_empty.size} #{with_empty.include?(Tag.new(1, "red"))}"
+
+  # `to_set` — the from_iter construction site.
+  let from_arr = [10, 20, 20, 30].to_set
+  puts "#{from_arr.size} #{from_arr.include?(20)} #{from_arr.include?(99)}"
+end
+
+# ---- from 1725_hash_key_kind_at_use_site ----
+# B73: a table whose CONSTRUCTION site cannot be typed is still keyed
+# correctly, because the key kind is also installed at the USE site.
+#
+# `Hash.new` is declared `-> Hash[K, V]` and a static constructor has no
+# receiver to substitute those parameters against, so in argument position
+# the temp holding the new table keeps the rigid `K`/`V`. The construction
+# site therefore has nothing concrete to derive a descriptor from.
+#
+# The USE site does. Every key-addressed operation (`insert` / `get` /
+# `key?` / `remove` / `[]`) has a receiver whose type is concrete, and the
+# post-pass emits an idempotent `ensure_key_kind` in front of it. Without
+# that second route these programs abort with the protocol's own panic
+# ("no key-kind descriptor on this table"), which is how this pin fails.
+#
+# Pinned here: argument position for both a `Hash` and a `Set`, and a
+# table built by a helper whose return type is the only annotation. All
+# use `String` keys, because raw-bits hashing on a `String` key is exactly
+# the silent-wrong-answer the UNSET panic exists to prevent.
+def fill(h: Hash[String, Int]) -> Bool
+  h.insert("alpha", 1)
+  h.insert("beta", 2)
+  h.key?("alpha")
+end
+
+def mark(s: Set[String]) -> Bool
+  s.insert("red")
+  s.insert("red")
+  s.insert("green")
+  s.include?("red")
+end
+
+def build -> Hash[String, Int]
+  Hash.new
+end
+
+def run_1725
+  puts "arg_hash=#{fill(Hash.new)}"
+  puts "arg_set=#{mark(Set.new)}"
+
+  var h = build
+  h.insert("gamma", 3)
+  puts "ret=#{h.key?("gamma")} #{h.key?("delta")}"
+
+  # `remove` and the panicking index read go through the same route.
+  match h.remove("gamma")
+    Some(v) -> puts "removed #{v}"
+    nil -> puts "removed nothing"
+  end
+  puts "after=#{h.key?("gamma")}"
+end
+
+# ---- from 1726_hash_from_iter_key_kind ----
+# B73: a table the C runtime FILLS internally takes its key kind from the
+# source iterable, not from its declared result type.
+#
+# `to_h` / `to_set` lower to `ruxen_hash_from_iter` / `ruxen_set_from_iter`,
+# which allocate AND populate inside the runtime. No `ensure` at a later
+# operation site can rescue them — by the time control returns, the entries
+# are already in buckets. So the descriptor has to be right at construction.
+#
+# The result type is the weaker of the two witnesses: `Array#to_h` is
+# declared `-> Int` in `library/std/array/src/lib.rx` (a laundered residual
+# decl — the real key type is not expressible on that `lib` line), which
+# says nothing about the key at all. The SOURCE is a concrete `Array`, and
+# collecting it is what fixes the key type: a `Set` collects its elements,
+# so the element IS the key; a `Hash` collects `(K, V)` pairs, so the key
+# is the pair's first field. Reading the key type off the source is what
+# makes `to_h` usable.
+#
+# Pinned with `String` keys (raw-bits hashing would compare them by pointer
+# and miss a freshly built lookup key) and with integer keys well above the
+# old 0x1000 probe boundary.
+def run_1726
+  let h = [("a", 1), ("bb", 2), ("a", 3)].to_h
+  puts "h=#{h.size} #{h.key?("a")} #{h.key?("bb")} #{h.key?("zz")}"
+  match h.get("a")
+    Some(v) -> puts "a=#{v}"
+    nil -> puts "a missing"
+  end
+
+  let g = [(5000, 1), (100000, 2), (5000, 3)].to_h
+  puts "g=#{g.size} #{g.key?(5000)} #{g.key?(100000)} #{g.key?(7)}"
+
+  let s = [5000, 100000, 5000].to_set
+  puts "s=#{s.size} #{s.include?(100000)} #{s.include?(4096)}"
+end
+
+def main
+  run_1723
+  run_1724
+  run_1725
+  run_1726
+end

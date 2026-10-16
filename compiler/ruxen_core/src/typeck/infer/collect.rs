@@ -318,7 +318,7 @@ impl<'a> InferenceEngine<'a> {
         // every lookup branch and the body's return type stays a fresh var
         // (which unifies to `Unit` eventually), producing a misleading
         // "expected Int, found ()" against the declared signature. Pin:
-        // `derive_hashable_dispatches_through_trait_bounds`.
+        // e2e `2051_derived_ord_hashable_generic_bound`.
         let mut cur = ty;
         while let Ty::Ref(inner)
         | Ty::RefMut(inner)

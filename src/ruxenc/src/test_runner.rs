@@ -75,6 +75,23 @@ pub fn run(opts: TestOptions) -> Result<(), String> {
         return Ok(());
     }
 
+    // A std package's source is already compiled in through the stdlib
+    // bootstrap. Point the bootstrap at this checkout so the test sees the
+    // package's current source rather than the copy embedded in the binary.
+    // Its dependencies and C runtime are std packages already in the
+    // bootstrap and `libruxenrt.a`, so they are not merged or linked again.
+    let std_package = is_std_package(&project_dir);
+    if std_package && std::env::var_os("RUXEN_STDLIB_PATH").is_none() {
+        if let Some(std_root) = project_dir.parent() {
+            std::env::set_var("RUXEN_STDLIB_PATH", std_root);
+        }
+    }
+    let dep_dirs: &[PathBuf] = if std_package {
+        &[]
+    } else {
+        &opts.dep_source_dirs
+    };
+
     let out_dir = project_dir.join("target").join("ruxen").join("test-build");
     fs::create_dir_all(&out_dir).map_err(|e| format!("create {}: {}", out_dir.display(), e))?;
 
@@ -88,14 +105,7 @@ pub fn run(opts: TestOptions) -> Result<(), String> {
     let mut built: Vec<(PathBuf, String, PathBuf)> = Vec::new(); // (user_file, test_path, bin_path)
     for f in &files {
         let tp = test_path_for(&project_dir, f);
-        match build_one(
-            &project_dir,
-            &tp,
-            f,
-            &out_dir,
-            opts.release,
-            &opts.dep_source_dirs,
-        ) {
+        match build_one(&project_dir, &tp, f, &out_dir, opts.release, dep_dirs) {
             Ok(bin_path) => built.push((f.clone(), tp, bin_path)),
             Err(e) => {
                 // Surface build errors as failed-file results so the
@@ -304,8 +314,22 @@ fn test_path_for(project_dir: &Path, file: &Path) -> String {
 /// for **library** projects (those with `src/lib.rx`); a `src/main.rx`
 /// binary project would inject its own `def main`, clashing with the
 /// synthesised one, so we skip it and return `None`.
+///
+/// A std package (`library/std/<pkg>`) is skipped too: the stdlib bootstrap
+/// already loads its source, so merging it again defines every item twice
+/// (`DuplicateDefinition`).
 fn gather_project_lib_sources(project_dir: &Path) -> Result<Option<String>, String> {
+    if is_std_package(project_dir) {
+        return Ok(None);
+    }
     gather_package_lib_src(project_dir)
+}
+
+/// True for a stdlib package directory, `library/std/<pkg>`.
+fn is_std_package(project_dir: &Path) -> bool {
+    project_dir
+        .parent()
+        .is_some_and(|p| p.ends_with(Path::new("library").join("std")))
 }
 
 /// Gather one package's library source (`src/lib.rx` entry first, then the
@@ -367,6 +391,7 @@ fn split_test_body(body: &str) -> (String, String) {
         let t = t.strip_prefix("pub ").unwrap_or(t);
         let t = t.strip_prefix("protected ").unwrap_or(t);
         let t = t.strip_prefix("private ").unwrap_or(t);
+        let t = t.strip_prefix("async ").unwrap_or(t);
         [
             "def ",
             "class ",
@@ -558,8 +583,10 @@ fn build_one(
     // The project's own `runtime/*.c` must link into every test binary so
     // `lib "runtime/foo.c"` declarations in library code resolve — the same
     // discovery `ruxen build` performs (codegen::find_runtime_sources_in_dir).
-    for c in ruxen_core::codegen::find_runtime_sources_in_dir(project_dir)? {
-        compile_args.push(format!("--runtime-c={}", c.display()));
+    if !is_std_package(project_dir) {
+        for c in ruxen_core::codegen::find_runtime_sources_in_dir(project_dir)? {
+            compile_args.push(format!("--runtime-c={}", c.display()));
+        }
     }
     // Q32: a flat-merged FFI dependency's `.rx` bodies are compiled INTO this
     // test binary (Q16), so its C runtime symbols (`ruxen_*` from
@@ -690,6 +717,10 @@ def make -> Int
   x
 end
 
+async def fetch -> Int
+  1
+end
+
 Tester.describe(\"x\") do
   it(\"works\")
 end
@@ -718,6 +749,10 @@ end
         assert!(
             !main_body.contains("def make"),
             "def must not remain in main: {main_body}"
+        );
+        assert!(
+            hoisted.contains("async def fetch") && !main_body.contains("async def"),
+            "async def hoisted: {hoisted}"
         );
         // The unattached file doc became a plain `#` comment in main.
         assert!(
@@ -771,6 +806,26 @@ end
         let class_at = synth.find("class Widget").expect("class merged");
         let main_at = synth.find("def main").expect("has main");
         assert!(class_at < main_at, "class must precede def main: {synth}");
+    }
+
+    // A std package's source already comes in through the stdlib bootstrap;
+    // merging it again caused `DuplicateDefinition("Set_reject")`.
+    #[test]
+    fn synthesise_skips_library_source_of_std_package() {
+        let pkg = std::env::temp_dir().join("test-runner-synth-std/library/std/set");
+        let _ = fs::remove_dir_all(&pkg);
+        fs::create_dir_all(pkg.join("src")).unwrap();
+        fs::write(pkg.join("src/lib.rx"), "class Set[T]\nend\n").unwrap();
+        let user_file = pkg.join("set_test.rx");
+        fs::write(
+            &user_file,
+            "Tester.describe(\"S\") do |t: &var Tester|\nend",
+        )
+        .unwrap();
+        let synth_path =
+            synthesise_wrapper(&pkg, "set_test", &user_file, &pkg.join("out"), &[]).unwrap();
+        let synth = fs::read_to_string(&synth_path).unwrap();
+        assert!(!synth.contains("class Set"), "std source merged: {synth}");
     }
 
     // Q16: dependency library sources are flat-merged into the synthesised

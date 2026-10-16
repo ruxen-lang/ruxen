@@ -55,7 +55,7 @@ pub fn new_project_in(name: &str, lib: bool, no_git: bool, parent: &Path) -> Res
     // The block-arg uses an explicit `do |t: &var Tester|` because
     // Ruxen's closure-arg type-inference does not yet infer the inner
     // T at `t.expect(...)` call sites without the binding type
-    // annotation — see fixture `test_tester_describe_it_eq.rx`.
+    // annotation — see `library/std/test/tests/matcher_test.rx`.
     let tests_dir = project_dir.join("tests");
     fs::create_dir_all(&tests_dir).map_err(|e| format!("failed to create tests/: {}", e))?;
     let example_test = "Tester.describe(\"example\") do |t: &var Tester|\n  \

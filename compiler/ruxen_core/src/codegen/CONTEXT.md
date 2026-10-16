@@ -20,7 +20,9 @@ to an executable / `.wasm`. Two backends behind one `Backend` enum.
 - `layout.rs` — type/struct layout. `lang_intrinsics.rs` — compiler-known intrinsics.
 
 ## Public surface
-`codegen::compile_*` entry points called by `src/ruxenc`. The two runtime ABI
+`codegen::compile_*` entry points called by `src/ruxenc`, plus
+`compile_with_runtime_sources` (the host link with a test-supplied runtime in
+place of the stdlib one, used by `drop_fixtures`). The two runtime ABI
 tables (`cranelift/runtime_sigs.rs`, `llvm/runtime_decl.rs`) are an ABI **contract**
 with the C runtime — every signature must match the C functions in `library/`.
 
@@ -49,8 +51,8 @@ the platform linker), and the C runtime in `library/`. No upward edges.
     *declared* scalar param (`f(3)` where `def f(x: Float)`) must stay `fcvt`.
     So the decision is keyed on the DECLARED Ruxen type via
     `codegen::is_erased_word_ty`, never on the machine type. Pin
-    `tests/release-e2e/cases/1004` guards that line; `1000`-`1003` guard the
-    erasure side.
+    `tests/release-e2e/cases/1000_float_erased_word.rx` guards both that line
+    (its `run_1004` section) and the erasure side.
   - The CLOSURE half lives in MIR lowering (`mir/lower/expr/closure.rs` and
     `expr/method_call.rs`, via `FloatToBits` / `BitsToFloat`), deliberately, so
     both backends inherit one implementation instead of each re-deriving it.

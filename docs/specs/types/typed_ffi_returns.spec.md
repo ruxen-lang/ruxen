@@ -198,9 +198,9 @@ class) does NOT get the lift. The lift is keyed on
 | B2        | `instance_method_return_type_honours_declaration`    | `typed_ffi_returns.rs`        |
 | B4        | `class_generic_t_substitutes_in_return`              | `typed_ffi_returns.rs`        |
 | B5        | `self_in_return_position_resolves_to_class_t`        | `typed_ffi_returns.rs`        |
-| B6        | e2e `cases/710_mutex_lock_unlock_typed_surface.rx`  | release-e2e                   |
+| B6        | `reads the value through lock_raw`                   | `library/std/sync/tests/sync_test.rx` |
 | B7        | `mutex_drop_emitted_on_typed_scope_exit`             | `typed_ffi_returns.rs`        |
-| B8        | covered by 710 (Mutex), 711 (SharedSync), 712 (Atomic) | release-e2e                 |
+| B8        | Mutex, SharedSync and AtomicI64 cases                | `library/std/sync/tests/sync_test.rx` |
 | B9        | covered by integration tests B1-B7                   | —                             |
 | B10       | `non_generic_class_constructor_returns_int`          | `typed_ffi_returns.rs`        |
 | B11       | `ffi_signature_unchanged_after_lift`                 | `typed_ffi_returns.rs`        |

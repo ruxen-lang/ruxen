@@ -1,8 +1,0 @@
-sum=-2.75
-include_neg_zero=true
-sort=-3.5,-1.5,0,2.25
-receiver=-1.5,2.25,-3.5,0
-sort_bang=-3.5,-1.5,0,2.25
-eq=true
-dedup_len=2
-empty_sum=0

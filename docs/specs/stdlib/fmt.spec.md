@@ -160,30 +160,18 @@ inside `_buffer` itself.
 
 ## Pin tests
 
-| Behaviour | Test fn                                                          | File                                  |
+`fmt_test.rx` is `library/std/fmt/tests/fmt_test.rx` (run `scripts/test-stdlib.sh fmt`).
+
+| Behaviour | Test                                                             | File                                  |
 |-----------|------------------------------------------------------------------|---------------------------------------|
-| B1        | `display_trait_and_formatter_are_resolvable`                     | `stdlib_fmt.rs`                       |
-| B1        | `user_impl_display_lowers_t_fmt_function`                        | `stdlib_fmt_display_dispatch.rs`      |
-| B1        | `interpolation_user_impl_display_money_round_trips`              | `stdlib_fmt_runtime.rs`               |
-| B2        | `debug_trait_is_resolvable_with_fmt_method`                      | `stdlib_fmt.rs`                       |
-| B2        | `debug_interpolation_spec_typechecks`                            | `stdlib_fmt.rs`                       |
-| B2        | implicit-Debug E2E fixtures `85_implicit_debug.rx` etc.         | `tests/release-e2e/cases/`            |
-| B3        | `formatter_write_str_then_buffer_round_trips`                    | `stdlib_fmt_runtime.rs`               |
-| B3        | `formatter_write_char_ascii_round_trips`                         | `stdlib_fmt_runtime.rs`               |
-| B3        | `formatter_len_after_write_str`                                  | `stdlib_fmt_runtime.rs`               |
-| B3        | `formatter_write_str_returns_result_unit_fmt_error`              | `stdlib_fmt.rs`                       |
-| B4        | `synth_primitive_fmt_functions_emitted`                          | `stdlib_fmt_display_dispatch.rs`      |
-| B4        | `interpolation_primitive_goes_through_display`                   | `stdlib_fmt_display_dispatch.rs`      |
+| B1        | `routes a Display class through its fmt`                         | `fmt_test.rx`                         |
+| B2        | `calls fmt on a Debug class`, `formats a plain class with :?`    | `fmt_test.rx`                         |
+| B2        | implicit-Debug E2E fixtures `139_implicit_debug_format.rx` etc. | `tests/release-e2e/cases/`            |
+| B3        | `Formatter` group (write_str, write_char, size)                  | `fmt_test.rx`                         |
+| B4        | `user_has_impl_display_*` helper unit tests                      | `compiler/ruxen_core/src/mir/tests.rs`|
 | B5        | implicit-Debug fixtures + existing interp E2E in `05_string_interp.rx` | `tests/release-e2e/cases/`      |
 | B6        | `lex_format_spec_*` (8 tests)                                    | `compiler/ruxen_core/src/lexer/tests.rs`|
-| B6        | `width_and_precision_specs_typecheck`                            | `stdlib_fmt.rs`                       |
-| B7        | `interpolation_width_right_align_pads_int`                       | `stdlib_fmt_runtime.rs`               |
-| B7        | `interpolation_width_left_align_pads_int`                        | `stdlib_fmt_runtime.rs`               |
-| B7        | `interpolation_width_center_align_pads_int`                      | `stdlib_fmt_runtime.rs`               |
-| B7        | `interpolation_fill_char_left_align`                             | `stdlib_fmt_runtime.rs`               |
-| B8        | `interpolation_float_precision`                                  | `stdlib_fmt_runtime.rs`               |
-| B8        | `interpolation_string_precision_truncates`                       | `stdlib_fmt_runtime.rs`               |
-| B9        | `interpolation_width_and_precision_compose`                      | `stdlib_fmt_runtime.rs`               |
+| B7-B9     | `applies width, fill and precision`                              | `fmt_test.rx`                         |
 | B10       | covered transitively by B7 / B8 / B9                             |                                       |
 | B11       | covered transitively by B3 + every interp test                   |                                       |
 

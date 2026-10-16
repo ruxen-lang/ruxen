@@ -15,7 +15,8 @@ captures the **observable** rejection envelope; cross-reference
 
 ## B1 — Sample-program acceptance baseline
 
-The `borrow_check_sample.rx` fixture is a canonical mid-size program
+The promoted sample program (e2e `2057_todo_manager_sample_program.rx`)
+is a canonical mid-size program
 that exercises move semantics, immutable borrowing, and mutable
 borrowing across function boundaries.  Borrow check accepts it
 without diagnostics.
@@ -52,7 +53,7 @@ sites.  Both must agree.
 
 | Behaviour | Test fn                                       | File                            |
 |-----------|-----------------------------------------------|---------------------------------|
-| B1        | `sample_program_borrow_checks`                | `borrow_check_sample.rs`        |
+| B1        | e2e `2057_todo_manager_sample_program.rx`     | release-e2e                     |
 | B2        | `use_after_move_on_string_argument_is_rejected` | `stdlib_string_negatives.rs`  |
 | B3        | `use_after_into_bytes_is_rejected`            | `stdlib_string_negatives.rs`    |
 

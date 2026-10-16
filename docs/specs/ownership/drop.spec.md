@@ -97,7 +97,7 @@ consuming/ambiguous call is treated as escaped and is not field-dropped.
 
 | Behaviour | Test fn                                                | File                |
 |-----------|--------------------------------------------------------|---------------------|
-| B1        | `user_drop_runs_at_scope_exit`                         | `user_drop_runs.rs` |
+| B1        | e2e `134_user_drop_runs.rx`                            | release-e2e         |
 | B2        | `reassignment_does_not_leak_prior_heap_value`          | `drop_fixtures.rs`  |
 | B3        | `loop_body_local_does_not_leak_across_iterations`      | `drop_fixtures.rs`  |
 | B4        | `break_drops_loop_body_local` + `continue_drops_loop_body_local` | `drop_fixtures.rs` |

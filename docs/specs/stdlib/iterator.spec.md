@@ -65,29 +65,18 @@ runtime round-trip (the runtime layer reuses the audited
 
 | Behaviour | Test fn                                  | File                  |
 |-----------|------------------------------------------|-----------------------|
-| B1        | `iter_fold_compiles_with_int_accumulator`| `stdlib_iterator.rs`  |
-| B2        | `iter_all_compiles_returning_bool`       | `stdlib_iterator.rs`  |
-| B3        | `iter_any_compiles_returning_bool`       | `stdlib_iterator.rs`  |
-| B4        | `iter_take_compiles` + `iter_skip_compiles` | `stdlib_iterator.rs` |
-| B5        | `iter_take_then_sum_compiles` + `iter_skip_then_sum_compiles` | `stdlib_iterator.rs` |
-| B6        | `iter_enumerate_passthrough_compiles`    | `stdlib_iterator.rs`  |
-| B7        | `iter_filter_then_count_compiles`        | `stdlib_iterator.rs`  |
-| B8        | `iter_map_changes_item_type_then_collect_vec_compiles` | `stdlib_iterator.rs` |
-| B9        | `iter_sum_still_compiles` + `iter_count_still_compiles` | `stdlib_iterator.rs` |
-| B10       | `iter_skip_then_take_then_count_compiles`| `stdlib_iterator.rs`  |
-| B11       | `iter_take_then_fold_compiles`           | `stdlib_iterator.rs`  |
-| B12       | `iter_skip_then_all_compiles`            | `stdlib_iterator.rs`  |
-| B13       | `iter_chain_compiles` + `iter_chain_then_sum_compiles` | `stdlib_iterator.rs` |
-| B14       | `iter_zip_then_count_compiles`           | `stdlib_iterator.rs`  |
-| B15       | `iter_collect_vec_compiles` + `iter_collect_string_compiles` + `iter_collect_hashmap_compiles` + `iter_collect_hashset_compiles` | `stdlib_iterator.rs` |
-| B16       | `string_from_iter_compiles` + `hashmap_from_iter_compiles` + `hashset_from_iter_compiles` | `stdlib_iterator.rs` |
+| B1, B9, B11 | "sum, count and reduce, including on an empty array" | `library/std/iter/tests/aggregate_test.rx` |
+| B2, B3    | "all?, any?, none? and one?"             | `library/std/iter/tests/aggregate_test.rx` |
+| B4, B5, B10, B12 | "take, drop and their combinations" | `library/std/iter/tests/transform_test.rx` |
+| B6        | "each and each_with_index visit in order" | `library/std/iter/tests/aggregate_test.rx` |
+| B7, B8    | "map, select, filter and find_all"       | `library/std/iter/tests/transform_test.rx` |
+| B13, B14  | "chain and zip"                          | `library/std/iter/tests/transform_test.rx` |
+| B15, B16  | "zip then to_h builds a Hash"; Set's "to_set from an array and to_a back" | `library/std/iter/tests/transform_test.rx`, `library/std/set/tests/set_test.rx` |
 | B17       | `sum_on_string_iter_typeck_rejects`      | `stdlib_iterator.rs`  |
 | B18       | _no dedicated pin yet_                   | —                     |
-| B19       | `sum_on_int_iter_still_compiles_after_tightening` | `stdlib_iterator.rs` |
+| B19       | "sum, count and reduce, including on an empty array" | `library/std/iter/tests/aggregate_test.rx` |
 
-Runtime correctness rides on the `ruxen_vec_*` helpers, which have
-their own pin tests + E2E fixtures (`tests/release-e2e/cases/600_…`
-through `611_…`).
+The `.rx` tests run with `scripts/test-stdlib.sh iter`.
 
 ---
 

@@ -1,0 +1,9 @@
+wide y=20
+method: r=1 g=2 b=3 a=255
+sum32=4
+sum64=4
+3
+direct=255
+parens=0
+a=255 r=10
+da=255 dr=1

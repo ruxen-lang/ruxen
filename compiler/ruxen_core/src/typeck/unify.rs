@@ -264,8 +264,8 @@ pub fn unify(a: &Ty, b: &Ty, ctx: &mut TypeContext, span: &Span) -> Result<Ty, T
         //   hs.push({ |n: Int| n + 10 })
         //   def make_adder(n: Int) -> any Fn(Int) -> Int = …
         //
-        // typecheck. The layout invariant is documented in
-        // `compiler/ruxen_core/tests/closures_dyn_dispatch.rs`: both
+        // typecheck. The layout invariant (pinned by e2e
+        // `2050_any_fn_dyn_dispatch`): both
         // sides are physically a 16-byte `(fn_ptr, captures_ptr)`
         // pair, so the runtime representation is identical and the
         // method-call lowerer can emit the same indirect call against

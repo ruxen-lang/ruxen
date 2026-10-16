@@ -1,0 +1,22 @@
+# ---- from 57_while_let_pop ----
+def run_57
+  var v = [1, 2, 3]
+  while let Some(x) = v.pop
+    puts "#{x}"
+  end
+  puts "done"
+end
+
+# ---- from 129_while_let_pop_string ----
+def run_129
+  var v = ["a", "b", "c"]
+  while let Some(s) = v.pop
+    puts s
+  end
+  puts "len=#{v.size}"
+end
+
+def main
+  run_57
+  run_129
+end

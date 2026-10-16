@@ -484,6 +484,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_invalid_toml_is_rejected() {
+        assert!(Manifest::from_str("not valid toml [[[").is_err());
+    }
+
+    #[test]
     fn test_minimal_manifest() {
         let toml = r#"
 [package]

@@ -58,12 +58,11 @@ absolute path.
 
 | Behaviour | Test fn                                      | File             |
 |-----------|----------------------------------------------|------------------|
-| B1        | `env_args_includes_program_name`             | `stdlib_env.rs`  |
-| B2 ok     | `env_var_returns_ok_for_set_key`             | `stdlib_env.rs`  |
-| B2 err    | `env_var_returns_err_for_missing_key`        | `stdlib_env.rs`  |
-| B3        | `env_vars_snapshots_process_environment`     | `stdlib_env.rs`  |
-| B3        | `env_vars_is_non_empty_when_one_var_set`     | `stdlib_env.rs`  |
-| B4        | `env_current_dir_returns_ok_path`            | `stdlib_env.rs`  |
+| B1        | "includes the program name in args" | `library/std/env/tests/env_test.rx` |
+| B2 ok     | "returns Ok with the value of a set variable from get" | `library/std/env/tests/env_test.rx` |
+| B2 err    | "returns Err from get for an unset variable" | `library/std/env/tests/env_test.rx` |
+| B3        | "snapshots the process environment in vars" | `library/std/env/tests/env_test.rx` |
+| B4        | "returns a non-empty current_dir" | `library/std/env/tests/env_test.rx` |
 
 ---
 

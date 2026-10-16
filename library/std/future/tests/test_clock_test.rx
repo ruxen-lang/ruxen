@@ -1,0 +1,96 @@
+use std.time.Duration
+use std.time.Instant
+
+def poll_state(s: &var TimeSleepFuture, cx: &var Context) -> String
+  match s.poll(cx)
+    Poll.Ready(_) -> "ready"
+    Poll.Pending -> "pending"
+  end
+end
+
+Tester.describe("TestClock") do |t: &var Tester|
+  t.it("fires a parked sleep when advanced past its deadline") do
+    var guard = TestClock.install
+    var cx = Context.executor
+    var s = Async.sleep(Duration.from_secs(60))
+    t.expect(poll_state(&var s, &var cx)).to_eq("pending")
+    TestClock.advance(Duration.from_secs(60))
+    t.expect(poll_state(&var s, &var cx)).to_eq("ready")
+  end
+
+  t.it("advance_to_next steps to each deadline in turn") do
+    var guard = TestClock.install
+    var cx = Context.executor
+    var a = Async.sleep(Duration.from_secs(10))
+    var b = Async.sleep(Duration.from_secs(25))
+    t.expect(poll_state(&var a, &var cx)).to_eq("pending")
+    t.expect(poll_state(&var b, &var cx)).to_eq("pending")
+    t.expect(TestClock.advance_to_next).to_eq(10000000000)
+    t.expect(poll_state(&var a, &var cx)).to_eq("ready")
+    t.expect(TestClock.advance_to_next).to_eq(15000000000)
+    t.expect(poll_state(&var b, &var cx)).to_eq("ready")
+    t.expect(TestClock.advance_to_next).to_eq(-1)
+  end
+
+  t.it("moves Instant by virtual time") do
+    var guard = TestClock.install
+    let start = Instant.now
+    TestClock.advance(Duration.from_secs(300))
+    t.expect(start.elapsed.as_millis).to_eq(300000)
+  end
+
+  t.it("set moves to an absolute time") do
+    var guard = TestClock.install
+    var cx = Context.executor
+    var s = Async.sleep(Duration.from_secs(30))
+    t.expect(poll_state(&var s, &var cx)).to_eq("pending")
+    TestClock.set(Duration.from_secs(20))
+    t.expect(poll_state(&var s, &var cx)).to_eq("pending")
+    TestClock.set(Duration.from_secs(40))
+    t.expect(poll_state(&var s, &var cx)).to_eq("ready")
+    TestClock.set(Duration.from_secs(10))
+  end
+
+  t.it("uninstall restores the real clock") do
+    var guard = TestClock.install
+    var cx = Context.executor
+    var s = Async.sleep(Duration.from_secs(60))
+    let _p1 = (&var s).poll(&var cx)
+    TestClock.advance(Duration.from_secs(60))
+    t.expect(poll_state(&var s, &var cx)).to_eq("ready")
+    TestClock.uninstall
+    let start = Instant.now
+    block_on(Async.sleep(Duration.from_millis(20)))
+    let ms = start.elapsed.as_millis
+    t.expect(ms >= 10 && ms <= 500).to_eq(true)
+  end
+
+  t.it("deregistering a fired timer keeps the other one live") do
+    TestClock.install
+    var cx = Context.executor
+    let h = ruxen_reactor_current_handle()
+    let a = ruxen_reactor_register_timer(h, 10000000000)
+    let b = ruxen_reactor_register_timer(h, 20000000000)
+    TestClock.advance(Duration.from_secs(10))
+    t.expect(ruxen_reactor_check_fired(h, a)).to_eq(1)
+    ruxen_reactor_deregister(h, a)
+    t.expect(ruxen_reactor_registered_count()).to_eq(1)
+    TestClock.advance(Duration.from_secs(15))
+    t.expect(ruxen_reactor_check_fired(h, b)).to_eq(1)
+    TestClock.uninstall
+  end
+
+  t.it("a nested install keeps the outer virtual time") do
+    TestClock.install
+    var cx = Context.executor
+    let h = ruxen_reactor_current_handle()
+    TestClock.advance(Duration.from_secs(30))
+    TestClock.install
+    let tm = ruxen_reactor_register_timer(h, 10000000000)
+    t.expect(ruxen_reactor_check_fired(h, tm)).to_eq(0)
+    TestClock.uninstall
+    TestClock.advance(Duration.from_secs(15))
+    t.expect(ruxen_reactor_check_fired(h, tm)).to_eq(1)
+    TestClock.uninstall
+  end
+end

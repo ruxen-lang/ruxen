@@ -2270,4 +2270,62 @@ end";
             diags.iter().map(|d| d.to_string()).collect::<Vec<_>>()
         );
     }
+
+    fn parse_repl(input: &str) -> ReplParseResult {
+        let tokens = Lexer::new(input).tokenize().expect("lexer failed");
+        Parser::new(tokens).parse_repl_input()
+    }
+
+    #[test]
+    fn repl_input_integer_expression() {
+        assert!(matches!(
+            parse_repl("1 + 2"),
+            ReplParseResult::Complete(ReplInput::Expression(_))
+        ));
+    }
+
+    #[test]
+    fn repl_input_let_statement() {
+        assert!(matches!(
+            parse_repl("let x = 42"),
+            ReplParseResult::Complete(ReplInput::Statement(_))
+        ));
+    }
+
+    #[test]
+    fn repl_input_function_definition() {
+        assert!(matches!(
+            parse_repl("def double(n: Int) -> Int\n  n * 2\nend"),
+            ReplParseResult::Complete(ReplInput::TopLevel(_))
+        ));
+    }
+
+    #[test]
+    fn repl_input_incomplete_def() {
+        assert!(matches!(
+            parse_repl("def double(n: Int) -> Int"),
+            ReplParseResult::Incomplete
+        ));
+    }
+
+    #[test]
+    fn repl_input_incomplete_class() {
+        assert!(matches!(parse_repl("class Foo"), ReplParseResult::Incomplete));
+    }
+
+    #[test]
+    fn repl_input_string_expression() {
+        assert!(matches!(
+            parse_repl("\"hello\""),
+            ReplParseResult::Complete(ReplInput::Expression(_))
+        ));
+    }
+
+    #[test]
+    fn repl_input_boolean_expression() {
+        assert!(matches!(
+            parse_repl("true"),
+            ReplParseResult::Complete(ReplInput::Expression(_))
+        ));
+    }
 }

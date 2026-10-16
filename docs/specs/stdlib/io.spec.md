@@ -109,7 +109,7 @@ e.message()` chains is currently incomplete (deferred).
 | B8        | `stdin_lines_yields_each_line`                         | `stdlib_io.rs`   |
 | B9        | `stdin_lines_no_trailing_empty_and_partial_final_line` | `stdlib_io.rs`   |
 | B10       | `stdin_lines_empty_input_yields_empty_vec`             | `stdlib_io.rs`   |
-| B11       | `io_error_variants_are_constructible_and_message_dispatches` | `stdlib_io.rs` |
+| B11       | "gives a default message for unit variants and the payload for the rest" | `library/std/io/tests/io_error_test.rx` |
 | B11/B12   | `io_error_message_dispatches_per_variant_on_empty_stdin` | `stdlib_io.rs` |
 
 ---

@@ -1,0 +1,114 @@
+def head_of(c: &Array[Int]) -> Int
+  match c.first
+    Some(v) -> v
+    nil     -> 0
+  end
+end
+
+def text_head(c: &Array[String]) -> String
+  match c.first
+    Some(v) -> v
+    nil     -> "?"
+  end
+end
+
+Tester.describe("Enumerable windows") do |t: &var Tester|
+  t.it("each_slice, each_cons, cycle, reverse_each and each_with_object") do
+    let a = [1, 2, 3, 4, 5]
+    var slices = ""
+    a.each_slice(2) { |c| slices = slices + "#{c.size}:#{head_of(c)} " }
+    t.expect(slices).to_eq("2:1 2:3 1:5 ")
+    var cons = ""
+    a.each_cons(2) { |c| cons = cons + "#{head_of(c)} " }
+    t.expect(cons).to_eq("1 2 3 4 ")
+    var wide = 0
+    a.each_cons(9) { |_c| wide = wide + 1 }
+    t.expect(wide).to_eq(0)
+    let two = [7, 8]
+    var cycled = ""
+    two.cycle(2) { |x| cycled = cycled + "#{x}" }
+    two.cycle(0) { |x| cycled = cycled + "never#{x}" }
+    t.expect(cycled).to_eq("7878")
+    var rev = ""
+    two.reverse_each { |x| rev = rev + "#{x}" }
+    t.expect(rev).to_eq("87")
+    t.expect(a.each_with_object(100) { |x, memo| memo + x }).to_eq(115)
+  end
+
+  t.it("edge cases: empty, single element, zero and negative sizes") do
+    let empty: Array[Int] = Array.new
+    t.expect(empty.entries.size).to_eq(0)
+    t.expect(empty.take(3).size).to_eq(0)
+    t.expect(empty.drop(3).size).to_eq(0)
+    t.expect(empty.take_while { |_x| true }.size).to_eq(0)
+    t.expect(empty.drop_while { |_x| true }.size).to_eq(0)
+    t.expect(empty.flat_map { |x| [x] }.size).to_eq(0)
+    t.expect(empty.first.unwrap_or(-1)).to_eq(-1)
+    var calls = ""
+    empty.each_slice(2) { |c| calls = calls + "es#{c.size} " }
+    empty.each_cons(2) { |c| calls = calls + "ec#{c.size} " }
+    empty.reverse_each { |x| calls = calls + "er#{x} " }
+    let one = [42]
+    one.each_slice(2) { |c| calls = calls + "os#{c.size} " }
+    one.each_cons(2) { |c| calls = calls + "oc#{c.size} " }
+    one.each_cons(1) { |c| calls = calls + "oc1#{c.size} " }
+    let a = [1, 2, 3]
+    a.each_slice(0) { |c| calls = calls + "zs#{c.size} " }
+    a.each_cons(0) { |c| calls = calls + "zc#{c.size} " }
+    a.cycle(-1) { |x| calls = calls + "nc#{x} " }
+    [1, 2, 3, 4].each_slice(2) { |c| calls = calls + "ev#{c.size} " }
+    t.expect(calls).to_eq("os1 oc11 ev2 ev2 ")
+    t.expect(a.take(99).size).to_eq(3)
+    t.expect(a.drop(99).size).to_eq(0)
+    t.expect(a.take(0).size).to_eq(0)
+    t.expect(a.drop(0).size).to_eq(3)
+    t.expect(a.take(-1).size).to_eq(0)
+  end
+
+  t.it("Set and Hash reach the Enumerable methods") do
+    var s: Set[Int] = Set.new
+    s.insert(10)
+    s.insert(20)
+    s.insert(30)
+    t.expect(s.count).to_eq(3)
+    t.expect(s.entries.size).to_eq(3)
+    t.expect(s.take(2).size).to_eq(2)
+    t.expect(s.drop(2).size).to_eq(1)
+    t.expect(s.flat_map { |x| [x, x] }.size).to_eq(6)
+    t.expect(s.each_with_object(0) { |x, memo| memo + x }).to_eq(60)
+    var slices = 0
+    s.each_slice(2) { |_c| slices = slices + 1 }
+    t.expect(slices).to_eq(2)
+    var windows = 0
+    s.each_cons(2) { |_c| windows = windows + 1 }
+    t.expect(windows).to_eq(2)
+    var reversed = 0
+    s.reverse_each { |_x| reversed = reversed + 1 }
+    t.expect(reversed).to_eq(3)
+    var h: Hash[String, Int] = Hash.new
+    h.insert("a", 1)
+    h.insert("b", 2)
+    h.insert("c", 3)
+    t.expect(h.count).to_eq(3)
+    t.expect(h.entries.size).to_eq(3)
+    t.expect(h.take(1).size).to_eq(1)
+    t.expect(h.drop(1).size).to_eq(2)
+    t.expect(h.flat_map { |pair| [pair.1] }.size).to_eq(3)
+    t.expect(h.each_with_object(0) { |pair, memo| memo + pair.1 }).to_eq(6)
+    t.expect(h.select { |pair| pair.1 > 1 }.size).to_eq(2)
+  end
+
+  t.it("String elements through the window methods") do
+    let a = ["alpha", "beta", "gamma"]
+    t.expect(a.entries.join(",")).to_eq("alpha,beta,gamma")
+    var out = ""
+    a.each_slice(2) { |c| out = out + "s#{c.size}:#{text_head(c)} " }
+    a.each_cons(2) { |c| out = out + "c:#{text_head(c)} " }
+    a.reverse_each { |s| out = out + "r:#{s} " }
+    t.expect(out).to_eq("s2:alpha s1:gamma c:alpha c:beta r:gamma r:beta r:alpha ")
+    t.expect(a.take(2).join(",")).to_eq("alpha,beta")
+    t.expect(a.take_while { |s| s.size < 5 }.size).to_eq(0)
+    t.expect(a.drop_while { |s| s.size < 5 }.size).to_eq(3)
+    t.expect(a.flat_map { |s| [s, s] }.size).to_eq(6)
+  end
+end

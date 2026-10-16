@@ -166,12 +166,10 @@ fn find_stdlib_root() -> Result<PathBuf, String> {
 /// the resulting `.o`s into the executable. There is no unity build.
 pub fn find_runtime_sources() -> Result<Vec<PathBuf>, String> {
     // `RUXEN_RUNTIME` is the legacy single-file override (one
-    // synthesized unity-build `.c`). Tests like
-    // `compiler/ruxen_core/tests/drop_fixtures.rs` write a tracked
-    // unity into a tempfile, point this env var at it, and expect
-    // the compile to use ONLY that file. Honoured for backward
-    // compatibility; the modern per-package path uses
-    // `RUXEN_STDLIB_ROOT`.
+    // synthesized unity-build `.c`); the compile then uses ONLY that
+    // file. Honoured for backward compatibility; in-process tests pass
+    // their runtime to `compile_with_runtime_sources` instead, and the
+    // modern per-package path uses `RUXEN_STDLIB_ROOT`.
     if let Ok(p) = std::env::var("RUXEN_RUNTIME") {
         let path = PathBuf::from(p);
         if path.is_file() {
@@ -585,7 +583,55 @@ pub fn compile_with_options_for_target(
         );
     }
 
-    // ── Host path (byte-identical to pre-4.02) ───────────────────────────
+    compile_host(
+        program,
+        output_path,
+        sanitize,
+        extra_link_flags,
+        extra_runtime_sources,
+        backend,
+        target,
+        None,
+    )
+}
+
+/// Compile a MIR program for the host, linking `runtime_sources` in place
+/// of the stdlib C runtime. The rest of the link (caller runtime sources,
+/// `[system_libs]` flags, `extra_link_flags`) is the production host path.
+/// Used by test harnesses that inject an instrumented runtime, such as the
+/// allocation-tracking runtime of the `drop_fixtures` leak tests.
+pub fn compile_with_runtime_sources(
+    program: &MirProgram,
+    output_path: &str,
+    runtime_sources: &[PathBuf],
+    extra_link_flags: &[String],
+) -> Result<(), String> {
+    compile_host(
+        program,
+        output_path,
+        false,
+        extra_link_flags,
+        &[],
+        Backend::Cranelift,
+        None,
+        Some(runtime_sources),
+    )
+}
+
+/// The host path (byte-identical to pre-4.02). `runtime_override`, when
+/// set, replaces the stdlib runtime sources and disables the prebuilt
+/// archive fast path.
+#[allow(clippy::too_many_arguments)]
+fn compile_host(
+    program: &MirProgram,
+    output_path: &str,
+    sanitize: bool,
+    extra_link_flags: &[String],
+    extra_runtime_sources: &[PathBuf],
+    backend: Backend,
+    target: Option<&target::ResolvedTarget>,
+    runtime_override: Option<&[PathBuf]>,
+) -> Result<(), String> {
     // Step 1: Generate object code via the selected backend
     let object_bytes = match backend {
         Backend::Cranelift => {
@@ -632,10 +678,12 @@ pub fn compile_with_options_for_target(
     // is a cache of the *default*, uninstrumented runtime build:
     //   - `sanitize`: the archive carries no ASan/UBSan instrumentation, so
     //     reusing it would silently strip sanitization from runtime calls.
-    //   - `RUXEN_RUNTIME` set: an explicit runtime-source override (e.g. the
-    //     drop/leak fixtures inject an allocation-tracking runtime). The
-    //     requested source must be compiled — the archive must not replace it.
-    let runtime_source_overridden = std::env::var_os("RUXEN_RUNTIME").is_some();
+    //   - `runtime_override` or `RUXEN_RUNTIME` set: an explicit runtime-source
+    //     override (e.g. the drop/leak fixtures inject an allocation-tracking
+    //     runtime). The requested source must be compiled — the archive must
+    //     not replace it.
+    let runtime_source_overridden =
+        runtime_override.is_some() || std::env::var_os("RUXEN_RUNTIME").is_some();
     let prebuilt_archive: Option<PathBuf> = if sanitize || runtime_source_overridden {
         None
     } else {
@@ -645,7 +693,10 @@ pub fn compile_with_options_for_target(
     let mut runtime_objects: Vec<PathBuf> = if prebuilt_archive.is_some() {
         Vec::new()
     } else {
-        let runtime_sources = find_runtime_sources()?;
+        let runtime_sources = match runtime_override {
+            Some(sources) => sources.to_vec(),
+            None => find_runtime_sources()?,
+        };
         object::compile_runtime_sources(&runtime_sources, sanitize)?
     };
 

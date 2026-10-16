@@ -402,7 +402,7 @@ pub(super) fn struct_name_with_ord(ty: &Ty, symbols: &SymbolTable) -> Option<(St
 /// wrong in both directions:
 ///
 /// * `"#{n.succ}"` would route to a synthesised `Int_to_debug` and print
-///   `Int {}` instead of the number (`1110_integer_predicates_sign`);
+///   `Int {}` instead of the number (`std/scalar` `integer_test.rx`);
 /// * `m1 == m2` on two DIFFERENT `Mutex`es would take the field-fold's
 ///   empty-list branch and answer a literal `true`.
 ///

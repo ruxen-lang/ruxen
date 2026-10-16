@@ -1,0 +1,244 @@
+# ---- from 1860_chain_select_each ----
+# B85 — chaining off a combinator must iterate the combinator's RESULT, not the
+# original receiver. `lower_vec_source` used to pattern-match the receiver's
+# method name (`select`/`reject`/`where_matching`) and recurse into ITS object,
+# discarding the combinator entirely, so `a.select { … }.each { … }` iterated
+# all of `a`. Silent wrong answer, never a crash.
+#
+# Both spellings are pinned side by side, and every count DIFFERS from the
+# receiver's own count (4), so a regression cannot pass by accident.
+def run_1860
+  let a = ["alpha", "beta", "gamma", "delta"]
+  puts("receiver=#{a.size}")
+
+  var chained = 0
+  a.select { |s| s.size > 4 }.each { |s| chained = chained + 1 }
+  puts("chained=#{chained}")
+
+  let bound = a.select { |s| s.size > 4 }
+  var counted = 0
+  bound.each { |s| counted = counted + 1 }
+  puts("bound=#{counted}")
+
+  # The elements themselves, not just the count.
+  a.select { |s| s.size > 4 }.each { |s| puts("chained-elem=#{s}") }
+  bound.each { |s| puts("bound-elem=#{s}") }
+end
+
+# ---- from 1861_chain_map_each ----
+# B85 — `map` chained into `each`, both spellings side by side. `map` was not
+# among the names `lower_vec_source` peeled, so this spelling was already
+# correct; it is pinned as regression armor for the general chaining mechanism
+# (the receiver of an inlined combinator is lowered by `lower_expr`, with no
+# method-name knowledge at all).
+#
+# The sums differ from the receiver's own sum (21), so a regression that
+# re-reads the receiver is caught.
+def run_1861
+  let n = [1, 2, 3, 4, 5, 6]
+  var raw = 0
+  n.each { |x| raw = raw + x }
+  puts("receiver-sum=#{raw}")
+
+  var chained = 0
+  n.map { |x| x * 2 }.each { |x| chained = chained + x }
+  puts("chained-sum=#{chained}")
+
+  let doubled = n.map { |x| x * 2 }
+  var counted = 0
+  doubled.each { |x| counted = counted + x }
+  puts("bound-sum=#{counted}")
+
+  # A map that CHANGES the element type, chained.
+  var widths = 0
+  ["a", "bb", "ccc"].map { |s| s.size }.each { |w| widths = widths + w }
+  puts("chained-widths=#{widths}")
+end
+
+# ---- from 1862_chain_reject_each ----
+# B85 — `reject` chained into `each`. This was broken identically to `select`:
+# `reject` was one of the three names `lower_vec_source` peeled through, so the
+# chain iterated all six elements instead of the three kept.
+def run_1862
+  let n = [1, 2, 3, 4, 5, 6]
+  puts("receiver=#{n.size}")
+
+  var chained = 0
+  n.reject { |x| x > 3 }.each { |x| chained = chained + 1 }
+  puts("chained=#{chained}")
+
+  let kept = n.reject { |x| x > 3 }
+  var counted = 0
+  kept.each { |x| counted = counted + 1 }
+  puts("bound=#{counted}")
+
+  var chained_sum = 0
+  n.reject { |x| x > 3 }.each { |x| chained_sum = chained_sum + x }
+  puts("chained-sum=#{chained_sum}")
+end
+
+# ---- from 1863_chain_filter_map_each ----
+# B85 — `filter_map` chained into `each`, both spellings. `filter_map` is an
+# `Enumerable[T]` mixin default (a real `.rx` body, not MIR-inlined), so its
+# chained result comes back through the normal call path; pinned so the general
+# chaining mechanism keeps covering `.rx`-bodied combinators too.
+#
+# The predicate helper is written in TAIL position deliberately: `return <v>`
+# from an `Option`-returning function segfaults (B84, open).
+def big_only(x: Int) -> Int?
+  if x > 4
+    Some(x)
+  else
+    nil
+  end
+end
+
+def run_1863
+  let n = [1, 2, 3, 4, 5, 6]
+  puts("receiver=#{n.size}")
+
+  var chained = 0
+  n.filter_map { |x| big_only(x) }.each { |x| chained = chained + 1 }
+  puts("chained=#{chained}")
+
+  let picked = n.filter_map { |x| big_only(x) }
+  var counted = 0
+  picked.each { |x| counted = counted + 1 }
+  puts("bound=#{counted}")
+
+  var chained_sum = 0
+  n.filter_map { |x| big_only(x) }.each { |x| chained_sum = chained_sum + x }
+  puts("chained-sum=#{chained_sum}")
+end
+
+# ---- from 1864_chain_take_drop_while_each ----
+# B85 — `take_while` / `drop_while` chained into `each`, both spellings. Like
+# `filter_map` these are `Enumerable[T]` mixin defaults, so they exercise the
+# `.rx`-bodied half of the chaining mechanism. Every count differs from the
+# receiver's own count (6).
+def run_1864
+  let n = [1, 2, 3, 4, 5, 6]
+  puts("receiver=#{n.size}")
+
+  var tw = 0
+  n.take_while { |x| x < 4 }.each { |x| tw = tw + 1 }
+  puts("take_while-chained=#{tw}")
+
+  let taken = n.take_while { |x| x < 4 }
+  var twb = 0
+  taken.each { |x| twb = twb + 1 }
+  puts("take_while-bound=#{twb}")
+
+  var dw = 0
+  n.drop_while { |x| x < 4 }.each { |x| dw = dw + x }
+  puts("drop_while-chained-sum=#{dw}")
+
+  let dropped = n.drop_while { |x| x < 4 }
+  var dwb = 0
+  dropped.each { |x| dwb = dwb + x }
+  puts("drop_while-bound-sum=#{dwb}")
+end
+
+# ---- from 1865_chain_three_links ----
+# B85 — a three-link chain. Every intermediate must be the previous link's
+# RESULT. `select` at the head is the shape that used to be discarded, so a
+# regression here shows up as the receiver's full contents flowing downstream.
+#
+# Receiver sum is 21; mapping ALL of it by *10 would give 210. The chain's
+# correct answer is 180, so the wrong-receiver answer is distinguishable.
+def run_1865
+  let n = [1, 2, 3, 4, 5, 6]
+
+  var t = 0
+  n.select { |x| x > 2 }.map { |x| x * 10 }.each { |x| t = t + x }
+  puts("select-map-each=#{t}")
+
+  # Same chain, bound at every step.
+  let picked = n.select { |x| x > 2 }
+  let scaled = picked.map { |x| x * 10 }
+  var b = 0
+  scaled.each { |x| b = b + x }
+  puts("bound-bound-each=#{b}")
+
+  # Reversed order of the two filters, and a reject in the middle.
+  var u = 0
+  n.map { |x| x * 3 }.reject { |x| x > 12 }.each { |x| u = u + x }
+  puts("map-reject-each=#{u}")
+
+  # Four links.
+  var v = 0
+  n.select { |x| x > 1 }.reject { |x| x > 5 }.map { |x| x * 2 }.each { |x| v = v + x }
+  puts("four-links=#{v}")
+end
+
+# ---- from 1866_chain_empty_intermediate ----
+# B85 — a chain whose intermediate is EMPTY must iterate nothing. This is the
+# sharpest form of the bug: when the combinator was discarded, `a.select { … }`
+# with a predicate no element satisfies still iterated every element, so the
+# body ran N times instead of zero.
+def run_1866
+  let n = [1, 2, 3, 4, 5, 6]
+  let a = ["alpha", "beta", "gamma", "delta"]
+
+  var e1 = 0
+  n.select { |x| x > 100 }.each { |x| e1 = e1 + 1 }
+  puts("empty-select=#{e1}")
+
+  var e2 = 0
+  a.reject { |s| s.size > 0 }.each { |s| e2 = e2 + 1 }
+  puts("empty-reject=#{e2}")
+
+  var e3 = 0
+  n.take_while { |x| x > 100 }.each { |x| e3 = e3 + 1 }
+  puts("empty-take_while=#{e3}")
+
+  # Empty intermediate in the MIDDLE of a three-link chain.
+  var e4 = 0
+  n.select { |x| x > 100 }.map { |x| x * 2 }.each { |x| e4 = e4 + 1 }
+  puts("empty-middle=#{e4}")
+
+  # Bound-first spellings of the same, for comparison.
+  let none = n.select { |x| x > 100 }
+  var e5 = 0
+  none.each { |x| e5 = e5 + 1 }
+  puts("empty-bound=#{e5}")
+  puts("empty-size=#{none.size}")
+end
+
+# ---- from 1869_chain_each_with_index ----
+# B85 — `each_with_index` off a chain, plus a chain nested INSIDE another
+# block's body. The index must run over the chained result's length, not the
+# original receiver's, so the printed index sequence is a direct witness: the
+# receiver has six elements and the chained result has three.
+#
+# The index is printed rather than accumulated: assigning to a captured `var`
+# from a two-parameter block is E1009 ("cannot move value — currently
+# borrowed"), which is a separate, pre-existing limitation.
+def run_1869
+  let n = [1, 2, 3, 4, 5, 6]
+  puts("receiver=#{n.size}")
+
+  n.select { |x| x > 3 }.each_with_index { |x, i| puts("chained #{i}:#{x}") }
+
+  let picked = n.select { |x| x > 3 }
+  picked.each_with_index { |x, i| puts("bound #{i}:#{x}") }
+
+  # A chain evaluated inside another block's body: the inner chain must not
+  # leak the outer receiver either.
+  var inner = 0
+  n.select { |x| x > 4 }.each { |x|
+    n.reject { |y| y > 2 }.each { |y| inner = inner + 1 }
+  }
+  puts("nested-chain=#{inner}")
+end
+
+def main
+  run_1860
+  run_1861
+  run_1862
+  run_1863
+  run_1864
+  run_1865
+  run_1866
+  run_1869
+end

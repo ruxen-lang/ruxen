@@ -9,8 +9,6 @@
 //! residual" — the catalogue had no consumer and was deleted.
 
 #[cfg(test)]
-mod tests_migrated;
-#[cfg(test)]
 mod tests_resolve;
 
 /// Extract the method name from a mangled `TypeName_method` string.

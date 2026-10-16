@@ -1,0 +1,8 @@
+tab[	] quote["] backslash[\]
+line1
+line2
+hash #{not interpolated}
+3 interpolated
+200 7 250 1234567890
+31 10 1000
+4278256131

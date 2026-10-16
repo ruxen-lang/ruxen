@@ -834,19 +834,6 @@ pub(super) fn is_repl_symbol_allowed(name: &str) -> bool {
     )
 }
 
-/// Test-only hook: JIT-compile a two-`Int`-argument MIR function, run it with
-/// `args`, and return the `i64` result. Used by the `cranelift_share_pin`
-/// both-backends parity test in `ruxen_core` to assert the REPL JIT backend
-/// lowers integer arithmetic identically to the batch backend.
-///
-/// `#[doc(hidden)]` so it is not part of the stable API, but `pub` so the
-/// cross-crate test can reach it. It drives the SAME `compile_repl_input`
-/// path the live REPL uses — it does not fork it.
-///
-/// # Safety contract
-/// `func` must have exactly two `Int`-typed parameters and an `Int` return,
-/// matching the transmuted `extern "C" fn(i64, i64) -> i64` arity. The pin
-/// fixture guarantees this.
 #[doc(hidden)]
 /// Test seam: compile `func` through the JIT's translation path into the
 /// shared codegen context and return the resulting CLIF text WITHOUT
@@ -865,6 +852,16 @@ pub fn clif_for_test(func: &MirFunction) -> Result<String, String> {
     Ok(jit.ctx.func.display().to_string())
 }
 
+/// Test-only hook: JIT-compile a two-`Int`-argument MIR function, run it with
+/// `args`, and return the `i64` result. Used by `tests::cranelift_share_parity`
+/// to check that the REPL JIT backend also runs integer arithmetic correctly.
+/// It drives the SAME `compile_repl_input` path the live REPL uses — it does
+/// not fork it.
+///
+/// # Safety contract
+/// `func` must have exactly two `Int`-typed parameters and an `Int` return,
+/// matching the transmuted `extern "C" fn(i64, i64) -> i64` arity. The pin
+/// fixture guarantees this.
 pub fn run_int_fn_for_test(func: &MirFunction, args: &[i64]) -> Result<i64, String> {
     assert_eq!(
         args.len(),

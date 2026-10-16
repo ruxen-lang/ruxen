@@ -1,5 +1,0 @@
-def main
-  var m: Hash[String, Int] = Hash.new
-  m.entry("a").or_insert_with { || 42 }
-  puts "#{m.size}"
-end

@@ -32,8 +32,7 @@ pub(crate) const COLLECTION_BUILTINS: &[&str] = &["Array", "Hash", "Set"];
 /// original f88d96c fast-path (it predates this table). Generic-args-free
 /// callers only; a parameterised name was never a primitive head.
 ///
-/// Pin: `string_is_class_but_resolves_to_primitive_ty` +
-/// `scalar_class_resolves_to_primitive_ty` in `builtin_anchor_class.rs`.
+/// Covered by every e2e program that types a `String` or a scalar.
 fn primitive_class_ty(name: &str) -> Option<Ty> {
     match name {
         "String" => Some(Ty::String),

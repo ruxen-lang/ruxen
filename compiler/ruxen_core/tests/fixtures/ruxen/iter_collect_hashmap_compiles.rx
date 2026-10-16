@@ -1,6 +1,0 @@
-def main
-  let keys = [1, 2, 3]
-  let vals = [10, 20, 30]
-  let m = keys.zip(vals).to_h
-  puts m.size.to_string
-end

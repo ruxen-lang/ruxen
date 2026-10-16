@@ -200,9 +200,9 @@ constant time. No measurable performance hit.
 | B2        | `builtin_containers_auto_derive_send_sync_when_t_is` | `concurrency_markers.rs`      |
 | B3        | `mutex_new_rejects_non_send_t_e1101`                 | `concurrency_negative.rs`     |
 | B4        | `sharedsync_new_rejects_non_send_t_e1102`            | `concurrency_negative.rs`     |
-| B5        | `channel_rejects_non_send_t_e1101`                   | `concurrency_negative.rs`     |
+| B5        | none (deferred: no `channel[T]()` constructor in v1)  | —                             |
 | B6        | `thread_spawn_rejects_non_send_capture_e1100`        | `concurrency_negative.rs`     |
-| B7        | `thread_spawn_capture_by_ref_requires_sync_e1100`    | `concurrency_negative.rs`     |
+| B7        | none (deferred: closures do not tell move from ref captures in v1) | — |
 | B8        | `thread_spawn_emits_one_diagnostic_per_bad_capture`  | `concurrency_negative.rs`     |
 | B9        | covered by B3 (transitivity)                         | —                             |
 | B10       | `user_class_with_include_send_passes_thread_spawn`   | `concurrency_markers.rs`      |

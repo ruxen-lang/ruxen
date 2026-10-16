@@ -951,13 +951,12 @@ mod helper_tests {
     /// 3. `Ty::Ref(Box::new(Class { name: "Money", .. }))` → returns
     ///    `Some("Money")` (proves the Ref-recursion path).
     ///
-    /// The helper was previously only validated indirectly through the
-    /// Stage-3 behaviour test `user_impl_display_lowers_t_fmt_function` in
-    /// `tests/stdlib_fmt_display_dispatch.rs`. This direct test closes the
-    /// spec gap surfaced in the Stage 2 spec review.
+    /// The helper is otherwise validated only indirectly, through e2e
+    /// `070_interp_display_dispatch`. This direct test closes the spec gap
+    /// surfaced in the Stage 2 spec review.
     #[test]
     fn user_has_impl_display_resolves_class_int_and_ref() {
-        // Canonical impl-Display fixture (mirrors `tests/stdlib_fmt.rs`).
+        // Canonical impl-Display fixture.
         // `class Money` declares a single `cents: Int` field and an
         // `impl Display` block whose `def fmt` matches the
         // `fmt(&mut Formatter) -> Result[(), FmtError]` contract.

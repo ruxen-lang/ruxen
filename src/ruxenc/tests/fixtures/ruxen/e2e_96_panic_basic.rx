@@ -1,5 +1,0 @@
-def main
-  puts "before"
-  panic!("boom")
-  puts "after"
-end

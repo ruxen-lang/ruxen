@@ -1,7 +1,0 @@
-stream start
-got 1
-got 2
-got 3
-count=3
-sum=6
-stream done

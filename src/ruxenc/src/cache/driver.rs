@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use super::hash::{hash_bytes, hash_file, to_hex, CacheKey};
 use super::manifest::{CacheManifest, CachedFile, ManifestLoadResult};
 use super::signature::FileSignature;
-use super::store::{unix_now_secs, CacheStore};
+use super::store::{unix_now_secs, CacheStore, STALE_TMP_AGE};
 
 /// One source file handed to the driver.
 #[derive(Debug, Clone)]
@@ -130,6 +130,7 @@ pub fn build(
     store
         .ensure_dirs()
         .map_err(|e| format!("ensure cache dirs: {}", e))?;
+    store.remove_stale_tmp_files(STALE_TMP_AGE);
 
     // ─── Load or discard the prior manifest ──────────────────────────
     let prior: Option<CacheManifest> = if options.force {

@@ -1,9 +1,0 @@
-early_ret_hit=50
-early_ret_miss=-1
-tail_expr_hit=50
-tail_expr_miss=-1
-early_ret_long=50
-early_ret_some=50
-early_ret_nil=-1
-early_ret_string=big
-early_ret_string_miss=none

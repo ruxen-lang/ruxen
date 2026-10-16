@@ -1,0 +1,17 @@
+# block_on keeps the future's Output type (a Result here, not an erased Int),
+# and Context's waker exposes the no-op wake and wake_by_ref.
+async def make_result() -> Result[Int, Int]
+  Ok(7)
+end
+
+def main
+  let res = block_on(make_result())
+  match res
+    Ok(v)  -> puts "ok=#{v + 1}"
+    Err(e) -> puts "err=#{e}"
+  end
+  let cx = Context.test_dummy()
+  cx.waker.wake_by_ref
+  cx.waker.wake
+  puts "woken"
+end

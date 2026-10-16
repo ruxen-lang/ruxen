@@ -1,0 +1,212 @@
+# Each case works in its own directory under /tmp and recreates it first.
+def fresh_dir(name: &String) -> String
+  let dir = "/tmp/ruxen_std_fs_test/#{name}"
+  let _ = FS.remove_dir_all(&dir)
+  FS.create_dir_all(&dir).expect!("create work dir")
+  dir
+end
+
+def not_found?(e: IoError) -> Bool
+  match e
+    IoError.NotFound -> true
+    _                -> false
+  end
+end
+
+Tester.describe("FS") do |t: &var Tester|
+  t.it("round-trips write and read_to_string") do
+    let file = "#{fresh_dir("round_trip")}/a.txt"
+    FS.write(&file, &"hello fs").expect!("write")
+    let back: String = FS.read_to_string(&file).expect!("read")
+    t.expect(back).to_eq("hello fs")
+  end
+
+  t.it("returns NotFound from read_to_string for a missing file") do
+    let missing = match FS.read_to_string("/no/such/path/ever/exists/here")
+      Ok(_)  -> false
+      Err(e) -> not_found?(e)
+    end
+    t.expect(missing).to_eq(true)
+  end
+
+  t.it("tells files, directories and missing paths apart") do
+    let dir = fresh_dir("kinds")
+    let file = "#{dir}/f.txt"
+    let missing = "#{dir}/nope"
+    FS.write(&file, &"hello").expect!("write")
+    t.expect(FS.exists(&file)).to_eq(true)
+    t.expect(FS.exists(&missing)).to_eq(false)
+    t.expect(FS.is_file(&file)).to_eq(true)
+    t.expect(FS.is_file(&dir)).to_eq(false)
+    t.expect(FS.is_file(&missing)).to_eq(false)
+    t.expect(FS.is_dir(&dir)).to_eq(true)
+    t.expect(FS.is_dir(&file)).to_eq(false)
+    t.expect(FS.is_dir(&missing)).to_eq(false)
+  end
+
+  t.it("lists every entry but . and .. with read_dir") do
+    let dir = fresh_dir("read_dir")
+    FS.write("#{dir}/alpha.txt", &"x").expect!("write alpha")
+    FS.write("#{dir}/beta.txt", &"x").expect!("write beta")
+    FS.write("#{dir}/gamma.txt", &"x").expect!("write gamma")
+    let entries: Array[String] = FS.read_dir(&dir).expect!("read_dir")
+    t.expect(entries.size).to_eq(3)
+    t.expect(entries.include?("alpha.txt")).to_eq(true)
+    t.expect(entries.include?("beta.txt")).to_eq(true)
+    t.expect(entries.include?("gamma.txt")).to_eq(true)
+  end
+
+  t.it("returns Err from read_dir for a missing directory") do
+    let failed = match FS.read_dir("/no/such/dir/ever/exists/here")
+      Ok(_)  -> false
+      Err(_) -> true
+    end
+    t.expect(failed).to_eq(true)
+  end
+
+  t.it("creates a directory with create_dir") do
+    let sub = "#{fresh_dir("create_dir")}/sub"
+    FS.create_dir(&sub).expect!("create_dir")
+    t.expect(FS.is_dir(&sub)).to_eq(true)
+  end
+
+  t.it("creates nested directories with create_dir_all, twice without error") do
+    let dir = fresh_dir("create_dir_all")
+    let nested = "#{dir}/a/b/c"
+    FS.create_dir_all(&nested).expect!("first")
+    t.expect(FS.is_dir("#{dir}/a")).to_eq(true)
+    t.expect(FS.is_dir("#{dir}/a/b")).to_eq(true)
+    t.expect(FS.is_dir(&nested)).to_eq(true)
+    let again = match FS.create_dir_all(&nested)
+      Ok(_)  -> true
+      Err(_) -> false
+    end
+    t.expect(again).to_eq(true)
+  end
+
+  t.it("returns Err from create_dir_all when a file is in the way") do
+    let file = "#{fresh_dir("create_dir_all_conflict")}/file"
+    FS.write(&file, &"x").expect!("write")
+    let failed = match FS.create_dir_all("#{file}/sub")
+      Ok(_)  -> false
+      Err(_) -> true
+    end
+    t.expect(failed).to_eq(true)
+  end
+
+  t.it("reports size and kind in metadata, and Err for a missing path") do
+    let dir = fresh_dir("metadata")
+    let file = "#{dir}/m.txt"
+    FS.write(&file, &"hello metadata!").expect!("write")
+    let m: Metadata = FS.metadata(&file).expect!("file metadata")
+    t.expect(m.size).to_eq(15)
+    t.expect(m.is_file).to_eq(true)
+    t.expect(m.is_dir).to_eq(false)
+    t.expect(m.is_symlink).to_eq(false)
+    let d: Metadata = FS.metadata(&dir).expect!("dir metadata")
+    t.expect(d.is_dir).to_eq(true)
+    t.expect(d.is_file).to_eq(false)
+    let missing = match FS.metadata("/no/such/path/ever/exists/here")
+      Ok(_)  -> false
+      Err(_) -> true
+    end
+    t.expect(missing).to_eq(true)
+  end
+
+  t.it("removes a file with remove_file") do
+    let file = "#{fresh_dir("remove_file")}/gone.txt"
+    FS.write(&file, &"x").expect!("write")
+    FS.remove_file(&file).expect!("remove_file")
+    t.expect(FS.exists(&file)).to_eq(false)
+  end
+
+  t.it("copies a file and returns the byte count") do
+    let dir = fresh_dir("copy")
+    let src = "#{dir}/src.txt"
+    let dst = "#{dir}/dst.txt"
+    FS.write(&src, &"hello copy").expect!("write")
+    t.expect(FS.copy(&src, &dst).expect!("copy")).to_eq(10)
+    let back: String = FS.read_to_string(&dst).expect!("read")
+    t.expect(back).to_eq("hello copy")
+  end
+
+  t.it("returns NotFound from copy for a missing source") do
+    let dir = fresh_dir("copy_missing")
+    let missing = match FS.copy("#{dir}/nope.txt", "#{dir}/dst.txt")
+      Ok(_)  -> false
+      Err(e) -> not_found?(e)
+    end
+    t.expect(missing).to_eq(true)
+  end
+
+  t.it("moves a file with rename") do
+    let dir = fresh_dir("rename")
+    let src = "#{dir}/a.txt"
+    let dst = "#{dir}/b.txt"
+    FS.write(&src, &"renamed content").expect!("write")
+    FS.rename(&src, &dst).expect!("rename")
+    t.expect(FS.exists(&src)).to_eq(false)
+    let back: String = FS.read_to_string(&dst).expect!("read")
+    t.expect(back).to_eq("renamed content")
+  end
+
+  t.it("removes a tree with remove_dir_all without following a symlink") do
+    let dir = fresh_dir("remove_dir_all")
+    let root = "#{dir}/tree"
+    let outside = "#{dir}/outside.txt"
+    FS.create_dir_all("#{root}/sub").expect!("mkdir tree")
+    FS.write("#{root}/a.txt", &"hello").expect!("write a")
+    FS.write("#{root}/sub/b.txt", &"world").expect!("write b")
+    FS.write(&outside, &"must survive").expect!("write outside")
+    FS.symlink(&outside, "#{root}/link").expect!("symlink")
+    FS.remove_dir_all(&root).expect!("remove_dir_all")
+    t.expect(FS.exists(&root)).to_eq(false)
+    t.expect(FS.exists(&outside)).to_eq(true)
+  end
+
+  t.it("resolves a symlink to its target with canonicalize") do
+    let dir: String = FS.canonicalize(&fresh_dir("canonicalize")).expect!("canonicalize dir")
+    let target = "#{dir}/real.txt"
+    let link = "#{dir}/alias.txt"
+    FS.write(&target, &"x").expect!("write")
+    FS.symlink(&target, &link).expect!("symlink")
+    let resolved: String = FS.canonicalize(&link).expect!("canonicalize link")
+    t.expect(resolved).to_eq(target.clone)
+  end
+
+  t.it("creates a symlink that metadata and read_link see") do
+    let dir = fresh_dir("symlink")
+    let target = "#{dir}/real.txt"
+    let link = "#{dir}/alias.txt"
+    FS.write(&target, &"hello symlink").expect!("write")
+    FS.symlink(&target, &link).expect!("symlink")
+    let m: Metadata = FS.metadata(&link).expect!("metadata")
+    t.expect(m.is_symlink).to_eq(true)
+    let back: String = FS.read_link(&link).expect!("read_link")
+    t.expect(back).to_eq(target.clone)
+  end
+
+  t.it("replaces a file with write_atomic and leaves no temp file") do
+    let dir = fresh_dir("write_atomic")
+    let file = "#{dir}/config.toml"
+    FS.write_atomic(&file, &"first contents").expect!("first")
+    let first: String = FS.read_to_string(&file).expect!("read first")
+    t.expect(first).to_eq("first contents")
+    FS.write_atomic(&file, &"second").expect!("second")
+    let second: String = FS.read_to_string(&file).expect!("read second")
+    t.expect(second).to_eq("second")
+    let entries: Array[String] = FS.read_dir(&dir).expect!("read_dir")
+    t.expect(entries.size).to_eq(1)
+  end
+
+  t.it("fails write_atomic under a missing parent without creating it") do
+    let dir = fresh_dir("write_atomic_fail")
+    let parent = "#{dir}/does/not/exist"
+    let failed = match FS.write_atomic("#{parent}/config.toml", &"should not stick")
+      Ok(_)  -> false
+      Err(_) -> true
+    end
+    t.expect(failed).to_eq(true)
+    t.expect(FS.exists("#{dir}/does")).to_eq(false)
+  end
+end

@@ -1,4 +1,0 @@
-drop start
-count_while_parked=1
-count_after_drop=0
-drop done

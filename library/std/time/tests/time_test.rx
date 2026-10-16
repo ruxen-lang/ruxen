@@ -1,0 +1,80 @@
+use std.time.unix_ns
+use std.time.Duration
+use std.time.Instant
+
+Tester.describe("Duration") do |t: &var Tester|
+  t.it("converts from_secs to every unit") do
+    let d = Duration.from_secs(5)
+    t.expect(d.as_millis).to_eq(5000)
+    t.expect(d.as_micros).to_eq(5000000)
+    t.expect(d.as_nanos).to_eq(5000000000)
+  end
+
+  t.it("floors as_secs") do
+    t.expect(Duration.from_millis(1500).as_secs).to_eq(1)
+  end
+
+  t.it("round-trips every from_* and as_* pair") do
+    let ds = [Duration.from_secs(2), Duration.from_millis(2000), Duration.from_micros(2000000), Duration.from_nanos(2000000000)]
+    for d in ds
+      t.expect(d.as_secs).to_eq(2)
+      t.expect(d.as_millis).to_eq(2000)
+      t.expect(d.as_micros).to_eq(2000000)
+      t.expect(d.as_nanos).to_eq(2000000000)
+    end
+  end
+
+  t.it("reads a sub-second value through every accessor") do
+    let d = Duration.from_nanos(1500000000)
+    t.expect(d.as_nanos).to_eq(1500000000)
+    t.expect(d.as_micros).to_eq(1500000)
+    t.expect(d.as_millis).to_eq(1500)
+    t.expect(d.as_secs).to_eq(1)
+  end
+
+  t.it("adds through the operator and add") do
+    let a = Duration.from_millis(750)
+    let b = Duration.from_millis(250)
+    t.expect((a + b).as_millis).to_eq(1000)
+    t.expect(a.add(b).as_millis).to_eq(1000)
+  end
+
+  t.it("saturates subtraction at zero") do
+    let small = Duration.from_secs(1)
+    let big = Duration.from_secs(5)
+    t.expect((small - big).as_nanos).to_eq(0)
+    t.expect(small.sub(big).as_nanos).to_eq(0)
+  end
+end
+
+Tester.describe("Instant") do |t: &var Tester|
+  t.it("reads unix_ns after 2020") do
+    t.expect(unix_ns() > 1577836800000000000).to_eq(true)
+  end
+
+  t.it("never goes backwards across a sleep") do
+    let a = Instant.now
+    Thread.sleep(Duration.from_millis(1))
+    let b = Instant.now
+    t.expect((b - a).as_nanos >= 0).to_eq(true)
+    t.expect(b.duration_since(a).as_nanos >= 0).to_eq(true)
+  end
+
+  t.it("reports a non-negative elapsed") do
+    t.expect(Instant.now.elapsed.as_nanos >= 0).to_eq(true)
+  end
+
+  t.it("sleeps for about the requested time") do
+    let start = Instant.now
+    Thread.sleep(Duration.from_millis(50))
+    let nanos = start.elapsed.as_nanos
+    t.expect(nanos >= 40000000 && nanos <= 200000000).to_eq(true)
+  end
+
+  t.it_panics("panics when duration_since gets a later instant", "earlier is in the future") do
+    let earlier = Instant.now
+    Thread.sleep(Duration.from_millis(1))
+    let later = Instant.now
+    earlier.duration_since(later)
+  end
+end

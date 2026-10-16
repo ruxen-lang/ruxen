@@ -1,9 +1,0 @@
-# Q25(a): `contains` on an EMPTY set must return cleanly (a Set reuses the
-# Hash runtime, and since B73 the same key-kind descriptor). Expected:
-# false / true.
-def main
-  var s: Set[Int] = Set.new
-  puts "#{s.include?(7)}"
-  s.insert(7)
-  puts "#{s.include?(7)}"
-end

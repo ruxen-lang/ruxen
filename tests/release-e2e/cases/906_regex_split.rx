@@ -1,5 +1,0 @@
-def main
-  let csv = "alpha,beta,gamma,delta"
-  let parts = /,/.split(csv)
-  puts "#{parts.size}"
-end

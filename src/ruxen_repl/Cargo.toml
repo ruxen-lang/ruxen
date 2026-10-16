@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+autotests = false
 # Declaring `links` lets downstream build scripts (e.g. ruxen_cli's,
 # which links the unified `ruxen` binary) read this crate's published
 # build-script metadata via `DEP_RUXENRT_*` env vars. We use it to
@@ -38,3 +39,8 @@ ruxen_cli = { path = "../ruxen_cli" }
 
 [lints]
 workspace = true
+
+# One integration-test binary: tests/it, one module per file.
+[[test]]
+name = "it"
+path = "tests/it/main.rs"

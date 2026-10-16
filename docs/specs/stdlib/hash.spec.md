@@ -108,9 +108,8 @@ def hash_it[T: Hashable](a: &T) -> Int
 end
 ```
 
-This is the exact pattern pin-tested by
-`derive_hashable_dispatches_through_trait_bounds` in
-`tests/implicit_mixin_dispatch.rs`.
+This is the exact pattern pinned by e2e
+`2051_derived_ord_hashable_generic_bound.rx`.
 
 ## B6 — Hash code semantics
 
@@ -132,10 +131,10 @@ This is the exact pattern pin-tested by
 
 | Behaviour                                           | Test fn                                               | File                                         |
 |-----------------------------------------------------|-------------------------------------------------------|----------------------------------------------|
-| B1 / B5 — bound dispatches `hash_code` on user types with implicit include | `derive_hashable_dispatches_through_trait_bounds`     | `tests/implicit_mixin_dispatch.rs`             |
+| B1 / B5 — bound dispatches `hash_code` on user types with implicit include | e2e `2051_derived_ord_hashable_generic_bound.rx`      | `tests/release-e2e/cases/`                     |
 | B3 — implicit include rejects non-Hashable field (E0615) | `derive_hash_on_struct_with_non_hash_field_emits_e0615` | `tests/implicit_negatives.rs` (`NotHashable` fixture) |
 | B2 — primitive `String` / `Int` hash via runtime    | covered indirectly via `Hash[String, V]` / `Hash[Int, V]` insert + lookup pin tests | `tests/hashmap_*.rs`                         |
-| B2 v2 follow-up — `T: Hashable` dispatch for primitive `T` | `primitive_int_and_string_dispatch_through_hashable_bound` (`#[ignore]` pending v2) | `tests/implicit_mixin_dispatch.rs`             |
+| B2 v2 follow-up — `T: Hashable` dispatch for primitive `T` | none (link gap tracked in TODO.md Known issues)       | —                                              |
 | B4 — `Hash[K, V]` rejects non-Hashable K             | covered by `ty_is_valid_hash_key` rejection diags     | `tests/hashmap_*.rs`                         |
 
 The B6 stability claims are attested by the v1 release checklist

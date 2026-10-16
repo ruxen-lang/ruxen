@@ -408,7 +408,7 @@ fn test_group_names_keep_source_order() {
 //
 // Each of these formats a source the parser accepts, then re-parses the
 // formatter's output and asserts it still parses. They pin the fixes for the
-// drift catalogued by `tests/formatter_corpus_roundtrip.rs`: the formatter
+// drift catalogued by `syntax_parity::axis_fmt_reparse_identity_and_idempotent`: the formatter
 // must never emit a spelling the current parser rejects.
 
 fn assert_reparses(source: &str) -> String {

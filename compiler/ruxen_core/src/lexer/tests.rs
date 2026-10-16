@@ -698,8 +698,7 @@ fn test_interpolation_precision_spec() {
 /// Pre-fix bug: lexer truncated `area(Shape.Circle(radius: 2.0))` at
 /// the `:` after `radius`, dropping the rest of the expression and
 /// emitting an empty interpolation. Result: `puts "#{...}"` produced
-/// no output (assertion fail in
-/// ruxenc/tests/installed_binary.rs::enum_with_match).
+/// no output (e2e `2079_basic_features_smoke` runs the same call).
 #[test]
 fn test_interpolation_named_arg_colon_is_not_spec() {
     let kinds = lex_kinds("\"#{Shape.Circle(radius: 2.0)}\"");

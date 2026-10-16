@@ -18,13 +18,18 @@
 # Path → command rules (keep in step with the test layout):
 #   compiler/ruxen_core/src/<phase>/**   cargo test -p ruxen_core --lib -- <phase>::
 #     lexer/parser                       + syntax_parity, parser_feature_parity
-#     formatter                          + syntax_parity, formatter_corpus_roundtrip,
-#                                          ruxen_ide format_basics
+#     formatter                          + syntax_parity, ruxen_ide format_basics
 #     mir/borrow_check/async_lowering/codegen  + drop_fixtures
 #     diagnostics/codes.rs, docs/errors  error_code_registry + ruxen_cli explain_long_form
-#   compiler/ruxen_core/tests/<t>.rs     cargo test -p ruxen_core --test <t>
+#   <crate>/tests/it/<m>.rs              cargo test -p <crate> --test it -- <m>::
+#   <crate>/tests/<t>.rs                 cargo test -p <crate> --test <t> (own binary)
+#   <crate>/tests/{it/main.rs,common/**} cargo test -p <crate> --test it
 #   <crate>/tests/fixtures/**            the integration tests that name the fixture
-#   library/std/<pkg>/src/*.rx           stdlib_<pkg>*.rs tests + e2e cases named *_<pkg>*
+#   library/std/<pkg>/{src,tests}/**     cargo build --release --bins, then
+#                                          scripts/test-stdlib.sh <pkg> (when the package has
+#                                          tests/) + stdlib_<pkg>*.rs + e2e cases named *_<pkg>*
+#                                          (the build keeps target/release/ruxen in step with
+#                                          compiler and runtime edits; near no-op when fresh)
 #   library/std/<pkg>/runtime/**         the line above + runtime_abi_derivation, runtime_safety
 #   src/<crate>/**                       cargo test -p <crate> (ruxen_lsp adds ruxen_ide)
 #   tests/release-e2e/{cases,expected}   RUXEN_E2E_CASES=<stems> release_e2e_smoke
@@ -80,11 +85,13 @@ fi
 # instead of associative arrays so the script runs on macOS's bash 3.2.
 FULL=0
 CORE_LIB=""      # ruxen_core --lib filters (module paths)
-CRATE_TESTS=""   # "<crate> <test>" pairs
+CRATE_TESTS=""   # "<crate> <test>" pairs: a tests/it module, or a tests/<t>.rs binary
+IT_CRATES=""     # crates whose whole tests/it binary runs
 CRATES=""        # whole crates
 E2E=""           # release_e2e_smoke case stems
 FULL_SMOKE=0     # the smoke harness itself changed: run every case
 SHELL_CHECK=""   # scripts to syntax-check
+STD_PKGS=""      # stdlib packages whose tests/*.rx run via scripts/test-stdlib.sh
 NOTES=""
 CORE_SRC_CHANGED=0
 
@@ -97,7 +104,7 @@ core_test() { add CRATE_TESTS "ruxen_core $1"; }
 # Integration tests in <crate_dir>/tests that mention a fixture by name.
 tests_naming() {
   local crate="$1" dir="$2" needle="$3" t
-  for t in $(grep -l -F -- "$needle" "$dir"/tests/*.rs 2>/dev/null || true); do
+  for t in $(grep -l -F -- "$needle" "$dir"/tests/*.rs "$dir"/tests/it/*.rs 2>/dev/null || true); do
     add CRATE_TESTS "$crate $(basename "$t" .rs)"
   done
 }
@@ -115,10 +122,11 @@ e2e_named_after_pkg() {
 
 stdlib_pkg_tests() {
   local pkg="$1" t
-  for t in compiler/ruxen_core/tests/stdlib_"$pkg".rs compiler/ruxen_core/tests/stdlib_"$pkg"_*.rs; do
+  for t in compiler/ruxen_core/tests/it/stdlib_"$pkg".rs compiler/ruxen_core/tests/it/stdlib_"$pkg"_*.rs; do
     [ -f "$t" ] && core_test "$(basename "$t" .rs)"
   done
   e2e_named_after_pkg "$pkg"
+  [ -d "library/std/$pkg/tests" ] && add STD_PKGS "$pkg"
 }
 
 crate_of_dir() {
@@ -157,7 +165,7 @@ while IFS= read -r path; do
     compiler/ruxen_core/src/formatter/*)
       CORE_SRC_CHANGED=1
       add CORE_LIB "formatter::"
-      core_test syntax_parity; core_test formatter_corpus_roundtrip
+      core_test syntax_parity
       add CRATE_TESTS "ruxen_ide format_basics" ;;
     compiler/ruxen_core/src/mir/*|compiler/ruxen_core/src/borrow_check/*|\
     compiler/ruxen_core/src/async_lowering/*|compiler/ruxen_core/src/codegen/*)
@@ -177,6 +185,14 @@ while IFS= read -r path; do
       fi ;;
 
     # ── integration tests and their fixtures ───────────────────────
+    compiler/*/tests/it/*.rs|src/*/tests/it/*.rs)
+      dir="${path%%/tests/*}"; crate="$(crate_of_dir "$dir")"
+      [ -f "$path" ] || { note "$path was deleted"; add IT_CRATES "$crate"; continue; }
+      if [ "$(basename "$path")" = main.rs ]; then
+        add IT_CRATES "$crate"
+      else
+        add CRATE_TESTS "$crate $(basename "$path" .rs)"
+      fi ;;
     compiler/*/tests/*/*|src/*/tests/*/*)
       dir="${path%%/tests/*}"; crate="$(crate_of_dir "$dir")"
       sub="${path#"$dir"/tests/}"
@@ -222,7 +238,7 @@ while IFS= read -r path; do
       fi ;;
     tests/release-e2e/*) note "$path is harness data; run tests/release-e2e/run.sh by hand if it matters" ;;
 
-    examples/*) core_test parser_feature_parity; core_test syntax_parity ;;
+    examples/*) core_test syntax_parity ;;
 
     *) FULL=1; note "$path matches no rule" ;;
   esac
@@ -248,22 +264,48 @@ else
     CMDS+=("cargo test -p ruxen_core --lib -- $lib_filters")
   fi
 
-  # One cargo invocation per crate with every --test it needs.
+  # Per crate: one `--test it` run filtered to the touched modules (the
+  # whole binary when tests/it/main.rs changed), plus one run naming every
+  # standalone tests/<t>.rs binary.
   pairs="$(uniq_lines "$CRATE_TESTS")"
-  for crate in $(printf '%s\n' "$pairs" | awk 'NF {print $1}' | sort -u); do
+  it_crates="$(uniq_lines "$IT_CRATES")"
+  for crate in $(printf '%s\n%s\n' "$pairs" "$it_crates" | awk 'NF {print $1}' | sort -u); do
     in_crates "$crate" && continue
-    args=""
+    case "$crate" in
+      ruxen_core) dir=compiler/ruxen_core ;;
+      *) dir="src/$crate" ;;
+    esac
+    filters=""; bins=""
     for t in $(printf '%s\n' "$pairs" | awk -v c="$crate" '$1 == c {print $2}'); do
       # The smoke test is #[ignore]-gated; a plain --test would skip it.
       [ "$t" = release_e2e_smoke ] && { FULL_SMOKE=1; continue; }
-      args="$args --test $t"
+      if [ -f "$dir/tests/$t.rs" ]; then
+        bins="$bins --test $t"
+      else
+        filters="$filters $t::"
+      fi
     done
-    [ -n "$args" ] && CMDS+=("cargo test -p $crate$args")
+    if printf '%s\n' "$it_crates" | grep -qx -- "$crate"; then
+      CMDS+=("cargo test -p $crate --test it")
+    elif [ -n "$filters" ]; then
+      CMDS+=("cargo test -p $crate --test it --$filters")
+    fi
+    [ -n "$bins" ] && CMDS+=("cargo test -p $crate$bins")
   done
 
   while IFS= read -r crate; do
     [ -n "$crate" ] && CMDS+=("cargo test -p $crate")
   done <<< "$crates"
+fi
+
+# Stdlib package tests run against target/release/ruxen, so always rebuild
+# it first: a stale binary would test the new stdlib with an old compiler or
+# runtime, and a missing one makes test-stdlib.sh exit 2. Cargo makes this a
+# near no-op when the build is fresh.
+std_pkgs="$(uniq_lines "$STD_PKGS" | tr '\n' ' ' | sed 's/ $//')"
+if [ -n "$std_pkgs" ]; then
+  CMDS+=("cargo build --release --bins")
+  CMDS+=("scripts/test-stdlib.sh $std_pkgs")
 fi
 
 e2e="$(uniq_lines "$E2E" | tr '\n' ',' | sed 's/,$//')"

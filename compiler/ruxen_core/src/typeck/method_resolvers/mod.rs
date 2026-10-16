@@ -237,10 +237,8 @@ mod golden {
         // `Unit` vs C `char*` — pin `48_borrow_var` proves the Unit tail).
         // Both are genuinely irreducible (no single `.rx` return type
         // expresses surface + ABI). `clone`/`to_s` MIGRATED earlier (wire-
-        // identical aliases). End-to-end coverage: builtin_receiver_bridge
-        // pins + e2e (`313_string_remove`, `315_string_push`,
-        // `311_string_insert_str`, `630_string_insert_char`,
-        // `631_string_push_str`).
+        // identical aliases). End-to-end coverage: `std/string`
+        // `build_test.rx` (remove, push, push_str, insert, insert_str).
         for m in ["remove", "push", "push_str", "insert", "insert_str"] {
             v.push(c(Ty::String, m));
         }
@@ -254,8 +252,8 @@ mod golden {
         // yield `String` (the C symbols `malloc` an owned buffer);
         // `parse_uint` is declared on `class String`
         // (`def parse_uint -> Result[USize, Error]`). End-to-end coverage:
-        // `45_string_methods`, `113_string_methods_chain`,
-        // `632_str_to_lower_upper`, `633_str_parse_uint`.
+        // the `std/string` package tests (`transform_test.rx`,
+        // `convert_test.rx`).
 
         // ── ParseIntError / ParseFloatError migrated to .rx ────────
         // `.message` resolves from string/src/parse_{int,float}_error.rx;
@@ -274,7 +272,7 @@ mod golden {
         // MIGRATED to array.rx (their `ruxen_vec_get_opt` aliases are
         // admitted now that E0722 compares wire shapes), so they resolve
         // via the bridge and return None under the empty table. End-to-end
-        // `.rx` resolution is covered by the builtin_receiver_bridge pins
+        // `.rx` resolution is covered by the `std/array` package tests
         // + the e2e suite.
         // `map`/`select`/`reject`/`all?`/`any?`/`partition`/`each_with_index`/
         // `find`/`index`/`sort_by`/`reduce` MIGRATED to real `.rx` bodies
@@ -298,15 +296,15 @@ mod golden {
         // values/to_a/insert/remove/clear) resolves from map.rx via the
         // bridge; with an EMPTY symbol table they return None, so there
         // is NOTHING to pin here. End-to-end resolution is covered by
-        // `hash_resolves_to_ty_map` + the e2e suite.
+        // the `std/map` package tests + the e2e suite.
 
         // ── Ty::Set structural — fully migrated to set.rx ──────────
         // Every Set method (new/with_capacity/size/empty?/include?/to_a/
         // union/intersection/difference/insert/remove/clear) resolves
         // from set.rx via the bridge; with an EMPTY symbol table they
         // return None, so there is NOTHING to pin here. End-to-end
-        // resolution is covered by `set_methods_resolve_via_general_path`
-        // + the e2e suite.
+        // resolution is covered by the `std/set` package tests + the e2e
+        // suite.
 
         // ── Ty::Option residual (shadow the bridge) ────────────────
         // The non-closure Option methods (unwrap/expect/unwrap_or/nil?/
@@ -434,7 +432,7 @@ mod golden {
         // return None and are NO LONGER pinned here (same treatment as the
         // `.rx`-bridged surface). End-to-end behaviour is pinned by the e2e
         // fixtures (`2xx_implicit_clone_*`, `49_clone_explicit`,
-        // `145_array_clone`, `810_to_s_universal`, `2xx_implicit_debug_*`,
+        // `std/array` `mutate_test.rx`, `810_to_s_universal`, `2xx_implicit_debug_*`,
         // `208_implicit_default`, `216_derive_default_include`).
 
         // ── Effectful-arm DIAGNOSTIC pins ──────────────────────────

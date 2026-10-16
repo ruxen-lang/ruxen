@@ -185,10 +185,8 @@ can't drain to the kernel buffer within the budget returns
 A byte sequence containing `0x00` (e.g. `[0xFF, 0x00, 0x41, 0x00, 0x42]`)
 sent via `TcpStream.write(&bytes)` and read back via `TcpStream.read(
 &var buf)` round-trips with all bytes intact — no truncation at the
-embedded NUL. Pinned by `tcp_stream_class_read_is_binary_safe` and
-e2e case `541_tcp_stream_connect_write_read` (which exercises a
-clean roundtrip; the binary-safety guarantee piggy-backs on the
-same `ruxen_tcp_read_bytes` path).
+embedded NUL. Pinned by "reads embedded zero bytes" in
+`library/std/net/tests/tcp_test.rx`.
 
 ### C16 — Flat `tcp_*` free fns are no longer exposed
 
@@ -204,30 +202,28 @@ symbols (`ruxen_tcp_connect`, `ruxen_tcp_listen`,
 
 | Behaviour | Test fn                                            | File                           |
 |-----------|----------------------------------------------------|--------------------------------|
-| C1 (ok)   | `tcp_listener_class_bind_ok`                       | `stdlib_net.rs`                |
-| C1 (err)  | `tcp_listener_class_bind_malformed_returns_err`    | `stdlib_net.rs`                |
-| C2        | `tcp_listener_class_close_idempotent`              | `stdlib_net.rs`                |
-| C3        | `tcp_listener_class_drop_closes_fd`                | `stdlib_net.rs`                |
-| C4        | `tcp_listener_class_local_addr`                    | `stdlib_net.rs`                |
-| C5        | `tcp_listener_class_set_nonblocking_would_block`   | `stdlib_net.rs`                |
-| C6, C7 (ok), C8, C9 | `tcp_class_loopback_roundtrip`           | `stdlib_net.rs`                |
-| C7 (err)  | `tcp_stream_class_connect_unreachable_returns_err` | `stdlib_net.rs`                |
-| C10       | `tcp_stream_class_peer_addr`                       | `stdlib_net.rs`                |
-| C11       | `tcp_stream_class_shutdown_write_then_read_eof`    | `stdlib_net.rs`                |
-| C12       | `tcp_stream_class_close_idempotent`                | `stdlib_net.rs`                |
-| C13       | `tcp_stream_class_drop_closes_fd`                  | `stdlib_net.rs`                |
+| C1 (ok)   | "binds to port 0 and reports a 127.0.0.1 local_addr" | `library/std/net/tests/tcp_test.rx` |
+| C1 (err)  | "returns Err from bind for a malformed address" | `library/std/net/tests/tcp_test.rx` |
+| C2        | "closes idempotently, then local_addr is Err" | `library/std/net/tests/tcp_test.rx` |
+| C3        | "releases the fd on drop across 200 binds" | `library/std/net/tests/tcp_test.rx` |
+| C4        | "binds to port 0 and reports a 127.0.0.1 local_addr" | `library/std/net/tests/tcp_test.rx` |
+| C5        | "returns WouldBlock from accept when nonblocking and idle" | `library/std/net/tests/tcp_test.rx` |
+| C6, C7 (ok), C8, C9 | "delivers written bytes to the accepted peer, then EOF after close" | `library/std/net/tests/tcp_test.rx` |
+| C7 (err)  | "returns Err from connect when nothing listens" | `library/std/net/tests/tcp_test.rx` |
+| C10       | "reports the listener as peer_addr" | `library/std/net/tests/tcp_test.rx` |
+| C11       | "shows EOF to the peer after shutdown(Write)" | `library/std/net/tests/tcp_test.rx` |
+| C12       | "closes idempotently" | `library/std/net/tests/tcp_test.rx` |
+| C13       | "releases the fd on drop across 200 connections" | `library/std/net/tests/tcp_test.rx` |
 | C14       | `shutdown_tag_values_match_runtime_and_resolver`   | `shutdown_tag_stability.rs`    |
-| C15       | `tcp_class_prelude_auto_import_resolves`           | `stdlib_net.rs`                |
-| C16       | `flat_tcp_free_fns_removed_from_resolver`          | `stdlib_net.rs`                |
-| C17       | `tcp_stream_class_set_read_timeout_would_block`    | `stdlib_net.rs`                |
-| C18       | `tcp_stream_class_set_write_timeout_resolves`      | `stdlib_net.rs`                |
-| C19       | `tcp_stream_class_read_is_binary_safe`             | `stdlib_net.rs`                |
+| C15       | "the `use std.net.{TcpListener, TcpStream, Shutdown}` line" | `library/std/net/tests/tcp_test.rx` |
+| C16       | retired syntax, no pin                             |                                |
+| C17       | "returns WouldBlock from read after the read timeout on an idle peer" | `library/std/net/tests/tcp_test.rx` |
+| C18       | "accepts a write timeout" | `library/std/net/tests/tcp_test.rx` |
+| C19       | "reads embedded zero bytes" | `library/std/net/tests/tcp_test.rx` |
 
-The original Phase-3 flat-fn roundtrip / SIGINT-echo-server pin
-tests have been migrated to use `TcpListener` / `TcpStream` and now
-live in `stdlib_net.rs` under the names above (the SIGINT echo
-server fixture also moved to the class surface — same scenario, new
-types).
+The SIGINT echo server test stays in `stdlib_net.rs`
+(`blocking_tcp_echo_server_with_graceful_sigint_shutdown`): the host
+process has to send the signal.
 
 ---
 

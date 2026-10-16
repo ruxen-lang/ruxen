@@ -1,0 +1,31 @@
+# String == must compare bytes, not pointers, when one side is a binding
+# destructured from `Ok(s)` and the other a String parameter, and when both
+# sides are String parameters.
+def make_result(payload: String) -> Result[String, Int]
+  Ok(payload)
+end
+
+def check_strings(s: String, needle: String) -> Int
+  if s == needle
+    1
+  else
+    0
+  end
+end
+
+def compare_with(needle: String) -> Int
+  match make_result("hello")
+    Ok(s)  -> if s == needle
+                1
+              else
+                0
+              end
+    Err(_) -> 0
+  end
+end
+
+def main
+  puts "params=#{check_strings("hello", "hello")}"
+  puts "destructured=#{compare_with("hello")}"
+  puts "differ=#{compare_with("help")}"
+end

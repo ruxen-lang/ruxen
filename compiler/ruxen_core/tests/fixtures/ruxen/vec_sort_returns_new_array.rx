@@ -1,7 +1,0 @@
-def main
-  var v: Array[Int] = Array.new
-  v.push(2)
-  v.push(1)
-  let s: Array[Int] = v.sort
-  puts "#{s.size}"
-end

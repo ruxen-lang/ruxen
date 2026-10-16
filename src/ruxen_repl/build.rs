@@ -159,7 +159,7 @@ fn main() {
         // on the cc invocation for every artifact this crate produces
         // (lib, bins, AND integration test binaries). The `link-lib=
         // framework=...` form alone was not propagating to the
-        // tests/repl_tests binary's link command on this toolchain.
+        // integration test binary's link command on this toolchain.
         println!("cargo:rustc-link-arg=-framework");
         println!("cargo:rustc-link-arg=Security");
         println!("cargo:rustc-link-lib=framework=Security");

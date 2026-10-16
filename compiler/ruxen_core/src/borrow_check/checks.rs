@@ -436,8 +436,7 @@ impl<'a> BorrowChecker<'a> {
         // `include?(needle: &String)` borrows but `needle` is an owned `String`
         // value falsely reports `value used after move` (E1001) — the owned
         // value is auto-referenced to `&String` at the call site, never
-        // consumed. (Pin: release-e2e 649_ffi_borrowed_string_arg + the
-        // borrow-check pin in tests/q29_ffi_borrowed_string.rs.)
+        // consumed. (Pin: release-e2e 649_ffi_borrowed_string_arg.)
         let receiver_home = {
             let shown = object.ty.peel_refs().to_string();
             shown.split('[').next().unwrap_or(&shown).to_string()

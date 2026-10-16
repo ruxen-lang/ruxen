@@ -30,4 +30,8 @@ def main()
     v
   end
   puts "#{clamped.join(",")}"
+
+  # A no-parameter `do ... end` block using `_1`.
+  let quintupled = xs.map do _1 * 5 end
+  puts "#{quintupled.join(",")}"
 end

@@ -1,0 +1,23 @@
+Tester.describe("Path") do |t: &var Tester|
+  t.it("joins, splits and inspects a path") do
+    let p = Path.join(&"/usr/local", &"bin/ruxen.rx")
+    t.expect(p.clone).to_eq("/usr/local/bin/ruxen.rx")
+    t.expect(Path.parent(&p)).to_eq("/usr/local/bin")
+    t.expect(Path.file_name(&p)).to_eq("ruxen.rx")
+    t.expect(Path.extname(&p)).to_eq("rx")
+  end
+
+  t.it("lets an absolute second part override the first on join") do
+    t.expect(Path.join(&"/etc", &"/usr/bin")).to_eq("/usr/bin")
+  end
+
+  t.it("returns an empty extension when there is none") do
+    t.expect(Path.extname(&"/foo/bar")).to_eq("")
+    t.expect(Path.extname(&"/foo/.hidden")).to_eq("")
+  end
+
+  t.it("detects an absolute path") do
+    t.expect(Path.is_absolute(&"/etc")).to_eq(true)
+    t.expect(Path.is_absolute(&"foo/bar")).to_eq(false)
+  end
+end

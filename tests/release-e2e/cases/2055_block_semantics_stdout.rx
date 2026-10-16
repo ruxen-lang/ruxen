@@ -1,0 +1,126 @@
+# Block and yield semantics observable on stdout: auto-call defaults, yielding
+# two &var refs, inferred block param types, explicit &block on a method
+# (block, parens, paren-less), block_given?, yield self, paren-less string args.
+def greet(n: Int = 5) -> Int
+  n
+end
+
+class Ui
+  n: Int
+  def init
+    self.n = 0
+  end
+  def bump -> nil
+    self.n = self.n + 1
+  end
+end
+
+class Col
+  n: Int
+  def init
+    self.n = 0
+  end
+  def add -> nil
+    self.n = self.n + 1
+  end
+end
+
+class App
+  ui: Ui
+  root: Col
+  def init
+    self.ui = Ui.new
+    self.root = Col.new
+  end
+end
+
+def build_app(&block: Fn[(&var Ui, &var Col) -> nil]) -> App
+  var app = App.new
+  yield(&var app.ui, &var app.root)
+  app
+end
+
+def build(&block: Fn[(&var Col) -> nil]) -> Col
+  var col = Col.new
+  yield(&var col)
+  col
+end
+
+class Widget
+  tag: Int
+  def init
+    self.tag = 5
+  end
+  def build(&block: Fn[(Int) -> nil]) -> nil
+    if block_defined?
+      yield self.tag
+    else
+      puts "no-block"
+    end
+  end
+  def with_self -> nil
+    yield self
+  end
+  def show -> nil
+    puts "widget=#{self.tag}"
+  end
+end
+
+class Sink
+  acc: String
+  def init
+    self.acc = ""
+  end
+  def put(s: &String) -> nil
+    self.acc = "#{self.acc}#{s}"
+  end
+  def show -> nil
+    puts "#{self.acc}"
+  end
+end
+
+def maybe(&block: Fn[() -> nil])
+  if block_given?
+    yield
+  else
+    puts "none"
+  end
+end
+
+def main
+  let r = greet
+  puts "#{r}"
+
+  var app = build_app do |ui: &var Ui, root: &var Col|
+    ui.bump
+    ui.bump
+    root.add
+  end
+  puts "ui=#{app.ui.n} root=#{app.root.n}"
+
+  var col = build do |c|
+    c.add
+  end
+  puts "n=#{col.n}"
+
+  var w = Widget.new
+  w.build do |t|
+    puts "tag=#{t}"
+  end
+  w.build()
+  w.build
+
+  w.with_self do |it|
+    it.show
+  end
+
+  maybe do
+    puts "yes"
+  end
+  maybe
+
+  var s = Sink.new
+  s.put "x"
+  s.put "y"
+  s.show
+end

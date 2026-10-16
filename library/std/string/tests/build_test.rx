@@ -1,0 +1,58 @@
+Tester.describe("String building and mutation") do |t: &var Tester|
+  t.it("new and with_capacity start empty") do
+    let s = String.new
+    t.expect(s.size).to_eq(0)
+    t.expect(s.empty?).to_eq(true)
+    let c = String.with_capacity(64)
+    t.expect(c.size).to_eq(0)
+    t.expect(c.empty?).to_eq(true)
+  end
+
+  t.it("as_str, to_string, bytes and into_bytes") do
+    let s = "hello"
+    let view = s.as_str
+    t.expect(view.size).to_eq(5)
+    t.expect(view).to_eq("hello")
+    let copy = "ruxen".to_string
+    t.expect(copy).to_eq("ruxen")
+    t.expect("hi".bytes.size).to_eq(2)
+    t.expect("hi".into_bytes.size).to_eq(2)
+  end
+
+  t.it("clear, truncate and remove shrink in place") do
+    var s = "hello"
+    s.clear
+    t.expect(s.size).to_eq(0)
+    t.expect(s.empty?).to_eq(true)
+    var w = "hello world"
+    w.truncate(5)
+    t.expect(w).to_eq("hello")
+    var r = "hello"
+    let _c = r.remove(0)
+    t.expect(r).to_eq("ello")
+  end
+
+  t.it("push, push_str, insert and insert_str grow in place") do
+    var s = "hi"
+    s.push(?\u{21})
+    t.expect(s).to_eq("hi!")
+    var p = "foo"
+    p.push_str("bar")
+    t.expect(p).to_eq("foobar")
+    var i = "ac"
+    i.insert(1, 98)
+    t.expect(i).to_eq("abc")
+    var w = "hello world"
+    w.insert_str(5, ",")
+    t.expect(w).to_eq("hello, world")
+  end
+
+  t.it("+ and += concatenate") do
+    let a = "foo"
+    let b = "bar"
+    t.expect(a + b).to_eq("foobar")
+    var s = "foo"
+    s += "bar"
+    t.expect(s).to_eq("foobar")
+  end
+end

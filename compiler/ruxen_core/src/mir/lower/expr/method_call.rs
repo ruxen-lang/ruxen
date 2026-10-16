@@ -54,8 +54,7 @@
 //!   `lookup_ffi_alias` (miss → unchanged-mangled), preserving the
 //!   pre-§B1 caller surface.
 //!
-//! The pin test `compiler/ruxen_core/tests/ffi_alias_single_entry.rs`
-//! locks in: no caller outside `mir/lower/mod.rs` accesses
+//! Invariant: no caller outside `mir/lower/mod.rs` accesses
 //! `ffi_alias_map` directly.
 
 use super::super::*;

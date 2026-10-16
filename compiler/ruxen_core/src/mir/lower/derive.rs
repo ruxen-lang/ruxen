@@ -1409,7 +1409,7 @@ impl<'a> Lowerer<'a> {
     /// The caller selects this route from the LEFT operand's type alone,
     /// so this checks the right operand is the SAME nominal type before
     /// walking any slot. It very often is not: `m == 0` is the null-check
-    /// idiom for an FFI handle (`703_mutex_new_repro`), and reading
+    /// idiom for an FFI handle (`Mutex.new(7) == 0`), and reading
     /// `Mutex`'s slots off an `Int` literal is nonsense. A mismatch falls
     /// back to the plain whole-value comparison, which is the semantics
     /// such a pairing has always had.

@@ -1,8 +1,0 @@
-receiver=6
-chained 0:4
-chained 1:5
-chained 2:6
-bound 0:4
-bound 1:5
-bound 2:6
-nested-chain=4

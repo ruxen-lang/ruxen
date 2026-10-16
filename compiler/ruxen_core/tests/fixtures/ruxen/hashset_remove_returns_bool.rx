@@ -1,6 +1,0 @@
-def main
-  var s: Set[Int] = Set.new
-  s.insert(1)
-  let r: Bool = s.remove(1)
-  puts "#{r}"
-end
