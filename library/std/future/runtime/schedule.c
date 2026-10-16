@@ -1,4 +1,5 @@
 #include "../../core/runtime/runtime.h"
+#include "future_rt.h"
 
 /* §4.6 Retry / Schedule — C helper for RetryFuture child teardown.
  *
@@ -10,24 +11,11 @@
  * timer) or the current attempt `any Future` — via the compiler-synthesised
  * `Drop_dynamic_drop`, then free the child's heap block. This is the §4.6
  * drop-correctness story: a cancelled retry deterministically tears down its
- * parked backoff timer / attempt. Mirrors `ruxen_stream_drop_inner`.
+ * parked backoff timer / attempt. Shares `ruxen_future_drop_and_free` (future_rt.h) with `ruxen_stream_drop_inner`.
  */
 
 #include <stdint.h>
 #include <stdlib.h>
-
-/* The compiler-synthesised single-helper that routes a future's `def drop`
- * through the Drop vtable slot in its class_info (§4.1 narrow path; emitted for
- * every Future class). Declared `__weak` so a program with no future at all
- * still links — then the call is a guarded no-op. */
-__attribute__((weak)) void Drop_dynamic_drop(int64_t self);
-
-/* The compiler-synthesised dynamic poll dispatch helper (mixin_vtables §B5),
- * emitted for any program with a `Future`-including class. Takes the future's
- * heap ptr + the Context heap ptr (both i64), returns the `Poll[T]` heap ptr.
- * SAME symbol the scheduler / Race / Queue use — this is the established
- * dyn-poll mechanism, NOT new dispatch machinery. */
-int64_t Future_dynamic_poll(int64_t self, int64_t ctx);
 
 /* §4.6 RetryFuture inner-poll step (mirrors `ruxen_race_step`). The `RetryFuture`
  * holds its current attempt as `any Future` whose `poll -> Poll[Self.Output]`
@@ -51,7 +39,6 @@ int64_t Future_dynamic_poll(int64_t self, int64_t ctx);
  * is freed here once decoded (this C caller is its only owner, as in the
  * scheduler's `ruxen_poll_is_ready`); the Ready payload, the `Result[Int,Int]`,
  * is not freed. */
-#define RUXEN_POLL_READY_TAG    0
 #define RUXEN_RESULT_OK_TAG     0
 static _Thread_local int64_t t_retry_inner_value = 0;
 
@@ -102,13 +89,7 @@ int64_t ruxen_retry_inner_value(void) {
  * or by an outer Scope/Race cancel via Drop_dynamic_drop), so no re-entrancy
  * guard is needed here. */
 void ruxen_retry_drop_child(int64_t child_ptr) {
-    if (child_ptr == 0) {
-        return;
-    }
-    if (Drop_dynamic_drop) {
-        Drop_dynamic_drop(child_ptr);
-    }
-    ruxen_dealloc((void *)(uintptr_t)child_ptr);
+    ruxen_future_drop_and_free(child_ptr);
 }
 
 /* Alias for the attempt-inner child — same teardown. Two names keep the `.rx`

@@ -110,11 +110,16 @@ pub struct Lowerer<'a> {
     /// codegen elides — the arg-count mismatch at the call site). The synthesis
     /// already knows the concrete receiver `Ty`, so it supplies it here.
     self_ty_override: Option<Ty>,
-    /// Set of class names that have a user-defined `def drop` (typically
+    /// DefIds of the classes that have a user-defined `def drop` (typically
     /// inside an `impl Drop` block). Consulted by `insert_drops` so that
     /// scope-exit cleanup of an instance of such a class emits a call to
     /// the user's `{ClassName}_drop` method before the no-op `MirInst::Drop`.
-    user_drop_classes: HashSet<String>,
+    /// A `Ty::Class` name is matched through [`drops::is_drop_class`].
+    user_drop_classes: HashSet<DefId>,
+    /// The `Future` and `Stream` async-protocol mixins, resolved once from
+    /// the symbol table. `None` when the program has no such mixin.
+    future_mixin: Option<DefId>,
+    stream_mixin: Option<DefId>,
     /// Active inside a closure body during lowering: for each captured
     /// `DefId`, the (slot_index_in_captures_struct, storage_kind). This
     /// lets `VarRef`/`Assign`/`CompoundAssign` on a captured variable
@@ -154,6 +159,10 @@ pub struct Lowerer<'a> {
     /// its receiver instantiation's base is in this set — otherwise the
     /// opaque `{Class}_{method}` fallback is kept.
     mono_emitted: HashSet<String>,
+    /// MIR function names of the opaque (un-monomorphised) bodies emitted
+    /// for eligible generic classes. Such a body is live only when a
+    /// reachable function calls it; see `prune_unmonomorphised_bodies`.
+    opaque_generic_bodies: HashSet<String>,
     /// Real (non-FFI) body methods defined directly on an FFI-shell
     /// generic builtin class (`Array[T]`, `Option[T]`, `Result[T,E]`).
     /// Keyed by the generic-STRIPPED mangled name (`Array_map`,
@@ -268,6 +277,14 @@ struct LoopFrame {
     body_locals: Vec<LocalId>,
 }
 
+/// The DefId of the async-protocol mixin named `name` (`Future`, `Stream`).
+fn protocol_mixin(symbols: &SymbolTable, name: &str) -> Option<DefId> {
+    symbols
+        .named(name)
+        .find(|def| matches!(def.kind, crate::resolve::symbols::DefKind::Trait { .. }))
+        .map(|def| def.id)
+}
+
 impl<'a> Lowerer<'a> {
     pub fn new(symbols: &'a SymbolTable) -> Self {
         Lowerer {
@@ -287,6 +304,8 @@ impl<'a> Lowerer<'a> {
             universal_kernel_needed: HashMap::new(),
             self_ty_override: None,
             user_drop_classes: HashSet::new(),
+            future_mixin: protocol_mixin(symbols, "Future"),
+            stream_mixin: protocol_mixin(symbols, "Stream"),
             capture_map: HashMap::new(),
             captures_ptr_local: None,
             initialized_heap_locals: HashSet::new(),
@@ -295,6 +314,7 @@ impl<'a> Lowerer<'a> {
             mono_classes: HashMap::new(),
             mono_instances: HashMap::new(),
             mono_emitted: HashSet::new(),
+            opaque_generic_bodies: HashSet::new(),
             builtin_head_mono_instances: Vec::new(),
             builtin_head_mono_emitted: HashSet::new(),
             mono_fns: HashMap::new(),
@@ -365,33 +385,23 @@ impl<'a> Lowerer<'a> {
     /// stringified callee: a concrete receiver carrying a bounded generic ARG
     /// (`Array[T: Showable]`) is a sound builtin call and must return false.
     fn receiver_is_unresolved_bound(&self, ty: &Ty) -> bool {
-        let mut cur = ty;
-        loop {
-            match cur {
-                Ty::Ref(inner)
-                | Ty::RefMut(inner)
-                | Ty::RefLifetime(_, inner)
-                | Ty::RefMutLifetime(_, inner) => cur = inner,
-                Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
-                    // Unbounded `[T]` is never dispatched on (a bare type param
-                    // with no bounds never names a bound method). A callable
-                    // bound (`Fn`/`FnMut`/`FnOnce`, e.g. `any Fn[Fn(T) -> U]`)
-                    // is dispatched by the closure `.call` mechanism, not by a
-                    // nominal `{Type}_{method}` mangle, so it never produces a
-                    // bound-placeholder callee — exclude it. Only a genuine
-                    // user-mixin bound with no unique implementor yields the
-                    // placeholder this guard rejects.
-                    if bounds.is_empty()
-                        || bounds
-                            .iter()
-                            .any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce"))
-                    {
-                        return false;
-                    }
-                    return self.unique_bound_impl(bounds).is_none();
+        match ty.peel_refs() {
+            Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
+                // Unbounded `[T]` is never dispatched on (a bare type param
+                // with no bounds never names a bound method). A callable
+                // bound (`Fn`/`FnMut`/`FnOnce`, e.g. `any Fn[Fn(T) -> U]`)
+                // is dispatched by the closure `.call` mechanism, not by a
+                // nominal `{Type}_{method}` mangle, so it never produces a
+                // bound-placeholder callee — exclude it. Only a genuine
+                // user-mixin bound with no unique implementor yields the
+                // placeholder this guard rejects.
+                if bounds.is_empty() || bounds.iter().any(crate::hir::types::MixinRef::is_fn_family)
+                {
+                    return false;
                 }
-                _ => return false,
+                self.unique_bound_impl(bounds).is_none()
             }
+            _ => false,
         }
     }
 
@@ -410,19 +420,10 @@ impl<'a> Lowerer<'a> {
     }
 
     fn class_has_method(&self, class_name: &str, method_name: &str) -> bool {
-        self.symbols.iter().any(|def| {
-            let crate::resolve::symbols::DefKind::Method { parent, .. } = &def.kind else {
-                return false;
-            };
-            self.symbols
-                .get(*parent)
-                .map(|parent_def| {
-                    parent_def.name == class_name
-                        && (def.name == method_name
-                            || def.name.starts_with(&format!("{}__overload", method_name)))
-                })
-                .unwrap_or(false)
-        })
+        self.symbols
+            .methods_named(class_name, method_name)
+            .next()
+            .is_some()
     }
 
     fn class_has_method_accepting_args(
@@ -431,20 +432,14 @@ impl<'a> Lowerer<'a> {
         method_name: &str,
         args: &[HirExpr],
     ) -> bool {
-        self.symbols.iter().any(|def| {
-            let crate::resolve::symbols::DefKind::Method { parent, signature } = &def.kind else {
-                return false;
-            };
-            self.symbols
-                .get(*parent)
-                .map(|parent_def| {
-                    parent_def.name == class_name
-                        && (def.name == method_name
-                            || def.name.starts_with(&format!("{}__overload", method_name)))
-                        && self.method_signature_accepts_args(signature, args)
-                })
-                .unwrap_or(false)
-        })
+        self.symbols
+            .methods_named(class_name, method_name)
+            .any(|def| match &def.kind {
+                crate::resolve::symbols::DefKind::Method { signature, .. } => {
+                    self.method_signature_accepts_args(signature, args)
+                }
+                _ => false,
+            })
     }
 
     fn method_signature_accepts_args(
@@ -470,9 +465,9 @@ impl<'a> Lowerer<'a> {
                 // mangled `text(closure)` to the `text(&str)` overload and
                 // stored the closure pointer as a String (heap corruption).
                 let arg_is_callable =
-                    matches!(arg.kind, HirExprKind::Closure { .. }) || ty_is_callable(&arg.ty);
+                    matches!(arg.kind, HirExprKind::Closure { .. }) || arg.ty.is_callable();
                 if arg_is_callable {
-                    return ty_is_callable(&param.ty);
+                    return param.ty.is_callable();
                 }
                 arg.ty.is_infer()
                     || arg.ty.is_error()
@@ -521,24 +516,16 @@ impl<'a> Lowerer<'a> {
         method_name: &str,
     ) -> Vec<(String, crate::resolve::symbols::FnSignature)> {
         let base = class_name.split('[').next().unwrap_or(class_name);
-        let overload_prefix = format!("{}__overload", method_name);
         let scan = |owner: &str| {
-            let mut found = Vec::new();
-            for def in self.symbols.iter() {
-                let crate::resolve::symbols::DefKind::Method { parent, signature } = &def.kind
-                else {
-                    continue;
-                };
-                let Some(parent_def) = self.symbols.get(*parent) else {
-                    continue;
-                };
-                if parent_def.name == owner
-                    && (def.name == method_name || def.name.starts_with(&overload_prefix))
-                {
-                    found.push((def.name.clone(), signature.clone()));
-                }
-            }
-            found
+            self.symbols
+                .methods_named(owner, method_name)
+                .filter_map(|def| match &def.kind {
+                    crate::resolve::symbols::DefKind::Method { signature, .. } => {
+                        Some((def.name.clone(), signature.clone()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
         };
         let exact = scan(class_name);
         if !exact.is_empty() || base == class_name {
@@ -576,82 +563,6 @@ impl<'a> Lowerer<'a> {
                 })
             })
             .map(|(name, _)| name.clone())
-    }
-
-    /// Trailing default arguments the resolved method declares that a call
-    /// supplying `supplied_user_args` positional arguments (NOT counting the
-    /// receiver) did not fill — each materialized as the param's lowered
-    /// `default` literal value.
-    ///
-    /// This is the MIR-side mirror of typeck's `append_method_default_args`
-    /// (`infer/collect.rs`). The PARENS method-call path (`MethodCall` HIR
-    /// node) gets its trailing defaults appended at typeck, so by the time it
-    /// reaches MIR the args vector already carries them. The PAREN-LESS no-arg
-    /// method-call path lowers as a `FieldAccess` (no args vector), so typeck
-    /// never runs the default-arg pass on it — without this, an optional
-    /// `&block` slot (which carries a `nil` default → null closure-pair-pointer
-    /// sentinel, Ruby-block-semantics ADR D1/D5) is left unfilled and the call
-    /// emits one too few arguments, crashing the MIR/Cranelift arity verifier
-    /// (`__closure_*: got 1, expected 2`). Filling it here makes `w.frame` and
-    /// `w.frame()` lower IDENTICALLY (the block-slot consistency the blocks
-    /// feature filed as a known limitation).
-    ///
-    /// Each default param's `nil`/`null` lowers to `Literal::Int(0)` — the same
-    /// value the `NullLiteral` HIR expr lowers to for a non-`Option` type
-    /// (`expr/literals.rs`); for the block slot that is the null
-    /// closure-pair-pointer the `emit_block_presence_guard` then tests.
-    fn method_trailing_default_sentinels(
-        &self,
-        class_name: &str,
-        method_name: &str,
-        supplied_user_args: usize,
-    ) -> Vec<MirValue> {
-        let method_name = self.symbols.canonical_method_name(class_name, method_name);
-        // Find the resolved method's signature, walking parents for inherited
-        // methods (mirrors `resolve_method_class`'s ancestor search via the
-        // already-resolved `class_name`). Shares `select_method_symbol_name`'s
-        // scan so a generic-suffixed receiver (`Hash[String, Int]`) finds the
-        // signature declared on the bare class. Before Q58 this site returned
-        // an empty vector for EVERY generic builtin head, so a paren-less call
-        // to a method with trailing defaults appended no sentinels and emitted
-        // one argument too few, aborting in the Cranelift verifier with
-        // `mismatched argument count ... got 1, expected 2`.
-        let Some((_, signature)) = self
-            .method_defs_on_class(class_name, method_name)
-            .into_iter()
-            .next()
-        else {
-            return Vec::new();
-        };
-        // Skip the params already covered by the supplied user args, then
-        // materialize each remaining param that carries a default. Only `nil`
-        // / `null` defaults arise on this path (the optional `&block` slot);
-        // a non-null literal default on a paren-less-reachable param is also
-        // honoured for parity with the parens path.
-        signature
-            .params
-            .iter()
-            .skip(supplied_user_args)
-            .filter_map(|p| p.default.as_ref().map(Self::default_expr_to_sentinel))
-            .collect()
-    }
-
-    /// Lower a param `default` AST expr to the MIR value the no-arg
-    /// field-access path appends. `nil`/`null` → `Literal::Int(0)` (the null
-    /// closure-pair-pointer for a `&block` slot, matching `NullLiteral`'s
-    /// non-`Option` lowering). Other literal defaults map to their value.
-    fn default_expr_to_sentinel(default: &crate::parser::ast::Expr) -> MirValue {
-        use crate::parser::ast::ExprKind;
-        match &default.kind {
-            ExprKind::NullLiteral | ExprKind::UnitLiteral => MirValue::Literal(Literal::Int(0)),
-            ExprKind::IntLiteral(v, _) => MirValue::Literal(Literal::Int(*v)),
-            ExprKind::BoolLiteral(v) => MirValue::Literal(Literal::Bool(*v)),
-            ExprKind::FloatLiteral(v, _) => MirValue::Literal(Literal::Float(*v)),
-            // Any other default shape falls back to the null sentinel; the
-            // only paren-less-reachable trailing default in practice is the
-            // optional `&block` (`nil`), so this is conservative parity.
-            _ => MirValue::Literal(Literal::Int(0)),
-        }
     }
 
     fn lower_items(
@@ -693,8 +604,8 @@ impl<'a> Lowerer<'a> {
                     return Ok(());
                 }
                 let mir_fn = self.lower_function(&lowered)?;
-                if mir_fn.name == "main" {
-                    mir.entry = Some("main".to_string());
+                if mir_fn.is_entry {
+                    mir.entry = Some(mir_fn.name.clone());
                 } else if !func.is_class_method && module_path.is_empty() {
                     // Tier 4.03 (WASM): record top-level free defs as wasm
                     // export candidates. A `wasm32-unknown-unknown` module is
@@ -717,6 +628,7 @@ impl<'a> Lowerer<'a> {
             HirItem::Class(class) => {
                 let qualified_class = Self::qualified_item_name(module_path, &class.name);
                 let class_symbol = Self::symbol_name(&qualified_class);
+                let first_fn = mir.functions.len();
                 for method in &class.methods {
                     // Q17b: an eligible generic method's abstract body could
                     // only dispatch through a mixin-bound placeholder. Calls
@@ -738,65 +650,29 @@ impl<'a> Lowerer<'a> {
                         &outer_methods,
                     )?;
                 }
+                // Derived bodies (B74: a class gets the same structural
+                // derives a struct does). `derive_is_synthesized` decides which
+                // apply, including the class-only rules: module root only, and
+                // no structural body for a fieldless class except `Clone`.
                 let class_ty = Ty::Class {
                     name: qualified_class,
                     generic_args: vec![],
                 };
-                let class_has = |trait_name: &str| -> bool {
-                    crate::resolve::symbols::ty_has_derive_trait(
-                        &class_ty,
-                        self.symbols,
-                        trait_name,
-                    )
-                };
-                // The B74 derives use the FIELD-GATED predicate instead:
-                // a fieldless class (every primitive method-home and FFI
-                // handle shell — `class Int`, `class Mutex[T]`, any
-                // `lib`-decl class) satisfies the structural rule
-                // vacuously, and synthesising these for it is actively
-                // wrong. See `nominal_derive_is_synthesized`.
-                //
-                // `Clone` deliberately keeps the ungated predicate: it
-                // predates B74 and a fieldless class already gets a
-                // `{Class}_clone`, so narrowing it here would turn an
-                // existing `.clone` call site into a link error. That is
-                // a separate decision from this fix.
-                let class_derives = |trait_name: &str| -> bool {
-                    nominal_derive_is_synthesized(&class_ty, self.symbols, trait_name)
-                };
-                // B74: a class gets the same structural derives a struct
-                // does. Before this, the arm synthesised Clone alone, so
-                // `a == b` compared heap addresses (silently `false`),
-                // `"#{a}"` printed one, and `a.hash_code` type-checked
-                // and then failed at LINK with an undefined
-                // `{Class}_hash_code`.
-                //
-                // `module_path.is_empty()` matches Clone's existing
-                // guard and `key_desc.rs`'s dotted-name skip: the
-                // synthesised symbols mangle from the BARE `class.name`
-                // while a module-nested use site's `Ty::Class` carries
-                // the qualified one, so emitting for a nested class
-                // would define a symbol no call site names.
-                //
-                // Ord / PartialOrd / Default are deliberately NOT here.
-                // They would need `{Class}_cmp` / `{Class}_default`
-                // bodies, which do not exist; the matching dispatch
-                // helpers stay struct-only to keep that a silent gap
-                // rather than a link error. Add a synthesiser and its
-                // dispatch site together, or neither.
-                if module_path.is_empty() {
-                    if class_has("Clone") {
-                        mir.functions.push(self.synthesize_class_clone(class));
-                    }
-                    if class_derives("Debug") {
-                        mir.functions.push(self.synthesize_class_to_debug(class));
-                    }
-                    if class_derives("PartialEq") {
-                        mir.functions.push(self.synthesize_class_eq(class));
-                    }
-                    if class_derives("Hashable") {
-                        mir.functions.push(self.synthesize_class_hash_code(class));
-                    }
+                // A stdlib class body anchored onto an enum (`class IoError`
+                // adding methods to `enum IoError`) is a method home only: the
+                // enum owns the type and its derived bodies.
+                let anchored_on_enum = matches!(
+                    self.symbols.get(class.def_id).map(|d| &d.kind),
+                    Some(crate::resolve::symbols::DefKind::Enum { .. })
+                );
+                if !anchored_on_enum {
+                    let fields = self.derive_fields_of_class(class);
+                    mir.functions
+                        .extend(self.synthesize_derives(&class_ty, &class.name, &fields));
+                }
+                if self.mono_classes.contains_key(&class.name) {
+                    self.opaque_generic_bodies
+                        .extend(mir.functions[first_fn..].iter().map(|f| f.name.clone()));
                 }
 
                 // §4.1 Increment 2: state-indexed drop glue. A synthesised
@@ -810,8 +686,8 @@ impl<'a> Lowerer<'a> {
                 // the Drop vtable slot at the REAL drop instead of the no-op.
                 //
                 // Use the SYMBOL-TABLE class name (`def.name`) for the function
-                // symbol + the `user_drop_classes` key — IDENTICAL to what
-                // `collect_mixin_vtables` keys on (`def.name`) — so the Drop
+                // symbol — IDENTICAL to what `collect_mixin_vtables` names the
+                // slot after (`def.name`), keyed by the same DefId — so the Drop
                 // vtable's `{name}_drop` method symbol and the synthesised
                 // function symbol always agree, even for a (hypothetical) module-
                 // nested state machine. (Today async state machines are always
@@ -823,7 +699,7 @@ impl<'a> Lowerer<'a> {
                     .unwrap_or_else(|| class.name.clone());
                 if let Some(drop_fn) = self.synthesize_future_state_machine_drop(class, &sm_symbol)
                 {
-                    self.user_drop_classes.insert(sm_symbol);
+                    self.user_drop_classes.insert(class.def_id);
                     mir.functions.push(drop_fn);
                 }
             }
@@ -842,35 +718,9 @@ impl<'a> Lowerer<'a> {
                     name: qualified_struct,
                     generic_args: vec![],
                 };
-                let has = |trait_name: &str| -> bool {
-                    crate::resolve::symbols::ty_has_derive_trait(
-                        &struct_ty,
-                        self.symbols,
-                        trait_name,
-                    )
-                };
-                if has("Debug") {
-                    let dbg_fn = self.synthesize_struct_to_debug(s);
-                    mir.functions.push(dbg_fn);
-                }
-                if has("PartialEq") {
-                    mir.functions.push(self.synthesize_struct_eq(s));
-                }
-                if has("Hashable") {
-                    mir.functions.push(self.synthesize_struct_hash_code(s));
-                }
-                if has("Default") {
-                    mir.functions.push(self.synthesize_struct_default(s));
-                }
-                if has("Ord") {
-                    mir.functions.push(self.synthesize_struct_cmp(s, false));
-                }
-                if has("PartialOrd") {
-                    mir.functions.push(self.synthesize_struct_cmp(s, true));
-                }
-                if has("Clone") {
-                    mir.functions.push(self.synthesize_struct_clone(s));
-                }
+                let fields = derive::derive_fields_of_struct(s);
+                mir.functions
+                    .extend(self.synthesize_derives(&struct_ty, &s.name, &fields));
             }
             HirItem::Enum(e) => {
                 let qualified_enum = Self::qualified_item_name(module_path, &e.name);
@@ -887,13 +737,20 @@ impl<'a> Lowerer<'a> {
                     name: qualified_enum,
                     generic_args: vec![],
                 };
-                let has = |trait_name: &str| -> bool {
-                    crate::resolve::symbols::ty_has_derive_trait(&enum_ty, self.symbols, trait_name)
+                // An enum's derived bodies switch on the variant, so they are
+                // built per enum rather than over a `DeriveField` slot list;
+                // `derive_is_synthesized` grants an enum `Debug` and `Clone`.
+                let derives = |trait_name: &str| -> bool {
+                    crate::implicit_includes::derive_is_synthesized(
+                        &enum_ty,
+                        self.symbols,
+                        trait_name,
+                    )
                 };
-                if has("Debug") {
+                if derives("Debug") {
                     mir.functions.push(self.synthesize_enum_to_debug(e));
                 }
-                if has("Clone") {
+                if derives("Clone") {
                     mir.functions.push(self.synthesize_enum_clone(e));
                 }
             }
@@ -1030,8 +887,19 @@ impl<'a> Lowerer<'a> {
         // runtime (`ruxen_int_to_string`, `Formatter_write_str`) absent in a
         // no_std link, and a no_std unit cannot interpolate anyway (E1400
         // rejects the `String` an interpolation would build).
+        // Each body converts its value to a fresh `String` and copies it into
+        // the formatter, so it gets the same drop elaboration as a lowered
+        // body; without it that string leaked once per formatted value.
         if !self.no_std {
-            for f in self.synthesize_primitive_fmt_displays() {
+            for mut f in self.synthesize_primitive_fmt_displays() {
+                let return_locals = self.find_return_locals(&f);
+                crate::mir::lower::drops::insert_drops(
+                    &mut f,
+                    &return_locals,
+                    self.symbols,
+                    &self.user_drop_classes,
+                    &|mangled| self.resolve_ffi_alias_callee(mangled),
+                );
                 mir.functions.push(f);
             }
         }
@@ -1100,6 +968,16 @@ impl<'a> Lowerer<'a> {
         // where the concrete `T` is passed by value. See `mir::refmut_abi`.
         crate::mir::refmut_abi::load_generic_refmut_returns(&mut mir);
 
+        // Container drops whose element pointers escaped get a shallow
+        // descriptor, then every element glue an OBJ descriptor names is
+        // defined. Both see the whole program, so they run after every body.
+        crate::mir::lower::drops::demote_escaping_element_drops(&mut mir, self.symbols);
+        self.synthesize_elem_glue(&mut mir)?;
+
+        // No abstract (`?`) callee may reach codegen: drop every
+        // un-monomorphised body nothing reachable calls, reject the rest.
+        self.prune_unmonomorphised_bodies(&mut mir)?;
+
         Ok(mir)
     }
 
@@ -1128,7 +1006,7 @@ impl<'a> Lowerer<'a> {
 
         // Iterate over classes. We need a stable order: walk the
         // symbol table.
-        for def in self.symbols.iter() {
+        for def in self.symbols.classes() {
             let info = match &def.kind {
                 DefKind::Class { info } if !info.runtime_dispatch_includes.is_empty() => info,
                 _ => continue,
@@ -1208,18 +1086,12 @@ impl<'a> Lowerer<'a> {
             // a header to any non-runtime-dispatch class.
             // Spec: docs/decisions/zio-comparison-concurrency-adoption.md
             // §4.1 + §4.5; docs/dev/concurrency-impl-plan.md Increment 1 + F5/Inc4.
-            let is_async_protocol = info.runtime_dispatch_includes.iter().any(|&m| {
-                self.symbols
-                    .get(m)
-                    .map(|d| d.name == "Future" || d.name == "Stream")
-                    .unwrap_or(false)
-            });
+            let is_async_protocol = info
+                .runtime_dispatch_includes
+                .iter()
+                .any(|&m| Some(m) == self.future_mixin || Some(m) == self.stream_mixin);
             if is_async_protocol {
-                let class_has_user_drop = self.user_drop_classes.contains(&class_name)
-                    || self
-                        .user_drop_classes
-                        .iter()
-                        .any(|q| q.ends_with(&format!(".{}", class_name)));
+                let class_has_user_drop = self.user_drop_classes.contains(&def.id);
                 let drop_method_sym = if class_has_user_drop {
                     format!("{}_drop", class_name)
                 } else {
@@ -1341,12 +1213,10 @@ impl<'a> Lowerer<'a> {
             },
             None => return None,
         };
-        let is_future = info.runtime_dispatch_includes.iter().any(|&m| {
-            self.symbols
-                .get(m)
-                .map(|d| d.name == "Future")
-                .unwrap_or(false)
-        });
+        let is_future = info
+            .runtime_dispatch_includes
+            .iter()
+            .any(|&m| Some(m) == self.future_mixin);
         if !is_future {
             return None;
         }
@@ -1468,16 +1338,12 @@ impl<'a> Lowerer<'a> {
     /// through `Drop_dynamic_drop`. §4.1 Increment 2.
     fn class_is_future(&self, class_name: &str) -> bool {
         use crate::resolve::symbols::DefKind;
-        for def in self.symbols.iter() {
-            if def.name == *class_name {
-                if let DefKind::Class { info } = &def.kind {
-                    return info.runtime_dispatch_includes.iter().any(|&m| {
-                        self.symbols
-                            .get(m)
-                            .map(|d| d.name == "Future")
-                            .unwrap_or(false)
-                    });
-                }
+        for def in self.symbols.named(class_name) {
+            if let DefKind::Class { info } = &def.kind {
+                return info
+                    .runtime_dispatch_includes
+                    .iter()
+                    .any(|&m| Some(m) == self.future_mixin);
             }
         }
         false
@@ -1512,13 +1378,11 @@ impl<'a> Lowerer<'a> {
             if mixins_to_synth.contains_key(&vt.mixin_name) {
                 continue;
             }
-            for def in self.symbols.iter() {
-                if def.name == vt.mixin_name
-                    && matches!(&def.kind, DefKind::Trait { info } if matches!(
-                        info.dispatch_mode,
-                        crate::parser::ast::DispatchMode::Runtime
-                    ))
-                {
+            for def in self.symbols.named(&vt.mixin_name) {
+                if matches!(&def.kind, DefKind::Trait { info } if matches!(
+                    info.dispatch_mode,
+                    crate::parser::ast::DispatchMode::Runtime
+                )) {
                     mixins_to_synth.insert(vt.mixin_name.clone(), def.id);
                     break;
                 }
@@ -1546,8 +1410,8 @@ impl<'a> Lowerer<'a> {
                 // E1117 has guaranteed every implementor's signature
                 // matches the mixin's contract, so any concrete impl
                 // is a valid source.
-                let sig = self.symbols.iter().find_map(|d| match &d.kind {
-                    DefKind::Method { parent, signature } if d.name == *method_name => {
+                let sig = self.symbols.named(method_name).find_map(|d| match &d.kind {
+                    DefKind::Method { parent, signature } => {
                         // Verify the parent class actually includes
                         // this mixin (otherwise a same-named method
                         // on an unrelated class would mismatch).
@@ -1653,11 +1517,9 @@ impl<'a> Lowerer<'a> {
     /// For every async future this is 1 (Future occupies slot 0).
     fn drop_vtable_slot_for_class(&self, class_name: &str) -> usize {
         use crate::resolve::symbols::DefKind;
-        for def in self.symbols.iter() {
-            if def.name == *class_name {
-                if let DefKind::Class { info } = &def.kind {
-                    return info.runtime_dispatch_includes.len();
-                }
+        for def in self.symbols.named(class_name) {
+            if let DefKind::Class { info } = &def.kind {
+                return info.runtime_dispatch_includes.len();
             }
         }
         // Defensive: a Drop vtable was emitted for this class only
@@ -1672,7 +1534,7 @@ impl<'a> Lowerer<'a> {
     /// ships a single such mixin (`Future`) so this is always 0.
     fn runtime_dispatch_mixin_slot(&self, mixin_def_id: DefId) -> Option<usize> {
         use crate::resolve::symbols::DefKind;
-        for def in self.symbols.iter() {
+        for def in self.symbols.classes() {
             if let DefKind::Class { info } = &def.kind {
                 if let Some(idx) = info
                     .runtime_dispatch_includes
@@ -1694,6 +1556,8 @@ impl<'a> Lowerer<'a> {
     /// the drop method shape is the fixed `(self) -> nil`. §4.1 NARROW.
     fn build_drop_dynamic_helper(&self, drop_slot: usize) -> MirFunction {
         let mut mir_fn = MirFunction::new("Drop_dynamic_drop", Ty::Unit);
+        // The C drain calls this helper by symbol.
+        mir_fn.linkage = MirLinkage::Export;
 
         let self_local = mir_fn.new_local(
             "self",
@@ -1759,6 +1623,9 @@ impl<'a> Lowerer<'a> {
 
         let return_ty = sig.return_ty.clone();
         let mut mir_fn = MirFunction::new(&fn_name, return_ty.clone());
+        // C runtime code (the scheduler's `Future_dynamic_poll`) calls
+        // these helpers by symbol.
+        mir_fn.linkage = MirLinkage::Export;
 
         // Parameter 0: `self` (i64 pointer to a heap object whose
         // slot 0 is the class_info_ptr).
@@ -1922,14 +1789,11 @@ impl<'a> Lowerer<'a> {
     /// Name-keyed field-type walk (mirrors `get_class_field_names`): own field
     /// types in declaration order, with any parent class's fields prepended so
     /// the result is in layout order. Keyed by name rather than DefId because
-    /// the same name-based `self.symbols.iter()` walk is how `get_class_field_names`
+    /// the same name lookup (`self.symbols.named`) is how `get_class_field_names`
     /// / `alloc_size` already locate the struct/class definition.
     fn construct_field_types_by_name(&self, name: &str) -> Vec<Ty> {
         use crate::resolve::symbols::DefKind;
-        for def in self.symbols.iter() {
-            if def.name != name {
-                continue;
-            }
+        for def in self.symbols.named(name) {
             match &def.kind {
                 DefKind::Struct { info } => {
                     return info
@@ -1971,17 +1835,15 @@ impl<'a> Lowerer<'a> {
         // themselves carry underscores. `class_name_from_mangled` walks
         // underscore positions right-to-left and returns the longest
         // prefix that names an actual class/struct/enum in the symbol
-        // table — the same routine that backs `synthesize_struct_*` /
+        // table — the same routine that backs `synthesize_derives` /
         // self-typing across the lowerer. Pin:
         // `project_ruxen_mir_mangled_method_name_parsing.md`.
         let class_name = self.class_name_from_mangled(&fn_name)?;
-        for def in self.symbols.iter() {
-            if def.name == class_name {
-                if let DefKind::Class { ref info } = def.kind {
-                    let parent_id = info.parent?;
-                    let parent_def = self.symbols.get(parent_id)?;
-                    return Some(parent_def.name.clone());
-                }
+        for def in self.symbols.named(&class_name) {
+            if let DefKind::Class { ref info } = def.kind {
+                let parent_id = info.parent?;
+                let parent_def = self.symbols.get(parent_id)?;
+                return Some(parent_def.name.clone());
             }
         }
         None
@@ -1992,25 +1854,23 @@ impl<'a> Lowerer<'a> {
     /// `match_target`, all failing falls through to `next_block`.
     fn get_class_field_names(&self, class_name: &str) -> Vec<String> {
         use crate::resolve::symbols::DefKind;
-        for def in self.symbols.iter() {
-            if def.name == class_name {
-                if let DefKind::Class { ref info } = def.kind {
-                    let mut fields = Vec::new();
-                    for &field_id in &info.fields {
-                        if let Some(field_def) = self.symbols.get(field_id) {
-                            fields.push(field_def.name.clone());
-                        }
+        for def in self.symbols.named(class_name) {
+            if let DefKind::Class { ref info } = def.kind {
+                let mut fields = Vec::new();
+                for &field_id in &info.fields {
+                    if let Some(field_def) = self.symbols.get(field_id) {
+                        fields.push(field_def.name.clone());
                     }
-                    // Also include parent class fields (prepended, since they come first in layout)
-                    if let Some(parent_id) = info.parent {
-                        if let Some(parent_def) = self.symbols.get(parent_id) {
-                            let mut parent_fields = self.get_class_field_names(&parent_def.name);
-                            parent_fields.extend(fields);
-                            return parent_fields;
-                        }
-                    }
-                    return fields;
                 }
+                // Also include parent class fields (prepended, since they come first in layout)
+                if let Some(parent_id) = info.parent {
+                    if let Some(parent_def) = self.symbols.get(parent_id) {
+                        let mut parent_fields = self.get_class_field_names(&parent_def.name);
+                        parent_fields.extend(fields);
+                        return parent_fields;
+                    }
+                }
+                return fields;
             }
         }
         Vec::new()
@@ -2022,37 +1882,35 @@ impl<'a> Lowerer<'a> {
     fn is_real_field(&self, class_name: &str, field_name: &str) -> bool {
         use crate::resolve::symbols::DefKind;
         // Find the class or struct definition in the symbol table.
-        for def in self.symbols.iter() {
-            if def.name == class_name {
-                match &def.kind {
-                    DefKind::Class { info } => {
-                        for &field_id in &info.fields {
-                            if let Some(field_def) = self.symbols.get(field_id) {
-                                if field_def.name == field_name {
-                                    return true;
-                                }
+        for def in self.symbols.named(class_name) {
+            match &def.kind {
+                DefKind::Class { info } => {
+                    for &field_id in &info.fields {
+                        if let Some(field_def) = self.symbols.get(field_id) {
+                            if field_def.name == field_name {
+                                return true;
                             }
                         }
-                        // Check parent class fields recursively
-                        if let Some(parent_id) = info.parent {
-                            if let Some(parent_def) = self.symbols.get(parent_id) {
-                                return self.is_real_field(&parent_def.name, field_name);
-                            }
-                        }
-                        return false;
                     }
-                    DefKind::Struct { info } => {
-                        for &field_id in &info.fields {
-                            if let Some(field_def) = self.symbols.get(field_id) {
-                                if field_def.name == field_name {
-                                    return true;
-                                }
-                            }
+                    // Check parent class fields recursively
+                    if let Some(parent_id) = info.parent {
+                        if let Some(parent_def) = self.symbols.get(parent_id) {
+                            return self.is_real_field(&parent_def.name, field_name);
                         }
-                        return false;
                     }
-                    _ => {}
+                    return false;
                 }
+                DefKind::Struct { info } => {
+                    for &field_id in &info.fields {
+                        if let Some(field_def) = self.symbols.get(field_id) {
+                            if field_def.name == field_name {
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                }
+                _ => {}
             }
         }
         false
@@ -2070,35 +1928,10 @@ impl<'a> Lowerer<'a> {
         if let Some(direct) = self.ffi_alias_map.get(mangled).cloned() {
             return Some(direct);
         }
-        // Generic stripping needs BALANCED bracket matching, not the
-        // naive `find('[')` + `find(']')` pair, because nested generics
-        // like `Array[any Fn[Fn(Int) -> Int]]_iter` would otherwise
-        // peel only the inner `]` and leave a stray `]_iter` tail.
-        if let Some(bracket_pos) = mangled.find('[') {
-            let bytes = mangled.as_bytes();
-            let mut depth: i32 = 0;
-            let mut close_pos: Option<usize> = None;
-            for (i, &b) in bytes.iter().enumerate().skip(bracket_pos) {
-                match b {
-                    b'[' => depth += 1,
-                    b']' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            close_pos = Some(i + 1);
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            if let Some(close_pos) = close_pos {
-                let stripped = format!("{}{}", &mangled[..bracket_pos], &mangled[close_pos..]);
-                if let Some(c) = self.ffi_alias_map.get(&stripped).cloned() {
-                    return Some(c);
-                }
-            }
-        }
-        None
+        // A call site carrying surface generic args (`Array[Int]_push`)
+        // reaches the alias registered on the bare shell (`Array_push`).
+        let stripped = strip_generic_suffix(mangled)?;
+        self.ffi_alias_map.get(&stripped).cloned()
     }
 
     /// #06.8 T#17 / T#14: rewrite a mangled builtin-method callee
@@ -2166,15 +1999,11 @@ impl<'a> Lowerer<'a> {
         // instance call and a phantom `self` (constant 0) was prepended at
         // the call site, tripping the Cranelift arg-count verifier.
         let mut candidates: Vec<(DefId, Option<DefId>)> = Vec::new();
-        for def in self.symbols.iter() {
-            if def.name == lookup_name {
-                match def.kind {
-                    DefKind::Class { ref info } => candidates.push((def.id, info.parent)),
-                    DefKind::Struct { .. } | DefKind::Enum { .. } => {
-                        candidates.push((def.id, None))
-                    }
-                    _ => {}
-                }
+        for def in self.symbols.named(lookup_name) {
+            match def.kind {
+                DefKind::Class { ref info } => candidates.push((def.id, info.parent)),
+                DefKind::Struct { .. } | DefKind::Enum { .. } => candidates.push((def.id, None)),
+                _ => {}
             }
         }
         // Pick the candidate that owns the queried method. If none
@@ -2189,10 +2018,9 @@ impl<'a> Lowerer<'a> {
                 .iter()
                 .copied()
                 .find(|(class_id, _)| {
-                    self.symbols.iter().any(|m| {
-                        m.name == method_name
-                            && matches!(&m.kind, DefKind::Method { parent, .. } if parent == class_id)
-                    })
+                    self.symbols
+                        .children_of(*class_id)
+                        .any(|m| m.name == method_name && matches!(&m.kind, DefKind::Method { .. }))
                 })
                 .unwrap_or(candidates[0])
         };
@@ -2204,16 +2032,14 @@ impl<'a> Lowerer<'a> {
             None => return false,
         };
         // Scan all methods whose parent matches this class.
-        for def in self.symbols.iter() {
-            if def.name == method_name {
-                if let DefKind::Method {
-                    parent,
-                    ref signature,
-                } = def.kind
-                {
-                    if parent == class_def_id {
-                        return signature.is_class_method;
-                    }
+        for def in self.symbols.named(method_name) {
+            if let DefKind::Method {
+                parent,
+                ref signature,
+            } = def.kind
+            {
+                if parent == class_def_id {
+                    return signature.is_class_method;
                 }
             }
         }
@@ -2228,22 +2054,20 @@ impl<'a> Lowerer<'a> {
     /// parent chain.  Returns the class name where the method is defined.
     fn resolve_method_class(&self, class_name: &str, method_name: &str) -> String {
         use crate::resolve::symbols::DefKind;
-        for def in self.symbols.iter() {
-            if def.name == class_name {
-                if let DefKind::Class { ref info } = def.kind {
-                    // Check methods on this class
-                    for &method_id in &info.methods {
-                        if let Some(method_def) = self.symbols.get(method_id) {
-                            if method_def.name == method_name {
-                                return class_name.to_string();
-                            }
+        for def in self.symbols.named(class_name) {
+            if let DefKind::Class { ref info } = def.kind {
+                // Check methods on this class
+                for &method_id in &info.methods {
+                    if let Some(method_def) = self.symbols.get(method_id) {
+                        if method_def.name == method_name {
+                            return class_name.to_string();
                         }
                     }
-                    // Check parent class
-                    if let Some(parent_id) = info.parent {
-                        if let Some(parent_def) = self.symbols.get(parent_id) {
-                            return self.resolve_method_class(&parent_def.name, method_name);
-                        }
+                }
+                // Check parent class
+                if let Some(parent_id) = info.parent {
+                    if let Some(parent_def) = self.symbols.get(parent_id) {
+                        return self.resolve_method_class(&parent_def.name, method_name);
                     }
                 }
             }
@@ -2267,17 +2091,15 @@ impl<'a> Lowerer<'a> {
             return class_name.to_string();
         }
 
-        for def in self.symbols.iter() {
-            if def.name == class_name {
-                if let DefKind::Class { ref info } = def.kind {
-                    if let Some(parent_id) = info.parent {
-                        if let Some(parent_def) = self.symbols.get(parent_id) {
-                            return self.resolve_method_class_with_args(
-                                &parent_def.name,
-                                method_name,
-                                args,
-                            );
-                        }
+        for def in self.symbols.named(class_name) {
+            if let DefKind::Class { ref info } = def.kind {
+                if let Some(parent_id) = info.parent {
+                    if let Some(parent_def) = self.symbols.get(parent_id) {
+                        return self.resolve_method_class_with_args(
+                            &parent_def.name,
+                            method_name,
+                            args,
+                        );
                     }
                 }
             }

@@ -4,8 +4,10 @@
 //! The actual `class` / `struct` / `enum` / `mixin` / `extension` parsers
 //! live in `parser/classes.rs`; this module dispatches into them.
 
-use crate::lexer::token::TokenKind;
+use crate::diagnostics::Diagnostic;
+use crate::lexer::token::{Span, TokenKind};
 use crate::parser::ast::*;
+use crate::parser::methods::BodyState;
 use crate::parser::Parser;
 
 impl Parser {
@@ -125,6 +127,71 @@ impl Parser {
         }
     }
 
+    /// Whether the cursor begins a top-level declaration item (`def`,
+    /// `class`, `use`, `lib`, `protected def`, `unsafe extension`,
+    /// `alias new old`, ...) rather than an expression statement: the
+    /// declaration arms of [`Self::parse_top_level_item`]. The REPL and the
+    /// test runner use it to tell items from statements.
+    pub fn is_item_start(&self) -> bool {
+        match self.current_kind() {
+            TokenKind::Module
+            | TokenKind::Class
+            | TokenKind::Struct
+            | TokenKind::Enum
+            | TokenKind::Mixin
+            | TokenKind::Extension
+            | TokenKind::Use
+            | TokenKind::Type
+            | TokenKind::Newtype
+            | TokenKind::Const
+            | TokenKind::Lib
+            | TokenKind::Async
+            | TokenKind::Def
+            | TokenKind::Protected => true,
+            TokenKind::Unsafe => matches!(self.peek_kind(), TokenKind::Extension),
+            TokenKind::Identifier(_) => self.is_alias_item_start(),
+            _ => false,
+        }
+    }
+
+    /// Split a script-style file (a test file: declarations mixed with
+    /// statements that run in `main`) into its top-level units, in source
+    /// order. Each unit's span starts at its first token, after any `##`
+    /// docs, and ends at its last token.
+    pub fn parse_script_units(&mut self) -> Result<Vec<ScriptUnit>, Vec<Diagnostic>> {
+        let mut units = Vec::new();
+        loop {
+            self.skip_terminators();
+            self.collect_doc_comments();
+            self.pending_doc_comments.clear();
+            if self.at_eof() {
+                break;
+            }
+            let start = self.current_span();
+            let before = self.pos;
+            let item = if self.is_item_start() {
+                self.parse_top_level_item()
+            } else {
+                self.parse_statement();
+                None
+            };
+            if self.pos == before {
+                // Nothing parsed; the error is already recorded.
+                break;
+            }
+            let end = self.tokens[self.pos - 1].span.end;
+            units.push(ScriptUnit {
+                item,
+                span: Span::new(start.start, end, start.line, start.column),
+            });
+        }
+        if self.diagnostics.is_empty() {
+            Ok(units)
+        } else {
+            Err(self.diagnostics.clone())
+        }
+    }
+
     /// Heuristic: does the cursor begin a plausible top-level expression
     /// statement (an identifier / type-identifier / `self` that starts a
     /// call or method-call chain)? Deliberately narrow — we only want to
@@ -159,6 +226,9 @@ impl Parser {
     /// `alias new, old` is rejected (D1) — a comma after the new name is a
     /// clean parse error here.
     pub(super) fn parse_alias_item(&mut self) -> AliasDef {
+        // `##` docs above an alias document the alias; `AliasDef` keeps no
+        // docs, and left pending they would attach to the next `def`.
+        self.take_pending_docs();
         let start = self.current_span();
         self.advance(); // consume the `alias` contextual keyword
                         // `parse_def_name` accepts both plain/`?`/`!` identifiers and
@@ -206,94 +276,47 @@ impl Parser {
 
         let mut items = Vec::new();
         // ruby-naming.spec.md §3.2: module bodies honour section markers.
-        // Module items inherit `current_vis` only when they expose a
-        // `visibility` field (Function, Const). Nested types
+        // Only module functions take the section's visibility; nested types
         // (Class/Struct/Module/...) carry their own visibility model.
-        let mut current_vis = Visibility::Public;
-        let mut name_list_overrides: Vec<(Visibility, Vec<String>)> = Vec::new();
-        while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
-            let __progress = self.pos;
-            self.skip_newlines();
-            // Leading `##` docs go to the next item via `take_pending_docs()`.
-            let docs = self.collect_doc_comments();
-            self.pending_doc_comments.extend(docs);
-            if self.at(TokenKind::End) {
+        let mut state = BodyState::new();
+        loop {
+            let progress = self.pos;
+            if !self.at_body_member() {
                 break;
             }
-            // Handle bare section markers BEFORE delegating to
-            // `parse_top_level_item`. `parse_top_level_item` doesn't
-            // know about Public/Private as section markers.
+            // Section markers and unprefixed `def`s first:
+            // `parse_top_level_item` knows neither.
             match self.current_kind().clone() {
-                TokenKind::Public => {
-                    self.advance();
-                    if self.at(TokenKind::Colon) {
-                        let names = self.parse_visibility_name_list();
-                        name_list_overrides.push((Visibility::Public, names));
-                    } else {
-                        current_vis = Visibility::Public;
-                    }
-                    self.skip_newlines();
-                    self.ensure_loop_progress(__progress);
-                    continue;
+                TokenKind::Public => self.parse_section_marker(Visibility::Public, &mut state),
+                TokenKind::Private => self.parse_section_marker(Visibility::Private, &mut state),
+                // `protected def` falls to `parse_top_level_item`.
+                TokenKind::Protected
+                    if !matches!(self.peek_kind(), TokenKind::Def | TokenKind::Async) =>
+                {
+                    self.parse_section_marker(Visibility::Protected, &mut state)
                 }
-                TokenKind::Private => {
-                    self.advance();
-                    if self.at(TokenKind::Colon) {
-                        let names = self.parse_visibility_name_list();
-                        name_list_overrides.push((Visibility::Private, names));
-                    } else {
-                        current_vis = Visibility::Private;
-                    }
-                    self.skip_newlines();
-                    self.ensure_loop_progress(__progress);
-                    continue;
-                }
-                TokenKind::Protected => {
-                    // Only treat as bare-marker if not followed by a decl.
-                    let next = self.peek_kind();
-                    let bare = !matches!(next, TokenKind::Def | TokenKind::Async);
-                    if bare {
-                        self.advance();
-                        if self.at(TokenKind::Colon) {
-                            let names = self.parse_visibility_name_list();
-                            name_list_overrides.push((Visibility::Protected, names));
-                        } else {
-                            current_vis = Visibility::Protected;
-                        }
-                        self.skip_newlines();
-                        self.ensure_loop_progress(__progress);
-                        continue;
-                    }
-                    // else: fall through and let parse_top_level_item handle it.
-                }
-                // An unprefixed `def` takes the current section's visibility.
                 TokenKind::Def | TokenKind::Async => {
-                    items.push(TopLevelItem::Function(self.parse_func_def(current_vis)));
-                    self.ensure_loop_progress(__progress);
-                    continue;
+                    items.push(TopLevelItem::Function(
+                        self.parse_func_def(state.current_vis),
+                    ));
                 }
-                _ => {}
+                _ => {
+                    if let Some(item) = self.parse_top_level_item() {
+                        items.push(item);
+                    } else {
+                        self.synchronize();
+                    }
+                }
             }
-            if let Some(item) = self.parse_top_level_item() {
-                items.push(item);
-            } else {
-                self.synchronize();
-            }
-            self.ensure_loop_progress(__progress);
+            self.skip_newlines();
+            self.ensure_loop_progress(progress);
         }
         self.expect(TokenKind::End);
-        // Apply name-list overrides on functions (top-level methods).
-        for (vis, names) in &name_list_overrides {
-            for n in names {
-                for item in items.iter_mut() {
-                    if let TopLevelItem::Function(f) = item {
-                        if &f.name == n {
-                            f.visibility = *vis;
-                        }
-                    }
-                }
-            }
-        }
+        // Name lists re-mark module functions.
+        state.apply_name_lists(items.iter_mut().filter_map(|item| match item {
+            TopLevelItem::Function(f) => Some(f),
+            _ => None,
+        }));
         let span = self.span_from(&start);
         ModuleDef { name, items, span }
     }

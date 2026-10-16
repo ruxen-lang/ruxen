@@ -353,6 +353,7 @@ impl Resolver {
                 };
                 let call = ast::Expr {
                     kind: ast::ExprKind::MethodCall {
+                        parens: true,
                         object: Box::new(receiver),
                         method: method_name.clone(),
                         generic_args: Vec::new(),
@@ -371,6 +372,8 @@ impl Resolver {
                     }],
                     body: ast::ClosureBody::Expr(Box::new(call)),
                     span: span.clone(),
+                    pipes: true,
+                    do_end: false,
                 };
                 self.resolve_closure(&closure, span)
             }

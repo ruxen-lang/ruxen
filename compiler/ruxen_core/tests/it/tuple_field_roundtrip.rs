@@ -35,12 +35,12 @@ fn tuple_field_multi_digit_index_preserves_value() {
         _ => panic!("expected let stmt, got {:?}", stmt),
     };
     let (outer_obj, outer_field) = match &value.kind {
-        ExprKind::FieldAccess { object, field } => (object, field),
+        ExprKind::FieldAccess { object, field, .. } => (object, field),
         other => panic!("expected outer FieldAccess, got {:?}", other),
     };
     assert_eq!(outer_field, "10", "outer tuple field must be `10`, not `1`");
     let (_inner_obj, inner_field) = match &outer_obj.kind {
-        ExprKind::FieldAccess { object, field } => (object, field),
+        ExprKind::FieldAccess { object, field, .. } => (object, field),
         other => panic!("expected inner FieldAccess, got {:?}", other),
     };
     assert_eq!(inner_field, "0", "inner tuple field must be `0`");

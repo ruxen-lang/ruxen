@@ -9,7 +9,7 @@
  * branches on it for every fill / flush; the cost is one branch per 8 KiB
  * transfer, lost in I/O latency.
  *
- * Wire layout (32 bytes — same shape for reader and writer):
+ * Wire layout (32 bytes — one `RuxenBufIo` struct for reader and writer):
  *
  *   +0   uint8  kind     — 0=File, 1=TcpStream
  *   +1   uint8  closed   — 1 once into_inner / drop has emptied the buffer
@@ -20,7 +20,11 @@
  *   +16  uint8* buf      — 8-byte aligned malloc(cap)
  *   +24  void*  inner    — borrowed RuxenFile* / RuxenTcpStream*; not owned
  *
- * Ownership: the `inner` pointer is borrowed, NOT owned. `into_inner_*`
+ * Only construction differs per inner type (it records `kind`); every other
+ * entry point, `into_inner` included, is one C symbol that each class's
+ * `lib` block aliases.
+ *
+ * Ownership: the `inner` pointer is borrowed, NOT owned. `into_inner`
  * surrenders the original pointer back to Ruxen (caller resumes
  * responsibility for closing it). `_drop` does NOT close the inner File /
  * TcpStream — the inner has its own drop helper which runs in the same
@@ -44,36 +48,17 @@ typedef struct {
     uint8_t  closed;
     uint16_t _pad;
     uint32_t cap;
-    uint32_t pos;
-    uint32_t filled;
+    uint32_t pos;     /* reader: next byte to return; writer: unused */
+    uint32_t filled;  /* reader: bytes valid in `buf`; writer: bytes pending */
     uint8_t *buf;
     void    *inner;
-} RuxenBufReader;
+} RuxenBufIo;
 
-_Static_assert(sizeof(RuxenBufReader) == 32,
-    "RuxenBufReader wire layout drifted from documented 32-byte form");
+_Static_assert(sizeof(RuxenBufIo) == 32,
+    "RuxenBufIo wire layout drifted from documented 32-byte form");
 
-typedef struct {
-    uint8_t  kind;
-    uint8_t  closed;
-    uint16_t _pad;
-    uint32_t cap;
-    uint32_t pos;     /* unused for writer (kept for parallel shape) */
-    uint32_t filled;  /* bytes pending in `buf` */
-    uint8_t *buf;
-    void    *inner;
-} RuxenBufWriter;
-
-_Static_assert(sizeof(RuxenBufWriter) == 32,
-    "RuxenBufWriter wire layout drifted from documented 32-byte form");
-
-/* Build Result::Err(IoError::InvalidInput) for the guard paths
- * (closed receiver, null inner, etc.). Mirrors `ruxen_file_invalid_input`
- * in io/file.c. */
-static void *ruxen_bufio_invalid_input(void) {
-    return ruxen_result_err_value(
-        (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
-}
+typedef RuxenBufIo RuxenBufReader;
+typedef RuxenBufIo RuxenBufWriter;
 
 static uint32_t ruxen_bufio_round_cap(int64_t cap) {
     if (cap <= 0) return 1;
@@ -81,87 +66,92 @@ static uint32_t ruxen_bufio_round_cap(int64_t cap) {
     return (uint32_t)cap;
 }
 
-/* Option constructors — inline because the runtime doesn't expose
- * a public `ruxen_option_*_value` family (the regular codegen path
- * allocates Option payloads from MIR `Alloc + SetField` rather than
- * via runtime calls). 16-byte layout: {i32 tag; i32 pad; i64 payload}
- * with tag 0 = None, tag 1 = Some — matches `ruxen_option_unwrap_or`
- * in core/alloc.c and the resolver's variant_idx assignment. */
-static void *ruxen_bufio_option_none(void) {
-    int64_t *out = (int64_t *)ruxen_alloc(16);
-    *(int32_t *)out = 0; /* None */
-    out[1] = 0;
-    return out;
+static RuxenBufIo *ruxen_bufio_alloc(uint8_t kind, uint32_t cap, void *inner) {
+    RuxenBufIo *b = (RuxenBufIo *)ruxen_alloc(sizeof(RuxenBufIo));
+    b->kind = kind;
+    b->closed = 0;
+    b->_pad = 0;
+    b->cap = cap;
+    b->pos = 0;
+    b->filled = 0;
+    b->buf = (uint8_t *)ruxen_xmalloc(cap);
+    b->inner = inner;
+    return b;
 }
 
-static void *ruxen_bufio_option_some(int64_t payload) {
-    int64_t *out = (int64_t *)ruxen_alloc(16);
-    *(int32_t *)out = 1; /* Some */
-    out[1] = payload;
-    return out;
+/* The inner's fd, or -1 with errno = EBADF when the inner is missing or
+ * closed. File and TcpStream share the `RuxenFdHandle` layout. */
+static int ruxen_bufio_inner_fd(RuxenBufIo *b) {
+    RuxenFdHandle *h = (RuxenFdHandle *)b->inner;
+    if (!h || h->closed || h->fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    return h->fd;
+}
+
+/* Free our buffer and mark closed. Shared by `into_inner` and drop. */
+static void ruxen_bufio_release(RuxenBufIo *b) {
+    if (b->buf) { free(b->buf); b->buf = NULL; }
+    b->cap = 0;
+    b->pos = 0;
+    b->filled = 0;
+    b->inner = NULL;
+    b->closed = 1;
+}
+
+/* Write all `n` bytes to `fd`: write(2) for a File, send(2) with
+ * MSG_NOSIGNAL for a TcpStream. Retries EINTR and partial writes.
+ * Returns 0, or -1 with errno set. */
+static int ruxen_bufio_write_fd(uint8_t kind, int fd, const uint8_t *data, size_t n) {
+    size_t off = 0;
+    while (off < n) {
+        ssize_t put;
+        do {
+            if (kind == RUXEN_BUFIO_KIND_FILE) {
+                put = write(fd, data + off, n - off);
+            } else {
+                put = send(fd, data + off, n - off, MSG_NOSIGNAL);
+            }
+        } while (put < 0 && errno == EINTR);
+        if (put < 0) return -1;
+        if (put == 0) { errno = EIO; return -1; }
+        off += (size_t)put;
+    }
+    return 0;
 }
 
 /* ── BufReader ─────────────────────────────────────────────────────── */
 
-static RuxenBufReader *ruxen_bufreader_alloc(uint8_t kind, uint32_t cap, void *inner) {
-    RuxenBufReader *br = (RuxenBufReader *)ruxen_alloc(sizeof(RuxenBufReader));
-    br->kind = kind;
-    br->closed = 0;
-    br->_pad = 0;
-    br->cap = cap;
-    br->pos = 0;
-    br->filled = 0;
-    br->buf = (uint8_t *)malloc(cap);
-    if (!br->buf) ruxen_panic("out of memory");
-    br->inner = inner;
-    return br;
-}
-
 RuxenBufReader *ruxen_bufreader_new_file(void *inner) {
-    return ruxen_bufreader_alloc(RUXEN_BUFIO_KIND_FILE, RUXEN_BUFIO_DEFAULT_CAP, inner);
+    return ruxen_bufio_alloc(RUXEN_BUFIO_KIND_FILE, RUXEN_BUFIO_DEFAULT_CAP, inner);
 }
 
 RuxenBufReader *ruxen_bufreader_new_tcp(void *inner) {
-    return ruxen_bufreader_alloc(RUXEN_BUFIO_KIND_TCP, RUXEN_BUFIO_DEFAULT_CAP, inner);
+    return ruxen_bufio_alloc(RUXEN_BUFIO_KIND_TCP, RUXEN_BUFIO_DEFAULT_CAP, inner);
 }
 
 RuxenBufReader *ruxen_bufreader_with_capacity_file(int64_t cap, void *inner) {
-    return ruxen_bufreader_alloc(RUXEN_BUFIO_KIND_FILE, ruxen_bufio_round_cap(cap), inner);
+    return ruxen_bufio_alloc(RUXEN_BUFIO_KIND_FILE, ruxen_bufio_round_cap(cap), inner);
 }
 
 RuxenBufReader *ruxen_bufreader_with_capacity_tcp(int64_t cap, void *inner) {
-    return ruxen_bufreader_alloc(RUXEN_BUFIO_KIND_TCP, ruxen_bufio_round_cap(cap), inner);
+    return ruxen_bufio_alloc(RUXEN_BUFIO_KIND_TCP, ruxen_bufio_round_cap(cap), inner);
 }
 
 /* Refill `buf` from the inner. Returns:
  *   >0  — bytes loaded (br->filled = n, br->pos = 0)
  *    0  — EOF
- *   <0  — errno (negated so the caller can map via ruxen_io_error_from_errno)
+ *   <0  — failure, errno set (the caller maps via ruxen_io_error_from_errno)
  *
- * Reader-side branch on kind: File reads via the inner fd directly (read(2));
- * TcpStream reads via recv(2). Both retry on EINTR. */
+ * File reads via read(2); TcpStream reads via recv(2). Both retry on
+ * EINTR. */
 static ssize_t ruxen_bufreader_fill(RuxenBufReader *br) {
     if (br->pos < br->filled) return (ssize_t)(br->filled - br->pos);
     br->pos = 0;
     br->filled = 0;
-    if (!br->inner) {
-        errno = EBADF;
-        return -1;
-    }
-    int fd;
-    if (br->kind == RUXEN_BUFIO_KIND_FILE) {
-        fd = ((RuxenFile *)br->inner)->fd;
-        if (((RuxenFile *)br->inner)->closed || fd < 0) {
-            errno = EBADF;
-            return -1;
-        }
-    } else {
-        fd = ((RuxenTcpStream *)br->inner)->fd;
-        if (((RuxenTcpStream *)br->inner)->closed || fd < 0) {
-            errno = EBADF;
-            return -1;
-        }
-    }
+    int fd = ruxen_bufio_inner_fd(br);
+    if (fd < 0) return -1;
     ssize_t got;
     do {
         if (br->kind == RUXEN_BUFIO_KIND_FILE) {
@@ -184,18 +174,16 @@ static ssize_t ruxen_bufreader_fill(RuxenBufReader *br) {
  * buffer that grows by doubling. For typical 80-200 char lines this is
  * one or two reallocs. */
 void *ruxen_bufreader_read_line(RuxenBufReader *br) {
-    if (!br || br->closed) return ruxen_bufio_invalid_input();
-    size_t out_cap = 128;
-    size_t out_len = 0;
-    char  *out = (char *)malloc(out_cap);
-    if (!out) ruxen_panic("out of memory");
+    if (!br || br->closed) return ruxen_io_error_invalid_input();
+    RuxenByteBuf out;
+    ruxen_byte_buf_init(&out, 128);
     int saw_any = 0;
     int saw_nl = 0;
     while (!saw_nl) {
         ssize_t avail = ruxen_bufreader_fill(br);
         if (avail < 0) {
             int saved = errno;
-            free(out);
+            free(out.data);
             return ruxen_io_error_from_errno(saved);
         }
         if (avail == 0) break; /* EOF */
@@ -210,29 +198,22 @@ void *ruxen_bufreader_read_line(RuxenBufReader *br) {
         }
         uint32_t take_end = (nl_at < end) ? (nl_at + 1) : end;
         size_t take = (size_t)(take_end - br->pos);
-        if (out_len + take + 1 > out_cap) {
-            size_t next = out_cap;
-            while (next < out_len + take + 1) next *= 2;
-            char *grown = (char *)realloc(out, next);
-            if (!grown) { free(out); ruxen_panic("out of memory"); }
-            out = grown;
-            out_cap = next;
-        }
-        memcpy(out + out_len, br->buf + br->pos, take);
-        out_len += take;
+        ruxen_byte_buf_reserve(&out, take);
+        memcpy(out.data + out.len, br->buf + br->pos, take);
+        out.len += take;
         br->pos = take_end;
         if (nl_at < end) saw_nl = 1;
     }
     if (!saw_any) {
-        free(out);
+        free(out.data);
         /* Ok(None) — the None variant has no payload; tag 0 in the
          * Option layout. */
-        return ruxen_result_ok_value((int64_t)ruxen_bufio_option_none());
+        return ruxen_result_ok_value((int64_t)ruxen_option_none());
     }
-    out[out_len] = '\0';
-    char *s = ruxen_string_from(out);
-    free(out);
-    return ruxen_result_ok_value((int64_t)ruxen_bufio_option_some((int64_t)s));
+    char *line = ruxen_byte_buf_finish(&out);
+    char *s = ruxen_string_from(line);
+    free(line);
+    return ruxen_result_ok_value((int64_t)ruxen_option_some((int64_t)s));
 }
 
 /* `BufReader.read(buf: &var Array[U8]) -> Result[Int, IoError]`. Pulls
@@ -240,7 +221,7 @@ void *ruxen_bufreader_read_line(RuxenBufReader *br) {
  * buffered window into `buf` as one int64 slot per byte — same wire
  * shape as `ruxen_file_read` / `ruxen_tcp_read_bytes`. */
 void *ruxen_bufreader_read(RuxenBufReader *br, RuxenVec *buf) {
-    if (!br || br->closed || !buf) return ruxen_bufio_invalid_input();
+    if (!br || br->closed || !buf) return ruxen_io_error_invalid_input();
     ssize_t avail = ruxen_bufreader_fill(br);
     if (avail < 0) {
         return ruxen_io_error_from_errno(errno);
@@ -260,24 +241,11 @@ void *ruxen_bufreader_read(RuxenBufReader *br, RuxenVec *buf) {
  * the caller (whose ownership we'd only borrowed) and marks ourselves
  * closed so the drop helper doesn't double-free our buffer. The buffer
  * is freed here, immediately. */
-static void *ruxen_bufreader_into_inner_common(RuxenBufReader *br) {
+void *ruxen_bufreader_into_inner(RuxenBufReader *br) {
     if (!br) return NULL;
     void *inner = br->inner;
-    if (br->buf) { free(br->buf); br->buf = NULL; }
-    br->cap = 0;
-    br->pos = 0;
-    br->filled = 0;
-    br->inner = NULL;
-    br->closed = 1;
+    ruxen_bufio_release(br);
     return inner;
-}
-
-void *ruxen_bufreader_into_inner_file(RuxenBufReader *br) {
-    return ruxen_bufreader_into_inner_common(br);
-}
-
-void *ruxen_bufreader_into_inner_tcp(RuxenBufReader *br) {
-    return ruxen_bufreader_into_inner_common(br);
 }
 
 /* Drop helper — frees our buffer only. The inner File / TcpStream has
@@ -286,80 +254,40 @@ void *ruxen_bufreader_into_inner_tcp(RuxenBufReader *br) {
 void ruxen_bufreader_drop(RuxenBufReader *br) {
     if (!br) return;
     if (br->closed) return;
-    if (br->buf) { free(br->buf); br->buf = NULL; }
-    br->cap = 0;
-    br->pos = 0;
-    br->filled = 0;
-    br->inner = NULL;
-    br->closed = 1;
+    ruxen_bufio_release(br);
 }
 
 /* ── BufWriter ─────────────────────────────────────────────────────── */
 
-static RuxenBufWriter *ruxen_bufwriter_alloc(uint8_t kind, uint32_t cap, void *inner) {
-    RuxenBufWriter *bw = (RuxenBufWriter *)ruxen_alloc(sizeof(RuxenBufWriter));
-    bw->kind = kind;
-    bw->closed = 0;
-    bw->_pad = 0;
-    bw->cap = cap;
-    bw->pos = 0;
-    bw->filled = 0;
-    bw->buf = (uint8_t *)malloc(cap);
-    if (!bw->buf) ruxen_panic("out of memory");
-    bw->inner = inner;
-    return bw;
-}
-
 RuxenBufWriter *ruxen_bufwriter_new_file(void *inner) {
-    return ruxen_bufwriter_alloc(RUXEN_BUFIO_KIND_FILE, RUXEN_BUFIO_DEFAULT_CAP, inner);
+    return ruxen_bufio_alloc(RUXEN_BUFIO_KIND_FILE, RUXEN_BUFIO_DEFAULT_CAP, inner);
 }
 
 RuxenBufWriter *ruxen_bufwriter_new_tcp(void *inner) {
-    return ruxen_bufwriter_alloc(RUXEN_BUFIO_KIND_TCP, RUXEN_BUFIO_DEFAULT_CAP, inner);
+    return ruxen_bufio_alloc(RUXEN_BUFIO_KIND_TCP, RUXEN_BUFIO_DEFAULT_CAP, inner);
 }
 
 RuxenBufWriter *ruxen_bufwriter_with_capacity_file(int64_t cap, void *inner) {
-    return ruxen_bufwriter_alloc(RUXEN_BUFIO_KIND_FILE, ruxen_bufio_round_cap(cap), inner);
+    return ruxen_bufio_alloc(RUXEN_BUFIO_KIND_FILE, ruxen_bufio_round_cap(cap), inner);
 }
 
 RuxenBufWriter *ruxen_bufwriter_with_capacity_tcp(int64_t cap, void *inner) {
-    return ruxen_bufwriter_alloc(RUXEN_BUFIO_KIND_TCP, ruxen_bufio_round_cap(cap), inner);
+    return ruxen_bufio_alloc(RUXEN_BUFIO_KIND_TCP, ruxen_bufio_round_cap(cap), inner);
 }
 
-/* Emit the pending buffer to the inner. Loops on partial writes;
- * retries on EINTR. Returns 0 on success, negative errno on failure
- * (caller maps via ruxen_io_error_from_errno). */
+/* Emit the pending buffer to the inner. Returns 0 on success, -1 with
+ * errno set on failure (caller maps via ruxen_io_error_from_errno). */
 static int ruxen_bufwriter_emit(RuxenBufWriter *bw) {
     if (bw->filled == 0) return 0;
-    if (!bw->inner) { errno = EBADF; return -1; }
-    int fd;
-    if (bw->kind == RUXEN_BUFIO_KIND_FILE) {
-        fd = ((RuxenFile *)bw->inner)->fd;
-        if (((RuxenFile *)bw->inner)->closed || fd < 0) { errno = EBADF; return -1; }
-    } else {
-        fd = ((RuxenTcpStream *)bw->inner)->fd;
-        if (((RuxenTcpStream *)bw->inner)->closed || fd < 0) { errno = EBADF; return -1; }
-    }
-    uint32_t off = 0;
-    while (off < bw->filled) {
-        ssize_t put;
-        do {
-            if (bw->kind == RUXEN_BUFIO_KIND_FILE) {
-                put = write(fd, bw->buf + off, bw->filled - off);
-            } else {
-                put = send(fd, bw->buf + off, bw->filled - off, MSG_NOSIGNAL);
-            }
-        } while (put < 0 && errno == EINTR);
-        if (put < 0) return -1;
-        if (put == 0) { errno = EIO; return -1; }
-        off += (uint32_t)put;
-    }
+    int fd = ruxen_bufio_inner_fd(bw);
+    if (fd < 0) return -1;
+    if (ruxen_bufio_write_fd(bw->kind, fd, bw->buf, bw->filled) != 0) return -1;
     bw->filled = 0;
     return 0;
 }
 
 /* Append the bytes in `staged` (length `n`) to `bw->buf`, flushing
- * whenever we'd overflow. Returns 0 on success, negative on emit error
+ * whenever we'd overflow. Returns 0 on success, -1 on emit error
  * (errno set). Splits one user-call into 0+ emits + one residual copy.
  *
  * The "byte larger than cap" case flushes the empty buffer first and
@@ -371,27 +299,9 @@ static int ruxen_bufwriter_append(RuxenBufWriter *bw, const uint8_t *staged, siz
      * flush whatever is pending then write straight through. */
     if (n >= bw->cap) {
         if (ruxen_bufwriter_emit(bw) != 0) return -1;
-        int fd;
-        if (bw->kind == RUXEN_BUFIO_KIND_FILE) {
-            fd = ((RuxenFile *)bw->inner)->fd;
-        } else {
-            fd = ((RuxenTcpStream *)bw->inner)->fd;
-        }
-        size_t off = 0;
-        while (off < n) {
-            ssize_t put;
-            do {
-                if (bw->kind == RUXEN_BUFIO_KIND_FILE) {
-                    put = write(fd, staged + off, n - off);
-                } else {
-                    put = send(fd, staged + off, n - off, MSG_NOSIGNAL);
-                }
-            } while (put < 0 && errno == EINTR);
-            if (put < 0) return -1;
-            if (put == 0) { errno = EIO; return -1; }
-            off += (size_t)put;
-        }
-        return 0;
+        int fd = ruxen_bufio_inner_fd(bw);
+        if (fd < 0) return -1;
+        return ruxen_bufio_write_fd(bw->kind, fd, staged, n);
     }
     /* Normal path: copy into the residual buffer, flushing when full. */
     size_t off = 0;
@@ -409,6 +319,21 @@ static int ruxen_bufwriter_append(RuxenBufWriter *bw, const uint8_t *staged, siz
     return 0;
 }
 
+/* Narrow `bytes` (one int64 slot per byte) and append them. Returns 0,
+ * or -1 with errno set. Shared by `write` and `write_all`. */
+static int ruxen_bufwriter_append_vec(RuxenBufWriter *bw, RuxenVec *bytes) {
+    size_t n = (size_t)bytes->len;
+    uint8_t *staged = (uint8_t *)ruxen_xmalloc(n > 0 ? n : 1);
+    for (size_t i = 0; i < n; i++) {
+        staged[i] = (uint8_t)(bytes->data[i] & 0xFF);
+    }
+    int rc = ruxen_bufwriter_append(bw, staged, n);
+    int saved = errno;
+    free(staged);
+    errno = saved;
+    return rc;
+}
+
 /* `BufWriter.write(bytes: &Array[U8]) -> Result[Int, IoError]`. Single
  * call → all bytes either accepted into the buffer or partially flushed
  * and the remainder buffered. We return Ok(bytes.len) on success
@@ -417,43 +342,23 @@ static int ruxen_bufwriter_append(RuxenBufWriter *bw, const uint8_t *staged, siz
  * BufWriter::write semantics where write returns Ok(buf.len()) when it
  * succeeds in queueing the bytes. */
 void *ruxen_bufwriter_write(RuxenBufWriter *bw, RuxenVec *bytes) {
-    if (!bw || bw->closed || !bytes) return ruxen_bufio_invalid_input();
-    size_t n = (size_t)bytes->len;
-    uint8_t *staged = (uint8_t *)malloc(n > 0 ? n : 1);
-    if (!staged) ruxen_panic("out of memory");
-    for (size_t i = 0; i < n; i++) {
-        staged[i] = (uint8_t)(bytes->data[i] & 0xFF);
+    if (!bw || bw->closed || !bytes) return ruxen_io_error_invalid_input();
+    if (ruxen_bufwriter_append_vec(bw, bytes) != 0) {
+        return ruxen_io_error_from_errno(errno);
     }
-    int rc = ruxen_bufwriter_append(bw, staged, n);
-    if (rc != 0) {
-        int saved = errno;
-        free(staged);
-        return ruxen_io_error_from_errno(saved);
-    }
-    free(staged);
-    return ruxen_result_ok_value((int64_t)n);
+    return ruxen_result_ok_value((int64_t)bytes->len);
 }
 
 void *ruxen_bufwriter_write_all(RuxenBufWriter *bw, RuxenVec *bytes) {
-    if (!bw || bw->closed || !bytes) return ruxen_bufio_invalid_input();
-    size_t n = (size_t)bytes->len;
-    uint8_t *staged = (uint8_t *)malloc(n > 0 ? n : 1);
-    if (!staged) ruxen_panic("out of memory");
-    for (size_t i = 0; i < n; i++) {
-        staged[i] = (uint8_t)(bytes->data[i] & 0xFF);
+    if (!bw || bw->closed || !bytes) return ruxen_io_error_invalid_input();
+    if (ruxen_bufwriter_append_vec(bw, bytes) != 0) {
+        return ruxen_io_error_from_errno(errno);
     }
-    int rc = ruxen_bufwriter_append(bw, staged, n);
-    if (rc != 0) {
-        int saved = errno;
-        free(staged);
-        return ruxen_io_error_from_errno(saved);
-    }
-    free(staged);
     return ruxen_result_ok_value(0);
 }
 
 void *ruxen_bufwriter_write_str(RuxenBufWriter *bw, const char *s) {
-    if (!bw || bw->closed) return ruxen_bufio_invalid_input();
+    if (!bw || bw->closed) return ruxen_io_error_invalid_input();
     if (!s) s = "";
     size_t n = strlen(s);
     int rc = ruxen_bufwriter_append(bw, (const uint8_t *)s, n);
@@ -464,7 +369,7 @@ void *ruxen_bufwriter_write_str(RuxenBufWriter *bw, const char *s) {
 }
 
 void *ruxen_bufwriter_flush(RuxenBufWriter *bw) {
-    if (!bw || bw->closed) return ruxen_bufio_invalid_input();
+    if (!bw || bw->closed) return ruxen_io_error_invalid_input();
     if (ruxen_bufwriter_emit(bw) != 0) {
         return ruxen_io_error_from_errno(errno);
     }
@@ -477,28 +382,15 @@ void *ruxen_bufwriter_flush(RuxenBufWriter *bw) {
  * but the v1 surface returns just the error). On success surrenders
  * the inner and marks closed. The returned value is the raw pointer
  * (caller's Result[W, IoError] payload). */
-static void *ruxen_bufwriter_into_inner_common(RuxenBufWriter *bw) {
-    if (!bw) return ruxen_bufio_invalid_input();
-    if (bw->closed) return ruxen_bufio_invalid_input();
+void *ruxen_bufwriter_into_inner(RuxenBufWriter *bw) {
+    if (!bw) return ruxen_io_error_invalid_input();
+    if (bw->closed) return ruxen_io_error_invalid_input();
     if (ruxen_bufwriter_emit(bw) != 0) {
         return ruxen_io_error_from_errno(errno);
     }
     void *inner = bw->inner;
-    if (bw->buf) { free(bw->buf); bw->buf = NULL; }
-    bw->cap = 0;
-    bw->pos = 0;
-    bw->filled = 0;
-    bw->inner = NULL;
-    bw->closed = 1;
+    ruxen_bufio_release(bw);
     return ruxen_result_ok_value((int64_t)inner);
-}
-
-void *ruxen_bufwriter_into_inner_file(RuxenBufWriter *bw) {
-    return ruxen_bufwriter_into_inner_common(bw);
-}
-
-void *ruxen_bufwriter_into_inner_tcp(RuxenBufWriter *bw) {
-    return ruxen_bufwriter_into_inner_common(bw);
 }
 
 /* Drop helper — best-effort flush, then frees our buffer. Errors are
@@ -509,10 +401,5 @@ void ruxen_bufwriter_drop(RuxenBufWriter *bw) {
     if (bw->closed) return;
     /* Best-effort flush; swallow errors. */
     (void)ruxen_bufwriter_emit(bw);
-    if (bw->buf) { free(bw->buf); bw->buf = NULL; }
-    bw->cap = 0;
-    bw->pos = 0;
-    bw->filled = 0;
-    bw->inner = NULL;
-    bw->closed = 1;
+    ruxen_bufio_release(bw);
 }

@@ -65,7 +65,7 @@ typedef struct {
     char *buf;
     size_t len;
     size_t cap;
-    int err_tag;         /* set when err_set != 0 */
+    int err_errno;       /* errno captured at poll time; set when err_set != 0 */
     int err_set;
     int done;            /* 1 once '\n' or EOF reached */
     int result_taken;
@@ -81,7 +81,7 @@ void *ruxen_async_stdin_state_new(void) {
     s->buf = NULL;
     s->len = 0;
     s->cap = 0;
-    s->err_tag = 0;
+    s->err_errno = 0;
     s->err_set = 0;
     s->done = 0;
     s->result_taken = 0;
@@ -93,7 +93,7 @@ void *ruxen_async_stdin_state_new(void) {
     int flags = fcntl(0, F_GETFL, 0);
     if (flags < 0) {
         s->err_set = 1;
-        s->err_tag = RUXEN_IO_ERROR_INVALID_INPUT;
+        s->err_errno = EINVAL;
         return s;
     }
     s->saved_flags = flags;
@@ -114,8 +114,7 @@ void *ruxen_async_stdin_state_new(void) {
     /* Pre-allocate a small line buffer. 256 covers most interactive
      * input; grows on demand below. */
     s->cap = 256;
-    s->buf = (char *)malloc(s->cap);
-    if (!s->buf) ruxen_panic("ruxen_async_stdin_state_new: malloc failed");
+    s->buf = (char *)ruxen_xmalloc(s->cap);
     return s;
 }
 
@@ -141,7 +140,7 @@ int64_t ruxen_async_stdin_step(void *state) {
             char *next = (char *)realloc(s->buf, next_cap);
             if (!next) {
                 s->err_set = 1;
-                s->err_tag = RUXEN_IO_ERROR_OUT_OF_MEMORY;
+                s->err_errno = ENOMEM;
                 return 3;
             }
             s->buf = next;
@@ -159,11 +158,7 @@ int64_t ruxen_async_stdin_step(void *state) {
                 return 1;
             }
             s->err_set = 1;
-            switch (errno) {
-                case EBADF:  s->err_tag = RUXEN_IO_ERROR_INVALID_INPUT; break;
-                case EPIPE:  s->err_tag = RUXEN_IO_ERROR_BROKEN_PIPE; break;
-                default:     s->err_tag = RUXEN_IO_ERROR_OTHER; break;
-            }
+            s->err_errno = errno;
             return 3;
         }
         if (got == 0) {
@@ -185,13 +180,11 @@ int64_t ruxen_async_stdin_step(void *state) {
 
 void *ruxen_async_stdin_state_take_result(void *state) {
     if (!state) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     RuxenAsyncStdinState *s = (RuxenAsyncStdinState *)state;
     if (s->result_taken) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     s->result_taken = 1;
     if (s->buf) {
@@ -199,8 +192,7 @@ void *ruxen_async_stdin_state_take_result(void *state) {
         s->buf = NULL;
     }
     if (s->err_set) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(s->err_tag));
+        return ruxen_io_error_from_errno(s->err_errno);
     }
     return ruxen_result_ok_value((int64_t)s->out_str);
 }

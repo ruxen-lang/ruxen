@@ -3,17 +3,14 @@
 //! `Paren` node, so the formatter must RE-DERIVE grouping from operator
 //! precedence: any operand whose precedence is looser than its position
 //! requires is re-parenthesised. The law is reparse-identity — the formatted
-//! output must parse to the SAME tree (the printer's fully-parenthesised
-//! canonical form) as the source.
+//! output must parse to the SAME tree (span-blind) as the source.
 
 use ruxen_core::formatter;
 use ruxen_core::lexer::Lexer;
-use ruxen_core::parser::printer::PrettyPrinter;
 use ruxen_core::parser::Parser;
 
-/// Span-blind canonical dump of a program: the AST printer fully
-/// parenthesises every operator, so two trees are structurally equal iff
-/// their dumps match.
+/// Span-blind canonical dump of a program: two trees are structurally equal
+/// iff their dumps match.
 fn canonical(src: &str) -> String {
     let toks = Lexer::new(src)
         .tokenize()
@@ -21,7 +18,7 @@ fn canonical(src: &str) -> String {
     let prog = Parser::new(toks)
         .parse()
         .unwrap_or_else(|e| panic!("parse {src:?}: {e:?}"));
-    PrettyPrinter::new().print_program(&prog)
+    crate::common::span_blind_ast(&prog)
 }
 
 /// fmt(src) must re-parse to the same tree AND be idempotent.

@@ -62,9 +62,7 @@ fn lowering_records_function_and_instruction_spans() {
     let body_lines: Vec<u32> = add
         .blocks
         .iter()
-        .flat_map(|b| {
-            (0..b.instructions.len()).filter_map(|i| b.span_at(i).map(|s| s.line))
-        })
+        .flat_map(|b| (0..b.instructions.len()).filter_map(|i| b.span_at(i).map(|s| s.line)))
         .collect();
     assert!(
         body_lines.contains(&2),

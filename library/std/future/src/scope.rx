@@ -177,7 +177,9 @@ class Scope
   ## Scope#drop safety net: same cancel-remaining cleanup for any path that
   ## drops a Scope VALUE (e.g. a future shape that scope-exit-drops it).
   ## After `open`'s explicit `cancel_remaining` the child list is empty, so
-  ## this is a no-op in the common path.
+  ## this is a no-op in the common path. The teardown loop is inlined here
+  ## (not shared through a public helper) so no caller can release the
+  ## handle refs without also clearing the child list.
   def drop
     self.children.each do |h|
       if TaskHandle.is_done(h) == 0

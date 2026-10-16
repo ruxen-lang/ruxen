@@ -311,29 +311,12 @@ pub fn clean() -> Result<(), String> {
     Ok(())
 }
 
-/// Find the project root by searching upward for Ruxen.toml.
-///
-/// Returns the FIRST ancestor with a Ruxen.toml — i.e. the nearest
-/// member when invoked from inside a workspace. The workspace root
+/// The nearest member when invoked inside a workspace. The workspace root
 /// (which may also contain a Ruxen.toml) is found separately by
-/// [`manifest::find_workspace_root`] and used only to compute the
-/// shared `target/` directory; build/run still operate against the
-/// nearest member's package.
-pub fn find_project_root() -> Result<PathBuf, String> {
-    let mut dir =
-        std::env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))?;
-
-    loop {
-        if dir.join("Ruxen.toml").exists() {
-            return Ok(dir);
-        }
-        if !dir.pop() {
-            return Err(
-                "could not find `Ruxen.toml` in this directory or any parent directory".to_string(),
-            );
-        }
-    }
-}
+/// [`manifest::find_workspace_root`] and used only to compute the shared
+/// `target/` directory; build/run still operate against the nearest
+/// member's package.
+pub use ruxenc::compile::find_project_root;
 
 /// Return the directory that owns `target/`. When `project_dir` is a
 /// member of a workspace, this is the workspace root; otherwise the
@@ -542,17 +525,16 @@ fn gather_project_bundle(
 /// Wrap the rlib object-extraction call with rich diagnostic context.
 ///
 /// The underlying I/O / archive errors are technically accurate (`No
-/// such file or directory`, `metadata.json not found in .rlib`, …)
+/// such file or directory`, `object code not found in .rlib`, …)
 /// but give the user no path forward.  Surface the dep name and a
 /// concrete fix hint based on the failure shape:
 ///
 /// - Missing rlib → dependency was never built.  Most common cause:
 ///   user edited `[dependencies]` then ran the binary directly without
 ///   `ruxen build` in between.
-/// - Compiler-version mismatch → dependency was built with a different
-///   ruxenc.  Common after upgrading the toolchain.
-/// - Corrupted archive / missing metadata → rlib is truncated or
-///   stale from a build that crashed mid-write.
+/// - Any failure reading an rlib that exists → the archive is
+///   unreadable, truncated or stale from a build that crashed
+///   mid-write; rebuilding regenerates it.
 fn extract_dep_object_code(name: &str, rlib_path: &Path) -> Result<Vec<u8>, String> {
     if !rlib_path.exists() {
         return Err(format!(
@@ -565,38 +547,16 @@ fn extract_dep_object_code(name: &str, rlib_path: &Path) -> Result<Vec<u8>, Stri
         ));
     }
     rlib::extract_object_code(rlib_path).map_err(|e| {
-        let lower = e.to_lowercase();
-        // Pattern-match the underlying error to give an actionable hint.
-        if lower.contains("incompatible") || lower.contains("compiled with ruxenc") {
-            format!(
-                "dependency `{}` was built with an incompatible compiler version\n  \
-                 Path: {}\n  \
-                 Cause: {}\n  \
-                 Hint: run `ruxen clean` then `ruxen build` to rebuild the dep \
-                 with the current toolchain.",
-                name,
-                rlib_path.display(),
-                e
-            )
-        } else if lower.contains("not found in .rlib") || lower.contains("failed to read") {
-            format!(
-                "dependency `{}` rlib is corrupted or incomplete\n  \
-                 Path: {}\n  \
-                 Cause: {}\n  \
-                 Hint: a previous build may have been interrupted; \
-                 run `ruxen clean` then `ruxen build` to regenerate.",
-                name,
-                rlib_path.display(),
-                e
-            )
-        } else {
-            format!(
-                "failed to load dependency `{}`\n  Path: {}\n  Cause: {}",
-                name,
-                rlib_path.display(),
-                e
-            )
-        }
+        format!(
+            "dependency `{}` rlib could not be read\n  \
+             Path: {}\n  \
+             Cause: {}\n  \
+             Hint: a previous build may have been interrupted; \
+             run `ruxen clean` then `ruxen build` to regenerate.",
+            name,
+            rlib_path.display(),
+            e
+        )
     })
 }
 
@@ -868,16 +828,13 @@ fn compile_project(
         extra_link_flags.push(obj_path.to_string_lossy().to_string());
     }
 
-    // Gather user-side C runtime sources: the project's own
-    // `runtime/*.c` plus every path-dep's `runtime/*.c`. Mirrors what
-    // stdlib packages get for free (`library/std/<pkg>/runtime/*.c`)
-    // so a `lib "runtime/foo.c"` decl in user code resolves to symbols
-    // defined in a sibling-of-`src/` C file.
-    let mut user_runtime: Vec<PathBuf> = Vec::new();
-    user_runtime.extend(codegen::find_runtime_sources_in_dir(project_dir)?);
-    for dep_dir in dep_source_dirs {
-        user_runtime.extend(codegen::find_runtime_sources_in_dir(dep_dir)?);
-    }
+    // User-side link inputs, shared with `ruxen test`: the project's and
+    // every path-dep's `runtime/*.c` (what stdlib packages get for free,
+    // so a `lib "runtime/foo.c"` decl resolves), each flat-merged dep's
+    // `[system_libs] libs` (Q32; `collect_system_lib_flags` only walks the
+    // stdlib) and the project's and deps' `[system_libs] frameworks`.
+    let link_inputs = codegen::LinkInputs::for_project(project_dir, dep_source_dirs)?;
+    let mut user_runtime = link_inputs.runtime_sources;
     // `.m` (Objective-C / AppKit) shims are native-only — never compile them for
     // wasm (no AppKit; clang would fail). On the wasm reactor path their symbols
     // become host imports like other deps' runtime, so a quiver web app that
@@ -886,46 +843,19 @@ fn compile_project(
         user_runtime.retain(|p| p.extension().and_then(|s| s.to_str()) != Some("m"));
     }
 
-    // Q32: a flat-merged FFI dependency's `[system_libs]` (e.g. `-lpthread`)
-    // must also reach this binary's link line, the same way its `runtime/*.c`
-    // does above. `collect_system_lib_flags` only walks the STDLIB root, so a
-    // user dep's link needs would otherwise be dropped. Mirrors the test
-    // runner's dep `[system_libs]` forwarding.
-    for dep_dir in dep_source_dirs {
-        let dep_toml = dep_dir.join("Ruxen.toml");
-        if let Ok(contents) = fs::read_to_string(&dep_toml) {
-            for lib in codegen::parse_system_libs(&contents) {
-                let flag = format!("-l{}", lib);
-                if !extra_link_flags.contains(&flag) {
-                    extra_link_flags.push(flag);
-                }
-            }
-        }
+    for lib in &link_inputs.system_libs {
+        extra_link_flags.push(format!("-l{}", lib));
     }
 
-    // macOS frameworks: this binary OR any dep may declare `[system_libs]
-    // frameworks = ["Cocoa", ...]` — e.g. a native AppKit widget backend. Forward
-    // each as `-framework <name>` so plain `ruxen build/run` links them (no env
-    // var). Native macOS targets only — never for wasm (wasm-ld rejects
-    // -framework) so a web app transitively depending on canvas still links.
+    // macOS frameworks (e.g. a native AppKit widget backend's `Cocoa`) go on
+    // as `-framework <name>` so plain `ruxen build/run` links them. Native
+    // macOS targets only, never wasm (wasm-ld rejects -framework), so a web
+    // app transitively depending on canvas still links.
     #[cfg(target_os = "macos")]
     if !target.is_wasm() {
-        let mut fw_tomls: Vec<PathBuf> = vec![project_dir.join("Ruxen.toml")];
-        for dep_dir in dep_source_dirs {
-            fw_tomls.push(dep_dir.join("Ruxen.toml"));
-        }
-        for toml_path in &fw_tomls {
-            if let Ok(contents) = fs::read_to_string(toml_path) {
-                for fw in codegen::parse_system_frameworks(&contents) {
-                    let dup = extra_link_flags
-                        .windows(2)
-                        .any(|w| w[0] == "-framework" && w[1] == fw);
-                    if !dup {
-                        extra_link_flags.push("-framework".to_string());
-                        extra_link_flags.push(fw);
-                    }
-                }
-            }
+        for fw in link_inputs.frameworks {
+            extra_link_flags.push("-framework".to_string());
+            extra_link_flags.push(fw);
         }
     }
 

@@ -5,9 +5,10 @@ the closed set `{File, TcpStream}`.
 
 v1 simplification: no formal `Read` / `Write` mixin. The runtime carves
 a 1-byte `kind` tag into the wrapper spine and branches on it for every
-fill / flush. The user-visible generic surface (`BufReader[R]`) is
-monomorphised at typeck against the closed inner set; anything else
-raises **E0714**. The formal mixin story is deferred to v1.5.
+fill / flush. `BufReader` / `BufWriter` are modules with one class per
+inner type; calling a method on the module itself (`BufReader.new`)
+raises **E0714**, which names the classes. The formal mixin story is
+deferred to v1.5.
 
 ## Surface
 
@@ -47,8 +48,9 @@ module BufWriter
 end
 ```
 
-- The inner is restricted to `File` or `TcpStream` (the `File` and
-  `Tcp` classes). Any other type raises **E0714** at typeck.
+- The inner is restricted to `File` or `TcpStream` by the `File` and
+  `Tcp` classes' declared constructor parameters. `BufReader.new(..)`
+  on the module raises **E0714**.
 - `BufReader#each_line` is deferred to v1.5.
 
 ## Semantics

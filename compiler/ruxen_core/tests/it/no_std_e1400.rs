@@ -52,6 +52,19 @@ fn array_literal_trips_e1400() {
 }
 
 #[test]
+fn struct_method_body_trips_e1400() {
+    // Struct and enum method bodies are user code too; the validator must
+    // walk them, not only free functions and class methods.
+    let src = "struct Point\n  x: Int\n  def label -> Int\n    let s = \"p\"\n    0\n  end\nend\n\
+               def main -> Int\n  0\nend\n";
+    let codes = e1400_codes(src);
+    assert!(
+        codes.iter().any(|c| c == "E1400"),
+        "a string literal in a no_std struct method must trip E1400, got: {codes:?}"
+    );
+}
+
+#[test]
 fn scalar_ffi_call_is_clean() {
     // A no_std unit may call a scalar-only FFI without tripping E1400.
     let src = "lib \"c\"\n  def exit(code: Int32)\nend\n\

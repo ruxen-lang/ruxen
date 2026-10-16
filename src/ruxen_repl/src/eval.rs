@@ -57,6 +57,7 @@ fn replay_flag_toggle_stmt(enter: bool, span: &ruxen_core::lexer::token::Span) -
     };
     let call = Expr {
         kind: ExprKind::Call {
+            parens: true,
             callee: Box::new(Expr {
                 kind: ExprKind::Identifier("__repl_set_replaying".to_string()),
                 span: span.clone(),
@@ -323,6 +324,7 @@ fn replay_region_mutates_slot(stmts: &[Statement], slot_name: &str) -> bool {
                 walk_expr(object, name) || args.iter().any(|a| walk_expr(a, name))
             }
             ExprKind::Call {
+                parens: _,
                 callee,
                 args,
                 block,
@@ -721,7 +723,7 @@ fn eval_statement(session: &mut ReplSession, raw_input: &str, stmt: Statement) -
 
 /// Evaluate a top-level item (def, class, struct, etc.).
 fn eval_top_level(session: &mut ReplSession, raw_input: &str, item: TopLevelItem) -> EvalResult {
-    let item_span = get_item_span(&item);
+    let item_span = item.span().clone();
     match item {
         TopLevelItem::Function(func_def) => {
             let name = func_def.name.clone();
@@ -1332,7 +1334,7 @@ fn eval_type_command(session: &mut ReplSession, expr_str: &str) -> EvalResult {
                 .next()
                 .unwrap_or(Ty::Unit);
 
-            EvalResult::Command(display::format_type(&return_ty))
+            EvalResult::Command(return_ty.to_string())
         }
         ReplParseResult::Complete(_) => {
             EvalResult::Error(display::format_error(":type expects an expression"))
@@ -1814,6 +1816,7 @@ fn slot_load_let(
     let addr = session.slot_addr(vs.idx);
     let call = Expr {
         kind: ExprKind::Call {
+            parens: true,
             callee: Box::new(Expr {
                 kind: ExprKind::Identifier("__slot_load_i64".to_string()),
                 span: span.clone(),
@@ -1832,6 +1835,7 @@ fn slot_load_let(
         generic_args: None,
         span: span.clone(),
         rooted: false,
+        nilable: false,
     }));
     // Phase 2.6: emit with `vs.mutable` (the source-level mutability
     // recorded at the var's first let/var binding). The post-replay
@@ -1894,6 +1898,7 @@ fn slot_refresh_assign(
     let addr = session.slot_addr(vs.idx);
     let load_call = Expr {
         kind: ExprKind::Call {
+            parens: true,
             callee: Box::new(Expr {
                 kind: ExprKind::Identifier("__slot_load_i64".to_string()),
                 span: span.clone(),
@@ -1939,6 +1944,7 @@ fn slot_store_expr_stmt(
     let addr = session.slot_addr(vs.idx);
     let call = Expr {
         kind: ExprKind::Call {
+            parens: true,
             callee: Box::new(Expr {
                 kind: ExprKind::Identifier("__slot_store_i64".to_string()),
                 span: span.clone(),
@@ -2024,26 +2030,6 @@ fn expr_contains_return(expr: &Expr) -> bool {
     let mut scan = ReturnScan { found: false };
     scan.visit_expr(expr);
     scan.found
-}
-
-/// Get the span from a top-level item.
-fn get_item_span(item: &TopLevelItem) -> ruxen_core::lexer::token::Span {
-    match item {
-        TopLevelItem::Function(f) => f.span.clone(),
-        TopLevelItem::Class(c) => c.span.clone(),
-        TopLevelItem::Struct(s) => s.span.clone(),
-        TopLevelItem::Enum(e) => e.span.clone(),
-        TopLevelItem::Mixin(t) => t.span.clone(),
-        TopLevelItem::Impl(i) => i.span.clone(),
-        TopLevelItem::Module(m) => m.span.clone(),
-        TopLevelItem::Use(u) => u.span.clone(),
-        TopLevelItem::TypeAlias(t) => t.span.clone(),
-        TopLevelItem::Newtype(n) => n.span.clone(),
-        TopLevelItem::Const(c) => c.span.clone(),
-        TopLevelItem::Lib(l) => l.span.clone(),
-        TopLevelItem::Expr(e) => e.span.clone(),
-        TopLevelItem::Alias(a) => a.span.clone(),
-    }
 }
 
 /// Format diagnostics for REPL display (compact format).

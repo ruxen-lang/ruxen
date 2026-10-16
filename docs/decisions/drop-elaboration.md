@@ -48,13 +48,18 @@ For each block ending in `Terminator::Return`, `insert_drops` appends, in
    right C symbol), then
 2. a type-directed free call:
    - `Ty::String` → `ruxen_string_free`
-   - `Ty::Array(elem)` → element-aware `ruxen_vec_drop_string` /
-     `ruxen_vec_drop_vec`, else spine-only `ruxen_vec_free`
-   - `Ty::Map(k,v)` / `Ty::Set(elem)` → element-aware `ruxen_hash_drop_*` /
-     `ruxen_set_drop_string`, else spine-only `ruxen_hash_free` / `ruxen_set_free`
+   - `Ty::Array(elem)` → `ruxen_vec_drop(v, desc(elem))`
+   - `Ty::Map(k,v)` → `ruxen_hash_drop(h, desc(k), desc(v))`
+   - `Ty::Set(elem)` → `ruxen_set_drop(s, desc(elem))`
    - `Ty::Class/Struct/Enum` → `ruxen_dealloc`
-   - any other type reaching this point → `unimplemented!` (loud, not a silent
-     fall-through), since the eligibility filter restricts to exactly these.
+
+   `desc` is an element descriptor (`drops::elem_desc`, the `RUXEN_ELEM_*`
+   block in `runtime.h`): a pre-order stream of 4-bit tags that the C side
+   follows recursively through `ruxen_elem_drop`, so nested containers are
+   freed to any depth. A `Hash` key or `Set` element is described as a
+   string or a plain word only, matching how those tables copy keys. The
+   eligibility filter is `heap_free_callee(ty).is_some()`, so no other type
+   reaches this point.
 
 Closures use the same MIR-call architecture. Lowering attaches a synthesized
 `__closure_N_drop(pair)` function to the fresh pair local. Drop elaboration

@@ -136,6 +136,40 @@ mod tests {
         assert_eq!(unify(&a, &b, &mut ctx, &span()).unwrap(), a);
     }
 
+    /// A borrow is not its referent: `&Int` and `Int` are different types,
+    /// in either order.
+    #[test]
+    fn unify_ref_with_its_referent_fails() {
+        let mut ctx = TypeContext::new();
+        let r = Ty::Ref(Box::new(Ty::Int));
+        assert!(unify(&r, &Ty::Int, &mut ctx, &span()).is_err());
+        assert!(unify(&Ty::Int, &r, &mut ctx, &span()).is_err());
+    }
+
+    /// A scalar coerces out of its borrow by value; a non-scalar does not,
+    /// and a value never coerces into a borrow.
+    #[test]
+    fn scalar_coerces_out_of_its_borrow() {
+        let ctx = TypeContext::new();
+        let borrow = |t: Ty| Ty::Ref(Box::new(t));
+        assert!(can_coerce(&borrow(Ty::Int), &Ty::Int, &ctx));
+        assert!(!can_coerce(&borrow(Ty::Int), &Ty::Float, &ctx));
+        assert!(!can_coerce(&borrow(Ty::String), &Ty::String, &ctx));
+        assert!(!can_coerce(&Ty::Int, &borrow(Ty::Int), &ctx));
+    }
+
+    /// Two different type params are different types; the same param unifies.
+    #[test]
+    fn unify_distinct_type_params_fails() {
+        let mut ctx = TypeContext::new();
+        let param = |name: &str| Ty::TypeParam {
+            name: name.to_string(),
+            bounds: vec![],
+        };
+        assert!(unify(&param("T"), &param("U"), &mut ctx, &span()).is_err());
+        assert!(unify(&param("T"), &param("T"), &mut ctx, &span()).is_ok());
+    }
+
     #[test]
     fn unify_different_types_fails() {
         let mut ctx = TypeContext::new();

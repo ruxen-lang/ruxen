@@ -145,16 +145,13 @@ behind.
       `-> str` arm wrongly claimed a borrowed slice) and `&str.parse_uint`
       (newly declared `def parse_uint -> Result[USize, Error]` on `class
       String`, sharing the `&str` C symbol). Their `strings.rs` `Ty::Str` arms
-      were deleted. GENUINE IRREDUCIBLE residuals kept in `strings.rs` (surface
-      type ≠ derivable ABI width — no single `.rx` decl expresses both):
-      `remove` (Char/I32 surface vs C 16-byte struct-pointer/I64 holding the
-      removed codepoint + rewritten buffer) and the mutation methods
-      `push`/`push_str`/`insert`/`insert_str` (surface `nil` — the MIR
-      special-case does the `&var String` deref/store dance and returns no
-      value, pin `48_borrow_var` — vs C `char*` the dance must capture, so
-      `.rx` declares `-> String`). Pins: `library/std/string/tests/build_test.rx`
-      and `convert_test.rx`. `strings.rs` residual count:
-      5 `String` arms (`remove`+4 mutation), 0 `Str` arms.
+      were deleted. The remaining residuals (`remove` and the mutation
+      methods `push`/`push_str`/`insert`/`insert_str`/`clear`/`truncate`)
+      are now `def var` lib decls: the receiver crosses as `&var String` (the
+      caller's slot address) and the C symbol replaces the buffer in place,
+      so each decl states its true surface type and `strings.rs` is deleted
+      (F-23). Pins: `library/std/string/tests/build_test.rx` and e2e
+      `2161_string_mutators_in_place`.
 - [~] Feature B: trait-bound enforcement. DONE: generalized
       `check_concurrency_bounds` → `check_declared_bounds` +
       `check_generic_param_bounds` (harvested-generic seam) +

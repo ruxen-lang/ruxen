@@ -2,7 +2,7 @@ use super::super::*;
 
 /// `vec[i]` lowers to `ruxen_vec_get_or_panic` for any receiver that is
 /// a backing Vec — a genuine `Ty::Array`, a reference to one, OR the
-/// `Ty::Class { name: "Array" | "Vec" }` shape that `self` carries
+/// `Ty::Class { name: "Array" }` shape that `self` carries
 /// INSIDE a migrated `class Array[T]` stdlib method body (the FFI-shell
 /// class, repr-identical to `RuxenVec*`). Without the latter, indexed
 /// reads inside `.rx` combinator bodies (`self[i]`) silently no-op.
@@ -10,14 +10,7 @@ use super::super::*;
 /// Shared with `assign.rs` (the `xs[i] = v` write path mirrors this read
 /// path), so it is `pub(super)`.
 pub(super) fn is_indexable_vec_ty(ty: &Ty) -> bool {
-    match ty.peel_refs() {
-        Ty::Array(_) => true,
-        Ty::Class { name, .. } => {
-            let base = name.split('[').next().unwrap_or(name);
-            matches!(base, "Vec" | "Array")
-        }
-        _ => false,
-    }
+    matches!(ty.builtin_head(), Some(("Array", _)))
 }
 
 impl<'a> Lowerer<'a> {
@@ -93,10 +86,13 @@ impl<'a> Lowerer<'a> {
                         kind: HirExprKind::MethodCall {
                             object: Box::new((**object).clone()),
                             method: UNRESOLVED_DEF,
+                            resolved: UNRESOLVED_DEF,
                             method_name: "[]".to_string(),
                             generic_args: vec![],
                             args: vec![(**index).clone()],
                             block: None,
+                            safe_nav: false,
+                            parens: true,
                         },
                         ty: expr.ty.clone(),
                         span: expr.span.clone(),

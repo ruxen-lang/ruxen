@@ -1,0 +1,13 @@
+# F-22. `==` on `Option` compares the held values with the element's own
+# `==` (Option#== in option_result.rx), not the two box pointers. Before,
+# `Some(3) == Some(3)` and `nil == nil` were both false.
+def main
+  puts Some(3) == Some(3)
+  puts Some(3) == Some(4)
+  puts Some(3) != Some(4)
+  let none: Option[Int] = nil
+  puts none == nil
+  puts Some(3) == nil
+  puts Some("ab") == Some("a" + "b")
+  puts Some("ab") != Some("ba")
+end

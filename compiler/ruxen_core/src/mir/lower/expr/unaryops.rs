@@ -11,17 +11,8 @@ impl<'a> Lowerer<'a> {
                 // (`Int`/`Float`/`Bool`) fall through to the direct
                 // `Negate`/`Not` instructions below — the machine floor.
                 // `Deref` is never a method. (`+@` has no surface operator.)
-                fn peel(t: &Ty) -> &Ty {
-                    match t {
-                        Ty::Ref(i)
-                        | Ty::RefMut(i)
-                        | Ty::RefLifetime(_, i)
-                        | Ty::RefMutLifetime(_, i) => peel(i),
-                        _ => t,
-                    }
-                }
                 let nominal = matches!(
-                    peel(&operand.ty),
+                    operand.ty.peel_refs(),
                     Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
                 );
                 let unary_method = match op {
@@ -37,10 +28,13 @@ impl<'a> Lowerer<'a> {
                             kind: HirExprKind::MethodCall {
                                 object: Box::new((**operand).clone()),
                                 method: UNRESOLVED_DEF,
+                                resolved: UNRESOLVED_DEF,
                                 method_name: method.to_string(),
                                 generic_args: vec![],
                                 args: vec![],
                                 block: None,
+                                safe_nav: false,
+                                parens: true,
                             },
                             ty: expr.ty.clone(),
                             span: expr.span.clone(),

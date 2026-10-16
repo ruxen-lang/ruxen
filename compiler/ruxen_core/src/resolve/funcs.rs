@@ -13,9 +13,8 @@ impl Resolver {
         let Some(def) = self.symbols.get(def_id) else {
             return false;
         };
-        let signature = match &def.kind {
-            DefKind::Function { signature } | DefKind::Method { signature, .. } => signature,
-            _ => return false,
+        let Some(signature) = def.kind.signature() else {
+            return false;
         };
         let required = signature
             .params
@@ -29,9 +28,8 @@ impl Resolver {
         let Some(def) = self.symbols.get(def_id) else {
             return false;
         };
-        let signature = match &def.kind {
-            DefKind::Function { signature } | DefKind::Method { signature, .. } => signature,
-            _ => return false,
+        let Some(signature) = def.kind.signature() else {
+            return false;
         };
         if !self.overload_accepts_arg_count(def_id, args.len()) {
             return false;
@@ -48,33 +46,7 @@ impl Resolver {
         let DefKind::OverloadSet { candidates } = &def.kind else {
             return def_id;
         };
-        candidates
-            .iter()
-            .copied()
-            .filter(|candidate| self.overload_accepts_args(*candidate, args))
-            .find(|candidate| {
-                self.symbols
-                    .get(*candidate)
-                    .and_then(|def| match &def.kind {
-                        DefKind::Function { signature } | DefKind::Method { signature, .. } => {
-                            Some(signature.params.len() == args.len())
-                        }
-                        _ => None,
-                    })
-                    .unwrap_or(false)
-            })
-            .or_else(|| {
-                candidates
-                    .iter()
-                    .copied()
-                    .find(|candidate| self.overload_accepts_args(*candidate, args))
-            })
-            .or_else(|| {
-                candidates
-                    .iter()
-                    .copied()
-                    .find(|candidate| self.overload_accepts_arg_count(*candidate, args.len()))
-            })
+        self.select_overload_candidate_by_args(candidates, args)
             .unwrap_or(def_id)
     }
 
@@ -90,13 +62,8 @@ impl Resolver {
             .find(|candidate| {
                 self.symbols
                     .get(*candidate)
-                    .and_then(|def| match &def.kind {
-                        DefKind::Function { signature } | DefKind::Method { signature, .. } => {
-                            Some(signature.params.len() == args.len())
-                        }
-                        _ => None,
-                    })
-                    .unwrap_or(false)
+                    .and_then(|def| def.kind.signature())
+                    .is_some_and(|signature| signature.params.len() == args.len())
             })
             .or_else(|| {
                 candidates
@@ -110,6 +77,19 @@ impl Resolver {
                     .copied()
                     .find(|candidate| self.overload_accepts_arg_count(*candidate, args.len()))
             })
+    }
+
+    /// Turn the tail expression of a body whose return type is implicitly
+    /// Unit (`def main`, `def init`, a `def var` method, none annotated)
+    /// into a statement. Ruby discards the last value of such a body, so
+    /// `def main; p 7; end` must not demand that `p 7` be `()`.
+    fn discard_tail_value(body: &mut HirExpr) {
+        if let HirExprKind::Block(stmts, tail) = &mut body.kind {
+            if let Some(value) = tail.take() {
+                stmts.push(HirStatement::Expr(*value));
+            }
+            body.ty = Ty::Unit;
+        }
     }
 
     /// True if `p` is the explicit `&block:` parameter (parser stores its
@@ -172,12 +152,7 @@ impl Resolver {
         let defaults: Vec<crate::parser::ast::Expr> = self
             .symbols
             .get(def_id)
-            .and_then(|def| match &def.kind {
-                DefKind::Function { signature } | DefKind::Method { signature, .. } => {
-                    Some(signature)
-                }
-                _ => None,
-            })
+            .and_then(|def| def.kind.signature())
             .map(|signature| {
                 signature
                     .params
@@ -330,16 +305,8 @@ impl Resolver {
                         let refs: Vec<MixinRef> = pred
                             .bounds
                             .iter()
-                            .map(|bound| MixinRef {
-                                name: bound.path.segments.join("."),
-                                generic_args: bound
-                                    .path
-                                    .generic_args
-                                    .as_ref()
-                                    .map(|args| {
-                                        args.iter().map(|a| self.resolve_type_expr(a)).collect()
-                                    })
-                                    .unwrap_or_default(),
+                            .map(|bound| {
+                                MixinRef::from_bound(&bound.path, |a| self.resolve_type_expr(a))
                             })
                             .collect();
                         if let Some(gp) = generic_params.iter_mut().find(|g| &g.name == name) {
@@ -553,27 +520,22 @@ impl Resolver {
             });
         }
 
-        let return_ty = f
-            .return_type
-            .as_ref()
-            .map(|t| self.resolve_type_expr(t))
-            .unwrap_or_else(|| {
-                // Default to Unit for:
-                // - init methods (constructors)
-                // - mut methods (typically mutate in place, return nothing)
-                // - main function
-                // - display/display_all methods (void-like)
-                // Otherwise use a fresh type var for inference
-                let is_mut = matches!(f.self_mode, Some(ast::SelfMode::Mutable));
-                let is_init = f.name == "init";
-                let is_main = f.name == "main" && self.current_self_ty.is_none();
-                let is_display_like = f.name == "display" || f.name == "display_all";
-                if is_init || is_mut || is_main || is_display_like {
-                    Ty::Unit
-                } else {
-                    self.type_context.fresh_type_var()
-                }
-            });
+        // Default to Unit for:
+        // - init methods (constructors)
+        // - mut methods (typically mutate in place, return nothing)
+        // - main function
+        // Otherwise use a fresh type var for inference
+        let implicit_unit = f.return_type.is_none() && {
+            let is_mut = matches!(f.self_mode, Some(ast::SelfMode::Mutable));
+            let is_init = f.name == "init";
+            let is_main = f.name == "main" && self.current_self_ty.is_none();
+            is_init || is_mut || is_main
+        };
+        let return_ty = match &f.return_type {
+            Some(t) => self.resolve_type_expr(t),
+            None if implicit_unit => Ty::Unit,
+            None => self.type_context.fresh_type_var(),
+        };
 
         let old_return_ty = self.current_return_ty.replace(return_ty.clone());
         let old_async_scope_depth = self.async_scope_depth;
@@ -585,7 +547,10 @@ impl Resolver {
             f.name == "init" && !f.is_class_method && self.current_class_is_subclass,
         );
 
-        let body = self.resolve_block_as_expr(&f.body);
+        let mut body = self.resolve_block_as_expr(&f.body);
+        if implicit_unit {
+            Self::discard_tail_value(&mut body);
+        }
 
         self.in_subclass_init = old_in_subclass_init;
         self.async_scope_depth = old_async_scope_depth;
@@ -673,31 +638,7 @@ impl Resolver {
                 let target_def_id = self.resolve_use_path_from(def_id, &path[1..], use_decl);
 
                 if let Some(final_id) = target_def_id {
-                    // Import the name(s) into the current scope based on UseKind
-                    match &use_decl.kind {
-                        ast::UseKind::Simple => {
-                            // `use Foo.Bar.Baz` — import the last segment name
-                            let import_name = path.last().unwrap().clone();
-                            self.scopes.insert(import_name.clone(), final_id);
-                            self.scopes.insert_type(import_name, final_id);
-                        }
-                        ast::UseKind::Alias(alias) => {
-                            // `use Foo.Bar as B` — import under the alias
-                            self.scopes.insert(alias.clone(), final_id);
-                            self.scopes.insert_type(alias.clone(), final_id);
-                        }
-                        ast::UseKind::Group(names) => {
-                            // `use Foo.Bar.{ X, Y }` — import each named item
-                            // final_id should be a module; resolve each name within it
-                            for name in names {
-                                let child_id = self.resolve_child_in_def(final_id, name, use_decl);
-                                if let Some(cid) = child_id {
-                                    self.scopes.insert(name.clone(), cid);
-                                    self.scopes.insert_type(name.clone(), cid);
-                                }
-                            }
-                        }
-                    }
+                    self.bind_use_import(use_decl, final_id, false);
                 }
             }
             None => {
@@ -729,27 +670,7 @@ impl Resolver {
                         if let Some(final_id) =
                             self.resolve_use_path_from(mid, &path[2..], use_decl)
                         {
-                            match &use_decl.kind {
-                                ast::UseKind::Simple => {
-                                    let import_name = path.last().unwrap().clone();
-                                    self.scopes.insert(import_name.clone(), final_id);
-                                    self.scopes.insert_type(import_name, final_id);
-                                }
-                                ast::UseKind::Alias(alias) => {
-                                    self.scopes.insert(alias.clone(), final_id);
-                                    self.scopes.insert_type(alias.clone(), final_id);
-                                }
-                                ast::UseKind::Group(names) => {
-                                    for name in names {
-                                        if let Some(cid) =
-                                            self.resolve_child_in_def(final_id, name, use_decl)
-                                        {
-                                            self.scopes.insert(name.clone(), cid);
-                                            self.scopes.insert_type(name.clone(), cid);
-                                        }
-                                    }
-                                }
-                            }
+                            self.bind_use_import(use_decl, final_id, false);
                             return;
                         }
                     }
@@ -764,43 +685,7 @@ impl Resolver {
                     // under the requested name (Simple/Alias/Group)
                     // so the explicit `use` still produces a usable
                     // local alias.
-                    match &use_decl.kind {
-                        ast::UseKind::Simple => {
-                            let import_name = last.clone();
-                            self.scopes.insert(import_name.clone(), final_id);
-                            self.scopes.insert_type(import_name, final_id);
-                        }
-                        ast::UseKind::Alias(alias) => {
-                            self.scopes.insert(alias.clone(), final_id);
-                            self.scopes.insert_type(alias.clone(), final_id);
-                        }
-                        ast::UseKind::Group(names) => {
-                            // For grouped `use rondo.{Rondo, Request}`,
-                            // each name must already be top-level. Bind
-                            // each one; a name that does not resolve is
-                            // an error (E0738), never a silent skip.
-                            for name in names {
-                                let id = self
-                                    .scopes
-                                    .lookup_type(name)
-                                    .or_else(|| self.scopes.lookup(name));
-                                if let Some(cid) = id {
-                                    self.scopes.insert(name.clone(), cid);
-                                    self.scopes.insert_type(name.clone(), cid);
-                                } else {
-                                    self.error_with_code(
-                                        format!(
-                                            "`{}` not found for `use {}.{{...}}`",
-                                            name,
-                                            path.join(".")
-                                        ),
-                                        &use_decl.span,
-                                        "E0738",
-                                    );
-                                }
-                            }
-                        }
-                    }
+                    self.bind_use_import(use_decl, final_id, true);
                     return;
                 }
                 self.diagnostics.push(Diagnostic::error(
@@ -810,6 +695,58 @@ impl Resolver {
                     ),
                     use_decl.span.clone(),
                 ));
+            }
+        }
+    }
+
+    /// Bind the name(s) a resolved `use` imports into both the value and the
+    /// type scope: the last path segment (`use Foo.Bar`), the alias
+    /// (`use Foo.Bar as B`), or each group member (`use Foo.{X, Y}`).
+    ///
+    /// Group members are looked up as children of `final_id`, except when
+    /// `flat_merged`: the path did not resolve because a flat-merged path
+    /// dependency put its types at top level, so each member must already
+    /// be in scope, and one that is not is E0738, never a silent skip.
+    fn bind_use_import(&mut self, use_decl: &ast::UseDecl, final_id: DefId, flat_merged: bool) {
+        let bind = |this: &mut Self, name: &str, id: DefId| {
+            this.scopes.insert(name.to_string(), id);
+            this.scopes.insert_type(name.to_string(), id);
+        };
+        match &use_decl.kind {
+            ast::UseKind::Simple => {
+                let import_name = use_decl
+                    .path
+                    .last()
+                    .expect("resolve_use_decl rejects an empty use path");
+                bind(self, import_name, final_id);
+            }
+            ast::UseKind::Alias(alias) => bind(self, alias, final_id),
+            ast::UseKind::Group(names) => {
+                for name in names {
+                    let child = if flat_merged {
+                        let id = self
+                            .scopes
+                            .lookup_type(name)
+                            .or_else(|| self.scopes.lookup(name));
+                        if id.is_none() {
+                            self.error_with_code(
+                                format!(
+                                    "`{}` not found for `use {}.{{...}}`",
+                                    name,
+                                    use_decl.path.join(".")
+                                ),
+                                &use_decl.span,
+                                "E0738",
+                            );
+                        }
+                        id
+                    } else {
+                        self.resolve_child_in_def(final_id, name, use_decl)
+                    };
+                    if let Some(cid) = child {
+                        bind(self, name, cid);
+                    }
+                }
             }
         }
     }

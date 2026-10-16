@@ -19,8 +19,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use tempfile::TempDir;
-
 /// Shared, pre-staged install layout for all tests in this binary.
 ///
 /// On Linux, if two parallel tests each `fs::copy(ruxenc_exe(), dst)` and
@@ -31,52 +29,77 @@ use tempfile::TempDir;
 /// test spawns — eliminates the race: there is no live write fd when
 /// tests run.
 fn shared_install() -> &'static Path {
-    static INSTALL: OnceLock<(TempDir, PathBuf)> = OnceLock::new();
-    &INSTALL
-        .get_or_init(|| {
-            let temp = tempfile::tempdir().expect("mktemp shared install");
-            let bin_dir = temp.path().join("bin");
-            let lib_dir = temp.path().join("lib");
-            fs::create_dir_all(&bin_dir).unwrap();
-            fs::create_dir_all(&lib_dir).unwrap();
+    static INSTALL: OnceLock<PathBuf> = OnceLock::new();
+    INSTALL.get_or_init(|| {
+        // A static is never dropped, so a `TempDir` here would leak a
+        // full staged toolchain (about 140 MB) into the system temp dir
+        // on every run. Stage under the cargo target dir instead, one
+        // directory per test process, and sweep the ones left by
+        // processes that have exited.
+        let install = shared_install_dir();
+        let bin_dir = install.join("bin");
+        let lib_dir = install.join("lib");
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::create_dir_all(&lib_dir).unwrap();
 
-            let staged_ruxen = bin_dir.join("ruxen");
-            fs::copy(ruxen_exe(), &staged_ruxen).expect("copy ruxen");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = fs::metadata(&staged_ruxen).unwrap().permissions();
-                perms.set_mode(0o755);
-                fs::set_permissions(&staged_ruxen, perms).unwrap();
-            }
+        let staged_ruxen = bin_dir.join("ruxen");
+        fs::copy(ruxen_exe(), &staged_ruxen).expect("copy ruxen");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&staged_ruxen).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&staged_ruxen, perms).unwrap();
+        }
 
-            // #06.95 Phase B reorganized the C runtime into per-package
-            // subdirectories under `library/std/<pkg>/runtime/`, with
-            // the aggregator `runtime.c` living at
-            // `library/std/core/runtime/runtime.c`. The aggregator
-            // `#include`s siblings via relative `../../<pkg>/runtime/*.c`
-            // paths, so the entire `library/std/` tree must be staged
-            // with its directory structure intact for the includes to
-            // resolve at build time. Stage it under `<install>/lib/std/`
-            // and point `RUXEN_RUNTIME` at the staged `runtime.c`.
-            let staged_std_root = lib_dir.join("std");
-            copy_runtime_tree(&workspace_root().join("library/std"), &staged_std_root);
+        // #06.95 Phase B reorganized the C runtime into per-package
+        // subdirectories under `library/std/<pkg>/runtime/`, with
+        // the aggregator `runtime.c` living at
+        // `library/std/core/runtime/runtime.c`. The aggregator
+        // `#include`s siblings via relative `../../<pkg>/runtime/*.c`
+        // paths, so the entire `library/std/` tree must be staged
+        // with its directory structure intact for the includes to
+        // resolve at build time. Stage it under `<install>/lib/std/`
+        // and point `RUXEN_RUNTIME` at the staged `runtime.c`.
+        let staged_std_root = lib_dir.join("std");
+        copy_runtime_tree(&workspace_root().join("library/std"), &staged_std_root);
 
-            // #06.8 Wave 2 stdlib self-hosting: ruxenc reads
-            // `library/std/<pkg>/src/lib.rx` at startup via the
-            // bootstrap loader. `resolve_stdlib_root` walks
-            //   1. $RUXEN_STDLIB_PATH
-            //   2. workspace-relative (CARGO_MANIFEST_DIR walk)
-            //   3. `<exe>/../library/std/`
-            // The full `library/std/` tree is already staged at
-            // `<install>/lib/std/` above (it contains both the runtime
-            // and the .rx sources side-by-side per #06.95 Phase B), so
-            // no additional copy is needed for the .rx sources — the
-            // staged_stdlib_dir() helper returns this same root.
+        // #06.8 Wave 2 stdlib self-hosting: ruxenc reads
+        // `library/std/<pkg>/src/lib.rx` at startup via the
+        // bootstrap loader. `resolve_stdlib_root` walks
+        //   1. $RUXEN_STDLIB_PATH
+        //   2. workspace-relative (CARGO_MANIFEST_DIR walk)
+        //   3. `<exe>/../library/std/`
+        // The full `library/std/` tree is already staged at
+        // `<install>/lib/std/` above (it contains both the runtime
+        // and the .rx sources side-by-side per #06.95 Phase B), so
+        // no additional copy is needed for the .rx sources — the
+        // staged_stdlib_dir() helper returns this same root.
 
-            (temp, staged_ruxen)
-        })
-        .1
+        staged_ruxen
+    })
+}
+
+/// `<CARGO_TARGET_TMPDIR>/installed_binary/<pid>`, created empty. Removes
+/// the directories of earlier test processes that are no longer running.
+fn shared_install_dir() -> PathBuf {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("installed_binary");
+    fs::create_dir_all(&root).expect("create shared install root");
+    for entry in fs::read_dir(&root).unwrap().flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|n| n.parse::<u32>().ok()) else {
+            continue;
+        };
+        // Liveness is only checkable through /proc; elsewhere keep them.
+        let exited = cfg!(target_os = "linux") && !Path::new(&format!("/proc/{pid}")).exists();
+        if pid != std::process::id() && exited {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+    let dir = root.join(std::process::id().to_string());
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("create shared install dir");
+    dir
 }
 
 /// Recursively copy a workspace directory tree (e.g. `library/std/`)

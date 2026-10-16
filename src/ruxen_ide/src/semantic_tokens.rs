@@ -1,5 +1,6 @@
 use lsp_types::{SemanticToken, SemanticTokenModifier, SemanticTokenType};
 use ruxen_core::hir::nodes::*;
+use ruxen_core::hir::visit::{walk_expr, Visit};
 use ruxen_core::lexer::token::TokenKind;
 use ruxen_core::resolve::symbols::{DefKind, SymbolTable};
 
@@ -198,210 +199,6 @@ impl<'a> HirTokenWalker<'a> {
         }
     }
 
-    fn visit_item(&mut self, item: &HirItem) {
-        match item {
-            HirItem::Function(func) => self.visit_func(func),
-            HirItem::Class(class) => {
-                for method in &class.methods {
-                    self.visit_func(method);
-                }
-                for imp in &class.impl_blocks {
-                    self.visit_impl(imp);
-                }
-            }
-            HirItem::Struct(_) => {}
-            HirItem::Enum(_) => {}
-            HirItem::Mixin(t) => {
-                for item in &t.items {
-                    if let HirMixinItem::DefaultMethod(func) = item {
-                        self.visit_func(func);
-                    }
-                }
-            }
-            HirItem::Impl(imp) => self.visit_impl(imp),
-            HirItem::Module(m) => {
-                for item in &m.items {
-                    self.visit_item(item);
-                }
-            }
-            HirItem::TypeAlias(_) | HirItem::Newtype(_) | HirItem::Const(_) => {}
-        }
-    }
-
-    fn visit_impl(&mut self, imp: &HirImplBlock) {
-        for item in &imp.items {
-            if let HirImplItem::Method(func) = item {
-                self.visit_func(func);
-            }
-        }
-    }
-
-    fn visit_func(&mut self, func: &HirFuncDef) {
-        self.visit_expr(&func.body);
-    }
-
-    fn visit_expr(&mut self, expr: &HirExpr) {
-        match &expr.kind {
-            HirExprKind::VarRef(def_id) => {
-                let (tt, mods) = self.classify_def(*def_id);
-                self.push_token(&expr.span, tt, mods);
-            }
-            HirExprKind::FnCall { args, .. } => {
-                // The callee name portion — classify as function
-                self.push_token(&expr.span, 3, 0); // FUNCTION
-                for arg in args {
-                    self.visit_expr(arg);
-                }
-            }
-            HirExprKind::MethodCall {
-                object,
-                args,
-                block,
-                ..
-            } => {
-                self.visit_expr(object);
-                // Method name is part of the expression — classified as METHOD
-                for arg in args {
-                    self.visit_expr(arg);
-                }
-                if let Some(b) = block {
-                    self.visit_expr(b);
-                }
-            }
-            HirExprKind::FieldAccess { object, .. } => {
-                self.visit_expr(object);
-            }
-            HirExprKind::BinaryOp { left, right, .. } => {
-                self.visit_expr(left);
-                self.visit_expr(right);
-            }
-            HirExprKind::UnaryOp { operand, .. } => {
-                self.visit_expr(operand);
-            }
-            HirExprKind::Borrow { expr: inner, .. } => {
-                self.visit_expr(inner);
-            }
-            HirExprKind::Block(stmts, tail) | HirExprKind::UnsafeBlock(stmts, tail) => {
-                for stmt in stmts {
-                    self.visit_statement(stmt);
-                }
-                if let Some(tail) = tail {
-                    self.visit_expr(tail);
-                }
-            }
-            HirExprKind::If {
-                cond,
-                then_branch,
-                else_branch,
-            } => {
-                self.visit_expr(cond);
-                self.visit_expr(then_branch);
-                if let Some(e) = else_branch {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::Match { scrutinee, arms } => {
-                self.visit_expr(scrutinee);
-                for arm in arms {
-                    if let Some(g) = &arm.guard {
-                        self.visit_expr(g);
-                    }
-                    self.visit_expr(&arm.body);
-                }
-            }
-            HirExprKind::While { condition, body } => {
-                self.visit_expr(condition);
-                self.visit_expr(body);
-            }
-            HirExprKind::For { iterable, body, .. } => {
-                self.visit_expr(iterable);
-                self.visit_expr(body);
-            }
-            HirExprKind::Loop { body } => {
-                self.visit_expr(body);
-            }
-            HirExprKind::Assign { target, value, .. } => {
-                self.visit_expr(target);
-                self.visit_expr(value);
-            }
-            HirExprKind::CompoundAssign { target, value, .. } => {
-                self.visit_expr(target);
-                self.visit_expr(value);
-            }
-            HirExprKind::Return(Some(inner)) | HirExprKind::Break(Some(inner)) => {
-                self.visit_expr(inner);
-            }
-            HirExprKind::Closure { body, .. } => {
-                self.visit_expr(body);
-            }
-            HirExprKind::Construct { fields, .. } => {
-                for (_name, val) in fields {
-                    self.visit_expr(val);
-                }
-            }
-            HirExprKind::EnumVariant { fields, .. } => {
-                for (_name, val) in fields {
-                    self.visit_expr(val);
-                }
-            }
-            HirExprKind::Tuple(elems) | HirExprKind::ArrayLiteral(elems) => {
-                for e in elems {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::MapLiteral(entries) => {
-                for (k, v) in entries {
-                    self.visit_expr(k);
-                    self.visit_expr(v);
-                }
-            }
-            HirExprKind::Index { object, index } => {
-                self.visit_expr(object);
-                self.visit_expr(index);
-            }
-            HirExprKind::Cast { expr: inner, .. } => {
-                self.visit_expr(inner);
-            }
-            HirExprKind::ArrayFill { value, .. } => {
-                self.visit_expr(value);
-            }
-            HirExprKind::Range { start, end, .. } => {
-                if let Some(s) = start {
-                    self.visit_expr(s);
-                }
-                if let Some(e) = end {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::Interpolation { parts } => {
-                for part in parts {
-                    if let HirInterpolationPart::Expr { expr: e, .. } = part {
-                        self.visit_expr(e);
-                    }
-                }
-            }
-            HirExprKind::MacroCall { args, .. } => {
-                for arg in args {
-                    self.visit_expr(arg);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn visit_statement(&mut self, stmt: &HirStatement) {
-        match stmt {
-            HirStatement::Let { value, .. } => {
-                if let Some(val) = value {
-                    self.visit_expr(val);
-                }
-            }
-            HirStatement::Expr(expr) => {
-                self.visit_expr(expr);
-            }
-        }
-    }
-
     fn classify_def(&self, def_id: DefId) -> (u32, u32) {
         if let Some(def) = self.symbols.get(def_id) {
             match &def.kind {
@@ -420,6 +217,22 @@ impl<'a> HirTokenWalker<'a> {
         } else {
             (1, 0) // VARIABLE fallback
         }
+    }
+}
+
+impl Visit for HirTokenWalker<'_> {
+    fn visit_expr(&mut self, expr: &HirExpr) {
+        match &expr.kind {
+            HirExprKind::VarRef(def_id) => {
+                let (tt, mods) = self.classify_def(*def_id);
+                self.push_token(&expr.span, tt, mods);
+            }
+            // The callee name portion — classify as function
+            HirExprKind::FnCall { .. } => self.push_token(&expr.span, 3, 0), // FUNCTION
+            // Every other kind only nests expressions, which the walk reaches.
+            _ => {}
+        }
+        walk_expr(self, expr);
     }
 }
 

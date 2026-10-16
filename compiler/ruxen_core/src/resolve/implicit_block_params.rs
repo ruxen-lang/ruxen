@@ -125,6 +125,7 @@ impl Scan {
                 }
             }
             Call {
+                parens: _,
                 callee,
                 args,
                 block,

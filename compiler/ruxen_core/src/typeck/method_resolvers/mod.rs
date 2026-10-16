@@ -10,12 +10,9 @@
 //! `resolve` returns `Some` wins, so precedence is ONE decision (the Vec
 //! order) instead of being smeared across arm positions. Three tiers:
 //!
-//!   1. declared-method (`resolver::declared_method_resolvers`) — a user
-//!      class's own `new` beats a builtin (bug A2 fix), scoped away from
-//!      the stdlib types that own a payload-inferring named `new` arm.
-//!   2. named-stdlib — `io` (BufReader/BufWriter), keyed on the receiver
-//!      class name (incl. the E0714 construction check).
-//!   3. structural — `strings`/`collections`/`numeric`/`iter` (keyed on
+//!   1. declared-method (`resolver::declared_method_resolvers`) — a
+//!      class's own declared `new` beats the structural fallback (bug A2).
+//!   2. structural — `collections`/`numeric`/`iter` (keyed on
 //!      `Ty` shape) + `resolver::structural_fallback_resolvers` (the
 //!      generic Class/Struct/Enum `to_s`/`clone`/`new`/`default` tail).
 //!
@@ -27,14 +24,12 @@ use crate::hir::nodes::*;
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 
-use super::infer::{is_bufio_inner_supported, InferenceEngine};
+use super::infer::InferenceEngine;
 
 mod builtin_bridge;
 mod collections;
-mod io;
 mod numeric;
 mod resolver;
-mod strings;
 
 use resolver::MethodResolver;
 
@@ -77,35 +72,21 @@ fn resolvers() -> &'static [MethodResolver] {
     PIPELINE.get_or_init(|| {
         let mut v = Vec::new();
         v.extend(resolver::declared_method_resolvers()); // TIER 1 — fixes A2
-                                                         // TIER 2 — named-stdlib residual. After the zero-Rust-stdlib
-                                                         // migration (Phase B), only the resolver carrying genuine
-                                                         // compiler logic remains:
-                                                         //   * `io` — BufReader/BufWriter `new`/`with_capacity` E0714
-                                                         //     inner-type check + their generic-representation methods.
-                                                         // The concurrency surface (Thread/JoinHandle/Mutex/
-                                                         // SharedSync/…) resolves from `library/std/sync/src/*.rx`.
-        v.extend(io::resolvers());
-        // TIER 3 — structural RESIDUAL resolvers. After the
-        // zero-Rust-stdlib migration these carry ONLY the arms that
-        // CANNOT be a static `.rx` return, and they MUST precede
-        // `builtin_bridge` so those residuals win over the `.rx`
-        // delegation for their shared heads:
-        //   * `strings` — the irreducible `String` surface residuals:
-        //     `remove` (Char/I32 vs C struct-pointer/I64) and the mutation
-        //     methods `push`/`push_str`/`insert`/`insert_str` (surface
-        //     `Unit` vs C `char*`). Feature E migrated the `&str`
-        //     `to_lower`/`to_upper`/`parse_uint` arms to string.rx.
-        //   * `collections` — `Array`/`Set`/`Map` CLOSURE combinators
-        //     (`map`/`select`/`reduce`/…, MIR-inlined), the arg-dependent
-        //     `zip`/`to_h`, the E0700 `sum` check, and `get_mut`/`get_var`
-        //     (E0722 alias cluster); PLUS `Option`/`Result` (enum heads
-        //     the bridge does not cover at all).
-        //   * `numeric` — now an EMPTY pipeline stage. The scalar `to_s`/
-        //     conversions migrated to scalar.rx in Phase 3; the lone
-        //     `Enum.weight` arm was a dead golden-only artifact and was
-        //     removed (see numeric.rs). Kept in the pipeline as a no-op so
-        //     a future numeric residual lands without re-threading wiring.
-        v.extend(strings::resolvers());
+                                                         // TIER 3 — structural RESIDUAL resolvers. After the
+                                                         // zero-Rust-stdlib migration these carry ONLY the arms that
+                                                         // CANNOT be a static `.rx` return, and they MUST precede
+                                                         // `builtin_bridge` so those residuals win over the `.rx`
+                                                         // delegation for their shared heads:
+                                                         //   * `collections` — `Array`/`Set`/`Map` CLOSURE combinators
+                                                         //     (`map`/`select`/`reduce`/…, MIR-inlined), the arg-dependent
+                                                         //     `zip`/`to_h`, the E0700 `sum` check, and `get_mut`/`get_var`
+                                                         //     (E0722 alias cluster); PLUS `Option`/`Result` (enum heads
+                                                         //     the bridge does not cover at all).
+                                                         //   * `numeric` — now an EMPTY pipeline stage. The scalar `to_s`/
+                                                         //     conversions migrated to scalar.rx in Phase 3; the lone
+                                                         //     `Enum.weight` arm was a dead golden-only artifact and was
+                                                         //     removed (see numeric.rs). Kept in the pipeline as a no-op so
+                                                         //     a future numeric residual lands without re-threading wiring.
         v.extend(collections::resolvers());
         v.extend(numeric::resolvers());
         // The delegator: builtin heads (`String`/`Array`/`Set` so far)
@@ -159,7 +140,7 @@ mod golden {
 
     use super::*;
     use crate::hir::context::TypeContext;
-    use crate::hir::nodes::{HirExpr, HirExprKind};
+    use crate::hir::nodes::HirExpr;
     use crate::hir::types::Ty;
     use crate::lexer::token::Span;
     use crate::resolve::symbols::SymbolTable;
@@ -172,17 +153,6 @@ mod golden {
             end: 0,
             line: 1,
             column: 1,
-        }
-    }
-
-    /// An argument expression whose `.ty` is what the effectful arms read
-    /// (e.g. `BufReader.new` reads `args[0].ty`). The `kind` is irrelevant
-    /// to the resolvers.
-    fn arg(ty: Ty) -> HirExpr {
-        HirExpr {
-            kind: HirExprKind::UnitLiteral,
-            ty,
-            span: span(),
         }
     }
 
@@ -216,10 +186,6 @@ mod golden {
         }
     }
 
-    fn c_args(recv: Ty, method: &'static str, args: Vec<HirExpr>) -> Case {
-        Case { recv, method, args }
-    }
-
     /// The full corpus — one entry per distinct `(Ty-head, guard, method)`
     /// arm in `mod.rs`. Effectful arms carry the args they read. Built
     /// programmatically per receiver group; transcribed from the live
@@ -227,27 +193,11 @@ mod golden {
     fn corpus() -> Vec<Case> {
         let mut v: Vec<Case> = Vec::new();
 
-        // ── Ty::String delegated to .rx (string.rx via builtin_bridge) ─
-        // Most `String` methods resolve from string.rx through the
-        // delegator; the golden runs with an EMPTY symbol table (no `.rx`
-        // loaded) so those would return None and are not pinned here. The
-        // residual arms that stay Rust-side (strings.rs) ARE pinned:
-        // `remove` (Char/I32 surface vs C struct-pointer/I64) and the
-        // mutation methods `push`/`push_str`/`insert`/`insert_str` (surface
-        // `Unit` vs C `char*` — pin `48_borrow_var` proves the Unit tail).
-        // Both are genuinely irreducible (no single `.rx` return type
-        // expresses surface + ABI). `clone`/`to_s` MIGRATED earlier (wire-
-        // identical aliases). End-to-end coverage: `std/string`
-        // `build_test.rx` (remove, push, push_str, insert, insert_str).
-        for m in ["remove", "push", "push_str", "insert", "insert_str"] {
-            v.push(c(Ty::String, m));
-        }
-
         // ── String surface — fully resolves from `class String` ──
         // One-string-type ADR: there is one string type. All string methods
         // (incl. Feature E's `to_lower`/`to_upper`/`parse_uint`) resolve from
         // `class String` via the bridge; a `&String` borrow peels to `String`
-        // in `method_home_key`. Under the golden's EMPTY symbol table they
+        // in `Ty::method_home`. Under the golden's EMPTY symbol table they
         // return None, so there is NOTHING to pin here. `to_lower`/`to_upper`
         // yield `String` (the C symbols `malloc` an owned buffer);
         // `parse_uint` is declared on `class String`
@@ -358,8 +308,8 @@ mod golden {
         // ── io: Stdin / Stdout / Stderr / IoError migrated to .rx ──
         // Resolve from `library/std/io/src/{stdin,stdout,stderr,lib}.rx`
         // via `lookup_method_with_args`; those io resolver arms were
-        // deleted. BufReader / BufWriter remain Rust residual (E0714 +
-        // generic representation) — exercised below.
+        // deleted. BufReader / BufWriter are modules of per-inner classes
+        // (`library/std/bufio/src/lib.rx`); the Rust residual is gone.
 
         // ── fs (Metadata / File / OpenOptions) migrated to .rx ─────
         // Those methods resolve from
@@ -372,42 +322,6 @@ mod golden {
 
         // ── net (TcpListener/TcpStream) migrated to .rx ────────────
         // Resolve from `library/std/net/src/lib.rx`.
-
-        // ── BufReader / BufWriter (effectful E0714) ────────────────
-        // `new` with a supported inner (File) — no diagnostic.
-        v.push(c_args(
-            class("BufReader", vec![]),
-            "new",
-            vec![arg(class("File", vec![]))],
-        ));
-        // `with_capacity(cap, inner)` reads args[1].
-        v.push(c_args(
-            class("BufReader", vec![]),
-            "with_capacity",
-            vec![arg(Ty::Int), arg(class("File", vec![]))],
-        ));
-        v.push(c(
-            class("BufReader", vec![class("File", vec![])]),
-            "read_line",
-        ));
-        v.push(c(class("BufReader", vec![class("File", vec![])]), "read"));
-        v.push(c(
-            class("BufReader", vec![class("File", vec![])]),
-            "into_inner",
-        ));
-        v.push(c_args(
-            class("BufWriter", vec![]),
-            "new",
-            vec![arg(class("File", vec![]))],
-        ));
-        v.push(c_args(
-            class("BufWriter", vec![]),
-            "with_capacity",
-            vec![arg(Ty::Int), arg(class("File", vec![]))],
-        ));
-        for m in ["write", "write_all", "write_str", "flush", "into_inner"] {
-            v.push(c(class("BufWriter", vec![class("File", vec![])]), m));
-        }
 
         // ── Enum / numeric / scalar structural RESIDUAL (TIER 3) ───
         // Int AND the Float/Bool/Char/USize scalar conversions
@@ -424,10 +338,11 @@ mod golden {
         v.push(c(class("Widget", vec![]), "new"));
         v.push(c(struct_ty("Point"), "new"));
         // `clone`, `to_s`, and `default` MIGRATED to the DERIVE MECHANISM
-        // (Feature D): they resolve via `ty_has_derive_trait(ty, "Clone")` /
-        // `(ty, "Debug")` / `(ty, "Default")` respectively, in lockstep with
-        // the MIR synthesis (`mir/lower/derive.rs`), so they require the type
-        // to be present in the symbol table. The golden runs with an EMPTY
+        // (Feature D): `to_s` resolves via `ty_has_derive_trait(ty, "Debug")`
+        // and `clone` / `default` via the `.rx` mixin signatures
+        // `MixinResolver` registers per type, in lockstep with the MIR
+        // synthesis (`mir/lower/derive.rs`), so they require the type to be
+        // present in the symbol table. The golden runs with an EMPTY
         // symbol table, so `Widget`/`Point`/`Color` `clone`/`to_s`/`default`
         // return None and are NO LONGER pinned here (same treatment as the
         // `.rx`-bridged surface). End-to-end behaviour is pinned by the e2e
@@ -435,32 +350,6 @@ mod golden {
         // `std/array` `mutate_test.rx`, `810_to_s_universal`, `2xx_implicit_debug_*`,
         // `208_implicit_default`, `216_derive_default_include`).
 
-        // ── Effectful-arm DIAGNOSTIC pins ──────────────────────────
-        // These exercise the early-return + pushed-diagnostic branches
-        // of the effectful arms, so the oracle captures the error code
-        // AND the `Some(Ty::Error)` return.
-        //
-        // BufReader / BufWriter with an unsupported inner (Int) → E0714.
-        v.push(c_args(
-            class("BufReader", vec![]),
-            "new",
-            vec![arg(Ty::Int)],
-        ));
-        v.push(c_args(
-            class("BufReader", vec![]),
-            "with_capacity",
-            vec![arg(Ty::Int), arg(Ty::Int)],
-        ));
-        v.push(c_args(
-            class("BufWriter", vec![]),
-            "new",
-            vec![arg(Ty::Int)],
-        ));
-        v.push(c_args(
-            class("BufWriter", vec![]),
-            "with_capacity",
-            vec![arg(Ty::Int), arg(Ty::Int)],
-        ));
         v
     }
 

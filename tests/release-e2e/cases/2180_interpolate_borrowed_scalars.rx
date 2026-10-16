@@ -1,0 +1,49 @@
+# F-24. A borrowed scalar (`&Float`, `&var Float`, `&Bool`, `&var Bool`)
+# carries the scalar's own word, and a float's word is its bit pattern.
+# Interpolation fell back to `Int_fmt` for every `&T`, so `"#{x}"` printed
+# 4612811918334230528 for `x: &Float` and 1 for `x: &var Bool`, and `x.to_s`
+# converted the bit pattern numerically (4.61281e+18).
+def show_float(x: &Float)
+  puts "float=#{x} to_s=#{x.to_s}"
+  puts x
+  puts "doubled=#{x * 2.0}"
+end
+
+def show_var_float(x: &var Float)
+  puts "var_float=#{x}"
+end
+
+def show_bool(x: &Bool)
+  puts "bool=#{x}"
+end
+
+def show_var_bool(x: &var Bool)
+  puts "var_bool=#{x} to_s=#{x.to_s}"
+end
+
+def show_char(x: &Char)
+  puts "char=#{x}"
+end
+
+def show_var_int(x: &var Int)
+  puts "var_int=#{x}"
+end
+
+def main
+  let f = 2.5
+  show_float(&f)
+  var g = -0.125
+  show_var_float(&var g)
+  let b = false
+  show_bool(&b)
+  var c = true
+  show_var_bool(&var c)
+  let ch = ?z
+  show_char(&ch)
+  var n = 42
+  show_var_int(&var n)
+  let r = &f
+  puts "local=#{r}"
+  let (lo, hi) = (1.5, true)
+  puts "tuple=#{lo} #{hi}"
+end

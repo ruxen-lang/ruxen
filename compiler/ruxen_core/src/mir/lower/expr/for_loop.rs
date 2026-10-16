@@ -130,14 +130,7 @@ impl<'a> Lowerer<'a> {
                 // each pair below. (Previously a Hash flowed straight into
                 // the Vec ops below and was read as a Vec → garbage / the
                 // value binding stayed unresolved into codegen.)
-                let mut iter_ty = self.mir_refined_expr_ty(iterable);
-                while let Ty::Ref(inner)
-                | Ty::RefMut(inner)
-                | Ty::RefLifetime(_, inner)
-                | Ty::RefMutLifetime(_, inner) = &iter_ty
-                {
-                    iter_ty = (**inner).clone();
-                }
+                let iter_ty = self.mir_refined_expr_ty(iterable).peel_refs().clone();
                 let elem_ty = if let Ty::Map(k, v) = &iter_ty {
                     let pair_ty = Ty::Tuple(vec![(**k).clone(), (**v).clone()]);
                     let entries = self.new_temp(Ty::Array(Box::new(pair_ty.clone())));

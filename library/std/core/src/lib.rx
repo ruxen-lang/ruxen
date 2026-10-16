@@ -561,12 +561,16 @@ mixin Sync
 
 end
 
+# The derive mixins. A struct, class or enum whose fields support one
+# includes it implicitly, and the compiler writes the method body
+# (ruby-naming.spec.md §3.6). These declarations are the signatures the
+# derived methods are typed by, with `Self` the deriving type.
 mixin Clone
-  def clone
+  def clone -> Self
 end
 
 mixin PartialEq
-  def eq
+  def eq(other: &Self) -> Bool
 end
 
 mixin Eq
@@ -574,7 +578,7 @@ mixin Eq
 end
 
 mixin Default
-  def default
+  def self.default -> Self
 end
 
 mixin Ord
@@ -697,45 +701,36 @@ end
 # generator behind it, so `srand` could not do anything except lie about
 # reproducibility.
 
-# Ruby `p(x)` — write the INSPECT form of `x` to STDOUT and return `x`,
-# which is what makes `p` droppable into an expression without changing
-# it. Ruby's `p` is universal because every Object has `inspect`; Ruxen
-# has no universal `to_s`, so `p` ships as one overload per type that has
-# a printable form (overload-by-argument-type on a free function
-# resolves). Anything else keeps using `puts "#{x}"`.
-#
-# For `Int` / `Bool` the inspect form is the display form. For `String` it
-# is the QUOTED form, which is the whole reason `p "a"` and `puts "a"`
-# differ in Ruby. Escaping of embedded quotes / newlines is NOT applied,
-# so `p` is a debugging aid and not a round-trippable serializer. The
-# `String` overload borrows and returns a fresh copy, where Ruby hands
-# back the very same object.
-def p(x: Int) -> Int
-  puts "#{x}"
-  x
+# Ruby `inspect` — the developer-facing form of a value, the one `p`
+# prints. The default is the display form `to_s`, which `Int`, `Float`,
+# `Bool` and `Char` (std/scalar) take; `String` (std/string) overrides it
+# with the QUOTED form, which is
+# the whole reason `p "a"` and `puts "a"` differ in Ruby. Escaping of
+# embedded quotes / newlines is NOT applied, so `inspect` is a debugging
+# aid and not a round-trippable serializer. (A stdlib file cannot hold an
+# `extension` block, E0725, so each type's own class body includes it.)
+mixin Inspect
+  # The display form; the one required method.
+  def to_s -> String
+
+  def inspect -> String
+    self.to_s
+  end
 end
 
-def p(x: Bool) -> Bool
-  puts "#{x}"
+# Ruby `p(x)` — write `x.inspect` to STDOUT and return `x`, which is what
+# makes `p` droppable into an expression without changing it. Any type
+# that includes `Inspect` works. `x` is taken by value and handed back:
+# for an owning value such as a `String`, rebind the result
+# (`s = p(s)`) to keep using it, where Ruby hands back the same object.
+def p[T: Inspect](x: T) -> T
+  puts x.inspect
   x
-end
-
-def p(x: &String) -> String
-  puts "\"#{x}\""
-  "#{x}"
 end
 
 # Ruby `pp(x)` — pretty-print. Ruxen's values have no nested structure to
 # lay out at this level, so `pp` is `p`'s output exactly, shipped under
 # its own name so scripts that reach for it work.
-def pp(x: Int) -> Int
-  p(x)
-end
-
-def pp(x: Bool) -> Bool
-  p(x)
-end
-
-def pp(x: &String) -> String
+def pp[T: Inspect](x: T) -> T
   p(x)
 end

@@ -168,11 +168,7 @@ int64_t ruxen_queue_new(int64_t capacity, int64_t overflow) {
         ruxen_panic("Queue.bounded: capacity too large");
         return 0;
     }
-    RuxenQueue *q = (RuxenQueue *)malloc(sizeof(RuxenQueue));
-    if (!q) {
-        ruxen_panic("ruxen_queue_new: malloc(queue) failed");
-        return 0;
-    }
+    RuxenQueue *q = (RuxenQueue *)ruxen_xmalloc(sizeof(RuxenQueue));
     q->buf = (int64_t *)malloc((size_t)capacity * sizeof(int64_t));
     if (!q->buf) {
         free(q);

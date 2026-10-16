@@ -51,6 +51,31 @@ impl<'a> Lowerer<'a> {
         dest
     }
 
+    /// A borrowed scalar (`&Float`, `&var Bool`) carries the scalar's own
+    /// word, not an address (see `mir::refmut_abi`), so it is formatted as
+    /// its pointee. A float's word is its IEEE-754 bit pattern and is
+    /// reinterpreted with `BitsToFloat`, never converted numerically. Any
+    /// other type is returned unchanged.
+    pub(super) fn deref_borrowed_scalar(
+        &mut self,
+        val_local: Option<LocalId>,
+        ty: &Ty,
+    ) -> (Option<LocalId>, Ty) {
+        let inner = ty.peel_refs();
+        if inner == ty || !inner.is_scalar_primitive() {
+            return (val_local, ty.clone());
+        }
+        let inner = inner.clone();
+        match val_local {
+            Some(src) if inner.is_float() => {
+                let dest = self.new_temp(inner.clone());
+                self.emit(MirInst::BitsToFloat { dest, src });
+                (Some(dest), inner)
+            }
+            other => (other, inner),
+        }
+    }
+
     pub(super) fn lower_interpolation(
         &mut self,
         parts: &[HirInterpolationPart],
@@ -65,7 +90,11 @@ impl<'a> Lowerer<'a> {
             return Ok(Some(dest));
         }
 
-        let mut accumulated: Option<LocalId> = None;
+        // The running result and whether this function owns it. A part is
+        // owned when a Fresh callee produced it (`Formatter#buffer`, the
+        // `to_s` helpers, a `concat`); a literal or a passed-through `String`
+        // value is not.
+        let mut accumulated: Option<(LocalId, bool)> = None;
 
         for part in parts {
             let part_local = match part {
@@ -115,25 +144,72 @@ impl<'a> Lowerer<'a> {
                         local_ty
                     };
 
-                    self.emit_display_to_string(val_local, &effective_ty, spec)?
+                    self.emit_display_to_string(val_local, &effective_ty, spec)
+                        .map_err(|e| format!("{e} (at {}:{})", expr.span.line, expr.span.column))?
                 }
             };
 
+            let part_owned = self.is_fresh_call_result(part_local);
             accumulated = Some(match accumulated {
-                None => part_local,
-                Some(prev) => {
+                None => (part_local, part_owned),
+                Some((prev, prev_owned)) => {
                     let dest = self.new_temp(Ty::String);
                     self.emit(MirInst::Call {
                         dest: Some(dest),
                         callee: "ruxen_string_concat".to_string(),
                         args: vec![MirValue::Use(prev), MirValue::Use(part_local)],
                     });
-                    dest
+                    // `concat` copies both operands, so the intermediate
+                    // pieces this interpolation built are dead here.
+                    if prev_owned {
+                        self.free_interpolation_temp(prev);
+                    }
+                    if part_owned {
+                        self.free_interpolation_temp(part_local);
+                    }
+                    (dest, true)
                 }
             });
         }
 
-        Ok(accumulated)
+        Ok(accumulated.map(|(result, _)| result))
+    }
+
+    /// True when `local` was just defined, in the current block, by a call
+    /// whose result is a fresh allocation the caller owns
+    /// (`runtime_abi::callee_ownership`).
+    fn is_fresh_call_result(&self, local: LocalId) -> bool {
+        use crate::mir::lower::runtime_abi::{callee_ownership, ResultOwnership};
+        self.fn_ref().blocks[self.current_block]
+            .instructions
+            .iter()
+            .rev()
+            .find_map(|inst| match inst {
+                MirInst::Call {
+                    dest: Some(dest),
+                    callee,
+                    ..
+                } if *dest == local => {
+                    Some(callee_ownership(callee).result == ResultOwnership::Fresh)
+                }
+                _ => None,
+            })
+            .unwrap_or(false)
+    }
+
+    /// Free an owned interpolation temporary right after its last use and
+    /// zero it. The zero store retires the temp: drop elaboration sees a
+    /// non-allocation value and never frees it a second time.
+    fn free_interpolation_temp(&mut self, temp: LocalId) {
+        self.emit(MirInst::Call {
+            dest: None,
+            callee: "ruxen_string_free".to_string(),
+            args: vec![MirValue::Use(temp)],
+        });
+        self.emit(MirInst::Assign {
+            dest: temp,
+            value: MirValue::Literal(Literal::Int(0)),
+        });
     }
 
     /// Render an already-lowered value as a `String` through the Display
@@ -163,7 +239,15 @@ impl<'a> Lowerer<'a> {
         effective_ty: &Ty,
         spec: &crate::lexer::token::FormatSpec,
     ) -> Result<LocalId, String> {
-        let effective_ty = effective_ty.clone();
+        let (val_local, effective_ty) = self.deref_borrowed_scalar(val_local, effective_ty);
+        // `self` inside `extension Int` is typed as the method-home class;
+        // its value is the primitive.
+        let effective_ty = match &effective_ty {
+            Ty::Class { name, generic_args } if generic_args.is_empty() => {
+                type_helpers::primitive_ty_by_name(name).unwrap_or(effective_ty)
+            }
+            _ => effective_ty,
+        };
         let formatted = {
             // Phase 2 #06.D2.S3 dispatch priority (top-down):
             //   1. string-like                    → pass-through
@@ -172,8 +256,12 @@ impl<'a> Lowerer<'a> {
             //   4. enum with `derive Debug`       → `{Name}_to_debug` (legacy)
             //   5. primitive Char/Int/Float/Bool  → synth `{Prim}_fmt` via Formatter
             //   6. abstract type parameter        → synth `Int_fmt` (opaque generic ABI)
-            //   7. invalid/error type             → lowering error (no pointer fallback)
-            //   8. legacy unresolved scalar       → synth `Int_fmt`
+            //   7. unresolved inference variable  → abstract callee (pruned or reported)
+            //   8. Unit / Never / Error           → lowering error
+            //   9. other concrete type            → synth `Int_fmt` (raw word; see the arm)
+            //
+            // A borrowed scalar is formatted as its pointee
+            // (`deref_borrowed_scalar`) before the ladder runs.
             //
             // Priorities 2/5/6 emit the canonical Display dispatch:
             //     fmt = Formatter_new()
@@ -264,6 +352,7 @@ impl<'a> Lowerer<'a> {
                     });
                     d
                 });
+                let abstract_fmt;
                 let fmt_callee = if effective_ty == Ty::Char {
                     "Char_fmt"
                 } else if is_string_like(&effective_ty) {
@@ -284,15 +373,24 @@ impl<'a> Lowerer<'a> {
                     // uniform-word ABI. Concrete generic call sites are
                     // monomorphized before this dispatch when possible.
                     "Int_fmt"
+                } else if effective_ty.is_infer() {
+                    // A type inference left open has no formatter yet. In
+                    // an opaque generic body that a monomorphised copy
+                    // replaces, the abstract callee lets
+                    // `prune_unmonomorphised_bodies` drop the body; in a
+                    // live body it is reported there as an error.
+                    abstract_fmt = format!("{effective_ty}_fmt");
+                    &abstract_fmt
                 } else if matches!(effective_ty, Ty::Unit | Ty::Never | Ty::Error) {
                     return Err(format!(
-                                "cannot interpolate value of type `{effective_ty}`: the type has no Display formatter"
-                            ));
+                        "cannot interpolate value of type `{effective_ty}`: the type has no Display formatter"
+                    ));
                 } else {
-                    // Legacy unresolved/borrowed scalar lowering. A
-                    // call with a declared String return cannot reach
-                    // this arm: `declared_method_return_ty` above
-                    // recovers it before dispatch.
+                    // A concrete type with no formatter (`Array`, `Option`,
+                    // a tuple) still prints its word. Making this an error
+                    // breaks every generic body that interpolates its `T`
+                    // (`Matcher[T]#to_eq` with `T = Array[Int]`) until
+                    // those types have a Display formatter.
                     "Int_fmt"
                 };
                 self.emit_display_dispatch(src, fmt_callee, Some(spec))

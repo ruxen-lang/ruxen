@@ -1,0 +1,17 @@
+struct Plot
+  side: Int
+
+  def area_anchor_qzx(scale: Int) -> Int
+    self.side * self.side * scale
+  end
+
+  def area_anchor_qzx -> Int
+    self.side * self.side
+  end
+end
+
+def main
+  let p = Plot.new(3)
+  let a = p.area_anchor_qzx
+  let b = p.area_anchor_qzx(2)
+end

@@ -21,26 +21,19 @@ enum NumKind {
     UnsignedInt,
 }
 
-/// The builtin heads whose `.rx` classes home operator methods: the string and
-/// collection types that are NOT `Ty::Class`/`Struct`/`Enum` (so they miss the
-/// nominal operator route) but still carry an `.rx` method home
-/// (`class String`, `class Array[T]`, `class Hash[K, V]`, `class Set[T]`).
+/// The builtin heads whose `.rx` classes home operator methods: the string,
+/// collection and `Option` types that are NOT `Ty::Class`/`Struct`/`Enum` (so
+/// they miss the nominal operator route) but still carry an `.rx` method home
+/// (`class String`, `class Array[T]`, `class Hash[K, V]`, `class Set[T]`,
+/// `class Option[T]`).
 /// Shared with `assign.rs`, whose `o[i] = v` route asks the same question of the
 /// same head set for `[]=`, so the read/binop side and the write side cannot
 /// drift apart on which receivers may dispatch to `.rx`.
 pub(super) fn is_builtin_op_head(ty: &Ty) -> bool {
-    matches!(ty, Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_))
-}
-
-/// Strip references off a receiver type down to the head being dispatched on.
-pub(super) fn unwrap_ref(t: &Ty) -> &Ty {
-    match t {
-        Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) => unwrap_ref(inner),
-        _ => t,
-    }
+    matches!(
+        ty,
+        Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_) | Ty::Option(_)
+    )
 }
 
 impl<'a> Lowerer<'a> {
@@ -220,7 +213,7 @@ impl<'a> Lowerer<'a> {
     fn peel_scalar_ref_operand(&mut self, local: Option<LocalId>) -> Option<LocalId> {
         let l = local?;
         let ty = self.fn_ref().locals.get(l as usize).map(|x| x.ty.clone())?;
-        let pointee = unwrap_ref(&ty);
+        let pointee = ty.peel_refs();
         if *pointee == ty || numeric_kind(pointee).is_none() {
             return Some(l);
         }
@@ -368,7 +361,7 @@ impl<'a> Lowerer<'a> {
                 // preserves auto-PartialEq/Ord for nominal types that do not
                 // define the corresponding symbol method.
                 let lhs_nominal = matches!(
-                    unwrap_ref(&left.ty),
+                    left.ty.peel_refs(),
                     Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
                 );
                 if lhs_nominal {
@@ -391,10 +384,13 @@ impl<'a> Lowerer<'a> {
                                 kind: HirExprKind::MethodCall {
                                     object: Box::new((**left).clone()),
                                     method: UNRESOLVED_DEF,
+                                    resolved: UNRESOLVED_DEF,
                                     method_name: method.to_string(),
                                     generic_args: vec![],
                                     args,
                                     block: None,
+                                    safe_nav: false,
+                                    parens: true,
                                 },
                                 ty: expr.ty.clone(),
                                 span: expr.span.clone(),
@@ -423,11 +419,12 @@ impl<'a> Lowerer<'a> {
                 // it — the builtin-head analogue of the nominal route above,
                 // and the generic-compiler end-state. `==` / `!=` route to a
                 // declared `def ==` (Array / Hash compare elements by their own
-                // `==`), `!=` negating it. Ordering and `~=`/`??` keep their
-                // dedicated routes below, and a head with no such method falls
-                // through to the existing hardcoded runtime routes / machine
-                // floor. Runs before operand lowering, so the synthetic call
-                // re-lowers the operands exactly once.
+                // `==`, Set by its key kind), `!=` negating it; `String#+` and
+                // `String#<=>` route the same way. `<` and friends and
+                // `~=`/`??` keep their dedicated routes below, and a head with
+                // no such method falls through to the machine floor. Runs
+                // before operand lowering, so the synthetic call re-lowers the
+                // operands exactly once.
                 if !lhs_nominal
                     && !matches!(
                         op,
@@ -435,12 +432,11 @@ impl<'a> Lowerer<'a> {
                             | BinOp::Gt
                             | BinOp::LtEq
                             | BinOp::GtEq
-                            | BinOp::Cmp
                             | BinOp::MatchOp
                             | BinOp::NilCoalesce
                     )
                 {
-                    let head = unwrap_ref(&left.ty);
+                    let head = left.ty.peel_refs();
                     if is_builtin_op_head(head) {
                         if let Some(method) = op.method_name() {
                             if self.builtin_head_has_op_method(head, method) {
@@ -448,10 +444,13 @@ impl<'a> Lowerer<'a> {
                                     kind: HirExprKind::MethodCall {
                                         object: Box::new((**left).clone()),
                                         method: UNRESOLVED_DEF,
+                                        resolved: UNRESOLVED_DEF,
                                         method_name: method.to_string(),
                                         generic_args: vec![],
                                         args: vec![(**right).clone()],
                                         block: None,
+                                        safe_nav: false,
+                                        parens: true,
                                     },
                                     ty: expr.ty.clone(),
                                     span: expr.span.clone(),
@@ -477,7 +476,7 @@ impl<'a> Lowerer<'a> {
                 // would compare struct *pointers* (heap addresses), false for
                 // two distinct allocations even when their fields match.
                 if matches!(op, BinOp::Eq | BinOp::NotEq) {
-                    if let Some(struct_name) = struct_name_with_partial_eq(&left.ty, self.symbols) {
+                    if let Some(struct_name) = self.derived_nominal(&left.ty, "PartialEq") {
                         if let Some(field_info) = struct_field_layout(&struct_name, self.symbols) {
                             return Ok(Some(self.lower_struct_partial_eq(
                                 left,
@@ -498,9 +497,14 @@ impl<'a> Lowerer<'a> {
                 // -1 / 0 / +1, so we only need to fold that result
                 // through the requested operator.
                 if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq) {
-                    if let Some((struct_name, partial)) =
-                        struct_name_with_ord(&left.ty, self.symbols)
-                    {
+                    // Prefer the total `Ord` (`<Type>_cmp`) over `PartialOrd`.
+                    let ord = match self.derived_nominal(&left.ty, "Ord") {
+                        Some(name) => Some((name, false)),
+                        None => self
+                            .derived_nominal(&left.ty, "PartialOrd")
+                            .map(|name| (name, true)),
+                    };
+                    if let Some((struct_name, partial)) = ord {
                         return Ok(Some(self.lower_struct_ord(
                             left,
                             right,
@@ -560,18 +564,12 @@ impl<'a> Lowerer<'a> {
                 }
 
                 // ── Three-way comparison `a <=> b` (spaceship) ──
-                // Returns Int (-1 / 0 / 1). Route by operand type: two Strings
-                // → `ruxen_str_spaceship`; any float operand → `ruxen_float_cmp`
-                // (int side coerced to f64); otherwise `ruxen_int_cmp`.
+                // Returns Int (-1 / 0 / 1). `String#<=>` took the builtin-head
+                // route above. Any float operand → `ruxen_float_cmp` (int side
+                // coerced to f64); otherwise `ruxen_int_cmp`.
                 if matches!(op, BinOp::Cmp) {
                     let dest = self.new_temp(Ty::Int);
-                    if matches!(left.ty, Ty::String) {
-                        self.emit(MirInst::Call {
-                            dest: Some(dest),
-                            callee: "ruxen_str_spaceship".to_string(),
-                            args: vec![lhs_val, rhs_val],
-                        });
-                    } else if matches!(left.ty, Ty::Float | Ty::Float32 | Ty::Float64)
+                    if matches!(left.ty, Ty::Float | Ty::Float32 | Ty::Float64)
                         || matches!(right.ty, Ty::Float | Ty::Float32 | Ty::Float64)
                     {
                         let l = self.coerce_local_to_float(lhs_local);
@@ -588,48 +586,6 @@ impl<'a> Lowerer<'a> {
                             args: vec![lhs_val, rhs_val],
                         });
                     }
-                    return Ok(Some(dest));
-                }
-
-                // ── Phase 2 stdlib batch 2 (#02): String + String ──
-                // The default `MirInst::BinOp { op: Add, ... }` would
-                // treat both operands as integers and codegen would
-                // emit an integer-add over heap pointers — undefined
-                // behaviour. Route through `ruxen_string_concat`
-                // instead. Matches the existing string-interpolation
-                // lowering, which already calls the same runtime fn.
-                if matches!(op, BinOp::Add)
-                    && matches!(left.ty, Ty::String)
-                    && matches!(right.ty, Ty::String)
-                {
-                    let dest = self.new_temp(Ty::String);
-                    self.emit(MirInst::Call {
-                        dest: Some(dest),
-                        callee: "ruxen_string_concat".to_string(),
-                        args: vec![lhs_val, rhs_val],
-                    });
-                    return Ok(Some(dest));
-                }
-
-                // ── Phase 2 stdlib (#04): HashSet == HashSet ──
-                if matches!(op, BinOp::Eq | BinOp::NotEq)
-                    && matches!(left.ty, Ty::Set(_))
-                    && matches!(right.ty, Ty::Set(_))
-                {
-                    let cmp = self.new_temp(Ty::Bool);
-                    self.emit(MirInst::Call {
-                        dest: Some(cmp),
-                        callee: "ruxen_set_eq".to_string(),
-                        args: vec![lhs_val, rhs_val],
-                    });
-                    if matches!(op, BinOp::Eq) {
-                        return Ok(Some(cmp));
-                    }
-                    let dest = self.new_temp(Ty::Bool);
-                    self.emit(MirInst::Not {
-                        dest,
-                        operand: MirValue::Use(cmp),
-                    });
                     return Ok(Some(dest));
                 }
 
@@ -663,7 +619,7 @@ impl<'a> Lowerer<'a> {
                 // the operands were peeled to the pointee above, so the result is
                 // that scalar VALUE, not a ref word (a word dest would `fcvt` the
                 // float sum to an integer). Comparisons already produce `Bool`.
-                let result_ty = match unwrap_ref(&expr.ty) {
+                let result_ty = match expr.ty.peel_refs() {
                     pointee if numeric_kind(pointee).is_some() => pointee.clone(),
                     _ => expr.ty.clone(),
                 };

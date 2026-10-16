@@ -258,7 +258,7 @@ class Repository[T: Showable]
       
   end
 
-  def display_all
+  def display_all -> nil
     if self.items.empty?
       puts "  (empty)"
       return
@@ -312,7 +312,7 @@ class TodoList
     self.repo.where_matching { |t| t.is_actionable }
   end
 
-  def display
+  def display -> nil
     puts "--- All Tasks ---"
     self.repo.display_all
   end
@@ -336,10 +336,10 @@ def parse_priority(input: &String) -> Result[Priority, TodoError]
 end
 
 # Accepts borrowed tasks, returns a formatted report — no ownership taken
-def generate_report(tasks: &Array[&Todo]) -> String
+def generate_report(tasks: &Array[Todo]) -> String
   var report = "=== Todo Report ===\n"
 
-  let (done, active): (Array[&&Todo], Array[&&Todo]) = tasks
+  let (done, active): (Array[Todo], Array[Todo]) = tasks
     .partition { |t| t.is_done }
 
   report.push_str("Active: #{active.size}\n")
@@ -485,8 +485,8 @@ def main
   puts ""
 
   # ── Generate report (demonstrates borrowing — list is NOT consumed) ──
-  let all_refs: Array[&Todo] = list.repo.all
-  let report = generate_report(&all_refs)
+  let all_refs = list.repo.all
+  let report = generate_report(all_refs)
   puts report
 
   # ── Print with generic function ──

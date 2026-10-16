@@ -713,6 +713,7 @@ fn detects_mut_immut_borrow_conflict() {
                     span: span(3, 1),
                 }),
                 method: 50,
+                resolved: 50,
                 method_name: "push".to_string(),
                 generic_args: vec![],
                 args: vec![HirExpr {
@@ -721,6 +722,8 @@ fn detects_mut_immut_borrow_conflict() {
                     span: span(3, 8),
                 }],
                 block: None,
+                safe_nav: false,
+                parens: true,
             },
             ty: Ty::Unit,
             span: span(3, 1),
@@ -884,6 +887,7 @@ fn nll_borrow_ends_at_last_use() {
                     span: span(4, 1),
                 }),
                 method: 50,
+                resolved: 50,
                 method_name: "push".to_string(),
                 generic_args: vec![],
                 args: vec![HirExpr {
@@ -892,6 +896,8 @@ fn nll_borrow_ends_at_last_use() {
                     span: span(4, 8),
                 }],
                 block: None,
+                safe_nav: false,
+                parens: true,
             },
             ty: Ty::Unit,
             span: span(4, 1),

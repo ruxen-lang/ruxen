@@ -251,13 +251,20 @@ impl<'a> BorrowChecker<'a> {
 
     // ─── FnCall ────────────────────────────────────────────────────
 
-    pub(super) fn check_fn_call(&mut self, callee_name: &str, args: &[HirExpr], _span: &Span) {
+    pub(super) fn check_fn_call(
+        &mut self,
+        callee: DefId,
+        callee_name: &str,
+        args: &[HirExpr],
+        _span: &Span,
+    ) {
         // Checkpoint: borrows created for function args are temporary
         let checkpoint = self.borrows.checkpoint();
-        let send_required_params = self.lookup_send_required_params(callee_name, args.len());
+        let send_required_params =
+            self.lookup_send_required_params(callee, callee_name, args.len());
         // A value passed to a `&T` / `&var T` parameter is auto-borrowed, not
         // moved — same reborrow rule as the method-call path.
-        let param_is_ref = self.lookup_param_is_ref(callee_name, args.len(), None);
+        let param_is_ref = self.lookup_param_is_ref(callee, callee_name, args.len(), None);
 
         for (idx, arg) in args.iter().enumerate() {
             self.check_expr(arg);
@@ -301,19 +308,13 @@ impl<'a> BorrowChecker<'a> {
 
     pub(super) fn lookup_send_required_params(
         &self,
+        callee: DefId,
         callee_name: &str,
         arg_len: usize,
     ) -> Vec<bool> {
         let mut required = vec![false; arg_len];
-        let Some(def) = self.symbols.iter().find(|def| {
-            def.name == callee_name
-                && matches!(def.kind, DefKind::Function { .. } | DefKind::Method { .. })
-        }) else {
+        let Some(signature) = self.callee_signature(callee, callee_name, None) else {
             return required;
-        };
-        let signature = match &def.kind {
-            DefKind::Function { signature } | DefKind::Method { signature, .. } => signature,
-            _ => return required,
         };
         for (idx, param) in signature.params.iter().enumerate().take(arg_len) {
             required[idx] = ty_has_bound(&param.ty, "Send");
@@ -321,16 +322,62 @@ impl<'a> BorrowChecker<'a> {
         required
     }
 
+    /// The declared signature of the function or method a call targets.
+    ///
+    /// The call's own DefId wins when it names a `Function` or `Method`:
+    /// resolve records the selected overload on a `FnCall`, and typeck
+    /// records the selected method on a `MethodCall` (`resolved`, builtin
+    /// heads included). Only when it does not (`UNRESOLVED_DEF` for a mixin
+    /// default, an unselected overload set) does the lookup fall back to the
+    /// callee's name: first a method homed on `receiver_home`, then the
+    /// first function or method of that name.
+    fn callee_signature(
+        &self,
+        callee: DefId,
+        callee_name: &str,
+        receiver_home: Option<&str>,
+    ) -> Option<&crate::resolve::symbols::FnSignature> {
+        fn signature_of(
+            def: &crate::resolve::symbols::Definition,
+        ) -> Option<&crate::resolve::symbols::FnSignature> {
+            match &def.kind {
+                DefKind::Function { signature } | DefKind::Method { signature, .. } => {
+                    Some(signature)
+                }
+                _ => None,
+            }
+        }
+        if let Some(signature) = self.symbols.get(callee).and_then(signature_of) {
+            return Some(signature);
+        }
+        let homed = receiver_home.and_then(|home| {
+            self.symbols.named(callee_name).find(|def| match &def.kind {
+                DefKind::Method { parent, .. } => {
+                    self.symbols.get(*parent).is_some_and(|p| p.name == home)
+                }
+                _ => false,
+            })
+        });
+        homed
+            .or_else(|| {
+                self.symbols.named(callee_name).find(|def| {
+                    matches!(def.kind, DefKind::Function { .. } | DefKind::Method { .. })
+                })
+            })
+            .and_then(signature_of)
+    }
+
     /// For each of the callee's first `arg_len` parameters, whether its declared
     /// type is a reference (`&T` / `&var T`). A value passed to a reference
     /// parameter is AUTO-BORROWED, not moved, so the borrow checker must not
-    /// flag it as a move (false E1001). Resolved by callee name, like
-    /// `lookup_send_required_params`. (Pin: release-e2e 649_ffi_borrowed_string_arg.)
+    /// flag it as a move (false E1001). The callee is found by
+    /// [`Self::callee_signature`]. (Pin: release-e2e 649_ffi_borrowed_string_arg.)
     /// `receiver_home`, when known, is the method home of the call's receiver
     /// (`Char`, `String`, `Hash`, a user class name, …). It disambiguates a
-    /// method name that several classes define.
+    /// method name that several classes define when the call carries no
+    /// resolved DefId.
     ///
-    /// Without it this scan took the FIRST def of that name in the whole
+    /// A name-only lookup takes the FIRST def of that name in the whole
     /// symbol table, so one class's signature silently governed every other
     /// class's same-named method. That is not hypothetical: adding a by-value
     /// `def <=>(other: Char)` to `class Char` made every `x.<=>(y)` in the
@@ -341,36 +388,18 @@ impl<'a> BorrowChecker<'a> {
     ///
     /// The exact-home pass is a preference, never a restriction. When the
     /// receiver is unknown (a free function) or no def is homed on it (a
-    /// mixin default, an inherited method), it falls back to the original
-    /// name-only scan, so previously-resolving calls resolve identically.
+    /// mixin default, an inherited method), it falls back to the name-only
+    /// lookup.
     pub(super) fn lookup_param_is_ref(
         &self,
+        callee: DefId,
         callee_name: &str,
         arg_len: usize,
         receiver_home: Option<&str>,
     ) -> Vec<bool> {
         let mut is_ref = vec![false; arg_len];
-        let name_matches = |def: &&crate::resolve::symbols::Definition| {
-            def.name == callee_name
-                && matches!(def.kind, DefKind::Function { .. } | DefKind::Method { .. })
-        };
-        let homed = receiver_home.and_then(|home| {
-            self.symbols.iter().find(|def| {
-                name_matches(def)
-                    && match &def.kind {
-                        DefKind::Method { parent, .. } => {
-                            self.symbols.get(*parent).is_some_and(|p| p.name == home)
-                        }
-                        _ => false,
-                    }
-            })
-        });
-        let Some(def) = homed.or_else(|| self.symbols.iter().find(name_matches)) else {
+        let Some(signature) = self.callee_signature(callee, callee_name, receiver_home) else {
             return is_ref;
-        };
-        let signature = match &def.kind {
-            DefKind::Function { signature } | DefKind::Method { signature, .. } => signature,
-            _ => return is_ref,
         };
         for (idx, param) in signature.params.iter().enumerate().take(arg_len) {
             is_ref[idx] = arg_is_reborrowed_reference(&param.ty);
@@ -411,10 +440,12 @@ impl<'a> BorrowChecker<'a> {
 
     // ─── MethodCall ────────────────────────────────────────────────
 
+    /// `resolved` is the method typeck selected (`MethodCall::resolved`),
+    /// `UNRESOLVED_DEF` when it selected none.
     pub(super) fn check_method_call(
         &mut self,
         object: &HirExpr,
-        method_def_id: DefId,
+        resolved: DefId,
         method_name: &str,
         args: &[HirExpr],
         block: &Option<Box<HirExpr>>,
@@ -428,21 +459,20 @@ impl<'a> BorrowChecker<'a> {
 
         // Whether each of the callee method's parameters is a reference type, so
         // a value passed to a `&T` / `&var T` parameter is treated as an
-        // AUTO-BORROW, not a move. Resolved by NAME, not by `method_def_id`:
-        // for `lib`-declared / builtin methods the HIR `method` DefId can still
-        // be `UNRESOLVED_DEF` at borrow-check time (it is selected during
-        // typeck without being written back into the node), so a by-DefId
-        // lookup would miss. Without this, `s.include?(needle)` where
+        // AUTO-BORROW, not a move. Read from the method typeck selected, else
+        // (an inherited mixin default, an unknown receiver) looked up by name
+        // on the receiver's home. Without this, `s.include?(needle)` where
         // `include?(needle: &String)` borrows but `needle` is an owned `String`
         // value falsely reports `value used after move` (E1001) — the owned
         // value is auto-referenced to `&String` at the call site, never
         // consumed. (Pin: release-e2e 649_ffi_borrowed_string_arg.)
-        let receiver_home = {
-            let shown = object.ty.peel_refs().to_string();
-            shown.split('[').next().unwrap_or(&shown).to_string()
-        };
-        let param_is_ref =
-            self.lookup_param_is_ref(method_name, args.len(), Some(receiver_home.as_str()));
+        let receiver_home = object.ty.method_home();
+        let param_is_ref = self.lookup_param_is_ref(
+            resolved,
+            method_name,
+            args.len(),
+            Some(receiver_home.as_str()),
+        );
 
         // Check args
         for (idx, arg) in args.iter().enumerate() {
@@ -475,93 +505,46 @@ impl<'a> BorrowChecker<'a> {
             self.check_expr(blk);
         }
 
-        // Check self_mode: consuming methods move receiver, &mut self checks mutation
+        // The receiver mode decides the receiver's fate: a `consume self`
+        // method moves it, a `def var` method mutates it.
         if let HirExprKind::VarRef(obj_id) = &object.kind {
-            // Look up method in symbol table
-            if let Some(def) = self.symbols.get(method_def_id) {
-                if let DefKind::Method { signature, .. } = &def.kind {
-                    match signature.self_mode {
-                        Some(HirSelfMode::Consuming) => {
-                            if !self.ty_is_effectively_copy(&object.ty) {
-                                self.moves.process_call_move(
-                                    *obj_id,
-                                    method_name.to_string(),
-                                    &object.ty,
-                                    span.clone(),
-                                );
-                                self.ownership.record_move_into_call(
-                                    *obj_id,
-                                    method_name.to_string(),
-                                    span.clone(),
-                                );
-                            }
-                        }
-                        Some(HirSelfMode::RefMut) => {
-                            // &mut self method: check mutation conflicts
-                            if let Err(conflict) = self.borrows.check_mutation(*obj_id) {
-                                let name = self.def_name(*obj_id);
-                                self.errors.push(BorrowError {
-                                    code: ErrorCode::E1002,
-                                    primary: SpanLabel {
-                                        span: span.clone(),
-                                        label: format!(
-                                            "cannot mutably borrow `{}` — already borrowed",
-                                            name
-                                        ),
-                                    },
-                                    secondary: vec![SpanLabel {
-                                        span: conflict.existing.created_span.clone(),
-                                        label: format!(
-                                            "previous {} borrow of `{}` here",
-                                            if conflict.existing.kind == BorrowKind::Mutable {
-                                                "mutable"
-                                            } else {
-                                                "immutable"
-                                            },
-                                            name
-                                        ),
-                                    }],
-                                    help: vec!["ensure the previous borrow is no longer in use"
-                                        .to_string()],
-                                });
-                            }
-                        }
-                        _ => {}
+            match self.receiver_mode(resolved, method_name, &object.ty) {
+                Some(HirSelfMode::Consuming) => {
+                    if !self.ty_is_effectively_copy(&object.ty) {
+                        self.moves.process_call_move(
+                            *obj_id,
+                            method_name.to_string(),
+                            &object.ty,
+                            span.clone(),
+                        );
+                        self.ownership.record_move_into_call(
+                            *obj_id,
+                            method_name.to_string(),
+                            span.clone(),
+                        );
                     }
                 }
-            } else {
-                // Method not in symbol table — use name-based heuristic for common mutating methods
-                let is_mutating = matches!(
-                    method_name,
-                    "push"
-                        | "pop"
-                        | "insert"
-                        | "remove"
-                        | "clear"
-                        | "sort"
-                        | "reverse"
-                        | "push_str"
-                        | "truncate"
-                        | "extend"
-                        | "retain"
-                        | "drain"
-                        | "iter_mut"
-                        | "set"
-                );
-                if is_mutating {
+                Some(HirSelfMode::RefMut) => {
                     if let Err(conflict) = self.borrows.check_mutation(*obj_id) {
                         let name = self.def_name(*obj_id);
                         self.errors.push(BorrowError {
                             code: ErrorCode::E1002,
                             primary: SpanLabel {
                                 span: span.clone(),
-                                label: format!("cannot mutably borrow `{}` — already borrowed", name),
+                                label: format!(
+                                    "cannot mutably borrow `{}` — already borrowed",
+                                    name
+                                ),
                             },
                             secondary: vec![SpanLabel {
                                 span: conflict.existing.created_span.clone(),
                                 label: format!(
                                     "previous {} borrow of `{}` here",
-                                    if conflict.existing.kind == BorrowKind::Mutable { "mutable" } else { "immutable" },
+                                    if conflict.existing.kind == BorrowKind::Mutable {
+                                        "mutable"
+                                    } else {
+                                        "immutable"
+                                    },
                                     name
                                 ),
                             }],
@@ -569,16 +552,56 @@ impl<'a> BorrowChecker<'a> {
                         });
                     }
                 }
-
-                // (The name-based `iter` / `into_iter` borrow/move
-                // ownership tracking was removed with the orphaned
-                // iterator machinery — Phase B / Milestone 2. Nothing
-                // produces those calls.)
+                Some(HirSelfMode::Ref) | None => {}
             }
         }
 
         // Kill temporary borrows from args — they're consumed by the callee
         self.borrows.kill_after_checkpoint(checkpoint);
+    }
+
+    /// The receiver mode of the method a call on `receiver` targets: the
+    /// mode `resolved` declares. A builtin head's `lib` method aliased to a
+    /// C symbol (`def push as "ruxen_vec_push"`) declares none (its
+    /// signature always says `&self`), and an unselected method has no
+    /// signature; for those the mode is the one of the common mutating
+    /// builtins by that name (`push`, `insert`, ...), else `None`.
+    fn receiver_mode(
+        &self,
+        resolved: DefId,
+        method_name: &str,
+        receiver: &crate::hir::types::Ty,
+    ) -> Option<HirSelfMode> {
+        use crate::hir::types::Ty;
+        let nominal = matches!(
+            receiver.peel_refs(),
+            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+        );
+        let declared = self.symbols.get(resolved).and_then(|def| match &def.kind {
+            DefKind::Method { signature, .. } => Some(signature),
+            _ => None,
+        });
+        match declared {
+            Some(signature) if nominal || signature.c_symbol.is_none() => signature.self_mode,
+            _ => matches!(
+                method_name,
+                "push"
+                    | "pop"
+                    | "insert"
+                    | "remove"
+                    | "clear"
+                    | "sort"
+                    | "reverse"
+                    | "push_str"
+                    | "truncate"
+                    | "extend"
+                    | "retain"
+                    | "drain"
+                    | "iter_mut"
+                    | "set"
+            )
+            .then_some(HirSelfMode::RefMut),
+        }
     }
 
     // ─── Return ────────────────────────────────────────────────────

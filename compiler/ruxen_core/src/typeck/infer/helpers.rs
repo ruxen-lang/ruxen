@@ -7,6 +7,7 @@
 
 use crate::hir::nodes::{DefId, *};
 use crate::hir::types::Ty;
+use crate::hir::visit::{walk_expr, Visit};
 use crate::lexer::token::Span;
 use crate::resolve::symbols::{DefKind, SymbolTable, VariantDefKind};
 
@@ -83,14 +84,13 @@ pub(super) fn propagate_pattern_types(
                 ),
                 _ => return,
             };
+            let subst = generic_subst(generic_params, generic_args);
             let mut field_tys: std::collections::HashMap<String, Ty> =
                 std::collections::HashMap::new();
             for fid in &field_def_ids {
                 if let Some(fdef) = symbols.get(*fid) {
                     if let DefKind::Field { ty, .. } = &fdef.kind {
-                        let subst_ty =
-                            substitute_generic_params(ty, &generic_params, &generic_args);
-                        field_tys.insert(fdef.name.clone(), subst_ty);
+                        field_tys.insert(fdef.name.clone(), ty.subst_params(&subst));
                     }
                 }
             }
@@ -178,10 +178,9 @@ pub(super) fn propagate_pattern_types(
                 .iter()
                 .map(|gp| gp.name.clone())
                 .collect();
+            let subst = generic_subst(generic_param_names, generic_args);
             for (field_pat, declared_ty) in fields.iter().zip(payload_tys.iter()) {
-                let subst_ty =
-                    substitute_generic_params(declared_ty, &generic_param_names, &generic_args);
-                propagate_pattern_types(field_pat, &subst_ty, symbols);
+                propagate_pattern_types(field_pat, &declared_ty.subst_params(&subst), symbols);
             }
         }
     }
@@ -197,56 +196,11 @@ fn scrutinee_class_generic_args(ty: &Ty) -> Vec<Ty> {
     }
 }
 
-/// Walk `ty` replacing every `Ty::Param(name, _)` with the matching
-/// argument from `(generic_params, generic_args)`. When the lookup
-/// fails the param is left in place — typeck will surface the
-/// mismatch via the downstream unify.
-fn substitute_generic_params(ty: &Ty, generic_params: &[String], generic_args: &[Ty]) -> Ty {
-    match ty {
-        Ty::TypeParam { name, .. } => generic_params
-            .iter()
-            .position(|p| p == name)
-            .and_then(|i| generic_args.get(i).cloned())
-            .unwrap_or_else(|| ty.clone()),
-        // Every other variant just folds substitution through its children.
-        // `Ty::map_inner` is the single exhaustive structural-recursion
-        // primitive, so this fold can never silently drop substitution
-        // through a `Ty` child (e.g. `Ty::RefLifetime`, `Ty::Fn`,
-        // `Ty::Newtype`, `Ty::Alias`, `Ty::FixedArray`) — bug #3.
-        other => other
-            .clone()
-            .map_inner(&mut |c| substitute_generic_params(c, generic_params, generic_args)),
-    }
-}
-
-/// Phase 2 #06.5 T6: BufReader[R] / BufWriter[W] restrict R/W to the
-/// closed set {File, TcpStream}. v1 deliberately ships no formal
-/// Read/Write trait (deferred to v1.5 with the Iterator mixin); the
-/// runtime branches on a 1-byte `kind` tag baked into the spine. Any
-/// other inner type at typeck → E0714. `Ty::Infer` and `Ty::Error`
-/// pass through so we don't double-report when the inner is already a
-/// type-error.
-pub(in crate::typeck) fn is_bufio_inner_supported(ty: &Ty) -> bool {
-    let peeled = peel_refs(ty);
-    matches!(
-        peeled,
-        Ty::Class { name, .. } if name == "File" || name == "TcpStream"
-    ) || matches!(peeled, Ty::Infer(_) | Ty::Error)
-}
-
-/// Strip outer reference layers (`&T`, `&var T`) so the wrapped type
-/// can be matched directly. Returns the inner Ty by reference.
-fn peel_refs(ty: &Ty) -> &Ty {
-    let mut cur = ty;
-    loop {
-        match cur {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => cur = inner,
-            _ => return cur,
-        }
-    }
+/// Pair a type's declared generic param names with a use site's generic
+/// args. A param with no matching arg is left out, so substitution leaves it
+/// in place and typeck surfaces the mismatch via the downstream unify.
+fn generic_subst(params: Vec<String>, args: Vec<Ty>) -> std::collections::HashMap<String, Ty> {
+    params.into_iter().zip(args).collect()
 }
 
 /// Infer the concrete `generic_args` for a user-defined enum variant
@@ -386,117 +340,21 @@ fn record_tyvar_binding(
 /// Walk a loop body collecting the types of every `break VALUE` (and
 /// recording `Unit` for bare `break`) so the enclosing `loop` expression
 /// can be given a precise type. Recursion stops at nested `Loop`/`While`/
-/// `For` bodies — those breaks belong to the inner loop, not ours.
+/// `For` bodies (those breaks belong to the inner loop, not ours), at nested
+/// closures (a `break` cannot cross a closure boundary) and at `return`.
 pub(super) fn collect_break_types(
     expr: &HirExpr,
     ctx: &mut crate::hir::context::TypeContext,
     acc: &mut Option<Ty>,
     loop_span: &Span,
 ) {
-    match &expr.kind {
-        HirExprKind::Break(value) => {
-            let t = match value {
-                Some(v) => ctx.resolve(&v.ty),
-                None => Ty::Unit,
-            };
-            match acc {
-                Some(prev) => {
-                    let _ = unify(prev, &t, ctx, loop_span);
-                }
-                None => *acc = Some(t),
-            }
-        }
-        // Nested loops own their own breaks — do not descend.
-        HirExprKind::Loop { .. } | HirExprKind::While { .. } | HirExprKind::For { .. } => {}
-        // Returns never flow into our loop's result either; skip entirely.
-        HirExprKind::Return(_) => {}
-
-        // Structural recursion through every expression kind that can
-        // syntactically contain a `break`.
-        HirExprKind::Block(stmts, tail) => {
-            for s in stmts {
-                match s {
-                    HirStatement::Let { value: Some(v), .. } => {
-                        collect_break_types(v, ctx, acc, loop_span);
-                    }
-                    HirStatement::Expr(e) => {
-                        collect_break_types(e, ctx, acc, loop_span);
-                    }
-                    _ => {}
-                }
-            }
-            if let Some(t) = tail {
-                collect_break_types(t, ctx, acc, loop_span);
-            }
-        }
-        HirExprKind::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => {
-            collect_break_types(cond, ctx, acc, loop_span);
-            collect_break_types(then_branch, ctx, acc, loop_span);
-            if let Some(e) = else_branch {
-                collect_break_types(e, ctx, acc, loop_span);
-            }
-        }
-        HirExprKind::Match { scrutinee, arms } => {
-            collect_break_types(scrutinee, ctx, acc, loop_span);
-            for arm in arms {
-                if let Some(g) = &arm.guard {
-                    collect_break_types(g, ctx, acc, loop_span);
-                }
-                collect_break_types(&arm.body, ctx, acc, loop_span);
-            }
-        }
-        HirExprKind::BinaryOp { left, right, .. } => {
-            collect_break_types(left, ctx, acc, loop_span);
-            collect_break_types(right, ctx, acc, loop_span);
-        }
-        HirExprKind::UnaryOp { operand, .. } => {
-            collect_break_types(operand, ctx, acc, loop_span);
-        }
-        HirExprKind::Borrow { expr: inner, .. } => {
-            collect_break_types(inner, ctx, acc, loop_span);
-        }
-        HirExprKind::Assign { target, value, .. }
-        | HirExprKind::CompoundAssign { target, value, .. } => {
-            collect_break_types(target, ctx, acc, loop_span);
-            collect_break_types(value, ctx, acc, loop_span);
-        }
-        HirExprKind::FnCall { args, .. } => {
-            for a in args {
-                collect_break_types(a, ctx, acc, loop_span);
-            }
-        }
-        HirExprKind::MethodCall {
-            object,
-            args,
-            block,
-            ..
-        } => {
-            collect_break_types(object, ctx, acc, loop_span);
-            for a in args {
-                collect_break_types(a, ctx, acc, loop_span);
-            }
-            if let Some(b) = block {
-                collect_break_types(b, ctx, acc, loop_span);
-            }
-        }
-        HirExprKind::FieldAccess { object, .. } => {
-            collect_break_types(object, ctx, acc, loop_span);
-        }
-        HirExprKind::Interpolation { parts } => {
-            for p in parts {
-                if let HirInterpolationPart::Expr { expr: e, .. } = p {
-                    collect_break_types(e, ctx, acc, loop_span);
-                }
-            }
-        }
-        // Other expression kinds cannot contain a break that targets
-        // our loop (they are leaves, closures, or type-level nodes).
-        _ => {}
+    JumpTypes {
+        jump: Jump::Break,
+        ctx,
+        acc,
+        span: loop_span,
     }
+    .visit_expr(expr);
 }
 
 /// Collect the value types of every `next expr` that belongs to THIS block
@@ -511,114 +369,80 @@ pub(super) fn collect_next_types(
     acc: &mut Option<Ty>,
     block_span: &Span,
 ) {
-    match &expr.kind {
-        HirExprKind::Next(value) => {
+    JumpTypes {
+        jump: Jump::Next,
+        ctx,
+        acc,
+        span: block_span,
+    }
+    .visit_expr(expr);
+}
+
+/// Which jump `JumpTypes` collects value types for.
+#[derive(Clone, Copy)]
+enum Jump {
+    Break,
+    Next,
+}
+
+/// Shared walk behind `collect_break_types` and `collect_next_types`: unifies
+/// the value type of every jump of kind `jump` that targets the construct
+/// being typed into `acc`.
+struct JumpTypes<'a> {
+    jump: Jump,
+    ctx: &'a mut crate::hir::context::TypeContext,
+    acc: &'a mut Option<Ty>,
+    span: &'a Span,
+}
+
+impl Visit for JumpTypes<'_> {
+    fn visit_expr(&mut self, expr: &HirExpr) {
+        let (value, boundary) = match self.jump {
+            Jump::Break => (
+                if let HirExprKind::Break(value) = &expr.kind {
+                    Some(value)
+                } else {
+                    None
+                },
+                // A nested loop owns its own breaks.
+                matches!(
+                    expr.kind,
+                    HirExprKind::Loop { .. }
+                        | HirExprKind::While { .. }
+                        | HirExprKind::For { .. }
+                        | HirExprKind::Closure { .. }
+                        | HirExprKind::Return(_)
+                ),
+            ),
+            Jump::Next => (
+                if let HirExprKind::Next(value) = &expr.kind {
+                    Some(value)
+                } else {
+                    None
+                },
+                // Unlike `break`, a `next` inside a nested loop still targets
+                // this block, so only a nested closure is a boundary.
+                matches!(
+                    expr.kind,
+                    HirExprKind::Closure { .. } | HirExprKind::Return(_)
+                ),
+            ),
+        };
+        if let Some(value) = value {
             let t = match value {
-                Some(v) => ctx.resolve(&v.ty),
+                Some(v) => self.ctx.resolve(&v.ty),
                 None => Ty::Unit,
             };
-            match acc {
+            match self.acc {
                 Some(prev) => {
-                    let _ = unify(prev, &t, ctx, block_span);
+                    let _ = unify(prev, &t, self.ctx, self.span);
                 }
-                None => *acc = Some(t),
+                None => *self.acc = Some(t),
             }
         }
-        // A nested closure owns its own `next`; do not descend. `return` does
-        // not contribute to the block's `next`-value type.
-        HirExprKind::Closure { .. } | HirExprKind::Return(_) => {}
-        // Unlike `break`, a `next` inside a nested loop still targets this
-        // block (loops use `continue`/`break`, never `next`), so descend.
-        HirExprKind::Loop { body } => collect_next_types(body, ctx, acc, block_span),
-        HirExprKind::While { condition, body } => {
-            collect_next_types(condition, ctx, acc, block_span);
-            collect_next_types(body, ctx, acc, block_span);
+        if !boundary {
+            walk_expr(self, expr);
         }
-        HirExprKind::For { iterable, body, .. } => {
-            collect_next_types(iterable, ctx, acc, block_span);
-            collect_next_types(body, ctx, acc, block_span);
-        }
-        HirExprKind::Block(stmts, tail) => {
-            for s in stmts {
-                match s {
-                    HirStatement::Let { value: Some(v), .. } => {
-                        collect_next_types(v, ctx, acc, block_span);
-                    }
-                    HirStatement::Expr(e) => {
-                        collect_next_types(e, ctx, acc, block_span);
-                    }
-                    _ => {}
-                }
-            }
-            if let Some(t) = tail {
-                collect_next_types(t, ctx, acc, block_span);
-            }
-        }
-        HirExprKind::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => {
-            collect_next_types(cond, ctx, acc, block_span);
-            collect_next_types(then_branch, ctx, acc, block_span);
-            if let Some(e) = else_branch {
-                collect_next_types(e, ctx, acc, block_span);
-            }
-        }
-        HirExprKind::Match { scrutinee, arms } => {
-            collect_next_types(scrutinee, ctx, acc, block_span);
-            for arm in arms {
-                if let Some(g) = &arm.guard {
-                    collect_next_types(g, ctx, acc, block_span);
-                }
-                collect_next_types(&arm.body, ctx, acc, block_span);
-            }
-        }
-        HirExprKind::BinaryOp { left, right, .. } => {
-            collect_next_types(left, ctx, acc, block_span);
-            collect_next_types(right, ctx, acc, block_span);
-        }
-        HirExprKind::UnaryOp { operand, .. } => {
-            collect_next_types(operand, ctx, acc, block_span);
-        }
-        HirExprKind::Borrow { expr: inner, .. } => {
-            collect_next_types(inner, ctx, acc, block_span);
-        }
-        HirExprKind::Assign { target, value, .. }
-        | HirExprKind::CompoundAssign { target, value, .. } => {
-            collect_next_types(target, ctx, acc, block_span);
-            collect_next_types(value, ctx, acc, block_span);
-        }
-        HirExprKind::FnCall { args, .. } => {
-            for a in args {
-                collect_next_types(a, ctx, acc, block_span);
-            }
-        }
-        HirExprKind::MethodCall {
-            object,
-            args,
-            block,
-            ..
-        } => {
-            collect_next_types(object, ctx, acc, block_span);
-            for a in args {
-                collect_next_types(a, ctx, acc, block_span);
-            }
-            if let Some(b) = block {
-                collect_next_types(b, ctx, acc, block_span);
-            }
-        }
-        HirExprKind::FieldAccess { object, .. } => {
-            collect_next_types(object, ctx, acc, block_span);
-        }
-        HirExprKind::Interpolation { parts } => {
-            for p in parts {
-                if let HirInterpolationPart::Expr { expr: e, .. } = p {
-                    collect_next_types(e, ctx, acc, block_span);
-                }
-            }
-        }
-        _ => {}
     }
 }
 
@@ -667,52 +491,5 @@ pub(super) fn multiassign_value_is_fresh(expr: &HirExpr) -> bool {
         // A place read (variable / field / index) aliases an existing owned
         // object; anything else is conservatively treated as aliasing.
         _ => false,
-    }
-}
-
-#[cfg(test)]
-mod substitute_generic_params_tests {
-    use super::substitute_generic_params;
-    use crate::hir::types::Ty;
-
-    fn tp(name: &str) -> Ty {
-        Ty::TypeParam {
-            name: name.into(),
-            bounds: vec![],
-        }
-    }
-
-    #[test]
-    fn substitutes_through_named_lifetime_ref() {
-        // &'a T  ->  &'a Int   (was a no-op before the map_inner migration:
-        // the tail `other => other.clone()` dropped substitution through
-        // Ty::RefLifetime — bug #3 surviving in this second fold).
-        let got = substitute_generic_params(
-            &Ty::RefLifetime("a".into(), Box::new(tp("T"))),
-            &["T".to_string()],
-            &[Ty::Int],
-        );
-        assert_eq!(got, Ty::RefLifetime("a".into(), Box::new(Ty::Int)));
-    }
-
-    #[test]
-    fn substitutes_through_fn_params_and_return() {
-        // Fn(T) -> U  ->  Fn(Int) -> Bool   (was a no-op before: the tail
-        // arm dropped substitution through Ty::Fn).
-        let got = substitute_generic_params(
-            &Ty::Fn {
-                params: vec![tp("T")],
-                ret: Box::new(tp("U")),
-            },
-            &["T".to_string(), "U".to_string()],
-            &[Ty::Int, Ty::Bool],
-        );
-        assert_eq!(
-            got,
-            Ty::Fn {
-                params: vec![Ty::Int],
-                ret: Box::new(Ty::Bool),
-            }
-        );
     }
 }

@@ -39,31 +39,6 @@
  * runtime.h above (cross-package surface). Defined in
  * library/std/array/runtime/vec.c and library/std/hash/runtime/hash.c. */
 
-/* ── Option constructors (inlined) ───────────────────────────────────
- *
- * The runtime has no public _some_value / _none_value factory — codegen
- * normally allocates Option payloads from MIR via Alloc + SetField, and
- * cross-package C call sites that need to fabricate one from C do this
- * inline. See library/std/io/runtime/bufio.c:90 for the canonical
- * pattern this is modelled on.
- *
- * Layout: 16 bytes, {i32 tag; i32 pad; i64 payload}. tag = 0 → None,
- * tag = 1 → Some. Matches the resolver's variant_idx ordering and
- * the Result helpers in runtime.h. */
-static void *ruxen_regex_option_none(void) {
-    int64_t *out = (int64_t *)ruxen_alloc(16);
-    *(int32_t *)out = 0; /* None */
-    out[1] = 0;
-    return out;
-}
-
-static void *ruxen_regex_option_some(int64_t payload) {
-    int64_t *out = (int64_t *)ruxen_alloc(16);
-    *(int32_t *)out = 1; /* Some */
-    out[1] = payload;
-    return out;
-}
-
 /* ── Flag-string → PCRE2 compile options ─────────────────────────── */
 
 /* Convert Ruxen flag-string chars to PCRE2 compile options. The lexer
@@ -248,17 +223,17 @@ static RuxenMatch *build_match_handle(pcre2_code_8 *r, const char *text,
 }
 
 void *ruxen_regex_match(pcre2_code_8 *r, const char *text) {
-    if (!r || !text) return ruxen_regex_option_none();
+    if (!r || !text) return ruxen_option_none();
     pcre2_match_data_8 *md = pcre2_match_data_create_from_pattern_8(r, NULL);
     int rc = pcre2_match_8(r, (PCRE2_SPTR)text, PCRE2_ZERO_TERMINATED,
                            0, 0, md, NULL);
     if (rc < 0) {
         pcre2_match_data_free_8(md);
-        return ruxen_regex_option_none();
+        return ruxen_option_none();
     }
     RuxenMatch *m = build_match_handle(r, text, md, rc);
     pcre2_match_data_free_8(md);
-    return ruxen_regex_option_some((int64_t)(intptr_t)m);
+    return ruxen_option_some((int64_t)(intptr_t)m);
 }
 
 /* ── Match accessors ─────────────────────────────────────────────── */
@@ -285,22 +260,22 @@ int64_t ruxen_match_end(RuxenMatch *m) {
 }
 
 void *ruxen_match_group(RuxenMatch *m, int64_t n) {
-    if (!m || n < 0 || n >= m->ovector_count) return ruxen_regex_option_none();
+    if (!m || n < 0 || n >= m->ovector_count) return ruxen_option_none();
     PCRE2_SIZE start = m->ovector_copy[n * 2];
     PCRE2_SIZE end   = m->ovector_copy[n * 2 + 1];
     /* PCRE2 marks non-participating groups with PCRE2_UNSET. */
     if (start == PCRE2_UNSET || end == PCRE2_UNSET) {
-        return ruxen_regex_option_none();
+        return ruxen_option_none();
     }
     size_t len = end - start;
     char *buf = (char *)ruxen_alloc(len + 1);
     memcpy(buf, m->subject_copy + start, len);
     buf[len] = '\0';
-    return ruxen_regex_option_some((int64_t)(intptr_t)buf);
+    return ruxen_option_some((int64_t)(intptr_t)buf);
 }
 
 void *ruxen_match_named(RuxenMatch *m, const char *name) {
-    if (!m || !m->named_table_copy || !name) return ruxen_regex_option_none();
+    if (!m || !m->named_table_copy || !name) return ruxen_option_none();
     for (int i = 0; i < m->named_count; i++) {
         const char *entry = m->named_table_copy + (size_t)i * m->named_entry_size;
         /* PCRE2 name-table entry layout: 2-byte big-endian group index
@@ -311,7 +286,7 @@ void *ruxen_match_named(RuxenMatch *m, const char *name) {
             return ruxen_match_group(m, (int64_t)group_idx);
         }
     }
-    return ruxen_regex_option_none();
+    return ruxen_option_none();
 }
 
 /* groups → Array[Option[String]], one entry per ovector pair. */

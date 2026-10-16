@@ -382,12 +382,14 @@ mod tests {
                 name: "a".to_string(),
                 ty: Ty::Int,
                 mutable: false,
+                kind: LocalKind::User,
             },
             MirLocal {
                 id: 1,
                 name: "b".to_string(),
                 ty: Ty::Int,
                 mutable: false,
+                kind: LocalKind::User,
             },
         ];
 
@@ -430,6 +432,7 @@ mod tests {
             name: "cond".to_string(),
             ty: Ty::Bool,
             mutable: false,
+            kind: LocalKind::User,
         }];
 
         let blocks = vec![

@@ -28,15 +28,6 @@
 ## reads one byte), so this isn't a recommended pattern — but it
 ## doesn't UAF either. v2's multi-threaded scheduler will need a
 ## mutex around the read path.
-## --- Reactor fd-readiness primitives (re-declared so this package
-## stands on its own, mirroring async_fs/async_net). These are the
-## same C symbols already declared in async_fs/src/lib.rx — Ruxen's
-## FFI registration is keyed on the (symbol, ABI) pair, so identical
-## decls in two packages refer to the same linker symbol.
-lib "../../future/runtime/reactor.c"
-  def ruxen_reactor_register_fd_read(reactor: Int, fd: Int) -> Int
-end
-
 ## --- async_stdin state-machine primitives ------------------------------
 ##
 ## See library/std/async_io/runtime/async_io.c for the C side. The state

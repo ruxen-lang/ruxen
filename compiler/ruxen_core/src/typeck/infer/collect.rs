@@ -14,7 +14,7 @@ use crate::lexer::token::Span;
 use crate::parser::ast;
 use crate::resolve::symbols::DefKind;
 
-use super::super::unify::unify;
+use super::super::unify::{can_coerce, unify};
 use super::InferenceEngine;
 
 impl<'a> InferenceEngine<'a> {
@@ -31,45 +31,16 @@ impl<'a> InferenceEngine<'a> {
         // the declared return type.  This binds fresh inference vars in
         // the receiver's `Ty::Fn { params, ret }` to concrete types.
         if method_name == "call" {
-            let derefed = match obj_ty {
-                Ty::Ref(inner)
-                | Ty::RefMut(inner)
-                | Ty::RefLifetime(_, inner)
-                | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
-                other => other,
-            };
-            if let Ty::Fn { params, ret } | Ty::FnMut { params, ret } | Ty::FnOnce { params, ret } =
-                derefed
-            {
+            // Dyn-erased closure receivers (`any Fn(T) -> U`, `some Fn(...)`)
+            // carry the function type in their `Fn` bound; without reading it
+            // `let r = closure.(arg)` would leave `r` at `Ty::Infer` and every
+            // later `r.field` / `r.method` would fail at codegen with an
+            // unresolved `?T_<m>` symbol.
+            if let Some((params, ret)) = obj_ty.peel_refs().callable_signature() {
                 for (arg, param_ty) in args.iter().zip(params.iter()) {
                     let _ = unify(&arg.ty, param_ty, self.ctx, span);
                 }
                 return self.ctx.resolve(ret);
-            }
-            // Dyn-erased closure receivers — `any Fn(T) -> U` shows up
-            // as `Ty::AnyMixin([MixinRef{name:"Fn", generic_args:[Fn{...}]}])`
-            // (and likewise `some Fn(...)` → `Ty::SomeMixin`). Peel the
-            // single `Fn` / `FnMut` / `FnOnce` bound's first generic
-            // arg, which carries the underlying `Ty::Fn { params, ret }`,
-            // and treat the call like a direct Fn dispatch above.
-            // Without this, `let r = closure.(arg)` on a dyn-typed
-            // receiver leaves `r`'s type at `Ty::Infer`, blowing up
-            // every subsequent `r.field` / `r.method` at codegen with
-            // an unresolved `?T_<m>` symbol.
-            if let Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) = derefed {
-                for bound in bounds {
-                    if matches!(bound.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
-                        if let Some(Ty::Fn { params, ret })
-                        | Some(Ty::FnMut { params, ret })
-                        | Some(Ty::FnOnce { params, ret }) = bound.generic_args.first()
-                        {
-                            for (arg, param_ty) in args.iter().zip(params.iter()) {
-                                let _ = unify(&arg.ty, param_ty, self.ctx, span);
-                            }
-                            return self.ctx.resolve(ret);
-                        }
-                    }
-                }
             }
         }
 
@@ -132,9 +103,8 @@ impl<'a> InferenceEngine<'a> {
         // Method not found. For a scalar value-primitive receiver
         // (numeric, Bool, Char) — and for `String` / `&str`, whose entire
         // method surface is the `.rx` `class String` (already consulted via
-        // `builtin_method_type` + `lookup_method_with_args` above) plus the
-        // MIR-only mutation/`remove` residuals (resolved by the `strings.rs`
-        // arms inside `builtin_method_type`) — an unknown method is
+        // `builtin_method_type` + `lookup_method_with_args` above) — an
+        // unknown method is
         // definitively an error: these types have no further class shell and
         // no later-phase method surface, so the call would mangle to
         // `<Type>_<method>` (e.g. `Int_to_f`, `String_from`) with no matching
@@ -144,12 +114,6 @@ impl<'a> InferenceEngine<'a> {
         // fail identically. This is the seam that makes the DELETED
         // `String.from(...)` produce a clean "no method `from` on type
         // `String`" error rather than leaking a `?T…` symbol into codegen.
-        //
-        // We deliberately do NOT error for class / struct / enum /
-        // collection / generic receivers: methods on those are resolved
-        // by later phases (e.g. `Array[T]_get_var` → `ruxen_vec_get_opt`,
-        // user methods on generic classes like `Repository[Todo]`), which
-        // the lenient fresh-var fallback below still feeds.
         let resolved = self.ctx.resolve(obj_ty);
         let is_str_head = matches!(resolved, Ty::String)
             || matches!(&resolved, Ty::Ref(inner) if matches!(**inner, Ty::String));
@@ -164,141 +128,63 @@ impl<'a> InferenceEngine<'a> {
             return Ty::Error;
         }
 
-        // Method not found — but don't error for common chaining patterns
-        // on richer receiver types (resolved by later phases).
-        self.ctx.fresh_type_var()
-    }
-
-    pub(super) fn infer_iter_collect_type(
-        &mut self,
-        obj_ty: &Ty,
-        generic_args: &[Ty],
-        span: &Span,
-    ) -> Ty {
-        if generic_args.len() != 1 {
-            self.diagnostics.push(Diagnostic::error_with_code(
-                "`collect` requires exactly one target type: `iter.collect[Array[T]]`".to_string(),
-                span.clone(),
-                "E0700",
-            ));
-            return Ty::Error;
-        }
-
-        let Some(item_ty) = self.iter_item_ty(obj_ty) else {
-            self.diagnostics.push(Diagnostic::error_with_code(
-                format!("`collect` is only defined on iterator values; got `{obj_ty}`"),
-                span.clone(),
-                "E0700",
-            ));
-            return Ty::Error;
+        // The same holds for a receiver with a known home class: a nominal
+        // class, struct or enum, or a builtin collection head whose methods
+        // live in its `.rx` class. Its whole method surface was consulted
+        // above, so an unknown name (`Array.from(123)`) is an error here, not
+        // a fresh variable that unifies with anything and fails at link
+        // time. A call without arguments may be a parenless member access,
+        // so its message names fields too. The `.rx` spelling of a builtin
+        // head (`self` inside `class Array[T]`, a `Ty::Class` named `Array`)
+        // is excluded: its `self[i]` reaches here as `[]`, which only the
+        // MIR index lowering knows.
+        let known_home = match resolved.peel_refs() {
+            Ty::Class { .. } => resolved.builtin_head().is_none(),
+            Ty::Struct { .. }
+            | Ty::Enum { .. }
+            | Ty::Array(_)
+            | Ty::Set(_)
+            | Ty::Map(_, _)
+            | Ty::Option(_)
+            | Ty::Result(_, _) => true,
+            _ => false,
         };
-
-        let target = self.ctx.resolve(&generic_args[0]);
-        if !self.collect_target_compatible(&target, &item_ty, span) {
+        // A name the home class does declare, at another arity, is a call
+        // shape later phases still lower: the static spelling of an
+        // instance method, `JoinHandle.join_raw(handle)`.
+        let declared = known_home
+            && self
+                .symbols
+                .methods_named(&resolved.method_home(), method_name)
+                .next()
+                .is_some();
+        if known_home && !declared {
+            let member = if args.is_empty() {
+                "field or method"
+            } else {
+                "method"
+            };
+            // A static call's receiver carries unbound fresh variables
+            // (`Array[?T]`): name its home class instead.
+            let shown = if resolved.any(&mut |t| t.is_infer()) {
+                resolved.method_home()
+            } else {
+                resolved.to_string()
+            };
+            self.diagnostics.push(Diagnostic::error_with_code(
+                format!(
+                    "no {member} `{method_name}` on type `{shown}`{}",
+                    Self::predicate_suffix_hint(method_name)
+                ),
+                span.clone(),
+                "E0740",
+            ));
             return Ty::Error;
         }
-        target
-    }
 
-    pub(super) fn iter_item_ty(&self, ty: &Ty) -> Option<Ty> {
-        match ty {
-            Ty::Class { name, generic_args } if name.ends_with("Iter") => {
-                generic_args.first().cloned()
-            }
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => self.iter_item_ty(inner),
-            _ => None,
-        }
-    }
-
-    pub(super) fn collect_target_compatible(
-        &mut self,
-        target: &Ty,
-        item_ty: &Ty,
-        span: &Span,
-    ) -> bool {
-        match target {
-            Ty::Array(elem) => {
-                let ok = unify(elem.as_ref(), item_ty, self.ctx, span).is_ok();
-                if !ok {
-                    self.diagnostics.push(Diagnostic::error_with_code(
-                        format!(
-                            "`collect[{}]` expects iterator items of type `{}`; got `{}`",
-                            target,
-                            elem.as_ref(),
-                            item_ty
-                        ),
-                        span.clone(),
-                        "E0700",
-                    ));
-                }
-                ok
-            }
-            Ty::String => {
-                let resolved = self.ctx.resolve(item_ty);
-                let ok = matches!(resolved, Ty::String);
-                if !ok {
-                    self.diagnostics.push(Diagnostic::error_with_code(
-                        format!(
-                            "`collect[String]` expects iterator items of type `String`; got `{}`",
-                            resolved
-                        ),
-                        span.clone(),
-                        "E0700",
-                    ));
-                }
-                ok
-            }
-            Ty::Map(k, v) => {
-                let resolved = self.ctx.resolve(item_ty);
-                let ok = match resolved {
-                    Ty::Tuple(ref elems) if elems.len() == 2 => {
-                        unify(k.as_ref(), &elems[0], self.ctx, span).is_ok()
-                            && unify(v.as_ref(), &elems[1], self.ctx, span).is_ok()
-                    }
-                    _ => false,
-                };
-                if !ok {
-                    self.diagnostics.push(Diagnostic::error_with_code(
-                        format!(
-                            "`collect[{}]` expects iterator items of type `(K, V)`; got `{}`",
-                            target, item_ty
-                        ),
-                        span.clone(),
-                        "E0700",
-                    ));
-                }
-                ok
-            }
-            Ty::Set(elem) => {
-                let ok = unify(elem.as_ref(), item_ty, self.ctx, span).is_ok();
-                if !ok {
-                    self.diagnostics.push(Diagnostic::error_with_code(
-                        format!(
-                            "`collect[{}]` expects iterator items of type `{}`; got `{}`",
-                            target,
-                            elem.as_ref(),
-                            item_ty
-                        ),
-                        span.clone(),
-                        "E0700",
-                    ));
-                }
-                ok
-            }
-            other => {
-                self.diagnostics.push(Diagnostic::error_with_code(
-                    format!(
-                        "`collect[{other}]` is not supported yet; use Array, String, Map, or Set"
-                    ),
-                    span.clone(),
-                    "E0700",
-                ));
-                false
-            }
-        }
+        // Method not found on a receiver with no home class (a function
+        // value, a tuple): left to later phases.
+        self.ctx.fresh_type_var()
     }
 
     /// If `ty` is (a reference to) a `TypeParam`, `impl Trait`, or `dyn Trait`,
@@ -319,15 +205,7 @@ impl<'a> InferenceEngine<'a> {
         // (which unifies to `Unit` eventually), producing a misleading
         // "expected Int, found ()" against the declared signature. Pin:
         // e2e `2051_derived_ord_hashable_generic_bound`.
-        let mut cur = ty;
-        while let Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) = cur
-        {
-            cur = inner.as_ref();
-        }
-        let bounds: &[crate::hir::types::MixinRef] = match cur {
+        let bounds: &[crate::hir::types::MixinRef] = match ty.peel_refs() {
             Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
                 bounds.as_slice()
             }
@@ -337,7 +215,13 @@ impl<'a> InferenceEngine<'a> {
             return None;
         }
         match self.traits.lookup_method_on_bounds(bounds, name, args) {
-            Ok(Some(sig)) => Some(self.wrap_async_return(&sig)),
+            // A bound's `Self` (`mixin Clone; def clone -> Self`) is the
+            // receiver's own type parameter.
+            Ok(Some(sig)) => {
+                let subst =
+                    std::collections::HashMap::from([("Self".to_string(), ty.peel_refs().clone())]);
+                Some(self.wrap_async_return(&sig).subst_params(&subst))
+            }
             Ok(None) => None,
             Err(providers) => {
                 self.error(
@@ -392,6 +276,9 @@ impl<'a> InferenceEngine<'a> {
         let sig = self
             .traits
             .lookup_method_with_args(ty, method, args, self.symbols)?;
+        if sig.is_class_method {
+            self.check_class_method_args(ty, method, &sig, args);
+        }
 
         // Receiver-element bound seam: a `.rx` method whose `where` clause
         // bounds the receiver class's OWN generic (`class Array[T]`'s
@@ -429,47 +316,74 @@ impl<'a> InferenceEngine<'a> {
         Some(self.harvest_and_subst_generics(&sig, args, &receiver_subst))
     }
 
-    pub(super) fn infer_index_ty(&self, obj_ty: &Ty) -> Ty {
-        match obj_ty {
-            Ty::Array(elem) => *elem.clone(),
-            Ty::FixedArray(elem, _) => *elem.clone(),
-            // `self[i]` INSIDE a migrated `class Array[T]` stdlib method
-            // body: `self` is typed as the FFI-shell `Ty::Class { name:
-            // "Array" | "Vec", generic_args: [T] }`, not `Ty::Array`. Yield
-            // the first generic arg as the element type so `.rx` combinator
-            // bodies can index their receiver (mirrors the lower.rs Index
-            // dispatch's `is_indexable_vec_ty`).
-            Ty::Class { name, generic_args }
-                if {
-                    let base = name.split('[').next().unwrap_or(name);
-                    matches!(base, "Vec" | "Array")
-                } =>
-            {
-                generic_args.first().cloned().unwrap_or(Ty::Error)
+    /// Each argument of a builtin head's class method must fit its declared
+    /// parameter type, the receiver's generic args substituted
+    /// (`Array.with_capacity("x")` is E0741). An argument may be passed
+    /// through or to a borrow of its type, or coerce to it. Instance
+    /// methods and user classes are not checked yet: the concurrency
+    /// surface passes objects through `Int` slots (`arms.push(fut)` for
+    /// `Race.any_of`, `Race.of(a, b)`).
+    pub(super) fn check_class_method_args(
+        &mut self,
+        receiver: &Ty,
+        method: &str,
+        sig: &crate::resolve::symbols::FnSignature,
+        args: &[HirExpr],
+    ) {
+        for (arg, param) in args.iter().zip(&sig.params) {
+            let param_ty = self.substitute_generics_in_return(receiver, &param.ty);
+            let arg_ty = self.ctx.resolve(&arg.ty);
+            let fits = unify(&arg_ty, &param_ty, self.ctx, &arg.span).is_ok()
+                || unify(
+                    arg_ty.peel_refs(),
+                    param_ty.peel_refs(),
+                    self.ctx,
+                    &arg.span,
+                )
+                .is_ok()
+                || can_coerce(&arg_ty, &param_ty, self.ctx);
+            if !fits {
+                let param_ty = self.ctx.resolve(&param_ty);
+                self.diagnostics.push(Diagnostic::error_with_code(
+                    format!(
+                        "argument `{}` of `{}` expects `{param_ty}`, found `{arg_ty}`",
+                        param.name, method,
+                    ),
+                    arg.span.clone(),
+                    "E0741",
+                ));
             }
+        }
+    }
+
+    pub(super) fn infer_index_ty(&self, obj_ty: &Ty) -> Ty {
+        // References index like their target (e.g. `&map[k]`).
+        match obj_ty.peel_refs() {
+            Ty::FixedArray(elem, _) => *elem.clone(),
             // `m[&k]` panics on missing keys (mirrors Rust's `Index for
             // HashMap`); the runtime helper `ruxen_hash_index` returns the
             // raw value slot rather than an Option, so the surface type is
             // V directly. See lower.rs Index handler for the dispatch.
             Ty::Map(_, v) => *v.clone(),
-            // Reference-to-HashMap also indexable (e.g. `&map[k]`).
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => self.infer_index_ty(inner),
-            // No index lowering (tuples included): the caller reports E1128.
-            _ => Ty::Error,
+            // An `Array`, in either spelling: `self[i]` INSIDE a migrated
+            // `class Array[T]` stdlib method body types `self` as the
+            // FFI-shell `Ty::Class { name: "Array", generic_args: [T] }`
+            // (mirrors the MIR Index dispatch's `is_indexable_vec_ty`).
+            // No index lowering otherwise (tuples included): the caller
+            // reports E1128.
+            other => match other.builtin_head() {
+                Some(("Array", args)) => args.into_iter().next().unwrap_or(Ty::Error),
+                _ => Ty::Error,
+            },
         }
     }
 
     pub(super) fn lookup_field(&self, type_name: &str, field_name: &str) -> Option<(Ty, usize)> {
-        for def in self.symbols.iter() {
-            if def.name == field_name {
-                if let DefKind::Field { parent, ty, index } = &def.kind {
-                    if let Some(parent_def) = self.symbols.get(*parent) {
-                        if parent_def.name == type_name {
-                            return Some((ty.clone(), *index));
-                        }
+        for def in self.symbols.named(field_name) {
+            if let DefKind::Field { parent, ty, index } = &def.kind {
+                if let Some(parent_def) = self.symbols.get(*parent) {
+                    if parent_def.name == type_name {
+                        return Some((ty.clone(), *index));
                     }
                 }
             }
@@ -515,8 +429,8 @@ impl<'a> InferenceEngine<'a> {
             }
             let Some(def) = self
                 .symbols
-                .iter()
-                .find(|d| d.name == name && matches!(d.kind, DefKind::Class { .. }))
+                .named(&name)
+                .find(|d| matches!(d.kind, DefKind::Class { .. }))
             else {
                 break;
             };
@@ -567,40 +481,33 @@ impl<'a> InferenceEngine<'a> {
         None
     }
 
-    /// Look up a user-defined method on a class (or its parents) and return its return type.
+    /// Look up a user-defined method on a class (or its parents) and return its
+    /// return type. Overload-aware: among `method_name` and its
+    /// `method_name__overload<N>` siblings declared on the nearest class that
+    /// has any, the first that accepts `argc` arguments wins, else the first
+    /// declared.
     pub(in crate::typeck) fn lookup_class_method_return(
         &self,
         type_name: &str,
         method_name: &str,
+        argc: usize,
     ) -> Option<Ty> {
-        for def in self.symbols.iter() {
-            if def.name == method_name {
-                if let DefKind::Method { parent, signature } = &def.kind {
-                    if let Some(parent_def) = self.symbols.get(*parent) {
-                        if parent_def.name == type_name {
-                            return Some(self.ctx.resolve(&signature.return_ty));
-                        }
-                    }
-                }
-            }
+        let candidates = self.class_method_candidates(type_name, method_name);
+        let selected = candidates
+            .iter()
+            .copied()
+            .find(|candidate| self.method_accepts_arg_count(*candidate, argc))
+            .or_else(|| candidates.first().copied());
+        if let Some(selected) = selected {
+            let Some(DefKind::Method { signature, .. }) =
+                self.symbols.get(selected).map(|def| &def.kind)
+            else {
+                unreachable!("class_method_candidates yields only Method definitions");
+            };
+            return Some(self.ctx.resolve(&signature.return_ty));
         }
-        // Walk the parent chain
-        for def in self.symbols.iter() {
-            if def.name == type_name {
-                if let DefKind::Class { info } = &def.kind {
-                    if let Some(parent_id) = info.parent {
-                        if let Some(parent_def) = self.symbols.get(parent_id) {
-                            return self.lookup_class_method_return(&parent_def.name, method_name);
-                        }
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    fn method_name_matches(def_name: &str, method_name: &str) -> bool {
-        def_name == method_name || def_name.starts_with(&format!("{}__overload", method_name))
+        let parent = self.parent_class_name(type_name)?;
+        self.lookup_class_method_return(&parent, method_name, argc)
     }
 
     fn method_accepts_arg_count(&self, method_id: DefId, argc: usize) -> bool {
@@ -648,7 +555,7 @@ impl<'a> InferenceEngine<'a> {
             let last_is_callable = signature
                 .params
                 .last()
-                .map(|p| Self::ty_is_callable(&self.ctx.resolve(&p.ty)))
+                .map(|p| self.ctx.resolve(&p.ty).is_callable())
                 .unwrap_or(false);
             if !last_is_callable {
                 return false;
@@ -668,10 +575,10 @@ impl<'a> InferenceEngine<'a> {
                 // mis-storing the closure pointer as a `String` → heap
                 // corruption. Checking `arg.kind` (syntactic) makes selection
                 // correct even before the closure's type is inferred.
-                let arg_is_callable = matches!(arg.kind, HirExprKind::Closure { .. })
-                    || Self::ty_is_callable(&arg_ty);
+                let arg_is_callable =
+                    matches!(arg.kind, HirExprKind::Closure { .. }) || arg_ty.is_callable();
                 if arg_is_callable {
-                    return Self::ty_is_callable(&param_ty);
+                    return param_ty.is_callable();
                 }
                 arg_ty.is_infer()
                     || arg_ty.is_error()
@@ -684,51 +591,18 @@ impl<'a> InferenceEngine<'a> {
             })
     }
 
-    /// True when `ty` is a callable shape — a bare `Ty::Fn`/`FnMut`/`FnOnce`
-    /// or the surface `any Fn[…]` / `some Fn[…]` mixin spelling (peeling one
-    /// reference layer). Used by overload selection so a closure argument is
-    /// matched against a closure parameter, not a `&str` one (Q1).
-    fn ty_is_callable(ty: &Ty) -> bool {
-        let peeled = match ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
-            other => other,
-        };
-        match peeled {
-            Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => true,
-            Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => bounds
-                .iter()
-                .any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce")),
-            _ => false,
-        }
-    }
-
     fn class_method_candidates(&self, type_name: &str, method_name: &str) -> Vec<DefId> {
         self.symbols
-            .iter()
-            .filter_map(|def| {
-                if !Self::method_name_matches(&def.name, method_name) {
-                    return None;
-                }
-                let DefKind::Method { parent, .. } = &def.kind else {
-                    return None;
-                };
-                let parent_def = self.symbols.get(*parent)?;
-                (parent_def.name == type_name).then_some(def.id)
-            })
+            .methods_named(type_name, method_name)
+            .map(|def| def.id)
             .collect()
     }
 
     fn find_class_def(&self, type_name: &str) -> Option<DefId> {
-        self.symbols.iter().find_map(|def| {
-            if def.name == type_name && matches!(def.kind, DefKind::Class { .. }) {
-                Some(def.id)
-            } else {
-                None
-            }
-        })
+        self.symbols
+            .named(type_name)
+            .find(|def| matches!(def.kind, DefKind::Class { .. }))
+            .map(|def| def.id)
     }
 
     fn parent_class_name(&self, type_name: &str) -> Option<String> {
@@ -964,16 +838,14 @@ impl<'a> InferenceEngine<'a> {
     /// Declared generic-parameter names of a class or struct by name, in
     /// declaration order. Empty when the type is non-generic or unknown.
     fn type_generic_param_names(&self, type_name: &str) -> Vec<String> {
-        for def in self.symbols.iter() {
-            if def.name == type_name {
-                let params = match &def.kind {
-                    DefKind::Class { info } => Some(&info.generic_params),
-                    DefKind::Struct { info } => Some(&info.generic_params),
-                    _ => None,
-                };
-                if let Some(params) = params {
-                    return params.iter().map(|gp| gp.name.clone()).collect();
-                }
+        for def in self.symbols.named(type_name) {
+            let params = match &def.kind {
+                DefKind::Class { info } => Some(&info.generic_params),
+                DefKind::Struct { info } => Some(&info.generic_params),
+                _ => None,
+            };
+            if let Some(params) = params {
+                return params.iter().map(|gp| gp.name.clone()).collect();
             }
         }
         Vec::new()
@@ -992,22 +864,20 @@ impl<'a> InferenceEngine<'a> {
             }
         }
         // Fall back to the declared fields (positional `.new`).
-        for def in self.symbols.iter() {
-            if def.name == type_name {
-                let field_ids = match &def.kind {
-                    DefKind::Class { info } => Some(info.fields.clone()),
-                    DefKind::Struct { info } => Some(info.fields.clone()),
-                    _ => None,
-                };
-                if let Some(field_ids) = field_ids {
-                    return field_ids
-                        .iter()
-                        .filter_map(|fid| match self.symbols.get(*fid).map(|d| &d.kind) {
-                            Some(DefKind::Field { ty, .. }) => Some(ty.clone()),
-                            _ => None,
-                        })
-                        .collect();
-                }
+        for def in self.symbols.named(type_name) {
+            let field_ids = match &def.kind {
+                DefKind::Class { info } => Some(info.fields.clone()),
+                DefKind::Struct { info } => Some(info.fields.clone()),
+                _ => None,
+            };
+            if let Some(field_ids) = field_ids {
+                return field_ids
+                    .iter()
+                    .filter_map(|fid| match self.symbols.get(*fid).map(|d| &d.kind) {
+                        Some(DefKind::Field { ty, .. }) => Some(ty.clone()),
+                        _ => None,
+                    })
+                    .collect();
             }
         }
         Vec::new()
@@ -1016,13 +886,12 @@ impl<'a> InferenceEngine<'a> {
     /// The parameter types of the method `method` declared directly on
     /// `type_name`, or `None` when the type declares no such method.
     fn own_method_param_types(&self, type_name: &str, method: &str) -> Option<Vec<Ty>> {
-        self.symbols.iter().find_map(|def| match &def.kind {
+        self.symbols.named(method).find_map(|def| match &def.kind {
             DefKind::Method { parent, signature }
-                if def.name == method
-                    && self
-                        .symbols
-                        .get(*parent)
-                        .is_some_and(|p| p.name == type_name) =>
+                if self
+                    .symbols
+                    .get(*parent)
+                    .is_some_and(|p| p.name == type_name) =>
             {
                 Some(signature.params.iter().map(|p| p.ty.clone()).collect())
             }
@@ -1074,15 +943,10 @@ impl<'a> InferenceEngine<'a> {
         // substitution is a structural no-op when the return names neither
         // `Self` nor a receiver generic.
         let mut subst = self.receiver_generic_bindings(obj_ty).unwrap_or_default();
-        let self_ty = match obj_ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => (**inner).clone(),
-            other => other.clone(),
-        };
-        subst.entry("Self".to_string()).or_insert(self_ty);
-        Self::subst_ty(ret_ty, &subst)
+        subst
+            .entry("Self".to_string())
+            .or_insert_with(|| obj_ty.peel_refs().clone());
+        ret_ty.subst_params(&subst)
     }
 
     /// Build the `{class-param-name → receiver-concrete-arg}` map for a
@@ -1096,100 +960,56 @@ impl<'a> InferenceEngine<'a> {
         &self,
         obj_ty: &Ty,
     ) -> Option<std::collections::HashMap<String, Ty>> {
-        // Peel references so `(&Array[Int]).pop` substitutes like
-        // `Array[Int].pop` (the receiver of a `&self` method is borrowed).
-        let peeled = match obj_ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
-            other => other,
-        };
-        // Zero-Rust-stdlib bridge (Phase B / M3): map the builtin generic
-        // heads to the synthetic `(class-name, generic_args)` of their
-        // `.rx` method-home class so the class's declared type params
-        // (`class Array[T]` → `[T]`) substitute against the receiver's
-        // concrete element type. Mirrors `MixinResolver::method_home_key`.
-        let owned_synthetic: (String, Vec<Ty>);
-        let (name, generic_args): (&String, &Vec<Ty>) = match peeled {
-            Ty::Class { name, generic_args } | Ty::Struct { name, generic_args }
-                if !generic_args.is_empty() =>
-            {
-                (name, generic_args)
-            }
-            Ty::Array(elem) => {
-                owned_synthetic = ("Array".to_string(), vec![elem.as_ref().clone()]);
-                (&owned_synthetic.0, &owned_synthetic.1)
-            }
-            Ty::Set(elem) => {
-                owned_synthetic = ("Set".to_string(), vec![elem.as_ref().clone()]);
-                (&owned_synthetic.0, &owned_synthetic.1)
-            }
-            Ty::Map(k, v) => {
-                // `Ty::Map` Displays as `Hash[K, V]`; its method-home class
-                // is `class Hash[K, V]` (map/src/lib.rx), so substitute
-                // against that class's declared `[K, V]` params. Mirrors
-                // `MixinResolver::method_home_key`'s `Ty::Map → "Hash"`.
-                owned_synthetic = (
-                    "Hash".to_string(),
-                    vec![k.as_ref().clone(), v.as_ref().clone()],
-                );
-                (&owned_synthetic.0, &owned_synthetic.1)
-            }
-            // `Ty::Option`/`Ty::Result` home their methods on the builtin
-            // `enum Option[T]` / `enum Result[T, E]` (registered by
-            // `resolve/stdlib/{option,result}.rs`). Substitute against
-            // those enums' declared params so `Option[Int].unwrap`
-            // yields `Int` (not the declared `T`) and
-            // `Result[Foo, IoError].unwrap` yields `Foo`. Mirrors
-            // `MixinResolver::method_home_key`'s Option/Result arms.
-            Ty::Option(inner) => {
-                owned_synthetic = ("Option".to_string(), vec![inner.as_ref().clone()]);
-                (&owned_synthetic.0, &owned_synthetic.1)
-            }
-            Ty::Result(ok, err) => {
-                owned_synthetic = (
-                    "Result".to_string(),
-                    vec![ok.as_ref().clone(), err.as_ref().clone()],
-                );
-                (&owned_synthetic.0, &owned_synthetic.1)
-            }
-            _ => return None,
+        // Zero-Rust-stdlib bridge (Phase B / M3): a builtin generic head
+        // (`Array`, `Set`, `Hash`, `Option`, `Result`, either spelling) maps
+        // to its `.rx` method-home class with the head's generic args, so the
+        // class's declared type params (`class Array[T]` → `[T]`, `enum
+        // Option[T]`) substitute against the receiver's concrete element type
+        // (`Option[Int].unwrap` yields `Int`). `Ty::builtin_head` peels
+        // references, so `(&Array[Int]).pop` substitutes like `Array[Int].pop`.
+        let (name, generic_args): (String, Vec<Ty>) = match obj_ty.builtin_head() {
+            Some((home, args)) => (home.to_string(), args),
+            None => match obj_ty.peel_refs() {
+                Ty::Class { name, generic_args } | Ty::Struct { name, generic_args }
+                    if !generic_args.is_empty() =>
+                {
+                    (name.clone(), generic_args.clone())
+                }
+                _ => return None,
+            },
         };
 
         // Build a name→type map using the class's declared generic params.
         let class_params: Vec<String> = {
             let mut out = Vec::new();
-            for def in self.symbols.iter() {
-                if def.name == *name {
-                    if let DefKind::Class { info } = &def.kind {
-                        out = info
-                            .generic_params
-                            .iter()
-                            .map(|gp| gp.name.clone())
-                            .collect();
-                        break;
-                    }
-                    if let DefKind::Struct { info } = &def.kind {
-                        out = info
-                            .generic_params
-                            .iter()
-                            .map(|gp| gp.name.clone())
-                            .collect();
-                        break;
-                    }
-                    // Builtin `enum Option[T]` / `enum Result[T, E]` —
-                    // their method-home is the enum, so read the enum's
-                    // declared params for the synthetic Option/Result
-                    // heads above.
-                    if let DefKind::Enum { info } = &def.kind {
-                        out = info
-                            .generic_params
-                            .iter()
-                            .map(|gp| gp.name.clone())
-                            .collect();
-                        break;
-                    }
+            for def in self.symbols.named(&name) {
+                if let DefKind::Class { info } = &def.kind {
+                    out = info
+                        .generic_params
+                        .iter()
+                        .map(|gp| gp.name.clone())
+                        .collect();
+                    break;
+                }
+                if let DefKind::Struct { info } = &def.kind {
+                    out = info
+                        .generic_params
+                        .iter()
+                        .map(|gp| gp.name.clone())
+                        .collect();
+                    break;
+                }
+                // Builtin `enum Option[T]` / `enum Result[T, E]` —
+                // their method-home is the enum, so read the enum's
+                // declared params for the synthetic Option/Result
+                // heads above.
+                if let DefKind::Enum { info } = &def.kind {
+                    out = info
+                        .generic_params
+                        .iter()
+                        .map(|gp| gp.name.clone())
+                        .collect();
+                    break;
                 }
             }
             out
@@ -1202,47 +1022,6 @@ impl<'a> InferenceEngine<'a> {
             .zip(generic_args.iter().cloned())
             .collect();
         Some(subst)
-    }
-
-    /// Substitute every `TypeParam` named in `subst` with its bound type,
-    /// recursing through ALL nested `Ty` children via `Ty::map_inner`. The only
-    /// special arm is `TypeParam`; everything else delegates to the exhaustive
-    /// fold, so reference layers (incl. `&'a`/`&'a mut`), `Map`/`Set`/`FixedArray`,
-    /// `Fn`/`Newtype`/`Alias` etc. are all covered automatically. See
-    /// docs/specs/types/typed_ffi_returns.spec.md.
-    pub(super) fn subst_ty(ty: &Ty, subst: &std::collections::HashMap<String, Ty>) -> Ty {
-        match ty {
-            Ty::TypeParam { name, .. } => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
-            // `Ty::map_inner` treats `Some/AnyMixin` as LEAVES (their
-            // children are `MixinRef`, not `Ty`), so a generic param nested
-            // inside a mixin bound's generic args — e.g. the `T`/`U` in
-            // `any Fn[Fn(T) -> U]` — would NOT be substituted by the fold
-            // below. The `.rx` closure combinators carry exactly that shape
-            // in their closure parameter, and receiver-generic substitution
-            // (`T → Int`) must reach the inner `Fn(T)` so the closure param
-            // seeds concretely. Substitute through each bound's generic args
-            // explicitly here.
-            Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) => {
-                let new_bounds: Vec<crate::hir::types::MixinRef> = bounds
-                    .iter()
-                    .map(|b| crate::hir::types::MixinRef {
-                        name: b.name.clone(),
-                        generic_args: b
-                            .generic_args
-                            .iter()
-                            .map(|g| Self::subst_ty(g, subst))
-                            .collect(),
-                    })
-                    .collect();
-                match ty {
-                    Ty::AnyMixin(_) => Ty::AnyMixin(new_bounds),
-                    _ => Ty::SomeMixin(new_bounds),
-                }
-            }
-            other => other
-                .clone()
-                .map_inner(&mut |child| Self::subst_ty(child, subst)),
-        }
     }
 
     /// Generic free-function call inference: harvest `{ type_param → concrete }`
@@ -1434,7 +1213,7 @@ impl<'a> InferenceEngine<'a> {
             // peels the actual's wrapper too if present).
             Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) => {
                 for bound in bounds {
-                    if matches!(bound.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
+                    if bound.is_fn_family() {
                         if let Some(inner) = bound.generic_args.first() {
                             let actual_inner = Self::peel_fn_mixin(actual);
                             Self::bind_type_params_from_args(param_names, inner, actual_inner, out);
@@ -1455,7 +1234,7 @@ impl<'a> InferenceEngine<'a> {
     fn peel_fn_mixin(ty: &Ty) -> &Ty {
         if let Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) = ty {
             for bound in bounds {
-                if matches!(bound.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
+                if bound.is_fn_family() {
                     if let Some(inner) = bound.generic_args.first() {
                         return inner;
                     }
@@ -1470,7 +1249,7 @@ impl<'a> InferenceEngine<'a> {
     /// shared by the `FnCall` path and the selected-method (`MethodCall`)
     /// path: both build a `param_names` set from `signature.generic_params`,
     /// match each formal param against the resolved actual arg via
-    /// [`Self::bind_type_params_from_args`], and `subst_ty` the result into
+    /// [`Self::bind_type_params_from_args`], and `Ty::subst_params` the result into
     /// the return type. Extracting it removes the duplicated driver loop the
     /// two sites previously hand-rolled.
     ///
@@ -1516,67 +1295,8 @@ impl<'a> InferenceEngine<'a> {
         let out = if bindings.is_empty() {
             ret.clone()
         } else {
-            Self::subst_ty(ret, &bindings)
+            ret.subst_params(&bindings)
         };
         (out, bindings)
-    }
-}
-
-#[cfg(test)]
-mod subst_ty_tests {
-    use super::*;
-    use crate::hir::types::Ty;
-    use std::collections::HashMap;
-
-    fn subst1(ty: Ty, name: &str, to: Ty) -> Ty {
-        let mut m = HashMap::new();
-        m.insert(name.to_string(), to);
-        InferenceEngine::subst_ty(&ty, &m)
-    }
-
-    #[test]
-    fn substitutes_through_named_lifetime_ref() {
-        // &'a T  ->  &'a Int   (was a no-op before the map_inner migration: bug #3)
-        let tp = Ty::TypeParam {
-            name: "T".into(),
-            bounds: vec![],
-        };
-        let got = subst1(Ty::RefLifetime("a".into(), Box::new(tp)), "T", Ty::Int);
-        assert_eq!(got, Ty::RefLifetime("a".into(), Box::new(Ty::Int)));
-    }
-
-    #[test]
-    fn substitutes_through_map_value() {
-        // Map[String, T] -> Map[String, Int]   (was a no-op before: bug #3)
-        let tp = Ty::TypeParam {
-            name: "T".into(),
-            bounds: vec![],
-        };
-        let got = subst1(Ty::Map(Box::new(Ty::String), Box::new(tp)), "T", Ty::Int);
-        assert_eq!(got, Ty::Map(Box::new(Ty::String), Box::new(Ty::Int)));
-    }
-
-    #[test]
-    fn preserves_existing_class_generic_substitution() {
-        // Characterization: the behaviour subst_ty ALREADY had must not regress.
-        let tp = Ty::TypeParam {
-            name: "T".into(),
-            bounds: vec![],
-        };
-        let got = subst1(
-            Ty::Class {
-                name: "MutexGuard".into(),
-                generic_args: vec![tp],
-            },
-            "T",
-            Ty::Int,
-        );
-        assert_eq!(
-            got,
-            Ty::Class {
-                name: "MutexGuard".into(),
-                generic_args: vec![Ty::Int],
-            }
-        );
     }
 }

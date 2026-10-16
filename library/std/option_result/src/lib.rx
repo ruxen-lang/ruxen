@@ -69,6 +69,21 @@ class Option[T]
     def present? as "ruxen_option_is_some" -> Bool
     def nil? as "ruxen_option_is_none" -> Bool
   end
+  alias expect! expect
+  alias unwrap! unwrap
+
+  # Ruby `==`: two options are equal when both are empty, or both hold
+  # equal values (compared with the element's own `==`).
+  def ==(other: Option[T]) -> Bool
+    match self
+      Some(a) ->
+        match other
+          Some(b) -> a == b
+          nil -> false
+        end
+      nil -> other.nil?
+    end
+  end
 
   # Ruby `Option#ok_or` — convert to a `Result`, using `err` as the `Err`
   # payload when empty. MIGRATED (Task H) to a `.rx` body: the method-level
@@ -116,6 +131,8 @@ class Result[T, E]
     def ok as "ruxen_result_ok" -> Option[T]
     def err as "ruxen_result_err" -> Option[E]
   end
+  alias expect! expect
+  alias unwrap! unwrap
 
   # Ruby `Result#map` — apply `f` to the `Ok` value, repackage as `Ok`;
   # propagate `Err` unchanged. Lowered ONCE as the opaque `Result_map`

@@ -94,18 +94,11 @@ impl<'a> Lexer<'a> {
 
             // Lex one token; it is emitted into `self.tokens` (kept there so
             // `self.tokens.last()` is the previous interpolation token).
-            match ch {
-                '\n' => {
-                    self.advance();
-                    continue;
-                }
-                '"' => self.lex_string(),
-                '\'' => self.lex_single_quote(),
-                '0'..='9' => self.lex_number(),
-                'a'..='z' | '_' => self.lex_identifier_or_keyword(),
-                'A'..='Z' => self.lex_type_identifier_or_keyword(),
-                _ => self.lex_operator_or_punct(),
+            if ch == '\n' {
+                self.advance();
+                continue;
             }
+            self.lex_one_token(ch);
 
             // Fold paren/bracket depth for any newly emitted tokens WITHOUT
             // removing them (they stay in `self.tokens` for the prev-token

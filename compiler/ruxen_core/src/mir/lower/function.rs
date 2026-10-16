@@ -1,4 +1,5 @@
 use super::*;
+use crate::hir::visit::{walk_expr, Visit};
 
 impl<'a> Lowerer<'a> {
     // ── Function / Method lowering ──────────────────────────────────────
@@ -36,6 +37,7 @@ impl<'a> Lowerer<'a> {
                 .unwrap_or(false);
 
         // If this method has a self receiver, add self as the first parameter.
+        let mut self_local = None;
         if has_self_param {
             // Derive the self type from the mangled method name (ClassName_method).
             //
@@ -69,14 +71,13 @@ impl<'a> Lowerer<'a> {
                 .unwrap_or(Ty::Unit);
             let local = self.fn_mut().new_local("self", self_ty, true);
             self.fn_mut().params.push(local);
-            // Register all SelfValue DefIds in the symbol table so self.field works
-            for def in self.symbols.iter() {
-                if def.name == "self" {
-                    if let crate::resolve::symbols::DefKind::SelfValue { .. } = &def.kind {
-                        self.def_to_local.insert(def.id, local);
-                    }
-                }
+            // Bind the `self` this body refers to (its own SelfValue, or the
+            // declaring mixin's for a copied default body) so `self.field`
+            // works. Other methods' SelfValues stay unbound.
+            for self_def in self_value_refs(&func.body, self.symbols) {
+                self.def_to_local.insert(self_def, local);
             }
+            self_local = Some(local);
         }
 
         // Create locals for parameters.
@@ -92,6 +93,11 @@ impl<'a> Lowerer<'a> {
         // against the fixed C entry signature.
         if name == "main" && !has_self_param && !func.params.is_empty() {
             return Err("`main` cannot take parameters (E0739)".to_string());
+        }
+        if name == "main" && !has_self_param {
+            let entry = self.fn_mut();
+            entry.is_entry = true;
+            entry.linkage = MirLinkage::Export;
         }
         // The process entry point takes the C `main(argc, argv)` ABI and hands
         // the arguments to `std.env` before the body runs. A no_std build has
@@ -112,9 +118,7 @@ impl<'a> Lowerer<'a> {
         // The field_index must match the class field order, not the param
         // order, since the class may have fields that aren't auto-assigned
         // (e.g., `status` in Task is set in the init body, not via @param).
-        if func.name == "init" && has_self_param {
-            // Find the self local (should be local 0 if self_mode is set)
-            let self_local = self.def_to_local.values().copied().min().unwrap_or(0);
+        if let Some(self_local) = self_local.filter(|_| func.name == "init") {
             // Recover the owning class name from the mangled method name
             // (see the symmetric note above on why `split('_').next()`
             // doesn't work for `__`-prefixed synth classes — that bug
@@ -250,4 +254,44 @@ impl<'a> Lowerer<'a> {
         }
         self.lower_expr(arg)
     }
+}
+
+/// The SelfValue DefIds `body` refers to: every `self` VarRef and every
+/// closure capture of `self`, in first-reference order.
+fn self_value_refs(body: &HirExpr, symbols: &SymbolTable) -> Vec<DefId> {
+    struct SelfRefs<'s> {
+        symbols: &'s SymbolTable,
+        found: Vec<DefId>,
+    }
+    impl SelfRefs<'_> {
+        fn note(&mut self, id: DefId) {
+            let is_self = matches!(
+                self.symbols.get(id).map(|def| &def.kind),
+                Some(crate::resolve::symbols::DefKind::SelfValue { .. })
+            );
+            if is_self && !self.found.contains(&id) {
+                self.found.push(id);
+            }
+        }
+    }
+    impl Visit for SelfRefs<'_> {
+        fn visit_expr(&mut self, expr: &HirExpr) {
+            match &expr.kind {
+                HirExprKind::VarRef(id) => self.note(*id),
+                HirExprKind::Closure { captures, .. } => {
+                    for capture in captures {
+                        self.note(capture.def_id);
+                    }
+                }
+                _ => {}
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut refs = SelfRefs {
+        symbols,
+        found: Vec::new(),
+    };
+    refs.visit_expr(body);
+    refs.found
 }

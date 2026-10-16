@@ -17,15 +17,12 @@ class String
     # its C symbol's wire width — pointers, boxed Option/Result, and
     # uint64 all cross the C ABI as I64. Zero-Rust-stdlib migration M3.
     def size as "ruxen_string_len" -> USize
-    # `length` is the Ruby spelling of `size` — same C symbol, same wire
-    # shape (admitted as a second alias by the wire-level E0722 check).
-    def length as "ruxen_string_len" -> USize
     def empty? as "ruxen_string_is_empty" -> Bool
     def include? as "ruxen_string_contains"(needle: &String) -> Bool
     def starts_with as "ruxen_string_starts_with"(needle: &String) -> Bool
     def ends_with as "ruxen_string_ends_with"(needle: &String) -> Bool
-    # `start_with?` / `end_with?` are the Ruby spellings of `starts_with` /
-    # `ends_with` — same C symbols, same wire shape (second aliases).
+    # `start_with?` / `end_with?` stay declarations, not `alias`es: they
+    # overload the `&Array[String]` forms declared further down.
     def start_with? as "ruxen_string_starts_with"(needle: &String) -> Bool
     def end_with? as "ruxen_string_ends_with"(needle: &String) -> Bool
     def find as "ruxen_string_find"(needle: &String) -> Option[USize]
@@ -34,17 +31,8 @@ class String
     def trim as "ruxen_string_trim" -> String
     def trim_start as "ruxen_string_trim_start" -> String
     def trim_end as "ruxen_string_trim_end" -> String
-    # `strip` / `lstrip` / `rstrip` are the Ruby spellings of `trim` /
-    # `trim_start` / `trim_end` — same C symbols (second aliases).
-    def strip as "ruxen_string_trim" -> String
-    def lstrip as "ruxen_string_trim_start" -> String
-    def rstrip as "ruxen_string_trim_end" -> String
     def to_lower as "ruxen_string_to_lower" -> String
     def to_upper as "ruxen_string_to_upper" -> String
-    # `downcase`/`upcase` are the Ruby spellings of `to_lower`/`to_upper` —
-    # same C symbols, same wire shape (admitted as second aliases).
-    def downcase as "ruxen_string_to_lower" -> String
-    def upcase as "ruxen_string_to_upper" -> String
     def repeat as "ruxen_string_repeat"(n: Int) -> String
     def replace as "ruxen_string_replace"(from: &String, to: &String) -> String
     # as_str returns the receiver's own buffer pointer (a BORROW — see
@@ -53,12 +41,6 @@ class String
     # no free is emitted on the receiver's pointer (declaring `-> String` here
     # would double-free the receiver). Wire-identical (`const char*` = i64).
     def as_str as "ruxen_string_as_str" -> &String
-    def to_string as "ruxen_string_to_string" -> String
-    # `to_s` is the Ruby spelling of `to_string` — same C symbol, same
-    # wire shape `(I64) -> I64`, admitted as a second alias by the
-    # wire-level E0722 check. Homing it here lets `String.to_s` (and a
-    # `&String` borrow, which peels to `String` in `method_home_key`)
-    # resolve through the bridge, retiring its strings.rs residual arm.
     def to_s as "ruxen_string_to_string" -> String
     def chars as "ruxen_string_chars" -> Array[Char]
     def lines as "ruxen_string_lines" -> Array[String]
@@ -74,24 +56,34 @@ class String
     # `&String` borrow) resolve through the bridge, retiring the strings.rs
     # residual arm.
     def parse_uint as "ruxen_str_parse_uint" -> Result[USize, Error]
-    def push_str as "ruxen_string_push_str"(other: &String) -> String
-    def push as "ruxen_string_push"(c: Char) -> String
-    def clear as "ruxen_string_clear"
-    def truncate as "ruxen_string_truncate"(n: Int)
-    def insert as "ruxen_string_insert"(i: Int, codepoint: Int) -> String
-    def insert_str as "ruxen_string_insert_str"(i: Int, part: &String) -> String
-    # `remove`: a genuinely-irreducible residual (Feature E). The C symbol
-    # returns a 16-byte struct *pointer* (void*/I64) carrying both the
-    # removed codepoint and the rewritten buffer; the MIR special-case reads
-    # both fields. The true surface type is Char (I32). No single return type
-    # expresses both an I64-wide pointer ABI and a Char surface, so this
-    # stays declared `-> Int` (ABI-faithful) and is shadowed by the
-    # strings.rs resolver arm that reports the true `Char`. The mutation
-    # methods push/push_str/insert/insert_str above are residuals for the
-    # same reason (surface `Unit` vs C `char*`). See the strings.rs module
-    # header for the full rationale.
-    def remove as "ruxen_string_remove"(i: Int) -> Int
+    # Ruby `String#hash` (`Hashable`): by value, the same hash a String field
+    # contributes to a derived `hash_code`.
+    def hash_code as "ruxen_string_hash" -> Int
+    # Ruby `String#+` (a new string, both operands untouched) and
+    # `String#<=>` (-1 / 0 / 1 by byte order). The binop lowering routes
+    # `a + b` and `a <=> b` here (builtin-head operator route).
+    def + as "ruxen_string_concat"(other: &String) -> String
+    def <=> as "ruxen_str_spaceship"(other: &String) -> Int
+    # The `def var` methods below mutate the receiver: it crosses the C ABI
+    # as `&var String` (the address of the caller's slot), and the C symbol
+    # stores the new buffer there and frees the old one.
+    def var push_str as "ruxen_string_push_str"(other: &String)
+    def var push as "ruxen_string_push"(c: Char)
+    def var clear as "ruxen_string_clear"
+    def var truncate as "ruxen_string_truncate"(n: Int)
+    def var insert as "ruxen_string_insert"(i: Int, codepoint: Int)
+    def var insert_str as "ruxen_string_insert_str"(i: Int, part: &String)
+    # Removes the byte at `i` and returns it.
+    def var remove as "ruxen_string_remove"(i: Int) -> Char
   end
+  # Ruby spellings of the declared methods above (same C symbol).
+  alias length size
+  alias strip trim
+  alias lstrip trim_start
+  alias rstrip trim_end
+  alias downcase to_lower
+  alias upcase to_upper
+  alias to_string to_s
 
   # Ruby `String#reverse` — the characters in reverse order. Built in `.rx`
   # over `chars` + `Array#reverse`; each `Char` is appended via interpolation.
@@ -123,31 +115,15 @@ class String
       len = len + 1
     end
     let ps = pad.chars
-    let pn: Int = ps.size as Int
-    if pn > 0
-      var k: Int = 0
-      while len < width
-        result.push(ps[k % pn])
-        k = k + 1
-        len = len + 1
-      end
-    end
+    let fill = self.pad_fill(&ps, width - len)
+    result.push_str(fill.as_str)
     result
   end
 
   def rjust(width: Int, pad: String = " ") -> String
-    var result = ""
     let n: Int = self.chars.size as Int
     let ps = pad.chars
-    let pn: Int = ps.size as Int
-    if pn > 0
-      let need: Int = width - n
-      var k: Int = 0
-      while k < need
-        result.push(ps[k % pn])
-        k = k + 1
-      end
-    end
+    var result = self.pad_fill(&ps, width - n)
     self.chars.each do |c|
       result.push(c)
     end
@@ -273,27 +249,18 @@ class String
   # `set` (`"lo"`, `"a-z"`, `"^aeiou"`). Ruby's multi-argument intersection
   # form takes one set here; see docs/ruby-parity/core.md.
   #
-  # Membership is a codepoint scan over the expanded set, hoisted out of the
-  # loop, rather than `members.include?("#{c}")`: the interpolation would
-  # allocate a fresh one-character `String` for EVERY character tested. `tr` /
-  # `tr_s` / `delete` / `squeeze` all test membership the same way.
+  # Membership is a codepoint scan (`tr_set_position`) over the expanded set,
+  # hoisted out of the loop, rather than `members.include?("#{c}")`: the
+  # interpolation would allocate a fresh one-character `String` for EVERY
+  # character tested. `tr` / `tr_s` / `delete` / `squeeze` share the scan.
   def count(set: &String) -> Int
     let members = set.tr_set_expand
     let negated = set.tr_set_negated?
     let ms = members.chars
-    let mn: Int = ms.size as Int
     var n: Int = 0
     self.chars.each do |c|
       let cp: Int = c as Int
-      var present = false
-      var i: Int = 0
-      while i < mn
-        let m: Int = ms[i] as Int
-        if m == cp
-          present = true
-        end
-        i = i + 1
-      end
+      let present = self.tr_set_position(&ms, cp) >= 0
       if present != negated
         n = n + 1
       end
@@ -623,31 +590,18 @@ class String
     let cs = self.chars
     let n: Int = cs.size as Int
     let ps = pad.chars
-    let pn: Int = ps.size as Int
     var total: Int = width - n
     if total < 0
       total = 0
     end
     let left: Int = total / 2
     let right: Int = total - left
-    var out = ""
-    if pn > 0
-      var k: Int = 0
-      while k < left
-        out.push(ps[k % pn])
-        k = k + 1
-      end
-    end
+    var out = self.pad_fill(&ps, left)
     cs.each do |c|
       out.push(c)
     end
-    if pn > 0
-      var j: Int = 0
-      while j < right
-        out.push(ps[j % pn])
-        j = j + 1
-      end
-    end
+    let tail = self.pad_fill(&ps, right)
+    out.push_str(tail.as_str)
     out
   end
 
@@ -692,19 +646,10 @@ class String
     let members = set.tr_set_expand
     let negated = set.tr_set_negated?
     let ms = members.chars
-    let mn: Int = ms.size as Int
     var out = ""
     self.chars.each do |c|
       let cp: Int = c as Int
-      var present = false
-      var i: Int = 0
-      while i < mn
-        let m: Int = ms[i] as Int
-        if m == cp
-          present = true
-        end
-        i = i + 1
-      end
+      let present = self.tr_set_position(&ms, cp) >= 0
       if present == negated
         out.push(c)
       end
@@ -733,20 +678,11 @@ class String
     let members = set.tr_set_expand
     let negated = set.tr_set_negated?
     let ms = members.chars
-    let mn: Int = ms.size as Int
     var out = ""
     var prev: Int = -1
     self.chars.each do |c|
       let cp: Int = c as Int
-      var present = false
-      var i: Int = 0
-      while i < mn
-        let m: Int = ms[i] as Int
-        if m == cp
-          present = true
-        end
-        i = i + 1
-      end
+      let present = self.tr_set_position(&ms, cp) >= 0
       if cp == prev && present != negated
         prev = cp
       else
@@ -769,19 +705,10 @@ class String
     let ts = targets.chars
     let tn: Int = ts.size as Int
     let src = members.chars
-    let sn: Int = src.size as Int
     var out = ""
     self.chars.each do |c|
       let cp: Int = c as Int
-      var at: Int = -1
-      var i: Int = 0
-      while i < sn
-        let s: Int = src[i] as Int
-        if s == cp && at < 0
-          at = i
-        end
-        i = i + 1
-      end
+      let at = self.tr_set_position(&src, cp)
       if negated
         if at < 0
           if tn > 0
@@ -816,21 +743,12 @@ class String
     let ts = targets.chars
     let tn: Int = ts.size as Int
     let src = members.chars
-    let sn: Int = src.size as Int
     var out = ""
     var prev: Int = -1
     var prev_translated = false
     self.chars.each do |c|
       let cp: Int = c as Int
-      var at: Int = -1
-      var i: Int = 0
-      while i < sn
-        let s: Int = src[i] as Int
-        if s == cp && at < 0
-          at = i
-        end
-        i = i + 1
-      end
+      let at = self.tr_set_position(&src, cp)
       var hit = at >= 0
       if negated
         hit = at < 0
@@ -955,9 +873,7 @@ class String
   end
 
   # Ruby `String#next` — the other spelling of `succ`.
-  def next -> String
-    self.succ
-  end
+  alias next succ
 
   # ─────────────────────────────────────────────────────────────────────
   # B10 — search and replace, string-argument forms
@@ -1150,16 +1066,7 @@ class String
   def to_i(base: Int = 10) -> Int
     let cs = self.chars
     let n: Int = cs.size as Int
-    var i: Int = 0
-    var skipping = true
-    while skipping && i < n
-      let cp: Int = cs[i] as Int
-      if cp == 32 || cp == 9 || cp == 10 || cp == 13 || cp == 11 || cp == 12
-        i = i + 1
-      else
-        skipping = false
-      end
-    end
+    var i: Int = self.skip_space(&cs, 0)
     var negative = false
     if i < n
       let sign: Int = cs[i] as Int
@@ -1172,27 +1079,9 @@ class String
         end
       end
     end
-    if i + 1 < n
-      let lead: Int = cs[i] as Int
-      if lead == 48
-        let tag: Int = cs[i + 1] as Int
-        var prefixed = false
-        if base == 16 && (tag == 120 || tag == 88)
-          prefixed = true
-        end
-        if base == 2 && (tag == 98 || tag == 66)
-          prefixed = true
-        end
-        if base == 8 && (tag == 111 || tag == 79)
-          prefixed = true
-        end
-        if base == 10 && (tag == 100 || tag == 68)
-          prefixed = true
-        end
-        if prefixed
-          i = i + 2
-        end
-      end
+    let named: Int = self.radix_prefix(&cs, i)
+    if named != 0 && named == base
+      i = i + 2
     end
     var value: Int = 0
     var seen = false
@@ -1236,16 +1125,7 @@ class String
   def to_f -> Float
     let cs = self.chars
     let n: Int = cs.size as Int
-    var i: Int = 0
-    var skipping = true
-    while skipping && i < n
-      let cp: Int = cs[i] as Int
-      if cp == 32 || cp == 9 || cp == 10 || cp == 13 || cp == 11 || cp == 12
-        i = i + 1
-      else
-        skipping = false
-      end
-    end
+    var i: Int = self.skip_space(&cs, 0)
     var buf = ""
     if i < n
       let sign: Int = cs[i] as Int
@@ -1350,37 +1230,16 @@ class String
   def oct -> Int
     let cs = self.chars
     let n: Int = cs.size as Int
-    var i: Int = 0
-    var skipping = true
-    while skipping && i < n
-      let cp: Int = cs[i] as Int
-      if cp == 32 || cp == 9 || cp == 10 || cp == 13 || cp == 11 || cp == 12
-        i = i + 1
-      else
-        skipping = false
-      end
-    end
+    var i: Int = self.skip_space(&cs, 0)
     if i < n
       let sign: Int = cs[i] as Int
       if sign == 45 || sign == 43
         i = i + 1
       end
     end
-    var base: Int = 8
-    if i + 1 < n
-      let lead: Int = cs[i] as Int
-      if lead == 48
-        let tag: Int = cs[i + 1] as Int
-        if tag == 120 || tag == 88
-          base = 16
-        end
-        if tag == 98 || tag == 66
-          base = 2
-        end
-        if tag == 100 || tag == 68
-          base = 10
-        end
-      end
+    var base: Int = self.radix_prefix(&cs, i)
+    if base == 0
+      base = 8
     end
     self.to_i(base)
   end
@@ -1414,6 +1273,17 @@ class String
   # Ruby `String#to_str` — the implicit-conversion spelling of `to_s`.
   def to_str -> String
     self.drop_chars(0)
+  end
+
+  # Ruby `String#inspect` (`Inspect`, std/core): the QUOTED form, what `p`
+  # prints. Embedded quotes and newlines are not escaped.
+  include Inspect
+
+  def inspect -> String
+    var out = "\""
+    out.push_str(self.as_str)
+    out.push_str("\"")
+    out
   end
 
   # Ruby `String#dup` — an owned copy. `clone` is the Ruxen-native spelling of
@@ -1501,5 +1371,85 @@ class String
       Some(m) -> Some(self.char_index_of_byte(m.start_pos))
       nil     -> nil
     end
+  end
+
+  # Private helpers shared by the methods above. They are methods, not
+  # top-level functions, so a user `def skip_space` cannot shadow them.
+  private
+
+  # The index of codepoint `cp` in `ms`, the characters of an expanded tr-style
+  # set (`String#tr_set_expand`), or -1 when it is not a member. The one
+  # membership scan behind `count` / `delete` / `squeeze(set)` / `tr` / `tr_s`.
+  def tr_set_position(ms: &Array[Char], cp: Int) -> Int
+    let n: Int = ms.size as Int
+    var i: Int = 0
+    while i < n
+      let m: Int = ms[i] as Int
+      if m == cp
+        return i
+      end
+      i = i + 1
+    end
+    -1
+  end
+
+  # The index of the first character of `cs` at or after `i` that is not
+  # space (`Char#space?`, Ruby's `[[:space:]]`). The lenient parsers'
+  # (`to_i` / `to_f` / `oct`) shared prologue.
+  def skip_space(cs: &Array[Char], i: Int) -> Int
+    let n: Int = cs.size as Int
+    var j: Int = i
+    var skipping = true
+    while skipping && j < n
+      let c: Char = cs[j]
+      if c.space?
+        j = j + 1
+      else
+        skipping = false
+      end
+    end
+    j
+  end
+
+  # The base a radix prefix at `cs[i]` names: 16 for `0x`, 2 for `0b`, 8 for
+  # `0o`, 10 for `0d` (either case), or 0 when there is none.
+  def radix_prefix(cs: &Array[Char], i: Int) -> Int
+    let n: Int = cs.size as Int
+    if i + 1 >= n
+      return 0
+    end
+    let lead: Char = cs[i]
+    if lead != ?0
+      return 0
+    end
+    let t: Char = cs[i + 1]
+    let tag: Char = t.downcase
+    if tag == ?x
+      16
+    elsif tag == ?b
+      2
+    elsif tag == ?o
+      8
+    elsif tag == ?d
+      10
+    else
+      0
+    end
+  end
+
+  # `count` characters cycled from `ps` (pad `"12"` fills `"1212…"`), or ""
+  # when `ps` is empty or `count` is not positive. The fill behind `ljust` /
+  # `rjust` / `center`.
+  def pad_fill(ps: &Array[Char], count: Int) -> String
+    var out = ""
+    let pn: Int = ps.size as Int
+    if pn > 0
+      var k: Int = 0
+      while k < count
+        out.push(ps[k % pn])
+        k = k + 1
+      end
+    end
+    out
   end
 end

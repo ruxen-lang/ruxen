@@ -1,18 +1,11 @@
 use super::*;
+use crate::implicit_includes::{derive_applies, peel_to_nominal};
 
 impl<'a> Lowerer<'a> {
     fn instantiate_method_return_ty(&self, parent: DefId, receiver_ty: &Ty, return_ty: &Ty) -> Ty {
         use crate::resolve::symbols::DefKind;
 
-        let mut receiver = receiver_ty;
-        while let Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) = receiver
-        {
-            receiver = inner;
-        }
-        let generic_args = match receiver {
+        let generic_args = match receiver_ty.peel_refs() {
             Ty::Class { generic_args, .. }
             | Ty::Struct { generic_args, .. }
             | Ty::Enum { generic_args, .. } => generic_args,
@@ -35,9 +28,7 @@ impl<'a> Lowerer<'a> {
             .map(|param| param.name.clone())
             .zip(generic_args.iter().cloned())
             .collect();
-        let mut instantiated = return_ty.clone();
-        crate::mir::lower::trait_default::subst_type_params_in_ty(&mut instantiated, &subst);
-        instantiated
+        return_ty.subst_params(&subst)
     }
 
     /// Prefer a concrete MIR binding type when HIR left a variable reference
@@ -47,14 +38,10 @@ impl<'a> Lowerer<'a> {
     /// generic.
     pub(super) fn mir_refined_expr_ty(&self, expr: &HirExpr) -> Ty {
         fn is_abstract(ty: &Ty) -> bool {
-            match ty {
-                Ty::TypeParam { .. } | Ty::Infer(_) | Ty::Error => true,
-                Ty::Ref(inner)
-                | Ty::RefMut(inner)
-                | Ty::RefLifetime(_, inner)
-                | Ty::RefMutLifetime(_, inner) => is_abstract(inner),
-                _ => false,
-            }
+            matches!(
+                ty.peel_refs(),
+                Ty::TypeParam { .. } | Ty::Infer(_) | Ty::Error
+            )
         }
 
         if !is_abstract(&expr.ty) {
@@ -120,21 +107,16 @@ impl<'a> Lowerer<'a> {
         };
         let receiver_ty = self.mir_refined_expr_ty(object);
         let receiver_name = type_name_from_ty(&receiver_ty);
-        self.symbols.iter().find_map(|def| {
-            let DefKind::Method { parent, signature } = &def.kind else {
-                return None;
-            };
-            let parent_name = self
-                .symbols
-                .get(*parent)
-                .map(|parent| parent.name.as_str())?;
-            let name_matches = def.name == method_name
-                || def.name.starts_with(&format!("{method_name}__overload"));
-            (parent_name == receiver_name && name_matches && signature.params.len() == arg_count)
-                .then(|| {
+        self.symbols
+            .methods_named(&receiver_name, method_name)
+            .find_map(|def| {
+                let DefKind::Method { parent, signature } = &def.kind else {
+                    return None;
+                };
+                (signature.params.len() == arg_count).then(|| {
                     self.instantiate_method_return_ty(*parent, &receiver_ty, &signature.return_ty)
                 })
-        })
+            })
     }
 
     /// Returns Some(type_name) if `ty` (peeling refs/aliases) is a struct
@@ -146,7 +128,7 @@ impl<'a> Lowerer<'a> {
     /// `"#{obj}"` on a class fell through every interpolation arm and
     /// printed the receiver's heap address (B74).
     pub(super) fn struct_with_derive_debug(&self, ty: &Ty) -> Option<String> {
-        self.nominal_with_derive_trait(ty, "Debug")
+        self.derived_nominal(ty, "Debug")
     }
 
     /// Phase 2 #06.C2: like `struct_with_derive_debug` but for enums.
@@ -229,7 +211,7 @@ impl<'a> Lowerer<'a> {
     }
 
     pub(super) fn type_supports_trait(&self, ty: &Ty, trait_name: &str) -> bool {
-        if self.struct_with_derive_trait(ty, trait_name).is_some() {
+        if self.derived_nominal(ty, trait_name).is_some() {
             return true;
         }
         match ty {
@@ -246,53 +228,27 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Like [`Self::struct_with_derive_trait`] but also accepts a
-    /// `class`. Use this at every site whose target derive IS
-    /// synthesised for classes — `Debug`, `PartialEq`, `Hashable`
-    /// (`mir/lower/mod.rs`, the `HirItem::Class` arm).
-    ///
-    /// `Ord` / `PartialOrd` / `Default` deliberately keep using the
-    /// struct-only helper: `{Class}_cmp` and `{Class}_default` are NOT
-    /// synthesised, so widening those call sites would turn a silent gap
-    /// into an undefined-symbol link failure. Widen a call site here only
-    /// together with the matching synthesiser.
-    pub(super) fn nominal_with_derive_trait(&self, ty: &Ty, trait_name: &str) -> Option<String> {
-        let nominal = peel_to_nominal(ty)?;
-        // Enums keep their own dispatch (`enum_with_derive_debug`); this
-        // helper is only for the two shapes `mod.rs` synthesises for.
-        let name = match nominal {
-            Ty::Struct { name, .. } | Ty::Class { name, .. } => name,
-            _ => return None,
-        };
-        if nominal_derive_is_synthesized(nominal, self.symbols, trait_name) {
-            Some(name.clone())
-        } else {
-            None
-        }
+    /// The struct or class name behind `ty` (peeling references, aliases
+    /// and newtypes) when a `{Name}_{method}` body exists for
+    /// `trait_name`'s derive, synthesised or user-written. The one dispatch
+    /// predicate every derived call site uses, so a site never names a body
+    /// that was not emitted. Enums dispatch through
+    /// [`Self::enum_with_derive_trait`] (variant-switch bodies).
+    pub(super) fn derived_nominal(&self, ty: &Ty, trait_name: &str) -> Option<String> {
+        derived_nominal(ty, self.symbols, trait_name)
     }
+}
 
-    pub(super) fn struct_with_derive_trait(&self, ty: &Ty, trait_name: &str) -> Option<String> {
-        // Peel reference/alias/newtype layers, then consult
-        // `ty_has_derive_trait` so implicit-include structural mixins
-        // (spec §3.6) are honoured.
-        let mut cur = ty;
-        loop {
-            match cur {
-                Ty::Ref(inner)
-                | Ty::RefMut(inner)
-                | Ty::RefLifetime(_, inner)
-                | Ty::RefMutLifetime(_, inner) => cur = inner,
-                Ty::Alias { target, .. } => cur = target,
-                Ty::Newtype { inner, .. } => cur = inner,
-                Ty::Struct { name, .. } => {
-                    if crate::resolve::symbols::ty_has_derive_trait(cur, self.symbols, trait_name) {
-                        return Some(name.clone());
-                    }
-                    return None;
-                }
-                _ => return None,
-            }
+/// Free-function form of [`Lowerer::derived_nominal`], for callers that
+/// hold only a `&SymbolTable`.
+pub(super) fn derived_nominal(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> Option<String> {
+    match peel_to_nominal(ty)? {
+        nominal @ (Ty::Struct { name, .. } | Ty::Class { name, .. })
+            if derive_applies(nominal, symbols, trait_name) =>
+        {
+            Some(name.clone())
         }
+        _ => None,
     }
 }
 
@@ -313,12 +269,8 @@ pub(super) fn is_string_like(ty: &Ty) -> bool {
 
 /// Extract a user-visible type name from a `Ty` for method mangling.
 pub fn type_name_from_ty(ty: &Ty) -> String {
-    match ty {
-        Ty::Class { name, .. } => name.clone(),
-        Ty::Struct { name, .. } => name.clone(),
-        Ty::Enum { name, .. } => name.clone(),
-        Ty::Ref(inner) | Ty::RefMut(inner) => type_name_from_ty(inner),
-        Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => type_name_from_ty(inner),
+    match ty.peel_refs() {
+        Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => name.clone(),
         other => other.type_name(),
     }
 }
@@ -329,119 +281,6 @@ pub fn def_id_name(def_id: DefId, symbols: &SymbolTable) -> String {
         .get(def_id)
         .map(|d| d.name.clone())
         .unwrap_or_else(|| format!("_unknown_{}", def_id))
-}
-
-/// If `ty` (after peeling reference layers) is a struct **or class**
-/// that derives — explicitly or implicitly per ruby-naming.spec.md §3.6
-/// — `PartialEq`, return the type's name. Otherwise return `None`.
-///
-/// B74: classes were absent here, so `a == b` on a class fell past the
-/// structural-equality route in `expr/binops.rs` and lowered to a raw
-/// `Compare` of two heap addresses — silently `false` for every pair of
-/// distinct allocations, however equal their fields.
-pub(super) fn struct_name_with_partial_eq(ty: &Ty, symbols: &SymbolTable) -> Option<String> {
-    let mut cur = ty;
-    loop {
-        match cur {
-            Ty::Ref(inner) | Ty::RefMut(inner) => cur = inner,
-            Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => cur = inner,
-            Ty::Struct { name, .. } | Ty::Class { name, .. } => {
-                if nominal_derive_is_synthesized(cur, symbols, "PartialEq") {
-                    return Some(name.clone());
-                }
-                return None;
-            }
-            _ => return None,
-        }
-    }
-}
-
-/// Return `Some((struct_name, partial))` when `ty` (peeling refs and
-/// aliases) is a struct that declares `derive Ord` or `derive
-/// PartialOrd`. The boolean is `true` only when the struct derives
-/// `PartialOrd` *without* `Ord`, in which case the BinaryOp lowering
-/// must dispatch to `<Type>_partial_cmp` rather than `<Type>_cmp`.
-pub(super) fn struct_name_with_ord(ty: &Ty, symbols: &SymbolTable) -> Option<(String, bool)> {
-    // ruby-naming.spec.md §3.6: Ord / PartialOrd are implicitly
-    // included when every field structurally supports them. Route
-    // through `ty_has_derive_trait` so both explicit and implicit
-    // forms surface here. Prefer `Ord` over `PartialOrd` when both
-    // apply (Ord is total — `<Type>_cmp`; PartialOrd is
-    // `<Type>_partial_cmp` which returns `Option[Ordering]`).
-    let mut cur = ty;
-    loop {
-        match cur {
-            Ty::Ref(inner) | Ty::RefMut(inner) => cur = inner,
-            Ty::RefLifetime(_, inner) | Ty::RefMutLifetime(_, inner) => cur = inner,
-            Ty::Struct { name, .. } => {
-                if crate::resolve::symbols::ty_has_derive_trait(cur, symbols, "Ord") {
-                    return Some((name.clone(), false));
-                }
-                if crate::resolve::symbols::ty_has_derive_trait(cur, symbols, "PartialOrd") {
-                    return Some((name.clone(), true));
-                }
-                return None;
-            }
-            _ => return None,
-        }
-    }
-}
-
-/// Does `ty` carry a SYNTHESISED structural derive for `trait_name`?
-///
-/// For a struct this is just [`ty_has_derive_trait`]. For a class it
-/// additionally requires at least one field, and that extra condition is
-/// load-bearing rather than cosmetic.
-///
-/// `ty_has_derive_trait` decides the implicit-include rule
-/// (ruby-naming.spec.md §3.6) with `fields.all(supports)`, which is
-/// vacuously TRUE for an empty field list. Ruxen's primitive
-/// method-homes and FFI handle shells — `class Int`, `class Float`,
-/// `class Char`, `class Mutex[T]`, every `lib`-decl class — are exactly
-/// the fieldless classes, so treating them as deriving everything is
-/// wrong in both directions:
-///
-/// * `"#{n.succ}"` would route to a synthesised `Int_to_debug` and print
-///   `Int {}` instead of the number (`std/scalar` `integer_test.rx`);
-/// * `m1 == m2` on two DIFFERENT `Mutex`es would take the field-fold's
-///   empty-list branch and answer a literal `true`.
-///
-/// A class with no fields has no structural content, so identity is the
-/// right answer for equality, hashing and formatting alike — which is
-/// also what Ruby's `Object#==` / `Object#hash` give. This is a
-/// structural test, not a list of type names: nothing here knows what
-/// `Int` or `Mutex` are.
-pub(super) fn nominal_derive_is_synthesized(
-    ty: &Ty,
-    symbols: &SymbolTable,
-    trait_name: &str,
-) -> bool {
-    if !crate::resolve::symbols::ty_has_derive_trait(ty, symbols, trait_name) {
-        return false;
-    }
-    match peel_to_nominal(ty) {
-        Some(Ty::Class { name, .. }) => {
-            class_field_layout(name, symbols).is_some_and(|fields| !fields.is_empty())
-        }
-        _ => true,
-    }
-}
-
-/// Peel references / aliases / newtypes down to the nominal `Ty`.
-fn peel_to_nominal(ty: &Ty) -> Option<&Ty> {
-    let mut cur = ty;
-    loop {
-        match cur {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner)
-            | Ty::Newtype { inner, .. }
-            | Ty::Alias { target: inner, .. } => cur = inner,
-            Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => return Some(cur),
-            _ => return None,
-        }
-    }
 }
 
 /// The nominal type name behind `ty` after peeling references, aliases
@@ -465,12 +304,10 @@ pub(super) fn peeled_nominal_name(ty: &Ty) -> Option<String> {
 /// where a class's first user field lives.
 pub(super) fn class_field_index_shift_in(class_name: &str, symbols: &SymbolTable) -> usize {
     use crate::resolve::symbols::DefKind;
-    for def in symbols.iter() {
-        if def.name == class_name {
-            if let DefKind::Class { info } = &def.kind {
-                // v1 ships a single class_info_ptr header at slot 0.
-                return usize::from(!info.runtime_dispatch_includes.is_empty());
-            }
+    for def in symbols.named(class_name) {
+        if let DefKind::Class { info } = &def.kind {
+            // v1 ships a single class_info_ptr header at slot 0.
+            return usize::from(!info.runtime_dispatch_includes.is_empty());
         }
     }
     0
@@ -487,21 +324,19 @@ pub(super) fn class_field_index_shift_in(class_name: &str, symbols: &SymbolTable
 /// subclass's own fields and skip every inherited one.
 pub(super) fn struct_field_layout(name: &str, symbols: &SymbolTable) -> Option<Vec<(usize, Ty)>> {
     use crate::resolve::symbols::DefKind;
-    for def in symbols.iter() {
-        if def.name == name {
-            if let DefKind::Class { .. } = def.kind {
-                return class_field_layout(name, symbols);
-            }
-            if let DefKind::Struct { ref info } = def.kind {
-                let mut out = Vec::with_capacity(info.fields.len());
-                for &fid in &info.fields {
-                    let field_def = symbols.get(fid)?;
-                    if let DefKind::Field { index, ref ty, .. } = field_def.kind {
-                        out.push((index, ty.clone()));
-                    }
+    for def in symbols.named(name) {
+        if let DefKind::Class { .. } = def.kind {
+            return class_field_layout(name, symbols);
+        }
+        if let DefKind::Struct { ref info } = def.kind {
+            let mut out = Vec::with_capacity(info.fields.len());
+            for &fid in &info.fields {
+                let field_def = symbols.get(fid)?;
+                if let DefKind::Field { index, ref ty, .. } = field_def.kind {
+                    out.push((index, ty.clone()));
                 }
-                return Some(out);
             }
+            return Some(out);
         }
     }
     None
@@ -518,8 +353,8 @@ fn class_field_layout(name: &str, symbols: &SymbolTable) -> Option<Vec<(usize, T
 
     let find_class = |n: &str| {
         symbols
-            .iter()
-            .find(|d| d.name == n && matches!(d.kind, DefKind::Class { .. }))
+            .named(n)
+            .find(|d| matches!(d.kind, DefKind::Class { .. }))
     };
 
     // Oldest ancestor first, so slot order matches `alloc_size`.
@@ -593,34 +428,21 @@ impl<'a> Lowerer<'a> {
     /// matching type), letting callers fall back to a non-class-method
     /// shape (e.g. `Ty::Unit` self placeholder, empty shift).
     pub(super) fn class_name_from_mangled(&self, mangled: &str) -> Option<String> {
-        use crate::resolve::symbols::DefKind;
         // Generic-class monomorphization: a specialized body is named
         // `Base__mono__Args_method`. Strip the `__mono__Args` segment so the
         // prefix walk below sees the original `Base` (or its dotted form)
         // and recovers the receiver class for self-type derivation.
         if let Some(base) = crate::mir::lower::monomorphize::strip_mono_suffix(mangled) {
-            for def in self.symbols.iter() {
-                if matches!(
-                    &def.kind,
-                    DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. }
-                ) && (def.name == base || def.name.replace('.', "_") == base)
-                {
-                    return Some(def.name.clone());
-                }
+            if let Some(def) = self.symbols.type_def(base) {
+                return Some(def.name.clone());
             }
         }
         let mut end = mangled.len();
         while let Some(pos) = mangled[..end].rfind('_') {
             let candidate = &mangled[..pos];
             if !candidate.is_empty() {
-                for def in self.symbols.iter() {
-                    if matches!(
-                        &def.kind,
-                        DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. }
-                    ) && (def.name == candidate || def.name.replace('.', "_") == candidate)
-                    {
-                        return Some(def.name.clone());
-                    }
+                if let Some(def) = self.symbols.type_def(candidate) {
+                    return Some(def.name.clone());
                 }
             }
             end = pos;
@@ -703,19 +525,17 @@ impl<'a> Lowerer<'a> {
                     // Verify the mixin is registered as
                     // dispatch_mode = Runtime; ordinary mixins would
                     // already have produced E1118 at typeck.
-                    for def in self.symbols.iter() {
-                        if def.name == *name {
-                            if matches!(
-                                &def.kind,
-                                DefKind::Trait { info } if matches!(
-                                    info.dispatch_mode,
-                                    crate::parser::ast::DispatchMode::Runtime
-                                )
-                            ) {
-                                return Some(name.clone());
-                            }
-                            return None;
+                    if let Some(def) = self.symbols.named(name).next() {
+                        if matches!(
+                            &def.kind,
+                            DefKind::Trait { info } if matches!(
+                                info.dispatch_mode,
+                                crate::parser::ast::DispatchMode::Runtime
+                            )
+                        ) {
+                            return Some(name.clone());
                         }
+                        return None;
                     }
                     return None;
                 }

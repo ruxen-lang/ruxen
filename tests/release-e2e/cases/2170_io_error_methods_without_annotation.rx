@@ -1,0 +1,20 @@
+# F-22. `IoError#message` / `#kind` are declared methods on the enum (a
+# stdlib `class IoError` body anchored onto `enum IoError`), so they resolve
+# without parentheses and keep their type without a typed binding. Before,
+# the parenless form failed typeck and an unannotated `e.message()` left an
+# unresolved type that silently dropped `main` at link time.
+use std.io.File
+
+def main
+  match File.open("/nonexistent/ruxen_e2e_2170")
+    Ok(_) -> puts "opened"
+    Err(e) ->
+      puts e.message
+      puts e.kind
+  end
+  let err = File.open("/nonexistent/ruxen_e2e_2170").err.unwrap
+  let msg = err.message()
+  puts msg.size
+  let kind = err.kind
+  puts kind
+end

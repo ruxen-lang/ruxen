@@ -49,6 +49,14 @@ Tester.describe("Formatter") do |t: &var Tester|
     t.expect(f.buffer).to_eq("A")
   end
 
+  t.it("UTF-8 encodes a non-ASCII char with write_char") do
+    var f = Formatter.new
+    let _ = f.write_char(233)
+    let _ = f.write_char(128512)
+    t.expect(f.size).to_eq(6)
+    t.expect(f.buffer).to_eq("é😀")
+  end
+
   t.it("counts the bytes written") do
     var f = Formatter.new
     let _ = f.write_str("hi")

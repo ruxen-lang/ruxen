@@ -60,4 +60,3 @@ fn json_runtime_compiles_with_strict_warnings() {
         let _ = std::fs::remove_file(obj);
     }
 }
-

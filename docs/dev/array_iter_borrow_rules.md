@@ -64,8 +64,8 @@ puts "#{r.size}"
   (`Array[String]`, `Array[Array[T]]`, …), the source temporary at the
   push site is tainted so the drop pass does not free it. The
   receiving slot inherits the responsibility through the
-  per-element drop helper (`ruxen_vec_drop_string`,
-  `ruxen_vec_drop_vec`).
+  element-aware drop glue (`ruxen_vec_drop` with the element
+  descriptor).
 
 - **Closure-takers** (`each`, `filter`, `find`, `position`, `map`,
   `partition`) are inlined at MIR lowering — they do not pass a

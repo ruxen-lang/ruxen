@@ -95,7 +95,8 @@ impl Parser {
 
             // Binary operators
             _ => {
-                let bin_op = token_to_binop(&op);
+                let bin_op = BinOp::from_token(&op)
+                    .unwrap_or_else(|| unreachable!("not a binary operator: {op:?}"));
                 let rhs = self.parse_expr_bp(r_bp);
                 let span = self.span_from(&start_span);
                 Expr {

@@ -54,28 +54,7 @@ fn is_operator_name(name: &str) -> bool {
 /// normal call, so these operators can be aliases without a second dispatch
 /// mechanism. Unary `+@` has no surface expression in Ruxen and remains E1123.
 fn supports_operator_alias(name: &str) -> bool {
-    matches!(
-        name,
-        "+" | "-"
-            | "*"
-            | "/"
-            | "%"
-            | "&"
-            | "|"
-            | "^"
-            | "<<"
-            | ">>"
-            | "!"
-            | "[]"
-            | "[]="
-            | "-@"
-            | "=="
-            | "<"
-            | ">"
-            | "<="
-            | ">="
-            | "<=>"
-    )
+    is_operator_name(name) && name != "+@"
 }
 
 impl Resolver {

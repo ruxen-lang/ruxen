@@ -453,6 +453,7 @@ fn try_linear_cfg(body: &Block) -> Option<Cfg> {
                         span: span.clone(),
                     }),
                     field: last_binding.clone(),
+                    ivar: false,
                 },
                 span,
             }));

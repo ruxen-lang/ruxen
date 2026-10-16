@@ -193,7 +193,34 @@ fn bootstrap_clean_stdlib_file_returns_program() {
     );
     assert_eq!(programs.len(), 1, "expected one parsed Program");
     assert!(
-        !programs[0].items.is_empty(),
+        !programs[0].1.items.is_empty(),
         "parsed Program should contain the placeholder def"
     );
+}
+
+#[test]
+fn bootstrap_parse_failure_keeps_later_packages_on_their_own_names() {
+    // A package that fails to parse drops out of the result; the packages
+    // after it must keep their own names instead of shifting onto the
+    // failed one's slot.
+    let tmp = TempDir::new();
+    let ok = "def placeholder() -> Int\n  0\nend\n";
+    write_fixture(tmp.path(), "first/src/lib.rx", ok);
+    write_fixture(
+        tmp.path(),
+        "broken/src/lib.rx",
+        "class Foo\n  def open(self) ->\nend\n",
+    );
+    write_fixture(tmp.path(), "last/src/lib.rx", ok);
+
+    let mut diags = Vec::<Diagnostic>::new();
+    let packages = run_bootstrap_with_files(
+        &["first/src/lib.rx", "broken/src/lib.rx", "last/src/lib.rx"],
+        Some(tmp.path()),
+        &mut diags,
+    );
+
+    let names: Vec<&str> = packages.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["first", "last"]);
+    assert!(diags.iter().any(|d| d.code.as_deref() == Some("E0725")));
 }

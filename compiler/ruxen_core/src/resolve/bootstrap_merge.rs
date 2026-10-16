@@ -584,11 +584,15 @@ mod tests {
         let Some(HirItem::Function(main)) = result.program.items.last() else {
             panic!("expected `main` last");
         };
-        let HirExprKind::Block(_, Some(tail)) = &main.body.kind else {
+        // `main`'s value is discarded, so its last expression is a statement.
+        let HirExprKind::Block(stmts, None) = &main.body.kind else {
             panic!("expected a block body: {:?}", main.body.kind);
         };
-        let HirExprKind::FnCall { callee, .. } = &tail.kind else {
-            panic!("expected a call: {:?}", tail.kind);
+        let Some(crate::hir::nodes::HirStatement::Expr(call)) = stmts.last() else {
+            panic!("expected an expression statement: {stmts:?}");
+        };
+        let HirExprKind::FnCall { callee, .. } = &call.kind else {
+            panic!("expected a call: {:?}", call.kind);
         };
         let callee_line = result.symbols.get(*callee).expect("callee def").span.line;
         assert_eq!(callee_line, 8, "`helper()` bound to the stdlib def");

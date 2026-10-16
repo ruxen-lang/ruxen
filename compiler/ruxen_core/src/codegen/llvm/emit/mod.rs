@@ -24,7 +24,7 @@ use crate::parser::ast::BinOp;
 use super::debug::DebugCtx;
 use super::runtime_decl;
 use super::types::ty_to_llvm;
-use crate::codegen::runtime::{extract_method_name, runtime_name};
+use crate::codegen::runtime::runtime_name;
 
 mod calls;
 mod control_flow;
@@ -68,20 +68,14 @@ pub fn compile_program<'ctx>(
     // Pass 1: declare all user functions
     for func in &program.functions {
         let fn_type = super::types::build_function_type(func, context);
-        // `main` + every `<Mixin>_dynamic_<method>` helper exports
-        // External linkage so C-side runtime code (e.g.
-        // library/std/future/runtime/scheduler.c, sub-phase 5) can
-        // dispatch through the helper by symbol. Mirrors the cranelift
-        // backend's logic — see codegen/cranelift/mod.rs::
-        // is_dynamic_dispatch_helper for the naming pattern.
+        // Lowering marks `main` and the `<Mixin>_dynamic_<method>` helpers
+        // C runtime code calls by symbol (e.g. the scheduler's
+        // `Future_dynamic_poll`) as `MirLinkage::Export`.
         // Tier 4.03 (WASM): a wasm-exported function needs External linkage
         // (Internal would be invisible to `wasm-ld`) plus the `export_name`
         // attribute set below.
         let is_wasm_export = is_wasm && program.wasm_exports.iter().any(|n| n == &func.name);
-        let linkage = if func.name == "main"
-            || super::super::cranelift::is_dynamic_dispatch_helper(&func.name)
-            || is_wasm_export
-        {
+        let linkage = if func.linkage == MirLinkage::Export || is_wasm_export {
             Some(inkwell::module::Linkage::External)
         } else {
             Some(inkwell::module::Linkage::Internal)

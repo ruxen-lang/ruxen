@@ -79,8 +79,8 @@ pub fn def_local(
 /// Read the current value of `local_id`.
 ///
 /// Mirrors `def_local`: address-taken locals read from their stack slot so
-/// that a mutation written through a `&mut` pointer (stored back via
-/// `ruxen_store_ptr`) is visible to subsequent uses. Everything else goes
+/// that a mutation written through a `&mut` pointer (e.g. by a `def var`
+/// String method) is visible to subsequent uses. Everything else goes
 /// through the Cranelift SSA variable.
 ///
 /// B01: the slot load yields the raw 8-byte word, so it is reinterpreted
@@ -238,12 +238,10 @@ pub fn translate_instruction<M: Module>(
 
             let result = if is_string_compare && matches!(op, CmpOp::Eq | CmpOp::NotEq) {
                 // Call ruxen_string_eq(a, b) which returns 1 for equal, 0 for not.
-                let func_ref = env.declare_runtime_func(
-                    "ruxen_string_eq",
-                    &[types::I64, types::I64],
-                    Some(types::I64),
-                    builder,
-                )?;
+                let (params, ret) = compiler_internal_signature("ruxen_string_eq")
+                    .expect("ruxen_string_eq is in the residual ABI table");
+                let func_ref =
+                    env.declare_runtime_func("ruxen_string_eq", &params, ret, builder)?;
                 let call = builder.ins().call(func_ref, &[l, r]);
                 let eq_result = builder.inst_results(call)[0];
                 if matches!(op, CmpOp::NotEq) {
@@ -256,12 +254,10 @@ pub fn translate_instruction<M: Module>(
                 }
             } else if is_string_compare {
                 // For ordered comparisons on strings, call ruxen_string_cmp
-                let func_ref = env.declare_runtime_func(
-                    "ruxen_string_cmp",
-                    &[types::I64, types::I64],
-                    Some(types::I64),
-                    builder,
-                )?;
+                let (params, ret) = compiler_internal_signature("ruxen_string_cmp")
+                    .expect("ruxen_string_cmp is in the residual ABI table");
+                let func_ref =
+                    env.declare_runtime_func("ruxen_string_cmp", &params, ret, builder)?;
                 let call = builder.ins().call(func_ref, &[l, r]);
                 let cmp_result = builder.inst_results(call)[0];
                 let zero = builder.ins().iconst(types::I64, 0);
@@ -372,8 +368,9 @@ pub fn translate_instruction<M: Module>(
                 simple_type_size(alloc_ty) as i64
             };
             let size_val = builder.ins().iconst(types::I64, size);
-            let func_ref =
-                env.declare_runtime_func("ruxen_alloc", &[types::I64], Some(types::I64), builder)?;
+            let (params, ret) = compiler_internal_signature("ruxen_alloc")
+                .expect("ruxen_alloc is in the residual ABI table");
+            let func_ref = env.declare_runtime_func("ruxen_alloc", &params, ret, builder)?;
             let call = builder.ins().call(func_ref, &[size_val]);
             let ptr = builder.inst_results(call)[0];
             def_local(var_map, stack_slots, builder, *dest, ptr);

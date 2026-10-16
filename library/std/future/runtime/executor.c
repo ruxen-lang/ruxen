@@ -143,11 +143,7 @@ void *ruxen_executor_make_context(void) {
 }
 
 void *ruxen_executor_make_task_context(void *task_entry) {
-    RuxenContext *cx = (RuxenContext *)malloc(sizeof(RuxenContext));
-    if (!cx) {
-        ruxen_panic("ruxen_executor: failed to allocate Context");
-        return (void *)0;
-    }
+    RuxenContext *cx = (RuxenContext *)ruxen_xmalloc(sizeof(RuxenContext));
     /* Acquire (lazy-create) the per-thread reactor so the waker has a
      * stable reactor pointer to signal. The reactor lives for the
      * thread's lifetime; the Context only borrows it. */
@@ -173,11 +169,7 @@ void *ruxen_context_clone(void *cx_opaque) {
     }
 
     RuxenContext *src = (RuxenContext *)cx_opaque;
-    RuxenContext *dst = (RuxenContext *)malloc(sizeof(RuxenContext));
-    if (!dst) {
-        ruxen_panic("ruxen_context_clone: failed to allocate Context");
-        return (void *)0;
-    }
+    RuxenContext *dst = (RuxenContext *)ruxen_xmalloc(sizeof(RuxenContext));
 
     dst->inline_waker.reactor = src->inline_waker.reactor;
     dst->inline_waker.task = src->inline_waker.task;

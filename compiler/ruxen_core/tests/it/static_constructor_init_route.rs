@@ -1,8 +1,7 @@
-//! Pins the universal-`new` reconciliation claim that
-//! `runtime_abi::is_static_constructor` makes (runtime_abi.rs:127-144):
-//! `method_name == "new"` is a static constructor for ANY type, yet a user
-//! class with `def init` and NO `def self.new` constructed via `.new` must
-//! still route through `{Class}_init` with `self` prepended as arg0.
+//! Pins the `.new` dispatch rule in `mir/lower/expr/method_call.rs`:
+//! `.new` is a static call for ANY type, yet a user class with `def init`
+//! and NO `def self.new` constructed via `.new` must still route through
+//! `{Class}_init` with `self` prepended as arg0.
 //!
 //! Without this guarantee the universal-`new` rule would be a UAF / wrong-ABI
 //! hazard: a user `.new` could be misclassified as a runtime collection ctor

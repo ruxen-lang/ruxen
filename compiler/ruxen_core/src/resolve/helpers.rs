@@ -28,10 +28,7 @@ impl Resolver {
                 ast::GenericParam::Type { name, bounds, .. } => {
                     let trait_refs: Vec<MixinRef> = bounds
                         .iter()
-                        .map(|b| MixinRef {
-                            name: b.path.segments.join("."),
-                            generic_args: vec![],
-                        })
+                        .map(|b| MixinRef::from_bound_name(&b.path))
                         .collect();
                     Some(GenericParamInfo::type_param(name.clone(), trait_refs))
                 }
@@ -94,18 +91,8 @@ impl Resolver {
                             ast::GenericParam::Type { name, bounds, span } => {
                                 let trait_refs: Vec<MixinRef> = bounds
                                     .iter()
-                                    .map(|b| MixinRef {
-                                        name: b.path.segments.join("."),
-                                        generic_args: b
-                                            .path
-                                            .generic_args
-                                            .as_ref()
-                                            .map(|args| {
-                                                args.iter()
-                                                    .map(|a| self.resolve_type_expr(a))
-                                                    .collect()
-                                            })
-                                            .unwrap_or_default(),
+                                    .map(|b| {
+                                        MixinRef::from_bound(&b.path, |a| self.resolve_type_expr(a))
                                     })
                                     .collect();
                                 Some(HirGenericParam {
@@ -156,31 +143,14 @@ impl Resolver {
             .collect()
     }
 
+    /// [`Self::resolve_params`], with each param also bound by name in the
+    /// current value scope.
     pub(super) fn resolve_and_register_params(&mut self, params: &[ast::Param]) -> Vec<HirParam> {
-        params
-            .iter()
-            .map(|p| {
-                let ty = self.resolve_type_expr(&p.type_expr);
-                let def_id = self.symbols.define(
-                    p.name.clone(),
-                    DefKind::Param {
-                        ty: ty.clone(),
-                        auto_assign: p.auto_assign,
-                    },
-                    Visibility::Private,
-                    p.span.clone(),
-                );
-                self.scopes.insert(p.name.clone(), def_id);
-                HirParam {
-                    def_id,
-                    name: p.name.clone(),
-                    ty,
-                    auto_assign: p.auto_assign,
-                    default: p.default.as_deref().cloned(),
-                    span: p.span.clone(),
-                }
-            })
-            .collect()
+        let hir_params = self.resolve_params(params);
+        for p in &hir_params {
+            self.scopes.insert(p.name.clone(), p.def_id);
+        }
+        hir_params
     }
 
     pub(super) fn convert_self_mode(&self, mode: ast::SelfMode) -> HirSelfMode {

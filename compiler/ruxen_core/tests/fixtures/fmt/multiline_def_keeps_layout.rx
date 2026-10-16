@@ -1,0 +1,24 @@
+class Ver
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def bump -> Int
+    self.n + 1
+  end
+
+  def double -> Int { self.n * 2 }
+end
+
+def label -> String
+  "label"
+end
+
+def main
+  let v = Ver.new(1)
+  puts(v.bump.to_s)
+
+  puts(label)
+  puts(v.double.to_s)
+end

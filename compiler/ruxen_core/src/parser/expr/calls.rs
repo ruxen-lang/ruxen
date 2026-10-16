@@ -132,6 +132,7 @@ impl Parser {
                         kind: ExprKind::FieldAccess {
                             object: Box::new(lhs),
                             field: name,
+                            ivar: false,
                         },
                         span,
                     };
@@ -149,6 +150,7 @@ impl Parser {
                         kind: ExprKind::FieldAccess {
                             object: Box::new(lhs),
                             field: first,
+                            ivar: false,
                         },
                         span: mid_span.clone(),
                     };
@@ -157,6 +159,7 @@ impl Parser {
                         kind: ExprKind::FieldAccess {
                             object: Box::new(inner),
                             field: second,
+                            ivar: false,
                         },
                         span,
                     };
@@ -186,6 +189,7 @@ impl Parser {
                             generic_args,
                             args,
                             block: block.map(Box::new),
+                            parens: true,
                         },
                         span,
                     }
@@ -207,6 +211,7 @@ impl Parser {
                             generic_args,
                             args: vec![arg],
                             block: block.map(Box::new),
+                            parens: false,
                         },
                         span,
                     }
@@ -222,6 +227,7 @@ impl Parser {
                                 generic_args,
                                 args: vec![],
                                 block: block.map(Box::new),
+                                parens: false,
                             },
                             span,
                         }
@@ -231,6 +237,7 @@ impl Parser {
                             kind: ExprKind::FieldAccess {
                                 object: Box::new(lhs),
                                 field,
+                                ivar: false,
                             },
                             span,
                         }
@@ -303,6 +310,7 @@ impl Parser {
                         callee: Box::new(lhs),
                         args,
                         block: block.map(Box::new),
+                        parens: true,
                     },
                     span,
                 }
@@ -312,16 +320,17 @@ impl Parser {
         }
     }
 
-    /// Check if current token starts a bare (paren-less) call argument.
-    /// Only string literals and interpolated strings qualify — this prevents
-    /// `x y` from being misread as a call when `x` is just a variable.
     /// Check if the next token can be a bare (no-parens) call argument.
     ///
     /// String literals are always accepted (any function can be called with
     /// a bare string: `puts "hello"`). Identifiers and other expression
-    /// tokens are only accepted for known IO functions (`puts`, `print`,
-    /// `eputs`) to avoid ambiguity where `foo bar` could be misread as
-    /// `foo(bar)` when they are two separate expressions.
+    /// tokens are only accepted for the known Kernel statement functions,
+    /// to avoid ambiguity where `foo bar` could be misread as `foo(bar)`
+    /// when they are two separate expressions.
+    ///
+    /// `p` and `pp` take value tokens only. `p` is also a common local
+    /// name, and after a local `p & mask` and `p !x`-like spellings are
+    /// operators, so `&`, `&mut` and `!` never start a bare `p` argument.
     pub(super) fn is_bare_call_arg_start(&self, callee_name: &str) -> bool {
         // String literals are always valid bare args for any function.
         if matches!(
@@ -331,16 +340,7 @@ impl Parser {
             return true;
         }
 
-        // For known IO/statement functions, allow broader expression args.
-        let is_bare_call_fn = matches!(
-            callee_name,
-            "puts" | "print" | "eputs" | "include" | "raise"
-        );
-        if !is_bare_call_fn {
-            return false;
-        }
-
-        matches!(
+        let value_token = matches!(
             self.current_kind(),
             TokenKind::Identifier(_)
                 | TokenKind::TypeIdentifier(_)
@@ -353,10 +353,18 @@ impl Parser {
                 | TokenKind::SomeKw
                 | TokenKind::OkKw
                 | TokenKind::ErrKw
-                | TokenKind::Amp
-                | TokenKind::AmpMut
-                | TokenKind::Bang
-        )
+        );
+        match callee_name {
+            "puts" | "print" | "eputs" | "include" | "raise" => {
+                value_token
+                    || matches!(
+                        self.current_kind(),
+                        TokenKind::Amp | TokenKind::AmpMut | TokenKind::Bang
+                    )
+            }
+            "p" | "pp" => value_token,
+            _ => false,
+        }
     }
 
     /// True when the next tokens look like a trailing block argument

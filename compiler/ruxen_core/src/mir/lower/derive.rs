@@ -1,4 +1,31 @@
 use super::*;
+use crate::implicit_includes::{derive_is_synthesized, derived_method, HASHABLE};
+
+/// Builds one derived body: `(lowerer, fn_name, self_ty, label, fields)`.
+/// `label` is the bare type name `Debug` prints.
+type BuildDerive = fn(&Lowerer<'_>, &str, Ty, &str, &[DeriveField]) -> MirFunction;
+
+/// Every derive the compiler synthesises a struct or class body for, each
+/// written once against a [`DeriveField`] slot list. Which entries a type
+/// gets is [`derive_is_synthesized`]'s call; the mangled method suffix is
+/// [`derived_method`]'s, so neither is spelled here.
+const DERIVES: [(&str, BuildDerive); 7] = [
+    ("Debug", |l, f, t, label, fields| {
+        l.build_to_debug(f, t, label, fields)
+    }),
+    ("PartialEq", |l, f, t, _, fields| l.build_eq(f, t, fields)),
+    (HASHABLE, |l, f, t, _, fields| {
+        l.build_hash_code(f, t, fields)
+    }),
+    ("Default", |l, f, t, _, fields| {
+        l.build_default(f, t, fields)
+    }),
+    ("Ord", |l, f, t, _, fields| l.build_cmp(f, t, fields, false)),
+    ("PartialOrd", |l, f, t, _, fields| {
+        l.build_cmp(f, t, fields, true)
+    }),
+    ("Clone", |l, f, t, _, fields| l.build_clone(f, t, fields)),
+];
 
 /// One field a derived method must visit: the MIR **slot index** to
 /// address it by on a value of the owning type, its declared name (for
@@ -56,6 +83,69 @@ impl<'a> Lowerer<'a> {
                 ty: f.ty,
             })
             .collect()
+    }
+
+    /// Synthesise every derived body a struct or class gets: one per
+    /// [`DERIVES`] entry that [`derive_is_synthesized`] grants `nominal_ty`.
+    /// `name` is the bare item name the bodies mangle from
+    /// (`{name}_{method}`), and `fields` its slot list. This is the one
+    /// item-kind-generic path: a struct and a class differ only in their
+    /// [`DeriveField`] slots. Enums keep their own variant-switch bodies.
+    pub(super) fn synthesize_derives(
+        &self,
+        nominal_ty: &Ty,
+        name: &str,
+        fields: &[DeriveField],
+    ) -> Vec<MirFunction> {
+        let self_ty = match nominal_ty {
+            Ty::Class { .. } => Ty::Class {
+                name: name.to_string(),
+                generic_args: vec![],
+            },
+            _ => Ty::Struct {
+                name: name.to_string(),
+                generic_args: vec![],
+            },
+        };
+        DERIVES
+            .iter()
+            .filter(|(trait_name, _)| derive_is_synthesized(nominal_ty, self.symbols, trait_name))
+            .map(|(trait_name, build)| {
+                let method = derived_method(trait_name).expect("every DERIVES entry has a method");
+                let fn_name = format!("{}_{}", name, method);
+                build(self, &fn_name, self_ty.clone(), name, fields)
+            })
+            .collect()
+    }
+
+    /// Allocate the value a derived constructor (`clone`, `default`)
+    /// returns. A runtime-dispatch class carries its `class_info` pointer
+    /// in slot 0, which every `.new` writes (`emit_class_info_init`); a
+    /// derived constructor writes it too, or a dynamic call through the
+    /// copy reads garbage.
+    fn alloc_derived_value(&self, mir_fn: &mut MirFunction, self_ty: &Ty) -> LocalId {
+        let entry = mir_fn.entry_block;
+        let dest = mir_fn.new_temp(self_ty.clone());
+        mir_fn.blocks[entry].instructions.push(MirInst::Alloc {
+            dest,
+            ty: self_ty.clone(),
+            size: self.alloc_size(self_ty),
+        });
+        if let Ty::Class { name, .. } = self_ty {
+            if self.class_field_index_shift(name) > 0 {
+                let addr = mir_fn.new_temp(Ty::Int);
+                mir_fn.blocks[entry].instructions.push(MirInst::DataAddr {
+                    dest: addr,
+                    data_sym: format!("__rx_classinfo_{}", name),
+                });
+                mir_fn.blocks[entry].instructions.push(MirInst::SetField {
+                    base: dest,
+                    field_index: 0,
+                    value: MirValue::Use(addr),
+                });
+            }
+        }
+        dest
     }
 
     /// Phase 2 #06.D2.S1: synthesize a `Display::fmt` MIR function for each
@@ -180,44 +270,13 @@ impl<'a> Lowerer<'a> {
         out
     }
 
-    /// Synthesize the body of `{StructName}_to_debug(self) -> String` for a
-    /// struct that declares `derive Debug`. Output shape:
-    /// `Name { field1: <fmt(field1)>, field2: <fmt(field2)>, ... }`.
-    /// Each field is formatted by [`Self::format_field_for_debug`], which
-    /// handles primitives, `String`/`Str`, and nested `derive Debug`
-    /// struct/enum fields (recursing into `{Type}_to_debug`); anything
-    /// else renders as `<...>` so the formatter never panics.
-    pub(super) fn synthesize_struct_to_debug(&self, s: &HirStructDef) -> MirFunction {
-        let self_ty = Ty::Struct {
-            name: s.name.clone(),
-            generic_args: vec![],
-        };
-        self.build_to_debug(
-            &format!("{}_to_debug", s.name),
-            self_ty,
-            &s.name,
-            &derive_fields_of_struct(s),
-        )
-    }
-
-    /// `{ClassName}_to_debug(self) -> String`. Same body as the struct
-    /// version; only the slot list differs (see [`DeriveField`]), so an
-    /// inherited field is labelled and rendered like an own field.
-    pub(super) fn synthesize_class_to_debug(&self, c: &HirClassDef) -> MirFunction {
-        let self_ty = Ty::Class {
-            name: c.name.clone(),
-            generic_args: vec![],
-        };
-        self.build_to_debug(
-            &format!("{}_to_debug", c.name),
-            self_ty,
-            &c.name,
-            &self.derive_fields_of_class(c),
-        )
-    }
-
-    /// Shared body of the derived `Debug`. `label` is the type name that
-    /// opens the rendering (`Name { … }`).
+    /// Derived `Debug`: `{Type}_to_debug(self) -> String`, rendering
+    /// `Name { field1: <fmt(field1)>, … }`. Each field is formatted by
+    /// [`Self::format_field_for_debug`], which handles primitives,
+    /// `String`, and nested derived struct/class/enum fields (recursing into
+    /// `{Type}_to_debug`); anything else renders as `<...>`. `label` is the
+    /// type name that opens the rendering; an inherited class field is
+    /// labelled and rendered like an own field.
     fn build_to_debug(
         &self,
         fn_name: &str,
@@ -383,33 +442,7 @@ impl<'a> Lowerer<'a> {
         acc
     }
 
-    pub(super) fn synthesize_struct_eq(&self, s: &HirStructDef) -> MirFunction {
-        let self_ty = Ty::Struct {
-            name: s.name.clone(),
-            generic_args: vec![],
-        };
-        self.build_eq(
-            &format!("{}_eq", s.name),
-            self_ty,
-            &derive_fields_of_struct(s),
-        )
-    }
-
-    /// `{ClassName}_eq(self, other) -> Bool`. Same body as the struct
-    /// version; only the slot list differs (see [`DeriveField`]).
-    pub(super) fn synthesize_class_eq(&self, c: &HirClassDef) -> MirFunction {
-        let self_ty = Ty::Class {
-            name: c.name.clone(),
-            generic_args: vec![],
-        };
-        self.build_eq(
-            &format!("{}_eq", c.name),
-            self_ty,
-            &self.derive_fields_of_class(c),
-        )
-    }
-
-    /// Shared body of the derived `PartialEq`: fold `&&` over a
+    /// Derived `PartialEq`, `{Type}_eq(self, other) -> Bool`: fold `&&` over a
     /// per-field equality. A field that is itself a nominal type with
     /// `PartialEq` recurses into its `{Type}_eq`; a `String` field goes
     /// through `ruxen_string_eq` so two distinct heap copies with the
@@ -436,7 +469,7 @@ impl<'a> Lowerer<'a> {
             init,
             |mir_fn, _slot, field_ty, lhs, rhs| {
                 let rhs = rhs.expect("eq fold supplies an other_local rhs");
-                if let Some(inner_name) = self.nominal_with_derive_trait(field_ty, "PartialEq") {
+                if let Some(inner_name) = self.derived_nominal(field_ty, "PartialEq") {
                     let dest = mir_fn.new_temp(Ty::Bool);
                     mir_fn.blocks[entry].instructions.push(MirInst::Call {
                         dest: Some(dest),
@@ -479,33 +512,7 @@ impl<'a> Lowerer<'a> {
         mir_fn
     }
 
-    pub(super) fn synthesize_struct_hash_code(&self, s: &HirStructDef) -> MirFunction {
-        let self_ty = Ty::Struct {
-            name: s.name.clone(),
-            generic_args: vec![],
-        };
-        self.build_hash_code(
-            &format!("{}_hash_code", s.name),
-            self_ty,
-            &derive_fields_of_struct(s),
-        )
-    }
-
-    /// `{ClassName}_hash_code(self) -> Int`. Same FNV-1a body as the
-    /// struct version; only the slot list differs (see [`DeriveField`]).
-    pub(super) fn synthesize_class_hash_code(&self, c: &HirClassDef) -> MirFunction {
-        let self_ty = Ty::Class {
-            name: c.name.clone(),
-            generic_args: vec![],
-        };
-        self.build_hash_code(
-            &format!("{}_hash_code", c.name),
-            self_ty,
-            &self.derive_fields_of_class(c),
-        )
-    }
-
-    /// Shared body of the derived `Hashable`: fold the FNV-1a
+    /// Derived `Hashable`, `{Type}_hash_code(self) -> Int`: fold the FNV-1a
     /// polynomial over each field's hash. Structurally equal values must
     /// produce identical hashes, so this walks the same slot list
     /// [`Self::build_eq`] compares.
@@ -528,7 +535,7 @@ impl<'a> Lowerer<'a> {
             None,
             init,
             |mir_fn, _slot, field_ty, field_local, _rhs| {
-                if let Some(inner_name) = self.nominal_with_derive_trait(field_ty, "Hashable") {
+                if let Some(inner_name) = self.derived_nominal(field_ty, HASHABLE) {
                     let dest = mir_fn.new_temp(Ty::Int);
                     mir_fn.blocks[entry].instructions.push(MirInst::Call {
                         dest: Some(dest),
@@ -592,27 +599,18 @@ impl<'a> Lowerer<'a> {
         mir_fn
     }
 
-    pub(super) fn synthesize_struct_default(&self, s: &HirStructDef) -> MirFunction {
-        let fn_name = format!("{}_default", s.name);
-        let self_ty = Ty::Struct {
-            name: s.name.clone(),
-            generic_args: vec![],
-        };
-
-        let mut mir_fn = MirFunction::new(&fn_name, self_ty.clone());
+    /// Derived `Default`, `{Type}_default() -> Type`: a fresh value with
+    /// every field at its own default ([`Self::synthesize_default_value`]).
+    fn build_default(&self, fn_name: &str, self_ty: Ty, fields: &[DeriveField]) -> MirFunction {
+        let mut mir_fn = MirFunction::new(fn_name, self_ty.clone());
         let entry = mir_fn.entry_block;
-        let obj = mir_fn.new_temp(self_ty.clone());
-        mir_fn.blocks[entry].instructions.push(MirInst::Alloc {
-            dest: obj,
-            ty: self_ty.clone(),
-            size: self.alloc_size(&self_ty),
-        });
+        let obj = self.alloc_derived_value(&mut mir_fn, &self_ty);
 
-        for (idx, field) in s.fields.iter().enumerate() {
+        for field in fields {
             let value = self.synthesize_default_value(&mut mir_fn, entry, &field.ty);
             mir_fn.blocks[entry].instructions.push(MirInst::SetField {
                 base: obj,
-                field_index: idx,
+                field_index: field.slot,
                 value: MirValue::Use(value),
             });
         }
@@ -621,29 +619,33 @@ impl<'a> Lowerer<'a> {
         mir_fn
     }
 
-    pub(super) fn synthesize_struct_cmp(&self, s: &HirStructDef, partial: bool) -> MirFunction {
-        let method_name = if partial { "partial_cmp" } else { "cmp" };
-        let fn_name = format!("{}_{}", s.name, method_name);
-        let self_ty = Ty::Struct {
-            name: s.name.clone(),
-            generic_args: vec![],
-        };
-
-        let mut mir_fn = MirFunction::new(&fn_name, Ty::Int);
+    /// Derived `Ord` / `PartialOrd`, `{Type}_cmp(self, other) -> Int`
+    /// (`partial_cmp` when `partial`): compare field by field in slot order
+    /// and return the first non-zero `-1` / `1`, else `0` (tuple order).
+    fn build_cmp(
+        &self,
+        fn_name: &str,
+        self_ty: Ty,
+        fields: &[DeriveField],
+        partial: bool,
+    ) -> MirFunction {
+        let trait_name = if partial { "PartialOrd" } else { "Ord" };
+        let method_name = derived_method(trait_name).expect("Ord and PartialOrd have methods");
+        let mut mir_fn = MirFunction::new(fn_name, Ty::Int);
         let self_local = mir_fn.new_local("self", self_ty.clone(), false);
         let other_local = mir_fn.new_local("other", Ty::Ref(Box::new(self_ty)), false);
         mir_fn.params.push(self_local);
         mir_fn.params.push(other_local);
 
         let mut current_block = mir_fn.entry_block;
-        for (idx, field) in s.fields.iter().enumerate() {
+        for field in fields {
             let lhs = mir_fn.new_temp(field.ty.clone());
             mir_fn.blocks[current_block]
                 .instructions
                 .push(MirInst::GetField {
                     dest: lhs,
                     base: self_local,
-                    field_index: idx,
+                    field_index: field.slot,
                 });
             let rhs = mir_fn.new_temp(field.ty.clone());
             mir_fn.blocks[current_block]
@@ -651,12 +653,10 @@ impl<'a> Lowerer<'a> {
                 .push(MirInst::GetField {
                     dest: rhs,
                     base: other_local,
-                    field_index: idx,
+                    field_index: field.slot,
                 });
 
-            if let Some(inner_name) =
-                self.struct_with_derive_trait(&field.ty, if partial { "PartialOrd" } else { "Ord" })
-            {
+            if let Some(inner_name) = self.derived_nominal(&field.ty, trait_name) {
                 let cmp = mir_fn.new_temp(Ty::Int);
                 mir_fn.blocks[current_block]
                     .instructions
@@ -829,28 +829,18 @@ impl<'a> Lowerer<'a> {
         src
     }
 
-    /// Synthesise `{StructName}_clone(self) -> StructName` for a
-    /// struct that declares `derive Clone`. The body allocates a fresh
-    /// instance, clones each field according to
-    /// [`Self::synthesize_clone_field`], and returns the new value.
-    pub(super) fn synthesize_struct_clone(&self, s: &HirStructDef) -> MirFunction {
-        let fn_name = format!("{}_clone", s.name);
-        let self_ty = Ty::Struct {
-            name: s.name.clone(),
-            generic_args: vec![],
-        };
-
-        let mut mir_fn = MirFunction::new(&fn_name, self_ty.clone());
+    /// Derived `Clone`, `{Type}_clone(self) -> Type`: allocate a fresh
+    /// value, clone each field into it with
+    /// [`Self::synthesize_clone_field`], and return it. A class's slot list
+    /// is the full parent-first chain ([`DeriveField`]), so an inherited
+    /// field is copied rather than left zeroed.
+    fn build_clone(&self, fn_name: &str, self_ty: Ty, fields: &[DeriveField]) -> MirFunction {
+        let mut mir_fn = MirFunction::new(fn_name, self_ty.clone());
         let self_local = mir_fn.new_local("self", self_ty.clone(), false);
         mir_fn.params.push(self_local);
         let entry = mir_fn.entry_block;
 
-        let dest = mir_fn.new_temp(self_ty.clone());
-        mir_fn.blocks[entry].instructions.push(MirInst::Alloc {
-            dest,
-            ty: self_ty.clone(),
-            size: self.alloc_size(&self_ty),
-        });
+        let dest = self.alloc_derived_value(&mut mir_fn, &self_ty);
 
         // Clone is a per-field load-transform-store: the driver supplies the
         // `GetField` load, `per_field` clones the value and stores it into
@@ -859,59 +849,7 @@ impl<'a> Lowerer<'a> {
         // result is always the freshly-allocated `dest`.
         self.fold_derive_fields(
             &mut mir_fn,
-            &derive_fields_of_struct(s),
-            self_local,
-            None,
-            dest,
-            |mir_fn, slot, field_ty, field_local, _rhs| {
-                let cloned = self.synthesize_clone_field(mir_fn, entry, field_local, field_ty);
-                mir_fn.blocks[entry].instructions.push(MirInst::SetField {
-                    base: dest,
-                    field_index: slot,
-                    value: MirValue::Use(cloned),
-                });
-                cloned
-            },
-            |_mir_fn, acc, _contribution| acc,
-        );
-
-        mir_fn.blocks[entry].terminator = Terminator::Return(Some(MirValue::Use(dest)));
-        mir_fn
-    }
-
-    /// Synthesise `{ClassName}_clone(self) -> ClassName` for a class
-    /// that declares `derive Clone`. Same body shape as the struct
-    /// version; the storage layout (8-byte field slots) is identical
-    /// at the MIR level.
-    pub(super) fn synthesize_class_clone(&self, c: &HirClassDef) -> MirFunction {
-        let fn_name = format!("{}_clone", c.name);
-        let self_ty = Ty::Class {
-            name: c.name.clone(),
-            generic_args: vec![],
-        };
-
-        let mut mir_fn = MirFunction::new(&fn_name, self_ty.clone());
-        let self_local = mir_fn.new_local("self", self_ty.clone(), false);
-        mir_fn.params.push(self_local);
-        let entry = mir_fn.entry_block;
-
-        let dest = mir_fn.new_temp(self_ty.clone());
-        mir_fn.blocks[entry].instructions.push(MirInst::Alloc {
-            dest,
-            ty: self_ty.clone(),
-            size: self.alloc_size(&self_ty),
-        });
-
-        // Walk the full class chain (parent fields first, in declaration
-        // order — same order `alloc_size` budgets and `Construct` lowers
-        // for). Iterating `c.fields` alone silently zero-init's every
-        // inherited slot; for a `class TimedTodo < Todo` whose parent
-        // owns `id: Int`, a clone of TimedTodo would emit `id = 0`.
-        // `derive_fields_of_class` supplies exactly that flattened,
-        // header-shifted slot list.
-        self.fold_derive_fields(
-            &mut mir_fn,
-            &self.derive_fields_of_class(c),
+            fields,
             self_local,
             None,
             dest,
@@ -1086,7 +1024,7 @@ impl<'a> Lowerer<'a> {
     /// * `Tuple(a, b)`    → `"Variant(<a>, <b>)"`
     /// * `Struct{x, y}`   → `"Variant { x: <x>, y: <y> }"`
     ///
-    /// Field formatting mirrors `synthesize_struct_to_debug`: primitives
+    /// Field formatting mirrors `build_to_debug`: primitives
     /// use the `ruxen_*_to_string` runtime helpers, nested structs with
     /// `derive Debug` recurse, anything else renders as `<...>` so the
     /// formatter never panics.
@@ -1226,7 +1164,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Format a single field value for `_to_debug` output. Mirrors
-    /// the per-field branch in `synthesize_struct_to_debug`. Phase D
+    /// the per-field branch in `build_to_debug`. Phase D
     /// will replace this with a canonical `Display::fmt` dispatch.
     pub(super) fn format_field_for_debug(
         &self,
@@ -1359,7 +1297,7 @@ impl<'a> Lowerer<'a> {
             });
             return dest;
         }
-        if let Some(inner_name) = self.struct_with_derive_trait(ty, "Default") {
+        if let Some(inner_name) = self.derived_nominal(ty, "Default") {
             let dest = mir_fn.new_temp(ty.clone());
             mir_fn.blocks[block].instructions.push(MirInst::Call {
                 dest: Some(dest),
@@ -1484,7 +1422,7 @@ impl<'a> Lowerer<'a> {
             // `String` needs no arm: `Compare` on a `Ty::String` operand
             // already lowers to a by-value comparison (pin 206).
             let nested_eq = self
-                .nominal_with_derive_trait(field_ty, "PartialEq")
+                .derived_nominal(field_ty, "PartialEq")
                 .filter(|name| !name.contains('.'));
             let field_eq = self.new_temp(Ty::Bool);
             match nested_eq {
@@ -1529,7 +1467,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Lower `<` / `<=` / `>` / `>=` on a struct that derives `Ord`
+    /// Lower `<` / `<=` / `>` / `>=` on a struct or class that derives `Ord`
     /// (or `PartialOrd`) by calling the synthesised
     /// `<Type>_cmp` / `<Type>_partial_cmp`, then comparing its
     /// `-1 / 0 / +1` result to `0` according to `op`.
@@ -1548,7 +1486,8 @@ impl<'a> Lowerer<'a> {
             .lower_expr(rhs)?
             .ok_or_else(|| "rhs of struct ordering has no value".to_string())?;
 
-        let method_name = if partial { "partial_cmp" } else { "cmp" };
+        let trait_name = if partial { "PartialOrd" } else { "Ord" };
+        let method_name = derived_method(trait_name).expect("Ord and PartialOrd have methods");
         let cmp = self.new_temp(Ty::Int);
         self.emit(MirInst::Call {
             dest: Some(cmp),

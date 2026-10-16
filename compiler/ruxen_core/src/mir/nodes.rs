@@ -157,6 +157,28 @@ pub struct MirLocal {
     pub name: String,
     pub ty: Ty,
     pub mutable: bool,
+    /// Who introduced the local. Drop elaboration applies different
+    /// ownership rules to compiler temporaries; the name never decides it.
+    pub kind: LocalKind,
+}
+
+/// Whether a [`MirLocal`] is a source binding or a compiler temporary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalKind {
+    /// A parameter, `let` binding or other local the program names.
+    User,
+    /// An intermediate value the lowerer introduced.
+    Temp,
+}
+
+/// The symbol linkage codegen gives a [`MirFunction`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MirLinkage {
+    /// Visible only inside the emitted module.
+    Local,
+    /// Exported: the process entry point, and helpers C runtime code calls
+    /// by symbol (the `<Mixin>_dynamic_<method>` dispatch helpers).
+    Export,
 }
 
 /// Drop glue attached to the fresh local that owns a closure pair.
@@ -191,6 +213,10 @@ pub struct MirFunction {
     /// debug-info emitter (P0.14) to build the function's `DISubprogram` line;
     /// a `None` here means the function gets no DWARF scope at all.
     pub def_span: Option<Span>,
+    /// Symbol linkage. `Local` unless lowering marks the function exported.
+    pub linkage: MirLinkage,
+    /// True only for the program's `main`, which takes the C entry ABI.
+    pub is_entry: bool,
     /// Counter used by `new_temp()` to generate unique names.
     next_temp: u32,
 }
@@ -208,6 +234,8 @@ impl MirFunction {
             entry_block: 0,
             closure_drops: Vec::new(),
             def_span: None,
+            linkage: MirLinkage::Local,
+            is_entry: false,
             next_temp: 0,
         }
     }
@@ -230,6 +258,8 @@ impl MirFunction {
             entry_block,
             closure_drops: Vec::new(),
             def_span: None,
+            linkage: MirLinkage::Local,
+            is_entry: false,
             next_temp: 0,
         }
     }
@@ -237,23 +267,36 @@ impl MirFunction {
     /// Allocate a new local with the given name, type, and mutability.
     /// Returns the `LocalId` of the newly created local.
     pub fn new_local(&mut self, name: impl Into<String>, ty: Ty, mutable: bool) -> LocalId {
+        self.new_local_of_kind(name, ty, mutable, LocalKind::User)
+    }
+
+    /// Allocate a new local of the given [`LocalKind`].
+    pub fn new_local_of_kind(
+        &mut self,
+        name: impl Into<String>,
+        ty: Ty,
+        mutable: bool,
+        kind: LocalKind,
+    ) -> LocalId {
         let id = self.locals.len() as LocalId;
         self.locals.push(MirLocal {
             id,
             name: name.into(),
             ty,
             mutable,
+            kind,
         });
         id
     }
 
-    /// Allocate a fresh compiler-generated temporary local.
-    /// Names are of the form `_t0`, `_t1`, etc.
+    /// Allocate a fresh compiler-generated temporary local
+    /// ([`LocalKind::Temp`]). Names are of the form `_t0`, `_t1`, etc. and
+    /// are for display only.
     pub fn new_temp(&mut self, ty: Ty) -> LocalId {
         let idx = self.next_temp;
         self.next_temp += 1;
         let name = format!("_t{}", idx);
-        self.new_local(name, ty, false)
+        self.new_local_of_kind(name, ty, false, LocalKind::Temp)
     }
 
     /// Append a new (empty) basic block to the function.

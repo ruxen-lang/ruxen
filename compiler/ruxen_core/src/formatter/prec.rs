@@ -15,8 +15,9 @@
 //!
 //! # Single source of precedence truth
 //!
-//! The numeric tiers below are the LEFT binding power of each operator as
-//! defined by `parser::expr::infix_binding_power` (keyword `and`/`or` 0,
+//! The numeric tiers are the LEFT binding power of each operator: binary
+//! operators read theirs from the parser's table (`BinOp::binding_power`);
+//! the rest mirror `parser::expr::infix_binding_power` (keyword `and`/`or` 0,
 //! assignment and keyword `not` 1, `??` 2, `||` 3, `&&` 5,
 //! comparison/`~=` 7, range 9, `|` 11, `^` 13, `&` 15, shift 17, `+`/`-` 19,
 //! `*`/`/`/`%` 21, cast 23, prefix/unary 25, postfix 27). When that table
@@ -56,6 +57,19 @@ pub fn expr_prec(expr: &Expr) -> Option<u8> {
         ExprKind::UnaryOp { .. } | ExprKind::Borrow(_) | ExprKind::BorrowMut(_) => Some(25),
         // Assignment / compound-assignment — tier 1 (loosest binding).
         ExprKind::Assign { .. } | ExprKind::CompoundAssign { .. } => Some(1),
+        // A command-form call (`puts x`, `w.text "a"`) takes the rest of the
+        // expression as its argument, so as an operand or receiver it needs
+        // grouping like assignment does.
+        ExprKind::Call {
+            parens: false,
+            args,
+            ..
+        }
+        | ExprKind::MethodCall {
+            parens: false,
+            args,
+            ..
+        } if !args.is_empty() => Some(1),
         // Everything else is an atom/primary or a postfix chain (call,
         // index, field, method, try, await, closure, control-flow): binds
         // at least as tight as a unary prefix and never needs grouping when
@@ -64,28 +78,10 @@ pub fn expr_prec(expr: &Expr) -> Option<u8> {
     }
 }
 
-/// Left binding power of a binary operator — mirrors
-/// `parser::expr::infix_binding_power` (the LEFT element of its `(l, r)`).
+/// Left binding power of a binary operator, from the parser's operator
+/// table ([`BinOp::binding_power`]).
 pub fn binop_prec(op: BinOp) -> u8 {
-    match op {
-        BinOp::KeywordAnd | BinOp::KeywordOr => 0,
-        BinOp::NilCoalesce => 2,
-        BinOp::Or => 3,
-        BinOp::And => 5,
-        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => 7,
-        BinOp::Cmp => 7,
-        // `~=` shares the comparison tier (std.regex spec).
-        BinOp::MatchOp => 7,
-        BinOp::BitOr => 11,
-        BinOp::BitXor => 13,
-        BinOp::BitAnd => 15,
-        BinOp::Shl | BinOp::Shr => 17,
-        BinOp::Add | BinOp::Sub => 19,
-        BinOp::Mul | BinOp::Div | BinOp::Mod => 21,
-        // Exponentiation binds tighter than `* / %` and is right-associative;
-        // mirrors `infix_binding_power`'s `StarStar => (26, 25)`.
-        BinOp::Pow => 26,
-    }
+    op.binding_power().0
 }
 
 /// Side of a binary/range/cast operator an operand sits on. Right operands

@@ -195,16 +195,10 @@ fn stdin_lines_empty_input_yields_empty_vec() {
 
 /// Phase 2 #06.5: `IoError` is now a tagged enum. Reading from an
 /// empty stdin yields `Err(IoError.UnexpectedEof)`; calling
-/// `.message()` on the captured error dispatches through the new
-/// runtime helper (`ruxen_io_error_get_message`) and returns the
-/// per-variant description string. The explicit `e: IoError` type
-/// annotation pins inference so the method-call callee is mangled
-/// as `IoError_message` (which `codegen/runtime.rs` maps to the
-/// real dispatcher). Without the annotation, the bound pattern
-/// variable's type stays an unresolved inference variable and the
-/// callee gets mangled with the type-var name instead of `IoError`
-/// — a pre-existing inference gap unrelated to the C2/IoError
-/// refactor.
+/// `.message()` on the captured error dispatches to
+/// `ruxen_io_error_get_message` (declared on `class IoError` in
+/// io/src/lib.rx) and returns the per-variant description string.
+/// The unannotated and parenless forms are pinned by e2e 2170.
 #[test]
 fn io_error_message_dispatches_per_variant_on_empty_stdin() {
     let source = rx("io_error_message_dispatches_per_variant_on_empty_stdin");

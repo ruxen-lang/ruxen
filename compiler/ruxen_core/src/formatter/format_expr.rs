@@ -4,6 +4,7 @@ use crate::parser::ast::*;
 
 use super::comments::CommentMap;
 use super::doc::*;
+use super::format_items::{dangling_comments_doc, with_comments};
 use super::format_pattern::{format_match_pattern, format_pattern};
 use super::format_type::format_type_expr;
 use super::prec::{binop_prec, expr_prec, needs_parens, Side};
@@ -75,7 +76,11 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         ExprKind::BorrowMut(inner) => concat(vec![text("&var "), format_expr(inner, comments)]),
 
         // ── Field/Method access ──
-        ExprKind::FieldAccess { object, field } => {
+        // `@field` as written; the parser builds it as `self.field`.
+        ExprKind::FieldAccess {
+            field, ivar: true, ..
+        } => text(format!("@{field}")),
+        ExprKind::FieldAccess { object, field, .. } => {
             // Check if this is part of a method chain
             if is_chain_start(object) {
                 format_method_chain(kind, comments)
@@ -89,6 +94,7 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         }
 
         ExprKind::MethodCall {
+            parens,
             object,
             method,
             generic_args,
@@ -102,7 +108,7 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
                     object,
                     method,
                     generic_args,
-                    args,
+                    (args, *parens),
                     block.as_deref(),
                     comments,
                 )
@@ -131,21 +137,14 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
 
         // ── Calls & Indexing ──
         ExprKind::Call {
+            parens,
             callee,
             args,
             block,
         } => {
             let arg_docs: Vec<Doc> = args.iter().map(|a| format_expr(a, comments)).collect();
             let mut parts = vec![format_expr(callee, comments)];
-            // A `Call` node ONLY exists when the source wrote `(...)` — a bare
-            // `row_height` (no parens) parses as an identifier/path, never a
-            // Call. So ALWAYS emit the parens, even for a zero-arg call:
-            // stripping them (`row_height()` → `row_height`) turns a call
-            // expression into a bare-name reference — a semantic change and a
-            // documented GUI-stack crash shape (Q30). When a block arg is
-            // present but there are no positional args, emit `()` before it so
-            // `f()  do … end` stays a call with a trailing block.
-            parts.push(format_call_args(arg_docs));
+            parts.push(written_call_args(*parens, arg_docs));
             if let Some(blk) = block {
                 parts.push(text(" "));
                 parts.push(format_expr(blk, comments));
@@ -162,12 +161,14 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
 
         ExprKind::ClosureCall { callee, args } => {
             let arg_docs: Vec<Doc> = args.iter().map(|a| format_expr(a, comments)).collect();
-            concat(vec![
+            // Grouped so the separators break only when this call itself is
+            // too long, not whenever an enclosing block breaks.
+            group(concat(vec![
                 format_expr(callee, comments),
                 text(".("),
                 join(concat(vec![text(","), line()]), arg_docs),
                 text(")"),
-            ])
+            ]))
         }
 
         // ── Try operator ──
@@ -177,9 +178,9 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         ExprKind::Assign { target, value } => group(concat(vec![
             format_expr(target, comments),
             text(" = "),
-            nest(
-                INDENT_WIDTH,
+            assigned_value(
                 format_operand(value, 1, Side::Right, false, comments),
+                value,
             ),
         ])),
 
@@ -486,7 +487,7 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
 
 fn format_int(val: i64, suffix: &Option<NumericSuffix>) -> Doc {
     match suffix {
-        Some(s) => text(format!("{}{}", val, suffix_str(s))),
+        Some(s) => text(format!("{}{}", val, s.as_str())),
         None => text(format!("{}", val)),
     }
 }
@@ -498,26 +499,8 @@ fn format_float(val: f64, suffix: &Option<NumericSuffix>) -> Doc {
         format!("{}", val)
     };
     match suffix {
-        Some(sf) => text(format!("{}{}", s, suffix_str(sf))),
+        Some(sf) => text(format!("{}{}", s, sf.as_str())),
         None => text(s),
-    }
-}
-
-fn suffix_str(s: &NumericSuffix) -> &'static str {
-    match s {
-        NumericSuffix::I8 => "i8",
-        NumericSuffix::I16 => "i16",
-        NumericSuffix::I32 => "i32",
-        NumericSuffix::I64 => "i64",
-        NumericSuffix::U => "u",
-        NumericSuffix::U8 => "u8",
-        NumericSuffix::U16 => "u16",
-        NumericSuffix::U32 => "u32",
-        NumericSuffix::U64 => "u64",
-        NumericSuffix::ISize => "isize",
-        NumericSuffix::USize => "usize",
-        NumericSuffix::F32 => "f32",
-        NumericSuffix::F64 => "f64",
     }
 }
 
@@ -605,35 +588,6 @@ fn format_spec_to_source(spec: &crate::lexer::token::FormatSpec) -> String {
     out
 }
 
-fn bin_op_str(op: BinOp) -> &'static str {
-    match op {
-        BinOp::Add => "+",
-        BinOp::Sub => "-",
-        BinOp::Mul => "*",
-        BinOp::Pow => "**",
-        BinOp::Div => "/",
-        BinOp::Mod => "%",
-        BinOp::Eq => "==",
-        BinOp::NotEq => "!=",
-        BinOp::Lt => "<",
-        BinOp::Gt => ">",
-        BinOp::LtEq => "<=",
-        BinOp::GtEq => ">=",
-        BinOp::Cmp => "<=>",
-        BinOp::And => "&&",
-        BinOp::Or => "||",
-        BinOp::NilCoalesce => "??",
-        BinOp::KeywordAnd => "and",
-        BinOp::KeywordOr => "or",
-        BinOp::BitAnd => "&",
-        BinOp::BitOr => "|",
-        BinOp::BitXor => "^",
-        BinOp::Shl => "<<",
-        BinOp::Shr => ">>",
-        BinOp::MatchOp => "~=",
-    }
-}
-
 fn compound_assign_op_str(op: BinOp) -> &'static str {
     match op {
         BinOp::Add => "+=",
@@ -660,7 +614,7 @@ fn format_binary_op(left: &Expr, op: BinOp, right: &Expr, comments: &CommentMap)
     group(concat(vec![
         format_operand(left, p, Side::Left, right_assoc, comments),
         text(" "),
-        text(bin_op_str(op)),
+        text(op.symbol()),
         line(),
         format_operand(right, p, Side::Right, right_assoc, comments),
     ]))
@@ -732,7 +686,14 @@ fn collect_chain(kind: &ExprKind) -> (Doc, Vec<Doc>) {
     let mut current = kind;
     let mut base: Option<&Expr> = None;
 
-    while let ExprKind::MethodCall { object, .. } | ExprKind::FieldAccess { object, .. } = current {
+    // An `@field` read is the chain's receiver, not a `.field` link.
+    while let ExprKind::MethodCall { object, .. }
+    | ExprKind::FieldAccess {
+        object,
+        ivar: false,
+        ..
+    } = current
+    {
         links.push(current.clone());
         base = Some(object);
         current = &object.kind;
@@ -750,10 +711,11 @@ fn collect_chain(kind: &ExprKind) -> (Doc, Vec<Doc>) {
     let link_docs: Vec<Doc> = links
         .iter()
         .map(|link| match link {
-            ExprKind::FieldAccess { object: _, field } => {
-                concat(vec![text("."), text(field.clone())])
-            }
+            ExprKind::FieldAccess {
+                object: _, field, ..
+            } => concat(vec![text("."), text(field.clone())]),
             ExprKind::MethodCall {
+                parens,
                 object: _,
                 method,
                 generic_args,
@@ -766,13 +728,8 @@ fn collect_chain(kind: &ExprKind) -> (Doc, Vec<Doc>) {
                     text(method.clone()),
                     format_method_generic_args(generic_args, &comments),
                 ];
-                // ALWAYS emit `()` — a `MethodCall` link is a call, never a
-                // field access (which is a separate `FieldAccess` link).
-                // Dropping the parens on a zero-arg call in a chain
-                // (`s.bytes().size()` → `s.bytes.size`) silently turns calls
-                // into field accesses (reparse-identity break; cf.
-                // `format_single_method_call`).
-                parts.push(format_call_args(arg_docs));
+                // The argument list as written (see `written_call_args`).
+                parts.push(written_call_args(*parens, arg_docs));
                 if let Some(blk) = block {
                     parts.push(text(" "));
                     parts.push(format_expr(blk, &comments));
@@ -809,6 +766,22 @@ fn format_method_chain(kind: &ExprKind, _comments: &CommentMap) -> Doc {
     ]))
 }
 
+/// A call's argument list the way the source wrote it. With `parens` it is
+/// always `(...)`, even when empty: `f()` and `x.m()` are calls, and dropping
+/// the parens would turn them into a name or a field access (Q30). Without
+/// parens it is the command form, ` a` (the parser takes one bare
+/// argument), or nothing for a block-only call (`x.map { }`) and a bare
+/// `x.m[T]`; fmt never adds parens the author left out.
+fn written_call_args(parens: bool, arg_docs: Vec<Doc>) -> Doc {
+    if parens {
+        format_call_args(arg_docs)
+    } else if arg_docs.is_empty() {
+        nil()
+    } else {
+        concat(vec![text(" "), join(text(", "), arg_docs)])
+    }
+}
+
 /// The `[T, U]` explicit type arguments of a method call, or nothing.
 fn format_method_generic_args(generic_args: &[TypeExpr], comments: &CommentMap) -> Doc {
     if generic_args.is_empty() {
@@ -825,7 +798,7 @@ fn format_single_method_call(
     object: &Expr,
     method: &str,
     generic_args: &[TypeExpr],
-    args: &[Expr],
+    (args, parens): (&[Expr], bool),
     block: Option<&Expr>,
     comments: &CommentMap,
 ) -> Doc {
@@ -836,13 +809,7 @@ fn format_single_method_call(
         text(method.to_string()),
         format_method_generic_args(generic_args, comments),
     ];
-    // ALWAYS emit the call parens, even for a zero-arg call. A `MethodCall`
-    // node only exists when the source wrote `x.foo()`; a bare `x.foo`
-    // parses as a `FieldAccess`, a DIFFERENT node. Dropping the parens
-    // (`x.foo()` → `x.foo`) silently rewrites a call into a field access — a
-    // semantic change that breaks reparse-identity (same fmt-destructiveness
-    // class as Q30's `Call`/closure shapes). The empty `()` is canonical.
-    parts.push(format_call_args(arg_docs));
+    parts.push(written_call_args(parens, arg_docs));
     if let Some(blk) = block {
         parts.push(text(" "));
         parts.push(format_expr(blk, comments));
@@ -863,10 +830,7 @@ fn format_if_expr(if_expr: &IfExpr, comments: &CommentMap) -> Doc {
     let mut parts = vec![
         text("if "),
         format_expr(condition, comments),
-        nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(then_body, comments)]),
-        ),
+        indented_block(then_body, comments),
     ];
 
     for ElsifClause {
@@ -878,19 +842,13 @@ fn format_if_expr(if_expr: &IfExpr, comments: &CommentMap) -> Doc {
         parts.push(hardline());
         parts.push(text("elsif "));
         parts.push(format_expr(condition, comments));
-        parts.push(nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(body, comments)]),
-        ));
+        parts.push(indented_block(body, comments));
     }
 
     if let Some(else_body) = else_body {
         parts.push(hardline());
         parts.push(text("else"));
-        parts.push(nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(else_body, comments)]),
-        ));
+        parts.push(indented_block(else_body, comments));
     }
 
     parts.push(hardline());
@@ -912,19 +870,13 @@ fn format_if_let_expr(if_let: &IfLetExpr, comments: &CommentMap) -> Doc {
         format_pattern(pattern, comments),
         text(" = "),
         format_expr(value, comments),
-        nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(then_body, comments)]),
-        ),
+        indented_block(then_body, comments),
     ];
 
     if let Some(else_body) = else_body {
         parts.push(hardline());
         parts.push(text("else"));
-        parts.push(nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(else_body, comments)]),
-        ));
+        parts.push(indented_block(else_body, comments));
     }
 
     parts.push(hardline());
@@ -943,7 +895,7 @@ fn format_match_expr(match_expr: &MatchExpr, comments: &CommentMap) -> Doc {
 
     let arm_docs: Vec<Doc> = arms
         .iter()
-        .map(|arm| format_match_arm(arm, comments))
+        .map(|arm| with_comments(arm.span.start, format_match_arm(arm, comments), comments))
         .collect();
 
     parts.push(nest(
@@ -974,10 +926,12 @@ fn format_match_arm(arm: &MatchArm, comments: &CommentMap) -> Doc {
     match body {
         MatchArmBody::Expr(expr) => {
             // Single expression: Pattern -> expr
+            // The arm's span runs to the next arm, so a comment at the end
+            // of the arm line trails the body expression.
             group(concat(vec![
                 pattern_doc,
                 text(" -> "),
-                format_expr(expr, comments),
+                with_comments(expr.span.start, format_expr(expr, comments), comments),
             ]))
         }
         MatchArmBody::Block(block) => {
@@ -1014,10 +968,7 @@ fn format_while_expr(w: &WhileExpr, comments: &CommentMap) -> Doc {
     concat(vec![
         text("while "),
         format_expr(condition, comments),
-        nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(body, comments)]),
-        ),
+        indented_block(body, comments),
         hardline(),
         text("end"),
     ])
@@ -1035,10 +986,7 @@ fn format_while_let_expr(wl: &WhileLetExpr, comments: &CommentMap) -> Doc {
         format_pattern(pattern, comments),
         text(" = "),
         format_expr(value, comments),
-        nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(body, comments)]),
-        ),
+        indented_block(body, comments),
         hardline(),
         text("end"),
     ])
@@ -1056,10 +1004,7 @@ fn format_for_expr(f: &ForExpr, comments: &CommentMap) -> Doc {
         format_pattern(pattern, comments),
         text(" in "),
         format_expr(iterable, comments),
-        nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(body, comments)]),
-        ),
+        indented_block(body, comments),
         hardline(),
         text("end"),
     ])
@@ -1069,10 +1014,7 @@ fn format_loop_expr(l: &LoopExpr, comments: &CommentMap) -> Doc {
     let LoopExpr { body, span: _ } = l;
     concat(vec![
         text("loop"),
-        nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(body, comments)]),
-        ),
+        indented_block(body, comments),
         hardline(),
         text("end"),
     ])
@@ -1094,26 +1036,54 @@ pub fn format_block(block: &Block, comments: &CommentMap) -> Doc {
     }
     concat(vec![
         text("do"),
-        nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(block, comments)]),
-        ),
+        indented_block(block, comments),
         hardline(),
         text("end"),
     ])
 }
 
-pub fn format_block_body(block: &Block, comments: &CommentMap) -> Doc {
-    let Block {
-        statements,
-        span: _,
-    } = block;
-    let stmt_docs: Vec<Doc> = statements
-        .iter()
-        .map(|stmt| format_statement(stmt, comments))
-        .collect();
+/// A block body on its own indented lines under its header, or nothing for
+/// an empty body (no statements, no comments), so `if c` / `else` with
+/// nothing between them gets no blank line.
+fn indented_block(block: &Block, comments: &CommentMap) -> Doc {
+    if block.statements.is_empty() && !comments.has_dangling(block.span.start) {
+        nil()
+    } else {
+        nest(
+            INDENT_WIDTH,
+            concat(vec![hardline(), format_block_body(block, comments)]),
+        )
+    }
+}
 
-    join(hardline(), stmt_docs)
+pub fn format_block_body(block: &Block, comments: &CommentMap) -> Doc {
+    let Block { statements, span } = block;
+    let mut parts = Vec::new();
+    for (i, stmt) in statements.iter().enumerate() {
+        let start = match stmt {
+            Statement::Let(l) => l.span.start,
+            Statement::Expression(e) => e.span.start,
+        };
+        if i > 0 {
+            parts.push(hardline());
+            // Keep one blank line the author left between two statements.
+            if comments.blank_line_before(start) {
+                parts.push(hardline());
+            }
+        }
+        parts.push(with_comments(
+            start,
+            format_statement(stmt, comments),
+            comments,
+        ));
+    }
+    if let Some(tail) = dangling_comments_doc(span.start, comments) {
+        if !parts.is_empty() {
+            parts.push(hardline());
+        }
+        parts.push(tail);
+    }
+    concat(parts)
 }
 
 pub fn format_statement(stmt: &Statement, comments: &CommentMap) -> Doc {
@@ -1144,10 +1114,44 @@ fn format_let_binding(binding: &LetBinding, comments: &CommentMap) -> Doc {
 
     if let Some(val) = value {
         parts.push(text(" = "));
-        parts.push(nest(INDENT_WIDTH, format_expr(val, comments)));
+        parts.push(assigned_value(format_expr(val, comments), val));
     }
 
     group(concat(parts))
+}
+
+/// The right side of `=`. A value that wraps onto continuation lines is
+/// indented one step; a block form (`match`, `if`, a call with a `do ... end`
+/// block) keeps its body and `end` aligned with the statement, as written:
+///
+/// ```text
+/// let x = match y
+///   ...
+/// end
+/// ```
+fn assigned_value(doc: Doc, value: &Expr) -> Doc {
+    if ends_in_block_form(value) {
+        doc
+    } else {
+        nest(INDENT_WIDTH, doc)
+    }
+}
+
+fn ends_in_block_form(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::If(_)
+        | ExprKind::IfLet(_)
+        | ExprKind::Match(_)
+        | ExprKind::While(_)
+        | ExprKind::WhileLet(_)
+        | ExprKind::For(_)
+        | ExprKind::Loop(_)
+        | ExprKind::Block(_)
+        | ExprKind::UnsafeBlock(_)
+        | ExprKind::Closure(_) => true,
+        ExprKind::Call { block, .. } | ExprKind::MethodCall { block, .. } => block.is_some(),
+        _ => false,
+    }
 }
 
 // ─── Closures ───────────────────────────────────────────────────────
@@ -1158,9 +1162,16 @@ pub fn format_closure(closure: &ClosureExpr, comments: &CommentMap) -> Doc {
         is_move,
         params,
         body,
-        span: _,
+        span,
+        pipes,
+        do_end,
     } = closure;
-    let params_doc = format_closure_params(params, comments);
+    // The parameter header as written: `|x|`, `||`, or none at all.
+    let header = if *pipes || !params.is_empty() {
+        concat(vec![format_closure_params(params, comments), text(" ")])
+    } else {
+        nil()
+    };
 
     // `async` / `move` modifiers (parser keyword order is `async move`). A move
     // closure written `{ |x| ... }` without the `move` keyword does not re-parse
@@ -1175,72 +1186,65 @@ pub fn format_closure(closure: &ClosureExpr, comments: &CommentMap) -> Doc {
     }
     let prefix_doc = concat(prefix);
 
-    let body = match body {
-        ClosureBody::Expr(expr) => {
-            // Single expression: normalize to { |params| expr }
-            let body_doc = format_expr(expr, comments);
-            group(concat(vec![
-                text("{ "),
-                params_doc,
-                text(" "),
-                body_doc,
-                text(" }"),
-            ]))
-        }
-        ClosureBody::Block(block) => {
-            // The brace form re-parses as a `Block` body only when it opens
-            // with `let`/`var`; any other one-statement brace body re-parses
-            // as `ClosureBody::Expr`, so those keep `do...end`.
-            if block.statements.len() == 1 && matches!(block.statements[0], Statement::Let(_)) {
-                // Single statement — try brace form first
-                let body_doc = format_block_body(block, comments);
-                let brace_form = group(concat(vec![
-                    text("{ "),
-                    params_doc.clone(),
-                    text(" "),
-                    body_doc.clone(),
-                    text(" }"),
-                ]));
-
-                // If it doesn't fit, use do...end
-                let do_form = concat(vec![
-                    text("do "),
-                    params_doc,
-                    nest(INDENT_WIDTH, concat(vec![hardline(), body_doc])),
-                    hardline(),
-                    text("end"),
-                ]);
-
-                // Use group with if_break to choose between forms
-                group(if_break(do_form, brace_form))
-            } else {
-                // Everything else: always use do...end
-                let body_doc = format_block_body(block, comments);
-                concat(vec![
-                    text("do "),
-                    params_doc,
-                    nest(INDENT_WIDTH, concat(vec![hardline(), body_doc])),
-                    hardline(),
-                    text("end"),
-                ])
-            }
-        }
+    // The author's form (`do ... end` or `{ ... }`) and line layout: a body
+    // written on the opening line stays there, any other body gets its own
+    // indented lines.
+    let (open, close) = if *do_end { ("do", "end") } else { ("{", "}") };
+    let one_line = match body {
+        ClosureBody::Expr(expr) => expr.span.line == span.line,
+        ClosureBody::Block(block) => match block.statements.as_slice() {
+            [] => true,
+            [only] => statement_line(only) == span.line,
+            _ => false,
+        },
+    };
+    let body_doc = match body {
+        ClosureBody::Expr(expr) => format_expr(expr, comments),
+        ClosureBody::Block(block) => format_block_body(block, comments),
+    };
+    let empty = match body {
+        ClosureBody::Expr(expr) => matches!(expr.kind, ExprKind::UnitLiteral),
+        ClosureBody::Block(block) => block.statements.is_empty(),
+    };
+    let body = if empty {
+        concat(vec![text(open), text(" "), header, text(close)])
+    } else if one_line {
+        concat(vec![
+            text(open),
+            text(" "),
+            header,
+            body_doc,
+            text(" "),
+            text(close),
+        ])
+    } else {
+        concat(vec![
+            text(open),
+            text(" "),
+            header,
+            nest(INDENT_WIDTH, concat(vec![hardline(), body_doc])),
+            hardline(),
+            text(close),
+        ])
     };
 
     concat(vec![prefix_doc, body])
 }
 
+/// The source line a statement starts on.
+fn statement_line(stmt: &Statement) -> u32 {
+    match stmt {
+        Statement::Let(l) => l.span.line,
+        Statement::Expression(e) => e.span.line,
+    }
+}
+
 fn format_closure_params(params: &[ClosureParam], comments: &CommentMap) -> Doc {
     if params.is_empty() {
-        // A zero-param closure MUST keep an explicit `||` header. The AST does
-        // not distinguish `{ || expr }` from a no-pipe `{ expr }` (both parse
-        // to a `ClosureExpr` with empty params), and emitting the bare `{ expr }`
-        // form is destructive: a brace block with no `||` re-parses ambiguously
-        // (block vs. closure) and is a DOCUMENTED segfault shape on the GUI
-        // stack (Q30) — `{ || App.build(...) }` collapsing to `{ App.build(...) }`
-        // turns compiling code into crashing code. `||` is always a legal,
-        // idempotent closure header, so always emit it. Returning `nil()` here
-        // also left a `{  expr }` double-space.
+        // An empty header the author wrote stays `||`: `{ || App.build(...) }`
+        // collapsing to `{ App.build(...) }` re-parses as a block, not a
+        // closure, in expression position (Q30). `format_closure` asks for
+        // the header only when the source had one (`ClosureExpr::pipes`).
         return text("||");
     }
 

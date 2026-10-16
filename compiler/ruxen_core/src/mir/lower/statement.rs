@@ -29,7 +29,12 @@ impl<'a> Lowerer<'a> {
                     let tuple_id = init_local.unwrap_or_else(|| self.new_temp(ty.clone()));
 
                     // Create a local for the whole tuple binding
-                    let tuple_local = self.new_local_named("_tuple", ty.clone(), *mutable);
+                    let tuple_local = self.fn_mut().new_local_of_kind(
+                        "_tuple",
+                        ty.clone(),
+                        *mutable,
+                        crate::mir::nodes::LocalKind::Temp,
+                    );
                     self.def_to_local.insert(*def_id, tuple_local);
                     self.emit(MirInst::Assign {
                         dest: tuple_local,
@@ -97,10 +102,21 @@ impl<'a> Lowerer<'a> {
                             value: val,
                         });
                     }
-                    if matches!(
-                        refined_ty,
-                        Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
-                    ) {
+                    // An element or field read (`let x = v[i]`, `let x = r.f`)
+                    // aliases storage the collection or the record still owns:
+                    // the binding owns nothing, so a loop back-edge must not free
+                    // it. Freeing it there handed `Array#sort!`'s `var a: T =
+                    // self[j - 1]` a double free on a class element.
+                    let aliases_owner = matches!(
+                        init.kind,
+                        HirExprKind::Index { .. } | HirExprKind::FieldAccess { .. }
+                    );
+                    if !aliases_owner
+                        && matches!(
+                            refined_ty,
+                            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                        )
+                    {
                         self.initialized_heap_locals.insert(local);
                         if let Some(frame) = self.loop_stack.last_mut() {
                             frame.body_locals.push(local);

@@ -130,39 +130,134 @@ Steps 2 to 7 of [the test-suite audit](docs/audits/2026-10-test-suite.md).
 
 [The code-debt audit](docs/audits/2026-10-code-debt.md) has instances, fixes and risks for each family. This is the core of the duplicate and non-generic cleanup.
 
-- [ ] **D, shared infrastructure:**
-  - F-16: a HIR visitor.
-  - F-17: adopt the canonical `Ty` helpers (`peel_refs`, `map_inner`).
-  - F-18: a name and parent index on `SymbolTable`.
-- [ ] **E, the HIR keeps resolution results:**
-  - F-19: call shape (safe navigation, calls without parentheses, operators).
-  - F-20: typeck records the method a call resolved to.
-- [ ] **F, replace name tables with declarations:**
-  - F-21: mixin-bound generics are monomorphised, and the sample-program names are removed from the compiler.
-  - F-22: builtin statics and methods leave the Rust name tables.
-  - F-23: the String "returns a new buffer" contract.
-  - F-24: display, printing and interpolation are no longer keyed by type and name.
-  - F-25: the ownership ABI and element-aware drop are no longer hand-listed.
-  - F-26: the triplicated residual runtime tables.
-  - F-27: the derive machinery.
-  - F-28: compiler protocols encoded in names.
-- [ ] **G, consolidation:**
-  - F-29: one lowering policy for Cranelift, LLVM and the REPL JIT.
-  - F-30: one front-end driver for `ruxenc`, CLI, REPL and IDE.
-  - F-31: resolver copy-paste.
-  - F-32 and F-33: parser and formatter duplication.
-  - F-34: the parser's surface desugaring.
-  - F-35: IDE definition lookup.
-  - F-36: REPL replay.
-  - F-37: build and link config.
-  - F-38: shared C runtime helpers.
-  - F-39: per-type copies in the runtime and stdlib.
-  - F-40: stdlib `.rx` duplication.
-  - F-41: typeck leniency.
-  - F-42: async lowering duplication.
-  - F-43: bootstrap lists maintained by hand.
-  - F-44: diagnostics plumbing.
-  - F-45: stale documentation.
+Run as three build batches (2026-10-16). Each family's leftovers are listed under it; leftovers that need an owner decision are marked (decision).
+
+- [x] **Batch 1 (D plus independent G leaves), built, proven and reviewed:**
+  - F-16: `hir/visit.rs` (exhaustive `Visit`/`VisitMut`), used by no_std (struct and enum method bodies now get E1400), typeck type resolution, break/next collection, MIR captures and closure inlining, trait defaults, monomorphization the borrow checker and the 10 IDE walkers. Item walking added to `parser/visit.rs`, and the REPL walkers use the AST `Visit`.
+  - F-17: canonical `Ty` helpers (`subst_params`, `any`, `callable_signature`, `builtin_head`, `method_home`, `is_scalar_primitive`); the three substitution copies, the callable and method-home copies and about 30 hand peels are gone.
+  - F-18: `SymbolTable` name, kind and parent index (`named`, `nominal`, `type_def`, `methods_of`, overload-aware). Methods bind only their own `self`. Fixes a false E1001 on module function calls and the overload pick for parenless calls in typeck.
+  - F-26: one `codegen/residual_abi.rs` table for both backends; the REPL JIT symbol table is gone.
+  - F-31: one FFI registration path, one impl-item lowering with `AutoTraitFlags`, `DefKind::signature()`/`generic_params()`.
+  - F-32 and F-33: shared parser body loop and signature parsing, one keyword/operator table, comments from lexer trivia. `ruxen fmt` no longer deletes comments on statements, fields, mixin signatures or module items; a comment it cannot place is an error, not silent loss.
+  - F-37: `ruxen.toml` lookup fixed to `Ruxen.toml`; one `find_project_root`; `LinkInputs::for_project`.
+  - F-38: shared C helpers in `runtime.h` and `future/runtime/future_rt.h`; `fmt` writes non-ASCII characters instead of `?`.
+  - F-39 and F-40: shared C for BufReader/BufWriter, atomics, Set/Hash and stdio; `step_future.rx`; string and scalar helpers.
+  - F-42: async lowering uses the real primitive names (`Int32`, `Char`, `String` outputs lower; e2e 2100), one diagnostic walker, one future-class synthesiser.
+  - F-43 and F-44: bootstrap tables generated in `build.rs`; borrow-check titles from REGISTRY; IDE and CLI classify by code; unused E1004/E1005/E1008 removed.
+  - Test temp dirs no longer leak into `/tmp` (a shared toolchain copy leaked 137 MB per `ruxenc` test run).
+- [ ] Batch 1 leftovers:
+  - F-17: `self` in builtin shell classes should get the structural head type once at assignment; the scalar name-to-`Ty` tables in resolve; `hir/context.rs` Fn-signature matches; `typeck/infer/ops.rs` non-Send walk (moving it to `Ty::any` widens Send errors, decision).
+  - F-18: remaining `symbols.iter()` scans in `codegen/layout.rs`, `implicit_includes`, `resolve/funcs.rs`, `resolve/items.rs` and the IDE; resolve needs rename and set-kind setters first. MIR still picks the wrong overload for a parenless call of an overloaded method (F-20).
+  - F-31: `resolve/` has no `CONTEXT.md`; three generic-param scope pushes remain in `resolve/items.rs`; `const_predicates` per-kind match. Struct and enum in-body `include Send`/`exclude Send` never set their flags and skip E1014 (decision).
+  - F-32 and F-33: `module_loader` still scans `require`/`autoload` by token line because the parser rejects `autoload :Const, "path"` (grammar decision); IDE E1006 quick fix still uses `rfind("let")`; REPL `format_fn_signature`; fmt cannot yet place comments inside method chains or argument lists (it errors instead); partial `# fmt: off` ranges.
+  - F-37: shared source gathering (needs `ModuleTree` below `ruxen_cli`); PCRE2 and macOS Security knowledge still hardcoded, and `RUXEN_MACOS_FRAMEWORKS` still read (needs a `[runtime]` manifest table, decision); workspace members' cache dir vs `ruxen clean`.
+  - F-39 and F-40: StepFuture is shared functions, not a mixin base (mixin-default `poll` over `Self.Output` does not monomorphise); OpenOptions setters take `Int` (pinned by `runtime_abi_derivation`); byte buffers are `Array[Int]`, not `Array[UInt8]` (API decision); `TcpStream` timeouts take `Int` (net does not depend on time); `IoError_message`/`IoError_kind` free-function workaround; operator and Enumerable synonyms stay `def`; magic codepoints in `tr_set_expand`, `to_i`, `to_f`, `succ`; BufReader/BufWriter constructors stay per inner type.
+- [ ] **Batch 2: checkpoint, to finish on the Mac.** It was stopped at a checkpoint (2026-10-17), amended into the one commit and pushed at the owner's request. The combined-tree gate was stopped before it finished.
+  - The last full gate passed on the tree without the CI-fix agent's link and runner changes: e2e 433/433, core lib 675, `it` 474, all stdlib packages, fmt and clippy clean.
+  - The link and runner changes were checked separately: `it` 474 with `--as-needed` forced, all stdlib packages, the `codegen::object` tests, fmt and clippy.
+  - So run the full gate once on the Mac first.
+  1. Fix the macOS `sync` double free (CI section below). Then make CI green: Ubuntu, macOS and Lint on the push.
+  2. Fix the `Mutex#lock` 8-byte overrun (CI section below).
+  3. Rerun the real-CLI proof on a scratch `ruxen new` project. It must exercise:
+     - safe navigation;
+     - parenless and operator calls on a class;
+     - user `each` and `push_str`;
+     - a mixin-bound generic;
+     - `Some(3) == Some(3)`;
+     - interpolation of each scalar and a class;
+     - `p` on each scalar;
+     - `Hash[String, Array[String]]`;
+     - a sorted class array.
+
+     Then run `ruxen fmt` twice (nothing changes the second time, no line lost). Use `leaks --atExit` or ASan on macOS for the leak and double-free check.
+  4. Run the end review (`general-review`, normal tier) over the whole batch, `git diff e3e7157`, and fix its blocker, high and medium findings.
+- [ ] **Batch 2 (E and F), built and checked card by card:**
+  - F-19: the HIR keeps call shape (`safe_nav`, `parens` from the parser). `&.` is the only safe navigation; a plain `.` on `T?` no longer reaches inside. The MIR safe-nav guessing and the copied method-call pipeline are gone. String `+`/`<=>` and Set `==` are `.rx` declarations.
+  - F-20: typeck records the resolved method. MIR picks the right overload for a parenless call. The IDE `resolve_struct_method` is implemented.
+  - F-21: user methods named `each`, `map`, `find` and so on run their own bodies. Mixin-bound generics are monomorphised. A `?` callee is a hard error, and the three backend guessing heuristics are gone.
+  - F-22: builtin statics come from `.rx` declarations, not Rust tables. `Some(3) == Some(3)` is true. `.unwrap` on `Option[Class]` from stdlib methods type-checks. Parenless `e.message`/`e.kind` work.
+  - F-23: one String rebinding mechanism. A user method named `push_str` no longer overwrites the local.
+  - F-24: interpolating `&Float`, `&var Float` or `&var Bool` no longer prints the raw word. `p`/`pp` are one generic each over `mixin Inspect`; scalars get `inspect`, and String's is quoted. `p 7` works without parens.
+  - F-25: one ownership ABI table, and a recursive element drop. Nested containers (`Hash[String, Array[_]]`, `Array[Array[String]]`) no longer leak.
+  - F-27: derive signatures are `Self`-typed `.rx` mixins. Classes get Ord, PartialOrd and Default. A user `hash_code` works as a Hash key. `hash_code` through a `Hashable` bound links for Int and String.
+  - F-28: `MirLocal` kind (a user `_total` is freed like any local), `MirFunction` linkage and entry, drop classes by DefId, no LLVM-to-Cranelift module edge, one `impl_blocks_with_target`.
+  - F-41: `&T` no longer unifies with `T`. Distinct type params do not unify. An unknown method on a known class is E0740. `Array.from(123)` fails at typeck, and `Array.with_capacity("x")` is E0741.
+  - Fixed while proving, all of them older than this work:
+    - `p(2.5)` called the String overload; a call matching no overload is now E0742.
+    - `sort`/`sort!` on a class array double-freed. A `let` that only reads `v[i]` was freed every loop pass.
+    - `ruxen fmt` collapsed multi-line `def`s, dropped blank lines and added parens. It now keeps parens as written, `@x`, `T?`, `where` placement, `do`/`{}` blocks and blank lines. A sweep of every e2e case and stdlib file loses nothing and is idempotent.
+    - The `each` block parameter on class arrays is typed from Enumerable's signature.
+- [ ] **CI failure on the pushed e3e7157** (run 38851223477; MSRV passed, the other three jobs failed):
+  - **Build + test (ubuntu-latest):** about 43 integration tests fail to link with `string.c:(.text.ruxen_float_pow+0x5): undefined reference to 'pow'`. Examples: `std_use_resolution::*`, `stdlib_io::*`, `stdlib_process::*`, `task_spawn_ownership::*`, `user_runtime_c::user_runtime_c_is_compiled_and_linked`.
+    - Cause: Ubuntu's gcc links with `--as-needed` and resolves archives left to right. `-lm` (from the per-package `[system_libs]`) comes before `libruxenrt.a` and the runtime objects on the link line, so it is dropped before `pow` is needed.
+    - Fedora does not default to `--as-needed`, so it passes locally.
+    - Fix: put system libs after every archive and object in every link path (`ruxenc`, `ruxen build`, the test harness `tests/common/mod.rs`).
+  - **Build + test (macos-14):** `scripts/test-stdlib.sh` reports `FAIL sync`, 7 passed and 1 failed.
+    - The Tester runner does not print which test failed, so the log cannot name it.
+    - Likely cause: a timing or pthread difference in `library/std/sync` (timed waits or `clock_gettime`; macOS lacks `pthread_condattr_setclock`). This needs confirming on the Mac.
+    - Also, the script's duration column prints an epoch (`1792125809.00s`) because BSD `date` has no `%N`.
+  - **Lint (advisory):** `cargo fmt --check` diffs at e3e7157 in `tests/it/main.rs`, `stdlib_json.rs`, `stdlib_array_negatives.rs`, `mir_debug_spans.rs`, `parser/tests.rs` and `src/ruxenc/src/compile.rs`.
+  - Status at the checkpoint (amended commit):
+    - **Ubuntu link: fixed.** One `link_command_args` in `codegen/object.rs` puts the program object, runtime objects and archive first, then every `-l` flag. It is shared by `compile_host`, `compile_no_std` and `ruxenc`. Guard test: `link_command_puts_library_flags_after_every_input`. Checked locally with a `cc` wrapper that forces `--as-needed` (474 `it` tests pass). Gap: `ruxen build` still passes dependency `.o` paths inside `extra_link_flags`.
+    - **Runner: fixed.** It names each failed case and how it died, and the durations are portable.
+    - **Lint: passes** on the current tree.
+    - **macOS sync: NOT fixed.** It is memory corruption, not timing.
+      - The failing case is `SharedSync / "round-trips a Mutex[String] between closures"`.
+      - Two closures (`reader`, `writer`) both capture `cell` by value, and both env-drop functions free it. The second `ruxen_sharedsync_drop` decrements freed memory.
+      - glibc survives this; the macOS allocator keeps its free list in that word and crashes.
+      - Fix in `mir/lower/expr/closure.rs` (`synthesize_closure_drop` / `capture_slot_still_owned`): two closures must not both own one non-Copy capture. Capture by reference, or make the second move E1001.
+      - Confirm on Linux: `RUXEN_TEST_FORMAT=documentation valgrind --trace-children=yes library/std/sync/target/debug/test/sync_test`. On the Mac, `scripts/test-stdlib.sh sync` should now name the case.
+    - **Also from valgrind: `Mutex#lock` (`.rx`, returning `Result`)** allocates 8 bytes and reads and writes 8 bytes past them, on every `m.lock`. The `Result[MutexGuard, _]` allocation is probably too small. Not fixed.
+    - Not run before the checkpoint: MSRV `cargo +1.91 build` and `cargo check --workspace --benches`. CI on the push will run them.
+- [ ] Batch 2 leftovers:
+  - **High, not in the audit: ordinary call arguments are never type-checked.** Every call site in typeck does `let _ = unify(arg, param)`, so `baz("s")` compiles for `def baz(x: Int)`. It is blocked by the Int-erased concurrency surface (`Race.any_of`, `spawn_raw(future_ptr: Int)`), by unify lacking `any Fn + Send` vs `any Fn`, and by a block returning into a `-> ()` slot.
+  - F-19 (decision): operators as method calls. Rewriting `a == b` to a call made by-value operator params move their operand. Choose between auto-borrowing operator operands and `&` operator params in the stdlib. `&String <=> &String` is still E0707.
+  - F-20: `MirInst::Call` structured callee (about 154 sites), so callee strings are still re-parsed in MIR and codegen. Extension methods on builtin heads are registered as free functions, so their parenless overloads are still wrong; register them as methods of the shell class. Not recorded for mixin defaults and `.new`.
+  - F-21: generic-calling-generic across classes (`Outer[T]` holding `Holder[T]`) is not monomorphised; it needs a worklist. `unique_bound_impl` still guesses.
+  - F-22 (decision): Option and Result declared in `.rx` need stdlib enums to export bare variants. E0722 cannot be re-tightened while Array `get`/`get_mut` share one C symbol with different surface types.
+  - F-23: `def var` on a top-level lib function is silently ignored. Mutating through `&String` runs on a copy.
+  - F-24 (decision): the `Int_fmt` fallback for Array, Option, Hash and type params (needs Display formatters). Primitive fmt via `.rx` `include Display` (needs `Formatter#precision` in `.rx`). `to_s` as a Kernel default. IO_TEXT_BUILTINS. Displayable, Display and Debug as one protocol. User classes have no `inspect`.
+  - F-25: the Mutex payload leak (`get` returns an alias and `into_inner` does not consume). Ownership markers in the lib grammar.
+  - F-27 (decision): Ord/PartialOrd/PartialEq into Comparable. A derived `eq(other: &Self)` is treated as a move by the borrow checker. Enums have no derived bodies. Bool, Char, Float and the collections have no `hash_code`.
+  - F-28: the `__state`/`__sub_` checks need async lowering to mark generated classes. Four codegen sites still test `name == "main"`. `include Into[X]` loses its generic argument in HIR.
+  - F-41: TypeParam against a concrete type is still lenient (`Array#sum`'s `var total: T = 0`, user generic statics, `Self::Output` as a TypeParam).
+  - Leaks (valgrind on the scratch program: 778 bytes definitely lost before, 0 after). Fixed: class elements in Array and Hash values (per-type glue descriptor `RUXEN_ELEM_OBJ`), interpolation temporaries, and String rebinding in loops and mono bodies. Still open:
+    - (decision) A class's own String or container fields are never freed. It needs a per-field drop rule, and fields alias freely today.
+    - `Set[Class]` elements and `Hash[Class, _]` keys (needs key copying through the glue in `hash.c`). Generic classes and enums as elements.
+    - A value returned by a user function, and a by-value argument to one (the F-25 ownership-ABI gap).
+    - The element-escape guard is conservative: a container passed to a closure-taking `.rx` method (`map`, `select`) is made shallow, so its elements leak.
+    - `Array#drop(n)` and `+` copy class elements with `<T>_clone`, so a class's `def drop` also runs on the copies.
+  - Pre-existing, found while proving: `if let Some(r) = v.find { }` on a class array segfaults; `v.count { }` has no block overload. fmt still drops grouping parens, alignment padding and `"""` heredocs.
+- [ ] **Batch 3 (rest of G):** F-29 backend lowering policy, F-30 one front-end driver, F-34 parser desugaring, F-35 IDE definition resolution, F-36 REPL replay, F-45 remaining stale docs.
+  - F-30 includes a bug: `ruxen check` never runs the borrow checker, so it passes code that `ruxen build` rejects.
+  - F-34 includes bugs: `case` re-evaluates its subject per branch; `x ||= y` evaluates `x` twice.
+  - F-36: if the slot redesign is too big for one pass, do the interim (rewrite the REPL walkers on the AST `Visit`; handle `MultiAssign`) and list the rest here.
+- [ ] **Batch 3 addition: one generic over a mixin bound instead of per-type copies** (owner rule, 2026-10-16). Inventory, at HEAD 3892d60:
+  - `.rx` only:
+    - AtomicI64/AtomicUsize share one lib block (`mixin AtomicWord`).
+    - Stdout/Stderr share `mixin StdStream`; `eprint`/`eprintln` become `alias`.
+    - bufio `drop` moves into `mixin Reader`/`Writer`. Check the drop-class detection, which is by DefId since F-28.
+    - MapStream, FilterStream and TakeStream `drop` move into `mixin StreamAdapter`.
+    - Set and Hash share one `each`.
+    - Array `min`/`max` share one private `extremum`.
+  - Compiler:
+    - Scalars and String `include Comparable, Hashable, PartialEq, Clone, Display, Default` in `.rx`.
+    - Then delete the per-type Rust arms:
+      - `derive.rs`: `synthesize_primitive_fmt_displays`, `format_field_for_debug`, `build_eq`/`build_hash_code`/`build_cmp`, `synthesize_clone_field`, `synthesize_default_value`
+      - `interpolation.rs`: the `fmt_callee` ladder
+      - `implicit_includes`: `ty_is_effectively_clone` / `ty_satisfies_named_trait`
+      - both backends: the String `Compare` special case
+    - Needs: `Float#hash_code`, Set/Hash `clone` declarations, conditional container impls (`Array[T]: PartialEq where T: PartialEq`), and `Formatter#precision` in `.rx`.
+    - Fixes a latent bug: Array/Hash/Set fields of a derived class are compared and hashed by pointer.
+  - Array-only `join`, `min`, `max`, `uniq`, `include?`, `sum` become `Enumerable` defaults with where-bounds, so Set and Hash get them.
+  - Int `clamp`/`between?` come from `Comparable`; Char gains them.
+  - The 11 async step futures: `mixin StepFuture` (needs associated types in mixin defaults).
+  - Check whether `ArrayMatcher`, `StringMatcher`, `BoolMatcher` and `OptionMatcher` in std/test are unreachable (`Tester.expect` returns only `Matcher[T]`); delete them if so.
+- **Running batch 3 on macOS (Apple Silicon):**
+  - valgrind does not run there. Use `leaks --atExit -- <binary>`, or build with `-fsanitize=address` for the leak and double-free checks.
+  - The stale-toolchain-copy sweep in `src/ruxenc/tests/support/installed_binary.rs` is Linux-only. Check that test temp dirs do not pile up in `CARGO_TARGET_TMPDIR`.
+  - e2e still needs `cargo build --release --bins` and then `RUXEN_WORKSPACE=$PWD tests/release-e2e/run.sh`.
+  - Do a first full run on a clean checkout to catch platform-specific failures, especially C runtime (`library/std/*/runtime/*.c`), linker flags and fixed-port fixtures, before starting the cards.
 
 ## Then: Ruby parity (priority 2)
 
@@ -201,8 +296,6 @@ Order from [the Rust-isms audit](docs/audits/2026-10-rust-isms.md), section 6. R
 - [ ] `docs/specs/syntax/ruby-naming.spec.md` appendix A lists things not yet verified on a fresh binary: the `super` lookup order, `.call` on a stored block, hex/binary/octal literals, and `protected`.
 - [ ] `typeck::type_check_with_bootstrap` (the non-package bootstrap path) is used only by 4 integration tests (`bootstrap_class_bodies`, `bootstrap_prelude_merge`, `no_std_e1400`, `wasm_codegen`). Port them to the package-aware path, then delete it. It cannot go behind `cfg(test)` because integration tests do not see `cfg(test)` items.
 - [ ] The `ruxen_driver` crate is deleted on this branch. Drop its mentions in `../CLAUDE.md` and `ruxen/CLAUDE.md` (both git-ignored, outside this worktree) when the branch merges.
-- [ ] `ruxenc::compile::project_target_ruxen` looks for `ruxen.toml` or `Cargo.toml`, not `Ruxen.toml`, so a project's incremental cache can land in `./target/ruxen` of the current directory.
-- [ ] **High:** `ruxen fmt` silently deletes comments on statements, fields, mixin signatures and module or extension items.
 - [ ] **High:** a guard from `Mutex#lock!` taken in a helper or as a temporary is never released, so the next lock deadlocks.
 - [ ] **High:** reading a `&var String` (interpolation, `.size`, passing it to a `&String` parameter) treats the slot address as the string. Reads through `MutexGuard#get` are fine.
 - [ ] **High:** a scalar `&var` (Int, Float, Bool) is passed by value, so a write through it never reaches the caller. This includes `MutexGuard#deref_mut` on `Mutex[Int]`.
@@ -211,7 +304,6 @@ Order from [the Rust-isms audit](docs/audits/2026-10-rust-isms.md), section 6. R
 - [ ] `Mutex.new` and `MutexGuard#set` take ownership of the payload and never free it (needs typed drop).
 - [ ] `String#[]` builds the char array on every call, aborts on a negative index and returns `Char`, not a `String`.
 - [ ] E1017 calls a type alias or newtype a `class`, and rejects an alias of a mixin.
-- [ ] REGISTRY rows and docs for E1004, E1005 and E1008 remain, but nothing emits them any more.
 - [ ] CHANGELOG [Unreleased] overstates a few things: Channel and "stdlib extensions", and "the formatter round-trips" (it still drops some comments). It also lacks Removed and Added entries.
 - [ ] `Option.Some(f.await)` (an `.await` inside an enum-variant constructor argument) typechecks but fails to link: `Ready_await` and `Future_poll` are undefined. Covered only by the Rust test using `fixtures/ruxen/async_await_in_enum_variant.rx`; add an e2e case once it links.
 - [ ] `hash_code` on `Int` and `String` through a `Hashable` generic bound typechecks but fails to link (`Int_hash_code`, `String_hash_code` undefined). No test covers this gap: the never-run `#[ignore]` pin was deleted. Repro: `def hash_it[T: Hashable](a: &T) -> Int` returning `a.hash_code`, called with `&42` and `&"hello"`.
@@ -245,3 +337,11 @@ Order from [the Rust-isms audit](docs/audits/2026-10-rust-isms.md), section 6. R
 - [ ] `ruxen test` has no stdout capture, so Kernel `p` / `pp` (e2e 1180) and `warn` (e2e 1181) stay e2e fixtures instead of `library/std/core/tests`.
 - [ ] `case opt in nil ... in x` on an `Option[Int]` binds `x` to the Option pointer, not the payload, so `puts "#{x}"` prints an address (the ruby-naming spec marks this form [implemented]). `in Some(x)` works; e2e 2079 uses it.
 - [ ] `Task.join(h).await` inside `block_on` hangs: the deferred e2e cases `728_async_spawn_join_basic` and `728c_async_spawn_loop` (removed; never run) compiled but did not finish within 10 s. Add an e2e case once spawned tasks join.
+- [ ] Stdlib top-level helpers share the user's global namespace, and `private` is not enforced: a user `def connect_state_to_result(x: Int)` replaces the stdlib helper inside stdlib bodies. Resolve stdlib bodies in their own package scope first, or enforce `private`; add a negative fixture.
+- [ ] Async I/O now classifies errno through the shared sync table: EBADF gives `Other("Bad file descriptor")` where async used to give `InvalidInput`.
+- [ ] `cargo fmt --all -- --check` failed on committed files before batch 1 (the CI fmt gate); batch 1 ran `cargo fmt --all`.
+- [ ] **High:** `BufWriter.File#into_inner` and `BufWriter.Tcp#into_inner` are declared `-> File`/`-> TcpStream`, but `ruxen_bufwriter_into_inner` (bufio.c) returns a boxed `Result[W, IoError]`, so the returned handle points at fd 0 and later writes go nowhere. Declare `-> Result[File, IoError]` (a flush can fail) or add a C entry point that returns the bare inner; this changes a public signature (decision).
+- [ ] `ruxen fmt --stdin` prints diagnostics but exits 0 on a parse error or an unplaceable comment, so editors cannot tell formatting was refused. Exit 1 and keep echoing the input.
+- [ ] `compiler/ruxen_core/build.rs` reruns only on edits in existing packages' `src/`; a new `library/std/<pkg>/src/lib.rx` is left out of the generated bootstrap tables until something else reruns it. Add a test that compares the package set on disk with `BOOTSTRAP_FILES`.
+- [ ] No `CONTEXT.md` yet for lexer, typeck, mir/lower, borrow_check, async_lowering, diagnostics and resolve, or for the io, net and async_net runtime dirs and the `src/` crates.
+- [ ] A class body's `include Send`/`include !Send` always overrides the same declaration in an `extension` of that class, whatever the source order (body `include !Send` plus `extension ... include Send` stays not Send). Decide the rule (last wins, or E1014 on a conflict) and pin it with a test.

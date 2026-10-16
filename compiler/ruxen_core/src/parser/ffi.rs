@@ -109,6 +109,15 @@ impl Parser {
         self.advance(); // consume `def`
         self.skip_newlines();
 
+        // `def var NAME`: a receiver-mutating instance method, the same
+        // spelling as a mutable-self `def` (see `parse_method_signature`).
+        let mutates_self = self.at(TokenKind::Var)
+            && (matches!(self.peek_kind(), TokenKind::Identifier(_))
+                || Self::is_operator_name_start(&self.peek_kind()));
+        if mutates_self {
+            self.advance(); // consume `var`
+        }
+
         // Ruxen convention (ruby-naming.spec.md §3.4a): `def NAME(...)` is
         // an instance method, `def self.NAME(...)` is a class method. The
         // same convention applies inside FFI lib blocks — a `def self.foo`
@@ -237,6 +246,7 @@ impl Parser {
         FfiFunction {
             name,
             is_class_method,
+            mutates_self,
             c_symbol,
             params,
             return_type,

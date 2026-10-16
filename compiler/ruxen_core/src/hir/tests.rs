@@ -6,7 +6,9 @@ mod tests {
     use crate::hir::types::{ConstExpr, MixinRef, MoveSemantics, Ty};
     use crate::lexer::token::Span;
     use crate::parser::ast::Visibility;
-    use crate::resolve::symbols::{DefKind, EnumInfo, StructInfo, SymbolTable, VariantDefKind};
+    use crate::resolve::symbols::{
+        AutoTraitFlags, DefKind, EnumInfo, StructInfo, SymbolTable, VariantDefKind,
+    };
 
     // ─── Copy/Move Classification ───────────────────────────────────
 
@@ -132,10 +134,7 @@ mod tests {
                     generic_params: vec![],
                     fields: vec![],
                     layout: vec![],
-                    opt_out_send: false,
-                    opt_out_sync: false,
-                    manual_send: false,
-                    manual_sync: false,
+                    auto_traits: AutoTraitFlags::default(),
                     const_predicates: vec![],
                 },
             },
@@ -216,10 +215,7 @@ mod tests {
                     generic_params: vec![],
                     fields: vec![safe_field],
                     layout: vec![],
-                    opt_out_send: false,
-                    opt_out_sync: false,
-                    manual_send: false,
-                    manual_sync: false,
+                    auto_traits: AutoTraitFlags::default(),
                     const_predicates: vec![],
                 },
             },
@@ -243,10 +239,7 @@ mod tests {
                     generic_params: vec![],
                     fields: vec![bad_field],
                     layout: vec![],
-                    opt_out_send: false,
-                    opt_out_sync: false,
-                    manual_send: false,
-                    manual_sync: false,
+                    auto_traits: AutoTraitFlags::default(),
                     const_predicates: vec![],
                 },
             },
@@ -301,10 +294,7 @@ mod tests {
                 info: EnumInfo {
                     generic_params: vec![],
                     variants: vec![ok_variant, bad_variant],
-                    opt_out_send: false,
-                    opt_out_sync: false,
-                    manual_send: false,
-                    manual_sync: false,
+                    auto_traits: AutoTraitFlags::default(),
                     const_predicates: vec![],
                 },
             },
@@ -341,10 +331,11 @@ mod tests {
                     generic_params: vec![],
                     fields: vec![ptr_field],
                     layout: vec![],
-                    opt_out_send: false,
-                    opt_out_sync: false,
-                    manual_send: true,
-                    manual_sync: true,
+                    auto_traits: AutoTraitFlags {
+                        manual_send: true,
+                        manual_sync: true,
+                        ..AutoTraitFlags::default()
+                    },
                     const_predicates: vec![],
                 },
             },
@@ -381,10 +372,11 @@ mod tests {
                     generic_params: vec![],
                     fields: vec![value_field],
                     layout: vec![],
-                    opt_out_send: true,
-                    opt_out_sync: true,
-                    manual_send: false,
-                    manual_sync: false,
+                    auto_traits: AutoTraitFlags {
+                        opt_out_send: true,
+                        opt_out_sync: true,
+                        ..AutoTraitFlags::default()
+                    },
                     const_predicates: vec![],
                 },
             },

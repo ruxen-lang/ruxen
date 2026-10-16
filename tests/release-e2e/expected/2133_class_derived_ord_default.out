@@ -1,0 +1,6 @@
+lt=true gt=true le=true ge=false
+cmp=-1 1 0
+partial_cmp=1
+inherited_lt=true inherited_gt=true
+mid_default=0 ''
+holder_default='' 0 0

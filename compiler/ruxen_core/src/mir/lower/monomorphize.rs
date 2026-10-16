@@ -25,7 +25,7 @@
 //!      cloned and keep their uniform-word C ABI.
 //!   2. Multi-param generics (`Pair[A,B]`) + `&T` returns: the substitution
 //!      map carries every type-param name in declaration order, and the
-//!      generalized `subst_type_params_in_ty` recurses through `Ref*`.
+//!      generalized `Ty::subst_params` recurses through `Ref*`.
 //!   3. Only fully-concrete instantiations are recorded (no nested
 //!      `TypeParam`/`Infer`), so we never emit a half-substituted body.
 //!
@@ -36,6 +36,7 @@
 //! resolving to it.
 
 use super::*;
+use crate::hir::visit::{walk_expr, walk_item, Visit};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Marker separating the base class name from its concrete generic args in
@@ -44,14 +45,21 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 /// Example: `Box[String]` method `eq` → `Box__mono__String_eq`.
 const MONO_SEP: &str = "__mono__";
 
+/// The callee MIR emits for a method call whose receiver is still a generic
+/// parameter (`?T_to_display`). An unresolved inference variable spells the
+/// same way through `Ty::Infer`'s Display (`?T3200_to_display`). Only an
+/// un-monomorphised generic body emits one, and
+/// `Lowerer::prune_unmonomorphised_bodies` guarantees none reaches codegen.
+pub(super) fn abstract_callee(param: &str, method: &str) -> String {
+    format!("{ABSTRACT_CALLEE_PREFIX}{param}_{method}")
+}
+
+/// First character of every abstract callee (see [`abstract_callee`]).
+pub(super) const ABSTRACT_CALLEE_PREFIX: char = '?';
+
 /// A recorded instantiation key: the concrete generic-arg vector for one
 /// use of a generic class.
 pub(super) type MonoKey = Vec<Ty>;
-
-/// Class shells whose instances are represented by a structural `Ty` head
-/// instead of `Ty::Class`. Kept in sync with `builtin_head_home` by the unit
-/// test `builtin_head_homes_cover_every_head`.
-const BUILTIN_HEAD_HOMES: &[&str] = &["Array", "Set", "Hash", "Option", "Result"];
 
 /// A builtin-head class shell's per-`T`-monomorphizable surface: the class's
 /// generic parameter names (declaration order, so they zip against a head's
@@ -71,7 +79,7 @@ pub(super) struct BuiltinHeadMonoInstance {
     /// The receiver's concrete generic arguments, in the same order.
     args: Vec<Ty>,
     /// The instantiation's STRUCTURAL type — `Ty::Array(Int)`, rebuilt by
-    /// `builtin_head_ty` rather than copied from whichever call site was seen
+    /// `Ty::from_builtin_head` rather than copied from whichever call site was seen
     /// first (the nominal `Ty::Class { name: "Array" }` spelling reaches the
     /// same symbol). Pinned as the specialized body's `self` type.
     self_ty: Ty,
@@ -80,64 +88,11 @@ pub(super) struct BuiltinHeadMonoInstance {
     def: HirFuncDef,
 }
 
-/// Structural `Ty` head → the `.rx` class shell that homes its methods,
-/// together with the head's generic arguments. The MIR-side twin of typeck's
-/// `MixinResolver::method_home_key`; a Ty-variant mapping, NOT per-method
-/// knowledge. `BUILTIN_HEAD_HOMES` lists the same names for the
-/// class-eligibility test and is pinned against this match by the unit test
-/// `builtin_head_homes_cover_every_head`.
-fn builtin_head_home(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
-    match peel_refs_ty(ty) {
-        Ty::Array(e) => Some(("Array", vec![(**e).clone()])),
-        Ty::Set(e) => Some(("Set", vec![(**e).clone()])),
-        Ty::Map(k, v) => Some(("Hash", vec![(**k).clone(), (**v).clone()])),
-        Ty::Option(t) => Some(("Option", vec![(**t).clone()])),
-        Ty::Result(o, e) => Some(("Result", vec![(**o).clone(), (**e).clone()])),
-        // The SAME instantiation also has a nominal spelling: inside a shell's
-        // own body `self` types as `Ty::Class { name: "Array", generic_args }`,
-        // and a `.rx` signature written `Array[T]` resolves that way too. Both
-        // spellings must key identically, or a self-call inside a specialized
-        // body would miss the specialization its receiver already selected.
-        Ty::Class { name, generic_args } if !generic_args.is_empty() => BUILTIN_HEAD_HOMES
-            .iter()
-            .find(|home| *home == name)
-            .map(|home| (*home, generic_args.clone())),
-        _ => None,
-    }
-}
-
-/// Inverse of `builtin_head_home`: rebuild the structural head type for a
-/// `(shell name, generic args)` pair. This is the spelling a value of the
-/// instantiation actually HAS at runtime, so it is what a specialized body
-/// pins as its `self` type. Returns `None` on an arity mismatch or a name that
-/// is not a builtin head.
-fn builtin_head_ty(class: &str, args: &[Ty]) -> Option<Ty> {
-    match (class, args) {
-        ("Array", [e]) => Some(Ty::Array(Box::new(e.clone()))),
-        ("Set", [e]) => Some(Ty::Set(Box::new(e.clone()))),
-        ("Hash", [k, v]) => Some(Ty::Map(Box::new(k.clone()), Box::new(v.clone()))),
-        ("Option", [t]) => Some(Ty::Option(Box::new(t.clone()))),
-        ("Result", [o, e]) => Some(Ty::Result(Box::new(o.clone()), Box::new(e.clone()))),
-        _ => None,
-    }
-}
-
-/// Peel every reference layer off a type.
-fn peel_refs_ty(ty: &Ty) -> &Ty {
-    match ty {
-        Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) => peel_refs_ty(inner),
-        other => other,
-    }
-}
-
 /// True when `ty`, peeled of references, IS one of `params` — i.e. a value of
 /// the bare element type, whose MIR lowering is type-directed and therefore
 /// wrong while the parameter is abstract.
 fn is_bare_type_param(ty: &Ty, params: &[String]) -> bool {
-    matches!(peel_refs_ty(ty), Ty::TypeParam { name, .. } if params.iter().any(|p| p == name))
+    matches!(ty.peel_refs(), Ty::TypeParam { name, .. } if params.iter().any(|p| p == name))
 }
 
 /// True when `ty` mentions one of `params` anywhere. Used for the operand of a
@@ -145,26 +100,7 @@ fn is_bare_type_param(ty: &Ty, params: &[String]) -> bool {
 /// (`Array[T] + Array[T]` routes differently from `Int + Int`), not just on a
 /// bare element.
 fn mentions_type_param(ty: &Ty, params: &[String]) -> bool {
-    match ty {
-        Ty::TypeParam { name, .. } => params.iter().any(|p| p == name),
-        Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner)
-        | Ty::FixedArray(inner, _)
-        | Ty::Option(inner)
-        | Ty::Array(inner)
-        | Ty::Set(inner) => mentions_type_param(inner, params),
-        Ty::Map(k, v) => mentions_type_param(k, params) || mentions_type_param(v, params),
-        Ty::Result(a, b) => mentions_type_param(a, params) || mentions_type_param(b, params),
-        Ty::Tuple(elems) => elems.iter().any(|e| mentions_type_param(e, params)),
-        Ty::Class { generic_args, .. }
-        | Ty::Struct { generic_args, .. }
-        | Ty::Enum { generic_args, .. } => {
-            generic_args.iter().any(|a| mentions_type_param(a, params))
-        }
-        _ => false,
-    }
+    ty.any(&mut |t| matches!(t, Ty::TypeParam { name, .. } if params.contains(name)))
 }
 
 /// True when `func`'s body would be mis-lowered with `params` left abstract:
@@ -240,24 +176,7 @@ pub(super) fn strip_mono_suffix(mangled: &str) -> Option<&str> {
 /// leaf is a concrete primitive / String / user type, with no `TypeParam`
 /// or `Infer` anywhere. Only such instantiations are safe to specialize.
 fn is_fully_concrete(ty: &Ty) -> bool {
-    match ty {
-        Ty::TypeParam { .. } | Ty::Infer(_) => false,
-        Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner)
-        | Ty::FixedArray(inner, _)
-        | Ty::Option(inner)
-        | Ty::Array(inner)
-        | Ty::Set(inner) => is_fully_concrete(inner),
-        Ty::Map(k, v) => is_fully_concrete(k) && is_fully_concrete(v),
-        Ty::Result(a, b) => is_fully_concrete(a) && is_fully_concrete(b),
-        Ty::Tuple(elems) => elems.iter().all(is_fully_concrete),
-        Ty::Class { generic_args, .. }
-        | Ty::Struct { generic_args, .. }
-        | Ty::Enum { generic_args, .. } => generic_args.iter().all(is_fully_concrete),
-        _ => true,
-    }
+    !ty.any(&mut |t| matches!(t, Ty::TypeParam { .. } | Ty::Infer(_)))
 }
 
 impl<'a> Lowerer<'a> {
@@ -487,6 +406,7 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
+            let included_defaults = self.included_mixin_defaults(class, &methods);
 
             // Defensive: never emit the same mangled base twice even if two
             // keys slipped through collection (the symbol table rejects a
@@ -518,6 +438,24 @@ impl<'a> Lowerer<'a> {
                     let mir_fn = self.lower_method(&mangled, &cloned)?;
                     mir.functions.push(mir_fn);
                 }
+                for (default_fn, mixin_subst) in &included_defaults {
+                    // The mixin's own params are spelled in the class's
+                    // params (`include Enumerable[T]`), and `Self` is the
+                    // class's target type: both resolve to concrete types
+                    // through this instantiation's class substitution.
+                    let default_subst: HashMap<String, Ty> = mixin_subst
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.subst_params(&subst)))
+                        .collect();
+                    let mut cloned = default_fn.clone();
+                    crate::mir::lower::trait_default::subst_type_params_in_func(
+                        &mut cloned,
+                        &default_subst,
+                    );
+                    let mangled = format!("{}_{}", base, cloned.name);
+                    let mir_fn = self.lower_method(&mangled, &cloned)?;
+                    mir.functions.push(mir_fn);
+                }
                 // `self.mono_emitted` was already populated for `base` in
                 // `collect_mono_instances` (it must exist before
                 // `lower_items` so call sites can redirect); nothing to do
@@ -527,30 +465,72 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    /// The default methods `class` gets from each `include`d mixin and does
+    /// not define itself (`own`), each with the map from the mixin's generic
+    /// params, and `Self`, to the class-level types the `include` names.
+    /// The opaque class emits these through
+    /// `lower_impl_block_with_outer_methods`; every monomorphised
+    /// instantiation needs its own copy, or a call redirected to
+    /// `<mono base>_<m>` has no body to link against (e2e 2062).
+    fn included_mixin_defaults(
+        &self,
+        class: &HirClassDef,
+        own: &[HirFuncDef],
+    ) -> Vec<(HirFuncDef, HashMap<String, Ty>)> {
+        let mut out = Vec::new();
+        for block in &class.impl_blocks {
+            let Some(trait_ref) = &block.trait_ref else {
+                continue;
+            };
+            if block.negative_trait {
+                continue;
+            }
+            let Some(defaults) = self.trait_default_methods.get(&trait_ref.name) else {
+                continue;
+            };
+            let mixin_params: Vec<String> = self
+                .symbols
+                .named(&trait_ref.name)
+                .find_map(|def| match &def.kind {
+                    crate::resolve::symbols::DefKind::Trait { info } => {
+                        Some(info.generic_params.iter().map(|g| g.name.clone()).collect())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let mut subst: HashMap<String, Ty> = mixin_params
+                .into_iter()
+                .zip(trait_ref.generic_args.iter().cloned())
+                .collect();
+            subst.insert("Self".to_string(), block.target_ty.clone());
+            let mut names: Vec<&String> = defaults.keys().collect();
+            names.sort();
+            for name in names {
+                if own.iter().any(|m| &m.name == name)
+                    || block
+                        .items
+                        .iter()
+                        .any(|i| matches!(i, HirImplItem::Method(m) if &m.name == name))
+                {
+                    continue;
+                }
+                out.push((defaults[name].clone(), subst.clone()));
+            }
+        }
+        out
+    }
+
     /// Given a method-call/constructor receiver type, return the
     /// monomorphic mangled *base* (`Box__mono__String`) when this exact
     /// instantiation was emitted; `None` otherwise (→ keep the opaque
     /// `{Class}_{method}` callee). Peels refs.
     pub(super) fn mono_base_for_ty(&self, ty: &Ty) -> Option<String> {
-        let mut cur = ty;
-        loop {
-            match cur {
-                Ty::Ref(inner)
-                | Ty::RefMut(inner)
-                | Ty::RefLifetime(_, inner)
-                | Ty::RefMutLifetime(_, inner) => cur = inner,
-                Ty::Class { name, generic_args } => {
-                    if generic_args.is_empty() {
-                        return None;
-                    }
-                    let base = mono_base(name, generic_args);
-                    if self.mono_emitted.contains(&base) {
-                        return Some(base);
-                    }
-                    return None;
-                }
-                _ => return None,
+        match ty.peel_refs() {
+            Ty::Class { name, generic_args } if !generic_args.is_empty() => {
+                let base = mono_base(name, generic_args);
+                self.mono_emitted.contains(&base).then_some(base)
             }
+            _ => None,
         }
     }
 
@@ -601,7 +581,8 @@ impl<'a> Lowerer<'a> {
         ) {
             match item {
                 HirItem::Class(c) => {
-                    if c.generic_params.is_empty() || !BUILTIN_HEAD_HOMES.contains(&c.name.as_str())
+                    if c.generic_params.is_empty()
+                        || !crate::hir::types::BUILTIN_HEAD_HOMES.contains(&c.name.as_str())
                     {
                         return;
                     }
@@ -685,7 +666,7 @@ impl<'a> Lowerer<'a> {
                         let DispatchSite::Receiver(recv_ty, name) = site else {
                             return;
                         };
-                        let Some((recv_class, recv_args)) = builtin_head_home(recv_ty) else {
+                        let Some((recv_class, recv_args)) = Ty::builtin_head(recv_ty) else {
                             return;
                         };
                         if recv_class != class.as_str()
@@ -740,7 +721,7 @@ impl<'a> Lowerer<'a> {
                 let DispatchSite::Receiver(recv_ty, name) = call else {
                     return;
                 };
-                let Some((class, args)) = builtin_head_home(recv_ty) else {
+                let Some((class, args)) = Ty::builtin_head(recv_ty) else {
                     return;
                 };
                 if !args.iter().all(is_fully_concrete) {
@@ -773,19 +754,13 @@ impl<'a> Lowerer<'a> {
                 let DispatchSite::Receiver(recv_ty, name) = call else {
                     return;
                 };
-                let Some((recv_class, recv_args)) = builtin_head_home(recv_ty) else {
+                let Some((recv_class, recv_args)) = Ty::builtin_head(recv_ty) else {
                     return;
                 };
                 if recv_class != class {
                     return;
                 }
-                let recv_args: Vec<Ty> = recv_args
-                    .into_iter()
-                    .map(|mut a| {
-                        crate::mir::lower::trait_default::subst_type_params_in_ty(&mut a, &subst);
-                        a
-                    })
-                    .collect();
+                let recv_args: Vec<Ty> = recv_args.iter().map(|a| a.subst_params(&subst)).collect();
                 if recv_args == args {
                     same_instantiation_calls.push(name.to_string());
                 }
@@ -834,7 +809,7 @@ impl<'a> Lowerer<'a> {
         // "Array" }` spelling reaches the same symbol, and whichever call site
         // happened to be visited first would otherwise decide the specialized
         // body's `self` type.
-        let Some(self_ty) = builtin_head_ty(class, args) else {
+        let Some(self_ty) = Ty::from_builtin_head(class, args) else {
             return;
         };
         for def in &shell.methods {
@@ -897,7 +872,7 @@ impl<'a> Lowerer<'a> {
         if self.builtin_head_mono_emitted.is_empty() {
             return None;
         }
-        let (class, args) = builtin_head_home(receiver_ty)?;
+        let (class, args) = Ty::builtin_head(receiver_ty)?;
         if !args.iter().all(is_fully_concrete) {
             return None;
         }
@@ -1318,13 +1293,6 @@ impl<'a> Lowerer<'a> {
         self.mono_methods.contains_key(&method_id)
     }
 
-    pub(super) fn is_generic_mixin_method_symbol(&self, owner: &str, method_name: &str) -> bool {
-        let owner_symbol = owner.replace('.', "_");
-        self.mono_methods
-            .values()
-            .any(|method| method.owner_symbol == owner_symbol && method.def.name == method_name)
-    }
-
     /// Emit one monomorphized copy of every eligible generic free function,
     /// per recorded concrete instantiation, and record each `(fn, args) →
     /// mangled` redirect in `self.fn_mono_emitted` so call-site lowering can
@@ -1428,17 +1396,8 @@ fn unify_collect_type_params(decl: &Ty, actual: &Ty, out: &mut HashMap<String, T
     // Peel matching reference layers on both sides first; also peel a
     // reference on just the actual side (a `&var T` param receives a
     // `&var Concrete` arg — same depth — but be tolerant of one-sided refs).
-    fn peel(ty: &Ty) -> &Ty {
-        match ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => peel(inner),
-            other => other,
-        }
-    }
-    let decl = peel(decl);
-    let actual = peel(actual);
+    let decl = decl.peel_refs();
+    let actual = actual.peel_refs();
 
     match (decl, actual) {
         (Ty::TypeParam { name, .. }, concrete) => {
@@ -1506,58 +1465,25 @@ fn unify_collect_type_params(decl: &Ty, actual: &Ty, out: &mut HashMap<String, T
     }
 }
 
-/// Invoke `f(body)` for every function / method body in the program.
+/// Invoke `f(body)` for every function / method body in the program, and
+/// for every const initializer.
 fn for_each_fn_body(program: &HirProgram, f: &mut impl FnMut(&HirExpr)) {
-    fn visit(item: &HirItem, f: &mut impl FnMut(&HirExpr)) {
-        match item {
-            HirItem::Function(func) => f(&func.body),
-            HirItem::Class(c) => {
-                for m in &c.methods {
-                    f(&m.body);
-                }
-                for b in &c.impl_blocks {
-                    for it in &b.items {
-                        if let HirImplItem::Method(m) = it {
-                            f(&m.body);
-                        }
-                    }
-                }
-            }
-            HirItem::Struct(s) => {
-                for m in &s.methods {
-                    f(&m.body);
-                }
-            }
-            HirItem::Enum(e) => {
-                for m in &e.methods {
-                    f(&m.body);
-                }
-            }
-            HirItem::Impl(b) => {
-                for it in &b.items {
-                    if let HirImplItem::Method(m) = it {
-                        f(&m.body);
-                    }
-                }
-            }
-            HirItem::Module(m) => {
-                for sub in &m.items {
-                    visit(sub, f);
-                }
-            }
-            HirItem::Const(c) => f(&c.value),
-            HirItem::Mixin(m) => {
-                for it in &m.items {
-                    if let HirMixinItem::DefaultMethod(func) = it {
-                        f(&func.body);
-                    }
-                }
-            }
-            HirItem::TypeAlias(_) | HirItem::Newtype(_) => {}
+    struct Bodies<'f, F> {
+        f: &'f mut F,
+    }
+    impl<F: FnMut(&HirExpr)> Visit for Bodies<'_, F> {
+        fn visit_func(&mut self, func: &HirFuncDef) {
+            (self.f)(&func.body);
+        }
+        // `walk_item` reaches `visit_expr` only for a const initializer
+        // (function bodies stop at `visit_func` above).
+        fn visit_expr(&mut self, expr: &HirExpr) {
+            (self.f)(expr);
         }
     }
+    let mut bodies = Bodies { f };
     for it in &program.items {
-        visit(it, f);
+        bodies.visit_item(it);
     }
 }
 
@@ -1583,40 +1509,40 @@ enum DispatchSite<'a> {
 }
 
 fn walk_dispatch_sites_in_expr(expr: &HirExpr, f: &mut impl FnMut(DispatchSite<'_>)) {
-    match &expr.kind {
-        HirExprKind::FnCall {
+    DispatchSites { f }.visit_expr(expr);
+}
+
+struct DispatchSites<'f, F> {
+    f: &'f mut F,
+}
+
+impl<F: FnMut(DispatchSite<'_>)> Visit for DispatchSites<'_, F> {
+    fn visit_expr(&mut self, expr: &HirExpr) {
+        let f = &mut *self.f;
+        if let HirExprKind::FnCall {
             callee_name, args, ..
-        } => {
+        } = &expr.kind
+        {
             f(DispatchSite::Function(callee_name, args));
-            for a in args {
-                walk_dispatch_sites_in_expr(a, f);
-            }
         }
-        HirExprKind::FieldAccess {
+        if let HirExprKind::FieldAccess {
             object, field_name, ..
-        } => {
+        } = &expr.kind
+        {
             f(DispatchSite::Receiver(&object.ty, field_name));
-            walk_dispatch_sites_in_expr(object, f)
         }
-        HirExprKind::MethodCall {
+        if let HirExprKind::MethodCall {
             object,
             method,
             method_name,
             args,
-            block,
             ..
-        } => {
+        } = &expr.kind
+        {
             f(DispatchSite::Method(*method, args));
             f(DispatchSite::Receiver(&object.ty, method_name));
-            walk_dispatch_sites_in_expr(object, f);
-            for a in args {
-                walk_dispatch_sites_in_expr(a, f);
-            }
-            if let Some(b) = block {
-                walk_dispatch_sites_in_expr(b, f);
-            }
         }
-        HirExprKind::BinaryOp { op, left, right } => {
+        if let HirExprKind::BinaryOp { op, left, right } = &expr.kind {
             // `binops.rs` lowers an operator on a builtin head to the head's
             // `.rx` operator method (`Array#==`), so the left operand is that
             // call's receiver.
@@ -1625,449 +1551,148 @@ fn walk_dispatch_sites_in_expr(expr: &HirExpr, f: &mut impl FnMut(DispatchSite<'
             }
             f(DispatchSite::Operand(&left.ty));
             f(DispatchSite::Operand(&right.ty));
-            walk_dispatch_sites_in_expr(left, f);
-            walk_dispatch_sites_in_expr(right, f);
         }
-        HirExprKind::UnaryOp { operand, .. } => walk_dispatch_sites_in_expr(operand, f),
-        HirExprKind::Borrow { expr: inner, .. } => walk_dispatch_sites_in_expr(inner, f),
-        HirExprKind::Block(stmts, tail) | HirExprKind::UnsafeBlock(stmts, tail) => {
-            for s in stmts {
-                walk_dispatch_sites_in_stmt(s, f);
-            }
-            if let Some(t) = tail {
-                walk_dispatch_sites_in_expr(t, f);
-            }
-        }
-        HirExprKind::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => {
-            walk_dispatch_sites_in_expr(cond, f);
-            walk_dispatch_sites_in_expr(then_branch, f);
-            if let Some(e) = else_branch {
-                walk_dispatch_sites_in_expr(e, f);
-            }
-        }
-        HirExprKind::Match { scrutinee, arms } => {
-            walk_dispatch_sites_in_expr(scrutinee, f);
-            for arm in arms {
-                if let Some(g) = &arm.guard {
-                    walk_dispatch_sites_in_expr(g, f);
-                }
-                walk_dispatch_sites_in_expr(&arm.body, f);
-            }
-        }
-        HirExprKind::Loop { body } => walk_dispatch_sites_in_expr(body, f),
-        HirExprKind::While { condition, body } => {
-            walk_dispatch_sites_in_expr(condition, f);
-            walk_dispatch_sites_in_expr(body, f);
-        }
-        HirExprKind::For { iterable, body, .. } => {
-            walk_dispatch_sites_in_expr(iterable, f);
-            walk_dispatch_sites_in_expr(body, f);
-        }
-        HirExprKind::Assign { target, value, .. }
-        | HirExprKind::CompoundAssign { target, value, .. } => {
-            walk_dispatch_sites_in_expr(target, f);
-            walk_dispatch_sites_in_expr(value, f);
-        }
-        HirExprKind::MultiAssign {
-            targets, values, ..
-        } => {
-            for t in targets {
-                walk_dispatch_sites_in_expr(t, f);
-            }
-            for v in values {
-                walk_dispatch_sites_in_expr(v, f);
-            }
-        }
-        HirExprKind::Return(e) | HirExprKind::Break(e) | HirExprKind::Next(e) => {
-            if let Some(inner) = e {
-                walk_dispatch_sites_in_expr(inner, f);
-            }
-        }
-        HirExprKind::Closure { body, .. } => walk_dispatch_sites_in_expr(body, f),
-        HirExprKind::Construct { fields, .. } | HirExprKind::EnumVariant { fields, .. } => {
-            for (_, e) in fields {
-                walk_dispatch_sites_in_expr(e, f);
-            }
-        }
-        HirExprKind::Tuple(elems) | HirExprKind::ArrayLiteral(elems) => {
-            for e in elems {
-                walk_dispatch_sites_in_expr(e, f);
-            }
-        }
-        HirExprKind::Index { object, index } => {
-            walk_dispatch_sites_in_expr(object, f);
-            walk_dispatch_sites_in_expr(index, f);
-        }
-        HirExprKind::Cast { expr: inner, .. } => walk_dispatch_sites_in_expr(inner, f),
-        HirExprKind::ArrayFill { value, .. } => walk_dispatch_sites_in_expr(value, f),
-        HirExprKind::Range { start, end, .. } => {
-            if let Some(s) = start {
-                walk_dispatch_sites_in_expr(s, f);
-            }
-            if let Some(e) = end {
-                walk_dispatch_sites_in_expr(e, f);
-            }
-        }
-        HirExprKind::Interpolation { parts } => {
+        if let HirExprKind::Interpolation { parts } = &expr.kind {
             for p in parts {
                 if let HirInterpolationPart::Expr { expr: e, .. } = p {
                     f(DispatchSite::Display(&e.ty));
-                    walk_dispatch_sites_in_expr(e, f);
                 }
             }
         }
-        HirExprKind::MacroCall { args, .. } => {
-            for a in args {
-                walk_dispatch_sites_in_expr(a, f);
-            }
-        }
-        HirExprKind::MapLiteral(pairs) => {
-            for (k, v) in pairs {
-                walk_dispatch_sites_in_expr(k, f);
-                walk_dispatch_sites_in_expr(v, f);
-            }
-        }
-        HirExprKind::IntLiteral(_)
-        | HirExprKind::FloatLiteral(_)
-        | HirExprKind::StringLiteral(_)
-        | HirExprKind::BoolLiteral(_)
-        | HirExprKind::CharLiteral(_)
-        | HirExprKind::UnitLiteral
-        | HirExprKind::RegexLiteral { .. }
-        | HirExprKind::VarRef(_)
-        | HirExprKind::Continue
-        | HirExprKind::NullLiteral
-        | HirExprKind::Error => {}
-    }
-}
-
-fn walk_dispatch_sites_in_stmt(stmt: &HirStatement, f: &mut impl FnMut(DispatchSite<'_>)) {
-    match stmt {
-        HirStatement::Let { value, .. } => {
-            if let Some(v) = value {
-                walk_dispatch_sites_in_expr(v, f);
-            }
-        }
-        HirStatement::Expr(e) => walk_dispatch_sites_in_expr(e, f),
+        walk_expr(self, expr);
     }
 }
 
 /// Walk every `Ty` reachable from the program (function/method bodies,
-/// signatures, fields) and call `f` on each. Deliberately conservative:
-/// it visits every expression's `.ty` and every let/param/return type, so
-/// any `Box[String]` that appears as a value type, a binding type, or a
-/// constructor result type is recorded.
+/// signatures, class and struct fields, const types) and call `f` on each.
+/// Deliberately conservative: it visits every type the shared HIR walk
+/// reaches, so any `Box[String]` that appears as a value type, a binding
+/// type, or a constructor result type is recorded. Type aliases and
+/// newtypes only re-name an existing type; the underlying instantiation is
+/// recorded at the use site, so their targets are not walked.
 fn walk_tys_in_program(program: &HirProgram, f: &mut impl FnMut(&Ty)) {
+    let mut tys = Tys { f };
     for item in &program.items {
-        walk_tys_in_item(item, f);
+        tys.visit_item(item);
     }
 }
 
-fn walk_tys_in_item(item: &HirItem, f: &mut impl FnMut(&Ty)) {
-    match item {
-        HirItem::Function(func) => walk_tys_in_func(func, f),
-        HirItem::Class(c) => {
-            for field in &c.fields {
-                f(&field.ty);
+struct Tys<'f, F> {
+    f: &'f mut F,
+}
+
+impl<F: FnMut(&Ty)> Visit for Tys<'_, F> {
+    fn visit_item(&mut self, item: &HirItem) {
+        // Item-level types `walk_item` does not visit.
+        if let HirItem::Class(HirClassDef { fields, .. })
+        | HirItem::Struct(HirStructDef { fields, .. }) = item
+        {
+            for field in fields {
+                (self.f)(&field.ty);
             }
-            for m in &c.methods {
-                walk_tys_in_func(m, f);
-            }
-            for b in &c.impl_blocks {
-                for it in &b.items {
-                    if let HirImplItem::Method(m) = it {
-                        walk_tys_in_func(m, f);
+        }
+        if let HirItem::Const(c) = item {
+            (self.f)(&c.ty);
+        }
+        walk_item(self, item);
+    }
+
+    fn visit_ty(&mut self, ty: &Ty) {
+        (self.f)(ty);
+    }
+}
+impl<'a> Lowerer<'a> {
+    /// Remove every function that dispatches on a still-generic receiver (an
+    /// abstract callee, see [`abstract_callee`]) when no reachable function
+    /// calls it, and fail when one does. Such a body is the opaque fallback of
+    /// a generic class whose instantiations all got monomorphised copies, so
+    /// it is dead; a live one would have no concrete method to call.
+    ///
+    /// Roots are the entry point and every function except the opaque
+    /// generic-class bodies and the abstract-dispatching ones; reachability
+    /// follows `Call` callees,
+    /// `FuncAddr` targets, closure drop functions and vtable slots.
+    pub(super) fn prune_unmonomorphised_bodies(&self, mir: &mut MirProgram) -> Result<(), String> {
+        let abstract_call = |f: &MirFunction| -> Option<String> {
+            f.blocks
+                .iter()
+                .flat_map(|b| &b.instructions)
+                .find_map(|inst| match inst {
+                    MirInst::Call { callee, .. } if callee.starts_with(ABSTRACT_CALLEE_PREFIX) => {
+                        Some(callee.clone())
                     }
-                }
-            }
+                    _ => None,
+                })
+        };
+        let poisoned: HashMap<String, String> = mir
+            .functions
+            .iter()
+            .filter_map(|f| abstract_call(f).map(|callee| (f.name.clone(), callee)))
+            .collect();
+        if poisoned.is_empty() {
+            return Ok(());
         }
-        HirItem::Struct(s) => {
-            for field in &s.fields {
-                f(&field.ty);
-            }
-            for m in &s.methods {
-                walk_tys_in_func(m, f);
-            }
-        }
-        HirItem::Enum(e) => {
-            for m in &e.methods {
-                walk_tys_in_func(m, f);
-            }
-        }
-        HirItem::Impl(b) => {
-            for it in &b.items {
-                if let HirImplItem::Method(m) = it {
-                    walk_tys_in_func(m, f);
-                }
-            }
-        }
-        HirItem::Module(m) => {
-            for sub in &m.items {
-                walk_tys_in_item(sub, f);
-            }
-        }
-        // Const initializers and mixin default-method bodies CAN host
-        // generic-class instantiations; walk them so a class used only there
-        // is still monomorphized (same hole class as the map-literal value).
-        HirItem::Const(c) => {
-            f(&c.ty);
-            walk_tys_in_expr(&c.value, f);
-        }
-        HirItem::Mixin(m) => {
-            for it in &m.items {
-                if let HirMixinItem::DefaultMethod(func) = it {
-                    walk_tys_in_func(func, f);
-                }
-            }
-        }
-        // Type aliases / newtypes only re-name an existing type; the
-        // underlying instantiation is recorded at the use site, and the alias
-        // target itself is not a fresh generic-class use to monomorphize.
-        // Enumerated explicitly (no `_ =>`) so a new `HirItem` variant that
-        // carries methods/exprs becomes a compile error here.
-        HirItem::TypeAlias(_) | HirItem::Newtype(_) => {}
-    }
-}
 
-fn walk_tys_in_func(func: &HirFuncDef, f: &mut impl FnMut(&Ty)) {
-    for p in &func.params {
-        f(&p.ty);
-    }
-    f(&func.return_ty);
-    walk_tys_in_expr(&func.body, f);
-}
-
-fn walk_tys_in_expr(expr: &HirExpr, f: &mut impl FnMut(&Ty)) {
-    f(&expr.ty);
-    match &expr.kind {
-        HirExprKind::FieldAccess { object, .. } => walk_tys_in_expr(object, f),
-        HirExprKind::MethodCall {
-            object,
-            args,
-            block,
-            ..
-        } => {
-            walk_tys_in_expr(object, f);
-            for a in args {
-                walk_tys_in_expr(a, f);
+        let by_name: HashMap<&str, &MirFunction> =
+            mir.functions.iter().map(|f| (f.name.as_str(), f)).collect();
+        let mut live: HashSet<&str> = HashSet::new();
+        // (function, the live function that references it; `None` for a root)
+        let mut work: Vec<(&str, Option<&str>)> = mir
+            .functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .filter(|n| !poisoned.contains_key(*n) && !self.opaque_generic_bodies.contains(*n))
+            .map(|n| (n, None))
+            .collect();
+        // The entry point is always live: pruning a poisoned `main` dropped
+        // the program's entry and surfaced as a link error (`undefined
+        // reference to main`) instead of this pass's diagnostic.
+        work.extend(mir.entry.as_deref().map(|e| (e, None)));
+        work.extend(
+            mir.vtables
+                .iter()
+                .flat_map(|v| v.method_symbols.iter().map(|m| (m.as_str(), None))),
+        );
+        while let Some((name, caller)) = work.pop() {
+            if !live.insert(name) {
+                continue;
             }
-            if let Some(b) = block {
-                walk_tys_in_expr(b, f);
+            let Some(f) = by_name.get(name) else {
+                continue;
+            };
+            if let Some(callee) = poisoned.get(name) {
+                return Err(format!(
+                    "cannot lower `{name}`{}: it calls `{}` on a value whose type is still a \
+                     generic parameter, and no monomorphised copy replaces this call \
+                     (generic-calling-generic requires a concrete leaf — see \
+                     docs/decisions/q17-cross-package-monomorphization.md).",
+                    caller
+                        .map(|c| format!(" (called from `{c}`)"))
+                        .unwrap_or_default(),
+                    callee.trim_start_matches(ABSTRACT_CALLEE_PREFIX)
+                ));
             }
-        }
-        HirExprKind::FnCall { args, .. } => {
-            for a in args {
-                walk_tys_in_expr(a, f);
-            }
-        }
-        HirExprKind::BinaryOp { left, right, .. } => {
-            walk_tys_in_expr(left, f);
-            walk_tys_in_expr(right, f);
-        }
-        HirExprKind::UnaryOp { operand, .. } => walk_tys_in_expr(operand, f),
-        HirExprKind::Borrow { expr: inner, .. } => walk_tys_in_expr(inner, f),
-        HirExprKind::Block(stmts, tail) | HirExprKind::UnsafeBlock(stmts, tail) => {
-            for s in stmts {
-                walk_tys_in_stmt(s, f);
-            }
-            if let Some(t) = tail {
-                walk_tys_in_expr(t, f);
-            }
-        }
-        HirExprKind::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => {
-            walk_tys_in_expr(cond, f);
-            walk_tys_in_expr(then_branch, f);
-            if let Some(e) = else_branch {
-                walk_tys_in_expr(e, f);
-            }
-        }
-        HirExprKind::Match { scrutinee, arms } => {
-            walk_tys_in_expr(scrutinee, f);
-            for arm in arms {
-                if let Some(g) = &arm.guard {
-                    walk_tys_in_expr(g, f);
-                }
-                walk_tys_in_expr(&arm.body, f);
-            }
-        }
-        HirExprKind::Loop { body } => walk_tys_in_expr(body, f),
-        HirExprKind::While { condition, body } => {
-            walk_tys_in_expr(condition, f);
-            walk_tys_in_expr(body, f);
-        }
-        HirExprKind::For { iterable, body, .. } => {
-            walk_tys_in_expr(iterable, f);
-            walk_tys_in_expr(body, f);
-        }
-        HirExprKind::Assign { target, value, .. } => {
-            walk_tys_in_expr(target, f);
-            walk_tys_in_expr(value, f);
-        }
-        HirExprKind::MultiAssign {
-            targets, values, ..
-        } => {
-            for t in targets {
-                walk_tys_in_expr(t, f);
-            }
-            for v in values {
-                walk_tys_in_expr(v, f);
-            }
-        }
-        HirExprKind::CompoundAssign { target, value, .. } => {
-            walk_tys_in_expr(target, f);
-            walk_tys_in_expr(value, f);
-        }
-        HirExprKind::Return(e) | HirExprKind::Break(e) | HirExprKind::Next(e) => {
-            if let Some(inner) = e {
-                walk_tys_in_expr(inner, f);
-            }
-        }
-        HirExprKind::Closure { body, .. } => walk_tys_in_expr(body, f),
-        HirExprKind::Construct { fields, .. } | HirExprKind::EnumVariant { fields, .. } => {
-            for (_, e) in fields {
-                walk_tys_in_expr(e, f);
-            }
-        }
-        HirExprKind::Tuple(elems) | HirExprKind::ArrayLiteral(elems) => {
-            for e in elems {
-                walk_tys_in_expr(e, f);
-            }
-        }
-        HirExprKind::Index { object, index } => {
-            walk_tys_in_expr(object, f);
-            walk_tys_in_expr(index, f);
-        }
-        HirExprKind::Cast {
-            expr: inner,
-            target,
-        } => {
-            walk_tys_in_expr(inner, f);
-            f(target);
-        }
-        HirExprKind::ArrayFill { value, .. } => walk_tys_in_expr(value, f),
-        HirExprKind::Range { start, end, .. } => {
-            if let Some(s) = start {
-                walk_tys_in_expr(s, f);
-            }
-            if let Some(e) = end {
-                walk_tys_in_expr(e, f);
-            }
-        }
-        HirExprKind::Interpolation { parts } => {
-            for p in parts {
-                if let HirInterpolationPart::Expr { expr: e, .. } = p {
-                    walk_tys_in_expr(e, f);
+            for inst in f.blocks.iter().flat_map(|b| &b.instructions) {
+                match inst {
+                    MirInst::Call { callee, .. } => work.push((callee, Some(name))),
+                    MirInst::FuncAddr { func_name, .. } => work.push((func_name, Some(name))),
+                    _ => {}
                 }
             }
+            work.extend(
+                f.closure_drops
+                    .iter()
+                    .map(|d| (d.drop_fn.as_str(), Some(name))),
+            );
         }
-        HirExprKind::MacroCall { args, .. } => {
-            for a in args {
-                walk_tys_in_expr(a, f);
-            }
-        }
-        // Map literals carry key/value sub-expressions whose types (and the
-        // generic-class instantiations inside them) must be walked. The
-        // previous `_ => {}` silently dropped these, so a generic class used
-        // ONLY as a map-literal value (e.g. `{ 1 => Box.new(5) }`) was never
-        // monomorphized — a latent link-failure hole the exhaustive match
-        // now closes.
-        HirExprKind::MapLiteral(pairs) => {
-            for (k, v) in pairs {
-                walk_tys_in_expr(k, f);
-                walk_tys_in_expr(v, f);
-            }
-        }
-        // Leaves with no nested `HirExpr` / `Ty` to walk. Enumerated
-        // explicitly (no `_ =>`) so a new `HirExprKind` variant that DOES
-        // carry a reachable type becomes a compile error here instead of a
-        // silently-skipped monomorphization target.
-        HirExprKind::IntLiteral(_)
-        | HirExprKind::FloatLiteral(_)
-        | HirExprKind::StringLiteral(_)
-        | HirExprKind::BoolLiteral(_)
-        | HirExprKind::CharLiteral(_)
-        | HirExprKind::UnitLiteral
-        | HirExprKind::RegexLiteral { .. }
-        | HirExprKind::VarRef(_)
-        | HirExprKind::Continue
-        | HirExprKind::NullLiteral
-        | HirExprKind::Error => {}
-    }
-}
-
-fn walk_tys_in_stmt(stmt: &HirStatement, f: &mut impl FnMut(&Ty)) {
-    match stmt {
-        HirStatement::Let { ty, value, .. } => {
-            f(ty);
-            if let Some(v) = value {
-                walk_tys_in_expr(v, f);
-            }
-        }
-        HirStatement::Expr(e) => walk_tys_in_expr(e, f),
+        mir.functions.retain(|f| !poisoned.contains_key(&f.name));
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod builtin_head_tests {
     use super::*;
-
-    /// One sample instance per builtin head. Pins `BUILTIN_HEAD_HOMES` (the
-    /// class-eligibility list) against `builtin_head_home` (the Ty-variant
-    /// map): adding a head to one without the other silently disables
-    /// specialization for that head, which is a WRONG-ANSWER bug (the abstract
-    /// body still lowers, it just mis-dispatches), not a link failure.
-    fn samples() -> Vec<(Ty, &'static str)> {
-        vec![
-            (Ty::Array(Box::new(Ty::Int)), "Array"),
-            (Ty::Set(Box::new(Ty::Int)), "Set"),
-            (Ty::Map(Box::new(Ty::String), Box::new(Ty::Int)), "Hash"),
-            (Ty::Option(Box::new(Ty::Int)), "Option"),
-            (
-                Ty::Result(Box::new(Ty::Int), Box::new(Ty::String)),
-                "Result",
-            ),
-        ]
-    }
-
-    #[test]
-    fn builtin_head_homes_cover_every_head() {
-        let mut mapped: Vec<&str> = samples()
-            .iter()
-            .map(|(ty, expected)| {
-                let (home, _) = builtin_head_home(ty)
-                    .unwrap_or_else(|| panic!("no builtin head home for {ty:?}"));
-                assert_eq!(home, *expected, "unexpected home for {ty:?}");
-                home
-            })
-            .collect();
-        mapped.sort_unstable();
-        let mut listed: Vec<&str> = BUILTIN_HEAD_HOMES.to_vec();
-        listed.sort_unstable();
-        assert_eq!(
-            mapped, listed,
-            "BUILTIN_HEAD_HOMES and builtin_head_home have drifted apart"
-        );
-    }
-
-    #[test]
-    fn every_head_round_trips_through_its_inverse() {
-        for (ty, _) in samples() {
-            let (class, args) = builtin_head_home(&ty).expect("head");
-            assert_eq!(
-                builtin_head_ty(class, &args).as_ref(),
-                Some(&ty),
-                "builtin_head_ty is not the inverse of builtin_head_home for {ty:?}"
-            );
-        }
-    }
 
     #[test]
     fn nominal_and_structural_spellings_key_identically() {
@@ -2079,23 +1704,9 @@ mod builtin_head_tests {
             name: "Array".to_string(),
             generic_args: vec![Ty::String],
         };
-        let (sc, sa) = builtin_head_home(&structural).expect("structural head");
-        let (nc, na) = builtin_head_home(&nominal).expect("nominal head");
+        let (sc, sa) = Ty::builtin_head(&structural).expect("structural head");
+        let (nc, na) = Ty::builtin_head(&nominal).expect("nominal head");
         assert_eq!(mono_base(sc, &sa), mono_base(nc, &na));
-    }
-
-    #[test]
-    fn a_non_generic_class_is_not_a_builtin_head() {
-        let plain = Ty::Class {
-            name: "Array".to_string(),
-            generic_args: vec![],
-        };
-        assert!(builtin_head_home(&plain).is_none());
-        let user = Ty::Class {
-            name: "Box".to_string(),
-            generic_args: vec![Ty::Int],
-        };
-        assert!(builtin_head_home(&user).is_none());
     }
 
     #[test]

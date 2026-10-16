@@ -69,6 +69,145 @@ impl Resolver {
         super::stdlib::register_all(self);
     }
 
+    /// Resolve an FFI decl's declared params and return type. Returns the
+    /// param types, their `ParamInfo`s, the return type (`Unit` when the
+    /// decl names none) and the return type as `HirFfiFunc` records it
+    /// (`None` when the decl names none).
+    fn resolve_ffi_sig(
+        &mut self,
+        ffi_fn: &ast::FfiFunction,
+    ) -> (Vec<Ty>, Vec<ParamInfo>, Ty, Option<Ty>) {
+        let param_tys: Vec<Ty> = ffi_fn
+            .params
+            .iter()
+            .map(|p| self.resolve_type_expr(&p.type_expr))
+            .collect();
+        let params: Vec<ParamInfo> = ffi_fn
+            .params
+            .iter()
+            .zip(param_tys.iter().cloned())
+            .map(|(p, ty)| ParamInfo {
+                name: p.name.clone(),
+                ty,
+                auto_assign: false,
+                default: None,
+            })
+            .collect();
+        let hir_return_ty = ffi_fn
+            .return_type
+            .as_ref()
+            .map(|t| self.resolve_type_expr(t));
+        let return_ty = hir_return_ty.clone().unwrap_or(Ty::Unit);
+        (param_tys, params, return_ty, hir_return_ty)
+    }
+
+    /// #06.8 Phase 2: check `signature` against any earlier decl of the
+    /// same LINKED C symbol (the `as "..."` alias, else the Ruxen name),
+    /// emitting E0722 on a wire-shape conflict, then record it if it is the
+    /// first. Catches two decls that route to one linker symbol with
+    /// incompatible signatures before codegen emits a mis-typed call.
+    fn record_ffi_link_symbol(&mut self, ffi_fn: &ast::FfiFunction, signature: &FnSignature) {
+        let link_symbol = ffi_fn
+            .c_symbol
+            .clone()
+            .unwrap_or_else(|| ffi_fn.name.clone());
+        self.check_ffi_signature_conflict(&link_symbol, signature, &ffi_fn.span);
+        self.extern_symbol_table
+            .entry(link_symbol)
+            .or_insert_with(|| (signature.clone(), ffi_fn.span.clone()));
+    }
+
+    /// Register one decl of a top-level `lib "X" ... end` block as a free
+    /// function bound to its C symbol, and return its `HirFfiFunc`.
+    fn register_ffi_fn(&mut self, ffi_fn: &ast::FfiFunction) -> HirFfiFunc {
+        let (param_tys, params, return_ty, hir_return_ty) = self.resolve_ffi_sig(ffi_fn);
+        let signature = FnSignature {
+            self_mode: None,
+            is_class_method: false,
+            is_async: false,
+            generic_params: vec![],
+            params,
+            return_ty,
+            c_symbol: ffi_fn.c_symbol.clone(),
+        };
+        self.record_ffi_link_symbol(ffi_fn, &signature);
+        let id = self.symbols.define(
+            ffi_fn.name.clone(),
+            DefKind::Function { signature },
+            Visibility::Public,
+            ffi_fn.span.clone(),
+        );
+        self.scopes.insert(ffi_fn.name.clone(), id);
+        HirFfiFunc {
+            ruxen_name: ffi_fn.name.clone(),
+            c_symbol: ffi_fn.c_symbol.clone(),
+            parent_type: None,
+            param_types: param_tys,
+            return_type: hir_return_ty,
+            is_variadic: ffi_fn.is_variadic,
+        }
+    }
+
+    /// Register every decl in `fns` (the `lib` blocks of a class or mixin
+    /// body, or of a mixin the class includes) as a class method on
+    /// `parent`, and push them as one `HirFfiLib` named after the parent.
+    fn register_lib_block<'a>(
+        &mut self,
+        parent: DefId,
+        parent_name: &str,
+        fns: impl IntoIterator<Item = &'a ast::FfiFunction>,
+        ffi_libs: &mut Vec<HirFfiLib>,
+        module_path: &[String],
+    ) {
+        let mut hir_fns: Vec<HirFfiFunc> = Vec::new();
+        for ffi_fn in fns {
+            self.register_class_lib_method_in(
+                parent,
+                parent_name,
+                ffi_fn,
+                &mut hir_fns,
+                module_path,
+            );
+        }
+        if !hir_fns.is_empty() {
+            ffi_libs.push(HirFfiLib {
+                name: parent_name.to_string(),
+                functions: hir_fns,
+            });
+        }
+    }
+
+    /// Push a `Class` scope holding `generic_params`' type params, so a
+    /// class or mixin body's `lib` decls can name them (`-> Mutex[T]`).
+    /// Returns those params as `Ty::TypeParam`s, in order. The caller pops
+    /// the scope.
+    fn push_lib_decl_scope(&mut self, generic_params: &Option<ast::GenericParams>) -> Vec<Ty> {
+        self.scopes.push(ScopeKind::Class);
+        let mut type_params: Vec<Ty> = Vec::new();
+        for p in generic_params.iter().flat_map(|gps| &gps.params) {
+            if let ast::GenericParam::Type { name, bounds, span } = p {
+                let bound_refs: Vec<MixinRef> = bounds
+                    .iter()
+                    .map(|b| MixinRef::from_bound_name(&b.path))
+                    .collect();
+                let gp_def = self.symbols.define(
+                    name.clone(),
+                    DefKind::TypeParam {
+                        bounds: bound_refs.clone(),
+                    },
+                    Visibility::Private,
+                    span.clone(),
+                );
+                self.scopes.insert_type(name.clone(), gp_def);
+                type_params.push(Ty::TypeParam {
+                    name: name.clone(),
+                    bounds: bound_refs,
+                });
+            }
+        }
+        type_params
+    }
+
     /// #06.8 Phase 3b: register a single FFI decl from inside a class
     /// (or mixin) body's `lib "X" ... end` block as a CLASS METHOD on
     /// that parent.
@@ -101,32 +240,7 @@ impl Resolver {
         hir_fns: &mut Vec<HirFfiFunc>,
         module_path: &[String],
     ) {
-        let param_tys: Vec<Ty> = ffi_fn
-            .params
-            .iter()
-            .map(|p| self.resolve_type_expr(&p.type_expr))
-            .collect();
-        let params: Vec<ParamInfo> = ffi_fn
-            .params
-            .iter()
-            .zip(param_tys.iter().cloned())
-            .map(|(p, ty)| ParamInfo {
-                name: p.name.clone(),
-                ty,
-                auto_assign: false,
-                default: None,
-            })
-            .collect();
-        let return_ty = ffi_fn
-            .return_type
-            .as_ref()
-            .map(|t| self.resolve_type_expr(t))
-            .unwrap_or(Ty::Unit);
-        let return_ty_for_hir = if ffi_fn.return_type.is_some() {
-            Some(return_ty.clone())
-        } else {
-            None
-        };
+        let (param_tys, params, return_ty, hir_return_ty) = self.resolve_ffi_sig(ffi_fn);
         // The class-method vs instance-method distinction is carried on
         // the AST FfiFunction (set by the parser based on whether the
         // decl was `def self.NAME` or plain `def NAME`). Ruxen's
@@ -143,8 +257,12 @@ impl Resolver {
         // have no own generics.
         let generic_params = self.ffi_receiver_element_bounds(parent, ffi_fn);
         let signature = FnSignature {
+            // `def var NAME` mutates its receiver: MIR passes it as
+            // `&var Self` (`emit_rebinding_self_call`).
             self_mode: if ffi_fn.is_class_method {
                 None
+            } else if ffi_fn.mutates_self {
+                Some(crate::hir::nodes::HirSelfMode::RefMut)
             } else {
                 Some(crate::hir::nodes::HirSelfMode::Ref)
             },
@@ -155,11 +273,7 @@ impl Resolver {
             return_ty,
             c_symbol: ffi_fn.c_symbol.clone(),
         };
-        let link_symbol = ffi_fn
-            .c_symbol
-            .clone()
-            .unwrap_or_else(|| ffi_fn.name.clone());
-        self.check_ffi_signature_conflict(&link_symbol, &signature, &ffi_fn.span);
+        self.record_ffi_link_symbol(ffi_fn, &signature);
         // #06.93 Phase 3: when `parent_name` is a class inside one or
         // more enclosing modules, prefix the mangled ruxen_name with
         // the underscored module path. The MIR call site builds the
@@ -188,9 +302,6 @@ impl Resolver {
             Visibility::Public,
             ffi_fn.span.clone(),
         );
-        self.extern_symbol_table
-            .entry(link_symbol)
-            .or_insert_with(|| (signature, ffi_fn.span.clone()));
         self.pass1_class_lib_methods
             .entry(parent)
             .or_default()
@@ -237,7 +348,7 @@ impl Resolver {
             ruxen_name: mangled,
             c_symbol: ffi_fn.c_symbol.clone(),
             param_types: final_param_tys,
-            return_type: return_ty_for_hir,
+            return_type: hir_return_ty,
             is_variadic: ffi_fn.is_variadic,
             // The class/mixin name is encoded in the mangled ruxen_name
             // (`ClassName_method`) so any downstream consumer that wants
@@ -313,18 +424,8 @@ impl Resolver {
         let class_param_names: Vec<String> = self
             .symbols
             .get(parent)
-            .map(|d| match &d.kind {
-                DefKind::Class { info } => {
-                    info.generic_params.iter().map(|g| g.name.clone()).collect()
-                }
-                DefKind::Struct { info } => {
-                    info.generic_params.iter().map(|g| g.name.clone()).collect()
-                }
-                DefKind::Enum { info } => {
-                    info.generic_params.iter().map(|g| g.name.clone()).collect()
-                }
-                _ => vec![],
-            })
+            .and_then(|d| d.kind.generic_params())
+            .map(|gps| gps.iter().map(|g| g.name.clone()).collect())
             .unwrap_or_default();
         let mut out = Vec::new();
         for pred in &wc.predicates {
@@ -341,15 +442,7 @@ impl Resolver {
             let refs: Vec<MixinRef> = pred
                 .bounds
                 .iter()
-                .map(|bound| MixinRef {
-                    name: bound.path.segments.join("."),
-                    generic_args: bound
-                        .path
-                        .generic_args
-                        .as_ref()
-                        .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                        .unwrap_or_default(),
-                })
+                .map(|bound| MixinRef::from_bound(&bound.path, |a| self.resolve_type_expr(a)))
                 .collect();
             out.push(GenericParamInfo::type_param(name.clone(), refs));
         }
@@ -450,37 +543,9 @@ impl Resolver {
         if class.lib_decls.is_empty() {
             return;
         }
-        self.scopes.push(ScopeKind::Class);
-        let mut self_generic_args: Vec<Ty> = Vec::new();
-        if let Some(gps) = class.generic_params.as_ref() {
-            for p in &gps.params {
-                if let ast::GenericParam::Type { name, bounds, span } = p {
-                    let bound_refs: Vec<MixinRef> = bounds
-                        .iter()
-                        .map(|b| MixinRef {
-                            name: b.path.segments.join("."),
-                            generic_args: vec![],
-                        })
-                        .collect();
-                    let gp_def = self.symbols.define(
-                        name.clone(),
-                        DefKind::TypeParam {
-                            bounds: bound_refs.clone(),
-                        },
-                        Visibility::Private,
-                        span.clone(),
-                    );
-                    self.scopes.insert_type(name.clone(), gp_def);
-                    self_generic_args.push(Ty::TypeParam {
-                        name: name.clone(),
-                        bounds: bound_refs,
-                    });
-                }
-            }
-        }
         let self_ty = Ty::Class {
             name: class.name.clone(),
-            generic_args: self_generic_args,
+            generic_args: self.push_lib_decl_scope(&class.generic_params),
         };
         let self_def = self.symbols.define(
             "Self".to_string(),
@@ -489,26 +554,14 @@ impl Resolver {
             class.span.clone(),
         );
         self.scopes.insert_type("Self".to_string(), self_def);
-
-        let mut hir_fns: Vec<HirFfiFunc> = Vec::new();
-        for lib in &class.lib_decls {
-            for ffi_fn in &lib.functions {
-                self.register_class_lib_method_in(
-                    id,
-                    &class.name,
-                    ffi_fn,
-                    &mut hir_fns,
-                    module_path,
-                );
-            }
-        }
+        self.register_lib_block(
+            id,
+            &class.name,
+            class.lib_decls.iter().flat_map(|lib| &lib.functions),
+            ffi_libs,
+            module_path,
+        );
         self.scopes.pop();
-        if !hir_fns.is_empty() {
-            ffi_libs.push(HirFfiLib {
-                name: class.name.clone(),
-                functions: hir_fns,
-            });
-        }
     }
 
     /// Second-walk driver for typed FFI returns: recurse into
@@ -743,10 +796,7 @@ impl Resolver {
                                 parent: None,
                                 fields: vec![],
                                 methods: vec![],
-                                opt_out_send: false,
-                                opt_out_sync: false,
-                                manual_send: false,
-                                manual_sync: false,
+                                auto_traits: AutoTraitFlags::default(),
                                 const_predicates: vec![],
                                 flat_heap_struct,
                                 runtime_dispatch_includes: Vec::new(),
@@ -772,10 +822,7 @@ impl Resolver {
                                 parent: None,
                                 fields: vec![],
                                 methods: vec![],
-                                opt_out_send: false,
-                                opt_out_sync: false,
-                                manual_send: false,
-                                manual_sync: false,
+                                auto_traits: AutoTraitFlags::default(),
                                 const_predicates: vec![],
                                 flat_heap_struct,
                                 runtime_dispatch_includes: Vec::new(),
@@ -856,24 +903,7 @@ impl Resolver {
                             .collect::<Vec<_>>()
                     })
                     .collect();
-                if !included_lib_fns.is_empty() {
-                    let mut hir_fns: Vec<HirFfiFunc> = Vec::new();
-                    for ffi_fn in &included_lib_fns {
-                        self.register_class_lib_method_in(
-                            id,
-                            &class.name,
-                            ffi_fn,
-                            &mut hir_fns,
-                            module_path,
-                        );
-                    }
-                    if !hir_fns.is_empty() {
-                        ffi_libs.push(HirFfiLib {
-                            name: class.name.clone(),
-                            functions: hir_fns,
-                        });
-                    }
-                }
+                self.register_lib_block(id, &class.name, &included_lib_fns, ffi_libs, module_path);
             }
             ast::TopLevelItem::Struct(s) => {
                 let struct_gp = self.collect_generic_param_infos(&s.generic_params);
@@ -884,10 +914,7 @@ impl Resolver {
                             generic_params: struct_gp,
                             fields: vec![],
                             layout: s.layout.clone(),
-                            opt_out_send: false,
-                            opt_out_sync: false,
-                            manual_send: false,
-                            manual_sync: false,
+                            auto_traits: AutoTraitFlags::default(),
                             const_predicates: vec![],
                         },
                     },
@@ -924,10 +951,7 @@ impl Resolver {
                         info: EnumInfo {
                             generic_params: enum_gp,
                             variants: vec![],
-                            opt_out_send: false,
-                            opt_out_sync: false,
-                            manual_send: false,
-                            manual_sync: false,
+                            auto_traits: AutoTraitFlags::default(),
                             const_predicates: vec![],
                         },
                     },
@@ -950,10 +974,7 @@ impl Resolver {
                                 ast::GenericParam::Type { name, bounds, span } => {
                                     let trait_refs: Vec<MixinRef> = bounds
                                         .iter()
-                                        .map(|b| MixinRef {
-                                            name: b.path.segments.join("."),
-                                            generic_args: vec![],
-                                        })
+                                        .map(|b| MixinRef::from_bound_name(&b.path))
                                         .collect();
                                     Some((name.clone(), trait_refs, span.clone()))
                                 }
@@ -1089,10 +1110,7 @@ impl Resolver {
                             super_traits: t
                                 .super_traits
                                 .iter()
-                                .map(|b| MixinRef {
-                                    name: b.path.segments.join("."),
-                                    generic_args: vec![],
-                                })
+                                .map(|b| MixinRef::from_bound_name(&b.path))
                                 .collect(),
                             required_methods: required,
                             default_methods: defaults,
@@ -1109,25 +1127,17 @@ impl Resolver {
                 // class methods on the mixin (parallel to class-body lib
                 // handling above). Same semantics: no implicit `self`,
                 // `ClassName.method(...)` call surface.
+                // The mixin's generic params are in scope, as a class's are.
                 if !t.lib_decls.is_empty() {
-                    let mut hir_fns: Vec<HirFfiFunc> = Vec::new();
-                    for lib in &t.lib_decls {
-                        for ffi_fn in &lib.functions {
-                            self.register_class_lib_method_in(
-                                id,
-                                &t.name,
-                                ffi_fn,
-                                &mut hir_fns,
-                                module_path,
-                            );
-                        }
-                    }
-                    if !hir_fns.is_empty() {
-                        ffi_libs.push(HirFfiLib {
-                            name: t.name.clone(),
-                            functions: hir_fns,
-                        });
-                    }
+                    self.push_lib_decl_scope(&t.generic_params);
+                    self.register_lib_block(
+                        id,
+                        &t.name,
+                        t.lib_decls.iter().flat_map(|lib| &lib.functions),
+                        ffi_libs,
+                        module_path,
+                    );
+                    self.scopes.pop();
                 }
             }
             ast::TopLevelItem::TypeAlias(ta) => {
@@ -1249,77 +1259,14 @@ impl Resolver {
                 self.scopes.insert(f.name.clone(), id);
             }
             ast::TopLevelItem::Lib(lib) => {
-                let mut hir_fns: Vec<HirFfiFunc> = Vec::with_capacity(lib.functions.len());
-                for ffi_fn in &lib.functions {
-                    let param_tys: Vec<Ty> = ffi_fn
-                        .params
-                        .iter()
-                        .map(|p| self.resolve_type_expr(&p.type_expr))
-                        .collect();
-                    let params: Vec<ParamInfo> = ffi_fn
-                        .params
-                        .iter()
-                        .zip(param_tys.iter().cloned())
-                        .map(|(p, ty)| ParamInfo {
-                            name: p.name.clone(),
-                            ty,
-                            auto_assign: false,
-                            default: None,
-                        })
-                        .collect();
-                    let return_ty = ffi_fn
-                        .return_type
-                        .as_ref()
-                        .map(|t| self.resolve_type_expr(t))
-                        .unwrap_or(Ty::Unit);
-                    let return_ty_for_hir = if ffi_fn.return_type.is_some() {
-                        Some(return_ty.clone())
-                    } else {
-                        None
-                    };
-                    let signature = FnSignature {
-                        self_mode: None,
-                        is_class_method: false,
-                        is_async: false,
-                        generic_params: vec![],
-                        params,
-                        return_ty,
-                        c_symbol: ffi_fn.c_symbol.clone(),
-                    };
-                    // #06.8 Phase 2: E0722 cross-decl conflict check. Keyed
-                    // on the LINKED C symbol (alias if present, Ruxen name
-                    // otherwise) so two decls that route to the same linker
-                    // symbol with incompatible signatures are caught before
-                    // codegen produces a mis-typed call.
-                    let link_symbol = ffi_fn
-                        .c_symbol
-                        .clone()
-                        .unwrap_or_else(|| ffi_fn.name.clone());
-                    self.check_ffi_signature_conflict(&link_symbol, &signature, &ffi_fn.span);
-                    let id = self.symbols.define(
-                        ffi_fn.name.clone(),
-                        DefKind::Function {
-                            signature: signature.clone(),
-                        },
-                        Visibility::Public,
-                        ffi_fn.span.clone(),
-                    );
-                    self.extern_symbol_table
-                        .entry(link_symbol)
-                        .or_insert_with(|| (signature, ffi_fn.span.clone()));
-                    self.scopes.insert(ffi_fn.name.clone(), id);
-                    hir_fns.push(HirFfiFunc {
-                        ruxen_name: ffi_fn.name.clone(),
-                        c_symbol: ffi_fn.c_symbol.clone(),
-                        parent_type: None,
-                        param_types: param_tys,
-                        return_type: return_ty_for_hir,
-                        is_variadic: ffi_fn.is_variadic,
-                    });
-                }
+                let functions = lib
+                    .functions
+                    .iter()
+                    .map(|ffi_fn| self.register_ffi_fn(ffi_fn))
+                    .collect();
                 ffi_libs.push(HirFfiLib {
                     name: lib.name.clone(),
-                    functions: hir_fns,
+                    functions,
                 });
             }
             _ => {

@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeSet;
 
 /// Post-lowering fixup that elides use-after-free deallocs caused by the
 /// `lower_assign` "pre-reassign drop" path. That path emits
@@ -705,9 +706,9 @@ fn local_initialized_at_all_returns(
             if !reachable[block_id] {
                 continue;
             }
-            let new_in = if block_id == func.entry_block {
-                false
-            } else if predecessors[block_id].is_empty() {
+            // The entry block and a block with no reachable predecessor
+            // start with `local` uninitialized.
+            let new_in = if block_id == func.entry_block || predecessors[block_id].is_empty() {
                 false
             } else {
                 predecessors[block_id]
@@ -791,11 +792,24 @@ fn branch_local_drop_blocks(
     placements
 }
 
+/// True when `name` (a `Ty::Class` name such as `Shop.Cart`, or its MIR
+/// symbol spelling `Shop_Cart`) resolves to a class in `drop_classes`, the
+/// DefIds `collect_user_drop_classes` registered as having a `def drop`.
+pub(crate) fn is_drop_class(
+    symbols: &SymbolTable,
+    drop_classes: &HashSet<DefId>,
+    name: &str,
+) -> bool {
+    symbols
+        .type_def(name)
+        .is_some_and(|def| drop_classes.contains(&def.id))
+}
+
 pub(super) fn insert_drops(
     func: &mut MirFunction,
     return_locals: &HashSet<LocalId>,
     symbols: &SymbolTable,
-    user_drop_classes: &HashSet<String>,
+    user_drop_classes: &HashSet<DefId>,
     resolve_ffi_alias_callee: &dyn Fn(String) -> String,
 ) {
     // Avoid recursing into a class's own `drop` method: if `Holder_drop`
@@ -804,8 +818,7 @@ pub(super) fn insert_drops(
     let in_user_drop_method = func
         .name
         .strip_suffix("_drop")
-        .map(|prefix| user_drop_classes.contains(prefix))
-        .unwrap_or(false);
+        .is_some_and(|prefix| is_drop_class(symbols, user_drop_classes, prefix));
 
     // Build a set of parameter locals to skip.
     let param_set: HashSet<LocalId> = func.params.iter().copied().collect();
@@ -813,7 +826,7 @@ pub(super) fn insert_drops(
     // Determine which locals' value provenance is a fresh allocation that
     // this frame owns exclusively. We need this set BEFORE building
     // `drop_locals` because String / Vec / HashMap intermediates that are
-    // technically compiler temporaries (`_t…` names) can still own heap
+    // technically compiler temporaries (`LocalKind::Temp`) can still own heap
     // (e.g. the implicit `ruxen_string_from` wrap inserted around a string
     // literal, or the owned `String` a `.clone` produces). Without
     // dropping such intermediates, every interpolated literal leaks the
@@ -864,7 +877,7 @@ pub(super) fn insert_drops(
     // return value. Collect in declaration order.
     //
     // We always drop user-declared locals (`let` bindings) of an owning
-    // type. Compiler-generated temporaries (`_t0`, `_t1`, …) are dropped
+    // type. Compiler temporaries (`LocalKind::Temp`) are dropped
     // only when:
     //   * the temp's type is a built-in heap-owning type
     //     (`String`, `Vec`, `HashMap`), AND
@@ -919,16 +932,7 @@ pub(super) fn insert_drops(
             // is what guards against double-free for locals whose value
             // came from a non-fresh source (e.g. a function-call return
             // pointing into the caller's heap).
-            if !matches!(
-                local.ty,
-                Ty::Class { .. }
-                    | Ty::Struct { .. }
-                    | Ty::Enum { .. }
-                    | Ty::String
-                    | Ty::Array(_)
-                    | Ty::Map(_, _)
-                    | Ty::Set(_)
-            ) {
+            if heap_free_callee(&local.ty).is_none() {
                 return false;
             }
             // Compiler temporaries: only drop heap-owning built-ins
@@ -939,7 +943,7 @@ pub(super) fn insert_drops(
             // when alloc-rooted — without this, the chained
             // `Command.new(p).arg(a).status()` pattern would leak the
             // intermediate Command's args/env spines.
-            if local.name.starts_with("_t") {
+            if local.kind == LocalKind::Temp {
                 let is_builtin_heap = matches!(
                     local.ty,
                     Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_)
@@ -948,14 +952,9 @@ pub(super) fn insert_drops(
                     return true;
                 }
                 if let Ty::Class { name, .. } = &local.ty {
-                    // Match bare name OR any module-qualified entry
-                    // ending in ".<name>" — user_drop_classes uses
-                    // qualified names for stdlib classes (see W15 fix
-                    // in drop_callees builder below).
-                    let suffix = format!(".{}", name);
-                    let user_drop_match = user_drop_classes.contains(name)
-                        || user_drop_classes.iter().any(|q| q.ends_with(&suffix));
-                    if user_drop_match && dealloc_safe.contains(&local.id) {
+                    if is_drop_class(symbols, user_drop_classes, name)
+                        && dealloc_safe.contains(&local.id)
+                    {
                         return true;
                     }
                 }
@@ -977,14 +976,26 @@ pub(super) fn insert_drops(
         .collect();
 
     if drop_locals.is_empty() && closure_drop_callees.is_empty() {
+        // A returned `String` rebuilt in a loop (`out = out + x`) is never
+        // scope-exit dropped, but each value it held before the last is.
+        let rebind_locals = free_prior_value_on_rebind(
+            func,
+            symbols,
+            &dealloc_safe,
+            &param_set,
+            &moved_to_ffi,
+            return_locals,
+            &return_alias_chain,
+        );
+        zero_init_at_entry(func, &rebind_locals);
         return;
     }
 
     // Pre-compute, for each drop-eligible local, the user-drop class name
     // so we can emit `{ClassName}_drop(self)` immediately before the
     // dealloc + no-op cleanup. Indexed for cheap lookup inside the loop.
-    // Build the drop-callee map. For each drop-eligible local, look
-    // up its class name in user_drop_classes (bare or qualified) and
+    // Build the drop-callee map. For each drop-eligible local, resolve
+    // its class to a DefId in user_drop_classes and
     // record the synthesized `{ClassName}_drop` callee. Resolve that
     // callee through `ffi_alias_map` so lib-decl `def drop as
     // "ruxen_..."` aliases reach the right C symbol — without this
@@ -1000,10 +1011,7 @@ pub(super) fn insert_drops(
         .filter_map(|&id| {
             let local = func.locals.iter().find(|l| l.id == id)?;
             if let Ty::Class { name, .. } = &local.ty {
-                let bare_match = user_drop_classes.contains(name);
-                let suffix = format!(".{}", name);
-                let suffix_match = user_drop_classes.iter().any(|q| q.ends_with(&suffix));
-                if bare_match || suffix_match {
+                if is_drop_class(symbols, user_drop_classes, name) {
                     let mangled = format!("{}_drop", name);
                     let callee = resolve_ffi_alias_callee(mangled);
                     return Some((id, callee));
@@ -1071,23 +1079,33 @@ pub(super) fn insert_drops(
         // `MirInst::Drop` is a backend no-op; this type-directed call is
         // the actual free and remains gated by exclusive alloc provenance.
         if dealloc_safe.contains(&local_id) && !user_drop_freed_storage {
-            let local = func
+            let ty = func
                 .locals
                 .iter()
                 .find(|candidate| candidate.id == local_id)
-                .expect("drop_locals references a missing local");
-            let drop_callee = heap_free_callee(&local.ty).unwrap_or_else(|| {
-                unimplemented!("insert_drops: no drop callee for type {:?}", local.ty)
-            });
-            instructions.push(MirInst::Call {
-                dest: None,
-                callee: drop_callee.to_string(),
-                args: vec![MirValue::Use(local_id)],
-            });
+                .expect("drop_locals references a missing local")
+                .ty
+                .clone();
+            // `drop_locals` admits only types `heap_free_callee` covers.
+            instructions.extend(
+                heap_free_call(func, symbols, &ty, local_id)
+                    .into_iter()
+                    .flatten(),
+            );
         }
         instructions.push(MirInst::Drop { local: local_id });
         drop_instructions.insert(local_id, instructions);
     }
+
+    let rebind_locals = free_prior_value_on_rebind(
+        func,
+        symbols,
+        &dealloc_safe,
+        &param_set,
+        &moved_to_ffi,
+        return_locals,
+        &return_alias_chain,
+    );
 
     // A marker-only Drop never reads the local in either backend. Only locals
     // with real closure/user/free glue need path-sensitive placement.
@@ -1175,6 +1193,8 @@ pub(super) fn insert_drops(
         func.blocks[func.entry_block].instructions = initializers;
     }
 
+    zero_init_at_entry(func, &rebind_locals);
+
     let return_blocks: Vec<BlockId> = func
         .blocks
         .iter()
@@ -1219,6 +1239,151 @@ pub(super) fn insert_drops(
     }
 }
 
+/// Free the value a built-in heap local (`String`, `Array`, `Hash`, `Set`)
+/// held before it is redefined, and return the locals this applies to.
+///
+/// Scope-exit drop frees a local's LAST value. A local redefined in a loop
+/// body (`out = out + x`, or any temporary such as an interpolation result)
+/// or rebound in straight-line code held other values before that, and each
+/// of them leaked. Every definition of such a local now frees the previous
+/// value first; the local is zeroed at function entry (see
+/// [`zero_init_at_entry`]) so the first definition frees NULL.
+///
+/// Sound for exactly the locals the dealloc-safety analysis proved own
+/// every value they are given: each definition stores a fresh allocation
+/// (any other source taints the local), and no value is ever moved out,
+/// aliased into another local, or stored. A returned local qualifies: its
+/// earlier values are not the one returned. When the definition reads the
+/// local itself (`s = f(s)`), the old value is kept in a temporary and freed
+/// after the definition instead.
+fn free_prior_value_on_rebind(
+    func: &mut MirFunction,
+    symbols: &SymbolTable,
+    dealloc_safe: &HashSet<LocalId>,
+    params: &HashSet<LocalId>,
+    moved_to_ffi: &HashSet<LocalId>,
+    return_locals: &HashSet<LocalId>,
+    return_alias_chain: &HashSet<LocalId>,
+) -> Vec<LocalId> {
+    // Lowering already frees the prior value of some rebinds itself (the
+    // splat assignment `a, *rest = xs` drops the old `rest`). Such a local
+    // has its own free discipline; a second free here would double-free.
+    let freed_by_lowering: HashSet<LocalId> = func
+        .blocks
+        .iter()
+        .flat_map(|block| block.instructions.iter())
+        .filter_map(|inst| match inst {
+            MirInst::Call { callee, args, .. }
+                if FREE_FAMILY_CALLEES.contains(&callee.as_str()) =>
+            {
+                match args.first() {
+                    Some(MirValue::Use(local)) => Some(*local),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect();
+    let candidates: Vec<(LocalId, Ty)> = func
+        .locals
+        .iter()
+        .filter(|local| {
+            !freed_by_lowering.contains(&local.id)
+                && matches!(
+                    local.ty,
+                    Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_)
+                )
+                && dealloc_safe.contains(&local.id)
+                && !params.contains(&local.id)
+                && !moved_to_ffi.contains(&local.id)
+                && (return_locals.contains(&local.id) || !return_alias_chain.contains(&local.id))
+        })
+        .map(|local| (local.id, local.ty.clone()))
+        .collect();
+
+    let mut rebound = Vec::new();
+    for (local, ty) in candidates {
+        let defs: Vec<(BlockId, usize)> = func
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(block_id, block)| {
+                block
+                    .instructions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, inst)| instruction_initializes_local(inst, local))
+                    .map(move |(idx, _)| (block_id, idx))
+            })
+            .collect();
+        let redefined = defs.len() > 1
+            || defs.iter().any(|&(block_id, _)| {
+                terminator_successors(&func.blocks[block_id].terminator)
+                    .into_iter()
+                    .any(|succ| block_reaches(func, succ, block_id))
+            });
+        if !redefined {
+            continue;
+        }
+        // Rewrite the last definition first so earlier indices stay valid.
+        for &(block_id, idx) in defs.iter().rev() {
+            let reads_local =
+                instruction_reads_local(&func.blocks[block_id].instructions[idx], local);
+            let freed = if reads_local {
+                func.new_temp(ty.clone())
+            } else {
+                local
+            };
+            let free = heap_free_call(func, symbols, &ty, freed)
+                .expect("a rebind-free candidate has a heap-owning type");
+            let instructions = &mut func.blocks[block_id].instructions;
+            if reads_local {
+                instructions.splice(idx + 1..idx + 1, free);
+                instructions.insert(
+                    idx,
+                    MirInst::Assign {
+                        dest: freed,
+                        value: MirValue::Use(local),
+                    },
+                );
+            } else {
+                instructions.splice(idx..idx, free);
+            }
+        }
+        rebound.push(local);
+    }
+    rebound
+}
+
+/// True when `inst` reads `local` (as opposed to only defining it).
+fn instruction_reads_local(inst: &MirInst, local: LocalId) -> bool {
+    match inst {
+        MirInst::Assign { value, .. } => value_uses_local(value, local),
+        MirInst::Call { args, .. } => args.iter().any(|arg| value_uses_local(arg, local)),
+        MirInst::CallIndirect { callee, args, .. } => {
+            *callee == local || args.iter().any(|arg| value_uses_local(arg, local))
+        }
+        MirInst::Copy { src, .. } | MirInst::Move { src, .. } => *src == local,
+        _ => false,
+    }
+}
+
+/// Zero `locals` at function entry, so a free that runs before a local's
+/// first definition frees NULL. Inserted after every other drop rewrite so
+/// the zero store is not mistaken for a definition by the flag analysis.
+fn zero_init_at_entry(func: &mut MirFunction, locals: &[LocalId]) {
+    let entry = func.entry_block;
+    for (i, &local) in locals.iter().enumerate() {
+        func.blocks[entry].instructions.insert(
+            i,
+            MirInst::Assign {
+                dest: local,
+                value: MirValue::Literal(Literal::Int(0)),
+            },
+        );
+    }
+}
+
 /// The type-correct heap-free runtime callee for a drop-eligible local.
 ///
 /// SINGLE SOURCE for the drop-callee selection consumed by BOTH scope-exit
@@ -1231,43 +1396,671 @@ pub(super) fn insert_drops(
 /// lockstep means a loop-body `String`/`Vec`/`Hash`/`Set` is freed by the same
 /// helper a function-scope one is.
 ///
+/// One callee per container. What the container's slots own is not part of
+/// the callee: it travels as the element descriptor arguments that
+/// [`heap_free_call`] appends.
+///
 /// Returns `None` for a type that is not heap-owning (the caller decides
-/// whether that is a bug or a no-op).
+/// whether that is a bug or a no-op). `Some` is also exactly the drop pass's
+/// eligibility test.
 pub(super) fn heap_free_callee(ty: &Ty) -> Option<&'static str> {
     Some(match ty {
         Ty::String => "ruxen_string_free",
-        // Element-aware Vec helpers (Phase 2 stdlib batch 2 #03):
-        // `ruxen_vec_drop_string` frees each `char*` slot before the spine;
-        // `ruxen_vec_drop_vec` recurses one level; anything else is spine-only.
-        Ty::Array(elem) => match elem.as_ref() {
-            Ty::String => "ruxen_vec_drop_string",
-            Ty::Array(_) => "ruxen_vec_drop_vec",
-            _ => "ruxen_vec_free",
-        },
-        // Element-aware HashMap helpers (Phase 2 stdlib batch 2 #04): a 4-way
-        // table over `(K is heap, V is heap)`; deeper nesting falls back to the
-        // spine-only `ruxen_hash_free` (documented CHANGELOG limitation).
-        Ty::Map(k, v) => {
-            let k_string = matches!(k.as_ref(), Ty::String);
-            let v_string = matches!(v.as_ref(), Ty::String);
-            let v_vec = matches!(v.as_ref(), Ty::Array(_));
-            match (k_string, v_string, v_vec) {
-                (true, true, _) => "ruxen_hash_drop_string_string",
-                (true, false, _) => "ruxen_hash_drop_string_v",
-                (false, true, _) => "ruxen_hash_drop_v_string",
-                (false, false, true) => "ruxen_hash_drop_v_vec",
-                _ => "ruxen_hash_free",
-            }
-        }
-        // HashSet[T] (Phase 2 stdlib batch 2 #04): String element walks slots
-        // before the spine; everything else is spine-only.
-        Ty::Set(elem) => match elem.as_ref() {
-            Ty::String => "ruxen_set_drop_string",
-            _ => "ruxen_set_free",
-        },
+        Ty::Array(_) => "ruxen_vec_drop",
+        Ty::Map(_, _) => "ruxen_hash_drop",
+        Ty::Set(_) => "ruxen_set_drop",
         Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => "ruxen_dealloc",
         _ => return None,
     })
+}
+
+/// The complete drop of `value` of type `ty`: the [`heap_free_callee`] call
+/// plus the element descriptors a container's drop glue needs (see the
+/// `RUXEN_ELEM_*` block in `library/std/core/runtime/runtime.h`), preceded by
+/// the instructions that compute a descriptor naming element glue. Temps for
+/// those instructions are allocated in `func`. `None` exactly when
+/// `heap_free_callee` is `None`.
+pub(super) fn heap_free_call(
+    func: &mut MirFunction,
+    symbols: &SymbolTable,
+    ty: &Ty,
+    value: LocalId,
+) -> Option<Vec<MirInst>> {
+    let callee = heap_free_callee(ty)?;
+    let descs = match ty {
+        Ty::Array(elem) => vec![elem_desc(elem, symbols)],
+        Ty::Map(key, val) => vec![ElemDesc::Word(key_elem_desc(key)), elem_desc(val, symbols)],
+        Ty::Set(elem) => vec![ElemDesc::Word(key_elem_desc(elem))],
+        _ => Vec::new(),
+    };
+    let mut insts = Vec::new();
+    let mut args = vec![MirValue::Use(value)];
+    for desc in descs {
+        let mut new_temp = || func.new_temp(Ty::Int);
+        args.push(elem_desc_value(desc, &mut new_temp, &mut insts));
+    }
+    insts.push(MirInst::Call {
+        dest: None,
+        callee: callee.to_string(),
+        args,
+    });
+    Some(insts)
+}
+
+/// Wire values of the element-descriptor tags. Must stay in step with the
+/// `RUXEN_ELEM_*` constants in `library/std/core/runtime/runtime.h`.
+const ELEM_POD: i64 = 0;
+const ELEM_CSTR: i64 = 1;
+const ELEM_VEC: i64 = 3;
+const ELEM_HASH: i64 = 4;
+const ELEM_SET: i64 = 5;
+const ELEM_OBJ: i64 = 6;
+
+/// A descriptor is at most 16 four-bit tags (one `i64`).
+const ELEM_DESC_MAX_TAGS: usize = 16;
+
+/// How many tags may precede an OBJ tag. The glue address fills the word
+/// above the OBJ tag, so it is shifted left four bits per preceding tag plus
+/// four for OBJ itself; a 48-bit code address still fits after two.
+const ELEM_OBJ_MAX_PREFIX_TAGS: usize = 2;
+
+/// Name prefix of the synthesised per-type element glue functions
+/// (`__ruxen_elem_glue_Point`), see [`Lowerer::synthesize_elem_glue`].
+pub(super) const ELEM_GLUE_PREFIX: &str = "__ruxen_elem_glue_";
+
+/// What one collection slot owns, as built by [`elem_desc`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ElemDesc {
+    /// A descriptor word known at compile time.
+    Word(i64),
+    /// A stream ending in OBJ: `tags` holds the `prefix_tags` preceding tags
+    /// and the OBJ tag, and the address of the function `glue` is stored
+    /// above them at run time.
+    Glue {
+        tags: i64,
+        prefix_tags: usize,
+        glue: String,
+    },
+}
+
+/// What one collection slot of type `ty` owns, as a `RUXEN_ELEM_*`
+/// descriptor: a pre-order stream of 4-bit tags, low nibble first.
+///
+/// The ONE builder of element descriptors. Drop glue frees a slot per this
+/// word and `ruxen_elem_clone` (the derived-collection helpers, rewritten in
+/// `key_desc.rs`) copies a slot per the same word, so copy depth and drop
+/// depth cannot drift apart. A type that does not fit is described to the
+/// deepest level that fits, with POD below it: such a value leaks its
+/// deepest elements rather than risking a free of something the copy
+/// aliased.
+pub(super) fn elem_desc(ty: &Ty, symbols: &SymbolTable) -> ElemDesc {
+    for depth in (0..=ELEM_DESC_MAX_TAGS).rev() {
+        let mut tags = Vec::new();
+        let glue = push_elem_tags(ty, depth, symbols, &mut tags);
+        if tags.len() > ELEM_DESC_MAX_TAGS {
+            continue;
+        }
+        let word = tags
+            .iter()
+            .enumerate()
+            .fold(0, |desc, (i, tag)| desc | (tag << (4 * i)));
+        match glue {
+            Some(glue) if tags.len() <= ELEM_OBJ_MAX_PREFIX_TAGS + 1 => {
+                return ElemDesc::Glue {
+                    tags: word,
+                    prefix_tags: tags.len() - 1,
+                    glue,
+                }
+            }
+            None => return ElemDesc::Word(word),
+            _ => {}
+        }
+    }
+    ElemDesc::Word(ELEM_POD)
+}
+
+/// Append the tags for `ty` to `out`, and return the glue function when the
+/// stream ends in an OBJ tag.
+fn push_elem_tags(
+    ty: &Ty,
+    depth: usize,
+    symbols: &SymbolTable,
+    out: &mut Vec<i64>,
+) -> Option<String> {
+    match ty {
+        Ty::String => {
+            out.push(ELEM_CSTR);
+            None
+        }
+        Ty::Array(elem) if depth > 0 => {
+            out.push(ELEM_VEC);
+            push_elem_tags(elem, depth - 1, symbols, out)
+        }
+        Ty::Map(key, val) if depth > 0 => {
+            out.push(ELEM_HASH);
+            out.push(key_elem_desc(key));
+            push_elem_tags(val, depth - 1, symbols, out)
+        }
+        Ty::Set(elem) if depth > 0 => {
+            out.push(ELEM_SET);
+            out.push(key_elem_desc(elem));
+            None
+        }
+        _ => {
+            let glue = obj_glue_name(ty, symbols);
+            out.push(if glue.is_some() { ELEM_OBJ } else { ELEM_POD });
+            glue
+        }
+    }
+}
+
+/// The element glue for a slot holding an instance of `ty`, or `None` when
+/// such a slot stays POD (the container never frees it). A non-generic class
+/// or struct qualifies when it has a `clone` (derived or declared): a
+/// derived-collection helper must be able to copy what the drop will free.
+/// Generic classes stay POD because their methods are per-instantiation
+/// symbols; enums because their payloads have no drop rule yet
+/// (`docs/specs/ownership/drop.spec.md`, out of scope).
+fn obj_glue_name(ty: &Ty, symbols: &SymbolTable) -> Option<String> {
+    let name = match ty {
+        Ty::Class { name, generic_args } | Ty::Struct { name, generic_args }
+            if generic_args.is_empty() && !name.contains('.') =>
+        {
+            name
+        }
+        _ => return None,
+    };
+    crate::implicit_includes::derive_applies(ty, symbols, "Clone")
+        .then(|| format!("{ELEM_GLUE_PREFIX}{name}"))
+}
+
+/// Emit the instructions that compute `desc` into `out` and return the
+/// value to pass. A `Glue` descriptor ORs the glue function's address,
+/// shifted above the tag stream, into the tags; a `Word` is a literal.
+pub(super) fn elem_desc_value(
+    desc: ElemDesc,
+    new_temp: &mut dyn FnMut() -> LocalId,
+    out: &mut Vec<MirInst>,
+) -> MirValue {
+    match desc {
+        ElemDesc::Word(word) => MirValue::Literal(Literal::Int(word)),
+        ElemDesc::Glue {
+            tags,
+            prefix_tags,
+            glue,
+        } => {
+            let addr = new_temp();
+            out.push(MirInst::FuncAddr {
+                dest: addr,
+                func_name: glue,
+            });
+            let shifted = new_temp();
+            out.push(MirInst::BinOp {
+                dest: shifted,
+                op: BinOp::Shl,
+                lhs: MirValue::Use(addr),
+                rhs: MirValue::Literal(Literal::Int(4 * (prefix_tags as i64 + 1))),
+            });
+            let word = new_temp();
+            out.push(MirInst::BinOp {
+                dest: word,
+                op: BinOp::BitOr,
+                lhs: MirValue::Use(shifted),
+                rhs: MirValue::Literal(Literal::Int(tags)),
+            });
+            MirValue::Use(word)
+        }
+    }
+}
+
+impl<'a> Lowerer<'a> {
+    /// Define every element glue function an OBJ descriptor names
+    /// (`FuncAddr __ruxen_elem_glue_<Type>`, see [`elem_desc`]). Runs once
+    /// over the whole program, after every body (and every drop) is lowered.
+    ///
+    /// `glue(op, slot)` mirrors a scope-exit drop of a `<Type>` local for
+    /// `op == RUXEN_ELEM_GLUE_DROP` (the type's `def drop`, then
+    /// `ruxen_dealloc` unless that drop releases the storage itself), and
+    /// returns `<Type>_clone(slot)` for `op == RUXEN_ELEM_GLUE_CLONE`.
+    pub(super) fn synthesize_elem_glue(&self, mir: &mut MirProgram) -> Result<(), String> {
+        let defined: HashSet<String> = mir.functions.iter().map(|f| f.name.clone()).collect();
+        let mut wanted: Vec<String> = mir
+            .functions
+            .iter()
+            .flat_map(|f| f.blocks.iter().flat_map(|b| b.instructions.iter()))
+            .filter_map(|inst| match inst {
+                MirInst::FuncAddr { func_name, .. }
+                    if func_name.starts_with(ELEM_GLUE_PREFIX) && !defined.contains(func_name) =>
+                {
+                    Some(func_name.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        wanted.sort_unstable();
+        wanted.dedup();
+        for glue_name in wanted {
+            let type_name = &glue_name[ELEM_GLUE_PREFIX.len()..];
+            let clone_mangled = format!("{type_name}_clone");
+            let clone_callee = self.resolve_ffi_alias_callee(clone_mangled.clone());
+            if clone_callee == clone_mangled && !defined.contains(&clone_callee) {
+                return Err(format!(
+                    "element glue for `{type_name}` needs `{clone_mangled}`, which was not lowered"
+                ));
+            }
+            mir.functions
+                .push(self.build_elem_glue(&glue_name, type_name, clone_callee));
+        }
+        Ok(())
+    }
+
+    fn build_elem_glue(
+        &self,
+        glue_name: &str,
+        type_name: &str,
+        clone_callee: String,
+    ) -> MirFunction {
+        let mut glue = MirFunction::new(glue_name, Ty::Int);
+        let op = glue.new_local("op", Ty::Int, false);
+        let slot = glue.new_local("slot", Ty::Int, false);
+        glue.params = vec![op, slot];
+
+        let is_drop = glue.new_temp(Ty::Bool);
+        let drop_block = glue.new_block();
+        let clone_block = glue.new_block();
+        let entry = glue.entry_block;
+        glue.blocks[entry].instructions.push(MirInst::Compare {
+            dest: is_drop,
+            op: CmpOp::Eq,
+            lhs: MirValue::Use(op),
+            rhs: MirValue::Literal(Literal::Int(0)),
+        });
+        glue.blocks[entry].terminator = Terminator::Branch {
+            cond: MirValue::Use(is_drop),
+            then_block: drop_block,
+            else_block: clone_block,
+        };
+
+        let mut frees_storage = false;
+        if is_drop_class(self.symbols, &self.user_drop_classes, type_name) {
+            let callee = self.resolve_ffi_alias_callee(format!("{type_name}_drop"));
+            frees_storage = crate::mir::lower::runtime_abi::drop_frees_storage(&callee);
+            glue.blocks[drop_block].instructions.push(MirInst::Call {
+                dest: None,
+                callee,
+                args: vec![MirValue::Use(slot)],
+            });
+        }
+        if !frees_storage {
+            glue.blocks[drop_block].instructions.push(MirInst::Call {
+                dest: None,
+                callee: "ruxen_dealloc".to_string(),
+                args: vec![MirValue::Use(slot)],
+            });
+        }
+        let none = glue.new_temp(Ty::Int);
+        glue.blocks[drop_block].instructions.push(MirInst::Assign {
+            dest: none,
+            value: MirValue::Literal(Literal::Int(0)),
+        });
+        glue.blocks[drop_block].terminator = Terminator::Return(Some(MirValue::Use(none)));
+
+        let copy = glue.new_temp(Ty::Int);
+        glue.blocks[clone_block].instructions.push(MirInst::Call {
+            dest: Some(copy),
+            callee: clone_callee,
+            args: vec![MirValue::Use(slot)],
+        });
+        glue.blocks[clone_block].terminator = Terminator::Return(Some(MirValue::Use(copy)));
+        glue
+    }
+}
+
+/// Make a container's drop shallow when a pointer to one of its elements
+/// escaped. Whole-program post-pass over the drops [`insert_drops`] (and the
+/// loop and splat frees) emitted with deep element descriptors.
+///
+/// Reading an element (`a[i]`, `for x in a`, `h[k]`, a `.rx` accessor such as
+/// `first`) yields an alias of a slot the container still owns; the language
+/// has no move-out-of-index rule. When such an alias is stored somewhere that
+/// frees it too (pushed into another collection, passed to a consuming
+/// parameter, kept in a field, returned out of the container's frame, freed),
+/// a deep drop of the source would free the element twice. For those
+/// containers the descriptor arguments become POD: the spine is freed and the
+/// elements are left to the other owner (or leak), never freed twice.
+///
+/// The analysis is flow-insensitive and interprocedural over the functions
+/// in `mir`: a fixpoint computes, per function, which parameters can reach an
+/// escaping sink and which can reach the return value. Unknown callees fall
+/// back to `runtime_abi::callee_ownership`, whose default treats every
+/// argument as escaping.
+pub(super) fn demote_escaping_element_drops(mir: &mut MirProgram, symbols: &SymbolTable) {
+    let index: HashMap<String, usize> = mir
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.name.clone(), i))
+        .collect();
+    let mut summaries: Vec<ParamFlow> = mir
+        .functions
+        .iter()
+        .map(|f| ParamFlow {
+            escapes: vec![false; f.params.len()],
+            returned: vec![false; f.params.len()],
+        })
+        .collect();
+    loop {
+        let mut changed = false;
+        for i in 0..mir.functions.len() {
+            let func = &mir.functions[i];
+            let flow = ElementFlow::analyze(func, &index, &summaries, symbols);
+            let summary = flow.param_flow(func);
+            if summary != summaries[i] {
+                summaries[i] = summary;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    for i in 0..mir.functions.len() {
+        let flow = ElementFlow::analyze(&mir.functions[i], &index, &summaries, symbols);
+        // A closure's drop function frees its captures; the body that may
+        // have leaked their elements is the closure function itself.
+        let closure_body_escapes = mir.functions[i]
+            .name
+            .strip_suffix("_drop")
+            .and_then(|body| index.get(body))
+            .is_some_and(|&body| summaries[body].escapes.iter().any(|e| *e));
+        for block in &mut mir.functions[i].blocks {
+            for inst in &mut block.instructions {
+                let MirInst::Call { callee, args, .. } = inst else {
+                    continue;
+                };
+                if !matches!(
+                    callee.as_str(),
+                    "ruxen_vec_drop" | "ruxen_hash_drop" | "ruxen_set_drop"
+                ) {
+                    continue;
+                }
+                let Some(MirValue::Use(container)) = args.first() else {
+                    continue;
+                };
+                if closure_body_escapes || flow.elements_escaped(*container) {
+                    for desc in args.iter_mut().skip(1) {
+                        *desc = MirValue::Literal(Literal::Int(ELEM_POD));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// What a function does with what its parameters point at, for its callers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParamFlow {
+    /// Something reachable from the parameter may be stored past the call.
+    escapes: Vec<bool>,
+    /// The return value may point into the parameter.
+    returned: Vec<bool>,
+}
+
+/// Points-to facts for one function. A ROOT is a container-typed local or a
+/// non-scalar parameter. `same[l]` is the roots `l` may BE (an alias or a
+/// reference of the root); `elem[l]` the roots `l` may point INTO.
+struct ElementFlow {
+    same: Vec<BTreeSet<LocalId>>,
+    elem: Vec<BTreeSet<LocalId>>,
+    escaped: BTreeSet<LocalId>,
+    returned: BTreeSet<LocalId>,
+}
+
+impl ElementFlow {
+    fn analyze(
+        func: &MirFunction,
+        index: &HashMap<String, usize>,
+        summaries: &[ParamFlow],
+        symbols: &SymbolTable,
+    ) -> Self {
+        let n = func.locals.len();
+        let mut flow = ElementFlow {
+            same: vec![BTreeSet::new(); n],
+            elem: vec![BTreeSet::new(); n],
+            escaped: BTreeSet::new(),
+            returned: BTreeSet::new(),
+        };
+        for local in &func.locals {
+            let is_container = matches!(
+                local.ty.peel_refs(),
+                Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_)
+            );
+            let is_param = func.params.contains(&local.id);
+            if is_container || (is_param && !is_scalar(&local.ty)) {
+                flow.same[local.id as usize].insert(local.id);
+            }
+        }
+        loop {
+            let before = flow.size();
+            for block in &func.blocks {
+                for inst in &block.instructions {
+                    flow.transfer(func, inst, index, summaries, symbols);
+                }
+                if let Terminator::Return(Some(MirValue::Use(value))) = &block.terminator {
+                    let reach = flow.reach(*value);
+                    // Returning an alias INTO a local container outlives
+                    // the container's drop at this frame's exit.
+                    let into_locals: Vec<LocalId> = flow.elem[*value as usize]
+                        .iter()
+                        .copied()
+                        .filter(|root| !func.params.contains(root))
+                        .collect();
+                    flow.escaped.extend(into_locals);
+                    flow.returned.extend(reach);
+                }
+            }
+            if flow.size() == before {
+                return flow;
+            }
+        }
+    }
+
+    fn size(&self) -> usize {
+        self.same
+            .iter()
+            .chain(&self.elem)
+            .map(BTreeSet::len)
+            .sum::<usize>()
+            + self.escaped.len()
+            + self.returned.len()
+    }
+
+    /// Every root `value` may be or point into.
+    fn reach(&self, value: LocalId) -> BTreeSet<LocalId> {
+        let value = value as usize;
+        self.same[value].union(&self.elem[value]).copied().collect()
+    }
+
+    fn flow_into(&mut self, dest: LocalId, roots: BTreeSet<LocalId>) {
+        self.elem[dest as usize].extend(roots);
+    }
+
+    fn transfer(
+        &mut self,
+        func: &MirFunction,
+        inst: &MirInst,
+        index: &HashMap<String, usize>,
+        summaries: &[ParamFlow],
+        symbols: &SymbolTable,
+    ) {
+        use crate::mir::lower::runtime_abi::{callee_ownership, user_callee_param_is_ref};
+        let non_scalar = |local: LocalId| !is_scalar(&func.locals[local as usize].ty);
+        match inst {
+            MirInst::Assign {
+                dest,
+                value: MirValue::Use(src),
+            }
+            | MirInst::Copy { dest, src }
+            | MirInst::Move { dest, src }
+            | MirInst::Ref { dest, src }
+            | MirInst::RefMut { dest, src } => {
+                let same = self.same[*src as usize].clone();
+                let elem = self.elem[*src as usize].clone();
+                self.same[*dest as usize].extend(same);
+                self.elem[*dest as usize].extend(elem);
+            }
+            MirInst::GetField { dest, base, .. }
+            | MirInst::GetPayload {
+                dest, src: base, ..
+            } => {
+                if non_scalar(*dest) {
+                    let reach = self.reach(*base);
+                    self.flow_into(*dest, reach);
+                }
+            }
+            MirInst::SetField {
+                value: MirValue::Use(value),
+                ..
+            } => {
+                let reach = self.reach(*value);
+                self.escaped.extend(reach);
+            }
+            MirInst::CallIndirect { dest, args, .. } => {
+                let mut reach = BTreeSet::new();
+                for arg in args {
+                    if let MirValue::Use(arg) = arg {
+                        reach.extend(self.reach(*arg));
+                    }
+                }
+                if let Some(dest) = dest.filter(|d| non_scalar(*d)) {
+                    self.flow_into(dest, reach.clone());
+                }
+                self.escaped.extend(reach);
+            }
+            MirInst::Call { dest, callee, args } => {
+                let summary = index.get(callee.as_str()).map(|&i| &summaries[i]);
+                let frees =
+                    FREE_FAMILY_CALLEES.contains(&callee.as_str()) || callee.ends_with("_drop");
+                let abi = callee_ownership(callee);
+                let param_is_ref = if summary.is_none() && !frees && !abi.args_are_borrowed {
+                    user_callee_param_is_ref(symbols, callee, args.len())
+                } else {
+                    Vec::new()
+                };
+                let mut result_reach = BTreeSet::new();
+                for (i, arg) in args.iter().enumerate() {
+                    let MirValue::Use(arg) = arg else {
+                        continue;
+                    };
+                    let reach = self.reach(*arg);
+                    let escapes = if frees {
+                        // Freeing an element alias frees the slot's object.
+                        self.escaped.extend(self.elem[*arg as usize].clone());
+                        false
+                    } else if let Some(summary) = summary {
+                        if summary.returned.get(i).copied().unwrap_or(true) {
+                            result_reach.extend(reach.iter().copied());
+                        }
+                        summary.escapes.get(i).copied().unwrap_or(true)
+                    } else {
+                        result_reach.extend(reach.iter().copied());
+                        !(abi.borrows_first_arg && i == 0)
+                            && (abi.arg_transfer.contains(i)
+                                || !(abi.args_are_borrowed
+                                    || param_is_ref.get(i).copied().unwrap_or(false)))
+                    };
+                    if escapes {
+                        // A collection that takes in an alias (or a value of
+                        // unknown provenance: a parameter) may now hold the
+                        // same object twice, or one another owner frees, so
+                        // its own drop must not free it either. An owned
+                        // local moved in is not an alias.
+                        let aliased = !self.elem[*arg as usize].is_empty()
+                            || self.same[*arg as usize]
+                                .iter()
+                                .any(|r| func.params.contains(r));
+                        if summary.is_none() && abi.arg_transfer.contains(i) && aliased {
+                            if let Some(MirValue::Use(target)) = args.first() {
+                                self.escaped.extend(self.reach(*target));
+                            }
+                        }
+                        self.escaped.extend(reach);
+                    }
+                }
+                if let Some(dest) = dest.filter(|d| non_scalar(*d)) {
+                    let fresh_owned = summary.is_none()
+                        && abi.result == crate::mir::lower::runtime_abi::ResultOwnership::Fresh
+                        && !func.locals[dest as usize].ty.any(&mut |t| {
+                            matches!(
+                                t,
+                                Ty::Ref(_)
+                                    | Ty::RefMut(_)
+                                    | Ty::RefLifetime(_, _)
+                                    | Ty::RefMutLifetime(_, _)
+                                    | Ty::Tuple(_)
+                            )
+                        });
+                    if !fresh_owned {
+                        self.flow_into(dest, result_reach);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// True when an element of the container `local` may be owned elsewhere.
+    fn elements_escaped(&self, local: LocalId) -> bool {
+        self.same[local as usize].iter().any(|root| {
+            self.escaped.contains(root)
+                || self
+                    .escaped
+                    .iter()
+                    .any(|escaped| self.same[*escaped as usize].contains(&local))
+        })
+    }
+
+    fn param_flow(&self, func: &MirFunction) -> ParamFlow {
+        ParamFlow {
+            escapes: func
+                .params
+                .iter()
+                .map(|&p| self.elements_escaped(p))
+                .collect(),
+            returned: func
+                .params
+                .iter()
+                .map(|p| self.returned.contains(p))
+                .collect(),
+        }
+    }
+}
+
+/// The drop callees that free their first argument. Must list what
+/// [`heap_free_callee`] can return.
+const FREE_FAMILY_CALLEES: &[&str] = &[
+    "ruxen_dealloc",
+    "ruxen_string_free",
+    "ruxen_vec_drop",
+    "ruxen_hash_drop",
+    "ruxen_set_drop",
+];
+
+/// A register value that can never carry a pointer.
+fn is_scalar(ty: &Ty) -> bool {
+    ty.is_scalar_primitive() || matches!(ty, Ty::Unit | Ty::Never)
+}
+
+/// The descriptor of a `Hash` key or a `Set` element: CSTR or POD only.
+/// Those tables copy keys by their `key_kind` (`ruxen_set_insert_owned`,
+/// `union`, `from_iter`), which can only say "a string" or "a word", so a
+/// deeper key ownership would free what the copy aliased.
+fn key_elem_desc(ty: &Ty) -> i64 {
+    match ty {
+        Ty::String => ELEM_CSTR,
+        _ => ELEM_POD,
+    }
 }
 
 /// Compute the set of locals whose value provenance is a fresh
@@ -1656,4 +2449,67 @@ fn compute_return_alias_chain(
         }
     }
     chain
+}
+
+#[cfg(test)]
+mod elem_desc_tests {
+    use super::*;
+
+    fn array(elem: Ty) -> Ty {
+        Ty::Array(Box::new(elem))
+    }
+
+    fn word(ty: &Ty) -> i64 {
+        match elem_desc(ty, &SymbolTable::new()) {
+            ElemDesc::Word(word) => word,
+            glue => panic!("expected a compile-time word, got {glue:?}"),
+        }
+    }
+
+    #[test]
+    fn nested_types_encode_pre_order_low_nibble_first() {
+        // Array[String]: VEC then CSTR.
+        assert_eq!(word(&array(Ty::String)), 0x13);
+        // Hash[String, Array[Int]]: HASH, key CSTR, value VEC then POD.
+        let map = Ty::Map(Box::new(Ty::String), Box::new(array(Ty::Int)));
+        assert_eq!(word(&map), 0x314);
+        // A Set element is a key: never deeper than CSTR.
+        assert_eq!(word(&Ty::Set(Box::new(array(Ty::String)))), 0x05);
+    }
+
+    #[test]
+    fn a_type_deeper_than_sixteen_tags_is_cut_to_pod() {
+        let mut deep = Ty::String;
+        for _ in 0..20 {
+            deep = array(deep);
+        }
+        // Fifteen VEC tags and a POD leaf: the deepest levels leak rather
+        // than overflow the word.
+        assert_eq!(word(&deep), 0x0333_3333_3333_3333);
+    }
+
+    #[test]
+    fn a_glue_descriptor_ors_the_shifted_glue_address_into_its_tags() {
+        let mut next = 10;
+        let mut new_temp = || {
+            next += 1;
+            next
+        };
+        let mut out = Vec::new();
+        let desc = ElemDesc::Glue {
+            tags: 0x63,
+            prefix_tags: 1,
+            glue: format!("{ELEM_GLUE_PREFIX}Point"),
+        };
+        let value = elem_desc_value(desc, &mut new_temp, &mut out);
+        assert!(matches!(value, MirValue::Use(13)));
+        assert!(matches!(
+            &out[..],
+            [
+                MirInst::FuncAddr { dest: 11, func_name },
+                MirInst::BinOp { dest: 12, op: BinOp::Shl, rhs: MirValue::Literal(Literal::Int(8)), .. },
+                MirInst::BinOp { dest: 13, op: BinOp::BitOr, rhs: MirValue::Literal(Literal::Int(0x63)), .. },
+            ] if func_name == "__ruxen_elem_glue_Point"
+        ));
+    }
 }

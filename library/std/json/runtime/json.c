@@ -208,8 +208,7 @@ static void out_init(JsonOut *out, int pretty, int indent) {
     out->error_tag = -1;
     out->pretty = pretty;
     out->indent = indent < 0 ? 0 : indent;
-    out->buf = (char *)malloc(out->cap);
-    if (!out->buf) ruxen_panic("out of memory");
+    out->buf = (char *)ruxen_xmalloc(out->cap);
     out->buf[0] = '\0';
 }
 
@@ -293,21 +292,8 @@ static int append_utf8(JsonOut *out, uint32_t cp) {
     if (cp == 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
         return 0;
     }
-    if (cp <= 0x7F) {
-        out_byte(out, (char)cp);
-    } else if (cp <= 0x7FF) {
-        out_byte(out, (char)(0xC0 | (cp >> 6)));
-        out_byte(out, (char)(0x80 | (cp & 0x3F)));
-    } else if (cp <= 0xFFFF) {
-        out_byte(out, (char)(0xE0 | (cp >> 12)));
-        out_byte(out, (char)(0x80 | ((cp >> 6) & 0x3F)));
-        out_byte(out, (char)(0x80 | (cp & 0x3F)));
-    } else {
-        out_byte(out, (char)(0xF0 | (cp >> 18)));
-        out_byte(out, (char)(0x80 | ((cp >> 12) & 0x3F)));
-        out_byte(out, (char)(0x80 | ((cp >> 6) & 0x3F)));
-        out_byte(out, (char)(0x80 | (cp & 0x3F)));
-    }
+    char bytes[4];
+    out_mem(out, bytes, ruxen_utf8_encode(cp, bytes));
     return out->error_tag < 0;
 }
 
@@ -532,8 +518,7 @@ static void *parse_number(JsonParser *p) {
     }
 
     size_t len = (size_t)(p->cur - start);
-    char *tmp = (char *)malloc(len + 1);
-    if (!tmp) ruxen_panic("out of memory");
+    char *tmp = (char *)ruxen_xmalloc(len + 1);
     memcpy(tmp, start, len);
     tmp[len] = '\0';
 
@@ -775,20 +760,6 @@ static int64_t json_payload(void *value) {
     return ((int64_t *)value)[1];
 }
 
-static void *option_none(void) {
-    int64_t *out = (int64_t *)ruxen_alloc(16);
-    *(int32_t *)out = 0;
-    out[1] = 0;
-    return out;
-}
-
-static void *option_some(int64_t payload) {
-    int64_t *out = (int64_t *)ruxen_alloc(16);
-    *(int32_t *)out = 1;
-    out[1] = payload;
-    return out;
-}
-
 void *ruxen_json_kind(void *value) {
     int tag = json_tag(value);
     if (tag < RUXEN_JSON_NULL || tag > RUXEN_JSON_OBJECT) tag = RUXEN_JSON_NULL;
@@ -824,29 +795,29 @@ int8_t ruxen_json_is_object(void *value) {
 }
 
 void *ruxen_json_as_bool(void *value) {
-    if (!ruxen_json_is_bool(value)) return option_none();
-    return option_some(json_payload(value) ? 1 : 0);
+    if (!ruxen_json_is_bool(value)) return ruxen_option_none();
+    return ruxen_option_some(json_payload(value) ? 1 : 0);
 }
 
 void *ruxen_json_as_int(void *value) {
-    if (!ruxen_json_is_int(value)) return option_none();
-    return option_some(json_payload(value));
+    if (!ruxen_json_is_int(value)) return ruxen_option_none();
+    return ruxen_option_some(json_payload(value));
 }
 
 void *ruxen_json_as_float(void *value) {
-    if (!ruxen_json_is_float(value)) return option_none();
-    return option_some(json_payload(value));
+    if (!ruxen_json_is_float(value)) return ruxen_option_none();
+    return ruxen_option_some(json_payload(value));
 }
 
 void *ruxen_json_as_string(void *value) {
-    if (!ruxen_json_is_string(value)) return option_none();
-    return option_some((int64_t)ruxen_string_from((const char *)json_payload(value)));
+    if (!ruxen_json_is_string(value)) return ruxen_option_none();
+    return ruxen_option_some((int64_t)ruxen_string_from((const char *)json_payload(value)));
 }
 
 void *ruxen_json_array_len(void *value) {
-    if (!ruxen_json_is_array(value)) return option_none();
+    if (!ruxen_json_is_array(value)) return ruxen_option_none();
     RuxenVec *items = (RuxenVec *)json_payload(value);
-    return option_some(items ? (int64_t)items->len : 0);
+    return ruxen_option_some(items ? (int64_t)items->len : 0);
 }
 
 /* `Json.array_get(value, index) -> Option[Json]`. The element at `index`
@@ -854,16 +825,16 @@ void *ruxen_json_array_len(void *value) {
  * `object_get`). None for a non-array, a null payload, or an
  * out-of-range index. */
 void *ruxen_json_array_get(void *value, int64_t index) {
-    if (!ruxen_json_is_array(value)) return option_none();
+    if (!ruxen_json_is_array(value)) return ruxen_option_none();
     RuxenVec *items = (RuxenVec *)json_payload(value);
-    if (!items || index < 0 || index >= (int64_t)items->len) return option_none();
-    return option_some(items->data[index]);
+    if (!items || index < 0 || index >= (int64_t)items->len) return ruxen_option_none();
+    return ruxen_option_some(items->data[index]);
 }
 
 void *ruxen_json_object_len(void *value) {
-    if (!ruxen_json_is_object(value)) return option_none();
+    if (!ruxen_json_is_object(value)) return ruxen_option_none();
     RuxenHash *obj = (RuxenHash *)json_payload(value);
-    return option_some(obj ? (int64_t)obj->len : 0);
+    return ruxen_option_some(obj ? (int64_t)obj->len : 0);
 }
 
 static RuxenHashEntry *json_object_find(RuxenHash *obj, const char *key) {
@@ -882,8 +853,8 @@ int8_t ruxen_json_object_has(void *value, const char *key) {
 }
 
 void *ruxen_json_object_get(void *value, const char *key) {
-    if (!ruxen_json_is_object(value)) return option_none();
+    if (!ruxen_json_is_object(value)) return ruxen_option_none();
     RuxenHashEntry *entry = json_object_find((RuxenHash *)json_payload(value), key);
-    if (!entry) return option_none();
-    return option_some(entry->value);
+    if (!entry) return ruxen_option_none();
+    return ruxen_option_some(entry->value);
 }

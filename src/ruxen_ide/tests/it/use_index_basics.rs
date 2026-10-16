@@ -204,3 +204,24 @@ fn skips_compiler_internal_double_underscore_defs() {
     let visible = def_by_name(&result, "visible_anchor_qzx");
     assert!(idx.count(visible) >= 2, "decl + 1 use minimum");
 }
+
+/// A call of a struct method lands on the overload typeck selected: each of
+/// the two `area_anchor_qzx` overloads gets its declaration plus its own one
+/// call, the bare `p.area_anchor_qzx` included.
+#[test]
+fn struct_method_call_lands_on_the_selected_overload() {
+    let src = load("struct_overloaded_method");
+    let (result, idx) = index_of(&src);
+    let symbols = result.symbols.as_ref().expect("symbols");
+    let counts: Vec<usize> = symbols
+        .iter()
+        // A later overload is registered as `area_anchor_qzx__overload<N>`.
+        .filter(|d| d.name.starts_with("area_anchor_qzx"))
+        .map(|d| idx.count(d.id))
+        .collect();
+    assert_eq!(
+        counts,
+        vec![2, 2],
+        "expected each overload to have 1 decl + 1 call"
+    );
+}

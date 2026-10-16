@@ -6,17 +6,138 @@ use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 use crate::resolve::symbols::{ty_has_derive_trait, ty_is_effectively_copy, SymbolTable};
 
+/// The hashing mixin, declared in `std/hash`. The one spelling every phase
+/// uses; `Hash` names only the `Hash[K, V]` collection.
+pub(crate) const HASHABLE: &str = "Hashable";
+
 const SUPPORTED_DERIVES: [&str; 9] = [
     "Debug",
     "Clone",
     "Copy",
     "PartialEq",
     "Eq",
-    "Hashable",
+    HASHABLE,
     "Default",
     "Ord",
     "PartialOrd",
 ];
+
+/// The derives whose body the compiler synthesises, each with the method it
+/// defines. MIR emits the body as `{Type}_{method}`; typeck registers the
+/// `.rx` mixin's own `Self`-typed declaration of `method` for the type
+/// (`std/core`, `std/hash`). `Debug`'s `to_debug` is the interpolation hook,
+/// not a method of `mixin Debug`, so typeck finds nothing to register for it.
+pub(crate) const DERIVED_METHODS: [(&str, &str); 7] = [
+    ("Debug", "to_debug"),
+    ("PartialEq", "eq"),
+    (HASHABLE, "hash_code"),
+    ("Default", "default"),
+    ("Ord", "cmp"),
+    ("PartialOrd", "partial_cmp"),
+    ("Clone", "clone"),
+];
+
+/// The method `trait_name`'s derive defines (see [`DERIVED_METHODS`]), or
+/// `None` for a derive with no synthesised body (`Copy`, `Eq`).
+pub(crate) fn derived_method(trait_name: &str) -> Option<&'static str> {
+    DERIVED_METHODS
+        .iter()
+        .find(|(t, _)| *t == trait_name)
+        .map(|(_, m)| *m)
+}
+
+/// Peel references, aliases and newtypes down to the nominal (struct,
+/// class or enum) type, or `None` when there is none.
+pub(crate) fn peel_to_nominal(ty: &Ty) -> Option<&Ty> {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner)
+            | Ty::Newtype { inner, .. }
+            | Ty::Alias { target: inner, .. } => cur = inner,
+            Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => return Some(cur),
+            _ => return None,
+        }
+    }
+}
+
+/// Does a `{Type}_{method}` body exist for `trait_name`'s derive on the
+/// nominal type behind `ty`, either synthesised or written by the user?
+///
+/// This is the one rule MIR dispatch, the derive synthesis and typeck's
+/// derived signatures share:
+///
+/// * a **struct** gets every derive it qualifies for
+///   ([`ty_has_derive_trait`], ruby-naming.spec.md §3.6);
+/// * an **enum** gets `Debug` and `Clone` only (its bodies switch on the
+///   variant; the other derives have no enum body);
+/// * a **class** gets them only at module root (the bodies mangle from the
+///   bare name, so a dotted name would name no symbol), and, except for
+///   `Clone`, only when it has at least one field, inherited ones included.
+///   `fields.all(supports)` is vacuously true for a fieldless class, and the
+///   fieldless classes are the primitive method-homes and FFI handle shells
+///   (`class Int`, `class Mutex[T]`): a structural body for them is wrong
+///   (`Int {}` for a number, `true` for two different mutexes). `Clone`
+///   keeps the ungated rule it always had, so an existing `.clone` call on a
+///   fieldless class still links.
+pub(crate) fn derive_applies(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
+    let Some(nominal) = peel_to_nominal(ty) else {
+        return false;
+    };
+    if !ty_has_derive_trait(nominal, symbols, trait_name) {
+        return false;
+    }
+    match nominal {
+        Ty::Enum { .. } => matches!(trait_name, "Debug" | "Clone"),
+        Ty::Class { name, .. } => {
+            !name.contains('.') && (trait_name == "Clone" || class_has_fields(name, symbols))
+        }
+        _ => true,
+    }
+}
+
+/// Must the compiler synthesise `trait_name`'s derived body for `ty`? True
+/// when [`derive_applies`] and the type does not define the method itself:
+/// a user `def hash_code` is the body, and a second, synthesised
+/// `{Type}_hash_code` would be a duplicate definition.
+pub(crate) fn derive_is_synthesized(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
+    derive_applies(ty, symbols, trait_name) && !declares_derived_method(ty, symbols, trait_name)
+}
+
+/// Does the nominal type behind `ty` declare `trait_name`'s derived method
+/// (see [`DERIVED_METHODS`]) itself?
+fn declares_derived_method(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
+    let Some(method) = derived_method(trait_name) else {
+        return false;
+    };
+    let Some(Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. }) =
+        peel_to_nominal(ty)
+    else {
+        return false;
+    };
+    symbols
+        .nominal(name)
+        .is_some_and(|def| symbols.methods_of(def.id, method).next().is_some())
+}
+
+/// Does class `name` have a field of its own or an inherited one?
+fn class_has_fields(name: &str, symbols: &SymbolTable) -> bool {
+    use crate::resolve::symbols::DefKind;
+    let mut cur = symbols.nominal(name);
+    while let Some(def) = cur {
+        let DefKind::Class { info } = &def.kind else {
+            return false;
+        };
+        if !info.fields.is_empty() {
+            return true;
+        }
+        cur = info.parent.and_then(|p| symbols.get(p));
+    }
+    false
+}
 
 /// Whether `name` is a compiler-synthesizable derive marker (the closed
 /// `SUPPORTED_DERIVES` set). Used by `MixinResolver::check_satisfaction` to
@@ -467,7 +588,7 @@ fn validate_per_field_traits<'a>(
     diags: &mut Vec<Diagnostic>,
 ) {
     let want_partial_eq = has_derive(derive_traits, "PartialEq");
-    let want_hash = has_derive(derive_traits, "Hashable");
+    let want_hash = has_derive(derive_traits, HASHABLE);
     let want_ord = has_derive(derive_traits, "Ord");
     let want_partial_ord = has_derive(derive_traits, "PartialOrd");
     if !(want_partial_eq || want_hash || want_ord || want_partial_ord) {
@@ -485,7 +606,7 @@ fn validate_per_field_traits<'a>(
                 "E0613",
             ));
         }
-        if want_hash && !ty_satisfies_named_trait(field_ty, "Hashable", symbols) {
+        if want_hash && !ty_satisfies_named_trait(field_ty, HASHABLE, symbols) {
             diags.push(Diagnostic::error_with_code(
                 format!(
                     "cannot auto-synthesize Hash on {} `{}` because field `{}` has type `{}` which is not hashable",

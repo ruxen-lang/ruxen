@@ -176,3 +176,68 @@ end
         errs
     );
 }
+
+/// A paren-less call through safe navigation (`opt&.size` on an
+/// `Option[Shelf]`) of an overloaded method types from the overload that
+/// takes no arguments, not from the first one declared (F-18: the class
+/// method return lookup used to see only the bare-named overload).
+#[test]
+fn safe_nav_parenless_call_types_from_the_zero_arg_overload() {
+    let src = r#"
+class Shelf
+  count: Int
+
+  def init(@count: Int)
+  end
+
+  def size(scale: Int) -> String
+    "scaled"
+  end
+
+  def size -> Int
+    self.count
+  end
+end
+
+def probe
+  let s: Option[Shelf] = Some(Shelf.new(3))
+  let n = s&.size
+end
+"#;
+    assert_eq!(
+        let_types_in(src, "probe"),
+        vec!["Option[Shelf]", "Option[Int]"]
+    );
+}
+
+/// F-19: only `&.` navigates into an optional. A plain `opt.size` on an
+/// `Option[Shelf]` is a call of `Option#size`, which does not exist, so it is
+/// an error; typeck used to guess safe navigation for any member `Option`
+/// does not declare.
+#[test]
+fn plain_dot_on_optional_does_not_navigate_into_it() {
+    let src = r#"
+class Shelf
+  count: Int
+
+  def init(@count: Int)
+  end
+
+  def size -> Int
+    self.count
+  end
+end
+
+def probe
+  let s: Option[Shelf] = Some(Shelf.new(3))
+  let n = s.size
+end
+"#;
+    let errs = typeck_errors(src);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("no field or method `size` on type `Option[Shelf]`")),
+        "a plain `.` on an optional must not navigate into it, got {:?}",
+        errs
+    );
+}

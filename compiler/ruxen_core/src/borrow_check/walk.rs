@@ -1,4 +1,5 @@
 use super::*;
+use crate::hir::visit::Visit;
 
 impl<'a> BorrowChecker<'a> {
     // ─── Program / Item walking ────────────────────────────────────
@@ -14,46 +15,11 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
+    /// Borrow-check every function body inside `item` (free functions,
+    /// class / struct / enum methods and their inline `include` blocks,
+    /// `extension` methods, mixin default methods) via the shared HIR walk.
     pub(super) fn check_item(&mut self, item: &HirItem) {
-        match item {
-            HirItem::Function(func) => self.check_function(func),
-            HirItem::Class(class) => {
-                for method in &class.methods {
-                    self.check_function(method);
-                }
-                for imp in &class.impl_blocks {
-                    self.check_impl_block(imp);
-                }
-            }
-            HirItem::Struct(_) => {
-                // Struct definitions have no executable code to check.
-            }
-            HirItem::Enum(_) => {
-                // Enum definitions have no executable code to check.
-            }
-            HirItem::Mixin(trait_def) => {
-                for trait_item in &trait_def.items {
-                    if let HirMixinItem::DefaultMethod(func) = trait_item {
-                        self.check_function(func);
-                    }
-                }
-            }
-            HirItem::Impl(imp) => self.check_impl_block(imp),
-            HirItem::Module(module) => {
-                for sub_item in &module.items {
-                    self.check_item(sub_item);
-                }
-            }
-            HirItem::TypeAlias(_) | HirItem::Newtype(_) | HirItem::Const(_) => {}
-        }
-    }
-
-    pub(super) fn check_impl_block(&mut self, imp: &HirImplBlock) {
-        for impl_item in &imp.items {
-            if let HirImplItem::Method(func) = impl_item {
-                self.check_function(func);
-            }
-        }
+        self.visit_item(item);
     }
 
     // ─── Function ──────────────────────────────────────────────────
@@ -102,21 +68,21 @@ impl<'a> BorrowChecker<'a> {
 
             HirExprKind::MethodCall {
                 object,
-                method,
+                resolved,
                 method_name,
                 args,
                 block,
                 ..
             } => {
-                self.check_method_call(object, *method, method_name, args, block, &expr.span);
+                self.check_method_call(object, *resolved, method_name, args, block, &expr.span);
             }
 
             HirExprKind::FnCall {
-                callee: _,
+                callee,
                 callee_name,
                 args,
             } => {
-                self.check_fn_call(callee_name, args, &expr.span);
+                self.check_fn_call(*callee, callee_name, args, &expr.span);
             }
 
             HirExprKind::BinaryOp { left, right, .. } => {
@@ -481,6 +447,7 @@ impl<'a> BorrowChecker<'a> {
         // Copy/Send/mut-ref decision below MUST consult.
         // See `Capture::current_ty` docs.
         let mut moved_captures: Vec<DefId> = Vec::new();
+        let mut borrowed_captures: Vec<(DefId, BorrowKind)> = Vec::new();
         for cap in captures {
             let live_ty = cap.current_ty(self.symbols);
             if cap.by_move || is_move {
@@ -500,15 +467,12 @@ impl<'a> BorrowChecker<'a> {
                     moved_captures.push(cap.def_id);
                 }
             } else {
-                // Borrow capture: create a borrow
-                let scope = self.scopes.current();
                 let kind = if live_ty.is_mut_ref() {
                     BorrowKind::Mutable
                 } else {
                     BorrowKind::Shared
                 };
-                self.borrows
-                    .create(kind, cap.def_id, cap.def_id, span.clone(), scope);
+                borrowed_captures.push((cap.def_id, kind));
             }
         }
 
@@ -535,6 +499,17 @@ impl<'a> BorrowChecker<'a> {
         self.moves.restore(&moves_snapshot);
         self.borrows.kill_scope(scope_id);
         self.scopes.pop();
+
+        // Borrow captures: the closure value holds these borrows from here
+        // on. They are created after the body is checked because the body
+        // reaches each captured variable through the capture itself, so a
+        // body that calls a `def var` method on one does not conflict with
+        // its own capture.
+        let scope = self.scopes.current();
+        for (def_id, kind) in borrowed_captures {
+            self.borrows
+                .create(kind, def_id, def_id, span.clone(), scope);
+        }
     }
 
     // ─── Pattern processing ────────────────────────────────────────
@@ -580,4 +555,15 @@ impl<'a> BorrowChecker<'a> {
             HirPattern::Wildcard { .. } | HirPattern::Literal { .. } | HirPattern::Rest { .. } => {}
         }
     }
+}
+
+impl Visit for BorrowChecker<'_> {
+    fn visit_func(&mut self, func: &HirFuncDef) {
+        self.check_function(func);
+    }
+
+    /// `walk_item` reaches this only for a const initializer (function bodies
+    /// stop at `visit_func`). Const initializers bind nothing and are not
+    /// borrow-checked.
+    fn visit_expr(&mut self, _expr: &HirExpr) {}
 }

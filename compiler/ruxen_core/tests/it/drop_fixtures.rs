@@ -67,6 +67,32 @@ fn strip_runtime_h_include(src: &str) -> String {
         .collect()
 }
 
+/// Splice a package-internal header (`#include "x.h"` naming a file next
+/// to the `.c`, such as `future/runtime/future_rt.h`) into the body. The
+/// unity TU is written to `tmp/`, where such a relative include would not
+/// resolve. Each header carries an include guard, so splicing it once per
+/// including file is harmless.
+fn inline_package_headers(src: &str, runtime_dir: &std::path::Path) -> String {
+    let mut out = String::with_capacity(src.len());
+    for line in src.lines() {
+        let local = line
+            .trim_start()
+            .strip_prefix("#include \"")
+            .and_then(|rest| rest.strip_suffix('"'))
+            .map(|name| runtime_dir.join(name))
+            .filter(|path| path.is_file());
+        match local {
+            Some(path) => out.push_str(
+                &std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e)),
+            ),
+            None => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// Build the equivalent of the pre-#06.95 Phase B-2 unity-build
 /// `runtime.c` by reading every per-package `runtime/*.c` and
 /// prepending the shared `runtime.h`. The string surgery below was
@@ -130,7 +156,8 @@ fn synthesize_unity_runtime() -> String {
         for c in c_files {
             let body = std::fs::read_to_string(&c)
                 .unwrap_or_else(|e| panic!("read {}: {}", c.display(), e));
-            out.push_str(&strip_runtime_h_include(&body));
+            let body = inline_package_headers(&strip_runtime_h_include(&body), &runtime_dir);
+            out.push_str(&body);
             out.push('\n');
         }
     }
@@ -234,9 +261,11 @@ fn write_tracking_runtime(target: &PathBuf) {
     //   * `WRAPNAME_MALLOC` → `ruxen_test_malloc`  (wrapper definition only)
     //   * `WRAPNAME_FREE`   → `ruxen_test_free`
     //   * `WRAPNAME_REALLOC`→ `ruxen_test_realloc`
+    //   * `WRAPNAME_CALLOC` → `ruxen_test_calloc`
     //   * `ORIG_MALLOC(`    → `malloc(`            (call to libc inside wrappers)
     //   * `ORIG_FREE(`      → `free(`
     //   * `ORIG_REALLOC(`   → `realloc(`
+    //   * `ORIG_CALLOC(`    → `calloc(`
     let raw_prelude = "/* drop_fixtures: raw-heap counters & wrappers */\n\
         #include <stdlib.h>\n\
         #include <stdint.h>\n\
@@ -266,6 +295,11 @@ fn write_tracking_runtime(target: &PathBuf) {
         }\n\
         static void *WRAPNAME_MALLOC(size_t n) {\n\
         \x20\x20\x20\x20void *p = ORIG_MALLOC(n);\n\
+        \x20\x20\x20\x20if (p) ruxen_test_raw_mallocs += 1;\n\
+        \x20\x20\x20\x20return p;\n\
+        }\n\
+        static void *WRAPNAME_CALLOC(size_t n, size_t size) {\n\
+        \x20\x20\x20\x20void *p = ORIG_CALLOC(n, size);\n\
         \x20\x20\x20\x20if (p) ruxen_test_raw_mallocs += 1;\n\
         \x20\x20\x20\x20return p;\n\
         }\n\
@@ -303,16 +337,22 @@ fn write_tracking_runtime(target: &PathBuf) {
     tracked = replace_call_at_word_boundary(&tracked, "malloc(", "ruxen_test_malloc(");
     tracked = replace_call_at_word_boundary(&tracked, "free(", "ruxen_test_free(");
     tracked = replace_call_at_word_boundary(&tracked, "realloc(", "ruxen_test_realloc(");
+    // `calloc` too: the formatter and class allocations come from it, and a
+    // block counted on its `free` but not on its allocation reads as an
+    // over-free.
+    tracked = replace_call_at_word_boundary(&tracked, "calloc(", "ruxen_test_calloc(");
     // 2) Restore the wrapper *definitions'* libc-call sentinels back to
     //    raw libc names so the wrappers don't recurse into themselves.
     tracked = tracked.replace("ORIG_MALLOC(", "malloc(");
     tracked = tracked.replace("ORIG_FREE(", "free(");
     tracked = tracked.replace("ORIG_REALLOC(", "realloc(");
+    tracked = tracked.replace("ORIG_CALLOC(", "calloc(");
     // 3) Restore the wrapper *names* (which we hid behind WRAPNAME_*
     //    sentinels) to their final identifiers.
     tracked = tracked.replace("WRAPNAME_MALLOC", "ruxen_test_malloc");
     tracked = tracked.replace("WRAPNAME_FREE", "ruxen_test_free");
     tracked = tracked.replace("WRAPNAME_REALLOC", "ruxen_test_realloc");
+    tracked = tracked.replace("WRAPNAME_CALLOC", "ruxen_test_calloc");
 
     // If the runtime exposes the new heap-deinit helpers (added by P0.7),
     // inject per-kind counter increments at the top of each one. The
@@ -338,12 +378,12 @@ fn write_tracking_runtime(target: &PathBuf) {
     );
     // Phase 2 stdlib (#04 batch 2): set spine drop. The hash spine
     // and string spine count their own frees independently above.
-    // The new HashMap/HashSet per-element drop helpers
-    // (`ruxen_hash_drop_*`, `ruxen_set_drop_string`) all reach
-    // `ruxen_string_ORIG_FREE` and `ruxen_hash_ORIG_FREE` /
-    // `ruxen_set_ORIG_FREE` internally, so the per-kind counters
-    // bump transitively without needing to instrument the new
-    // helpers themselves.
+    // The drop glue (`ruxen_vec_drop`, `ruxen_hash_drop`,
+    // `ruxen_set_drop`, `ruxen_elem_drop`) reaches
+    // `ruxen_string_ORIG_FREE`, `ruxen_vec_ORIG_FREE`,
+    // `ruxen_hash_ORIG_FREE` and `ruxen_set_ORIG_FREE` internally, so
+    // the per-kind counters bump transitively without instrumenting
+    // the glue itself.
     tracked = inject_helper_counter(
         &tracked,
         "void ruxen_set_free(RuxenSet *s) {",
@@ -616,6 +656,22 @@ fn runtime_no_leak_fixture_exits_without_tracked_leaks() {
         "expected at least 2 Buffer allocations, got allocs={}",
         allocs
     );
+}
+
+/// A user `let` whose name starts with `_t` is a user binding, not a compiler
+/// temporary: `_total` and `_tally` must be freed at scope exit like any
+/// other owned local. Temporary-ness comes from `LocalKind`, never the name.
+#[test]
+fn underscore_t_user_local_is_freed_like_any_binding() {
+    let source = rx("underscore_t_user_local_drop");
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("underscore_t_user_local_drop", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {stderr}");
+    assert_eq!(stdout, "42\n", "stdout was {stdout:?}");
+    let (allocs, frees, outstanding) = parse_leak_marker(&stderr);
+    assert_eq!(allocs, 2, "expected two Buffer allocations: {stderr}");
+    assert_eq!(frees, 2, "both `_t`-named bindings must be freed: {stderr}");
+    assert_eq!(outstanding, 0, "leak: {stderr}");
 }
 
 /// A brace closure and a `do...end` block each own a by-value heap capture.
@@ -960,9 +1016,9 @@ fn string_plus_op_frees_both_operands() {
 /* ──────────────────────────────────────────────────────────────────
  * #03 batch 2: Vec[String] / Vec[Vec[T]] element-drop selector.
  *
- * The MIR drop-elaboration picks `ruxen_vec_drop_string` for
- * `Vec[String]` locals and `ruxen_vec_drop_vec` for `Vec[Vec[T]]`
- * locals. Each helper walks the slots before releasing the spine, so
+ * The MIR drop-elaboration emits `ruxen_vec_drop` with the element
+ * descriptor for `Vec[String]` and `Vec[Vec[T]]` locals. It walks
+ * the slots before releasing the spine, so
  * the per-element heap (the owned `char*` for String slots, the inner
  * `RuxenVec*` for Vec slots) gets freed at the same scope exit.
  *
@@ -1125,6 +1181,110 @@ fn p04_hashset_string_releases_every_element() {
     assert!(
         report.set_frees >= 1,
         "expected the set spine to be freed: {:#?}",
+        report
+    );
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * F-25: nested containers drop recursively.
+ *
+ * Every container local gets ONE drop callee (`ruxen_vec_drop`,
+ * `ruxen_hash_drop`, `ruxen_set_drop`) plus an element descriptor built
+ * from its static type, and `ruxen_elem_drop` recurses through it. The
+ * old per-type-pair helpers stopped one level down, so the inner
+ * strings and arrays below leaked.
+ * ────────────────────────────────────────────────────────────────── */
+
+/// `Hash[String, Array[String]]`: the old selector freed the keys only
+/// (`ruxen_hash_drop_string_v`), leaking every value Array and its strings.
+#[test]
+fn hash_of_string_to_array_of_string_frees_values() {
+    let source = r#"
+def main
+  var m: Hash[String, Array[String]] = Hash.new
+  var a: Array[String] = Array.new
+  a.push("x")
+  a.push("y")
+  var b: Array[String] = Array.new
+  b.push("z")
+  m.insert("first", a)
+  m.insert("second", b)
+  let _len = m.size
+end
+"#;
+    let report = run_fixture_inline("f25_hash_string_to_array_string", source);
+    assert_eq!(report.outstanding_allocations, 0, "leak: {:#?}", report);
+    assert!(
+        report.string_frees >= 5,
+        "expected 2 key + 3 element string frees: {:#?}",
+        report
+    );
+    assert!(
+        report.vec_frees >= 2,
+        "expected both value Arrays freed: {:#?}",
+        report
+    );
+}
+
+/// `Array[Array[String]]` and a deep copy of its tail (`drop(1)` lowers to
+/// `ruxen_vec_skip_elem`): the old `ruxen_vec_drop_vec` freed the inner
+/// spines only, leaking every string. The copy and the source must each
+/// free their own strings, once.
+#[test]
+fn array_of_array_of_string_frees_inner_strings() {
+    let source = r#"
+def main
+  var grid: Array[Array[String]] = Array.new
+  var row1: Array[String] = Array.new
+  row1.push("a")
+  row1.push("b")
+  var row2: Array[String] = Array.new
+  row2.push("c")
+  grid.push(row1)
+  grid.push(row2)
+  let tail = grid.drop(1)
+  let _n = tail.size
+end
+"#;
+    let report = run_fixture_inline("f25_array_array_string", source);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "leak (or double free): {:#?}",
+        report
+    );
+    assert!(
+        report.string_frees >= 4,
+        "expected 3 source strings and 1 copied string freed: {:#?}",
+        report
+    );
+}
+
+/// A Hash nested in an Array, with an Array nested in the Hash, plus a
+/// deep copy of it (`drop(0)`): the descriptor has to carry the key and
+/// then the value past it, for the copy and for both drops.
+#[test]
+fn array_of_hash_of_string_to_array_frees_every_level() {
+    let source = r#"
+def main
+  var outer: Array[Hash[String, Array[Int]]] = Array.new
+  var h: Hash[String, Array[Int]] = Hash.new
+  var nums: Array[Int] = Array.new
+  nums.push(1)
+  h.insert("k", nums)
+  outer.push(h)
+  let copy = outer.drop(0)
+  let _len = copy.size
+end
+"#;
+    let report = run_fixture_inline("f25_array_hash_array", source);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "leak (or double free): {:#?}",
+        report
+    );
+    assert!(
+        report.hash_frees >= 2,
+        "expected the inner Hash and its copy freed: {:#?}",
         report
     );
 }
@@ -1412,33 +1572,19 @@ end
 /// per-iteration `String` into a user `&String` reader inside a loop body.
 ///
 /// `0741468` registered built-in heap loop-body locals
-/// (`String`/`Array`/`Map`/`Set`) for a loop-back-edge free so each
-/// iteration's allocation was reclaimed (this fixture then asserted
-/// `outstanding == 0`, `string_frees >= 3`). That back-edge free was emitted
-/// UNCONDITIONALLY at lower time and did NOT consult whether the local had
-/// been MOVED OUT during the iteration (into an escaping collection, a return
-/// value, or a stored field). When it had — as in rondo's path-param
-/// `captures.insert(name, …)` — the back-edge freed an allocation the
-/// collection now owned, dangling its pointer → nondeterministic
-/// use-after-free across the whole dispatch path (rondo `<none>` capture
-/// reads; reproduced + bisected to `0741468`).
+/// (`String`/`Array`/`Map`/`Set`) for a loop-back-edge free that did NOT
+/// consult whether the local had been MOVED OUT during the iteration (rondo's
+/// `captures.insert(name, …)`), and freed what a collection now owned. It was
+/// reverted, and per-iteration values then leaked until scope exit.
 ///
-/// The registration was REVERTED (`statement.rs`) on the soundness mandate:
-/// built-in heap loop-body locals are now freed ONLY at function scope exit,
-/// where `compute_dealloc_safe_locals`'s `arg_transfer` taint tracks moves
-/// correctly. The COST is this accepted leak: a genuinely-owned per-iteration
-/// built-in heap local LEAKS until scope exit (iterations `1..n-1` here)
-/// rather than dangling. Soundness strictly beats leak-fixing.
-///
-/// This pin now CHARACTERIZES that benign leak — the run exits cleanly with no
-/// UAF and no double-free (`raw_frees <= raw_mallocs`), the borrow source is
-/// not consumed by the reader, and exactly `n-1` of the `n` per-iteration
-/// allocations stay outstanding at scope exit. The move-aware back-edge free
-/// (needs the dealloc-safe analysis BEFORE the loop edge is emitted) is the
-/// filed follow-up in `docs/TASKS.md`; closing it flips this assertion back to
-/// `outstanding == 0`.
+/// The drop pass now frees the value such a local held before each
+/// redefinition (`drops::free_prior_value_on_rebind`), only for locals the
+/// dealloc-safety analysis proves own every value they hold, so a moved-out
+/// local is never freed (pinned by
+/// `loop_local_moved_into_hash_is_not_freed_on_rebind`). All three
+/// per-iteration Strings are freed, and none twice.
 #[test]
-fn borrow_in_loop_leaks_until_scope_exit_no_uaf() {
+fn borrow_in_loop_frees_every_iteration_no_uaf() {
     let source = r#"
 def borrow_len(s: &String) -> USize
   s.size
@@ -1477,15 +1623,14 @@ end
          raw_frees={raw_frees}\n{:#?}",
         report
     );
-    // ACCEPTED LEAK: exactly `n-1` (= 2) of the 3 per-iteration Strings stay
-    // outstanding at scope exit — they are freed only at function scope exit,
-    // not at the loop back-edge. Pinned EXACTLY so the day the move-aware
-    // back-edge free lands, this fixture fails loudly and is flipped back to
-    // `outstanding == 0`.
     assert_eq!(
-        report.outstanding_allocations, 2,
-        "expected the accepted per-iteration leak (n-1 = 2 outstanding); a \
-         change here means the back-edge free behavior moved: {:#?}",
+        report.outstanding_allocations, 0,
+        "every per-iteration String must be freed: {:#?}",
+        report
+    );
+    assert!(
+        report.string_frees >= 3,
+        "expected one free per iteration: {:#?}",
         report
     );
 }
@@ -1561,6 +1706,198 @@ end
     assert_eq!(
         report.ruxen_alloc_outstanding, 0,
         "class receiver borrowed through &self leaked or double-freed: {:#?}",
+        report
+    );
+}
+
+/// Class elements of an `Array[UserClass]` and the class values of a
+/// `Hash[String, UserClass]` are freed when the container drops, and a
+/// class's `def drop` runs for each one. Before the OBJ element descriptor
+/// (`RUXEN_ELEM_OBJ` + per-type element glue) every element leaked.
+#[test]
+fn class_elements_and_hash_class_values_are_freed_with_the_container() {
+    let source = r##"
+class Point
+  x: Int
+  y: Int
+
+  def init(@x: Int, @y: Int)
+  end
+end
+
+class Tracked
+  id: Int
+
+  def init(@id: Int)
+  end
+
+  def drop
+    puts "drop #{self.id}"
+  end
+end
+
+def main
+  var pts = [Point.new(1, 2), Point.new(3, 4)]
+  pts.push(Point.new(5, 6))
+  var h: Hash[String, Point] = Hash.new
+  h["a"] = Point.new(7, 8)
+  h["b"] = Point.new(9, 10)
+  var ts: Array[Tracked] = Array.new
+  ts.push(Tracked.new(1))
+  ts.push(Tracked.new(2))
+  puts "#{pts.size} #{h.size} #{ts.size}"
+end
+"##;
+    let (stdout, stderr, exit) = compile_and_run_with_tracking("class_elements", source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr:\n{stderr}");
+    assert_eq!(stdout, "3 2 2\ndrop 1\ndrop 2\n", "stdout: {stdout:?}");
+    let report = parse_leak_report(&stderr);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "class elements leaked: {:#?}",
+        report
+    );
+}
+
+/// A read element (`a[0]`, `for q in a`) is an alias of a slot the source
+/// still owns. Pushed into another collection, the source must not free it
+/// too: the source's drop becomes shallow (`drops::demote_escaping_element_drops`).
+/// The String spelling aborted with a double free before; the class spelling
+/// would have since class elements are freed.
+#[test]
+fn an_element_alias_stored_elsewhere_is_not_freed_twice() {
+    let source = r##"
+class P
+  x: Int
+
+  def init(@x: Int)
+  end
+end
+
+def main
+  let a = ["x" + "y", "z" + "w"]
+  var b: Array[String] = Array.new
+  b.push(a[0])
+  let ps = [P.new(1), P.new(2)]
+  var qs: Array[P] = Array.new
+  qs.push(ps[0])
+  for q in ps
+    qs.push(q)
+  end
+  puts "#{b.size} #{qs.size}"
+end
+"##;
+    let (stdout, stderr, exit) = compile_and_run_with_tracking("element_alias_escape", source);
+    assert_eq!(
+        exit,
+        Some(0),
+        "double free on an escaped element alias. stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "1 3\n");
+    let report = parse_leak_report(&stderr);
+    let raw_line = stderr
+        .lines()
+        .find(|l| l.starts_with("RUXEN_TEST_RAW"))
+        .expect("raw marker");
+    let raw_mallocs = extract_u64(raw_line, "raw_mallocs", &stderr);
+    let raw_frees = extract_u64(raw_line, "raw_frees", &stderr);
+    assert!(raw_frees <= raw_mallocs, "over-free: {:#?}", report);
+}
+
+/// String interpolation in a loop: every formatted part (`Formatter#buffer`,
+/// the `Int`/`Float`/`Bool` `_fmt` bodies' `to_s` strings), every
+/// intermediate `concat` and every per-iteration result is freed.
+#[test]
+fn interpolation_temporaries_are_freed_in_a_loop() {
+    let source = r##"
+def main
+  var i = 0
+  let name = "n" + "m"
+  while i < 3
+    puts "i=#{i} f=#{1.5} b=#{i > 1} s=#{name}!"
+    let label = "#{i}"
+    puts label
+    i = i + 1
+  end
+end
+"##;
+    let report = run_fixture_inline("interpolation_loop", source);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "interpolation temporaries leaked: {:#?}",
+        report
+    );
+}
+
+/// String locals inside monomorphised bodies: a bounded generic fn rebuilds a
+/// `String` in a loop (`out = out + …`, the shape of the stdlib
+/// `Array__mono__T_join`), and a generic class method keeps a `String`
+/// local. Every value `out` held before its last is freed on redefinition,
+/// and a receiver passed to a `Box__mono__Int_*` method is still freed by
+/// its caller (the mono callee name resolves to the generic method's `&self`).
+#[test]
+fn string_locals_in_monomorphised_bodies_are_freed() {
+    let source = r##"
+def joined_size[T: Hashable](v: &T, n: Int) -> Int
+  var out = ""
+  var i = 0
+  while i < n
+    out = out + "#{v},"
+    i = i + 1
+  end
+  out.size as Int
+end
+
+class Box[T]
+  item: T
+
+  def init(@item: T)
+  end
+
+  def describe -> Int
+    let s = "box"
+    let t = s + "!"
+    t.size as Int
+  end
+end
+
+def main
+  let k = "kk" + "x"
+  puts joined_size(&k, 3)
+  puts joined_size(&7, 2)
+  let b = Box.new(3)
+  puts b.describe
+end
+"##;
+    let report = run_fixture_inline("mono_string_locals", source);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "String locals in monomorphised bodies leaked: {:#?}",
+        report
+    );
+}
+
+/// A loop-body String moved into a collection each iteration (rondo's
+/// `captures.insert(name, …)`) is owned by the collection after the move:
+/// the rebind free must not touch it, and the Hash frees every key once.
+#[test]
+fn loop_local_moved_into_hash_is_not_freed_on_rebind() {
+    let source = r##"
+def main
+  var h: Hash[String, Int] = Hash.new
+  var i = 0
+  while i < 3
+    let k = "k#{i}"
+    h[k] = i
+    i = i + 1
+  end
+  puts h.size
+end
+"##;
+    let report = run_fixture_inline("loop_local_moved", source);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "moved loop local leaked or double-freed: {:#?}",
         report
     );
 }

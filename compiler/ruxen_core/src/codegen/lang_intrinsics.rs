@@ -6,39 +6,25 @@
 //!
 //! 1. **Compiler-internal mangling.** `Fn(...)_call` /
 //!    `Fn[...]_call` (closure invocation), `yield` (block-arg
-//!    invocation placeholder), `?T..._call` / `&any Fn(...)_call` (dyn-erased
+//!    invocation placeholder), `&any Fn(...)_call` (dyn-erased
 //!    closure dispatch). These are not stdlib FFI — they are
 //!    intermediate codegen shapes that backends inline or rewrite
 //!    elsewhere.
 //!
-//! 2. **Aliased clusters + bang variants + inferred-type dispatch.**
+//! 2. **Aliased clusters + inferred-type dispatch.**
 //!    `Vec[T]_get_mut` / `Vec[T]_get_var` alias `ruxen_vec_get_opt`
 //!    (canonical `get` is in `library/std/array/src/lib.rx`); E0722
 //!    rejects duplicate aliases for the same `c_symbol` with different
 //!    wire shapes, so they cannot ride the array.rx alias map. (The
 //!    former `into_iter`/`iter_mut`/`to_vec`/`enumerate`/`as_slice`
 //!    cluster sharing `ruxen_iter_to_vec` was deleted with the
-//!    orphaned iterator machinery — Phase B / Milestone 2.) The
-//!    `Option[T]_unwrap!` /
-//!    `Option[T]_expect!` bang variants can't ride the alias map
-//!    either — `!` is part of the surface method name but isn't
-//!    yet accepted inside a `def NAME as ...` lib decl. The
-//!    `?T..._<m>` / `?..._<m>` dispatcher handles inferred-type
-//!    method calls that escape typeck without a concrete receiver.
+//!    orphaned iterator machinery — Phase B / Milestone 2.) An abstract
+//!    `?T..._<m>` callee (a receiver that is still a generic
+//!    parameter) is an error: MIR never lets one reach codegen.
 //!
 //! 3. **Defensive fallback.** Unmangled `MyClass_my_method` shapes
-//!    (user-defined types) and generic-type-parameter forwards
-//!    (`T_assign`, `E_message`) fall through to a final `Ok(name)`
-//!    that lets the link step resolve them.
-//!
-//! Inner-type-discriminator entries (`BufReader_new_file` /
-//! `BufWriter_into_inner_tcp`, …) are NOT here yet — they still
-//! live in `runtime_table/mod.rs` because their suffix selection
-//! is druxen by the MIR call-site lowerer in
-//! `mir/lower/expr/method_call.rs:180-200` and removing them
-//! requires the module+mixin reshape described in #06.95 Phase
-//! E §"Module + mixin pattern". Phase E moves them into this
-//! module in a later slice with a documented comment.
+//!    (user-defined types) fall through to a final `Ok(name)` that
+//!    lets the link step resolve them.
 
 use super::runtime::{extract_method_name, unresolved_method_error};
 
@@ -73,30 +59,9 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // names (Fn(...)_call, super, yield) rather than in any
         // package's lib block.
         "Float_to_string_prec" => return Ok("ruxen_float_to_string_prec"),
-        // Numeric conversions. `Int.to_f()` / `Float.to_i()` are real
-        // surface methods (typeck: `method_resolvers::builtin_method_type`)
-        // but the receiver is a scalar primitive with no `.rx` class shell,
-        // so the call-site mangling (`Int_to_f` / `Float_to_i`) has no
-        // FFI-alias entry to rewrite it. Map them to their runtime symbols
-        // here, the same way the precision helpers above are handled —
-        // otherwise the mangled name falls through to the `Ok(name)`
-        // link-time fallback and dies as `can't resolve symbol Int_to_f`.
-        "Int_to_f" => return Ok("ruxen_int_to_f"),
-        "Float_to_i" => return Ok("ruxen_float_to_i"),
-        // Universal `to_s` on scalar primitives — share the same runtime
-        // string helpers that interpolation (`#{x}`) uses. Same rationale
-        // as the conversions above: scalar primitives have no `.rx` class
-        // shell, so the mangled `<Type>_to_s` needs an explicit mapping or
-        // it falls through to the link-time `Ok(name)` fallback and dies.
-        "Int_to_s" | "USize_to_s" => return Ok("ruxen_int_to_string"),
-        "Float_to_s" => return Ok("ruxen_float_to_string"),
-        "Bool_to_s" => return Ok("ruxen_bool_to_string"),
-        "Char_to_s" => return Ok("ruxen_char_to_string"),
-        // `String_to_s` is homed in string.rx (`def to_s as
-        // "ruxen_string_to_string"`) and the MIR `ffi_alias_map` rewrites it
-        // before codegen reaches here; this arm stays as a belt-and-suspenders
-        // fallback for the `String` spelling. Clones to an owned `String`.
-        "String_to_s" => return Ok("ruxen_string_to_string"),
+        // (Scalar `to_s` / `to_f` / `to_i` are declared in scalar.rx and
+        // `String#to_s` in string.rx; the MIR `ffi_alias_map` rewrites them
+        // before codegen reaches here.)
         "String_truncate_chars" => return Ok("ruxen_string_truncate_chars"),
         // Phase E-rest 3 of #06.95: MIR-synthesised Formatter callees
         // from `mir/lower/interpolation.rs::emit_display_dispatch`.
@@ -109,13 +74,6 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
         // attaches.
         "Formatter_new_with_spec" => return Ok("ruxen_fmt_formatter_new_with_spec"),
         "Formatter_precision" => return Ok("ruxen_fmt_formatter_precision"),
-        // `String_from_iter` is consumed by the
-        // `iter.collect[String]()` MIR lowering, not a surface
-        // `.from_iter(...)` method call — same MIR-synthesised
-        // category as the precision helpers above. No .rx
-        // class-body decl can attach to it (it has no surface
-        // method name on `String`).
-        "String_from_iter" => return Ok("ruxen_string_from_iter"),
         // `String_clone` MIGRATED to `string.rx` (`def clone as
         // "ruxen_string_from"`). The E0722 conflict check now compares
         // post-self-prepend WIRE shapes, so the second alias of
@@ -147,19 +105,12 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
 
     // Phase 2 #06.9: belt-and-suspenders for dyn-erased closure
     // dispatch. The MIR lowerer (see `mir/lower/expr/method_call.rs`
-    // `is_fn_call`) recognises `any Fn(...)` / `?T*` receivers and
-    // emits an indirect call, so this arm should never fire in
-    // normal operation. It exists so a missed lowering path
-    // produces a deterministic noop-passthrough instead of a hard
-    // codegen error — easier to root-cause when a regression slips
-    // in. The `?T*` form is the `Ty::Infer(N)` Display mangling:
-    // an unresolved type variable leaking into a `.call(...)`
-    // site.
+    // `is_fn_call`) recognises `any Fn(...)` receivers and emits an
+    // indirect call, so this arm should never fire in normal operation.
     if name.starts_with("any Fn(")
         || name.starts_with("any Fn[")
         || name.starts_with("&any Fn(")
         || name.starts_with("&any Fn[")
-        || (name.starts_with("?T") && name.ends_with("_call"))
     {
         return Ok("ruxen_noop_passthrough");
     }
@@ -238,15 +189,11 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     // `[...]` segment and retries when the exact-shape key
     // misses, so the migrated entries reach the C symbol via
     // the alias path BEFORE codegen consults the arms below.
-    // The bang variants (`unwrap!`, `expect!`) can't ride the
-    // alias map yet — the `!` is part of the method-name
-    // surface but the parser doesn't accept it inside a `def
-    // NAME as ...` lib decl. Those stay here as explicit
-    // fallbacks.
+    // The bang variants (`unwrap!`, `expect!`) are `alias`es of
+    // `unwrap` / `expect` in option_result.rx, so MIR mangles the
+    // canonical name and the alias map rewrites it.
     if name.starts_with("Option") || name.contains("Option[") {
         return match method {
-            "expect!" => Ok("ruxen_option_expect"),
-            "unwrap!" => Ok("ruxen_option_unwrap"),
             // Known unimplemented Option combinators. `map`
             // and `unwrap_or_else` are closure-inlined at MIR
             // level.
@@ -264,68 +211,23 @@ pub fn runtime_name(name: &str) -> Result<&str, String> {
     // closure — that's a real bug worth surfacing.
     //
     // #06.8 T#17 migrated `unwrap_or`, `is_ok`, `is_err`,
-    // `ok`, `err` into the same option_result.rx lib block.
-    // The remaining arms below are non-aliasable (bang surface
-    // names) and stay here. `try_op` (the `?` operator) is lowered
-    // inline by MIR and never reaches codegen.
+    // `ok`, `err` into the same option_result.rx lib block, and
+    // `expect!` / `unwrap!` are `alias`es there. `try_op` (the `?`
+    // operator) is lowered inline by MIR and never reaches codegen.
     if name.starts_with("Result") || name.contains("Result[") {
         return match method {
-            "expect!" => Ok("ruxen_result_expect"),
-            "unwrap!" => Ok("ruxen_result_unwrap"),
             // Known unimplemented Result combinators.
             "and_then" | "or" | "or_else" | "ok_or" => Err(unresolved_method_error(name, "Result")),
             _ => Ok(name),
         };
     }
 
-    // Inferred-type method calls (e.g. `?T..._method` from
-    // generics that weren't fully resolved at typecheck). The
-    // historical `_ => ruxen_noop_passthrough` fallback here
-    // was the worst silent-failure path; it accepted *any*
-    // method on an inferred type and quietly returned the
-    // receiver.
-    if name.starts_with("?T") || name.starts_with('?') {
-        return match method {
-            // Result/Option combinators with real symbols.
-            "unwrap_or" => Ok("ruxen_option_unwrap_or"),
-            // String operations. (`from` REMOVED — the surface `String.from`
-            // static method was deleted; the borrow→owned spelling is `clone`,
-            // which still backs onto the `ruxen_string_from` C symbol.)
-            "clone" => Ok("ruxen_string_from"),
-            "push_str" => Ok("ruxen_string_push_str"),
-            "trim" => Ok("ruxen_string_trim"),
-            "to_lower" => Ok("ruxen_string_to_lower"),
-            // Vec/collection operations with real symbols.
-            "size" => Ok("ruxen_vec_len"),
-            "empty?" => Ok("ruxen_vec_is_empty"),
-            "push" => Ok("ruxen_vec_push"),
-            "pop" => Ok("ruxen_vec_pop"),
-            "get" | "get_mut" | "get_var" => Ok("ruxen_vec_get_opt"),
-            "each" => Ok("ruxen_vec_each"),
-            // User-defined methods commonly used in fixtures
-            // — forward to link-time resolution (a missing
-            // impl will surface as a link error against the
-            // unmangled name).
-            "message" | "summary" | "is_actionable" | "is_done" | "weight" | "id" | "title_ref"
-            | "priority_ref" | "deadline_ref" | "serialize" | "is_overdue" | "to_display"
-            | "assign" | "complete" | "cancel" | "to_string" | "to_s" => Ok(name),
-            // Anything else: refuse. This is the P0.5
-            // change — the old `_ => "ruxen_noop_passthrough"`
-            // masked unimplemented stdlib methods (.map,
-            // .map_err, .ok_or, .filter, .find, .fold, .sum,
-            // .count, .collect, ...) behind a silent identity.
-            _ => Err(unresolved_method_error(name, "?T")),
-        };
-    }
-
-    // Generic type parameter methods (e.g., `T_assign`,
-    // `E_message`): forward to link-time resolution.
-    if let Some(pos) = name.find('_') {
-        let prefix = &name[..pos];
-        if prefix.len() <= 2 && !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_uppercase())
-        {
-            return Ok(name);
-        }
+    // An abstract callee (`?T_method`, `?T3200_method`) dispatches on a
+    // receiver whose type is still a generic parameter. MIR removes every
+    // body that emits one (`prune_unmonomorphised_bodies`) or rejects the
+    // program, so reaching here is a compiler bug: fail loudly.
+    if name.starts_with('?') {
+        return Err(unresolved_method_error(name, "?T"));
     }
 
     // Defensive fallback: forward the unmangled name to

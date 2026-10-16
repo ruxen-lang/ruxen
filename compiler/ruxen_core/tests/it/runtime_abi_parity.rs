@@ -176,6 +176,25 @@ fn intentional_fresh_addition(c: &str) -> bool {
             | "ruxen_set_new_keyed"
             | "ruxen_set_with_capacity_keyed"
             | "ruxen_set_from_iter_keyed"
+            // The scalar-to-text helpers each `malloc` a new string, and
+            // `Formatter#buffer` hands over the formatter's buffer. Every
+            // interpolation part and every `{Prim}_fmt` body leaked one
+            // while these were unclassified.
+            | "ruxen_int_to_string"
+            | "Int_to_s"
+            | "USize_to_s"
+            | "ruxen_float_to_string"
+            | "Float_to_s"
+            | "ruxen_bool_to_string"
+            | "Bool_to_s"
+            | "ruxen_char_to_string"
+            | "Char_to_s"
+            | "ruxen_float_to_string_prec"
+            | "Float_to_string_prec"
+            | "ruxen_string_truncate_chars"
+            | "String_truncate_chars"
+            | "ruxen_fmt_formatter_buffer"
+            | "Formatter_buffer"
     )
 }
 
@@ -191,44 +210,36 @@ fn intentional_transfer_addition(c: &str) -> &'static [usize] {
     }
 }
 
-fn ref_borrows_first_arg(c: &str) -> bool {
-    // VERBATIM from drops.rs:967-984.
-    c.ends_with("_init")
-        || c == "ruxen_dealloc"
-        || c == "ruxen_string_free"
-        || c == "ruxen_vec_free"
-        || c == "ruxen_vec_drop_string"
-        || c == "ruxen_vec_drop_vec"
-        || c == "ruxen_hash_free"
-        || c == "ruxen_set_free"
-        || c == "ruxen_hash_drop_string_v"
-        || c == "ruxen_hash_drop_v_string"
-        || c == "ruxen_hash_drop_string_string"
-        || c == "ruxen_hash_drop_v_vec"
-        || c == "ruxen_set_drop_string"
-}
-
-fn ref_is_runtime_consume_helper(c: &str) -> bool {
-    // VERBATIM from drops.rs:1003-1043.
+/// The drop glue the drop pass emits. Reviewed delta (F-25): the ten
+/// per-element-type helpers of drops.rs:967-984 (`ruxen_vec_free`,
+/// `ruxen_vec_drop_string`, `ruxen_hash_drop_string_v`, …) were replaced by
+/// one descriptor-taking drop callee per container.
+fn ref_is_drop_glue(c: &str) -> bool {
     matches!(
         c,
         "ruxen_dealloc"
             | "ruxen_string_free"
-            | "ruxen_vec_free"
-            | "ruxen_vec_drop_string"
-            | "ruxen_vec_drop_vec"
-            | "ruxen_hash_free"
-            | "ruxen_set_free"
-            | "ruxen_hash_drop_string_v"
-            | "ruxen_hash_drop_v_string"
-            | "ruxen_hash_drop_string_string"
-            | "ruxen_hash_drop_v_vec"
-            | "ruxen_set_drop_string"
-            | "ruxen_string_into_bytes"
-            | "String_into_bytes"
-            | "ruxen_vec_from_iter"
-            | "Vec_from_iter"
+            | "ruxen_vec_drop"
+            | "ruxen_hash_drop"
+            | "ruxen_set_drop"
     )
+}
+
+fn ref_borrows_first_arg(c: &str) -> bool {
+    // drops.rs:967-984, with the drop glue renamed (see `ref_is_drop_glue`).
+    c.ends_with("_init") || ref_is_drop_glue(c)
+}
+
+fn ref_is_runtime_consume_helper(c: &str) -> bool {
+    // drops.rs:1003-1043, with the drop glue renamed (see `ref_is_drop_glue`).
+    ref_is_drop_glue(c)
+        || matches!(
+            c,
+            "ruxen_string_into_bytes"
+                | "String_into_bytes"
+                | "ruxen_vec_from_iter"
+                | "Vec_from_iter"
+        )
 }
 
 fn ref_is_move_by_ffi_callee(c: &str) -> bool {
@@ -277,11 +288,6 @@ fn ref_is_command_builder_method(c: &str) -> bool {
             | "Command_current_dir"
             | "ruxen_command_current_dir"
     )
-}
-
-fn ref_is_pointer_store_helper(c: &str) -> bool {
-    // VERBATIM from drops.rs:1180.
-    c == "ruxen_store_ptr"
 }
 
 // Effective is_runtime_borrow_helper AFTER all three rebinds (1089/1140/1169):
@@ -349,6 +355,22 @@ fn ref_transfer_indices(c: &str) -> &'static [usize] {
 // ---------------------------------------------------------------------------
 
 pub(crate) const SYMBOLS: &[&str] = &[
+    // Reviewed Fresh additions (see `intentional_fresh_addition`).
+    "ruxen_int_to_string",
+    "Int_to_s",
+    "USize_to_s",
+    "ruxen_float_to_string",
+    "Float_to_s",
+    "ruxen_bool_to_string",
+    "Bool_to_s",
+    "ruxen_char_to_string",
+    "Char_to_s",
+    "ruxen_float_to_string_prec",
+    "Float_to_string_prec",
+    "ruxen_string_truncate_chars",
+    "String_truncate_chars",
+    "ruxen_fmt_formatter_buffer",
+    "Formatter_buffer",
     // FRESH_ALLOC_CALLEES (694-934)
     "String_from",
     "Vec_new",
@@ -490,16 +512,9 @@ pub(crate) const SYMBOLS: &[&str] = &[
     // borrows_first_arg / consume helpers (967-984, 1003-1043)
     "ruxen_dealloc",
     "ruxen_string_free",
-    "ruxen_vec_free",
-    "ruxen_vec_drop_string",
-    "ruxen_vec_drop_vec",
-    "ruxen_hash_free",
-    "ruxen_set_free",
-    "ruxen_hash_drop_string_v",
-    "ruxen_hash_drop_v_string",
-    "ruxen_hash_drop_string_string",
-    "ruxen_hash_drop_v_vec",
-    "ruxen_set_drop_string",
+    "ruxen_vec_drop",
+    "ruxen_hash_drop",
+    "ruxen_set_drop",
     // move-by-ffi (1068-1088)
     "ruxen_executor_spawn",
     "Task_spawn_raw",
@@ -511,8 +526,6 @@ pub(crate) const SYMBOLS: &[&str] = &[
     "ruxen_exit_status_code",
     "ExitStatus_success",
     "ruxen_exit_status_success",
-    // pointer store (1180)
-    "ruxen_store_ptr",
     // transfer_indices runtime witnesses (1241-1244)
     "ruxen_vec_push",
     "ruxen_vec_insert",
@@ -590,8 +603,6 @@ fn oracle_sanity_spot_checks() {
 
     // user callee: not a borrow helper.
     assert!(!ref_is_runtime_borrow_helper("MyClass_method"));
-
-    assert!(ref_is_pointer_store_helper("ruxen_store_ptr"));
 }
 
 // ---------------------------------------------------------------------------
@@ -602,13 +613,10 @@ fn oracle_sanity_spot_checks() {
 
 use ruxen_core::mir::lower::runtime_abi::{callee_ownership, ArgMask, ResultOwnership};
 
-/// Reconstruct the expected ArgMask from the oracle's transfer index list +
-/// the pointer-store rule. In this domain at most two indices ever transfer.
+/// Reconstruct the expected ArgMask from the oracle's transfer index list.
+/// In this domain at most two indices ever transfer.
 fn expected_arg_mask(c: &str) -> ArgMask {
     let mut idxs: Vec<usize> = ref_transfer_indices(c).to_vec();
-    if ref_is_pointer_store_helper(c) && !idxs.contains(&1) {
-        idxs.push(1);
-    }
     idxs.extend_from_slice(intentional_transfer_addition(c));
     match idxs.as_slice() {
         [] => ArgMask::none(),

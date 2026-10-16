@@ -26,103 +26,6 @@ use ruxen_core::codegen::cranelift::{
 };
 use ruxen_core::mir::nodes::*;
 
-// ── C runtime function declarations ────────────────────────────────
-// These are linked into the REPL binary and registered as JIT symbols.
-
-extern "C" {
-    // Note: ruxen_puts / ruxen_print / ruxen_eputs / ruxen_print_int /
-    // ruxen_print_float are intentionally NOT declared here — they are
-    // swapped at symbol-registration time with capture shims (see
-    // `crate::capture`) that append into a buffer we diff to surface only
-    // the newest input's output.
-    fn ruxen_int_to_string(n: i64) -> *const i8;
-    fn ruxen_float_to_string(f: f64) -> *const i8;
-    fn ruxen_bool_to_string(b: i64) -> *const i8;
-    fn ruxen_char_to_string(c: i64) -> *const i8;
-    fn ruxen_string_concat(a: *const i8, b: *const i8) -> *const i8;
-    fn ruxen_string_from(s: *const i8) -> *const i8;
-    fn ruxen_string_push_str(s: *const i8, t: *const i8) -> *const i8;
-    fn ruxen_string_len(s: *const i8) -> i64;
-    fn ruxen_string_is_empty(s: *const i8) -> i8;
-    fn ruxen_string_trim(s: *const i8) -> *const i8;
-    fn ruxen_string_to_lower(s: *const i8) -> *const i8;
-    fn ruxen_string_to_upper(s: *const i8) -> *const i8;
-    fn ruxen_string_chars(s: *const i8) -> *mut u8;
-    fn ruxen_string_eq(a: *const i8, b: *const i8) -> i64;
-    fn ruxen_string_cmp(a: *const i8, b: *const i8) -> i64;
-    fn ruxen_str_parse_uint(s: *const i8) -> i64;
-    fn ruxen_deref_ptr(p: *const i8) -> *const i8;
-    fn ruxen_store_ptr(p: *mut i8, v: *const i8);
-    fn ruxen_alloc(size: i64) -> *mut u8;
-    fn ruxen_dealloc(ptr: *mut u8);
-    fn ruxen_panic(msg: *const i8);
-    fn ruxen_vec_new() -> *mut u8;
-    fn ruxen_vec_push(v: *mut u8, item: i64);
-    fn ruxen_vec_pop(v: *mut u8) -> i64;
-    fn ruxen_vec_len(v: *mut u8) -> i64;
-    fn ruxen_vec_get(v: *mut u8, idx: i64) -> i64;
-    fn ruxen_vec_get_opt(v: *mut u8, idx: i64) -> i64;
-    fn ruxen_vec_is_empty(v: *mut u8) -> i8;
-    fn ruxen_vec_each(v: *mut u8, cb: *const u8);
-    fn ruxen_hash_new() -> *mut u8;
-    // B73 key-kind protocol: the MIR rewrites every table constructor to
-    // its descriptor-taking form, so the JIT has to be able to resolve
-    // these or a REPL line containing a `Hash` / `Set` fails to link.
-    fn ruxen_hash_new_keyed(kind: i64, hash_fn: i64, eq_fn: i64) -> *mut u8;
-    fn ruxen_hash_with_capacity_keyed(cap: i64, kind: i64, hash_fn: i64, eq_fn: i64) -> *mut u8;
-    fn ruxen_hash_from_iter_keyed(iter: *mut u8, kind: i64, hash_fn: i64, eq_fn: i64) -> *mut u8;
-    fn ruxen_set_new_keyed(kind: i64, hash_fn: i64, eq_fn: i64) -> *mut u8;
-    fn ruxen_set_with_capacity_keyed(cap: i64, kind: i64, hash_fn: i64, eq_fn: i64) -> *mut u8;
-    fn ruxen_set_from_iter_keyed(iter: *mut u8, kind: i64, hash_fn: i64, eq_fn: i64) -> *mut u8;
-    fn ruxen_hash_ensure_key_kind(h: *mut u8, kind: i64, hash_fn: i64, eq_fn: i64);
-    fn ruxen_set_ensure_key_kind(s: *mut u8, kind: i64, hash_fn: i64, eq_fn: i64);
-    fn ruxen_hash_insert(h: *mut u8, k: i64, v: i64);
-    fn ruxen_hash_get(h: *mut u8, k: i64) -> i64;
-    fn ruxen_hash_contains_key(h: *mut u8, k: i64) -> i8;
-    fn ruxen_hash_len(h: *mut u8) -> i64;
-    fn ruxen_hash_is_empty(h: *mut u8) -> i8;
-    fn ruxen_set_new() -> *mut u8;
-    fn ruxen_set_insert(s: *mut u8, v: i64);
-    fn ruxen_set_contains(s: *mut u8, v: i64) -> i8;
-    fn ruxen_set_len(s: *mut u8) -> i64;
-    fn ruxen_set_is_empty(s: *mut u8) -> i8;
-    fn ruxen_option_unwrap_or(opt: *mut u8, default: i64) -> i64;
-    fn ruxen_option_expect(opt: *mut u8, msg: *const i8) -> i64;
-    fn ruxen_option_unwrap(opt: *mut u8) -> i64;
-    fn ruxen_option_is_some(opt: *mut u8) -> i8;
-    fn ruxen_option_is_none(opt: *mut u8) -> i8;
-    fn ruxen_result_expect(result: *mut u8, msg: *const i8) -> i64;
-    fn ruxen_result_unwrap(result: *mut u8) -> i64;
-    fn ruxen_result_is_ok(result: *mut u8) -> i8;
-    fn ruxen_result_is_err(result: *mut u8) -> i8;
-    fn ruxen_result_ok(result: *mut u8) -> i64;
-    fn ruxen_result_err(result: *mut u8) -> i64;
-    fn ruxen_noop_passthrough(val: i64) -> i64;
-
-    // ruby-naming.spec.md §3.6 / #06.D interp routing: bare `"#{x}"`
-    // for a primitive (Int/Float/Bool/Char) lowers through
-    // `{Type}_fmt(value, formatter)` + `Formatter_buffer(formatter)`
-    // → `ruxen_fmt_formatter_*` C symbols. Without these registrations
-    // even `1 + 2` panics in the REPL with "can't resolve symbol
-    // ruxen_fmt_formatter_write_str".
-    fn ruxen_fmt_formatter_new() -> *mut u8;
-    fn ruxen_fmt_formatter_new_with_spec(
-        fill: i64,
-        align: i64,
-        sign: i64,
-        alt: i64,
-        zero: i64,
-        width: i64,
-        precision: i64,
-    ) -> *mut u8;
-    fn ruxen_fmt_formatter_write_str(f: *mut u8, s: *const i8) -> i64;
-    fn ruxen_fmt_formatter_write_char(f: *mut u8, c: i64) -> i64;
-    fn ruxen_fmt_formatter_buffer(f: *mut u8) -> *const i8;
-    fn ruxen_fmt_formatter_len(f: *const u8) -> i64;
-    fn ruxen_fmt_formatter_free(f: *mut u8);
-    fn ruxen_fmt_formatter_precision(f: *const u8) -> i64;
-}
-
 /// Cranelift JIT code generation engine for the REPL.
 pub struct JITCodeGen {
     module: JITModule,
@@ -170,11 +73,9 @@ impl JITCodeGen {
 
         let mut jit_builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
 
-        // Register all C runtime functions as JIT symbols. The explicit
-        // registrations below cover the print-family capture shims and
-        // a hand-picked subset for documentation; the dlsym fallback
-        // below picks up everything else statically linked into this
-        // binary (the runtime.c family + libc).
+        // Register the REPL-only overrides: the print-family capture shims
+        // and the session-slot helpers. Every other runtime symbol comes
+        // from the dlsym fallback below.
         register_runtime_symbols(&mut jit_builder);
 
         // Fallback symbol lookup via libc::dlsym. The ruxen-repl binary
@@ -340,7 +241,7 @@ impl JITCodeGen {
         for lib in &program.ffi_libs {
             for ffi_fn in &lib.functions {
                 // Reuse an existing declaration of the C symbol if one was
-                // already made (e.g. via the `runtime_signature` path on a
+                // already made (e.g. via the `compiler_internal_signature` path on a
                 // prior input) so we never declare the same import twice;
                 // otherwise declare it fresh.
                 let func_id = if let Some(&id) = self.declared_fns.get(&ffi_fn.name) {
@@ -636,12 +537,6 @@ impl JITCodeGen {
 // ── Runtime symbol registration ────────────────────────────────────
 
 fn register_runtime_symbols(builder: &mut JITBuilder) {
-    macro_rules! reg {
-        ($builder:expr, $name:ident) => {
-            $builder.symbol(stringify!($name), $name as *const u8);
-        };
-    }
-
     // Print family → capture shims so the REPL can diff cumulative stdout
     // between inputs and surface only the newest input's output.
     builder.symbol(
@@ -677,76 +572,6 @@ fn register_runtime_symbols(builder: &mut JITBuilder) {
         "ruxen_repl_slot_store_i64",
         crate::slots::ruxen_repl_slot_store_i64 as *const u8,
     );
-    reg!(builder, ruxen_int_to_string);
-    reg!(builder, ruxen_float_to_string);
-    reg!(builder, ruxen_bool_to_string);
-    reg!(builder, ruxen_char_to_string);
-    reg!(builder, ruxen_string_concat);
-    reg!(builder, ruxen_string_from);
-    reg!(builder, ruxen_string_push_str);
-    reg!(builder, ruxen_string_len);
-    reg!(builder, ruxen_string_is_empty);
-    reg!(builder, ruxen_string_trim);
-    reg!(builder, ruxen_string_to_lower);
-    reg!(builder, ruxen_string_to_upper);
-    reg!(builder, ruxen_string_chars);
-    reg!(builder, ruxen_string_eq);
-    reg!(builder, ruxen_string_cmp);
-    reg!(builder, ruxen_str_parse_uint);
-    reg!(builder, ruxen_deref_ptr);
-    reg!(builder, ruxen_store_ptr);
-    reg!(builder, ruxen_alloc);
-    reg!(builder, ruxen_dealloc);
-    reg!(builder, ruxen_panic);
-    reg!(builder, ruxen_vec_new);
-    reg!(builder, ruxen_vec_push);
-    reg!(builder, ruxen_vec_pop);
-    reg!(builder, ruxen_vec_len);
-    reg!(builder, ruxen_vec_get);
-    reg!(builder, ruxen_vec_get_opt);
-    reg!(builder, ruxen_vec_is_empty);
-    reg!(builder, ruxen_vec_each);
-    reg!(builder, ruxen_hash_new);
-    reg!(builder, ruxen_hash_new_keyed);
-    reg!(builder, ruxen_hash_with_capacity_keyed);
-    reg!(builder, ruxen_hash_from_iter_keyed);
-    reg!(builder, ruxen_set_new_keyed);
-    reg!(builder, ruxen_set_with_capacity_keyed);
-    reg!(builder, ruxen_set_from_iter_keyed);
-    reg!(builder, ruxen_hash_ensure_key_kind);
-    reg!(builder, ruxen_set_ensure_key_kind);
-    reg!(builder, ruxen_hash_insert);
-    reg!(builder, ruxen_hash_get);
-    reg!(builder, ruxen_hash_contains_key);
-    reg!(builder, ruxen_hash_len);
-    reg!(builder, ruxen_hash_is_empty);
-    reg!(builder, ruxen_set_new);
-    reg!(builder, ruxen_set_insert);
-    reg!(builder, ruxen_set_contains);
-    reg!(builder, ruxen_set_len);
-    reg!(builder, ruxen_set_is_empty);
-    reg!(builder, ruxen_option_unwrap_or);
-    reg!(builder, ruxen_option_expect);
-    reg!(builder, ruxen_option_unwrap);
-    reg!(builder, ruxen_option_is_some);
-    reg!(builder, ruxen_option_is_none);
-    reg!(builder, ruxen_result_expect);
-    reg!(builder, ruxen_result_unwrap);
-    reg!(builder, ruxen_result_is_ok);
-    reg!(builder, ruxen_result_is_err);
-    reg!(builder, ruxen_result_ok);
-    reg!(builder, ruxen_result_err);
-    reg!(builder, ruxen_noop_passthrough);
-    // Formatter family — ruby-naming.spec.md §3.6 / #06.D routes
-    // primitive interpolations through these symbols.
-    reg!(builder, ruxen_fmt_formatter_new);
-    reg!(builder, ruxen_fmt_formatter_new_with_spec);
-    reg!(builder, ruxen_fmt_formatter_write_str);
-    reg!(builder, ruxen_fmt_formatter_write_char);
-    reg!(builder, ruxen_fmt_formatter_buffer);
-    reg!(builder, ruxen_fmt_formatter_len);
-    reg!(builder, ruxen_fmt_formatter_free);
-    reg!(builder, ruxen_fmt_formatter_precision);
 }
 
 /// Widen a narrow integer Cranelift type (i8/i16/i32) to the i64 machine
@@ -882,6 +707,19 @@ pub fn run_int_fn_for_test(func: &MirFunction, args: &[i64]) -> Result<i64, Stri
     Ok(result)
 }
 
+/// B01: per-param "declared slot is an erased uniform word" flags for a MIR
+/// function, matching `build_signature`'s param filtering (zero-sized
+/// `Unit`/`Never` params get no ABI slot). The batch backend computes the
+/// same thing in `CodeGen::compile_program`.
+fn param_word_slots(func: &MirFunction) -> Vec<bool> {
+    func.params
+        .iter()
+        .filter_map(|&id| func.locals.get(id as usize))
+        .filter(|l| ty_to_cranelift(&l.ty).is_some())
+        .map(|l| ruxen_core::codegen::is_erased_word_ty(&l.ty))
+        .collect()
+}
+
 #[cfg(test)]
 mod symbol_allowlist_tests {
     use super::is_repl_symbol_allowed;
@@ -932,17 +770,4 @@ mod symbol_allowlist_tests {
         assert!(!is_repl_symbol_allowed("read"));
         assert!(!is_repl_symbol_allowed("write"));
     }
-}
-
-/// B01: per-param "declared slot is an erased uniform word" flags for a MIR
-/// function, matching `build_signature`'s param filtering (zero-sized
-/// `Unit`/`Never` params get no ABI slot). The batch backend computes the
-/// same thing in `CodeGen::compile_program`.
-fn param_word_slots(func: &MirFunction) -> Vec<bool> {
-    func.params
-        .iter()
-        .filter_map(|&id| func.locals.get(id as usize))
-        .filter(|l| ty_to_cranelift(&l.ty).is_some())
-        .map(|l| ruxen_core::codegen::is_erased_word_ty(&l.ty))
-        .collect()
 }

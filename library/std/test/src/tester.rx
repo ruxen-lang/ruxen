@@ -54,7 +54,7 @@ class Tester
       r.note_pass(name)
     else
       r.failed = r.failed + 1
-      r.note_fail(name)
+      r.note_fail(name, packed)
     end
   end
 
@@ -84,7 +84,7 @@ class Tester
     else
       eputs(&output)
       r.failed = r.failed + 1
-      r.note_fail(name)
+      r.note_fail(name, packed)
     end
   end
 

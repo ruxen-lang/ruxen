@@ -22,7 +22,7 @@ pub fn format_result(raw_value: i64, ty: &Ty) -> Option<String> {
         Ty::Unit => None,
         _ => {
             let value_str = format_value(raw_value, ty);
-            let type_str = format_type(ty);
+            let type_str = ty.to_string();
             Some(format!(
                 "{GREEN}=>{RESET} {value_str} {DIM}: {type_str}{RESET}"
             ))
@@ -90,55 +90,9 @@ pub fn format_value(raw: i64, ty: &Ty) -> String {
             if raw == 0 {
                 "nil".to_string()
             } else {
-                format!("<{} at 0x{:x}>", format_type(ty), raw as u64)
+                format!("<{} at 0x{:x}>", ty, raw as u64)
             }
         }
-    }
-}
-
-/// Format a Ty as a human-readable type string.
-pub fn format_type(ty: &Ty) -> String {
-    match ty {
-        Ty::Int => "Int".to_string(),
-        Ty::Int8 => "Int8".to_string(),
-        Ty::Int16 => "Int16".to_string(),
-        Ty::Int32 => "Int32".to_string(),
-        Ty::Int64 => "Int64".to_string(),
-        Ty::UInt => "UInt".to_string(),
-        Ty::UInt8 => "UInt8".to_string(),
-        Ty::UInt16 => "UInt16".to_string(),
-        Ty::UInt32 => "UInt32".to_string(),
-        Ty::UInt64 => "UInt64".to_string(),
-        Ty::ISize => "ISize".to_string(),
-        Ty::USize => "USize".to_string(),
-        Ty::Float => "Float".to_string(),
-        Ty::Float32 => "Float32".to_string(),
-        Ty::Float64 => "Float64".to_string(),
-        Ty::Bool => "Bool".to_string(),
-        Ty::Char => "Char".to_string(),
-        Ty::Unit => "Unit".to_string(),
-        Ty::Never => "Never".to_string(),
-        Ty::String => "String".to_string(),
-        Ty::Array(inner) => format!("Array[{}]", format_type(inner)),
-        Ty::Map(k, v) => format!("Hash[{}, {}]", format_type(k), format_type(v)),
-        Ty::Set(inner) => format!("Set[{}]", format_type(inner)),
-        Ty::Option(inner) => format!("Option[{}]", format_type(inner)),
-        Ty::Result(ok, err) => format!("Result[{}, {}]", format_type(ok), format_type(err)),
-        Ty::Ref(inner) => format!("&{}", format_type(inner)),
-        Ty::RefMut(inner) => format!("&var {}", format_type(inner)),
-        Ty::Tuple(elems) => {
-            let parts: Vec<String> = elems.iter().map(format_type).collect();
-            format!("({})", parts.join(", "))
-        }
-        Ty::FixedArray(inner, size) => format!("[{}; {}]", format_type(inner), size),
-        Ty::Fn { params, ret } => {
-            let parts: Vec<String> = params.iter().map(format_type).collect();
-            format!("Fn({}) -> {}", parts.join(", "), format_type(ret))
-        }
-        Ty::Class { name, .. } => name.clone(),
-        Ty::Struct { name, .. } => name.clone(),
-        Ty::Enum { name, .. } => name.clone(),
-        _ => format!("{:?}", ty),
     }
 }
 
@@ -184,25 +138,21 @@ pub fn format_fn_type_for_def(target: &FuncDef, all_defs: &[FuncDef]) -> String 
 
     let param_strs: Vec<String> = params
         .iter()
-        .map(|(n, t)| format!("{}: {}", n, format_type(t)))
+        .map(|(n, t)| format!("{}: {}", n, t))
         .collect();
-    format!(
-        "Fn({}) -> {}",
-        param_strs.join(", "),
-        format_type(&return_ty)
-    )
+    format!("Fn({}) -> {}", param_strs.join(", "), return_ty)
 }
 
 /// Format a function signature for display after definition.
 pub fn format_fn_signature(name: &str, params: &[(String, Ty)], return_ty: &Ty) -> String {
     let param_strs: Vec<String> = params
         .iter()
-        .map(|(n, t)| format!("{}: {}", n, format_type(t)))
+        .map(|(n, t)| format!("{}: {}", n, t))
         .collect();
     format!(
         "{GREEN}=>{RESET} {name} {DIM}: Fn({}) -> {}{RESET}",
         param_strs.join(", "),
-        format_type(return_ty)
+        return_ty
     )
 }
 
@@ -213,86 +163,6 @@ pub fn format_error(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── format_type ────────────────────────────────────────────────
-
-    #[test]
-    fn format_type_primitives() {
-        assert_eq!(format_type(&Ty::Int), "Int");
-        assert_eq!(format_type(&Ty::Int8), "Int8");
-        assert_eq!(format_type(&Ty::Int16), "Int16");
-        assert_eq!(format_type(&Ty::Int32), "Int32");
-        assert_eq!(format_type(&Ty::Int64), "Int64");
-        assert_eq!(format_type(&Ty::UInt), "UInt");
-        assert_eq!(format_type(&Ty::UInt8), "UInt8");
-        assert_eq!(format_type(&Ty::UInt16), "UInt16");
-        assert_eq!(format_type(&Ty::UInt32), "UInt32");
-        assert_eq!(format_type(&Ty::UInt64), "UInt64");
-        assert_eq!(format_type(&Ty::ISize), "ISize");
-        assert_eq!(format_type(&Ty::USize), "USize");
-        assert_eq!(format_type(&Ty::Float), "Float");
-        assert_eq!(format_type(&Ty::Float32), "Float32");
-        assert_eq!(format_type(&Ty::Float64), "Float64");
-        assert_eq!(format_type(&Ty::Bool), "Bool");
-        assert_eq!(format_type(&Ty::Char), "Char");
-        assert_eq!(format_type(&Ty::Unit), "Unit");
-        assert_eq!(format_type(&Ty::Never), "Never");
-        assert_eq!(format_type(&Ty::String), "String");
-    }
-
-    #[test]
-    fn format_type_composite() {
-        assert_eq!(format_type(&Ty::Array(Box::new(Ty::Int))), "Array[Int]");
-        assert_eq!(
-            format_type(&Ty::Map(Box::new(Ty::String), Box::new(Ty::Int))),
-            "Hash[String, Int]",
-        );
-        assert_eq!(format_type(&Ty::Set(Box::new(Ty::Bool))), "Set[Bool]");
-        assert_eq!(format_type(&Ty::Option(Box::new(Ty::Int))), "Option[Int]");
-        assert_eq!(
-            format_type(&Ty::Result(Box::new(Ty::Int), Box::new(Ty::String))),
-            "Result[Int, String]",
-        );
-    }
-
-    #[test]
-    fn format_type_references() {
-        assert_eq!(format_type(&Ty::Ref(Box::new(Ty::Int))), "&Int");
-        assert_eq!(format_type(&Ty::RefMut(Box::new(Ty::Bool))), "&var Bool");
-    }
-
-    #[test]
-    fn format_type_tuple_and_array() {
-        assert_eq!(
-            format_type(&Ty::Tuple(vec![Ty::Int, Ty::Bool, Ty::Char])),
-            "(Int, Bool, Char)",
-        );
-        assert_eq!(
-            format_type(&Ty::FixedArray(
-                Box::new(Ty::Int),
-                ruxen_core::hir::types::ConstExpr::Lit(4)
-            )),
-            "[Int; 4]"
-        );
-    }
-
-    #[test]
-    fn format_type_function() {
-        let ty = Ty::Fn {
-            params: vec![Ty::Int, Ty::Int],
-            ret: Box::new(Ty::Int),
-        };
-        assert_eq!(format_type(&ty), "Fn(Int, Int) -> Int");
-    }
-
-    #[test]
-    fn format_type_class_uses_name() {
-        let ty = Ty::Class {
-            name: "Point".to_string(),
-            generic_args: vec![],
-        };
-        assert_eq!(format_type(&ty), "Point");
-    }
 
     // ── format_value ───────────────────────────────────────────────
 
@@ -436,7 +306,8 @@ mod tests {
         let out = format_fn_signature("noop", &[], &Ty::Unit);
         let plain = strip_ansi(&out);
         assert!(plain.contains("noop"));
-        assert!(plain.contains("Fn() -> Unit"));
+        // Types render through `Ty`'s `Display`, as everywhere else: unit is `()`.
+        assert!(plain.contains("Fn() -> ()"));
     }
 
     #[test]

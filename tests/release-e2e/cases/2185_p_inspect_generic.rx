@@ -1,0 +1,60 @@
+# Kernel `p` / `pp` are one generic function each over `Inspect`, and
+# print `x.inspect`. Pins the paren and parenless forms on every scalar
+# and on String, the value `p` returns, and `inspect` itself.
+#
+# `p 7` used to parse as a bare `p` followed by a separate `7` (the
+# parenless-argument rule knew only `puts`/`print`/`eputs`), `p(2.5)`
+# segfaulted (no `Float` overload, so the `&String` one got the double),
+# and a `def main` ending in `p ...` failed with "expected `()`".
+class Counter
+  n: Int
+
+  # An unannotated `init` discards its last value, as Ruby does.
+  def init(@n: Int)
+    @n + 1
+  end
+end
+
+# A local named `p` is still a value: `p & 3` is a bitwise and.
+def masked -> Int
+  let p = 6
+  p & 3
+end
+
+def main
+  p(7)
+  p 8
+  p(2.5)
+  p 3.25
+  p(true)
+  p false
+  p("paren")
+  p "bare"
+  pp(9)
+  pp 1.5
+  pp true
+  pp "pp"
+
+  # `p` returns its argument, so it drops into an expression.
+  let n = p(4) * p 5
+  puts "n #{n}"
+  let f = pp(0.5) + 1.0
+  puts "f #{f}"
+  var s = "kept"
+  s = p s
+  puts "s #{s}"
+  let b = p(1 < 2)
+  puts "b #{b}"
+
+  puts 5.inspect
+  puts 2.5.inspect
+  puts true.inspect
+  puts "q".inspect
+  let c = "xy".chars
+  puts c[0].inspect
+
+  let m = masked
+  puts "m #{m} #{Counter.new(1).n}"
+  # The last statement of `main` may be a non-unit `p` call.
+  p 10
+end

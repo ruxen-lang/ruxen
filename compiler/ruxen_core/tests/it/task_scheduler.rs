@@ -372,7 +372,7 @@ fn arm_pumps_before_yield(body: &ruxen_core::parser::ast::MatchArmBody) -> bool 
 fn expr_contains_thread_yield_now(expr: &ruxen_core::parser::ast::Expr) -> bool {
     if matches!(
         &expr.kind,
-        ExprKind::FieldAccess { object, field }
+        ExprKind::FieldAccess { object, field, .. }
             if field == "yield_now"
                 && matches!(&object.kind, ExprKind::Identifier(name) if name == "Thread")
     ) {

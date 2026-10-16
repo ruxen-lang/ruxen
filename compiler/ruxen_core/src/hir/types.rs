@@ -5,10 +5,13 @@
 //! unification. After type checking, all `Infer` types must be resolved
 //! to concrete types.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use crate::resolve::symbols::SymbolTable;
+
+mod ty_helpers;
+pub use ty_helpers::BUILTIN_HEAD_HOMES;
 
 /// Unique identifier for type variables during inference.
 pub type TypeId = u32;
@@ -230,6 +233,50 @@ pub struct MixinRef {
     pub generic_args: Vec<Ty>,
 }
 
+impl MixinRef {
+    /// The bound a source path names (`Display`, `Into[String]`), with each
+    /// generic arg resolved by `resolve_arg`.
+    pub fn from_bound(
+        path: &crate::parser::ast::TypePath,
+        resolve_arg: impl FnMut(&crate::parser::ast::TypeExpr) -> Ty,
+    ) -> Self {
+        Self {
+            name: path.segments.join("."),
+            generic_args: path
+                .generic_args
+                .as_ref()
+                .map(|args| args.iter().map(resolve_arg).collect())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The bound a source path names, by name only: its generic args are
+    /// dropped. For the pass-1 forward declarations, which run before the
+    /// types those args name are registered.
+    pub fn from_bound_name(path: &crate::parser::ast::TypePath) -> Self {
+        Self {
+            name: path.segments.join("."),
+            generic_args: vec![],
+        }
+    }
+
+    /// Whether this bound names the `Fn` family (`Fn`, `FnMut`, `FnOnce`).
+    pub fn is_fn_family(&self) -> bool {
+        matches!(self.name.as_str(), "Fn" | "FnMut" | "FnOnce")
+    }
+
+    /// The function type an `Fn`-family bound carries in its first generic
+    /// arg (`any Fn[Fn(T) -> U]` → `Fn(T) -> U`), if it carries one.
+    pub fn callable_ty(&self) -> Option<&Ty> {
+        if !self.is_fn_family() {
+            return None;
+        }
+        self.generic_args
+            .first()
+            .filter(|t| matches!(t, Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. }))
+    }
+}
+
 impl fmt::Display for MixinRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name)?;
@@ -416,24 +463,8 @@ impl Ty {
     pub fn is_copy(&self) -> bool {
         match self {
             // Primitives are always Copy
-            Ty::Int
-            | Ty::Int8
-            | Ty::Int16
-            | Ty::Int32
-            | Ty::Int64
-            | Ty::UInt
-            | Ty::UInt8
-            | Ty::UInt16
-            | Ty::UInt32
-            | Ty::UInt64
-            | Ty::ISize
-            | Ty::USize
-            | Ty::Float
-            | Ty::Float32
-            | Ty::Float64
-            | Ty::Bool
-            | Ty::Char
-            | Ty::Unit => true,
+            _ if self.is_scalar_primitive() => true,
+            Ty::Unit => true,
 
             // Never is Copy (vacuously — you can never have a Never value)
             Ty::Never => true,
@@ -792,10 +823,10 @@ fn is_send_with_inner(ty: &Ty, symbols: &SymbolTable, visiting: &mut HashSet<u32
                 // pre-B2 behaviour for any name that doesn't resolve.
                 return false;
             };
-            if nominal_type_has_negative_auto_trait(def, true) {
+            if def.kind.auto_traits().is_some_and(|f| f.opted_out(true)) {
                 return false;
             }
-            if !nominal_type_has_manual_auto_trait(def, true) {
+            if !def.kind.auto_traits().is_some_and(|f| f.manual(true)) {
                 return false;
             }
             // Cycle guard — revisit returns true (Send is a default
@@ -879,10 +910,10 @@ fn nominal_members_are_thread_safe(
     let Some(def) = nominal_definition(ty, symbols) else {
         return false;
     };
-    if nominal_type_has_manual_auto_trait(def, is_send) {
+    if def.kind.auto_traits().is_some_and(|f| f.manual(is_send)) {
         return true;
     }
-    if nominal_type_has_negative_auto_trait(def, is_send) {
+    if def.kind.auto_traits().is_some_and(|f| f.opted_out(is_send)) {
         return false;
     }
     if !visiting.insert(def.id) {
@@ -921,84 +952,18 @@ fn nominal_members_are_thread_safe(
     result
 }
 
-fn nominal_type_has_manual_auto_trait(
-    def: &crate::resolve::symbols::Definition,
-    is_send: bool,
-) -> bool {
-    match &def.kind {
-        crate::resolve::symbols::DefKind::Class { info } => {
-            if is_send {
-                info.manual_send
-            } else {
-                info.manual_sync
-            }
-        }
-        crate::resolve::symbols::DefKind::Struct { info } => {
-            if is_send {
-                info.manual_send
-            } else {
-                info.manual_sync
-            }
-        }
-        crate::resolve::symbols::DefKind::Enum { info } => {
-            if is_send {
-                info.manual_send
-            } else {
-                info.manual_sync
-            }
-        }
-        _ => false,
-    }
-}
-
-fn nominal_type_has_negative_auto_trait(
-    def: &crate::resolve::symbols::Definition,
-    is_send: bool,
-) -> bool {
-    match &def.kind {
-        crate::resolve::symbols::DefKind::Class { info } => {
-            if is_send {
-                info.opt_out_send
-            } else {
-                info.opt_out_sync
-            }
-        }
-        crate::resolve::symbols::DefKind::Struct { info } => {
-            if is_send {
-                info.opt_out_send
-            } else {
-                info.opt_out_sync
-            }
-        }
-        crate::resolve::symbols::DefKind::Enum { info } => {
-            if is_send {
-                info.opt_out_send
-            } else {
-                info.opt_out_sync
-            }
-        }
-        _ => false,
-    }
-}
-
-fn nominal_definition<'a>(
+/// The class, struct or enum definition a `Ty::Class`/`Struct`/`Enum` names
+/// (the first one by that name), or `None` for any other type.
+pub(crate) fn nominal_definition<'a>(
     ty: &Ty,
     symbols: &'a SymbolTable,
 ) -> Option<&'a crate::resolve::symbols::Definition> {
-    let name = match ty {
-        Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => name,
-        _ => return None,
-    };
-
-    symbols.iter().find(|def| {
-        def.name == *name
-            && matches!(
-                def.kind,
-                crate::resolve::symbols::DefKind::Class { .. }
-                    | crate::resolve::symbols::DefKind::Struct { .. }
-                    | crate::resolve::symbols::DefKind::Enum { .. }
-            )
-    })
+    match ty {
+        Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => {
+            symbols.nominal(name)
+        }
+        _ => None,
+    }
 }
 
 impl fmt::Display for Ty {
@@ -1136,180 +1101,5 @@ impl fmt::Display for Ty {
             Ty::Error => write!(f, "<error>"),
             Ty::ConstArg(e) => write!(f, "{}", e),
         }
-    }
-}
-
-impl Ty {
-    /// Apply `f` to every directly-nested `Ty` child, rebuilding `self` with the
-    /// results. EXHAUSTIVE: every variant is matched explicitly — there is no
-    /// `_ =>` arm, so adding a new `Ty` variant is a compile error here until it
-    /// is handled. This is the single structural-recursion primitive for `Ty`;
-    /// folds like `subst_ty` are written as `match { interesting arms; other =>
-    /// other.map_inner(f) }`.
-    pub fn map_inner(self, f: &mut impl FnMut(&Ty) -> Ty) -> Ty {
-        match self {
-            // Leaves — no nested Ty. `SomeMixin`/`AnyMixin` carry `Vec<MixinRef>`,
-            // not `Ty`, so they have no direct `Ty` child and are leaves here.
-            Ty::Int
-            | Ty::Int8
-            | Ty::Int16
-            | Ty::Int32
-            | Ty::Int64
-            | Ty::UInt
-            | Ty::UInt8
-            | Ty::UInt16
-            | Ty::UInt32
-            | Ty::UInt64
-            | Ty::ISize
-            | Ty::USize
-            | Ty::Float
-            | Ty::Float32
-            | Ty::Float64
-            | Ty::Bool
-            | Ty::Char
-            | Ty::Unit
-            | Ty::Never
-            | Ty::String
-            | Ty::ConstArg(_)
-            | Ty::SomeMixin(_)
-            | Ty::AnyMixin(_)
-            | Ty::Infer(_)
-            | Ty::TypeParam { .. }
-            | Ty::RawPtrVoid
-            | Ty::RawPtrMutVoid
-            | Ty::Error => self,
-
-            // Single-child wrappers.
-            Ty::Array(t) => Ty::Array(Box::new(f(&t))),
-            Ty::Set(t) => Ty::Set(Box::new(f(&t))),
-            Ty::Option(t) => Ty::Option(Box::new(f(&t))),
-            Ty::Ref(t) => Ty::Ref(Box::new(f(&t))),
-            Ty::RefMut(t) => Ty::RefMut(Box::new(f(&t))),
-            Ty::RawPtr(t) => Ty::RawPtr(Box::new(f(&t))),
-            Ty::RawPtrMut(t) => Ty::RawPtrMut(Box::new(f(&t))),
-
-            // Named-lifetime refs (bug #3: these were skipped by subst_ty).
-            Ty::RefLifetime(l, t) => Ty::RefLifetime(l, Box::new(f(&t))),
-            Ty::RefMutLifetime(l, t) => Ty::RefMutLifetime(l, Box::new(f(&t))),
-
-            // Two-child.
-            Ty::Map(k, v) => Ty::Map(Box::new(f(&k)), Box::new(f(&v))),
-            Ty::Result(ok, err) => Ty::Result(Box::new(f(&ok)), Box::new(f(&err))),
-
-            // Const-sized array: fold the element, keep the const expr.
-            Ty::FixedArray(t, n) => Ty::FixedArray(Box::new(f(&t)), n),
-
-            // Sequences of children.
-            Ty::Tuple(ts) => Ty::Tuple(ts.iter().map(&mut *f).collect()),
-
-            // Nominal types with generic args.
-            Ty::Class { name, generic_args } => Ty::Class {
-                name,
-                generic_args: generic_args.iter().map(&mut *f).collect(),
-            },
-            Ty::Struct { name, generic_args } => Ty::Struct {
-                name,
-                generic_args: generic_args.iter().map(&mut *f).collect(),
-            },
-            Ty::Enum { name, generic_args } => Ty::Enum {
-                name,
-                generic_args: generic_args.iter().map(&mut *f).collect(),
-            },
-
-            // Function types.
-            Ty::Fn { params, ret } => Ty::Fn {
-                params: params.iter().map(&mut *f).collect(),
-                ret: Box::new(f(&ret)),
-            },
-            Ty::FnMut { params, ret } => Ty::FnMut {
-                params: params.iter().map(&mut *f).collect(),
-                ret: Box::new(f(&ret)),
-            },
-            Ty::FnOnce { params, ret } => Ty::FnOnce {
-                params: params.iter().map(&mut *f).collect(),
-                ret: Box::new(f(&ret)),
-            },
-
-            // Transparent / opaque wrappers — fold the inner.
-            Ty::Alias { name, target } => Ty::Alias {
-                name,
-                target: Box::new(f(&target)),
-            },
-            Ty::Newtype { name, inner } => Ty::Newtype {
-                name,
-                inner: Box::new(f(&inner)),
-            },
-        }
-    }
-
-    /// Peel every reference layer (`&`, `&mut`, `&'a`, `&'a mut`) off `self`,
-    /// returning the first non-reference inner type. The single canonical
-    /// reference-peeler — replaces the several partial hand-rolled peels.
-    pub fn peel_refs(&self) -> &Ty {
-        match self {
-            Ty::Ref(t) | Ty::RefMut(t) | Ty::RefLifetime(_, t) | Ty::RefMutLifetime(_, t) => {
-                t.peel_refs()
-            }
-            other => other,
-        }
-    }
-
-    /// Whether this is a String, looking through references (`&String`,
-    /// `&var String`). The one String-form test shared by MIR and both
-    /// codegen backends.
-    pub fn is_string_form(&self) -> bool {
-        match self.peel_refs() {
-            Ty::String => true,
-            Ty::Class { name, .. } => name == "String",
-            _ => false,
-        }
-    }
-}
-
-#[cfg(test)]
-mod map_inner_tests {
-    use super::*;
-
-    // A fold that renames every TypeParam "T" to Int, recursing everywhere.
-    fn t_to_int(ty: &Ty) -> Ty {
-        match ty {
-            Ty::TypeParam { name, .. } if name == "T" => Ty::Int,
-            other => other.clone().map_inner(&mut |c| t_to_int(c)),
-        }
-    }
-
-    #[test]
-    fn substitutes_through_explicit_lifetime_refs() {
-        // &'a T  — the variant subst_ty historically MISSED (bug #3)
-        let ty = Ty::RefLifetime(
-            "a".into(),
-            Box::new(Ty::TypeParam {
-                name: "T".into(),
-                bounds: vec![],
-            }),
-        );
-        assert_eq!(
-            t_to_int(&ty),
-            Ty::RefLifetime("a".into(), Box::new(Ty::Int))
-        );
-    }
-
-    #[test]
-    fn substitutes_through_map_and_set() {
-        // Map[T, T] and Set[T] — also historically missed by subst_ty.
-        let tp = || Ty::TypeParam {
-            name: "T".into(),
-            bounds: vec![],
-        };
-        let m = Ty::Map(Box::new(tp()), Box::new(tp()));
-        assert_eq!(t_to_int(&m), Ty::Map(Box::new(Ty::Int), Box::new(Ty::Int)));
-        let s = Ty::Set(Box::new(tp()));
-        assert_eq!(t_to_int(&s), Ty::Set(Box::new(Ty::Int)));
-    }
-
-    #[test]
-    fn leaves_unrelated_leaves_untouched() {
-        assert_eq!(t_to_int(&Ty::Int), Ty::Int);
-        assert_eq!(t_to_int(&Ty::String), Ty::String);
     }
 }

@@ -165,11 +165,7 @@ typedef struct RuxenReactor {
 static _Thread_local RuxenReactor *t_current_reactor = (RuxenReactor *)0;
 
 static RuxenReactor *ruxen_reactor_alloc_struct(void) {
-    RuxenReactor *r = (RuxenReactor *)malloc(sizeof(RuxenReactor));
-    if (!r) {
-        ruxen_panic("ruxen_reactor: malloc(RuxenReactor) failed");
-        return NULL;
-    }
+    RuxenReactor *r = (RuxenReactor *)ruxen_xmalloc(sizeof(RuxenReactor));
     memset(r, 0, sizeof(*r));
     r->wake_fd = -1;
 
@@ -506,76 +502,28 @@ int64_t ruxen_reactor_register_fd_write(int64_t reactor_handle, int64_t fd) {
 
 /* ── Persistent fd registration ────────────────────────────────────────
  *
- * Variant of register_fd_{read,write} that keeps the OS registration
- * live for the fd's lifetime. The intended caller registers ONCE at fd
- * construction (AsyncTcpStream / AsyncTcpListener `_from_fd` / `_bind`)
- * and keeps the handle alive until the owning stream drops, so the
- * per-poll register + deregister pair the futures used to emit becomes
- * zero syscalls on the hot path (-6 syscalls per HTTP request on the
- * rondo bench).
+ * Registers exactly as `register_fd_{read,write}` above: the OS
+ * registration already stays live until `deregister`, so "persistent" is
+ * a property of how the caller uses the handle, not of the registration.
+ * AsyncTcpStream / AsyncTcpListener (`_from_fd` / `_bind`) register ONCE
+ * at construction and keep the handle until the owning stream drops, so
+ * the per-poll register + deregister pair the futures used to emit
+ * becomes zero syscalls on the hot path (-6 syscalls per HTTP request on
+ * the rondo bench). The separate entry points keep that intent visible at
+ * the call site.
  *
- * Level-triggering is intentional here. Per-task waker routing means a
- * future attaches its task only after it actually returns Pending; if an
- * edge arrives before that attachment, edge-triggering can consume the
- * event and strand the task. Level-triggering lets the reactor observe
+ * Level-triggering is intentional. Per-task waker routing means a future
+ * attaches its task only after it actually returns Pending; if an edge
+ * arrives before that attachment, edge-triggering can consume the event
+ * and strand the task. Level-triggering lets the reactor observe
  * still-readable/still-writable fds after the task has registered its
  * waker. */
-static int64_t ruxen_reactor_register_fd_persistent_internal(int64_t reactor_handle,
-                                                             int64_t fd_in,
-                                                             int mode) {
-    RuxenReactor *r;
-    if (reactor_handle == 0) {
-        r = ruxen_reactor_acquire();
-    } else {
-        r = (RuxenReactor *)(uintptr_t)reactor_handle;
-    }
-    int user_fd = (int)fd_in;
-    if (user_fd < 0) {
-        return 0;
-    }
-
-    int slot = ruxen_reactor_alloc_fd_slot(r);
-    if (slot < 0) {
-        return 0;
-    }
-    RuxenReactorFdSlot *fd_slot = r->fd_slots[slot];
-    fd_slot->fd = user_fd;
-    fd_slot->mode = mode;
-    fd_slot->fired = 0;
-    fd_slot->task = NULL;
-
-#if defined(__APPLE__)
-    struct kevent ev;
-    short filter = mode == 1 ? EVFILT_WRITE : EVFILT_READ;
-    EV_SET(&ev, (uintptr_t)user_fd, filter,
-           EV_ADD | EV_ENABLE,
-           0, 0, fd_slot);
-    if (kevent(r->fd, &ev, 1, NULL, 0, NULL) < 0) {
-        fd_slot->fd = 0;
-        return 0;
-    }
-#elif defined(__linux__)
-    struct epoll_event ev;
-    memset(&ev, 0, sizeof(ev));
-    ev.events = mode == 1 ? EPOLLOUT : EPOLLIN;
-    ev.data.ptr = fd_slot;
-    if (epoll_ctl(r->fd, EPOLL_CTL_ADD, user_fd, &ev) < 0) {
-        fd_slot->fd = 0;
-        return 0;
-    }
-#endif
-
-    fd_slot->live = 1;
-    r->registered_count++;
-    return (int64_t)(-(slot + 1));
-}
-
 int64_t ruxen_reactor_register_fd_read_persistent(int64_t reactor_handle, int64_t fd) {
-    return ruxen_reactor_register_fd_persistent_internal(reactor_handle, fd, 0);
+    return ruxen_reactor_register_fd_internal(reactor_handle, fd, 0);
 }
 
 int64_t ruxen_reactor_register_fd_write_persistent(int64_t reactor_handle, int64_t fd) {
-    return ruxen_reactor_register_fd_persistent_internal(reactor_handle, fd, 1);
+    return ruxen_reactor_register_fd_internal(reactor_handle, fd, 1);
 }
 
 /* Register a one-shot timer. Returns an opaque i64 handle that

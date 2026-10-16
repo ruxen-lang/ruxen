@@ -11,8 +11,6 @@ use cranelift_codegen::ir::{AbiParam, Signature};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 
-use crate::codegen::runtime::extract_method_name;
-
 use super::runtime_sigs::compiler_internal_signature;
 
 pub struct TranslationEnv<'a, M: Module> {
@@ -80,72 +78,13 @@ impl<'a, M: Module> TranslationEnv<'a, M> {
             return Ok(func_ref);
         }
 
-        // TODO (quality review §1.3): the two suffix-fallback paths
-        // below ("shortest-name wins") are unsound — any class whose
-        // mangled name ends with the same suffix wins by chance for an
-        // unresolved generic-typed callee. The proper fix is to
-        // monomorphise generic methods at MIR time so the callee name
-        // is concrete by codegen entry.
-        //
-        // Removing the fallback now breaks the sample fixture's
-        // `Repository[T: Showable].display_all`'s `item.to_display`
-        // call (MIR emits `?T625_to_display`), because mixin-bound
-        // generics aren't monomorphised yet. Leaving the suffix
-        // fallback in place but tracked.
-        //
-        // Blast radius (post-Cranelift-share): this `TranslationEnv` is the
-        // SHARED codegen path, so the fallback now ships in BOTH backends —
-        // the batch `CodeGen` (ObjectModule) and the REPL `JITCodeGen`
-        // (JITModule). A fix here corrects both; a regression here breaks both.
-        //
-        // For inferred-type method calls (?T..._method), search for a
-        // declared function whose name ends with _method.
-        // Prefer the shortest match to avoid picking e.g.
-        // TaskList_find_by_id when we want Task_id.
-        if name.starts_with("?") {
-            let method = extract_method_name(name);
-            let suffix = format!("_{}", method);
-            let match_name = self
-                .declared_fns
-                .keys()
-                .filter(|k| k.ends_with(&suffix) && !k.starts_with("?"))
-                .min_by_key(|k| k.len())
-                .cloned();
-            if let Some(resolved) = match_name {
-                let func_id = self.declared_fns[&resolved];
-                let func_ref = self.module.declare_func_in_func(func_id, builder.func);
-                return Ok(func_ref);
-            }
-        }
-
-        // For unresolved generic type parameters (e.g., T_assign, E_message),
-        // use suffix matching to find the concrete method.
-        if !self.declared_fns.contains_key(name) {
-            let method = extract_method_name(name);
-            let type_prefix = if let Some(pos) = name.find('_') {
-                &name[..pos]
-            } else {
-                ""
-            };
-            // Match single-letter type params or common generic names
-            let is_generic_param =
-                type_prefix.len() <= 2 && type_prefix.chars().all(|c| c.is_ascii_uppercase());
-            if is_generic_param && !type_prefix.is_empty() {
-                let suffix = format!("_{}", method);
-                let match_name = self
-                    .declared_fns
-                    .keys()
-                    .filter(|k| {
-                        k.ends_with(&suffix) && !k.starts_with("?") && k.len() > suffix.len()
-                    })
-                    .min_by_key(|k| k.len())
-                    .cloned();
-                if let Some(resolved) = match_name {
-                    let func_id = self.declared_fns[&resolved];
-                    let func_ref = self.module.declare_func_in_func(func_id, builder.func);
-                    return Ok(func_ref);
-                }
-            }
+        // An abstract callee (`?T_method`) has no concrete body; MIR never
+        // lets one reach codegen (`prune_unmonomorphised_bodies`).
+        if name.starts_with('?') {
+            return Err(format!(
+                "internal error: abstract callee `{name}` reached codegen (its receiver is \
+                 still a generic parameter)"
+            ));
         }
 
         // Compiler-internal residual symbols (alloc, `==`/`<=>` lowering,

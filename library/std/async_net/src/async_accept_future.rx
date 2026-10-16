@@ -23,16 +23,13 @@ class AsyncAcceptFuture
   end
 
   def var poll(cx: &var Context) -> Poll[Result[(AsyncTcpStream, String), IoError]]
-    if self.done != 0
-      return Poll.Ready(accept_state_to_result(self.state_ptr))
+    if self.done == 0
+      if ruxen_async_accept_step(self.state_ptr) == 1
+        StepFuture.park(cx, self.handle)
+        return Poll.Pending
+      end
+      self.done = 1
     end
-    let step = ruxen_async_accept_step(self.state_ptr)
-    if step == 1
-      let w = cx.waker
-      ruxen_reactor_set_waker(ruxen_reactor_current_handle(), self.handle, w)
-      return Poll.Pending
-    end
-    self.done = 1
     Poll.Ready(accept_state_to_result(self.state_ptr))
   end
 

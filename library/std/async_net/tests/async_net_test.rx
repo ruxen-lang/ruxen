@@ -1,0 +1,24 @@
+Tester.describe("AsyncTcpStream.connect") do |t: &var Tester|
+  # The async state machine records errno at poll time; the IoError it
+  # reports must keep the strerror message, as the sync runtime does.
+  # Port 1 (tcpmux) is privileged and has no listener on a normal host,
+  # so loopback refuses the connect.
+  t.it("reports a refused connect with its strerror message") do
+    let msg = match block_on(AsyncTcpStream.connect(&"127.0.0.1:1"))
+      Ok(_)  -> "connected"
+      Err(e) -> e.message()
+    end
+    t.expect(msg).to_eq("Connection refused")
+  end
+end
+
+Tester.describe("io_error_from_tag") do |t: &var Tester|
+  # Public since the first async_net release: tag 0 is `IoError.NotFound`.
+  t.it("builds the IoError for a variant tag") do
+    let found = match io_error_from_tag(0)
+      IoError.NotFound -> true
+      _ -> false
+    end
+    t.expect(found).to_eq(true)
+  end
+end

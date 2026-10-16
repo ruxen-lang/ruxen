@@ -9,6 +9,7 @@ pub mod nodes;
 #[cfg(test)]
 mod tests;
 pub mod types;
+pub mod visit;
 
 /// The builtin I/O functions whose single argument must be TEXT (a `char*`)
 /// by the time it reaches the runtime.

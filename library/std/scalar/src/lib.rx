@@ -45,9 +45,19 @@ class Int
   include Add
 
   lib "../../string/runtime/string.c"
-    def to_string as "ruxen_int_to_string" -> String
     def to_s as "ruxen_int_to_string" -> String
     def to_f as "ruxen_int_to_f" -> Float
+  end
+  alias to_string to_s
+
+  # Ruby `inspect` (`Inspect`, std/core): the display form, what `p` prints.
+  include Inspect
+
+  # Ruby `Integer#hash` (`Hashable`): an Int hashes to itself, the same
+  # contribution an Int field makes to a derived `hash_code`. This is the
+  # body a `[T: Hashable]` generic calls when `T` is `Int`.
+  def hash_code -> Int
+    0 + self
   end
 
   # Ruby `Integer#times` — yield 0, 1, …, self - 1 in order. The counter
@@ -171,13 +181,12 @@ class Int
   # (or 0), Ruxen answers 0. Recorded PARTIAL in the matrix.
   def truncate(ndigits: Int = 0) -> Int
     let n = 0 + self
-    let k = 0 - ndigits
-    if k <= 0
+    let m = self.rounding_unit(ndigits)
+    if m == 1
       n
-    elsif k > 18
+    elsif m == 0
       0
     else
-      let m = 10.pow(k)
       (n / m) * m
     end
   end
@@ -186,13 +195,12 @@ class Int
   # `-25.floor(-1)` is `-30`, not `-20`.
   def floor(ndigits: Int = 0) -> Int
     let n = 0 + self
-    let k = 0 - ndigits
-    if k <= 0
+    let m = self.rounding_unit(ndigits)
+    if m == 1
       n
-    elsif k > 18
+    elsif m == 0
       0
     else
-      let m = 10.pow(k)
       var q = n / m
       if n < 0 && n % m != 0
         q = q - 1
@@ -205,13 +213,12 @@ class Int
   # `25.ceil(-1)` is `30`, `-25.ceil(-1)` is `-20`.
   def ceil(ndigits: Int = 0) -> Int
     let n = 0 + self
-    let k = 0 - ndigits
-    if k <= 0
+    let m = self.rounding_unit(ndigits)
+    if m == 1
       n
-    elsif k > 18
+    elsif m == 0
       0
     else
-      let m = 10.pow(k)
       var q = n / m
       if n > 0 && n % m != 0
         q = q + 1
@@ -231,13 +238,12 @@ class Int
   # `rest * 2` inside the range.
   def round(ndigits: Int = 0) -> Int
     let n = 0 + self
-    let k = 0 - ndigits
-    if k <= 0
+    let m = self.rounding_unit(ndigits)
+    if m == 1
       n
-    elsif k > 18
+    elsif m == 0
       0
     else
-      let m = 10.pow(k)
       var a = n
       if a < 0
         a = 0 - a
@@ -603,6 +609,25 @@ class Int
     let n = 0 + self
     n as Char
   end
+
+  # Private helper of the rounding family. A method, not a top-level
+  # function, so a user `def rounding_unit` cannot shadow it.
+  private
+
+  # The `10 ** -ndigits` unit `Int`'s rounding family (`truncate` / `floor` /
+  # `ceil` / `round`) works at: 1 for a non-negative `ndigits` (an Integer has
+  # no fractional digits, so they are the identity) and 0 past the i64 range
+  # (`ndigits <= -19`), which each of them answers with 0.
+  def rounding_unit(ndigits: Int) -> Int
+    let k = 0 - ndigits
+    if k <= 0
+      1
+    elsif k > 18
+      0
+    else
+      10.pow(k)
+    end
+  end
 end
 
 ## Feature A — scalar method-homes for Float / Bool / Char / USize.
@@ -627,17 +652,32 @@ class Float
   include Add
 
   lib "../../string/runtime/string.c"
-    def to_string as "ruxen_float_to_string" -> String
     def to_s as "ruxen_float_to_string" -> String
     def to_i as "ruxen_float_to_i" -> Int
+  end
+  alias to_string to_s
+
+  # Ruby `inspect` (`Inspect`, std/core): the display form, what `p` prints.
+  include Inspect
+
+  # Overrides the `Inspect` default only to rebox `self`: here `self` is
+  # typed `Class[Float]` and travels as an i64 word, so the default's
+  # `self.to_s` would convert the raw bits to a double (`2.5` printed as
+  # `4.61281e+18`). `0.0 + self` yields the machine `Float` first.
+  def inspect -> String
+    let x = 0.0 + self
+    x.to_s
   end
 end
 
 class Bool
   lib "../../string/runtime/string.c"
-    def to_string as "ruxen_bool_to_string" -> String
     def to_s as "ruxen_bool_to_string" -> String
   end
+  alias to_string to_s
+
+  # Ruby `inspect` (`Inspect`, std/core): the display form, what `p` prints.
+  include Inspect
 
   ## Ruby's `TrueClass` / `FalseClass` operators — `&`, `|`, `^` and `!` —
   ## are ALREADY the machine operators on a `Bool` operand, and they are
@@ -658,8 +698,11 @@ end
 class Char
   lib "../../string/runtime/string.c"
     def to_s as "ruxen_char_to_string" -> String
-    def to_string as "ruxen_char_to_string" -> String
   end
+  alias to_string to_s
+
+  # Ruby `inspect` (`Inspect`, std/core): the display form, what `p` prints.
+  include Inspect
 
   ## Ruby's `Char` surface (batch B18). Ruby has no `Char` class at all —
   ## a one-character string is a `String` — so each method below is the
@@ -786,7 +829,7 @@ class USize
   include Add
 
   lib "../../string/runtime/string.c"
-    def to_string as "ruxen_int_to_string" -> String
     def to_s as "ruxen_int_to_string" -> String
   end
+  alias to_string to_s
 end

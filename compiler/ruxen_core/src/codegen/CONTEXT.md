@@ -12,19 +12,25 @@ to an executable / `.wasm`. Two backends behind one `Backend` enum.
 - `object.rs` — turning object bytes into files + invoking external tools: `cc`
   (`compile_runtime*`), the system/cross linkers, and `emit_wasm_module` (`wasm-ld`).
   External-process discovery (cc/clang/wasm-ld, `RUXEN_WASM_LD`) lives here.
+- `residual_abi.rs` — the ONE backend-neutral `AbiTy` table of runtime symbols
+  the compiler emits itself and no `.rx` lib block declares on every target.
 - `cranelift/` — default backend (dev + REPL JIT); native ISAs only, **cannot emit
-  wasm**. `runtime_sigs.rs` is its runtime ABI table.
+  wasm**. `runtime_sigs.rs` maps `residual_abi` to Cranelift types.
 - `llvm/` — feature `llvm` (Inkwell + LLVM 18); release + the **only wasm-capable**
-  backend. `runtime_decl.rs` is its runtime ABI table; `emit/` sets export/import attrs.
+  backend. `runtime_decl.rs` declares `residual_abi` in LLVM; `emit/` sets export/import attrs.
 - `runtime/mod.rs` — locating the embedded/host runtime C sources.
 - `layout.rs` — type/struct layout. `lang_intrinsics.rs` — compiler-known intrinsics.
 
 ## Public surface
 `codegen::compile_*` entry points called by `src/ruxenc`, plus
 `compile_with_runtime_sources` (the host link with a test-supplied runtime in
-place of the stdlib one, used by `drop_fixtures`). The two runtime ABI
-tables (`cranelift/runtime_sigs.rs`, `llvm/runtime_decl.rs`) are an ABI **contract**
-with the C runtime — every signature must match the C functions in `library/`.
+place of the stdlib one, used by `drop_fixtures`). `LinkInputs::for_project` is
+the one gatherer of a project's and its flat-merged deps' runtime shims and
+`[system_libs]` libs/frameworks, used by both `ruxen build` and `ruxen test`;
+`collect_system_lib_flags` covers the stdlib packages. `residual_abi.rs` is an ABI
+**contract** with the C runtime: every signature must match the C function in
+`library/`. A stdlib runtime function's ABI is derived from its `.rx` lib
+declaration, never listed there.
 
 ## Depends on
 MIR (`mir::MirProgram`), `target` policy, external tools (`cc`/`clang`/`wasm-ld`/
@@ -35,7 +41,11 @@ the platform linker), and the C runtime in `library/`. No upward edges.
 - ABI: everything crosses as `int64_t` except `Float` (C `double`); `&String` is
   `char*`. A `&var T` is a slot address only for String, else the value's own
   word: ask `mir::refmut_abi::refmut_is_slot_address` (Cranelift, LLVM and the
-  REPL JIT `RefMut` pre-scans all do). Changing a runtime signature means editing BOTH ABI tables + the C side.
+  REPL JIT `RefMut` pre-scans all do). Changing a stdlib runtime signature means
+  editing its `.rx` declaration + the C side; only a symbol the compiler emits
+  itself (and the wasm bootstrap does not declare) goes in `residual_abi.rs`,
+  which `tests/it/runtime_abi_derivation.rs` guards. The REPL JIT resolves runtime
+  symbols by dlsym and registers only its capture and slot shims.
 - **The erased uniform word (B01) — read before touching any float coercion.**
   A value whose static type codegen cannot see lives in a 64-bit *uniform
   word*: a generic-collection slot (`RuxenVec` / the hash+set tables are
@@ -59,13 +69,26 @@ the platform linker), and the C runtime in `library/`. No upward edges.
   - The LLVM mirror of `coerce_erased_word` was written but NOT compile-verified
     (LLVM 18 absent where B01 landed; `llvm-sys` fails to build). Expect
     mechanical fixes there on the first `--features llvm` build.
+- No callee guessing: an abstract `?T_method` callee (receiver still a generic
+  parameter) is a hard error in both backends and in `lang_intrinsics`. MIR's
+  `prune_unmonomorphised_bodies` guarantees none arrives; never reintroduce a
+  "shortest suffix wins" or `T_method` lookup.
+- Symbol linkage comes from `MirFunction::linkage` (set by MIR lowering for
+  `main` and the `<Mixin>_dynamic_<method>` helpers C calls by symbol); a
+  backend never picks it from the function name, and LLVM never imports Cranelift.
+- Link order has one owner: `object::link_command_args` (used by
+  `emit_executable`, so by `compile_host`, `compile_no_std` and `ruxenc`). It
+  puts the program object, runtime objects and the runtime archive (whole-archive,
+  or `-force_load` on macOS) first, then every `-l` and link flag. Linkers that
+  default to `--as-needed` (Ubuntu) drop a library listed before its user.
 - Cranelift is hard-blocked for wasm/embedded (`requires_llvm_backend()`); those
   targets force LLVM (`mod.rs` guard).
 - The wasm path (`compile_cross` → `target.is_wasm()`) now compiles a curated
   runtime subset (`object::WASM_RUNTIME_CORE`: alloc.c, vec.c) + a bundled
   allocator/libc shim (`object::WASM_RT_C`) via clang `--target=wasm32` and links
-  them (`emit_wasm_module` takes runtime objects). `runtime_decl.rs` declares the
-  vec ABI with int64 slots. Tier 4.09 (WIP) — see
+  them (`emit_wasm_module` takes runtime objects). The vec ABI is derived
+  from the array `.rx` declarations (`ty_to_llvm` keeps a generic `T` slot at
+  i64 on wasm32). Tier 4.09 (WIP) — see
   `docs/requirements/tier4_09_wasm_heap_and_host_imports.md`. KNOWN-OPEN: on wasm32
   the call-site arg lowering passes an `Int` to `ruxen_vec_push` as i32 instead of
   i64 (slot-width bug) → traps; fix is in `llvm/emit` arg lowering, not the decl table.

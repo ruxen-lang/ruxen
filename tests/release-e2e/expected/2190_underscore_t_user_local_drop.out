@@ -1,0 +1,5 @@
+body total _total _tally
+drop _tally
+drop _total
+drop total
+done

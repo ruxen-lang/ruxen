@@ -252,6 +252,7 @@ Families are listed in the recommended fix order.
 - Root cause: `core/hir/` has only `context`, `mod`, `nodes`, `tests` and `types` (V); there is no `visit.rs`.
 - Fix: add `core/hir/visit.rs` (`walk_expr`, `walk_expr_mut`, `walk_item`), exhaustive with no `_` arm, mirroring `parser/visit.rs`. Port `no_std` first. Add item walking to `parser/visit.rs` and use the AST `Visit` in the REPL.
 - Risk: coverage widening is the point. Guards: `no_std_e1400.rs` (add a struct-method case), the capture tests, the q17 fixtures.
+- Status (batch 1): done. `core/hir/visit.rs` exists; the compiler passes and all ten IDE walkers use it, and the REPL uses the AST `Visit`. `highlight` and `rename` share `node_finder::method_call_at`, and `use_index` sorts each def's uses into source order after the walk.
 
 **F-17 Canonical `Ty` helpers not adopted.** Kind: duplicate. Severity: medium. Effort: M.
 - Instances:
@@ -475,6 +476,7 @@ Families are listed in the recommended fix order.
   - `bin/ruxen_repl/build.rs:4-48,108-165` hardcodes PCRE2 and the Security framework; `bin/ruxen_cli/build.rs:65`; `core/codegen/object.rs:18-62,315,954`.
   - `RUXEN_MACOS_FRAMEWORKS` environment variable; four `[system_libs]` readers (`core/codegen/mod.rs:405`).
 - Fix: shared `find_project_root`, `LinkInputs::for_project` and `link_requirements`; per-package `[runtime]` defines and excludes in `Ruxen.toml`.
+- Status (batch 1): partial, rest deferred. Still open: the `RUXEN_MACOS_FRAMEWORKS` variable (`core/codegen/object.rs:28`) and the hardcoded PCRE2 sources and Security framework in `bin/ruxen_repl/build.rs`.
 
 **F-38 C runtime missing shared helpers.** Kind: duplicate. Severity: medium. Effort: M.
 - Instances:
@@ -508,6 +510,7 @@ Families are listed in the recommended fix order.
   - Array, Hash and Set re-declare Enumerable (`array/src/lib.rx:66-95`, `std/map/src/lib.rx:91`, `set/src/lib.rx:206`, `std/test/src/matcher.rx:106`).
   - ABI workarounds that type values as `Int`: `std/io/src/lib.rx:94-106`, `std/net/src/lib.rx:57-98`, `std/io/src/open_options.rx:14`, `std/http/src/lib.rx:33`.
 - Fix: private helpers (`tr_set_position`, `skip_space`, `radix_prefix`, `matches_at?`), `alias` where it already works, Bool parameters now that the ABI keeps Bool as I8, and `Array[UInt8]` for byte buffers.
+- Status (batch 1): partial, rest deferred. Still open: the Enumerable re-declarations in Array, Hash and Set listed above, and the instances batch 1 did not touch.
 
 **F-41 Typeck leniency and unsoundness.** Kind: other-debt. Severity: medium. Effort: M.
 - Instances: `core/typeck/unify.rs:288-319` lets `&T` unify with `T` (V, a documented TODO); `:249` TypeParam unifies with anything; `core/typeck/infer/collect.rs:110-162` returns a fresh type variable for unknown methods on non-scalar receivers.

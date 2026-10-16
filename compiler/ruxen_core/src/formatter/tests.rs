@@ -204,6 +204,18 @@ fn test_doc_comment_preserved() {
     );
 }
 
+/// `ruxen fmt` used to delete comments on statements, fields, mixin
+/// signatures and module or extension items. Every comment must survive,
+/// in place, and a second pass must change nothing.
+#[test]
+fn test_comments_everywhere_idempotent() {
+    let source = fmt_fixture("test_comments_everywhere_idempotent");
+    let result = format(&source);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert_eq!(result.output, source, "\nGot:\n{}", result.output);
+    assert_idempotent(&source);
+}
+
 // ─── String Interpolation ───────────────────────────────────────────
 
 #[test]
@@ -360,11 +372,16 @@ fn test_doc_group_break_on_narrow() {
 
 // ─── Comment Collector Tests ────────────────────────────────────────
 
+fn collect_comments(source: &str) -> Vec<comments::Comment> {
+    let mut lexer = Lexer::new(source);
+    lexer.tokenize().expect("fixture lexes");
+    comments::classify_comments(source, lexer.comment_spans()).0
+}
+
 #[test]
 fn test_comment_collector_multiple() {
     let source = fmt_fixture("test_comment_collector_multiple");
-    let collector = comments::CommentCollector::new(&source);
-    let (comments, _) = collector.collect();
+    let comments = collect_comments(&source);
     assert_eq!(comments.len(), 2);
 }
 
@@ -382,8 +399,7 @@ fn test_nested_interpolated_string_arg() {
 #[test]
 fn test_comment_inside_interpolation_ignored() {
     let source = fmt_fixture("test_comment_inside_interpolation_ignored");
-    let collector = comments::CommentCollector::new(&source);
-    let (comments, _) = collector.collect();
+    let comments = collect_comments(&source);
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0].kind, comments::CommentKind::Line);
 }
@@ -588,4 +604,49 @@ fn f5_formatter_preserves_ast() {
     );
     assert!(!out.contains("@["), "retired attribute emitted:\n{}", out);
     assert_eq!(out.matches("protected").count(), 1, "{}", out);
+}
+
+/// A class body prints every member in source order: `include Future` stays
+/// above the methods and the `type Output = String` binding survives (the
+/// parser used to discard it and the formatter grouped members by kind).
+#[test]
+fn class_body_members_keep_source_order() {
+    let src = fmt_fixture("class_body_members_keep_source_order");
+    let out = assert_reparses(&src);
+    assert_eq!(out, src, "class body changed:\n{}", out);
+}
+
+/// A `def` whose body the author wrote on its own lines stays a `def` /
+/// `end` block (fmt used to collapse every simple one-expression body into
+/// `def f -> T { expr }`); a body written on the `def` line keeps its
+/// one-line form; blank lines between statements survive.
+#[test]
+fn multiline_def_keeps_layout() {
+    let src = fmt_fixture("multiline_def_keeps_layout");
+    let out = assert_reparses(&src);
+    assert_eq!(out, src, "layout changed:\n{}", out);
+    assert_idempotent(&src);
+}
+
+/// `p 7` is a call of `p` with the argument `7`, like `puts 7`. It used to
+/// parse as a bare `p` followed by a separate `7`, which fmt then wrote on
+/// two lines.
+#[test]
+fn bare_p_call_keeps_its_argument() {
+    let src = fmt_fixture("bare_p_call");
+    let out = assert_reparses(&src);
+    assert_eq!(out, src, "bare call changed:\n{}", out);
+}
+
+/// Spellings the AST used to normalize away stay as written: `@field`, a
+/// `where` clause on its own line or on the header line, `T?`, calls written
+/// without parens (`puts "x"`, `v.sort_by { }`, `v.map { }`), and a block's
+/// form, header and line layout (`do ... end` without `||`, a one-line
+/// `do |x| ... end`, `{ 1 }` without `||`).
+#[test]
+fn lossless_surface_spellings() {
+    let src = fmt_fixture("lossless_surface_spellings");
+    let out = assert_reparses(&src);
+    assert_eq!(out, src, "spelling changed:\n{}", out);
+    assert_idempotent(&src);
 }

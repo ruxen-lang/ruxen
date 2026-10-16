@@ -30,6 +30,7 @@ impl Parser {
                 generic_args: Some(vec![base]),
                 span: outer_span,
                 rooted: false,
+                nilable: true,
             });
         }
         base
@@ -75,7 +76,7 @@ impl Parser {
             // `nil` in type position — alias for the unit type `()`.
             // Produces the IDENTICAL AST node as `()` (empty Tuple) so
             // every downstream consumer (resolve, typeck, MIR, codegen,
-            // pretty-printer) sees one canonical form. Users who write
+            // formatter) sees one canonical form. Users who write
             // `nil` still see `()` in error messages — `()` remains the
             // canonical display form.
             TokenKind::Nil => {
@@ -307,22 +308,45 @@ impl Parser {
     fn parse_fn_type(&mut self) -> TypeExpr {
         let start = self.current_span();
         self.advance(); // consume Fn
-        self.expect(TokenKind::LParen);
-        self.skip_newlines();
-
-        let mut params = Vec::new();
-        if !self.at(TokenKind::RParen) {
-            params.push(self.parse_type());
-            while self.eat(TokenKind::Comma) {
-                self.skip_newlines();
-                if self.at(TokenKind::RParen) {
-                    break;
-                }
-                params.push(self.parse_type());
-            }
+        if !self.at(TokenKind::LParen) {
+            self.expect(TokenKind::LParen); // reports the missing `(`
         }
-        self.skip_newlines();
-        self.expect(TokenKind::RParen);
+        let (params, return_type) = self.parse_fn_signature_tail();
+
+        let span = self.span_from(&start);
+        TypeExpr::Function {
+            params,
+            return_type: Box::new(return_type),
+            bracketed: false, // paren form `Fn(...) -> R`
+            span,
+        }
+    }
+
+    /// The signature every function type spells the same way, after its
+    /// `Fn` / `Fn[` / `Block` / bound-name head: an optional parenthesised
+    /// parameter list (trailing comma allowed), then an optional `-> R`. A
+    /// missing return type is the unit type.
+    pub(super) fn parse_fn_signature_tail(&mut self) -> (Vec<TypeExpr>, TypeExpr) {
+        let params = if self.at(TokenKind::LParen) {
+            self.advance();
+            self.skip_newlines();
+            let mut params = Vec::new();
+            if !self.at(TokenKind::RParen) {
+                params.push(self.parse_type());
+                while self.eat(TokenKind::Comma) {
+                    self.skip_newlines();
+                    if self.at(TokenKind::RParen) {
+                        break;
+                    }
+                    params.push(self.parse_type());
+                }
+            }
+            self.skip_newlines();
+            self.expect(TokenKind::RParen);
+            params
+        } else {
+            vec![]
+        };
 
         let return_type = if self.eat(TokenKind::Arrow) {
             self.skip_newlines();
@@ -334,13 +358,7 @@ impl Parser {
             }
         };
 
-        let span = self.span_from(&start);
-        TypeExpr::Function {
-            params,
-            return_type: Box::new(return_type),
-            bracketed: false, // paren form `Fn(...) -> R`
-            span,
-        }
+        (params, return_type)
     }
 
     pub(crate) fn parse_named_type(&mut self) -> TypeExpr {
@@ -382,6 +400,7 @@ impl Parser {
                     generic_args: None,
                     span: start,
                     rooted,
+                    nilable: false,
                 };
             }
         }
@@ -412,6 +431,7 @@ impl Parser {
             generic_args,
             span,
             rooted,
+            nilable: false,
         }
     }
 
@@ -584,31 +604,7 @@ impl Parser {
             .unwrap_or(false);
         if is_fn_trait && self.at(TokenKind::LParen) {
             let fn_start = self.current_span();
-            self.advance(); // consume (
-            self.skip_newlines();
-            let mut params = Vec::new();
-            if !self.at(TokenKind::RParen) {
-                params.push(self.parse_type());
-                while self.eat(TokenKind::Comma) {
-                    self.skip_newlines();
-                    if self.at(TokenKind::RParen) {
-                        break;
-                    }
-                    params.push(self.parse_type());
-                }
-            }
-            self.skip_newlines();
-            self.expect(TokenKind::RParen);
-
-            let return_type = if self.eat(TokenKind::Arrow) {
-                self.skip_newlines();
-                self.parse_type()
-            } else {
-                TypeExpr::Tuple {
-                    elements: vec![],
-                    span: self.current_span(),
-                }
-            };
+            let (params, return_type) = self.parse_fn_signature_tail();
 
             let fn_span = self.span_from(&fn_start);
             let fn_ty = TypeExpr::Function {
@@ -736,6 +732,7 @@ impl Parser {
             generic_args,
             span,
             rooted: false,
+            nilable: false,
         })
     }
 }

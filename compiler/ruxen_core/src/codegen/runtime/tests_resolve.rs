@@ -109,15 +109,3 @@ fn thread_runtime_methods_resolve() {
         "Thread_yield_now"
     );
 }
-
-#[test]
-fn bang_unwrap_maps_to_runtime_symbol() {
-    assert_eq!(
-        runtime_name("Option[Int]_unwrap!").unwrap(),
-        "ruxen_option_unwrap"
-    );
-    assert_eq!(
-        runtime_name("Result[Int,IoError]_unwrap!").unwrap(),
-        "ruxen_result_unwrap"
-    );
-}

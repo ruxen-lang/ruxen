@@ -1,4 +1,5 @@
 #include "../../core/runtime/runtime.h"
+#include "future_rt.h"
 
 /* §4.5 Async Stream — C helpers.
  *
@@ -21,13 +22,8 @@
  * class_info — the §4.5 Inc4 gate widening, mirroring the §4.1 Future Drop
  * slot) and then free the inner's heap block. Composes down the whole chain:
  * dropping a `TakeStream(MapStream(Source))` runs each stage's `def drop`,
- * including the source's resource teardown. Mirrors `ruxen_race_cancel_arm`.
- *
- * `Drop_dynamic_drop` is the SAME compiler-synthesised helper the scheduler
- * drain/cancel + race loser-cleanup call; declared `__weak` so a program with
- * no async-protocol class at all (helper never emitted) still links — then the
- * call is a guarded no-op (a program using a Stream adapter always emits it). */
-__attribute__((weak)) void Drop_dynamic_drop(int64_t self);
+ * including the source's resource teardown. Shares `ruxen_future_drop_and_free` (future_rt.h) with Race losers.
+ */
 
 /* Run an adapter's inner `any Stream` `def drop` + free its heap block. NULL
  * inner (never set) is a no-op. Each adapter's `def drop` runs EXACTLY ONCE per
@@ -39,11 +35,5 @@ __attribute__((weak)) void Drop_dynamic_drop(int64_t self);
  * `def drop` is arbitrary user code; we hold only the raw `inner_ptr` local
  * across it and free the block after it returns. */
 void ruxen_stream_drop_inner(int64_t inner_ptr) {
-    if (inner_ptr == 0) {
-        return;
-    }
-    if (Drop_dynamic_drop) {
-        Drop_dynamic_drop(inner_ptr);
-    }
-    ruxen_dealloc((void *)(uintptr_t)inner_ptr);
+    ruxen_future_drop_and_free(inner_ptr);
 }

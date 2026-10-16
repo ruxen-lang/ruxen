@@ -18,7 +18,7 @@ impl<'a> Lowerer<'a> {
     /// receiver HAS one but the caller reached the floor without desugaring"
     /// (parallel assignment), so its refusal names the real limitation.
     fn index_assign_routes_to_method(&self, object_ty: &Ty) -> bool {
-        let head = super::binops::unwrap_ref(object_ty);
+        let head = object_ty.peel_refs();
         matches!(head, Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. })
             || (super::binops::is_builtin_op_head(head)
                 && self.builtin_head_has_op_method(head, "[]="))
@@ -28,7 +28,11 @@ impl<'a> Lowerer<'a> {
     /// (a plain/captured/cell-promoted variable, a struct field, or a
     /// fixed-array / backing-Vec index). Shared by single `Assign` lowering and
     /// `MultiAssign` so both use one code path for every target kind.
-    fn store_value_into_target(&mut self, target: &HirExpr, val: MirValue) -> Result<(), String> {
+    pub(super) fn store_value_into_target(
+        &mut self,
+        target: &HirExpr,
+        val: MirValue,
+    ) -> Result<(), String> {
         match &target.kind {
             HirExprKind::VarRef(def_id) => {
                 // Captured variable inside a closure body is ByRef (mutation
@@ -178,9 +182,6 @@ impl<'a> Lowerer<'a> {
         let HirExprKind::VarRef(def_id) = &target.kind else {
             return Err("assignment splat target is not a variable".to_string());
         };
-        let callee = super::super::drops::heap_free_callee(&target.ty)
-            .ok_or_else(|| format!("assignment splat target is not heap-owned: {}", target.ty))?
-            .to_string();
 
         let old_value = if let Some(slot) = self.capture_map.get(def_id).copied() {
             let cap_ptr = self.captures_ptr_local.unwrap();
@@ -213,11 +214,15 @@ impl<'a> Lowerer<'a> {
             return Err("assignment splat target has no local storage".to_string());
         };
 
-        self.emit(MirInst::Call {
-            dest: None,
-            callee,
-            args: vec![MirValue::Use(old_value)],
-        });
+        let symbols = self.symbols;
+        let free =
+            super::super::drops::heap_free_call(self.fn_mut(), symbols, &target.ty, old_value)
+                .ok_or_else(|| {
+                    format!("assignment splat target is not heap-owned: {}", target.ty)
+                })?;
+        for inst in free {
+            self.emit(inst);
+        }
         Ok(())
     }
 
@@ -363,10 +368,13 @@ impl<'a> Lowerer<'a> {
                             kind: HirExprKind::MethodCall {
                                 object: Box::new((**object).clone()),
                                 method: UNRESOLVED_DEF,
+                                resolved: UNRESOLVED_DEF,
                                 method_name: "[]=".to_string(),
                                 generic_args: vec![],
                                 args: vec![(**index).clone(), (**value).clone()],
                                 block: None,
+                                safe_nav: false,
+                                parens: true,
                             },
                             ty: Ty::Unit,
                             span: expr.span.clone(),
@@ -390,36 +398,20 @@ impl<'a> Lowerer<'a> {
                 let rhs_local = self.lower_expr(value)?;
                 let rhs_val = local_to_value(rhs_local);
 
-                // ── Phase 2 stdlib batch 2 (#02): String += String ──
-                // Lower as `target = String_push_str(target, value)`.
-                // The default integer-add path below would treat the
-                // heap pointer operands as i64 and corrupt them.
-                //
-                // Note: we don't emit an explicit free for the prior
-                // buffer here. That mirrors the existing `s.push_str(x)`
-                // method-call lowering at line ~1546, which also rebinds
-                // without freeing. The known temporary leak is shared
-                // by both paths and tracked for a future buffer-owning
-                // String redesign; closing it here would diverge from
-                // push_str semantics and confuse the leak-tracker tests.
-                if matches!(op, BinOp::Add)
-                    && matches!(target.ty, Ty::String)
-                    && matches!(value.ty, Ty::String)
-                {
-                    if let HirExprKind::VarRef(def_id) = &target.kind {
-                        if let Some(&dest) = self.def_to_local.get(def_id) {
-                            let new_buf = self.new_temp(Ty::String);
-                            self.emit(MirInst::Call {
-                                dest: Some(new_buf),
-                                callee: "String_push_str".to_string(),
-                                args: vec![MirValue::Use(dest), rhs_val],
-                            });
-                            self.emit(MirInst::Assign {
-                                dest,
-                                value: MirValue::Use(new_buf),
-                            });
-                            return Ok(None);
-                        }
+                // `s += t` on Strings appends in place, as `s.push_str(t)`.
+                // The default integer-add path below would treat the heap
+                // pointer operands as i64 and corrupt them.
+                if matches!(target.ty, Ty::String) && matches!(value.ty, Ty::String) {
+                    if let BinOp::Add = op {
+                        let target_val = local_to_value(self.lower_expr(target)?);
+                        let callee = self.resolve_ffi_alias_callee("String_push_str".to_string());
+                        self.emit_rebinding_self_call(
+                            target,
+                            callee,
+                            vec![target_val, rhs_val],
+                            None,
+                        )?;
+                        return Ok(None);
                     }
                 }
 

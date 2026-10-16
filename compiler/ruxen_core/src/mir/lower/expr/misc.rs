@@ -38,28 +38,7 @@ impl<'a> Lowerer<'a> {
                 // (float↔float), and `fcvt_from_*`/`fcvt_to_*_sat` (int↔float,
                 // signedness-correct per direction). Non-numeric casts (e.g.
                 // reference reinterpret) stay pass-through.
-                let is_int_like = |ty: &Ty| {
-                    matches!(
-                        ty,
-                        Ty::Int
-                            | Ty::Int8
-                            | Ty::Int16
-                            | Ty::Int32
-                            | Ty::Int64
-                            | Ty::UInt
-                            | Ty::UInt8
-                            | Ty::UInt16
-                            | Ty::UInt32
-                            | Ty::UInt64
-                            | Ty::ISize
-                            | Ty::USize
-                            | Ty::Bool
-                            | Ty::Char
-                    )
-                };
-                let is_float_like = |ty: &Ty| matches!(ty, Ty::Float | Ty::Float32 | Ty::Float64);
-                let is_numeric = |ty: &Ty| is_int_like(ty) || is_float_like(ty);
-                if !is_numeric(&resolved_target) || !is_numeric(&inner.ty) {
+                if !resolved_target.is_scalar_primitive() || !inner.ty.is_scalar_primitive() {
                     return Ok(Some(src));
                 }
                 let dest = self.new_temp(resolved_target);

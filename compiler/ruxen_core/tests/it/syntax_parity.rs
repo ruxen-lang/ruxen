@@ -38,10 +38,8 @@
 //! `library/std/`; they are picked up automatically. Sibling repos
 //! (canvas/quiver/rondo) are read-only corpora discovered by path.
 
-use ruxen_core::lexer::token::Span;
 use ruxen_core::lexer::Lexer;
 use ruxen_core::parser::ast::*;
-use ruxen_core::parser::printer::PrettyPrinter;
 use ruxen_core::parser::Parser;
 use ruxen_core::{diagnostics::Diagnostic, formatter};
 use std::path::{Path, PathBuf};
@@ -116,8 +114,7 @@ fn parse(src: &str) -> Result<Program, String> {
 
 /// Span-blind, import-order-normalised structural fingerprint of a program.
 ///
-/// Built from the AST pretty-printer (which is span-free and fully
-/// parenthesises every operator, so distinct trees print distinctly), then
+/// Built from the span-blind AST dump (`common::span_blind_ast`), after
 /// the `Use std.x.{a, b}` member lists are sorted so the formatter's
 /// deliberate import alphabetisation (a meaning-preserving canonicalisation,
 /// `format_imports.rs`) is not flagged as a divergence — but a DROPPED,
@@ -133,7 +130,7 @@ fn fingerprint(prog: &Program) -> String {
             members.sort();
         }
     }
-    PrettyPrinter::new().print_program(&prog)
+    crate::common::span_blind_ast(&prog)
 }
 
 // ─── Axis 1: compiler (lex + parse) ──────────────────────────────────
@@ -414,7 +411,7 @@ fn axis_repl_accepts_corpus_top_level_items() {
             if matches!(item, TopLevelItem::Expr(_)) {
                 continue;
             }
-            let span = item_span(item);
+            let span = item.span();
             let Some(slice) = src.get(span.start..span.end) else {
                 continue;
             };
@@ -446,25 +443,4 @@ fn axis_repl_accepts_corpus_top_level_items() {
         failures.len(),
         failures.join("\n")
     );
-}
-
-/// Byte span of a top-level item (mirrors the formatter's private
-/// `item_span`). Used only to slice per-item source for the repl sweep.
-fn item_span(item: &TopLevelItem) -> &Span {
-    match item {
-        TopLevelItem::Module(m) => &m.span,
-        TopLevelItem::Class(c) => &c.span,
-        TopLevelItem::Struct(s) => &s.span,
-        TopLevelItem::Enum(e) => &e.span,
-        TopLevelItem::Mixin(t) => &t.span,
-        TopLevelItem::Impl(i) => &i.span,
-        TopLevelItem::Function(f) => &f.span,
-        TopLevelItem::Use(u) => &u.span,
-        TopLevelItem::TypeAlias(ta) => &ta.span,
-        TopLevelItem::Newtype(nt) => &nt.span,
-        TopLevelItem::Const(c) => &c.span,
-        TopLevelItem::Lib(l) => &l.span,
-        TopLevelItem::Expr(e) => &e.span,
-        TopLevelItem::Alias(a) => &a.span,
-    }
 }

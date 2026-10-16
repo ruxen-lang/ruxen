@@ -17,19 +17,16 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
+    /// The code's title from the central `diagnostics::codes::REGISTRY`,
+    /// so the borrow checker and `ruxen explain` never disagree.
     pub fn title(&self) -> &'static str {
-        match self {
-            ErrorCode::E1001 => "value used after move",
-            ErrorCode::E1002 => "cannot borrow writably — already borrowed read-only",
-            ErrorCode::E1003 => "cannot borrow read-only — already borrowed writably",
-            ErrorCode::E1006 => "cannot assign to `let` binding",
-            ErrorCode::E1007 => "cannot borrow `let` binding writably",
-            ErrorCode::E1009 => "cannot move value — currently borrowed",
-            ErrorCode::E1010 => "returned reference outlives local value",
-            ErrorCode::E1011 => "value is not `Send`",
-            ErrorCode::E1012 => "value is not `Sync`",
-            ErrorCode::E1013 => "non-`static` value captured by send-required closure",
-            ErrorCode::E1014 => "invalid manual `Send` / `Sync` inclusion",
+        match crate::diagnostics::codes::lookup(self.code_str()) {
+            Some(info) => info.title,
+            // Pinned by `borrow_check_codes_appear_in_central_registry`.
+            None => unreachable!(
+                "{} missing from diagnostics::codes::REGISTRY",
+                self.code_str()
+            ),
         }
     }
 

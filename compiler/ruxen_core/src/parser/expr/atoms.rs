@@ -112,6 +112,7 @@ impl Parser {
                             span: start.clone(),
                         }),
                         field,
+                        ivar: true,
                     },
                     span: self.span_from(&start),
                 }
@@ -196,6 +197,7 @@ impl Parser {
                             }),
                             args,
                             block: block.map(Box::new),
+                            parens: true,
                         },
                         span,
                     }
@@ -211,6 +213,7 @@ impl Parser {
                             }),
                             args: vec![arg],
                             block: None,
+                            parens: false,
                         },
                         span,
                     }
@@ -228,6 +231,7 @@ impl Parser {
                             }),
                             args: vec![],
                             block: block.map(Box::new),
+                            parens: false,
                         },
                         span,
                     }
@@ -402,6 +406,7 @@ impl Parser {
                             }),
                             args,
                             block: None,
+                            parens: true,
                         },
                         span,
                     }
@@ -557,6 +562,7 @@ impl Parser {
                     generic_args: Some(args.clone()),
                     span: parser.span_from(&start),
                     rooted: false,
+                    nilable: false,
                 })
             })
         };
@@ -725,6 +731,7 @@ impl Parser {
                     }),
                     args,
                     block: block.map(Box::new),
+                    parens: true,
                 },
                 span,
             }
@@ -1126,6 +1133,7 @@ impl Parser {
         self.skip_newlines();
 
         // Check for closure params: { |x, y| ... } or empty `||`
+        let pipes = self.at(TokenKind::Pipe) || self.at(TokenKind::PipePipe);
         let params = if self.at(TokenKind::Pipe) {
             self.parse_closure_params()
         } else if self.at(TokenKind::PipePipe) {
@@ -1215,6 +1223,8 @@ impl Parser {
                 params,
                 body,
                 span: span.clone(),
+                pipes,
+                do_end: false,
             }),
             span,
         }
@@ -1225,6 +1235,7 @@ impl Parser {
         self.advance(); // consume do
         self.skip_newlines();
 
+        let pipes = self.at(TokenKind::Pipe) || self.at(TokenKind::PipePipe);
         let params = if self.at(TokenKind::Pipe) {
             self.parse_closure_params()
         } else if self.at(TokenKind::PipePipe) {
@@ -1250,6 +1261,8 @@ impl Parser {
                 params,
                 body: ClosureBody::Block(block),
                 span: span.clone(),
+                pipes,
+                do_end: true,
             }),
             span,
         }

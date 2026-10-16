@@ -20,26 +20,6 @@ impl<'a> Lowerer<'a> {
         field_ty: &Ty,
     ) -> Option<LocalId> {
         let val_local = val_local?;
-        let is_numeric = |ty: &Ty| {
-            matches!(
-                ty,
-                Ty::Int
-                    | Ty::Int8
-                    | Ty::Int16
-                    | Ty::Int32
-                    | Ty::Int64
-                    | Ty::UInt
-                    | Ty::UInt8
-                    | Ty::UInt16
-                    | Ty::UInt32
-                    | Ty::UInt64
-                    | Ty::ISize
-                    | Ty::USize
-                    | Ty::Float
-                    | Ty::Float32
-                    | Ty::Float64
-            )
-        };
         let Some(val_ty) = self
             .fn_ref()
             .locals
@@ -51,7 +31,7 @@ impl<'a> Lowerer<'a> {
         // Only re-materialise when both ends are numeric and the widths/kinds
         // actually differ. Non-numeric fields (heap pointers, nested structs)
         // are stored/loaded as raw 8-byte slots and must pass through unchanged.
-        if val_ty == *field_ty || !is_numeric(&val_ty) || !is_numeric(field_ty) {
+        if val_ty == *field_ty || !val_ty.is_numeric() || !field_ty.is_numeric() {
             return Some(val_local);
         }
         let dest = self.new_temp(field_ty.clone());

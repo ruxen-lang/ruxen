@@ -161,3 +161,19 @@ pub fn compile_and_run(source: &str, name: &str) -> (String, String, Option<i32>
         output.status.code(),
     )
 }
+
+/// Span-blind structural dump of a parsed program: its `{:?}` with every
+/// `Span { .. }` value removed, so two trees compare equal exactly when they
+/// differ only in source positions (the formatter's reparse-identity law).
+pub fn span_blind_ast(program: &ruxen_core::parser::ast::Program) -> String {
+    let dump = format!("{program:?}");
+    let mut out = String::with_capacity(dump.len());
+    let mut rest = dump.as_str();
+    while let Some(i) = rest.find("Span { start: ") {
+        out.push_str(&rest[..i]);
+        let close = rest[i..].find('}').expect("a Span dump closes");
+        rest = &rest[i + close + 1..];
+    }
+    out.push_str(rest);
+    out
+}

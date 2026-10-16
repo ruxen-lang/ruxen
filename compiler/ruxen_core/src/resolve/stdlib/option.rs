@@ -26,10 +26,7 @@ pub(super) fn register_option(r: &mut Resolver) {
             info: EnumInfo {
                 generic_params: vec![GenericParamInfo::type_param("T".to_string(), vec![])],
                 variants: vec![], // will be filled below
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
+                auto_traits: AutoTraitFlags::default(),
                 const_predicates: vec![],
             },
         },

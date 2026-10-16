@@ -9,6 +9,28 @@ use super::symbols::*;
 use super::{PatternSpan, Resolver};
 
 impl Resolver {
+    /// The type of a type name used as a value (the receiver of
+    /// `Point.new(...)`, `Color.Red`, `Outer.Inner.method(...)`): the
+    /// class, struct or enum itself, else a fresh inference variable.
+    fn type_name_value_ty(&mut self, def_id: DefId, name: &str) -> Ty {
+        let name = name.to_string();
+        match self.symbols.get(def_id).map(|d| &d.kind) {
+            Some(DefKind::Class { .. }) => Ty::Class {
+                name,
+                generic_args: vec![],
+            },
+            Some(DefKind::Struct { .. }) => Ty::Struct {
+                name,
+                generic_args: vec![],
+            },
+            Some(DefKind::Enum { .. }) => Ty::Enum {
+                name,
+                generic_args: vec![],
+            },
+            _ => self.type_context.fresh_type_var(),
+        }
+    }
+
     pub(super) fn resolve_expr(&mut self, expr: &ast::Expr) -> HirExpr {
         let span = expr.span.clone();
         match &expr.kind {
@@ -209,21 +231,7 @@ impl Resolver {
                 } else if let Some(def_id) = self.scopes.lookup_type(name) {
                     // Type name used as a value — needed for constructor calls
                     // like Point.new(...), Color.Red, etc.
-                    let ty = match self.symbols.get(def_id).map(|d| &d.kind) {
-                        Some(DefKind::Class { .. }) => Ty::Class {
-                            name: name.clone(),
-                            generic_args: vec![],
-                        },
-                        Some(DefKind::Struct { .. }) => Ty::Struct {
-                            name: name.clone(),
-                            generic_args: vec![],
-                        },
-                        Some(DefKind::Enum { .. }) => Ty::Enum {
-                            name: name.clone(),
-                            generic_args: vec![],
-                        },
-                        _ => self.type_context.fresh_type_var(),
-                    };
+                    let ty = self.type_name_value_ty(def_id, name);
                     HirExpr {
                         kind: HirExprKind::VarRef(def_id),
                         ty,
@@ -240,21 +248,7 @@ impl Resolver {
                     // expression so the trailing `.method(args)`
                     // dispatches as a regular class-method call.
                     if let Some(&def_id) = self.type_registry.get(name) {
-                        let ty = match self.symbols.get(def_id).map(|d| &d.kind) {
-                            Some(DefKind::Class { .. }) => Ty::Class {
-                                name: name.clone(),
-                                generic_args: vec![],
-                            },
-                            Some(DefKind::Struct { .. }) => Ty::Struct {
-                                name: name.clone(),
-                                generic_args: vec![],
-                            },
-                            Some(DefKind::Enum { .. }) => Ty::Enum {
-                                name: name.clone(),
-                                generic_args: vec![],
-                            },
-                            _ => self.type_context.fresh_type_var(),
-                        };
+                        let ty = self.type_name_value_ty(def_id, name);
                         HirExpr {
                             kind: HirExprKind::VarRef(def_id),
                             ty,
@@ -437,7 +431,7 @@ impl Resolver {
                     span,
                 }
             }
-            ast::ExprKind::FieldAccess { object, field } => {
+            ast::ExprKind::FieldAccess { object, field, .. } => {
                 let obj_hir = self.resolve_expr(object);
                 let ty = self.type_context.fresh_type_var();
                 HirExpr {
@@ -445,12 +439,14 @@ impl Resolver {
                         object: Box::new(obj_hir),
                         field_name: field.clone(),
                         field_idx: 0, // resolved during type checking
+                        safe_nav: false,
                     },
                     ty,
                     span,
                 }
             }
             ast::ExprKind::MethodCall {
+                parens,
                 object,
                 method,
                 generic_args,
@@ -524,16 +520,20 @@ impl Resolver {
                     kind: HirExprKind::MethodCall {
                         object: Box::new(obj_hir),
                         method: UNRESOLVED_DEF, // resolved during type checking
+                        resolved: UNRESOLVED_DEF,
                         method_name: method.clone(),
                         generic_args: generic_args_hir,
                         args: args_hir,
                         block: block_hir,
+                        safe_nav: false,
+                        parens: *parens,
                     },
                     ty,
                     span,
                 }
             }
             ast::ExprKind::Call {
+                parens,
                 callee,
                 args,
                 block,
@@ -621,10 +621,13 @@ impl Resolver {
                                         span: callee.span.clone(),
                                     }),
                                     method: UNRESOLVED_DEF,
+                                    resolved: UNRESOLVED_DEF,
                                     method_name: "call".to_string(),
                                     generic_args: vec![],
                                     args: args_hir,
                                     block: Some(blk),
+                                    safe_nav: false,
+                                    parens: *parens,
                                 },
                                 None => HirExprKind::FnCall {
                                     callee: def_id,
@@ -699,17 +702,20 @@ impl Resolver {
                         }
                     }
                     // FieldAccess could be a static method call: Type.method(...)
-                    ast::ExprKind::FieldAccess { object, field } => {
+                    ast::ExprKind::FieldAccess { object, field, .. } => {
                         let obj_hir = self.resolve_expr(object);
                         let ty = self.type_context.fresh_type_var();
                         HirExpr {
                             kind: HirExprKind::MethodCall {
                                 object: Box::new(obj_hir),
                                 method: UNRESOLVED_DEF,
+                                resolved: UNRESOLVED_DEF,
                                 method_name: field.clone(),
                                 generic_args: vec![],
                                 args: args_hir,
                                 block: block_hir,
+                                safe_nav: false,
+                                parens: *parens,
                             },
                             ty,
                             span,
@@ -722,10 +728,13 @@ impl Resolver {
                             kind: HirExprKind::MethodCall {
                                 object: Box::new(callee_hir),
                                 method: UNRESOLVED_DEF,
+                                resolved: UNRESOLVED_DEF,
                                 method_name: "call".to_string(),
                                 generic_args: vec![],
                                 args: args_hir,
                                 block: block_hir,
+                                safe_nav: false,
+                                parens: *parens,
                             },
                             ty,
                             span,
@@ -1058,10 +1067,13 @@ impl Resolver {
                     kind: HirExprKind::MethodCall {
                         object: Box::new(inner_hir),
                         method: UNRESOLVED_DEF,
+                        resolved: UNRESOLVED_DEF,
                         method_name: "await".to_string(),
                         generic_args: vec![],
                         args: vec![],
                         block: None,
+                        safe_nav: false,
+                        parens: false,
                     },
                     ty,
                     span,
@@ -1077,26 +1089,31 @@ impl Resolver {
                     kind: HirExprKind::MethodCall {
                         object: Box::new(inner_hir),
                         method: UNRESOLVED_DEF,
+                        resolved: UNRESOLVED_DEF,
                         method_name: "try_op".to_string(),
                         generic_args: vec![],
                         args: vec![],
                         block: None,
+                        safe_nav: false,
+                        parens: false,
                     },
                     ty: result_ty,
                     span,
                 }
             }
+            // `x&.name`: typeck decides field or method and wraps the
+            // result in `T?`; MIR branches on the receiver's tag.
             ast::ExprKind::SafeNav { object, field } => {
                 let obj_hir = self.resolve_expr(object);
                 let ty = self.type_context.fresh_type_var();
-                // Desugar `x?.field` to match on Option
                 HirExpr {
                     kind: HirExprKind::FieldAccess {
                         object: Box::new(obj_hir),
                         field_name: field.clone(),
                         field_idx: 0,
+                        safe_nav: true,
                     },
-                    ty: Ty::Option(Box::new(ty)),
+                    ty,
                     span,
                 }
             }
@@ -1112,12 +1129,15 @@ impl Resolver {
                     kind: HirExprKind::MethodCall {
                         object: Box::new(obj_hir),
                         method: UNRESOLVED_DEF,
+                        resolved: UNRESOLVED_DEF,
                         method_name: method.clone(),
                         generic_args: vec![],
                         args: args_hir,
                         block: None,
+                        safe_nav: true,
+                        parens: true,
                     },
-                    ty: Ty::Option(Box::new(ty)),
+                    ty,
                     span,
                 }
             }
@@ -1252,10 +1272,13 @@ impl Resolver {
                     kind: HirExprKind::MethodCall {
                         object: Box::new(callee_hir),
                         method: UNRESOLVED_DEF,
+                        resolved: UNRESOLVED_DEF,
                         method_name: "call".to_string(),
                         generic_args: vec![],
                         args: args_hir,
                         block: None,
+                        safe_nav: false,
+                        parens: true,
                     },
                     ty,
                     span,
@@ -1289,10 +1312,13 @@ impl Resolver {
                         kind: HirExprKind::MethodCall {
                             object: Box::new(callee),
                             method: UNRESOLVED_DEF,
+                            resolved: UNRESOLVED_DEF,
                             method_name: "call".to_string(),
                             generic_args: vec![],
                             args: args_hir,
                             block: None,
+                            safe_nav: false,
+                            parens: true,
                         },
                         ty,
                         span,

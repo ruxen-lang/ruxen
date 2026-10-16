@@ -812,12 +812,13 @@ end";
         // a.b.c — should parse as (a.b).c
         let expr = parse_expr("a.b.c");
         match &expr.kind {
-            ExprKind::FieldAccess { object, field } => {
+            ExprKind::FieldAccess { object, field, .. } => {
                 assert_eq!(field, "c");
                 match &object.kind {
                     ExprKind::FieldAccess {
                         object: inner,
                         field: f2,
+                        ..
                     } => {
                         assert_eq!(f2, "b");
                         match &inner.kind {
@@ -841,6 +842,7 @@ end";
         let expr = parse_expr("items.each { |x| x }");
         match &expr.kind {
             ExprKind::MethodCall {
+                parens: _,
                 object,
                 method,
                 generic_args,
@@ -872,6 +874,7 @@ end";
         let expr = parse_expr("Thread.spawn({ || 42 })");
         match &expr.kind {
             ExprKind::MethodCall {
+                parens: _,
                 object,
                 method,
                 generic_args,
@@ -1578,6 +1581,7 @@ end";
         let expr = parse_expr("list.push(42)");
         match &expr.kind {
             ExprKind::MethodCall {
+                parens: _,
                 object,
                 method,
                 generic_args,
@@ -1602,6 +1606,7 @@ end";
         let expr = parse_expr("v.iter.collect[Vec[Int]]");
         match &expr.kind {
             ExprKind::MethodCall {
+                parens: _,
                 object,
                 method,
                 generic_args,
@@ -2174,7 +2179,7 @@ end";
     #[test]
     fn at_ivar_desugars_to_self_field_access() {
         match parse_expr("@count").kind {
-            ExprKind::FieldAccess { object, field } => {
+            ExprKind::FieldAccess { object, field, .. } => {
                 assert_eq!(field, "count");
                 assert!(
                     matches!(object.kind, ExprKind::SelfRef),
@@ -2310,7 +2315,10 @@ end";
 
     #[test]
     fn repl_input_incomplete_class() {
-        assert!(matches!(parse_repl("class Foo"), ReplParseResult::Incomplete));
+        assert!(matches!(
+            parse_repl("class Foo"),
+            ReplParseResult::Incomplete
+        ));
     }
 
     #[test]

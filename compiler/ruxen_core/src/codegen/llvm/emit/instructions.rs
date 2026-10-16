@@ -546,8 +546,8 @@ pub(super) fn translate_instruction<'ctx>(
             if crate::mir::refmut_abi::refmut_is_slot_address(&func.locals[*src as usize].ty) =>
         {
             // `&var` on a String takes the local's address, as Cranelift's
-            // stack slot does: the callee mutates through `ruxen_deref_ptr` /
-            // `ruxen_store_ptr`, so the caller sees a reallocated buffer.
+            // stack slot does: the callee stores through it, so the caller
+            // sees a reallocated buffer.
             builder
                 .build_store(local_allocas[dest], local_allocas[src])
                 .map_err(|e| format!("Failed to store ref_mut address: {:?}", e))?;

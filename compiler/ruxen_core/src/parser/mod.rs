@@ -12,7 +12,6 @@ pub mod items;
 pub mod macros;
 pub mod methods;
 pub mod patterns;
-pub mod printer;
 pub mod types;
 pub mod visit;
 
@@ -37,6 +36,10 @@ pub struct Parser {
     /// closure `next` stays an ordinary identifier so `.next` / a `next`
     /// method are unaffected.
     closure_depth: usize,
+    /// Errors that may only mean the input stopped early: any error raised
+    /// at end of input, and a missing `end`. `parse_repl_input` reads this
+    /// to tell an unfinished entry from a wrong one.
+    maybe_incomplete_errors: usize,
 }
 
 // ─── Token Navigation ───────────────────────────────────────────────
@@ -49,6 +52,7 @@ impl Parser {
             diagnostics: Vec::new(),
             pending_doc_comments: Vec::new(),
             closure_depth: 0,
+            maybe_incomplete_errors: 0,
         }
     }
 
@@ -95,32 +99,16 @@ impl Parser {
         // Save position for backtracking
         let saved_pos = self.pos;
         let saved_diags = self.diagnostics.len();
+        let saved_incomplete = self.maybe_incomplete_errors;
 
         // Try top-level item first (def, class, struct, enum, mixin, extension,
-        // module, use, const). Legacy `trait`/`impl`/`extern` no longer lex.
+        // module, use, const, `alias new old`, ...). Legacy `trait`/`impl`/
+        // `extern` no longer lex.
         match self.current_kind().clone() {
-            TokenKind::Def
-            | TokenKind::Async
-            | TokenKind::Class
-            | TokenKind::Struct
-            | TokenKind::Enum
-            | TokenKind::Mixin
-            | TokenKind::Extension
-            | TokenKind::Module
-            | TokenKind::Use
-            | TokenKind::Const
-            | TokenKind::Type
-            | TokenKind::Newtype
-            | TokenKind::Lib => {
+            _ if self.is_item_start() => {
                 let result = self.parse_top_level_item();
                 if self.diagnostics.len() > saved_diags {
-                    // Check if the errors indicate incomplete input
-                    let has_eof_error = self.diagnostics[saved_diags..].iter().any(|d| {
-                        d.message.contains("expected End")
-                            || d.message.contains("expected {:?}, found Eof")
-                            || d.message.contains("found Eof")
-                    });
-                    if has_eof_error || self.at_eof() {
+                    if self.maybe_incomplete_errors > saved_incomplete || self.at_eof() {
                         // Could be incomplete — check delimiter balance
                         self.pos = saved_pos;
                         self.diagnostics.truncate(saved_diags);
@@ -135,58 +123,8 @@ impl Parser {
                 }
                 match result {
                     Some(item) => ReplParseResult::Complete(ReplInput::TopLevel(item)),
-                    None => {
-                        let diags = self.diagnostics[saved_diags..].to_vec();
-                        if diags.is_empty() {
-                            ReplParseResult::Error(vec![Diagnostic::error(
-                                "failed to parse top-level item",
-                                self.current_span(),
-                            )])
-                        } else {
-                            ReplParseResult::Error(diags)
-                        }
-                    }
-                }
-            }
-            TokenKind::Protected => {
-                let result = self.parse_top_level_item();
-                if self.diagnostics.len() > saved_diags {
-                    let has_eof_error = self.diagnostics[saved_diags..]
-                        .iter()
-                        .any(|d| d.message.contains("found Eof"));
-                    if has_eof_error {
-                        self.pos = saved_pos;
-                        self.diagnostics.truncate(saved_diags);
-                        if self.check_incomplete() {
-                            return ReplParseResult::Incomplete;
-                        }
-                    }
-                    let diags = self.diagnostics[saved_diags..].to_vec();
-                    return ReplParseResult::Error(diags);
-                }
-                match result {
-                    Some(item) => ReplParseResult::Complete(ReplInput::TopLevel(item)),
-                    None => {
-                        let diags = self.diagnostics[saved_diags..].to_vec();
-                        ReplParseResult::Error(diags)
-                    }
-                }
-            }
-            // A contextual-keyword `alias new old` item (top-level free-fn
-            // synonym). `alias` lexes as an Identifier, so it would otherwise
-            // fall into the expression arm and fail to parse; route it to the
-            // top-level item parser like `def`/`class` so the REPL accepts the
-            // same grammar the compiler does (docs/decisions/alias-keyword.md).
-            TokenKind::Identifier(_) if self.is_alias_item_start() => {
-                let result = self.parse_top_level_item();
-                if self.diagnostics.len() > saved_diags {
-                    let diags = self.diagnostics[saved_diags..].to_vec();
-                    return ReplParseResult::Error(diags);
-                }
-                match result {
-                    Some(item) => ReplParseResult::Complete(ReplInput::TopLevel(item)),
                     None => ReplParseResult::Error(vec![Diagnostic::error(
-                        "failed to parse alias item",
+                        "failed to parse top-level item",
                         self.current_span(),
                     )]),
                 }
@@ -223,16 +161,23 @@ impl Parser {
     /// Check if the remaining tokens indicate an incomplete input
     /// (unclosed delimiters that need continuation lines).
     fn check_incomplete(&self) -> bool {
+        Self::has_unclosed_delimiters(&self.tokens)
+    }
+
+    /// Whether `tokens` open more blocks (`def`, `class`, `if`, `do`, ...)
+    /// or brackets than they close: the input needs continuation lines.
+    /// The REPL's line validator and `parse_repl_input` share this check.
+    pub fn has_unclosed_delimiters(tokens: &[Token]) -> bool {
         let mut depth: i32 = 0;
         let mut paren_depth: i32 = 0;
         let mut bracket_depth: i32 = 0;
         let mut brace_depth: i32 = 0;
 
-        for tok in &self.tokens {
+        for tok in tokens {
             match &tok.kind {
-                // Block openers
+                // Block openers, each closed by `end`. `async` is not one:
+                // it prefixes `def`, which is.
                 TokenKind::Def
-                | TokenKind::Async
                 | TokenKind::Class
                 | TokenKind::Struct
                 | TokenKind::Enum
@@ -243,9 +188,8 @@ impl Parser {
                 | TokenKind::While
                 | TokenKind::For
                 | TokenKind::Loop
-                | TokenKind::Match => depth += 1,
-                // Do blocks also need end
-                TokenKind::Do => depth += 1,
+                | TokenKind::Match
+                | TokenKind::Do => depth += 1,
                 TokenKind::End => depth -= 1,
                 TokenKind::LParen => paren_depth += 1,
                 TokenKind::RParen => paren_depth -= 1,
@@ -421,6 +365,9 @@ impl Parser {
             self.advance();
             true
         } else {
+            if kind == TokenKind::End {
+                self.maybe_incomplete_errors += 1;
+            }
             self.error(&format!(
                 "expected {:?}, found {:?}",
                 kind,
@@ -744,6 +691,9 @@ impl Parser {
     // ─── Error Reporting ─────────────────────────────────────────────
 
     pub(crate) fn error(&mut self, message: &str) {
+        if self.at_eof() {
+            self.maybe_incomplete_errors += 1;
+        }
         let span = self.current_span();
         self.diagnostics.push(Diagnostic::error(message, span));
     }

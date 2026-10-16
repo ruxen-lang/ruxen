@@ -44,9 +44,19 @@ for pkg in "${pkgs[@]}"; do
   fi
 done
 
+# Wall-clock seconds. BSD `date` (macOS) has no `%N` and printed the epoch;
+# bash 5's EPOCHREALTIME is sub-second, older bash falls back to `date +%s`.
+now() {
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then
+    echo "${EPOCHREALTIME/,/.}"
+  else
+    date +%s
+  fi
+}
+
 for pkg in "${pkgs[@]}"; do
   (
-    start=$(date +%s.%N)
+    start=$(now)
     if [[ -d "$std/$pkg/tests" ]]; then
       (cd "$std/$pkg" && "$ruxen" test) >"$logs/$pkg.log" 2>&1
       status=$?
@@ -54,7 +64,7 @@ for pkg in "${pkgs[@]}"; do
       echo "no tests/ directory in library/std/$pkg" >"$logs/$pkg.log"
       status=1
     fi
-    end=$(date +%s.%N)
+    end=$(now)
     echo "$status $(awk "BEGIN { printf \"%.2f\", $end - $start }")" >"$logs/$pkg.status"
   ) &
 done

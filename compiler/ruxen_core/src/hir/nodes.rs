@@ -117,22 +117,48 @@ pub enum HirExprKind {
     /// Resolved variable reference
     VarRef(DefId),
 
-    /// Field access with resolved field index
+    /// Field access with resolved field index. Resolve builds one for every
+    /// `x.name` written without arguments; typeck keeps it only when `name`
+    /// is a real field (or a tuple / newtype index) and rewrites every other
+    /// one into a `MethodCall` with `parens: false`. One that survives typeck
+    /// with an unresolved receiver is decided by MIR the same way.
     FieldAccess {
         object: Box<HirExpr>,
         field_name: String,
         field_idx: usize,
+        /// `x&.name`: when `object` is a `T?`, the access runs only on a
+        /// present value and the result is wrapped back into `T?`.
+        safe_nav: bool,
     },
 
     /// Method call with resolved method DefId
     MethodCall {
         object: Box<HirExpr>,
+        /// The method MIR dispatches to by DefId: set by typeck only on a
+        /// user class, struct or enum receiver, else `UNRESOLVED_DEF`.
         method: DefId,
+        /// The method typeck selected on ANY receiver head, builtin heads
+        /// (`String`, `Array`, ...) and scalar primitives included;
+        /// `UNRESOLVED_DEF` when it selected none (an inherited method, a
+        /// mixin default, an unknown receiver). Read it for the callee's
+        /// declared signature. MIR never dispatches on it: a builtin-head
+        /// call mangles through the FFI alias map, and its def's span lies
+        /// in a stdlib file, so it is no IDE jump target either.
+        resolved: DefId,
         method_name: String,
         generic_args: Vec<Ty>,
         args: Vec<HirExpr>,
         /// Trailing block argument (desugared closure)
         block: Option<Box<HirExpr>>,
+        /// `x&.m(...)`: when `object` is a `T?`, the call runs only on a
+        /// present value and the result is wrapped back into `T?`.
+        safe_nav: bool,
+        /// True when the source wrote an argument list `(...)`, copied from
+        /// the AST call's `parens`. False for the command form `x.m "a"`, a
+        /// block-only call `x.m { }`, a bare member access `x.m` (which
+        /// typeck rewrites from a `FieldAccess`), and the calls the compiler
+        /// synthesizes (`.await`, `?`, `puts x` calling `x.to_s`).
+        parens: bool,
     },
 
     /// Resolved function call

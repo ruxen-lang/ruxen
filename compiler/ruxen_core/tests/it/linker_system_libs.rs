@@ -124,3 +124,46 @@ libs = ["pthread"]  # only -lpthread needed
     let libs = codegen::parse_system_libs(toml);
     assert_eq!(libs, vec!["pthread"]);
 }
+
+/// `ruxen build` and `ruxen test` link a project through the same
+/// `LinkInputs::for_project`: the project's and each dependency's runtime
+/// shims, each dependency's `libs` once, and the frameworks of all of them.
+#[test]
+fn link_inputs_for_project_gather_project_and_dependency_needs() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tmp/linker-system-libs")
+        .join(format!("link-inputs-{}", std::process::id()));
+    let project = root.join("app");
+    let dep_a = root.join("dep_a");
+    let dep_b = root.join("dep_b");
+    for dir in [&project, &dep_a, &dep_b] {
+        std::fs::create_dir_all(dir.join("runtime")).unwrap();
+    }
+    std::fs::write(
+        project.join("Ruxen.toml"),
+        "[system_libs]\nframeworks = [\"Cocoa\"]\n",
+    )
+    .unwrap();
+    std::fs::write(project.join("runtime/app.c"), "").unwrap();
+    std::fs::write(
+        dep_a.join("Ruxen.toml"),
+        "[system_libs]\nlibs = [\"pthread\", \"ssl\"]\nframeworks = [\"Cocoa\"]\n",
+    )
+    .unwrap();
+    std::fs::write(dep_a.join("runtime/shim.m"), "").unwrap();
+    std::fs::write(
+        dep_b.join("Ruxen.toml"),
+        "[system_libs]\nlibs = [\"ssl\"]\n",
+    )
+    .unwrap();
+
+    let inputs = codegen::LinkInputs::for_project(&project, &[dep_a.clone(), dep_b]).unwrap();
+
+    assert_eq!(
+        inputs.runtime_sources,
+        vec![project.join("runtime/app.c"), dep_a.join("runtime/shim.m")]
+    );
+    assert_eq!(inputs.system_libs, vec!["pthread", "ssl"]);
+    assert_eq!(inputs.frameworks, vec!["Cocoa"]);
+    let _ = std::fs::remove_dir_all(&root);
+}

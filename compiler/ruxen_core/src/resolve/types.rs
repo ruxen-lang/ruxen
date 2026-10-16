@@ -75,16 +75,10 @@ impl Resolver {
                 // downstream typeck reuses the existing dyn-mixin
                 // satisfaction path. Codegen of the actual vtable is
                 // Phase B/C.
-                if let Some(mixin_ty) = self.try_resolve_dyn_mixin_ref(inner, ref_span) {
-                    return match (lifetime, mutable) {
-                        (Some(lt), true) => Ty::RefMutLifetime(lt.clone(), Box::new(mixin_ty)),
-                        (Some(lt), false) => Ty::RefLifetime(lt.clone(), Box::new(mixin_ty)),
-                        (None, true) => Ty::RefMut(Box::new(mixin_ty)),
-                        (None, false) => Ty::Ref(Box::new(mixin_ty)),
-                    };
-                }
-
-                let inner_ty = self.resolve_type_expr(inner);
+                let inner_ty = match self.try_resolve_dyn_mixin_ref(inner, ref_span) {
+                    Some(mixin_ty) => mixin_ty,
+                    None => self.resolve_type_expr(inner),
+                };
                 match (lifetime, mutable) {
                     (Some(lt), true) => Ty::RefMutLifetime(lt.clone(), Box::new(inner_ty)),
                     (Some(lt), false) => Ty::RefLifetime(lt.clone(), Box::new(inner_ty)),
@@ -132,29 +126,13 @@ impl Resolver {
             ast::TypeExpr::SomeMixin { bounds, .. } => Ty::SomeMixin(
                 bounds
                     .iter()
-                    .map(|b| MixinRef {
-                        name: b.path.segments.join("."),
-                        generic_args: b
-                            .path
-                            .generic_args
-                            .as_ref()
-                            .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                            .unwrap_or_default(),
-                    })
+                    .map(|b| MixinRef::from_bound(&b.path, |a| self.resolve_type_expr(a)))
                     .collect(),
             ),
             ast::TypeExpr::AnyMixin { bounds, .. } => Ty::AnyMixin(
                 bounds
                     .iter()
-                    .map(|b| MixinRef {
-                        name: b.path.segments.join("."),
-                        generic_args: b
-                            .path
-                            .generic_args
-                            .as_ref()
-                            .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                            .unwrap_or_default(),
-                    })
+                    .map(|b| MixinRef::from_bound(&b.path, |a| self.resolve_type_expr(a)))
                     .collect(),
             ),
             ast::TypeExpr::Never { .. } => Ty::Never,
@@ -269,27 +247,8 @@ impl Resolver {
                 .get(&name)
                 .copied()
                 .and_then(|id| self.symbols.get(id))
-                .and_then(|def| match &def.kind {
-                    DefKind::Class { info } => Some(
-                        info.generic_params
-                            .iter()
-                            .map(|gp| gp.kind.clone())
-                            .collect(),
-                    ),
-                    DefKind::Struct { info } => Some(
-                        info.generic_params
-                            .iter()
-                            .map(|gp| gp.kind.clone())
-                            .collect(),
-                    ),
-                    DefKind::Enum { info } => Some(
-                        info.generic_params
-                            .iter()
-                            .map(|gp| gp.kind.clone())
-                            .collect(),
-                    ),
-                    _ => None,
-                });
+                .and_then(|def| def.kind.generic_params())
+                .map(|gps| gps.iter().map(|gp| gp.kind.clone()).collect());
             for (idx, arg) in ast_args.iter().enumerate() {
                 let is_const_arg = matches!(
                     arg,
@@ -410,12 +369,8 @@ impl Resolver {
                 let declared_params: Vec<crate::resolve::symbols::GenericParamInfo> = self
                     .symbols
                     .get(class_def_id)
-                    .map(|def| match &def.kind {
-                        DefKind::Class { info } => info.generic_params.clone(),
-                        DefKind::Struct { info } => info.generic_params.clone(),
-                        DefKind::Enum { info } => info.generic_params.clone(),
-                        _ => vec![],
-                    })
+                    .and_then(|def| def.kind.generic_params())
+                    .map(<[_]>::to_vec)
                     .unwrap_or_default();
                 let mut bindings = std::collections::HashMap::new();
                 let empty_inner = std::collections::HashMap::new();

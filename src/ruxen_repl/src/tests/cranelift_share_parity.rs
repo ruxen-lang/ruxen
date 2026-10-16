@@ -23,7 +23,7 @@
 
 use ruxen_core::hir::types::Ty;
 use ruxen_core::mir::nodes::{
-    BasicBlock, Literal, MirFunction, MirInst, MirLocal, MirValue, Terminator,
+    BasicBlock, Literal, LocalKind, MirFunction, MirInst, MirLocal, MirValue, Terminator,
 };
 use ruxen_core::parser::ast::BinOp;
 
@@ -38,24 +38,28 @@ fn fixture_add3() -> MirFunction {
             name: "a".into(),
             ty: Ty::Int,
             mutable: false,
+            kind: LocalKind::User,
         },
         MirLocal {
             id: 1,
             name: "b".into(),
             ty: Ty::Int,
             mutable: false,
+            kind: LocalKind::User,
         },
         MirLocal {
             id: 2,
             name: "_t0".into(),
             ty: Ty::Int,
             mutable: false,
+            kind: LocalKind::User,
         },
         MirLocal {
             id: 3,
             name: "_t1".into(),
             ty: Ty::Int,
             mutable: false,
+            kind: LocalKind::User,
         },
     ];
 
@@ -101,18 +105,21 @@ fn fixture_cat() -> MirFunction {
             name: "a".into(),
             ty: Ty::String,
             mutable: false,
+            kind: LocalKind::User,
         },
         MirLocal {
             id: 1,
             name: "b".into(),
             ty: Ty::String,
             mutable: false,
+            kind: LocalKind::User,
         },
         MirLocal {
             id: 2,
             name: "_t0".into(),
             ty: Ty::String,
             mutable: false,
+            kind: LocalKind::User,
         },
     ];
 

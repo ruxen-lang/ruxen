@@ -685,16 +685,10 @@ impl<'a> Lowerer<'a> {
 /// unchanged. Arity mismatches (a "Result" with ≠2 args, etc.) also pass
 /// through so a malformed shape never silently loses information.
 fn normalize_option_result_class(ty: &Ty) -> Ty {
-    match ty {
-        Ty::Class { name, generic_args } if name == "Option" && generic_args.len() == 1 => {
-            Ty::Option(Box::new(generic_args[0].clone()))
+    match (ty, ty.builtin_head()) {
+        (Ty::Class { .. }, Some((home @ ("Option" | "Result"), args))) => {
+            Ty::from_builtin_head(home, &args).unwrap_or_else(|| ty.clone())
         }
-        Ty::Class { name, generic_args } if name == "Result" && generic_args.len() == 2 => {
-            Ty::Result(
-                Box::new(generic_args[0].clone()),
-                Box::new(generic_args[1].clone()),
-            )
-        }
-        other => other.clone(),
+        _ => ty.clone(),
     }
 }

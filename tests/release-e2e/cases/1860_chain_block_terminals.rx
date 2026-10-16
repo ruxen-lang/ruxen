@@ -49,9 +49,10 @@ def run_1861
   doubled.each { |x| counted = counted + x }
   puts("bound-sum=#{counted}")
 
-  # A map that CHANGES the element type, chained.
+  # A map that CHANGES the element type, chained. `String#size` is a
+  # `USize`, so the `each` block's `w` is one too and needs `as Int` to add.
   var widths = 0
-  ["a", "bb", "ccc"].map { |s| s.size }.each { |w| widths = widths + w }
+  ["a", "bb", "ccc"].map { |s| s.size }.each { |w| widths = widths + (w as Int) }
   puts("chained-widths=#{widths}")
 end
 

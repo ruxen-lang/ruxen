@@ -145,7 +145,14 @@ pub fn format_type_path(path: &TypePath) -> Doc {
         generic_args,
         span: _,
         rooted,
+        nilable,
     } = path;
+    // `T?` as written; the parser builds it as `Option[T]`.
+    if *nilable {
+        if let Some([inner]) = generic_args.as_deref() {
+            return concat(vec![format_type_expr(inner, &CommentMap::new()), text("?")]);
+        }
+    }
     // `::Name` anchors the lookup at the root scope.
     let root = if *rooted { "::" } else { "" };
     let segments_doc = text(format!("{root}{}", segments.join(".")));
@@ -218,9 +225,11 @@ pub fn format_generic_params(gp: &GenericParams) -> Doc {
     ]))
 }
 
-/// ` where T: A + B, N > 0` on the header line. Trait predicates come
-/// before const predicates, which is how the parser splits them anyway.
-pub fn format_where_clause(wc: &WhereClause) -> Doc {
+/// ` where T: A + B, N > 0`. Trait predicates come before const
+/// predicates, which is how the parser splits them anyway. It stays on the
+/// header line, or on its own indented line when the author wrote it below a
+/// header that starts on `header_line`.
+pub fn format_where_clause(wc: &WhereClause, header_line: u32) -> Doc {
     let WhereClause {
         predicates,
         const_predicates,
@@ -244,7 +253,12 @@ pub fn format_where_clause(wc: &WhereClause) -> Doc {
         super::format_expr::format_expr(expr, &comments)
     });
     let pred_docs: Vec<Doc> = trait_docs.chain(const_docs).collect();
-    concat(vec![text(" where "), join(text(", "), pred_docs)])
+    let clause = concat(vec![text("where "), join(text(", "), pred_docs)]);
+    if wc.span.line > header_line {
+        nest(INDENT_WIDTH, concat(vec![hardline(), clause]))
+    } else {
+        concat(vec![text(" "), clause])
+    }
 }
 
 pub fn format_trait_bounds(bounds: &[MixinBound]) -> Doc {

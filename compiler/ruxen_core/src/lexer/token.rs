@@ -105,6 +105,27 @@ pub enum NumericSuffix {
     F64,
 }
 
+impl NumericSuffix {
+    /// The suffix as written in source (`42i8`, `3.0f32`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NumericSuffix::I8 => "i8",
+            NumericSuffix::I16 => "i16",
+            NumericSuffix::I32 => "i32",
+            NumericSuffix::I64 => "i64",
+            NumericSuffix::U => "u",
+            NumericSuffix::U8 => "u8",
+            NumericSuffix::U16 => "u16",
+            NumericSuffix::U32 => "u32",
+            NumericSuffix::U64 => "u64",
+            NumericSuffix::ISize => "isize",
+            NumericSuffix::USize => "usize",
+            NumericSuffix::F32 => "f32",
+            NumericSuffix::F64 => "f64",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // ── Keywords: Variable & Binding ──
@@ -367,179 +388,109 @@ impl TokenKind {
     }
 }
 
-/// The canonical list of Ruxen keyword spellings — the single source of
-/// truth shared with IDE features (e.g. completion) so they cannot drift
-/// from the lexer. Every entry MUST be recognized by [`lookup_keyword`];
-/// the `keywords_const_matches_lookup` test enforces that.
-pub const KEYWORDS: &[&str] = &[
-    "let",
-    "move",
-    "ref",
-    "var",
-    "class",
-    "struct",
-    "enum",
-    "mixin",
-    "include",
-    "extension",
-    "newtype",
-    "type",
-    "def",
-    "public",
-    "private",
-    "protected",
-    "consume",
-    "inline",
-    "self",
-    "Self",
-    "init",
-    "super",
-    "return",
-    "yield",
-    "async",
-    "await",
-    "if",
-    "elsif",
-    "else",
-    "match",
-    "while",
-    "for",
-    "in",
-    "loop",
-    "do",
-    "end",
-    "break",
-    "continue",
-    "where",
-    "as",
-    "some",
-    "any",
-    "layout",
-    "module",
-    "use",
-    "package",
-    "unsafe",
-    "lib",
-    "nil",
-    "true",
-    "false",
-    "Some",
-    "Ok",
-    "Err",
-    "macro",
-    "static",
-    "const",
-    "when",
-    "unless",
-    "until",
-    "case",
-    "then",
-    "and",
-    "or",
-    "not",
+/// The keyword table: every reserved word's spelling and the token it lexes
+/// to. The lexer ([`lookup_keyword`]), IDE completion, IDE rename and REPL
+/// completion all read it, so none of them can drift from the lexer.
+/// Contextual words (`alias`, `exclude`) lex as identifiers and are not here.
+pub static KEYWORD_TABLE: [(&str, TokenKind); 65] = [
+    // Variable & Binding
+    ("let", TokenKind::Let),
+    // `mut` removed — use `var` for every writable position.
+    ("move", TokenKind::Move),
+    ("ref", TokenKind::Ref),
+    ("var", TokenKind::Var),
+    // Type Definitions
+    ("class", TokenKind::Class),
+    ("struct", TokenKind::Struct),
+    ("enum", TokenKind::Enum),
+    // `trait` removed — use `mixin`.
+    // `impl` removed — use `include` inside a type body or `extension`
+    // for conditional / external method blocks.
+    ("mixin", TokenKind::Mixin),
+    ("include", TokenKind::Include),
+    ("extension", TokenKind::Extension),
+    ("newtype", TokenKind::Newtype),
+    ("type", TokenKind::Type),
+    // Functions & Methods
+    ("def", TokenKind::Def),
+    // `pub` removed — use `public` section marker or `public` prefix.
+    ("public", TokenKind::Public),
+    ("private", TokenKind::Private),
+    ("protected", TokenKind::Protected),
+    ("consume", TokenKind::Consume),
+    ("inline", TokenKind::Inline),
+    ("self", TokenKind::SelfValue),
+    ("Self", TokenKind::SelfType),
+    ("init", TokenKind::Init),
+    ("super", TokenKind::Super),
+    ("return", TokenKind::Return),
+    ("yield", TokenKind::Yield),
+    ("async", TokenKind::Async),
+    ("await", TokenKind::Await),
+    // Control Flow
+    ("if", TokenKind::If),
+    ("elsif", TokenKind::Elsif),
+    ("else", TokenKind::Else),
+    ("match", TokenKind::Match),
+    ("while", TokenKind::While),
+    ("for", TokenKind::For),
+    ("in", TokenKind::In),
+    ("loop", TokenKind::Loop),
+    ("do", TokenKind::Do),
+    ("end", TokenKind::End),
+    ("break", TokenKind::Break),
+    ("continue", TokenKind::Continue),
+    // Type System
+    ("where", TokenKind::Where),
+    ("as", TokenKind::As),
+    // `dyn` removed — use `any Mixin` for dyn-trait positions.
+    ("some", TokenKind::SomeBound),
+    ("any", TokenKind::AnyBound),
+    // `derive` removed — auto-include replaces it.
+    ("layout", TokenKind::Layout),
+    // Modules
+    ("module", TokenKind::Module),
+    ("use", TokenKind::Use),
+    ("package", TokenKind::Package),
+    // Safety
+    ("unsafe", TokenKind::Unsafe),
+    // FFI & Interop
+    ("lib", TokenKind::Lib),
+    // `null` removed — use `nil` (raw-pointer null literal).
+    ("nil", TokenKind::Nil),
+    // Literals
+    ("true", TokenKind::True),
+    ("false", TokenKind::False),
+    // `None` removed — use `nil` (Option::None literal).
+    ("Some", TokenKind::SomeKw),
+    ("Ok", TokenKind::OkKw),
+    ("Err", TokenKind::ErrKw),
+    // Reserved
+    ("macro", TokenKind::Macro),
+    // `crate` removed — use `package`.
+    // `extern` removed — use `lib`.
+    ("static", TokenKind::Static),
+    ("const", TokenKind::Const),
+    ("when", TokenKind::When),
+    ("unless", TokenKind::Unless),
+    ("until", TokenKind::Until),
+    ("case", TokenKind::Case),
+    ("then", TokenKind::Then),
+    // Low-precedence logical operators
+    ("and", TokenKind::And),
+    ("or", TokenKind::Or),
+    ("not", TokenKind::Not),
 ];
+
+/// Every keyword spelling, in table order.
+pub fn keywords() -> impl Iterator<Item = &'static str> {
+    KEYWORD_TABLE.iter().map(|(spelling, _)| *spelling)
+}
 
 /// Look up a keyword from an identifier string.
 pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
-    match ident {
-        // Variable & Binding
-        "let" => Some(TokenKind::Let),
-        // `mut` removed — use `var` for every writable position.
-        "move" => Some(TokenKind::Move),
-        "ref" => Some(TokenKind::Ref),
-        "var" => Some(TokenKind::Var),
-
-        // Type Definitions
-        "class" => Some(TokenKind::Class),
-        "struct" => Some(TokenKind::Struct),
-        "enum" => Some(TokenKind::Enum),
-        // `trait` removed — use `mixin`.
-        // `impl` removed — use `include` inside a type body or `extension`
-        // for conditional / external method blocks.
-        "mixin" => Some(TokenKind::Mixin),
-        "include" => Some(TokenKind::Include),
-        "extension" => Some(TokenKind::Extension),
-        "newtype" => Some(TokenKind::Newtype),
-        "type" => Some(TokenKind::Type),
-
-        // Functions & Methods
-        "def" => Some(TokenKind::Def),
-        // `pub` removed — use `public` section marker or `public` prefix.
-        "public" => Some(TokenKind::Public),
-        "private" => Some(TokenKind::Private),
-        "protected" => Some(TokenKind::Protected),
-        "consume" => Some(TokenKind::Consume),
-        "inline" => Some(TokenKind::Inline),
-        "self" => Some(TokenKind::SelfValue),
-        "Self" => Some(TokenKind::SelfType),
-        "init" => Some(TokenKind::Init),
-        "super" => Some(TokenKind::Super),
-        "return" => Some(TokenKind::Return),
-        "yield" => Some(TokenKind::Yield),
-        "async" => Some(TokenKind::Async),
-        "await" => Some(TokenKind::Await),
-
-        // Control Flow
-        "if" => Some(TokenKind::If),
-        "elsif" => Some(TokenKind::Elsif),
-        "else" => Some(TokenKind::Else),
-        "match" => Some(TokenKind::Match),
-        "while" => Some(TokenKind::While),
-        "for" => Some(TokenKind::For),
-        "in" => Some(TokenKind::In),
-        "loop" => Some(TokenKind::Loop),
-        "do" => Some(TokenKind::Do),
-        "end" => Some(TokenKind::End),
-        "break" => Some(TokenKind::Break),
-        "continue" => Some(TokenKind::Continue),
-
-        // Type System
-        "where" => Some(TokenKind::Where),
-        "as" => Some(TokenKind::As),
-        // `dyn` removed — use `any Mixin` for dyn-trait positions.
-        "some" => Some(TokenKind::SomeBound),
-        "any" => Some(TokenKind::AnyBound),
-        // `derive` removed — auto-include replaces it.
-        "layout" => Some(TokenKind::Layout),
-
-        // Modules
-        "module" => Some(TokenKind::Module),
-        "use" => Some(TokenKind::Use),
-        "package" => Some(TokenKind::Package),
-
-        // Safety
-        "unsafe" => Some(TokenKind::Unsafe),
-
-        // FFI & Interop
-        "lib" => Some(TokenKind::Lib),
-        // `null` removed — use `nil` (raw-pointer null literal).
-        "nil" => Some(TokenKind::Nil),
-
-        // Literals
-        "true" => Some(TokenKind::True),
-        "false" => Some(TokenKind::False),
-        // `None` removed — use `nil` (Option::None literal).
-        "Some" => Some(TokenKind::SomeKw),
-        "Ok" => Some(TokenKind::OkKw),
-        "Err" => Some(TokenKind::ErrKw),
-
-        // Reserved
-        "macro" => Some(TokenKind::Macro),
-        // `crate` removed — use `package`.
-        // `extern` removed — use `lib`.
-        "static" => Some(TokenKind::Static),
-        "const" => Some(TokenKind::Const),
-        "when" => Some(TokenKind::When),
-        "unless" => Some(TokenKind::Unless),
-        "until" => Some(TokenKind::Until),
-        "case" => Some(TokenKind::Case),
-        "then" => Some(TokenKind::Then),
-
-        // Low-precedence logical operators
-        "and" => Some(TokenKind::And),
-        "or" => Some(TokenKind::Or),
-        "not" => Some(TokenKind::Not),
-
-        _ => None,
-    }
+    KEYWORD_TABLE
+        .iter()
+        .find(|(spelling, _)| *spelling == ident)
+        .map(|(_, kind)| kind.clone())
 }

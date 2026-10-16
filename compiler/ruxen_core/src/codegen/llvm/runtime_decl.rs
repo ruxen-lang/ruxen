@@ -1,211 +1,45 @@
-//! Compiler-internal runtime declarations for the LLVM backend (residual).
+//! LLVM declarations for the compiler-emitted runtime ABI residual.
 //!
-//! LLVM analogue of `cranelift/runtime_sigs.rs`. After
-//! `docs/specs/system/zero_rust_stdlib_classes.spec.md`, the ABI of every
-//! `ruxen_*` symbol a stdlib `.rx` `lib` block declares is DERIVED from the
-//! declared `Ty`s by `emit::declare_ffi_function` (`ty_to_llvm` per param /
-//! return). That runs BEFORE this function in `emit::compile_program`, so
-//! every `.rx`-declared import is created from its derived signature; the
-//! `module.get_function(name).is_none()` guard in the `decl!` macro then
-//! skips any name already declared.
-//!
-//! What remains here is the IRREDUCIBLE residual: symbols emitted directly
-//! by codegen / MIR lowering, declared by no `.rx` lib block (allocation,
-//! `==`/`<=>`/hash lowering, drop glue, panic, the formatter-synthesis
-//! surface, pointer-indirection helpers, the no-op sentinel, plus the
-//! implicit conversion/accessor helpers). This is the SAME residual set the
-//! Cranelift backend keeps in `compiler_internal_signature`; the parity
-//! guard `compiler/ruxen_core/tests/runtime_abi_derivation.rs` pins it.
-//!
-//! Adding a stdlib runtime function NO LONGER touches this file: declare it
-//! in the package's `.rx` + `.c` and its ABI is derived. Only a NEW
-//! compiler-emitted-but-undeclared symbol belongs here.
+//! The residual itself lives in the backend-neutral `codegen::residual_abi`
+//! table, shared with the Cranelift backend; this module only declares its
+//! entries. `emit::compile_program` declares every `.rx`-declared FFI import
+//! first, from its derived signature (`ty_to_llvm`, which keeps a generic
+//! `T` slot at `i64` on wasm32), so the per-name `get_function` guard below
+//! never overrides a derived declaration.
 
 use inkwell::context::Context;
-use inkwell::module::Module;
-use inkwell::types::BasicMetadataTypeEnum;
+use inkwell::module::{Linkage, Module};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::AddressSpace;
 
-/// Declare the compiler-internal residual runtime functions in the LLVM
-/// module with External linkage. Idempotent per name (the `is_none` guard),
-/// and called AFTER the derived FFI declarations so `.rx`-declared symbols
-/// keep their derived signature.
+use crate::codegen::residual_abi::{AbiTy, RESIDUAL_RUNTIME_FNS};
+
+/// Declare every residual runtime function not already in `module`, with
+/// External linkage. Idempotent.
 pub fn declare_runtime_functions<'ctx>(module: &Module<'ctx>, context: &'ctx Context) {
-    let i8_ty = context.i8_type();
-    let i64_ty = context.i64_type();
-    let f64_ty = context.f64_type();
-    let ptr_ty = context.ptr_type(AddressSpace::default());
-    let void_ty = context.void_type();
-
-    macro_rules! decl {
-        ($name:expr, void, [$($p:expr),*]) => {{
-            let params: &[BasicMetadataTypeEnum] = &[$($p.into()),*];
-            let fn_ty = void_ty.fn_type(params, false);
-            if module.get_function($name).is_none() {
-                module.add_function($name, fn_ty, Some(inkwell::module::Linkage::External));
-            }
-        }};
-        ($name:expr, $ret:expr, [$($p:expr),*]) => {{
-            let params: &[BasicMetadataTypeEnum] = &[$($p.into()),*];
-            let fn_ty = $ret.fn_type(params, false);
-            if module.get_function($name).is_none() {
-                module.add_function($name, fn_ty, Some(inkwell::module::Linkage::External));
-            }
-        }};
+    for r in RESIDUAL_RUNTIME_FNS {
+        if module.get_function(r.name).is_some() {
+            continue;
+        }
+        let params: Vec<BasicMetadataTypeEnum> = r
+            .params
+            .iter()
+            .map(|&t| abi_ty_to_llvm(t, context).into())
+            .collect();
+        let fn_ty = match r.ret {
+            Some(ret) => abi_ty_to_llvm(ret, context).fn_type(&params, false),
+            None => context.void_type().fn_type(&params, false),
+        };
+        module.add_function(r.name, fn_ty, Some(Linkage::External));
     }
+}
 
-    // ── Implicit I/O entry points ───────────────────────────────────
-    decl!("ruxen_puts", void, [ptr_ty]);
-    decl!("ruxen_print", void, [ptr_ty]);
-    decl!("ruxen_eputs", void, [ptr_ty]);
-    decl!("ruxen_read_line", ptr_ty, []);
-    decl!("ruxen_stdin", ptr_ty, []);
-    decl!("ruxen_stdout", ptr_ty, []);
-    decl!("ruxen_stderr", ptr_ty, []);
-    decl!("ruxen_print_int", void, [i64_ty]);
-    decl!("ruxen_env_init", void, [context.i32_type(), ptr_ty]);
-
-    // ── Implicit conversions (interpolation / `to_s` synthesis) ─────
-    decl!("ruxen_int_to_string", ptr_ty, [i64_ty]);
-    decl!("ruxen_float_to_string", ptr_ty, [f64_ty]);
-    decl!("ruxen_bool_to_string", ptr_ty, [i64_ty]);
-    decl!("ruxen_char_to_string", ptr_ty, [i64_ty]);
-    decl!("ruxen_int_to_f", f64_ty, [i64_ty]);
-    decl!("ruxen_float_to_i", i64_ty, [f64_ty]);
-
-    // ── Exponentiation lowering (`a ** b`) ──────────────────────────
-    // Emitted by `mir/lower/expr/binops.rs` for the power operator.
-    decl!("ruxen_int_pow", i64_ty, [i64_ty, i64_ty]);
-    decl!("ruxen_float_pow", f64_ty, [f64_ty, f64_ty]);
-
-    // ── Three-way comparison lowering (`a <=> b`) ───────────────────
-    decl!("ruxen_int_cmp", i64_ty, [i64_ty, i64_ty]);
-    decl!("ruxen_float_cmp", i64_ty, [f64_ty, f64_ty]);
-    decl!("ruxen_str_spaceship", i64_ty, [ptr_ty, ptr_ty]);
-
-    // ── Formatter synthesis surface (Debug/Display derive) ──────────
-    decl!("ruxen_float_to_string_prec", ptr_ty, [f64_ty, i64_ty]);
-    decl!("ruxen_string_truncate_chars", ptr_ty, [ptr_ty, i64_ty]);
-    decl!(
-        "ruxen_fmt_formatter_new_with_spec",
-        ptr_ty,
-        [i64_ty, i64_ty, i64_ty, i64_ty]
-    );
-    decl!("ruxen_fmt_formatter_precision", i64_ty, [ptr_ty]);
-
-    // ── Equality / ordering / hashing lowering (`==`, `<=>`) ────────
-    decl!("ruxen_string_concat", ptr_ty, [ptr_ty, ptr_ty]);
-    decl!("ruxen_string_cmp", i64_ty, [ptr_ty, ptr_ty]);
-    // String equality (string.c: `int64_t ruxen_string_eq(const char*, const
-    // char*)`). MUST be declared with 2 params: the call-site fallback in
-    // `get_or_declare_runtime` declares an unknown runtime fn as `ptr -> i64`
-    // (1 param), which the string `==` lowering then calls with 2 args → an
-    // "incorrect number of arguments" broken-module error (tier 4.09).
-    decl!("ruxen_string_eq", i64_ty, [ptr_ty, ptr_ty]);
-    decl!("ruxen_string_hash", i64_ty, [ptr_ty]);
-    decl!("ruxen_string_from_iter", ptr_ty, [ptr_ty]);
-    decl!("ruxen_str_parse_uint", ptr_ty, [ptr_ty]);
-    decl!("ruxen_hash_index", i64_ty, [ptr_ty, i64_ty]);
-    decl!("ruxen_set_eq", i8_ty, [ptr_ty, ptr_ty]);
-
-    // ── B73 key-kind protocol: the descriptor-taking table constructors.
-    //    The MIR rewrites `ruxen_hash_new` & co. to these and appends
-    //    `(kind, hash_fn, eq_fn)`. No `.rx` decl names them (the `.rx`
-    //    surface keeps the descriptor-free spelling), so they MUST be
-    //    declared here — the call-site fallback in `get_or_declare_runtime`
-    //    would otherwise infer a 1-param `ptr -> i64` shape and the module
-    //    would fail verification on the argument count.
-    decl!("ruxen_hash_new_keyed", ptr_ty, [i64_ty, i64_ty, i64_ty]);
-    decl!(
-        "ruxen_hash_with_capacity_keyed",
-        ptr_ty,
-        [i64_ty, i64_ty, i64_ty, i64_ty]
-    );
-    decl!(
-        "ruxen_hash_from_iter_keyed",
-        ptr_ty,
-        [ptr_ty, i64_ty, i64_ty, i64_ty]
-    );
-    decl!("ruxen_set_new_keyed", ptr_ty, [i64_ty, i64_ty, i64_ty]);
-    decl!(
-        "ruxen_set_with_capacity_keyed",
-        ptr_ty,
-        [i64_ty, i64_ty, i64_ty, i64_ty]
-    );
-    decl!(
-        "ruxen_set_from_iter_keyed",
-        ptr_ty,
-        [ptr_ty, i64_ty, i64_ty, i64_ty]
-    );
-    // The idempotent install emitted ahead of a key-addressed operation.
-    decl!(
-        "ruxen_hash_ensure_key_kind",
-        void_ty,
-        [ptr_ty, i64_ty, i64_ty, i64_ty]
-    );
-    decl!(
-        "ruxen_set_ensure_key_kind",
-        void_ty,
-        [ptr_ty, i64_ty, i64_ty, i64_ty]
-    );
-
-    // ── Indexing / element access emitted by `a[i]` lowering ────────
-    decl!("ruxen_vec_get", i64_ty, [ptr_ty, i64_ty]);
-    decl!("ruxen_vec_set", void, [ptr_ty, i64_ty, i64_ty]);
-    decl!("ruxen_vec_from_iter", ptr_ty, [ptr_ty]);
-
-    // ── Vec constructors / iteration emitted by Array methods. These MUST
-    //    be declared: without an explicit signature the call-site fallback
-    //    (calls.rs) infers arg widths from values, which matches the C
-    //    int64-slot ABI on 64-bit targets but passes a pointer-width (i32)
-    //    item on wasm32 — an ABI mismatch with the runtime's int64_t
-    //    parameters (tier 4.09). ──────────────────────────────────────────
-    decl!("ruxen_vec_new", ptr_ty, []);
-    decl!("ruxen_vec_push", void, [ptr_ty, i64_ty]);
-    decl!("ruxen_vec_pop", ptr_ty, [ptr_ty]);
-    decl!("ruxen_vec_len", i64_ty, [ptr_ty]);
-
-    // ── Pointer indirection helpers (`&mut T` mutation lowering) ────
-    decl!("ruxen_deref_ptr", ptr_ty, [ptr_ty]);
-    decl!("ruxen_store_ptr", void, [ptr_ty, ptr_ty]);
-
-    // ── Allocation + panic (core language runtime) ──────────────────
-    decl!("ruxen_alloc", ptr_ty, [i64_ty]);
-    decl!("ruxen_dealloc", void, [ptr_ty]);
-    decl!("ruxen_panic", void, [ptr_ty]);
-
-    // ── Drop-glue selectors emitted by the MIR drop pass ────────────
-    decl!("ruxen_string_free", void, [ptr_ty]);
-    decl!("ruxen_vec_free", void, [ptr_ty]);
-    decl!("ruxen_hash_free", void, [ptr_ty]);
-    decl!("ruxen_set_free", void, [ptr_ty]);
-    decl!("ruxen_hash_drop_string_v", void, [ptr_ty]);
-    decl!("ruxen_hash_drop_v_string", void, [ptr_ty]);
-    decl!("ruxen_hash_drop_string_string", void, [ptr_ty]);
-    decl!("ruxen_hash_drop_v_vec", void, [ptr_ty]);
-    decl!("ruxen_set_drop_string", void, [ptr_ty]);
-    decl!("ruxen_vec_drop_string", void, [ptr_ty]);
-    decl!("ruxen_vec_drop_vec", void, [ptr_ty]);
-
-    // ── Result `?`-operator + closure-fallback helpers ──────────────
-
-    // ── Implicit accessor/conversion helpers without a `.rx` decl ───
-    // FOLLOW-UP (coverage gap, not a language primitive): see the
-    // matching note in `cranelift/runtime_sigs.rs` — these should be
-    // `.rx`-declared so they too become derived.
-    decl!("ruxen_duration_as_secs", i64_ty, [ptr_ty]);
-    decl!("ruxen_duration_as_millis", i64_ty, [ptr_ty]);
-    decl!("ruxen_duration_as_micros", i64_ty, [ptr_ty]);
-    decl!("ruxen_duration_as_nanos", i64_ty, [ptr_ty]);
-    decl!("ruxen_thread_sleep_ns", void, [i64_ty]);
-    decl!("ruxen_metadata_len", i64_ty, [ptr_ty]);
-    decl!("ruxen_metadata_modified", i64_ty, [ptr_ty]);
-    decl!("ruxen_metadata_is_file", i64_ty, [ptr_ty]);
-    decl!("ruxen_metadata_is_dir", i64_ty, [ptr_ty]);
-    decl!("ruxen_metadata_is_symlink", i64_ty, [ptr_ty]);
-    decl!("ruxen_exit_status_code", i64_ty, [ptr_ty]);
-    decl!("ruxen_exit_status_success", i64_ty, [ptr_ty]);
-    decl!("ruxen_regex_compile_const", ptr_ty, [ptr_ty, ptr_ty]);
-
-    // ── No-op sentinel ──────────────────────────────────────────────
+fn abi_ty_to_llvm<'ctx>(ty: AbiTy, context: &'ctx Context) -> BasicTypeEnum<'ctx> {
+    match ty {
+        AbiTy::I8 => context.i8_type().into(),
+        AbiTy::I32 => context.i32_type().into(),
+        AbiTy::I64 => context.i64_type().into(),
+        AbiTy::F64 => context.f64_type().into(),
+        AbiTy::Ptr => context.ptr_type(AddressSpace::default()).into(),
+    }
 }

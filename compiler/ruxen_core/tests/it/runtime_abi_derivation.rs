@@ -147,9 +147,7 @@ fn baseline_runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         // String operations
         "ruxen_string_concat" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_string_from" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_string_push_str" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_deref_ptr" => Some((vec![types::I64], Some(types::I64))),
-        "ruxen_store_ptr" => Some((vec![types::I64, types::I64], None)),
+        "ruxen_string_push_str" => Some((vec![types::I64, types::I64], None)),
         "ruxen_string_len" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_string_is_empty" => Some((vec![types::I64], Some(types::I8))),
         "ruxen_string_trim" => Some((vec![types::I64], Some(types::I64))),
@@ -167,16 +165,14 @@ fn baseline_runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "ruxen_string_splitn" => Some((vec![types::I64, types::I64, types::I64], Some(types::I64))),
         "ruxen_string_clear" => Some((vec![types::I64], None)),
         "ruxen_string_truncate" => Some((vec![types::I64, types::I64], None)),
-        "ruxen_string_insert" => Some((vec![types::I64, types::I64, types::I64], Some(types::I64))),
-        "ruxen_string_insert_str" => {
-            Some((vec![types::I64, types::I64, types::I64], Some(types::I64)))
-        }
-        "ruxen_string_remove" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_string_insert" => Some((vec![types::I64, types::I64, types::I64], None)),
+        "ruxen_string_insert_str" => Some((vec![types::I64, types::I64, types::I64], None)),
+        "ruxen_string_remove" => Some((vec![types::I64, types::I64], Some(types::I32))),
         "ruxen_string_parse_int" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_string_parse_float" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_parse_error_message" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_string_split" => Some((vec![types::I64, types::I64], Some(types::I64))),
-        "ruxen_string_push" => Some((vec![types::I64, types::I64], Some(types::I64))),
+        "ruxen_string_push" => Some((vec![types::I64, types::I32], None)),
         "ruxen_string_into_bytes" => Some((vec![types::I64], Some(types::I64))),
         "ruxen_string_eq" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_string_cmp" => Some((vec![types::I64, types::I64], Some(types::I64))),
@@ -328,7 +324,11 @@ fn derived_abi_map() -> BTreeMap<String, AbiShape> {
         diags.is_empty(),
         "stdlib bootstrap emitted diagnostics: {diags:?}"
     );
+    derived_abi_map_from(&bootstrap_packages)
+}
 
+/// [`derived_abi_map`] over a chosen bootstrap package set.
+fn derived_abi_map_from(bootstrap_packages: &[(String, Program)]) -> BTreeMap<String, AbiShape> {
     // Empty user program — we only want the merged-in stdlib FFI surface.
     let empty = Program {
         items: Vec::new(),
@@ -339,7 +339,7 @@ fn derived_abi_map() -> BTreeMap<String, AbiShape> {
             column: 0,
         },
     };
-    let result = Resolver::new().resolve_with_bootstrap_packages(&empty, &bootstrap_packages);
+    let result = Resolver::new().resolve_with_bootstrap_packages(&empty, bootstrap_packages);
 
     let mut map: BTreeMap<String, AbiShape> = BTreeMap::new();
     for lib in &result.program.ffi_libs {
@@ -472,8 +472,6 @@ fn table_symbols() -> &'static [&'static str] {
         "ruxen_string_concat",
         "ruxen_string_from",
         "ruxen_string_push_str",
-        "ruxen_deref_ptr",
-        "ruxen_store_ptr",
         "ruxen_string_len",
         "ruxen_string_is_empty",
         "ruxen_string_trim",
@@ -627,10 +625,6 @@ fn table_symbols() -> &'static [&'static str] {
 ///     (I8); C returns `int64_t` (I64). The call reads the low byte —
 ///     correct for a 0/1 bool on little-endian. Exercised by e2e cases
 ///     531/533 (fs.exists) and 907 (regex is_match); passes today.
-///   * `ruxen_string_push`: `.rx` declares `(c: Char)` (I32); C takes
-///     `int64_t codepoint`. FOLLOW-UP BUG: the `.rx` param should be
-///     `Int`. Exercised by e2e case 315 (`s.push(?\u{21})`); passes today
-///     because the Char arg widens compatibly. `.rx` fix is out of scope.
 ///   * `ruxen_vec_each`: `.rx` declares `def each -> Int` with no params;
 ///     C is `(RuxenVec*, void(*)(int64_t)) -> void`. FOLLOW-UP BUG: the
 ///     `.rx` decl omits the callback param and declares a bogus `-> Int`.
@@ -638,12 +632,7 @@ fn table_symbols() -> &'static [&'static str] {
 ///     so the missing param is invisible at the C-call boundary. Exercised
 ///     by e2e cases 120/108/307/88; passes today. `.rx` fix is out of scope.
 fn known_rx_vs_table_discrepancies() -> &'static [&'static str] {
-    &[
-        "ruxen_fs_exists",
-        "ruxen_regex_is_match",
-        "ruxen_string_push",
-        "ruxen_vec_each",
-    ]
+    &["ruxen_fs_exists", "ruxen_regex_is_match", "ruxen_vec_each"]
 }
 
 /// The crux check: for every symbol present in BOTH the derived map and
@@ -729,9 +718,10 @@ const KNOWN_UNWIRED_RUNTIME_SYMBOLS: &[&str] = &[
 ];
 
 /// Files that list runtime symbols without emitting calls to them: the
-/// residual ABI tables and the REPL's JIT symbol registrations. A symbol
-/// named only here has no producer, so these do not count as emitters.
-const NON_EMITTER_SOURCES: &[&str] = &["runtime_sigs.rs", "runtime_decl.rs", "jit.rs"];
+/// residual ABI table and the REPL's JIT capture-shim registrations. A
+/// symbol named only here has no producer, so these do not count as
+/// emitters.
+const NON_EMITTER_SOURCES: &[&str] = &["residual_abi.rs", "jit.rs"];
 
 fn workspace_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -843,6 +833,28 @@ fn exported_c_definitions(code: &str) -> Vec<String> {
     defs
 }
 
+/// Every `ruxen_*` identifier in non-test compiler and tool source code,
+/// skipping comments and the [`NON_EMITTER_SOURCES`].
+fn compiler_emitted_symbols(root: &std::path::Path) -> std::collections::BTreeSet<String> {
+    let mut rs_files = Vec::new();
+    files_with_ext(&root.join("compiler/ruxen_core/src"), "rs", &mut rs_files);
+    files_with_ext(&root.join("src"), "rs", &mut rs_files);
+    let mut emitted = std::collections::BTreeSet::new();
+    for path in &rs_files {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let in_tests = path.components().any(|c| c.as_os_str() == "tests");
+        if in_tests || name.starts_with("tests") || NON_EMITTER_SOURCES.contains(&name) {
+            continue;
+        }
+        let src = std::fs::read_to_string(path).expect("read compiler source");
+        for line in src.lines() {
+            let code = line.split("//").next().unwrap_or("");
+            emitted.extend(ruxen_identifiers(code).into_iter().map(str::to_string));
+        }
+    }
+    emitted
+}
+
 /// Every non-`static` `ruxen_*` function a stdlib C runtime exports must be
 /// reachable: declared in a `.rx` `lib` block, emitted by the compiler, or
 /// called from other runtime C code. An exported symbol nothing reaches is
@@ -875,23 +887,7 @@ fn every_exported_runtime_symbol_has_a_declaration_or_emitter() {
     }
 
     let declared = derived_abi_map();
-
-    let mut rs_files = Vec::new();
-    files_with_ext(&root.join("compiler/ruxen_core/src"), "rs", &mut rs_files);
-    files_with_ext(&root.join("src"), "rs", &mut rs_files);
-    let mut emitted: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for path in &rs_files {
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let in_tests = path.components().any(|c| c.as_os_str() == "tests");
-        if in_tests || name.starts_with("tests") || NON_EMITTER_SOURCES.contains(&name) {
-            continue;
-        }
-        let src = std::fs::read_to_string(path).expect("read compiler source");
-        for line in src.lines() {
-            let code = line.split("//").next().unwrap_or("");
-            emitted.extend(ruxen_identifiers(code).into_iter().map(str::to_string));
-        }
-    }
+    let emitted = compiler_emitted_symbols(&root);
 
     let mut unreachable = Vec::new();
     for (name, files) in &exported {
@@ -917,5 +913,58 @@ fn every_exported_runtime_symbol_has_a_declaration_or_emitter() {
          or C caller ({}):\n{}",
         unreachable.len(),
         unreachable.join("\n")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Residual ABI table guard (F-26)
+// ---------------------------------------------------------------------------
+
+/// `codegen::residual_abi` may hold only symbols the compiler emits itself
+/// and that not every bootstrap declares in `.rx` (the wasm subset is the
+/// smallest one). A declared entry duplicates the derived ABI; an entry
+/// nothing emits is dead. Where the full bootstrap does declare an entry,
+/// the derived Cranelift widths must equal the table's.
+#[test]
+fn residual_abi_table_holds_only_undeclared_emitted_symbols() {
+    use ruxen_core::codegen::cranelift::compiler_internal_signature;
+    use ruxen_core::codegen::residual_abi::RESIDUAL_RUNTIME_FNS;
+    use ruxen_core::resolve::bootstrap::run_wasm_bootstrap_with_package_names;
+
+    let mut diags = Vec::new();
+    let wasm_declared = derived_abi_map_from(&run_wasm_bootstrap_with_package_names(&mut diags));
+    assert!(
+        diags.is_empty(),
+        "wasm bootstrap emitted diagnostics: {diags:?}"
+    );
+    let declared = derived_abi_map();
+    let emitted = compiler_emitted_symbols(&workspace_root());
+
+    let mut problems = Vec::new();
+    for r in RESIDUAL_RUNTIME_FNS {
+        if wasm_declared.contains_key(r.name) {
+            problems.push(format!(
+                "  {}: declared by a wasm-bootstrap .rx lib block",
+                r.name
+            ));
+        }
+        if !emitted.contains(r.name) {
+            problems.push(format!("  {}: no compiler source emits it", r.name));
+        }
+        if let Some(derived) = declared.get(r.name) {
+            let table = compiler_internal_signature(r.name).expect("residual entry resolves");
+            if *derived != table {
+                problems.push(format!(
+                    "  {}: derived {derived:?} != table {table:?}",
+                    r.name
+                ));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "stale residual ABI entries ({}):\n{}",
+        problems.len(),
+        problems.join("\n")
     );
 }

@@ -115,3 +115,58 @@ end
         errors
     );
 }
+
+/// F-18 — a function call is checked against the function it resolved to,
+/// not looked up again by name. A module function call carries the mangled
+/// name `Util_keep`, which names no definition, so the by-name lookup found
+/// no signature and treated the borrowed argument as moved.
+#[test]
+fn module_fn_call_uses_its_resolved_signature() {
+    let source = "\
+class Shelf
+  n: Int
+  def init(@n: Int)
+  end
+end
+
+module Util
+  def keep(s: &Shelf) -> Int
+    2
+  end
+end
+
+def twice(s: Shelf) -> Int
+  Util.keep(s)
+  Util.keep(s)
+end
+";
+    let errors = borrow_errors(source);
+    assert!(
+        errors.is_empty(),
+        "`Util.keep` borrows `s`, so calling it twice must not move it; got: {:#?}",
+        errors
+    );
+}
+
+/// F-20 — the receiver mode comes from the method typeck selected, not
+/// from its name. `Array#sort` is a `.rx` method that returns a sorted copy,
+/// so calling it while a closure holds a shared borrow of the array is fine.
+/// It used to be reported as a mutation (E1002) because `sort` is on the list
+/// of mutating builtin names.
+#[test]
+fn non_mutating_builtin_method_named_like_a_mutator_is_not_a_mutation() {
+    let source = "\
+def main
+  let v = [3, 1, 2]
+  let size_of = { || v.size }
+  let sorted = v.sort
+  puts \"#{size_of.()} #{sorted.size}\"
+end
+";
+    let errors = borrow_errors(source);
+    assert!(
+        errors.is_empty(),
+        "`v.sort` returns a copy and must not count as a mutation of `v`; got: {:#?}",
+        errors
+    );
+}

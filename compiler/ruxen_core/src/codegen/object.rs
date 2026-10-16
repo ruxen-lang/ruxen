@@ -149,16 +149,73 @@ pub fn compile_runtime_sources(
     Ok(objects)
 }
 
+/// The `cc` arguments that link `obj_path` into `output_path`, in the order
+/// the linker needs them: every input file (the program object, the runtime
+/// objects, then the prebuilt runtime archive) before any library flag.
+///
+/// A library flag is resolved only against the inputs to its left. GNU ld
+/// with `--as-needed` (Ubuntu's gcc default) drops a `-lm` that precedes
+/// the archive whose `ruxen_float_pow` calls `pow`, and the link then fails
+/// with an undefined reference. Fedora's gcc does not pass `--as-needed`,
+/// which is why a wrong order links there and fails on Ubuntu CI.
+///
+/// `prebuilt_archive` is whole-archived (`-force_load` on Apple ld, which
+/// does not honour `--whole-archive`) so members no object references, such
+/// as the Cranelift dispatch helpers, survive the link.
+fn link_command_args(
+    obj_path: &Path,
+    runtime_objects: &[PathBuf],
+    prebuilt_archive: Option<&Path>,
+    output_path: &str,
+    sanitize: bool,
+    extra_link_flags: &[String],
+) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = vec![obj_path.into()];
+    args.extend(runtime_objects.iter().map(|o| o.into()));
+    if let Some(ar) = prebuilt_archive {
+        if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
+            let mut force_load = std::ffi::OsString::from("-Wl,-force_load,");
+            force_load.push(ar);
+            args.push(force_load);
+        } else {
+            args.push("-Wl,--whole-archive".into());
+            args.push(ar.into());
+            args.push("-Wl,--no-whole-archive".into());
+        }
+    }
+    args.push("-o".into());
+    args.push(output_path.into());
+    // Match the deployment target of every input object (11.0) so the link
+    // target isn't the lower OS-major default, which makes ld flag the
+    // prebuilt archive as "built for a newer macOS version".
+    if cfg!(target_os = "macos") {
+        args.push("-mmacosx-version-min=11.0".into());
+    }
+    args.extend(
+        linker_args(sanitize, extra_link_flags)
+            .into_iter()
+            .map(std::ffi::OsString::from),
+    );
+    args
+}
+
 /// Write object bytes to a file and link with the runtime into an executable.
+///
+/// The C runtime arrives either as `runtime_objects` (compiled `.o` files,
+/// removed after the link) or as `prebuilt_archive` (a `libruxenrt.a`,
+/// whole-archived and left in place). See [`link_command_args`] for the
+/// argument order this guarantees.
 ///
 /// When `sanitize` is true, the linker is invoked with sanitizer flags so that
 /// the sanitizer runtime is linked into the final binary.
 ///
 /// `extra_link_flags` provides additional linker flags (e.g., `-lfoo` from
-/// `@[link("foo")]` FFI attributes).
+/// `@[link("foo")]` FFI attributes, and the `[system_libs]` set); they all
+/// follow every input file.
 pub fn emit_executable(
     object_bytes: &[u8],
     runtime_objects: &[PathBuf],
+    prebuilt_archive: Option<&Path>,
     output_path: &str,
     sanitize: bool,
     extra_link_flags: &[String],
@@ -169,20 +226,14 @@ pub fn emit_executable(
         .map_err(|e| format!("Failed to write object file: {}", e))?;
 
     let mut cmd = Command::new("cc");
-    cmd.arg(&obj_path);
-    for runtime_o in runtime_objects {
-        cmd.arg(runtime_o);
-    }
-    cmd.arg("-o").arg(output_path);
-    // Match the deployment target of every input object (11.0) so the link
-    // target isn't the lower OS-major default, which makes ld flag the
-    // prebuilt archive as "built for a newer macOS version".
-    #[cfg(target_os = "macos")]
-    cmd.arg("-mmacosx-version-min=11.0");
-
-    for arg in linker_args(sanitize, extra_link_flags) {
-        cmd.arg(arg);
-    }
+    cmd.args(link_command_args(
+        Path::new(&obj_path),
+        runtime_objects,
+        prebuilt_archive,
+        output_path,
+        sanitize,
+        extra_link_flags,
+    ));
 
     let status = cmd
         .status()
@@ -1106,7 +1157,43 @@ fn shell_quote(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::linker_args;
+    use super::{link_command_args, linker_args};
+    use std::path::{Path, PathBuf};
+
+    /// Every input file precedes every `-l` flag. GNU ld with `--as-needed`
+    /// (Ubuntu's default) drops a library no input to its left uses, so
+    /// `-lm` before the runtime archive left `ruxen_float_pow`'s `pow`
+    /// undefined on Ubuntu CI. Pins the order for both runtime shapes.
+    #[test]
+    fn link_command_puts_library_flags_after_every_input() {
+        let archive = Path::new("target/debug/libruxenrt.a");
+        let runtime_objects = vec![PathBuf::from("string.o"), PathBuf::from("user_shim.o")];
+        let flags = vec![
+            String::from("-lfoo"),
+            String::from("-lc"),
+            String::from("-lm"),
+            String::from("-lpthread"),
+        ];
+        for (objects, ar) in [(Vec::new(), Some(archive)), (runtime_objects, None)] {
+            let args: Vec<String> =
+                link_command_args(Path::new("prog.o"), &objects, ar, "prog", false, &flags)
+                    .into_iter()
+                    .map(|a| a.to_string_lossy().into_owned())
+                    .collect();
+            let first_lib = args
+                .iter()
+                .position(|a| a.starts_with("-l"))
+                .expect("library flags reach the link line");
+            let last_input = args
+                .iter()
+                .rposition(|a| a == "prog.o" || a.ends_with(".a") || a.ends_with(".o"))
+                .expect("inputs reach the link line");
+            assert!(
+                last_input < first_lib,
+                "every input must precede every -l flag; got {args:?}"
+            );
+        }
+    }
 
     // B3 of docs/specs/system/zero_rust_stdlib_classes.spec.md moved
     // `-lc / -lm / -lpthread` out of `linker_args` into per-package

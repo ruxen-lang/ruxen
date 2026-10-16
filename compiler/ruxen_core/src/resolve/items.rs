@@ -152,13 +152,6 @@ impl Resolver {
         // Resolve fields
         let mut fields = Vec::new();
         let mut field_def_ids = Vec::new();
-        let mut opt_out_send = false;
-        let mut opt_out_sync = false;
-        let mut manual_send = false;
-        let mut manual_sync = false;
-        // Mixin vtables Phase B-1: collected during the inner_impls loop
-        // below, sealed onto ClassInfo at construction time.
-        let mut runtime_dispatch_includes: Vec<crate::hir::nodes::DefId> = Vec::new();
         for (idx, field) in class.fields.iter().enumerate() {
             let ty = self.resolve_type_expr(&field.type_expr);
             let fid = self.symbols.define(
@@ -192,88 +185,22 @@ impl Resolver {
             methods.push(hir_method);
         }
 
-        // Resolve inner impl blocks
-        let mut impl_blocks = Vec::new();
+        // Resolve inner impl blocks, then read the class-level facts off
+        // each `include`: the E1014 checks, the Send/Sync markers and the
+        // runtime-dispatch mixins.
+        let impl_blocks = self.lower_inner_impls(&class.inner_impls, &self_ty, Some(def_id));
+        let mut auto_traits = AutoTraitFlags::default();
+        // Mixin vtables Phase B-1: sealed onto ClassInfo at construction time.
+        let mut runtime_dispatch_includes: Vec<DefId> = Vec::new();
         for inner in &class.inner_impls {
-            self.check_include_names_mixin(inner);
-            let trait_ref = MixinRef {
-                name: inner.trait_name.segments.join("."),
-                generic_args: inner
-                    .trait_name
-                    .generic_args
-                    .as_ref()
-                    .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                    .unwrap_or_default(),
-            };
-
-            // Collect `type Foo = X` bindings from the inner impl block so
-            // that `Self.Foo` in method signatures resolves concretely.
-            let old_assoc = std::mem::take(&mut self.current_impl_assoc_types);
-            for ii in &inner.items {
-                if let ast::ImplItem::AssocType {
-                    name, type_expr, ..
-                } = ii
-                {
-                    let ty = self.resolve_type_expr(type_expr);
-                    self.current_impl_assoc_types.insert(name.clone(), ty);
-                }
-            }
-
-            let mut items = Vec::new();
-            for ii in &inner.items {
-                match ii {
-                    ast::ImplItem::Method(f) => {
-                        items.push(HirImplItem::Method(self.resolve_func_def(f, Some(def_id))));
-                    }
-                    ast::ImplItem::AssocType {
-                        name,
-                        type_expr,
-                        span,
-                    } => {
-                        items.push(HirImplItem::AssocType {
-                            name: name.clone(),
-                            ty: self.resolve_type_expr(type_expr),
-                            span: span.clone(),
-                        });
-                    }
-                    ast::ImplItem::Include {
-                        is_unsafe,
-                        negative_trait,
-                        trait_name,
-                        span,
-                    } => {
-                        items.push(HirImplItem::Include {
-                            is_unsafe: *is_unsafe,
-                            negative_trait: *negative_trait,
-                            trait_name: trait_name.segments.join("."),
-                            span: span.clone(),
-                        });
-                    }
-                    // `alias` inside a class-body inner `include`/impl block is
-                    // not a Tier-1 surface (aliases live at the class-body level);
-                    // ignore it here (docs/decisions/alias-keyword.md).
-                    ast::ImplItem::Alias(_) => {}
-                }
-            }
-            self.current_impl_assoc_types = old_assoc;
-            self.record_auto_trait_flags(
-                &self_ty,
-                Some(&trait_ref.name),
+            let trait_name = inner.trait_name.segments.join(".");
+            self.check_auto_trait_include(
+                &trait_name,
                 inner.negative_trait,
                 inner.is_unsafe,
                 inner.span.clone(),
             );
-            // Spec B10 (send_sync_enforcement.spec.md): plain
-            // `include Send` is a user opt-in marker — equivalent to
-            // `unsafe include Send` (B12) for v1, since user classes
-            // have no auto-derive to suppress.
-            match trait_ref.name.as_str() {
-                "Send" if inner.negative_trait => opt_out_send = true,
-                "Sync" if inner.negative_trait => opt_out_sync = true,
-                "Send" => manual_send = true,
-                "Sync" => manual_sync = true,
-                _ => {}
-            }
+            auto_traits.record(&trait_name, inner.negative_trait);
 
             // Mixin vtables Phase B-1: if the included mixin has
             // `dispatch_mode = Runtime`, record its DefId on the class so
@@ -281,7 +208,7 @@ impl Resolver {
             // Negative includes (`include !Foo`) don't trigger this — the
             // class explicitly opts out of the mixin contract.
             if !inner.negative_trait {
-                if let Some(mixin_def) = self.symbols.iter().find(|d| d.name == trait_ref.name) {
+                if let Some(mixin_def) = self.symbols.iter().find(|d| d.name == trait_name) {
                     let is_runtime_dispatch = matches!(
                         &mixin_def.kind,
                         DefKind::Trait { info }
@@ -295,16 +222,6 @@ impl Resolver {
                     }
                 }
             }
-
-            impl_blocks.push(HirImplBlock {
-                generic_params: vec![],
-                is_unsafe: inner.is_unsafe,
-                negative_trait: inner.negative_trait,
-                trait_ref: Some(trait_ref),
-                target_ty: self_ty.clone(),
-                items,
-                span: inner.span.clone(),
-            });
         }
 
         self.scopes.pop();
@@ -340,6 +257,11 @@ impl Resolver {
             method_def_ids.extend(lib_method_ids.iter().copied());
         }
         if let Some(def) = self.symbols.get_mut(def_id) {
+            // A stdlib `class E` body anchored onto an `enum E` only
+            // contributes methods (parented on the enum's DefId); the enum
+            // keeps its kind so `E` still resolves to `Ty::Enum` and its
+            // variants survive.
+            let anchored_on_enum = matches!(def.kind, DefKind::Enum { .. });
             // Zero-Rust-stdlib migration (Phase B / M3): an anchored
             // builtin (`register_builtins` registered `String` →
             // `TypeAlias { target: Ty::String }`, then the bootstrap merge
@@ -357,21 +279,20 @@ impl Resolver {
             // head) even when the DefKind is `Class`, so `let s: String`,
             // string literals, and the C ABI / runtime repr are unchanged.
             // Covered by every e2e program that types a `String`.
-            def.kind = DefKind::Class {
-                info: ClassInfo {
-                    generic_params: class_generic_param_infos,
-                    parent: parent_def,
-                    fields: field_def_ids,
-                    methods: method_def_ids,
-                    opt_out_send,
-                    opt_out_sync,
-                    manual_send,
-                    manual_sync,
-                    const_predicates,
-                    flat_heap_struct,
-                    runtime_dispatch_includes,
-                },
-            };
+            if !anchored_on_enum {
+                def.kind = DefKind::Class {
+                    info: ClassInfo {
+                        generic_params: class_generic_param_infos,
+                        parent: parent_def,
+                        fields: field_def_ids,
+                        methods: method_def_ids,
+                        auto_traits,
+                        const_predicates,
+                        flat_heap_struct,
+                        runtime_dispatch_includes,
+                    },
+                };
+            }
         }
 
         // Ruby `alias new old` method synonyms (docs/decisions/alias-keyword.md).
@@ -506,10 +427,7 @@ impl Resolver {
                     generic_params: struct_generic_param_infos,
                     fields: field_def_ids,
                     layout: s.layout.clone(),
-                    opt_out_send: false,
-                    opt_out_sync: false,
-                    manual_send: false,
-                    manual_sync: false,
+                    auto_traits: AutoTraitFlags::default(),
                     const_predicates,
                 },
             };
@@ -600,10 +518,10 @@ impl Resolver {
     }
 
     /// Lower a list of AST `InnerImpl` directives (collected from a
-    /// struct or enum body under ruby-naming.spec.md §3.4a) into HIR
-    /// `HirImplBlock` records. The same routine the class path uses,
-    /// minus the class-specific `opt_out_*` tracking — struct/enum
-    /// auto-trait flags live on their own info structs.
+    /// class, struct or enum body under ruby-naming.spec.md §3.4a) into
+    /// HIR `HirImplBlock` records. The class-only facts an `include`
+    /// carries (Send/Sync markers, runtime-dispatch mixins) are read by
+    /// `resolve_class` itself.
     pub(super) fn lower_inner_impls(
         &mut self,
         inner_impls: &[ast::InnerImpl],
@@ -613,64 +531,9 @@ impl Resolver {
         let mut impl_blocks = Vec::new();
         for inner in inner_impls {
             self.check_include_names_mixin(inner);
-            let trait_ref = MixinRef {
-                name: inner.trait_name.segments.join("."),
-                generic_args: inner
-                    .trait_name
-                    .generic_args
-                    .as_ref()
-                    .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                    .unwrap_or_default(),
-            };
+            let trait_ref = MixinRef::from_bound(&inner.trait_name, |a| self.resolve_type_expr(a));
 
-            let old_assoc = std::mem::take(&mut self.current_impl_assoc_types);
-            for ii in &inner.items {
-                if let ast::ImplItem::AssocType {
-                    name, type_expr, ..
-                } = ii
-                {
-                    let ty = self.resolve_type_expr(type_expr);
-                    self.current_impl_assoc_types.insert(name.clone(), ty);
-                }
-            }
-
-            let mut items = Vec::new();
-            for ii in &inner.items {
-                match ii {
-                    ast::ImplItem::Method(f) => {
-                        items.push(HirImplItem::Method(self.resolve_func_def(f, parent_def)));
-                    }
-                    ast::ImplItem::AssocType {
-                        name,
-                        type_expr,
-                        span,
-                    } => {
-                        items.push(HirImplItem::AssocType {
-                            name: name.clone(),
-                            ty: self.resolve_type_expr(type_expr),
-                            span: span.clone(),
-                        });
-                    }
-                    ast::ImplItem::Include {
-                        is_unsafe,
-                        negative_trait,
-                        trait_name,
-                        span,
-                    } => {
-                        items.push(HirImplItem::Include {
-                            is_unsafe: *is_unsafe,
-                            negative_trait: *negative_trait,
-                            trait_name: trait_name.segments.join("."),
-                            span: span.clone(),
-                        });
-                    }
-                    // `alias` inside a class-body inner `include`/impl block is
-                    // not a Tier-1 surface (aliases live at the class-body level);
-                    // ignore it here (docs/decisions/alias-keyword.md).
-                    ast::ImplItem::Alias(_) => {}
-                }
-            }
-            self.current_impl_assoc_types = old_assoc;
+            let items = self.lower_impl_items(&inner.items, parent_def);
 
             impl_blocks.push(HirImplBlock {
                 generic_params: vec![],
@@ -683,6 +546,64 @@ impl Resolver {
             });
         }
         impl_blocks
+    }
+
+    /// Lower the items of one impl body: an in-body `include` block or an
+    /// `extension`. Its `type Foo = X` bindings are in scope for the whole
+    /// body (so `Self.Foo` in a method signature resolves concretely) and
+    /// are restored on return. An `alias` item lowers to nothing here; the
+    /// caller records it (docs/decisions/alias-keyword.md).
+    fn lower_impl_items(
+        &mut self,
+        impl_items: &[ast::ImplItem],
+        parent_def: Option<DefId>,
+    ) -> Vec<HirImplItem> {
+        let old_assoc = std::mem::take(&mut self.current_impl_assoc_types);
+        for ii in impl_items {
+            if let ast::ImplItem::AssocType {
+                name, type_expr, ..
+            } = ii
+            {
+                let ty = self.resolve_type_expr(type_expr);
+                self.current_impl_assoc_types.insert(name.clone(), ty);
+            }
+        }
+
+        let mut items = Vec::new();
+        for ii in impl_items {
+            match ii {
+                ast::ImplItem::Method(f) => {
+                    items.push(HirImplItem::Method(self.resolve_func_def(f, parent_def)));
+                }
+                ast::ImplItem::AssocType {
+                    name,
+                    type_expr,
+                    span,
+                } => {
+                    items.push(HirImplItem::AssocType {
+                        name: name.clone(),
+                        ty: self.resolve_type_expr(type_expr),
+                        span: span.clone(),
+                    });
+                }
+                ast::ImplItem::Include {
+                    is_unsafe,
+                    negative_trait,
+                    trait_name,
+                    span,
+                } => {
+                    items.push(HirImplItem::Include {
+                        is_unsafe: *is_unsafe,
+                        negative_trait: *negative_trait,
+                        trait_name: trait_name.segments.join("."),
+                        span: span.clone(),
+                    });
+                }
+                ast::ImplItem::Alias(_) => {}
+            }
+        }
+        self.current_impl_assoc_types = old_assoc;
+        items
     }
 
     pub(super) fn resolve_enum(&mut self, e: &ast::EnumDef) -> HirEnumDef {
@@ -770,10 +691,7 @@ impl Resolver {
                 info: EnumInfo {
                     generic_params: enum_generic_param_infos,
                     variants: variant_def_ids,
-                    opt_out_send: false,
-                    opt_out_sync: false,
-                    manual_send: false,
-                    manual_sync: false,
+                    auto_traits: AutoTraitFlags::default(),
                     const_predicates: vec![],
                 },
             };
@@ -867,15 +785,7 @@ impl Resolver {
         let super_traits: Vec<MixinRef> = t
             .super_traits
             .iter()
-            .map(|b| MixinRef {
-                name: b.path.segments.join("."),
-                generic_args: b
-                    .path
-                    .generic_args
-                    .as_ref()
-                    .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                    .unwrap_or_default(),
-            })
+            .map(|b| MixinRef::from_bound(&b.path, |a| self.resolve_type_expr(a)))
             .collect();
 
         // Make the trait's declared associated-type names visible so
@@ -951,18 +861,14 @@ impl Resolver {
     pub(super) fn resolve_impl(&mut self, imp: &ast::ImplBlock) -> HirImplBlock {
         let generic_params = self.resolve_generic_params(&imp.generic_params);
         let target_ty = self.resolve_type_expr(&imp.target_type);
-        let trait_ref = imp.trait_name.as_ref().map(|tp| MixinRef {
-            name: tp.segments.join("."),
-            generic_args: tp
-                .generic_args
-                .as_ref()
-                .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                .unwrap_or_default(),
-        });
+        let trait_ref = imp
+            .trait_name
+            .as_ref()
+            .map(|tp| MixinRef::from_bound(tp, |a| self.resolve_type_expr(a)));
         if let Some(ref trait_ref) = trait_ref {
             self.record_auto_trait_flags(
                 &target_ty,
-                Some(&trait_ref.name),
+                &trait_ref.name,
                 imp.negative_trait,
                 imp.is_unsafe,
                 imp.span.clone(),
@@ -999,55 +905,7 @@ impl Resolver {
         );
         self.scopes.insert_type("Self".to_string(), self_type_id);
 
-        // First pass: collect `type Foo = X` bindings so that `Self.Foo`
-        // references inside method signatures/bodies resolve to the
-        // concrete type declared here.
-        let old_assoc = std::mem::take(&mut self.current_impl_assoc_types);
-        for ii in &imp.items {
-            if let ast::ImplItem::AssocType {
-                name, type_expr, ..
-            } = ii
-            {
-                let ty = self.resolve_type_expr(type_expr);
-                self.current_impl_assoc_types.insert(name.clone(), ty);
-            }
-        }
-
-        let mut items = Vec::new();
-        for ii in &imp.items {
-            match ii {
-                ast::ImplItem::Method(f) => {
-                    items.push(HirImplItem::Method(self.resolve_func_def(f, class_def)));
-                }
-                ast::ImplItem::AssocType {
-                    name,
-                    type_expr,
-                    span,
-                } => {
-                    items.push(HirImplItem::AssocType {
-                        name: name.clone(),
-                        ty: self.resolve_type_expr(type_expr),
-                        span: span.clone(),
-                    });
-                }
-                ast::ImplItem::Include {
-                    is_unsafe,
-                    negative_trait,
-                    trait_name,
-                    span,
-                } => {
-                    items.push(HirImplItem::Include {
-                        is_unsafe: *is_unsafe,
-                        negative_trait: *negative_trait,
-                        trait_name: trait_name.segments.join("."),
-                        span: span.clone(),
-                    });
-                }
-                // Ruby `alias new old` inside an `extension` body — a method
-                // synonym scoped to the target type (docs/decisions/alias-keyword.md).
-                ast::ImplItem::Alias(_) => {}
-            }
-        }
+        let items = self.lower_impl_items(&imp.items, class_def);
 
         // Record `extension`-body aliases against the target type. The visible
         // method set is the methods this impl resolved (HIR `Method` items).
@@ -1074,7 +932,6 @@ impl Resolver {
             }
         }
 
-        self.current_impl_assoc_types = old_assoc;
         self.scopes.pop();
         self.current_self_ty = old_self_ty;
         self.current_class_def = old_class_def;
@@ -1090,88 +947,63 @@ impl Resolver {
         }
     }
 
+    /// Record an `extension`'s `include Send`/`include !Sync` (and friends)
+    /// on the nominal type it targets. See [`Self::check_auto_trait_include`]
+    /// for the diagnostics.
     pub(super) fn record_auto_trait_flags(
         &mut self,
         target_ty: &Ty,
-        trait_name: Option<&str>,
+        trait_name: &str,
         negative_trait: bool,
         is_unsafe: bool,
         span: Span,
     ) {
-        let Some(trait_name) = trait_name else {
+        if !self.check_auto_trait_include(trait_name, negative_trait, is_unsafe, span) {
             return;
-        };
-
-        let (mark_send, mark_sync) = match trait_name {
-            "Send" => (true, false),
-            "Sync" => (false, true),
-            _ => {
-                if negative_trait {
-                    self.diagnostics.push(Diagnostic::error_with_code(
-                        "negative include (`exclude`) is only supported for Send and Sync",
-                        span,
-                        "E1014",
-                    ));
-                } else if is_unsafe {
-                    self.diagnostics.push(Diagnostic::error_with_code(
-                        "`unsafe include` is only required for Send and Sync",
-                        span,
-                        "E1014",
-                    ));
-                }
-                return;
-            }
-        };
-
-        // Spec B10 (send_sync_enforcement.spec.md): plain `include Send`
-        // / `include Sync` is a user opt-in marker for v1. `unsafe
-        // include Send` (B12) is the explicit-safety-assertion variant
-        // for classes that wrap raw pointers / non-Send containers.
-        // Both forms set `manual_send` / `manual_sync` — v1 has no
-        // user-class auto-derive, so the two are equivalent here.
-        // Negative include (`include !Send`) sets `opt_out_send` (B11).
-        // E1014 stays reserved (was previously raised here when neither
-        // form was present, but the spec promoted the bare marker form).
-        let _ = is_unsafe; // accepted but not differentiated for v1
-
-        let Some(def) = const_helpers::nominal_type_definition_mut(target_ty, &mut self.symbols)
-        else {
-            return;
-        };
-
-        match &mut def.kind {
-            DefKind::Class { info } => {
-                if mark_send {
-                    info.opt_out_send = negative_trait;
-                    info.manual_send = !negative_trait;
-                }
-                if mark_sync {
-                    info.opt_out_sync = negative_trait;
-                    info.manual_sync = !negative_trait;
-                }
-            }
-            DefKind::Struct { info } => {
-                if mark_send {
-                    info.opt_out_send = negative_trait;
-                    info.manual_send = !negative_trait;
-                }
-                if mark_sync {
-                    info.opt_out_sync = negative_trait;
-                    info.manual_sync = !negative_trait;
-                }
-            }
-            DefKind::Enum { info } => {
-                if mark_send {
-                    info.opt_out_send = negative_trait;
-                    info.manual_send = !negative_trait;
-                }
-                if mark_sync {
-                    info.opt_out_sync = negative_trait;
-                    info.manual_sync = !negative_trait;
-                }
-            }
-            _ => {}
         }
+        if let Some(flags) =
+            const_helpers::nominal_type_definition_mut(target_ty, &mut self.symbols)
+                .and_then(|def| def.kind.auto_traits_mut())
+        {
+            flags.record(trait_name, negative_trait);
+        }
+    }
+
+    /// E1014 checks for one `include`/`exclude` of `trait_name`; returns
+    /// whether it names `Send` or `Sync`.
+    ///
+    /// Spec B10 (send_sync_enforcement.spec.md): plain `include Send`
+    /// / `include Sync` is a user opt-in marker for v1. `unsafe
+    /// include Send` (B12) is the explicit-safety-assertion variant
+    /// for classes that wrap raw pointers / non-Send containers.
+    /// Both forms set `manual_send` / `manual_sync`; v1 has no
+    /// user-class auto-derive, so the two are equivalent here.
+    /// Negative include (`include !Send`) sets `opt_out_send` (B11).
+    /// For every other mixin, `exclude` and `unsafe include` are E1014.
+    pub(super) fn check_auto_trait_include(
+        &mut self,
+        trait_name: &str,
+        negative_trait: bool,
+        is_unsafe: bool,
+        span: Span,
+    ) -> bool {
+        if matches!(trait_name, "Send" | "Sync") {
+            return true;
+        }
+        if negative_trait {
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "negative include (`exclude`) is only supported for Send and Sync",
+                span,
+                "E1014",
+            ));
+        } else if is_unsafe {
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "`unsafe include` is only required for Send and Sync",
+                span,
+                "E1014",
+            ));
+        }
+        false
     }
 
     // ─── Function Resolution ────────────────────────────────────────

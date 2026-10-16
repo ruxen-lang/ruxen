@@ -53,6 +53,9 @@ class Set[T]
     def union as "ruxen_set_union"(other: Set[T]) -> Set[T]
     def intersection as "ruxen_set_intersection"(other: Set[T]) -> Set[T]
     def difference as "ruxen_set_difference"(other: Set[T]) -> Set[T]
+    # Ruby `Set#==`: the same elements, by the table's key kind. The binop
+    # lowering routes `a == b` (and `a != b`, negated) here.
+    def == as "ruxen_set_eq"(other: &Set[T]) -> Bool
     def insert as "ruxen_set_insert"(item: T)
     def remove as "ruxen_set_remove"(item: T) -> Bool
     def clear as "ruxen_set_clear"

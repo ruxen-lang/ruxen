@@ -1,0 +1,12 @@
+alias_mixin_default=48
+alias_default_parens=7
+alias_default_bare=7
+scalar_default_parens=1234
+scalar_default_bare=1234
+collect_parens=40
+collect_bare=40
+ref_concat=abcd
+spaceship=-1
+set_eq=true
+set_ne=false
+set_eq_after_insert=false

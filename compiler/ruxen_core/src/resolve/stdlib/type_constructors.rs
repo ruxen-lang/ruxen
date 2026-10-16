@@ -1,27 +1,11 @@
-//! Value-scope type-constructor variables.
+//! Value-scope bindings for the builtin-head type names.
 //!
-//! Phase D-5 of #06.95: collapse the previously hand-spelled
-//! type_constructors table (~175 LOC, one tuple per type) into a
-//! small data-druxen structure. The table registers each type
-//! NAME in the value scope as a `DefKind::Variable` so call sites
-//! like `Array.new(...)` / `String.new` / `Command.new(...)`
-//! resolve the receiver to a class-id-like sentinel value. The
-//! typeck path then promotes the Variable to the corresponding
-//! `Ty::Class` / `Ty::Array` / … and the static-ctor fast path in
-//! `mir/lower/expr/method_call.rs` handles dispatch.
-//!
-//! Three shape categories:
-//!   - Container builtins (`Array`/`Vec`, `Map`/`HashMap`,
-//!     `Set`/`HashSet`) carry a primitive Ty.
-//!   - `String` carries `Ty::String`.
-//!   - Every other class name carries `Ty::Class { name, ... }`
-//!     with one or zero generic_args.
-//!
-//! Future cleanup (separate prompt): teach
-//! `register_top_level_type_with_ffi`'s Class arm to insert into
-//! the value scope alongside the type scope, eliminating the
-//! need for the SIMPLE_CLASS_CTORS list entirely (the class .rx
-//! declaration would self-register both bindings).
+//! `Array`, `Hash`, `Set` and `String` have no type-scope class entry
+//! (`resolve_type_expr` builds their primitive `Ty` directly), so each
+//! name is registered in the value scope as a `DefKind::Variable`
+//! carrying that `Ty`. That lets `Array.new(...)` / `String.new` resolve
+//! the receiver. Every other class used as a receiver (`Duration`,
+//! `Mutex`, `File`, ...) resolves through its own type-scope entry.
 
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
@@ -29,34 +13,6 @@ use crate::parser::ast::Visibility;
 
 use super::super::symbols::*;
 use super::super::Resolver;
-
-// (name, generic_param_names) — classes with optional one-arg
-// generics. `Arc` is an alias for `SharedSync`, so its
-// value-scope Variable carries the SharedSync type identity.
-const SIMPLE_CLASS_CTORS: &[(&str, &[&str])] = &[
-    ("Thread", &[]),
-    ("Duration", &[]),
-    ("Instant", &[]),
-    ("TcpListener", &[]),
-    ("TcpStream", &[]),
-    ("BufReader", &["R"]),
-    ("BufWriter", &["W"]),
-    ("Mutex", &["T"]),
-    ("SharedSync", &["T"]),
-];
-
-fn class_ty(name: &str, gens: &[&str]) -> Ty {
-    Ty::Class {
-        name: name.to_string(),
-        generic_args: gens
-            .iter()
-            .map(|g| Ty::TypeParam {
-                name: g.to_string(),
-                bounds: vec![],
-            })
-            .collect(),
-    }
-}
 
 pub(super) fn register_type_constructors(r: &mut Resolver) {
     let span = Span {
@@ -85,18 +41,12 @@ pub(super) fn register_type_constructors(r: &mut Resolver) {
         bounds: vec![],
     }));
 
-    let type_constructors: Vec<(&str, Ty)> = {
-        let mut v: Vec<(&str, Ty)> = vec![
-            ("Array", array_ty),
-            ("Hash", map_ty),
-            ("Set", set_ty),
-            ("String", Ty::String),
-        ];
-        for (name, gens) in SIMPLE_CLASS_CTORS {
-            v.push((name, class_ty(name, gens)));
-        }
-        v
-    };
+    let type_constructors: Vec<(&str, Ty)> = vec![
+        ("Array", array_ty),
+        ("Hash", map_ty),
+        ("Set", set_ty),
+        ("String", Ty::String),
+    ];
     for (name, ty) in type_constructors {
         let id = r.symbols.define(
             name.to_string(),

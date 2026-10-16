@@ -145,6 +145,19 @@ fn class_method_call_site_appears() {
 }
 
 #[test]
+fn method_call_inside_multi_assign_and_unsafe_block_is_found() {
+    // The unresolved-method fallback must reach a call nested in a
+    // `a, b = x, y` value and in an `unsafe { }` body.
+    let src = load("method_in_multi_assign_and_unsafe");
+    let result = analyze(&src);
+    for skip in [1, 2] {
+        let cursor = pos_inside(&src, "tick_anchor_qzx", skip);
+        let locs = references(&result, cursor, true);
+        assert_eq!(locs.len(), 3, "cursor on use {}: {:?}", skip, locs);
+    }
+}
+
+#[test]
 fn cursor_on_declaration_returns_all_uses() {
     // Cursor directly on the `let decl_anchor_qzx` decl. With the
     // decl flag on we get 1 decl + 2 uses = 3. With it off, 2 uses.

@@ -3,7 +3,7 @@
 //! Every node carries a `Span` for error reporting. The AST is untyped —
 //! no semantic information is attached at this stage.
 
-use crate::lexer::token::{FormatSpec, NumericSuffix, Span};
+use crate::lexer::token::{FormatSpec, NumericSuffix, Span, TokenKind};
 
 // ─── Visibility ──────────────────────────────────────────────────────
 
@@ -51,6 +51,28 @@ pub enum TopLevelItem {
     Expr(Expr),
 }
 
+impl TopLevelItem {
+    /// Source span of the whole item.
+    pub fn span(&self) -> &Span {
+        match self {
+            TopLevelItem::Module(m) => &m.span,
+            TopLevelItem::Class(c) => &c.span,
+            TopLevelItem::Struct(s) => &s.span,
+            TopLevelItem::Enum(e) => &e.span,
+            TopLevelItem::Mixin(t) => &t.span,
+            TopLevelItem::Impl(i) => &i.span,
+            TopLevelItem::Function(f) => &f.span,
+            TopLevelItem::Use(u) => &u.span,
+            TopLevelItem::TypeAlias(ta) => &ta.span,
+            TopLevelItem::Newtype(nt) => &nt.span,
+            TopLevelItem::Const(c) => &c.span,
+            TopLevelItem::Lib(l) => &l.span,
+            TopLevelItem::Alias(a) => &a.span,
+            TopLevelItem::Expr(e) => &e.span,
+        }
+    }
+}
+
 // ─── Type Expressions ────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,6 +80,9 @@ pub struct TypePath {
     pub segments: Vec<String>,
     pub generic_args: Option<Vec<TypeExpr>>,
     pub span: Span,
+    /// `true` when the source wrote the nilable shorthand `T?`, which the
+    /// parser builds as `Option[T]`; `ruxen fmt` writes it back as `T?`.
+    pub nilable: bool,
     /// `true` if the type path was written with a leading `::` —
     /// e.g. `::Foo` or `::Outer.Inner`.  Set by the parser
     /// (`parse_type_path`) when the first token is `ColonColon`.
@@ -149,6 +174,26 @@ pub enum TypeExpr {
         expr: Box<Expr>,
         span: Span,
     },
+}
+
+impl TypeExpr {
+    /// Source span of the whole type expression.
+    pub fn span(&self) -> &Span {
+        match self {
+            TypeExpr::Named(tp) => &tp.span,
+            TypeExpr::Reference { span, .. }
+            | TypeExpr::Tuple { span, .. }
+            | TypeExpr::Array { span, .. }
+            | TypeExpr::Function { span, .. }
+            | TypeExpr::SomeMixin { span, .. }
+            | TypeExpr::AnyMixin { span, .. }
+            | TypeExpr::Never { span }
+            | TypeExpr::Inferred { span }
+            | TypeExpr::RawPointer { span, .. }
+            | TypeExpr::ConstLit { span, .. }
+            | TypeExpr::ConstExprArg { span, .. } => span,
+        }
+    }
 }
 
 // ─── Mixin Bounds & Generics ─────────────────────────────────────────
@@ -367,6 +412,10 @@ pub enum ExprKind {
     FieldAccess {
         object: Box<Expr>,
         field: String,
+        /// `true` when the source wrote the instance-variable form `@field`,
+        /// which the parser builds as `self.field`; `ruxen fmt` writes it
+        /// back as `@field`.
+        ivar: bool,
     },
     MethodCall {
         object: Box<Expr>,
@@ -374,6 +423,10 @@ pub enum ExprKind {
         generic_args: Vec<TypeExpr>,
         args: Vec<Expr>,
         block: Option<Box<Expr>>,
+        /// The source wrote an argument list `(...)`. False for the
+        /// command form `x.m "a"`, a block-only call `x.m { }` and a bare
+        /// `x.m[T]`; `ruxen fmt` writes the call back the same way.
+        parens: bool,
     },
     SafeNav {
         object: Box<Expr>,
@@ -390,6 +443,10 @@ pub enum ExprKind {
         callee: Box<Expr>,
         args: Vec<Expr>,
         block: Option<Box<Expr>>,
+        /// The source wrote an argument list `(...)`. False for the
+        /// command form `puts "x"` and a block-only call `with_x { }`;
+        /// `ruxen fmt` writes the call back the same way.
+        parens: bool,
     },
     Index {
         object: Box<Expr>,
@@ -568,6 +625,90 @@ pub enum BinOp {
 }
 
 impl BinOp {
+    /// Every binary operator, in [`Self::spec`] order.
+    const ALL: [BinOp; 24] = [
+        BinOp::KeywordAnd,
+        BinOp::KeywordOr,
+        BinOp::NilCoalesce,
+        BinOp::Or,
+        BinOp::And,
+        BinOp::Eq,
+        BinOp::NotEq,
+        BinOp::Lt,
+        BinOp::Gt,
+        BinOp::LtEq,
+        BinOp::GtEq,
+        BinOp::Cmp,
+        BinOp::MatchOp,
+        BinOp::BitOr,
+        BinOp::BitXor,
+        BinOp::BitAnd,
+        BinOp::Shl,
+        BinOp::Shr,
+        BinOp::Add,
+        BinOp::Sub,
+        BinOp::Mul,
+        BinOp::Div,
+        BinOp::Mod,
+        BinOp::Pow,
+    ];
+
+    /// The operator table: each binary operator's token, source spelling and
+    /// Pratt binding powers `(left, right)`. Higher binds tighter;
+    /// `left < right` is left-associative, `left > right` right-associative,
+    /// equal powers chain to the right (`??`). The parser, the formatter's
+    /// precedence model and the diagnostics that name an operator all read
+    /// it from here. Assignment (1, 2), range (9, 10) and cast (23, 24) are
+    /// not `BinOp`s; `parser::expr::infix_binding_power` places them.
+    fn spec(self) -> (TokenKind, &'static str, (u8, u8)) {
+        match self {
+            // Ruby keyword `and` / `or`: one level, looser than assignment.
+            BinOp::KeywordAnd => (TokenKind::And, "and", (0, 1)),
+            BinOp::KeywordOr => (TokenKind::Or, "or", (0, 1)),
+            BinOp::NilCoalesce => (TokenKind::QuestionQuestion, "??", (2, 2)),
+            BinOp::Or => (TokenKind::PipePipe, "||", (3, 4)),
+            BinOp::And => (TokenKind::AmpAmp, "&&", (5, 6)),
+            // Comparison and regex match: one non-associative level.
+            BinOp::Eq => (TokenKind::EqEq, "==", (7, 8)),
+            BinOp::NotEq => (TokenKind::NotEq, "!=", (7, 8)),
+            BinOp::Lt => (TokenKind::Lt, "<", (7, 8)),
+            BinOp::Gt => (TokenKind::Gt, ">", (7, 8)),
+            BinOp::LtEq => (TokenKind::LtEq, "<=", (7, 8)),
+            BinOp::GtEq => (TokenKind::GtEq, ">=", (7, 8)),
+            BinOp::Cmp => (TokenKind::Spaceship, "<=>", (7, 8)),
+            BinOp::MatchOp => (TokenKind::TildeEq, "~=", (7, 8)),
+            BinOp::BitOr => (TokenKind::Pipe, "|", (11, 12)),
+            BinOp::BitXor => (TokenKind::Caret, "^", (13, 14)),
+            BinOp::BitAnd => (TokenKind::Amp, "&", (15, 16)),
+            BinOp::Shl => (TokenKind::Shl, "<<", (17, 18)),
+            BinOp::Shr => (TokenKind::Shr, ">>", (17, 18)),
+            BinOp::Add => (TokenKind::Plus, "+", (19, 20)),
+            BinOp::Sub => (TokenKind::Minus, "-", (19, 20)),
+            BinOp::Mul => (TokenKind::Star, "*", (21, 22)),
+            BinOp::Div => (TokenKind::Slash, "/", (21, 22)),
+            BinOp::Mod => (TokenKind::Percent, "%", (21, 22)),
+            // `**` binds tighter than `* / %`, cast and unary minus (25),
+            // and is right-associative: `2 ** 3 ** 2 == 512`,
+            // `-2 ** 2 == -4`. Postfix (27) still binds tighter.
+            BinOp::Pow => (TokenKind::StarStar, "**", (26, 25)),
+        }
+    }
+
+    /// The binary operator `kind` spells, if any.
+    pub fn from_token(kind: &TokenKind) -> Option<BinOp> {
+        Self::ALL.into_iter().find(|op| op.spec().0 == *kind)
+    }
+
+    /// The operator's source spelling (`+`, `<=>`, `and`).
+    pub fn symbol(self) -> &'static str {
+        self.spec().1
+    }
+
+    /// Pratt binding powers `(left, right)`.
+    pub fn binding_power(self) -> (u8, u8) {
+        self.spec().2
+    }
+
     /// The method name this operator can desugar to. Nominal arithmetic and
     /// bitwise operators always take this route. Comparisons only take it
     /// when the receiver exposes the method, preserving primitive and
@@ -720,6 +861,13 @@ pub struct ClosureExpr {
     pub params: Vec<ClosureParam>,
     pub body: ClosureBody,
     pub span: Span,
+    /// The source wrote a parameter header (`|x|` or `||`). A block with
+    /// no parameters may omit it (`do ... end`, `x.then { 1 }`); `ruxen
+    /// fmt` writes the header back only when it was there.
+    pub pipes: bool,
+    /// The source wrote `do ... end` rather than `{ ... }`; `ruxen fmt`
+    /// keeps the author's form.
+    pub do_end: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -807,6 +955,17 @@ pub struct AliasDef {
     pub span: Span,
 }
 
+/// A class-body `type Name = Concrete` binding of an included mixin's
+/// associated type (ruby-naming.spec.md §3.4). Kept in the AST so the
+/// formatter round-trips it; resolve does not read it yet (the class's
+/// concrete-return method carries the type through codegen).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssocTypeBinding {
+    pub name: String,
+    pub type_expr: TypeExpr,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub auto_assign: bool,
@@ -861,6 +1020,8 @@ pub struct ClassDef {
     /// Ruby-style `alias new old` items declared in the class body
     /// (docs/decisions/alias-keyword.md). Pure synonyms — no method body.
     pub aliases: Vec<AliasDef>,
+    /// `type Name = Concrete` associated-type bindings in the class body.
+    pub assoc_types: Vec<AssocTypeBinding>,
     pub span: Span,
 }
 
@@ -1108,6 +1269,12 @@ pub struct FfiFunction {
     /// flip `FnSignature.is_class_method`. Top-level FFI decls are always
     /// `false` here — they're free functions, not methods on a type.
     pub is_class_method: bool,
+    /// `true` when the decl was spelled `def var NAME(...)`: an instance
+    /// method that mutates its receiver. The receiver crosses the C ABI as
+    /// `&var Self`, which for a String is the address of the caller's slot
+    /// (`char**`, see `mir/refmut_abi.rs`), so the C symbol can reallocate
+    /// the buffer in place.
+    pub mutates_self: bool,
     /// Optional C-symbol alias declared via `def name as "<c-symbol>"(...)`.
     /// When `None`, the Ruxen-side name (`name`) is the linked C symbol —
     /// the historical behaviour of `lib "X" ... end` blocks. When `Some`,
@@ -1148,6 +1315,16 @@ pub enum ReplInput {
     TopLevel(TopLevelItem),
     Statement(Statement),
     Expression(Expr),
+}
+
+/// One top-level unit of a script-style file ([`crate::parser::Parser::parse_script_units`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScriptUnit {
+    /// The declaration item (`def`, `class`, `use`, ...), or `None` for a
+    /// statement.
+    pub item: Option<TopLevelItem>,
+    /// The unit's source, without its leading `##` docs.
+    pub span: Span,
 }
 
 /// Result of attempting to parse REPL input.

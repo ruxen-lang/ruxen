@@ -21,8 +21,7 @@
 //!   checks.
 //! - `collect.rs` — method-call resolution, iterator/`collect` typing,
 //!   field lookup, generic substitution.
-//! - `helpers.rs` — free helper functions (`is_bufio_inner_supported`,
-//!   `peel_refs`,
+//! - `helpers.rs` — free helper functions (`peel_refs`,
 //!   `is_iter_sum_compatible`, `infer_user_enum_generic_args`,
 //!   `record_tyvar_binding`, `collect_break_types`).
 //!
@@ -36,7 +35,7 @@ use crate::hir::nodes::*;
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 use crate::parser::ast::Visibility;
-use crate::resolve::symbols::SymbolTable;
+use crate::resolve::symbols::{DefKind, SymbolTable};
 
 use super::mixins::MixinResolver;
 use super::unify::{can_coerce, unify, TypeError};
@@ -45,10 +44,6 @@ mod collect;
 mod expr;
 mod helpers;
 mod ops;
-
-// Free-function helpers that need to be reachable from `super::infer::*`
-// (e.g. `typeck::method_resolvers` consumes them through that path).
-pub(super) use helpers::is_bufio_inner_supported;
 
 /// The type inference engine — walks HIR and resolves all types.
 pub struct InferenceEngine<'a> {
@@ -126,17 +121,6 @@ impl<'a> InferenceEngine<'a> {
         Ty::Class {
             name: "Future".to_string(),
             generic_args: vec![output],
-        }
-    }
-
-    pub(super) fn option_ty(inner: Ty) -> Ty {
-        Ty::Option(Box::new(inner))
-    }
-
-    pub(super) fn class_ty(name: &str, generic_args: Vec<Ty>) -> Ty {
-        Ty::Class {
-            name: name.to_string(),
-            generic_args,
         }
     }
 
@@ -233,20 +217,19 @@ impl<'a> InferenceEngine<'a> {
         // Check: public functions must have explicit type annotations
         if func.visibility == Visibility::Public {
             if func.return_ty.is_infer() {
-                // For mut methods (RefMut self mode) or void-like methods
-                // (display, display_all, etc.), default to Unit instead of erroring
+                // For mut methods (RefMut self mode) and the `init`/`drop`
+                // language hooks, default to Unit instead of erroring
                 let is_mut_method = func.self_mode == Some(HirSelfMode::RefMut);
                 // Overloaded methods are renamed `<name>__overload<N>` by the
                 // resolver, so match the BASE name — otherwise an overloaded
-                // void method (`drop`, `display`, …) would skip the Unit
+                // `drop` would skip the Unit
                 // default and spuriously demand an explicit return type.
                 let base_name = func
                     .name
                     .split("__overload")
                     .next()
                     .unwrap_or(func.name.as_str());
-                let is_void_method =
-                    matches!(base_name, "display" | "display_all" | "init" | "drop");
+                let is_void_method = matches!(base_name, "init" | "drop");
                 if is_mut_method || is_void_method {
                     func.return_ty = Ty::Unit;
                 } else {
@@ -308,7 +291,11 @@ impl<'a> InferenceEngine<'a> {
     pub(super) fn infer_statement(&mut self, stmt: &mut HirStatement) {
         match stmt {
             HirStatement::Let {
-                ty, value, def_id, ..
+                ty,
+                value,
+                def_id,
+                pattern,
+                ..
             } => {
                 if let Some(ref mut val) = value {
                     self.infer_expr(val);
@@ -342,7 +329,9 @@ impl<'a> InferenceEngine<'a> {
                 }
                 let resolved = self.ctx.resolve(ty);
                 *ty = resolved.clone();
-                // Update the symbol table with the resolved type
+                // Update the symbol table with the resolved type, and type
+                // each binding of a destructuring `let (a, b) = t`.
+                helpers::propagate_pattern_types(pattern, &resolved, self.symbols);
                 self.symbols.update_ty(*def_id, resolved);
             }
             HirStatement::Expr(expr) => {
@@ -700,10 +689,7 @@ impl<'a> InferenceEngine<'a> {
         // the symbol table ends up `Class` (anchor mutation), not
         // `Enum`. We don't care which — we just need the DefId so MIR
         // can dispatch EnumVariant lowering by type_name + variant_idx.
-        self.symbols
-            .iter()
-            .find(|d| d.name == "Option")
-            .map(|d| d.id)
+        self.symbols.named("Option").next().map(|d| d.id)
     }
 
     pub(super) fn error(&mut self, message: String, span: &Span) {
@@ -728,18 +714,37 @@ impl<'a> InferenceEngine<'a> {
         }
     }
 
+    /// True when more than one free function is named `name` (the
+    /// resolver renames the extra ones `name__overload<N>`).
+    pub(super) fn is_overloaded_free_fn(&self, name: &str) -> bool {
+        let base = name.split("__overload").next().unwrap_or(name);
+        let renamed = format!("{base}__overload");
+        self.symbols.overloads_named(base).any(|def| {
+            matches!(def.kind, DefKind::Function { .. }) && def.name.starts_with(&renamed)
+        })
+    }
+
+    /// True when an argument of type `arg` may be passed to a parameter of
+    /// type `param`: equal up to the auto-borrow (`String` to `&String`) or
+    /// coercible.
+    pub(super) fn arg_fits_param(&mut self, arg: &Ty, param: &Ty, span: &Span) -> bool {
+        let strip = |ty: Ty| match ty {
+            Ty::Ref(inner) | Ty::RefMut(inner) => *inner,
+            other => other,
+        };
+        let arg = strip(self.ctx.resolve(arg));
+        let param = strip(self.ctx.resolve(param));
+        self.unify_or_coerce(&param, &arg, span).is_ok()
+    }
+
     /// Returns `true` if the type is acceptable as an argument to `puts`,
     /// `eputs`, or `print`.  Strings in any common form (`String`,
     /// `&String`) qualify, as do zero-arg functions that return such a type
     /// (MIR auto-invokes them). `Infer`, `Error`, and `Never` are permitted
     /// to avoid cascading diagnostics.
     pub(super) fn is_puts_compatible(ty: &Ty) -> bool {
-        match ty {
+        match ty.peel_refs() {
             Ty::String | Ty::Infer(_) | Ty::Error | Ty::Never => true,
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => Self::is_puts_compatible(inner),
             Ty::Fn { params, ret } if params.is_empty() => Self::is_puts_compatible(ret),
             _ => false,
         }

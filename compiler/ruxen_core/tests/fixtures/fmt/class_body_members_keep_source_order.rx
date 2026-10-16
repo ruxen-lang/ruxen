@@ -1,0 +1,28 @@
+class StringFuture
+  value: String
+
+  include Future
+
+  type Output = String
+
+  def var poll(cx: &var Context) -> Poll[String]
+    let v = self.value.clone
+    Poll.Ready(v)
+  end
+
+  private
+
+  def helper -> Int
+    let x = 1
+    x + 1
+  end
+
+  public
+
+  def label -> String
+    let s = "x"
+    s
+  end
+
+  alias tag label
+end

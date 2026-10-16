@@ -1,4 +1,5 @@
 #include "../../core/runtime/runtime.h"
+#include "future_rt.h"
 
 /* Sub-phase 5 of the async round (docs/specs/stdlib/task_spawn.spec.md):
  * single-threaded task scheduler that lives alongside the inline
@@ -70,34 +71,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Forward decl into compiler-synthesised dispatch helper (see
- * docs/specs/types/mixin_vtables.spec.md §B5 — the MIR pass
- * `synthesize_dynamic_dispatch_helpers` emits `Future_dynamic_poll`
- * when any class includes `Future dispatch runtime`). Signature is
- * fixed at the i64 ABI: takes the future's heap pointer and the
- * context's heap pointer, returns the poll result as the Poll[T]
- * tagged enum value at the i64 ABI (Ruxen tagged enums fit in i64
- * for v1). */
-int64_t Future_dynamic_poll(int64_t self, int64_t ctx);
-
-/* §4.1 NARROW cancellation path: the compiler synthesises ONE
- * `Drop_dynamic_drop(self)` (MIR `build_drop_dynamic_helper`) whenever the
- * program has ANY future (a class including `Future dispatch runtime`). It
- * reads the Drop vtable from the future's class_info (slot AFTER Future)
- * and calls the concrete `<Class>_drop(self)` — or a synthesised no-op for
- * a future that declared no `def drop` (so the lookup is always valid).
- * `ruxen_executor_drain_remaining` calls it on every still-queued/parked
- * future before freeing the queue entry, so a drained/cancelled future
- * runs its `def drop` (reactor deregister, fd close, refcount release)
- * instead of leaking. Declared `__weak` so a program with NO future at all
- * (the helper is then never emitted) still links — the drain no-ops the
- * call (NULL symbol guarded below). NOTE: the NULL case is "no futures in
- * the program", NOT "no future defines drop" — a no-user-drop future still
- * emits the helper (pointing its Drop slot at the no-op).
- * Spec: docs/decisions/zio-comparison-concurrency-adoption.md §4.1;
- * docs/dev/concurrency-impl-plan.md Increment 1. */
-__attribute__((weak)) void Drop_dynamic_drop(int64_t self);
-
 /* Forward decl into Context factory (executor.c). The pump call
  * needs a Context pointer to pass into each Future_dynamic_poll;
  * the AST-level block_on rewriter already constructs one per
@@ -105,22 +78,6 @@ __attribute__((weak)) void Drop_dynamic_drop(int64_t self);
 void *ruxen_executor_make_context(void);
 void *ruxen_executor_make_task_context(void *task_entry);
 void ruxen_executor_context_drop(void *cx);
-
-/* Poll[T] heap layout (pinned by `poll_tag_layout_stability` in
- * compiler/ruxen_core/tests/async_surface.rs; emit lives in
- * compiler/ruxen_core/src/codegen/cranelift/emit.rs SetTag/GetTag/
- * GetPayload):
- *   offset 0: tag (i32, slot is 8-aligned)
- *     Ready = 0
- *     Pending = 1
- *   offset 8: payload (i64; for Ready arms only)
- * Ruxen enums with payloads are heap-allocated as a 16-byte block.
- * Future_dynamic_poll returns the heap pointer as i64 at the FFI
- * boundary; ruxen_poll_is_ready frees that 16-byte box once decoded.
- * The Ready payload is NOT freed: it moves into the TaskHandle / race
- * winner slot. */
-#define RUXEN_POLL_READY_TAG   0
-#define RUXEN_POLL_PENDING_TAG 1
 
 /* ---------------------------------------------------------------------
  * Task handle (Ruxen-visible). Caller-held; outlives the queue entry.
@@ -168,11 +125,7 @@ int64_t ruxen_executor_spawn(int64_t future_ptr) {
         ruxen_panic("ruxen_executor_spawn: null future");
         return 0;
     }
-    RuxenTaskHandle *h = (RuxenTaskHandle *)malloc(sizeof(RuxenTaskHandle));
-    if (!h) {
-        ruxen_panic("ruxen_executor_spawn: malloc(handle) failed");
-        return 0;
-    }
+    RuxenTaskHandle *h = (RuxenTaskHandle *)ruxen_xmalloc(sizeof(RuxenTaskHandle));
     h->done = 0;
     h->result = 0;
     h->refcount = 2; /* queue + caller */
@@ -479,31 +432,12 @@ typedef struct RuxenRaceState {
 } RuxenRaceState;
 
 int64_t ruxen_race_state_new(int64_t arm_a, int64_t arm_b) {
-    RuxenRaceState *s = (RuxenRaceState *)malloc(sizeof(RuxenRaceState));
-    if (!s) {
-        ruxen_panic("ruxen_race_state_new: malloc failed");
-        return 0;
-    }
+    RuxenRaceState *s = (RuxenRaceState *)ruxen_xmalloc(sizeof(RuxenRaceState));
     s->arm_a = arm_a;
     s->arm_b = arm_b;
     s->winner_payload = 0;
     s->winner = 0;
     return (int64_t)(uintptr_t)s;
-}
-
-/* Cancel (drop + free) ONE arm by its heap pointer. Reentrancy discipline
- * (mirrors `cancel_task`): the caller has already cleared the arm's slot in the
- * state (so a re-entrant step can't see it) BEFORE calling this. Fires the
- * arm's user `def drop` via the §4.1 path, then frees the heap block. NULL arm
- * (already consumed) is a no-op. */
-static void ruxen_race_cancel_arm(int64_t arm_ptr) {
-    if (arm_ptr == 0) {
-        return;
-    }
-    if (Drop_dynamic_drop) {
-        Drop_dynamic_drop(arm_ptr);
-    }
-    ruxen_dealloc((void *)(uintptr_t)arm_ptr);
 }
 
 /* Poll the live arms once. Returns 0 = both still Pending (undecided),
@@ -542,7 +476,7 @@ int64_t ruxen_race_step(int64_t state_ptr, int64_t cx) {
             s->arm_b = 0;
             s->winner_payload = payload;
             s->winner = 1;
-            ruxen_race_cancel_arm(loser); /* loser: def drop + free */
+            ruxen_future_drop_and_free(loser); /* loser: def drop + free */
             return 1;
         }
     }
@@ -557,7 +491,7 @@ int64_t ruxen_race_step(int64_t state_ptr, int64_t cx) {
             s->arm_b = 0;
             s->winner_payload = payload;
             s->winner = 2;
-            ruxen_race_cancel_arm(loser);
+            ruxen_future_drop_and_free(loser);
             return 2;
         }
     }
@@ -585,8 +519,8 @@ void ruxen_race_state_free(int64_t state_ptr) {
     int64_t b = s->arm_b;
     s->arm_a = 0;
     s->arm_b = 0;
-    ruxen_race_cancel_arm(a);
-    ruxen_race_cancel_arm(b);
+    ruxen_future_drop_and_free(a);
+    ruxen_future_drop_and_free(b);
     free(s);
 }
 
@@ -615,11 +549,7 @@ typedef struct RuxenRaceAnyState {
 /* Copy the arm pointers out of the Ruxen `Array[Int]` (a RuxenVec*) into a
  * C-owned array, so the source vec can be dropped independently. */
 int64_t ruxen_race_any_state_new(int64_t arms_vec) {
-    RuxenRaceAnyState *s = (RuxenRaceAnyState *)malloc(sizeof(RuxenRaceAnyState));
-    if (!s) {
-        ruxen_panic("ruxen_race_any_state_new: malloc(state) failed");
-        return 0;
-    }
+    RuxenRaceAnyState *s = (RuxenRaceAnyState *)ruxen_xmalloc(sizeof(RuxenRaceAnyState));
     RuxenVec *v = (RuxenVec *)(uintptr_t)arms_vec;
     int64_t n = (int64_t)ruxen_vec_len(v);
     if (n <= 0) {
@@ -683,11 +613,7 @@ int64_t ruxen_race_any_step(int64_t state_ptr, int64_t cx) {
              * a loser's drop that re-enters and frees the state must see every
              * slot already 0). Then cancel each LOSER from the snapshot; LEAK
              * the winner block. */
-            int64_t *snapshot = (int64_t *)malloc((size_t)s->n * sizeof(int64_t));
-            if (!snapshot) {
-                ruxen_panic("ruxen_race_any_step: malloc(snapshot) failed");
-                return i + 1;
-            }
+            int64_t *snapshot = (int64_t *)ruxen_xmalloc((size_t)s->n * sizeof(int64_t));
             for (int64_t j = 0; j < s->n; j++) {
                 snapshot[j] = s->arms[j];
                 s->arms[j] = 0;
@@ -704,7 +630,7 @@ int64_t ruxen_race_any_step(int64_t state_ptr, int64_t cx) {
                     continue; /* winner: leaked, not dropped */
                 }
                 if (snapshot[j] != 0) {
-                    ruxen_race_cancel_arm(snapshot[j]); /* loser: def drop + free */
+                    ruxen_future_drop_and_free(snapshot[j]); /* loser: def drop + free */
                 }
             }
             free(snapshot);
@@ -762,18 +688,14 @@ void ruxen_race_any_state_free(int64_t state_ptr) {
          * Guard `busy` so a re-entrant free during a cancelled arm's drop is
          * deferred rather than double-freeing this state. */
         s->busy = 1;
-        int64_t *snapshot = (int64_t *)malloc((size_t)s->n * sizeof(int64_t));
-        if (!snapshot) {
-            ruxen_panic("ruxen_race_any_state_free: malloc(snapshot) failed");
-            return;
-        }
+        int64_t *snapshot = (int64_t *)ruxen_xmalloc((size_t)s->n * sizeof(int64_t));
         for (int64_t i = 0; i < s->n; i++) {
             snapshot[i] = s->arms[i];
             s->arms[i] = 0;
         }
         for (int64_t i = 0; i < s->n; i++) {
             if (snapshot[i] != 0) {
-                ruxen_race_cancel_arm(snapshot[i]);
+                ruxen_future_drop_and_free(snapshot[i]);
             }
         }
         free(snapshot);

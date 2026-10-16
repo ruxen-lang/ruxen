@@ -29,9 +29,10 @@
 //! call it without re-running the pipeline.
 
 use lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat, Position};
-use ruxen_core::hir::nodes::{DefId, HirExpr, HirExprKind, HirItem, HirProgram, HirStatement};
+use ruxen_core::hir::nodes::{DefId, HirExpr, HirExprKind, HirProgram};
 use ruxen_core::hir::types::Ty;
-use ruxen_core::lexer::token::{Span, KEYWORDS};
+use ruxen_core::hir::visit::{walk_expr, Visit};
+use ruxen_core::lexer::token::{keywords, Span};
 use ruxen_core::resolve::symbols::{DefKind, Definition, SymbolTable};
 
 use crate::analysis::AnalysisResult;
@@ -161,7 +162,7 @@ fn word_start_completions(
     // Built-in keywords — ranked low per spec §5.4. Only include
     // when the prefix actually shares an initial letter (saves the
     // client a sort pass when the user is typing a name).
-    for kw in KEYWORDS {
+    for kw in keywords() {
         if !matches_prefix(kw, prefix) {
             continue;
         }
@@ -235,7 +236,7 @@ fn after_dot_completions(
             out.push(CompletionItem {
                 label: def.name.clone(),
                 kind: Some(CompletionItemKind::METHOD),
-                detail: Some(format_signature(&def.name, signature)),
+                detail: Some(crate::signature_render::render(&def.name, signature)),
                 sort_text: Some(sort_text(&def.name, prefix)),
                 insert_text: Some(def.name.clone()),
                 insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
@@ -386,60 +387,16 @@ impl ReceiverFinder {
             self.visit_item(item);
         }
     }
+}
 
-    fn visit_item(&mut self, item: &HirItem) {
-        match item {
-            HirItem::Function(func) => self.visit_expr(&func.body),
-            HirItem::Class(class) => {
-                for method in &class.methods {
-                    self.visit_expr(&method.body);
-                }
-            }
-            _ => {}
-        }
-    }
-
+impl Visit for ReceiverFinder {
     fn visit_expr(&mut self, expr: &HirExpr) {
         if expr.span.end == self.target {
             self.best = Some(expr.clone());
         }
         // Recurse so an inner expression whose span end matches wins
         // over an outer expression whose span end also matches.
-        match &expr.kind {
-            HirExprKind::FieldAccess { object, .. } => self.visit_expr(object),
-            HirExprKind::MethodCall { object, args, .. } => {
-                self.visit_expr(object);
-                for a in args {
-                    self.visit_expr(a);
-                }
-            }
-            HirExprKind::FnCall { args, .. } => {
-                for a in args {
-                    self.visit_expr(a);
-                }
-            }
-            HirExprKind::BinaryOp { left, right, .. } => {
-                self.visit_expr(left);
-                self.visit_expr(right);
-            }
-            HirExprKind::UnaryOp { operand, .. } => self.visit_expr(operand),
-            HirExprKind::Block(stmts, tail) => {
-                for stmt in stmts {
-                    match stmt {
-                        HirStatement::Let { value, .. } => {
-                            if let Some(v) = value {
-                                self.visit_expr(v);
-                            }
-                        }
-                        HirStatement::Expr(e) => self.visit_expr(e),
-                    }
-                }
-                if let Some(t) = tail {
-                    self.visit_expr(t);
-                }
-            }
-            _ => {}
-        }
+        walk_expr(self, expr);
     }
 }
 
@@ -469,7 +426,7 @@ fn item_kind_for(kind: &DefKind) -> CompletionItemKind {
 fn detail_for(def: &Definition, symbols: &SymbolTable) -> Option<String> {
     match &def.kind {
         DefKind::Function { signature } | DefKind::Method { signature, .. } => {
-            Some(format_signature(&def.name, signature))
+            Some(crate::signature_render::render(&def.name, signature))
         }
         DefKind::OverloadSet { candidates } => Some(format!("{} overloads", candidates.len())),
         DefKind::Variable { ty, .. } | DefKind::Param { ty, .. } | DefKind::SelfValue { ty } => {
@@ -489,20 +446,6 @@ fn detail_for(def: &Definition, symbols: &SymbolTable) -> Option<String> {
             .map(|p| format!("{}.{}", p.name, def.name)),
         DefKind::TypeParam { .. } => Some(format!("typeparam {}", def.name)),
     }
-}
-
-fn format_signature(name: &str, sig: &ruxen_core::resolve::symbols::FnSignature) -> String {
-    let params: Vec<String> = sig
-        .params
-        .iter()
-        .map(|p| format!("{}: {}", p.name, p.ty))
-        .collect();
-    let ret = if matches!(sig.return_ty, Ty::Unit) {
-        String::new()
-    } else {
-        format!(" -> {}", sig.return_ty)
-    };
-    format!("def {}({}){}", name, params.join(", "), ret)
 }
 
 fn matches_prefix(name: &str, prefix: &str) -> bool {
@@ -544,5 +487,5 @@ fn sort_text(name: &str, prefix: &str) -> String {
 }
 
 // Built-in keywords for completion (spec §5.4 lowest-rank fallback) come from
-// the lexer's canonical `KEYWORDS` list (imported above) — never a local copy,
+// the lexer's `KEYWORD_TABLE` (`keywords()`, imported above) — never a local copy,
 // so the completion set can never drift from the language's actual keywords.

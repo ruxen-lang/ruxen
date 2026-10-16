@@ -51,8 +51,44 @@ fn vec_sort_bang_returns_nil() {
 fn vec_is_an_undefined_type() {
     let diags = typecheck_diagnostics("def main\n  let v: Vec[Int] = []\nend");
     assert!(
-        diags.iter().any(|d| d.level == DiagnosticLevel::Error
-            && d.message.contains("undefined type `Vec`")),
+        diags.iter().any(
+            |d| d.level == DiagnosticLevel::Error && d.message.contains("undefined type `Vec`")
+        ),
+        "{diags:?}"
+    );
+}
+
+/// The errors coded `code` in `diags`.
+fn coded<'a>(diags: &'a [Diagnostic], code: &str) -> Vec<&'a Diagnostic> {
+    diags
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error && d.code.as_deref() == Some(code))
+        .collect()
+}
+
+/// `Array` declares no `from`, so `Array.from(123)` is E0740 at typeck. It
+/// used to type as a fresh variable and fail only at link time.
+#[test]
+fn array_from_is_no_method() {
+    let diags = typecheck_diagnostics("def main\n  let a = Array.from(123)\nend");
+    let errs = coded(&diags, "E0740");
+    assert!(
+        errs.iter()
+            .any(|d| d.message == "no method `from` on type `Array`"),
+        "{diags:?}"
+    );
+}
+
+/// `Array.with_capacity(cap: Int)` rejects a non-Int capacity with E0741.
+#[test]
+fn array_with_capacity_takes_an_int() {
+    let diags =
+        typecheck_diagnostics("def main\n  let a: Array[Int] = Array.with_capacity(\"x\")\nend");
+    let errs = coded(&diags, "E0741");
+    assert!(
+        errs.iter().any(|d| d
+            .message
+            .contains("`cap` of `with_capacity` expects `Int`, found `String`")),
         "{diags:?}"
     );
 }

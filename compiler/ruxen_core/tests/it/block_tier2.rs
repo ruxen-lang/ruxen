@@ -86,6 +86,31 @@ end
 }
 
 #[test]
+fn next_inside_unsafe_in_inlined_each_is_rejected() {
+    // The `next` scan must see through every expression kind, not only
+    // control flow: a `next` wrapped in an `unsafe` block is still the
+    // inlined block's own `next`.
+    let source = r##"
+def main
+  let xs = [1, 2, 3]
+  xs.each { |x|
+    unsafe
+      if x == 2
+        next
+      end
+    end
+    puts "#{x}"
+  }
+end
+"##;
+    let err = mir_lower_result(source).expect_err("inlined-each `next` must be rejected");
+    assert!(
+        err.contains("next") && err.contains("inlined"),
+        "expected an inlined-`next` rejection, got: {err}"
+    );
+}
+
+#[test]
 fn forward_with_no_block_is_e1124() {
     let source = r##"
 def inner(&block: Fn[() -> nil])

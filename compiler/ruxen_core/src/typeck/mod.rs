@@ -356,151 +356,25 @@ fn resolve_item_types(item: &mut crate::hir::nodes::HirItem, ctx: &TypeContext) 
 }
 
 fn resolve_func_types(func: &mut crate::hir::nodes::HirFuncDef, ctx: &TypeContext) {
-    func.return_ty = ctx.resolve(&func.return_ty);
-    for param in &mut func.params {
-        param.ty = ctx.resolve(&param.ty);
-    }
-    resolve_expr_types(&mut func.body, ctx);
+    use crate::hir::visit::VisitMut;
+    TyResolver { ctx }.visit_func_mut(func);
 }
 
 fn resolve_expr_types(expr: &mut crate::hir::nodes::HirExpr, ctx: &TypeContext) {
-    expr.ty = ctx.resolve(&expr.ty);
-    use crate::hir::nodes::HirExprKind::*;
-    match &mut expr.kind {
-        Block(stmts, tail) => {
-            for stmt in stmts {
-                match stmt {
-                    crate::hir::nodes::HirStatement::Let { ty, value, .. } => {
-                        *ty = ctx.resolve(ty);
-                        if let Some(ref mut v) = value {
-                            resolve_expr_types(v, ctx);
-                        }
-                    }
-                    crate::hir::nodes::HirStatement::Expr(e) => resolve_expr_types(e, ctx),
-                }
-            }
-            if let Some(ref mut t) = tail {
-                resolve_expr_types(t, ctx);
-            }
-        }
-        BinaryOp { left, right, .. } => {
-            resolve_expr_types(left, ctx);
-            resolve_expr_types(right, ctx);
-        }
-        UnaryOp { operand, .. } => resolve_expr_types(operand, ctx),
-        Borrow { expr: inner, .. } => resolve_expr_types(inner, ctx),
-        If {
-            cond,
-            then_branch,
-            else_branch,
-        } => {
-            resolve_expr_types(cond, ctx);
-            resolve_expr_types(then_branch, ctx);
-            if let Some(ref mut e) = else_branch {
-                resolve_expr_types(e, ctx);
-            }
-        }
-        Match { scrutinee, arms } => {
-            resolve_expr_types(scrutinee, ctx);
-            for arm in arms {
-                resolve_expr_types(&mut arm.body, ctx);
-                if let Some(ref mut g) = arm.guard {
-                    resolve_expr_types(g, ctx);
-                }
-            }
-        }
-        While { condition, body } => {
-            resolve_expr_types(condition, ctx);
-            resolve_expr_types(body, ctx);
-        }
-        Loop { body } => resolve_expr_types(body, ctx),
-        For { iterable, body, .. } => {
-            resolve_expr_types(iterable, ctx);
-            resolve_expr_types(body, ctx);
-        }
-        MethodCall {
-            object,
-            args,
-            block,
-            ..
-        } => {
-            resolve_expr_types(object, ctx);
-            for arg in args {
-                resolve_expr_types(arg, ctx);
-            }
-            if let Some(ref mut b) = block {
-                resolve_expr_types(b, ctx);
-            }
-        }
-        FnCall { args, .. } => {
-            for arg in args {
-                resolve_expr_types(arg, ctx);
-            }
-        }
-        FieldAccess { object, .. } => resolve_expr_types(object, ctx),
-        Assign { target, value, .. } => {
-            resolve_expr_types(target, ctx);
-            resolve_expr_types(value, ctx);
-        }
-        CompoundAssign { target, value, .. } => {
-            resolve_expr_types(target, ctx);
-            resolve_expr_types(value, ctx);
-        }
-        Return(Some(v)) | Break(Some(v)) => {
-            resolve_expr_types(v, ctx);
-        }
-        Return(None) | Break(None) => {}
-        Closure { body, params, .. } => {
-            for p in params {
-                p.ty = ctx.resolve(&p.ty);
-            }
-            resolve_expr_types(body, ctx);
-        }
-        Construct { fields, .. } => {
-            for (_, e) in fields {
-                resolve_expr_types(e, ctx);
-            }
-        }
-        EnumVariant { fields, .. } => {
-            for (_, e) in fields {
-                resolve_expr_types(e, ctx);
-            }
-        }
-        Tuple(elems) | ArrayLiteral(elems) => {
-            for e in elems {
-                resolve_expr_types(e, ctx);
-            }
-        }
-        ArrayFill { value, .. } => resolve_expr_types(value, ctx),
-        Index { object, index } => {
-            resolve_expr_types(object, ctx);
-            resolve_expr_types(index, ctx);
-        }
-        Cast { expr: inner, .. } => resolve_expr_types(inner, ctx),
-        Range { start, end, .. } => {
-            if let Some(ref mut s) = start {
-                resolve_expr_types(s, ctx);
-            }
-            if let Some(ref mut e) = end {
-                resolve_expr_types(e, ctx);
-            }
-        }
-        Interpolation { parts } => {
-            for p in parts {
-                if let crate::hir::nodes::HirInterpolationPart::Expr {
-                    expr: ref mut e, ..
-                } = p
-                {
-                    resolve_expr_types(e, ctx);
-                }
-            }
-        }
-        MacroCall { args, .. } => {
-            for a in args {
-                resolve_expr_types(a, ctx);
-            }
-        }
-        _ => {}
+    use crate::hir::visit::VisitMut;
+    TyResolver { ctx }.visit_expr_mut(expr);
+}
+
+/// Replaces every type the shared HIR walk reaches (expression, `let`,
+/// closure-parameter, cast-target, method generic-argument and signature
+/// types) with its resolved form.
+struct TyResolver<'c> {
+    ctx: &'c TypeContext,
+}
+
+impl crate::hir::visit::VisitMut for TyResolver<'_> {
+    fn visit_ty_mut(&mut self, ty: &mut crate::hir::types::Ty) {
+        *ty = self.ctx.resolve(ty);
     }
 }
 
@@ -597,11 +471,9 @@ fn validate_runtime_dispatch_includes(
     // lib-decl-registered methods, derive-synthesised methods, etc.).
     let mut have: std::collections::HashSet<String> =
         class.methods.iter().map(|m| m.name.clone()).collect();
-    for def in symbols.iter() {
-        if let DefKind::Method { parent, .. } = &def.kind {
-            if *parent == class.def_id {
-                have.insert(def.name.clone());
-            }
+    for def in symbols.children_of(class.def_id) {
+        if let DefKind::Method { .. } = &def.kind {
+            have.insert(def.name.clone());
         }
     }
     // Inner impl-block methods carry their own method names — count
@@ -623,12 +495,10 @@ fn validate_runtime_dispatch_includes(
         // methods. Skip if the name doesn't resolve (an earlier pass
         // already emitted an "unknown mixin" diagnostic).
         let mut info_opt = None;
-        for def in symbols.iter() {
-            if def.name == trait_ref.name {
-                if let DefKind::Trait { info } = &def.kind {
-                    info_opt = Some(info);
-                    break;
-                }
+        for def in symbols.named(&trait_ref.name) {
+            if let DefKind::Trait { info } = &def.kind {
+                info_opt = Some(info);
+                break;
             }
         }
         let Some(info) = info_opt else {

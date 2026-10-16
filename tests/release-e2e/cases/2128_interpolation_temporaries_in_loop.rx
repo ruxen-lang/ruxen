@@ -1,0 +1,16 @@
+# Interpolation builds every formatted part and every intermediate
+# `concat` as a heap string. They are freed right after the concatenation
+# that consumes them, the `{Prim}_fmt` bodies free their `to_s` string,
+# and a result rebuilt on every loop iteration frees the previous one.
+# Valgrind on this program used to report a leak per part per iteration.
+def main
+  let name = "n" + "m"
+  var i = 0
+  while i < 3
+    puts "i=#{i} f=#{1.5} b=#{i > 1} c=#{'z'} s=#{name}!"
+    let label = "#{i}:#{name}"
+    puts label
+    i = i + 1
+  end
+  puts "#{i}"
+end

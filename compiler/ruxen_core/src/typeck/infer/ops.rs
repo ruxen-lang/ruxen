@@ -349,14 +349,10 @@ impl<'a> InferenceEngine<'a> {
     /// collection heads (`Array`/`Set`/`Map`) are NOT nominal here: they
     /// keep their machine-floor / special-case binop lowering. Peels refs.
     pub(super) fn is_nominal_operator_receiver(ty: &Ty) -> bool {
-        match ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => Self::is_nominal_operator_receiver(inner),
-            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => true,
-            _ => false,
-        }
+        matches!(
+            ty.peel_refs(),
+            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+        )
     }
 
     /// Whether `ty` exposes an operator method that accepts `args`.
@@ -371,14 +367,7 @@ impl<'a> InferenceEngine<'a> {
         method: &str,
         args: &[crate::hir::nodes::HirExpr],
     ) -> bool {
-        let mut peeled = ty;
-        while let Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) = peeled
-        {
-            peeled = inner;
-        }
+        let peeled = ty.peel_refs();
         match peeled {
             Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => self
                 .traits
@@ -407,14 +396,7 @@ impl<'a> InferenceEngine<'a> {
         method: &str,
         args: &[crate::hir::nodes::HirExpr],
     ) -> bool {
-        let mut peeled = ty;
-        while let Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) = peeled
-        {
-            peeled = inner;
-        }
+        let peeled = ty.peel_refs();
         matches!(
             peeled,
             Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_)
@@ -553,6 +535,13 @@ impl<'a> InferenceEngine<'a> {
                 // no Duration/Instant arm here anymore — the result type
                 // comes from the method's declared return.
 
+                // Arithmetic reads numeric operands through a borrow
+                // (`a + b` with `a: &Float`), and the result is a fresh
+                // value, so it has the numeric type, not `&Float`.
+                let (left, right) = match (left.peel_refs(), right.peel_refs()) {
+                    (l, r) if l.is_numeric() && r.is_numeric() => (l, r),
+                    _ => (left, right),
+                };
                 if left.is_numeric() && right.is_numeric() {
                     // Unify the two sides
                     match unify(left, right, self.ctx, span) {
@@ -569,14 +558,7 @@ impl<'a> InferenceEngine<'a> {
                             // an opaque internal error. Make both operands
                             // share a type (e.g. annotate `a: Float` and
                             // use `1.0`, or keep both sides integers).
-                            let op_sym = match op {
-                                BinOp::Add => "+",
-                                BinOp::Sub => "-",
-                                BinOp::Mul => "*",
-                                BinOp::Div => "/",
-                                BinOp::Mod => "%",
-                                _ => "<op>",
-                            };
+                            let op_sym = op.symbol();
                             self.diagnostics.push(Diagnostic::error_with_code(
                                 format!(
                                     "binary operator `{op_sym}` cannot be applied to \
@@ -612,13 +594,7 @@ impl<'a> InferenceEngine<'a> {
                 let left_ok = unify(left, &Ty::Bool, self.ctx, span).is_ok();
                 let right_ok = unify(right, &Ty::Bool, self.ctx, span).is_ok();
                 if !left_ok || !right_ok {
-                    let op_name = match op {
-                        BinOp::And => "&&",
-                        BinOp::Or => "||",
-                        BinOp::KeywordAnd => "and",
-                        BinOp::KeywordOr => "or",
-                        _ => unreachable!(),
-                    };
+                    let op_name = op.symbol();
                     self.diagnostics.push(Diagnostic::error_with_code(
                         format!(
                             "logical operator `{op_name}` requires Bool operands, \
@@ -644,24 +620,10 @@ impl<'a> InferenceEngine<'a> {
             // Mismatch on either side emits E1702.
             BinOp::MatchOp => {
                 fn is_string_like(ty: &Ty) -> bool {
-                    match ty {
-                        Ty::String => true,
-                        Ty::Ref(inner)
-                        | Ty::RefMut(inner)
-                        | Ty::RefLifetime(_, inner)
-                        | Ty::RefMutLifetime(_, inner) => is_string_like(inner),
-                        _ => false,
-                    }
+                    matches!(ty.peel_refs(), Ty::String)
                 }
                 fn is_regex(ty: &Ty) -> bool {
-                    match ty {
-                        Ty::Class { name, .. } => name == "Regex",
-                        Ty::Ref(inner)
-                        | Ty::RefMut(inner)
-                        | Ty::RefLifetime(_, inner)
-                        | Ty::RefMutLifetime(_, inner) => is_regex(inner),
-                        _ => false,
-                    }
+                    matches!(ty.peel_refs(), Ty::Class { name, .. } if name == "Regex")
                 }
                 // Tolerate unresolved Infer vars: they may not be
                 // pinned yet at first inference visit. Emit E1702

@@ -142,3 +142,38 @@ fn class_lib_method_mir_callee_is_c_symbol() {
         "mangled `Foo_bar` should be rewritten away at MIR-lowering time"
     );
 }
+
+/// A mixin body's `lib` decls see the mixin's own generic params, as a
+/// class body's do: `T` resolves to the type param instead of an error.
+#[test]
+fn mixin_lib_method_resolves_mixin_generic_param() {
+    let program = parse_fixture("lib_mixin_generic_param");
+    let result = Resolver::new().resolve(&program);
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "unexpected resolver errors: {:?}",
+        errors
+    );
+
+    let wrap = result
+        .symbols
+        .iter()
+        .find(|d| d.name == "wrap" && matches!(&d.kind, DefKind::Method { .. }))
+        .expect("wrap method should be in the symbol table");
+    let signature = wrap.kind.signature().expect("a method has a signature");
+    assert!(
+        matches!(&signature.params[0].ty, ruxen_core::hir::types::Ty::TypeParam { name, .. } if name == "T"),
+        "param type: {:?}",
+        signature.params[0].ty
+    );
+    assert!(
+        matches!(&signature.return_ty, ruxen_core::hir::types::Ty::TypeParam { name, .. } if name == "T"),
+        "return type: {:?}",
+        signature.return_ty
+    );
+}

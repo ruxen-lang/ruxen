@@ -67,10 +67,15 @@ impl<'a> Lowerer<'a> {
                 object,
                 method,
                 method_name,
-                generic_args: _generic_args,
                 args,
                 block,
+                safe_nav,
+                resolved,
+                ..
             } => {
+                if *safe_nav && is_option_type(&object.ty) {
+                    return self.lower_safe_nav(expr);
+                }
                 let receiver_ty = self.mir_refined_expr_ty(object);
                 let type_name = self
                     .receiver_type_name(object)
@@ -89,20 +94,11 @@ impl<'a> Lowerer<'a> {
                 // (`lang_intrinsics`: `Int_to_s` → `ruxen_int_to_string`),
                 // so this intercept is intentionally limited to the
                 // user-defined aggregate types.
-                fn peel_refs(ty: &Ty) -> &Ty {
-                    match ty {
-                        Ty::Ref(inner)
-                        | Ty::RefMut(inner)
-                        | Ty::RefLifetime(_, inner)
-                        | Ty::RefMutLifetime(_, inner) => peel_refs(inner),
-                        other => other,
-                    }
-                }
                 if method_name == "to_s"
                     && args.is_empty()
                     && block.is_none()
                     && matches!(
-                        peel_refs(&object.ty),
+                        object.ty.peel_refs(),
                         Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
                     )
                     && !self.class_has_method(&type_name, "to_s")
@@ -151,94 +147,24 @@ impl<'a> Lowerer<'a> {
                     return Ok(dest);
                 }
 
-                // Handle .new() / .with_capacity() constructor calls:
-                // dispatch directly to the runtime symbol (no self arg).
-                //
-                // Phase 2 stdlib (#06.5 T2): `File.{open,create,append,
-                // open_options}` are *static* constructor-style methods
-                // (no `self` receiver). The receiver type-name resolves
-                // to "File" (the class identifier promoted to its Ty by
-                // resolve/mod.rs), so the regular dispatch path below
-                // would mangle to `File_open(self, path)` and pass the
-                // class-identifier value as a synthetic `self` — the
-                // runtime `ruxen_file_open(path)` takes one arg, not
-                // two, so the Cranelift verifier rejects the call. We
-                // route these names through the same direct-dispatch
-                // path as `Command.new` instead.
-                // Static-constructor fast-path GATE. This is a fast-path
-                // allowlist, NOT the static-vs-instance authority — the
-                // downstream `String_new` special-case (line ~396) and the
-                // base-type dispatch allowlist (line ~277) make the accepted
-                // method set here behaviourally narrower than
-                // `runtime_abi::is_static_constructor` (the reconciled union).
-                // Routing this gate through the union would reroute
-                // `String.with_capacity` / `String.from_bytes` / collection
-                // `from_iter` into the `String_new` / `Class_init` fast path —
-                // a silent dispatch change. Per the Phase 2 plan obligation
-                // ("do not silently widen the fast path"), the per-type cascade
-                // stays explicit here; `is_static_constructor` is the authority
-                // only for the static-vs-instance decision in `util.rs`.
-                let is_file_static_ctor = (type_name == "File" || type_name.starts_with("File["))
-                    && matches!(
-                        method_name.as_str(),
-                        "open" | "create" | "append" | "open_options"
-                    );
-                let is_tcp_listener_static_ctor =
-                    type_name == "TcpListener" && method_name == "bind";
-                let is_tcp_stream_static_ctor =
-                    type_name == "TcpStream" && method_name == "connect";
-                let is_bufio_static_ctor = matches!(type_name.as_str(), "BufReader" | "BufWriter")
-                    && matches!(method_name.as_str(), "new" | "with_capacity");
-                let is_duration_static_ctor = type_name == "Duration"
-                    && matches!(
-                        method_name.as_str(),
-                        "from_secs" | "from_millis" | "from_micros" | "from_nanos"
-                    );
-                let is_instant_static_ctor = type_name == "Instant" && method_name == "now";
-                let is_collection_ctor = method_name == "new"
-                    || is_file_static_ctor
-                    || is_duration_static_ctor
-                    || is_instant_static_ctor
-                    || is_tcp_listener_static_ctor
-                    || is_tcp_stream_static_ctor
-                    || is_bufio_static_ctor
-                    || (method_name == "with_capacity" && {
-                        let bt = if let Some(pos) = type_name.find('[') {
-                            &type_name[..pos]
-                        } else {
-                            type_name.as_str()
-                        };
-                        matches!(
-                            bt,
-                            "Vec" | "Array" | "Hash" | "HashMap" | "Map" | "Set" | "HashSet"
-                        )
-                    });
-                if is_collection_ctor {
-                    // For built-in types (Vec, Hash, Set), call the runtime
-                    // constructor directly instead of Alloc + init.
-                    let base_type = if let Some(pos) = type_name.find('[') {
-                        &type_name[..pos]
-                    } else {
-                        type_name.as_str()
+                // Static calls: `Type.new(...)` and every declared
+                // `def self.NAME` (static-ness comes from the declaration,
+                // `is_user_static_method`). A static bound `as "c_symbol"`
+                // dispatches straight to that symbol with no synthetic
+                // `self` (`lookup_ffi_alias`, the single alias entry).
+                // Module-nested classes (`BufReader.File`) mangle with
+                // dot -> underscore, the shape `register_class_lib_method_in`
+                // keys the alias map on. A `.new` with no FFI binding
+                // allocates and runs `Class_init` (or fills a struct's
+                // fields) below; any other static without one takes the
+                // regular static dispatch further down.
+                let is_new = method_name == "new";
+                if is_new || self.is_user_static_method(&type_name, method_name) {
+                    let base_type = match type_name.find('[') {
+                        Some(pos) => &type_name[..pos],
+                        None => type_name.as_str(),
                     };
-
-                    // Bug-fix (v1-missing-features 2026-05-20):
-                    // ANY class that has a `def self.{method_name} as "<c-symbol>"`
-                    // lib decl registered — including generic classes like
-                    // `Mutex[T]`, `SharedSync[T]`, `AtomicI64`, `Sender[T: Send]`,
-                    // etc. — must route directly to the FFI symbol with NO
-                    // synthetic `self` prepended and NO `Class_init` fallback.
-                    // The hardcoded class lists below only cover legacy
-                    // builtins; without this generic check, calls like
-                    // `Mutex.new(7)` synthesize `Mutex_init(self, 7)` and the
-                    // linker fails with "undefined symbol _Mutex_init".
-                    // The dotted-name normalisation matches
-                    // `register_class_lib_method_in`'s mangling shape.
-                    //
-                    // §B1 — every "is there an FFI alias?" check routes
-                    // through `lookup_ffi_alias` (the single entry).
-                    let alias_key_cs = base_type.replace('.', "_");
-                    let alias_key = format!("{}_{}", alias_key_cs, method_name);
+                    let alias_key = format!("{}_{}", base_type.replace('.', "_"), method_name);
                     if let Some(callee) = self.lookup_ffi_alias(&alias_key) {
                         let obj = self.new_temp(expr.ty.clone());
                         let mut call_args = Vec::with_capacity(args.len());
@@ -253,206 +179,8 @@ impl<'a> Lowerer<'a> {
                         });
                         return Ok(Some(obj));
                     }
-                    // Phase 2 #06.D2.S0: `Formatter.new()` dispatches to
-                    // the runtime constructor just like Vec/Hash.
-                    // Phase 2 #06 (Command): `Command.new(prog)` joins
-                    // the same fast path so it dispatches to
-                    // `ruxen_command_new(prog)` instead of going through
-                    // the `Class_init` path (Command has no user-defined
-                    // init).
-                    // Phase E.E of #06.95: any class with a dotted
-                    // name (`BufReader.File`, `BufWriter.Tcp`, …) was
-                    // declared inside a `module` block. Module-nested
-                    // classes are necessarily new (they didn't exist
-                    // before the module+mixin reshape), they have no
-                    // user-defined `_init`, and their `def self.NAME`
-                    // lib decls already register the right FFI alias.
-                    // Treat them like the listed top-level classes —
-                    // route through the static-ctor fast path, mangle
-                    // with dot → underscore, and let
-                    // `resolve_ffi_alias_callee` rewrite to the C
-                    // symbol.
-                    let is_module_nested_class =
-                        base_type.contains('.') && !self.class_has_method(base_type, "init");
-                    if is_module_nested_class
-                        || matches!(
-                            base_type,
-                            "Vec"
-                            | "Array"
-                            | "Hash"
-                            | "HashMap"
-                            | "Map"
-                            | "Set"
-                            | "HashSet"
-                            | "Formatter"
-                            | "Command"
-                            // Phase 2 stdlib (#06.5 T2): `File.open/create/
-                            // append/open_options` and `OpenOptions.new`
-                            // dispatch to the runtime constructor here so
-                            // they bypass the `Class_init(self, args)`
-                            // path (these classes have no user-defined
-                            // init). The dispatch table in
-                            // codegen/runtime.rs then maps the resulting
-                            // `File_open` / `OpenOptions_new` mangled name
-                            // to the `ruxen_file_*` / `ruxen_open_options_*`
-                            // runtime fn.
-                            | "File"
-                            | "OpenOptions"
-                            // Phase 2 stdlib (#06.5 T4): Duration /
-                            // Instant static-style constructors
-                            // dispatch directly to their runtime
-                            // symbol — `Duration_from_secs(s)` →
-                            // `ruxen_duration_from_secs(s)`,
-                            // `Instant_now()` → `ruxen_instant_now()`.
-                            // No `_init` path; these classes have no
-                            // user-defined init.
-                            | "Duration"
-                            | "Instant"
-                            // Phase 2 #06.5 T5: TcpListener.bind /
-                            // TcpStream.connect — class-static
-                            // constructors that take only `&String`.
-                            // The dispatch table in codegen/
-                            // runtime_table maps `TcpListener_bind` →
-                            // `ruxen_tcp_listener_bind`, etc.
-                            | "TcpListener"
-                            | "TcpStream"
-                            // Phase 2 #06.5 T6: BufReader[R] /
-                            // BufWriter[W] LEGACY entries — superseded
-                            // by the `is_module_nested_class` check
-                            // above once callers migrate to
-                            // BufReader.File / BufReader.Tcp. Remove
-                            // after the BOOTSTRAP_FILES migration
-                            // sweep deletes the last bare BufReader
-                            // usage.
-                            | "BufReader"
-                            | "BufWriter"
-                        )
-                    {
-                        let obj = self.new_temp(expr.ty.clone());
-                        // ruby-naming.spec.md §3.11 renames stdlib types
-                        // (`Vec` → `Array`, `HashMap` → `Map`, `HashSet` →
-                        // `Set`). The runtime C functions keep their
-                        // legacy names (`Vec_new`, `Hash_new`, …), so map
-                        // the surface base-type back to the runtime
-                        // before mangling.
-                        let runtime_base = match base_type {
-                            "Array" => "Vec",
-                            "Map" => "Hash",
-                            "HashMap" => "Hash",
-                            "Set" => "HashSet",
-                            other => other,
-                        };
-                        // The same fast path also handles `with_capacity`,
-                        // which takes a single integer arg and lowers to
-                        // e.g. `ruxen_hash_with_capacity(cap)`.
-                        let mut call_args = Vec::with_capacity(args.len());
-                        // Phase 2 #06.5 T6: BufReader[R] / BufWriter[W]
-                        // pick `_new_file` vs `_new_tcp` (and similarly
-                        // `_with_capacity_file` / `_with_capacity_tcp`)
-                        // by peeking at the inner argument's type.
-                        // For `new(inner)` inner is args[0]; for
-                        // `with_capacity(cap, inner)` it's args[1]. The
-                        // typeck E0714 check above already rejects any
-                        // other inner type, so this match is exhaustive
-                        // (the fallback to "file" is defensive — if we
-                        // hit it the runtime dispatch table will fail
-                        // to find a symbol and the link step errors
-                        // out cleanly).
-                        let bufio_suffix: Option<&'static str> =
-                            if matches!(base_type, "BufReader" | "BufWriter") {
-                                let inner_idx = if method_name == "with_capacity" { 1 } else { 0 };
-                                let inner_name = args
-                                    .get(inner_idx)
-                                    .map(|a| type_name_from_ty(&a.ty))
-                                    .unwrap_or_default();
-                                // Peel leading reference if any (defensive —
-                                // the spec passes inner by value).
-                                let inner_name = inner_name
-                                    .strip_prefix('&')
-                                    .map(str::trim_start)
-                                    .unwrap_or(&inner_name);
-                                match inner_name {
-                                    "TcpStream" => Some("tcp"),
-                                    "File" => Some("file"),
-                                    _ => Some("file"),
-                                }
-                            } else {
-                                None
-                            };
-                        for arg in args {
-                            let local = self.lower_expr(arg)?;
-                            call_args.push(local_to_value(local));
-                        }
-                        // Phase E.E of #06.95: module-nested classes
-                        // carry dotted names (`BufReader.File`). C
-                        // symbols can't contain `.`, so normalise to
-                        // `_` when building the mangled callee — same
-                        // shape `register_class_lib_method_in` uses
-                        // for the FFI alias map key.
-                        let runtime_base_cs = runtime_base.replace('.', "_");
-                        let raw_callee = if let Some(suffix) = bufio_suffix {
-                            format!("{}_{}_{}", runtime_base_cs, method_name, suffix)
-                        } else {
-                            format!("{}_{}", runtime_base_cs, method_name)
-                        };
-                        // #06.8 T#14: the static-ctor fast path
-                        // historically emitted `Vec_new` / `Hash_new`
-                        // / `Set_new` directly and let runtime_table
-                        // do the runtime-symbol rewrite. With the
-                        // migration moving those constructors into
-                        // .rx class-body lib decls, route through
-                        // the alias map first — try both the
-                        // `runtime_base` (legacy `Vec_new`) and the
-                        // surface `base_type` (canonical `Array_new`)
-                        // shapes, since the bootstrap `class` shell
-                        // is keyed on the canonical name. Falls
-                        // through to the raw mangled callee when
-                        // neither lookup hits, preserving
-                        // backward-compat for any base/method whose
-                        // entry still lives in runtime_table.
-                        let callee = {
-                            let aliased = self.resolve_ffi_alias_callee(raw_callee.clone());
-                            if aliased != raw_callee {
-                                aliased
-                            } else if let Some(suffix) = bufio_suffix {
-                                self.resolve_ffi_alias_callee(format!(
-                                    "{}_{}_{}",
-                                    base_type, method_name, suffix
-                                ))
-                            } else {
-                                self.resolve_ffi_alias_callee(format!(
-                                    "{}_{}",
-                                    base_type, method_name
-                                ))
-                            }
-                        };
-                        self.emit(MirInst::Call {
-                            dest: Some(obj),
-                            callee,
-                            args: call_args,
-                        });
-                        return Ok(Some(obj));
-                    }
-                    // String.new / String.with_capacity — dispatch to the
-                    // C runtime directly. The dispatch table in
-                    // codegen/runtime.rs maps `String_new` and
-                    // `String_with_capacity` to their `ruxen_string_*`
-                    // implementations.
-                    if base_type == "String" {
-                        let obj = self.new_temp(expr.ty.clone());
-                        let mut call_args = Vec::with_capacity(args.len());
-                        for arg in args {
-                            let local = self.lower_expr(arg)?;
-                            call_args.push(local_to_value(local));
-                        }
-                        self.emit(MirInst::Call {
-                            dest: Some(obj),
-                            callee: "String_new".to_string(),
-                            args: call_args,
-                        });
-                        return Ok(Some(obj));
-                    }
-
+                }
+                if is_new {
                     // Structs have no user-defined `init`. The positional
                     // arguments map directly onto the declared fields, so
                     // we allocate the backing storage and emit one
@@ -545,45 +273,15 @@ impl<'a> Lowerer<'a> {
                 }
 
                 // ── Inline closure-taking methods ──────────────────────
-                // When a method like .each, .filter, .find, .position,
-                // .map, .partition, .where_matching takes a trailing block
-                // (closure), inline the closure body as a loop instead of
-                // passing a (null) function pointer.
+                // `Array#each` and `Array#select!` with a trailing block
+                // inline the block body as a loop; every other receiver and
+                // method calls the real method body.
                 if let Some(block_expr) = block {
                     if let Some(result) =
-                        self.try_inline_closure_method(expr, object, method_name, args, block_expr)?
+                        self.try_inline_closure_method(object, method_name, block_expr)?
                     {
                         return Ok(result);
                     }
-                }
-
-                // Phase 2 stdlib (#05 follow-up): built-in
-                // `iter.collect[Target]` lowers directly to a runtime
-                // constructor over the v1 eager-iterator representation
-                // (`RuxenVec*`). Typeck has already validated the target
-                // and item compatibility, so lowering only picks the
-                // concrete helper by the expression's result type.
-                if method_name == "collect" {
-                    let iter_local = self.lower_expr(object)?;
-                    let iter_id = iter_local.unwrap_or_else(|| self.new_temp(Ty::Int));
-                    let dest = self.new_temp(expr.ty.clone());
-                    let callee = match &expr.ty {
-                        Ty::Array(_) => "ruxen_vec_from_iter",
-                        Ty::String => "ruxen_string_from_iter",
-                        Ty::Map(_, _) => "ruxen_hash_from_iter",
-                        Ty::Set(_) => "ruxen_set_from_iter",
-                        other => {
-                            return Err(format!(
-                                "unsupported collect target in MIR lowering: {other}"
-                            ));
-                        }
-                    };
-                    self.emit(MirInst::Call {
-                        dest: Some(dest),
-                        callee: callee.to_string(),
-                        args: vec![MirValue::Use(iter_id)],
-                    });
-                    return Ok(Some(dest));
                 }
 
                 // ── Inline try_op (? operator) ──────────────────────────
@@ -731,7 +429,6 @@ impl<'a> Lowerer<'a> {
                     });
 
                     // Read the Option tag: 0 = None (in Option), 1 = Some
-                    // Note: inline_position uses tag 0 = None, tag 1 = Some
                     let tag = self.new_temp(Ty::Int32);
                     self.emit(MirInst::GetTag {
                         dest: tag,
@@ -820,8 +517,7 @@ impl<'a> Lowerer<'a> {
                 // "got 2, expected 1".
                 let static_dispatch_ty = &receiver_ty;
                 let receiver_is_class_identifier = self.is_class_identifier(object);
-                let is_static = is_builtin_static_method(&type_name, method_name)
-                    || self.is_user_static_method(&type_name, method_name)
+                let is_static = self.is_user_static_method(&type_name, method_name)
                     || (method_name == "default"
                         && self.type_supports_trait(static_dispatch_ty, "Default"))
                     || receiver_is_class_identifier;
@@ -830,6 +526,16 @@ impl<'a> Lowerer<'a> {
                 // Still lowered (for its side effects) even when its value is
                 // dropped as a zero-sized self below.
                 let obj_local = self.lower_expr(object)?;
+                // A borrowed scalar receiver (`x.to_s` on `x: &Float`) passes
+                // its pointee, so a float's bit-pattern word is not converted
+                // numerically at the call.
+                let obj_local = match obj_local {
+                    Some(lid) if !is_static => {
+                        let local_ty = self.fn_mut().locals[lid as usize].ty.clone();
+                        self.deref_borrowed_scalar(obj_local, &local_ty).0
+                    }
+                    other => other,
+                };
 
                 // A zero-sized (`Unit`/`Never`) receiver has no ABI self: codegen
                 // elides a `Unit` param from the callee signature
@@ -839,7 +545,7 @@ impl<'a> Lowerer<'a> {
                 // the universal `Kernel` methods on a unit-typed receiver
                 // (`puts(x).tap { … }`) — ordinary code never calls an instance
                 // method on `Unit`. Drop the self arg to match the param side.
-                let self_is_zero_sized = matches!(peel_refs(&receiver_ty), Ty::Unit | Ty::Never);
+                let self_is_zero_sized = matches!(receiver_ty.peel_refs(), Ty::Unit | Ty::Never);
                 let mut arg_values = if is_static || self_is_zero_sized {
                     // Static method (or zero-sized self): don't prepend self.
                     Vec::with_capacity(args.len())
@@ -861,25 +567,16 @@ impl<'a> Lowerer<'a> {
                 // For a generic type parameter or impl/dyn Trait, dispatch
                 // to the unique implementor of the trait bound when one
                 // exists.
-                let resolved_class = match &receiver_ty {
-                    Ty::Class { name, .. } => {
+                let resolved_class = match (&receiver_ty, receiver_ty.peel_refs()) {
+                    (Ty::Class { name, .. }, _) => {
                         self.resolve_method_class_with_args(name, method_name, args)
                     }
-                    Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
-                        self.unique_bound_impl(bounds)
-                            .unwrap_or_else(|| type_name.clone())
-                    }
-                    Ty::Ref(inner)
-                    | Ty::RefMut(inner)
-                    | Ty::RefLifetime(_, inner)
-                    | Ty::RefMutLifetime(_, inner) => match inner.as_ref() {
-                        Ty::TypeParam { bounds, .. }
-                        | Ty::SomeMixin(bounds)
-                        | Ty::AnyMixin(bounds) => self
-                            .unique_bound_impl(bounds)
-                            .unwrap_or_else(|| type_name.clone()),
-                        _ => type_name.clone(),
-                    },
+                    (
+                        _,
+                        Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds),
+                    ) => self
+                        .unique_bound_impl(bounds)
+                        .unwrap_or_else(|| type_name.clone()),
                     _ => type_name.clone(),
                 };
                 let resolved_class = if *method != UNRESOLVED_DEF {
@@ -907,45 +604,6 @@ impl<'a> Lowerer<'a> {
                 } else {
                     resolved_class
                 };
-                // Phase 2 #06.5 T6: BufReader / BufWriter instance
-                // methods that need kind-suffix routing (`into_inner`
-                // returns the inner File or TcpStream — the runtime
-                // exports `_into_inner_file` / `_into_inner_tcp` so
-                // the LLVM/Cranelift return ABI is honest about the
-                // concrete inner type). The closed-set typeck check
-                // at construction time means generic_args[0] is one
-                // of File / TcpStream here.
-                let bufio_instance_suffix: Option<&'static str> =
-                    if matches!(resolved_class.as_str(), "BufReader" | "BufWriter")
-                        && method_name == "into_inner"
-                    {
-                        let inner_name = match &object.ty {
-                            Ty::Class { generic_args, .. } => generic_args
-                                .first()
-                                .map(type_name_from_ty)
-                                .unwrap_or_default(),
-                            Ty::Ref(inner)
-                            | Ty::RefMut(inner)
-                            | Ty::RefLifetime(_, inner)
-                            | Ty::RefMutLifetime(_, inner) => {
-                                if let Ty::Class { generic_args, .. } = inner.as_ref() {
-                                    generic_args
-                                        .first()
-                                        .map(type_name_from_ty)
-                                        .unwrap_or_default()
-                                } else {
-                                    String::new()
-                                }
-                            }
-                            _ => String::new(),
-                        };
-                        match inner_name.as_str() {
-                            "TcpStream" => Some("tcp"),
-                            _ => Some("file"),
-                        }
-                    } else {
-                        None
-                    };
                 // #06.93 Phase 3: module-qualified class names carry a
                 // dotted form (`Outer.Inner`). C symbol names can't
                 // contain `.`, so normalise to `_` when building the
@@ -980,31 +638,26 @@ impl<'a> Lowerer<'a> {
                         })
                         .unwrap_or(method_name.as_str())
                 } else {
-                    method_name.as_str()
+                    // Ruby `alias new old`: an alias of a method the class
+                    // only inherits from a mixin default has no symbol of its
+                    // own to select; mangle the canonical name, whose
+                    // per-implementor default body is emitted.
+                    self.symbols
+                        .canonical_method_name(&resolved_class, method_name)
                 };
-                let mangled = if let Some(suffix) = bufio_instance_suffix {
-                    format!("{}_{}_{}", resolved_class_cs, lowered_method_name, suffix)
-                } else {
-                    format!("{}_{}", resolved_class_cs, lowered_method_name)
-                };
+                let mangled = format!("{}_{}", resolved_class_cs, lowered_method_name);
 
                 // Generic-class monomorphization: when the receiver is a
                 // concrete instantiation we specialized (e.g. the receiver
                 // of `box.eq(...)` is `Box[String]`), redirect the callee to
                 // the specialized `Box__mono__String_eq` so the body
-                // dispatches `==` / `#{}` through the concrete type. Guarded
-                // on `bufio_instance_suffix.is_none()` so the BufReader/
-                // BufWriter kind-suffix routing above is untouched, and on
-                // `mono_base_for_ty` returning Some only when a copy was
+                // dispatches `==` / `#{}` through the concrete type.
+                // `mono_base_for_ty` returns Some only when a copy was
                 // actually emitted (FFI shells / un-specialized
                 // instantiations keep the opaque callee).
-                let mangled = if bufio_instance_suffix.is_none() {
-                    match self.mono_base_for_ty(&receiver_ty) {
-                        Some(base) => format!("{}_{}", base, lowered_method_name),
-                        None => mangled,
-                    }
-                } else {
-                    mangled
+                let mangled = match self.mono_base_for_ty(&receiver_ty) {
+                    Some(base) => format!("{}_{}", base, lowered_method_name),
+                    None => mangled,
                 };
 
                 // Builtin-head per-`T` monomorphization: the receiver of a
@@ -1014,13 +667,10 @@ impl<'a> Lowerer<'a> {
                 // `(instantiation, method)` was emitted; otherwise keep the
                 // opaque callee, which `resolve_ffi_alias_callee` routes to the
                 // FFI symbol or the shared `{Class}_{method}` body as before.
-                let mangled = if bufio_instance_suffix.is_none() {
-                    match self.builtin_head_mono_callee(&receiver_ty, lowered_method_name) {
-                        Some(specialized) => specialized,
-                        None => mangled,
-                    }
-                } else {
-                    mangled
+                let mangled = match self.builtin_head_mono_callee(&receiver_ty, lowered_method_name)
+                {
+                    Some(specialized) => specialized,
+                    None => mangled,
                 };
 
                 // Q17b: specialize a generic METHOD over a mixin bound using
@@ -1049,304 +699,32 @@ impl<'a> Lowerer<'a> {
                     mangled
                 };
 
-                // Sound residual boundary: a method call whose RECEIVER itself is
-                // a still-abstract, mixin-bound type parameter (`item.width`
-                // where `item: &var T, T: Sized`) with NO unique implementor
-                // would mangle to a bound-PLACEHOLDER callee (`T: Sized_width`)
-                // that link-fails. Q17/Q17b substitution normally makes this
-                // receiver concrete before lowering. If an unsupported
-                // generic-through-generic shape remains, detect it structurally
-                // on the peeled receiver type, NOT by
-                // string-matching the mangled callee: a concrete receiver with a
-                // bounded generic ARG (`Array[T: Showable]`) also stringifies
-                // with `": "` but is a sound builtin call, so it must not trip
-                // this guard. Surface a clear error instead of the placeholder
-                // symbol. The single-implementor case never reaches here:
-                // `unique_bound_impl` already resolved a concrete `resolved_class`.
-                if self.receiver_is_unresolved_bound(&receiver_ty) {
+                // A method call whose RECEIVER is still an abstract,
+                // mixin-bound type parameter (`item.width` where
+                // `item: &var T, T: Sized`) with no unique implementor has no
+                // concrete callee. That only happens in an un-monomorphised
+                // generic body (the opaque fallback beside the per-
+                // instantiation copies). Detect it on the peeled receiver type,
+                // NOT by string-matching the mangled callee: a concrete
+                // receiver with a bounded generic ARG (`Array[T: Showable]`) is
+                // a sound builtin call. Mark the callee abstract;
+                // `prune_unmonomorphised_bodies` drops the body when nothing
+                // reachable calls it and rejects the program otherwise.
+                // A `some Mixin` / `any Mixin` receiver is not a generic
+                // parameter of an enclosing body, so no monomorphised copy
+                // replaces it: reject it here.
+                let mangled = if !self.receiver_is_unresolved_bound(&receiver_ty) {
+                    mangled
+                } else if let Ty::TypeParam { name, .. } = receiver_ty.peel_refs() {
+                    monomorphize::abstract_callee(name, lowered_method_name)
+                } else {
                     return Err(format!(
                         "cannot lower method `{method_name}` on unresolved mixin-bound \
                          receiver `{resolved_class}`: no concrete monomorphization reached \
                          this call (generic-calling-generic requires a concrete leaf — see \
                          docs/decisions/q17-cross-package-monomorphization.md)."
                     ));
-                }
-
-                // `&mut String` detection: when the receiver is a local
-                // of type `&mut String` (i.e. the caller passed `&mut s`
-                // into a parameter typed `&mut String`), the local holds
-                // a pointer-to-`char*`. Mutating methods must read the
-                // current buffer via `ruxen_deref_ptr`, call the string
-                // helper, then write the new buffer back via
-                // `ruxen_store_ptr` so the caller observes the update.
-                let receiver_is_mut_string_ref = matches!(
-                    &object.ty,
-                    Ty::RefMut(inner) | Ty::RefMutLifetime(_, inner)
-                        if matches!(inner.as_ref(), Ty::String)
-                );
-
-                // Special handling for push_str on String variables:
-                // ruxen_string_push_str returns a new char*, so we need to
-                // capture the return value and reassign it to the object variable.
-                if method_name == "push_str" {
-                    if receiver_is_mut_string_ref {
-                        // `self_arg` here is the pointer value (char**).
-                        // We need the pointee to feed into push_str, and
-                        // we must store the returned buffer back through
-                        // the pointer.
-                        let ptr_arg = arg_values[0].clone();
-                        let tail_args: Vec<MirValue> = arg_values.iter().skip(1).cloned().collect();
-                        let cur = self.new_temp(Ty::String);
-                        self.emit(MirInst::Call {
-                            dest: Some(cur),
-                            callee: "ruxen_deref_ptr".to_string(),
-                            args: vec![ptr_arg.clone()],
-                        });
-                        let new_buf = self.new_temp(Ty::String);
-                        let mut call_args = vec![MirValue::Use(cur)];
-                        call_args.extend(tail_args);
-                        self.emit(MirInst::Call {
-                            dest: Some(new_buf),
-                            callee: "String_push_str".to_string(),
-                            args: call_args,
-                        });
-                        self.emit(MirInst::Call {
-                            dest: None,
-                            callee: "ruxen_store_ptr".to_string(),
-                            args: vec![ptr_arg, MirValue::Use(new_buf)],
-                        });
-                        return Ok(None);
-                    }
-                    if let HirExprKind::VarRef(def_id) = &object.kind {
-                        if let Some(&obj_var) = self.def_to_local.get(def_id) {
-                            let tmp = self.new_temp(Ty::String);
-                            self.emit(MirInst::Call {
-                                dest: Some(tmp),
-                                callee: mangled,
-                                args: arg_values,
-                            });
-                            self.emit(MirInst::Assign {
-                                dest: obj_var,
-                                value: MirValue::Use(tmp),
-                            });
-                            return Ok(None);
-                        }
-                    }
-                }
-
-                // Special handling for `String.push(char)`: the runtime
-                // only exposes `ruxen_string_push_str`, so we first widen
-                // the Char arg to a one-char heap string via
-                // `ruxen_char_to_string`, then hand that to push_str.
-                // Without this rewrite every program that calls
-                // `s.push('!')` links against a missing `String_push`.
-                //
-                // When the receiver is `&mut String` (a parameter), we
-                // lower to `*s = String_push_str(*s, one_char_str)` using
-                // the deref/store runtime helpers so the caller's local
-                // is updated in place.  For an owned local String binding
-                // we just rebind the variable to the new buffer.
-                if method_name == "push" && resolved_class == "String" && arg_values.len() == 2 {
-                    // Phase 2 stdlib batch 2 (#02): route through the
-                    // dedicated `ruxen_string_push(s, codepoint)` runtime
-                    // fn rather than synthesising
-                    // `ruxen_char_to_string` + `String_push_str` here.
-                    // The dedicated fn allocates exactly one fresh
-                    // buffer per call and frees its internal char-string
-                    // temporary, so we don't leak the codepoint
-                    // intermediate. The prior receiver buffer is freed
-                    // here explicitly so the rebind doesn't leak it.
-                    let char_arg = arg_values[1].clone();
-                    let self_arg = arg_values[0].clone();
-                    if receiver_is_mut_string_ref {
-                        let cur = self.new_temp(Ty::String);
-                        self.emit(MirInst::Call {
-                            dest: Some(cur),
-                            callee: "ruxen_deref_ptr".to_string(),
-                            args: vec![self_arg.clone()],
-                        });
-                        let new_buf = self.new_temp(Ty::String);
-                        self.emit(MirInst::Call {
-                            dest: Some(new_buf),
-                            callee: "String_push".to_string(),
-                            args: vec![MirValue::Use(cur), char_arg],
-                        });
-                        // Free the prior buffer before overwriting the
-                        // pointer slot, otherwise it leaks.
-                        self.emit(MirInst::Call {
-                            dest: None,
-                            callee: "ruxen_string_free".to_string(),
-                            args: vec![MirValue::Use(cur)],
-                        });
-                        self.emit(MirInst::Call {
-                            dest: None,
-                            callee: "ruxen_store_ptr".to_string(),
-                            args: vec![self_arg, MirValue::Use(new_buf)],
-                        });
-                        return Ok(None);
-                    }
-                    let new_buf = self.new_temp(Ty::String);
-                    self.emit(MirInst::Call {
-                        dest: Some(new_buf),
-                        callee: "String_push".to_string(),
-                        args: vec![self_arg.clone(), char_arg],
-                    });
-                    if let HirExprKind::VarRef(def_id) = &object.kind {
-                        if let Some(&obj_var) = self.def_to_local.get(def_id) {
-                            // Free the prior buffer first; the local
-                            // owns it (we just lowered it as the self
-                            // arg above) and the assignment below is
-                            // about to overwrite the slot.
-                            self.emit(MirInst::Call {
-                                dest: None,
-                                callee: "ruxen_string_free".to_string(),
-                                args: vec![MirValue::Use(obj_var)],
-                            });
-                            self.emit(MirInst::Assign {
-                                dest: obj_var,
-                                value: MirValue::Use(new_buf),
-                            });
-                        }
-                    }
-                    return Ok(None);
-                }
-
-                // Phase 2 stdlib: mutating String methods that allocate a
-                // fresh buffer (insert, insert_str). Same dance as push_str.
-                if matches!(method_name.as_str(), "insert" | "insert_str")
-                    && resolved_class == "String"
-                {
-                    if receiver_is_mut_string_ref {
-                        let ptr_arg = arg_values[0].clone();
-                        let tail_args: Vec<MirValue> = arg_values.iter().skip(1).cloned().collect();
-                        let cur = self.new_temp(Ty::String);
-                        self.emit(MirInst::Call {
-                            dest: Some(cur),
-                            callee: "ruxen_deref_ptr".to_string(),
-                            args: vec![ptr_arg.clone()],
-                        });
-                        let new_buf = self.new_temp(Ty::String);
-                        let mut call_args = vec![MirValue::Use(cur)];
-                        call_args.extend(tail_args);
-                        self.emit(MirInst::Call {
-                            dest: Some(new_buf),
-                            callee: format!("String_{}", method_name),
-                            args: call_args,
-                        });
-                        self.emit(MirInst::Call {
-                            dest: None,
-                            callee: "ruxen_store_ptr".to_string(),
-                            args: vec![ptr_arg, MirValue::Use(new_buf)],
-                        });
-                        return Ok(None);
-                    }
-                    if let HirExprKind::VarRef(def_id) = &object.kind {
-                        if let Some(&obj_var) = self.def_to_local.get(def_id) {
-                            let tmp = self.new_temp(Ty::String);
-                            self.emit(MirInst::Call {
-                                dest: Some(tmp),
-                                callee: format!("String_{}", method_name),
-                                args: arg_values,
-                            });
-                            self.emit(MirInst::Assign {
-                                dest: obj_var,
-                                value: MirValue::Use(tmp),
-                            });
-                            return Ok(None);
-                        }
-                    }
-                }
-
-                // String.remove(i) — returns the removed Char and
-                // simultaneously rewrites the buffer. The runtime returns
-                // a 16-byte struct {removed: i64, new_buffer: ptr}; we read
-                // .removed for the value and .new_buffer to update the
-                // local / &mut String.
-                if method_name == "remove" && resolved_class == "String" {
-                    let self_arg = arg_values[0].clone();
-                    // For &mut String, we must first deref to get the buf.
-                    let buf_arg = if receiver_is_mut_string_ref {
-                        let cur = self.new_temp(Ty::String);
-                        self.emit(MirInst::Call {
-                            dest: Some(cur),
-                            callee: "ruxen_deref_ptr".to_string(),
-                            args: vec![self_arg.clone()],
-                        });
-                        MirValue::Use(cur)
-                    } else {
-                        self_arg.clone()
-                    };
-                    let tail_args: Vec<MirValue> = arg_values.iter().skip(1).cloned().collect();
-                    let result_struct = self.new_temp(Ty::Int);
-                    let mut call_args = vec![buf_arg];
-                    call_args.extend(tail_args);
-                    self.emit(MirInst::Call {
-                        dest: Some(result_struct),
-                        callee: "String_remove".to_string(),
-                        args: call_args,
-                    });
-                    // Read the removed Char (field 0 of the 16-byte struct).
-                    let removed = self.new_temp(Ty::Char);
-                    self.emit(MirInst::GetField {
-                        dest: removed,
-                        base: result_struct,
-                        field_index: 0,
-                    });
-                    // Read the new buffer (field 1).
-                    let new_buf = self.new_temp(Ty::String);
-                    self.emit(MirInst::GetField {
-                        dest: new_buf,
-                        base: result_struct,
-                        field_index: 1,
-                    });
-                    if receiver_is_mut_string_ref {
-                        self.emit(MirInst::Call {
-                            dest: None,
-                            callee: "ruxen_store_ptr".to_string(),
-                            args: vec![self_arg, MirValue::Use(new_buf)],
-                        });
-                    } else if let HirExprKind::VarRef(def_id) = &object.kind {
-                        if let Some(&obj_var) = self.def_to_local.get(def_id) {
-                            self.emit(MirInst::Assign {
-                                dest: obj_var,
-                                value: MirValue::Use(new_buf),
-                            });
-                        }
-                    }
-                    return Ok(Some(removed));
-                }
-
-                // String.clear / truncate — in-place mutation; for &mut
-                // String we must deref to the buffer pointer first.
-                if matches!(method_name.as_str(), "clear" | "truncate")
-                    && resolved_class == "String"
-                {
-                    if receiver_is_mut_string_ref {
-                        let ptr_arg = arg_values[0].clone();
-                        let tail_args: Vec<MirValue> = arg_values.iter().skip(1).cloned().collect();
-                        let cur = self.new_temp(Ty::String);
-                        self.emit(MirInst::Call {
-                            dest: Some(cur),
-                            callee: "ruxen_deref_ptr".to_string(),
-                            args: vec![ptr_arg],
-                        });
-                        let mut call_args = vec![MirValue::Use(cur)];
-                        call_args.extend(tail_args);
-                        self.emit(MirInst::Call {
-                            dest: None,
-                            callee: format!("String_{}", method_name),
-                            args: call_args,
-                        });
-                        return Ok(None);
-                    }
-                    // Owned local: pass the buffer pointer directly.
-                    self.emit(MirInst::Call {
-                        dest: None,
-                        callee: format!("String_{}", method_name),
-                        args: arg_values,
-                    });
-                    return Ok(None);
-                }
+                };
 
                 let result_ty = self
                     .declared_method_return_ty(expr)
@@ -1357,6 +735,14 @@ impl<'a> Lowerer<'a> {
                 } else {
                     None
                 };
+
+                // A `def var` lib method (`String#push_str`, `#remove`, ...)
+                // takes its receiver as `&var Self`.
+                if self.mutates_slot_receiver(*resolved, &object.ty) {
+                    let callee = self.resolve_ffi_alias_callee(mangled);
+                    self.emit_rebinding_self_call(object, callee, arg_values, dest)?;
+                    return Ok(dest);
+                }
 
                 // For calls on Fn/FnMut/FnOnce types (closure invocation),
                 // emit an indirect call through the function pointer instead
@@ -1379,29 +765,13 @@ impl<'a> Lowerer<'a> {
                 // typeck-side unification in `typeck/unify.rs` is what
                 // gets the closure literal into the dyn slot in the
                 // first place.
-                fn bounds_contain_fn(bounds: &[crate::hir::types::MixinRef]) -> bool {
-                    bounds
-                        .iter()
-                        .any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce"))
-                }
-                fn ty_is_fn_like(ty: &Ty) -> bool {
-                    match ty {
-                        Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => true,
-                        Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) => bounds_contain_fn(bounds),
-                        Ty::Ref(inner)
-                        | Ty::RefMut(inner)
-                        | Ty::RefLifetime(_, inner)
-                        | Ty::RefMutLifetime(_, inner) => ty_is_fn_like(inner),
-                        _ => false,
-                    }
-                }
                 let is_any_fn_type = matches!(
                     &object.ty,
-                    Ty::AnyMixin(bounds) if bounds_contain_fn(bounds)
+                    Ty::AnyMixin(bounds) if bounds.iter().any(crate::hir::types::MixinRef::is_fn_family)
                 );
                 let is_ref_any_fn_type = matches!(&object.ty,
                     Ty::Ref(inner) | Ty::RefMut(inner)
-                    if matches!(inner.as_ref(), Ty::AnyMixin(bounds) if bounds_contain_fn(bounds))
+                    if matches!(inner.as_ref(), Ty::AnyMixin(bounds) if bounds.iter().any(crate::hir::types::MixinRef::is_fn_family))
                 );
                 // For-loop bindings (and any other receiver whose HIR
                 // expression type was left as `Ty::Infer` by typeck —
@@ -1419,7 +789,7 @@ impl<'a> Lowerer<'a> {
                             let func = self.fn_mut();
                             func.locals
                                 .get(id as usize)
-                                .map(|l| ty_is_fn_like(&l.ty))
+                                .map(|l| l.ty.is_callable())
                                 .unwrap_or(false)
                         })
                         .unwrap_or(false);
@@ -1556,7 +926,7 @@ impl<'a> Lowerer<'a> {
                         .get("Kernel")
                         .is_some_and(|m| m.contains_key(lowered_method_name))
                     {
-                        let self_ty = peel_refs(&receiver_ty).clone();
+                        let self_ty = receiver_ty.peel_refs().clone();
                         self.universal_kernel_needed
                             .insert(mangled.clone(), (self_ty, lowered_method_name.to_string()));
                     }
@@ -1573,5 +943,93 @@ impl<'a> Lowerer<'a> {
             // ── Assignment ──────────────────────────────────────────
             _ => unreachable!("lower_method_call: dispatched to wrong helper"),
         }
+    }
+
+    /// Whether `resolved` is a `def var` lib method (`String#push_str`) on a
+    /// receiver whose `&var` is the address of its slot (a String, see
+    /// `refmut_abi`): the C symbol then replaces the receiver's buffer in
+    /// place, so the call must pass `&var receiver`, not its value.
+    fn mutates_slot_receiver(&self, resolved: DefId, receiver_ty: &Ty) -> bool {
+        use crate::resolve::symbols::DefKind;
+        resolved != UNRESOLVED_DEF
+            && crate::mir::refmut_abi::refmut_is_slot_address(receiver_ty)
+            && self.symbols.get(resolved).is_some_and(|def| {
+                matches!(&def.kind, DefKind::Method { signature, .. }
+                    if signature.c_symbol.is_some()
+                        && signature.self_mode == Some(HirSelfMode::RefMut))
+            })
+    }
+
+    /// Emit a call to a `def var` lib method on a String receiver. `args[0]`
+    /// holds the lowered receiver; it is replaced by a `&var String` slot
+    /// address. The callee stores the new buffer through the slot and frees
+    /// the old one, so the slot must be the receiver's own storage:
+    ///
+    /// - a `&var String` receiver already is the caller's slot address;
+    /// - an owned local is borrowed `&var` in place;
+    /// - a captured or cell-held variable, or a field, runs on a temporary
+    ///   slot holding its buffer, which is stored back afterwards;
+    /// - a buffer this code does not own (a `&String` borrow, a call result)
+    ///   is copied first, so the callee never frees someone else's buffer.
+    ///   A borrowed variable is rebound to the mutated copy.
+    pub(super) fn emit_rebinding_self_call(
+        &mut self,
+        object: &HirExpr,
+        callee: String,
+        mut args: Vec<MirValue>,
+        dest: Option<LocalId>,
+    ) -> Result<(), String> {
+        if matches!(object.ty, Ty::RefMut(_) | Ty::RefMutLifetime(..)) {
+            self.emit(MirInst::Call { dest, callee, args });
+            return Ok(());
+        }
+        let slot_ty = Ty::RefMut(Box::new(Ty::String));
+        let owned = matches!(object.ty, Ty::String);
+        if let HirExprKind::VarRef(def_id) = &object.kind {
+            let local = self.def_to_local.get(def_id).copied();
+            if let Some(local) = local.filter(|_| {
+                owned
+                    && !self.capture_map.contains_key(def_id)
+                    && !self.cell_promoted.contains(def_id)
+            }) {
+                let slot = self.new_temp(slot_ty);
+                self.emit(MirInst::RefMut {
+                    dest: slot,
+                    src: local,
+                });
+                args[0] = MirValue::Use(slot);
+                self.emit(MirInst::Call { dest, callee, args });
+                return Ok(());
+            }
+        }
+
+        let is_place = matches!(
+            object.kind,
+            HirExprKind::VarRef(_) | HirExprKind::FieldAccess { .. }
+        );
+        let buf = self.new_temp(Ty::String);
+        if owned && is_place {
+            self.emit(MirInst::Assign {
+                dest: buf,
+                value: args[0].clone(),
+            });
+        } else {
+            self.emit(MirInst::Call {
+                dest: Some(buf),
+                callee: "ruxen_string_from".to_string(),
+                args: vec![args[0].clone()],
+            });
+        }
+        let slot = self.new_temp(slot_ty);
+        self.emit(MirInst::RefMut {
+            dest: slot,
+            src: buf,
+        });
+        args[0] = MirValue::Use(slot);
+        self.emit(MirInst::Call { dest, callee, args });
+        if is_place {
+            self.store_value_into_target(object, MirValue::Use(buf))?;
+        }
+        Ok(())
     }
 }

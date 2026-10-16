@@ -22,7 +22,8 @@ use ruxen_core::codegen::llvm::CodeGen;
 use ruxen_core::hir::types::Ty;
 use ruxen_core::lexer::token::Span;
 use ruxen_core::mir::nodes::{
-    BasicBlock, Literal, MirFunction, MirInst, MirLocal, MirProgram, MirValue, Terminator,
+    BasicBlock, Literal, LocalKind, MirFunction, MirInst, MirLocal, MirProgram, MirValue,
+    Terminator,
 };
 use ruxen_core::parser::ast::BinOp;
 
@@ -32,6 +33,7 @@ fn int_local(id: u32, name: &str) -> MirLocal {
         name: name.to_string(),
         ty: Ty::Int,
         mutable: false,
+        kind: LocalKind::User,
     }
 }
 

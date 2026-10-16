@@ -26,6 +26,9 @@ pub struct Diagnostic {
     pub message: String,
     pub span: Span,
     pub code: Option<String>,
+    /// Suggestions rendered after the message as `= help: …` lines, the
+    /// same shape the borrow checker's `BorrowError` uses.
+    pub help: Vec<String>,
 }
 
 impl Diagnostic {
@@ -35,6 +38,7 @@ impl Diagnostic {
             message: message.into(),
             span,
             code: None,
+            help: Vec::new(),
         }
     }
 
@@ -48,7 +52,14 @@ impl Diagnostic {
             message: message.into(),
             span,
             code: Some(code.into()),
+            help: Vec::new(),
         }
+    }
+
+    /// Append one `= help: …` suggestion.
+    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+        self.help.push(help.into());
+        self
     }
 
     pub fn warning(message: impl Into<String>, span: Span) -> Self {
@@ -57,6 +68,7 @@ impl Diagnostic {
             message: message.into(),
             span,
             code: None,
+            help: Vec::new(),
         }
     }
 }
@@ -71,7 +83,11 @@ impl fmt::Display for Diagnostic {
             f,
             "{}{}: {} (at {}:{})",
             code_str, self.level, self.message, self.span.line, self.span.column
-        )
+        )?;
+        for h in &self.help {
+            write!(f, "\n  = help: {}", h)?;
+        }
+        Ok(())
     }
 }
 
@@ -165,6 +181,16 @@ mod tests {
         let diag = Diagnostic::error_with_code("oops", Span::new(0, 1, 3, 9), "E1");
         let rendered = format!("{}", diag);
         assert_eq!(rendered, "[E1] error: oops (at 3:9)");
+    }
+
+    #[test]
+    fn diagnostic_display_renders_help_lines() {
+        let diag = Diagnostic::error_with_code("oops", Span::new(0, 1, 3, 9), "E1")
+            .with_help("try `var x`");
+        assert_eq!(
+            format!("{}", diag),
+            "[E1] error: oops (at 3:9)\n  = help: try `var x`"
+        );
     }
 
     #[test]

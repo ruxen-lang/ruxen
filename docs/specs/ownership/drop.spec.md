@@ -37,6 +37,11 @@ A binding declared inside a loop body is dropped at the end of each
 iteration; the allocation count after N iterations matches the count
 after 1 iteration (no per-iteration accumulation).
 
+For a built-in heap local (`String`, `Array`, `Hash`, `Set`, including a
+compiler temporary such as an interpolation result) the value it held is
+freed when it is redefined, provided it owned every value it was given
+and none was moved out; a value moved into a collection is never freed.
+
 ## B4 — `break` and `continue` drop pending loop-body locals
 
 `break` and `continue` walk back through the active scopes and emit
@@ -50,6 +55,18 @@ drop calls for any live owned bindings before transferring control.
 - `Hash[Int, String]` frees every value string.
 - `Hash[String, Array[Int]]` frees every key and every value.
 - `Set[String]` frees every element.
+- `Array[C]` and `Hash[K, C]` (C a non-generic class or struct with a
+  `clone`) run each element's `def drop` and free it. The slot's
+  descriptor is `RUXEN_ELEM_OBJ` plus the address of per-type element glue.
+  A `Set[C]` element and a `Hash[C, V]` key stay unowned (their table copies
+  keys by key kind), as do the elements of a generic class or an enum.
+- A container whose element pointer escaped (an element read stored into
+  another collection, a field, a consuming parameter, or the return value)
+  frees only its spine: the element has another owner or none, never two.
+
+A class instance does not free its own fields (there is no per-field drop
+yet; see `docs/decisions/drop-elaboration.md`), so a `String` field of an
+element leaks with or without B5.
 
 ## B6 — `String.push(s)` does not leak the appended slice
 
@@ -107,6 +124,9 @@ consuming/ambiguous call is treated as escaped and is not field-dropped.
 | B5 Set    | `p04_hashset_string_releases_every_element`           | `drop_fixtures.rs`  |
 
 <!-- TODO(migration): pin-test fn names still mention `vec_*`, `hashmap_*`, `hashset_*` — internal Rust identifiers, rename when in scope. -->
+| B5 class  | `class_elements_and_hash_class_values_are_freed_with_the_container` + `an_element_alias_stored_elsewhere_is_not_freed_twice`; e2e `2126`, `2127` | `drop_fixtures.rs` |
+| B3 rebind | `borrow_in_loop_frees_every_iteration_no_uaf` + `loop_local_moved_into_hash_is_not_freed_on_rebind` + `string_locals_in_monomorphised_bodies_are_freed`; e2e `2129` | `drop_fixtures.rs` |
+| Interpolation | `interpolation_temporaries_are_freed_in_a_loop`; e2e `2128` | `drop_fixtures.rs` |
 | B6        | `string_push_does_not_leak`                            | `drop_fixtures.rs`  |
 | B7        | `string_into_bytes_transfers_ownership`                | `drop_fixtures.rs`  |
 | B8        | `string_plus_op_frees_both_operands`                   | `drop_fixtures.rs`  |

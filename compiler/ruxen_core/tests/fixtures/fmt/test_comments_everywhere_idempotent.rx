@@ -1,0 +1,64 @@
+# file header
+module Geo
+  # module item comment
+  def self.area(x: Int) -> Int
+    # leading statement comment
+    let y = x * 2  # trailing statement comment
+    # comment before the tail expression
+    y
+  end
+end
+
+class Point
+  # leading field comment
+  x: Int
+  y: Int  # trailing field comment
+
+  def init(@x: Int, @y: Int)
+  end
+
+  def sign -> Int
+    if x > 0
+      # then branch
+      1
+    else
+      # else branch
+      0
+      # end of else branch
+    end
+    # end of method body
+  end
+
+  def todo
+    # empty body comment
+  end
+  # end of class body
+end
+
+struct Pair
+  # struct field comment
+  a: Int
+  b: Int
+end
+
+enum Color
+  # variant comment
+  Red
+  Green
+end
+
+mixin Shape
+  # mixin signature comment
+  def area -> Int
+end
+
+extension Int
+  # extension item comment
+  def twice -> Int { self * 2 }
+end
+
+def main
+  # only statement comment
+  puts(Geo.area(3))
+end
+# end of file comment

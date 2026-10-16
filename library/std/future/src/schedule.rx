@@ -156,6 +156,18 @@ class Schedule
     end
   end
 
+  ## Whether a failed 0-based `attempt` that produced error `e` gets another
+  ## try: the predicate (when set) accepts `e` and the attempt budget is not
+  ## spent. The one retry decision the sync `run` and the async `RetryFuture`
+  ## share.
+  def retry?(e: Int, attempt: Int) -> Bool
+    if self.has_pred && !self.pred.(e)
+      false
+    else
+      attempt + 1 < self.max_attempts
+    end
+  end
+
   ## ── SYNC driver ───────────────────────────────────────────────────────────
 
   ## Run the `Result`-returning block; on `Err`, retry up to the attempt budget,
@@ -176,20 +188,14 @@ class Schedule
           done = true
         Err(e) ->
           out = Result.Err(e)
-          # Stop if the predicate rejects this error, or the budget is spent.
-          if self.has_pred && !self.pred.(e)
-            done = true
-          else
-            let next_attempt = attempt + 1
-            if next_attempt >= self.max_attempts
-              done = true
-            else
-              let delay = self.actual_delay_ns(attempt)
-              if delay > 0
-                Thread.sleep(Duration.from_nanos(delay))
-              end
-              attempt = next_attempt
+          if self.retry?(e, attempt)
+            let delay = self.actual_delay_ns(attempt)
+            if delay > 0
+              Thread.sleep(Duration.from_nanos(delay))
             end
+            attempt = attempt + 1
+          else
+            done = true
           end
       end
     end
@@ -317,30 +323,24 @@ class RetryFuture
             self.result = Result.Ok(v)
           else
             # Err(v) — retry unless the predicate rejects it or budget is spent.
-            if self.sched.has_pred && !self.sched.pred.(v)
+            if self.sched.retry?(v, self.attempt)
+              # Park on a fresh backoff timer (the completed attempt was already
+              # consumed above — no drop, leak its block). Tear down the current
+              # backoff child first: the init placeholder on the first retry, so
+              # it doesn't leak. (A prior FIRED backoff is already dropped at the
+              # Ready arm with has_backoff = 0, so the guard skips it — no
+              # double-free.)
+              if self.has_backoff != 0
+                ruxen_retry_drop_child(self.backoff)
+              end
+              let delay = self.sched.actual_delay_ns(self.attempt)
+              self.backoff = Async.sleep(Duration.from_nanos(delay))
+              self.has_backoff = 1
+              self.attempt = self.attempt + 1
+              self.phase = 1
+            else
               self.done = 1
               self.result = Result.Err(v)
-            else
-              let next_attempt = self.attempt + 1
-              if next_attempt >= self.sched.max_attempts
-                self.done = 1
-                self.result = Result.Err(v)
-              else
-                # Park on a fresh backoff timer (the completed attempt was already
-                # consumed above — no drop, leak its block). Tear down the current
-                # backoff child first: the init placeholder on the first retry, so
-                # it doesn't leak. (A prior FIRED backoff is already dropped at the
-                # Ready arm with has_backoff = 0, so the guard skips it — no
-                # double-free.)
-                if self.has_backoff != 0
-                  ruxen_retry_drop_child(self.backoff)
-                end
-                let delay = self.sched.actual_delay_ns(self.attempt)
-                self.backoff = Async.sleep(Duration.from_nanos(delay))
-                self.has_backoff = 1
-                self.attempt = next_attempt
-                self.phase = 1
-              end
             end
           end
         end

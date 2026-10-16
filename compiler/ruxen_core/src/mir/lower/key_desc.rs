@@ -36,7 +36,8 @@
 //! range check on a key's value.
 
 use crate::hir::types::Ty;
-use crate::mir::lower::type_helpers::nominal_derive_is_synthesized;
+use crate::implicit_includes::HASHABLE;
+use crate::mir::lower::type_helpers::derived_nominal;
 use crate::mir::nodes::{Literal, LocalId, MirFunction, MirInst, MirValue};
 use crate::resolve::symbols::SymbolTable;
 
@@ -101,13 +102,6 @@ const KEYED_TABLE_OPS: &[(&str, &str)] = &[
 
 const HASH_ENSURE: &str = "ruxen_hash_ensure_key_kind";
 const SET_ENSURE: &str = "ruxen_set_ensure_key_kind";
-
-/// Wire values for the ELEMENT kind, matching the `RUXEN_ELEM_*` block in
-/// `library/std/core/runtime/runtime.h`. They coincide with the key kinds
-/// on purpose (a Set's element is its key); see that header for why.
-const ELEM_POD: i64 = 0;
-const ELEM_CSTR: i64 = 1;
-const ELEM_VEC: i64 = 3;
 
 /// `Vec` helpers that build a fresh OWNED array by copying slots out of a
 /// borrowed source, paired with the element-descriptor-taking form the
@@ -233,16 +227,15 @@ fn key_descriptor(key_ty: &Ty, symbols: &SymbolTable) -> KeyDesc {
     // struct does; before, it fell through to identity and two equal
     // keys were distinct entries.
     //
-    // The predicate is `nominal_derive_is_synthesized`, not the raw
+    // The predicate is `derived_nominal`, not the raw
     // `ty_has_derive_trait`, so this asks whether the two functions were
     // actually EMITTED rather than whether the type nominally qualifies.
     // A fieldless class satisfies the structural rule vacuously but has
     // no synthesised `_hash_code` / `_eq`, so pointing the runtime at
     // those symbols would fail at link.
     if let Ty::Struct { name, .. } | Ty::Class { name, .. } = peeled {
-        let hashable =
-            !name.contains('.') && nominal_derive_is_synthesized(peeled, symbols, "Hashable");
-        if hashable && nominal_derive_is_synthesized(peeled, symbols, "PartialEq") {
+        let hashable = !name.contains('.') && derived_nominal(peeled, symbols, HASHABLE).is_some();
+        if hashable && derived_nominal(peeled, symbols, "PartialEq").is_some() {
             // The same mangling `derive.rs` builds its synthesized
             // `build_hash_code` / `build_eq` function names from.
             return KeyDesc::Custom {
@@ -330,25 +323,35 @@ pub(super) fn install_key_descriptors(func: &mut MirFunction, symbols: &SymbolTa
             //
             //    The witness is the RESULT's type, and ONLY the result's.
             //    The result is the local that will be handed to
-            //    `heap_free_callee`, so its element type is the one that
+            //    `heap_free_call`, so its element type is the one that
             //    decides what must be owned.
             //
             //    Deliberately NOT falling back to argument 0 when the
             //    result cannot be typed. The source's element type is the
             //    wrong witness for this question, and using it inverts the
             //    bug instead of fixing it: an untypeable result gets no
-            //    deep drop from `heap_free_callee` either, so cloning for
+            //    deep drop from `heap_free_call` either, so cloning for
             //    it would allocate elements nothing ever frees. POD (alias)
             //    is the correct answer for an unknown result — it is what
             //    keeps the copy exactly as deep as the drop.
             if let Some(with_desc) = elem_derive_for(callee) {
-                let kind = dest
+                let desc = dest
                     .and_then(|d| local_tys.get(d as usize))
-                    .filter(|ty| matches!(peel(ty), Ty::Array(_)))
-                    .map(elem_kind_of)
-                    .unwrap_or(ELEM_POD);
+                    .map_or(super::drops::ElemDesc::Word(0), |ty| {
+                        elem_kind_of(ty, symbols)
+                    });
                 let mut args = args.clone();
-                args.push(MirValue::Literal(Literal::Int(kind)));
+                let mut new_temp = || {
+                    let id = next_temp_id as LocalId;
+                    next_temp_id += 1;
+                    new_locals.push((id, Ty::Int));
+                    id
+                };
+                args.push(super::drops::elem_desc_value(
+                    desc,
+                    &mut new_temp,
+                    &mut rewritten,
+                ));
                 rewritten.push(MirInst::Call {
                     dest: *dest,
                     callee: with_desc.to_string(),
@@ -395,8 +398,22 @@ pub(super) fn install_key_descriptors(func: &mut MirFunction, symbols: &SymbolTa
             name: format!("_keydesc{}", id),
             ty,
             mutable: false,
+            kind: crate::mir::nodes::LocalKind::Temp,
         });
     }
+}
+
+/// The runtime symbol a descriptor-taking form was rewritten FROM
+/// (`ruxen_hash_new_keyed` -> `ruxen_hash_new`), or `callee` itself. The
+/// rewritten form allocates and transfers exactly what its base does, so
+/// `runtime_abi` classifies it under the base's one row instead of
+/// listing every spelling twice.
+pub(super) fn base_symbol(callee: &str) -> &str {
+    KEYED_TABLE_CTORS
+        .iter()
+        .chain(ELEM_DERIVE_HELPERS)
+        .find(|(_, rewritten)| *rewritten == callee)
+        .map_or(callee, |(base, _)| base)
 }
 
 fn elem_derive_for(callee: &str) -> Option<&'static str> {
@@ -407,26 +424,17 @@ fn elem_derive_for(callee: &str) -> Option<&'static str> {
 }
 
 /// How deep a copy the elements of `array_ty` need, expressed as a
-/// `RUXEN_ELEM_*` wire value.
+/// `RUXEN_ELEM_*` descriptor; POD (0) when `array_ty` is not an `Array`.
 ///
-/// DERIVED FROM THE DROP SELECTOR ON PURPOSE. The invariant that matters
-/// is copy-depth == drop-depth: whatever `heap_free_callee` will
-/// deep-free out of the result's slots is exactly what the derive has to
-/// have allocated, no more and no less. Re-implementing the `Ty` ladder
-/// here would be a second copy of that decision, free to drift from the
-/// first — which is the shape of the bug this whole mechanism exists to
-/// fix. So ask the drop selector what it is going to free, and copy that.
-///
-/// A new element-owning array type is therefore picked up by adding it to
-/// `heap_free_callee` (plus a `ruxen_elem_clone` case) and nothing else.
-/// An unrecognised drop helper falls to POD, which aliases — sound only
-/// because a helper this does not know about is one that frees nothing
-/// per-element.
-fn elem_kind_of(array_ty: &Ty) -> i64 {
-    match super::drops::heap_free_callee(peel(array_ty)) {
-        Some("ruxen_vec_drop_string") => ELEM_CSTR,
-        Some("ruxen_vec_drop_vec") => ELEM_VEC,
-        _ => ELEM_POD,
+/// Built by the drop pass's own `elem_desc`, on purpose. The invariant
+/// that matters is copy-depth == drop-depth: whatever the result's drop
+/// glue will free out of its slots is exactly what the derive has to have
+/// allocated, no more and no less. Both read the one descriptor builder,
+/// so they cannot drift apart.
+fn elem_kind_of(array_ty: &Ty, symbols: &SymbolTable) -> super::drops::ElemDesc {
+    match peel(array_ty) {
+        Ty::Array(elem) => super::drops::elem_desc(elem, symbols),
+        _ => super::drops::ElemDesc::Word(0),
     }
 }
 

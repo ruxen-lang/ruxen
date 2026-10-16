@@ -1,0 +1,87 @@
+# Blocker 5 (F-21). A user class whose methods are named like the Array
+# combinators (each, map, find, filter, position, partition) must run its own
+# bodies. MIR used to inline the Array loop over the class's field 0, so the
+# first field (here an Int, not an Array) was read as a Vec.
+class Counter
+  start: Int
+  limit: Int
+
+  def init(start: Int, limit: Int)
+    self.start = start
+    self.limit = limit
+  end
+
+  def each(&block: Block(Int) -> nil) -> nil
+    var i = self.start
+    while i < self.limit
+      yield i
+      i = i + 1
+    end
+  end
+
+  def map(&block: Block(Int) -> Int) -> Int
+    var total = 0
+    var i = self.start
+    while i < self.limit
+      total = total + (yield i)
+      i = i + 1
+    end
+    total
+  end
+
+  def find(&block: Block(Int) -> Bool) -> Int
+    var i = self.start
+    while i < self.limit
+      if yield i
+        return i
+      end
+      i = i + 1
+    end
+    -1
+  end
+
+  def filter(&block: Block(Int) -> Bool) -> Int
+    var count = 0
+    var i = self.start
+    while i < self.limit
+      if yield i
+        count = count + 1
+      end
+      i = i + 1
+    end
+    count
+  end
+
+  def position(&block: Block(Int) -> Bool) -> Int
+    var i = self.start
+    while i < self.limit
+      if yield i
+        return i - self.start
+      end
+      i = i + 1
+    end
+    -1
+  end
+
+  def partition(&block: Block(Int) -> Bool) -> Int
+    var below = 0
+    var i = self.start
+    while i < self.limit
+      if !(yield i)
+        below = below + 1
+      end
+      i = i + 1
+    end
+    below
+  end
+end
+
+def main
+  let c = Counter.new(3, 7)
+  c.each { |x| puts("each #{x}") }
+  puts("map #{c.map { |x| x * 10 }}")
+  puts("find #{c.find { |x| x > 4 }}")
+  puts("filter #{c.filter { |x| x % 2 == 0 }}")
+  puts("position #{c.position { |x| x == 5 }}")
+  puts("partition #{c.partition { |x| x > 4 }}")
+end

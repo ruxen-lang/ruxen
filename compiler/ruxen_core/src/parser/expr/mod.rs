@@ -28,11 +28,10 @@ mod operators;
 /// Right-associative: left < right. Left-associative: left > right (or left == right-1).
 /// Non-associative: left == right.
 fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
+    if let Some(op) = BinOp::from_token(kind) {
+        return Some(op.binding_power());
+    }
     match kind {
-        // Ruby keyword `and` / `or`: one shared precedence level, looser
-        // than assignment, and left-associative.
-        TokenKind::And | TokenKind::Or => Some((0, 1)),
-
         // Assignment: right-associative (1, 2)
         TokenKind::Eq
         | TokenKind::PlusEq
@@ -48,53 +47,8 @@ fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
         | TokenKind::PipeEq
         | TokenKind::CaretEq => Some((1, 2)),
 
-        // Nil coalescing: right-associative and between assignment and `||`.
-        // Equal binding powers let `a ?? b ?? c` parse as `a ?? (b ?? c)`.
-        TokenKind::QuestionQuestion => Some((2, 2)),
-
-        // Logical OR: left-associative (3, 4)
-        TokenKind::PipePipe => Some((3, 4)),
-
-        // Logical AND: left-associative (5, 6)
-        TokenKind::AmpAmp => Some((5, 6)),
-
-        // Comparison + regex-match: non-associative (7, 8). `~=` sits
-        // at the same precedence as `==`/`!=` per the std.regex spec.
-        TokenKind::EqEq
-        | TokenKind::NotEq
-        | TokenKind::Lt
-        | TokenKind::Gt
-        | TokenKind::LtEq
-        | TokenKind::GtEq
-        | TokenKind::Spaceship
-        | TokenKind::TildeEq => Some((7, 8)),
-
         // Range: non-associative (9, 10)
         TokenKind::DotDot | TokenKind::DotDotDot => Some((9, 10)),
-
-        // Bitwise OR (11, 12)
-        TokenKind::Pipe => Some((11, 12)),
-
-        // Bitwise XOR (13, 14)
-        TokenKind::Caret => Some((13, 14)),
-
-        // Bitwise AND (15, 16)
-        TokenKind::Amp => Some((15, 16)),
-
-        // Shift (17, 18)
-        TokenKind::Shl | TokenKind::Shr => Some((17, 18)),
-
-        // Add/Sub (19, 20)
-        TokenKind::Plus | TokenKind::Minus => Some((19, 20)),
-
-        // Mul/Div/Mod (21, 22)
-        TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Some((21, 22)),
-
-        // Exponentiation binds TIGHTER than `* / %` and unary minus, and is
-        // RIGHT-associative (`l_bp > r_bp`): `2 ** 3 ** 2 == 512`, and
-        // `-2 ** 2 == -4` (the `**` is consumed inside the prefix operand,
-        // whose min_bp is 25). Postfix (`.m`/`[i]`, bp 27) still binds tighter.
-        TokenKind::StarStar => Some((26, 25)),
 
         // Cast (23, 24)
         TokenKind::As => Some((23, 24)),
@@ -361,35 +315,5 @@ impl Parser {
                 | TokenKind::Unsafe
                 | TokenKind::Nil
         )
-    }
-}
-
-fn token_to_binop(kind: &TokenKind) -> BinOp {
-    match kind {
-        TokenKind::Plus => BinOp::Add,
-        TokenKind::Minus => BinOp::Sub,
-        TokenKind::Star => BinOp::Mul,
-        TokenKind::StarStar => BinOp::Pow,
-        TokenKind::Slash => BinOp::Div,
-        TokenKind::Percent => BinOp::Mod,
-        TokenKind::EqEq => BinOp::Eq,
-        TokenKind::NotEq => BinOp::NotEq,
-        TokenKind::Lt => BinOp::Lt,
-        TokenKind::Gt => BinOp::Gt,
-        TokenKind::LtEq => BinOp::LtEq,
-        TokenKind::GtEq => BinOp::GtEq,
-        TokenKind::Spaceship => BinOp::Cmp,
-        TokenKind::AmpAmp => BinOp::And,
-        TokenKind::PipePipe => BinOp::Or,
-        TokenKind::QuestionQuestion => BinOp::NilCoalesce,
-        TokenKind::And => BinOp::KeywordAnd,
-        TokenKind::Or => BinOp::KeywordOr,
-        TokenKind::Amp => BinOp::BitAnd,
-        TokenKind::Pipe => BinOp::BitOr,
-        TokenKind::Caret => BinOp::BitXor,
-        TokenKind::Shl => BinOp::Shl,
-        TokenKind::Shr => BinOp::Shr,
-        TokenKind::TildeEq => BinOp::MatchOp,
-        _ => unreachable!("not a binary operator: {:?}", kind),
     }
 }

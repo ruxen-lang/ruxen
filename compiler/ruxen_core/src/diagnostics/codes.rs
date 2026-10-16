@@ -223,14 +223,12 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0712",
         title: "SeekFrom arg out of range (negative offset on Start)",
     },
-    // Phase 2 #06.5 T6: BufReader[R] / BufWriter[W] v1 restrict the
-    // inner type to the closed set {File, TcpStream}. The full
-    // Read/Write trait/mixin story is deferred to v1.5 with the
-    // iterator-trait work; until then any other R/W is rejected at
-    // typeck with E0714 (see typeck::method_resolvers::builtin_method_type).
+    // A method called on a `module` name (`BufReader.new`): a module is a
+    // namespace, so the call names one of its classes instead
+    // (`BufReader.File.new`). Emitted by typeck `reject_module_receiver`.
     CodeInfo {
         code: "E0714",
-        title: "BufReader/BufWriter inner type must be File or TcpStream (v1)",
+        title: "method called on a module instead of a class inside it",
     },
     // #06.8 Phase 2: cross-decl FFI signature conflict — two
     // `lib`/`extern` declarations target the same C symbol with
@@ -340,10 +338,29 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0739",
         title: "`main` cannot take parameters",
     },
+    // E0740: a method name the receiver's home class does not declare
+    // (`Array.from(123)`), from typeck `resolve_method_call`. It used to type
+    // as a fresh variable and fail at link time.
+    CodeInfo {
+        code: "E0740",
+        title: "no method with this name on the receiver's type",
+    },
+    // E0741: an argument of a builtin head's class method that does not fit
+    // the declared parameter (`Array.with_capacity("x")`).
+    CodeInfo {
+        code: "E0741",
+        title: "argument type does not match the class method's parameter",
+    },
+    // E0742: a call of an overloaded free function whose argument fits no
+    // overload (`f(2.5)` with only `f(Int)` and `f(Bool)`). The resolver
+    // falls back to an overload by arity, which passed the value anyway.
+    CodeInfo {
+        code: "E0742",
+        title: "no overload of the function takes this argument type",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
-    // The borrow checker maintains a parallel `ErrorCode` enum in
-    // `borrow_check/errors.rs`; titles below mirror its `title()`
-    // method. Keep them in sync when adding new codes.
+    // The borrow checker's `ErrorCode` enum in `borrow_check/errors.rs`
+    // reads its titles from these rows.
     CodeInfo {
         code: "E1001",
         title: "value used after move",
@@ -357,24 +374,12 @@ pub const REGISTRY: &[CodeInfo] = &[
         title: "cannot borrow read-only — already borrowed writably",
     },
     CodeInfo {
-        code: "E1004",
-        title: "cannot move out of borrowed reference",
-    },
-    CodeInfo {
-        code: "E1005",
-        title: "borrow outlives owner",
-    },
-    CodeInfo {
         code: "E1006",
         title: "cannot assign to `let` binding",
     },
     CodeInfo {
         code: "E1007",
         title: "cannot borrow `let` binding writably",
-    },
-    CodeInfo {
-        code: "E1008",
-        title: "value moved into closure, cannot be used outside",
     },
     CodeInfo {
         code: "E1009",

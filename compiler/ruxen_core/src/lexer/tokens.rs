@@ -281,53 +281,58 @@ impl<'a> Lexer<'a> {
         self.try_numeric_suffix(false)
     }
 
+    /// Consume a numeric suffix at the cursor, if one is present and is
+    /// not the start of a longer identifier. Integer literals take the
+    /// integer suffixes; float literals take `f32` / `f64` and, as they
+    /// always have, `u`.
     pub(super) fn try_numeric_suffix(&mut self, is_int: bool) -> Option<NumericSuffix> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        let remaining: String = self.chars[self.pos..].iter().collect();
-
-        // Try longest suffixes first
-        let suffixes: &[(&str, NumericSuffix, bool)] = &[
-            ("isize", NumericSuffix::ISize, true),
-            ("usize", NumericSuffix::USize, true),
-            ("i64", NumericSuffix::I64, true),
-            ("i32", NumericSuffix::I32, true),
-            ("i16", NumericSuffix::I16, true),
-            ("i8", NumericSuffix::I8, true),
-            ("u64", NumericSuffix::U64, true),
-            ("u32", NumericSuffix::U32, true),
-            ("u16", NumericSuffix::U16, true),
-            ("u8", NumericSuffix::U8, true),
-            ("f64", NumericSuffix::F64, false),
-            ("f32", NumericSuffix::F32, false),
-            ("u", NumericSuffix::U, true),
+        // Longest spelling first so `isize` wins over `i8` and `u64` over `u`.
+        const LONGEST_FIRST: [NumericSuffix; 13] = [
+            NumericSuffix::ISize,
+            NumericSuffix::USize,
+            NumericSuffix::I64,
+            NumericSuffix::I32,
+            NumericSuffix::I16,
+            NumericSuffix::I8,
+            NumericSuffix::U64,
+            NumericSuffix::U32,
+            NumericSuffix::U16,
+            NumericSuffix::U8,
+            NumericSuffix::F64,
+            NumericSuffix::F32,
+            NumericSuffix::U,
         ];
-
-        for &(text, ref suffix, int_only) in suffixes {
-            if !is_int && int_only && *suffix != NumericSuffix::U {
-                // float can have f32/f64 but not int suffixes
+        for suffix in LONGEST_FIRST {
+            let is_float_suffix = matches!(suffix, NumericSuffix::F32 | NumericSuffix::F64);
+            let allowed = if is_int {
+                !is_float_suffix
+            } else {
+                is_float_suffix || suffix == NumericSuffix::U
+            };
+            if !allowed {
                 continue;
             }
-            if is_int && !int_only {
-                // int can have int suffixes and also f32/f64 (wait — no, skip float suffixes for ints)
+            let text = suffix.as_str();
+            let end = self.pos + text.len();
+            let Some(candidate) = self.chars.get(self.pos..end) else {
+                continue;
+            };
+            if !candidate.iter().copied().eq(text.chars()) {
                 continue;
             }
-            if remaining.starts_with(text) {
-                // Ensure the suffix isn't followed by identifier chars
-                let after = remaining.chars().nth(text.len());
-                if after.is_none_or(|c| !c.is_alphanumeric() && c != '_') {
-                    for _ in 0..text.len() {
-                        self.advance();
-                    }
-                    return Some(*suffix);
-                }
+            // The suffix must not run on into identifier characters.
+            if self
+                .chars
+                .get(end)
+                .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+            {
+                continue;
             }
+            for _ in 0..text.len() {
+                self.advance();
+            }
+            return Some(suffix);
         }
-
-        // Special case: float suffixes on int context are actually floats
-        // But we handle that at parse level. For now, just return None.
         None
     }
 

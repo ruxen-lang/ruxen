@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 
 use crate::lexer::token::{Token, TokenKind};
 use crate::lexer::Lexer;
+use crate::parser::ast::Program;
 use crate::parser::Parser;
-use crate::typeck;
+use crate::resolve::Resolver;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedFile {
@@ -140,9 +141,12 @@ impl ModuleLoader {
         if self.autoloads.is_empty() {
             return Ok(());
         }
+        let mut bootstrap_diagnostics = Vec::new();
+        let bootstrap =
+            crate::resolve::bootstrap::run_bootstrap_with_package_names(&mut bootstrap_diagnostics);
         loop {
             let source = combine_files(&self.files);
-            let unresolved = compile_unresolved_names(&source);
+            let unresolved = compile_unresolved_names(&source, &bootstrap);
             let pending: Vec<AutoloadRegistration> = self
                 .autoloads
                 .values()
@@ -473,19 +477,24 @@ fn update_scope_stack(tokens: &[Token], stack: &mut Vec<Option<String>>) {
     }
 }
 
-/// Resolve `source` and return the raw identifiers name resolution could not
-/// resolve. Drives the autoload fixpoint: a registration whose constant appears
-/// here is loaded, and the loop repeats until the set is empty (or no file was
-/// added). Parse/lex failures yield an empty list (a genuine syntax error fails
-/// the real build downstream).
-fn compile_unresolved_names(source: &str) -> Vec<String> {
+/// Resolve `source` against the stdlib `bootstrap` and return the raw
+/// identifiers name resolution could not resolve. Drives the autoload
+/// fixpoint: a registration whose constant appears here is loaded, and the
+/// loop repeats until the set is empty (or no file was added). Only name
+/// resolution runs (type inference adds nothing to this set), as the build's
+/// own `type_check` does it: implicit `main` first. Parse/lex failures yield
+/// an empty list (a genuine syntax error fails the real build downstream).
+fn compile_unresolved_names(source: &str, bootstrap: &[(String, Program)]) -> Vec<String> {
     let Ok(tokens) = Lexer::new(source).tokenize() else {
         return Vec::new();
     };
-    let Ok(program) = Parser::new(tokens).parse() else {
+    let Ok(mut program) = Parser::new(tokens).parse() else {
         return Vec::new();
     };
-    typeck::type_check(&program).unresolved_names
+    crate::parser::implicit_main::synthesize_implicit_main(&mut program);
+    Resolver::new()
+        .resolve_with_bootstrap_packages(&program, bootstrap)
+        .unresolved_names
 }
 
 /// True when `constant` is one of the raw identifiers name resolution reported

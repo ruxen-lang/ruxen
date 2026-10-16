@@ -42,10 +42,10 @@ end
 ## Free fn rather than method because the result type's tuple shape is
 ## awkward to type as a method return.
 def accept_state_to_result(state_ptr: Int) -> Result[(AsyncTcpStream, String), IoError]
-  let err_tag = ruxen_async_accept_state_get_err(state_ptr)
-  if err_tag >= 0
+  let err = ruxen_async_accept_state_get_err(state_ptr)
+  if err >= 0
     ruxen_async_accept_state_mark_taken(state_ptr)
-    return Result.Err(io_error_from_tag(err_tag))
+    return Result.Err(ruxen_io_error_value_from_errno(err))
   end
   let stream_fd = ruxen_async_accept_state_take_fd(state_ptr)
   let peer = ruxen_async_accept_state_take_peer(state_ptr)
@@ -55,10 +55,10 @@ def accept_state_to_result(state_ptr: Int) -> Result[(AsyncTcpStream, String), I
 end
 
 def connect_state_to_result(state_ptr: Int) -> Result[AsyncTcpStream, IoError]
-  let err_tag = ruxen_async_connect_state_get_err(state_ptr)
-  if err_tag >= 0
+  let err = ruxen_async_connect_state_get_err(state_ptr)
+  if err >= 0
     ruxen_async_connect_state_mark_taken(state_ptr)
-    return Result.Err(io_error_from_tag(err_tag))
+    return Result.Err(ruxen_io_error_value_from_errno(err))
   end
   let stream_fd = ruxen_async_connect_state_take_fd(state_ptr)
   ruxen_async_connect_state_mark_taken(state_ptr)
@@ -66,14 +66,19 @@ def connect_state_to_result(state_ptr: Int) -> Result[AsyncTcpStream, IoError]
   Result.Ok(stream)
 end
 
-## Hash an IoError tag (returned as an Int from the C state takers) into
-## an IoError struct. The state takers expose the tag as an Int rather
-## than constructing the IoError themselves so the Ruxen side controls
-## the typed value the Result.Err arm carries.
+## Build the IoError for variant tag `tag` (its zero-based position in
+## `enum IoError`), with no message. Public since the first async_net
+## release; the state takers now report an errno instead, which the
+## result builders above turn into an IoError (strerror message
+## included) through `ruxen_io_error_value_from_errno`.
 def io_error_from_tag(tag: Int) -> IoError
   ruxen_io_error_from_tag(tag)
 end
 
+## The state takers expose the errno a C state recorded at poll time
+## rather than constructing the IoError themselves, so the Ruxen side
+## controls the typed value the Result.Err arm carries.
 lib "../io/runtime/io_error.c"
+  def ruxen_io_error_value_from_errno(err: Int) -> IoError
   def ruxen_io_error_from_tag as "ruxen_io_error_unit"(tag: Int) -> IoError
 end

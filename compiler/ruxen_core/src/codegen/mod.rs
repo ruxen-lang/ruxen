@@ -6,6 +6,7 @@ pub mod cranelift;
 pub mod lang_intrinsics;
 pub mod layout;
 pub mod object;
+pub mod residual_abi;
 pub mod runtime;
 pub mod target;
 // `runtime_table` deleted in #06.95 Phase E-rest FINAL — every
@@ -367,6 +368,63 @@ pub fn find_runtime_sources_in_dir(dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(sources)
 }
 
+/// What a project's link line needs beyond the stdlib, shared by `ruxen build`
+/// (`ruxen_cli`) and `ruxen test` (`ruxenc`) so the two cannot drift.
+///
+/// Dependencies are flat-merged into the binary (Q16), so nothing of theirs
+/// arrives through an rlib: their C shims and link needs (Q32) are gathered
+/// here alongside the project's own.
+#[derive(Debug, Default)]
+pub struct LinkInputs {
+    /// `runtime/*.c` and `.m` shims of the project, then of each dependency.
+    pub runtime_sources: Vec<PathBuf>,
+    /// Each dependency's `[system_libs] libs`, deduplicated, as bare names.
+    pub system_libs: Vec<String>,
+    /// `[system_libs] frameworks` of the project and each dependency,
+    /// deduplicated. Only macOS links them; callers skip them elsewhere.
+    pub frameworks: Vec<String>,
+}
+
+impl LinkInputs {
+    /// Gather the link inputs of `project_dir` and its topologically sorted
+    /// flat-merged `dep_dirs`. A missing `runtime/` or `Ruxen.toml`
+    /// contributes nothing; an unreadable `runtime/` is an error.
+    pub fn for_project(project_dir: &Path, dep_dirs: &[PathBuf]) -> Result<Self, String> {
+        let mut inputs = LinkInputs {
+            runtime_sources: find_runtime_sources_in_dir(project_dir)?,
+            ..LinkInputs::default()
+        };
+        push_unique(
+            &mut inputs.frameworks,
+            parse_system_frameworks(&read_package_manifest(project_dir)),
+        );
+        for dep_dir in dep_dirs {
+            inputs
+                .runtime_sources
+                .extend(find_runtime_sources_in_dir(dep_dir)?);
+            let manifest = read_package_manifest(dep_dir);
+            push_unique(&mut inputs.system_libs, parse_system_libs(&manifest));
+            push_unique(&mut inputs.frameworks, parse_system_frameworks(&manifest));
+        }
+        Ok(inputs)
+    }
+}
+
+/// The text of `<package_dir>/Ruxen.toml`, or empty when it is missing or
+/// unreadable (a package without one declares no `[system_libs]`).
+fn read_package_manifest(package_dir: &Path) -> String {
+    std::fs::read_to_string(package_dir.join("Ruxen.toml")).unwrap_or_default()
+}
+
+/// Append each of `items` not already in `out`, keeping first-seen order.
+fn push_unique(out: &mut Vec<String>, items: Vec<String>) {
+    for item in items {
+        if !out.contains(&item) {
+            out.push(item);
+        }
+    }
+}
+
 /// Walk every `library/std/<pkg>/Ruxen.toml`, extract the
 /// `[system_libs] libs = [...]` entries, and return the deduplicated
 /// union as `-l<name>` linker flags in stable order.
@@ -393,32 +451,23 @@ pub fn collect_system_lib_flags() -> Result<Vec<String>, String> {
     let std_root = find_stdlib_root()?;
     let mut seen: Vec<String> = Vec::new();
 
-    let mut pkg_paths: Vec<PathBuf> = Vec::new();
+    let mut pkg_dirs: Vec<PathBuf> = Vec::new();
     let pkg_iter = std::fs::read_dir(&std_root)
         .map_err(|e| format!("read_dir({}): {}", std_root.display(), e))?;
     for entry in pkg_iter.flatten() {
         let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let toml_path = path.join("Ruxen.toml");
-        if toml_path.is_file() {
-            pkg_paths.push(toml_path);
+        if path.is_dir() {
+            pkg_dirs.push(path);
         }
     }
     // Stable order for reproducible link command lines.
-    pkg_paths.sort();
+    pkg_dirs.sort();
 
-    for toml_path in &pkg_paths {
-        let contents = match std::fs::read_to_string(toml_path) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        for lib in parse_system_libs(&contents) {
-            if !seen.contains(&lib) {
-                seen.push(lib);
-            }
-        }
+    for pkg_dir in &pkg_dirs {
+        push_unique(
+            &mut seen,
+            parse_system_libs(&read_package_manifest(pkg_dir)),
+        );
     }
 
     Ok(seen.into_iter().map(|l| format!("-l{}", l)).collect())
@@ -737,31 +786,13 @@ fn compile_host(
         }
     }
 
-    // Step 3b: When the fast path is active, whole-archive the prebuilt
-    // runtime so every `ruxen_*` symbol survives the link. The linker
-    // would otherwise drop archive members no user-object section
-    // happens to reference, and Cranelift dispatch helpers / FFI calls
-    // would see undefined symbols at run time.
-    //
-    // GNU ld and lld accept `-Wl,--whole-archive <ar> -Wl,--no-whole-archive`.
-    // Apple ld doesn't honour `--whole-archive`; on macOS we emit
-    // `-Wl,-force_load,<ar>` instead, matching `ruxen_repl/build.rs`
-    // and `src/ruxen_cli/build.rs` for the REPL bin.
-    if let Some(ar) = &prebuilt_archive {
-        let ar_str = ar.to_string_lossy().to_string();
-        if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
-            all_link_flags.push(format!("-Wl,-force_load,{}", ar_str));
-        } else {
-            all_link_flags.push("-Wl,--whole-archive".to_string());
-            all_link_flags.push(ar_str);
-            all_link_flags.push("-Wl,--no-whole-archive".to_string());
-        }
-    }
-
-    // Step 4: Link into executable
+    // Step 4: Link into executable. `emit_executable` whole-archives the
+    // prebuilt runtime (so every `ruxen_*` symbol survives) and places it,
+    // like every other input, before the `[system_libs]` flags above.
     object::emit_executable(
         &object_bytes,
         &runtime_objects,
+        prebuilt_archive.as_deref(),
         output_path,
         sanitize,
         &all_link_flags,
@@ -944,7 +975,7 @@ pub fn compile_no_std(
     // `[system_libs]` aggregation, no FFI flags. `emit_executable` with empty
     // runtime objects + empty link flags is exactly "bare `cc <obj> -o <out>`"
     // (plus the macOS deployment-target pin, which is harmless).
-    object::emit_executable(&object_bytes, &[], output_path, false, &[])
+    object::emit_executable(&object_bytes, &[], None, output_path, false, &[])
 }
 
 /// Minimal `which`: is `name` an executable on `$PATH`? Used to detect an
@@ -968,15 +999,31 @@ mod prebuilt_archive_tests {
 
     static N: AtomicU64 = AtomicU64::new(0);
 
-    /// Unique empty temp dir per call (no external crates).
-    fn fresh_dir() -> PathBuf {
+    /// Unique empty temp dir per call (no external crates), removed when
+    /// the test drops it.
+    struct FreshDir(PathBuf);
+
+    impl std::ops::Deref for FreshDir {
+        type Target = PathBuf;
+        fn deref(&self) -> &PathBuf {
+            &self.0
+        }
+    }
+
+    impl Drop for FreshDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn fresh_dir() -> FreshDir {
         let d = std::env::temp_dir().join(format!(
             "ruxen_ar_test_{}_{}",
             std::process::id(),
             N.fetch_add(1, Ordering::Relaxed),
         ));
         std::fs::create_dir_all(&d).unwrap();
-        d
+        FreshDir(d)
     }
 
     fn touch(p: &std::path::Path) {

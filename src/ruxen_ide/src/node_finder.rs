@@ -1,5 +1,6 @@
 use ruxen_core::hir::nodes::*;
 use ruxen_core::hir::types::Ty;
+use ruxen_core::hir::visit::{walk_expr, walk_impl_block, walk_pattern, Visit};
 use ruxen_core::lexer::token::Span;
 
 /// Describes the innermost HIR node found at a cursor position.
@@ -30,14 +31,73 @@ pub fn node_at_position(program: &HirProgram, byte_offset: usize) -> Option<Node
     let mut finder = NodeFinder {
         target: byte_offset,
         result: None,
+        enclosing_fn: None,
     };
     finder.visit_program(program);
     finder.result
 }
 
+/// The innermost function or method containing a byte offset.
+pub struct EnclosingFn {
+    pub name: String,
+    pub is_async: bool,
+    /// The whole definition; it starts at its `def` (or `async`) keyword.
+    pub span: Span,
+}
+
+/// Find the innermost function or method whose span contains `byte_offset`.
+pub fn enclosing_function(program: &HirProgram, byte_offset: usize) -> Option<EnclosingFn> {
+    let mut finder = NodeFinder {
+        target: byte_offset,
+        result: None,
+        enclosing_fn: None,
+    };
+    finder.visit_program(program);
+    finder.enclosing_fn
+}
+
+/// The innermost `MethodCall` whose span contains `byte_offset`, as its
+/// receiver `Ty` and textual method name. The fallback highlight and
+/// rename use when typeck left the call's method unresolved.
+pub(crate) fn method_call_at(program: &HirProgram, byte_offset: usize) -> Option<(Ty, String)> {
+    let mut finder = MethodCallAt {
+        target: byte_offset,
+        result: None,
+    };
+    for item in &program.items {
+        finder.visit_item(item);
+    }
+    finder.result
+}
+
+struct MethodCallAt {
+    target: usize,
+    result: Option<(Ty, String)>,
+}
+
+impl Visit for MethodCallAt {
+    fn visit_expr(&mut self, expr: &HirExpr) {
+        if !(expr.span.start <= self.target && self.target < expr.span.end) {
+            return;
+        }
+        // Record this call as the best so far; a deeper call (say, one in
+        // an argument) overwrites it.
+        if let HirExprKind::MethodCall {
+            object,
+            method_name,
+            ..
+        } = &expr.kind
+        {
+            self.result = Some((object.ty.clone(), method_name.clone()));
+        }
+        walk_expr(self, expr);
+    }
+}
+
 struct NodeFinder {
     target: usize,
     result: Option<NodeAtPosition>,
+    enclosing_fn: Option<EnclosingFn>,
 }
 
 impl NodeFinder {
@@ -50,10 +110,12 @@ impl NodeFinder {
             self.visit_item(item);
         }
     }
+}
 
+impl Visit for NodeFinder {
     fn visit_item(&mut self, item: &HirItem) {
         match item {
-            HirItem::Function(func) => self.visit_func_def(func),
+            HirItem::Function(func) => self.visit_func(func),
             HirItem::Class(class) => {
                 if self.contains(&class.span) {
                     // Check if cursor is on the class name
@@ -68,7 +130,7 @@ impl NodeFinder {
                         self.visit_field_def(field);
                     }
                     for method in &class.methods {
-                        self.visit_func_def(method);
+                        self.visit_func(method);
                     }
                     for imp in &class.impl_blocks {
                         self.visit_impl_block(imp);
@@ -98,13 +160,8 @@ impl NodeFinder {
                 if self.contains(&t.span) {
                     for item in &t.items {
                         match item {
-                            HirMixinItem::DefaultMethod(func) => self.visit_func_def(func),
-                            HirMixinItem::MethodSig { span, .. } => {
-                                if self.contains(span) {
-                                    // method signature in trait
-                                }
-                            }
-                            _ => {}
+                            HirMixinItem::DefaultMethod(func) => self.visit_func(func),
+                            HirMixinItem::MethodSig { .. } | HirMixinItem::AssocType { .. } => {}
                         }
                     }
                 }
@@ -121,28 +178,15 @@ impl NodeFinder {
         }
     }
 
-    fn visit_impl_block(&mut self, imp: &HirImplBlock) {
-        if self.contains(&imp.span) {
-            for item in &imp.items {
-                match item {
-                    HirImplItem::Method(func) => self.visit_func_def(func),
-                    HirImplItem::AssocType { .. } => {}
-                    HirImplItem::Include { .. } => {}
-                }
-            }
-        }
-    }
-
-    fn visit_field_def(&mut self, field: &HirFieldDef) {
-        if self.contains(&field.span) {
-            self.result = Some(NodeAtPosition::Definition(field.def_id, field.span.clone()));
-        }
-    }
-
-    fn visit_func_def(&mut self, func: &HirFuncDef) {
+    fn visit_func(&mut self, func: &HirFuncDef) {
         if !self.contains(&func.span) {
             return;
         }
+        self.enclosing_fn = Some(EnclosingFn {
+            name: func.name.clone(),
+            is_async: func.is_async,
+            span: func.span.clone(),
+        });
         // Check if cursor is on the function name itself
         // The name is at the start of the function definition
         self.result = Some(NodeAtPosition::Definition(func.def_id, func.span.clone()));
@@ -159,216 +203,52 @@ impl NodeFinder {
         if !self.contains(&expr.span) {
             return;
         }
-
         match &expr.kind {
             HirExprKind::VarRef(def_id) => {
                 self.result = Some(NodeAtPosition::VarRef(*def_id, expr.span.clone()));
             }
-            HirExprKind::FnCall { callee, args, .. } => {
+            HirExprKind::FnCall { callee, .. } => {
                 self.result = Some(NodeAtPosition::FnCall {
                     callee: *callee,
                     span: expr.span.clone(),
                 });
-                for arg in args {
-                    self.visit_expr(arg);
-                }
             }
-            HirExprKind::MethodCall {
-                object,
-                method,
-                args,
-                block,
-                ..
-            } => {
-                self.visit_expr(object);
-                // If we didn't find anything more specific in the object, this is a method call
-                if !self.found_inside(object) {
-                    self.result = Some(NodeAtPosition::MethodCall {
-                        method: *method,
-                        span: expr.span.clone(),
-                    });
-                }
-                for arg in args {
-                    self.visit_expr(arg);
-                }
-                if let Some(b) = block {
-                    self.visit_expr(b);
-                }
+            // A cursor outside the receiver is on the call itself (or in an
+            // argument, which the walk below then narrows to).
+            HirExprKind::MethodCall { object, method, .. } if !self.contains(&object.span) => {
+                self.result = Some(NodeAtPosition::MethodCall {
+                    method: *method,
+                    span: expr.span.clone(),
+                });
+            }
+            _ => {}
+        }
+        walk_expr(self, expr);
+        // A cursor inside the receiver lands on the call or field access
+        // unless the receiver held something more specific.
+        match &expr.kind {
+            HirExprKind::MethodCall { object, method, .. }
+                if self.contains(&object.span) && !self.found_inside(object) =>
+            {
+                self.result = Some(NodeAtPosition::MethodCall {
+                    method: *method,
+                    span: expr.span.clone(),
+                });
             }
             HirExprKind::FieldAccess {
                 object, field_name, ..
-            } => {
-                self.visit_expr(object);
-                if !self.found_inside(object) {
-                    self.result = Some(NodeAtPosition::FieldAccess {
-                        object_ty: object.ty.clone(),
-                        field_name: field_name.clone(),
-                        span: expr.span.clone(),
-                    });
-                }
+            } if !self.found_inside(object) => {
+                self.result = Some(NodeAtPosition::FieldAccess {
+                    object_ty: object.ty.clone(),
+                    field_name: field_name.clone(),
+                    span: expr.span.clone(),
+                });
             }
-            HirExprKind::BinaryOp { left, right, .. } => {
-                self.visit_expr(left);
-                self.visit_expr(right);
-            }
-            HirExprKind::UnaryOp { operand, .. } => {
-                self.visit_expr(operand);
-            }
-            HirExprKind::Borrow { expr: inner, .. } => {
-                self.visit_expr(inner);
-            }
-            HirExprKind::Block(stmts, tail) => {
-                for stmt in stmts {
-                    self.visit_statement(stmt);
-                }
-                if let Some(tail) = tail {
-                    self.visit_expr(tail);
-                }
-            }
-            HirExprKind::If {
-                cond,
-                then_branch,
-                else_branch,
-            } => {
-                self.visit_expr(cond);
-                self.visit_expr(then_branch);
-                if let Some(e) = else_branch {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::Match { scrutinee, arms } => {
-                self.visit_expr(scrutinee);
-                for arm in arms {
-                    self.visit_pattern(&arm.pattern);
-                    if let Some(guard) = &arm.guard {
-                        self.visit_expr(guard);
-                    }
-                    self.visit_expr(&arm.body);
-                }
-            }
-            HirExprKind::While { condition, body } => {
-                self.visit_expr(condition);
-                self.visit_expr(body);
-            }
-            HirExprKind::For {
-                binding,
-                iterable,
-                body,
-                ..
-            } => {
-                self.visit_expr(iterable);
-                // The binding is a definition
-                // We don't have a separate span for the binding name,
-                // but it's part of the for expression
-                let _ = binding;
-                self.visit_expr(body);
-            }
-            HirExprKind::Loop { body } => {
-                self.visit_expr(body);
-            }
-            HirExprKind::Assign { target, value, .. } => {
-                self.visit_expr(target);
-                self.visit_expr(value);
-            }
-            HirExprKind::CompoundAssign { target, value, .. } => {
-                self.visit_expr(target);
-                self.visit_expr(value);
-            }
-            HirExprKind::Return(Some(inner))
-            | HirExprKind::Break(Some(inner))
-            | HirExprKind::Next(Some(inner)) => {
-                self.visit_expr(inner);
-            }
-            HirExprKind::Closure { body, .. } => {
-                self.visit_expr(body);
-            }
-            HirExprKind::Construct { fields, .. } => {
-                for (_name, val) in fields {
-                    self.visit_expr(val);
-                }
-            }
-            HirExprKind::EnumVariant { fields, .. } => {
-                for (_name, val) in fields {
-                    self.visit_expr(val);
-                }
-            }
-            HirExprKind::MultiAssign {
-                targets, values, ..
-            } => {
-                for t in targets {
-                    self.visit_expr(t);
-                }
-                for v in values {
-                    self.visit_expr(v);
-                }
-            }
-            HirExprKind::Tuple(elems) | HirExprKind::ArrayLiteral(elems) => {
-                for e in elems {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::MapLiteral(entries) => {
-                for (k, v) in entries {
-                    self.visit_expr(k);
-                    self.visit_expr(v);
-                }
-            }
-            HirExprKind::Index { object, index } => {
-                self.visit_expr(object);
-                self.visit_expr(index);
-            }
-            HirExprKind::Cast { expr: inner, .. } => {
-                self.visit_expr(inner);
-            }
-            HirExprKind::ArrayFill { value, .. } => {
-                self.visit_expr(value);
-            }
-            HirExprKind::Range { start, end, .. } => {
-                if let Some(s) = start {
-                    self.visit_expr(s);
-                }
-                if let Some(e) = end {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::Interpolation { parts } => {
-                for part in parts {
-                    if let HirInterpolationPart::Expr { expr: e, .. } = part {
-                        self.visit_expr(e);
-                    }
-                }
-            }
-            HirExprKind::MacroCall { args, .. } => {
-                for arg in args {
-                    self.visit_expr(arg);
-                }
-            }
-            HirExprKind::UnsafeBlock(stmts, tail) => {
-                for stmt in stmts {
-                    self.visit_statement(stmt);
-                }
-                if let Some(tail) = tail {
-                    self.visit_expr(tail);
-                }
-            }
-            // Literals and other terminal nodes — no children to visit
-            HirExprKind::IntLiteral(_)
-            | HirExprKind::FloatLiteral(_)
-            | HirExprKind::StringLiteral(_)
-            | HirExprKind::BoolLiteral(_)
-            | HirExprKind::CharLiteral(_)
-            | HirExprKind::UnitLiteral
-            | HirExprKind::NullLiteral
-            | HirExprKind::RegexLiteral { .. }
-            | HirExprKind::Continue
-            | HirExprKind::Return(None)
-            | HirExprKind::Break(None)
-            | HirExprKind::Next(None)
-            | HirExprKind::Error => {}
+            _ => {}
         }
     }
 
-    fn visit_statement(&mut self, stmt: &HirStatement) {
+    fn visit_stmt(&mut self, stmt: &HirStatement) {
         match stmt {
             HirStatement::Let {
                 def_id,
@@ -399,37 +279,26 @@ impl NodeFinder {
 
     fn visit_pattern(&mut self, pattern: &HirPattern) {
         match pattern {
-            HirPattern::Binding { def_id, span, .. } => {
+            HirPattern::Binding { def_id, span, .. } | HirPattern::Ref { def_id, span, .. } => {
                 if self.contains(span) {
                     self.result = Some(NodeAtPosition::Definition(*def_id, span.clone()));
                 }
             }
-            HirPattern::Tuple { elements, .. } => {
-                for elem in elements {
-                    self.visit_pattern(elem);
-                }
-            }
-            HirPattern::Enum { fields, .. } => {
-                for field in fields {
-                    self.visit_pattern(field);
-                }
-            }
-            HirPattern::Struct { fields, .. } => {
-                for (_name, pat) in fields {
-                    self.visit_pattern(pat);
-                }
-            }
-            HirPattern::Or { patterns, .. } => {
-                for pat in patterns {
-                    self.visit_pattern(pat);
-                }
-            }
-            HirPattern::Ref { def_id, span, .. } => {
-                if self.contains(span) {
-                    self.result = Some(NodeAtPosition::Definition(*def_id, span.clone()));
-                }
-            }
-            HirPattern::Wildcard { .. } | HirPattern::Literal { .. } | HirPattern::Rest { .. } => {}
+            _ => walk_pattern(self, pattern),
+        }
+    }
+}
+
+impl NodeFinder {
+    fn visit_impl_block(&mut self, imp: &HirImplBlock) {
+        if self.contains(&imp.span) {
+            walk_impl_block(self, imp);
+        }
+    }
+
+    fn visit_field_def(&mut self, field: &HirFieldDef) {
+        if self.contains(&field.span) {
+            self.result = Some(NodeAtPosition::Definition(field.def_id, field.span.clone()));
         }
     }
 

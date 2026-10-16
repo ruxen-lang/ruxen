@@ -201,3 +201,42 @@ fn duplicate_derive_trait_reports_e0609() {
         diags
     );
 }
+
+/// A derived method is typed by its `.rx` mixin declaration with `Self`
+/// substituted (`def hash_code -> Int`, `def eq(other: &Self) -> Bool`,
+/// `def cmp(other: &Self) -> Int`), so a misuse of its result is a type
+/// error. Before, typeck had no signature for these: the parenless
+/// `p.hash_code` was "no field or method", and `k.eq(..)` / `k.cmp(..)`
+/// typed as fresh variables that unified with anything.
+#[test]
+fn derived_method_return_types_are_checked() {
+    let source = rx("derived_method_return_types_are_checked");
+
+    let diags = typecheck_diagnostics_from_source(&source);
+    let messages: Vec<&str> = diags
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .map(|d| d.message.as_str())
+        .collect();
+    for expected in [
+        "type mismatch: expected `String`, found `Int`",
+        "type mismatch: expected `Int`, found `Bool`",
+    ] {
+        assert!(
+            messages.iter().any(|m| m.contains(expected)),
+            "expected `{expected}` — got errors {messages:?}"
+        );
+    }
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|m| m.contains("expected `String`, found `Int`"))
+            .count(),
+        2,
+        "both `hash_code` and `cmp` return Int — got errors {messages:?}"
+    );
+    assert!(
+        !messages.iter().any(|m| m.contains("no field or method")),
+        "a derived method must resolve — got errors {messages:?}"
+    );
+}

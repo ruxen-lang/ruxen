@@ -34,10 +34,7 @@ impl<'a> Lowerer<'a> {
                 .find(|l| l.id == local)
                 .and_then(|l| match &l.ty {
                     Ty::Class { name, .. } => {
-                        let bare = self.user_drop_classes.contains(name);
-                        let suffix = format!(".{}", name);
-                        let qualified = self.user_drop_classes.iter().any(|q| q.ends_with(&suffix));
-                        if bare || qualified {
+                        if is_drop_class(self.symbols, &self.user_drop_classes, name) {
                             let mangled = format!("{}_drop", name);
                             Some(self.resolve_ffi_alias_callee(mangled))
                         } else {
@@ -61,18 +58,27 @@ impl<'a> Lowerer<'a> {
             // back to `ruxen_dealloc` for any local whose type is not a
             // recognized heap-owning built-in (Class/Struct/Enum and the
             // pre-existing behavior for anything else).
-            let free_callee = self
+            let ty = self
                 .fn_ref()
                 .locals
                 .iter()
                 .find(|l| l.id == local)
-                .and_then(|l| crate::mir::lower::drops::heap_free_callee(&l.ty))
-                .unwrap_or("ruxen_dealloc");
-            self.emit(MirInst::Call {
-                dest: None,
-                callee: free_callee.to_string(),
-                args: vec![MirValue::Use(local)],
-            });
+                .map(|l| l.ty.clone());
+            let symbols = self.symbols;
+            let free_call = ty
+                .and_then(|ty| {
+                    crate::mir::lower::drops::heap_free_call(self.fn_mut(), symbols, &ty, local)
+                })
+                .unwrap_or_else(|| {
+                    vec![MirInst::Call {
+                        dest: None,
+                        callee: "ruxen_dealloc".to_string(),
+                        args: vec![MirValue::Use(local)],
+                    }]
+                });
+            for inst in free_call {
+                self.emit(inst);
+            }
             self.emit(MirInst::Assign {
                 dest: local,
                 value: MirValue::Literal(Literal::Int(0)),
@@ -399,8 +405,8 @@ impl<'a> Lowerer<'a> {
         if let Ty::Enum { name, .. } = ty {
             let enum_def = self
                 .symbols
-                .iter()
-                .find(|d| d.name == *name && matches!(d.kind, DefKind::Enum { .. }));
+                .named(name)
+                .find(|d| matches!(d.kind, DefKind::Enum { .. }));
             let variant_ids: Vec<u32> = match enum_def {
                 Some(d) => match &d.kind {
                     DefKind::Enum { info } => info.variants.clone(),
@@ -429,22 +435,20 @@ impl<'a> Lowerer<'a> {
             let mut total_fields = 0usize;
             let mut cur = Some(name.clone());
             while let Some(n) = cur.take() {
-                for def in self.symbols.iter() {
-                    if def.name == n {
-                        match &def.kind {
-                            DefKind::Class { info } => {
-                                total_fields += info.fields.len();
-                                cur = info
-                                    .parent
-                                    .and_then(|p| self.symbols.get(p).map(|d| d.name.clone()));
-                                break;
-                            }
-                            DefKind::Struct { info } => {
-                                total_fields += info.fields.len();
-                                break;
-                            }
-                            _ => {}
+                for def in self.symbols.named(&n) {
+                    match &def.kind {
+                        DefKind::Class { info } => {
+                            total_fields += info.fields.len();
+                            cur = info
+                                .parent
+                                .and_then(|p| self.symbols.get(p).map(|d| d.name.clone()));
+                            break;
                         }
+                        DefKind::Struct { info } => {
+                            total_fields += info.fields.len();
+                            break;
+                        }
+                        _ => {}
                     }
                 }
             }

@@ -178,7 +178,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 
     // ─── Cached compile path ─────────────────────────────────────
-    let store = CacheStore::new(project_target_ruxen());
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let store = CacheStore::new(project_target_ruxen(&cwd));
     let opt_level_label = if release_mode { "release" } else { "debug" };
     // Fold the extra runtime C sources (path + content hash) into the cache
     // flags so editing a project's `runtime/*.c` invalidates the cached
@@ -217,7 +218,6 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let compile_one = move |f: &SourceFile| -> Result<CompileOutput, String> {
         compile_to_object(
             &f.source,
-            &f.path,
             release_mode,
             backend_override_owned.as_deref(),
             opt_level_override_owned.as_deref(),
@@ -305,7 +305,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .map(std::path::PathBuf::from)
         .collect();
     if let Some(root) = ruxen_core::resolve::bootstrap::test_stdlib_root() {
-        extra_paths.extend(ruxen_core::resolve::bootstrap::test_stdlib_runtime_sources(&root));
+        extra_paths.extend(ruxen_core::resolve::bootstrap::test_stdlib_runtime_sources(
+            &root,
+        ));
     }
     if !extra_paths.is_empty() {
         let extra_objects =
@@ -318,18 +320,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // Dependency `[system_libs]` flags (`-l<lib>`), forwarded by `ruxen test`
     // so a flat-merged FFI dependency's link needs are satisfied (Q32).
     link_flags.extend(extra_link_args.iter().cloned());
-    if let Some(ar) = &prebuilt_archive {
-        let ar_str = ar.to_string_lossy().to_string();
-        if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
-            link_flags.push(format!("-Wl,-force_load,{}", ar_str));
-        } else {
-            link_flags.push("-Wl,--whole-archive".to_string());
-            link_flags.push(ar_str);
-            link_flags.push("-Wl,--no-whole-archive".to_string());
-        }
-    }
-    // The stdlib's own `[system_libs]` (`-lc -lm`, ...), after the runtime
-    // archive that needs them, as `codegen::compile_with_options` does.
+    // The stdlib's own `[system_libs]` (`-lc -lm`, ...). `emit_executable`
+    // places every link flag after the runtime archive and objects that
+    // need them.
     if let Ok(system_flags) = ruxen_core::codegen::collect_system_lib_flags() {
         for flag in system_flags {
             if !link_flags.contains(&flag) {
@@ -341,6 +334,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     if let Err(e) = ruxen_core::codegen::object::emit_executable(
         &object_bytes,
         &runtime_objects,
+        prebuilt_archive.as_deref(),
         &output_path,
         false,
         &link_flags,
@@ -445,7 +439,6 @@ fn type_check_with_package_bootstrap(
 /// the cache layer is not responsible for compiler error reporting policy.
 fn compile_to_object(
     source: &str,
-    _path: &str,
     release_mode: bool,
     backend_override: Option<&str>,
     opt_level_override: Option<&str>,
@@ -772,8 +765,7 @@ fn run_compile_direct(source: &str, emit_mode: EmitMode) -> Result<(), String> {
     })?;
 
     if emit_mode == EmitMode::Ast {
-        let printer = ruxen_core::parser::printer::PrettyPrinter::new();
-        println!("{}", printer.print_program(&program));
+        println!("{program:#?}");
         return Ok(());
     }
 
@@ -888,23 +880,36 @@ fn resolve_backend(
     }
 }
 
-/// Locate the `target/ruxen/` directory for the current project.
+/// Find the project root: the nearest ancestor of the cwd holding a
+/// `Ruxen.toml`, which inside a workspace is the nearest member, not the
+/// workspace root. The one finder behind `ruxen build`/`run`/`check`/`clean`
+/// and `ruxen test`.
+pub fn find_project_root() -> Result<PathBuf, String> {
+    let cwd = env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))?;
+    nearest_ancestor_with(&cwd, &["Ruxen.toml"]).ok_or_else(|| {
+        "could not find `Ruxen.toml` in this directory or any parent directory".to_string()
+    })
+}
+
+/// Locate the `target/ruxen/` directory (the incremental cache) for the
+/// project containing `start`.
 ///
-/// We walk upward from the cwd looking for a `Cargo.toml` or `ruxen.toml` to
-/// anchor the project; if none is found, we fall back to `./target/ruxen/`.
-pub(crate) fn project_target_ruxen() -> PathBuf {
-    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut p = cwd.as_path();
-    loop {
-        if p.join("Cargo.toml").exists() || p.join("ruxen.toml").exists() {
-            return p.join("target").join("ruxen");
-        }
-        match p.parent() {
-            Some(parent) => p = parent,
-            None => break,
-        }
+/// The anchor is the nearest ancestor with a `Ruxen.toml`, the same root
+/// `ruxen clean` removes `target/` under, or a `Cargo.toml` for a single file
+/// compiled inside a Cargo checkout; with neither, `./target/ruxen/`.
+pub(crate) fn project_target_ruxen(start: &Path) -> PathBuf {
+    match nearest_ancestor_with(start, &["Ruxen.toml", "Cargo.toml"]) {
+        Some(root) => root.join("target").join("ruxen"),
+        None => PathBuf::from("./target/ruxen"),
     }
-    PathBuf::from("./target/ruxen")
+}
+
+/// The nearest of `start` and its ancestors that contains any of `manifests`.
+fn nearest_ancestor_with(start: &Path, manifests: &[&str]) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find(|dir| manifests.iter().any(|m| dir.join(m).exists()))
+        .map(Path::to_path_buf)
 }
 
 /// Fingerprint of the running compiler binary, folded into the cache flags
@@ -966,5 +971,22 @@ mod tests {
     fn unknown_emit_value_is_an_error() {
         let err = run(&args(&["--emit=object"])).expect_err("unknown --emit accepted");
         assert!(err.contains("unknown --emit value `object`"), "{err}");
+    }
+
+    #[test]
+    fn cache_root_is_the_nearest_ruxen_toml_project() {
+        // Created under the repo's `tmp/`, so an outer `Cargo.toml` is an
+        // ancestor too: the nearer `Ruxen.toml` must win.
+        let repo_tmp = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp");
+        std::fs::create_dir_all(&repo_tmp).unwrap();
+        let project = tempfile::tempdir_in(&repo_tmp).unwrap();
+        std::fs::write(project.path().join("Ruxen.toml"), "[package]\n").unwrap();
+        let nested = project.path().join("src").join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        assert_eq!(
+            super::project_target_ruxen(&nested),
+            project.path().join("target").join("ruxen")
+        );
     }
 }

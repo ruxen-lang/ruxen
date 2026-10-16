@@ -24,7 +24,8 @@ use lsp_types::{
     Documentation, ParameterInformation, ParameterLabel, Position, SignatureHelp,
     SignatureInformation,
 };
-use ruxen_core::hir::nodes::{DefId, HirExpr, HirExprKind, HirItem, HirProgram, HirStatement};
+use ruxen_core::hir::nodes::{DefId, HirExpr, HirExprKind, HirProgram};
+use ruxen_core::hir::visit::{walk_expr, Visit};
 use ruxen_core::resolve::symbols::{DefKind, FnSignature, SymbolTable};
 
 use crate::analysis::AnalysisResult;
@@ -291,242 +292,53 @@ impl CallFinder {
             self.visit_item(item);
         }
     }
+}
 
-    fn visit_item(&mut self, item: &HirItem) {
-        match item {
-            HirItem::Function(func) => self.visit_expr(&func.body),
-            HirItem::Class(class) => {
-                for method in &class.methods {
-                    self.visit_expr(&method.body);
-                }
-                for imp in &class.impl_blocks {
-                    for it in &imp.items {
-                        if let ruxen_core::hir::nodes::HirImplItem::Method(func) = it {
-                            self.visit_expr(&func.body);
-                        }
-                    }
-                }
-            }
-            HirItem::Impl(imp) => {
-                for it in &imp.items {
-                    if let ruxen_core::hir::nodes::HirImplItem::Method(func) = it {
-                        self.visit_expr(&func.body);
-                    }
-                }
-            }
-            HirItem::Module(m) => {
-                for it in &m.items {
-                    self.visit_item(it);
-                }
-            }
-            _ => {}
-        }
-    }
-
+impl Visit for CallFinder {
     fn visit_expr(&mut self, expr: &HirExpr) {
         // Only descend if the target falls inside this expression's
         // span — saves us walking every sibling subtree.
         if expr.span.start > self.target || expr.span.end <= self.target {
             return;
         }
-
+        // Record this call as the best so far — a more deeply nested call
+        // overwrites it if it also contains `target` (outside-in walk, so
+        // the last write wins).
         match &expr.kind {
             HirExprKind::FnCall {
                 callee,
                 callee_name,
-                args,
-            } => {
-                // Record this call as the best so far — a later, more
-                // deeply-nested call will overwrite if it also
-                // contains `target`. (We're walking outside-in, so the
-                // last write wins.)
-                if *callee != ruxen_core::hir::nodes::UNRESOLVED_DEF {
-                    self.best = Some(Callee::Fn {
-                        def_id: *callee,
-                        name: callee_name.clone(),
-                    });
-                }
-                for a in args {
-                    self.visit_expr(a);
-                }
+                ..
+            } if *callee != ruxen_core::hir::nodes::UNRESOLVED_DEF => {
+                self.best = Some(Callee::Fn {
+                    def_id: *callee,
+                    name: callee_name.clone(),
+                });
             }
+            // The receiver's `Ty` was filled in by typeck. We carry it
+            // (rather than a DefId) because the MethodCall HIR node doesn't
+            // store the resolved method DefId — see `lookup_call_signature`
+            // for the by-name resolution.
             HirExprKind::MethodCall {
                 object,
                 method_name,
-                args,
-                block,
                 ..
             } => {
-                // The receiver's `Ty` was filled in by typeck. We carry
-                // it (rather than a DefId) because the MethodCall HIR
-                // node doesn't store the resolved method DefId — see
-                // `lookup_call_signature` for the by-name resolution.
                 self.best = Some(Callee::Method {
                     receiver_ty: object.ty.clone(),
                     method_name: method_name.clone(),
                 });
-                self.visit_expr(object);
-                for a in args {
-                    self.visit_expr(a);
-                }
-                if let Some(b) = block {
-                    self.visit_expr(b);
-                }
             }
-            HirExprKind::FieldAccess { object, .. } => self.visit_expr(object),
-            HirExprKind::BinaryOp { left, right, .. } => {
-                self.visit_expr(left);
-                self.visit_expr(right);
-            }
-            HirExprKind::UnaryOp { operand, .. } => self.visit_expr(operand),
-            HirExprKind::Borrow { expr: inner, .. } => self.visit_expr(inner),
-            HirExprKind::Block(stmts, tail) => {
-                for stmt in stmts {
-                    match stmt {
-                        HirStatement::Let { value, .. } => {
-                            if let Some(v) = value {
-                                self.visit_expr(v);
-                            }
-                        }
-                        HirStatement::Expr(e) => self.visit_expr(e),
-                    }
-                }
-                if let Some(t) = tail {
-                    self.visit_expr(t);
-                }
-            }
-            HirExprKind::If {
-                cond,
-                then_branch,
-                else_branch,
-            } => {
-                self.visit_expr(cond);
-                self.visit_expr(then_branch);
-                if let Some(e) = else_branch {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::Match { scrutinee, arms } => {
-                self.visit_expr(scrutinee);
-                for arm in arms {
-                    if let Some(g) = &arm.guard {
-                        self.visit_expr(g);
-                    }
-                    self.visit_expr(&arm.body);
-                }
-            }
-            HirExprKind::While { condition, body } => {
-                self.visit_expr(condition);
-                self.visit_expr(body);
-            }
-            HirExprKind::For { iterable, body, .. } => {
-                self.visit_expr(iterable);
-                self.visit_expr(body);
-            }
-            HirExprKind::Loop { body } => self.visit_expr(body),
-            HirExprKind::Assign { target, value, .. }
-            | HirExprKind::CompoundAssign { target, value, .. } => {
-                self.visit_expr(target);
-                self.visit_expr(value);
-            }
-            HirExprKind::Return(Some(inner))
-            | HirExprKind::Break(Some(inner))
-            | HirExprKind::Next(Some(inner)) => {
-                self.visit_expr(inner);
-            }
-            HirExprKind::Closure { body, .. } => self.visit_expr(body),
-            HirExprKind::Construct { fields, .. } | HirExprKind::EnumVariant { fields, .. } => {
-                for (_n, v) in fields {
-                    self.visit_expr(v);
-                }
-            }
-            HirExprKind::MultiAssign {
-                targets, values, ..
-            } => {
-                for t in targets {
-                    self.visit_expr(t);
-                }
-                for v in values {
-                    self.visit_expr(v);
-                }
-            }
-            HirExprKind::Tuple(elems) | HirExprKind::ArrayLiteral(elems) => {
-                for e in elems {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::MapLiteral(entries) => {
-                for (k, v) in entries {
-                    self.visit_expr(k);
-                    self.visit_expr(v);
-                }
-            }
-            HirExprKind::Index { object, index } => {
-                self.visit_expr(object);
-                self.visit_expr(index);
-            }
-            HirExprKind::Cast { expr: inner, .. } => self.visit_expr(inner),
-            HirExprKind::ArrayFill { value, .. } => self.visit_expr(value),
-            HirExprKind::Range { start, end, .. } => {
-                if let Some(s) = start {
-                    self.visit_expr(s);
-                }
-                if let Some(e) = end {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::Interpolation { parts } => {
-                for part in parts {
-                    if let ruxen_core::hir::nodes::HirInterpolationPart::Expr { expr: e, .. } = part
-                    {
-                        self.visit_expr(e);
-                    }
-                }
-            }
-            HirExprKind::MacroCall { args, .. } => {
-                for a in args {
-                    self.visit_expr(a);
-                }
-            }
-            HirExprKind::UnsafeBlock(stmts, tail) => {
-                for stmt in stmts {
-                    match stmt {
-                        HirStatement::Let { value, .. } => {
-                            if let Some(v) = value {
-                                self.visit_expr(v);
-                            }
-                        }
-                        HirStatement::Expr(e) => self.visit_expr(e),
-                    }
-                }
-                if let Some(t) = tail {
-                    self.visit_expr(t);
-                }
-            }
-            // Terminal kinds — nothing to recurse into.
-            HirExprKind::VarRef(_)
-            | HirExprKind::IntLiteral(_)
-            | HirExprKind::FloatLiteral(_)
-            | HirExprKind::StringLiteral(_)
-            | HirExprKind::BoolLiteral(_)
-            | HirExprKind::CharLiteral(_)
-            | HirExprKind::UnitLiteral
-            | HirExprKind::NullLiteral
-            | HirExprKind::RegexLiteral { .. }
-            | HirExprKind::Continue
-            | HirExprKind::Return(None)
-            | HirExprKind::Break(None)
-            | HirExprKind::Next(None)
-            | HirExprKind::Error => {}
+            _ => {}
         }
+        walk_expr(self, expr);
     }
 }
 
 // ─── Signature formatting ──────────────────────────────────────────
 
-/// Render the call's label exactly as a user would write it. We keep
-/// it close to `format_signature` in `completion.rs` so the two
-/// surfaces look consistent.
+/// Render the call's label exactly as a user would write it, with the
+/// renderer completion and hover share.
 fn format_signature(name: &str, sig: &FnSignature) -> String {
     // Delegate to the shared renderer so signature help, hover, and
     // `ruxen fmt` always agree on signature shape. `build_parameter_information`

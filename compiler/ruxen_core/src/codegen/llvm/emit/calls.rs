@@ -55,25 +55,13 @@ pub(super) fn get_or_declare_func<'ctx>(
         });
     }
 
-    // For inferred-type method calls (?T..._method), search declared functions
+    // An abstract callee (`?T_method`) has no concrete body; MIR never lets
+    // one reach codegen (`prune_unmonomorphised_bodies`).
     if name.starts_with('?') {
-        let method = extract_method_name(name);
-        let suffix = format!("_{}", method);
-        if let Some(resolved) = find_function_by_suffix(module, &suffix) {
-            return Ok(resolved);
-        }
-    }
-
-    // For generic type parameter methods (T_assign, E_message)
-    if let Some(pos) = name.find('_') {
-        let prefix = &name[..pos];
-        if prefix.len() <= 2 && !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_uppercase())
-        {
-            let method = &name[pos..]; // includes the _
-            if let Some(resolved) = find_function_by_suffix(module, method) {
-                return Ok(resolved);
-            }
-        }
+        return Err(format!(
+            "internal error: abstract callee `{name}` reached codegen (its receiver is \
+             still a generic parameter)"
+        ));
     }
 
     // Try runtime functions
@@ -178,26 +166,4 @@ pub(super) fn callee_param_word_slots(program: &MirProgram, name: &str) -> Optio
 /// flags must skip them identically or every later index would be off by one.
 fn occupies_abi_slot(ty: &Ty) -> bool {
     !matches!(ty, Ty::Unit | Ty::Never | Ty::Error | Ty::ConstArg(_))
-}
-
-/// Find a function whose name ends with the given suffix.
-/// Prefers the shortest match (most specific).
-pub(super) fn find_function_by_suffix<'ctx>(
-    module: &Module<'ctx>,
-    suffix: &str,
-) -> Option<FunctionValue<'ctx>> {
-    let mut best: Option<FunctionValue<'ctx>> = None;
-    let mut best_len = usize::MAX;
-
-    let mut func = module.get_first_function();
-    while let Some(f) = func {
-        let fname = f.get_name().to_str().unwrap_or("");
-        if fname.ends_with(suffix) && !fname.starts_with('?') && fname.len() < best_len {
-            best = Some(f);
-            best_len = fname.len();
-        }
-        func = f.get_next_function();
-    }
-
-    best
 }

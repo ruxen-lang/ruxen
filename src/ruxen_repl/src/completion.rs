@@ -4,62 +4,11 @@
 
 use rustyline::completion::{Completer, Pair};
 use rustyline::Context;
+use ruxen_core::lexer::token::keywords;
 
-/// Basic keyword and command completer.
+/// Basic keyword and command completer. Keywords come from the lexer's
+/// `KEYWORD_TABLE`, so completion offers exactly what the lexer reserves.
 pub struct RuxenCompleter;
-
-// Keywords surfaced by tab-completion. Tracks §3.14 of the surface-syntax
-// spec — retired keywords (`trait`, `impl`, `mut`, `pub`, `None`) are not
-// listed; their replacements (`mixin`, `extension`, `var`, public-default
-// section markers, `nil`) are.
-const KEYWORDS: &[&str] = &[
-    "def",
-    "end",
-    "class",
-    "struct",
-    "enum",
-    "mixin",
-    "extension",
-    "include",
-    "exclude",
-    "let",
-    "var",
-    "if",
-    "elsif",
-    "else",
-    "match",
-    "while",
-    "for",
-    "in",
-    "loop",
-    "do",
-    "return",
-    "true",
-    "false",
-    "self",
-    "Self",
-    "public",
-    "private",
-    "protected",
-    "use",
-    "module",
-    "package",
-    "some",
-    "any",
-    "where",
-    "as",
-    "lib",
-    "unsafe",
-    "consume",
-    "inline",
-    "layout",
-    "break",
-    "continue",
-    "Some",
-    "nil",
-    "Ok",
-    "Err",
-];
 
 const COMMANDS: &[&str] = &[":help", ":quit", ":exit", ":q", ":reset", ":type"];
 
@@ -90,7 +39,7 @@ impl Completer for RuxenCompleter {
                 }
             }
         } else {
-            for &kw in KEYWORDS {
+            for kw in keywords() {
                 if kw.starts_with(word) {
                     candidates.push(Pair {
                         display: kw.to_string(),

@@ -79,8 +79,10 @@ fn is_move_by_ffi_matches_table_and_rejects_dotted_and_user() {
     // Every member of MOVE_BY_FFI is recognized — this is the single
     // predicate drops.rs's `moved_to_ffi` collection routes through, so
     // the two can no longer diverge.
-    for &c in MOVE_BY_FFI {
-        assert!(is_move_by_ffi(c), "MOVE_BY_FFI member {c:?} not recognized");
+    for &(symbol, spellings) in MOVE_BY_FFI {
+        for &c in std::iter::once(&symbol).chain(spellings) {
+            assert!(is_move_by_ffi(c), "MOVE_BY_FFI member {c:?} not recognized");
+        }
     }
     // The dotted `Task.spawn_raw` form is DEAD: MIR call callees are
     // always underscore-mangled (`Type_method`), so the dotted spelling
@@ -92,50 +94,11 @@ fn is_move_by_ffi_matches_table_and_rejects_dotted_and_user() {
 }
 
 #[test]
-fn pointer_store_transfers_arg1() {
-    assert_eq!(
-        callee_ownership("ruxen_store_ptr").arg_transfer,
-        ArgMask::single(1)
-    );
-}
-
-#[test]
 fn user_callee_is_fully_conservative() {
     let o = callee_ownership("MyClass_method");
     assert_eq!(o.result, ResultOwnership::None); // dest tainted
     assert!(!o.args_are_borrowed); // every Use(arg) tainted
     assert!(!o.borrows_first_arg);
-}
-
-#[test]
-fn static_constructor_union_is_reconciled() {
-    // From the method_call.rs fast-path cascade:
-    assert!(is_static_constructor("File", "open"));
-    assert!(is_static_constructor("Duration", "from_secs"));
-    assert!(is_static_constructor("Instant", "now"));
-    assert!(is_static_constructor("TcpListener", "bind"));
-    assert!(is_static_constructor("TcpStream", "connect"));
-    assert!(is_static_constructor("BufReader", "new"));
-    assert!(is_static_constructor("BufWriter", "with_capacity"));
-    // From util.rs::is_builtin_static_method (the diverged sibling):
-    // `String.from` was DELETED from the language — it is no longer a
-    // static constructor (borrow→owned is `x.clone`); the negative below
-    // pins that.
-    assert!(!is_static_constructor("String", "from"));
-    assert!(is_static_constructor("String", "from_bytes"));
-    assert!(is_static_constructor("Thread", "spawn"));
-    assert!(is_static_constructor("Mutex", "new"));
-    assert!(is_static_constructor("Arc", "new"));
-    assert!(is_static_constructor("SharedSync", "new"));
-    // Generic-base handling (Vec[T] → Vec):
-    assert!(is_static_constructor("Vec[String]", "with_capacity"));
-    assert!(is_static_constructor("HashMap[K, V]", "from_iter"));
-    // The universal `new` rule that method_call.rs's is_collection_ctor
-    // applies to ANY type:
-    assert!(is_static_constructor("AnyUserClass", "new"));
-    // Negatives:
-    assert!(!is_static_constructor("Vec", "len"));
-    assert!(!is_static_constructor("File", "read"));
 }
 
 #[test]
