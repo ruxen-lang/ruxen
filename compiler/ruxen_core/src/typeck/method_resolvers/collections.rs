@@ -24,13 +24,10 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             // truncate/swap/insert/remove/extend/dedup/take/drop/chain/
             // to_set/new/with_capacity/capacity/count) were MIGRATED to
             // `library/std/array/src/lib.rx` (`class Array[T]`) and now
-            // resolve through `builtin_bridge`. What stays here:
+            // resolve through `builtin_bridge`, as do `each` (a real `.rx`
+            // method, `def each(f: Fn(T) -> nil) -> nil`), the closure
+            // combinators and `zip`. What stays here:
             //
-            //   * CLOSURE combinators — inlined in mir/lower/closure_inline;
-            //     their return types are closure-inferred (a fresh type var
-            //     or an element-derived shape), not a static `.rx` return.
-            //   * `zip` — the pair's second element type is read from the
-            //     ARG, so it cannot be a fixed declared return.
             //   * `to_h` — the Map key/value types are read from the
             //     receiver's tuple element, likewise arg/receiver-derived.
             //   * `sum` — carries the E0700 non-numeric-element check.
@@ -41,7 +38,6 @@ pub(super) fn resolvers() -> Vec<MethodResolver> {
             // `ruxen_vec_get_opt` are now admitted, so they resolve via
             // the bridge against `class Array[T]`'s declared
             // `Option[&var T]` return.
-            (Ty::Array(_), "each") => Some(Ty::Unit),
             // `map` / `select` / `reject` / `all?` / `any?` / `partition` /
             // `each_with_index` / `find` / `index` / `reduce` / `sort_by`
             // MIGRATED to real `.rx` bodies over `each` (or `swap`+indexed

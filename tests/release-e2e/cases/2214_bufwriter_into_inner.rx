@@ -1,0 +1,11 @@
+## `BufWriter.File#into_inner` flushes the buffer and hands back the File
+## itself. It used to return a boxed `Result`, so the "File" pointed at fd 0
+## and a write through it went nowhere.
+path = "/tmp/ruxen_e2e_2214_into_inner.txt"
+f = File.create(path).expect!("create")
+bw = BufWriter.File.new(f)
+bw.write_str("buffered ").expect!("write_str")
+inner = bw.into_inner()
+inner.write_str("direct").expect!("write")
+puts FS.read_to_string(path).expect!("read")
+FS.remove_file(path).expect!("remove")

@@ -332,8 +332,9 @@ mod tests {
     // ─── Cranelift codegen tests ────────────────────────────────────────────────
 
     /// Helper: build a minimal MIR program with a single `main` function.
+    /// The last lowering step runs on it, as on every lowered program.
     fn make_main_program(locals: Vec<MirLocal>, blocks: Vec<BasicBlock>) -> MirProgram {
-        MirProgram {
+        let mut program = MirProgram {
             functions: vec![MirFunction::with_parts(
                 "main".to_string(),
                 vec![],
@@ -343,11 +344,10 @@ mod tests {
                 0,
             )],
             entry: Some("main".to_string()),
-            ffi_libs: vec![],
-            vtables: Vec::new(),
-            class_infos: Vec::new(),
-            wasm_exports: Vec::new(),
-        }
+            ..MirProgram::new()
+        };
+        crate::mir::coercion::make_coercions_explicit(&mut program);
+        program
     }
 
     #[test]

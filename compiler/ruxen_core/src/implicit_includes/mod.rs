@@ -548,6 +548,9 @@ fn ty_is_effectively_clone(ty: &Ty, symbols: &SymbolTable) -> bool {
         Ty::Map(k, v) | Ty::Result(k, v) => {
             ty_is_effectively_clone(k, symbols) && ty_is_effectively_clone(v, symbols)
         }
+        Ty::Tuple(elems) => elems
+            .iter()
+            .all(|elem| ty_is_effectively_clone(elem, symbols)),
         Ty::Ref(inner)
         | Ty::RefMut(inner)
         | Ty::RefLifetime(_, inner)

@@ -13,16 +13,26 @@ mod index;
 mod literals;
 mod method_call;
 mod misc;
+mod refmut_place;
 mod unaryops;
 mod var_ref;
 
 impl<'a> Lowerer<'a> {
     pub(super) fn lower_expr(&mut self, expr: &HirExpr) -> Result<Option<LocalId>, String> {
-        // Stamp the debug span for every instruction this expression emits
-        // (P0.14). Recursion re-stamps for each sub-expression, so an
-        // instruction carries the span of the innermost node being lowered
-        // when it is pushed, which is good enough for line-granular DWARF.
-        self.current_span = Some(expr.span.clone());
+        // Stamp the span of every instruction this expression emits (P0.14
+        // DWARF lines, MIR diagnostics). A sub-expression stamps its own and
+        // restores this one on return, so an instruction emitted after the
+        // operands (a call, a store) carries its own expression's span.
+        let outer_span = self.current_span.replace(expr.span.clone());
+        let lowered = self.lower_expr_node(expr);
+        self.current_span = outer_span;
+        lowered
+    }
+
+    fn lower_expr_node(&mut self, expr: &HirExpr) -> Result<Option<LocalId>, String> {
+        // Only the call `lower_refmut_addr` asked for may yield a `&var T`
+        // address; a nested expression always yields values.
+        let want_refmut_addr = std::mem::take(&mut self.want_refmut_addr);
         match &expr.kind {
             // Literals
             HirExprKind::IntLiteral(_)
@@ -54,8 +64,18 @@ impl<'a> Lowerer<'a> {
             HirExprKind::For { .. } => self.lower_for_loop(expr),
 
             // Calls
-            HirExprKind::FnCall { .. } => self.lower_fn_call(expr),
-            HirExprKind::MethodCall { .. } => self.lower_method_call(expr),
+            HirExprKind::FnCall { .. } | HirExprKind::MethodCall { .. } => {
+                let result = if matches!(expr.kind, HirExprKind::FnCall { .. }) {
+                    self.lower_fn_call(expr)?
+                } else {
+                    self.lower_method_call(expr)?
+                };
+                if want_refmut_addr {
+                    Ok(result)
+                } else {
+                    Ok(self.load_slot_refmut_result(result))
+                }
+            }
 
             // Assignment
             HirExprKind::Assign { .. } | HirExprKind::CompoundAssign { .. } => {

@@ -1,4 +1,6 @@
-use super::ast::{Block, FuncDef, Program, Statement, TopLevelItem, TypeExpr, Visibility};
+use super::ast::{
+    Block, Expr, ExprKind, FuncDef, Program, Statement, TopLevelItem, TypeExpr, Visibility,
+};
 
 /// Move top-level executable expressions into a compiler-synthesized `main`.
 ///
@@ -27,6 +29,13 @@ pub fn synthesize_implicit_main(program: &mut Program) {
     }
 
     let span = first_span.expect("top-level expression presence checked before collection");
+    // The file's last statement is a statement, not the value of `main`
+    // (Ruby discards it): end the body in `nil`, so a last expression of
+    // any type (`f.()` returning a String) fits the `-> ()` return.
+    statements.push(Statement::Expression(Expr {
+        kind: ExprKind::UnitLiteral,
+        span: span.clone(),
+    }));
     declarations.push(TopLevelItem::Function(FuncDef {
         visibility: Visibility::Private,
         is_async: false,
@@ -50,7 +59,7 @@ pub fn synthesize_implicit_main(program: &mut Program) {
     program.items = declarations;
 }
 
-pub(crate) fn needs_implicit_main(program: &Program) -> bool {
+fn needs_implicit_main(program: &Program) -> bool {
     let mut has_main = false;
     let mut has_expression = false;
     for item in &program.items {
@@ -101,10 +110,9 @@ mod tests {
         };
         assert_eq!(main.name, "main");
         assert!(main.params.is_empty());
-        assert_eq!(main.body.statements.len(), 3);
-        let body_spans: Vec<_> = main
-            .body
-            .statements
+        // The three moved expressions, then the closing `nil`.
+        assert_eq!(main.body.statements.len(), 4);
+        let body_spans: Vec<_> = main.body.statements[..3]
             .iter()
             .map(|statement| match statement {
                 Statement::Expression(expression) => expression.span.clone(),

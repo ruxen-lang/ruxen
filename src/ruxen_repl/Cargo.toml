@@ -22,9 +22,6 @@ path = "src/lib.rs"
 ruxen_core = { path = "../../compiler/ruxen_core" }
 cranelift-jit = { version = "0.130", features = ["selinux-fix"] }
 cranelift-module = "0.130"
-cranelift-codegen = "0.130"
-cranelift-native = "0.130"
-cranelift-frontend = "0.130"
 rustyline = "15"
 target-lexicon = "0.13"
 libc = "0.2"

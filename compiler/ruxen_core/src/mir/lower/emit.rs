@@ -122,30 +122,28 @@ impl<'a> Lowerer<'a> {
 
     /// Push an instruction onto the current basic block.
     pub(super) fn emit(&mut self, inst: MirInst) {
+        // A value stored into a field (or a cell) now belongs there: neither
+        // a rebind nor a loop edge may free it through its old local.
+        if let MirInst::SetField {
+            value: MirValue::Use(local),
+            ..
+        } = &inst
+        {
+            self.remove_moved_loop_local(*local);
+        }
         if let MirInst::Call { callee, args, .. } = &inst {
             // Single source of truth: runtime_abi::MOVE_BY_FFI (the dead dotted
             // `"Task.spawn_raw"` spelling was dropped — MIR callees are always
             // underscore-mangled, so it was unreachable).
             let moves_args = crate::mir::lower::runtime_abi::is_move_by_ffi(callee.as_str());
             let init_moves_non_self_args = callee.ends_with("_init");
-            // A collection-insert family callee (`ruxen_hash_insert` key+value,
-            // `ruxen_vec_push`/`ruxen_vec_insert`/`ruxen_set_insert` element)
-            // TRANSFERS ownership of its key/value/element slots into the
-            // collection — the SAME single-source mask `compute_dealloc_safe_locals`
-            // taints for scope-exit drop. A loop-body local moved into a
-            // collection this way must therefore ALSO be pulled off the loop's
-            // back-edge free list AND the scope-exit `initialized_heap_locals`
-            // set: the collection now owns the allocation, so freeing the source
-            // local at the loop edge would dangle the stored entry's pointer.
-            // This mirrors the `is_move_by_ffi` / `_init` removals above for the
-            // insert family. (Built-in heap loop-body locals are currently NOT
-            // back-edge-registered — see the soundness note in `statement.rs` —
-            // so today this guards a CLASS local inserted into a collection
-            // inside a loop, AND keeps the loop-free list move-aware so the
-            // built-in registration can be safely re-enabled once the dealloc-
-            // safe analysis runs before the loop edge is emitted.)
-            let transfer_mask =
-                crate::mir::lower::runtime_abi::callee_ownership(callee.as_str()).arg_transfer;
+            // A value passed BY VALUE to a `.rx` FFI declaration
+            // (`Array#push`, `Hash#insert`, `Mutex.new`) moves into C: the
+            // same `FfiByValue` source drop elaboration taints for scope-exit
+            // drop. A loop-body local moved this way must ALSO leave the
+            // loop's back-edge free list and the scope-exit
+            // `initialized_heap_locals` set (handled below), or freeing it at
+            // the loop edge would dangle the stored entry.
             if moves_args || init_moves_non_self_args {
                 for (idx, arg) in args.iter().enumerate() {
                     if init_moves_non_self_args && idx == 0 {
@@ -176,7 +174,7 @@ impl<'a> Lowerer<'a> {
             // Independently of the move-by-FFI / `_init` paths above, a
             // collection-insert transfer slot is moved out — remove it.
             for (idx, arg) in args.iter().enumerate() {
-                if transfer_mask.contains(idx) {
+                if self.ffi_by_value.takes_by_value(callee, idx) {
                     if let MirValue::Use(local) = arg {
                         self.remove_moved_loop_local(*local);
                     }
@@ -348,7 +346,7 @@ impl<'a> Lowerer<'a> {
                 .fn_mut()
                 .locals
                 .get(*id as usize)
-                .map(|l| crate::codegen::is_float_ty(&l.ty))
+                .map(|l| crate::mir::abi::is_float_ty(&l.ty))
                 .unwrap_or(false),
             MirValue::Literal(Literal::Float(_)) => true,
             _ => false,
@@ -390,10 +388,19 @@ impl<'a> Lowerer<'a> {
         use crate::resolve::symbols::{DefKind, VariantDefKind};
         let layout = crate::codegen::layout::layout_of(ty, self.symbols);
         let base = layout.size.max(8);
+        // `Option`/`Result` use the same slot addressing: the tag in slot 0,
+        // and the payload word at `GetPayload` = base + 8. The payload is one
+        // word whatever its type (a class is a pointer), but the packed layout
+        // sizes a class payload by its inline fields, so a fieldless class
+        // (`MutexGuard`, `PoisonError`) packed to an 8-byte cell and `Ok(g)`
+        // wrote 8 bytes past it. Always reserve the payload slot.
+        if matches!(ty, Ty::Option(_) | Ty::Result(..)) {
+            return base.max(16);
+        }
         // Enums are stored with the SAME fixed 8-byte-slot addressing as
         // classes/structs: codegen reads the payload at `GetPayload` = base+8
         // (one slot covering tag + padding) and each payload field at
-        // `field_index * 8` (cranelift/emit.rs + llvm/emit/instructions.rs).
+        // `field_index * 8` (`codegen::lower`, every backend).
         // The packed `layout.size` undersizes a variant whose payload fields
         // are narrower than 8 bytes — e.g. `Move(Float32, Float32)` packs to
         // 16, but codegen writes field 1 at offset 8 + 1*8 = 16, a 4-byte
@@ -478,7 +485,7 @@ impl<'a> Lowerer<'a> {
         }
         // Materialize the class_info symbol address into a fresh
         // temporary, then store at slot 0 of the alloc.
-        let addr_local = self.new_temp(Ty::Int);
+        let addr_local = self.new_temp(Ty::RawPtrVoid);
         let sym = format!("__rx_classinfo_{}", class_name);
         self.emit(MirInst::DataAddr {
             dest: addr_local,

@@ -40,15 +40,12 @@ class TestClock
   ## Install the virtual clock on this thread; returns a guard whose `def drop`
   ## restores the real clock.
   ##
-  ## v1 RESTORE NOTE: the guard's `def drop` IS the intended RAII restore, but a
-  ## `let guard = TestClock.install` local (bound from a static-method result) is
-  ## currently tainted OUT of drop-elaboration (the conservative-dealloc limit
-  ## Scope/Queue/Stream also hit), so its `def drop` does NOT fire automatically
-  ## at scope exit. Until that drop-rooting follow-up lands, a test must call
-  ## `TestClock.uninstall` EXPLICITLY to restore the real clock (the `Scope`
-  ## `cancel_remaining` precedent — explicit teardown + `def drop` as a
-  ## belt-and-braces net). install/uninstall are NESTING-AWARE: only the
-  ## outermost install anchors + the outermost uninstall restores.
+  ## The guard is a fresh `TestClock` the caller owns, so binding it
+  ## (`var clock = TestClock.install`) restores the real clock when the
+  ## guard's scope ends, and a discarded guard (`TestClock.install` as a bare
+  ## statement) restores it at the end of that statement. `uninstall` stays
+  ## the explicit teardown; install/uninstall are NESTING-AWARE: only the
+  ## outermost install anchors and the outermost uninstall restores.
   def self.install -> TestClock
     ruxen_test_clock_install()
     TestClock.new

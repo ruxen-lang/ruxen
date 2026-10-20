@@ -282,6 +282,7 @@ pub(super) fn install_key_descriptors(func: &mut MirFunction, symbols: &SymbolTa
     let local_tys: Vec<Ty> = func.locals.iter().map(|l| l.ty.clone()).collect();
     let mut next_temp_id = func.locals.len();
     let mut new_locals: Vec<(LocalId, Ty)> = Vec::new();
+    let mut glue_descs: Vec<super::drops::ElemDesc> = Vec::new();
 
     for block in &mut func.blocks {
         let mut rewritten = Vec::with_capacity(block.instructions.len());
@@ -309,6 +310,22 @@ pub(super) fn install_key_descriptors(func: &mut MirFunction, symbols: &SymbolTa
                     &mut next_temp_id,
                     &mut new_locals,
                 ));
+                if let Some(value_desc) =
+                    pair_value_desc(callee, dest, args.first(), &local_tys, symbols)
+                {
+                    glue_descs.push(value_desc.clone());
+                    let mut new_temp = || {
+                        let id = next_temp_id as LocalId;
+                        next_temp_id += 1;
+                        new_locals.push((id, Ty::Int));
+                        id
+                    };
+                    args.push(super::drops::elem_desc_value(
+                        value_desc,
+                        &mut new_temp,
+                        &mut rewritten,
+                    ));
+                }
                 rewritten.push(MirInst::Call {
                     dest: *dest,
                     callee: keyed.to_string(),
@@ -340,6 +357,7 @@ pub(super) fn install_key_descriptors(func: &mut MirFunction, symbols: &SymbolTa
                     .map_or(super::drops::ElemDesc::Word(0), |ty| {
                         elem_kind_of(ty, symbols)
                     });
+                glue_descs.push(desc.clone());
                 let mut args = args.clone();
                 let mut new_temp = || {
                     let id = next_temp_id as LocalId;
@@ -390,6 +408,9 @@ pub(super) fn install_key_descriptors(func: &mut MirFunction, symbols: &SymbolTa
             rewritten.push(inst);
         }
         block.instructions = rewritten;
+    }
+    for desc in &glue_descs {
+        super::drops::record_elem_glue(func, desc);
     }
 
     for (id, ty) in new_locals {
@@ -513,6 +534,42 @@ fn ctor_descriptor(
         }
     }
     fallback
+}
+
+/// The value descriptor a pair collector (`ruxen_hash_from_iter`) copies
+/// each value with: the element descriptor of the result's value type, the
+/// one its drop frees values with (`drops::heap_free_call`), else of the
+/// source pairs' second element (the result is laundered, `Array#to_h` is
+/// declared `-> Int`). POD when neither is typed, which then also drops
+/// nothing. `None` for every other constructor.
+fn pair_value_desc(
+    callee: &str,
+    dest: &Option<LocalId>,
+    source: Option<&MirValue>,
+    local_tys: &[Ty],
+    symbols: &SymbolTable,
+) -> Option<super::drops::ElemDesc> {
+    if callee != "ruxen_hash_from_iter" {
+        return None;
+    }
+    let from_result = dest.and_then(|d| match local_tys.get(d as usize).map(peel) {
+        Some(Ty::Map(_, value)) => Some((**value).clone()),
+        _ => None,
+    });
+    let from_source =
+        source
+            .and_then(as_local)
+            .and_then(|l| match local_tys.get(l as usize).map(peel) {
+                Some(Ty::Array(elem)) => match peel(elem) {
+                    Ty::Tuple(pair) if pair.len() == 2 => Some(pair[1].clone()),
+                    _ => None,
+                },
+                _ => None,
+            });
+    let value = from_result.or(from_source);
+    Some(value.map_or(super::drops::ElemDesc::Word(0), |v| {
+        super::drops::elem_desc(&v, symbols)
+    }))
 }
 
 /// Turn a descriptor into the three trailing `(kind, hash_fn, eq_fn)`

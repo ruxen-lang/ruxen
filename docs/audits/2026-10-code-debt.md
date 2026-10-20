@@ -308,6 +308,7 @@ Families are listed in the recommended fix order.
   - Quick win (S): make `lookup_ffi_alias` call `strip_generic_suffix` instead of its inline copy.
 - Dependencies: F-18.
 - Guards: `borrow_check/tests.rs`, q29, e2e 649 and 965, `ffi_alias_single_entry.rs`.
+- Status (A4, 2026-10-21): the `borrow_check/checks.rs` mutation guess by method name is deleted with the HIR loan code (loans are checked on MIR, `mir/loan_check.rs`); the receiver mode is read only from the selected method's `self_mode`.
 
 ### Phase F: replace name tables with declarations
 

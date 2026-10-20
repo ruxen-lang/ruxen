@@ -45,7 +45,7 @@ class TcpStream
     def read as "ruxen_tcp_stream_read"(buf: &var Array[Int]) -> Result[Int, IoError]
     def write as "ruxen_tcp_stream_write"(bytes: &Array[Int]) -> Result[Int, IoError]
     def peer_addr as "ruxen_tcp_stream_peer_addr" -> Result[String, IoError]
-    def shutdown as "ruxen_tcp_stream_shutdown"(how: Shutdown) -> Result[nil, IoError]
+    def shutdown as "ruxen_tcp_stream_shutdown"(how: &Shutdown) -> Result[nil, IoError]
     def set_read_timeout as "ruxen_tcp_stream_set_read_timeout"(d: Int) -> Result[nil, IoError]
     def set_write_timeout as "ruxen_tcp_stream_set_write_timeout"(d: Int) -> Result[nil, IoError]
     def set_read_timeout_ns as "ruxen_tcp_stream_set_read_timeout_ns"(ns: Int) -> Result[

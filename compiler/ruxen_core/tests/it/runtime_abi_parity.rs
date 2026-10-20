@@ -18,7 +18,7 @@
 //!   is_runtime_borrow_helper       1089-1170 (effective, post-3-rebinds)
 //!   transfer_indices               1215-1247
 
-use ruxen_core::codegen::runtime::extract_method_name;
+use ruxen_core::mir::lang_intrinsics::extract_method_name;
 
 // ---------------------------------------------------------------------------
 // Reference predicates (the golden oracle)
@@ -195,6 +195,29 @@ fn intentional_fresh_addition(c: &str) -> bool {
             | "String_truncate_chars"
             | "ruxen_fmt_formatter_buffer"
             | "Formatter_buffer"
+    )
+}
+
+/// Reviewed post-extraction Fresh REMOVALS. The `OpenOptions` setters write a
+/// flag in place and return their receiver, so their result is not a new
+/// allocation: classified Fresh, a builder chain's temporaries each owned the
+/// same options and were freed once per link. The fluent methods are now
+/// `.rx` bodies that return `self` (`std/io/src/open_options.rx`).
+fn intentional_fresh_removal(c: &str) -> bool {
+    matches!(
+        c,
+        "OpenOptions_read"
+            | "ruxen_open_options_read"
+            | "OpenOptions_write"
+            | "ruxen_open_options_write"
+            | "OpenOptions_append"
+            | "ruxen_open_options_append"
+            | "OpenOptions_truncate"
+            | "ruxen_open_options_truncate"
+            | "OpenOptions_create"
+            | "ruxen_open_options_create"
+            | "OpenOptions_create_new"
+            | "ruxen_open_options_create_new"
     )
 }
 
@@ -611,20 +634,9 @@ fn oracle_sanity_spot_checks() {
 // byte-equivalent to the six old predicates BEFORE drops.rs deletes them.
 // ---------------------------------------------------------------------------
 
-use ruxen_core::mir::lower::runtime_abi::{callee_ownership, ArgMask, ResultOwnership};
-
-/// Reconstruct the expected ArgMask from the oracle's transfer index list.
-/// In this domain at most two indices ever transfer.
-fn expected_arg_mask(c: &str) -> ArgMask {
-    let mut idxs: Vec<usize> = ref_transfer_indices(c).to_vec();
-    idxs.extend_from_slice(intentional_transfer_addition(c));
-    match idxs.as_slice() {
-        [] => ArgMask::none(),
-        [i] => ArgMask::single(*i),
-        [i, j] => ArgMask::pair(*i, *j),
-        _ => panic!("more than two transfer indices for {c:?}: {idxs:?}"),
-    }
-}
+use ruxen_core::mir::lower::runtime_abi::{
+    callee_ownership, ffi_param_takes_value, ResultOwnership,
+};
 
 #[test]
 fn table_reproduces_every_oracle_answer_for_every_symbol() {
@@ -634,7 +646,8 @@ fn table_reproduces_every_oracle_answer_for_every_symbol() {
         // Result matches the extracted oracle plus reviewed additions.
         assert_eq!(
             o.result == ResultOwnership::Fresh,
-            ref_returns_fresh_alloc(c) || intentional_fresh_addition(c),
+            (ref_returns_fresh_alloc(c) || intentional_fresh_addition(c))
+                && !intentional_fresh_removal(c),
             "result mismatch for {c:?}"
         );
 
@@ -651,12 +664,53 @@ fn table_reproduces_every_oracle_answer_for_every_symbol() {
             ref_is_runtime_borrow_helper(c),
             "args_are_borrowed mismatch for {c:?}"
         );
-
-        // arg_transfer == transfer_indices (plus pointer-store arg1)
-        assert_eq!(
-            o.arg_transfer,
-            expected_arg_mask(c),
-            "arg_transfer mismatch for {c:?}"
-        );
     }
+}
+
+/// The transfer rows the oracle listed (`Array#push`, `Hash#insert`,
+/// `Set#insert`, `Mutex.new`, `MutexGuard#set`) are no longer a table: drop
+/// elaboration derives them from each symbol's `.rx` declaration
+/// (`ffi_param_takes_value`). Every oracle transfer of a C symbol must be a
+/// by-value parameter of that symbol's declaration, so deleting the rows
+/// lost no move.
+#[test]
+fn oracle_transfers_are_by_value_in_the_rx_declarations() {
+    let mut diags = Vec::new();
+    let packages = ruxen_core::resolve::bootstrap::run_bootstrap_with_package_names(&mut diags);
+    assert!(diags.is_empty(), "stdlib bootstrap diagnostics: {diags:?}");
+    let empty = ruxen_core::parser::ast::Program {
+        items: Vec::new(),
+        span: ruxen_core::lexer::token::Span {
+            start: 0,
+            end: 0,
+            line: 0,
+            column: 0,
+        },
+    };
+    let result =
+        ruxen_core::resolve::Resolver::new().resolve_with_bootstrap_packages(&empty, &packages);
+    let mut checked = 0;
+    for &c in SYMBOLS.iter().filter(|c| c.starts_with("ruxen_")) {
+        let mut transfers: Vec<usize> = ref_transfer_indices(c).to_vec();
+        transfers.extend_from_slice(intentional_transfer_addition(c));
+        if transfers.is_empty() {
+            continue;
+        }
+        let decl = result
+            .program
+            .ffi_libs
+            .iter()
+            .flat_map(|lib| &lib.functions)
+            .find(|f| f.c_symbol.as_deref().unwrap_or(&f.ruxen_name) == c)
+            .unwrap_or_else(|| panic!("{c} has no .rx declaration"));
+        for slot in transfers {
+            let ty = &decl.param_types[slot];
+            assert!(
+                ffi_param_takes_value(ty, decl.has_receiver && slot == 0),
+                "{c} slot {slot} (`{ty}`) is not by value in its .rx declaration"
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked >= 6, "only {checked} transfer symbols checked");
 }

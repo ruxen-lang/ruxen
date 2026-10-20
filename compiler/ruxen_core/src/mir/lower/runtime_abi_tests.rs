@@ -1,4 +1,5 @@
-//! Unit tests for `runtime_abi.rs`: callee ownership classes and arg masks.
+//! Unit tests for `runtime_abi.rs`: callee ownership classes and the FFI
+//! by-value parameter rule.
 
 use super::*;
 
@@ -35,37 +36,26 @@ fn free_family_consumes_first_arg_and_returns_nothing() {
 }
 
 #[test]
-fn drop_frees_storage_classifies_ffi_ownership_primitives_only() {
-    assert!(drop_frees_storage("ruxen_mutex_drop"));
-    assert!(drop_frees_storage("ruxen_sharedsync_drop"));
-    assert!(drop_frees_storage("ruxen_channel_sender_drop"));
-    assert!(!drop_frees_storage("ruxen_mutex_guard_drop"));
-    assert!(!drop_frees_storage("ruxen_file_drop"));
-    assert!(!drop_frees_storage("Holder_drop"));
-}
-
-#[test]
-fn vec_push_transfers_arg1() {
-    assert_eq!(
-        callee_ownership("ruxen_vec_push").arg_transfer,
-        ArgMask::single(1)
-    );
-    assert_eq!(
-        callee_ownership("Vec_push").arg_transfer,
-        ArgMask::single(1)
-    );
-}
-
-#[test]
-fn hashmap_insert_transfers_arg1_and_arg2() {
-    assert_eq!(
-        callee_ownership("ruxen_hash_insert").arg_transfer,
-        ArgMask::pair(1, 2)
-    );
-    assert_eq!(
-        callee_ownership("HashMap_insert").arg_transfer,
-        ArgMask::pair(1, 2)
-    );
+fn ffi_value_params_move_and_borrowed_params_do_not() {
+    use crate::hir::types::Ty;
+    let elem = Ty::TypeParam {
+        name: "T".to_string(),
+        bounds: Vec::new(),
+    };
+    // `Array#push(x: T)`: the receiver is borrowed, `x` moves into C.
+    assert!(!ffi_param_takes_value(&elem, true));
+    assert!(ffi_param_takes_value(&elem, false));
+    assert!(ffi_param_takes_value(&Ty::String, false));
+    // A C function that only reads declares `&T`; scalars are copies.
+    assert!(!ffi_param_takes_value(
+        &Ty::Ref(Box::new(Ty::String)),
+        false
+    ));
+    assert!(!ffi_param_takes_value(
+        &Ty::RefMut(Box::new(Ty::String)),
+        false
+    ));
+    assert!(!ffi_param_takes_value(&Ty::Int, false));
 }
 
 #[test]
@@ -77,7 +67,7 @@ fn move_by_ffi_does_not_borrow_args() {
 #[test]
 fn is_move_by_ffi_matches_table_and_rejects_dotted_and_user() {
     // Every member of MOVE_BY_FFI is recognized — this is the single
-    // predicate drops.rs's `moved_to_ffi` collection routes through, so
+    // predicate drops/'s `moved_to_ffi` collection routes through, so
     // the two can no longer diverge.
     for &(symbol, spellings) in MOVE_BY_FFI {
         for &c in std::iter::once(&symbol).chain(spellings) {
@@ -99,17 +89,4 @@ fn user_callee_is_fully_conservative() {
     assert_eq!(o.result, ResultOwnership::None); // dest tainted
     assert!(!o.args_are_borrowed); // every Use(arg) tainted
     assert!(!o.borrows_first_arg);
-}
-
-#[test]
-fn arg_mask_contains_is_safe_beyond_u8_width() {
-    // A many-arg FFI (e.g. `ruxen_canvas_draw_rect`, 9 args) queries
-    // `contains()` for arg indices >= 8; the u8 mask must NOT overflow-shift
-    // (regression: `1u8 << 8` panicked in debug). Bits beyond the u8 are
-    // unset by definition.
-    let m = ArgMask::single(1);
-    assert!(m.contains(1));
-    assert!(!m.contains(8));
-    assert!(!m.contains(64));
-    assert!(!ArgMask::none().contains(8));
 }

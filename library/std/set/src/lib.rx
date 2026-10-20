@@ -48,16 +48,16 @@ class Set[T]
     def self.with_capacity as "ruxen_set_with_capacity"(cap: Int) -> Set[T]
     def size as "ruxen_set_len" -> USize
     def empty? as "ruxen_set_is_empty" -> Bool
-    def include? as "ruxen_set_contains"(item: T) -> Bool
+    def include? as "ruxen_set_contains"(item: &T) -> Bool
     def to_a as "ruxen_set_iter" -> Array[&T]
-    def union as "ruxen_set_union"(other: Set[T]) -> Set[T]
-    def intersection as "ruxen_set_intersection"(other: Set[T]) -> Set[T]
-    def difference as "ruxen_set_difference"(other: Set[T]) -> Set[T]
+    def union as "ruxen_set_union"(other: &Set[T]) -> Set[T]
+    def intersection as "ruxen_set_intersection"(other: &Set[T]) -> Set[T]
+    def difference as "ruxen_set_difference"(other: &Set[T]) -> Set[T]
     # Ruby `Set#==`: the same elements, by the table's key kind. The binop
     # lowering routes `a == b` (and `a != b`, negated) here.
     def == as "ruxen_set_eq"(other: &Set[T]) -> Bool
     def insert as "ruxen_set_insert"(item: T)
-    def remove as "ruxen_set_remove"(item: T) -> Bool
+    def remove as "ruxen_set_remove"(item: &T) -> Bool
     def clear as "ruxen_set_clear"
   end
 
@@ -69,7 +69,7 @@ class Set[T]
   # Generic `each`: yield every element to the user closure. Lowered
   # ONCE as the opaque `Set_each` (T abstract); materializes the elements
   # via the FFI call on `self` (`self.to_a`) and forwards each to `f`.
-  def each(f: any Fn[Fn(T) -> nil]) -> nil
+  def each(f: Fn(T) -> nil) -> nil
     let items = self.to_a
     items.each do |x| f.(x) end
     nil

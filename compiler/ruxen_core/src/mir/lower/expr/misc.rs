@@ -24,7 +24,7 @@ impl<'a> Lowerer<'a> {
                 // Let-binding the cast first hid the bug because the `let`'s
                 // declared type forced the widening Assign coercion — do the
                 // same here by binding into a fresh target-typed local. (We
-                // intentionally reuse the existing Assign `coerce_value` path,
+                // intentionally reuse the Assign conversion (`mir::coercion`),
                 // so signedness behaviour matches let-bound casts exactly.)
                 // Types are already resolved by typeck's finalisation pass,
                 // so `target` and the inner's type are concrete here.
@@ -32,8 +32,8 @@ impl<'a> Lowerer<'a> {
                 // Re-materialise for any NUMERIC→NUMERIC cast — int↔int width
                 // changes (Bug B) and, since Q5, int↔float / float↔int /
                 // float↔float conversions too. Binding into a target-typed
-                // local routes the value through the Assign `coerce_value`
-                // path, which now emits the right instruction for each pair:
+                // local routes the value through the Assign conversion
+                // (`mir::coercion`), which emits the right instruction for each pair:
                 // `ireduce`/`extend` (int↔int), `fdemote`/`fpromote`
                 // (float↔float), and `fcvt_from_*`/`fcvt_to_*_sat` (int↔float,
                 // signedness-correct per direction). Non-numeric casts (e.g.

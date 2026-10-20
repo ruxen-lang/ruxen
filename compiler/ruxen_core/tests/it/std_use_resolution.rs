@@ -1,7 +1,9 @@
 use ruxen_core::diagnostics::DiagnosticLevel;
 use ruxen_core::lexer::Lexer;
 use ruxen_core::parser::Parser;
-use ruxen_core::{borrow_check, codegen, typeck};
+use ruxen_core::typeck;
+
+use crate::common::compile_program;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -18,47 +20,6 @@ fn typecheck_source(source: &str) -> Vec<ruxen_core::diagnostics::Diagnostic> {
     let mut parser = Parser::new(tokens);
     let program = parser.parse().expect("parse");
     typeck::type_check(&program).diagnostics
-}
-
-fn compile_to_exe(source: &str) -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let output_path = format!(
-        "{}/ruxen_std_io_{}_{}.exe",
-        std::env::temp_dir().display(),
-        std::process::id(),
-        id
-    );
-
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().expect("lex failed");
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().expect("parse failed");
-    let type_result = typeck::type_check(&program);
-    let errors: Vec<_> = type_result
-        .diagnostics
-        .iter()
-        .filter(|d| d.level == DiagnosticLevel::Error)
-        .collect();
-    assert!(errors.is_empty(), "type errors: {:?}", errors);
-
-    let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
-    assert!(
-        borrow_errors.is_empty(),
-        "borrow errors: {:?}",
-        borrow_errors
-    );
-
-    let mut lowerer = ruxen_core::mir::lower::Lowerer::new(&type_result.symbols);
-    let mir_program = lowerer
-        .lower_program(&type_result.program)
-        .expect("MIR lowering failed");
-    codegen::compile(&mir_program, &output_path).expect("codegen failed");
-
-    output_path
 }
 
 #[test]
@@ -96,7 +57,7 @@ fn std_sync_concurrency_surface_typechecks_cleanly() {
 #[test]
 fn std_sync_thread_sleep_and_yield_round_trip() {
     let source = rx("std_sync_thread_sleep_and_yield_round_trip");
-    let exe = compile_to_exe(&source);
+    let exe = compile_program(&source, "std_use");
     let output = Command::new(&exe)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -137,7 +98,7 @@ fn std_io_group_imports_and_methods_typecheck_cleanly() {
 #[test]
 fn std_io_println_and_eprintln_round_trip() {
     let source = rx("std_io_println_and_eprintln_round_trip");
-    let exe = compile_to_exe(&source);
+    let exe = compile_program(&source, "std_use");
     let output = Command::new(&exe)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -159,7 +120,7 @@ fn std_io_println_and_eprintln_round_trip() {
 #[test]
 fn std_io_write_str_result_is_unit_and_round_trips() {
     let source = rx("std_io_write_str_result_is_unit_and_round_trips");
-    let exe = compile_to_exe(&source);
+    let exe = compile_program(&source, "std_use");
     let output = Command::new(&exe)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -181,7 +142,7 @@ fn std_io_write_str_result_is_unit_and_round_trips() {
 #[test]
 fn std_io_read_line_and_stdout_round_trip() {
     let source = rx("std_io_read_line_and_stdout_round_trip");
-    let exe = compile_to_exe(&source);
+    let exe = compile_program(&source, "std_use");
     let mut child = Command::new(&exe)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -215,7 +176,7 @@ fn std_io_read_line_and_stdout_round_trip() {
 #[test]
 fn std_io_stdin_read_to_string_round_trip() {
     let source = rx("std_io_stdin_read_to_string_round_trip");
-    let exe = compile_to_exe(&source);
+    let exe = compile_program(&source, "std_use");
     let mut child = Command::new(&exe)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -249,7 +210,7 @@ fn std_io_stdin_read_to_string_round_trip() {
 #[test]
 fn main_shim_initializes_runtime_argv() {
     let source = rx("main_shim_initializes_runtime_argv");
-    let exe = compile_to_exe(&source);
+    let exe = compile_program(&source, "std_use");
     let output = Command::new(&exe)
         .arg("alpha")
         .arg("beta")
@@ -288,7 +249,7 @@ fn use_std_env_typechecks_cleanly() {
 #[test]
 fn std_env_args_round_trip() {
     let source = rx("std_env_args_round_trip");
-    let exe = compile_to_exe(&source);
+    let exe = compile_program(&source, "std_use");
     let output = Command::new(&exe)
         .arg("alpha")
         .arg("beta")
@@ -311,7 +272,7 @@ fn std_env_args_round_trip() {
 #[test]
 fn std_env_var_round_trip() {
     let source = rx("std_env_var_round_trip");
-    let exe = compile_to_exe(&source);
+    let exe = compile_program(&source, "std_use");
     let output = Command::new(&exe)
         .env("RUXEN_STD_ENV_TEST", "env value")
         .stdout(Stdio::piped())
@@ -359,7 +320,7 @@ fn std_fs_round_trip() {
 
     let source = rx("std_fs_round_trip").replace("{path}", &path_str);
 
-    let exe = compile_to_exe(&source);
+    let exe = compile_program(&source, "std_use");
     let output = Command::new(&exe)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -397,7 +358,7 @@ fn use_std_process_typechecks_cleanly() {
 #[test]
 fn std_process_exit_round_trip() {
     let source = rx("std_process_exit_round_trip");
-    let exe = compile_to_exe(&source);
+    let exe = compile_program(&source, "std_use");
     let output = Command::new(&exe)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -453,7 +414,7 @@ fn std_fs_mutation_helpers_round_trip() {
         .replace("{file_a}", &file_a_str)
         .replace("{file_b}", &file_b_str);
 
-    let exe = compile_to_exe(&source);
+    let exe = compile_program(&source, "std_use");
     let output = Command::new(&exe)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -506,7 +467,7 @@ fn std_fs_create_dir_all_round_trip() {
 
     let source = rx("std_fs_create_dir_all_round_trip").replace("{nested}", &nested_str);
 
-    let exe = compile_to_exe(&source);
+    let exe = compile_program(&source, "std_use");
     let output = Command::new(&exe)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -207,12 +207,10 @@ impl<'a> InferenceEngine<'a> {
                 // `T where T: Bound` from flagging its own `T` return, and
                 // keeps a `[U: Bound]` forwarded into another `[V: Bound]`
                 // call site silent (it was silent pre-Feature-B too).
-                _ if matches!(found, Ty::TypeParam { .. }) => {
-                    let Ty::TypeParam { bounds: tp, .. } = found else {
-                        unreachable!()
-                    };
-                    tp.iter().any(|b| b.name == bound.name)
-                }
+                // The enclosing method's `where` clause counts too.
+                _ if matches!(found, Ty::TypeParam { .. }) => self
+                    .receiver_bounds(found)
+                    .is_some_and(|tp| tp.iter().any(|b| b.name == bound.name)),
                 _ => !matches!(
                     self.traits
                         .check_satisfaction(found, bound, self.symbols, require_nominal),
@@ -373,9 +371,10 @@ impl<'a> InferenceEngine<'a> {
                 .traits
                 .lookup_method_with_args(peeled, method, args, self.symbols)
                 .is_some(),
-            Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
+            Ty::TypeParam { .. } | Ty::SomeMixin(_) | Ty::AnyMixin(_) => {
+                let bounds = self.receiver_bounds(peeled).unwrap_or_default();
                 !matches!(
-                    self.traits.lookup_method_on_bounds(bounds, method, args),
+                    self.traits.lookup_method_on_bounds(&bounds, method, args),
                     Ok(None)
                 )
             }

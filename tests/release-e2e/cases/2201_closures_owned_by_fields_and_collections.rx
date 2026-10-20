@@ -1,0 +1,67 @@
+## Closures owned by fields and collections (plan: fields, cards f4 and f5).
+## A lambda or proc stored in a field, an Array or a Hash moves in and is
+## freed once, by its owner, through the drop slot of its closure pair.
+## `.clone` of a Proc shares the pair; the last owner frees it. A user
+## `each(&block)` iterating its own Array lends each element to the block,
+## so the Array keeps freeing its elements.
+
+class Button
+  label: String
+  on_click: Proc[(Int) -> nil]
+
+  def init(@label: String, @on_click: Proc[(Int) -> nil])
+  end
+
+  def click(n: Int) -> nil
+    @on_click.(n)
+  end
+end
+
+class Bag
+  items: Array[String]
+
+  def init
+    @items = ["a" + "", "b" + ""]
+  end
+
+  def each(&block: Fn[(String) -> nil]) -> nil
+    for s in @items
+      block.(s)
+    end
+  end
+end
+
+def run(f: Fn(Int) -> nil) -> nil
+  f.(0)
+end
+
+who = "ada" + ""
+b = Button.new("ok", ->(n: Int) { puts "#{who} clicked #{n}" })
+b.click(1)
+run(b.on_click)
+shared = b.on_click.clone
+shared.(2)
+copy = b.clone
+copy.click(3)
+b.on_click = proc { |n: Int| puts "replaced #{n}" }
+b.click(4)
+
+handlers = Array[Proc[(Int) -> nil]].new
+x = "x" + ""
+y = "y" + ""
+handlers.push(->(n: Int) { puts "#{x}#{n}" })
+handlers.push(->(n: Int) { puts "#{y}#{n}" })
+for h in handlers
+  h.(5)
+end
+
+routes = Hash[String, Proc[(Int) -> nil]].new
+r = "route" + ""
+routes["get"] = ->(n: Int) { puts "#{r} #{n}" }
+routes["get"].(6)
+
+prefix = "p-"
+bag = Bag.new
+bag.each { |s| puts prefix + s }
+bag.each { |s| puts prefix + s + "!" }
+puts "#{handlers.size} #{routes.size} #{copy.label}"

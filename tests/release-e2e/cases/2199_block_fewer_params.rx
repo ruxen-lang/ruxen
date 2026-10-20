@@ -1,0 +1,23 @@
+# A Ruby block or proc may take fewer parameters than the callable it is
+# bound to; the extra arguments are dropped. A lambda keeps exact arity.
+def run(f: Fn(Int) -> nil) -> nil
+  f.(1)
+  f.(2)
+end
+
+def pair(f: Fn(Int, Int) -> nil) -> nil
+  f.(7, 8)
+end
+
+def keep(p: Proc[(Int, Int) -> nil]) -> nil
+  p.(3, 4)
+end
+
+run do
+  puts "y"
+end
+run() { puts "z" }
+pair { |n| puts n }
+keep { |n| puts n + 1 }
+keep(proc { puts "p" })
+[1, 2].each { puts "x" }

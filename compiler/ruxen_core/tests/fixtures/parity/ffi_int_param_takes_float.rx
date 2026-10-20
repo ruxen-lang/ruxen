@@ -1,0 +1,7 @@
+# F-29 drift: a Float passed to an FFI parameter declared Int narrows to the
+# integer (prints 2) on every backend.
+lib "C"
+  def black_box as "ruxen_bench_black_box"(v: Int) -> Int
+end
+
+puts black_box(2.75)

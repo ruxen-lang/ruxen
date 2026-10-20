@@ -1,0 +1,28 @@
+# A tuple element read borrows: `cycle.0.clone` copies the String out of a
+# tuple the loop owns, so storing it in a field leaves `cycle` whole and
+# both are freed once (the rondo request-cycle shape).
+class Session
+  wire: String
+
+  def init
+    @wire = ""
+  end
+end
+
+def make(i: Int) -> (String, Int)
+  ("wire-#{i}", i)
+end
+
+def run -> nil
+  s = Session.new
+  i = 0
+  while i < 3
+    cycle = make(i)
+    s.wire = cycle.0.clone
+    puts("#{s.wire} #{cycle.0} #{cycle.1}")
+    i += 1
+  end
+  puts(s.wire)
+end
+
+run

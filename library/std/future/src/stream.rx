@@ -61,7 +61,7 @@ mixin Stream dispatch runtime
   ## `ruxen_dealloc` fires). Bounded by the number of drains, not iterations or
   ## lifetime; documented, not hidden. A `Context`-reuse / explicit-teardown
   ## driver is a v2 follow-up.
-  def var for_each(f: any Fn[Fn(Int) -> nil]) -> nil
+  def var for_each(f: Fn(Int) -> nil) -> nil
     var cx = Context.executor
     var running = true
     while running
@@ -126,12 +126,12 @@ end
 ## is the public primitive and a composing adapter / custom driver may re-poll.
 class MapStream
   inner: any Stream
-  f: any Fn[Fn(Int) -> Int]
+  f: Proc[(Int) -> Int]
   done: Int
   include Stream
   type Item = Int
 
-  def init(inner: any Stream, f: any Fn[Fn(Int) -> Int])
+  def init(inner: any Stream, f: Proc[(Int) -> Int])
     self.inner = inner
     self.f = f
     self.done = 0
@@ -170,12 +170,12 @@ end
 ## the driver, which parks correctly).
 class FilterStream
   inner: any Stream
-  pred: any Fn[Fn(Int) -> Bool]
+  pred: Proc[(Int) -> Bool]
   done: Int
   include Stream
   type Item = Int
 
-  def init(inner: any Stream, pred: any Fn[Fn(Int) -> Bool])
+  def init(inner: any Stream, pred: Proc[(Int) -> Bool])
     self.inner = inner
     self.pred = pred
     self.done = 0

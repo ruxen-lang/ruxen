@@ -1,0 +1,16 @@
+## `MutexGuard#deref_mut` / `#deref_var` on a `Mutex[Int]` give the address
+## of the guarded Int, like a `&var` of a local: a write through it lands in
+## the mutex. It used to be a copy, so the write was lost.
+def bump(n: &var Int) -> nil
+  n += 1
+end
+
+m = Mutex.new(41)
+g = m.lock!
+bump(g.deref_mut)
+puts g.get
+r = g.deref_var
+bump(r)
+bump(r)
+puts g.get
+puts "r=#{r}"

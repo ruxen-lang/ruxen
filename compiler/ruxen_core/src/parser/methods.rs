@@ -469,22 +469,9 @@ impl Parser {
     fn parse_block_type(&mut self) -> TypeExpr {
         let start = self.current_span();
         if let TokenKind::TypeIdentifier(ref name) = self.current_kind().clone() {
-            // Canonical: `Fn[(T…) -> R]`. Only treat `Fn[` as the block
-            // signature form — `Fn(...)` falls through to `parse_fn_type`.
+            // Canonical: `Fn[(T…) -> R]`, the shared closure-type parser.
             if name == "Fn" && self.peek_kind() == TokenKind::LBracket {
-                self.advance(); // consume `Fn`
-                self.advance(); // consume `[`
-                self.skip_newlines();
-                let (params, return_type) = self.parse_fn_signature_tail();
-                self.skip_newlines();
-                self.expect(TokenKind::RBracket);
-                let span = self.span_from(&start);
-                return TypeExpr::Function {
-                    params,
-                    return_type: Box::new(return_type),
-                    bracketed: true, // canonical `Fn[(T…) -> R]`
-                    span,
-                };
+                return self.parse_fn_type();
             }
             // Legacy: `Block(T…) -> R` / `Block`.
             if name == "Block" {
@@ -494,7 +481,7 @@ impl Parser {
                 return TypeExpr::Function {
                     params,
                     return_type: Box::new(return_type),
-                    bracketed: false, // legacy `Block(...)` form
+                    spelling: FnTypeSpelling::Paren, // legacy `Block(...)` form
                     span,
                 };
             }

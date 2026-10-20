@@ -12,7 +12,7 @@
 //! walker silently skipping `UnsafeBlock`, `Tuple` or a struct method body).
 //!
 //! What gets visited:
-//!   * `walk_item` reaches every function body (free functions, class /
+//!   * `walk_item` (and its `&mut` mirror `walk_item_mut`) reaches every function body (free functions, class /
 //!     struct / enum methods, methods of their inline `include` blocks,
 //!     `extension` methods, mixin default methods) and every const
 //!     initializer. It does not visit item-level type annotations (fields,
@@ -322,10 +322,11 @@ pub fn walk_expr<V: Visit>(v: &mut V, expr: &HirExpr) {
     }
 }
 
-/// Mutating HIR traversal: the `&mut` mirror of [`Visit`] for function
-/// bodies. Item-level walking is read-only today (no mutating consumer
-/// needs it).
+/// Mutating HIR traversal: the `&mut` mirror of [`Visit`].
 pub trait VisitMut: Sized {
+    fn visit_item_mut(&mut self, item: &mut HirItem) {
+        walk_item_mut(self, item);
+    }
     fn visit_func_mut(&mut self, func: &mut HirFuncDef) {
         walk_func_mut(self, func);
     }
@@ -341,6 +342,65 @@ pub trait VisitMut: Sized {
     /// Called on every `Ty` the `walk_*_mut` functions reach, the same set as
     /// [`Visit::visit_ty`]. A no-op by default.
     fn visit_ty_mut(&mut self, _ty: &mut Ty) {}
+}
+
+/// `&mut` mirror of [`walk_item`].
+pub fn walk_item_mut<V: VisitMut>(v: &mut V, item: &mut HirItem) {
+    match item {
+        HirItem::Module(m) => {
+            for sub in &mut m.items {
+                v.visit_item_mut(sub);
+            }
+        }
+        HirItem::Class(c) => {
+            for m in &mut c.methods {
+                v.visit_func_mut(m);
+            }
+            for b in &mut c.impl_blocks {
+                walk_impl_block_mut(v, b);
+            }
+        }
+        HirItem::Struct(s) => {
+            for m in &mut s.methods {
+                v.visit_func_mut(m);
+            }
+            for b in &mut s.impl_blocks {
+                walk_impl_block_mut(v, b);
+            }
+        }
+        HirItem::Enum(e) => {
+            for m in &mut e.methods {
+                v.visit_func_mut(m);
+            }
+            for b in &mut e.impl_blocks {
+                walk_impl_block_mut(v, b);
+            }
+        }
+        HirItem::Mixin(m) => {
+            for it in &mut m.items {
+                match it {
+                    HirMixinItem::DefaultMethod(f) => v.visit_func_mut(f),
+                    // Signatures only: no body to visit.
+                    HirMixinItem::AssocType { .. } | HirMixinItem::MethodSig { .. } => {}
+                }
+            }
+        }
+        HirItem::Impl(b) => walk_impl_block_mut(v, b),
+        HirItem::Function(f) => v.visit_func_mut(f),
+        HirItem::Const(c) => v.visit_expr_mut(&mut c.value),
+        // Pure type-level items: no body.
+        HirItem::TypeAlias(_) | HirItem::Newtype(_) => {}
+    }
+}
+
+/// `&mut` mirror of [`walk_impl_block`].
+pub fn walk_impl_block_mut<V: VisitMut>(v: &mut V, block: &mut HirImplBlock) {
+    for it in &mut block.items {
+        match it {
+            HirImplItem::Method(f) => v.visit_func_mut(f),
+            HirImplItem::AssocType { .. } | HirImplItem::Include { .. } => {}
+        }
+    }
 }
 
 /// `&mut` mirror of [`walk_func`].

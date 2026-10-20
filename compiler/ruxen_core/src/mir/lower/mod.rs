@@ -32,6 +32,7 @@ mod type_helpers;
 mod util;
 use captures::*;
 use drops::*;
+pub(crate) use drops::{CLOSURE_PAIR_CAPTURES, CLOSURE_PAIR_FN};
 use trait_default::*;
 use type_helpers::*;
 pub use type_helpers::{def_id_name, type_name_from_ty};
@@ -42,6 +43,10 @@ use util::*;
 /// Walks typed HIR and produces MIR functions with explicit CFGs.
 pub struct Lowerer<'a> {
     symbols: &'a SymbolTable,
+    /// Set by [`Lowerer::lower_program_checked`]: check loans on the
+    /// lowered bodies before drop elaboration, into `loan_errors`.
+    check_loans: bool,
+    loan_errors: Vec<crate::borrow_check::errors::BorrowError>,
     /// Maps HIR DefIds (variables, params) to MIR LocalIds within the
     /// current function being lowered.
     def_to_local: HashMap<DefId, LocalId>,
@@ -59,6 +64,16 @@ pub struct Lowerer<'a> {
     closure_counter: u32,
     /// Closure functions generated during lowering (added to the program).
     pending_closures: Vec<MirFunction>,
+    /// The statement boundaries of the function being lowered: each
+    /// statement that created locals ends in a `MirInst::Nop` marker, and
+    /// `drops::insert_drops` drops a temporary that statement owns at it.
+    stmt_log: drops::StmtScopeLog,
+    /// Every function lowered from a body, by MIR name, with its statement
+    /// boundaries. Drop elaboration runs on these once every body exists
+    /// (`elaborate_drops`), because a call's result is owned by the caller
+    /// exactly when the callee returns a fresh value, which needs the
+    /// callee's body.
+    drop_pending: HashMap<String, Vec<drops::StmtScope>>,
     /// Map from trait name → list of concrete type names that impl it.
     /// Populated at the start of `lower_program`. Used for method dispatch
     /// on generic parameters with a single-trait bound: when the only
@@ -76,6 +91,19 @@ pub struct Lowerer<'a> {
     /// cell with the enclosing frame. Reads and writes to such a local
     /// become loads/stores through the cell pointer stored in the local.
     cell_promoted: HashSet<DefId>,
+    /// DefIds whose local holds the ADDRESS of a slot-addressed `&var T`'s
+    /// storage (`mir::refmut_abi`): a `&var Int` / `&var String` parameter, a
+    /// `let r: &var Int = ...` binding, or such a variable captured by
+    /// reference in a closure body. Each is also in `cell_promoted`, so reads
+    /// and writes go through the address; this set adds that the storage is
+    /// exactly `T` wide (a `Bool` slot is one byte), so a read loads a `T` and
+    /// a write stores a `T`.
+    refmut_slots: HashSet<DefId>,
+    /// Set by `lower_refmut_addr` for the one call expression it lowers: a
+    /// call whose result is a slot-addressed `&var T` then yields the address
+    /// rather than the loaded value. `lower_expr` takes it on entry, so it
+    /// never reaches a nested expression.
+    want_refmut_addr: bool,
     /// Map from a `const` definition's DefId to its initializer expression.
     /// References to a constant are substituted with the RHS at every use
     /// site so that `const NAME = 100` emits the literal directly, rather
@@ -130,6 +158,10 @@ pub struct Lowerer<'a> {
     /// `None` when not lowering a closure body (or when the closure has no
     /// captures).
     captures_ptr_local: Option<LocalId>,
+    /// Active inside a closure body: every closure nested in it that borrows
+    /// one of its by-value capture slots (see [`NestedRecapture`]). Read when
+    /// the enclosing closure's drop decides which slots it still owns.
+    nested_recaptures: Vec<NestedRecapture>,
     /// Locals that currently hold an initialized, frame-owned heap
     /// allocation (Class/Struct/Enum). Populated when a `let` binds a
     /// heap-typed value and when an `Assign` overwrites such a local.
@@ -146,6 +178,14 @@ pub struct Lowerer<'a> {
     /// rewrite the linker would resolve the call to the wrong symbol
     /// (or fail outright if no `add_one` C symbol exists).
     ffi_alias_map: HashMap<String, String>,
+    /// Which FFI argument slots take an owned value that moves into C, from
+    /// the `.rx` declarations (`drops::FfiByValue`). Set once the FFI libs
+    /// are bridged, before any body is lowered.
+    ffi_by_value: drops::FfiByValue,
+    /// The FFI declarations whose result is owned (`-> owned T`), from
+    /// `MirProgram::ffi_libs`; the first thing `runtime_abi::result_ownership`
+    /// reads.
+    declared_results: runtime_abi::DeclaredResults,
     /// Generic-class monomorphization (option 1): eligible generic classes
     /// keyed by class name. Populated by `collect_mono_instances`; an entry
     /// exists only for a user-defined generic class with ≥1 user method and
@@ -186,6 +226,14 @@ pub struct Lowerer<'a> {
     /// `(instantiation, method)` is in here; every other call keeps the opaque
     /// `{Class}_{method}` body reached through `lib_body_methods`.
     builtin_head_mono_emitted: HashSet<String>,
+    /// Generic classes that declare `lib` methods (`Array`, `MutexGuard`),
+    /// whose `.rx` bodies are lowered once with their type params abstract
+    /// unless `collect_builtin_head_mono_instances` specializes one.
+    lib_shell_classes: HashSet<String>,
+    /// Shell methods with a `where` bound on a class generic that the
+    /// head pass specializes: their body is meaningful only per
+    /// instantiation, so no opaque body is emitted.
+    specialized_only: HashSet<DefId>,
     /// Q17: eligible generic FREE functions (≥1 mixin-bounded type param),
     /// keyed by function name. Populated by `collect_generic_fn_instances`.
     mono_fns: HashMap<String, crate::hir::nodes::HirFuncDef>,
@@ -223,10 +271,15 @@ struct CaptureSlot {
     /// Index of the 8-byte slot (captures[slot_index] is at offset 8*idx).
     slot_index: usize,
     /// Whether the slot holds the value directly (`ByValue`) or a pointer
-    /// to a single-slot heap cell (`ByRef`).  `ByRef` is used for
+    /// to the variable's storage (`ByRef`).  `ByRef` is used for
     /// `let mut`-bound variables that the closure mutates through a
-    /// shared cell with the enclosing frame.
+    /// shared cell with the enclosing frame, and for every String or
+    /// scalar a block captures (the enclosing variable's own address).
     kind: CaptureKind,
+    /// Whether the closure owns a `ByValue` slot's value (a proc or a
+    /// lambda): a `&var` of the capture is then the slot's own address.
+    /// A block never owns a capture.
+    owns: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,8 +287,10 @@ enum CaptureKind {
     /// The slot stores the captured value directly (move or copy of a
     /// Copy-typed local).
     ByValue,
-    /// The slot stores a pointer to an 8-byte heap cell shared with the
-    /// enclosing frame (for non-`move` closures over mutable locals).
+    /// The slot stores a pointer to the variable's 8-byte storage, shared
+    /// with the enclosing frame: a heap cell (a non-`move` closure over a
+    /// mutable local), or the enclosing variable's own slot (a String or
+    /// scalar a block borrows, `drop.spec` B12).
     ByRef,
 }
 
@@ -253,6 +308,24 @@ enum CaptureSource {
     /// enclosing captures pointer at `slot_index` (through the cell when
     /// the enclosing capture is `ByRef`). (Q26.)
     Recapture(CaptureSlot),
+}
+
+/// A closure nested in the closure body being lowered that re-captures the
+/// enclosing closure's by-value slot `slot`. The nested closure only borrows
+/// the value (its drop frees no re-capture), so the enclosing closure keeps
+/// owning the slot and frees it once, unless the nested pair escapes the
+/// enclosing body (`escapes`, or found by `closure_pair_escapes` once the
+/// body is complete): then the value may outlive the enclosing closure and
+/// the slot's drop glue is suppressed.
+#[derive(Debug, Clone, Copy)]
+struct NestedRecapture {
+    /// The nested closure's `{fn_ptr, captures_ptr}` pair local.
+    pair: LocalId,
+    /// The enclosing closure's capture slot it re-captures.
+    slot: usize,
+    /// Set when a closure nested in the NESTED one escapes, carrying the
+    /// borrowed value out with it.
+    escapes: bool,
 }
 
 /// Per-active-loop book-keeping: targets for `continue`/`break`, the
@@ -289,15 +362,21 @@ impl<'a> Lowerer<'a> {
     pub fn new(symbols: &'a SymbolTable) -> Self {
         Lowerer {
             symbols,
+            check_loans: false,
+            loan_errors: Vec::new(),
             def_to_local: HashMap::new(),
             current_fn: None,
             current_block: 0,
             current_span: None,
             closure_counter: 0,
             pending_closures: Vec::new(),
+            stmt_log: drops::StmtScopeLog::default(),
+            drop_pending: HashMap::new(),
             trait_impls: HashMap::new(),
             loop_stack: Vec::new(),
             cell_promoted: HashSet::new(),
+            refmut_slots: HashSet::new(),
+            want_refmut_addr: false,
             const_values: HashMap::new(),
             into_impls: HashSet::new(),
             trait_default_methods: HashMap::new(),
@@ -308,8 +387,11 @@ impl<'a> Lowerer<'a> {
             stream_mixin: protocol_mixin(symbols, "Stream"),
             capture_map: HashMap::new(),
             captures_ptr_local: None,
+            nested_recaptures: Vec::new(),
             initialized_heap_locals: HashSet::new(),
             ffi_alias_map: HashMap::new(),
+            ffi_by_value: drops::FfiByValue::default(),
+            declared_results: runtime_abi::DeclaredResults::default(),
             lib_body_methods: HashSet::new(),
             mono_classes: HashMap::new(),
             mono_instances: HashMap::new(),
@@ -317,6 +399,8 @@ impl<'a> Lowerer<'a> {
             opaque_generic_bodies: HashSet::new(),
             builtin_head_mono_instances: Vec::new(),
             builtin_head_mono_emitted: HashSet::new(),
+            lib_shell_classes: HashSet::new(),
+            specialized_only: HashSet::new(),
             mono_fns: HashMap::new(),
             fn_mono_instances: HashMap::new(),
             fn_mono_emitted: HashMap::new(),
@@ -772,6 +856,17 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    /// Lower `program` and check its loans (`mir::loan_check`) on the
+    /// bodies as lowered, before drop elaboration.
+    pub fn lower_program_checked(
+        &mut self,
+        program: &HirProgram,
+    ) -> Result<(MirProgram, Vec<crate::borrow_check::errors::BorrowError>), String> {
+        self.check_loans = true;
+        let mir = self.lower_program(program)?;
+        Ok((mir, std::mem::take(&mut self.loan_errors)))
+    }
+
     pub fn lower_program(&mut self, program: &HirProgram) -> Result<MirProgram, String> {
         let mut mir = MirProgram::new();
 
@@ -845,6 +940,18 @@ impl<'a> Lowerer<'a> {
                     param_types: hir_fn.param_types.clone(),
                     return_type: hir_fn.return_type.clone(),
                     is_variadic: hir_fn.is_variadic,
+                    has_receiver: hir_fn.has_receiver,
+                    returns_owned: hir_fn.returns_owned,
+                    param_modes: hir_fn
+                        .self_mode
+                        .iter()
+                        .map(crate::mir::param_modes::receiver_mode)
+                        .chain(
+                            hir_fn.param_types[usize::from(hir_fn.has_receiver)..]
+                                .iter()
+                                .map(|ty| crate::mir::param_modes::param_mode(ty, self.symbols)),
+                        )
+                        .collect(),
                 });
             }
             mir.ffi_libs.push(crate::mir::nodes::FfiLib {
@@ -853,7 +960,20 @@ impl<'a> Lowerer<'a> {
             });
         }
 
-        self.lower_items(&program.items, &mut mir, &[])?;
+        self.ffi_by_value = drops::FfiByValue::from_libs(&mir.ffi_libs);
+        self.declared_results = runtime_abi::DeclaredResults::from_libs(&mir.ffi_libs);
+
+        let prelude_count = program.prelude_item_count.min(program.items.len());
+        let (prelude, user) = program.items.split_at(prelude_count);
+        self.lower_items(prelude, &mut mir, &[])?;
+        for func in mir
+            .functions
+            .iter_mut()
+            .chain(self.pending_closures.iter_mut())
+        {
+            func.from_prelude = true;
+        }
+        self.lower_items(user, &mut mir, &[])?;
 
         // Generic-class monomorphization (option 1): emit a specialized MIR
         // copy of every user-defined method (incl. `init`) of each eligible
@@ -891,15 +1011,8 @@ impl<'a> Lowerer<'a> {
         // the formatter, so it gets the same drop elaboration as a lowered
         // body; without it that string leaked once per formatted value.
         if !self.no_std {
-            for mut f in self.synthesize_primitive_fmt_displays() {
-                let return_locals = self.find_return_locals(&f);
-                crate::mir::lower::drops::insert_drops(
-                    &mut f,
-                    &return_locals,
-                    self.symbols,
-                    &self.user_drop_classes,
-                    &|mangled| self.resolve_ffi_alias_callee(mangled),
-                );
+            for f in self.synthesize_primitive_fmt_displays() {
+                self.drop_pending.insert(f.name.clone(), Vec::new());
                 mir.functions.push(f);
             }
         }
@@ -915,17 +1028,12 @@ impl<'a> Lowerer<'a> {
         // before pushing into `pending_closures`, so insert_drops
         // sees the same shape it sees for top-level methods.
         for mut closure_fn in std::mem::take(&mut self.pending_closures) {
-            let return_locals = self.find_return_locals(&closure_fn);
             // B73: a closure body constructs tables too — same post-pass,
             // same reason. See `key_desc::install_key_descriptors`.
             key_desc::install_key_descriptors(&mut closure_fn, self.symbols);
-            crate::mir::lower::drops::insert_drops(
-                &mut closure_fn,
-                &return_locals,
-                self.symbols,
-                &self.user_drop_classes,
-                &|mangled| self.resolve_ffi_alias_callee(mangled),
-            );
+            self.drop_pending
+                .entry(closure_fn.name.clone())
+                .or_default();
             mir.functions.push(closure_fn);
         }
 
@@ -956,6 +1064,39 @@ impl<'a> Lowerer<'a> {
         //   return result
         self.synthesize_dynamic_dispatch_helpers(&mut mir);
 
+        // Every owner of a boxed Copy value gets its own box before any
+        // summary reads a body (a returned copy is not the parameter).
+        let lowered: HashSet<String> = mir.functions.iter().map(|f| f.name.clone()).collect();
+        for func in &mut mir.functions {
+            if self.drop_pending.contains_key(&func.name) {
+                self.duplicate_boxed_copies(func, &self.ffi_by_value, &lowered);
+            }
+        }
+        let summaries = self.call_summaries(&mir);
+        for func in &mut mir.functions {
+            if self.drop_pending.contains_key(&func.name) {
+                drops::record_default_views(func, &summaries);
+            }
+        }
+        if self.check_loans {
+            // The rebind frees elision deletes never run, so they are not
+            // checked (`drops::elided_rebind_frees`, the one rule).
+            let returns_param = drops::returned_params(&mir);
+            let elided: HashMap<&str, HashSet<(BlockId, usize)>> = mir
+                .functions
+                .iter()
+                .map(|func| {
+                    let sites = drops::elided_rebind_frees(func, &returns_param);
+                    (func.name.as_str(), sites.into_iter().collect())
+                })
+                .collect();
+            self.loan_errors = crate::mir::loan_check::check_program(&mir, self.symbols, &elided);
+        }
+
+        // Drop elaboration for every lowered body, now that every callee's
+        // body exists (see `elaborate_drops`).
+        self.elaborate_drops(&mut mir, &summaries);
+
         // Post-lowering fixup: elide the `ruxen_dealloc(R)` that
         // `lower_assign` emits before `Assign { dest: R, value: Use(X) }`
         // when `X` came from a call whose callee returns `self`. The
@@ -968,17 +1109,95 @@ impl<'a> Lowerer<'a> {
         // where the concrete `T` is passed by value. See `mir::refmut_abi`.
         crate::mir::refmut_abi::load_generic_refmut_returns(&mut mir);
 
-        // Container drops whose element pointers escaped get a shallow
-        // descriptor, then every element glue an OBJ descriptor names is
-        // defined. Both see the whole program, so they run after every body.
+        // Define every field drop glue and element glue a drop names. Each
+        // kind can name the other (an object's field holds an `Array[Point]`,
+        // a `Point` element owns fields), so repeat until neither adds one.
+        // Then container drops whose element pointers escaped (including
+        // those inside field glue) get a shallow descriptor. All of this
+        // sees the whole program, so it runs after every body.
+        loop {
+            let before = mir.functions.len();
+            self.synthesize_field_drop_glue(&mut mir)?;
+            self.synthesize_elem_glue(&mut mir)?;
+            if mir.functions.len() == before {
+                break;
+            }
+        }
+        drops::synthesize_closure_helpers(&mut mir);
         crate::mir::lower::drops::demote_escaping_element_drops(&mut mir, self.symbols);
-        self.synthesize_elem_glue(&mut mir)?;
 
         // No abstract (`?`) callee may reach codegen: drop every
         // un-monomorphised body nothing reachable calls, reject the rest.
         self.prune_unmonomorphised_bodies(&mut mir)?;
 
+        // Last: every value crossing into another machine class becomes an
+        // explicit `MirInst::Convert`, so no backend decides a coercion.
+        crate::mir::coercion::make_coercions_explicit(&mut mir);
+
         Ok(mir)
+    }
+
+    /// Run drop elaboration (`drops::insert_drops`) on every function
+    /// lowered from a body, then remove the statement markers.
+    ///
+    /// It runs once every body exists because a call result is owned by
+    /// the caller exactly when the callee returns a FRESH value: an
+    /// allocation its own frame owned outright (not a field, a parameter or
+    /// a value it stored elsewhere). That is decided from the callee's body
+    /// (`drops::returns_fresh`), iterated to a fixpoint so a function that
+    /// returns another fresh-returning function's result qualifies too. A
+    /// getter that returns a field stays borrowed, and an argument bound to
+    /// a parameter the callee may return is not treated as a mere borrow.
+    /// What each callee does with its arguments and result, over every
+    /// lowered body: read by drop elaboration and the loan check.
+    fn call_summaries(&self, mir: &MirProgram) -> drops::CallSummaries {
+        let pending = &self.drop_pending;
+        let mut summaries = drops::CallSummaries {
+            ffi_by_value: self.ffi_by_value.clone(),
+            declared_results: self.declared_results.clone(),
+            ..Default::default()
+        };
+        summaries.record_roles(&mir.functions);
+        for func in mir
+            .functions
+            .iter()
+            .filter(|f| pending.contains_key(&f.name))
+        {
+            summaries.record_returned_params(func);
+        }
+        loop {
+            let newly_fresh: Vec<String> = mir
+                .functions
+                .iter()
+                .filter(|f| pending.contains_key(&f.name) && !summaries.fresh.contains(&f.name))
+                .filter(|f| drops::returns_fresh(f, self.symbols, &summaries))
+                .map(|f| f.name.clone())
+                .collect();
+            if newly_fresh.is_empty() {
+                break;
+            }
+            summaries.fresh.extend(newly_fresh);
+        }
+        summaries
+    }
+
+    fn elaborate_drops(&mut self, mir: &mut MirProgram, summaries: &drops::CallSummaries) {
+        let pending = std::mem::take(&mut self.drop_pending);
+        for func in &mut mir.functions {
+            if let Some(scopes) = pending.get(&func.name) {
+                let return_locals = self.find_return_locals(func);
+                drops::insert_drops(
+                    func,
+                    &return_locals,
+                    self.symbols,
+                    &self.user_drop_classes,
+                    &|mangled| self.resolve_ffi_alias_callee(mangled),
+                    summaries,
+                    scopes,
+                );
+            }
+            drops::strip_statement_markers(func);
+        }
     }
 
     /// Phase B-2/B-3: enumerate every class that includes a
@@ -1003,6 +1222,9 @@ impl<'a> Lowerer<'a> {
         // that still need a no-op drop fn for their uniform Drop vtable
         // slot. Collected during the class walk, synthesised after it.
         let mut drop_noop_classes: Vec<String> = Vec::new();
+        // Runtime-dispatch classes that own fields: `(wrapper, class type,
+        // field glue)` for a `<Class>_drop_owned` Drop slot.
+        let mut drop_owned_classes: Vec<(String, Ty, String)> = Vec::new();
 
         // Iterate over classes. We need a stable order: walk the
         // symbol table.
@@ -1092,7 +1314,18 @@ impl<'a> Lowerer<'a> {
                 .any(|&m| Some(m) == self.future_mixin || Some(m) == self.stream_mixin);
             if is_async_protocol {
                 let class_has_user_drop = self.user_drop_classes.contains(&def.id);
-                let drop_method_sym = if class_has_user_drop {
+                let class_ty = Ty::Class {
+                    name: class_name.clone(),
+                    generic_args: vec![],
+                };
+                let field_glue = drops::field_drop_glue_name(&class_ty, self.symbols);
+                let drop_method_sym = if let Some(field_glue) = field_glue {
+                    // The class owns fields: the slot runs its `def drop`
+                    // (if any) and then frees them, as a static drop does.
+                    let wrapper = format!("{}_drop_owned", class_name);
+                    drop_owned_classes.push((wrapper.clone(), class_ty, field_glue));
+                    wrapper
+                } else if class_has_user_drop {
                     format!("{}_drop", class_name)
                 } else {
                     // No user `def drop` → point the slot at a synthesised
@@ -1121,6 +1354,42 @@ impl<'a> Lowerer<'a> {
         for class_name in drop_noop_classes {
             mir.functions.push(self.build_drop_noop(&class_name));
         }
+        for (wrapper, class_ty, field_glue) in drop_owned_classes {
+            mir.functions
+                .push(self.build_drop_owned(&wrapper, class_ty, field_glue));
+        }
+    }
+
+    /// Build `<Class>_drop_owned(self) -> nil`, the Drop vtable entry of a
+    /// runtime-dispatch class that owns fields: its `def drop` (if any),
+    /// then its field glue. `Drop_dynamic_drop`'s callers free the storage
+    /// afterwards, as they do after any Drop slot.
+    fn build_drop_owned(&self, wrapper: &str, class_ty: Ty, field_glue: String) -> MirFunction {
+        let mut mir_fn = MirFunction::new(wrapper, Ty::Unit);
+        let self_local = mir_fn.new_local("self", class_ty.clone(), false);
+        mir_fn.params.push(self_local);
+        let entry = mir_fn.entry_block;
+        let mut frees_storage = false;
+        if let Some((callee, frees)) = self.user_drop_callee(&class_ty) {
+            frees_storage = frees;
+            mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                dest: None,
+                callee,
+                args: vec![MirValue::Use(self_local)],
+            });
+        }
+        if !frees_storage {
+            mir_fn
+                .field_glue_calls
+                .insert(field_glue.clone(), class_ty.clone());
+            mir_fn.blocks[entry].instructions.push(MirInst::Call {
+                dest: None,
+                callee: field_glue,
+                args: vec![MirValue::Use(self_local)],
+            });
+        }
+        mir_fn.blocks[entry].terminator = Terminator::Return(None);
+        mir_fn
     }
 
     /// Build a trivial `<Class>_drop_noop(self) -> nil` whose body is an
@@ -1128,17 +1397,11 @@ impl<'a> Lowerer<'a> {
     /// FUTURE that defines no user `def drop`, so the single
     /// `Drop_dynamic_drop` helper always resolves a valid fn pointer.
     ///
-    /// SCOPE LIMIT (Increment 1): the no-op does NOT drop the future's
-    /// owned FIELDS / sub-futures. For a future that owns a droppable field
-    /// but declares no `def drop` (e.g. a synthesised `async def` state
-    /// machine that hoisted a droppable cross-suspend local), draining it
-    /// runs this no-op and that field's `def drop` does NOT fire — the same
-    /// leak as before this increment (drain previously fired NO drop at
-    /// all), so this is no regression. Synthesising per-state field-drop
-    /// glue for such futures is **Increment 2** (state-indexed drop glue,
-    /// docs/dev/concurrency-impl-plan.md). The no-op is the honest,
-    /// documented Increment-1 boundary, not a claim of complete cleanup.
-    /// §4.1 NARROW.
+    /// A class that owns fields gets `<Class>_drop_owned` instead (see
+    /// [`Self::build_drop_owned`]). A synthesised `async def` state machine
+    /// owns none (`SymbolTable::class_owns_fields`): a hoisted droppable
+    /// cross-suspend local is not dropped on drain, the documented
+    /// Increment-1 boundary (docs/dev/concurrency-impl-plan.md). §4.1 NARROW.
     fn build_drop_noop(&self, class_name: &str) -> MirFunction {
         let fn_name = format!("{}_drop_noop", class_name);
         let mut mir_fn = MirFunction::new(&fn_name, Ty::Unit);
@@ -1167,7 +1430,7 @@ impl<'a> Lowerer<'a> {
     /// slot and the emitted `<symbol>_drop` agree even for a (hypothetical)
     /// module-nested state machine.
     ///
-    /// Ruxen has NO automatic per-field drop (see drops.rs /
+    /// Ruxen has NO automatic per-field drop (see drops/ /
     /// drop-elaboration.md), so this destructor drops each owned sub-future
     /// EXPLICITLY: a `__sub_i` is itself a `Future` (it carries the Drop vtable
     /// slot Increment 1 added), so we drop it via the same
@@ -1262,7 +1525,7 @@ impl<'a> Lowerer<'a> {
         }
 
         // Build `<symbol>_drop(self) -> nil`. Drop in REVERSE declaration order
-        // (LIFO, matching sync RAII / drops.rs).
+        // (LIFO, matching sync RAII / drops/).
         //
         // NULL-GUARD per sub-future (partial-init / spec §4.1 risk 2): a `__sub_i`
         // is NOT always live. LINEAR state machines construct every `__sub_i`
@@ -1602,6 +1865,9 @@ impl<'a> Lowerer<'a> {
                 dest: None,
                 callee: drop_ptr,
                 args: vec![MirValue::Use(self_local)],
+                // `<Class>_drop` consumes the object.
+                modes: vec![ParamMode::Move],
+                pair: None,
             });
 
         mir_fn.blocks[entry].terminator = Terminator::Return(None);
@@ -1676,6 +1942,23 @@ impl<'a> Lowerer<'a> {
         // Build call args: self followed by the remaining params (all
         // already locals on mir_fn).
         let args: Vec<MirValue> = mir_fn.params.iter().map(|&id| MirValue::Use(id)).collect();
+        // Each argument as the mixin method declares it: the receiver by its
+        // self mode, the rest by their parameter types.
+        let receiver = match &sig.self_mode {
+            Some(mode) => crate::mir::param_modes::receiver_mode(mode),
+            None => crate::mir::param_modes::unknown_param_mode(
+                &mir_fn.locals[self_local as usize].ty,
+                self.symbols,
+            ),
+        };
+        let modes: Vec<ParamMode> = std::iter::once(receiver)
+            .chain(
+                sig.params
+                    .iter()
+                    .map(|p| crate::mir::param_modes::param_mode(&p.ty, self.symbols)),
+            )
+            .collect();
+        mir_fn.param_modes = modes.clone();
 
         // Indirect call.
         let has_return = !matches!(return_ty, Ty::Unit);
@@ -1690,6 +1973,8 @@ impl<'a> Lowerer<'a> {
                 dest,
                 callee: method_ptr,
                 args,
+                modes,
+                pair: None,
             });
 
         mir_fn.blocks[entry].terminator = match dest {

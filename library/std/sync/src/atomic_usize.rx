@@ -10,6 +10,6 @@ class AtomicUsize
     def fetch_add as "ruxen_atomic_i64_fetch_add"(delta: Int) -> Int
     def fetch_sub as "ruxen_atomic_i64_fetch_sub"(delta: Int) -> Int
     def compare_and_swap as "ruxen_atomic_i64_compare_and_swap"(current: Int, new_val: Int) -> Int
-    def drop as "ruxen_atomic_i64_drop" -> nil
+    def consume drop as "ruxen_atomic_i64_drop" -> nil
   end
 end

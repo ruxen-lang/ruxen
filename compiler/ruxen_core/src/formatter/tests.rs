@@ -529,10 +529,11 @@ fn const_without_type_omits_annotation() {
 #[test]
 fn do_end_closure_preserved() {
     // `let v = do … end` is a no-param closure bound to `v`; the formatter
-    // must keep the `do…end` wrapper rather than rewriting it to braces.
+    // prints the value as a `->` lambda and keeps the `do…end` wrapper rather
+    // than rewriting it to braces.
     let src = fmt_fixture("do_end_block_expression_preserved");
     let out = assert_reparses(&src);
-    assert!(out.contains("= do"), "do...end wrapper lost:\n{}", out);
+    assert!(out.contains("= -> do"), "do...end wrapper lost:\n{}", out);
     assert!(out.contains("end"), "{}", out);
 }
 
@@ -540,11 +541,7 @@ fn do_end_closure_preserved() {
 fn move_closure_keeps_move() {
     let src = fmt_fixture("move_closure_keeps_move");
     let out = assert_reparses(&src);
-    assert!(
-        out.contains("move {") || out.contains("move do"),
-        "move keyword lost:\n{}",
-        out
-    );
+    assert!(out.contains("move ->(x) {"), "move keyword lost:\n{}", out);
 }
 
 #[test]

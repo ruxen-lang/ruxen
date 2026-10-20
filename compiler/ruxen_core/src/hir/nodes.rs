@@ -8,7 +8,7 @@
 
 use crate::hir::types::{MixinRef, MoveSemantics, Ty};
 use crate::lexer::token::Span;
-use crate::parser::ast::{BinOp, UnaryOp, Visibility};
+use crate::parser::ast::{BinOp, ClosureKind, UnaryOp, Visibility};
 
 /// Unique identifier for every definition in the program.
 pub type DefId = u32;
@@ -70,6 +70,16 @@ pub struct HirFfiFunc {
     pub param_types: Vec<crate::hir::types::Ty>,
     pub return_type: Option<crate::hir::types::Ty>,
     pub is_variadic: bool,
+    /// Whether `param_types[0]` is the receiver the MIR method call
+    /// prepends (an instance method of a class- or mixin-body `lib`
+    /// block), rather than a declared parameter.
+    pub has_receiver: bool,
+    /// The declaration spelled its result `-> owned T`
+    /// (`ast::FfiFunction::returns_owned`).
+    pub returns_owned: bool,
+    /// How the receiver is passed (`def var` / `def consume`); `None` when
+    /// `has_receiver` is false.
+    pub self_mode: Option<HirSelfMode>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +105,33 @@ pub struct HirExpr {
     pub kind: HirExprKind,
     pub ty: Ty,
     pub span: Span,
+}
+
+impl HirExpr {
+    /// Whether this expression, passed for a slot-addressed `&var T`
+    /// parameter (a String or a scalar, `Ty::refmut_is_slot_address`), is a
+    /// projection whose storage has no address to pass: an element of
+    /// anything but an Array (a Hash value), or a field read through safe
+    /// navigation or of a value that is not an object. MIR passes every
+    /// other shape (`lower_refmut_addr`); borrow_check reports these
+    /// (E1021). The one rule both stages read.
+    pub fn is_unaddressable_var_place(&self) -> bool {
+        match &self.kind {
+            HirExprKind::Borrow {
+                mutable: true,
+                expr: inner,
+            } => inner.is_unaddressable_var_place(),
+            HirExprKind::Index { object, .. } => {
+                !matches!(object.ty.builtin_head(), Some(("Array", _)))
+            }
+            HirExprKind::FieldAccess {
+                object, safe_nav, ..
+            } => {
+                *safe_nav || !matches!(object.ty.peel_refs(), Ty::Class { .. } | Ty::Struct { .. })
+            }
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -138,13 +175,22 @@ pub enum HirExprKind {
         /// user class, struct or enum receiver, else `UNRESOLVED_DEF`.
         method: DefId,
         /// The method typeck selected on ANY receiver head, builtin heads
-        /// (`String`, `Array`, ...) and scalar primitives included;
-        /// `UNRESOLVED_DEF` when it selected none (an inherited method, a
-        /// mixin default, an unknown receiver). Read it for the callee's
-        /// declared signature. MIR never dispatches on it: a builtin-head
+        /// (`String`, `Array`, ...) and scalar primitives included: an own
+        /// or inherited method, or the mixin default (`Kernel` and the
+        /// bounds of a type-parameter receiver included) inference typed
+        /// the call with. `UNRESOLVED_DEF` when it selected none (an
+        /// unknown receiver, a bodiless bound requirement). Read it for the
+        /// callee's declared signature instead of looking the method up
+        /// again. MIR never dispatches on it: a builtin-head
         /// call mangles through the FFI alias map, and its def's span lies
         /// in a stdlib file, so it is no IDE jump target either.
         resolved: DefId,
+        /// The parameter types of the bodiless mixin requirement typeck
+        /// selected (by argument types, among same-named overloads) for a
+        /// call on a mixin-bound receiver, where `resolved` has no def to
+        /// record. `None` for every other call. The borrow checker reads it
+        /// instead of choosing an overload again.
+        requirement_params: Option<Vec<Ty>>,
         method_name: String,
         generic_args: Vec<Ty>,
         args: Vec<HirExpr>,
@@ -271,6 +317,8 @@ pub enum HirExprKind {
         captures: Vec<Capture>,
         is_async: bool,
         is_move: bool,
+        /// Block, proc or lambda, as the parser marked it.
+        kind: ClosureKind,
     },
 
     /// Struct/class construction

@@ -1,0 +1,51 @@
+# I-15: a binding that borrows a temporary's field or result keeps the
+# temporary alive while the binding is used, then frees it once.
+# I-17: a field or element passed to a `&var String` parameter, explicitly or
+# auto-borrowed, is replaced in place and freed once.
+class U
+  name: String
+
+  def init(@name: String)
+  end
+
+  def label -> &String
+    @name
+  end
+end
+
+def mk(k: Int) -> U
+  U.new("made-#{k}")
+end
+
+def pick(u: &U) -> &String
+  u.name
+end
+
+def replace(s: &var String) -> nil
+  s = "new-value"
+end
+
+k = 3
+n = U.new("tmp-#{k}").name
+puts n
+m = mk(4).name
+puts m
+l = U.new("lbl-#{k}").label
+puts l
+x = pick(U.new("p-#{k}"))
+puts x
+i = 0
+while i < 2
+  w = U.new("loop-#{i}").name
+  puts w
+  i += 1
+end
+
+u = U.new("old-#{k}")
+replace(&var u.name)
+puts u.name
+a = ["e-#{k}", "f-#{k}"]
+replace(&var a[0])
+replace(a[1])
+puts a[0]
+puts a[1]

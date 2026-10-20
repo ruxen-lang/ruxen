@@ -7,11 +7,7 @@
 
 use ruxen_core::codegen;
 use ruxen_core::diagnostics::Diagnostic;
-use ruxen_core::lexer::Lexer;
-use ruxen_core::mir::lower::Lowerer;
-use ruxen_core::parser::ast::Program;
-use ruxen_core::parser::Parser;
-use ruxen_core::typeck;
+use ruxen_core::driver::{self, Options};
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -86,30 +82,7 @@ struct CaseOutcome {
     detail: String,
 }
 
-/// `typeck::type_check`-equivalent that takes a pre-loaded bootstrap
-/// package list. The harness loads BOOTSTRAP_FILES once (27 stdlib
-/// files × ~25 ms = ~700 ms) and reuses the parse tree across every
-/// fixture; calling `type_check` directly would re-parse the stdlib on
-/// every iteration (~6 min wasted in the 291-fixture sweep).
-fn type_check_with_shared_bootstrap(
-    program: &Program,
-    bootstrap_packages: &[(String, Program)],
-) -> typeck::TypeCheckResult {
-    let mut lowered = program.clone();
-    let e1112_diags = ruxen_core::async_lowering::collect_block_on_in_async_diagnostics(&lowered);
-    let e1116_diags =
-        ruxen_core::async_lowering::collect_task_spawn_outside_async_diagnostics(&lowered);
-    let e1115_diags = ruxen_core::async_lowering::collect_await_in_loop_diagnostics(&lowered);
-    let bootstrap_refs: Vec<&Program> = bootstrap_packages.iter().map(|(_, p)| p).collect();
-    ruxen_core::async_lowering::lower_async_defs_with_bootstrap(&mut lowered, &bootstrap_refs);
-    let mut result = typeck::type_check_with_bootstrap_packages(&lowered, bootstrap_packages);
-    result.diagnostics.extend(e1112_diags);
-    result.diagnostics.extend(e1116_diags);
-    result.diagnostics.extend(e1115_diags);
-    result
-}
-
-fn compile_and_run(case_name: &str, bootstrap_packages: &[(String, Program)]) -> CaseOutcome {
+fn compile_and_run(case_name: &str) -> CaseOutcome {
     let root = workspace_root();
     let src_path = root.join(format!("tests/release-e2e/cases/{}.rx", case_name));
     let expected_path = root.join(format!("tests/release-e2e/expected/{}.out", case_name));
@@ -133,57 +106,26 @@ fn compile_and_run(case_name: &str, bootstrap_packages: &[(String, Program)]) ->
         }
     };
 
-    let mut lexer = Lexer::new(&source);
-    let tokens = match lexer.tokenize() {
-        Ok(t) => t,
-        Err(e) => {
-            return CaseOutcome {
-                name: case_name.to_string(),
-                ok: false,
-                detail: format!("lex: {:?}", e),
-            }
-        }
-    };
-    let mut parser = Parser::new(tokens);
-    let program = match parser.parse() {
+    let program = match driver::parse(&source) {
         Ok(p) => p,
         Err(e) => {
             return CaseOutcome {
                 name: case_name.to_string(),
                 ok: false,
-                detail: format!("parse: {:?}", e),
+                detail: format!("parse: {}", driver::render_diagnostics(&e, None)),
             }
         }
     };
-    let result = type_check_with_shared_bootstrap(&program, bootstrap_packages);
-    let errors: Vec<_> = result
-        .diagnostics
-        .iter()
-        .filter(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error)
-        .collect();
-    if !errors.is_empty() {
-        let msgs: Vec<String> = errors
-            .iter()
-            .take(5)
-            .map(|d| d.message.to_string())
-            .collect();
+    // A pinned case is a program `ruxen build` accepts: it passes the whole
+    // front end, both borrow checkers included (I-20: a case the CLI
+    // rejected used to pass here).
+    let mut frontend = driver::check(&program, &Options::default());
+    let Some(mir) = frontend.mir.take() else {
         return CaseOutcome {
             name: case_name.to_string(),
             ok: false,
-            detail: format!("typecheck: {} errors: {}", errors.len(), msgs.join(" | ")),
+            detail: format!("front end: {}", frontend.render(None)),
         };
-    }
-
-    let mut lowerer = Lowerer::new(&result.symbols);
-    let mir = match lowerer.lower_program(&result.program) {
-        Ok(m) => m,
-        Err(e) => {
-            return CaseOutcome {
-                name: case_name.to_string(),
-                ok: false,
-                detail: format!("MIR lowering: {}", e),
-            }
-        }
     };
 
     let test_runtime =
@@ -194,7 +136,7 @@ fn compile_and_run(case_name: &str, bootstrap_packages: &[(String, Program)]) ->
         false,
         &[],
         &test_runtime,
-        codegen::Backend::Cranelift,
+        e2e_backend(),
     ) {
         return CaseOutcome {
             name: case_name.to_string(),
@@ -272,6 +214,9 @@ fn compile_and_run(case_name: &str, bootstrap_packages: &[(String, Program)]) ->
 // trimmed; empty entries are ignored.  An unknown case name fails
 // the run with a clear message so typos don't silently skip cases.
 //
+// Set `RUXEN_E2E_BACKEND=llvm` (with `--features llvm`) to build every
+// case with LLVM instead of Cranelift.
+//
 // Workflow:
 //   - per-commit: skip the harness entirely (it's `#[ignore]`-gated).
 //   - new fixture: `RUXEN_E2E_CASES=NAME cargo test --test
@@ -315,9 +260,26 @@ fn find_prebuilt_runtime_archive() -> Option<PathBuf> {
     best.map(|(_, p)| p)
 }
 
+/// The backend the sweep builds with, chosen by `Backend::select` as a
+/// debug build: `RUXEN_E2E_BACKEND=llvm` selects LLVM at -O0 (needs
+/// `--features llvm`); unset or `cranelift` selects Cranelift.
+fn e2e_backend() -> codegen::Backend {
+    let choice = std::env::var("RUXEN_E2E_BACKEND").ok();
+    codegen::Backend::select(
+        false,
+        choice.as_deref(),
+        None,
+        &codegen::target::ResolvedTarget::host(),
+    )
+    .unwrap_or_else(|e| panic!("RUXEN_E2E_BACKEND: {e}"))
+}
+
 #[test]
 #[ignore]
 fn release_e2e_all_fixtures() {
+    // Resolve the backend up front so a bad `RUXEN_E2E_BACKEND` fails once.
+    e2e_backend();
+
     // Opt into the fast-path link: skip the per-fixture `cc -c`
     // forks for stdlib runtime sources and whole-archive a prebuilt
     // libruxenrt.a instead. Mirrors what `tests/release-e2e/run.sh`
@@ -389,9 +351,8 @@ fn release_e2e_all_fixtures() {
         }
     }
 
-    // Load BOOTSTRAP_FILES ONCE up-front. `type_check` would otherwise
-    // re-parse the entire stdlib (~27 files) for every fixture — a
-    // ~6-minute fixed cost on the 291-fixture sweep.
+    // The stdlib parse is cached per process; loading it here, once, fails
+    // the sweep up front on a broken stdlib instead of once per fixture.
     //
     // Some fixtures (434/436 stream drop, 750 trio-leak pin) use the
     // test-only stdlib; this sweep opts into it for every case, and
@@ -401,9 +362,7 @@ fn release_e2e_all_fixtures() {
         workspace_root().join("library/test_std"),
     );
     let mut bootstrap_diagnostics: Vec<Diagnostic> = Vec::new();
-    let bootstrap_packages = ruxen_core::resolve::bootstrap::run_bootstrap_with_package_names(
-        &mut bootstrap_diagnostics,
-    );
+    ruxen_core::resolve::bootstrap::run_bootstrap_with_package_names(&mut bootstrap_diagnostics);
     if !bootstrap_diagnostics.is_empty() {
         panic!(
             "release-e2e: stdlib bootstrap emitted diagnostics during \
@@ -424,13 +383,11 @@ fn release_e2e_all_fixtures() {
         .min(names.len().max(1))
         .min(16);
     let names_arc = std::sync::Arc::new(names.clone());
-    let bootstrap_arc = std::sync::Arc::new(bootstrap_packages);
     let next_idx = std::sync::atomic::AtomicUsize::new(0);
     let outcomes: Vec<CaseOutcome> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..worker_count)
             .map(|_| {
                 let names = names_arc.clone();
-                let bootstrap = bootstrap_arc.clone();
                 let next_idx = &next_idx;
                 scope.spawn(move || {
                     let mut local: Vec<CaseOutcome> = Vec::new();
@@ -439,7 +396,22 @@ fn release_e2e_all_fixtures() {
                         if i >= names.len() {
                             break;
                         }
-                        local.push(compile_and_run(&names[i], &bootstrap));
+                        // A compiler panic fails its case, not the worker
+                        // (and with it every case the worker had left).
+                        let outcome = std::panic::catch_unwind(|| compile_and_run(&names[i]))
+                            .unwrap_or_else(|panic| CaseOutcome {
+                                name: names[i].clone(),
+                                ok: false,
+                                detail: format!(
+                                    "compiler panicked: {}",
+                                    panic
+                                        .downcast_ref::<String>()
+                                        .map(String::as_str)
+                                        .or_else(|| panic.downcast_ref::<&str>().copied())
+                                        .unwrap_or("(non-string payload)")
+                                ),
+                            });
+                        local.push(outcome);
                     }
                     local
                 })

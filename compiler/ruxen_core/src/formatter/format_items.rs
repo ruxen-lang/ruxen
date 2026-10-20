@@ -33,11 +33,16 @@ pub fn format_program(program: &Program, comments: &CommentMap) -> Doc {
         let current_kind = classify_item(item);
 
         if i > 0 {
-            // Insert blank line(s) between items
-            let needs_blank = !matches!(
-                (&prev_kind, &current_kind),
-                (Some(ItemKind::Use), ItemKind::Use)
-            );
+            // Insert blank line(s) between items. Consecutive top-level
+            // statements keep the blank lines the author left, as statements
+            // in a method body do.
+            let needs_blank = match (&prev_kind, &current_kind) {
+                (Some(ItemKind::Use), ItemKind::Use) => false,
+                (Some(ItemKind::Statement), ItemKind::Statement) => {
+                    comments.blank_line_before(item.span().start)
+                }
+                _ => true,
+            };
             if needs_blank {
                 parts.push(hardline());
             }
@@ -92,6 +97,7 @@ enum ItemKind {
     TypeDef,
     Function,
     Impl,
+    Statement,
     Other,
 }
 
@@ -107,6 +113,7 @@ fn classify_item(item: &TopLevelItem) -> ItemKind {
         | TopLevelItem::Newtype(_) => ItemKind::TypeDef,
         TopLevelItem::Function(_) => ItemKind::Function,
         TopLevelItem::Impl(_) => ItemKind::Impl,
+        TopLevelItem::Expr(_) => ItemKind::Statement,
         _ => ItemKind::Other,
     }
 }
@@ -1273,6 +1280,8 @@ fn format_ffi_function(func: &FfiFunction, comments: &CommentMap) -> Doc {
         name,
         is_class_method,
         mutates_self,
+        consumes_self,
+        returns_owned,
         c_symbol,
         params,
         return_type,
@@ -1301,6 +1310,9 @@ fn format_ffi_function(func: &FfiFunction, comments: &CommentMap) -> Doc {
     if *mutates_self {
         parts.push(text("var "));
     }
+    if *consumes_self {
+        parts.push(text("consume "));
+    }
 
     // `def self.NAME` marks a class method (ruby-naming.spec.md §3.4a). The
     // parser records this in `FfiFunction.is_class_method`; emit it back so a
@@ -1327,6 +1339,9 @@ fn format_ffi_function(func: &FfiFunction, comments: &CommentMap) -> Doc {
 
     if let Some(rt) = return_type {
         parts.push(text(" -> "));
+        if *returns_owned {
+            parts.push(text("owned "));
+        }
         parts.push(format_type_expr(rt, comments));
     }
 

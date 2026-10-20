@@ -1,0 +1,12 @@
+# A by-value `if let` binding takes the String out of an owned Option[String]
+# (the borrow checker records a move of `o`, so a second `if let` is E1001).
+# The binding owns the payload and frees it once at scope exit.
+
+def mk(k: Int) -> Option[String]
+  Some("opt-#{k}")
+end
+
+o = mk(7)
+if let Some(v) = o
+  puts v
+end

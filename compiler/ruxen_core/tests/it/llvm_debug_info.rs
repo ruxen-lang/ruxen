@@ -117,14 +117,13 @@ fn add_program() -> MirProgram {
     // `add` is defined on source line 1.
     add.def_span = Some(Span::new(0, 0, 1, 1));
 
-    MirProgram {
+    let mut program = MirProgram {
         functions: vec![add, seven],
-        entry: None,
-        ffi_libs: vec![],
-        vtables: vec![],
-        class_infos: vec![],
-        wasm_exports: vec![],
-    }
+        ..MirProgram::new()
+    };
+    // The last lowering step, as on every lowered program.
+    ruxen_core::mir::coercion::make_coercions_explicit(&mut program);
+    program
 }
 
 #[test]

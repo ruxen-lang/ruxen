@@ -66,7 +66,7 @@ Tester.describe("TestClock") do |t: &var Tester|
   end
 
   t.it("deregistering a fired timer keeps the other one live") do
-    TestClock.install
+    clock = TestClock.install
     var cx = Context.executor
     let h = ruxen_reactor_current_handle()
     let a = ruxen_reactor_register_timer(h, 10000000000)
@@ -77,20 +77,18 @@ Tester.describe("TestClock") do |t: &var Tester|
     t.expect(ruxen_reactor_registered_count()).to_eq(1)
     TestClock.advance(Duration.from_secs(15))
     t.expect(ruxen_reactor_check_fired(h, b)).to_eq(1)
-    TestClock.uninstall
   end
 
   t.it("a nested install keeps the outer virtual time") do
-    TestClock.install
+    clock = TestClock.install
     var cx = Context.executor
     let h = ruxen_reactor_current_handle()
     TestClock.advance(Duration.from_secs(30))
-    TestClock.install
+    inner_clock = TestClock.install
     let tm = ruxen_reactor_register_timer(h, 10000000000)
     t.expect(ruxen_reactor_check_fired(h, tm)).to_eq(0)
     TestClock.uninstall
     TestClock.advance(Duration.from_secs(15))
     t.expect(ruxen_reactor_check_fired(h, tm)).to_eq(1)
-    TestClock.uninstall
   end
 end

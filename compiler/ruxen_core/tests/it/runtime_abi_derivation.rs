@@ -229,7 +229,6 @@ fn baseline_runtime_signature(name: &str) -> Option<(Vec<Type>, Option<Type>)> {
         "ruxen_vec_get_mut" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_vec_get_mut_opt" => Some((vec![types::I64, types::I64], Some(types::I64))),
         "ruxen_vec_is_empty" => Some((vec![types::I64], Some(types::I8))),
-        "ruxen_vec_each" => Some((vec![types::I64, types::I64], None)),
         // Hash operations
         "ruxen_hash_new" => Some((vec![], Some(types::I64))),
         "ruxen_hash_from_iter" => Some((vec![types::I64], Some(types::I64))),
@@ -548,7 +547,6 @@ fn table_symbols() -> &'static [&'static str] {
         "ruxen_vec_get_mut",
         "ruxen_vec_get_mut_opt",
         "ruxen_vec_is_empty",
-        "ruxen_vec_each",
         "ruxen_hash_new",
         "ruxen_hash_from_iter",
         "ruxen_hash_insert",
@@ -625,14 +623,8 @@ fn table_symbols() -> &'static [&'static str] {
 ///     (I8); C returns `int64_t` (I64). The call reads the low byte —
 ///     correct for a 0/1 bool on little-endian. Exercised by e2e cases
 ///     531/533 (fs.exists) and 907 (regex is_match); passes today.
-///   * `ruxen_vec_each`: `.rx` declares `def each -> Int` with no params;
-///     C is `(RuxenVec*, void(*)(int64_t)) -> void`. FOLLOW-UP BUG: the
-///     `.rx` decl omits the callback param and declares a bogus `-> Int`.
-///     The callback is supplied via closure lowering, not a plain FFI arg,
-///     so the missing param is invisible at the C-call boundary. Exercised
-///     by e2e cases 120/108/307/88; passes today. `.rx` fix is out of scope.
 fn known_rx_vs_table_discrepancies() -> &'static [&'static str] {
-    &["ruxen_fs_exists", "ruxen_regex_is_match", "ruxen_vec_each"]
+    &["ruxen_fs_exists", "ruxen_regex_is_match"]
 }
 
 /// The crux check: for every symbol present in BOTH the derived map and
@@ -920,15 +912,15 @@ fn every_exported_runtime_symbol_has_a_declaration_or_emitter() {
 // Residual ABI table guard (F-26)
 // ---------------------------------------------------------------------------
 
-/// `codegen::residual_abi` may hold only symbols the compiler emits itself
+/// `mir::residual_abi` may hold only symbols the compiler emits itself
 /// and that not every bootstrap declares in `.rx` (the wasm subset is the
 /// smallest one). A declared entry duplicates the derived ABI; an entry
 /// nothing emits is dead. Where the full bootstrap does declare an entry,
 /// the derived Cranelift widths must equal the table's.
 #[test]
 fn residual_abi_table_holds_only_undeclared_emitted_symbols() {
-    use ruxen_core::codegen::cranelift::compiler_internal_signature;
-    use ruxen_core::codegen::residual_abi::RESIDUAL_RUNTIME_FNS;
+    use ruxen_core::codegen::cranelift::clif_type;
+    use ruxen_core::mir::residual_abi::RESIDUAL_RUNTIME_FNS;
     use ruxen_core::resolve::bootstrap::run_wasm_bootstrap_with_package_names;
 
     let mut diags = Vec::new();
@@ -952,7 +944,10 @@ fn residual_abi_table_holds_only_undeclared_emitted_symbols() {
             problems.push(format!("  {}: no compiler source emits it", r.name));
         }
         if let Some(derived) = declared.get(r.name) {
-            let table = compiler_internal_signature(r.name).expect("residual entry resolves");
+            let table: AbiShape = (
+                r.params.iter().map(|&c| clif_type(c)).collect(),
+                r.ret.map(clif_type),
+            );
             if *derived != table {
                 problems.push(format!(
                     "  {}: derived {derived:?} != table {table:?}",

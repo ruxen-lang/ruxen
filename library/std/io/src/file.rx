@@ -28,7 +28,7 @@ class File
     def write_all as "ruxen_file_write_all"(bytes: &Array[Int]) -> Result[nil, IoError]
     def write_str as "ruxen_file_write_str"(s: &String) -> Result[nil, IoError]
     def flush as "ruxen_file_flush" -> Result[nil, IoError]
-    def seek as "ruxen_file_seek"(from: SeekFrom) -> Result[Int, IoError]
+    def seek as "ruxen_file_seek"(from: &SeekFrom) -> Result[Int, IoError]
     def metadata as "ruxen_file_metadata" -> Result[Metadata, IoError]
     def close as "ruxen_file_close" -> Result[nil, IoError]
     def drop as "ruxen_file_drop" -> nil

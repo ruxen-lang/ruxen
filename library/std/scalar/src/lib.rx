@@ -39,6 +39,12 @@
 ## The parity guard `tests/runtime_abi_derivation.rs` pins every derived
 ## width against the frozen `runtime_signature` table.
 class Int
+  ## A scalar is copied by value, so its copy is itself (Ruby's
+  ## `Integer#clone`); this is what a `where T: Clone` body reaches for it.
+  def clone -> Self
+    self
+  end
+
   # `Add` capability: Int elements can be `sum`med (receiver-element
   # bound on `Array[T].sum where T: Add`). Nominal opt-in — the bound
   # check requires an explicit `include`.
@@ -67,7 +73,7 @@ class Int
   # they need `self` itself in arithmetic, but a scalar method-home `self`
   # is typed nominally as `Class[Int]`, which does not yet flow into the
   # primitive `+`/`-` floor.)
-  def times(f: any Fn[Fn(Int) -> nil]) -> nil
+  def times(f: Fn(Int) -> nil) -> nil
     var i = 0
     while i < self
       f.(i)
@@ -648,6 +654,12 @@ end
 ## The parity guard `tests/runtime_abi_derivation.rs` pins every derived
 ## width against the frozen `runtime_signature` table.
 class Float
+  ## A scalar is copied by value, so its copy is itself (Ruby's
+  ## `Integer#clone`); this is what a `where T: Clone` body reaches for it.
+  def clone -> Self
+    self
+  end
+
   # `Add` capability — see `class Int`.
   include Add
 
@@ -671,6 +683,12 @@ class Float
 end
 
 class Bool
+  ## A scalar is copied by value, so its copy is itself (Ruby's
+  ## `Integer#clone`); this is what a `where T: Clone` body reaches for it.
+  def clone -> Self
+    self
+  end
+
   lib "../../string/runtime/string.c"
     def to_s as "ruxen_bool_to_string" -> String
   end
@@ -696,6 +714,12 @@ class Bool
 end
 
 class Char
+  ## A scalar is copied by value, so its copy is itself (Ruby's
+  ## `Integer#clone`); this is what a `where T: Clone` body reaches for it.
+  def clone -> Self
+    self
+  end
+
   lib "../../string/runtime/string.c"
     def to_s as "ruxen_char_to_string" -> String
   end
@@ -825,6 +849,12 @@ class Char
 end
 
 class USize
+  ## A scalar is copied by value, so its copy is itself (Ruby's
+  ## `Integer#clone`); this is what a `where T: Clone` body reaches for it.
+  def clone -> Self
+    self
+  end
+
   # `Add` capability — see `class Int`.
   include Add
 

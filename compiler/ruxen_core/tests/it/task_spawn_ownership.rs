@@ -9,7 +9,7 @@
 //! elaborated, and the next `ruxen_executor_pump_tasks()` call in
 //! the outer driver dereferences freed memory (SIGSEGV / exit 139).
 //!
-//! The fix lives in `compiler/ruxen_core/src/mir/lower/drops.rs`:
+//! The fix lives in `compiler/ruxen_core/src/mir/lower/drops/`:
 //! the `is_move_by_ffi_callee` predicate excludes
 //! `ruxen_executor_spawn` from the runtime-borrow-helper list, so
 //! the default-taint path on the per-arg loop runs and the
@@ -38,7 +38,7 @@ fn rx(name: &str) -> String {
 /// followed a freed pointer and SIGSEGV'd (exit 139).
 ///
 /// After the fix: `ruxen_executor_spawn` is excluded from the
-/// runtime-borrow-helper analysis in `drops.rs`, so the
+/// runtime-borrow-helper analysis in `drops/`, so the
 /// default-taint path removes `fut` from `alloc_rooted` and the
 /// scope-exit drop pass skips it. The future stays live for the
 /// executor's queue, the pump runs it to Ready(42), and main

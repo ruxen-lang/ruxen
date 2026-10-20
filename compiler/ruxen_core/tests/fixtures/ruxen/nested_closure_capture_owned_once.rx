@@ -1,0 +1,23 @@
+# Blocks, procs and lambdas: a closure nested in an owning lambda reads an
+# outer String through the lambda, so the lambda captures (owns) it. Each
+# String is freed exactly once, by the owning lambda's drop, however often
+# the lambda runs. A nested block only borrows it; a nested owning lambda
+# owns a clone made in the outer body (capturing `s` itself is E1019).
+
+def each_one(&block: Fn[(Int) -> nil])
+  yield 1
+end
+
+s = "xyz"
+outer = -> do
+  mine = s.clone
+  inner = -> { mine.size }
+  inner.()
+end
+puts outer.()
+puts outer.()
+t = "t"
+shout = -> do
+  each_one { |n| puts "#{t}#{n}" }
+end
+shout.()

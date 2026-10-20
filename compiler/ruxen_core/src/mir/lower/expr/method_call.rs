@@ -525,12 +525,25 @@ impl<'a> Lowerer<'a> {
                 // Regular method call: object becomes the first argument (self).
                 // Still lowered (for its side effects) even when its value is
                 // dropped as a zero-sized self below.
-                let obj_local = self.lower_expr(object)?;
+                //
+                // A `def var` String lib method on a `&var String` receiver
+                // takes the receiver's slot address (`mir::refmut_abi`), not
+                // the String loaded through it.
+                let slot_receiver = self.mutates_slot_receiver(*resolved, &object.ty);
+                // A receiver with storage of its own (a variable, a field,
+                // `(&var u.name)`, P-8) passes its address
+                // (`emit_rebinding_self_call`).
+                let receiver_is_address = slot_receiver && self.slot_receiver_has_storage(object);
+                let obj_local = if slot_receiver {
+                    self.lower_slot_receiver(object)?
+                } else {
+                    self.lower_expr(object)?
+                };
                 // A borrowed scalar receiver (`x.to_s` on `x: &Float`) passes
                 // its pointee, so a float's bit-pattern word is not converted
                 // numerically at the call.
                 let obj_local = match obj_local {
-                    Some(lid) if !is_static => {
+                    Some(lid) if !is_static && !receiver_is_address => {
                         let local_ty = self.fn_mut().locals[lid as usize].ty.clone();
                         self.deref_borrowed_scalar(obj_local, &local_ty).0
                     }
@@ -552,22 +565,25 @@ impl<'a> Lowerer<'a> {
                 } else {
                     vec![local_to_value(obj_local)]
                 };
-                for arg in args {
-                    let local = self.lower_expr(arg)?;
-                    arg_values.push(local_to_value(local));
-                }
-                // Include trailing block argument if present (closures passed
-                // as the last parameter of the method).
-                if let Some(block_expr) = block {
-                    let block_local = self.lower_expr(block_expr)?;
-                    arg_values.push(local_to_value(block_local));
-                }
+                // The arguments are lowered below, once the callee is known:
+                // a slot-addressed `&var T` parameter takes an address.
 
                 // Resolve through parent classes for inherited methods.
                 // For a generic type parameter or impl/dyn Trait, dispatch
                 // to the unique implementor of the trait bound when one
                 // exists.
+                // A call typeck resolved to a method of the class declared
+                // `layout closure` (`Closure#clone` on a `Proc[...]`) is a
+                // call of that method, not an invocation of the closure.
+                let shell = self.symbols.closure_shell();
+                let closure_shell_method = self.symbols.get(*resolved).is_some_and(|def| {
+                    matches!(def.kind, crate::resolve::symbols::DefKind::Method { parent, .. }
+                        if shell.is_some_and(|shell| shell.id == parent))
+                });
                 let resolved_class = match (&receiver_ty, receiver_ty.peel_refs()) {
+                    _ if closure_shell_method => {
+                        receiver_ty.method_home(self.symbols.closure_shell_name())
+                    }
                     (Ty::Class { name, .. }, _) => {
                         self.resolve_method_class_with_args(name, method_name, args)
                     }
@@ -670,6 +686,12 @@ impl<'a> Lowerer<'a> {
                 let mangled = match self.builtin_head_mono_callee(&receiver_ty, lowered_method_name)
                 {
                     Some(specialized) => specialized,
+                    // No copy for an abstract receiver: only an opaque generic
+                    // body calls it, and `prune_unmonomorphised_bodies` drops
+                    // that body (or reports it when something live reaches it).
+                    None if *method != UNRESOLVED_DEF && self.is_specialized_only(*method) => {
+                        monomorphize::abstract_callee(&receiver_ty.to_string(), lowered_method_name)
+                    }
                     None => mangled,
                 };
 
@@ -736,9 +758,49 @@ impl<'a> Lowerer<'a> {
                     None
                 };
 
+                // A slot-addressed `&var T` parameter (`n: &var Int`) takes the
+                // ADDRESS of the argument's storage (`mir::refmut_abi`), decided
+                // on the declared signature of the callee this call names. A
+                // zero-sized receiver passes no self, so its slots do not line
+                // up with a `self`-taking signature; only `Kernel` methods are
+                // called on one, and they take no `&var`.
+                let refmut_slots = if self_is_zero_sized && !is_static {
+                    Vec::new()
+                } else {
+                    let preferred = [*method, *resolved]
+                        .into_iter()
+                        .find(|def| *def != UNRESOLVED_DEF);
+                    crate::mir::lower::runtime_abi::user_callee_refmut_slot_params(
+                        self.symbols,
+                        &mangled,
+                        preferred,
+                        arg_values.len() + args.len(),
+                    )?
+                };
+                let first_arg_slot = arg_values.len();
+                for (index, arg) in args.iter().enumerate() {
+                    if refmut_slots
+                        .get(first_arg_slot + index)
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        let addr = self.lower_refmut_addr(arg)?;
+                        arg_values.push(local_to_value(addr));
+                        continue;
+                    }
+                    let local = self.lower_expr(arg)?;
+                    arg_values.push(local_to_value(local));
+                }
+                // Include trailing block argument if present (closures passed
+                // as the last parameter of the method).
+                if let Some(block_expr) = block {
+                    let block_local = self.lower_expr(block_expr)?;
+                    arg_values.push(local_to_value(block_local));
+                }
+
                 // A `def var` lib method (`String#push_str`, `#remove`, ...)
                 // takes its receiver as `&var Self`.
-                if self.mutates_slot_receiver(*resolved, &object.ty) {
+                if slot_receiver {
                     let callee = self.resolve_ffi_alias_callee(mangled);
                     self.emit_rebinding_self_call(object, callee, arg_values, dest)?;
                     return Ok(dest);
@@ -758,8 +820,8 @@ impl<'a> Lowerer<'a> {
                 // Phase 2 #06.9: dyn-erased `any Fn(...)` receivers
                 // dispatch through the same indirect-call path. The
                 // physical representation is identical — a closure
-                // value is a 16-byte `(fn_ptr, captures_ptr)` heap
-                // pair (see `closure.rs`), and `Ty::AnyMixin` lays out
+                // value is a pointer to the `(fn_ptr, captures_ptr, …)`
+                // heap pair (see `drops::CLOSURE_PAIR_SIZE`), and `Ty::AnyMixin` lays out
                 // as a 16-byte primitive (see `codegen/layout.rs:445`),
                 // so slot 0 / slot 1 line up without a vtable. The
                 // typeck-side unification in `typeck/unify.rs` is what
@@ -793,19 +855,20 @@ impl<'a> Lowerer<'a> {
                                 .unwrap_or(false)
                         })
                         .unwrap_or(false);
-                let is_fn_call = is_fn_type
-                    || is_ref_fn_type
-                    || is_any_fn_type
-                    || is_ref_any_fn_type
-                    || local_ty_is_fn
-                    || type_name.starts_with("Fn(")
-                    || type_name.starts_with("Fn[")
-                    || type_name.starts_with("&Fn(")
-                    || type_name.starts_with("&Fn[")
-                    || type_name.starts_with("any Fn(")
-                    || type_name.starts_with("any Fn[")
-                    || type_name.starts_with("&any Fn(")
-                    || type_name.starts_with("&any Fn[");
+                let is_fn_call = !closure_shell_method
+                    && (is_fn_type
+                        || is_ref_fn_type
+                        || is_any_fn_type
+                        || is_ref_any_fn_type
+                        || local_ty_is_fn
+                        || type_name.starts_with("Fn(")
+                        || type_name.starts_with("Fn[")
+                        || type_name.starts_with("&Fn(")
+                        || type_name.starts_with("&Fn[")
+                        || type_name.starts_with("any Fn(")
+                        || type_name.starts_with("any Fn[")
+                        || type_name.starts_with("&any Fn(")
+                        || type_name.starts_with("&any Fn["));
 
                 if is_fn_call {
                     // The closure value is a heap pair {fn_ptr, captures_ptr}.
@@ -836,13 +899,13 @@ impl<'a> Lowerer<'a> {
                     self.emit(MirInst::GetField {
                         dest: fn_ptr,
                         base: pair,
-                        field_index: 0,
+                        field_index: CLOSURE_PAIR_FN,
                     });
                     let cap_ptr = self.new_temp(Ty::Int);
                     self.emit(MirInst::GetField {
                         dest: cap_ptr,
                         base: pair,
-                        field_index: 1,
+                        field_index: CLOSURE_PAIR_CAPTURES,
                     });
                     // Drop the self-as-first-arg that method-call lowering
                     // prepended; replace it with captures_ptr.
@@ -870,13 +933,15 @@ impl<'a> Lowerer<'a> {
                     for arg in user_args {
                         indirect_args.push(self.float_arg_to_word(arg));
                     }
+                    let (modes, result) =
+                        self.closure_call_facts(&object.ty, obj_local, &indirect_args);
 
                     // A float result comes back in a word, so the
                     // `CallIndirect` destination must be word-typed and the
                     // real destination filled by the inverse reinterpretation.
                     let dest_is_float = dest
                         .and_then(|d| self.fn_mut().locals.get(d as usize))
-                        .map(|l| crate::codegen::is_float_ty(&l.ty))
+                        .map(|l| crate::mir::abi::is_float_ty(&l.ty))
                         .unwrap_or(false);
                     let call_dest = if dest_is_float {
                         Some(self.new_temp(Ty::Int))
@@ -887,7 +952,12 @@ impl<'a> Lowerer<'a> {
                         dest: call_dest,
                         callee: fn_ptr,
                         args: indirect_args,
+                        modes,
+                        pair: obj_local,
                     });
+                    if let (Some(call_dest), Some(result)) = (call_dest, result) {
+                        self.fn_mut().record_view(call_dest, result);
+                    }
                     if let (true, Some(word), Some(real)) = (dest_is_float, call_dest, dest) {
                         self.emit(MirInst::BitsToFloat {
                             dest: real,
@@ -945,10 +1015,52 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// What lowering knows of a closure call from the closure's declared
+    /// signature (`object_ty`, else the type of the `pair` local holding
+    /// it): how it takes each of `args` (`args[0]` is the pair's own
+    /// captures box, which the call only reads), as
+    /// `param_modes::unknown_param_mode` where the signature has no
+    /// parameter; and the [`View`] of its result, `Own` when the declared
+    /// result can hold no reference, `None` (it may point into every
+    /// argument) when it can or the signature is unknown.
+    fn closure_call_facts(
+        &mut self,
+        object_ty: &Ty,
+        pair: Option<LocalId>,
+        args: &[MirValue],
+    ) -> (Vec<ParamMode>, Option<View>) {
+        let pair_ty = pair.map(|pair| self.fn_mut().locals[pair as usize].ty.clone());
+        let signature = [Some(object_ty), pair_ty.as_ref()]
+            .into_iter()
+            .flatten()
+            .find_map(|ty| ty.peel_refs().callable_signature())
+            .map(|(params, result)| (params.to_vec(), result.clone()));
+        let result = signature.as_ref().and_then(|(_, result)| {
+            let generic = result.any(&mut |t: &Ty| matches!(t, Ty::TypeParam { .. }));
+            (!generic && !result.holds_reference()).then_some(View::Own)
+        });
+        let params = signature.map(|(params, _)| params).unwrap_or_default();
+        let symbols = self.symbols;
+        let func = self.fn_mut();
+        let mut modes = vec![ParamMode::Read];
+        for (position, arg) in args.iter().enumerate().skip(1) {
+            let mode = match (params.get(position - 1), arg.local()) {
+                (Some(param), _) => crate::mir::param_modes::param_mode(param, symbols),
+                (None, Some(local)) => crate::mir::param_modes::unknown_param_mode(
+                    &func.locals[local as usize].ty,
+                    symbols,
+                ),
+                (None, None) => ParamMode::Read,
+            };
+            modes.push(mode);
+        }
+        (modes, result)
+    }
+
     /// Whether `resolved` is a `def var` lib method (`String#push_str`) on a
-    /// receiver whose `&var` is the address of its slot (a String, see
-    /// `refmut_abi`): the C symbol then replaces the receiver's buffer in
-    /// place, so the call must pass `&var receiver`, not its value.
+    /// receiver whose `&var` is the address of its slot (a String or a
+    /// scalar, see `refmut_abi`): the C symbol then writes the receiver's
+    /// slot in place, so the call must pass `&var receiver`, not its value.
     fn mutates_slot_receiver(&self, resolved: DefId, receiver_ty: &Ty) -> bool {
         use crate::resolve::symbols::DefKind;
         resolved != UNRESOLVED_DEF
@@ -960,18 +1072,57 @@ impl<'a> Lowerer<'a> {
             })
     }
 
-    /// Emit a call to a `def var` lib method on a String receiver. `args[0]`
-    /// holds the lowered receiver; it is replaced by a `&var String` slot
-    /// address. The callee stores the new buffer through the slot and frees
-    /// the old one, so the slot must be the receiver's own storage:
+    /// Whether the receiver of a `def var` lib method on a String or scalar
+    /// is passed as the address of its own storage: a `&var T` receiver
+    /// (already the caller's address), and an owned variable (a local, a
+    /// cell, a capture) or owned field (`lower_refmut_addr`). A borrowed
+    /// String or a temporary has no storage the callee may replace.
+    pub(super) fn slot_receiver_has_storage(&self, object: &HirExpr) -> bool {
+        if matches!(object.ty, Ty::RefMut(_) | Ty::RefMutLifetime(..)) {
+            return true;
+        }
+        let owned = if object.ty.peel_refs().is_string_form() {
+            matches!(object.ty, Ty::String)
+        } else {
+            !matches!(object.ty, Ty::Ref(_) | Ty::RefLifetime(..))
+        };
+        owned
+            && match &object.kind {
+                HirExprKind::VarRef(def_id) => {
+                    self.def_to_local.contains_key(def_id) || self.capture_map.contains_key(def_id)
+                }
+                HirExprKind::FieldAccess { .. } | HirExprKind::Index { .. } => {
+                    !object.is_unaddressable_var_place()
+                }
+                _ => false,
+            }
+    }
+
+    /// Lower the receiver of a `def var` lib method on a String or scalar:
+    /// its storage's address when it has one
+    /// ([`Self::slot_receiver_has_storage`]), else its value.
+    pub(super) fn lower_slot_receiver(
+        &mut self,
+        object: &HirExpr,
+    ) -> Result<Option<LocalId>, String> {
+        if self.slot_receiver_has_storage(object) {
+            self.lower_refmut_addr(object)
+        } else {
+            self.lower_expr(object)
+        }
+    }
+
+    /// Emit a call to a `def var` lib method on a String or scalar receiver.
+    /// `args[0]` holds the receiver lowered by [`Self::lower_slot_receiver`].
+    /// The callee writes the new value through a `&var T` slot (a String
+    /// callee frees the old buffer), so the slot must be the receiver's own
+    /// storage:
     ///
-    /// - a `&var String` receiver already is the caller's slot address;
-    /// - an owned local is borrowed `&var` in place;
-    /// - a captured or cell-held variable, or a field, runs on a temporary
-    ///   slot holding its buffer, which is stored back afterwards;
-    /// - a buffer this code does not own (a `&String` borrow, a call result)
-    ///   is copied first, so the callee never frees someone else's buffer.
-    ///   A borrowed variable is rebound to the mutated copy.
+    /// - a receiver with storage already is its address;
+    /// - a String buffer this code does not own (a `&String` borrow, a call
+    ///   result) is copied first, so the callee never frees someone else's
+    ///   buffer. A borrowed variable is rebound to the mutated copy. A
+    ///   scalar is a plain copy.
     pub(super) fn emit_rebinding_self_call(
         &mut self,
         object: &HirExpr,
@@ -979,36 +1130,23 @@ impl<'a> Lowerer<'a> {
         mut args: Vec<MirValue>,
         dest: Option<LocalId>,
     ) -> Result<(), String> {
-        if matches!(object.ty, Ty::RefMut(_) | Ty::RefMutLifetime(..)) {
+        if self.slot_receiver_has_storage(object) {
             self.emit(MirInst::Call { dest, callee, args });
             return Ok(());
         }
-        let slot_ty = Ty::RefMut(Box::new(Ty::String));
-        let owned = matches!(object.ty, Ty::String);
-        if let HirExprKind::VarRef(def_id) = &object.kind {
-            let local = self.def_to_local.get(def_id).copied();
-            if let Some(local) = local.filter(|_| {
-                owned
-                    && !self.capture_map.contains_key(def_id)
-                    && !self.cell_promoted.contains(def_id)
-            }) {
-                let slot = self.new_temp(slot_ty);
-                self.emit(MirInst::RefMut {
-                    dest: slot,
-                    src: local,
-                });
-                args[0] = MirValue::Use(slot);
-                self.emit(MirInst::Call { dest, callee, args });
-                return Ok(());
-            }
-        }
-
+        let pointee = object.ty.peel_refs().clone();
+        let slot_ty = Ty::RefMut(Box::new(pointee.clone()));
+        let owned = if pointee.is_string_form() {
+            matches!(object.ty, Ty::String)
+        } else {
+            !matches!(object.ty, Ty::Ref(_) | Ty::RefLifetime(..))
+        };
         let is_place = matches!(
             object.kind,
             HirExprKind::VarRef(_) | HirExprKind::FieldAccess { .. }
         );
-        let buf = self.new_temp(Ty::String);
-        if owned && is_place {
+        let buf = self.new_temp(pointee.clone());
+        if (owned && is_place) || !pointee.is_string_form() {
             self.emit(MirInst::Assign {
                 dest: buf,
                 value: args[0].clone(),

@@ -18,11 +18,17 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ruxen_core::codegen::target::ResolvedTarget;
-use ruxen_core::lexer::Lexer;
-use ruxen_core::parser::Parser;
-use ruxen_core::{borrow_check, typeck};
+use ruxen_core::driver::{self, Options, Prelude};
 
 static N: AtomicU64 = AtomicU64::new(0);
+
+/// The front end with no stdlib bootstrap, lowered with the hosted lowerer.
+fn no_prelude() -> Options {
+    Options {
+        prelude: Prelude::None,
+        ..Options::default()
+    }
+}
 
 /// Resolve `wasm-ld`: the LLVM-18 prefix the cross work assumes, else PATH.
 /// Returns `None` so a host without lld SKIPs (does not fail) the link bars.
@@ -55,24 +61,13 @@ fn node_available() -> bool {
 /// Compile `src` to a wasm32 object via the real Ruxen LLVM backend (no
 /// stdlib bootstrap — wasm is a no_std reactor). Returns the object bytes.
 fn compile_wasm_object(src: &str) -> Vec<u8> {
-    let mut lexer = Lexer::new(src);
-    let tokens = lexer.tokenize().expect("lex");
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().expect("parse");
     // Empty bootstrap: the no_std reality. No `dispatch runtime` stdlib
     // classes, so `class_infos`/`vtables` stay empty and the LLVM backend
     // (which does not yet emit vtable globals) compiles cleanly.
-    let tr = typeck::type_check_with_bootstrap(&program, &[]);
-    let errs: Vec<_> = tr
-        .diagnostics
-        .iter()
-        .filter(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error)
-        .collect();
-    assert!(errs.is_empty(), "type errors: {errs:?}");
-    let be = borrow_check::borrow_check(&tr.program, &tr.symbols);
-    assert!(be.is_empty(), "borrow errors: {be:?}");
-    let mut lo = ruxen_core::mir::lower::Lowerer::new(&tr.symbols);
-    let mir = lo.lower_program(&tr.program).expect("lower");
+    let mut frontend = driver::check(&driver::parse(src).expect("parse"), &no_prelude());
+    let Some(mir) = frontend.mir.take() else {
+        panic!("front end errors: {}", frontend.render(None));
+    };
     assert!(
         mir.class_infos.is_empty() && mir.vtables.is_empty(),
         "a no-bootstrap program must not carry vtables/class_infos"
@@ -111,13 +106,8 @@ fn lower_records_top_level_defs_as_wasm_exports() {
     // The export set is target-independent metadata, populated at lower time.
     let src = "def add(a: Int32, b: Int32) -> Int32\n  a + b\nend\n\
                def mul(a: Int32, b: Int32) -> Int32\n  a * b\nend\n";
-    let mut lexer = Lexer::new(src);
-    let tokens = lexer.tokenize().unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().unwrap();
-    let tr = typeck::type_check_with_bootstrap(&program, &[]);
-    let mut lo = ruxen_core::mir::lower::Lowerer::new(&tr.symbols);
-    let mir = lo.lower_program(&tr.program).unwrap();
+    let frontend = driver::check(&driver::parse(src).unwrap(), &no_prelude());
+    let mir = frontend.mir.expect("lower");
     assert!(mir.wasm_exports.contains(&"add".to_string()));
     assert!(mir.wasm_exports.contains(&"mul".to_string()));
 }

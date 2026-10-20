@@ -156,29 +156,6 @@ void ruxen_hash_ensure_key_kind(RuxenHash *h, int64_t kind, int64_t hash_fn,
     h->key_eq = (RuxenKeyEqFn)(uintptr_t)eq_fn;
 }
 
-/* Hash::clone — shallow copy: a new Hash with the same (key, value)
-   pairs. Mirrors the v1 contract of `ruxen_vec_clone` (vec.c:301-311):
-   the entry slots are heap-owned i64 pointers; cloning shares storage
-   with the source. Suitable for `derive Clone` on user classes whose
-   fields include `Map[K, V]` — without this symbol the MIR-synthesised
-   `<Class>_clone` references an undefined helper and the link fails
-   ("Undefined symbols: _ruxen_hash_clone, referenced from _Foo_clone").
-   Pin: the compiler's `synthesize_clone_field` (mir/lower/derive.rs:647)
-   names this symbol. */
-RuxenHash *ruxen_hash_clone(RuxenHash *h) {
-    /* The clone has the same key TYPE as its source, so it inherits the
-       descriptor — and inherits it BEFORE the first insert, which is
-       what keeps the copied entries landing in the same buckets. */
-    if (!h) return ruxen_hash_new();
-    RuxenHash *out = ruxen_hash_alloc(h->key_kind, h->key_hash, h->key_eq);
-    for (uint64_t i = 0; i < h->bucket_count; i++) {
-        for (RuxenHashEntry *e = h->buckets[i]; e; e = e->next) {
-            ruxen_hash_insert(out, e->key, e->value);
-        }
-    }
-    return out;
-}
-
 /* Hash drop — see the "Heap-owned built-in drops" comment in the
    memory-management section above for the dual-name pattern. The
    spine-only variant frees the bucket chains and the struct itself;
@@ -413,15 +390,6 @@ static void ruxen_set_insert_owned(RuxenSet *s, int64_t item) {
                       ruxen_elem_clone(item, s->inner.key_kind), 1);
 }
 
-/* Set::clone — shallow copy. Mirrors `ruxen_hash_clone` (same v1
-   contract: heap-owned element slots are shared between source and
-   clone). Required for `derive Clone` on user classes with `Set[T]`
-   fields — pin: `synthesize_clone_field` in mir/lower/derive.rs. */
-RuxenSet *ruxen_set_clone(RuxenSet *s) {
-    if (!s) return ruxen_set_new();
-    return (RuxenSet *)ruxen_hash_clone(&s->inner);
-}
-
 int8_t ruxen_set_contains(RuxenSet *s, int64_t item) {
     if (!s) return 0;
     return ruxen_hash_contains_key(&s->inner, item);
@@ -634,22 +602,29 @@ RuxenVec *ruxen_set_iter(RuxenSet *s) {
 
 /* HashMap.from_iter(iter[(K, V)]) / iter.collect[HashMap[K, V]].
    Each iter slot is a heap-allocated 2-tuple with field0 at +0 and
-   field1 at +8, matching `ruxen_vec_zip`'s tuple layout and the
-   compiler's generic tuple allocation rule. */
+   field1 at +8, matching the compiler's generic tuple allocation rule.
+   A tuple owns its elements, so the table owns COPIES: the key by its
+   key kind (as `ruxen_set_insert_owned` does) and the value by
+   `val_desc`, the element descriptor the result's own drop frees values
+   with (the compiler appends it, `mir/lower/key_desc.rs`). Copy depth
+   therefore equals drop depth, and the source and the result can be
+   dropped independently. */
 RuxenHash *ruxen_hash_from_iter_keyed(RuxenVec *iter, int64_t kind,
-                                      int64_t hash_fn, int64_t eq_fn) {
+                                      int64_t hash_fn, int64_t eq_fn,
+                                      int64_t val_desc) {
     RuxenHash *out = ruxen_hash_new_keyed(kind, hash_fn, eq_fn);
     if (!iter) return out;
     for (uint64_t i = 0; i < iter->len; i++) {
         int64_t *pair = (int64_t *)iter->data[i];
         if (!pair) continue;
-        ruxen_hash_insert(out, pair[0], pair[1]);
+        ruxen_hash_insert(out, ruxen_elem_clone(pair[0], kind),
+                          ruxen_elem_clone(pair[1], val_desc));
     }
     return out;
 }
 
 RuxenHash *ruxen_hash_from_iter(RuxenVec *iter) {
-    return ruxen_hash_from_iter_keyed(iter, RUXEN_KEY_UNSET, 0, 0);
+    return ruxen_hash_from_iter_keyed(iter, RUXEN_KEY_UNSET, 0, 0, 0);
 }
 
 /* HashSet.from_iter(iter[T]) / iter.collect[HashSet[T]].
@@ -664,8 +639,8 @@ RuxenHash *ruxen_hash_from_iter(RuxenVec *iter) {
  *   Caller may assume: source and result can be dropped independently.
  *
  * The elements are copied rather than aliased BECAUSE the source's drop
- * is element-aware. This is the asymmetry with `ruxen_hash_from_iter_keyed`
- * below, whose source is a `Vec` of tuples that drops spine-only. */
+ * is element-aware, as `ruxen_hash_from_iter_keyed` above copies for the
+ * same reason. */
 RuxenSet *ruxen_set_from_iter_keyed(RuxenVec *iter, int64_t kind,
                                     int64_t hash_fn, int64_t eq_fn) {
     RuxenSet *out = ruxen_set_new_keyed(kind, hash_fn, eq_fn);

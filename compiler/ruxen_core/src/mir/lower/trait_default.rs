@@ -70,11 +70,20 @@ pub(super) fn rewrite_self_in_func(func: &mut HirFuncDef, concrete: &Ty) {
 /// binop / interpolation lowering runs — at which point the existing
 /// `Ty::String` special-cases in `binops.rs` / `interpolation.rs` fire
 /// naturally.
+///
+/// A closure bound to a type parameter is substituted as a stored proc
+/// (`Ty::as_type_argument`): the specialized parameter is passed by value
+/// like any `T`, so a constructor that stores it in a field owns it, and the
+/// caller does not free it too (it is not a borrowed block slot).
 pub(super) fn subst_type_params_in_func(
     func: &mut HirFuncDef,
     subst: &std::collections::HashMap<String, Ty>,
 ) {
-    TypeParamSubst { subst }.visit_func_mut(func);
+    let subst: std::collections::HashMap<String, Ty> = subst
+        .iter()
+        .map(|(name, ty)| (name.clone(), ty.as_type_argument()))
+        .collect();
+    TypeParamSubst { subst: &subst }.visit_func_mut(func);
 }
 
 /// Applies `Ty::subst_params` to every type the shared HIR walk reaches.

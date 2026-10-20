@@ -5,7 +5,6 @@ use std::fmt;
 pub enum ErrorCode {
     E1001, // use after move
     E1002, // can't borrow writably while borrowed read-only
-    E1003, // can't borrow read-only while borrowed writably
     E1006, // assign to `let` binding
     E1007, // can't borrow `let` binding writably
     E1009, // can't move while borrowed
@@ -14,6 +13,10 @@ pub enum ErrorCode {
     E1012, // value is not Sync
     E1013, // non-`static` capture in send-required closure
     E1014, // invalid manual Send/Sync include form
+    E1018, // block parameter stored
+    E1019, // borrowed capture moved out of a closure body
+    E1020, // rebinding a handle `&var` parameter
+    E1021, // a `&var` argument with no address (a Hash value)
 }
 
 impl ErrorCode {
@@ -34,7 +37,6 @@ impl ErrorCode {
         match self {
             ErrorCode::E1001 => "E1001",
             ErrorCode::E1002 => "E1002",
-            ErrorCode::E1003 => "E1003",
             ErrorCode::E1006 => "E1006",
             ErrorCode::E1007 => "E1007",
             ErrorCode::E1009 => "E1009",
@@ -43,6 +45,10 @@ impl ErrorCode {
             ErrorCode::E1012 => "E1012",
             ErrorCode::E1013 => "E1013",
             ErrorCode::E1014 => "E1014",
+            ErrorCode::E1018 => "E1018",
+            ErrorCode::E1019 => "E1019",
+            ErrorCode::E1020 => "E1020",
+            ErrorCode::E1021 => "E1021",
         }
     }
 }
@@ -126,7 +132,6 @@ mod tests {
     const ALL_ERROR_CODES: &[ErrorCode] = &[
         ErrorCode::E1001,
         ErrorCode::E1002,
-        ErrorCode::E1003,
         ErrorCode::E1006,
         ErrorCode::E1007,
         ErrorCode::E1009,
@@ -135,6 +140,10 @@ mod tests {
         ErrorCode::E1012,
         ErrorCode::E1013,
         ErrorCode::E1014,
+        ErrorCode::E1018,
+        ErrorCode::E1019,
+        ErrorCode::E1020,
+        ErrorCode::E1021,
     ];
 
     #[test]

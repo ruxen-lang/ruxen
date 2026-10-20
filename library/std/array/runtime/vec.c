@@ -112,15 +112,6 @@ int8_t ruxen_vec_is_empty(RuxenVec *v) {
     return (!v || v->len == 0) ? 1 : 0;
 }
 
-void ruxen_vec_each(RuxenVec *v, void (*callback)(int64_t)) {
-    /* In the v1 runtime, closures/blocks are not yet supported.
-       Just iterate and call the callback if non-null. */
-    if (!v || !callback) return;
-    for (uint64_t i = 0; i < v->len; i++) {
-        callback(v->data[i]);
-    }
-}
-
 /* `Vec::count` — alias for length. Kept as a separate symbol so the
    codegen can dispatch without a special case. */
 int64_t ruxen_vec_count(RuxenVec *v) {
@@ -211,6 +202,7 @@ static int ruxen_elem_owns_heap(int64_t desc) {
         case RUXEN_ELEM_HASH:
         case RUXEN_ELEM_SET:
         case RUXEN_ELEM_OBJ:
+        case RUXEN_ELEM_CLOSURE:
             return 1;
         default:
             return 0;
@@ -242,6 +234,9 @@ int64_t ruxen_elem_clone(int64_t slot, int64_t desc) {
                 (RuxenHash *)slot, rest, RUXEN_ELEM_POD);
         case RUXEN_ELEM_OBJ:
             return ((RuxenElemGlue)(uintptr_t)rest)(RUXEN_ELEM_GLUE_CLONE, slot);
+        case RUXEN_ELEM_CLOSURE:
+            /* Shared, not copied: one more owner of the same pair. */
+            return ruxen_closure_share(slot);
         default:
             /* RUXEN_ELEM_POD and any pass-through key kind (e.g.
                RUXEN_KEY_CUSTOM): the slot is a value, copying the word
@@ -272,6 +267,12 @@ void ruxen_elem_drop(int64_t slot, int64_t desc) {
         case RUXEN_ELEM_OBJ:
             ((RuxenElemGlue)(uintptr_t)rest)(RUXEN_ELEM_GLUE_DROP, slot);
             return;
+        case RUXEN_ELEM_CLOSURE: {
+            /* The pair's own drop glue releases this owner. */
+            int64_t drop_fn = ((int64_t *)(uintptr_t)slot)[RUXEN_CLOSURE_DROP_SLOT];
+            ((RuxenClosureDrop)(uintptr_t)drop_fn)(slot);
+            return;
+        }
         default:
             return;
     }
@@ -492,6 +493,16 @@ int64_t ruxen_vec_get_or_panic(RuxenVec *v, uint64_t i) {
 #endif
     }
     return v->data[i];
+}
+
+/* Address of element `i`, bounds-checked like `ruxen_vec_get_or_panic`.
+   A `&var T` argument naming an Array element (`replace(&var a[i])`,
+   `replace(a[i])`) passes the slot itself, so a store through the callee's
+   parameter replaces the element in place: the callee frees the value it
+   replaces, once, and the Array owns the new one. */
+int64_t *ruxen_vec_slot_addr(RuxenVec *v, uint64_t i) {
+    (void)ruxen_vec_get_or_panic(v, i);
+    return &v->data[i];
 }
 
 /* `Array[T]` drop glue: the one drop callee the MIR drop pass emits for

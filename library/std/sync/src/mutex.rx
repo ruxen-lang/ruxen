@@ -20,7 +20,7 @@ class Mutex[T: Send]
     def is_poisoned as "ruxen_mutex_is_poisoned" -> Int
     def clear_poison as "ruxen_mutex_clear_poison" -> nil
     def into_inner_raw as "ruxen_mutex_into_inner" -> T
-    def drop as "ruxen_mutex_drop" -> nil
+    def consume drop as "ruxen_mutex_drop" -> nil
   end
 
   ## Ergonomic poison-surfacing wrappers layered on the `_raw` FFI.

@@ -1,0 +1,7 @@
+drop tag t1
+renamed 5 copy 6
+child extra l1 r1
+drop note copy (6 lines)
+drop tag t2
+drop note renamed (5 lines)
+drop tag t2

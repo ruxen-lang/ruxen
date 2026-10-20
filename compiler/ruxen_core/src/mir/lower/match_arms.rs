@@ -18,8 +18,34 @@ impl<'a> Lowerer<'a> {
         // from the (possibly abstract) inner type, not from the variant's
         // declared TypeParam via `lookup_variant_field_types` — which
         // yields a wrong field type and a segfault / `ok 0`.
-        let scrut_ty = normalize_option_result_class(&scrutinee.ty);
+        //
+        // A borrowed scrutinee (`if let Some(v) = @name`, where a field read
+        // is a `&Option[String]`) is the same handle word: the tag switch and
+        // the payload typing read the referent's type. Its bindings are views
+        // (`drops::borrowed_views`), never owners.
+        let scrut_ty = normalize_option_result_class(scrutinee.ty.peel_refs());
         let scrut_local = self.lower_expr(scrutinee)?;
+        // A scrutinee that names a place (a variable, field or element)
+        // keeps its payload: a `_` arm must not free it. A `let` / `var`
+        // local the frame owns gives its payload up to a by-value binding
+        // (the borrow checker records the move), so that arm frees the
+        // emptied box (`MirPayloadMove`).
+        let scrut_is_place = matches!(
+            scrutinee.kind,
+            HirExprKind::VarRef(_) | HirExprKind::FieldAccess { .. } | HirExprKind::Index { .. }
+        );
+        let scrut_is_owned_local = match &scrutinee.kind {
+            HirExprKind::VarRef(def_id) => {
+                matches!(
+                    self.symbols.get(*def_id).map(|d| &d.kind),
+                    Some(crate::resolve::symbols::DefKind::Variable { .. })
+                ) && !self.cell_promoted.contains(def_id)
+            }
+            _ => false,
+        } && matches!(
+            normalize_option_result_class(&scrutinee.ty),
+            Ty::Option(_) | Ty::Result(_, _)
+        );
 
         // For enum-like types (Enum, Result, Option), use tag-based
         // switch. Also treat unresolved Infer types as enum if any arm
@@ -140,6 +166,8 @@ impl<'a> Lowerer<'a> {
             // Lower each arm body.
             for (arm_idx, (arm_block, arm)) in arm_blocks.iter().enumerate() {
                 self.current_block = *arm_block;
+                // Whether this arm binds a heap payload by value.
+                let mut moved_owned_payload = false;
 
                 // Bind pattern variables if it's an Enum pattern with field bindings.
                 if let HirPattern::Enum {
@@ -182,6 +210,11 @@ impl<'a> Lowerer<'a> {
                         });
 
                         for (idx, field_pat) in fields.iter().enumerate() {
+                            if let HirPattern::Binding { .. } = field_pat {
+                                let field_ty =
+                                    variant_field_types.get(idx).cloned().unwrap_or(Ty::Int);
+                                moved_owned_payload |= is_owned_heap_payload(&field_ty);
+                            }
                             let binding_info = match field_pat {
                                 HirPattern::Binding {
                                     def_id,
@@ -214,7 +247,10 @@ impl<'a> Lowerer<'a> {
                                     base: payload_ptr,
                                     field_index: idx,
                                 });
-                            } else if matches!(field_pat, HirPattern::Wildcard { .. }) {
+                                self.record_scalar_payload(local, *type_def, &scrut_ty);
+                            } else if !scrut_is_place
+                                && matches!(field_pat, HirPattern::Wildcard { .. })
+                            {
                                 // A `_`-discarded payload field that owns heap
                                 // (e.g. the File in `match File.open(p) {
                                 // Ok(_) => .. }`) is never bound to a local, so
@@ -228,18 +264,12 @@ impl<'a> Lowerer<'a> {
                                 // `{Class}_drop` + dealloc. Only heap-owning
                                 // payload types need this; Int/Bool/etc. and
                                 // enum payloads (which the container drop
-                                // handles) are left alone.
+                                // handles) are left alone. A place scrutinee
+                                // (`match o` / `match @f`) still owns the
+                                // payload, so it is not materialised.
                                 let field_ty =
                                     variant_field_types.get(idx).cloned().unwrap_or(Ty::Int);
-                                if matches!(
-                                    field_ty,
-                                    Ty::Class { .. }
-                                        | Ty::Struct { .. }
-                                        | Ty::String
-                                        | Ty::Array(_)
-                                        | Ty::Map(_, _)
-                                        | Ty::Set(_)
-                                ) {
+                                if is_owned_heap_payload(&field_ty) {
                                     let tmp = self.new_temp(field_ty);
                                     self.emit(MirInst::GetField {
                                         dest: tmp,
@@ -283,7 +313,7 @@ impl<'a> Lowerer<'a> {
                                     self.emit(MirInst::GetPayload {
                                         dest: inner_payload,
                                         src: inner_enum_local,
-                                        ty: inner_enum_ty,
+                                        ty: inner_enum_ty.clone(),
                                     });
 
                                     for (inner_idx, inner_field_pat) in
@@ -322,6 +352,11 @@ impl<'a> Lowerer<'a> {
                                                 base: inner_payload,
                                                 field_index: inner_idx,
                                             });
+                                            self.record_scalar_payload(
+                                                inner_local,
+                                                *inner_type_def,
+                                                &inner_enum_ty,
+                                            );
                                         }
                                     }
                                 }
@@ -342,6 +377,20 @@ impl<'a> Lowerer<'a> {
                     self.emit(MirInst::Assign {
                         dest: local,
                         value: MirValue::Use(scrut),
+                    });
+                }
+
+                // The binding now owns the payload of an owned local: the
+                // arm body starts in its own block, where drop elaboration
+                // frees the emptied box. Not with a guard, which can fall
+                // through to an arm that reads the box again.
+                if moved_owned_payload && scrut_is_owned_local && arm.guard.is_none() {
+                    let body_block = self.new_block();
+                    self.set_terminator(Terminator::Goto(body_block));
+                    self.current_block = body_block;
+                    self.fn_mut().payload_moves.push(MirPayloadMove {
+                        scrutinee: scrut,
+                        block: body_block,
                     });
                 }
 
@@ -384,6 +433,31 @@ impl<'a> Lowerer<'a> {
 
         self.current_block = merge_block;
         Ok(result_local)
+    }
+
+    /// Record that the payload binding `local` is a scalar when its field
+    /// is declared as a type parameter that `enum_ty` (of the enum
+    /// `type_def`) instantiates with one: `v` out of `Poll.Ready(v)` on a
+    /// `Poll[Int]` keeps the parameter as its MIR type, so only this record
+    /// says it points nowhere.
+    fn record_scalar_payload(&mut self, local: LocalId, type_def: DefId, enum_ty: &Ty) {
+        use crate::resolve::symbols::DefKind;
+        let Ty::Enum { generic_args, .. } = enum_ty else {
+            return;
+        };
+        let Some(DefKind::Enum { info }) = self.symbols.get(type_def).map(|def| &def.kind) else {
+            return;
+        };
+        let subst: HashMap<String, Ty> = info
+            .generic_params
+            .iter()
+            .map(|param| param.name.clone())
+            .zip(generic_args.iter().cloned())
+            .collect();
+        let field_ty = self.fn_ref().locals[local as usize].ty.subst_params(&subst);
+        if is_scalar(&field_ty) {
+            self.fn_mut().record_view(local, View::Scalar);
+        }
     }
 
     fn lower_match_cascading(

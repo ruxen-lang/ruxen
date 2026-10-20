@@ -2297,7 +2297,11 @@ trapped; emitted MIR shows the guard itself had already been used correctly.
 
 **Fix:** `mir/lower/runtime_abi.rs::drop_frees_storage` is the single list of FFI
 drop hooks that consume their own storage. Ordinary and synthesized closure
-drop elaboration consult it and suppress only the redundant outer free. The
+drop elaboration consult it and suppress only the redundant outer free.
+(Superseded 2026-10-17: the Rust list is gone; such a hook is declared
+`def consume drop as "..."` in its `.rx` class and
+`SymbolTable::drop_consumes_self` answers the same question, so app packages
+such as canvas can declare their own.) The
 `Ok` arm still materializes the cloned String, calls
 `ruxen_mutex_guard_drop(g)` exactly once, then deallocates the guard spine once,
 and the `Err` arm never touches `g`. Pin `937_mutex_guard_match_arm_closure_drop`
@@ -3035,6 +3039,39 @@ better witness for both `from_iter` forms regardless of the decl, because these
 two constructors populate their table INSIDE the C runtime, where no use-site
 `ensure` can reach it. The `-> Int` decl is still worth correcting when per-`T`
 mono (E1) allows it, but nothing depends on it now.
+
+## Q61 · S2: quiver and rondo relied on aliasing that tuple ownership now rejects (fixed in the apps, 2026-10-24)
+
+Found by the strict MIR loan checker on `feat/concurrency-adoption` (CHANGELOG
+`[Unreleased]`, "A tuple element read borrows" and "Tuples own their
+elements"). Not a compiler bug: the language rule changed, and two app shapes
+were real aliases that both owners freed.
+
+**(a) A tuple element read is a borrow.** `typeck/infer/helpers.rs::slot_read_ty`
+types `.N`, destructured bindings and `for (k, v)` bindings as `&T` for a
+non-Copy `T`, the class-field rule. Storing one into an owned slot is E0744
+(`reject_borrow_into_owned`, which recurses through tuple slots):
+
+```rx
+# rondo/src/async_server.rx (before)
+self.wire = cycle.0          # E0744: a borrow stored into an owned field
+# after
+self.wire = cycle.0.clone
+```
+
+A non-Clone element (an `AsyncTcpStream` in `(AsyncTcpStream, String)`) is used
+through a borrow instead: `server_echo_once(&var p.0)`
+(`tests/release-e2e/cases/727_async_tcp_echo.rx`).
+
+**(b) `SharedSync#get` and `MutexGuard#get` no longer alias.** They become `.rx`
+`def get -> T where T: Clone { self.deref.clone }` (in progress, see
+`TODO.md`); before, `get` handed out the cell's own value as an
+owned `T`. Code that shares or mutates the payload uses `deref` (`&T`) or
+`lock_raw`/`deref_var`. quiver moves its shared state to `SharedSync[Mutex[...]]`
+(`quiver/src/lib.rx`).
+
+**Fixes are in the apps** (rondo `.clone`, quiver `SharedSync[Mutex[...]]`);
+match these shapes rather than working around the rule.
 
 ## Where the workarounds live (grep-able)
 

@@ -8,14 +8,13 @@ impl<'a> Lowerer<'a> {
                 params,
                 body,
                 is_move,
+                kind: closure_kind,
                 ..
             } => {
-                // Closure layout (heap-allocated, 16 bytes):
-                //   [0] fn_ptr       — address of the synthesized function
-                //   [8] captures_ptr — heap block holding captured values
-                //                      (one 8-byte slot per capture). May
-                //                      be NULL when the closure captures
-                //                      nothing.
+                // Closure layout: the four-word pair documented on
+                // `drops::CLOSURE_PAIR_SIZE` — fn_ptr, captures_ptr (one
+                // 8-byte slot per capture, NULL when nothing is captured),
+                // this literal's drop glue, and the extra-owner count.
                 //
                 // Each capture slot holds either the value directly
                 // (ByValue — move or Copy) or a pointer to a single-slot
@@ -68,11 +67,41 @@ impl<'a> Lowerer<'a> {
                 //                   literal is nested inside another
                 //                   closure's body and re-captures one of
                 //                   the outer block's captures (Q26).
+                //
+                // A block borrows each String or scalar it captures by its
+                // address (`ByRef` onto the enclosing variable's own slot,
+                // no heap cell): a write, a `&var` or a `def var` call in the
+                // body then reaches the variable itself, and the enclosing
+                // scope keeps the one owner (drop.spec B12).
+                //
+                // A proc or lambda owns a String it captures (the enclosing
+                // variable moved in): a write, a `&var` or a `def var` call
+                // in the body replaces the value in the closure's own slot,
+                // which the closure's drop frees (no shared cell).
+                let owns_captures =
+                    *is_move || *closure_kind != crate::parser::ast::ClosureKind::Block;
                 let mut slots: Vec<(DefId, CaptureSource, Ty, CaptureKind)> =
                     Vec::with_capacity(captured_def_ids.len());
+                let mut address_slots: HashSet<DefId> = HashSet::new();
+                let mut own_slots: HashSet<DefId> = HashSet::new();
                 for def in &captured_def_ids {
                     let mutates = closure_body_mutates(body, *def);
-                    let want_byref = !*is_move && mutates;
+                    let live_ty = self.symbols.def_ty(*def);
+                    let slot_addressed = live_ty
+                        .as_ref()
+                        .is_some_and(crate::mir::refmut_abi::refmut_is_slot_address);
+                    let copy = live_ty.as_ref().is_some_and(|ty| {
+                        crate::resolve::symbols::ty_is_effectively_copy(ty, self.symbols)
+                    });
+                    let by_address = !owns_captures && slot_addressed;
+                    let in_own_slot = owns_captures && slot_addressed && !copy;
+                    if by_address {
+                        address_slots.insert(*def);
+                    }
+                    if in_own_slot {
+                        own_slots.insert(*def);
+                    }
+                    let want_byref = !*is_move && ((mutates && !in_own_slot) || by_address);
 
                     if let Some(&local) = self.def_to_local.get(def) {
                         let ty = self.fn_mut().locals[local as usize].ty.clone();
@@ -96,7 +125,7 @@ impl<'a> Lowerer<'a> {
                         // enclosing capture to a cell after the fact, which is
                         // not supported — reject rather than miscompile.
                         let kind = if want_byref {
-                            if enclosing.kind == CaptureKind::ByRef {
+                            if enclosing.kind == CaptureKind::ByRef || by_address {
                                 CaptureKind::ByRef
                             } else {
                                 return Err(format!(
@@ -133,7 +162,10 @@ impl<'a> Lowerer<'a> {
                         CaptureSource::Local(l) => *l,
                         CaptureSource::Recapture(_) => continue,
                     };
-                    if *kind == CaptureKind::ByRef && !self.cell_promoted.contains(def) {
+                    if *kind == CaptureKind::ByRef
+                        && !self.cell_promoted.contains(def)
+                        && !address_slots.contains(def)
+                    {
                         let cell = self.new_temp(Ty::Int);
                         self.emit(MirInst::Alloc {
                             dest: cell,
@@ -199,7 +231,20 @@ impl<'a> Lowerer<'a> {
                                 // out of the cell before storing.  (Niche:
                                 // a ByValue capture of a local promoted by an
                                 // earlier closure in this frame.)
-                                if self.cell_promoted.contains(&def) {
+                                if self.refmut_slots.contains(&def) {
+                                    // A slot-addressed `&var T`: load exactly
+                                    // a `T` (a `Bool` slot is one byte) and
+                                    // widen it into the capture word.
+                                    let pointee = self.fn_ref().locals[outer_local as usize]
+                                        .ty
+                                        .peel_refs()
+                                        .clone();
+                                    MirValue::Use(self.load_through_refmut(
+                                        outer_local,
+                                        &pointee,
+                                        &Ty::Int,
+                                    ))
+                                } else if self.cell_promoted.contains(&def) {
                                     let tmp = self.new_temp(Ty::Int);
                                     self.emit(MirInst::GetField {
                                         dest: tmp,
@@ -207,9 +252,32 @@ impl<'a> Lowerer<'a> {
                                         field_index: 0,
                                     });
                                     MirValue::Use(tmp)
+                                } else if *closure_kind == crate::parser::ast::ClosureKind::Block {
+                                    // A block BORROWS its captures: store
+                                    // through a `Ref` so the drop pass does
+                                    // not see the outer local stored into an
+                                    // aggregate. The enclosing scope keeps
+                                    // ownership and frees it once; the
+                                    // block's drop frees no capture.
+                                    let ty = self.fn_mut().locals[outer_local as usize].ty.clone();
+                                    let borrow = self.new_temp(Ty::Ref(Box::new(ty)));
+                                    self.emit(MirInst::Ref {
+                                        dest: borrow,
+                                        src: outer_local,
+                                    });
+                                    MirValue::Use(borrow)
                                 } else {
                                     MirValue::Use(outer_local)
                                 }
+                            }
+                            // A block's String or scalar: the address of
+                            // the enclosing variable's storage (a plain
+                            // local's slot, or the address a cell or `&var`
+                            // already holds).
+                            (CaptureSource::Local(_), CaptureKind::ByRef)
+                                if address_slots.contains(&def) =>
+                            {
+                                local_to_value(self.var_storage_addr(def)?)
                             }
                             (CaptureSource::Local(outer_local), CaptureKind::ByRef) => {
                                 // Outer local already holds the cell pointer
@@ -226,15 +294,39 @@ impl<'a> Lowerer<'a> {
                                 );
                                 match (encl.kind, nested_kind) {
                                     // Enclosing ByValue → its slot holds the
-                                    // value directly; copy it forward.
-                                    (CaptureKind::ByValue, _) => {
+                                    // value directly. The nested closure
+                                    // BORROWS it (its drop frees no
+                                    // re-capture): store it through a `Ref`
+                                    // so the enclosing closure's slot stays
+                                    // owned and its drop frees the value
+                                    // once. A nested pair that escapes the
+                                    // enclosing body gives the slot up
+                                    // instead (`NestedRecapture`).
+                                    (CaptureKind::ByValue, CaptureKind::ByValue) => {
                                         let tmp = self.new_temp(Ty::Int);
                                         self.emit(MirInst::GetField {
                                             dest: tmp,
                                             base: encl_cap,
                                             field_index: encl.slot_index,
                                         });
-                                        MirValue::Use(tmp)
+                                        let borrow = self.new_temp(Ty::Ref(Box::new(Ty::Int)));
+                                        self.emit(MirInst::Ref {
+                                            dest: borrow,
+                                            src: tmp,
+                                        });
+                                        MirValue::Use(borrow)
+                                    }
+                                    // A block nested in an owning closure
+                                    // borrows that closure's own slot by
+                                    // address.
+                                    (CaptureKind::ByValue, CaptureKind::ByRef) => {
+                                        let addr = self.new_temp(Ty::RefMut(Box::new(Ty::Int)));
+                                        self.emit(MirInst::FieldAddr {
+                                            dest: addr,
+                                            base: encl_cap,
+                                            field_index: encl.slot_index,
+                                        });
+                                        MirValue::Use(addr)
                                     }
                                     // Enclosing ByRef, nested ByRef → share
                                     // the same cell: propagate the cell ptr.
@@ -316,13 +408,14 @@ impl<'a> Lowerer<'a> {
                 // `method_call.rs`, at the `Fn`-box `CallIndirect`. Both
                 // sides must move together — one alone is worse than
                 // neither.
-                let ret_is_float = crate::codegen::is_float_ty(&ret_ty);
+                let ret_is_float = crate::mir::abi::is_float_ty(&ret_ty);
                 let abi_ret_ty = if ret_is_float {
                     Ty::Int
                 } else {
                     ret_ty.clone()
                 };
                 let mut closure_fn = MirFunction::new(&closure_name, abi_ret_ty);
+                closure_fn.role = MirFnRole::ClosureBody;
                 let cap_param = closure_fn.new_local("__captures".to_string(), Ty::Int, false);
                 closure_fn.params.push(cap_param);
                 // `closure_param_ids` are what the BODY sees (always the
@@ -332,7 +425,7 @@ impl<'a> Lowerer<'a> {
                 let mut closure_param_ids: Vec<LocalId> = Vec::with_capacity(params.len());
                 let mut float_param_words: Vec<(LocalId, LocalId)> = Vec::new();
                 for param in params {
-                    if crate::codegen::is_float_ty(&param.ty) {
+                    if crate::mir::abi::is_float_ty(&param.ty) {
                         let word_id =
                             closure_fn.new_local(format!("{}__word", param.name), Ty::Int, false);
                         closure_fn.params.push(word_id);
@@ -347,6 +440,14 @@ impl<'a> Lowerer<'a> {
                         closure_param_ids.push(local_id);
                     }
                 }
+                // The captures box is the pair's, lent to the body; each
+                // parameter is taken as its declared type says.
+                closure_fn.param_modes =
+                    std::iter::once(ParamMode::Read)
+                        .chain(params.iter().map(|param| {
+                            crate::mir::param_modes::param_mode(&param.ty, self.symbols)
+                        }))
+                        .collect();
 
                 // Save the current lowerer state, lower the closure body
                 // in the context of the new function, then restore.
@@ -356,6 +457,24 @@ impl<'a> Lowerer<'a> {
                 let saved_capture_map = std::mem::take(&mut self.capture_map);
                 let saved_captures_ptr = self.captures_ptr_local.take();
                 let saved_cell_promoted = std::mem::take(&mut self.cell_promoted);
+                let saved_nested_recaptures = std::mem::take(&mut self.nested_recaptures);
+                // A slot-addressed `&var T` captured by reference stays one
+                // inside the body: its cell pointer is the caller's address.
+                // So does a String or scalar a block borrows by address, and
+                // a String a proc or lambda owns in its own slot (its
+                // address is the slot, `var_storage_addr`).
+                let body_refmut_slots: HashSet<DefId> = slots
+                    .iter()
+                    .filter(|(def, _, _, kind)| {
+                        (*kind == CaptureKind::ByRef
+                            && (self.refmut_slots.contains(def) || address_slots.contains(def)))
+                            || (*kind == CaptureKind::ByValue && own_slots.contains(def))
+                    })
+                    .map(|(def, ..)| *def)
+                    .collect();
+                let saved_refmut_slots =
+                    std::mem::replace(&mut self.refmut_slots, body_refmut_slots);
+                let saved_stmt_log = std::mem::take(&mut self.stmt_log);
 
                 self.current_fn = Some(closure_fn);
                 self.current_block = 0;
@@ -368,7 +487,10 @@ impl<'a> Lowerer<'a> {
                 // Clear def_to_local: only closure params (and captures
                 // via the capture map) should be visible inside the body.
                 self.def_to_local.clear();
-                self.initialized_heap_locals.clear();
+                // The body tracks its own heap locals; the enclosing
+                // function's set comes back after it, or every rebind after
+                // the closure literal would skip freeing the old object.
+                let saved_heap_locals = std::mem::take(&mut self.initialized_heap_locals);
                 for (i, param) in params.iter().enumerate() {
                     self.def_to_local.insert(param.def_id, closure_param_ids[i]);
                 }
@@ -381,6 +503,7 @@ impl<'a> Lowerer<'a> {
                         CaptureSlot {
                             slot_index: slot_idx,
                             kind: *kind,
+                            owns: owns_captures,
                         },
                     );
                     if *kind == CaptureKind::ByRef {
@@ -416,6 +539,9 @@ impl<'a> Lowerer<'a> {
 
                 // Extract the completed closure function.
                 let mut completed_fn = self.current_fn.take().unwrap();
+                let body_scopes = std::mem::replace(&mut self.stmt_log, saved_stmt_log).scopes;
+                self.drop_pending
+                    .insert(completed_fn.name.clone(), body_scopes);
 
                 // Closure word-ABI, OUTBOUND edge: rewrite EVERY value
                 // return to hand back the float's bit pattern in the
@@ -431,8 +557,38 @@ impl<'a> Lowerer<'a> {
                 if ret_is_float {
                     erase_float_returns_to_word(&mut completed_fn, &ret_ty);
                 }
-                let (closure_drop, owned_capture_slots) =
-                    self.synthesize_closure_drop(&closure_name, &slots, &completed_fn, cap_param);
+                // A block's captures are borrowed (see the capture fill
+                // above), so its drop frees only the captures box and pair.
+                let owning_slots: &[_] = if *closure_kind == crate::parser::ast::ClosureKind::Block
+                {
+                    &[]
+                } else {
+                    &slots
+                };
+                // The slots a nested closure borrowed and carried out of this
+                // body: this closure no longer owns them.
+                let nested =
+                    std::mem::replace(&mut self.nested_recaptures, saved_nested_recaptures);
+                let given_up: HashSet<usize> = nested
+                    .iter()
+                    .filter(|n| {
+                        n.escapes
+                            || closure_pair_escapes(
+                                &completed_fn,
+                                n.pair,
+                                self.symbols,
+                                &self.ffi_by_value,
+                            )
+                    })
+                    .map(|n| n.slot)
+                    .collect();
+                let (closure_drop, owned_capture_slots) = self.synthesize_closure_drop(
+                    &closure_name,
+                    owning_slots,
+                    &completed_fn,
+                    cap_param,
+                    &given_up,
+                );
                 let closure_drop_name = closure_drop.name.clone();
                 self.pending_closures.push(completed_fn);
                 self.pending_closures.push(closure_drop);
@@ -444,38 +600,71 @@ impl<'a> Lowerer<'a> {
                 self.capture_map = saved_capture_map;
                 self.captures_ptr_local = saved_captures_ptr;
                 self.cell_promoted = saved_cell_promoted;
+                self.refmut_slots = saved_refmut_slots;
+                self.initialized_heap_locals = saved_heap_locals;
 
-                // Build the closure pair {fn_ptr, captures_ptr}.
+                // Build the closure pair {fn_ptr, captures_ptr, drop_fn,
+                // shares}. The drop slot lets a field or collection that
+                // owns the pair free it without knowing this literal.
                 let fn_ptr = self.new_temp(Ty::Int);
                 self.emit(MirInst::FuncAddr {
                     dest: fn_ptr,
-                    func_name: closure_name,
+                    func_name: closure_name.clone(),
+                });
+                let drop_ptr = self.new_temp(Ty::Int);
+                self.emit(MirInst::FuncAddr {
+                    dest: drop_ptr,
+                    func_name: closure_drop_name.clone(),
                 });
                 let pair = self.new_temp(expr.ty.clone());
                 self.emit(MirInst::Alloc {
                     dest: pair,
                     ty: expr.ty.clone(),
-                    size: 16,
-                });
-                self.emit(MirInst::SetField {
-                    base: pair,
-                    field_index: 0,
-                    value: MirValue::Use(fn_ptr),
+                    size: CLOSURE_PAIR_SIZE,
                 });
                 let cap_val = match captures_ptr {
                     Some(cp) => MirValue::Use(cp),
                     None => MirValue::Literal(Literal::Int(0)),
                 };
-                self.emit(MirInst::SetField {
-                    base: pair,
-                    field_index: 1,
-                    value: cap_val,
-                });
+                for (field_index, value) in [
+                    (CLOSURE_PAIR_FN, MirValue::Use(fn_ptr)),
+                    (CLOSURE_PAIR_CAPTURES, cap_val),
+                    (CLOSURE_PAIR_DROP, MirValue::Use(drop_ptr)),
+                    (CLOSURE_PAIR_SHARES, MirValue::Literal(Literal::Int(0))),
+                ] {
+                    self.emit(MirInst::SetField {
+                        base: pair,
+                        field_index,
+                        value,
+                    });
+                }
+                self.fn_mut().record_view(
+                    pair,
+                    View::Closure {
+                        body: closure_name,
+                        captures: captures_ptr,
+                    },
+                );
                 self.fn_mut().closure_drops.push(MirClosureDrop {
                     local: pair,
                     drop_fn: closure_drop_name,
                     owned_capture_slots,
                 });
+                // Every by-value re-capture is a borrow of the enclosing
+                // closure's slot (see the capture fill); tell the enclosing
+                // closure which pair holds it.
+                let carries_nested_escape = !given_up.is_empty();
+                for (_def, source, _ty, kind) in &slots {
+                    if let CaptureSource::Recapture(encl) = source {
+                        if encl.kind == CaptureKind::ByValue && *kind == CaptureKind::ByValue {
+                            self.nested_recaptures.push(NestedRecapture {
+                                pair,
+                                slot: encl.slot_index,
+                                escapes: carries_nested_escape,
+                            });
+                        }
+                    }
+                }
                 Ok(Some(pair))
             }
 
@@ -490,6 +679,7 @@ impl<'a> Lowerer<'a> {
         slots: &[(DefId, CaptureSource, Ty, CaptureKind)],
         closure_fn: &MirFunction,
         captures_param: LocalId,
+        given_up: &HashSet<usize>,
     ) -> (MirFunction, Vec<(usize, LocalId)>) {
         let mut owned_fields: Vec<(usize, Ty, LocalId)> = slots
             .iter()
@@ -499,8 +689,15 @@ impl<'a> Lowerer<'a> {
                     return None;
                 };
                 (*kind == CaptureKind::ByValue
+                    && !given_up.contains(&slot)
                     && heap_free_callee(ty).is_some()
-                    && capture_slot_still_owned(closure_fn, captures_param, slot, self.symbols))
+                    && capture_slot_still_owned(
+                        closure_fn,
+                        captures_param,
+                        slot,
+                        self.symbols,
+                        &self.ffi_by_value,
+                    ))
                 .then(|| (slot, ty.clone(), *source_local))
             })
             .collect();
@@ -522,20 +719,59 @@ impl<'a> Lowerer<'a> {
                 lhs: MirValue::Use(pair),
                 rhs: MirValue::Literal(Literal::Int(0)),
             });
-        let pair_live_block = drop_fn.new_block();
+        let shares_block = drop_fn.new_block();
         let return_block = drop_fn.new_block();
         drop_fn.blocks[drop_fn.entry_block].terminator = Terminator::Branch {
             cond: MirValue::Use(has_pair),
-            then_block: pair_live_block,
+            then_block: shares_block,
             else_block: return_block,
         };
+        // A shared pair (`.clone` of a Proc) loses one owner and stays
+        // live; only the last owner frees it.
+        let shares = drop_fn.new_temp(Ty::Int);
+        let is_shared = drop_fn.new_temp(Ty::Bool);
+        drop_fn.blocks[shares_block].instructions.extend([
+            MirInst::GetField {
+                dest: shares,
+                base: pair,
+                field_index: CLOSURE_PAIR_SHARES,
+            },
+            MirInst::Compare {
+                dest: is_shared,
+                op: CmpOp::NotEq,
+                lhs: MirValue::Use(shares),
+                rhs: MirValue::Literal(Literal::Int(0)),
+            },
+        ]);
+        let unshare_block = drop_fn.new_block();
+        let pair_live_block = drop_fn.new_block();
+        drop_fn.blocks[shares_block].terminator = Terminator::Branch {
+            cond: MirValue::Use(is_shared),
+            then_block: unshare_block,
+            else_block: pair_live_block,
+        };
+        let fewer = drop_fn.new_temp(Ty::Int);
+        drop_fn.blocks[unshare_block].instructions.extend([
+            MirInst::BinOp {
+                dest: fewer,
+                op: BinOp::Sub,
+                lhs: MirValue::Use(shares),
+                rhs: MirValue::Literal(Literal::Int(1)),
+            },
+            MirInst::SetField {
+                base: pair,
+                field_index: CLOSURE_PAIR_SHARES,
+                value: MirValue::Use(fewer),
+            },
+        ]);
+        drop_fn.blocks[unshare_block].terminator = Terminator::Goto(return_block);
         let captures = drop_fn.new_temp(Ty::Int);
         drop_fn.blocks[pair_live_block]
             .instructions
             .push(MirInst::GetField {
                 dest: captures,
                 base: pair,
-                field_index: 1,
+                field_index: CLOSURE_PAIR_CAPTURES,
             });
         let has_captures = drop_fn.new_temp(Ty::Bool);
         drop_fn.blocks[pair_live_block]
@@ -588,8 +824,7 @@ impl<'a> Lowerer<'a> {
                     name,
                 ) {
                     let callee = self.resolve_ffi_alias_callee(format!("{}_drop", name));
-                    user_drop_freed_storage =
-                        crate::mir::lower::runtime_abi::drop_frees_storage(&callee);
+                    user_drop_freed_storage = self.symbols.drop_consumes_self(name);
                     drop_fn.blocks[field_drop].instructions.push(MirInst::Call {
                         dest: None,
                         callee,

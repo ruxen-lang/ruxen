@@ -132,7 +132,8 @@ impl<'a> Lowerer<'a> {
                 // value binding stayed unresolved into codegen.)
                 let iter_ty = self.mir_refined_expr_ty(iterable).peel_refs().clone();
                 let elem_ty = if let Ty::Map(k, v) = &iter_ty {
-                    let pair_ty = Ty::Tuple(vec![(**k).clone(), (**v).clone()]);
+                    // Each entry borrows the key and value the table owns.
+                    let pair_ty = Ty::Tuple(vec![Ty::Ref(k.clone()), Ty::Ref(v.clone())]);
                     let entries = self.new_temp(Ty::Array(Box::new(pair_ty.clone())));
                     self.emit(MirInst::Call {
                         dest: Some(entries),

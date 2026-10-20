@@ -7,7 +7,7 @@ fn linker_args(sanitize: bool, extra_link_flags: &[String]) -> Vec<String> {
     // B3 of `docs/specs/system/zero_rust_stdlib_classes.spec.md`:
     // `-lc / -lm / -lpthread` are now declared in per-package
     // `Ruxen.toml` `[system_libs]` tables (`library/std/core/Ruxen.toml`,
-    // `library/std/sync/Ruxen.toml`). `codegen::compile_with_options`
+    // `library/std/sync/Ruxen.toml`). `codegen::aggregate_link_flags`
     // aggregates them into `extra_link_flags` BEFORE calling this
     // function, so they arrive here in the caller-supplied slice
     // alongside FFI-attribute flags from `@[link("...")]`. Only
@@ -69,10 +69,8 @@ fn apply_pcre2_flags(cmd: &mut Command, runtime_c_path: &Path) {
 /// Compile a single C runtime source to an object file.
 ///
 /// When `sanitize` is true, the file is compiled with AddressSanitizer
-/// and UndefinedBehaviorSanitizer instrumentation. Kept as the primitive
-/// shared by both the singleton path (legacy unity-build callers via
-/// [`compile_runtime`]) and the multi-source path
-/// ([`compile_runtime_sources`]) introduced in #06.95 Phase B-2.
+/// and UndefinedBehaviorSanitizer instrumentation. [`compile_c_sources`]
+/// runs it over every source of a host link.
 pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -121,32 +119,32 @@ pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf,
     Ok(runtime_o)
 }
 
-/// Compile every per-package C runtime source to its own object file.
-///
-/// After #06.95 Phase B-2, each stdlib package's `.c` files are
-/// standalone translation units (they `#include` the shared
-/// `library/std/core/runtime/runtime.h` for cross-package type and
-/// function declarations). This walks the source list, compiles each
-/// to a uniquely named `.o`, and returns the full set for the linker.
-///
-/// On failure, any objects already produced are best-effort removed.
-pub fn compile_runtime_sources(
+/// Compile each C source in `sources` with `compile_one` (the host
+/// [`compile_runtime`], [`compile_runtime_for_target`] or
+/// [`compile_runtime_for_wasm`]) and return the objects in order. On failure
+/// the objects already produced are removed.
+pub fn compile_c_sources(
     sources: &[PathBuf],
-    sanitize: bool,
+    compile_one: impl Fn(&Path) -> Result<PathBuf, String>,
 ) -> Result<Vec<PathBuf>, String> {
     let mut objects: Vec<PathBuf> = Vec::with_capacity(sources.len());
     for src in sources {
-        match compile_runtime(src, sanitize) {
+        match compile_one(src) {
             Ok(o) => objects.push(o),
             Err(e) => {
-                for partial in &objects {
-                    let _ = std::fs::remove_file(partial);
-                }
+                remove_objects(&objects);
                 return Err(e);
             }
         }
     }
     Ok(objects)
+}
+
+/// Best-effort removal of temporary object files.
+pub fn remove_objects(objects: &[PathBuf]) {
+    for o in objects {
+        let _ = std::fs::remove_file(o);
+    }
 }
 
 /// The `cc` arguments that link `obj_path` into `output_path`, in the order
@@ -1198,7 +1196,7 @@ mod tests {
     // B3 of docs/specs/system/zero_rust_stdlib_classes.spec.md moved
     // `-lc / -lm / -lpthread` out of `linker_args` into per-package
     // Ruxen.toml `[system_libs]` tables. The aggregation now happens
-    // upstream in `codegen::compile_with_options` and arrives here
+    // upstream in `codegen::aggregate_link_flags` and arrives here
     // through the `extra_link_flags` argument — so `linker_args(_,
     // &["-lpthread", "-lc", "-lm"])` is now the right contract to
     // assert. See `compiler/ruxen_core/tests/linker_system_libs.rs`

@@ -2,8 +2,8 @@
 //!
 //! Phase 2 wired `c_symbol` aliases end-to-end. Phase 3 ties the
 //! `run_bootstrap` loader to the resolver via
-//! `Resolver::merge_bootstrap_programs` (and the typeck convenience
-//! wrapper `type_check_with_bootstrap`). Every release-e2e fixture runs
+//! `Resolver::merge_bootstrap_programs` (and the typeck entry
+//! `type_check_with_bootstrap_packages`). Every release-e2e fixture runs
 //! through the real stdlib bootstrap, so the end-to-end path is covered
 //! there.
 //!
@@ -132,7 +132,10 @@ fn bootstrap_program_injects_def_into_user_scope() {
     assert_eq!(foo.c_symbol.as_deref(), Some("ruxen_test_extern_add_one"));
 
     // MIR path: the call to `foo(41)` rewrites to the C symbol.
-    let type_result = typeck::type_check_with_bootstrap(&user_program, &[bootstrap_program]);
+    let type_result = typeck::type_check_with_bootstrap_packages(
+        &user_program,
+        &[("rt".to_string(), bootstrap_program)],
+    );
     let type_errors: Vec<&Diagnostic> = type_result
         .diagnostics
         .iter()

@@ -8,6 +8,7 @@ pub mod async_lowering;
 pub mod borrow_check;
 pub mod codegen;
 pub mod diagnostics;
+pub mod driver;
 pub mod formatter;
 pub mod hir;
 pub mod implicit_includes;

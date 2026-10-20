@@ -727,6 +727,10 @@ impl Parser {
                     //     class bodies): fields in declaration order, native
                     //     alignment, no reordering, so C and Ruxen method
                     //     bodies share one wire layout.
+                    //   * `layout closure` — the class's values are closure
+                    //     pairs: it is the method home of every stored
+                    //     closure value (`class Closure` in std/core,
+                    //     `SymbolTable::closure_shell`).
                     //
                     // `packed` and `transparent` aren't (yet) meaningful on
                     // class bodies — defer until a class needs them.
@@ -735,20 +739,20 @@ impl Parser {
                         match self.current_kind().clone() {
                             TokenKind::Identifier(name) => {
                                 self.advance();
-                                if name == "flat_heap_struct" {
-                                    layout.push("flat_heap_struct".to_string());
+                                if name == "flat_heap_struct" || name == "closure" {
+                                    layout.push(name);
                                 } else if name.eq_ignore_ascii_case("c") {
                                     layout.push("C".to_string());
                                 } else {
                                     self.error(&format!(
-                                        "expected `flat_heap_struct` or `c` after `layout` in class body, found `{}`",
+                                        "expected `flat_heap_struct`, `closure` or `c` after `layout` in class body, found `{}`",
                                         name
                                     ));
                                 }
                             }
                             other => {
                                 self.error(&format!(
-                                    "expected `flat_heap_struct` or `c` after `layout` in class body, found {:?}",
+                                    "expected `flat_heap_struct`, `closure` or `c` after `layout` in class body, found {:?}",
                                     other
                                 ));
                             }

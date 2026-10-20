@@ -10,7 +10,7 @@ class Nums
   def init(@items: Array[Int])
   end
 
-  def each(f: any Fn[Fn(Int) -> nil]) -> nil
+  def each(f: Fn(Int) -> nil) -> nil
     self.items.each do |x|
       f.(x)
     end

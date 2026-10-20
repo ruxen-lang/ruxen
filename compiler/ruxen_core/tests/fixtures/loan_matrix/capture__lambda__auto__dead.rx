@@ -1,0 +1,89 @@
+class A
+  name: String
+  def init(@name: String)
+  end
+  def show_with(n: Int) -> nil
+    puts(@name)
+  end
+end
+
+class U
+  name: String
+  count: Int
+  a: A
+  def init(@name: String, @a: A)
+    @count = 0
+  end
+  def var rename_n(n: String) -> Int
+    @name = n
+    1
+  end
+  def var rename_ref(n: &String) -> nil
+    @name = "renamed-a-long-enough-string-to-realloc"
+    puts(n)
+  end
+end
+
+class V
+  def init
+  end
+  def show(s: &String, n: Int) -> nil
+    puts(s)
+  end
+end
+
+def mk(k: Int) -> U
+  U.new("old-#{k}", A.new("a-#{k}"))
+end
+
+def reset(u: &var U) -> Int
+  u.name = "reset-a-long-enough-string-to-realloc"
+  u.a = A.new("reset-a")
+  1
+end
+
+def resets(u: &var U) -> String
+  u.name = "reset-a-long-enough-string-to-realloc"
+  "r"
+end
+
+def show(s: &String, n: Int) -> nil
+  puts(s)
+end
+
+def setn(s: &var String, n: Int) -> nil
+  s = "set-#{n}-long-enough-to-need-a-new-buffer"
+end
+
+def replace(s: &var String) -> nil
+  s = "replaced-value-long-enough-to-need-a-new-buffer"
+end
+
+def bump(n: &var Int) -> nil
+  n += 4
+end
+
+def h(s: &var String, &block: Fn[() -> nil]) -> nil
+  s = "h-wrote-a-long-enough-string-to-realloc"
+  yield
+end
+
+def hs(s: &String, &block: Fn[() -> nil]) -> nil
+  yield
+  puts(s)
+end
+
+def run_block(&block: Fn[() -> nil]) -> nil
+  yield
+end
+
+def run(k: Int) -> nil
+  s = "cap-#{k}"
+  f = -> {
+    replace(s)
+    puts(s)
+  }
+  f.()
+end
+
+run(3)

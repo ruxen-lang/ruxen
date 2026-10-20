@@ -5,7 +5,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub enum BindingState {
     Owned,
-    Moved { target: DefId, span: Span },
+    Moved { target: Option<DefId>, span: Span },
     MovedIntoCall { callee: String, span: Span },
 }
 
@@ -31,7 +31,7 @@ impl OwnershipState {
         self.bindings.insert(def_id, BindingState::Owned);
     }
 
-    pub fn record_move(&mut self, source: DefId, target: DefId, span: Span) {
+    pub fn record_move(&mut self, source: DefId, target: Option<DefId>, span: Span) {
         self.bindings
             .insert(source, BindingState::Moved { target, span });
     }
@@ -98,7 +98,7 @@ mod tests {
     fn move_invalidates_source() {
         let mut state = OwnershipState::new();
         state.declare(10);
-        state.record_move(10, 20, span());
+        state.record_move(10, Some(20), span());
         assert!(state.is_moved(10));
         assert!(!state.is_owned(10));
     }
@@ -119,7 +119,7 @@ mod tests {
         let snapshot = state.snapshot();
 
         // Branch A: move 10
-        state.record_move(10, 30, span());
+        state.record_move(10, Some(30), span());
         let branch_a = state.clone();
 
         // Branch B: nothing (restore from snapshot)

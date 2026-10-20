@@ -37,13 +37,15 @@ libc (`malloc`/`free`/`memset`) on native targets. Nothing in the Ruxen tree.
   `ruxen_io_error_from_errno` / `ruxen_io_error_value_from_errno` so the
   strerror message survives.
 - A collection slot's ownership travels as an element descriptor (`RUXEN_ELEM_*`
-  in `runtime.h`, built only by `mir/lower/drops.rs` `elem_desc`).
+  in `runtime.h`, built only by `mir/lower/drops/` `elem_desc`).
   `ruxen_elem_clone` and `ruxen_elem_drop` (array/runtime/vec.c) must follow
   the same tags to the same depth, or a deep copy double-frees or leaks.
   `RUXEN_ELEM_OBJ` (a user class/struct slot) is always the last tag: the rest
   of the word is the address of compiler-synthesised element glue
   (`int64_t glue(op, slot)`: drop or clone), so the runtime never needs to
-  know a user type.
+  know a user type. `RUXEN_ELEM_CLOSURE` (a closure slot) is a leaf: dropping
+  calls the pair's own drop slot (word 2), copying adds an owner (word 3) and
+  returns the same pair.
 - Helpers keep the literal `malloc(` / `realloc(` / `free(` spellings: the
   drop_fixtures test rewrites them textually to count raw heap traffic.
 - ABI: a "slot" is `int64_t`; pointers (`char*`, heap ptrs) are reinterpret-cast

@@ -95,6 +95,19 @@ pub struct TypePath {
     pub rooted: bool,
 }
 
+/// How a function type was written ([`TypeExpr::Function`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FnTypeSpelling {
+    /// The paren form `Fn(T…) -> R` (also the legacy `Block(T…) -> R`).
+    Paren,
+    /// The canonical square-bracket block signature `Fn[(T…) -> R]`
+    /// (Ruby-block-semantics ADR D8).
+    Bracket,
+    /// A bare signature `(T…) -> R` written as a generic argument of any
+    /// named type: `Proc[(Int) -> nil]`.
+    Signature,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeExpr {
     Named(TypePath),
@@ -116,12 +129,10 @@ pub enum TypeExpr {
     Function {
         params: Vec<TypeExpr>,
         return_type: Box<TypeExpr>,
-        /// Surface spelling: `true` for the canonical square-bracket block
-        /// signature `Fn[(T…) -> R]` (Ruby-block-semantics ADR D8), `false`
-        /// for the paren form `Fn(T…) -> R`. Carried so `ruxen fmt` preserves
-        /// whichever the author wrote rather than normalizing one to the other
-        /// (the fmt-destructiveness class — Q23/Q30/Q34). Semantically inert.
-        bracketed: bool,
+        /// Surface spelling, carried so `ruxen fmt` preserves whichever the
+        /// author wrote rather than normalizing one to another (the
+        /// fmt-destructiveness class — Q23/Q30/Q34). Semantically inert.
+        spelling: FnTypeSpelling,
         span: Span,
     },
     /// `some M` — static-dispatch mixin reference (was `impl Trait`
@@ -625,6 +636,15 @@ pub enum BinOp {
 }
 
 impl BinOp {
+    /// True for the comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`),
+    /// whose result is a `Bool`.
+    pub fn is_comparison(self) -> bool {
+        matches!(
+            self,
+            BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq
+        )
+    }
+
     /// Every binary operator, in [`Self::spec`] order.
     const ALL: [BinOp; 24] = [
         BinOp::KeywordAnd,
@@ -868,6 +888,38 @@ pub struct ClosureExpr {
     /// The source wrote `do ... end` rather than `{ ... }`; `ruxen fmt`
     /// keeps the author's form.
     pub do_end: bool,
+    /// Block, proc or lambda. The parser marks a trailing block `Block`,
+    /// `proc`/`Proc.new` `Proc`, and every other literal `Lambda`.
+    pub kind: ClosureKind,
+    /// How the source spelled the literal; `ruxen fmt` writes it back, except
+    /// a `Bare` non-block value, which it prints as a `->` lambda.
+    pub spelling: ClosureSpelling,
+}
+
+/// What a closure literal is (plan: blocks, procs and lambdas). A block
+/// borrows its captures for the call it is attached to; a proc or a lambda
+/// owns them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosureKind {
+    Block,
+    Proc,
+    Lambda,
+}
+
+/// The written head of a closure literal. For `Stabby`, `ClosureExpr::pipes`
+/// records whether a `(...)` parameter list was written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosureSpelling {
+    /// `{ |x| ... }` / `do |x| ... end` with no head.
+    Bare,
+    /// `->(x) { ... }` / `->(x) do ... end`.
+    Stabby,
+    /// `lambda { |x| ... }`.
+    Lambda,
+    /// `proc { |x| ... }`.
+    Proc,
+    /// `Proc.new { |x| ... }`.
+    ProcNew,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1275,6 +1327,19 @@ pub struct FfiFunction {
     /// (`char**`, see `mir/refmut_abi.rs`), so the C symbol can reallocate
     /// the buffer in place.
     pub mutates_self: bool,
+    /// `true` when the decl was spelled `def consume NAME(...)`: an instance
+    /// method that takes its receiver over, the same spelling as a
+    /// consuming-self `def`. On a `def consume drop`, the C symbol releases
+    /// the whole handle, its storage included, so drop elaboration emits no
+    /// storage free after it (`SymbolTable::drop_consumes_self`).
+    pub consumes_self: bool,
+    /// `true` when the return type was spelled `-> owned T`: the C function
+    /// returns a fresh value the caller owns outright (for a collection, its
+    /// spine, buffer and every element), so drop elaboration frees the
+    /// result at the caller's scope exit
+    /// (`mir::lower::runtime_abi::result_ownership`). Without it a C result
+    /// is not assumed owned.
+    pub returns_owned: bool,
     /// Optional C-symbol alias declared via `def name as "<c-symbol>"(...)`.
     /// When `None`, the Ruxen-side name (`name`) is the linked C symbol —
     /// the historical behaviour of `lib "X" ... end` blocks. When `Some`,

@@ -18,7 +18,7 @@ All extant stdlib surface resolves to one of ~25 C functions in a single file:
 | To-string conversions | `ruxen_int_to_string`, `ruxen_float_to_string`, `ruxen_bool_to_string` | 59-92 |
 | String ops | `ruxen_string_eq`, `ruxen_string_cmp`, `ruxen_string_concat`, `ruxen_string_from`, `ruxen_string_len`, `ruxen_string_is_empty`, `ruxen_string_push_str`, `ruxen_string_trim`, `ruxen_string_to_lower` | 98-216 |
 | Memory | `ruxen_alloc`, `ruxen_dealloc`, `ruxen_realloc` | 144-163 |
-| Array | `ruxen_vec_new`, `ruxen_vec_push`, `ruxen_vec_len`, `ruxen_vec_get`, `ruxen_vec_get_mut`, `ruxen_vec_get_opt`, `ruxen_vec_get_mut_opt`, `ruxen_vec_is_empty`, `ruxen_vec_each` | 221-322 |
+| Array | `ruxen_vec_new`, `ruxen_vec_push`, `ruxen_vec_len`, `ruxen_vec_get`, `ruxen_vec_get_mut`, `ruxen_vec_get_opt`, `ruxen_vec_get_mut_opt`, `ruxen_vec_is_empty` | 221-322 |
 | `&str` | `ruxen_str_split`, `ruxen_str_parse_uint` | 326-372 |
 | Option/Result | `ruxen_option_unwrap_or`, `ruxen_result_unwrap_or_else`, `ruxen_result_try_op` | 377-405 |
 | Fallbacks | `ruxen_noop_passthrough`, `ruxen_noop_return_null`, `ruxen_noop` | 410-419 |

@@ -9,7 +9,7 @@
 //! produce the expected output for some fixtures. The fallback is gone;
 //! these tests pin that behavior in place.
 
-use ruxen_core::codegen::runtime::runtime_name;
+use ruxen_core::mir::lang_intrinsics::runtime_name;
 
 // (The `rx` / `try_compile` end-to-end helpers were removed with the
 // `.iter.flat_map` codegen-rejection canary — see the note at the bottom

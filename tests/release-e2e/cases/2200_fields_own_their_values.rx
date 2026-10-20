@@ -1,0 +1,67 @@
+## Fields own their values (plan: fields, card f2). An object frees its
+## String, Array and nested-object fields when it dies, after its `def drop`
+## (which can still read them); storing into a field frees the value it
+## replaces; a derived `clone` deep-copies every field, so changing the copy
+## leaves the original intact and each frees only its own fields.
+
+class Tag
+  label: String
+
+  def init(@label: String)
+  end
+
+  def drop
+    puts "drop tag #{@label}"
+  end
+end
+
+class Note
+  title: String
+  lines: Array[String]
+  tag: Tag
+
+  def init(@title: String, @lines: Array[String], @tag: Tag)
+  end
+
+  def drop
+    puts "drop note #{@title} (#{@lines.size} lines)"
+  end
+end
+
+class Base
+  name: String
+
+  def init(@name: String)
+  end
+end
+
+class Child < Base
+  extra: String
+
+  def init(@name: String, @extra: String)
+  end
+end
+
+class Pair[T]
+  left: T
+  right: T
+
+  def init(@left: T, @right: T)
+  end
+end
+
+n = Note.new("first", ["a", "b"], Tag.new("t1"))
+n.title = "renamed"
+n.tag = Tag.new("t2")
+i = 0
+while i < 3
+  n.lines.push("line #{i}")
+  i = i + 1
+end
+copy = n.clone
+copy.lines.push("only in copy")
+copy.title = "copy"
+puts "#{n.title} #{n.lines.size} #{copy.title} #{copy.lines.size}"
+c = Child.new("child", "extra")
+p = Pair.new("l" + "1", "r" + "1")
+puts "#{c.name} #{c.extra} #{p.left} #{p.right}"

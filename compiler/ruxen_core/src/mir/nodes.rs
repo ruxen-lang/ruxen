@@ -4,6 +4,7 @@
 //! machine code. Each function is a set of basic blocks connected by
 //! terminators. Instructions within a block are simple three-address code.
 
+use super::abi::{CalleeIndex, Coercion};
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 use crate::parser::ast::BinOp;
@@ -54,6 +55,11 @@ pub struct MirProgram {
     /// `wasm_export "custom"` rename directive is the staged remainder
     /// (`docs/decisions/phase4-no-std-wasm.md`).
     pub wasm_exports: Vec<String>,
+    /// Every callee's machine signature by each name a call spells, built by
+    /// `mir::coercion::make_coercions_explicit` (the last lowering step)
+    /// from the functions and FFI declarations above. The conversions that
+    /// step inserts and every backend's declarations read this one index.
+    pub callees: CalleeIndex,
 }
 
 /// Phase B-2: one static vtable struct per `(class, mixin)` pair.
@@ -127,6 +133,86 @@ pub struct FfiFuncDecl {
     pub return_type: Option<crate::hir::types::Ty>,
     /// Whether the function is variadic.
     pub is_variadic: bool,
+    /// Whether `param_types[0]` is the method receiver rather than a
+    /// declared parameter (see `HirFfiFunc::has_receiver`).
+    pub has_receiver: bool,
+    /// The declaration spelled its result `-> owned T`: the caller owns
+    /// the result outright (`runtime_abi::DeclaredResults`).
+    pub returns_owned: bool,
+    /// How each entry of `param_types` receives its argument (receiver
+    /// first when `has_receiver`); see [`ParamMode`].
+    pub param_modes: Vec<ParamMode>,
+}
+
+/// How a callee receives one argument, recorded on its declaration
+/// ([`MirFunction::param_modes`], [`FfiFuncDecl::param_modes`]) so a pass
+/// reading a `Call` learns what the call does to each operand without
+/// knowing the callee. Derived in one place from the declared signature
+/// (`mir::lower::param_modes`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamMode {
+    /// The callee only reads it: a `&T` or `Fn[...]` parameter, a `&self`
+    /// receiver, or a Copy value.
+    Read,
+    /// The callee may write through it: a `&var T` parameter or a
+    /// `def var` receiver.
+    Mut,
+    /// The callee takes ownership: a non-Copy by-value parameter or a
+    /// `def consume` receiver.
+    Move,
+}
+
+/// What lowering knows a value it builds may point into, recorded in
+/// [`MirFunction::views`] by the local the value is defined in, where
+/// lowering makes it (or, for a call result, once every callee's body
+/// exists). The loan check and drop elaboration read it; neither
+/// reconstructs it from types or instruction shapes. A local with no entry
+/// may point into every place its defining instruction reads: a field read
+/// views the field, a payload read the payload, a call result every
+/// non-scalar argument (and it holds the loans of every argument it was
+/// made from).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum View {
+    /// A machine scalar (an integer, float, Bool, Char or unit): it points
+    /// nowhere and nothing can point into it or be kept in it.
+    Scalar,
+    /// Points into nothing it does not own: a fresh value, or the old value
+    /// a field store moves out of the field to free it.
+    Own,
+    /// A closure pair this body builds (it owns the pair): `body` is the
+    /// closure body it runs, `captures` the captures box it was given.
+    Closure {
+        body: String,
+        captures: Option<LocalId>,
+    },
+    /// An address lowering built for an `op=` target that a call then
+    /// writes through (`s += t` appends through the slot): it views the
+    /// place, and passing it assigns that place rather than mutating it.
+    Assignee,
+    /// A call result that may point into the arguments at these positions
+    /// (a reference result, a callee that may return that parameter, a
+    /// runtime result the callee does not allocate fresh).
+    Args(Vec<usize>),
+}
+
+impl MirFunction {
+    /// Record what the value `local` is defined with may point into. A
+    /// local defined twice with different facts gets none: it may point
+    /// into whatever each definition reads.
+    pub fn record_view(&mut self, local: LocalId, view: View) {
+        let recorded = self
+            .views
+            .entry(local)
+            .or_insert_with(|| Some(view.clone()));
+        if recorded.as_ref() != Some(&view) {
+            *recorded = None;
+        }
+    }
+
+    /// The [`View`] recorded for `local`, if exactly one was.
+    pub fn view(&self, local: LocalId) -> Option<&View> {
+        self.views.get(&local).and_then(Option::as_ref)
+    }
 }
 
 impl MirProgram {
@@ -138,6 +224,7 @@ impl MirProgram {
             vtables: Vec::new(),
             class_infos: Vec::new(),
             wasm_exports: Vec::new(),
+            callees: CalleeIndex::new(),
         }
     }
 }
@@ -181,6 +268,25 @@ pub enum MirLinkage {
     Export,
 }
 
+/// What a synthesized [`MirFunction`] is, set where lowering builds it, so
+/// later passes recognise it without reading its name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MirFnRole {
+    /// Any function with no role below: user code, glue, helpers.
+    #[default]
+    Plain,
+    /// A closure literal's body: parameter 0 is its captures box.
+    ClosureBody,
+    /// A derived `clone`: reads its receiver and returns a new owner.
+    DerivedClone,
+    /// An object type's field drop glue: frees the fields an instance owns,
+    /// ahead of the instance's own free (`drops::heap_free_call`).
+    FieldGlue,
+    /// `__ruxen_closure_drop(pair)`: releases one owner of a closure pair
+    /// through the pair's drop slot.
+    ClosureDrop,
+}
+
 /// Drop glue attached to the fresh local that owns a closure pair.
 #[derive(Debug, Clone)]
 pub struct MirClosureDrop {
@@ -190,6 +296,17 @@ pub struct MirClosureDrop {
     /// this enclosing function. Drop elaboration uses the source local to
     /// transfer a returned capture back out before running closure cleanup.
     pub owned_capture_slots: Vec<(usize, LocalId)>,
+}
+
+/// A `match` arm that moved an owned payload out of an `Option` / `Result`
+/// local into a by-value binding (the borrow checker records the move, so
+/// the local is not read again). Drop elaboration frees the local's box at
+/// the start of `block` when the frame owns it: not a parameter and not a
+/// field read or reference.
+#[derive(Debug, Clone)]
+pub struct MirPayloadMove {
+    pub scrutinee: LocalId,
+    pub block: BlockId,
 }
 
 // ─── Function ───────────────────────────────────────────────────────────────
@@ -207,6 +324,9 @@ pub struct MirFunction {
     /// Per-closure destructor roots. Assign/Copy/Move propagation is resolved
     /// by drop elaboration so only the final, still-owned pair is destroyed.
     pub closure_drops: Vec<MirClosureDrop>,
+    /// Arms that moved a payload out of a sum-type local; see
+    /// [`MirPayloadMove`].
+    pub payload_moves: Vec<MirPayloadMove>,
     /// Source span of the function's definition (its `def` line). `None` for
     /// compiler-synthesized functions (derives, drop glue, dynamic-dispatch
     /// helpers) that have no source location. Consumed by the LLVM backend's
@@ -217,6 +337,33 @@ pub struct MirFunction {
     pub linkage: MirLinkage,
     /// True only for the program's `main`, which takes the C entry ABI.
     pub is_entry: bool,
+    /// What this function is when lowering synthesized it.
+    pub role: MirFnRole,
+    /// The field drop glue this body calls, by callee, with the object type
+    /// each glue frees. Recorded by the one emitter
+    /// (`drops::heap_free_call`), so later passes recognise a glue call by
+    /// this record (and define the glue from the recorded type) instead of
+    /// spelling its name again.
+    pub field_glue_calls: std::collections::BTreeMap<String, Ty>,
+    /// The element glue (`RUXEN_ELEM_OBJ`) whose address this body passes in
+    /// an element descriptor, by glue name, with the object type it frees
+    /// and copies. Recorded wherever a descriptor is emitted
+    /// (`drops::record_elem_glue`) and read by `synthesize_elem_glue`, so no
+    /// pass recovers a type from a glue name.
+    pub elem_glue_types: std::collections::BTreeMap<String, Ty>,
+    /// How each of `params` receives its argument, index-aligned; empty for
+    /// a compiler-synthesized function (every argument then counts as
+    /// [`ParamMode::Read`]).
+    pub param_modes: Vec<ParamMode>,
+    /// Lowered from the prepended standard library (an item before
+    /// `HirProgram::prelude_item_count`, or a closure inside one): trusted
+    /// code that source-level checks skip, as the HIR borrow check does.
+    pub from_prelude: bool,
+    /// What lowering knows the value of a local may point into, by the
+    /// local an instruction defines; see [`View`]. A local with no entry,
+    /// or `None` (definitions recorded different facts), may point into
+    /// whatever its defining instruction reads.
+    pub views: std::collections::HashMap<LocalId, Option<View>>,
     /// Counter used by `new_temp()` to generate unique names.
     next_temp: u32,
 }
@@ -233,9 +380,16 @@ impl MirFunction {
             blocks: vec![entry_block],
             entry_block: 0,
             closure_drops: Vec::new(),
+            payload_moves: Vec::new(),
             def_span: None,
             linkage: MirLinkage::Local,
             is_entry: false,
+            role: MirFnRole::Plain,
+            field_glue_calls: std::collections::BTreeMap::new(),
+            elem_glue_types: std::collections::BTreeMap::new(),
+            param_modes: Vec::new(),
+            from_prelude: false,
+            views: std::collections::HashMap::new(),
             next_temp: 0,
         }
     }
@@ -257,9 +411,16 @@ impl MirFunction {
             blocks,
             entry_block,
             closure_drops: Vec::new(),
+            payload_moves: Vec::new(),
             def_span: None,
             linkage: MirLinkage::Local,
             is_entry: false,
+            role: MirFnRole::Plain,
+            field_glue_calls: std::collections::BTreeMap::new(),
+            elem_glue_types: std::collections::BTreeMap::new(),
+            param_modes: Vec::new(),
+            from_prelude: false,
+            views: std::collections::HashMap::new(),
             next_temp: 0,
         }
     }
@@ -422,6 +583,16 @@ pub enum MirInst {
         base: LocalId,
         field_index: usize,
     },
+    /// `dest = &base.field_index` — the address of field slot
+    /// `field_index` of the object (or captures box) `base` points at: a
+    /// slot-addressed `&var` of a field or of a closure's own capture,
+    /// pointing at the real storage (no copy, no store-back). `dest` is a
+    /// `RefMut(T)` word and owns nothing; `base` must outlive it.
+    FieldAddr {
+        dest: LocalId,
+        base: LocalId,
+        field_index: usize,
+    },
     /// `base.field_index = value`
     SetField {
         base: LocalId,
@@ -461,6 +632,14 @@ pub enum MirInst {
         dest: Option<LocalId>,
         callee: LocalId,
         args: Vec<MirValue>,
+        /// How the callee takes each of `args`, by position: lowering
+        /// derives them from the callee's declared signature
+        /// (`param_modes::param_mode`); where the signature is unknown,
+        /// `param_modes::unknown_param_mode`, never a bare `Read`.
+        modes: Vec<ParamMode>,
+        /// The closure pair `callee` was read out of, when this calls a
+        /// closure (its captures box is `args[0]`).
+        pair: Option<LocalId>,
     },
     /// `dest = bit-reinterpret(src)` — reinterpret a float's storage bits
     /// as an integer of the same width (f64→i64, f32→i32) without value
@@ -481,8 +660,126 @@ pub enum MirInst {
     /// float closure parameter, and when a caller reads a float closure
     /// result back out of the word.
     BitsToFloat { dest: LocalId, src: LocalId },
+    /// `dest = convert(src)` — move a value into a local of another
+    /// machine class by the operation `mir::abi` decided (an integer
+    /// extension, a numeric conversion, a word reinterpretation, ...).
+    /// Inserted only by `mir::coercion::make_coercions_explicit`, the last
+    /// step of lowering, so no pass before codegen sees one.
+    Convert {
+        dest: LocalId,
+        src: MirValue,
+        coercion: Coercion,
+    },
     /// No operation — placeholder / removed instruction.
     Nop,
+}
+
+impl MirInst {
+    /// The local this instruction defines (overwrites as a whole), if any.
+    /// `SetField` and `SetTag` update a value in place, so they define
+    /// nothing and read the value they update.
+    pub fn dest(&self) -> Option<LocalId> {
+        match self {
+            MirInst::Assign { dest, .. }
+            | MirInst::BinOp { dest, .. }
+            | MirInst::Negate { dest, .. }
+            | MirInst::Not { dest, .. }
+            | MirInst::Compare { dest, .. }
+            | MirInst::Alloc { dest, .. }
+            | MirInst::StackAlloc { dest, .. }
+            | MirInst::GetField { dest, .. }
+            | MirInst::FieldAddr { dest, .. }
+            | MirInst::GetTag { dest, .. }
+            | MirInst::GetPayload { dest, .. }
+            | MirInst::Ref { dest, .. }
+            | MirInst::RefMut { dest, .. }
+            | MirInst::Copy { dest, .. }
+            | MirInst::Move { dest, .. }
+            | MirInst::StringLiteral { dest, .. }
+            | MirInst::FuncAddr { dest, .. }
+            | MirInst::FloatToBits { dest, .. }
+            | MirInst::BitsToFloat { dest, .. }
+            | MirInst::Convert { dest, .. }
+            | MirInst::DataAddr { dest, .. } => Some(*dest),
+            MirInst::Call { dest, .. } | MirInst::CallIndirect { dest, .. } => *dest,
+            MirInst::SetField { .. }
+            | MirInst::SetTag { .. }
+            | MirInst::Drop { .. }
+            | MirInst::Nop => None,
+        }
+    }
+
+    /// The local [`Self::dest`] names, to retarget the instruction.
+    pub fn dest_mut(&mut self) -> Option<&mut LocalId> {
+        match self {
+            MirInst::Assign { dest, .. }
+            | MirInst::BinOp { dest, .. }
+            | MirInst::Negate { dest, .. }
+            | MirInst::Not { dest, .. }
+            | MirInst::Compare { dest, .. }
+            | MirInst::Alloc { dest, .. }
+            | MirInst::StackAlloc { dest, .. }
+            | MirInst::GetField { dest, .. }
+            | MirInst::FieldAddr { dest, .. }
+            | MirInst::GetTag { dest, .. }
+            | MirInst::GetPayload { dest, .. }
+            | MirInst::Ref { dest, .. }
+            | MirInst::RefMut { dest, .. }
+            | MirInst::Copy { dest, .. }
+            | MirInst::Move { dest, .. }
+            | MirInst::StringLiteral { dest, .. }
+            | MirInst::FuncAddr { dest, .. }
+            | MirInst::FloatToBits { dest, .. }
+            | MirInst::BitsToFloat { dest, .. }
+            | MirInst::Convert { dest, .. }
+            | MirInst::DataAddr { dest, .. } => Some(dest),
+            MirInst::Call { dest, .. } | MirInst::CallIndirect { dest, .. } => dest.as_mut(),
+            MirInst::SetField { .. }
+            | MirInst::SetTag { .. }
+            | MirInst::Drop { .. }
+            | MirInst::Nop => None,
+        }
+    }
+
+    /// Every local this instruction reads, in operand order: values,
+    /// bases, sources, an indirect callee, and the value a `SetField`,
+    /// `SetTag` or `Drop` acts on.
+    pub fn read_locals(&self) -> Vec<LocalId> {
+        let values = |values: &[&MirValue]| -> Vec<LocalId> {
+            values.iter().filter_map(|value| value.local()).collect()
+        };
+        match self {
+            MirInst::Assign { value, .. } | MirInst::Convert { src: value, .. } => values(&[value]),
+            MirInst::BinOp { lhs, rhs, .. } | MirInst::Compare { lhs, rhs, .. } => {
+                values(&[lhs, rhs])
+            }
+            MirInst::Negate { operand, .. } | MirInst::Not { operand, .. } => values(&[operand]),
+            MirInst::Call { args, .. } => args.iter().filter_map(MirValue::local).collect(),
+            MirInst::CallIndirect { callee, args, .. } => std::iter::once(*callee)
+                .chain(args.iter().filter_map(MirValue::local))
+                .collect(),
+            MirInst::GetField { base, .. } | MirInst::FieldAddr { base, .. } => vec![*base],
+            MirInst::SetField { base, value, .. } => {
+                std::iter::once(*base).chain(value.local()).collect()
+            }
+            MirInst::SetTag { dest, .. } => vec![*dest],
+            MirInst::GetTag { src, .. }
+            | MirInst::GetPayload { src, .. }
+            | MirInst::Ref { src, .. }
+            | MirInst::RefMut { src, .. }
+            | MirInst::Copy { src, .. }
+            | MirInst::Move { src, .. }
+            | MirInst::FloatToBits { src, .. }
+            | MirInst::BitsToFloat { src, .. } => vec![*src],
+            MirInst::Drop { local } => vec![*local],
+            MirInst::Alloc { .. }
+            | MirInst::StackAlloc { .. }
+            | MirInst::StringLiteral { .. }
+            | MirInst::FuncAddr { .. }
+            | MirInst::DataAddr { .. }
+            | MirInst::Nop => Vec::new(),
+        }
+    }
 }
 
 // ─── Comparison Operator ─────────────────────────────────────────────────────
@@ -523,6 +820,39 @@ pub enum Terminator {
     Unreachable,
 }
 
+impl Terminator {
+    /// The blocks control may reach next, in terminator order.
+    pub fn successors(&self) -> Vec<BlockId> {
+        match self {
+            Terminator::Goto(target) => vec![*target],
+            Terminator::Branch {
+                then_block,
+                else_block,
+                ..
+            } => vec![*then_block, *else_block],
+            Terminator::Switch {
+                targets, otherwise, ..
+            } => targets
+                .iter()
+                .map(|(_, target)| *target)
+                .chain(std::iter::once(*otherwise))
+                .collect(),
+            Terminator::Return(_) | Terminator::Unreachable => Vec::new(),
+        }
+    }
+
+    /// The local this terminator reads, if any.
+    pub fn read_local(&self) -> Option<LocalId> {
+        match self {
+            Terminator::Return(value) => value.as_ref().and_then(MirValue::local),
+            Terminator::Branch { cond: value, .. } | Terminator::Switch { value, .. } => {
+                value.local()
+            }
+            Terminator::Goto(_) | Terminator::Unreachable => None,
+        }
+    }
+}
+
 // ─── Values ──────────────────────────────────────────────────────────────────
 
 /// An r-value operand used inside instructions and terminators.
@@ -534,6 +864,16 @@ pub enum MirValue {
     Use(LocalId),
     /// The unit value `()`.
     Unit,
+}
+
+impl MirValue {
+    /// The local this operand reads, if it reads one.
+    pub fn local(&self) -> Option<LocalId> {
+        match self {
+            MirValue::Use(local) => Some(*local),
+            MirValue::Literal(_) | MirValue::Unit => None,
+        }
+    }
 }
 
 // ─── Literals ────────────────────────────────────────────────────────────────

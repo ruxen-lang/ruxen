@@ -113,6 +113,17 @@ out — e.g. `String.from_raw(ptr, len)` to take ownership of a
 returned C buffer, or `Box.from_raw(ptr)` for a single allocation.
 Ruxen does not insert any implicit drop for raw pointers.
 
+## B13 — Ownership markers on `lib` declarations
+
+**Given** a `lib` declaration whose result is spelled `-> owned T`
+(`def clone as "ruxen_closure_share" -> owned Self`)
+**Then** the caller owns the returned value outright and drop elaboration frees
+it at the caller's scope exit (`mir::lower::runtime_abi::result_ownership`
+reads the marker before its hand-listed table). `def var NAME` passes the
+receiver as `&var Self`, and `def consume NAME` takes it over (`def consume
+drop` frees the handle's storage). A by-value parameter moves into C; a
+read-only parameter is declared `&T`.
+
 ---
 
 ## Pin tests
@@ -132,6 +143,7 @@ Ruxen does not insert any implicit drop for raw pointers.
 | B11 ptr   | `raw_pointer_layout`                          | `phase7_ffi.rs`  |
 | B11 packed| `packed_struct_layout`                        | `phase7_ffi.rs`  |
 | B11 trans | `transparent_struct_layout` + `transparent_struct_rejects_multiple_fields` | `phase7_ffi.rs` |
+| B13       | `owned_result_marker_parses_round_trips_and_classifies_fresh` + `def_consume_drop_marks_a_drop_that_releases_its_storage` | `lib_c_symbol_alias.rs` |
 
 <!-- TODO(migration): pin-test fn `parse_null_literal` still says `null` (the literal is `nil`); rename when in scope. -->
 

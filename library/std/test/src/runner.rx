@@ -105,7 +105,7 @@ class Runner
   lib "runtime/test.c"
     def self.set_current as "ruxen_test_current_set"(handle: Int) -> Int
     def self.get_current as "ruxen_test_current_get" -> Int
-    def self.self_addr as "ruxen_test_runner_addr"(r: Runner) -> Int
+    def self.self_addr as "ruxen_test_runner_addr"(r: &Runner) -> Int
     def self.from_handle as "ruxen_test_runner_from_addr"(addr: Int) -> &var Runner
     def self.case_reset as "ruxen_test_case_reset" -> Int
     def self.case_mark_failed as "ruxen_test_case_mark_failed" -> Int

@@ -29,6 +29,7 @@ impl<'a> Lowerer<'a> {
                                 object: Box::new((**operand).clone()),
                                 method: UNRESOLVED_DEF,
                                 resolved: UNRESOLVED_DEF,
+                                requirement_params: None,
                                 method_name: method.to_string(),
                                 generic_args: vec![],
                                 args: vec![],
@@ -94,14 +95,14 @@ impl<'a> Lowerer<'a> {
                         return Ok(Some(self.emit_raw_string_literal(s)));
                     }
                 }
+                // A `&var x` is an address only where a `&var` parameter or
+                // binding takes one, and `lower_refmut_addr` lowers those
+                // (`mir::refmut_abi`). Read as a value (`(&var fut).poll(cx)`,
+                // a handle `&var`), it is `x`'s word, like `&x`.
                 let src_local = self.lower_expr(inner)?;
                 if let Some(src) = src_local {
                     let dest = self.new_temp(expr.ty.clone());
-                    if *mutable {
-                        self.emit(MirInst::RefMut { dest, src });
-                    } else {
-                        self.emit(MirInst::Ref { dest, src });
-                    }
+                    self.emit(MirInst::Ref { dest, src });
                     Ok(Some(dest))
                 } else {
                     Ok(None)

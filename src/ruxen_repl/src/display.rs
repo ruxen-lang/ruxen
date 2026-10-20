@@ -3,9 +3,9 @@
 //! Formats values with their types: `=> value : Type`
 //! Uses ANSI colors for terminal output.
 
+use ruxen_core::driver::Stage;
 use ruxen_core::hir::types::Ty;
 use ruxen_core::parser::ast::{FuncDef, Program, TopLevelItem};
-use ruxen_core::typeck;
 
 // ANSI color codes
 const GREEN: &str = "\x1b[32m";
@@ -113,10 +113,10 @@ pub fn format_fn_type_for_def(target: &FuncDef, all_defs: &[FuncDef]) -> String 
         items,
         span: target.span.clone(),
     };
-    let result = typeck::type_check(&program);
+    let result = crate::eval::check(&program, Stage::Typeck);
 
     let resolved = result
-        .program
+        .hir()
         .items
         .iter()
         .filter_map(|item| {

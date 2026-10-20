@@ -22,7 +22,7 @@ impl Resolver {
             }
             ast::TopLevelItem::TypeAlias(ta) => {
                 let def_id = self.own_type_def(&ta.name);
-                let ty = self.resolve_type_expr(&ta.type_expr);
+                let (ty, _) = self.resolve_alias_target(ta);
                 Some(HirItem::TypeAlias(HirTypeAlias {
                     def_id,
                     name: ta.name.clone(),
@@ -143,6 +143,7 @@ impl Resolver {
             "Self".to_string(),
             DefKind::TypeAlias {
                 target: self_ty.clone(),
+                params: Vec::new(),
             },
             Visibility::Private,
             class.span.clone(),
@@ -248,6 +249,7 @@ impl Resolver {
         // #06.8 T0c: preserve the `layout flat_heap_struct` marker
         // captured in pass 1 across the pass-2 rewrite.
         let flat_heap_struct = class.layout.iter().any(|s| s == "flat_heap_struct");
+        let closure_shell = class.layout.iter().any(|s| s == "closure");
         // #06.8 Phase 3b: append the class-body `lib` FFI methods that
         // pass-1 registered onto the side-map. They were registered as
         // `DefKind::Method` with `parent = def_id` and need to appear
@@ -289,6 +291,7 @@ impl Resolver {
                         auto_traits,
                         const_predicates,
                         flat_heap_struct,
+                        closure_shell,
                         runtime_dispatch_includes,
                     },
                 };
@@ -769,6 +772,7 @@ impl Resolver {
             "Self".to_string(),
             DefKind::TypeAlias {
                 target: self_ty.clone(),
+                params: Vec::new(),
             },
             Visibility::Private,
             t.span.clone(),
@@ -899,6 +903,7 @@ impl Resolver {
             "Self".to_string(),
             DefKind::TypeAlias {
                 target: target_ty.clone(),
+                params: Vec::new(),
             },
             Visibility::Private,
             imp.span.clone(),

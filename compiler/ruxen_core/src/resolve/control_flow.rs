@@ -26,7 +26,21 @@ impl Resolver {
                         stmts.push(binding);
                         continue;
                     }
-                    let hir_expr = self.resolve_expr(expr);
+                    // `x = a and b`: Ruby binds `=` tighter than the keyword
+                    // operators, so the leading assignment declares `x` like
+                    // a statement of its own, and the rest reads `x`.
+                    let split = split_leading_assignment(expr);
+                    let binding = split
+                        .as_ref()
+                        .and_then(|(assign, _)| self.resolve_bare_assignment_binding(assign));
+                    let expr = match (binding, split) {
+                        (Some(binding), Some((_, rest))) => {
+                            stmts.push(binding);
+                            std::borrow::Cow::Owned(rest)
+                        }
+                        _ => std::borrow::Cow::Borrowed(expr),
+                    };
+                    let hir_expr = self.resolve_expr(&expr);
                     if is_last {
                         // Last expression in block is the tail (implicit return)
                         tail_expr = Some(Box::new(hir_expr));
@@ -55,8 +69,19 @@ impl Resolver {
         let ast::ExprKind::Identifier(name) = &target.kind else {
             return None;
         };
-        if self.scopes.lookup(name).is_some() {
-            return None;
+        // Ruby: an assignment names an existing local (or parameter) when
+        // one is in scope; otherwise it declares a new local, even when a
+        // method of that name exists (`p = "x"` shadows `Kernel#p`).
+        if let Some(existing) = self.scopes.lookup(name) {
+            let names_method = self.symbols.get(existing).is_some_and(|def| {
+                matches!(
+                    def.kind,
+                    DefKind::Function { .. } | DefKind::OverloadSet { .. } | DefKind::Method { .. }
+                )
+            });
+            if !names_method {
+                return None;
+            }
         }
 
         let binding = ast::LetBinding {
@@ -297,7 +322,16 @@ impl Resolver {
         }
 
         let body = match &closure.body {
-            ast::ClosureBody::Expr(e) => self.resolve_expr(e),
+            // A one-expression body that assigns a new name declares a
+            // local, as the same statement in a `do ... end` body does.
+            ast::ClosureBody::Expr(e) => match self.resolve_bare_assignment_binding(e) {
+                Some(binding) => HirExpr {
+                    kind: HirExprKind::Block(vec![binding], None),
+                    ty: Ty::Unit,
+                    span: e.span.clone(),
+                },
+                None => self.resolve_expr(e),
+            },
             ast::ClosureBody::Block(b) => self.resolve_block_as_expr(b),
         };
 
@@ -330,6 +364,7 @@ impl Resolver {
                 captures,
                 is_async: closure.is_async,
                 is_move: closure.is_move,
+                kind: closure.kind,
             },
             ty: fn_ty,
             span: span.clone(),
@@ -374,6 +409,8 @@ impl Resolver {
                     span: span.clone(),
                     pipes: true,
                     do_end: false,
+                    kind: ast::ClosureKind::Block,
+                    spelling: ast::ClosureSpelling::Bare,
                 };
                 self.resolve_closure(&closure, span)
             }
@@ -413,13 +450,12 @@ impl Resolver {
         }
     }
 
+    /// Record `def_id` as a capture of every enclosing closure it is defined
+    /// outside of, innermost first. A closure nested in another reads the
+    /// outer local through the enclosing closure's captures, so the enclosing
+    /// closure captures it too: an owning lambda around a block that reads `s`
+    /// owns (moves) `s`, and the borrow checker sees that move.
     pub(super) fn record_capture_if_needed(&mut self, def_id: DefId, def_scope_id: ScopeId) {
-        let Some(closure) = self.closure_stack.last_mut() else {
-            return;
-        };
-        if self.scopes.is_within_scope(def_scope_id, closure.scope_id) {
-            return;
-        }
         let Some(def) = self.symbols.get(def_id) else {
             return;
         };
@@ -427,16 +463,59 @@ impl Resolver {
             def.kind,
             DefKind::Variable { .. } | DefKind::Param { .. } | DefKind::SelfValue { .. }
         );
-        if !should_capture || closure.captures.iter().any(|cap| cap.def_id == def_id) {
+        // A global is no closure's capture: the builtin type constructors
+        // (`Array`, `Hash`, ...) are value-scope `Variable`s of the global
+        // scope, and `Array.new` in a lambda must not capture (or move) them.
+        if !should_capture || self.scopes.is_global(def_scope_id) {
             return;
         }
-        closure.captures.push(Capture {
-            def_id,
-            name: def.name.clone(),
-            by_move: closure.is_move,
-            ty: self.symbols.def_ty(def_id).unwrap_or(Ty::Error),
-        });
+        let name = def.name.clone();
+        let ty = self.symbols.def_ty(def_id).unwrap_or(Ty::Error);
+        for closure in self.closure_stack.iter_mut().rev() {
+            if self.scopes.is_within_scope(def_scope_id, closure.scope_id) {
+                // Defined inside this closure, so inside every enclosing one.
+                return;
+            }
+            if !closure.captures.iter().any(|cap| cap.def_id == def_id) {
+                closure.captures.push(Capture {
+                    def_id,
+                    name: name.clone(),
+                    by_move: closure.is_move,
+                    ty: ty.clone(),
+                });
+            }
+        }
     }
 
     // ─── Pattern Resolution ─────────────────────────────────────────
+}
+
+/// For a statement `x = a and b` / `x = a or b` (the assignment is the
+/// leftmost operand of a chain of keyword `and` / `or`, which bind looser
+/// than `=`), the assignment `x = a` and the rest of the statement with
+/// the assignment replaced by a read of `x`: `x and b`.
+fn split_leading_assignment(expr: &ast::Expr) -> Option<(ast::Expr, ast::Expr)> {
+    let ast::ExprKind::BinaryOp { left, op, right } = &expr.kind else {
+        return None;
+    };
+    if !matches!(op, ast::BinOp::KeywordAnd | ast::BinOp::KeywordOr) {
+        return None;
+    }
+    let (assign, rest_left) = match &left.kind {
+        ast::ExprKind::Assign { target, .. }
+            if matches!(target.kind, ast::ExprKind::Identifier(_)) =>
+        {
+            (left.as_ref().clone(), target.as_ref().clone())
+        }
+        _ => split_leading_assignment(left)?,
+    };
+    let rest = ast::Expr {
+        kind: ast::ExprKind::BinaryOp {
+            left: Box::new(rest_left),
+            op: *op,
+            right: right.clone(),
+        },
+        span: expr.span.clone(),
+    };
+    Some((assign, rest))
 }

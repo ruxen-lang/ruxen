@@ -119,6 +119,8 @@ fn parse(src: &str) -> Result<Program, String> {
 /// deliberate import alphabetisation (a meaning-preserving canonicalisation,
 /// `format_imports.rs`) is not flagged as a divergence — but a DROPPED,
 /// ADDED, or RENAMED member still changes the fingerprint and trips the test.
+/// Likewise a bare closure value (`{ |x| x }`, not a trailing block) counts as
+/// the `->(x) { x }` lambda fmt deliberately prints it as.
 fn fingerprint(prog: &Program) -> String {
     let mut prog = prog.clone();
     for item in &mut prog.items {
@@ -130,7 +132,10 @@ fn fingerprint(prog: &Program) -> String {
             members.sort();
         }
     }
-    crate::common::span_blind_ast(&prog)
+    crate::common::span_blind_ast(&prog).replace(
+        "kind: Lambda, spelling: Bare",
+        "kind: Lambda, spelling: Stabby",
+    )
 }
 
 // ─── Axis 1: compiler (lex + parse) ──────────────────────────────────

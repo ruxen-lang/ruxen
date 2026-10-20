@@ -67,6 +67,7 @@ fn class_kind() -> DefKind {
             auto_traits: AutoTraitFlags::default(),
             const_predicates: vec![],
             flat_heap_struct: false,
+            closure_shell: false,
             runtime_dispatch_includes: Vec::new(),
         },
     }

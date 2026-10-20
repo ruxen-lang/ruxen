@@ -181,7 +181,7 @@ impl<'a> Lowerer<'a> {
             // mangle key would produce `File_new` and miss the FFI
             // alias `BufReader_File_new → ruxen_bufreader_new_file`.
             DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. } => None,
-            DefKind::TypeAlias { target } => Some(type_name_from_ty(target)),
+            DefKind::TypeAlias { target, .. } => Some(type_name_from_ty(target)),
             _ => None,
         }
     }

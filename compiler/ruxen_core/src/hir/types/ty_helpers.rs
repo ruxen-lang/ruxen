@@ -124,6 +124,50 @@ impl Ty {
         }
     }
 
+    /// Whether a parameter of this type takes a BLOCK: a `Fn[...]` (`Ty::Fn`,
+    /// incl. `&block` and the implicit-yield `__block`), behind any references.
+    /// Such a parameter only calls its closure, so the closure borrows its
+    /// captures and the caller keeps and frees the closure pair. A
+    /// `Proc[...]` / `any Fn[...]` parameter (`Ty::AnyMixin`) may store it
+    /// instead. The one predicate typeck (trailing-block kinds), the borrow
+    /// checker (E1018, argument moves) and MIR (`runtime_abi`) all ask.
+    pub fn is_borrowed_block(&self) -> bool {
+        matches!(self.peel_refs(), Ty::Fn { .. })
+    }
+
+    /// The type a type parameter bound to `self` stands for in a
+    /// specialized body. A type parameter's value may be stored (a field
+    /// typed `T`), so a closure bound to one is a stored proc
+    /// (`Proc[...]`, which the core library declares as `any Fn[...]`), never
+    /// a borrowed block (`Fn[...]`, which only a declared block parameter
+    /// is). Every other type is itself.
+    pub fn as_type_argument(&self) -> Ty {
+        match self {
+            Ty::Fn { .. } => Ty::proc_of(self.clone()),
+            other => other.clone(),
+        }
+    }
+
+    /// The stored-closure type `Proc[fn_ty]`, which the core library
+    /// declares as `type Proc[F] = any Fn[F]`: the one constructor of an
+    /// `Fn`-family `any` bound.
+    pub fn proc_of(fn_ty: Ty) -> Ty {
+        Ty::AnyMixin(vec![MixinRef {
+            name: "Fn".into(),
+            generic_args: vec![fn_ty],
+        }])
+    }
+
+    /// True when this is, behind any references, a `Proc[...]`
+    /// (`any Fn[...]`): a closure that owns its captures, so it can be
+    /// stored and shared (`Closure#clone`, its `.rx` method home in
+    /// `std/core`). A `Fn[...]` value may be a block that borrows its
+    /// captures and has no `clone`.
+    pub fn is_proc(&self) -> bool {
+        matches!(self.peel_refs(), Ty::AnyMixin(bounds)
+            if bounds.iter().any(MixinRef::is_fn_family))
+    }
+
     /// Substitute every `TypeParam` named in `subst` with its bound type,
     /// recursing through every nested child via `map_inner` (references of
     /// every kind, collections, `Fn` types, aliases and mixin bounds). A
@@ -141,8 +185,21 @@ impl Ty {
     /// True when `pred` holds for `self` or for any type nested inside it,
     /// searched with the same children `map_inner` folds.
     pub fn any(&self, pred: &mut impl FnMut(&Ty) -> bool) -> bool {
+        self.any_within(pred, &mut |_| true)
+    }
+
+    /// [`Ty::any`], searching the children of only those types `descend`
+    /// accepts (`pred` still sees every type it reaches).
+    pub fn any_within(
+        &self,
+        pred: &mut impl FnMut(&Ty) -> bool,
+        descend: &mut impl FnMut(&Ty) -> bool,
+    ) -> bool {
         if pred(self) {
             return true;
+        }
+        if !descend(self) {
+            return false;
         }
         match self {
             Ty::Int
@@ -182,8 +239,10 @@ impl Ty {
             | Ty::RefMutLifetime(_, t)
             | Ty::FixedArray(t, _)
             | Ty::Alias { target: t, .. }
-            | Ty::Newtype { inner: t, .. } => t.any(pred),
-            Ty::Map(a, b) | Ty::Result(a, b) => a.any(pred) || b.any(pred),
+            | Ty::Newtype { inner: t, .. } => t.any_within(pred, descend),
+            Ty::Map(a, b) | Ty::Result(a, b) => {
+                a.any_within(pred, descend) || b.any_within(pred, descend)
+            }
             Ty::Tuple(ts)
             | Ty::Class {
                 generic_args: ts, ..
@@ -193,13 +252,13 @@ impl Ty {
             }
             | Ty::Enum {
                 generic_args: ts, ..
-            } => ts.iter().any(|t| t.any(pred)),
+            } => ts.iter().any(|t| t.any_within(pred, descend)),
             Ty::Fn { params, ret } | Ty::FnMut { params, ret } | Ty::FnOnce { params, ret } => {
-                params.iter().any(|t| t.any(pred)) || ret.any(pred)
+                params.iter().any(|t| t.any_within(pred, descend)) || ret.any_within(pred, descend)
             }
             Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => bounds
                 .iter()
-                .any(|b| b.generic_args.iter().any(|t| t.any(pred))),
+                .any(|b| b.generic_args.iter().any(|t| t.any_within(pred, descend))),
         }
     }
 
@@ -220,6 +279,38 @@ impl Ty {
             }
             _ => None,
         }
+    }
+
+    /// The written spelling of a callable type, looking through references:
+    /// `Fn(Int) -> nil` for a block type and `Proc[(Int) -> nil]` for a
+    /// stored closure (`Proc[...]`, `any Fn[...]`), with a unit spelled
+    /// `nil`. `None` for a non-callable type.
+    pub fn callable_spelling(&self) -> Option<std::string::String> {
+        let signature = self.signature_spelling()?;
+        Some(if self.is_borrowed_block() {
+            format!("Fn{signature}")
+        } else {
+            format!("Proc[{signature}]")
+        })
+    }
+
+    /// The `Proc[(A, B) -> R]` spelling of a callable type's signature, the
+    /// storable parameter type for it (`nil` for a unit). `None` for a
+    /// non-callable type.
+    pub fn proc_spelling(&self) -> Option<std::string::String> {
+        Some(format!("Proc[{}]", self.signature_spelling()?))
+    }
+
+    /// `(A, B) -> R` for a callable type, looking through references, with a
+    /// unit spelled `nil`.
+    fn signature_spelling(&self) -> Option<std::string::String> {
+        let (params, ret) = self.peel_refs().callable_signature()?;
+        let surface = |t: &Ty| match t {
+            Ty::Unit => "nil".to_string(),
+            other => other.to_string(),
+        };
+        let params: Vec<std::string::String> = params.iter().map(surface).collect();
+        Some(format!("({}) -> {}", params.join(", "), surface(ret)))
     }
 
     /// Whether this is a callable shape, looking through references: a bare
@@ -273,9 +364,15 @@ impl Ty {
     /// The name of the class whose methods this type dispatches to, looking
     /// through references: the bare shell name of a builtin head (`Array`,
     /// `Set`, `Hash`, `Option`, `Result`), the name of a class, struct or
-    /// enum, and otherwise the type's display text (`Int`, `Char`, …).
-    pub fn method_home(&self) -> std::string::String {
+    /// enum, `closure_shell` for a stored closure value (`Proc[...]`, `any
+    /// Fn[...]`: the class the core library declares `layout closure`,
+    /// `SymbolTable::closure_shell_name`), and otherwise the type's display
+    /// text (`Int`, `Char`, …).
+    pub fn method_home(&self, closure_shell: Option<&str>) -> std::string::String {
         let peeled = self.peel_refs();
+        if let Some(shell) = closure_shell.filter(|_| peeled.is_proc()) {
+            return shell.to_string();
+        }
         match peeled {
             Ty::Array(_) => "Array".to_string(),
             Ty::Set(_) => "Set".to_string(),
@@ -305,6 +402,16 @@ impl Ty {
     /// and `String` are not scalars.
     pub fn is_scalar_primitive(&self) -> bool {
         self.is_numeric() || matches!(self, Ty::Bool | Ty::Char)
+    }
+
+    /// Whether a `&var` of a value of this type is the ADDRESS of the
+    /// caller's slot (a String or a scalar) rather than a copy of its handle
+    /// word (classes, structs, enums, arrays, hashes, closures, type
+    /// parameters). References are looked through. The one rule shared by
+    /// borrow check and MIR lowering (`mir::refmut_abi`).
+    pub fn refmut_is_slot_address(&self) -> bool {
+        let pointee = self.peel_refs();
+        pointee.is_string_form() || pointee.is_scalar_primitive()
     }
 }
 
@@ -383,13 +490,10 @@ mod ty_helper_tests {
     }
 
     fn any_fn(params: Vec<Ty>, ret: Ty) -> Ty {
-        Ty::AnyMixin(vec![MixinRef {
-            name: "Fn".into(),
-            generic_args: vec![Ty::Fn {
-                params,
-                ret: Box::new(ret),
-            }],
-        }])
+        Ty::proc_of(Ty::Fn {
+            params,
+            ret: Box::new(ret),
+        })
     }
 
     fn subst(pairs: &[(&str, Ty)]) -> HashMap<String, Ty> {
@@ -456,6 +560,14 @@ mod ty_helper_tests {
     }
 
     #[test]
+    fn holds_reference_does_not_search_a_callable_signature() {
+        let takes_ref = any_fn(vec![Ty::Ref(Box::new(Ty::String))], Ty::Int);
+        assert!(!takes_ref.holds_reference());
+        assert!(!Ty::Array(Box::new(takes_ref)).holds_reference());
+        assert!(Ty::Array(Box::new(Ty::Ref(Box::new(Ty::String)))).holds_reference());
+    }
+
+    #[test]
     fn callable_signature_reads_bare_and_mixin_spellings() {
         let bare = Ty::FnMut {
             params: vec![Ty::Int],
@@ -482,6 +594,21 @@ mod ty_helper_tests {
     }
 
     #[test]
+    fn a_closure_bound_to_a_type_parameter_is_a_stored_proc() {
+        let block = Ty::Fn {
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Unit),
+        };
+        let stored = block.as_type_argument();
+        assert!(
+            stored.is_proc() && !stored.is_borrowed_block(),
+            "{stored:?}"
+        );
+        assert_eq!(stored, any_fn(vec![Ty::Int], Ty::Unit));
+        assert_eq!(Ty::String.as_type_argument(), Ty::String);
+    }
+
+    #[test]
     fn method_home_names_the_dispatch_class() {
         let cases = [
             (
@@ -499,8 +626,19 @@ mod ty_helper_tests {
             (Ty::RefMut(Box::new(Ty::Char)), "Char"),
         ];
         for (ty, home) in cases {
-            assert_eq!(ty.method_home(), home, "for {ty:?}");
+            assert_eq!(ty.method_home(None), home, "for {ty:?}");
         }
+        // A stored closure is homed on the class declared `layout closure`,
+        // whatever its name: the home comes from the declaration.
+        let proc = Ty::Ref(Box::new(any_fn(vec![Ty::Int], Ty::Unit)));
+        assert_eq!(proc.method_home(Some("Shell")), "Shell");
+        assert_ne!(proc.method_home(None), "Shell");
+        // A borrowed block is no stored closure.
+        let block = Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Unit),
+        };
+        assert_ne!(block.method_home(Some("Shell")), "Shell");
     }
 
     #[test]

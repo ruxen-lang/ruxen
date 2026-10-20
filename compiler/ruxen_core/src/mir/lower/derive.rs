@@ -97,6 +97,20 @@ impl<'a> Lowerer<'a> {
         name: &str,
         fields: &[DeriveField],
     ) -> Vec<MirFunction> {
+        self.synthesize_derives_as(nominal_ty, name, name, fields)
+    }
+
+    /// [`Self::synthesize_derives`] with the bodies mangled from `fn_prefix`
+    /// (`{fn_prefix}_{method}`) instead of the item name: a generic class's
+    /// monomorphic instance (`Box__mono__Int`) gets its own derived bodies,
+    /// over `fields` whose types carry that instantiation's arguments.
+    pub(super) fn synthesize_derives_as(
+        &self,
+        nominal_ty: &Ty,
+        name: &str,
+        fn_prefix: &str,
+        fields: &[DeriveField],
+    ) -> Vec<MirFunction> {
         let self_ty = match nominal_ty {
             Ty::Class { .. } => Ty::Class {
                 name: name.to_string(),
@@ -112,7 +126,7 @@ impl<'a> Lowerer<'a> {
             .filter(|(trait_name, _)| derive_is_synthesized(nominal_ty, self.symbols, trait_name))
             .map(|(trait_name, build)| {
                 let method = derived_method(trait_name).expect("every DERIVES entry has a method");
-                let fn_name = format!("{}_{}", name, method);
+                let fn_name = format!("{}_{}", fn_prefix, method);
                 build(self, &fn_name, self_ty.clone(), name, fields)
             })
             .collect()
@@ -133,7 +147,7 @@ impl<'a> Lowerer<'a> {
         });
         if let Ty::Class { name, .. } = self_ty {
             if self.class_field_index_shift(name) > 0 {
-                let addr = mir_fn.new_temp(Ty::Int);
+                let addr = mir_fn.new_temp(Ty::RawPtrVoid);
                 mir_fn.blocks[entry].instructions.push(MirInst::DataAddr {
                     dest: addr,
                     data_sym: format!("__rx_classinfo_{}", name),
@@ -188,6 +202,7 @@ impl<'a> Lowerer<'a> {
             mir_fn.params.push(self_local);
             let fmt_local = mir_fn.new_local("fmt", formatter_ty.clone(), true);
             mir_fn.params.push(fmt_local);
+            mir_fn.param_modes = vec![ParamMode::Read, ParamMode::Mut];
 
             let entry = mir_fn.entry_block;
 
@@ -287,6 +302,7 @@ impl<'a> Lowerer<'a> {
         let mut mir_fn = MirFunction::new(fn_name, Ty::String);
         let self_local = mir_fn.new_local("self", self_ty, false);
         mir_fn.params.push(self_local);
+        mir_fn.param_modes = vec![ParamMode::Read];
 
         let entry = mir_fn.entry_block;
 
@@ -453,6 +469,7 @@ impl<'a> Lowerer<'a> {
         let other_local = mir_fn.new_local("other", Ty::Ref(Box::new(self_ty)), false);
         mir_fn.params.push(self_local);
         mir_fn.params.push(other_local);
+        mir_fn.param_modes = vec![ParamMode::Read, ParamMode::Read];
 
         let entry = mir_fn.entry_block;
         let init = mir_fn.new_temp(Ty::Bool);
@@ -520,6 +537,7 @@ impl<'a> Lowerer<'a> {
         let mut mir_fn = MirFunction::new(fn_name, Ty::Int);
         let self_local = mir_fn.new_local("self", self_ty, false);
         mir_fn.params.push(self_local);
+        mir_fn.param_modes = vec![ParamMode::Read];
 
         let entry = mir_fn.entry_block;
         let init = mir_fn.new_temp(Ty::Int);
@@ -636,6 +654,7 @@ impl<'a> Lowerer<'a> {
         let other_local = mir_fn.new_local("other", Ty::Ref(Box::new(self_ty)), false);
         mir_fn.params.push(self_local);
         mir_fn.params.push(other_local);
+        mir_fn.param_modes = vec![ParamMode::Read, ParamMode::Read];
 
         let mut current_block = mir_fn.entry_block;
         for field in fields {
@@ -767,9 +786,12 @@ impl<'a> Lowerer<'a> {
     ///   * Copy types (primitives, references, function pointers,
     ///     `derive Copy` user types) → bitwise reuse of `src`.
     ///   * `String` / `Str`           → `ruxen_string_from(src)`.
-    ///   * `Vec[_]`                   → `ruxen_vec_clone(src)`.
-    ///   * `HashMap[_, _]`            → `ruxen_hash_clone(src)`.
-    ///   * `Set[_]`                   → `ruxen_set_clone(src)`.
+    ///   * `Array[_]`                 → `ruxen_vec_skip_elem(src, 0, elem)`.
+    ///   * `Hash[_, _]` / `Set[_]`    → `ruxen_hash_deep_clone(src, key, val)`.
+    ///     The element descriptors are the container drop's own
+    ///     (`drops::heap_free_call`), so every owned element is copied.
+    ///   * A class instance           → its class's `clone` (derived,
+    ///     declared, or an FFI shell's).
     ///   * Anything else falls back to a bitwise reuse — drop
     ///     elaboration in `implicit_includes/mod.rs::validate_clone_requirements`
     ///     ensures the fallback only triggers for types with E0610
@@ -783,6 +805,31 @@ impl<'a> Lowerer<'a> {
         src: LocalId,
         field_ty: &Ty,
     ) -> LocalId {
+        // A tuple owns its elements: the copy is a new box of element copies,
+        // each made by this same rule (a Copy tuple is a box too).
+        if let Ty::Tuple(elems) = field_ty {
+            let dest = mir_fn.new_temp(field_ty.clone());
+            mir_fn.blocks[block].instructions.push(MirInst::Alloc {
+                dest,
+                ty: field_ty.clone(),
+                size: self.alloc_size(field_ty),
+            });
+            for (index, elem) in elems.iter().enumerate() {
+                let value = mir_fn.new_temp(elem.clone());
+                mir_fn.blocks[block].instructions.push(MirInst::GetField {
+                    dest: value,
+                    base: src,
+                    field_index: index,
+                });
+                let copy = self.synthesize_clone_field(mir_fn, block, value, elem);
+                mir_fn.blocks[block].instructions.push(MirInst::SetField {
+                    base: dest,
+                    field_index: index,
+                    value: MirValue::Use(copy),
+                });
+            }
+            return dest;
+        }
         if ty_is_effectively_copy(field_ty, self.symbols) {
             return src;
         }
@@ -795,32 +842,80 @@ impl<'a> Lowerer<'a> {
             });
             return dest;
         }
-        if matches!(field_ty, Ty::Array(_)) {
+        // A closure field is shared, not copied: the copy is one more owner
+        // of the same pair (`drops::CLOSURE_SHARE_FN`).
+        if drops::is_owned_closure(field_ty) {
             let dest = mir_fn.new_temp(field_ty.clone());
-            mir_fn.blocks[block].instructions.push(MirInst::Call {
-                dest: Some(dest),
-                callee: "ruxen_vec_clone".to_string(),
-                args: vec![MirValue::Use(src)],
-            });
+            mir_fn.blocks[block]
+                .instructions
+                .push(drops::closure_share_call(dest, src));
             return dest;
         }
-        if matches!(field_ty, Ty::Map(_, _)) {
+        // A field owns its container's elements, so the copy owns copies of
+        // them: each element is cloned per the SAME descriptor the
+        // container's drop frees it with (`drops::heap_free_call`), so copy
+        // depth and drop depth agree.
+        let deep_clone = match field_ty {
+            Ty::Array(elem) => Some((
+                "ruxen_vec_skip_elem",
+                vec![
+                    drops::ElemDesc::Word(0),
+                    drops::elem_desc(elem, self.symbols),
+                ],
+            )),
+            Ty::Map(key, val) => Some((
+                "ruxen_hash_deep_clone",
+                vec![
+                    drops::ElemDesc::Word(drops::key_elem_desc(key)),
+                    drops::elem_desc(val, self.symbols),
+                ],
+            )),
+            Ty::Set(elem) => Some((
+                "ruxen_hash_deep_clone",
+                vec![
+                    drops::ElemDesc::Word(drops::key_elem_desc(elem)),
+                    drops::ElemDesc::Word(0),
+                ],
+            )),
+            _ => None,
+        };
+        if let Some((callee, descs)) = deep_clone {
+            let mut insts = Vec::new();
+            let mut args = vec![MirValue::Use(src)];
+            for desc in descs {
+                drops::record_elem_glue(mir_fn, &desc);
+                let mut new_temp = || mir_fn.new_temp(Ty::Int);
+                args.push(drops::elem_desc_value(desc, &mut new_temp, &mut insts));
+            }
             let dest = mir_fn.new_temp(field_ty.clone());
-            mir_fn.blocks[block].instructions.push(MirInst::Call {
+            insts.push(MirInst::Call {
                 dest: Some(dest),
-                callee: "ruxen_hash_clone".to_string(),
-                args: vec![MirValue::Use(src)],
+                callee: callee.to_string(),
+                args,
             });
+            mir_fn.blocks[block].instructions.extend(insts);
             return dest;
         }
-        if matches!(field_ty, Ty::Set(_)) {
-            let dest = mir_fn.new_temp(field_ty.clone());
-            mir_fn.blocks[block].instructions.push(MirInst::Call {
-                dest: Some(dest),
-                callee: "ruxen_set_clone".to_string(),
-                args: vec![MirValue::Use(src)],
-            });
-            return dest;
+        // An object field owns its object: copy it with the class's own
+        // `clone` (derived, declared, or an FFI shell's, such as a shared
+        // handle's refcount bump), the same per-instance symbol a `.clone`
+        // call on it would reach.
+        if let Ty::Class { name, .. } = field_ty {
+            if drops::field_owns_value(field_ty, self.symbols) {
+                let callee = match self.mono_base_for_ty(field_ty) {
+                    Some(base) => format!("{base}_clone"),
+                    None => {
+                        self.resolve_ffi_alias_callee(format!("{}_clone", name.replace('.', "_")))
+                    }
+                };
+                let dest = mir_fn.new_temp(field_ty.clone());
+                mir_fn.blocks[block].instructions.push(MirInst::Call {
+                    dest: Some(dest),
+                    callee,
+                    args: vec![MirValue::Use(src)],
+                });
+                return dest;
+            }
         }
         // Fallback: bitwise reuse. The companion validator in
         // `implicit_includes/mod.rs` will already have surfaced E0610 for this
@@ -838,6 +933,7 @@ impl<'a> Lowerer<'a> {
         let mut mir_fn = MirFunction::new(fn_name, self_ty.clone());
         let self_local = mir_fn.new_local("self", self_ty.clone(), false);
         mir_fn.params.push(self_local);
+        mir_fn.param_modes = vec![ParamMode::Read];
         let entry = mir_fn.entry_block;
 
         let dest = self.alloc_derived_value(&mut mir_fn, &self_ty);
@@ -866,6 +962,9 @@ impl<'a> Lowerer<'a> {
         );
 
         mir_fn.blocks[entry].terminator = Terminator::Return(Some(MirValue::Use(dest)));
+        // The clone is a new owner its caller frees, and it borrows nothing
+        // from the receiver (`CallSummaries::record_roles`).
+        mir_fn.role = MirFnRole::DerivedClone;
         mir_fn
     }
 
@@ -932,6 +1031,7 @@ impl<'a> Lowerer<'a> {
         let mut mir_fn = MirFunction::new(&fn_name, self_ty.clone());
         let self_local = mir_fn.new_local("self", self_ty.clone(), false);
         mir_fn.params.push(self_local);
+        mir_fn.param_modes = vec![ParamMode::Read];
 
         let entry = mir_fn.entry_block;
         let result = mir_fn.new_temp(self_ty.clone());
@@ -1038,6 +1138,7 @@ impl<'a> Lowerer<'a> {
         let mut mir_fn = MirFunction::new(&fn_name, Ty::String);
         let self_local = mir_fn.new_local("self", self_ty.clone(), false);
         mir_fn.params.push(self_local);
+        mir_fn.param_modes = vec![ParamMode::Read];
 
         let entry = mir_fn.entry_block;
         let tag = mir_fn.new_temp(Ty::Int32);

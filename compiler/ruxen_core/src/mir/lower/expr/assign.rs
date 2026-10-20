@@ -37,6 +37,14 @@ impl<'a> Lowerer<'a> {
             HirExprKind::VarRef(def_id) => {
                 // Captured variable inside a closure body is ByRef (mutation
                 // requires cell-shared storage).
+                // A slot-addressed `&var T` stores a `T` through the
+                // caller's address (`mir::refmut_abi`).
+                if self.refmut_slots.contains(def_id) {
+                    let addr = self.refmut_slot_addr(*def_id)?;
+                    let pointee = target.ty.peel_refs().clone();
+                    self.store_through_refmut(addr, &pointee, val);
+                    return Ok(());
+                }
                 if let Some(slot) = self.capture_map.get(def_id).copied() {
                     let cap_ptr = self.captures_ptr_local.unwrap();
                     let cell_ptr = self.new_temp(Ty::Int);
@@ -62,13 +70,21 @@ impl<'a> Lowerer<'a> {
                         });
                     } else {
                         // Re-binding a heap-owned local: free the prior
-                        // allocation before the new pointer overwrites it. (P0.2)
+                        // allocation (and the fields it owns) before the new
+                        // pointer overwrites it. (P0.2)
                         if self.initialized_heap_locals.contains(&dest) {
-                            self.emit(MirInst::Call {
-                                dest: None,
-                                callee: "ruxen_dealloc".to_string(),
-                                args: vec![MirValue::Use(dest)],
-                            });
+                            let ty = self.fn_ref().locals[dest as usize].ty.clone();
+                            let symbols = self.symbols;
+                            let free = super::super::drops::heap_free_call(
+                                self.fn_mut(),
+                                symbols,
+                                &ty,
+                                dest,
+                            )
+                            .expect("an initialized heap local has an aggregate type");
+                            for inst in free {
+                                self.emit(inst);
+                            }
                         }
                         self.emit(MirInst::Assign { dest, value: val });
                         let dest_ty = self
@@ -96,11 +112,91 @@ impl<'a> Lowerer<'a> {
                     // Phase B-4: shift past class_info_ptr header for
                     // runtime-dispatch classes.
                     let shift = self.class_field_shift_for_ty(&object.ty);
+                    let field_index = *field_idx + shift;
+                    let owned = match object.ty.peel_refs() {
+                        Ty::Class { name, .. } => {
+                            self.symbols.class_owns_fields(name)
+                                && super::super::drops::field_owns_value(&target.ty, self.symbols)
+                        }
+                        _ => false,
+                    };
+                    if !owned {
+                        self.emit(MirInst::SetField {
+                            base,
+                            field_index,
+                            value: val,
+                        });
+                        return Ok(());
+                    }
+                    // The field owns its value: the store moves `val` in and
+                    // frees the value it replaces, unless that is the same
+                    // object (a self-returning update) or NULL (never stored,
+                    // e.g. the first store in `init`; `ruxen_alloc` zeroes).
+                    // A closure is counted, not compared: `val` is an owner
+                    // of its own (a literal, a moved value, a `.clone`
+                    // share), so the replaced owner is always released.
+                    let counted = super::super::drops::is_owned_closure(&target.ty);
+                    let old = self.new_temp(target.ty.clone());
+                    self.emit(MirInst::GetField {
+                        dest: old,
+                        base,
+                        field_index,
+                    });
+                    self.fn_mut().record_view(old, View::Own);
+                    let replaced = (!counted).then(|| {
+                        let replaced = self.new_temp(Ty::Bool);
+                        self.emit(MirInst::Compare {
+                            dest: replaced,
+                            op: CmpOp::NotEq,
+                            lhs: MirValue::Use(old),
+                            rhs: val.clone(),
+                        });
+                        replaced
+                    });
                     self.emit(MirInst::SetField {
                         base,
-                        field_index: *field_idx + shift,
+                        field_index,
                         value: val,
                     });
+                    let live = self.new_temp(Ty::Bool);
+                    self.emit(MirInst::Compare {
+                        dest: live,
+                        op: CmpOp::NotEq,
+                        lhs: MirValue::Use(old),
+                        rhs: MirValue::Literal(Literal::Int(0)),
+                    });
+                    let check_live = self.new_block();
+                    let drop_block = self.new_block();
+                    let done = self.new_block();
+                    match replaced {
+                        Some(replaced) => self.set_terminator(Terminator::Branch {
+                            cond: MirValue::Use(replaced),
+                            then_block: check_live,
+                            else_block: done,
+                        }),
+                        None => self.set_terminator(Terminator::Goto(check_live)),
+                    }
+                    self.current_block = check_live;
+                    self.set_terminator(Terminator::Branch {
+                        cond: MirValue::Use(live),
+                        then_block: drop_block,
+                        else_block: done,
+                    });
+                    self.current_block = drop_block;
+                    let user_drop = self.user_drop_callee(&target.ty);
+                    let symbols = self.symbols;
+                    let free = super::super::drops::owned_value_drop(
+                        self.fn_mut(),
+                        symbols,
+                        user_drop,
+                        &target.ty,
+                        old,
+                    );
+                    for inst in free {
+                        self.emit(inst);
+                    }
+                    self.set_terminator(Terminator::Goto(done));
+                    self.current_block = done;
                 }
             }
             // `xs[i] = v` index assignment (Q9), machine floor. Mirrors the read
@@ -369,6 +465,7 @@ impl<'a> Lowerer<'a> {
                                 object: Box::new((**object).clone()),
                                 method: UNRESOLVED_DEF,
                                 resolved: UNRESOLVED_DEF,
+                                requirement_params: None,
                                 method_name: "[]=".to_string(),
                                 generic_args: vec![],
                                 args: vec![(**index).clone(), (**value).clone()],
@@ -385,6 +482,7 @@ impl<'a> Lowerer<'a> {
 
                 let val_local = self.lower_expr(value)?;
                 let val = local_to_value(val_local);
+                self.free_replaced_refmut_string(target, value)?;
                 self.store_value_into_target(target, val)?;
                 if expr.ty.is_copy() && expr.ty != Ty::Unit {
                     Ok(val_local)
@@ -398,13 +496,24 @@ impl<'a> Lowerer<'a> {
                 let rhs_local = self.lower_expr(value)?;
                 let rhs_val = local_to_value(rhs_local);
 
+                if let HirExprKind::VarRef(def_id) = &target.kind {
+                    if self.refmut_slots.contains(def_id) {
+                        let addr = self.refmut_slot_addr(*def_id)?;
+                        return self.compound_assign_through(addr, target, *op, value, rhs_val);
+                    }
+                }
+
                 // `s += t` on Strings appends in place, as `s.push_str(t)`.
                 // The default integer-add path below would treat the heap
                 // pointer operands as i64 and corrupt them.
                 if matches!(target.ty, Ty::String) && matches!(value.ty, Ty::String) {
                     if let BinOp::Add = op {
-                        let target_val = local_to_value(self.lower_expr(target)?);
-                        let callee = self.resolve_ffi_alias_callee("String_push_str".to_string());
+                        let receiver = self.lower_slot_receiver(target)?;
+                        if let Some(receiver) = receiver {
+                            self.fn_mut().record_view(receiver, View::Assignee);
+                        }
+                        let target_val = local_to_value(receiver);
+                        let callee = self.string_append_callee();
                         self.emit_rebinding_self_call(
                             target,
                             callee,
@@ -435,7 +544,7 @@ impl<'a> Lowerer<'a> {
                                 field_index: 0,
                             });
                             let tmp = self.new_temp(target.ty.clone());
-                            if is_comparison(*op) {
+                            if op.is_comparison() {
                                 self.emit(MirInst::Compare {
                                     dest: tmp,
                                     op: binop_to_cmpop(*op),
@@ -467,7 +576,7 @@ impl<'a> Lowerer<'a> {
                                     field_index: 0,
                                 });
                                 let tmp = self.new_temp(target.ty.clone());
-                                if is_comparison(*op) {
+                                if op.is_comparison() {
                                     self.emit(MirInst::Compare {
                                         dest: tmp,
                                         op: binop_to_cmpop(*op),
@@ -491,7 +600,7 @@ impl<'a> Lowerer<'a> {
                             }
                             let lhs_val = MirValue::Use(dest);
                             let tmp = self.new_temp(target.ty.clone());
-                            if is_comparison(*op) {
+                            if op.is_comparison() {
                                 self.emit(MirInst::Compare {
                                     dest: tmp,
                                     op: binop_to_cmpop(*op),
@@ -532,7 +641,7 @@ impl<'a> Lowerer<'a> {
                             });
                             // Perform the operation.
                             let tmp = self.new_temp(target.ty.clone());
-                            if is_comparison(*op) {
+                            if op.is_comparison() {
                                 self.emit(MirInst::Compare {
                                     dest: tmp,
                                     op: binop_to_cmpop(*op),
@@ -555,8 +664,20 @@ impl<'a> Lowerer<'a> {
                             });
                         }
                     }
+                    // An Array element is updated in its own slot.
+                    HirExprKind::Index { object, index }
+                        if !target.is_unaddressable_var_place() =>
+                    {
+                        let Some(addr) = self.element_slot_addr(object, index, &target.ty)? else {
+                            return Ok(None);
+                        };
+                        return self.compound_assign_through(addr, target, *op, value, rhs_val);
+                    }
                     _ => {
-                        // Other compound assignment targets (index, etc.) — skip for now
+                        return Err(format!(
+                            "`{op:?}=` cannot update this place in place (only a variable, a \
+                             field or an Array element can be); write `x = x {op:?} v` instead"
+                        ));
                     }
                 }
                 Ok(None)
@@ -565,5 +686,120 @@ impl<'a> Lowerer<'a> {
             // ── Construct (struct/class instantiation) ──────────────
             _ => unreachable!("lower_assign: dispatched to wrong helper"),
         }
+    }
+
+    /// The address a slot-addressed `&var T` variable holds: its own local,
+    /// or, inside a closure, the capture's storage (`var_storage_addr`: the
+    /// cell or caller's address a by-reference capture holds, or the
+    /// closure's own slot for a String it owns).
+    pub(super) fn refmut_slot_addr(&mut self, def_id: DefId) -> Result<LocalId, String> {
+        if self.capture_map.contains_key(&def_id) {
+            return self
+                .var_storage_addr(def_id)?
+                .ok_or_else(|| "a captured `&var` variable has no storage".to_string());
+        }
+        self.def_to_local
+            .get(&def_id)
+            .copied()
+            .ok_or_else(|| "a `&var` variable has no local storage".to_string())
+    }
+
+    /// `s = v` on a `&var String` replaces the caller's String: free the
+    /// buffer it held, which nothing else owns. `value` is already lowered;
+    /// a self-assignment (`s = s`) keeps the buffer it stores.
+    fn free_replaced_refmut_string(
+        &mut self,
+        target: &HirExpr,
+        value: &HirExpr,
+    ) -> Result<(), String> {
+        let HirExprKind::VarRef(def_id) = &target.kind else {
+            return Ok(());
+        };
+        if !self.refmut_slots.contains(def_id) || !target.ty.is_string_form() {
+            return Ok(());
+        }
+        if matches!(&value.kind, HirExprKind::VarRef(v) if v == def_id) {
+            return Ok(());
+        }
+        let addr = self.refmut_slot_addr(*def_id)?;
+        let old = self.load_through_refmut(addr, &Ty::String, &Ty::String);
+        let symbols = self.symbols;
+        let free = super::super::drops::heap_free_call(self.fn_mut(), symbols, &Ty::String, old)
+            .expect("String has a free helper");
+        for inst in free {
+            self.emit(inst);
+        }
+        Ok(())
+    }
+
+    /// `x op= v` on a place reached through `addr`, the address of its
+    /// storage (a slot-addressed `&var T` variable, an Array element): read
+    /// the `T` through the address, apply the operator at the pointee's own
+    /// type (a float adds as a float, not as its bit pattern) and store the
+    /// `T` back. `s += t` on a String appends in place through the address
+    /// (`String#push_str`).
+    /// The callee `s += t` appends through: the `String#push_str`
+    /// declaration, resolved to its C symbol.
+    fn string_append_callee(&self) -> String {
+        self.resolve_ffi_alias_callee("String_push_str".to_string())
+    }
+
+    fn compound_assign_through(
+        &mut self,
+        addr: LocalId,
+        target: &HirExpr,
+        op: BinOp,
+        value: &HirExpr,
+        rhs_val: MirValue,
+    ) -> Result<Option<LocalId>, String> {
+        let pointee = target.ty.peel_refs().clone();
+        if pointee.is_string_form() {
+            if !(matches!(op, BinOp::Add) && value.ty.is_string_form()) {
+                return Err(format!(
+                    "`{op:?}=` is not defined on a `&var String`; only `+=` appends"
+                ));
+            }
+            let callee = self.string_append_callee();
+            self.fn_mut().record_view(addr, View::Assignee);
+            self.emit(MirInst::Call {
+                dest: None,
+                callee,
+                args: vec![MirValue::Use(addr), rhs_val],
+            });
+            return Ok(None);
+        }
+        let cur = self.load_through_refmut(addr, &pointee, &pointee);
+        let rhs_val = match rhs_val {
+            MirValue::Use(src)
+                if self.fn_ref().locals[src as usize].ty.peel_refs() == &pointee
+                    && self.fn_ref().locals[src as usize].ty != pointee =>
+            {
+                let narrowed = self.new_temp(pointee.clone());
+                self.emit(MirInst::Copy {
+                    dest: narrowed,
+                    src,
+                });
+                MirValue::Use(narrowed)
+            }
+            other => other,
+        };
+        let result = self.new_temp(pointee.clone());
+        if op.is_comparison() {
+            self.emit(MirInst::Compare {
+                dest: result,
+                op: binop_to_cmpop(op),
+                lhs: MirValue::Use(cur),
+                rhs: rhs_val,
+            });
+        } else {
+            self.emit(MirInst::BinOp {
+                dest: result,
+                op,
+                lhs: MirValue::Use(cur),
+                rhs: rhs_val,
+            });
+        }
+        self.store_through_refmut(addr, &pointee, MirValue::Use(result));
+        Ok(None)
     }
 }

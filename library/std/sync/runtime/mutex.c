@@ -172,7 +172,7 @@ int8_t ruxen_mutex_guard_held(int64_t guard_ptr) {
 /* MutexGuard drop — release the lock ONLY. The malloc'd
  * RuxenMutexGuard spine is freed by the MIR scope-exit pass via
  * `ruxen_dealloc` once `Mutex_lock_raw` is whitelisted as a fresh-
- * alloc callee (see `compiler/ruxen_core/src/mir/lower/drops.rs`
+ * alloc callee (see `compiler/ruxen_core/src/mir/lower/drops/`
  * FRESH_ALLOC_CALLEES). Doing the free here too would double-free
  * the spine; the C side strictly handles the pthread side effect. */
 void ruxen_mutex_guard_drop(int64_t guard_ptr) {

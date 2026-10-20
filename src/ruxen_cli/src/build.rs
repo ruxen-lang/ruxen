@@ -4,13 +4,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use ruxen_core::borrow_check;
-use ruxen_core::codegen;
-use ruxen_core::lexer::Lexer;
-use ruxen_core::mir;
+use ruxen_core::codegen::target::ResolvedTarget;
+use ruxen_core::codegen::{self, Backend};
+use ruxen_core::driver::Options;
+use ruxen_core::mir::nodes::MirProgram;
 use ruxen_core::module_loader::{ModuleLoader, SourceBundle};
-use ruxen_core::parser::Parser;
-use ruxen_core::typeck;
+use ruxenc::compile;
 
 use crate::lock::LockFile;
 use crate::manifest::Manifest;
@@ -36,8 +35,9 @@ pub fn build(
     let target_str: Option<String> = target
         .map(|s| s.to_string())
         .or_else(|| manifest.build.as_ref().and_then(|b| b.target.clone()));
-    let resolved_target =
-        ruxen_core::codegen::target::ResolvedTarget::resolve(target_str.as_deref())?;
+    let resolved_target = ResolvedTarget::resolve(target_str.as_deref())?;
+    let opt_level = manifest.opt_level(release).map(|level| level.to_string());
+    let backend = Backend::select(release, None, opt_level.as_deref(), &resolved_target)?;
 
     // Advisory: dev-dependencies are parsed + survive `ruxen add --dev`
     // / `ruxen remove`, but `ruxen build` does not yet compile them
@@ -151,9 +151,10 @@ pub fn build(
                 &dep.name,
                 &dep.version,
                 &rlib_path,
-                release,
+                backend,
                 &extern_libs,
                 &dep_deps,
+                &resolved_target,
             )?;
             extern_libs.push((dep.name.clone(), rlib_path));
         }
@@ -177,9 +178,10 @@ pub fn build(
             &package.name,
             &package.version,
             &rlib_path,
-            release,
+            backend,
             &extern_libs,
             &dep_source_dirs,
+            &resolved_target,
         )?;
     } else {
         // Binary: produce an executable
@@ -193,7 +195,7 @@ pub fn build(
             &project_dir,
             &manifest,
             &output_path,
-            release,
+            backend,
             &extern_libs,
             &dep_source_dirs,
             &resolved_target,
@@ -223,7 +225,7 @@ pub fn run(release: bool, target: Option<&str>, args: Vec<String>) -> Result<(),
     // §3 non-goal: `ruxen run --target <non-host>` does not launch an emulator.
     // Resolve and reject up front with an actionable message rather than
     // building a binary the host can't execute.
-    let resolved_target = ruxen_core::codegen::target::ResolvedTarget::resolve(target)?;
+    let resolved_target = ResolvedTarget::resolve(target)?;
     if !resolved_target.is_host() {
         return Err(format!(
             "cannot run a binary cross-compiled for '{}' on the host. \
@@ -255,7 +257,8 @@ pub fn run(release: bool, target: Option<&str>, args: Vec<String>) -> Result<(),
     Ok(())
 }
 
-/// `ruxen check [--target <triple>]` — type-check without codegen.
+/// `ruxen check [--target <triple>]` — run the front end `ruxen build` runs
+/// (type, borrow and loan checks, MIR lowering) without codegen.
 pub fn check(target: Option<&str>) -> Result<(), String> {
     let start = Instant::now();
     let project_dir = find_project_root()?;
@@ -263,14 +266,12 @@ pub fn check(target: Option<&str>) -> Result<(), String> {
     manifest.validate()?;
     let package = manifest.require_package()?;
 
-    // Validate the triple up front (an invalid `--target` is a hard error even
-    // in `check`). Codegen is not run; the resolved target is reserved for
-    // cfg(...) gating (tier 4.01).
+    // The target picks the stdlib the program is checked against, as in
+    // `ruxen build`; an invalid `--target` is a hard error.
     let target_str: Option<String> = target
         .map(|s| s.to_string())
         .or_else(|| manifest.build.as_ref().and_then(|b| b.target.clone()));
-    let _resolved_target =
-        ruxen_core::codegen::target::ResolvedTarget::resolve(target_str.as_deref())?;
+    let resolved_target = ResolvedTarget::resolve(target_str.as_deref())?;
 
     let entry = project_dir.join(manifest.entry_point());
     if !entry.exists() {
@@ -281,10 +282,11 @@ pub fn check(target: Option<&str>) -> Result<(), String> {
     let combined =
         gather_project_bundle(&project_dir, &entry, &dep_source_dirs, &package.name)?.source;
 
-    if let Err(e) = check_single_file(&combined, &entry) {
-        eprintln!("{}", e);
-        return Err("type checking failed".to_string());
-    }
+    front_end(
+        &combined,
+        &entry,
+        &Options::for_target(&resolved_target, false),
+    )?;
 
     let elapsed = start.elapsed();
     println!(
@@ -339,124 +341,13 @@ pub fn find_target_root(project_dir: &Path) -> PathBuf {
     project_dir.to_path_buf()
 }
 
-/// Compile a single .rx file through the full pipeline: lex → parse → typecheck → borrow check → MIR → codegen.
-fn compile_single_file(source: &str, _file_path: &Path, release: bool) -> Result<Vec<u8>, String> {
-    // Phase 1: Lexing
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().map_err(|diagnostics| {
-        diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    // Phase 2: Parsing
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().map_err(|diagnostics| {
-        diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    // Phase 3: Type checking
-    let type_result = typeck::type_check(&program);
-    let has_errors = type_result
-        .diagnostics
-        .iter()
-        .any(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error);
-
-    if has_errors {
-        let msgs: Vec<String> = type_result
-            .diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect();
-        return Err(msgs.join("\n"));
-    }
-
-    // Phase 4: Borrow checking
-    let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
-    if !borrow_errors.is_empty() {
-        let msgs: Vec<String> = borrow_errors.iter().map(|e| e.to_string()).collect();
-        return Err(msgs.join("\n"));
-    }
-
-    // Phase 5: MIR lowering
-    let mut lowerer = mir::lower::Lowerer::new(&type_result.symbols);
-    let mir_program = lowerer
-        .lower_program(&type_result.program)
-        .map_err(|e| format!("MIR lowering error: {}", e))?;
-
-    // Phase 6: Code generation
-    let backend = if release {
-        #[cfg(feature = "llvm")]
-        {
-            codegen::Backend::Llvm { opt_level: 2 }
-        }
-        #[cfg(not(feature = "llvm"))]
-        {
-            codegen::Backend::Cranelift
-        }
-    } else {
-        codegen::Backend::Cranelift
-    };
-
-    let object_bytes = match backend {
-        codegen::Backend::Cranelift => {
-            let mut cg = codegen::cranelift::CodeGen::new()?;
-            cg.compile_program(&mir_program)?;
-            cg.finish()?
-        }
-        #[cfg(feature = "llvm")]
-        codegen::Backend::Llvm { opt_level } => {
-            let mut cg = codegen::llvm::CodeGen::new(opt_level)?;
-            cg.compile_program(&mir_program)?;
-            cg.finish()?
-        }
-    };
-
-    Ok(object_bytes)
-}
-
-/// Type-check a single file (no codegen).
-fn check_single_file(source: &str, file_path: &Path) -> Result<(), String> {
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().map_err(|diagnostics| {
-        diagnostics
-            .iter()
-            .map(|d| format!("{}: {}", file_path.display(), d))
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().map_err(|diagnostics| {
-        diagnostics
-            .iter()
-            .map(|d| format!("{}: {}", file_path.display(), d))
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    let type_result = typeck::type_check(&program);
-    let has_errors = type_result
-        .diagnostics
-        .iter()
-        .any(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error);
-
-    if has_errors {
-        let msgs: Vec<String> = type_result
-            .diagnostics
-            .iter()
-            .map(|d| format!("{}: {}", file_path.display(), d))
-            .collect();
-        return Err(msgs.join("\n"));
-    }
-
-    Ok(())
+/// Run the front end on `source`, the bundle whose entry file is `entry`,
+/// and take its MIR program. Errors (and, on success, warnings) carry the
+/// entry file's path, as `ruxen compile` prints them.
+fn front_end(source: &str, entry: &Path, options: &Options) -> Result<MirProgram, String> {
+    let path = entry.to_string_lossy();
+    let (_, mir_program) = compile::front_end(&compile::parse(source, &path)?, &path, options)?;
+    Ok(mir_program)
 }
 
 /// Gather all source files in a project into a single combined source string.
@@ -664,7 +555,8 @@ fn transitive_dep_source_dirs(
         .collect()
 }
 
-/// Compile a dependency piece into an .rlib file.
+/// Compile a dependency piece into an .rlib file, checked against
+/// `target`'s stdlib.
 ///
 /// `dep_source_dirs` carries the (topologically-sorted) source dirs of
 /// every package this piece depends on, flat-merged ahead of its own
@@ -676,9 +568,10 @@ fn compile_piece(
     name: &str,
     version: &str,
     rlib_path: &Path,
-    release: bool,
+    backend: Backend,
     _extern_libs: &[(String, PathBuf)],
     dep_source_dirs: &[PathBuf],
+    target: &ResolvedTarget,
 ) -> Result<(), String> {
     let entry_file = if source_dir.join("src/lib.rx").is_file() {
         source_dir.join("src/lib.rx")
@@ -687,7 +580,9 @@ fn compile_piece(
     };
     let bundle = gather_project_bundle(source_dir, &entry_file, dep_source_dirs, name)?;
     let combined = bundle.source;
-    let object_bytes = compile_single_file(&combined, &entry_file, release)?;
+    let options = Options::for_target(target, false);
+    let object_bytes =
+        backend.emit_object(&front_end(&combined, &entry_file, &options)?, target)?;
     let metadata = TypeMetadata {
         compiler_version: rlib::COMPILER_VERSION.to_string(),
         name: name.to_string(),
@@ -706,10 +601,10 @@ fn compile_project(
     project_dir: &Path,
     manifest: &Manifest,
     output_path: &Path,
-    release: bool,
+    backend: Backend,
     extern_libs: &[(String, PathBuf)],
     dep_source_dirs: &[PathBuf],
-    target: &ruxen_core::codegen::target::ResolvedTarget,
+    target: &ResolvedTarget,
 ) -> Result<(), String> {
     let entry = project_dir.join(manifest.entry_point());
     if !entry.exists() {
@@ -719,85 +614,7 @@ fn compile_project(
     let package_name = manifest.require_package()?.name.clone();
     let source = gather_project_bundle(project_dir, &entry, dep_source_dirs, &package_name)?.source;
 
-    // Phase 1: Lex
-    let mut lexer = Lexer::new(&source);
-    let tokens = lexer.tokenize().map_err(|diagnostics| {
-        diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    // Phase 2: Parse
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().map_err(|diagnostics| {
-        diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    // Phase 3: Type check. On the wasm target use the curated stdlib bootstrap
-    // (heap-core subset) — the full bootstrap drags in `dispatch runtime` stdlib
-    // (TimeSleepFuture) the LLVM/wasm backend can't lower (tier 4.09). Mirrors
-    // the single-file `ruxen compile` wasm path.
-    let type_result = if target.is_wasm() {
-        typeck::type_check_wasm(&program)
-    } else {
-        typeck::type_check(&program)
-    };
-    let has_errors = type_result
-        .diagnostics
-        .iter()
-        .any(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error);
-
-    if has_errors {
-        let msgs: Vec<String> = type_result
-            .diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect();
-        return Err(msgs.join("\n"));
-    }
-
-    // Phase 4: Borrow check
-    let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
-    if !borrow_errors.is_empty() {
-        let msgs: Vec<String> = borrow_errors.iter().map(|e| e.to_string()).collect();
-        return Err(msgs.join("\n"));
-    }
-
-    // Phase 5: MIR lowering
-    let mut lowerer = mir::lower::Lowerer::new(&type_result.symbols);
-    let mir_program = lowerer
-        .lower_program(&type_result.program)
-        .map_err(|e| format!("MIR lowering error: {}", e))?;
-
-    // Phase 6: Code generation → link → executable
-    // §5.8: a target Cranelift can't emit (wasm/embedded) forces LLVM even in
-    // debug. Otherwise: LLVM for --release (when built), Cranelift for debug.
-    let force_llvm = target.requires_llvm_backend();
-    let backend = if release || force_llvm {
-        #[cfg(feature = "llvm")]
-        {
-            codegen::Backend::Llvm { opt_level: 2 }
-        }
-        #[cfg(not(feature = "llvm"))]
-        {
-            if force_llvm {
-                return Err(format!(
-                    "target '{}' requires the LLVM backend, which this build of \
-                     ruxen was not compiled with (rebuild with --features llvm).",
-                    target.canonical()
-                ));
-            }
-            codegen::Backend::Cranelift
-        }
-    } else {
-        codegen::Backend::Cranelift
-    };
+    let mir_program = front_end(&source, &entry, &Options::for_target(target, false))?;
 
     // Collect link flags from extern libs.  Wrap each rlib extraction
     // with rich error context — the dep name and a concrete fix hint

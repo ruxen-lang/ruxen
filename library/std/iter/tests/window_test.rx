@@ -7,7 +7,7 @@ end
 
 def text_head(c: &Array[String]) -> String
   match c.first
-    Some(v) -> v
+    Some(v) -> v.clone
     nil     -> "?"
   end
 end
@@ -109,6 +109,6 @@ Tester.describe("Enumerable windows") do |t: &var Tester|
     t.expect(a.take(2).join(",")).to_eq("alpha,beta")
     t.expect(a.take_while { |s| s.size < 5 }.size).to_eq(0)
     t.expect(a.drop_while { |s| s.size < 5 }.size).to_eq(3)
-    t.expect(a.flat_map { |s| [s, s] }.size).to_eq(6)
+    t.expect(a.flat_map { |s| [s.clone, s.clone] }.size).to_eq(6)
   end
 end

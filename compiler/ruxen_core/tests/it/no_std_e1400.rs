@@ -4,21 +4,22 @@
 //! over typed HIR. A heap construction in a no_std unit → E1400; a pure
 //! scalar/arithmetic unit → clean.
 
-use ruxen_core::lexer::Lexer;
-use ruxen_core::parser::Parser;
-use ruxen_core::{no_std, typeck};
+use ruxen_core::codegen::target::ResolvedTarget;
+use ruxen_core::driver::{self, Options, Stage};
 
-/// Type-check `src` with NO stdlib bootstrap (the no_std reality) and return
-/// the E1400 diagnostics from the no_std validator.
+/// Type-check `src` as a no_std unit (no stdlib bootstrap) and return its
+/// E1400 diagnostics.
 fn e1400_codes(src: &str) -> Vec<String> {
-    let mut lexer = Lexer::new(src);
-    let tokens = lexer.tokenize().expect("lex");
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().expect("parse");
-    let tr = typeck::type_check_with_bootstrap(&program, &[]);
-    no_std::validate(&tr.program)
-        .into_iter()
-        .filter_map(|d| d.code)
+    let program = driver::parse(src).expect("parse");
+    let options = Options {
+        stop_after: Stage::Typeck,
+        ..Options::for_target(&ResolvedTarget::host(), true)
+    };
+    driver::check(&program, &options)
+        .diagnostics()
+        .iter()
+        .filter_map(|d| d.code.clone())
+        .filter(|c| c == "E1400")
         .collect()
 }
 

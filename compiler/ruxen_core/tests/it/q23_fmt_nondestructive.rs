@@ -107,7 +107,9 @@ fn top_level_describe_becomes_implicit_main_for_compile() {
         panic!("compile pre-pass should replace the expression with main");
     };
     assert_eq!(main.name, "main");
-    assert_eq!(main.body.statements.len(), 1);
+    // The moved expression, then the closing `nil` (the last statement is
+    // not `main`'s value).
+    assert_eq!(main.body.statements.len(), 2);
 }
 
 /// Negative: a genuine top-level garbage token sequence (not a clean
@@ -131,9 +133,10 @@ fn top_level_garbage_still_errors() {
 //     compiling code into a documented segfault shape. These round-trip pins
 //     lock the three shapes the fix preserves.
 
-/// (Q30) A no-arg closure header `{ || … }` must survive formatting — the AST
-/// can't tell it from a no-pipe `{ … }` block, and emitting the bare-brace form
-/// is a documented GUI-stack crash shape (the closure re-parses ambiguously).
+/// (Q30) A no-arg closure value `{ || … }` must not lose its header — the bare
+/// `{ … }` form is a documented GUI-stack crash shape (it re-parses as a
+/// block). `fmt` prints a bare closure value as a lambda, `->() { … }`
+/// (`docs/decisions/blocks-procs-lambdas.md`), which cannot be misread.
 #[test]
 fn q30_no_arg_closure_header_preserved() {
     let src =
@@ -141,14 +144,14 @@ fn q30_no_arg_closure_header_preserved() {
     let r = fmt(src);
     assert!(r.errors.is_empty(), "format errored: {:?}", r.errors);
     assert!(
-        r.output.contains("{ || App.build"),
-        "no-arg closure header `||` dropped; output:\n{}",
+        r.output.contains("->() { App.build"),
+        "no-arg closure value not printed as `->() {{ … }}`; output:\n{}",
         r.output
     );
-    // The inner builder block must stay a BRACE block, never auto-convert to
-    // `do…end` (a free-function `do…end` block-arg is a crash shape here).
+    // The inner closure argument must stay a brace closure, never auto-convert
+    // to `do…end` (a free-function `do…end` block-arg is a crash shape here).
     assert!(
-        r.output.contains("App.build({ |ui, root|"),
+        r.output.contains("App.build(->(ui, root) {"),
         "brace block-arg rewritten (do…end?); output:\n{}",
         r.output
     );
@@ -179,12 +182,13 @@ fn q30_zero_arg_call_keeps_parens() {
 }
 
 /// (Q30) The full builder shape both GUI agents wrote — closure header, brace
-/// block-arg, and zero-arg call together — round-trips byte-for-byte.
+/// closure argument, and zero-arg call together — round-trips byte-for-byte in
+/// its canonical lambda spelling.
 #[test]
 fn q30_builder_shape_round_trips() {
     let src = concat!(
         "def main\n",
-        "  let app = { || App.build({ |ui, root| root.text(\"hi\") }) }\n",
+        "  let app = ->() { App.build(->(ui, root) { root.text(\"hi\") }) }\n",
         "  let h = row_height()\n",
         "  app\n",
         "end\n",

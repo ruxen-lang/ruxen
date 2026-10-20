@@ -1,20 +1,16 @@
 //! Borrow-check regression pins for reference reborrow + move-capture
-//! (gui-stack-v1-issues Q12 / Q4). These exercise the *diagnostics* pass
-//! (the e2e harness does not borrow-check), so the program is parsed and
-//! type-checked but not run — an inline source string is appropriate here.
+//! (gui-stack-v1-issues Q12 / Q4). These exercise the diagnostics, so the
+//! program goes through the front end but is not run: an inline source
+//! string is appropriate here.
 
-use ruxen_core::borrow_check;
-use ruxen_core::lexer::Lexer;
-use ruxen_core::parser::Parser;
-use ruxen_core::typeck;
+use ruxen_core::driver;
 
+/// The borrow errors the front end reports for `source` (`driver::check`:
+/// the borrow check, then the MIR loan check).
 fn borrow_errors(source: &str) -> Vec<String> {
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().expect("lexer failed");
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().expect("parser failed");
-    let type_result = typeck::type_check(&program);
-    borrow_check::borrow_check(&type_result.program, &type_result.symbols)
+    let program = driver::parse(source).expect("parse");
+    driver::check(&program, &driver::Options::default())
+        .borrow_errors
         .iter()
         .map(|e| e.to_string())
         .collect()
@@ -150,17 +146,18 @@ end
 
 /// F-20 — the receiver mode comes from the method typeck selected, not
 /// from its name. `Array#sort` is a `.rx` method that returns a sorted copy,
-/// so calling it while a closure holds a shared borrow of the array is fine.
+/// so calling it while a shared borrow of the array is live is fine.
 /// It used to be reported as a mutation (E1002) because `sort` is on the list
-/// of mutating builtin names.
+/// of mutating builtin names. (The borrow is a `&v` view: a closure literal is
+/// a lambda now and would own `v`.)
 #[test]
 fn non_mutating_builtin_method_named_like_a_mutator_is_not_a_mutation() {
     let source = "\
 def main
   let v = [3, 1, 2]
-  let size_of = { || v.size }
+  let view = &v
   let sorted = v.sort
-  puts \"#{size_of.()} #{sorted.size}\"
+  puts \"#{view.size} #{sorted.size}\"
 end
 ";
     let errors = borrow_errors(source);

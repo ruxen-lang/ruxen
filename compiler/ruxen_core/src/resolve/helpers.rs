@@ -5,6 +5,7 @@ use crate::lexer::token::Span;
 use crate::parser::ast::{self, Visibility};
 
 use super::const_helpers;
+use super::scope::ScopeKind;
 use super::symbols::*;
 use super::Resolver;
 
@@ -39,6 +40,35 @@ impl Resolver {
                 ast::GenericParam::Lifetime { .. } => None,
             })
             .collect()
+    }
+
+    /// The target of `type Name[P…] = T` with the alias's own generic
+    /// parameters in scope (as type parameters), and those parameters' names
+    /// in order: what `DefKind::TypeAlias` stores. Shared by the type
+    /// registration pass and the HIR pass.
+    pub(super) fn resolve_alias_target(&mut self, ta: &ast::TypeAliasDef) -> (Ty, Vec<String>) {
+        if ta.generic_params.is_none() {
+            return (self.resolve_type_expr(&ta.type_expr), Vec::new());
+        }
+        let generic_params = self.resolve_generic_params(&ta.generic_params);
+        self.scopes.push(ScopeKind::Class);
+        for gp in &generic_params {
+            let gp_def = self.symbols.define(
+                gp.name.clone(),
+                DefKind::TypeParam {
+                    bounds: gp.bounds.clone(),
+                },
+                Visibility::Private,
+                gp.span.clone(),
+            );
+            self.scopes.insert_type(gp.name.clone(), gp_def);
+        }
+        let target = self.resolve_type_expr(&ta.type_expr);
+        self.scopes.pop();
+        (
+            target,
+            generic_params.into_iter().map(|gp| gp.name).collect(),
+        )
     }
 
     pub(super) fn resolve_generic_params(

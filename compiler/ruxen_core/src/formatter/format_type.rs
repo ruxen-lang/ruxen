@@ -70,41 +70,15 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
         TypeExpr::Function {
             params,
             return_type,
-            bracketed,
+            spelling,
             span: _,
         } => {
-            let param_docs: Vec<Doc> = params
-                .iter()
-                .map(|p| format_type_expr(p, _comments))
-                .collect();
-            let params_doc = if param_docs.is_empty() {
-                text("()")
-            } else {
-                group(concat(vec![
-                    text("("),
-                    nest(
-                        INDENT_WIDTH,
-                        concat(vec![
-                            softline(),
-                            join(concat(vec![text(","), line()]), param_docs),
-                        ]),
-                    ),
-                    softline(),
-                    text(")"),
-                ]))
-            };
-            let sig = concat(vec![
-                params_doc,
-                text(" -> "),
-                format_type_expr(return_type, _comments),
-            ]);
-            if *bracketed {
-                // Canonical block signature `Fn[(T…) -> R]` — preserve the
-                // square-bracket spelling the author wrote (ADR D8). Never
-                // rewrite it to the paren form.
-                concat(vec![text("Fn["), sig, text("]")])
-            } else {
-                concat(vec![text("Fn"), sig])
+            let sig = format_fn_signature(params, return_type, _comments);
+            // Each spelling as written (ADR D8); never normalized.
+            match spelling {
+                FnTypeSpelling::Bracket => concat(vec![text("Fn["), sig, text("]")]),
+                FnTypeSpelling::Paren => concat(vec![text("Fn"), sig]),
+                FnTypeSpelling::Signature => sig,
             }
         }
 
@@ -137,6 +111,35 @@ pub fn format_type_expr(ty: &TypeExpr, _comments: &CommentMap) -> Doc {
             super::format_expr::format_expr(expr, _comments)
         }
     }
+}
+
+/// `(T…) -> R`, the signature every function type spells the same way.
+fn format_fn_signature(params: &[TypeExpr], return_type: &TypeExpr, comments: &CommentMap) -> Doc {
+    let param_docs: Vec<Doc> = params
+        .iter()
+        .map(|p| format_type_expr(p, comments))
+        .collect();
+    let params_doc = if param_docs.is_empty() {
+        text("()")
+    } else {
+        group(concat(vec![
+            text("("),
+            nest(
+                INDENT_WIDTH,
+                concat(vec![
+                    softline(),
+                    join(concat(vec![text(","), line()]), param_docs),
+                ]),
+            ),
+            softline(),
+            text(")"),
+        ]))
+    };
+    concat(vec![
+        params_doc,
+        text(" -> "),
+        format_type_expr(return_type, comments),
+    ])
 }
 
 pub fn format_type_path(path: &TypePath) -> Doc {

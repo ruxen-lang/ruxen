@@ -9,6 +9,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod check_front_end;
 mod cross_package_mono;
 mod dep_visibility;
 mod explain_long_form;

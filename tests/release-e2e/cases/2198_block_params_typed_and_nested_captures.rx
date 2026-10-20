@@ -1,0 +1,29 @@
+# Blocks, procs and lambdas follow-ups.
+# 1. A trailing block takes its parameter types from the callee's
+#    `Fn[...]` parameter: `n` is an Int even though `puts(n)` alone would
+#    have pinned it to `String` (it segfaulted, forwarded or not).
+# 2. A closure nested in an owning lambda makes the lambda own what it
+#    reads; the lambda frees it once however often it runs. The nested
+#    lambda owns a clone made in the outer body: capturing the outer
+#    lambda's own capture `s` would move it out (E1019).
+def inner(&block: Fn[(Int) -> nil])
+  yield 1
+  yield 2
+end
+
+def outer(&block: Fn[(Int) -> nil])
+  inner(&block)
+end
+
+outer { |n| puts n }
+outer do |n|
+  puts n + 10
+end
+s = "xyz"
+owner = -> do
+  mine = s.clone
+  nested = -> { mine.size }
+  nested.()
+end
+puts owner.()
+puts owner.()

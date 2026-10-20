@@ -81,6 +81,37 @@ Tester.describe("BufWriter.File") do |t: &var Tester|
     t.expect(back).to_eq("persisted")
     FS.remove_file(&path).expect!("remove")
   end
+
+  t.it("flushes on into_inner and hands back a writable File") do
+    path = "/tmp/ruxen_std_bufwriter_into_inner.txt"
+    f = File.create(path).expect!("create")
+    bw = BufWriter.File.new(f)
+    bw.write_str("buffered ").expect!("write_str")
+    inner = bw.into_inner
+    inner.write_str("direct").expect!("write through the inner File")
+    back = FS.read_to_string(path).expect!("read")
+    t.expect(back).to_eq("buffered direct")
+    FS.remove_file(path).expect!("remove")
+  end
+
+  t.it("flushes on into_inner and hands back a writable TcpStream") do
+    l = TcpListener.bind("127.0.0.1:0").expect!("bind")
+    addr = l.local_addr.expect!("local_addr")
+    client = TcpStream.connect(addr).expect!("connect")
+    server = l.accept.expect!("accept")
+    bw = BufWriter.Tcp.new(client)
+    bw.write_str("a").expect!("write_str")
+    inner = bw.into_inner
+    inner.write("b".bytes).expect!("write through the inner TcpStream")
+    buf = Array[Int].new
+    got = 0
+    while got < 2
+      got = got + server.read(buf).expect!("read")
+    end
+    t.expect(buf.size).to_eq(2)
+    t.expect(buf[0]).to_eq(97)
+    t.expect(buf[1]).to_eq(98)
+  end
 end
 
 # The peer runs in this process: on loopback, connect completes against the

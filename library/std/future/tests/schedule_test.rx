@@ -141,7 +141,7 @@ end
 
 Tester.describe("AsyncRetry") do |t: &var Tester|
   t.it("backs off exponentially on the test clock and frees its timers") do
-    TestClock.install
+    clock = TestClock.install
     var cx = Context.executor
     var src = Attempts.new(3, 7)
     var rf = AsyncRetry.retry(Schedule.exponential(Duration.from_millis(50)).max_attempts(5), { || src.make_next })
@@ -153,16 +153,14 @@ Tester.describe("AsyncRetry") do |t: &var Tester|
     TestClock.advance(Duration.from_millis(200))
     t.expect(poll_phase(&var rf, &var cx)).to_eq(7)
     t.expect(ruxen_reactor_registered_count()).to_eq(0)
-    TestClock.uninstall
   end
 
   t.it("dropping a retry mid-backoff frees its timer") do
-    TestClock.install
+    clock = TestClock.install
     var cx = Context.executor
     var src = Attempts.new(99, 0)
     t.expect(park_then_drop(&var src, &var cx)).to_eq(1)
     t.expect(ruxen_reactor_registered_count()).to_eq(0)
-    TestClock.uninstall
   end
 
   t.it("while_input stops at the first error it rejects") do
@@ -182,7 +180,7 @@ Tester.describe("AsyncRetry") do |t: &var Tester|
   end
 
   t.it("a jittered backoff never exceeds the base delay") do
-    TestClock.install
+    clock = TestClock.install
     var cx = Context.executor
     var src = Attempts.new(1, 8)
     var rf = AsyncRetry.retry(Schedule.exponential(Duration.from_millis(50)).max_attempts(2).jittered, { || src.make_next })
@@ -190,6 +188,5 @@ Tester.describe("AsyncRetry") do |t: &var Tester|
     TestClock.advance(Duration.from_millis(50))
     t.expect(poll_phase(&var rf, &var cx)).to_eq(8)
     t.expect(ruxen_reactor_registered_count()).to_eq(0)
-    TestClock.uninstall
   end
 end

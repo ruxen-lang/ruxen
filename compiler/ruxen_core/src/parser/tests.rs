@@ -2336,4 +2336,35 @@ end";
             ReplParseResult::Complete(ReplInput::Expression(_))
         ));
     }
+
+    /// The canonical closure type `Fn[(A) -> R]` parses in every type
+    /// position, not only after `&block:` (spec section 6, I-22), and the
+    /// formatter keeps the bracket spelling.
+    #[test]
+    fn bracket_closure_type_parses_in_any_type_position() {
+        let source =
+            "def run(build: Fn[(&var Int, String) -> nil], f: Fn[() -> Int]) -> nil\nend\n";
+        let program = parse(source);
+        let TopLevelItem::Function(func) = &program.items[0] else {
+            panic!("expected a function");
+        };
+        for param in &func.params {
+            assert!(
+                matches!(
+                    param.type_expr,
+                    TypeExpr::Function {
+                        spelling: FnTypeSpelling::Bracket,
+                        ..
+                    }
+                ),
+                "{:?}",
+                param.type_expr
+            );
+        }
+        let formatted = crate::formatter::format(source).output;
+        assert!(
+            formatted.contains("build: Fn[(&var Int, String) -> nil]"),
+            "{formatted}"
+        );
+    }
 }

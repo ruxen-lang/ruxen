@@ -36,7 +36,7 @@ class FooBar[T]
 
   def init(value: T) { self.payload = value }
 
-  def get -> T { self.payload }
+  def get -> &T { self.payload }
 
   include Send
 

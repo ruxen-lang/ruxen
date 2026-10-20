@@ -7,21 +7,20 @@
 //! program that includes all prior `def`s as top-level items and replays
 //! all prior `let`s inside the synthetic wrapper function's body. This
 //! gives the typechecker the full scope and lets the JIT resolve
-//! previously-defined functions by name (already-compiled functions are
-//! skipped on the JIT side via `JITCodeGen::is_declared`).
+//! previously-defined functions by name (`JITCodeGen::compile_program`
+//! skips the functions an earlier input compiled).
 
 use ruxen_core::diagnostics::{Diagnostic, DiagnosticLevel};
+use ruxen_core::driver::{self, Frontend, Options, Stage};
 use ruxen_core::hir::types::Ty;
 use ruxen_core::lexer::Lexer;
-use ruxen_core::mir::lower::Lowerer;
-use ruxen_core::mir::nodes::MirFunction;
+use ruxen_core::mir::nodes::MirProgram;
 use ruxen_core::parser::ast::{
     Block, Expr, ExprKind, FuncDef, LetBinding, Pattern, Program, ReplInput, ReplParseResult,
     Statement, TopLevelItem, Visibility,
 };
 use ruxen_core::parser::visit::{walk_expr, Visit};
 use ruxen_core::parser::Parser;
-use ruxen_core::typeck;
 use std::collections::HashSet;
 
 use crate::capture;
@@ -616,15 +615,9 @@ fn eval_statement(session: &mut ReplSession, raw_input: &str, stmt: Statement) -
                 let probe_fn = format!("__repl_probe_{}", session.input_counter);
                 let probe_wrapper =
                     build_program(session, &probe_fn, probe_replay, probe_user, &span);
-                let probe_result = typeck::type_check(&probe_wrapper);
-                let probe_ok = probe_result
-                    .diagnostics
-                    .iter()
-                    .all(|d| d.level != DiagnosticLevel::Error);
-                if probe_ok {
-                    if let Some(let_ty) =
-                        find_let_type_in_wrapper(&probe_result.program, &probe_fn, name)
-                    {
+                let probe = check(&probe_wrapper, Stage::Typeck);
+                if !probe.has_errors() {
+                    if let Some(let_ty) = find_let_type_in_wrapper(probe.hir(), &probe_fn, name) {
                         // Either the LetBinding-level `mutable`
                         // (top-level `var name = …` form) or the
                         // pattern's own `mutable` (the inline `let
@@ -747,12 +740,7 @@ fn eval_top_level(session: &mut ReplSession, raw_input: &str, item: TopLevelItem
                 span: item_span,
             };
 
-            // Type check
-            let type_result = typeck::type_check(&program);
-            let has_errors = type_result
-                .diagnostics
-                .iter()
-                .any(|d| d.level == DiagnosticLevel::Error);
+            let frontend = check(&program, Stage::Mir);
 
             // Some defs can't compile in isolation and must wait for a
             // later input. Two cases:
@@ -773,15 +761,21 @@ fn eval_top_level(session: &mut ReplSession, raw_input: &str, item: TopLevelItem
             // In both cases we record the def and report it accepted; a
             // genuine typo simply surfaces when the symbol is finally
             // called.
-            if has_errors {
-                let only_deferrable = type_result
-                    .diagnostics
+            if frontend.has_errors() {
+                // Only type errors defer: a type error stops the front end
+                // before the borrow checkers, so none of their errors exist.
+                let mut type_errors = frontend
+                    .diagnostics()
                     .iter()
                     .filter(|d| d.level == DiagnosticLevel::Error)
+                    .peekable();
+                let only_deferrable = frontend.bootstrap.is_empty()
+                    && type_errors.peek().is_some()
                     // E0736 could not infer, E0735 undefined function,
                     // E0734 undefined variable. Matched on the code, never
                     // the message text, so a real type error is reported.
-                    .all(|d| matches!(d.code.as_deref(), Some("E0734" | "E0735" | "E0736")));
+                    && type_errors
+                        .all(|d| matches!(d.code.as_deref(), Some("E0734" | "E0735" | "E0736")));
                 if only_deferrable {
                     session.func_defs.push(func_def);
                     session.record_input(raw_input);
@@ -790,19 +784,7 @@ fn eval_top_level(session: &mut ReplSession, raw_input: &str, item: TopLevelItem
                         name
                     )));
                 }
-                return EvalResult::Error(format_diagnostics(&type_result.diagnostics));
-            }
-
-            // Borrow check
-            let borrow_errors =
-                ruxen_core::borrow_check::borrow_check(&type_result.program, &type_result.symbols);
-            if !borrow_errors.is_empty() {
-                let msg = borrow_errors
-                    .iter()
-                    .map(|e| format!("{}", e))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                return EvalResult::Error(display::format_error(&msg));
+                return EvalResult::Error(format_errors(&frontend));
             }
 
             // Do NOT JIT-compile the body now — only record the def and
@@ -820,13 +802,13 @@ fn eval_top_level(session: &mut ReplSession, raw_input: &str, item: TopLevelItem
             // redefined, so `classify(true)` dispatched to the stale Int
             // body. Deferring compilation until the whole set is present
             // makes every overload compile once, under its final name.
-            // (Type + borrow checking above already ran, so genuine
-            // errors are still reported at definition time.)
+            // (The front end above already ran, so genuine errors are
+            // still reported at definition time.)
 
             // Extract param info for display — look at the just-defined fn
             // (matched by name) in the typechecked HIR.
-            let (params, return_ty) = type_result
-                .program
+            let (params, return_ty) = frontend
+                .hir()
                 .items
                 .iter()
                 .filter_map(|item| {
@@ -874,57 +856,13 @@ fn eval_top_level(session: &mut ReplSession, raw_input: &str, item: TopLevelItem
                 span: item_span,
             };
 
-            let type_result = typeck::type_check(&program);
-            let has_errors = type_result
-                .diagnostics
-                .iter()
-                .any(|d| d.level == DiagnosticLevel::Error);
-
-            if has_errors {
-                return EvalResult::Error(format_diagnostics(&type_result.diagnostics));
-            }
-
-            // Borrow check
-            let borrow_errors =
-                ruxen_core::borrow_check::borrow_check(&type_result.program, &type_result.symbols);
-            if !borrow_errors.is_empty() {
-                let msg = borrow_errors
-                    .iter()
-                    .map(|e| format!("{}", e))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                return EvalResult::Error(display::format_error(&msg));
-            }
-
-            // Lower to MIR and JIT any new functions (methods, trait
-            // impls, etc.) that aren't already declared.
-            let mut lowerer = Lowerer::new(&type_result.symbols);
-            let mir_program = match lowerer.lower_program(&type_result.program) {
-                Ok(mir) => mir,
-                Err(e) => return EvalResult::Error(display::format_error(&e)),
+            // JIT any new functions (methods, trait impls, etc.) that
+            // aren't already declared.
+            let mir_program = match check_to_mir(&program) {
+                Ok((_, mir)) => mir,
+                Err(e) => return EvalResult::Error(e),
             };
-            if let Err(e) = session.jit.declare_program_data(&mir_program) {
-                return EvalResult::Error(display::format_error(&e));
-            }
-            let mut to_define: Vec<&MirFunction> = Vec::new();
-            for mir_func in &mir_program.functions {
-                if session.jit.is_declared(&mir_func.name) {
-                    continue;
-                }
-                if let Err(e) = session.jit.declare_function(mir_func) {
-                    return EvalResult::Error(display::format_error(&e));
-                }
-                to_define.push(mir_func);
-            }
-            if let Err(e) = session.jit.define_program_data(&mir_program) {
-                return EvalResult::Error(display::format_error(&e));
-            }
-            for mir_func in to_define {
-                if let Err(e) = session.jit.compile_function(mir_func) {
-                    return EvalResult::Error(display::format_error(&e));
-                }
-            }
-            if let Err(e) = session.jit.finalize() {
+            if let Err(e) = session.jit.compile_program(&mir_program) {
                 return EvalResult::Error(display::format_error(&e));
             }
 
@@ -952,35 +890,17 @@ fn compile_and_execute(
     show_result: bool,
     on_success: Option<CompileHook>,
 ) -> EvalResult {
-    // Type check
-    let type_result = typeck::type_check(&program);
-    let has_errors = type_result
-        .diagnostics
-        .iter()
-        .any(|d| d.level == DiagnosticLevel::Error);
-
-    if has_errors {
-        return EvalResult::Error(format_diagnostics(&type_result.diagnostics));
-    }
-
-    // Borrow check
-    let borrow_errors =
-        ruxen_core::borrow_check::borrow_check(&type_result.program, &type_result.symbols);
-    if !borrow_errors.is_empty() {
-        let msg = borrow_errors
-            .iter()
-            .map(|e| format!("{}", e))
-            .collect::<Vec<_>>()
-            .join("\n");
-        return EvalResult::Error(display::format_error(&msg));
-    }
+    let (frontend, mir_program) = match check_to_mir(&program) {
+        Ok(checked) => checked,
+        Err(e) => return EvalResult::Error(e),
+    };
 
     // Determine the return type from the type-checked HIR of the wrapper
     // (matched by name). This is the inferred result type of the expression
     // we are about to execute — everything downstream (MIR, Cranelift
     // signature, result transmute) keys off this.
-    let return_ty = type_result
-        .program
+    let return_ty = frontend
+        .hir()
         .items
         .iter()
         .filter_map(|item| {
@@ -997,54 +917,14 @@ fn compile_and_execute(
         .next()
         .unwrap_or(Ty::Unit);
 
-    // MIR lowering
-    let mut lowerer = Lowerer::new(&type_result.symbols);
-    let mir_program = match lowerer.lower_program(&type_result.program) {
-        Ok(mir) => mir,
-        Err(e) => return EvalResult::Error(display::format_error(&e)),
-    };
-    if let Err(e) = session.jit.declare_program_data(&mir_program) {
-        return EvalResult::Error(display::format_error(&e));
-    }
-
     // Compile every synthesized MIR function (closures `__closure_N`,
-    // class methods, trait default-method monomorphizations, ...) that
-    // the JIT hasn't seen yet. Two-phase so forward references resolve.
-    let mut to_define: Vec<&MirFunction> = Vec::new();
-    for mir_func in &mir_program.functions {
-        if mir_func.name == fn_name {
-            continue;
-        }
-        if session.jit.is_declared(&mir_func.name) {
-            continue;
-        }
-        if let Err(e) = session.jit.declare_function(mir_func) {
-            return EvalResult::Error(display::format_error(&e));
-        }
-        to_define.push(mir_func);
-    }
-    if let Err(e) = session.jit.define_program_data(&mir_program) {
-        return EvalResult::Error(display::format_error(&e));
-    }
-    for mir_func in to_define {
-        if let Err(e) = session.jit.compile_function(mir_func) {
-            return EvalResult::Error(display::format_error(&e));
-        }
-    }
-
-    // Find the REPL wrapper function in MIR
-    let mir_func = match mir_program.functions.iter().find(|f| f.name == fn_name) {
-        Some(f) => f,
-        None => {
-            return EvalResult::Error(display::format_error(&format!(
-                "Internal error: REPL function '{}' not found in MIR",
-                fn_name
-            )))
-        }
-    };
-
-    // JIT compile the wrapper last.
-    let code_ptr = match session.jit.compile_repl_input(mir_func) {
+    // class methods, trait default-method monomorphizations, ...) the JIT
+    // hasn't seen yet, with the REPL wrapper.
+    let code_ptr = match session
+        .jit
+        .compile_program(&mir_program)
+        .and_then(|()| session.jit.function_ptr(fn_name))
+    {
         Ok(ptr) => ptr,
         Err(e) => return EvalResult::Error(display::format_error(&e)),
     };
@@ -1132,9 +1012,7 @@ fn compile_and_execute(
                     ..
                 } = &b.pattern
                 {
-                    if let Some(let_ty) =
-                        find_let_type_in_wrapper(&type_result.program, fn_name, name)
-                    {
+                    if let Some(let_ty) = find_let_type_in_wrapper(frontend.hir(), fn_name, name) {
                         // Phase 1.2 only emits a slot-load prefix for
                         // Int (see `slot_load_let`). To avoid burning
                         // through `REPL_MAX_SLOTS` on session vars whose
@@ -1301,13 +1179,8 @@ fn eval_type_command(session: &mut ReplSession, expr_str: &str) -> EvalResult {
                 .collect();
             let user_stmts: Vec<Statement> = vec![Statement::Expression(expr)];
             let wrapper = build_program(session, "__type_check", replay_stmts, user_stmts, &span);
-            let type_result = typeck::type_check(&wrapper);
-
-            let has_errors = type_result
-                .diagnostics
-                .iter()
-                .any(|d| d.level == DiagnosticLevel::Error);
-            if has_errors {
+            let frontend = check(&wrapper, Stage::Typeck);
+            if frontend.has_errors() {
                 // `:type` is an inspection command — if the expression
                 // references an unknown name (e.g. after `:reset`), stay
                 // silent rather than spamming a red error. Interactive
@@ -1316,8 +1189,8 @@ fn eval_type_command(session: &mut ReplSession, expr_str: &str) -> EvalResult {
                 return EvalResult::Ok(None);
             }
 
-            let return_ty = type_result
-                .program
+            let return_ty = frontend
+                .hir()
                 .items
                 .iter()
                 .filter_map(|item| {
@@ -2033,13 +1906,39 @@ fn expr_contains_return(expr: &Expr) -> bool {
 }
 
 /// Format diagnostics for REPL display (compact format).
+/// Lex and parse errors in the driver's one format.
 fn format_diagnostics(diagnostics: &[Diagnostic]) -> String {
-    diagnostics
-        .iter()
-        .filter(|d| d.level == DiagnosticLevel::Error)
-        .map(|d| display::format_error(&d.message))
-        .collect::<Vec<_>>()
-        .join("\n")
+    display::format_error(&driver::render_diagnostics(diagnostics, None))
+}
+
+/// Every error `frontend` found, in the driver's one format.
+fn format_errors(frontend: &Frontend) -> String {
+    display::format_error(&frontend.render(None))
+}
+
+/// Run the front end ([`driver::check`]) on a REPL program up to
+/// `stop_after`, against the hosted stdlib.
+pub(crate) fn check(program: &Program, stop_after: Stage) -> Frontend {
+    driver::check(
+        program,
+        &Options {
+            stop_after,
+            ..Options::default()
+        },
+    )
+}
+
+/// Run the whole front end, MIR loan check included, on a REPL program:
+/// its results and MIR, or every error it found, formatted for display.
+fn check_to_mir(program: &Program) -> Result<(Frontend, MirProgram), String> {
+    let mut frontend = check(program, Stage::Mir);
+    if frontend.has_errors() {
+        return Err(format_errors(&frontend));
+    }
+    let mir = frontend.mir.take().ok_or_else(|| {
+        display::format_error("internal error: the front end reported no error but produced no MIR")
+    })?;
+    Ok((frontend, mir))
 }
 
 #[cfg(test)]

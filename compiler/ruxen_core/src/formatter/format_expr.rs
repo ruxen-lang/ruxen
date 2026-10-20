@@ -1165,12 +1165,34 @@ pub fn format_closure(closure: &ClosureExpr, comments: &CommentMap) -> Doc {
         span,
         pipes,
         do_end,
+        kind,
+        spelling,
     } = closure;
-    // The parameter header as written: `|x|`, `||`, or none at all.
-    let header = if *pipes || !params.is_empty() {
+    // A bare closure that is not a block is a lambda value: it prints as
+    // `->(x) { ... }`, the spelling that cannot be misread as a block.
+    let spelling = match spelling {
+        ClosureSpelling::Bare if *kind != ClosureKind::Block => ClosureSpelling::Stabby,
+        other => *other,
+    };
+    let has_header = *pipes || !params.is_empty();
+    // The parameter header as written: `|x|`, `||`, or none at all; a `->`
+    // lambda writes `(x)` / `()` before its body instead.
+    let header = if has_header && spelling != ClosureSpelling::Stabby {
         concat(vec![format_closure_params(params, comments), text(" ")])
     } else {
         nil()
+    };
+    let head = match spelling {
+        ClosureSpelling::Bare => nil(),
+        ClosureSpelling::Stabby if has_header => concat(vec![
+            text("->("),
+            format_closure_param_list(params, comments),
+            text(") "),
+        ]),
+        ClosureSpelling::Stabby => text("-> "),
+        ClosureSpelling::Lambda => text("lambda "),
+        ClosureSpelling::Proc => text("proc "),
+        ClosureSpelling::ProcNew => text("Proc.new "),
     };
 
     // `async` / `move` modifiers (parser keyword order is `async move`). A move
@@ -1228,7 +1250,7 @@ pub fn format_closure(closure: &ClosureExpr, comments: &CommentMap) -> Doc {
         ])
     };
 
-    concat(vec![prefix_doc, body])
+    concat(vec![prefix_doc, head, body])
 }
 
 /// The source line a statement starts on.
@@ -1247,7 +1269,15 @@ fn format_closure_params(params: &[ClosureParam], comments: &CommentMap) -> Doc 
         // the header only when the source had one (`ClosureExpr::pipes`).
         return text("||");
     }
+    concat(vec![
+        text("|"),
+        format_closure_param_list(params, comments),
+        text("|"),
+    ])
+}
 
+/// `x, y: Int` — closure parameters without their delimiters.
+fn format_closure_param_list(params: &[ClosureParam], comments: &CommentMap) -> Doc {
     let param_docs: Vec<Doc> = params
         .iter()
         .map(
@@ -1268,10 +1298,5 @@ fn format_closure_params(params: &[ClosureParam], comments: &CommentMap) -> Doc 
             },
         )
         .collect();
-
-    concat(vec![
-        text("|"),
-        join(concat(vec![text(","), space()]), param_docs),
-        text("|"),
-    ])
+    join(concat(vec![text(","), space()]), param_docs)
 }

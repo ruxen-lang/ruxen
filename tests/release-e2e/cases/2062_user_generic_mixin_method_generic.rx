@@ -1,9 +1,9 @@
 # A user generic mixin's default method with its own type parameter
 # (`map[U]`) composes with closure-return inference through `include`.
 mixin Enumerable[T]
-  def each(f: any Fn[Fn(T) -> nil]) -> nil
+  def each(f: Fn(T) -> nil) -> nil
 
-  def map[U](f: any Fn[Fn(T) -> U]) -> Array[U]
+  def map[U](f: Fn(T) -> U) -> Array[U]
     var out: Array[U] = Array.new
     self.each do |x| out.push(f.(x)) end
     out
@@ -18,8 +18,8 @@ class Box[T]
 
   include Enumerable[T]
 
-  def each(f: any Fn[Fn(T) -> nil]) -> nil
-    let data: Array[T] = self.items
+  def each(f: Fn(T) -> nil) -> nil
+    let data: &Array[T] = self.items
     var i = 0
     while i < data.size
       f.(data[i])

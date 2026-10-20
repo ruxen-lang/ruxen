@@ -145,9 +145,22 @@ counters + an `atexit` leak report) and asserts `outstanding == 0`. Coverage:
   or reaches a consuming/ambiguous call. Nested re-captures are not assigned a
   second owner. These conservative cases can leak until path-sensitive capture
   ownership is represented; they cannot double-free the escaped value.
-- **Temporaries**: the current filter drops only `_t*` temps that are built-in
-  heap types proven alloc-rooted; the general "drop every non-Copy temp at
-  end-of-statement" rule (tier1_04 §7.2.6) is not in place.
+- **Temporaries** (partly done 2026-10-17): a compiler temporary that owns a
+  fresh value (a built-in heap type, a plain class or struct, or a class with a
+  `def drop`) and is used only inside its statement is dropped at the end of
+  that statement. Each statement that creates locals ends in a `MirInst::Nop`
+  marker (`lower_scoped_statement`); `insert_drops` sinks the temporary's drop
+  to it when the temporary and every borrow of it are dead after the marker,
+  and strips the markers afterwards. Drop elaboration runs once every body is
+  lowered (`Lowerer::elaborate_drops`), so a call result is owned by the
+  caller when the callee returns a fresh value (`drops::returns_fresh`: every
+  return is an allocation its own frame owned outright; a container only when
+  its elements own no heap). An argument bound to a `&T` parameter the callee
+  may return is no longer treated as a mere borrow. Still open: enum
+  temporaries (a match moves a payload out without stripping the enum), a
+  temporary whose statement spans several blocks (it keeps the
+  function-exit drop), and results of functions that return a field or a
+  parameter, which stay borrowed and are never freed.
 
 ## Notes for whoever picks up the remainder
 

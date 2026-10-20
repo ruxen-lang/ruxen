@@ -57,6 +57,28 @@ fn primitive_class_ty(name: &str) -> Option<Ty> {
 }
 
 impl Resolver {
+    /// A use of a type alias: its target with the alias's own generic
+    /// parameters replaced by the use's arguments, in order
+    /// (`type Proc[F] = any Fn[F]` used as `Proc[(Int) -> nil]` is
+    /// `any Fn[(Int) -> nil]`). A parameter the use gives no argument for is
+    /// left to inference, as a generic class without arguments is.
+    fn instantiate_alias(&mut self, target: &Ty, params: &[String], args: Vec<Ty>) -> Ty {
+        if params.is_empty() {
+            return target.clone();
+        }
+        let mut args = args.into_iter();
+        let subst: std::collections::HashMap<String, Ty> = params
+            .iter()
+            .map(|param| {
+                let arg = args
+                    .next()
+                    .unwrap_or_else(|| self.type_context.fresh_type_var());
+                (param.clone(), arg)
+            })
+            .collect();
+        target.subst_params(&subst)
+    }
+
     pub fn resolve_type_expr(&mut self, type_expr: &ast::TypeExpr) -> Ty {
         match type_expr {
             ast::TypeExpr::Named(path) => self.resolve_type_path(path),
@@ -434,7 +456,7 @@ impl Resolver {
             "Set" => {
                 // `Set[T]` is the Ruby spelling. The Rust `HashSet[T]` is no
                 // longer accepted; the runtime representation is unchanged
-                // (method dispatch in `codegen::runtime::runtime_name` keys
+                // (method dispatch in `mir::lang_intrinsics::runtime_name` keys
                 // off the `HashSet` runtime prefix).
                 let elem = generic_args
                     .into_iter()
@@ -511,7 +533,10 @@ impl Resolver {
         if let Some(&def_id) = self.type_registry.get(&name) {
             if let Some(def) = self.symbols.get(def_id) {
                 match &def.kind {
-                    DefKind::TypeAlias { target } => return target.clone(),
+                    DefKind::TypeAlias { target, params } => {
+                        let (target, params) = (target.clone(), params.clone());
+                        return self.instantiate_alias(&target, &params, generic_args);
+                    }
                     DefKind::Class { .. } => {
                         // Root-cause normalisation for the
                         // String-builtin-anchored-onto-stdlib-class case:
@@ -602,8 +627,9 @@ impl Resolver {
                                 bounds: bounds.clone(),
                             };
                         }
-                        DefKind::TypeAlias { target } => {
-                            return target.clone();
+                        DefKind::TypeAlias { target, params } => {
+                            let (target, params) = (target.clone(), params.clone());
+                            return self.instantiate_alias(&target, &params, generic_args);
                         }
                         _ => {}
                     }

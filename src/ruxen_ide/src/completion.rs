@@ -437,7 +437,7 @@ fn detail_for(def: &Definition, symbols: &SymbolTable) -> Option<String> {
         DefKind::Struct { .. } => Some(format!("struct {}", def.name)),
         DefKind::Enum { .. } => Some(format!("enum {}", def.name)),
         DefKind::Trait { .. } => Some(format!("mixin {}", def.name)),
-        DefKind::TypeAlias { target } => Some(format!("alias {} = {}", def.name, target)),
+        DefKind::TypeAlias { target, .. } => Some(format!("alias {} = {}", def.name, target)),
         DefKind::Newtype { inner } => Some(format!("newtype {}({})", def.name, inner)),
         DefKind::Module { .. } => Some(format!("module {}", def.name)),
         DefKind::Field { ty, .. } => Some(format!("{}: {}", def.name, ty)),

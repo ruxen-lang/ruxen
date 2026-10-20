@@ -104,8 +104,8 @@ impl<'a> Lowerer<'a> {
     /// `coerce_value`, which uses `fcvt_from_uint` for an int→float crossing.
     /// That turns a signed `Int(-1)` (i64 `0xFFFF…`) into `1.8e19` instead of
     /// `-1.0`, so `f32_val == -1` is false. Routing the int operand through a
-    /// target-typed `Assign` to the float type invokes codegen's Q5
-    /// signedness-aware path (`fcvt_from_sint` for a signed source), exactly as
+    /// target-typed `Assign` to the float type gets the Q5
+    /// signedness-aware `Assign` conversion (`mir::coercion`) (`fcvt_from_sint` for a signed source), exactly as
     /// a `let`-bound `as Float32` cast does, so both operands reach `Compare`
     /// at the same float width with the right sign. Mirrors `coerce_to_field_ty`.
     ///
@@ -202,7 +202,7 @@ impl<'a> Lowerer<'a> {
     ///
     /// A `&Float` (or `&Int32`, or a generic `&T` specialized to one) is not a
     /// pointer at run time: it is an erased uniform word carrying the scalar's
-    /// bits (`codegen::is_erased_word_ty`). Left as a `Ref(..)` local, codegen
+    /// bits (`mir::abi::is_erased_word_ty`). Left as a `Ref(..)` local, codegen
     /// sees two `i64` words and emits an integer `icmp`/`iadd`, so `0.0 ==
     /// -0.0` was false, `NaN == NaN` true, `-1.5 < -0.5` false and `1.5 + 2.25`
     /// garbage. Routing the operand through a pointee-typed `Assign` invokes
@@ -385,6 +385,7 @@ impl<'a> Lowerer<'a> {
                                     object: Box::new((**left).clone()),
                                     method: UNRESOLVED_DEF,
                                     resolved: UNRESOLVED_DEF,
+                                    requirement_params: None,
                                     method_name: method.to_string(),
                                     generic_args: vec![],
                                     args,
@@ -445,6 +446,7 @@ impl<'a> Lowerer<'a> {
                                         object: Box::new((**left).clone()),
                                         method: UNRESOLVED_DEF,
                                         resolved: UNRESOLVED_DEF,
+                                        requirement_params: None,
                                         method_name: method.to_string(),
                                         generic_args: vec![],
                                         args: vec![(**right).clone()],
@@ -603,7 +605,7 @@ impl<'a> Lowerer<'a> {
                 // already (E1702); on the off-chance the literal hadn't
                 // resolved (e.g. an Infer var) we fall through to the
                 // default arm and let codegen catch it via the
-                // `unreachable!` in `emit_binop`.
+                // `unreachable!` in `codegen::lower::binop`.
                 if matches!(op, BinOp::MatchOp) {
                     let dest = self.new_temp(Ty::Bool);
                     self.emit(MirInst::Call {
@@ -625,7 +627,7 @@ impl<'a> Lowerer<'a> {
                 };
                 let dest = self.new_temp(result_ty);
 
-                if is_comparison(*op) {
+                if op.is_comparison() {
                     // Q33: re-materialize a mismatched numeric operand pair to a
                     // common float width with a signedness-correct conversion
                     // before the width-blind `Compare` (e.g. `f32 == -1`, where

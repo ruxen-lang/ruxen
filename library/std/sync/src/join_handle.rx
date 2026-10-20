@@ -8,7 +8,7 @@ class JoinHandle[T: Send]
   include Sync
 
   lib "runtime/thread.c"
-    def self.spawn_closure as "ruxen_thread_spawn"(closure: any Fn[Fn() -> T]) -> JoinHandle[T]
+    def self.spawn_closure as "ruxen_thread_spawn"(closure: Proc[() -> T]) -> JoinHandle[T]
     def join_raw as "ruxen_thread_join" -> T
     def thread_id_raw as "ruxen_thread_join_handle_id" -> Int
     def drop as "ruxen_thread_join_handle_drop" -> nil

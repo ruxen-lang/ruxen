@@ -1,0 +1,6 @@
+# F-29 drift: a Kernel default method on a Unit-typed receiver (`puts`
+# returns nil) binds its block parameter past the zero-sized self.
+puts("side").tap do |x|
+  puts "in-tap"
+end
+puts "after-tap"

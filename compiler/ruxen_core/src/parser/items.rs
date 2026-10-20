@@ -89,35 +89,39 @@ impl Parser {
                 }
             }
             _ => {
-                // A top-level EXPRESSION STATEMENT — e.g. a call with a
-                // trailing `do…end` at module scope (`Tester.describe("…")
-                // do … end`, the shape of every `tests/*.rx`), or a Ruby-style
-                // assignment. The compile pipeline moves clean expressions
-                // into an implicit `main`; the shared parser retains the raw
-                // item so `ruxen fmt` can round-trip source faithfully.
-                if self.starts_top_level_expr_stmt() {
-                    let before_pos = self.pos;
-                    let before_diags = self.diagnostics.len();
-                    let expr = self.parse_expression();
-                    let consumed = self.pos > before_pos;
-                    let clean = self.diagnostics.len() == before_diags;
-                    let at_boundary = matches!(
-                        self.current_kind(),
-                        TokenKind::Newline | TokenKind::Eof | TokenKind::End
-                    );
-                    // Accept only a fully-clean expression that lands on a
-                    // statement boundary. Anything else falls through to the
-                    // standard error path so a real top-level-declaration typo
-                    // still gets the clear "expected top-level declaration"
-                    // diagnostic instead of being silently swallowed.
-                    if consumed && clean && at_boundary {
-                        return Some(TopLevelItem::Expr(expr));
-                    }
-                    // Reset cursor + drop any diagnostics the speculative
-                    // parse recorded, then fall through.
-                    self.pos = before_pos;
-                    self.diagnostics.truncate(before_diags);
+                // A top-level EXPRESSION STATEMENT: any statement Ruby runs
+                // at the top of a file, such as a call with a trailing
+                // `do…end` (`Tester.describe("…") do … end`, the shape of
+                // every `tests/*.rx`), an assignment, `while` / `for` / `if` /
+                // `match`, or a literal receiver (`[1, 2].each { … }`). The
+                // compile pipeline moves clean expressions into an implicit
+                // `main`; the shared parser retains the raw item so
+                // `ruxen fmt` can round-trip source faithfully.
+                let before_pos = self.pos;
+                let before_diags = self.diagnostics.len();
+                let expr = self.parse_expression();
+                let consumed = self.pos > before_pos;
+                let clean = self.diagnostics.len() == before_diags;
+                let at_boundary = matches!(
+                    self.current_kind(),
+                    TokenKind::Newline | TokenKind::Eof | TokenKind::End
+                );
+                // Accept a fully-clean expression that lands on a statement
+                // boundary.
+                if consumed && clean && at_boundary {
+                    return Some(TopLevelItem::Expr(expr));
                 }
+                // A statement that parsed past its first token but hit an
+                // error inside (`f = ->(x: Int) { |y| y }`) keeps that
+                // error: it says what is wrong with the statement.
+                if consumed && !clean {
+                    return None;
+                }
+                // Anything else (a declaration typo, a stray token) gets the
+                // "expected top-level declaration" diagnostic below; drop
+                // what the speculative parse recorded.
+                self.pos = before_pos;
+                self.diagnostics.truncate(before_diags);
                 self.error(&format!(
                     "expected top-level declaration, found {:?}",
                     self.current_kind()
@@ -190,18 +194,6 @@ impl Parser {
         } else {
             Err(self.diagnostics.clone())
         }
-    }
-
-    /// Heuristic: does the cursor begin a plausible top-level expression
-    /// statement (an identifier / type-identifier / `self` that starts a
-    /// call or method-call chain)? Deliberately narrow — we only want to
-    /// accept the `Recv.method(args) do…end` test-file shape, not arbitrary
-    /// expressions that would mask real top-level-declaration typos.
-    fn starts_top_level_expr_stmt(&self) -> bool {
-        matches!(
-            self.current_kind(),
-            TokenKind::Identifier(_) | TokenKind::TypeIdentifier(_) | TokenKind::SelfValue
-        )
     }
 
     /// True if the cursor begins a Ruby `alias new_name old_name` item:

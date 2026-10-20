@@ -100,7 +100,7 @@ pub struct ReplSession {
     /// creation so every input cheaply prepends it to the wrapper
     /// program. The C symbols `ruxen_repl_slot_load_i64` /
     /// `ruxen_repl_slot_store_i64` are registered as JIT symbols in
-    /// `jit::new_jit_module_builder` — the lib block here only tells
+    /// `jit::register_runtime_symbols` — the lib block here only tells
     /// the typechecker and resolver that callable Ruxen-side names
     /// exist with the right signatures.
     pub repl_slot_lib: TopLevelItem,
@@ -244,7 +244,7 @@ impl ReplSession {
 /// whatever the parser emits (Approach A fallback per Task 1.2).
 fn parse_repl_slot_lib() -> TopLevelItem {
     // Two FFI shims for the REPL-internal slot read/write helpers
-    // registered in `jit::new_jit_module_builder`. `as "ruxen_repl_*"`
+    // registered in `jit::register_runtime_symbols`. `as "ruxen_repl_*"`
     // pins the linked C symbol; the bare Ruxen names are what the
     // synthetic prefix/suffix call sites spell.
     // The two `__repl_set_replaying` / `__repl_get_replaying` decls

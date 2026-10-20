@@ -151,9 +151,10 @@ if [ -n "$FROM_SOURCE" ]; then
   # binaries no longer exist.
   #
   # The optimizing LLVM backend (used by `ruxen build --release`) is behind
-  # the `llvm` cargo feature. Without it, `--release` silently falls back to
-  # the unoptimized Cranelift backend — so we build WITH `--features llvm`
-  # whenever LLVM 18 is discoverable, and degrade gracefully to a
+  # the `llvm` cargo feature. Without it, `--release` is an error that names
+  # the missing `llvm` feature (`Backend::select` in
+  # compiler/ruxen_core/src/codegen/backend.rs). So we build WITH
+  # `--features llvm` whenever LLVM 18 is discoverable, and degrade to a
   # Cranelift-only toolchain (with a loud note) when it is not.
   CARGO_FEATURES=""
   if [ -z "${LLVM_SYS_180_PREFIX:-}" ]; then

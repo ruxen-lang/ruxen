@@ -35,6 +35,7 @@
 //! NOT monomorphize (e.g. a generic arg that stayed a type param) keeps
 //! resolving to it.
 
+use super::derive::DeriveField;
 use super::*;
 use crate::hir::visit::{walk_expr, walk_item, Visit};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -61,7 +62,7 @@ pub(super) const ABSTRACT_CALLEE_PREFIX: char = '?';
 /// use of a generic class.
 pub(super) type MonoKey = Vec<Ty>;
 
-/// A builtin-head class shell's per-`T`-monomorphizable surface: the class's
+/// A lib-shell class's per-`T`-monomorphizable surface: the class's
 /// generic parameter names (declaration order, so they zip against a head's
 /// generic args) and the body methods that dispatch on them, directly or
 /// through a call to another such method of the same shell.
@@ -73,7 +74,7 @@ struct BuiltinHeadShell {
 /// One `(receiver instantiation, method)` specialization to emit.
 pub(super) struct BuiltinHeadMonoInstance {
     /// The owning shell's name (`Array`), the key into the eligible shells.
-    class: &'static str,
+    class: String,
     /// The owning shell's generic parameter names, in declaration order.
     params: Vec<String>,
     /// The receiver's concrete generic arguments, in the same order.
@@ -456,6 +457,27 @@ impl<'a> Lowerer<'a> {
                     let mir_fn = self.lower_method(&mangled, &cloned)?;
                     mir.functions.push(mir_fn);
                 }
+                // A call on this instance mangles to `<base>_clone` (and the
+                // other derived methods) too, so the derived bodies are emitted
+                // per instance, over the substituted field types.
+                let class_ty = Ty::Class {
+                    name: class.name.clone(),
+                    generic_args: vec![],
+                };
+                let fields: Vec<DeriveField> = self
+                    .derive_fields_of_class(class)
+                    .into_iter()
+                    .map(|f| DeriveField {
+                        ty: f.ty.subst_params(&subst),
+                        ..f
+                    })
+                    .collect();
+                mir.functions.extend(self.synthesize_derives_as(
+                    &class_ty,
+                    &class.name,
+                    &base,
+                    &fields,
+                ));
                 // `self.mono_emitted` was already populated for `base` in
                 // `collect_mono_instances` (it must exist before
                 // `lower_items` so call sites can redirect); nothing to do
@@ -577,13 +599,12 @@ impl<'a> Lowerer<'a> {
         fn collect(
             item: &HirItem,
             handled_by_class_mono: &HashMap<String, HirClassDef>,
+            lib_shells: &HashSet<String>,
             out: &mut HashMap<String, BuiltinHeadShell>,
         ) {
             match item {
                 HirItem::Class(c) => {
-                    if c.generic_params.is_empty()
-                        || !crate::hir::types::BUILTIN_HEAD_HOMES.contains(&c.name.as_str())
-                    {
+                    if c.generic_params.is_empty() || !lib_shells.contains(&c.name) {
                         return;
                     }
                     // Precedence: generic-CLASS monomorphization owns any class
@@ -622,7 +643,7 @@ impl<'a> Lowerer<'a> {
                 }
                 HirItem::Module(m) => {
                     for sub in &m.items {
-                        collect(sub, handled_by_class_mono, out);
+                        collect(sub, handled_by_class_mono, lib_shells, out);
                     }
                 }
                 HirItem::Function(_)
@@ -635,10 +656,23 @@ impl<'a> Lowerer<'a> {
                 | HirItem::Newtype(_) => {}
             }
         }
+        // Every generic class with `lib` methods is a shell: its body
+        // methods are otherwise lowered once with their params abstract.
+        self.lib_shell_classes = program
+            .ffi_libs
+            .iter()
+            .flat_map(|lib| &lib.functions)
+            .filter_map(|f| f.parent_type.clone())
+            .collect();
         let mut shells: HashMap<String, BuiltinHeadShell> = HashMap::new();
         let handled_by_class_mono = self.mono_classes.clone();
         for item in &program.items {
-            collect(item, &handled_by_class_mono, &mut shells);
+            collect(
+                item,
+                &handled_by_class_mono,
+                &self.lib_shell_classes,
+                &mut shells,
+            );
         }
 
         // 1b. Close eligibility over calls within the shell. A method that
@@ -666,10 +700,10 @@ impl<'a> Lowerer<'a> {
                         let DispatchSite::Receiver(recv_ty, name) = site else {
                             return;
                         };
-                        let Some((recv_class, recv_args)) = Ty::builtin_head(recv_ty) else {
+                        let Some((recv_class, recv_args)) = self.shell_head(recv_ty) else {
                             return;
                         };
-                        if recv_class != class.as_str()
+                        if recv_class != *class
                             || !recv_args
                                 .iter()
                                 .any(|a| mentions_type_param(a, &shell.params))
@@ -693,6 +727,17 @@ impl<'a> Lowerer<'a> {
                 }
             }
             shell.methods.retain(|m| eligible.contains(&m.name));
+            // A `where` bound on the class's own generic makes the body
+            // meaningful only per instantiation.
+            for m in &shell.methods {
+                let bounds_class_generic = m
+                    .generic_params
+                    .iter()
+                    .any(|g| !g.bounds.is_empty() && shell.params.contains(&g.name));
+                if bounds_class_generic {
+                    self.specialized_only.insert(m.def_id);
+                }
+            }
         }
         shells.retain(|_, shell| !shell.methods.is_empty());
         if shells.is_empty() {
@@ -721,7 +766,7 @@ impl<'a> Lowerer<'a> {
                 let DispatchSite::Receiver(recv_ty, name) = call else {
                     return;
                 };
-                let Some((class, args)) = Ty::builtin_head(recv_ty) else {
+                let Some((class, args)) = self.shell_head(recv_ty) else {
                     return;
                 };
                 if !args.iter().all(is_fully_concrete) {
@@ -729,7 +774,7 @@ impl<'a> Lowerer<'a> {
                 }
                 self.record_builtin_head_instances(
                     &shells,
-                    class,
+                    &class,
                     &args,
                     name,
                     &mut instances,
@@ -737,9 +782,63 @@ impl<'a> Lowerer<'a> {
                 );
             });
         });
+        // A generic class's bodies are specialized per instantiation too
+        // (`collect_mono_instances`): `State[Int]#peek` calling `g.get` on
+        // its `MutexGuard[T]` needs `MutexGuard[Int]#get`.
+        for (class_name, keys) in &self.mono_instances {
+            let Some(class) = self.mono_classes.get(class_name) else {
+                continue;
+            };
+            let params: Vec<String> = class
+                .generic_params
+                .iter()
+                .map(|g| g.name.clone())
+                .collect();
+            let bodies: Vec<&HirFuncDef> = class
+                .methods
+                .iter()
+                .chain(
+                    class
+                        .impl_blocks
+                        .iter()
+                        .flat_map(|b| b.items.iter())
+                        .filter_map(|i| match i {
+                            HirImplItem::Method(m) => Some(m),
+                            _ => None,
+                        }),
+                )
+                .collect();
+            for args in keys {
+                let subst: HashMap<String, Ty> =
+                    params.iter().cloned().zip(args.iter().cloned()).collect();
+                for def in &bodies {
+                    walk_dispatch_sites_in_expr(&def.body, &mut |call| {
+                        let DispatchSite::Receiver(recv_ty, name) = call else {
+                            return;
+                        };
+                        let Some((shell, shell_args)) =
+                            self.shell_head(&recv_ty.subst_params(&subst))
+                        else {
+                            return;
+                        };
+                        if !shell_args.iter().all(is_fully_concrete) {
+                            return;
+                        }
+                        self.record_builtin_head_instances(
+                            &shells,
+                            &shell,
+                            &shell_args,
+                            name,
+                            &mut instances,
+                            &mut emitted,
+                        );
+                    });
+                }
+            }
+        }
         let mut next = 0;
         while next < instances.len() {
-            let class = instances[next].class;
+            let class = instances[next].class.clone();
             let args = instances[next].args.clone();
             let subst: HashMap<String, Ty> = instances[next]
                 .params
@@ -754,7 +853,7 @@ impl<'a> Lowerer<'a> {
                 let DispatchSite::Receiver(recv_ty, name) = call else {
                     return;
                 };
-                let Some((recv_class, recv_args)) = Ty::builtin_head(recv_ty) else {
+                let Some((recv_class, recv_args)) = self.shell_head(recv_ty) else {
                     return;
                 };
                 if recv_class != class {
@@ -768,7 +867,7 @@ impl<'a> Lowerer<'a> {
             for name in &same_instantiation_calls {
                 self.record_builtin_head_instances(
                     &shells,
-                    class,
+                    &class,
                     &args,
                     name,
                     &mut instances,
@@ -788,7 +887,7 @@ impl<'a> Lowerer<'a> {
     fn record_builtin_head_instances(
         &self,
         shells: &HashMap<String, BuiltinHeadShell>,
-        class: &'static str,
+        class: &str,
         args: &[Ty],
         name: &str,
         instances: &mut Vec<BuiltinHeadMonoInstance>,
@@ -809,9 +908,10 @@ impl<'a> Lowerer<'a> {
         // "Array" }` spelling reaches the same symbol, and whichever call site
         // happened to be visited first would otherwise decide the specialized
         // body's `self` type.
-        let Some(self_ty) = Ty::from_builtin_head(class, args) else {
-            return;
-        };
+        let self_ty = Ty::from_builtin_head(class, args).unwrap_or_else(|| Ty::Class {
+            name: class.to_string(),
+            generic_args: args.to_vec(),
+        });
         for def in &shell.methods {
             if def.name != canonical && !def.name.starts_with(&overload_prefix) {
                 continue;
@@ -821,7 +921,7 @@ impl<'a> Lowerer<'a> {
                 continue;
             }
             instances.push(BuiltinHeadMonoInstance {
-                class,
+                class: class.to_string(),
                 params: shell.params.clone(),
                 args: args.to_vec(),
                 self_ty: self_ty.clone(),
@@ -861,6 +961,23 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    /// The lib shell class a receiver's methods live on, with its generic
+    /// args: a builtin head (`Ty::Array(Int)` is `Array[Int]`) or an
+    /// instance of a generic class with `lib` methods (`MutexGuard[String]`).
+    fn shell_head(&self, ty: &Ty) -> Option<(String, Vec<Ty>)> {
+        if let Some((class, args)) = ty.builtin_head() {
+            return Some((class.to_string(), args));
+        }
+        match ty.peel_refs() {
+            Ty::Class { name, generic_args }
+                if !generic_args.is_empty() && self.lib_shell_classes.contains(name) =>
+            {
+                Some((name.clone(), generic_args.clone()))
+            }
+            _ => None,
+        }
+    }
+
     /// At a receiver-bearing call site, the specialized callee for this
     /// `(receiver instantiation, method)` when one was emitted; `None`
     /// otherwise (→ keep the opaque `{Class}_{method}` callee).
@@ -872,11 +989,11 @@ impl<'a> Lowerer<'a> {
         if self.builtin_head_mono_emitted.is_empty() {
             return None;
         }
-        let (class, args) = Ty::builtin_head(receiver_ty)?;
+        let (class, args) = self.shell_head(receiver_ty)?;
         if !args.iter().all(is_fully_concrete) {
             return None;
         }
-        let symbol = format!("{}_{}", mono_base(class, &args), method_name);
+        let symbol = format!("{}_{}", mono_base(&class, &args), method_name);
         self.builtin_head_mono_emitted
             .contains(&symbol)
             .then_some(symbol)
@@ -1097,9 +1214,15 @@ impl<'a> Lowerer<'a> {
     /// the receiver is fixed (`Frame`); only the method's own type parameters
     /// are recovered by unifying its declared parameters with call arguments.
     pub(super) fn collect_generic_method_instances(&mut self, program: &HirProgram) {
-        fn eligible(method: &HirFuncDef) -> bool {
-            !method.generic_params.is_empty()
-                && method.generic_params.iter().any(|g| !g.bounds.is_empty())
+        // A method's OWN bounded generic: a `where` predicate on the owning
+        // type's generic (`def get -> T where T: Clone` in `class
+        // MutexGuard[T]`) is not one, the receiver's instantiation fixes it
+        // (`collect_builtin_head_mono_instances`).
+        fn eligible(method: &HirFuncDef, owner_generics: &[HirGenericParam]) -> bool {
+            method
+                .generic_params
+                .iter()
+                .any(|g| !g.bounds.is_empty() && !owner_generics.iter().any(|o| o.name == g.name))
         }
 
         fn collect_methods(
@@ -1107,7 +1230,7 @@ impl<'a> Lowerer<'a> {
             module_path: &mut Vec<String>,
             out: &mut HashMap<DefId, MonoMethod>,
         ) {
-            let mut record = |owner: &str, methods: &[HirFuncDef]| {
+            let mut record = |owner: &str, generics: &[HirGenericParam], methods: &[HirFuncDef]| {
                 let qualified = if module_path.is_empty() {
                     owner.to_string()
                 } else {
@@ -1115,7 +1238,7 @@ impl<'a> Lowerer<'a> {
                 };
                 let owner_symbol = qualified.replace('.', "_");
                 for method in methods {
-                    if eligible(method) {
+                    if eligible(method, generics) {
                         out.insert(
                             method.def_id,
                             MonoMethod {
@@ -1128,9 +1251,9 @@ impl<'a> Lowerer<'a> {
             };
 
             match item {
-                HirItem::Class(c) => record(&c.name, &c.methods),
-                HirItem::Struct(s) => record(&s.name, &s.methods),
-                HirItem::Enum(e) => record(&e.name, &e.methods),
+                HirItem::Class(c) => record(&c.name, &c.generic_params, &c.methods),
+                HirItem::Struct(s) => record(&s.name, &s.generic_params, &s.methods),
+                HirItem::Enum(e) => record(&e.name, &e.generic_params, &e.methods),
                 HirItem::Module(m) => {
                     module_path.push(m.name.clone());
                     for sub in &m.items {
@@ -1286,7 +1409,13 @@ impl<'a> Lowerer<'a> {
     }
 
     pub(super) fn generic_method_keeps_opaque(&self, method_id: DefId) -> bool {
-        !self.mono_methods.contains_key(&method_id)
+        !self.mono_methods.contains_key(&method_id) && !self.specialized_only.contains(&method_id)
+    }
+
+    /// Whether `method_id` exists only as per-instantiation copies (see
+    /// `Lowerer::specialized_only`).
+    pub(super) fn is_specialized_only(&self, method_id: DefId) -> bool {
+        self.specialized_only.contains(&method_id)
     }
 
     pub(super) fn is_generic_mixin_method(&self, method_id: DefId) -> bool {
@@ -1685,7 +1814,19 @@ impl<'a> Lowerer<'a> {
                     .map(|d| (d.drop_fn.as_str(), Some(name))),
             );
         }
-        mir.functions.retain(|f| !poisoned.contains_key(&f.name));
+        // An opaque generic body nothing live reaches goes too: it may call
+        // a poisoned body this pass removes.
+        let dead: HashSet<String> = mir
+            .functions
+            .iter()
+            .filter(|f| {
+                poisoned.contains_key(&f.name)
+                    || (self.opaque_generic_bodies.contains(&f.name)
+                        && !live.contains(f.name.as_str()))
+            })
+            .map(|f| f.name.clone())
+            .collect();
+        mir.functions.retain(|f| !dead.contains(&f.name));
         Ok(())
     }
 }

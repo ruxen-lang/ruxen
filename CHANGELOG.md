@@ -7,7 +7,480 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Added
+- **A method's `where` bound on a class generic works in its body, and such a method
+  of a `lib`-shell generic class is specialized per instantiation.** `def get -> T
+  where T: Clone { self.deref.clone }` in `class MutexGuard[T]` now type-checks
+  (`InferenceEngine::receiver_bounds` adds the enclosing method's bounds to a
+  type-parameter receiver) and lowers to one copy per receiver type
+  (`MutexGuard__mono__String_get`): every generic class with `lib` methods is a shell
+  for the per-`T` specialization pass (`collect_builtin_head_mono_instances`, which now
+  also follows generic-class instantiations such as quiver's `State[Int]`), and a method
+  whose `where` bound names the class generic gets no opaque body. `Int`, `Float`,
+  `Bool`, `Char` and `USize` define `clone -> Self` (a derived clone treated `Int` as an
+  object and returned an uninitialized box). `MutexGuard#get` and `SharedSync#get`
+  return an owned copy; `deref` stays the borrow.
+- **Backend parity suite (F-29 P0).** One fixture list
+  (`compiler/ruxen_core/tests/common/parity_cases.rs`: the 14 former `llvm_backend`
+  fixtures plus F-29 drift fixtures under `tests/fixtures/parity/`) is built and run
+  through Cranelift vs LLVM (`it` `backend_parity`, `llvm` feature) and Cranelift vs the
+  REPL JIT (`ruxen_repl` `it` `jit_parity`, which runs the JIT's `main` in a re-executed
+  child process); stdout and exit code must match. Known drifts are ignored with the
+  F-29 phase that fixes them: LLVM zero-extends a negative `Int32` argument widened to
+  `Int` (P1); the JIT rejects a `Float` passed to an FFI `Int` param and crashes on a
+  `Kernel` default with a `Unit` self (P2). Both lanes run in `pr-ready.yml`'s LLVM job.
+  `RUXEN_E2E_BACKEND=llvm` runs the release-e2e sweep with LLVM (389/390), and a
+  compiler panic now fails its case instead of the sweep. `JITCodeGen::compile_program`
+  compiles a whole MIR program for the REPL and the JIT lane.
+- **Loan checking on MIR.** `mir::loan_check` checks E1002/E1009 on the lowered
+  bodies, in the order the program evaluates operands, so it rejects the I-30 shapes
+  the HIR walker missed (`puts([u.name][reset(u)])`, `h[u.name] = reset(u)`). It
+  agreed with the HIR checker on all 932 loan-matrix programs and fixtures and adds no
+  measurable compile time (prelude bodies are skipped). Every binary runs it through
+  the front-end driver. Pinned by `it` `mir_loan_check::loan_check_families`; the loan
+  matrix (661 programs: the original 485 plus 176 over branch-merge, multi-argument-call and direct-closure-call axes) is in the repo at `compiler/ruxen_core/tests/fixtures/loan_matrix/`,
+  checked in process by the ignored `it` `mir_loan_check::loan_matrix` (every conflict
+  row rejected except 22 listed rows whose write never reaches the view, every dead row
+  accepted), with its generator (`gen.py`) and memory runner (`memrun.py`, Guard Malloc or ASan; the pr-ready job `loan-matrix-memory` runs it) beside it.
+- Shared MIR facts: `mir::dataflow` (liveness, predecessors), `MirInst::dest` /
+  `read_locals`, `Terminator::successors`, declared `ParamMode`s on every function and FFI
+  declaration. Debug spans of instructions emitted after their operands now point at
+  their own expression.
+
+### Fixed
+- **Tuples own their elements and are freed.** A tuple box leaked with everything in
+  it: `drops::heap_free_callee` now has a `Tuple` arm (`ruxen_dealloc`), and tuples get
+  field glue (`owned_field_slots`, `field_drop_glue_name`, `object_glue_key` in
+  `mir/lower/drops/glue.rs`) and element glue (`RUXEN_ELEM_OBJ`), so an `Array` of tuples
+  frees each one. `field_owns_value` counts tuples, a tuple is Clone when its elements
+  are (`implicit_includes::ty_is_effectively_clone`), and a derived `clone` of a tuple
+  field copies the box element by element (`derive::synthesize_clone_field`). A tuple
+  result is caller-owned (`drops::fresh_result_type`) when each element is a scalar, a
+  borrow or itself fresh, so `partition`'s `(Array[T], Array[T])`, which holds aliases,
+  is not. `let (a, b) = expr` keeps the tuple in a scoped `_tuple` local that owns it
+  and the bindings borrow it; destructuring a variable borrows the variable
+  (`mir/lower/statement.rs`).
+- **Building a Hash from pairs copies what it inserts.** `ruxen_hash_from_iter_keyed`
+  (`library/std/hash/runtime/hash.c`) takes a fifth argument `val_desc` and copies each
+  key by its key kind and each value by `val_desc`, so the source pairs and the new
+  table drop independently. The compiler appends the value descriptor
+  (`key_desc::pair_value_desc`); `mir/residual_abi.rs` carries the new signature.
+- **A boxed Copy value has one box per owner.** A Copy tuple, struct or class lives in a
+  heap box, and `b = a` or `arr.push(a)` left two owners of one box. The new pass
+  `Lowerer::duplicate_boxed_copies` (`mir/lower/drops/copies.rs`), run on every lowered
+  body before the call summaries, gives each new owner its own box: a copy between
+  locals, a store into an object or tuple field (not an enum payload, a closure captures
+  box or a `Ref` borrow), a by-value FFI argument, and a return of a value that is not
+  the frame's own box. A fresh temporary consumed in place moves without a copy. Drop
+  elaboration follows: Copy tuples are drop candidates, a boxed Copy argument to a user
+  callee or closure is not tainted, a closure call's boxed Copy result is owned, and a
+  container of boxed Copy elements is never demoted to a shallow drop. This fixes a
+  double free (exit 134) when a Copy struct was pushed into an Array and also kept.
+  `it` `drop_fixtures::closure_drop_does_not_free_a_moved_out_capture` now expects 3
+  allocations, 3 frees and 0 outstanding: the escaped Buffer is freed once by its new
+  owner instead of leaking.
+- **The MIR loan check sees views of several places and closure calls (I-41, I-42).**
+  A local now denotes a set of places (`loan_check::Places`): a join of paths that bound
+  it differently unions them, as does a call result that may point into several
+  arguments, and a write, move or `&var` through it is checked at each one (paths are
+  capped at `MAX_PLACE_DEPTH`, so the sets stay finite). Before, both collapsed to "own
+  storage" and `al = if c then u.a else w.a end; al.name = ...` or
+  `al = pick(c, u.a, w.a)` freed a string `x = u.a.name` still viewed (a crash).
+  `MirInst::CallIndirect` records how the callee takes each argument (`modes`, from the
+  closure's declared signature; `param_modes::unknown_param_mode`, never `Read`, for an
+  unspelled one) and the closure `pair` it calls, so a closure call mutating a `&var`
+  argument (`f.(&var u)` with `x = u.name` live) is E1002 and one writing a capture
+  (`f = { u.name = ... }; f.()`) is E1009; drop elaboration's closure-call map reads the
+  same `pair`. Pinned by seven new `it` `mir_loan_check::loan_check_families` rows plus a read-only guard row.
+- **The MIR loan check reads recorded borrow facts and guesses none.** Lowering records
+  what each value may point into (`MirFunction::views`, `mir::nodes::View`: scalar,
+  owned, closure pair, `op=` address, call result into given arguments; call results
+  get theirs from `drops::record_default_views`, the rule drop elaboration also reads)
+  and how every body takes its parameters (`param_modes` on derived, closure and
+  indirect-call bodies too, `ResidualFn::modes` for the compiler's own runtime calls).
+  The checker's type-based guesses (`holds_reference`, Copy-ness, "can this container
+  store that value", the `FuncAddr`/`Alloc` closure-pair reconstruction, shared vs
+  mutable loan kinds) are deleted; anything unrecorded is treated as the worst case.
+  `assignment_addresses`, `replaced_values` and the `ResultBorrows` callback are gone.
+  Four shapes the type-based checker accepted and that crashed under Guard Malloc are
+  now rejected: a rebind to a callee that returns `self` on only some paths (its free
+  stays; the frees the elision pass deletes are skipped, `drops::elided_rebind_frees`,
+  the one rule), a view a callee stores into an object's field, a view moved into the
+  object a callee returns (a by-value argument's loans go to the result), and a call
+  of a closure joined from two branches (every closure a local may hold is checked).
+  Pinned by `it` `mir_loan_check::loan_check_families` (`joined_closures`) and its
+  `RECORDED_FACT_CASES`. The two view shapes came from `MutexGuard#get` handing out
+  the mutex's own value; `get` now returns a copy, so those programs are safe and
+  their pins (`copy_stored_by_callee`, `copy_kept_in_result`) expect no error. The
+  checker rule stays for any C getter that returns an alias.
+- **The IDE reports MIR lowering errors (I-43).** `driver::Frontend::into_type_check_result`
+  appends the lowering error as an error diagnostic, so a program `ruxen build` rejects
+  at lowering (returning a slot-addressed `&var`) is an error in the editor too.
+- **The REPL JIT reuses the batch Cranelift driver (F-29 P2).** `codegen::cranelift::CodeGen`
+  is generic over the Cranelift module (`ObjectModule` for builds, `JITModule` for the REPL)
+  and its `compile_program` is incremental: it declares and defines only what an earlier
+  call has not (functions, FFI imports, vtable and class_info data), and a failed call
+  undeclares the functions it did not define. `codegen::cranelift::isa(target, is_pic)`
+  builds the ISA for both. The JIT's forked declare/define/data/entry-binding code and its
+  own callee index are deleted; `jit.rs` keeps only its module construction (runtime
+  shims, allowlisted `dlsym` lookup). Fixed: a `Kernel` default method on a `Unit` self
+  (`puts(x).tap { ... }`) crashed the REPL, since the JIT bound entry params by index
+  (`jit_parity` `unit_self_kernel_default` no longer ignored; no parity lane ignores a
+  fixture now). A translation error no longer leaves the shared function context dirty.
+- **No backend decides any coercion (F-29 P1c).** `mir::coercion` now also lands each
+  instruction's result in its destination's class: an operation, call or address result
+  goes to a temporary of the class it produces (`mir::abi::produced`) followed by a
+  `Convert`; a `Copy`/`Ref` across classes and every `FloatToBits`/`BitsToFloat` become the
+  `Convert`. The passthrough pseudo-call (`yield` with no block in scope) becomes an
+  `Assign` of its argument. Cranelift's and LLVM's `coerce`, `coerce_value`,
+  `coerce_erased_word`, the backends' passthrough arms and LLVM's `llvm_class` are deleted;
+  Cranelift keeps only its `&var` stack-slot word (`slot_word`), a storage detail.
+- **Coercions are explicit MIR (F-29 P1b): no backend decides a value conversion.**
+  The lowering policy moved from `codegen/abi.rs` to `mir/abi.rs` (with the residual
+  runtime ABI, `mir/residual_abi.rs`, and `runtime_name`, `mir/lang_intrinsics.rs`). The
+  last lowering step, `mir::coercion::make_coercions_explicit`, builds the program's
+  `CalleeIndex` (`MirProgram::callees`, which both backends now declare from instead of
+  building their own) and inserts one `MirInst::Convert { dest, src, coercion }` wherever
+  a value crosses into another machine class: an `Assign`, a call argument, a returned
+  value, binary operands and a string comparison's operands. Cranelift and LLVM emit each
+  `Convert` (`emit_coercion`) and trust every other operand; `coerce_call_args`,
+  `unify_binop_operands` and the per-site mode calls are deleted from both. An integer
+  into a pointer-class slot now keeps its signedness on LLVM too (`IntToPtr { signed }`).
+  The REPL JIT declares FFI imports from their derived ABI (`FnAbi::of_ffi`) instead of
+  widening narrow params and returns to `i64`, so a `Float` passed to an FFI `Int` param
+  converts in the REPL as in a build (`jit_parity` `ffi_int_param_takes_float` no longer
+  ignored). An undeclared callee's narrow-integer or variadic argument is widened to
+  `I64` on LLVM as on Cranelift.
+- **One backend lowering policy (F-29 P1a): Cranelift, LLVM and the REPL JIT read
+  `codegen/abi.rs`.** It owns the `Ty` → machine class map (`AbiClass`), signatures
+  (`FnAbi`; the C entry ABI comes from `MirFunction::is_entry`, no longer from the name
+  `main`), one `CalleeIndex` per program (FFI C symbol, Ruxen name, lib-qualified alias, MIR
+  functions, the residual runtime symbols), the B01 erased-word predicates and every
+  coercion decision (assign, call argument, return, binary operands); each backend keeps
+  only its class → type map. Drifts fixed: LLVM zero-extended a negative `Int32` argument
+  widened to `Int` and converted an integer argument to a `Float` param unsigned (now both
+  backends extend and convert by the argument's signedness); LLVM's float → integer
+  conversion is now saturating like Cranelift's (`llvm.fpto[su]i.sat`: clamp, NaN → 0); a
+  `Float` passed to a declared `Int` parameter converts signed on both backends (was the
+  unsigned saturating form, so `-2.5` became 0); LLVM no longer panics on a `Not`/negate of
+  a `&var` scalar parameter's pointer-typed temporary (`2212_var_scalar_param_writes`; LLVM
+  release-e2e 390/390). `cranelift/runtime_sigs.rs` and `llvm/runtime_decl.rs` are gone
+  (the residual is read through the index). Pinned by the parity fixtures
+  `neg_int32_arg_widened` (no longer ignored) and `float_to_int_saturates`.
+- **The MIR loan check no longer rejects field stores and Copy derefs the apps
+  use.** A field store's read of the value it replaces is a move to free it
+  (`MirFunction::replaced_values`), not a borrow of the field; a callable type
+  such as `Proc[(&String) -> Int]` no longer counts as holding a reference
+  (`Ty::holds_reference`); and a Copy value without references (`*v` of a
+  `&Bool`) holds no loan. quiver, rondo and canvas build again. Pinned by `it`
+  `mir_loan_check::loan_check_families` (three `guard_*` rows).
+
 ### Changed
+- **A tuple element read borrows, like a field read.** One rule,
+  `typeck/infer/helpers.rs::slot_read_ty`, types a value read out of a slot its
+  container keeps owning: a non-Copy `T` reads as `&T`. Class field reads
+  (`field_read_ty`), tuple `.N` reads, tuple destructuring bindings
+  (`propagate_pattern_types` on an owned tuple) and `for (k, v)` bindings all use it;
+  `retype_field_place` covers tuple element writes. E0744 (`reject_borrow_into_owned`)
+  recurses through tuple slots, so `keep((u.name, 1))` into a `(String, Int)` parameter
+  is E0744. Storing an element needs `.clone` (`s.wire = cycle.0.clone`); a non-Clone
+  element is used through a borrow (`server_echo_once(&var p.0)`, ported in
+  `tests/release-e2e/cases/727_async_tcp_echo.rx`).
+- **Hash entries are borrowed views.** `Hash#to_a` returns `Array[(&K, &V)]`, `Hash#each`
+  yields `(&K, &V)` and Hash includes `Enumerable[(&K, &V)]`
+  (`library/std/map/src/lib.rx`); `for (k, v) in h` iterates `(&K, &V)`
+  (`mir/lower/expr/for_loop.rs`, `typeck/infer/expr.rs`).
+- **Element glue is built from a recorded type.** Every emitter of an element
+  descriptor (`heap_free_call`, derive, `key_desc`) records the glue's object type with
+  `drops::glue::record_elem_glue` into `MirFunction::elem_glue_types`, and
+  `synthesize_elem_glue` reads it; `ElemDesc::Glue` carries `object: Ty`. No glue name
+  is parsed back into a type anymore.
+- **LLVM lowers through the one MIR walk (F-29 P4b).** The LLVM backend implements
+  `IrBuilder` as `llvm::emit::builder::LlvmBuilder` (allocas in an `entry` block, the
+  program's string globals, the function's debug scope) and runs `codegen::lower::lower_function`;
+  its own instruction, terminator and call lowerer (`llvm/emit/instructions.rs`,
+  `control_flow.rs`, `calls.rs`) is deleted, so Cranelift, the REPL JIT and LLVM share every
+  instruction decision. Behaviour changes on LLVM: a bitwise or logical `BinOp` on `Float`
+  operands is now a compile error ("`BitAnd` has no float form") where LLVM silently
+  produced the left operand; a zero-sized (`Unit`) parameter's alloca now holds an `i64` 0,
+  as on Cranelift. DWARF line info comes from the walk's locations, unchanged in output.
+- **One MIR walk for code generation (F-29 P4a).** `codegen::lower::lower_function`
+  translates every `MirInst` and `Terminator` once, through the `codegen::ir_builder::IrBuilder`
+  trait (values, blocks and function handles as associated types; int/float operations and
+  comparisons, `Coercion`, loads/stores at offsets, direct/indirect/runtime calls,
+  function/data/string addresses, local def/use/address, return/jump/branch/switch/
+  unreachable, source locations). The walk owns every instruction decision (the `BinOp` to
+  operation map, the runtime string comparison and its `Bool` narrowing, field/payload
+  offsets, the entry's exit status, zero-sized parameter binding); Cranelift (batch and the
+  REPL JIT) implements the trait as `cranelift::emit::ClifBuilder` and its own instruction
+  and terminator translator is deleted. LLVM keeps its own lowerer until P4b. No output
+  change.
+- **One backend rule on every driver (F-29 P3).** `codegen::Backend::select` picks the
+  backend for `ruxen compile`, `ruxen build`/`run`/`test` and the e2e harness, and
+  `Backend::emit_object` is the one dispatch (five copies replaced). User-visible:
+  `ruxen build --release` on a toolchain built without the `llvm` feature now fails with
+  "`--release` needs the LLVM backend, but this ruxen was built without the `llvm`
+  feature; rebuild it with `--features llvm` (LLVM 18)" instead of silently building with
+  Cranelift (`ruxen compile --release` already failed, with another message);
+  `ruxen build` honours `[profile.release]`/`[profile.debug]` `opt-level` (it was fixed
+  at 2); an unknown `--backend=` or `--opt-level=` value is an error (it fell back to the
+  default); a wasm target without `--release` builds at LLVM `-O0` (was `-O2`);
+  `ruxen compile --no-std` honours `--backend=`/`--opt-level=`. Linking has one host path,
+  `codegen::link_host` over a `LinkPlan`, which ruxenc's cached compile now uses too (so
+  `RUXEN_RUNTIME` turns off the prebuilt archive there as well).
+- **MIR owns the loan codes; the HIR loan code is deleted.** The HIR borrow
+  check no longer tracks loans: `borrow_check/borrows.rs`, `places.rs` and
+  `regions.rs`, the operand holds, the last-use pass and the mutating-method
+  name list (`push`, `insert`, ...) are gone, and the driver's filter for a loan
+  error both checkers reported with it. E1002 and E1009 come from the MIR loan
+  check only. E1003 is no longer emitted and stays registered: a shared borrow
+  next to a live `&var` of an object, Array or Hash reads through the same
+  handle and is accepted, and one the write would leave dangling (a `&var`
+  String) is E1002 (`docs/errors/E1003.md`). Shapes that change: `push_str` on
+  a borrowed field chain is E1009 (was E1002); a `&var` of a field beside the
+  object's handle (`hr(&var u.name, &u)`, `v.bump(&var v.name)`, `v.bump(v.name)`,
+  `self.bump(&var @name)` where the callee reads the field after the write) is
+  accepted (was E1002), since the callee sees the new value and no view of the
+  old one exists (Guard Malloc clean). Pinned by `it` `borrowed_places`.
+- **The REPL and the IDE run the same front end as `ruxen build`.** Both
+  call `ruxen_core::driver`, MIR loan check included, so the I-30 shapes
+  (`puts([u.name][reset(u)])`, `h[u.name] = reset(u)`) are E1002 in the
+  REPL (it used to run them and read freed memory) and in the editor. A def
+  is now borrow and loan checked when it is entered. REPL errors print in
+  the driver's format with code and position (`Error: [E0734] error:
+  undefined variable `x` (at 1:1)`; it printed the message alone). The LSP
+  analyses on open and save only, so the added check runs once per save.
+  Pinned by `ruxen_repl` `tests::loan_check` and `ruxen_ide`
+  `analysis::tests::analyze_reports_mir_loan_errors`.
+- **`ruxen check` runs everything `ruxen build` runs before codegen.** It
+  type checks, borrow checks, lowers to MIR and runs the MIR loan check, so a
+  program `ruxen check` accepts no longer fails `ruxen build` with a borrow
+  error (`puts([u.name][reset(u)])` is now E1002 from `check`; it used to
+  pass). It checks against the target's stdlib: a wasm target
+  (`--target wasm32-unknown-unknown` or `[build] target`) is checked against
+  the curated wasm subset `ruxen build` uses, not the hosted stdlib.
+  Warnings print on success; a stdlib diagnostic is always an error.
+- **One diagnostics format for `ruxen check`, `ruxen build` and `ruxen
+  compile`.** All three run one front end (`ruxen_core::driver`) and print
+  its errors the same way, each line prefixed with the entry file's path
+  (`ruxen build` printed no path before; `check` and `build` print the full
+  path of the project's entry file, `ruxen compile` the path as given). `ruxen check` prints the errors themselves as its failure
+  (`Error: ...`), as `ruxen build` does, instead of a separate `type checking
+  failed`. Pinned by `ruxen_cli` `it` `check_front_end`.
+- **`ruxen compile --target wasm32-unknown-unknown --no-std` loads no
+  stdlib.** It used to load the curated wasm subset and ignore `--no-std`;
+  now `--no-std` means a no_std unit on every target: no stdlib, E1400 on
+  heap allocation, and lowering without the hosted runtime helpers.
+  `ruxen compile` also runs the MIR loan check now, so the I-30 shapes are
+  E1002 there.
+- **Structural fixes for the borrow and `&var` families (review round 3,
+  I-19, I-24, I-29 to I-33, P-11, P-12).**
+  - One provenance query (`borrow_check/places.rs`): a value borrows the
+    places of every sub-expression whose type holds a reference
+    (`ty.any(is_ref)`), so an aggregate built from a borrow keeps its root
+    borrowed (`[u.name]`, `(u.name, 1)`, `{"a" => u.name}`, `Some(u.name)`,
+    a lambda holding `x = u.name` put into an Array or `Some`): writing the
+    root while it is live is E1009 (probes b14e, c2, b19, c6, c7, a14, b14,
+    b14c read freed memory).
+  - Operand order: an operand already evaluated is protected while the
+    later operands of the same call, binary operator or literal run, so
+    `show(u.name, reset(u))`, `v.show(u.name, reset(u))`,
+    `replace(&var u.name, reset(&var u))` and `u.name + resets(u)` are E1002
+    (k1, k1b, k2, k3, k9). A free function's trailing block reaches the
+    captures it borrows like a method's block: `h(&var s) { puts(s) }` is
+    E1002 (e5, d3). A `var self` receiver excludes its place from the other
+    operands like a `&var` argument (`u.rename_with(u.name)` read freed
+    memory). A write through a `r = &var u.name` binding keeps the place
+    borrowed until its last use.
+  - A `&var` place is the place's own storage: a field passes the address of
+    its slot (new `MirInst::FieldAddr`, lowered by Cranelift, LLVM and the
+    REPL JIT through one offset rule, `codegen::layout::field_slot_offset`),
+    `r = &var u.name` holds it, and a `&var` or `def var` call on a captured
+    variable writes the variable itself: a block borrows each String or
+    scalar it captures by the enclosing variable's address (no heap cell), a
+    proc or lambda keeps a String it owns in its own slot. Every writeback of
+    a detached copy is deleted. `r = &var u.name; r = ..` (k5), forwarding
+    `r` (k7), `replace(&var s)` inside a block, lambda or proc (m1, o9, o9c,
+    o9e) and `s.push_str(..)` on a captured String (m2, m4) printed garbage
+    or crashed; `c = &var u.count; c = 9` lost the write (k6). A block that
+    assigns a captured String no longer leaks its cell (m5).
+  - `op=` on an Array element updates the element in its own slot
+    (`b[0] += "x"`, `c[0] += 5`); it was a silent no-op. `op=` on a place
+    with no address (a Hash value) is a lowering error.
+  - The method home of a stored closure is the class the core library
+    declares `layout closure` (`class Closure`), read off its declaration
+    (`SymbolTable::closure_shell`); `Ty::method_home` no longer spells
+    `"Closure"` and MIR's `closure_home_method` is gone. `Ty::proc_of` is the
+    one constructor of the `Proc[...]` type. quiver's last paren closure types
+    use `Fn[(T) -> T]`.
+  - Pins: `borrowed_places::semantics_an_aggregate_holding_a_borrow_keeps_its_root_borrowed`,
+    `..._an_evaluated_operand_is_protected_while_later_operands_run`,
+    `..._a_var_binding_keeps_its_place_borrowed_through_writes`,
+    `..._a_var_self_receiver_excludes_its_place_from_the_arguments`,
+    `drop_fixtures::var_places_point_at_the_real_storage`,
+    `drop_fixtures::compound_assignment_updates_an_array_element`,
+    `drop_fixtures::compound_assignment_to_a_hash_value_is_rejected`,
+    `blocks_procs_lambdas::semantics_a_proc_method_resolves_on_the_declared_closure_shell`,
+    e2e `2221`; the loan matrix grows to 485 programs
+    (`tmp/test-cache/loan-matrix/gen.py`, `gen2.py`).
+- **Borrows follow every value shape, and every write checks the same
+  places (F-1, review I-15, I-24, I-25).** One provenance rule in
+  `borrow_check/places.rs` serves both sides. A binding borrows from every
+  place its value may come from, through an `if`/`case` arm, a block tail, a
+  cast, a parallel assignment's value, a copy of a borrow, a pattern binding,
+  a `for` loop over a field (until the loop ends), and a closure that captures
+  a borrow (for as long as the closure lives); the move rule walks the same
+  leaves. Loans carry a field path, so writing `u.count` while `u.name` is
+  borrowed is fine, while a write through an alias (`b = u.a; b.name = ..`)
+  checks the root `b` borrows. `&var` arguments, explicit or auto-borrowed,
+  and `var self` receivers on a borrowed place are E1002, and a `&var` place
+  argument excludes its root from the rest of the call: `u.bump(&var u.name)`,
+  `h(&var u.name, &u)` and `g(&var a[0], &var a)` are E1002 (they freed the
+  field under the callee). A borrowing binding that is never used holds
+  nothing. A `&var` String or scalar argument with no address (a Hash value)
+  is the new E1021 instead of an uncoded MIR error. Pins
+  `tests/it/borrowed_places.rs`; an adversarial matrix of 242 programs
+  (`tmp/test-cache/loan-matrix/gen.py`).
+- **`-> owned T` marks a C function's result as caller-owned (F-25
+  mechanism, review I-19).** A `lib` declaration spelled `-> owned T` is read
+  by `runtime_abi::result_ownership` before the `FRESH_ALLOC_CALLEES` table;
+  `Proc#clone` (`def clone as "ruxen_closure_share" -> owned Self`) uses it and
+  its table row is gone. Pin
+  `lib_c_symbol_alias::owned_result_marker_parses_round_trips_and_classifies_fresh`;
+  `docs/specs/codegen/ffi.spec.md` B13.
+- **`Fn[(A) -> R]` parses in every type position**, not only after `&block:`;
+  quiver's `run_app`/`run_windowed`/`run_native`/`App.build`/`edit_value`
+  and e2e 616 use it instead of the deprecated paren form.
+- **A borrow of a place keeps its root borrowed; a borrow of a temporary
+  keeps the temporary alive.** Reading a non-Copy place (`x = u.name`,
+  `arr[0].name`, a field chain, a method or function returning `&T`, a copy
+  of such a borrow) borrows its variable root until the binding's last use:
+  assigning the root or any field or element of it, `op=`, a parallel
+  assignment target and moving it are E1009 (a `var self` call E1002), where
+  they used to free the value the binding still read. A borrow of a
+  temporary (`U.new(..).name`, `mk(4).name`, `pick(U.new(..))`) keeps the
+  temporary alive until the binding's last use, then frees it once. One
+  place helper (`borrow_check/places.rs`) serves loans and writes; last uses
+  are computed ahead of the walk, so a later use is never missed. Pins
+  `tests/it/borrowed_places.rs`,
+  `drop_fixtures::borrow_of_a_temporary_keeps_it_alive_then_frees_it`, e2e
+  `2219`; drop.spec B16 (TODO.md Decisions, "Borrow of a temporary").
+- **The release-e2e harness and `drop_fixtures` run the borrow checker**, so
+  a pinned program `ruxen build` rejects can no longer pass there. e2e 2198
+  and 616 captured an enclosing closure's capture in a nested owning lambda
+  (E1019); they now clone it in the outer body.
+- **`drops.rs` is split** into `mir/lower/drops/{mod,closures,glue,flow}.rs`;
+  behaviour is unchanged.
+- **Generic type aliases; `Proc` is one.** `type Name[P] = T` now
+  substitutes its parameters at each use, and `Proc` is declared in the core
+  library as `type Proc[F] = any Fn[F]` instead of being special-cased by
+  name in the parser, formatter and resolver. The bare signature `(A) -> R`
+  is a generic argument of any named type (`Callback[A] = Proc[(A) -> nil]`),
+  printed as written by `ruxen fmt`; a parenthesised list without `->` stays
+  a tuple. Pins `tests/release-e2e/cases/2218`,
+  `blocks_procs_lambdas::syntax_signature_generic_arg_works_for_any_alias`.
+- **Drop elaboration reads typed facts, not names.** `.clone` of a Proc is
+  the `.rx` method `Closure#clone` (std/core), a lib method over the C
+  `ruxen_closure_share`, resolved like any method (the `ProcClone` node and
+  the MIR share helper are gone); closure bodies, derived class `clone`s,
+  field glue and the closure drop helper carry a `MirFnRole`; field glue
+  calls are recognised from the calling body's record
+  (`MirFunction::field_glue_calls`), never from a rebuilt name; borrow-check
+  diagnostics read a definition's display name (`block` for `__block`); whether an owned value passed to C
+  moves comes only from the `.rx` declaration (the `arg_transfer` rows are
+  deleted); block parameters come from one reader. Behaviour is unchanged;
+  `runtime_abi_parity` proves every deleted row is derivable.
+- **Closures held by fields and collections are freed.** A lambda or proc
+  stored in a class field or an `Array` / `Hash` element (quiver's
+  `handlers: Array[Proc[...]]`) moves in and is freed exactly once by its
+  owner. The closure pair grew from two words to four: the literal's drop
+  function and an owner count, so field glue and the new `RUXEN_ELEM_CLOSURE`
+  element tag free a closure they never saw built. Reading a closure field is
+  now a borrow (moving it into an owned slot is E0744); `.clone` of a `Proc`
+  shares the pair, as do a derived `clone` and a copied `Array[Proc]`
+  (`Schedule`'s builders and `Tester#context` now `.clone` their procs). A call
+  through a closure no longer counts as an escape of its arguments unless a
+  body that can be the target stores them, so a user `each(&block)` that
+  iterates its own `Array[String]` with `for` keeps freeing the elements
+  (`drop.spec.md` B12, B13). Pins: e2e `2201_closures_owned_by_fields_and_collections`,
+  `drop_fixtures.rs`, `field_ownership.rs`.
+- **Blocks, procs and lambdas have Ruby's ownership rules.** A trailing block
+  bound to a `Fn[...]` parameter (incl. `&block` and implicit `yield`) borrows
+  its captures, so two blocks may share one String and the caller frees it
+  once. `proc { }`, `Proc.new { }`, `->(x) { }`, `lambda { }` and a block bound
+  to a `Proc[...]` / `any Fn[...]` parameter own their captures (reusing a
+  moved capture is E1001). Storing a block is the new error **E1018**; declare
+  the parameter as `Proc[...]` to store it. `Proc[(A) -> R]` is the same type
+  as `any Fn[Fn(A) -> R]`. `ruxen fmt` keeps each spelling and prints a bare
+  closure value as a `->` lambda. Typeck settles each trailing block's kind in
+  one pass, and the borrow checker and MIR read that kind. Inference records
+  the mixin default (`Kernel` and type-param bounds included) it typed a method
+  call with in `MethodCall::resolved`, for positional and block arguments
+  alike, and the borrow checker no longer falls back to an unrelated
+  same-named method. So `b.visit(block)` forwarding to a mixin `Fn[...]`
+  default is no false E1018, and a block on a `T: Walk` receiver borrows its
+  captures instead of moving them (false E1001). Pins: e2e
+  `2195_blocks_procs_lambdas_ownership`, `2197_array_each_closure_value`,
+  `tests/it/blocks_procs_lambdas.rs`.
+- **A block may not move a capture it borrows (new error E1019).** A block's
+  body could return a captured String, bind it, pass it to a by-value
+  parameter, push it, put it in an array literal or capture it in an owning
+  lambda, while the enclosing scope still freed it: a use after free or double
+  free (it only leaked before blocks borrowed). Every by-value use of a
+  non-Copy capture in a block body is now **E1019** with a `.clone` hint, and
+  so is a by-value use, in a closure nested in another closure, of what it
+  takes from the enclosing closure. Reads, `&self` calls, `&T` arguments and
+  forwarding to `Fn[...]` stay allowed. A builtin type constructor (`Array`,
+  `Hash`, ...) read in a closure is no longer recorded as a capture. quiver's
+  tests clone their `State` handles before handing them to a `button` proc
+  inside a layout block. Pins: `tests/it/blocks_procs_lambdas.rs`
+  (`semantics_moving_a_borrowed_capture_out_of_a_block_is_e1019`),
+  `drop_fixtures.rs` (`cloned_block_captures_are_freed_once`).
+- **E1019 is one rule for every closure body, and pattern bindings move.**
+  A proc or lambda body may no longer move its own capture: `-> { eat(s) }`,
+  `-> { s }` or `proc do let t = s ... end` handed the same String out on
+  every call and double freed on the second. The borrow checker now treats
+  every non-Copy capture of any closure body as borrowed and rejects a move
+  of one where it records every move (`record_move`), replacing the
+  per-position `reject_capture_move` list. That also closes the positions the
+  list missed: a cast (`s as String`), a `match s; x -> x` binding, a
+  multi-assign value (`q, n = s, 1`), tuple and enum-variant literals. A proc
+  or lambda nested in an owning lambda owns a clone made in the outer body
+  instead of re-capturing the outer slot (which leaked when it escaped).
+  Those by-value positions now also record moves of ordinary variables, and
+  a branch that `return`s, `break`s or `next`s no longer carries its moves
+  past the branch. A by-value pattern binding of a non-Copy payload moves the
+  scrutinee variable, so two `if let Some(v) = o` on an `Option[String]` (a
+  double free) are E1001; Copy payloads, `_`, literal patterns and temporary
+  scrutinees move nothing. In MIR the binding owns the payload and the arm
+  frees the emptied `Option` / `Result` box of an owned local; a field read
+  only views its payload (`if let Some(v) = @name` freed the field's String),
+  and `Some(_)` on a variable no longer frees the payload. quiver's tests
+  clone `State` handles for `list` closures; a std `iter` test clones a
+  String it put in an array twice. Pins: `tests/it/blocks_capture_moves.rs`,
+  `tests/it/borrow_check_pattern_moves.rs`, `drop_fixtures.rs`
+  (`cloned_capture_moves_pass_borrow_check_and_free_once`,
+  `if_let_binding_owns_the_option_payload`,
+  `match_on_a_place_keeps_its_payload`).
+- **Blocks and procs may take fewer parameters than their `Fn` type** (Ruby
+  arity): `run do puts("y") end` for `def run(f: Fn(Int) -> nil)` compiles
+  again and ignores the extra argument. Lambdas keep exact arity (E0743).
+  E0743 now spells callable types as written (`Fn(Int) -> nil`,
+  `Proc[(Int) -> nil]`), never `()`. Pin: e2e `2199_block_fewer_params`.
+- **Fewer false borrow errors on closures.** Forwarding a `Fn[...]` parameter
+  to a callable value (`invoke.(f)`) or to a mixin requirement with no default
+  body reads that callable's or requirement's declared parameters (no false
+  E1018); among same-arity requirement overloads it reads the one typeck
+  selected by argument type. A proc or lambda passed to a `Send`-bounded
+  parameter owns its captures, so it is no false E1013; a block there still
+  is, and so is any closure capturing a reference (`let r = &s`), whose
+  pointee stays in the caller's frame.
+- **`Proc.new() { ... }`** with empty parentheses is the proc literal, like
+  `Proc.new { ... }`.
+- **Mixin method lookups return the selected default body with the
+  signature** (`MixinResolver::lookup_method_with_args`,
+  `lookup_method_on_bounds`, `lookup_block_method_by_name`); the parallel
+  `trait_method_defs` map and the four `_with_def` lookups are gone.
 - **Concurrency methods are real `.rx` code.** `Thread`, `Mutex`, `Channel` and
   friends are implemented as stdlib extensions instead of hardcoded Rust method
   resolvers; `typeck/method_resolvers/concurrency.rs` is gone and the `Send`
@@ -74,8 +547,150 @@ once 1.0.0 ships.
 - Error codes E1004, E1005 and E1008, which nothing emitted any more.
 
 ### Fixed
+- **`(&var u.name).push_str(s)` and `u.name += s` grow the field's own
+  buffer.** The first discarded the receiver's store-back and left the field
+  on the freed buffer (P-8); the second stored the grown buffer back through
+  the freeing field store, a double free under Guard Malloc. Both now store the
+  slot back raw (since replaced by the field's own address, `FieldAddr`).
+  Pins `drop_fixtures::var_field_receiver_grows_the_field_in_place`,
+  `drop_fixtures::place_writes_after_borrows_neither_leak_nor_double_free`.
+- **A closure stored through a type parameter is freed once.**
+  `Holder.new(-> { 7 })` specialized `Holder[T]#init` with `T` as a borrowed
+  block slot, so the caller freed the closure the field also freed. A closure
+  bound to a type parameter is now a stored proc in the specialized body
+  (`Ty::as_type_argument`). Pin
+  `drop_fixtures::a_closure_stored_through_a_type_parameter_is_freed_once`.
+- **Rebinding an object after a closure literal frees the old object.** The
+  closure body's lowering dropped the enclosing function's record of its heap
+  locals, so every later rebind leaked the replaced object.
+- **A parallel assignment to a field types the field as owned** (`u.name, n
+  = "x", 1` was a type mismatch against `&String`).
+- **`x = a and b` declares `x`** like Ruby (`=` binds tighter than the
+  keyword operators); it was "undefined variable". Pin e2e `2220`.
+- **A move before `break` / `next` reaches the code after the loop.** The
+  borrow checker dropped a branch ending in `break` from the merge, so
+  `if c; eat(s); break; end` then `puts s` after the loop compiled and, with
+  an owning callee, read freed memory. Those states now merge into the loop
+  exit; a move before `return` still compiles. Pin
+  `borrow_check_pattern_moves::semantics_a_move_before_break_or_next_reaches_the_code_after_the_loop`.
+- **`&var` field and element arguments free once.** `replace(&var u.name)`
+  freed the old String in the callee and again in the store-back. The
+  object is evaluated once and the field is stored back raw; an Array
+  element passes its own slot (`ruxen_vec_slot_addr`), so `replace(a[0])`
+  no longer makes the Array's drop shallow either. Pins
+  `drop_fixtures::var_string_param_writes_neither_leak_nor_double_free`, e2e
+  `2219`; drop.spec B17.
+- **`u.name = &var s` is E0744**, like `u.name = &s`: every reference form is
+  a borrow that cannot move into an owned slot. An assignment whose value
+  does not fit its target is now reported (it was silently accepted). Pin
+  `field_ownership::a_mutable_borrow_into_an_owned_slot_is_e0744_and_mismatches_are_reported`.
+- `BufWriter#into_inner`'s flush-failure panic is pinned
+  (`stdlib_bufio::bufwriter_into_inner_panics_when_its_flush_fails`); the
+  closure pair layout is one `RuxenClosurePair` in runtime.h with
+  `_Static_assert`s, compared with the compiler's `CLOSURE_PAIR_*` by
+  `closure_pair_slots_match_the_c_runtime`; an LLVM builder `.unwrap()` is an
+  error return.
+- **Top-level programs accept every Ruby statement, and an assignment shadows a
+  method of the same name.** A file's top level now runs `while`, `for`, `if`,
+  `match` and literal-receiver calls (`[1, 2].each { }`), not only statements
+  that start with an identifier, and a statement with an error inside reports
+  that error instead of "expected top-level declaration". `p = "x"` declares a
+  local even though `Kernel#p` exists (it used to resolve to the method), and
+  so does a one-expression closure body (`-> { saved = f }`). The file's last
+  expression is a statement, not `main`'s value, so it may have any type. The
+  formatter keeps consecutive top-level statements together. The
+  blocks/fields/`&var` fixtures, e2e cases 2195 to 2216 and their `it` test
+  programs now use top-level statements, `x = 1`, `@ivar`, parenless `puts`
+  and `->` lambdas. Pin: e2e `2217_assignment_shadows_method_name`.
+- **Merge of the `&var` slot ABI and statement temporaries with fields-own-values,
+  blocks/procs/lambdas.** Fixes found by the combined gate, each derived from
+  the program rather than a Rust name list:
+  a call to a function that returns one of its parameters on every path
+  (`Kernel#tap`, a builder returning `self`; one shared analysis,
+  `drops::single_returned_param`, also used by `elide_returns_self_realloc`)
+  passes a temporary argument's ownership to its result and leaves a named
+  owner in charge (`[1, 2].tap { }` was freed at statement end while bound;
+  `r.with_body(b)` freed `r`); a block passed to a mixin default or `Kernel`
+  method is freed by the caller (`CallSummaries::block_params` reads the
+  callee's lowered body); an owned value passed by value to a `.rx` `lib`
+  declaration moves into C (`SharedSync.new(obj)` freed `obj` at statement
+  end), so read-only C parameters are now declared `&T` (`Hash#key?`/`remove`,
+  `Set#include?`/`remove`, `BufReader`/`BufWriter.new`, `File#seek`,
+  `TcpStream#shutdown`, `Duration`/`Instant` arithmetic, `ruxen_queue_new`);
+  `Array#first` / `#last` return `Option[&T]` (the C side hands back the
+  element itself; `if let Some(v) = a.first` freed it); the `OpenOptions`
+  fluent setters are `.rx` bodies returning `self` and lost their wrong Fresh
+  classification (each chain link freed the same options); a C drop that
+  releases its own storage is declared `def consume drop as "..."` in its
+  `.rx` class, replacing the `DROP_FREES_STORAGE` list (`Mutex`, `SharedSync`,
+  channel ends, atomics; canvas's raw handles); `TestClock.install` returns a
+  fresh guard the caller owns, so a bound guard restores the real clock at
+  scope end. LLVM: a pointer-typed erased word (`self` in `class Float`) is
+  read as an integer word before a float binop. A `match` on a borrowed
+  `Option`/`Result` types its payload from the referent. Pins: e2e `2216`,
+  `lib_c_symbol_alias::def_consume_drop_marks_a_drop_that_releases_its_storage`,
+  stdlib `future`/`io`/`sync`/`iter`/`core` tests, `runtime_abi_parity`
+  `intentional_fresh_removal`.
+- **Rebinding a `&var` parameter that holds a handle is an error (E1020).** A
+  `&var` of a class, struct, enum, `Array`, `Hash`, closure or type parameter
+  is the caller's handle, so `p = Point.new(0)` in the callee never reached the
+  caller and silently did nothing. Borrow check now rejects it, with the help
+  "return the new value, or wrap it in a field". Because such a parameter can
+  no longer be stored or rebound, a value passed to a `&var` parameter or as a
+  `var self` receiver stays owned by the caller and is freed at its scope exit
+  (it leaked). `p = make_point` (a bare nullary function on the right of an
+  assignment) now calls it, as `let p = make_point` does; it stored nothing and
+  crashed. A `match` / `if let` on a borrowed `Option` or `Result` (a field
+  read) types its payload from the referent; it printed the pointer. Pins:
+  `tests/it/refmut_handle_rebind.rs`, e2e `2216_var_handle_param_rebind_fixes`,
+  `drop_fixtures::match_on_a_place_keeps_its_payload`.
+- **Blocks and closure arguments are typed from the parameter they bind to.**
+  A trailing block on a free-function call takes its parameter types from the
+  callee's `Fn[...]` parameter before its body is inferred, so
+  `outer { |n| puts(n) }` with `&block: Fn[(Int) -> nil]` prints the Int
+  instead of segfaulting (`puts(n)` used to pin `n: String`). An argument that
+  is not a closure taking the declared parameters is the new error **E0743**
+  (`run(5)`, `[1, 2].each(5)`, `->(s: String) { }` where `Fn(Int) -> nil` is
+  expected); it used to compile and crash. A closure nested in an owning
+  lambda makes the lambda capture (move) what it reads, so reusing it is
+  E1001, and the lambda's drop frees it once however often it runs (it
+  leaked). E1018's help spells the block's storable type
+  (``Proc[(Int) -> nil]``) and its docs cover `async def` with a `Fn`
+  parameter. The `Array#each` resolver arm is gone; the `.rx` declaration
+  answers it. Pins: `tests/it/blocks_procs_lambdas.rs`, `drop_fixtures`
+  `forwarded_blocks_run_typed_and_free_once`,
+  `nested_closure_capture_is_owned_by_the_lambda_and_freed_once`.
+- **`Array#each` with a closure value** (`arr.each(f)`, `arr.each(&block)`) runs
+  a `.rx` body. It aliased the C `ruxen_vec_each`, which expected a raw
+  function pointer, and crashed with SIGBUS (deleted). Pin: e2e
+  `2197_array_each_closure_value`.
+- **`.clone` on a generic class instance links.** The derived clone body is
+  emitted per monomorphic instance. Pin: e2e `2196_generic_class_derived_clone`.
+- **`&var` of a scalar or String is the caller's storage, and statement
+  temporaries are dropped at the end of their statement.** A `&var Int`,
+  `&var Float`, `&var Bool` or `&var String` parameter is the address of the
+  caller's variable: every read in the callee loads through it and every write
+  (`n += 1`, `s.push_str`, `s = "x"`) lands in the caller, with or without an
+  explicit `&var` at the call site; `MutexGuard#deref_mut` on a `Mutex[Int]`
+  writes through. Reading a `&var String` parameter no longer crashes, and
+  scalar writes are no longer lost (`mir::refmut_abi`, `expr/refmut_place.rs`,
+  one `allocate_refmut_slots` for Cranelift and the REPL JIT, the same rule in
+  LLVM). A temporary that owns a value, including a `MutexGuard` from
+  `m.lock!.get` and a value returned by a function that returns a fresh one, is
+  dropped at the end of its statement, so a helper that locks no longer
+  deadlocks on its second call and such temporaries no longer leak. Drop
+  elaboration now runs once every body is lowered. e2e `2210`-`2213`, `2215`;
+  `drop_fixtures::heap_statement_temporaries_are_freed`,
+  `drop_class_statement_temporary_drops_at_statement_end`,
+  `var_string_param_writes_neither_leak_nor_double_free`.
+- **`BufWriter#into_inner` hands back the inner `File`/`TcpStream`.** It
+  returned a boxed `Result`, so the handle pointed at fd 0 and writes through it
+  went nowhere. A new C entry point flushes, returns the bare handle and panics
+  when the flush fails; the public signatures are unchanged. e2e `2214`, bufio
+  stdlib tests.
 - **Linking on Ubuntu:** `-lm` and the other system libraries now come after the runtime archive, so linkers that default to `--as-needed` no longer drop them (`undefined reference to 'pow'`).
 - **Memory:**
+  - `Mutex#lock` no longer writes 8 bytes past its `Result`. An `Option` or `Result` whose payload is a class with no fields (`MutexGuard`, `PoisonError`) got an 8-byte cell, too small for the tag and the payload.
   - `sort`/`sort!` on an array of a class no longer double-frees. A loop `let` that only read `v[i]` was freed on every pass.
   - Class elements of an Array, and class values of a Hash, are freed with the container.
   - Nested containers are freed too.

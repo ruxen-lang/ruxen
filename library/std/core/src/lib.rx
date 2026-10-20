@@ -58,6 +58,24 @@ mixin Comparable
   end
 end
 
+## `Proc[(A) -> R]`: a closure value that owns its captures, so it can be
+## stored, returned and shared with `clone`. A block parameter (`Fn[...]`)
+## only borrows its closure.
+type Proc[F] = any Fn[F]
+
+## `Closure`: the method home of every stored closure value (`Proc[...]`,
+## `any Fn[...]`), which `layout closure` declares: its values are closure
+## pairs. Calling one (`p.(x)`, `p.call(x)`) is the closure's own body; the
+## methods below are ordinary ones.
+class Closure
+  layout closure
+  lib "runtime/alloc.c"
+    ## `p.clone`: one more owner of the same closure (shared, not copied).
+    ## Each owner is dropped on its own; the captures are freed by the last.
+    def clone as "ruxen_closure_share" -> owned Self
+  end
+end
+
 # `Kernel` — the universal object surface every Ruxen value carries, the
 # analogue of Ruby's `Kernel`/`Object`. It has NO required methods; its
 # defaults are expressed purely in terms of `self` and a block, so they are
@@ -67,7 +85,7 @@ mixin Kernel
   # `tap` — run the block with `self`, then return `self`. Lets you thread a
   # side effect (logging, mutation, assertion) into a call chain without
   # breaking it: `x.tap { |v| puts v }` evaluates to `x`.
-  def tap(f: any Fn[Fn(&Self) -> nil]) -> Self
+  def tap(f: Fn(&Self) -> nil) -> Self
     f.(self)
     self
   end
@@ -77,11 +95,11 @@ mixin Kernel
   # `yield_self` is Ruby's older spelling of the same method; it is a real
   # method here (not an `alias`) so it resolves through the universal-`Kernel`
   # fallback on every receiver, which a type-keyed `alias` would not.
-  def then[U](f: any Fn[Fn(&Self) -> U]) -> U
+  def then[U](f: Fn(&Self) -> U) -> U
     f.(self)
   end
 
-  def yield_self[U](f: any Fn[Fn(&Self) -> U]) -> U
+  def yield_self[U](f: Fn(&Self) -> U) -> U
     f.(self)
   end
 end
@@ -120,17 +138,17 @@ mixin Enumerable[T]
   # The single required primitive: yield every element to `f`, in
   # order. Each including collection provides this (Array over its
   # backing vec, Set/Hash over their iterators).
-  def each(f: any Fn[Fn(T) -> nil]) -> nil
+  def each(f: Fn(T) -> nil) -> nil
 
   # Ruby `map` — apply `f` to each element, collect the results.
-  def map[U](f: any Fn[Fn(T) -> U]) -> Array[U]
+  def map[U](f: Fn(T) -> U) -> Array[U]
     var out: Array[U] = Array.new
     self.each do |x| out.push(f.(x)) end
     out
   end
 
   # Ruby `select` / `filter` — keep elements where the predicate holds.
-  def select(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
+  def select(pred: Fn(T) -> Bool) -> Array[T]
     var out: Array[T] = Array.new
     self.each do |x|
       if pred.(x)
@@ -141,7 +159,7 @@ mixin Enumerable[T]
   end
 
   # Ruby `reject` — the inverse of `select`.
-  def reject(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
+  def reject(pred: Fn(T) -> Bool) -> Array[T]
     var out: Array[T] = Array.new
     self.each do |x|
       if pred.(x)
@@ -153,7 +171,7 @@ mixin Enumerable[T]
   end
 
   # Ruby `all?` — true iff the predicate holds for every element.
-  def all?(pred: any Fn[Fn(T) -> Bool]) -> Bool
+  def all?(pred: Fn(T) -> Bool) -> Bool
     var ok: Bool = true
     self.each do |x|
       if pred.(x)
@@ -165,7 +183,7 @@ mixin Enumerable[T]
   end
 
   # Ruby `any?` — true iff the predicate holds for at least one element.
-  def any?(pred: any Fn[Fn(T) -> Bool]) -> Bool
+  def any?(pred: Fn(T) -> Bool) -> Bool
     var found: Bool = false
     self.each do |x|
       if pred.(x)
@@ -176,7 +194,7 @@ mixin Enumerable[T]
   end
 
   # Ruby `partition` — split into (matching, non-matching) by predicate.
-  def partition(pred: any Fn[Fn(T) -> Bool]) -> (Array[T], Array[T])
+  def partition(pred: Fn(T) -> Bool) -> (Array[T], Array[T])
     var yes: Array[T] = Array.new
     var no: Array[T] = Array.new
     self.each do |x|
@@ -191,7 +209,7 @@ mixin Enumerable[T]
 
   # Ruby `each_with_index` — yield each element together with its
   # 0-based position. An external counter is bumped per iteration.
-  def each_with_index(f: any Fn[Fn(T, Int) -> nil]) -> nil
+  def each_with_index(f: Fn(T, Int) -> nil) -> nil
     var i: Int = 0
     self.each do |x|
       f.(x, i)
@@ -205,7 +223,7 @@ mixin Enumerable[T]
   # hit wraps explicitly via `Option.Some(x)` (the bare-value "drop
   # Some" sugar only fires at let / function-tail positions, not at an
   # in-loop assignment).
-  def find(pred: any Fn[Fn(T) -> Bool]) -> Option[T]
+  def find(pred: Fn(T) -> Bool) -> Option[T]
     var out: Option[T] = nil
     var found: Bool = false
     self.each do |x|
@@ -222,7 +240,7 @@ mixin Enumerable[T]
 
   # Ruby `index` — the 0-based position of the first matching element,
   # or `nil`. Walks with an external counter, freezing on the first hit.
-  def index(pred: any Fn[Fn(T) -> Bool]) -> Option[Int]
+  def index(pred: Fn(T) -> Bool) -> Option[Int]
     var out: Option[Int] = nil
     var found: Bool = false
     var i: Int = 0
@@ -243,7 +261,7 @@ mixin Enumerable[T]
   # accumulator seeded by `seed`. The closure receives the running
   # accumulator and the current element and returns the next
   # accumulator. The result type `U` is the accumulator type.
-  def reduce[U](seed: U, f: any Fn[Fn(U, T) -> U]) -> U
+  def reduce[U](seed: U, f: Fn(U, T) -> U) -> U
     var acc: U = seed
     self.each do |x|
       acc = f.(acc, x)
@@ -255,33 +273,33 @@ mixin Enumerable[T]
   # default methods. (`alias` does not compose with the per-implementor
   # monomorphization of a mixin default, and `collect` is NOT aliased to `map`
   # — it is already the iterator `collect[Target]` method.)
-  def filter(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
+  def filter(pred: Fn(T) -> Bool) -> Array[T]
     self.select(pred)
   end
 
-  def detect(pred: any Fn[Fn(T) -> Bool]) -> Option[T]
+  def detect(pred: Fn(T) -> Bool) -> Option[T]
     self.find(pred)
   end
 
-  def inject[U](seed: U, f: any Fn[Fn(U, T) -> U]) -> U
+  def inject[U](seed: U, f: Fn(U, T) -> U) -> U
     self.reduce(seed, f)
   end
 
   # Ruby `find_all` — a synonym of `select` (keep elements where the
   # predicate holds).
-  def find_all(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
+  def find_all(pred: Fn(T) -> Bool) -> Array[T]
     self.select(pred)
   end
 
   # Ruby `none?` — true when NO element satisfies the predicate.
-  def none?(pred: any Fn[Fn(T) -> Bool]) -> Bool
+  def none?(pred: Fn(T) -> Bool) -> Bool
     !self.any?(pred)
   end
 
   # Ruby `one?` — true when EXACTLY one element satisfies the predicate.
   # An external counter is bumped per matching element (same pattern as
   # `each_with_index`).
-  def one?(pred: any Fn[Fn(T) -> Bool]) -> Bool
+  def one?(pred: Fn(T) -> Bool) -> Bool
     var n: Int = 0
     self.each do |x|
       if pred.(x)
@@ -320,7 +338,7 @@ mixin Enumerable[T]
   # predicate holds. Once the predicate first fails, every later element is
   # skipped (a `taking` latch), which is what distinguishes this from
   # `select`.
-  def take_while(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
+  def take_while(pred: Fn(T) -> Bool) -> Array[T]
     var out: Array[T] = Array.new
     var taking: Bool = true
     self.each do |x|
@@ -338,7 +356,7 @@ mixin Enumerable[T]
   # Ruby `drop_while` — everything from the FIRST element that fails the
   # predicate onward, including that element. The complement of
   # `take_while`; the latch flips once and never flips back.
-  def drop_while(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
+  def drop_while(pred: Fn(T) -> Bool) -> Array[T]
     var out: Array[T] = Array.new
     var dropping: Bool = true
     self.each do |x|
@@ -415,7 +433,7 @@ mixin Enumerable[T]
   # Ruby tests the block result for truthiness; the typed equivalent is a
   # block returning `Option[U]`, so `nil` is the skip signal and `Some(v)`
   # (or a bare `v` at the block's tail) is a keep.
-  def filter_map[U](f: any Fn[Fn(T) -> Option[U]]) -> Array[U]
+  def filter_map[U](f: Fn(T) -> Option[U]) -> Array[U]
     var out: Array[U] = Array.new
     self.each do |x|
       let r: Option[U] = f.(x)
@@ -431,14 +449,14 @@ mixin Enumerable[T]
   # returning the 0-based position of the first match or `nil`. (Ruby's
   # value form `find_index(obj)` needs `T` equality and is therefore
   # deferred to the element-typed batch.)
-  def find_index(pred: any Fn[Fn(T) -> Bool]) -> Option[Int]
+  def find_index(pred: Fn(T) -> Bool) -> Option[Int]
     self.index(pred)
   end
 
   # Ruby `flat_map` — map each element to a collection, then concatenate
   # the results one level deep. `extend` does the concatenation; nothing
   # here inspects `T` or `U`, so it stays a single opaque body.
-  def flat_map[U](f: any Fn[Fn(T) -> Array[U]]) -> Array[U]
+  def flat_map[U](f: Fn(T) -> Array[U]) -> Array[U]
     var out: Array[U] = Array.new
     self.each do |x|
       let inner: Array[U] = f.(x)
@@ -451,7 +469,7 @@ mixin Enumerable[T]
   # delegating method rather than an `alias`, for the same reason `filter`
   # and `detect` are (an alias does not compose with the per-implementor
   # monomorphization of a mixin default).
-  def collect_concat[U](f: any Fn[Fn(T) -> Array[U]]) -> Array[U]
+  def collect_concat[U](f: Fn(T) -> Array[U]) -> Array[U]
     self.flat_map(f)
   end
 
@@ -461,7 +479,7 @@ mixin Enumerable[T]
   # by value, so the memo is threaded THROUGH the closure instead and the
   # block must return it. The argument ORDER still matches Ruby (element
   # first), which is what distinguishes this from `reduce`.
-  def each_with_object[U](memo: U, f: any Fn[Fn(T, U) -> U]) -> U
+  def each_with_object[U](memo: U, f: Fn(T, U) -> U) -> U
     var acc: U = memo
     self.each do |x|
       acc = f.(x, acc)
@@ -475,7 +493,7 @@ mixin Enumerable[T]
   # a positive `if` wrapper rather than an early `return nil`: an early
   # `return` from a `-> nil` body fails the Cranelift verifier with
   # "arguments of return must match function signature".
-  def each_slice(n: Int, f: any Fn[Fn(Array[T]) -> nil]) -> nil
+  def each_slice(n: Int, f: Fn(Array[T]) -> nil) -> nil
     if n > 0
       let buf: Array[T] = self.entries
       let len: Int = buf.size as Int
@@ -501,7 +519,7 @@ mixin Enumerable[T]
   # shorter than `n` yields nothing. Each window is built fresh by indexed
   # reads off a materialised buffer rather than cloned off a mutated
   # cursor, so no window aliases another.
-  def each_cons(n: Int, f: any Fn[Fn(Array[T]) -> nil]) -> nil
+  def each_cons(n: Int, f: Fn(Array[T]) -> nil) -> nil
     if n > 0
       let buf: Array[T] = self.entries
       let len: Int = buf.size as Int
@@ -524,7 +542,7 @@ mixin Enumerable[T]
   # `n <= 0` runs it zero times. (Ruby's arg-less form loops forever and
   # its block-less form returns a lazy enumerator; neither is expressible
   # here, so only the counted form ships.)
-  def cycle(n: Int, f: any Fn[Fn(T) -> nil]) -> nil
+  def cycle(n: Int, f: Fn(T) -> nil) -> nil
     var i: Int = 0
     while i < n
       self.each do |x|
@@ -538,7 +556,7 @@ mixin Enumerable[T]
   # Ruby `reverse_each` — yield the elements in reverse iteration order.
   # Buffers through `entries` first, because the one required primitive
   # (`each`) only runs forwards.
-  def reverse_each(f: any Fn[Fn(T) -> nil]) -> nil
+  def reverse_each(f: Fn(T) -> nil) -> nil
     let buf: Array[T] = self.entries
     var i: Int = buf.size as Int
     while i > 0

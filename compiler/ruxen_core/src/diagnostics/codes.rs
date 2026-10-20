@@ -358,6 +358,22 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0742",
         title: "no overload of the function takes this argument type",
     },
+    // E0743: an argument bound to a closure parameter (`Fn[...]`,
+    // `Proc[...]`) that is not a callable taking the declared parameter types
+    // (`run(5)`, `[1, 2].each(5)`). It used to type-check and crash at the
+    // indirect call.
+    CodeInfo {
+        code: "E0743",
+        title: "argument is not a closure matching the parameter's signature",
+    },
+    // E0744: a borrow `&T` of a non-Copy `T` (a field read, a `&T`
+    // parameter) used where an owned `T` is required: a by-value parameter,
+    // a `-> T` return, a `let`/field typed `T` (TODO.md Decisions, "Fields").
+    // Owning it would free a value its owner still frees.
+    CodeInfo {
+        code: "E0744",
+        title: "a borrowed value is used where an owned value is required",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker's `ErrorCode` enum in `borrow_check/errors.rs`
     // reads its titles from these rows.
@@ -369,6 +385,8 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1002",
         title: "cannot borrow writably — already borrowed read-only",
     },
+    // E1003 is no longer emitted: the MIR loan check reports a conflicting
+    // borrow as E1002 or E1009 (docs/errors/E1003.md). Codes stay registered.
     CodeInfo {
         code: "E1003",
         title: "cannot borrow read-only — already borrowed writably",
@@ -424,6 +442,43 @@ pub const REGISTRY: &[CodeInfo] = &[
     CodeInfo {
         code: "E1017",
         title: "`include` of a type that is not a mixin",
+    },
+    // E1018 — a block parameter (`&block: Fn[...]`, the implicit-yield
+    // `__block`, or any `Fn[...]` parameter) used other than by calling it,
+    // testing it with `block_given?`, or forwarding it to another `Fn[...]`
+    // parameter. A block borrows its captures, so storing it would outlive
+    // them; `Proc[...]` is the storable spelling. Emitted by borrow_check.
+    CodeInfo {
+        code: "E1018",
+        title: "block parameter stored",
+    },
+    // E1019 — a closure body uses a capture it only borrows by value (returns
+    // it, binds it, passes it to a by-value parameter, stores it, or captures
+    // it in an owning proc or lambda). A block borrows every capture, and a
+    // closure nested in another closure borrows what it takes from it; the
+    // owner still frees the value, so a move would free it twice. The fix is
+    // `.clone`. Emitted by borrow_check.
+    CodeInfo {
+        code: "E1019",
+        title: "cannot move a borrowed capture out of a closure body",
+    },
+    // E1020 — assigning to a `&var` parameter whose type is passed as its
+    // handle word (a class, struct, enum, array, hash, closure or type
+    // parameter; see `Ty::refmut_is_slot_address`). The callee holds a copy
+    // of the caller's handle, so the rebinding would never reach the caller:
+    // a silent no-op. Emitted by borrow_check.
+    CodeInfo {
+        code: "E1020",
+        title: "cannot rebind a `&var` parameter that holds a handle",
+    },
+    // E1021 — a `&var` argument for a String or scalar parameter (passed as
+    // the address of the caller's storage) that has no address: a Hash
+    // value, a safe-navigation field read, a field of a non-object
+    // (`HirExpr::is_unaddressable_var_place`). The write would be lost.
+    // Emitted by borrow_check.
+    CodeInfo {
+        code: "E1021",
+        title: "this value has no address to pass to a `&var` parameter",
     },
     // Send/Sync enforcement at thread-boundary construction sites
     // (docs/specs/ownership/send_sync_enforcement.spec.md). E1011 / E1012

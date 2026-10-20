@@ -305,9 +305,26 @@ impl Parser {
         TypeExpr::AnyMixin { bounds, span }
     }
 
-    fn parse_fn_type(&mut self) -> TypeExpr {
+    /// A closure type after its `Fn` head: the canonical bracket form
+    /// `Fn[(T…) -> R]` (a borrowed block, spec section 6) or the deprecated
+    /// paren form `Fn(T…) -> R`. The one parser for both, in every type
+    /// position (a `&block:` parameter included).
+    pub(super) fn parse_fn_type(&mut self) -> TypeExpr {
         let start = self.current_span();
         self.advance(); // consume Fn
+        if self.at(TokenKind::LBracket) {
+            self.advance(); // consume `[`
+            self.skip_newlines();
+            let (params, return_type) = self.parse_fn_signature_tail();
+            self.skip_newlines();
+            self.expect(TokenKind::RBracket);
+            return TypeExpr::Function {
+                params,
+                return_type: Box::new(return_type),
+                spelling: FnTypeSpelling::Bracket,
+                span: self.span_from(&start),
+            };
+        }
         if !self.at(TokenKind::LParen) {
             self.expect(TokenKind::LParen); // reports the missing `(`
         }
@@ -317,8 +334,45 @@ impl Parser {
         TypeExpr::Function {
             params,
             return_type: Box::new(return_type),
-            bracketed: false, // paren form `Fn(...) -> R`
+            spelling: FnTypeSpelling::Paren,
             span,
+        }
+    }
+
+    /// A bare signature `(T…) -> R` as a generic argument of any named type
+    /// (`Proc[(Int) -> nil]`). The `->` after the closing paren tells it
+    /// from a tuple type (`Array[(Int, String)]`).
+    fn parse_signature_arg(&mut self) -> TypeExpr {
+        let start = self.current_span();
+        let (params, return_type) = self.parse_fn_signature_tail();
+        TypeExpr::Function {
+            params,
+            return_type: Box::new(return_type),
+            spelling: FnTypeSpelling::Signature,
+            span: self.span_from(&start),
+        }
+    }
+
+    /// Whether the cursor is at `(` whose matching `)` is followed by `->`.
+    fn at_signature(&self) -> bool {
+        if !self.at(TokenKind::LParen) {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut offset = 0usize;
+        loop {
+            match self.peek_at_kind(offset) {
+                TokenKind::LParen => depth += 1,
+                TokenKind::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return self.peek_at_kind(offset + 1) == TokenKind::Arrow;
+                    }
+                }
+                TokenKind::Eof => return false,
+                _ => {}
+            }
+            offset += 1;
         }
     }
 
@@ -496,6 +550,9 @@ impl Parser {
             self.advance();
             return TypeExpr::ConstLit { value: v, span };
         }
+        if self.at_signature() {
+            return self.parse_signature_arg();
+        }
         self.parse_type()
     }
 
@@ -610,7 +667,7 @@ impl Parser {
             let fn_ty = TypeExpr::Function {
                 params,
                 return_type: Box::new(return_type),
-                bracketed: false, // `Fn(...)` sugar inside a mixin bound
+                spelling: FnTypeSpelling::Paren, // `Fn(...)` sugar inside a mixin bound
                 span: fn_span,
             };
             path.generic_args = Some(vec![fn_ty]);

@@ -31,6 +31,34 @@ pub(super) fn propagate_pattern_types(
     scrutinee_ty: &Ty,
     symbols: &mut SymbolTable,
 ) {
+    // Destructuring a borrow (`match self.next` on an `&Option[Node]` field
+    // read) matches the borrowed value and binds each non-Copy payload as a
+    // borrow of it: the scrutinee's owner keeps owning the payload.
+    if let (
+        Ty::Ref(inner),
+        HirPattern::Tuple { .. } | HirPattern::Enum { .. } | HirPattern::Struct { .. },
+    ) = (scrutinee_ty, pattern)
+    {
+        propagate_pattern_types(pattern, inner, symbols);
+        borrow_pattern_bindings(pattern, symbols);
+        return;
+    }
+    // A tuple keeps owning its elements, so destructuring one binds each
+    // non-Copy element as a borrow of it, exactly as reading `t.0` does.
+    if let (Ty::Tuple(_), HirPattern::Tuple { .. }) = (scrutinee_ty, pattern) {
+        propagate_owned_pattern_types(pattern, scrutinee_ty, symbols);
+        borrow_pattern_bindings(pattern, symbols);
+        return;
+    }
+    propagate_owned_pattern_types(pattern, scrutinee_ty, symbols);
+}
+
+/// [`propagate_pattern_types`] on a scrutinee the pattern owns.
+fn propagate_owned_pattern_types(
+    pattern: &HirPattern,
+    scrutinee_ty: &Ty,
+    symbols: &mut SymbolTable,
+) {
     match pattern {
         HirPattern::Wildcard { .. } | HirPattern::Rest { .. } | HirPattern::Literal { .. } => {}
         HirPattern::Binding { def_id, .. } => {
@@ -183,6 +211,63 @@ pub(super) fn propagate_pattern_types(
                 propagate_pattern_types(field_pat, &declared_ty.subst_params(&subst), symbols);
             }
         }
+    }
+}
+
+/// The type of reading a value out of a slot its container keeps owning (a
+/// class field, a tuple element, a destructured payload): a non-Copy `T` is
+/// read as the borrow `&T` (TODO.md Decisions, "Fields"). Copy values,
+/// borrows, and types not yet known read as themselves.
+pub(super) fn slot_read_ty(ty: Ty, symbols: &SymbolTable) -> Ty {
+    if matches!(ty, Ty::Ref(_) | Ty::RefMut(_))
+        || ty.is_copy_with(symbols)
+        || ty.is_infer()
+        || ty.is_error()
+    {
+        ty
+    } else {
+        Ty::Ref(Box::new(ty))
+    }
+}
+
+/// Re-type every by-value binding inside a destructuring `pattern` as its
+/// [`slot_read_ty`] (see [`propagate_pattern_types`] on a borrowed scrutinee
+/// or a tuple).
+fn borrow_pattern_bindings(pattern: &HirPattern, symbols: &mut SymbolTable) {
+    match pattern {
+        HirPattern::Binding { def_id, .. } => {
+            let Some(ty) = symbols.def_ty(*def_id) else {
+                return;
+            };
+            let read = slot_read_ty(ty.clone(), symbols);
+            if read != ty {
+                symbols.update_ty(*def_id, read);
+            }
+        }
+        HirPattern::Tuple { elements, .. } => {
+            for elem in elements {
+                borrow_pattern_bindings(elem, symbols);
+            }
+        }
+        HirPattern::Enum { fields, .. } => {
+            for field in fields {
+                borrow_pattern_bindings(field, symbols);
+            }
+        }
+        HirPattern::Struct { fields, .. } => {
+            for (_, field) in fields {
+                borrow_pattern_bindings(field, symbols);
+            }
+        }
+        HirPattern::Or { patterns, .. } => {
+            for p in patterns {
+                borrow_pattern_bindings(p, symbols);
+            }
+        }
+        HirPattern::Wildcard { .. }
+        | HirPattern::Rest { .. }
+        | HirPattern::Literal { .. }
+        | HirPattern::Ref { .. } => {}
     }
 }
 

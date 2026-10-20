@@ -61,7 +61,7 @@ impl<'a> InferenceEngine<'a> {
         // sees a bare `U`, an index yields `U`). Harvest is a no-op for a
         // method with no own `generic_params`, so ordinary trait-default
         // methods are unaffected.
-        if let Some(sig) =
+        if let Some((sig, _)) =
             self.traits
                 .lookup_method_with_args(obj_ty, method_name, args, self.symbols)
         {
@@ -155,7 +155,10 @@ impl<'a> InferenceEngine<'a> {
         let declared = known_home
             && self
                 .symbols
-                .methods_named(&resolved.method_home(), method_name)
+                .methods_named(
+                    &resolved.method_home(self.symbols.closure_shell_name()),
+                    method_name,
+                )
                 .next()
                 .is_some();
         if known_home && !declared {
@@ -167,7 +170,7 @@ impl<'a> InferenceEngine<'a> {
             // A static call's receiver carries unbound fresh variables
             // (`Array[?T]`): name its home class instead.
             let shown = if resolved.any(&mut |t| t.is_infer()) {
-                resolved.method_home()
+                resolved.method_home(self.symbols.closure_shell_name())
             } else {
                 resolved.to_string()
             };
@@ -185,6 +188,61 @@ impl<'a> InferenceEngine<'a> {
         // Method not found on a receiver with no home class (a function
         // value, a tuple): left to later phases.
         self.ctx.fresh_type_var()
+    }
+
+    /// The mixin default body a method call on `ty` resolves to, through
+    /// the same lookups [`Self::resolve_method_call`] types it with: an
+    /// included mixin's or the universal `Kernel` default
+    /// (`lookup_method_with_args`), else a mixin bound of a type-parameter
+    /// receiver (`lookup_method_on_bounds`). `None` when the call resolves to
+    /// an own, impl or derived method, a bodiless requirement, nothing, or
+    /// is a closure invocation. The caller records it in
+    /// `MethodCall::resolved`, so every later stage reads this choice.
+    pub(super) fn selected_default_method(
+        &self,
+        ty: &Ty,
+        method_name: &str,
+        args: &[HirExpr],
+    ) -> Option<DefId> {
+        let receiver = ty.peel_refs();
+        if receiver.callable_signature().is_some() {
+            return None;
+        }
+        if let Some((_, def)) =
+            self.traits
+                .lookup_method_with_args(receiver, method_name, args, self.symbols)
+        {
+            return def;
+        }
+        let bounds = self.receiver_bounds(receiver)?;
+        self.traits
+            .lookup_method_on_bounds(&bounds, method_name, args)
+            .ok()
+            .flatten()
+            .and_then(|(_, def)| def)
+    }
+
+    /// The parameter types of the bodiless requirement a call on a
+    /// mixin-bound receiver `ty` selects with `args`, the same choice
+    /// `lookup_method_on_bounds` makes for typing it; `None` when the
+    /// receiver has no bounds or the selected method has a default body
+    /// (recorded as a def instead).
+    pub(super) fn selected_bound_requirement(
+        &self,
+        ty: &Ty,
+        method_name: &str,
+        args: &[HirExpr],
+    ) -> Option<Vec<Ty>> {
+        let bounds = self.receiver_bounds(ty)?;
+        match self
+            .traits
+            .lookup_method_on_bounds(&bounds, method_name, args)
+        {
+            Ok(Some((signature, None))) => {
+                Some(signature.params.into_iter().map(|p| p.ty).collect())
+            }
+            _ => None,
+        }
     }
 
     /// If `ty` is (a reference to) a `TypeParam`, `impl Trait`, or `dyn Trait`,
@@ -205,19 +263,14 @@ impl<'a> InferenceEngine<'a> {
         // (which unifies to `Unit` eventually), producing a misleading
         // "expected Int, found ()" against the declared signature. Pin:
         // e2e `2051_derived_ord_hashable_generic_bound`.
-        let bounds: &[crate::hir::types::MixinRef] = match ty.peel_refs() {
-            Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => {
-                bounds.as_slice()
-            }
-            _ => return None,
-        };
+        let bounds = self.receiver_bounds(ty)?;
         if bounds.is_empty() {
             return None;
         }
-        match self.traits.lookup_method_on_bounds(bounds, name, args) {
+        match self.traits.lookup_method_on_bounds(&bounds, name, args) {
             // A bound's `Self` (`mixin Clone; def clone -> Self`) is the
             // receiver's own type parameter.
-            Ok(Some(sig)) => {
+            Ok(Some((sig, _))) => {
                 let subst =
                     std::collections::HashMap::from([("Self".to_string(), ty.peel_refs().clone())]);
                 Some(self.wrap_async_return(&sig).subst_params(&subst))
@@ -273,7 +326,7 @@ impl<'a> InferenceEngine<'a> {
         args: &[HirExpr],
         span: &Span,
     ) -> Option<Ty> {
-        let sig = self
+        let (sig, _) = self
             .traits
             .lookup_method_with_args(ty, method, args, self.symbols)?;
         if sig.is_class_method {
@@ -856,7 +909,7 @@ impl<'a> InferenceEngine<'a> {
     /// params (an FFI constructor such as `Mutex.new(initial: T)`), else the
     /// type's declared field types (the implicit all-fields `.new`). Used to
     /// harvest generic-param bindings from constructor arguments.
-    fn constructor_param_types(&self, type_name: &str) -> Vec<Ty> {
+    pub(super) fn constructor_param_types(&self, type_name: &str) -> Vec<Ty> {
         // Prefer an explicit `init` method's params, then a declared `new`.
         for ctor in ["init", "new"] {
             if let Some(params) = self.own_method_param_types(type_name, ctor) {
@@ -946,7 +999,33 @@ impl<'a> InferenceEngine<'a> {
         subst
             .entry("Self".to_string())
             .or_insert_with(|| obj_ty.peel_refs().clone());
-        ret_ty.subst_params(&subst)
+        let ret = ret_ty.subst_params(&subst);
+        // A receiver that is no nominal type dispatches to a shell class
+        // (the `layout closure` class for a `Proc[...]`, `Ty::method_home`); inside the shell
+        // `Self` is the shell, so its own type in a return stands for the
+        // receiver's type (`p.clone` is a `Proc[...]` again).
+        let receiver = obj_ty.peel_refs();
+        if matches!(
+            receiver,
+            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+        ) {
+            return ret;
+        }
+        let home = receiver.method_home(self.symbols.closure_shell_name());
+        Self::replace_shell_class(&ret, &home, receiver)
+    }
+
+    /// `ty` with every non-generic `Class { name: home }` replaced by
+    /// `receiver`.
+    fn replace_shell_class(ty: &Ty, home: &str, receiver: &Ty) -> Ty {
+        match ty {
+            Ty::Class { name, generic_args } if name == home && generic_args.is_empty() => {
+                receiver.clone()
+            }
+            other => other
+                .clone()
+                .map_inner(&mut |child| Self::replace_shell_class(child, home, receiver)),
+        }
     }
 
     /// Build the `{class-param-name → receiver-concrete-arg}` map for a

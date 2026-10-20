@@ -5,7 +5,7 @@
 # bound result (`b`) still exposes `.n`. Regression guard for the mixin-default
 # closure-param Self-seeding + Self-return path (not the compiler tap builtin).
 mixin Tappable
-  def run_with(f: any Fn[Fn(&Self) -> nil]) -> Self
+  def run_with(f: Fn(&Self) -> nil) -> Self
     f.(self)
     self
   end

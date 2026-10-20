@@ -17,6 +17,13 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
+Q61 fixed 2026-10-24 (uncommitted on `feat/concurrency-adoption`): tuples own
+and free their elements, a tuple element read borrows (`s.wire = cycle.0` needs
+`.clone`, E0744), Hash entries are `(&K, &V)` views, and `MutexGuard#get` /
+`SharedSync#get` return owned copies through a per-instantiation `.rx` body; rondo
+and quiver are adapted (`dev/gui-stack-v1-issues.md` Q61, `TODO.md` "Tuple
+ownership"). Pins: `it` `field_ownership`, release-e2e 2240-2243.
+
 B87 fixed 2026-07-30 (a free function whose name ended in `!` compiled clean
 and then did nothing at its call site: `parser/expr/atoms.rs` classified EVERY
 identifier ending in `!` as a macro call, stripped the `!`, and emitted an

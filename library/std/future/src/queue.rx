@@ -346,7 +346,7 @@ end
 ## into the step decls as the raw `RuxenContext*` at the i64 ABI (the `race.rx`
 ## precedent), which the step reads for the parked task's waker.
 lib "runtime/queue.c"
-  def ruxen_queue_new(capacity: Int, overflow: Overflow) -> Int
+  def ruxen_queue_new(capacity: Int, overflow: &Overflow) -> Int
   def ruxen_queue_recv_step(queue_ptr: Int, cx: &var Context) -> Int
   def ruxen_queue_recv_taken_value(queue_ptr: Int) -> Int
   def ruxen_queue_recv_waker(queue_ptr: Int) -> Int

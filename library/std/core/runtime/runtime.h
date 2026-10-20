@@ -77,6 +77,7 @@ extern int errno;
 #endif
 #else
 #include <stdio.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -202,7 +203,7 @@ typedef struct RuxenHashEntry {
  * element (`VEC`, `SET`) or of its key and then its value (`HASH`).
  * `Array[Array[String]]`'s element descriptor is VEC then CSTR, i.e.
  * 0x13. Tags past the end of the stream read as POD. The compiler
- * builds descriptors in exactly one place (`mir/lower/drops.rs`
+ * builds descriptors in exactly one place (`mir/lower/drops/`
  * `elem_desc`), from the static element type, and the drop and the
  * deep copy read the same word, so copy depth and drop depth cannot
  * disagree.
@@ -225,6 +226,46 @@ typedef struct RuxenHashEntry {
 #define RUXEN_ELEM_HASH  4 /* slot OWNS a RuxenHash; key, value follow   */
 #define RUXEN_ELEM_SET   5 /* slot OWNS a set table; element desc follows */
 #define RUXEN_ELEM_OBJ   6 /* slot OWNS a user object; glue address follows */
+#define RUXEN_ELEM_CLOSURE 7 /* slot OWNS one share of a closure pair     */
+
+/* `RUXEN_ELEM_CLOSURE` describes a slot holding a closure value: a pointer
+ * to the compiler's four-word closure pair (`mir/lower/drops/`,
+ * `CLOSURE_PAIR_SIZE`):
+ *
+ *     [0] fn_ptr  [1] captures_ptr  [2] drop_fn  [3] shares
+ *
+ * Dropping the slot calls `drop_fn(pair)`, the literal's own drop glue,
+ * which releases one owner (`shares` > 0 is decremented; at 0 the owned
+ * captures, the captures box and the pair are freed). Copying the slot adds
+ * an owner (`shares` + 1) and returns the same pair: closures are shared,
+ * never copied. A leaf tag: nothing follows it in the stream.
+ *
+ * The slot numbers and the pair size below are the C side of the layout;
+ * the compiler's `CLOSURE_PAIR_*` constants (`mir/lower/drops/closures.rs`)
+ * are the Rust side, and a test there reads these `#define`s back and
+ * compares them. */
+#define RUXEN_CLOSURE_FN_SLOT       0
+#define RUXEN_CLOSURE_CAPTURES_SLOT 1
+#define RUXEN_CLOSURE_DROP_SLOT     2
+#define RUXEN_CLOSURE_SHARES_SLOT   3
+#define RUXEN_CLOSURE_PAIR_SIZE     32
+typedef struct {
+    int64_t fn_ptr;       /* the body, called with captures_ptr first */
+    int64_t captures_ptr; /* one word per capture, or 0 */
+    int64_t drop_fn;      /* the literal's own `<closure>_drop` */
+    int64_t shares;       /* owners beyond the first */
+} RuxenClosurePair;
+_Static_assert(offsetof(RuxenClosurePair, fn_ptr) == RUXEN_CLOSURE_FN_SLOT * 8,
+               "closure pair: fn_ptr slot");
+_Static_assert(offsetof(RuxenClosurePair, captures_ptr) == RUXEN_CLOSURE_CAPTURES_SLOT * 8,
+               "closure pair: captures_ptr slot");
+_Static_assert(offsetof(RuxenClosurePair, drop_fn) == RUXEN_CLOSURE_DROP_SLOT * 8,
+               "closure pair: drop_fn slot");
+_Static_assert(offsetof(RuxenClosurePair, shares) == RUXEN_CLOSURE_SHARES_SLOT * 8,
+               "closure pair: shares slot");
+_Static_assert(sizeof(RuxenClosurePair) == RUXEN_CLOSURE_PAIR_SIZE, "closure pair: size");
+typedef void (*RuxenClosureDrop)(int64_t pair);
+int64_t ruxen_closure_share(int64_t pair);
 
 /* `RUXEN_ELEM_OBJ` describes a slot holding an instance of a user class or
  * struct. Freeing or copying one needs the type's own code (its `def drop`,
@@ -235,7 +276,7 @@ typedef struct RuxenHashEntry {
  *     glue(RUXEN_ELEM_GLUE_CLONE, slot) returns an owned copy of it.
  *
  * OBJ is therefore always the LAST tag of a stream: `RUXEN_ELEM_REST` of an
- * OBJ descriptor is the glue address. The compiler (`mir/lower/drops.rs`
+ * OBJ descriptor is the glue address. The compiler (`mir/lower/drops/`
  * `elem_desc`) emits OBJ only when the address still fits after the
  * preceding tags, and otherwise describes the slot as POD. */
 #define RUXEN_ELEM_GLUE_DROP  0
@@ -258,7 +299,8 @@ _Static_assert(RUXEN_ELEM_CSTR == RUXEN_KEY_CSTR,
 _Static_assert(RUXEN_ELEM_VEC != RUXEN_KEY_CUSTOM &&
                    RUXEN_ELEM_HASH != RUXEN_KEY_CUSTOM &&
                    RUXEN_ELEM_SET != RUXEN_KEY_CUSTOM &&
-                   RUXEN_ELEM_OBJ != RUXEN_KEY_CUSTOM,
+                   RUXEN_ELEM_OBJ != RUXEN_KEY_CUSTOM &&
+                   RUXEN_ELEM_CLOSURE != RUXEN_KEY_CUSTOM,
                "a container tag must not collide with a pass-through key kind");
 #endif
 

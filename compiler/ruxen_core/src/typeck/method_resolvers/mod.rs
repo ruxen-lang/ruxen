@@ -233,11 +233,12 @@ mod golden {
         // golden's EMPTY symbol table, return None — so they are NO LONGER
         // pinned here (same treatment as the already-migrated size/push/pop/…
         // surface). End-to-end resolution is covered by the e2e suite. The
-        // residual arms that still live in collections.rs ARE pinned: `each`
-        // (the iteration primitive), receiver-derived `to_h`, the E0700
-        // `sum`, and the in-place `select!` (no indexed-write `.rx` surface).
+        // residual arms that still live in collections.rs ARE pinned:
+        // receiver-derived `to_h`, the E0700 `sum`, and the in-place
+        // `select!` (no indexed-write `.rx` surface). `each` is a real `.rx`
+        // method (`def each(f: Fn(T) -> nil) -> nil`) answered by the bridge.
         let arr = || Ty::Array(Box::new(Ty::Int));
-        for m in ["each", "to_h", "sum", "select!"] {
+        for m in ["to_h", "sum", "select!"] {
             v.push(c(arr(), m));
         }
 

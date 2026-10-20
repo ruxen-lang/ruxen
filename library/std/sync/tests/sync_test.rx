@@ -1,6 +1,6 @@
 def read_locked(m: &Mutex[String]) -> String
   match m.lock
-    Ok(g) -> g.get.clone
+    Ok(g) -> g.get
     Err(_) -> "poisoned"
   end
 end
@@ -26,7 +26,7 @@ class Cell
 
   def read -> String
     match self.m.lock
-      Ok(g) -> g.get.clone
+      Ok(g) -> g.get
       Err(_) -> "poisoned"
     end
   end
@@ -48,7 +48,7 @@ Tester.describe("Mutex") do |t: &var Tester|
     let m = Mutex.new("twice")
     let reader = { ||
       match m.lock
-        Ok(g) -> g.get.clone
+        Ok(g) -> g.get
         Err(_) -> "poisoned"
       end
     }
@@ -107,8 +107,9 @@ Tester.describe("SharedSync") do |t: &var Tester|
 
   t.it("round-trips a Mutex[String] between closures") do
     let cell = SharedSync.new(Cell.new(Mutex.new("init")))
-    let writer = { || cell.get.write("payload-xyz") }
-    let reader = { || cell.get.read }
+    shared = cell.clone
+    writer = -> { shared.deref.write("payload-xyz") }
+    reader = -> { cell.deref.read }
     writer.()
     t.expect(reader.()).to_eq("payload-xyz")
   end

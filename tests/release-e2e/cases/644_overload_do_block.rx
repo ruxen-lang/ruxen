@@ -1,6 +1,6 @@
 class Col
   labels: Array[String]
-  computes: Array[any Fn[Fn() -> String]]
+  computes: Array[Proc[() -> String]]
   def init
     self.labels = Array.new
     self.computes = Array.new
@@ -8,7 +8,7 @@ class Col
   def var text(label: &String) -> nil
     self.labels.push(label.to_string)
   end
-  def var text(f: any Fn[Fn() -> String]) -> nil
+  def var text(f: Proc[() -> String]) -> nil
     self.computes.push(f)
   end
 end

@@ -4,22 +4,20 @@
 //!
 //! Sources, compile flags and system libraries come from the same driver
 //! entry points the real build uses (`codegen::find_runtime_sources`,
-//! `codegen::object::compile_runtime_sources`,
+//! `codegen::object::compile_c_sources` with `compile_runtime`,
 //! `codegen::collect_system_lib_flags`), so a new runtime package, a
 //! vendored C tree (PCRE2) or a `[system_libs]` entry (`-lm`) reaches
 //! these tests without a per-test source list.
 //!
-//! Each test binary uses only part of this module.
+//! Each test binary uses only part of this module; `ruxen_repl`'s `it`
+//! binary includes it too (the JIT parity lane).
 #![allow(dead_code)]
 
-use ruxen_core::codegen;
-use ruxen_core::diagnostics::DiagnosticLevel;
-use ruxen_core::lexer::Lexer;
-use ruxen_core::mir::lower::Lowerer;
-use ruxen_core::parser::Parser;
-use ruxen_core::typeck;
+use ruxen_core::codegen::{self, Backend};
+use ruxen_core::driver;
+use ruxen_core::mir::nodes::MirProgram;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
@@ -56,7 +54,7 @@ pub fn package_runtime_sources(packages: &[&str]) -> Vec<PathBuf> {
 /// the test tmp dir.
 pub fn compile_runtime_objects(sources: &[PathBuf]) -> Vec<PathBuf> {
     let dir = out_dir();
-    codegen::object::compile_runtime_sources(sources, false)
+    codegen::object::compile_c_sources(sources, |src| codegen::object::compile_runtime(src, false))
         .expect("compile runtime sources")
         .into_iter()
         .map(|obj| {
@@ -115,11 +113,28 @@ __attribute__((weak)) void Drop_dynamic_drop(long long self) { \
     harness_exe
 }
 
-/// Lex, parse, typecheck (asserting no errors), lower and compile `source`
-/// with the default runtime. Returns the executable, written under the
-/// workspace `tmp/` so it never lands on the system tmpfs; the caller
-/// runs and removes it.
-pub fn compile_program(source: &str, name: &str) -> PathBuf {
+/// Run the whole front end ([`driver::check`]) on `source` with `options`
+/// and take its MIR program, panicking with the rendered diagnostics when
+/// the program does not build.
+pub fn lower_with(source: &str, options: &driver::Options) -> MirProgram {
+    let program = driver::parse(source)
+        .unwrap_or_else(|e| panic!("parse: {}", driver::render_diagnostics(&e, None)));
+    let mut frontend = driver::check(&program, options);
+    frontend
+        .mir
+        .take()
+        .unwrap_or_else(|| panic!("front end errors: {}", frontend.render(None)))
+}
+
+/// [`lower_with`] against the hosted stdlib.
+pub fn lower(source: &str) -> MirProgram {
+    lower_with(source, &driver::Options::default())
+}
+
+/// Build `source` through the front end and `backend` with the default
+/// runtime. Returns the executable, written under the workspace `tmp/` so
+/// it never lands on the system tmpfs; the caller runs and removes it.
+pub fn compile_with_backend(source: &str, name: &str, backend: Backend) -> PathBuf {
     let tmp_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp");
     std::fs::create_dir_all(&tmp_dir).expect("create workspace tmp dir");
     let bin_path = tmp_dir.join(format!(
@@ -128,38 +143,35 @@ pub fn compile_program(source: &str, name: &str) -> PathBuf {
         unique_suffix()
     ));
 
-    let tokens = Lexer::new(source).tokenize().expect("lex");
-    let program = Parser::new(tokens).parse().expect("parse");
-    let result = typeck::type_check(&program);
-    let errors: Vec<_> = result
-        .diagnostics
-        .iter()
-        .filter(|d| d.level == DiagnosticLevel::Error)
-        .map(|d| &d.message)
-        .collect();
-    assert!(errors.is_empty(), "typecheck errors for {name}: {errors:?}");
-
-    let mir = Lowerer::new(&result.symbols)
-        .lower_program(&result.program)
-        .unwrap_or_else(|e| panic!("MIR lowering for {name}: {e}"));
-    codegen::compile(&mir, bin_path.to_str().unwrap())
+    let mir = lower(source);
+    codegen::compile_with_options(&mir, bin_path.to_str().unwrap(), false, &[], &[], backend)
         .unwrap_or_else(|e| panic!("codegen for {name}: {e}"));
     bin_path
 }
 
-/// [`compile_program`], run the executable, remove it, and return its
-/// `(stdout, stderr, exit code)`.
-pub fn compile_and_run(source: &str, name: &str) -> (String, String, Option<i32>) {
-    let bin_path = compile_program(source, name);
-    let output = Command::new(&bin_path)
+/// [`compile_with_backend`] through Cranelift, the default backend.
+pub fn compile_program(source: &str, name: &str) -> PathBuf {
+    compile_with_backend(source, name, Backend::Cranelift)
+}
+
+/// Run the executable at `bin_path` with a null stdin, remove it, and
+/// return its `(stdout, stderr, exit code)`.
+pub fn run_binary(bin_path: &Path) -> (String, String, Option<i32>) {
+    let output = Command::new(bin_path)
+        .stdin(Stdio::null())
         .output()
-        .unwrap_or_else(|e| panic!("run {name}: {e}"));
-    let _ = std::fs::remove_file(&bin_path);
+        .unwrap_or_else(|e| panic!("run {}: {e}", bin_path.display()));
+    let _ = std::fs::remove_file(bin_path);
     (
         String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
         output.status.code(),
     )
+}
+
+/// [`compile_program`] and [`run_binary`].
+pub fn compile_and_run(source: &str, name: &str) -> (String, String, Option<i32>) {
+    run_binary(&compile_program(source, name))
 }
 
 /// Span-blind structural dump of a parsed program: its `{:?}` with every

@@ -143,6 +143,11 @@ pub struct ClassInfo {
     /// check once a real stdlib class is migrated to user-source
     /// `.rx` and gates a `ruxen_<class>_layout_check` symbol.
     pub flat_heap_struct: bool,
+    /// Set when the class body carried a `layout closure` directive: its
+    /// values are closure pairs, so it is the method home of every stored
+    /// closure value (`Proc[...]`, `any Fn[...]`). The core library's
+    /// `class Closure` declares it; [`SymbolTable::closure_shell`] reads it.
+    pub closure_shell: bool,
     /// Mixin vtables Phase B-1: DefIds of mixins this class
     /// `include`s that are marked `dispatch runtime`. Populated by
     /// `resolve_class_def` after looking up each include's mixin
@@ -253,6 +258,11 @@ pub enum DefKind {
     },
     TypeAlias {
         target: Ty,
+        /// The alias's own generic parameters (`type Proc[F] = any Fn[F]`),
+        /// in order; `target` names them as `Ty::TypeParam`s, which a use
+        /// (`Proc[(Int) -> nil]`) replaces by its arguments
+        /// (`Resolver::instantiate_alias`). Empty for a plain alias.
+        params: Vec<String>,
     },
     Newtype {
         inner: Ty,
@@ -374,6 +384,8 @@ struct SymbolIndex {
     children: HashMap<DefId, Vec<DefId>>,
     /// Every `Class` definition.
     classes: Vec<DefId>,
+    /// The class declared `layout closure` (`ClassInfo::closure_shell`).
+    closure_shell: Option<DefId>,
 }
 
 impl SymbolIndex {
@@ -408,7 +420,12 @@ impl SymbolIndex {
             | DefKind::EnumVariant { parent, .. } => {
                 self.children.entry(*parent).or_default().push(def.id);
             }
-            DefKind::Class { .. } => self.classes.push(def.id),
+            DefKind::Class { info } => {
+                self.classes.push(def.id);
+                if info.closure_shell {
+                    self.closure_shell = Some(def.id);
+                }
+            }
             DefKind::Variable { .. }
             | DefKind::Function { .. }
             | DefKind::OverloadSet { .. }
@@ -468,6 +485,10 @@ pub struct SymbolTable {
     /// `Set_include?`, not a bodiless `Set_member?`). A pure synonym — no extra
     /// method body exists.
     method_aliases: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    /// The name a diagnostic shows for a definition the resolver
+    /// synthesized under an internal name (the block slot `__block` reads
+    /// `block`). See [`SymbolTable::display_name`].
+    display_names: std::collections::HashMap<DefId, String>,
 }
 
 impl SymbolTable {
@@ -476,7 +497,23 @@ impl SymbolTable {
             definitions: Vec::new(),
             index: OnceLock::new(),
             method_aliases: std::collections::HashMap::new(),
+            display_names: std::collections::HashMap::new(),
         }
+    }
+
+    /// Show `id` as `name` in diagnostics (it was defined under an internal
+    /// name lookups use).
+    pub fn set_display_name(&mut self, id: DefId, name: impl Into<String>) {
+        self.display_names.insert(id, name.into());
+    }
+
+    /// The name diagnostics show for `id`: its display name when the
+    /// resolver gave it one, else its definition name.
+    pub fn display_name(&self, id: DefId) -> Option<&str> {
+        self.display_names
+            .get(&id)
+            .map(String::as_str)
+            .or_else(|| self.get(id).map(|def| def.name.as_str()))
     }
 
     /// Record the resolver's method-alias map onto the symbol table so the MIR
@@ -592,6 +629,52 @@ impl SymbolTable {
             (Some(a), Some(b)) => Some(if a.id < b.id { a } else { b }),
             (a, b) => a.or(b),
         }
+    }
+
+    /// True when the class `name` owns its fields: reading one borrows it,
+    /// storing one frees the old value, and the object's death frees them.
+    /// A synthesised async state machine (it carries a `__state` field) does
+    /// not: its fields mirror the async body's parameters and locals, which
+    /// `poll` moves out of without clearing the field, and its `__sub_i`
+    /// sub-futures are dropped by its own synthesised `def drop`
+    /// (`Lowerer::synthesize_future_state_machine_drop`).
+    /// Whether the type named `name` declares `def consume drop`: its drop
+    /// takes the whole value over and releases its storage itself (a C
+    /// handle whose release is its refcount or handle free, declared
+    /// `def consume drop as "ruxen_mutex_drop"`), so drop elaboration
+    /// emits no storage free after calling it.
+    pub fn drop_consumes_self(&self, name: &str) -> bool {
+        self.type_def(name).is_some_and(|def| {
+            self.methods_of(def.id, "drop").any(|m| {
+                matches!(&m.kind, DefKind::Method { signature, .. }
+                    if signature.self_mode == Some(crate::hir::nodes::HirSelfMode::Consuming))
+            })
+        })
+    }
+
+    /// The class declared `layout closure` (`class Closure` in std/core):
+    /// the method home of every stored closure value. Read off the
+    /// declaration; `None` when no such class is loaded.
+    pub fn closure_shell(&self) -> Option<&Definition> {
+        self.index()
+            .closure_shell
+            .map(|id| &self.definitions[id as usize])
+    }
+
+    /// The name of [`Self::closure_shell`], the home `Ty::method_home`
+    /// gives a stored closure value.
+    pub fn closure_shell_name(&self) -> Option<&str> {
+        self.closure_shell().map(|def| def.name.as_str())
+    }
+
+    pub fn class_owns_fields(&self, name: &str) -> bool {
+        let Some(DefKind::Class { info }) = self.type_def(name).map(|def| &def.kind) else {
+            return false;
+        };
+        !info
+            .fields
+            .iter()
+            .any(|&field| self.get(field).is_some_and(|f| f.name == "__state"))
     }
 
     /// The `Method`, `Field` and `EnumVariant` definitions whose parent is
@@ -778,6 +861,14 @@ fn ty_has_derive_trait_seen(
                 if trait_name == "Copy" {
                     return false;
                 }
+                // A fieldless class whose methods are C (`lib`) functions is
+                // an opaque handle: a derived clone would copy its box, not
+                // the C object behind it (a copied `Mutex` locked
+                // uninitialized memory). It is Clone only by declaring
+                // `clone` itself (`SharedSync#clone`).
+                if trait_name == "Clone" && info.fields.is_empty() && is_c_handle(symbols, info) {
+                    return false;
+                }
                 struct_or_class_fields_all_support(symbols, &info.fields, trait_name, seen)
             }
             DefKind::Struct { info } => {
@@ -796,6 +887,22 @@ fn ty_has_derive_trait_seen(
             _ => false,
         }
     })
+}
+
+/// Whether a class's methods include a C (`lib`) function and none of them
+/// is its own `clone`.
+fn is_c_handle(symbols: &SymbolTable, info: &ClassInfo) -> bool {
+    let methods = info.methods.iter().filter_map(|&m| symbols.get(m));
+    let mut has_c_method = false;
+    for def in methods {
+        if def.name == "clone" {
+            return false;
+        }
+        if let DefKind::Method { signature, .. } = &def.kind {
+            has_c_method |= signature.c_symbol.is_some();
+        }
+    }
+    has_c_method
 }
 
 /// Helper for `ty_has_derive_trait`: returns true when every field's

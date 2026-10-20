@@ -175,7 +175,16 @@ impl Parser {
                     .strip_suffix('!')
                     .filter(|base| macros::is_builtin_macro(base))
                     .map(str::to_string);
-                if let Some(base) = macro_head {
+                // `lambda { |x| ... }` / `proc { |x| ... }` (also `do ... end`).
+                let closure_head = match name.as_str() {
+                    "lambda" => Some(ClosureSpelling::Lambda),
+                    "proc" => Some(ClosureSpelling::Proc),
+                    _ => None,
+                }
+                .filter(|_| self.at(TokenKind::LBrace) || self.at(TokenKind::Do));
+                if let Some(spelling) = closure_head {
+                    self.parse_headed_closure(spelling, start)
+                } else if let Some(base) = macro_head {
                     self.parse_macro_call_args(base, start)
                 } else if self.at(TokenKind::Bang) && macros::is_builtin_macro(&name) {
                     // `panic !(...)` — a space split the `!` off the name, so
@@ -257,6 +266,9 @@ impl Parser {
             // `parse_do_closure` handles the missing-pipe case.
             TokenKind::Do => self.parse_do_closure(false, false),
 
+            // `->(x) { ... }` / `->(x) do ... end` lambda.
+            TokenKind::Arrow => self.parse_stabby_closure(false, false),
+
             // move closure
             TokenKind::Move => {
                 self.advance();
@@ -264,8 +276,10 @@ impl Parser {
                     self.parse_brace_closure(false, true)
                 } else if self.at(TokenKind::Do) {
                     self.parse_do_closure(false, true)
+                } else if self.at(TokenKind::Arrow) {
+                    self.parse_stabby_closure(false, true)
                 } else {
-                    self.error("expected `{` or `do` after `move`");
+                    self.error("expected `{`, `do` or `->` after `move`");
                     Expr {
                         kind: ExprKind::Identifier("_error".to_string()),
                         span: start,
@@ -280,8 +294,10 @@ impl Parser {
                     self.parse_brace_closure(true, is_move)
                 } else if self.at(TokenKind::Do) {
                     self.parse_do_closure(true, is_move)
+                } else if self.at(TokenKind::Arrow) {
+                    self.parse_stabby_closure(true, is_move)
                 } else {
-                    self.error("expected `def`, `do`, or `{` after `async`");
+                    self.error("expected `def`, `do`, `{` or `->` after `async`");
                     Expr {
                         kind: ExprKind::Identifier("_error".to_string()),
                         span: start,
@@ -1225,6 +1241,8 @@ impl Parser {
                 span: span.clone(),
                 pipes,
                 do_end: false,
+                kind: ClosureKind::Lambda,
+                spelling: ClosureSpelling::Bare,
             }),
             span,
         }
@@ -1263,9 +1281,80 @@ impl Parser {
                 span: span.clone(),
                 pipes,
                 do_end: true,
+                kind: ClosureKind::Lambda,
+                spelling: ClosureSpelling::Bare,
             }),
             span,
         }
+    }
+
+    /// `->(x, y) { ... }` / `-> { ... }` / `->(x) do ... end`: a lambda whose
+    /// parameters come in an optional `(...)` list before the body.
+    fn parse_stabby_closure(&mut self, is_async: bool, is_move: bool) -> Expr {
+        let start = self.current_span();
+        self.advance(); // consume ->
+        let header = self.at(TokenKind::LParen);
+        let mut params = Vec::new();
+        if header {
+            self.advance(); // consume (
+            self.skip_newlines();
+            while !self.at(TokenKind::RParen) && !self.at(TokenKind::Eof) {
+                let progress = self.pos;
+                params.push(self.parse_closure_param());
+                self.skip_newlines();
+                if !self.eat(TokenKind::Comma) {
+                    break;
+                }
+                self.skip_newlines();
+                self.ensure_loop_progress(progress);
+            }
+            self.expect(TokenKind::RParen);
+        }
+        let mut expr = if self.at(TokenKind::LBrace) {
+            self.parse_brace_closure(is_async, is_move)
+        } else if self.at(TokenKind::Do) {
+            self.parse_do_closure(is_async, is_move)
+        } else {
+            self.error("expected `{` or `do` after `->`");
+            return Expr {
+                kind: ExprKind::Identifier("_error".to_string()),
+                span: start,
+            };
+        };
+        let span = self.span_from(&start);
+        if let ExprKind::Closure(c) = &mut expr.kind {
+            if c.pipes {
+                self.error("a `->` lambda takes its parameters in `(...)`, not `|...|`");
+            }
+            c.params = params;
+            c.pipes = header;
+            c.spelling = ClosureSpelling::Stabby;
+            c.span = span.clone();
+        }
+        expr.span = span;
+        expr
+    }
+
+    /// `lambda { ... }` / `proc { ... }` and their `do ... end` forms; the
+    /// head identifier is already consumed and starts at `start`.
+    fn parse_headed_closure(&mut self, spelling: ClosureSpelling, start: Span) -> Expr {
+        let mut expr = if self.at(TokenKind::LBrace) {
+            self.parse_brace_closure(false, false)
+        } else {
+            self.parse_do_closure(false, false)
+        };
+        let span = self.span_from(&start);
+        if let ExprKind::Closure(c) = &mut expr.kind {
+            c.kind = if spelling == ClosureSpelling::Proc {
+                ClosureKind::Proc
+            } else {
+                ClosureKind::Lambda
+            };
+            c.spelling = spelling;
+            c.span = span.clone();
+        }
+        expr.span = span;
+        expr
     }
 
     fn parse_closure_params(&mut self) -> Vec<ClosureParam> {

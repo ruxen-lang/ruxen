@@ -15,8 +15,7 @@ use std::fs;
 use std::path::Path;
 use std::process;
 
-use ruxen_core::lexer::Lexer;
-use ruxen_core::parser::Parser;
+use ruxen_core::driver;
 
 pub fn run(args: &[String]) -> Result<(), String> {
     if args.is_empty() {
@@ -72,20 +71,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // syntax / item-shape — full typeck happens on the synthesised
     // file below, so a typo in a bench body will surface there with
     // the normal codepath.
-    let mut lexer = Lexer::new(&source);
-    let tokens = lexer.tokenize().map_err(|ds| {
-        ds.iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().map_err(|ds| {
-        ds.iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
+    let program = driver::parse(&source)
+        .map_err(|ds| driver::render_diagnostics(&ds, Some(Path::new(&path))))?;
 
     // Collect bench fns: name convention `bench_*`, exactly one
     // parameter. The Bencher-receiver type-check happens at the real

@@ -1,0 +1,17 @@
+class Holder[T]
+  v: T
+  def init(@v: T)
+  end
+
+  def get -> &T
+    @v
+  end
+end
+
+def main
+  a = Holder.new("x")
+  b = a.clone
+  puts(b.get)
+  f = Holder.new(-> { 7 })
+  puts(f.get.())
+end

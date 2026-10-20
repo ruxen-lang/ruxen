@@ -57,14 +57,6 @@ pub(super) fn local_to_value(local: Option<LocalId>) -> MirValue {
     }
 }
 
-/// Check if a BinOp is a comparison operator.
-pub(super) fn is_comparison(op: BinOp) -> bool {
-    matches!(
-        op,
-        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq
-    )
-}
-
 /// Convert a comparison BinOp to the corresponding CmpOp.
 pub(super) fn binop_to_cmpop(op: BinOp) -> CmpOp {
     match op {

@@ -17,17 +17,30 @@ use super::helpers::{collect_break_types, infer_user_enum_generic_args};
 use super::InferenceEngine;
 
 impl<'a> InferenceEngine<'a> {
-    fn seed_closure_param_types(arg: &mut HirExpr, expected_ty: &Ty) {
+    /// Before a closure literal's body is inferred, give each unannotated
+    /// parameter the type the callee's closure parameter declares for it
+    /// (`def outer(&block: Fn[(Int) -> nil])` makes `outer { |n| puts(n) }`
+    /// type `n: Int`). The parameter's inference variable is unified, not
+    /// replaced, so every use of `n` in the body sees the type: otherwise
+    /// `puts(n)` pins `n` to `String` first and the call passes an Int as a
+    /// string pointer. An expected type still naming a type parameter or an
+    /// inference variable is left for inference to settle.
+    fn seed_closure_param_types(&mut self, arg: &mut HirExpr, expected_ty: &Ty) {
         let HirExprKind::Closure { params, .. } = &mut arg.kind else {
             return;
         };
-        let expected_params = match expected_ty.peel_refs() {
-            Ty::Fn { params, .. } | Ty::FnMut { params, .. } | Ty::FnOnce { params, .. } => params,
-            _ => return,
+        let expected_ty = self.ctx.resolve(expected_ty);
+        let Some((expected_params, _)) = expected_ty.peel_refs().callable_signature() else {
+            return;
         };
         for (param, expected) in params.iter_mut().zip(expected_params.iter()) {
-            if param.ty.is_infer() {
+            let open = expected.any(&mut |t| matches!(t, Ty::Infer(_) | Ty::TypeParam { .. }));
+            if open || !self.ctx.resolve(&param.ty).is_infer() {
+                continue;
+            }
+            if unify(&param.ty, expected, self.ctx, &arg.span).is_ok() {
                 param.ty = expected.clone();
+                self.symbols.update_ty(param.def_id, expected.clone());
             }
         }
     }
@@ -114,6 +127,7 @@ impl<'a> InferenceEngine<'a> {
             object,
             method: UNRESOLVED_DEF,
             resolved: UNRESOLVED_DEF,
+            requirement_params: None,
             method_name: field_name,
             generic_args: Vec::new(),
             args: Vec::new(),
@@ -225,7 +239,8 @@ impl<'a> InferenceEngine<'a> {
                         if let Some((field_ty, idx)) =
                             self.lookup_field_with_parents(name, field_name)
                         {
-                            expr.ty = self.substitute_generics_in_return(&derefed, &field_ty);
+                            let owned = self.substitute_generics_in_return(&derefed, &field_ty);
+                            expr.ty = self.field_read_ty(name, owned);
                             *field_idx = idx;
                             return;
                         }
@@ -234,7 +249,11 @@ impl<'a> InferenceEngine<'a> {
                     Ty::Tuple(elems) => {
                         if let Ok(idx) = field_name.parse::<usize>() {
                             if idx < elems.len() {
-                                expr.ty = elems[idx].clone();
+                                // A tuple keeps owning its elements.
+                                expr.ty = super::helpers::slot_read_ty(
+                                    self.ctx.resolve(&elems[idx]),
+                                    self.symbols,
+                                );
                                 *field_idx = idx;
                             } else {
                                 self.error(
@@ -270,6 +289,7 @@ impl<'a> InferenceEngine<'a> {
                 object,
                 method,
                 resolved,
+                requirement_params,
                 method_name,
                 generic_args,
                 args,
@@ -420,7 +440,7 @@ impl<'a> InferenceEngine<'a> {
                     {
                         let obj_ty_sig = self.ctx.resolve(&object.ty);
                         let (_, derefed_sig) = auto_deref(&obj_ty_sig, self.ctx);
-                        if let Some(sig) = self
+                        if let Some((sig, _)) = self
                             .traits
                             .lookup_block_method_by_name(&derefed_sig, method_name)
                         {
@@ -539,8 +559,9 @@ impl<'a> InferenceEngine<'a> {
                         | Ty::Set(_)
                         | Ty::Option(_)
                         | Ty::Result(_, _)
-                ) || derefed.is_scalar_primitive())
-                .then(|| derefed.method_home());
+                ) || derefed.is_scalar_primitive()
+                    || derefed.is_proc())
+                .then(|| derefed.method_home(self.symbols.closure_shell_name()));
                 let selected_method = head_class_name.and_then(|name| {
                     // Ruby `alias new old` selects the aliased method, so its
                     // default arguments fill like a call by the old name.
@@ -569,8 +590,10 @@ impl<'a> InferenceEngine<'a> {
                     if let Some(signature) = &signature {
                         for (arg, param) in args.iter_mut().zip(&signature.params) {
                             let param_ty = self.substitute_generics_in_return(&derefed, &param.ty);
-                            Self::seed_closure_param_types(arg, &param_ty);
+                            self.seed_closure_param_types(arg, &param_ty);
                             self.infer_expr(arg);
+                            self.check_closure_arg(&param_ty, arg, method_name);
+                            self.reject_borrowed_arg(&param_ty, &arg.ty, &arg.span);
                         }
                     } else {
                         for arg in args.iter_mut() {
@@ -609,6 +632,22 @@ impl<'a> InferenceEngine<'a> {
                 } else {
                     args
                 };
+                // A call no class method was selected for may resolve to a
+                // mixin default (an included mixin, `Kernel`, or a bound of a
+                // type-parameter receiver): record that default, so the
+                // block-kind pass, the borrow checker and MIR read the
+                // signature inference typed the call with. A bodiless
+                // requirement of a bound has no def: record its parameter
+                // types instead (`requirement_params`).
+                if selected_method.is_none() && method_name != "new" {
+                    if let Some(default_def) =
+                        self.selected_default_method(&derefed, method_name, effective_args)
+                    {
+                        *resolved = default_def;
+                    }
+                    *requirement_params =
+                        self.selected_bound_requirement(&derefed, method_name, effective_args);
+                }
                 let builtin_ret = if method_name == "new" {
                     None
                 } else {
@@ -647,7 +686,25 @@ impl<'a> InferenceEngine<'a> {
                 callee_name,
                 args,
             } => {
-                for arg in args.iter_mut() {
+                // A closure argument (a trailing block included) takes its
+                // parameter types from the callee's declared closure
+                // parameter before its body is inferred. Only a single
+                // function's signature seeds: an overload set has no one
+                // parameter type until the resolver picks a candidate.
+                let seed_params: Vec<Ty> = self
+                    .symbols
+                    .get(*callee)
+                    .and_then(|def| match &def.kind {
+                        DefKind::Function { signature } | DefKind::Method { signature, .. } => {
+                            Some(signature.params.iter().map(|p| p.ty.clone()).collect())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                for (i, arg) in args.iter_mut().enumerate() {
+                    if let Some(param_ty) = seed_params.get(i) {
+                        self.seed_closure_param_types(arg, param_ty);
+                    }
                     self.infer_expr(arg);
                 }
 
@@ -671,6 +728,7 @@ impl<'a> InferenceEngine<'a> {
                                 object: Box::new(object),
                                 method: UNRESOLVED_DEF,
                                 resolved: UNRESOLVED_DEF,
+                                requirement_params: None,
                                 method_name: "to_s".to_string(),
                                 generic_args: Vec::new(),
                                 args: Vec::new(),
@@ -758,6 +816,10 @@ impl<'a> InferenceEngine<'a> {
                                         arg.span.clone(),
                                         "E0742",
                                     ));
+                                }
+                                if !overloaded {
+                                    self.check_closure_arg(&param.ty, arg, callee_name);
+                                    self.reject_borrowed_arg(&param.ty, &arg.ty, &arg.span);
                                 }
                                 self.check_declared_bounds(&param.ty, &arg.ty, &arg.span);
                                 self.check_send_required_closure(&param.ty, arg, None);
@@ -890,6 +952,7 @@ impl<'a> InferenceEngine<'a> {
                 expr: inner,
             } => {
                 self.infer_expr(inner);
+                self.retype_field_place(inner);
                 let inner_ty = self.ctx.resolve(&inner.ty);
                 expr.ty = if *mutable {
                     Ty::RefMut(Box::new(inner_ty))
@@ -1032,7 +1095,9 @@ impl<'a> InferenceEngine<'a> {
                 let (_, iter_derefed) = auto_deref(&iter_ty, self.ctx);
                 let elem_ty: Option<Ty> = match &iter_derefed {
                     Ty::Array(e) | Ty::Set(e) => Some((**e).clone()),
-                    Ty::Map(k, v) => Some(Ty::Tuple(vec![(**k).clone(), (**v).clone()])),
+                    // An entry borrows the key and value the table owns
+                    // (`Hash#to_a`).
+                    Ty::Map(k, v) => Some(Ty::Tuple(vec![Ty::Ref(k.clone()), Ty::Ref(v.clone())])),
                     _ => None,
                 };
                 if let Some(elem_ty) = elem_ty {
@@ -1053,7 +1118,12 @@ impl<'a> InferenceEngine<'a> {
                                 tuple_bindings.iter().zip(components.iter())
                             {
                                 if let Some(sub_ty) = self.symbols.def_ty(*sub_id) {
-                                    let _ = unify(&sub_ty, comp_ty, self.ctx, &expr.span);
+                                    // The element tuple keeps owning its components.
+                                    let read = super::helpers::slot_read_ty(
+                                        self.ctx.resolve(comp_ty),
+                                        self.symbols,
+                                    );
+                                    let _ = unify(&sub_ty, &read, self.ctx, &expr.span);
                                 }
                             }
                         }
@@ -1097,10 +1167,38 @@ impl<'a> InferenceEngine<'a> {
                     expr.ty = Ty::Unit;
                 } else {
                     self.infer_expr(target);
+                    self.retype_field_place(target);
                     self.infer_expr(value);
                     let target_ty = self.ctx.resolve(&target.ty);
+                    // `p = make_point` assigns the RESULT of a bare nullary
+                    // function reference, as `let p = make_point` binds it,
+                    // unless the target is itself a `Fn` slot.
+                    self.auto_call_fn_reference(&target_ty, value);
                     let value_ty = self.ctx.resolve(&value.ty);
-                    let _ = unify(&target_ty, &value_ty, self.ctx, &expr.span);
+                    if !self.reject_borrow_into_owned(&target_ty, &value_ty, &value.span) {
+                        // Assigning to a `&var T` binding stores a `T` through
+                        // it (`s = "new"` on a `&var String` parameter).
+                        let stored_ty = match &target_ty {
+                            Ty::RefMut(pointee) | Ty::RefMutLifetime(_, pointee)
+                                if !value_ty.is_ref() =>
+                            {
+                                (**pointee).clone()
+                            }
+                            _ => target_ty.clone(),
+                        };
+                        // An integer literal takes the integer type it is
+                        // stored as (`@next_id = 1` into a `USize` field), as
+                        // it does in a typed binding.
+                        if matches!(value.kind, HirExprKind::IntLiteral(_))
+                            && stored_ty.is_integer()
+                        {
+                            value.ty = stored_ty.clone();
+                        } else if let Err(error) =
+                            self.unify_or_coerce(&stored_ty, &value_ty, &expr.span)
+                        {
+                            self.type_error(error);
+                        }
+                    }
 
                     // Determine copy/move semantics
                     let resolved = self.ctx.resolve(&value_ty);
@@ -1121,8 +1219,11 @@ impl<'a> InferenceEngine<'a> {
                 for value in values.iter_mut() {
                     self.infer_expr(value);
                 }
+                // A field target is a place of the field's own type, as for
+                // `=` (`u.name, n = "x", 1`).
                 for target in targets.iter_mut() {
                     self.infer_expr(target);
+                    self.retype_field_place(target);
                 }
 
                 if let Some(rest_index) = *splat_target {
@@ -1294,6 +1395,7 @@ impl<'a> InferenceEngine<'a> {
                 value,
             } => {
                 self.infer_expr(target);
+                self.retype_field_place(target);
                 self.infer_expr(value);
                 expr.ty = Ty::Unit;
             }
@@ -1693,6 +1795,13 @@ impl<'a> InferenceEngine<'a> {
                 }
             }
         }
+        if let Ty::Class { name, .. } | Ty::Struct { name, .. } = derefed {
+            let params = self.constructor_param_types(name);
+            for (arg, param) in args.iter().zip(&params) {
+                let param = self.substitute_generics_in_return(derefed, param);
+                self.reject_borrow_into_owned(&param, &arg.ty, &arg.span);
+            }
+        }
         if let Ty::Class { name, generic_args } | Ty::Struct { name, generic_args } = derefed {
             // A bare stdlib head (`Mutex.new(x)`) arrives carrying its own
             // unapplied params (`Mutex[T]`); infer those from the args too.
@@ -1859,6 +1968,49 @@ impl<'a> InferenceEngine<'a> {
             }
         }
         None
+    }
+
+    /// The type of reading a field whose declared (receiver-substituted)
+    /// type is `owned`: a non-Copy field is read as the borrow `&T`, since
+    /// the object keeps owning the value (TODO.md Decisions, "Fields"). A
+    /// closure field too: the object frees its pair, so a second owner
+    /// takes `.clone` (a shared Proc). Copy fields, types not yet known, and
+    /// every field of a class that does not own its fields (an async state
+    /// machine, whose `poll` moves its locals out) read as themselves.
+    fn field_read_ty(&self, class: &str, owned: Ty) -> Ty {
+        let owned = self.ctx.resolve(&owned);
+        if self.symbols.class_owns_fields(class) {
+            super::helpers::slot_read_ty(owned, self.symbols)
+        } else {
+            owned
+        }
+    }
+
+    /// A field written by `=` / `op=` or borrowed by `&` / `&var` is a
+    /// place of the field's own type `T`, not the `&T` its read has:
+    /// re-type an inferred `FieldAccess` to the owned field type, so a store
+    /// checks against `T` and `&u.name` is `&T` rather than `&&T`.
+    fn retype_field_place(&mut self, target: &mut HirExpr) {
+        let HirExprKind::FieldAccess {
+            object, field_name, ..
+        } = &target.kind
+        else {
+            return;
+        };
+        let obj_ty = self.ctx.resolve(&object.ty);
+        let (_, derefed) = auto_deref(&obj_ty, self.ctx);
+        if let Ty::Tuple(elems) = &derefed {
+            if let Some(elem) = field_name.parse::<usize>().ok().and_then(|i| elems.get(i)) {
+                target.ty = elem.clone();
+            }
+            return;
+        }
+        let (Ty::Class { name, .. } | Ty::Struct { name, .. }) = &derefed else {
+            return;
+        };
+        if let Some((field_ty, _)) = self.lookup_field_with_parents(name, field_name) {
+            target.ty = self.substitute_generics_in_return(&derefed, &field_ty);
+        }
     }
 
     /// Return-typing for a declared (class-selected) method: unify each

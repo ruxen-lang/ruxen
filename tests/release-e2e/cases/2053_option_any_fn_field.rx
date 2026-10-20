@@ -1,9 +1,9 @@
 # A method returning the result of an indirect call on an `Option[any Fn]`
 # field, with an `if let` arm that returns early.
 class Box
-  cb: Option[any Fn[Fn() -> Int]]
+  cb: Option[Proc[() -> Int]]
   def init
-    self.cb = Some({ || 42 })
+    self.cb = Some(-> { 42 })
   end
   def run -> Int
     if let Some(f) = self.cb

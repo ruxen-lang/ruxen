@@ -31,96 +31,28 @@ pub struct TypeCheckResult {
     pub unresolved_names: Vec<String>,
 }
 
-/// Run the full type checking pipeline on a parsed AST program.
-///
-/// Pipeline:
-/// 1. Stdlib bootstrap load (parses `library/std/<pkg>/src/lib.rx` once per call)
-/// 2. Name resolution (AST → HIR with DefIds, unresolved types)
-/// 3. Trait/impl collection
-/// 4. Type inference (resolve all Infer types)
-/// 5. Final validation (check no unresolved types remain)
-///
-/// Wave 2 (#06.8): stdlib modules like `std.rand` now live in `.rx`
-/// files loaded by [`crate::resolve::bootstrap::run_bootstrap`]. Test
-/// harnesses that call this function pick up the prelude automatically;
-/// callers that *don't* want the prelude (rare — pure compiler-internal
-/// tests) should use [`type_check_with_bootstrap`] with an explicit
-/// empty slice instead.
+/// Type-check `program` against the hosted stdlib: the front end
+/// ([`crate::driver::check`]) run to [`crate::driver::Stage::Typeck`], with
+/// any stdlib bootstrap diagnostic appended to the diagnostics.
 pub fn type_check(program: &ast::Program) -> TypeCheckResult {
-    let mut bootstrap_diagnostics: Vec<crate::diagnostics::Diagnostic> = Vec::new();
-    // Phase D of #06.95: drive bootstrap through the package-aware
-    // path so each `std.<pkg>` submodule's `items` list is
-    // auto-populated from the matching `library/std/<pkg>/src/lib.rx`
-    // — no hand-maintained FIXUPS row required per package.
-    let bootstrap_packages =
-        crate::resolve::bootstrap::run_bootstrap_with_package_names(&mut bootstrap_diagnostics);
-    type_check_with_loaded_bootstrap(program, &bootstrap_packages, bootstrap_diagnostics)
+    let options = crate::driver::Options {
+        stop_after: crate::driver::Stage::Typeck,
+        ..Default::default()
+    };
+    crate::driver::check(program, &options).into_type_check_result()
 }
 
-/// Like [`type_check`] but bootstraps only the curated wasm stdlib subset
-/// ([`crate::resolve::bootstrap::run_wasm_bootstrap_with_package_names`]). The
-/// `ruxen build` wasm path uses this so a multi-package app doesn't drag in the
-/// `dispatch runtime` stdlib (`TimeSleepFuture`) the LLVM/wasm backend can't
-/// lower — matching what the single-file `ruxen compile` wasm path already does
-/// (tier 4.09).
-pub fn type_check_wasm(program: &ast::Program) -> TypeCheckResult {
-    let mut bootstrap_diagnostics: Vec<crate::diagnostics::Diagnostic> = Vec::new();
-    let bootstrap_packages = crate::resolve::bootstrap::run_wasm_bootstrap_with_package_names(
-        &mut bootstrap_diagnostics,
-    );
-    type_check_with_loaded_bootstrap(program, &bootstrap_packages, bootstrap_diagnostics)
-}
-
-/// Shared body of [`type_check`] / [`type_check_wasm`]: the async-lowering
-/// pre-checks + bootstrap-aware resolve/typeck, parameterized on the
-/// already-loaded `bootstrap_packages`. Splitting this out lets the two entry
-/// points differ ONLY in which stdlib subset they bootstrap.
-fn type_check_with_loaded_bootstrap(
-    program: &ast::Program,
-    bootstrap_packages: &[(String, ast::Program)],
-    bootstrap_diagnostics: Vec<crate::diagnostics::Diagnostic>,
-) -> TypeCheckResult {
-    // Async lowering — Milestone 2A (docs/specs/syntax/async_lowering.spec.md
-    // B1–B6). Synthesises a Future state-machine class per top-level
-    // `async def` and rewrites the original fn to construct it. Runs
-    // BEFORE the resolver so the generated class lifts through the
-    // normal resolve/typeck/MIR pipeline as if it were user-written.
-    let mut lowered = program.clone();
-    crate::parser::implicit_main::synthesize_implicit_main(&mut lowered);
-    // E1112/E1116/E1115 pre-checks: detect block_on-in-async, Task.spawn-in-sync,
-    // and .await-in-loop BEFORE the async-fn rewrite collapses bodies into synth
-    // state-machine classes (which would make the checks unreachable).
-    let e1112_diags = crate::async_lowering::collect_block_on_in_async_diagnostics(&lowered);
-    let e1116_diags = crate::async_lowering::collect_task_spawn_outside_async_diagnostics(&lowered);
-    let e1115_diags = crate::async_lowering::collect_await_in_loop_diagnostics(&lowered);
-    // Pass bootstrap programs through so the .await desugar's awaitee classifier
-    // can see stdlib Future classes. See `lower_async_defs_with_bootstrap`.
-    let bootstrap_refs: Vec<&ast::Program> = bootstrap_packages.iter().map(|(_, p)| p).collect();
-    crate::async_lowering::lower_async_defs_with_bootstrap(&mut lowered, &bootstrap_refs);
-    let mut result = type_check_with_bootstrap_packages(&lowered, bootstrap_packages);
-    result.diagnostics.extend(bootstrap_diagnostics);
-    result.diagnostics.extend(e1112_diags);
-    result.diagnostics.extend(e1116_diags);
-    result.diagnostics.extend(e1115_diags);
-    result
-}
-
-/// Package-aware variant of [`type_check_with_bootstrap`]. Each
-/// element of `bootstrap_packages` carries the package name (e.g.
+/// Resolve and type-check `program` (already async-lowered) against
+/// `bootstrap_packages`. Each element carries the package name (e.g.
 /// `"io"`) alongside its parsed `Program`, so the resolver can
 /// auto-populate each `std.<pkg>` submodule from the matching
-/// `library/std/<pkg>/src/lib.rx` — the table-druxen fixup is no
-/// longer required for the per-package bulk case.
+/// `library/std/<pkg>/src/lib.rx`. [`crate::driver::check`] runs the whole
+/// front end around it (implicit `main`, async lowering) and is the one
+/// production caller.
 pub fn type_check_with_bootstrap_packages(
     program: &ast::Program,
     bootstrap_packages: &[(String, ast::Program)],
 ) -> TypeCheckResult {
-    let synthesized = crate::parser::implicit_main::needs_implicit_main(program).then(|| {
-        let mut prepared = program.clone();
-        crate::parser::implicit_main::synthesize_implicit_main(&mut prepared);
-        prepared
-    });
-    let prepared = synthesized.as_ref().unwrap_or(program);
     let resolver = Resolver::new();
     let ResolveResult {
         mut program,
@@ -130,7 +62,7 @@ pub fn type_check_with_bootstrap_packages(
         unresolved_names,
         type_registry,
         method_aliases,
-    } = resolver.resolve_with_bootstrap_packages(prepared, bootstrap_packages);
+    } = resolver.resolve_with_bootstrap_packages(program, bootstrap_packages);
 
     diagnostics.extend(crate::implicit_includes::validate_program(
         &program, &symbols,
@@ -155,85 +87,8 @@ pub fn type_check_with_bootstrap_packages(
     diagnostics.extend(engine.diagnostics);
 
     resolve_all_types(&mut program, &type_context);
+    settle_trailing_block_kinds(&mut program, &symbols, &trait_resolver);
     diagnostics.extend(validate(&program, &symbols, &type_context));
-
-    TypeCheckResult {
-        program,
-        symbols,
-        type_context,
-        diagnostics,
-        unresolved_names,
-    }
-}
-
-/// Type-check a parsed user `program` with stdlib `bootstrap_programs`
-/// merged into the resolver scope before user-code resolution. The
-/// driver (`ruxenc`) calls this with the output of
-/// `ruxen_core::resolve::bootstrap::run_bootstrap`; callers that don't
-/// want the prelude (today: most tests) keep using
-/// [`type_check`](type_check) and get an empty-bootstrap shortcut for
-/// free.
-///
-/// The pipeline is identical to `type_check` once name resolution is
-/// done — bootstrap programs only contribute to Phase 1.
-pub fn type_check_with_bootstrap(
-    program: &ast::Program,
-    bootstrap_programs: &[ast::Program],
-) -> TypeCheckResult {
-    // Async lowering — see `type_check` for context. Identical
-    // injection point in this non-package-aware variant.
-    let mut lowered_user = program.clone();
-    crate::parser::implicit_main::synthesize_implicit_main(&mut lowered_user);
-    // E1112 pre-check (docs/specs/stdlib/executor.spec.md B6) —
-    // mirrors `type_check`'s injection.
-    let e1112_diags = crate::async_lowering::collect_block_on_in_async_diagnostics(&lowered_user);
-    // E1116 pre-check — see `type_check`'s mirror.
-    let e1116_diags =
-        crate::async_lowering::collect_task_spawn_outside_async_diagnostics(&lowered_user);
-    // E1115 pre-check — see `type_check`'s mirror.
-    let e1115_diags = crate::async_lowering::collect_await_in_loop_diagnostics(&lowered_user);
-    // Mirror of the bootstrap-aware lowering in `type_check`. See
-    // commentary there.
-    let bootstrap_refs: Vec<&ast::Program> = bootstrap_programs.iter().collect();
-    crate::async_lowering::lower_async_defs_with_bootstrap(&mut lowered_user, &bootstrap_refs);
-
-    // Phase 1: Name resolution (with bootstrap prelude merged in)
-    let resolver = Resolver::new();
-    let ResolveResult {
-        mut program,
-        mut symbols,
-        mut type_context,
-        mut diagnostics,
-        unresolved_names,
-        type_registry,
-        method_aliases,
-    } = resolver.resolve_with_bootstrap(&lowered_user, bootstrap_programs);
-    diagnostics.extend(e1112_diags);
-    diagnostics.extend(e1116_diags);
-    diagnostics.extend(e1115_diags);
-
-    // Phase 2: Validate derive usage and collect all trait impls
-    diagnostics.extend(crate::implicit_includes::validate_program(
-        &program, &symbols,
-    ));
-
-    let mut trait_resolver = MixinResolver::new();
-    trait_resolver.collect_impls(&program, &symbols);
-    trait_resolver.register_classes_from_registry(&type_registry, &symbols);
-    // Ruby `alias new old` method synonyms (docs/decisions/alias-keyword.md).
-    trait_resolver.register_method_aliases(&method_aliases);
-
-    // Phase 3: Type inference
-    let mut engine = InferenceEngine::new(&mut type_context, &mut symbols, &trait_resolver);
-    engine.infer_program(&mut program);
-    diagnostics.extend(engine.diagnostics);
-
-    // Phase 4: Final resolution pass — resolve all remaining inference variables
-    resolve_all_types(&mut program, &type_context);
-
-    // Phase 5: Validation — check for unresolved types, missing annotations, etc.
-    let validation_diags = validate(&program, &symbols, &type_context);
-    diagnostics.extend(validation_diags);
 
     TypeCheckResult {
         program,
@@ -375,6 +230,117 @@ struct TyResolver<'c> {
 impl crate::hir::visit::VisitMut for TyResolver<'_> {
     fn visit_ty_mut(&mut self, ty: &mut crate::hir::types::Ty) {
         *ty = self.ctx.resolve(ty);
+    }
+}
+
+/// Blocks, procs and lambdas: the parser marks every trailing block
+/// `ClosureKind::Block`; the parameter it binds to decides what it is. Runs
+/// after [`resolve_all_types`], over every function body. The settled
+/// `HirExprKind::Closure::kind` is the single source of truth later stages
+/// read (borrow check: owning vs borrowed captures; MIR: capture drops).
+///
+/// - A parameter for which [`Ty::is_borrowed_block`] holds (`Fn[...]`, incl.
+///   `&block` and the implicit-yield `__block`) only calls the block, so it
+///   stays a Block and borrows its captures.
+/// - Any other parameter type (`Proc[...]` / `any Fn[...]`, a type parameter)
+///   may keep it, so it becomes a Proc that owns its captures.
+/// - A callee whose signature is unknown (no recorded def, no mixin default
+///   of that name on the receiver) also gets a Proc: owning is the choice
+///   that can never free a capture twice. Pinned by
+///   `blocks_procs_lambdas::semantics_unknown_signature_block_is_proc`.
+///
+/// A `FnCall` carries its trailing block as the argument at the block
+/// parameter's index; a `MethodCall` keeps it in `block`, bound to the final
+/// parameter of `resolved`, the method inference selected (own, inherited,
+/// or the mixin / `Kernel` / type-param-bound default it typed the call
+/// with). Only a call inference recorded no def for (a bodiless bound
+/// requirement, an unknown receiver) looks the signature up by name on the
+/// receiver; a default found that way is written to `resolved` too, so the
+/// borrow checker reads the same signature when the block slot holds a
+/// forwarded `&block` instead of a literal.
+///
+/// [`Ty::is_borrowed_block`]: crate::hir::types::Ty::is_borrowed_block
+fn settle_trailing_block_kinds(
+    program: &mut HirProgram,
+    symbols: &SymbolTable,
+    traits: &MixinResolver,
+) {
+    use crate::hir::visit::VisitMut;
+    let mut settler = BlockKindSettler { symbols, traits };
+    for item in &mut program.items {
+        settler.visit_item_mut(item);
+    }
+}
+
+struct BlockKindSettler<'c> {
+    symbols: &'c SymbolTable,
+    traits: &'c MixinResolver,
+}
+
+impl crate::hir::visit::VisitMut for BlockKindSettler<'_> {
+    fn visit_expr_mut(&mut self, expr: &mut crate::hir::nodes::HirExpr) {
+        crate::hir::visit::walk_expr_mut(self, expr);
+        self.settle_call(expr);
+    }
+}
+
+impl BlockKindSettler<'_> {
+    fn settle_call(&self, expr: &mut crate::hir::nodes::HirExpr) {
+        use crate::hir::nodes::{HirExprKind, UNRESOLVED_DEF};
+        let signature = |def| self.symbols.get(def).and_then(|d| d.kind.signature());
+
+        match &mut expr.kind {
+            HirExprKind::MethodCall {
+                object,
+                method,
+                resolved,
+                method_name,
+                block: Some(block),
+                ..
+            } => {
+                if *resolved == UNRESOLVED_DEF && *method != UNRESOLVED_DEF {
+                    *resolved = *method;
+                }
+                let param_ty = match signature(*resolved) {
+                    Some(sig) => sig.params.last().map(|p| p.ty.clone()),
+                    None => {
+                        let found = self
+                            .traits
+                            .lookup_block_method_by_name(object.ty.peel_refs(), method_name);
+                        if let Some((_, Some(default_def))) = &found {
+                            *resolved = *default_def;
+                        }
+                        found.and_then(|(sig, _)| sig.params.last().map(|p| p.ty.clone()))
+                    }
+                };
+                settle_block(block, param_ty.as_ref());
+            }
+            HirExprKind::FnCall { callee, args, .. } => {
+                let params = signature(*callee)
+                    .map(|s| s.params.as_slice())
+                    .unwrap_or(&[]);
+                for (idx, arg) in args.iter_mut().enumerate() {
+                    settle_block(arg, params.get(idx).map(|p| &p.ty));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Settle one trailing block bound to a parameter of type `param_ty`
+/// (`None`: unknown). Closures the parser did not mark `Block` (lambdas,
+/// procs) and non-closure arguments are left alone.
+fn settle_block(
+    closure: &mut crate::hir::nodes::HirExpr,
+    param_ty: Option<&crate::hir::types::Ty>,
+) {
+    use crate::hir::nodes::HirExprKind;
+    use crate::parser::ast::ClosureKind;
+    if let HirExprKind::Closure { kind, .. } = &mut closure.kind {
+        if *kind == ClosureKind::Block && !param_ty.is_some_and(|ty| ty.is_borrowed_block()) {
+            *kind = ClosureKind::Proc;
+        }
     }
 }
 

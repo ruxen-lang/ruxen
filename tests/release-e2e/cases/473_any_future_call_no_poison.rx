@@ -3,7 +3,7 @@
 ## unrelated stored `any Future` value later in the same compilation.
 
 class BootstrapFutureFactory
-  def self.call(make: any Fn[Fn() -> any Future]) -> any Future
+  def self.call(make: Fn() -> any Future) -> any Future
     make.()
   end
 end

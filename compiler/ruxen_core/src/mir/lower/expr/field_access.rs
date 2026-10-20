@@ -44,6 +44,7 @@ impl<'a> Lowerer<'a> {
                     object: object.clone(),
                     method: UNRESOLVED_DEF,
                     resolved: UNRESOLVED_DEF,
+                    requirement_params: None,
                     method_name: field_name.clone(),
                     generic_args: Vec::new(),
                     args: Vec::new(),

@@ -178,9 +178,20 @@ impl Parser {
                     vec![]
                 };
 
+                // `Proc.new { |x| ... }` (also with empty parens) is the proc
+                // literal, not a call.
+                let proc_new = field == "new"
+                    && generic_args.is_empty()
+                    && matches!(&lhs.kind, ExprKind::Identifier(n) if n == "Proc");
                 if self.at(TokenKind::LParen) {
                     let args = self.parse_call_args();
-                    let block = self.maybe_parse_block_arg();
+                    let mut block = self.maybe_parse_block_arg();
+                    if proc_new && args.is_empty() {
+                        match self.proc_new_literal(block, &start_span) {
+                            Ok(literal) => return literal,
+                            Err(not_literal) => block = not_literal,
+                        }
+                    }
                     let span = self.span_from(&start_span);
                     Expr {
                         kind: ExprKind::MethodCall {
@@ -217,8 +228,20 @@ impl Parser {
                     }
                 } else {
                     // Check for block arg after field access (method call with no parens but with block)
-                    let block = self.maybe_parse_block_arg();
-                    if block.is_some() || !generic_args.is_empty() {
+                    let mut block = self.maybe_parse_block_arg();
+                    let mut literal = None;
+                    if proc_new {
+                        match self.proc_new_literal(block, &start_span) {
+                            Ok(proc_literal) => {
+                                literal = Some(proc_literal);
+                                block = None;
+                            }
+                            Err(not_literal) => block = not_literal,
+                        }
+                    }
+                    if let Some(literal) = literal {
+                        literal
+                    } else if block.is_some() || !generic_args.is_empty() {
                         let span = self.span_from(&start_span);
                         Expr {
                             kind: ExprKind::MethodCall {
@@ -391,15 +414,44 @@ impl Parser {
         false
     }
 
+    /// `Proc.new { |x| ... }` / `Proc.new() { |x| ... }`: the closure `block`
+    /// becomes the proc literal spanning from `start`. Hands `block` back
+    /// unchanged when it is not a closure.
+    fn proc_new_literal(
+        &mut self,
+        block: Option<Expr>,
+        start: &Span,
+    ) -> Result<Expr, Option<Expr>> {
+        match block {
+            Some(Expr {
+                kind: ExprKind::Closure(mut c),
+                ..
+            }) => {
+                c.kind = ClosureKind::Proc;
+                c.spelling = ClosureSpelling::ProcNew;
+                Ok(Expr {
+                    kind: ExprKind::Closure(c),
+                    span: self.span_from(start),
+                })
+            }
+            other => Err(other),
+        }
+    }
+
     /// Try to parse a trailing block argument after a method call.
     /// Returns Some if { |params| ... } or do |params| ... end follows.
+    /// The closure is marked `ClosureKind::Block`.
     pub(crate) fn maybe_parse_block_arg(&mut self) -> Option<Expr> {
-        if self.at(TokenKind::LBrace) {
-            Some(self.parse_brace_closure(false, false))
+        let mut block = if self.at(TokenKind::LBrace) {
+            self.parse_brace_closure(false, false)
         } else if self.at(TokenKind::Do) {
-            Some(self.parse_do_closure(false, false))
+            self.parse_do_closure(false, false)
         } else {
-            None
+            return None;
+        };
+        if let ExprKind::Closure(c) = &mut block.kind {
+            c.kind = ClosureKind::Block;
         }
+        Some(block)
     }
 }

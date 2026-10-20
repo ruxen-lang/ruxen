@@ -151,3 +151,91 @@ fn formatter_round_trips_c_symbol_alias() {
         result.output
     );
 }
+
+/// `def consume drop as "..."` declares a drop that takes the whole handle
+/// over and releases its storage: the resolver records a consuming receiver
+/// and `SymbolTable::drop_consumes_self` answers true, so drop elaboration
+/// emits no storage free after it. The stdlib's refcounted handles use it;
+/// a drop that only cleans up resources (`MutexGuard`, `File`) does not.
+#[test]
+fn def_consume_drop_marks_a_drop_that_releases_its_storage() {
+    let source = "\
+class Handle
+  lib \"runtime/handle.c\"
+    def self.open as \"handle_open\" -> Handle
+    def consume drop as \"handle_release\" -> nil
+  end
+end
+
+class Plain
+  lib \"runtime/plain.c\"
+    def self.open as \"plain_open\" -> Plain
+    def drop as \"plain_close\" -> nil
+  end
+end
+";
+    let tokens = Lexer::new(source).tokenize().expect("lex");
+    let program = Parser::new(tokens).parse().expect("parse");
+    let formatted = ruxen_core::formatter::format(source).output;
+    assert!(
+        formatted.contains("def consume drop as \"handle_release\" -> nil"),
+        "fmt dropped `consume`:\n{formatted}"
+    );
+    let result = ruxen_core::typeck::type_check(&program);
+    assert!(result.symbols.drop_consumes_self("Handle"));
+    assert!(!result.symbols.drop_consumes_self("Plain"));
+    for name in ["Mutex", "SharedSync", "Sender", "Receiver", "AtomicI64"] {
+        assert!(result.symbols.drop_consumes_self(name), "{name}");
+    }
+    for name in ["MutexGuard", "File", "JoinHandle"] {
+        assert!(!result.symbols.drop_consumes_self(name), "{name}");
+    }
+}
+
+/// `-> owned T` on a `lib` declaration says the C function returns a value
+/// the caller owns outright (F-25's ownership markers, I-19): it parses, the
+/// formatter keeps it, it reaches the MIR declaration, and the runtime ABI
+/// reads it before its hand-listed table. `Proc#clone` (`class Closure`,
+/// std/core) declares its C share this way instead of a table row.
+#[test]
+fn owned_result_marker_parses_round_trips_and_classifies_fresh() {
+    use ruxen_core::mir::lower::runtime_abi::{
+        callee_ownership, result_ownership, DeclaredResults, ResultOwnership,
+    };
+    let source = "\
+class Handle
+  lib \"runtime/handle.c\"
+    def self.open as \"handle_open\" -> owned Handle
+    def peek as \"handle_peek\" -> Handle
+  end
+end
+";
+    let tokens = Lexer::new(source).tokenize().expect("lex");
+    let program = Parser::new(tokens).parse().expect("parse");
+    let formatted = ruxen_core::formatter::format(source).output;
+    assert!(
+        formatted.contains("def self.open as \"handle_open\" -> owned Handle"),
+        "fmt dropped `owned`:\n{formatted}"
+    );
+    let result = ruxen_core::typeck::type_check(&program);
+    let mir =
+        ruxen_core::mir::lower::lower_program(&result.program, &result.symbols).expect("lower");
+    let declared = DeclaredResults::from_libs(&mir.ffi_libs);
+    assert_eq!(
+        result_ownership("handle_open", &declared),
+        ResultOwnership::Fresh
+    );
+    assert_eq!(
+        result_ownership("handle_peek", &declared),
+        ResultOwnership::None
+    );
+    // The closure share is declared owned in std/core, not listed.
+    assert_eq!(
+        callee_ownership("ruxen_closure_share").result,
+        ResultOwnership::None
+    );
+    assert_eq!(
+        result_ownership("ruxen_closure_share", &declared),
+        ResultOwnership::Fresh
+    );
+}

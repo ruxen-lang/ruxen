@@ -676,6 +676,15 @@ impl Ty {
         )
     }
 
+    /// Whether a value of this type may hold a reference anywhere in it
+    /// (`&String`, `Array[&String]`, `Option[&U]`): such a value points into
+    /// the places it was made from. A callable's signature is not searched:
+    /// a `Proc[(&String) -> Int]` takes references, it does not hold them
+    /// (what a closure captures is tracked from its captures, not its type).
+    pub fn holds_reference(&self) -> bool {
+        self.any_within(&mut |t: &Ty| t.is_ref(), &mut |t: &Ty| !t.is_callable())
+    }
+
     /// Returns true if this is a mutable reference.
     pub fn is_mut_ref(&self) -> bool {
         matches!(self, Ty::RefMut(_) | Ty::RefMutLifetime(_, _))

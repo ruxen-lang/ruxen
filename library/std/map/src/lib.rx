@@ -65,30 +65,30 @@ class Hash[K, V]
     def self.with_capacity as "ruxen_hash_with_capacity"(cap: Int) -> Hash[K, V]
     def size as "ruxen_hash_len" -> USize
     def empty? as "ruxen_hash_is_empty" -> Bool
-    def get as "ruxen_hash_get"(key: K) -> Option[&V]
-    def key? as "ruxen_hash_contains_key"(key: K) -> Bool
+    def get as "ruxen_hash_get"(key: &K) -> Option[&V]
+    def key? as "ruxen_hash_contains_key"(key: &K) -> Bool
     def keys as "ruxen_hash_keys" -> Array[&K]
     def values as "ruxen_hash_values" -> Array[&V]
-    def to_a as "ruxen_hash_entries" -> Array[(K, V)]
+    def to_a as "ruxen_hash_entries" -> Array[(&K, &V)]
     def insert as "ruxen_hash_insert"(key: K, value: V)
-    def remove as "ruxen_hash_remove"(key: K) -> Option[V]
+    def remove as "ruxen_hash_remove"(key: &K) -> Option[V]
     def clear as "ruxen_hash_clear"
   end
 
   # The combinator family (`map`/`select`/`reject`/`find`/`reduce`/
   # `all?`/`any?`/`partition`/…) comes from the shared `mixin
   # Enumerable[T]` over the single `each` primitive below. Hash's
-  # ELEMENT is the `(K, V)` pair, so it includes `Enumerable[(K, V)]`:
-  # every combinator closure receives a `(K, V)` tuple (tuple-field
-  # access `kv.0` / `kv.1` is sound — Bug 3, `604_closure_tuple_param_field`).
-  include Enumerable[(K, V)]
+  # ELEMENT is the `(&K, &V)` pair: each entry borrows the key and value
+  # the table keeps owning (as `keys` / `values` do), so every combinator
+  # closure receives a `(&K, &V)` tuple and keeping one takes `.clone`.
+  include Enumerable[(&K, &V)]
 
-  # Generic `each`: yield every `(K, V)` entry to the user closure. The
+  # Generic `each`: yield every `(&K, &V)` entry to the user closure. The
   # `.rx` body is lowered ONCE as the opaque `Hash_each` (K/V abstract);
   # it materializes the entries via the FFI call on `self` (`self.to_a`)
   # and forwards each tuple to `f`. Proves the FFI-on-self result flows
   # out of the opaque body into the iteration.
-  def each(f: any Fn[Fn((K, V)) -> nil]) -> nil
+  def each(f: Fn((&K, &V)) -> nil) -> nil
     let entries = self.to_a
     entries.each do |kv| f.(kv) end
     nil
@@ -155,12 +155,12 @@ class Hash[K, V]
   # Ruby `each_key` / `each_value` — yield only the key / only the value of
   # every entry. Expressed over `each` + tuple-field access on the `(K, V)`
   # pair (`kv.0` / `kv.1`).
-  def each_key(f: any Fn[Fn(K) -> nil]) -> nil
+  def each_key(f: Fn(K) -> nil) -> nil
     self.each do |kv| f.(kv.0) end
     nil
   end
 
-  def each_value(f: any Fn[Fn(V) -> nil]) -> nil
+  def each_value(f: Fn(V) -> nil) -> nil
     self.each do |kv| f.(kv.1) end
     nil
   end

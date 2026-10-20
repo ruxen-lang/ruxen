@@ -145,6 +145,9 @@ impl Resolver {
             param_types: param_tys,
             return_type: hir_return_ty,
             is_variadic: ffi_fn.is_variadic,
+            has_receiver: false,
+            returns_owned: ffi_fn.returns_owned,
+            self_mode: None,
         }
     }
 
@@ -263,6 +266,8 @@ impl Resolver {
                 None
             } else if ffi_fn.mutates_self {
                 Some(crate::hir::nodes::HirSelfMode::RefMut)
+            } else if ffi_fn.consumes_self {
+                Some(crate::hir::nodes::HirSelfMode::Consuming)
             } else {
                 Some(crate::hir::nodes::HirSelfMode::Ref)
             },
@@ -350,6 +355,9 @@ impl Resolver {
             param_types: final_param_tys,
             return_type: hir_return_ty,
             is_variadic: ffi_fn.is_variadic,
+            has_receiver: !ffi_fn.is_class_method,
+            returns_owned: ffi_fn.returns_owned,
+            self_mode: signature.self_mode,
             // The class/mixin name is encoded in the mangled ruxen_name
             // (`ClassName_method`) so any downstream consumer that wants
             // the parent type can split there. Setting it explicitly
@@ -549,7 +557,10 @@ impl Resolver {
         };
         let self_def = self.symbols.define(
             "Self".to_string(),
-            DefKind::TypeAlias { target: self_ty },
+            DefKind::TypeAlias {
+                target: self_ty,
+                params: Vec::new(),
+            },
             Visibility::Private,
             class.span.clone(),
         );
@@ -686,6 +697,7 @@ impl Resolver {
                 // marker at forward-declaration time so any pre-pass
                 // user (e.g. forward-referenced fn sigs) sees it.
                 let flat_heap_struct = class.layout.iter().any(|s| s == "flat_heap_struct");
+                let closure_shell = class.layout.iter().any(|s| s == "closure");
 
                 // #06.8 T#21: namespace-anchor mode. When the bootstrap
                 // is merging a `class Foo` whose name already has a
@@ -799,6 +811,7 @@ impl Resolver {
                                 auto_traits: AutoTraitFlags::default(),
                                 const_predicates: vec![],
                                 flat_heap_struct,
+                                closure_shell,
                                 runtime_dispatch_includes: Vec::new(),
                             },
                         },
@@ -825,6 +838,7 @@ impl Resolver {
                                 auto_traits: AutoTraitFlags::default(),
                                 const_predicates: vec![],
                                 flat_heap_struct,
+                                closure_shell,
                                 runtime_dispatch_includes: Vec::new(),
                             },
                         },
@@ -1141,10 +1155,10 @@ impl Resolver {
                 }
             }
             ast::TopLevelItem::TypeAlias(ta) => {
-                let target = self.resolve_type_expr(&ta.type_expr);
+                let (target, params) = self.resolve_alias_target(ta);
                 let id = self.symbols.define(
                     ta.name.clone(),
-                    DefKind::TypeAlias { target },
+                    DefKind::TypeAlias { target, params },
                     Visibility::Public,
                     ta.span.clone(),
                 );
@@ -1312,7 +1326,7 @@ impl Resolver {
 /// explicit `Ty::Int64` instead: it lowers to i64 on EVERY target/backend
 /// (Cranelift I64 — unchanged width — and LLVM i64 even on wasm32),
 /// matching the C `int64_t`. The receiver value (a `Char` i32 / `Bool`
-/// i8) is zero-extended to i64 by `coerce_value` at the call site. This
+/// i8) is widened to i64 by its call-argument `Convert` (`mir::coercion`). This
 /// is the same "int-slot ABI" rule that maps `Ty::TypeParam` to i64
 /// (`codegen/llvm/types.rs`). Heap/pointer homes (`String`, the
 /// collections, `Option`/`Result`) keep the `Ty::Class` handle: their C

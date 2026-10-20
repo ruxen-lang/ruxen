@@ -117,6 +117,14 @@ impl Parser {
         if mutates_self {
             self.advance(); // consume `var`
         }
+        // `def consume NAME`: a receiver-consuming instance method, the same
+        // spelling as a consuming-self `def`.
+        let consumes_self = !mutates_self
+            && self.at(TokenKind::Consume)
+            && matches!(self.peek_kind(), TokenKind::Identifier(_));
+        if consumes_self {
+            self.advance(); // consume `consume`
+        }
 
         // Ruxen convention (ruby-naming.spec.md §3.4a): `def NAME(...)` is
         // an instance method, `def self.NAME(...)` is a class method. The
@@ -225,8 +233,16 @@ impl Parser {
             self.expect(TokenKind::RParen);
         }
 
+        // `-> owned T`: the C function hands the caller a fresh value it
+        // owns outright. `owned` is contextual: a lowercase word before a
+        // type is never itself a type.
+        let mut returns_owned = false;
         let return_type = if self.eat(TokenKind::Arrow) {
             self.skip_newlines();
+            if matches!(self.current_kind(), TokenKind::Identifier(word) if word == "owned") {
+                self.advance(); // consume `owned`
+                returns_owned = true;
+            }
             Some(self.parse_type())
         } else {
             None
@@ -247,6 +263,8 @@ impl Parser {
             name,
             is_class_method,
             mutates_self,
+            consumes_self,
+            returns_owned,
             c_symbol,
             params,
             return_type,

@@ -1,4 +1,3 @@
-Array(Int) :: each => Some(Unit) | diag=[]
 Array(Int) :: to_h => Some(Map(Infer(0), Infer(1))) | diag=[]
 Array(Int) :: sum => None | diag=[]
 Array(Int) :: select! => Some(Unit) | diag=[]

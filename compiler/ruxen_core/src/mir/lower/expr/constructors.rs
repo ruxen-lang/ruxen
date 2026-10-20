@@ -8,8 +8,8 @@ impl<'a> Lowerer<'a> {
     /// at the field-binding's declared width; if a value's width and the
     /// slot's width disagree the slot reads garbage (an f64 store into a 4-byte
     /// f32 slot reads 0). Routing the value through a target-typed `Assign`
-    /// invokes codegen's `coerce_value` (the `fdemote`/`fpromote`/`fcvt_*`
-    /// path — the same one a `let`-bound `as Float32` cast and a `Float32`
+    /// gets it the `Assign` conversion (`mir::coercion`: the
+    /// `fdemote`/`fpromote`/`fcvt_*` path — the same one a `let`-bound `as Float32` cast and a `Float32`
     /// fn-param boundary already use), so the SSA value is the field's width
     /// BEFORE the store. A no-op when the types already match (the inline
     /// `120.5f32` literal path, which `Assign`-coerces to the temp upstream).

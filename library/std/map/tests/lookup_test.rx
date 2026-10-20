@@ -56,7 +56,7 @@ Tester.describe("Hash lookup") do |t: &var Tester|
     h.insert(3, 30)
     t.expect(h.keys.size).to_eq(3)
     t.expect(h.values.size).to_eq(3)
-    let pairs: Array[(Int, Int)] = h.to_a
+    pairs = h.to_a
     t.expect(pairs.size).to_eq(3)
     var total = 0
     for (k, v) in pairs

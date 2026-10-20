@@ -13,7 +13,6 @@ use crate::mir::nodes::MirProgram;
 mod debug;
 pub mod emit;
 pub mod optimize;
-pub mod runtime_decl;
 pub mod types;
 
 /// LLVM code generation engine.

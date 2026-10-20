@@ -47,7 +47,7 @@ class Box[T]
   v: T
   def init(@v: T)
   end
-  def get -> T
+  def get -> &T
     self.v
   end
 end

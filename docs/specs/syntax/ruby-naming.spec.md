@@ -177,10 +177,10 @@ type (E0730); a borrowed string is `&String`.
 | Block forwarding | `@items.each(&block)` | [implemented] (`&block` / bare `&` in argument position; the receiving parameter still needs its type, `&block: Fn[...]`) |
 | `next` | ends the current block iteration, optionally with a value | [implemented] inside blocks only; see section 6 for loops |
 | Calling a stored block | `blk.(x)` | [implemented] |
-| `blk.call(x)`, `blk[x]` | | [planned]; confirm against the resolver's closure-variable `call` path before documenting as working |
-| Lambda | `double = ->(x: Int) { x * 2 }` | [planned] |
-| `lambda { \|x\| ... }`, `proc { \|x\| ... }` | | [planned] |
-| Closure type, square form | `Fn[(Int) -> Int]` | [implemented] (OQ-5: whether to rename to `Proc[...]`) |
+| `blk.call(x)`, `blk[x]` | | [planned] (card "Ruby lambdas") |
+| Lambda | `double = ->(x: Int) { x * 2 }`, `-> { work }`, `->(x) do ... end` | [implemented]; owns its captures (capturing a non-Copy variable moves it). See `docs/decisions/blocks-procs-lambdas.md` |
+| `lambda { \|x\| ... }`, `proc { \|x\| ... }`, `Proc.new { ... }` | | [implemented]; own their captures. Strict arity and `return` semantics for procs: [planned] |
+| Closure types | `Fn[(Int) -> Int]` for a block (borrowed for the call, cannot be stored: E1018); `Proc[(Int) -> Int]` for a stored proc or lambda | [implemented]; OQ-5 decided 2026-10-17 |
 | Closure type, paren form | `Fn(Int) -> Int`, `\|Int\| -> Bool` | [deprecated], replace with `Fn[(Int) -> Int]` |
 | Capture-capability types | `FnMut(...)`, `FnOnce(...)` bounds | [implemented] (OQ-5) |
 | Empty pipes | `{ \|\| work }` | [deprecated], replace with `{ work }` |
@@ -574,6 +574,8 @@ FFI stays as Ruxen's own `lib` block, which reads like Ruby FFI's
 |---|---|---|
 | Library block | `lib "m" ... end`, `lib "ssl", version: "3" ... end` | [implemented] (the trailing options are parsed and ignored today) |
 | Renamed C symbol | `def open as "ruxen_file_open"(path: &String) -> Int` | [implemented]. This `as` is the C symbol name, not a cast; it stays. |
+| Receiver mode of a C method | `def var push as "ruxen_vec_push"(v: T)`, `def consume drop as "ruxen_mutex_free"` | [implemented]. Same spellings as a Ruby-side `def var` / `def consume`; a `def consume drop` frees the handle's storage itself. |
+| Owned C result | `def clone as "ruxen_closure_share" -> owned Self` | [implemented]. The caller owns the result outright (for a collection: its spine, buffer and every element) and frees it. Without `owned`, a C result is not assumed owned. |
 | Library block inside a class | `class File; lib "ruxen_runtime" ... end; end` | [implemented] |
 | Variadic C function | `def printf(fmt: *UInt8, ...) -> Int32` | [implemented] |
 | Raw pointers | `*UInt8`, `*var Void`; null is `nil` | [implemented] |
@@ -666,7 +668,7 @@ as keywords internally, but users must be able to read them as Ruby calls.
 | OQ-2 | Can a method declare its raise set explicitly, and how? | inferred only |
 | OQ-3 | Ivar type declarations: keep `name: Type` in the class body, or the RBS form `@name: Type`? | `name: Type` |
 | OQ-4 | Keyword parameters in definitions: Ruby's `def f(host:, port: 80)` collides with `name: Type` annotations | positional parameters with defaults |
-| OQ-5 | Block and proc types: rename `Fn[(A) -> R]` to `Proc[(A) -> R]`? Infer `FnMut` / `FnOnce` capture capability instead of naming it? | `Fn[(A) -> R]` |
+| OQ-5 | Block and proc types | Decided 2026-10-17: `Fn[(A) -> R]` is a borrowed block, `Proc[(A) -> R]` a stored proc or lambda. `FnMut`/`FnOnce` capability inference stays open |
 | OQ-6 | Conditional methods via a bounded reopen (`class Box[T < Comparable]`): exact rule | as in section 12 |
 | OQ-7 | Two included modules with the same default method: Ruby's "last include wins", or keep an error? | Ruby's rule is the target |
 | OQ-8 | Sized integers: FFI and storage only? Literal suffixes (`200u8`) kept or replaced by `200.to_u8`? `[T; N]` and const generics kept (perhaps as `StaticArray[T, N]`) or dropped? | unchanged |
@@ -674,7 +676,7 @@ as keywords internally, but users must be able to read them as Ruby calls.
 | OQ-10 | Generic type aliases (`type Pair[T] = ...` in RBS) | `X = Y` for plain aliases |
 | OQ-11 | `some` / `any` existentials and associated types: keep, or is a plain module-typed parameter enough? (Associated types exist mainly for the retired iterator layer and `Future::Output`.) | unchanged |
 | OQ-12 | `#= ... =#` block comments once `=begin ... =end` exists | keep both |
-| OQ-13 | Auto-borrow at call sites so `f("x")` passes `&"x"` | explicit `&` |
+| OQ-13 | Auto-borrow at call sites so `f("x")` passes `&"x"` | Decided 2026-10-17: auto-borrow; callers never write `&` |
 | OQ-14 | One opt-out spelling for `Send` / `Sync` (`exclude Send` proposed) | `include !Send` |
 | OQ-15 | Names of the ownership types (`Box`, `Shared`, `SharedSync`; `Send` / `Sync`, for example `Shareable` after Ractor) | unchanged |
 | OQ-16 | `ref` / `ref var` patterns, or default binding modes | unchanged |

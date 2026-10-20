@@ -18,9 +18,11 @@
 //! `ruxen_hash_free`, the splice also injects per-helper counters so
 //! tests can assert which kind of free fired.
 
+use crate::blocks_procs_lambdas::borrow_codes;
 use crate::common;
 
 use ruxen_core::codegen;
+use ruxen_core::driver;
 use ruxen_core::lexer::Lexer;
 use ruxen_core::mir::lower::Lowerer;
 use ruxen_core::parser::Parser;
@@ -466,22 +468,13 @@ fn compile_and_run_with_tracking(name: &str, source: &str) -> (String, String, O
 
     write_tracking_runtime(&runtime_path);
 
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().expect("lex");
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().expect("parse");
-    let result = typeck::type_check(&program);
-    let errors: Vec<_> = result
-        .diagnostics
-        .iter()
-        .filter(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error)
-        .collect();
-    assert!(errors.is_empty(), "typecheck errors: {:?}", errors);
-
-    let mut lowerer = Lowerer::new(&result.symbols);
-    let mir = lowerer
-        .lower_program(&result.program)
-        .expect("MIR lowering");
+    // Every fixture is a program `ruxen build` accepts: it type-checks,
+    // borrow-checks and lowers with its loan check (I-20).
+    let program = driver::parse(source).expect("parse");
+    let mut frontend = driver::check(&program, &driver::Options::default());
+    let Some(mir) = frontend.mir.take() else {
+        panic!("`{name}` does not build:\n{}", frontend.render(None));
+    };
 
     // Link against the tracked runtime in place of the default one,
     // passed by path through the production host link. No process env
@@ -696,8 +689,128 @@ fn closure_and_block_captures_are_freed_at_closure_drop() {
     }
 }
 
-/// Returning a capture moves it out of the closure. Closure drop still frees
-/// its pair and captures block, but must leave the escaped Buffer live.
+/// Two trailing blocks capture the same String. Blocks borrow their captures,
+/// so the String is freed once by `main` and never by a block's drop.
+#[test]
+fn blocks_sharing_a_capture_free_it_once() {
+    let source = rx("blocks_share_string_capture");
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("blocks_share_string_capture", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {stderr}");
+    assert_eq!(stdout, "p-0\np-1\np-0\np-1\np-\n", "stdout was {stdout:?}");
+    let report = parse_leak_report(&stderr);
+    assert_eq!(report.outstanding_allocations, 0, "leak: {report:#?}");
+}
+
+/// A block borrows its captures, so moving one out goes through `.clone`
+/// (E1019 otherwise): the block's value, a binding, a push, an array literal,
+/// an owning lambda in the block, and a lambda nested in a lambda (it owns a
+/// clone made in the outer body). Every clone and every capture is freed once.
+#[test]
+fn cloned_block_captures_are_freed_once() {
+    let source = rx("block_capture_clone_moves_no_leak");
+    assert_eq!(borrow_codes(&source), Vec::<String>::new());
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("block_capture_clone_moves_no_leak", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {stderr}");
+    assert_eq!(
+        stdout, "1\ncap-7\n2\n1\ncap-7\ncap-7\n",
+        "stdout was {stdout:?}"
+    );
+    let report = parse_leak_report(&stderr);
+    assert_eq!(report.outstanding_allocations, 0, "leak: {report:#?}");
+}
+
+/// A capture-less block forwarded through `&block` runs with its `Fn[...]`
+/// parameter types (it segfaulted), and a forwarded capturing block borrows
+/// its String: every allocation is freed exactly once.
+#[test]
+fn forwarded_blocks_run_typed_and_free_once() {
+    let source = rx("block_forwarded_capture_less");
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("block_forwarded_capture_less", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {stderr}");
+    assert_eq!(stdout, "1\n2\n1\ns\n2\ns\ns\n", "stdout was {stdout:?}");
+    let report = parse_leak_report(&stderr);
+    assert_eq!(report.outstanding_allocations, 0, "leak: {report:#?}");
+}
+
+/// A closure nested in an owning lambda makes the lambda own the outer
+/// String it reads: the String is freed once, by the lambda's drop. A nested
+/// owning lambda owns a clone made in the outer body.
+#[test]
+fn nested_closure_capture_is_owned_by_the_lambda_and_freed_once() {
+    let source = rx("nested_closure_capture_owned_once");
+    assert_eq!(borrow_codes(&source), Vec::<String>::new());
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("nested_closure_capture_owned_once", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {stderr}");
+    assert_eq!(stdout, "3\n3\nt1\n", "stdout was {stdout:?}");
+    let report = parse_leak_report(&stderr);
+    assert_eq!(report.outstanding_allocations, 0, "leak: {report:#?}");
+}
+
+/// A lambda passed to an ordinary `Fn[...]` parameter is borrowed: the caller
+/// frees the closure pair and the lambda's owned String after both calls.
+#[test]
+fn lambda_passed_to_fn_param_is_freed_by_the_caller() {
+    let source = rx("lambda_to_fn_param_no_leak");
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("lambda_to_fn_param_no_leak", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {stderr}");
+    assert_eq!(stdout, "4\n5\n", "stdout was {stdout:?}");
+    let report = parse_leak_report(&stderr);
+    assert_eq!(report.outstanding_allocations, 0, "leak: {report:#?}");
+}
+
+/// The `.clone` forms of the moves E1019 rejects in a closure body (a cast, a
+/// match binding, a multi-assign value, and a push or binding in an owning
+/// lambda called twice) pass the borrow checker and free every clone once.
+#[test]
+fn cloned_capture_moves_pass_borrow_check_and_free_once() {
+    let source = rx("capture_clone_moves_no_leak");
+    assert_eq!(borrow_codes(&source), Vec::<String>::new());
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("capture_clone_moves_no_leak", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {stderr}");
+    assert_eq!(stdout, "cap-7\n2\n2\n2\ncap-7\n", "stdout was {stdout:?}");
+    let report = parse_leak_report(&stderr);
+    assert_eq!(report.outstanding_allocations, 0, "leak: {report:#?}");
+}
+
+/// A single `if let Some(v) = o` on an owned Option[String] moves the payload
+/// into `v`, which frees it once: nothing leaks and nothing is freed twice.
+#[test]
+fn if_let_binding_owns_the_option_payload() {
+    let source = rx("if_let_owned_option_no_leak");
+    assert_eq!(borrow_codes(&source), Vec::<String>::new());
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("if_let_owned_option_no_leak", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {stderr}");
+    assert_eq!(stdout, "opt-7\n", "stdout was {stdout:?}");
+    let report = parse_leak_report(&stderr);
+    assert_eq!(report.outstanding_allocations, 0, "leak: {report:#?}");
+}
+
+/// `Some(_)` on a local leaves the payload in place for a later `if let`, and
+/// an `if let` on a field only views the field's payload, so neither frees a
+/// String something else still owns (both crashed; the field read is a
+/// `&Option[String]`, whose payload match typing peels the reference). Only
+/// exit and output are pinned: an `Option` box that no by-value binding
+/// emptied is never freed yet (TODO.md, Known issues).
+#[test]
+fn match_on_a_place_keeps_its_payload() {
+    let source = rx("match_place_payload_kept");
+    assert_eq!(borrow_codes(&source), Vec::<String>::new());
+    let (stdout, stderr, exit) = compile_and_run_with_tracking("match_place_payload_kept", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {stderr}");
+    assert_eq!(stdout, "some\nopt-7\nn-3\nn-3\n", "stdout was {stdout:?}");
+}
+
+/// Returning a capture moves it out of the closure. Closure drop frees only
+/// its pair and captures block; the escaped Buffer stays live until its new
+/// owner, the caller's `escaped`, frees it once (a boxed Copy value a closure
+/// returns is the caller's box).
 #[test]
 fn closure_drop_does_not_free_a_moved_out_capture() {
     let source = rx("closure_capture_moved_out_not_freed");
@@ -707,11 +820,8 @@ fn closure_drop_does_not_free_a_moved_out_capture() {
     assert_eq!(stdout, "42", "escaped capture was invalid: {stderr}");
     let (allocs, frees, outstanding) = parse_leak_marker(&stderr);
     assert_eq!(allocs, 3, "expected capture + block + pair: {stderr}");
-    assert_eq!(frees, 2, "only the block and pair may be freed: {stderr}");
-    assert_eq!(
-        outstanding, 1,
-        "the escaped Buffer must remain live: {stderr}"
-    );
+    assert_eq!(frees, 3, "block, pair, then the escaped Buffer: {stderr}");
+    assert_eq!(outstanding, 0, "the escaped Buffer leaked: {stderr}");
 }
 
 /// Re-binding a heap-owned local must free the prior allocation before
@@ -1902,8 +2012,616 @@ end
     );
 }
 
+/// Run `source` against the tracking runtime and require a clean exit (a
+/// double free aborts), the expected stdout and zero outstanding
+/// allocations of either flavour.
+fn assert_runs_leak_free(name: &str, source: &str, expected_stdout: &str) {
+    let (stdout, stderr, exit) = compile_and_run_with_tracking(name, source);
+    assert_eq!(exit, Some(0), "`{name}` exited non-zero. stderr:\n{stderr}");
+    assert_eq!(stdout, expected_stdout, "`{name}` stdout");
+    let report = parse_leak_report(&stderr);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "`{name}` leaked: {report:#?}"
+    );
+}
+
+/// An object owns its fields: when it dies its String, Array[String] and
+/// nested-object fields are freed after its `def drop` runs, whether it dies
+/// at scope exit, at a loop back-edge, on rebinding, or as an element of a
+/// collection.
+#[test]
+fn an_object_frees_its_fields_when_it_dies() {
+    let source = r##"
+class Address
+  city: String
+
+  def init(@city: String)
+  end
+end
+
+class User
+  name: String
+  tags: Array[String]
+  home: Address
+
+  def init(@name: String, @tags: Array[String], @home: Address)
+  end
+end
+
+class Noisy
+  label: String
+
+  def init(@label: String)
+  end
+
+  def drop
+    puts "drop #{@label}"
+  end
+end
+
+total = 0
+i = 0
+while i < 20
+  u = User.new("u#{i}", ["a#{i}", "b#{i}"], Address.new("c#{i}"))
+  total = total + (u.tags.size as Int)
+  i = i + 1
+end
+r = User.new("r1", ["x"], Address.new("y"))
+r = User.new("r2", ["z"], Address.new("w"))
+users = Array[User].new
+users.push(User.new("e", ["f"], Address.new("g")))
+n = Noisy.new("n" + "1")
+puts "#{total} #{r.home.city} #{users.size}"
+"##;
+    assert_runs_leak_free("object_fields", source, "40 w 1\ndrop n1\n");
+}
+
+/// Storing into a field frees the value it held before: rebuilding a
+/// String field in a loop (`rep.text = rep.text + w`) leaks none of the
+/// intermediate values.
+#[test]
+fn storing_into_a_field_frees_the_previous_value() {
+    let source = r##"
+class Report
+  text: String
+  words: Array[String]
+
+  def init
+    @text = ""
+    @words = []
+  end
+end
+
+rep = Report.new
+i = 0
+while i < 30
+  w = "w#{i}"
+  rep.text = rep.text + w
+  rep.words.push(w.clone)
+  i = i + 1
+end
+puts "#{rep.text.size} #{rep.words.size}"
+"##;
+    assert_runs_leak_free("field_overwrite", source, "80 30\n");
+}
+
+/// `rep.words = rep.words.select { … }` keeps aliases of the old Array's
+/// elements: freeing the old value, and later the field, must not free a
+/// kept element twice (the field's drops become shallow,
+/// `drops::demote_escaping_element_drops`).
+#[test]
+fn a_field_element_kept_by_its_replacement_is_not_freed_twice() {
+    let source = r##"
+class Report
+  words: Array[String]
+
+  def init
+    @words = []
+  end
+end
+
+rep = Report.new
+i = 0
+while i < 30
+  rep.words.push("w#{i}")
+  i = i + 1
+end
+rep.words = rep.words.select { |w| w.size < 3 }
+puts rep.words.size
+"##;
+    let (stdout, stderr, exit) = compile_and_run_with_tracking("field_element_alias", source);
+    assert_eq!(
+        exit,
+        Some(0),
+        "double free of a kept element. stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "10\n");
+    let raw_line = stderr
+        .lines()
+        .find(|l| l.starts_with("RUXEN_TEST_RAW"))
+        .expect("raw marker");
+    let raw_mallocs = extract_u64(raw_line, "raw_mallocs", &stderr);
+    let raw_frees = extract_u64(raw_line, "raw_frees", &stderr);
+    assert!(raw_frees <= raw_mallocs, "over-free:\n{stderr}");
+}
+
+/// A derived `clone` copies every field deeply, so the original and the
+/// copy each free only their own fields, in either order.
+#[test]
+fn a_derived_clone_owns_independent_fields() {
+    let source = r##"
+class Inner
+  label: String
+
+  def init(@label: String)
+  end
+end
+
+class Outer
+  name: String
+  items: Array[String]
+  inner: Inner
+
+  def init(@name: String, @items: Array[String], @inner: Inner)
+  end
+end
+
+a = Outer.new("a" + "b", ["c" + "d"], Inner.new("e" + "f"))
+b = a.clone
+c = b.clone
+puts "#{a.name} #{b.items.size} #{c.inner.label}"
+"##;
+    assert_runs_leak_free("derived_clone_fields", source, "ab 1 ef\n");
+}
+
+/// A generic class instance frees the fields its type arguments make owned,
+/// and a subclass frees the String field it inherits from its parent.
+#[test]
+fn generic_and_inherited_fields_are_freed() {
+    let source = r##"
+class Box[T]
+  item: T
+  note: String
+
+  def init(@item: T, @note: String)
+  end
+
+end
+
+class Animal
+  name: String
+
+  def init(@name: String)
+  end
+end
+
+class Dog < Animal
+  trick: String
+
+  def init(@name: String, @trick: String)
+  end
+end
+
+b = Box.new("x" + "y", "note")
+b.item = "z" + "w"
+n = Box.new(7, "seven")
+d = Dog.new("rex", "sit")
+puts "#{b.note} #{n.note} #{d.name} #{d.trick}"
+"##;
+    assert_runs_leak_free("generic_inherited_fields", source, "note seven rex sit\n");
+}
+
+/// A lambda stored in a field moves into the object, which frees it (its
+/// captured String, captures box and pair) exactly once when it dies.
+#[test]
+fn an_object_frees_the_lambda_in_its_field() {
+    let source = r##"
+class Holder
+  cb: Proc[() -> nil]
+
+  def init(@cb: Proc[() -> nil])
+  end
+
+  def fire -> nil
+    @cb.()
+  end
+end
+
+name = "ali" + "ce"
+h = Holder.new(-> { puts name })
+h.fire
+h.fire
+"##;
+    assert_runs_leak_free("closure_field", source, "alice\nalice\n");
+}
+
+/// Lambdas pushed into an Array move into it; the Array's drop frees each
+/// one through the pair's own drop slot (the CLOSURE element tag), also
+/// after they were called through a `for` loop binding.
+#[test]
+fn an_array_frees_the_lambdas_it_holds() {
+    let source = r##"
+hs = Array[Proc[(Int) -> nil]].new
+a = "a" + "1"
+b = "b" + "2"
+c = "c" + "3"
+hs.push(->(n: Int) { puts "#{a}-#{n}" })
+hs.push(->(n: Int) { puts "#{b}-#{n}" })
+hs.push(->(n: Int) { puts "#{c}-#{n}" })
+for h in hs
+  h.(7)
+end
+puts hs.size
+"##;
+    assert_runs_leak_free("closure_array", source, "a1-7\nb2-7\nc3-7\n3\n");
+}
+
+/// The Bag shape: a user `each(&block)` iterating its own `@items` with
+/// `for` and calling the block only lends each element to the block, so
+/// `@items` keeps a deep drop. Two blocks borrow a shared prefix; a lambda
+/// and a proc own theirs.
+#[test]
+fn a_block_called_from_a_for_loop_borrows_the_elements() {
+    let source = r##"
+class Bag
+  items: Array[String]
+
+  def init
+    @items = ["a" + "", "b" + ""]
+  end
+
+  def each(&block: Fn[(String) -> nil]) -> nil
+    for s in @items
+      block.(s)
+    end
+  end
+end
+
+prefix = "p-"
+bag = Bag.new
+bag.each { |n| puts prefix + n }
+bag.each { |n| puts prefix + n }
+puts prefix
+tag = "tag-".clone
+f = -> { puts tag }
+f.()
+g = proc { puts "proc" }
+g.()
+"##;
+    assert_runs_leak_free(
+        "bag_each_block",
+        source,
+        "p-a\np-b\np-a\np-b\np-\ntag-\nproc\n",
+    );
+}
+
+/// A Hash frees the lambda and proc values it holds, also after one was
+/// called through an index read.
+#[test]
+fn a_hash_frees_the_procs_it_holds() {
+    let source = r##"
+routes = Hash[String, Proc[(Int) -> nil]].new
+x = "x" + "!"
+y = "y" + "?"
+routes["get"] = ->(n: Int) { puts "#{x}#{n}" }
+routes["put"] = proc { |n: Int| puts "#{y}#{n}" }
+routes["put"].(3)
+puts routes.size
+"##;
+    assert_runs_leak_free("closure_hash", source, "y?3\n2\n");
+}
+
+/// `.clone` of a Proc shares it: every copy (an explicit `.clone` of a
+/// field read, a derived clone of the object, a copied Array) holds a
+/// counted reference, and the pair is freed once, by its last owner.
+#[test]
+fn a_shared_proc_is_freed_once_by_its_last_owner() {
+    let source = r##"
+class Policy
+  pred: Proc[(Int) -> Bool]
+  hooks: Array[Proc[() -> nil]]
+
+  def init(@pred: Proc[(Int) -> Bool], @hooks: Array[Proc[() -> nil]])
+  end
+end
+
+limit = "lim" + "it"
+hooks = Array[Proc[() -> nil]].new
+hooks.push(-> { puts limit })
+p = Policy.new(->(n: Int) { n > 2 }, hooks)
+q = Policy.new(p.pred.clone, p.hooks.drop(0))
+r = q.clone
+for h in r.hooks
+  h.()
+end
+puts "#{p.pred.(3)} #{q.pred.(1)} #{r.pred.(5)}"
+"##;
+    assert_runs_leak_free("shared_proc", source, "limit\ntrue false true\n");
+}
+
+/// Heap statement temporaries are freed at the end of their statement:
+/// a `String` or class instance returned by a user function and only used
+/// inside one statement (`puts(label(i))`, `boxed(i).value`), and a
+/// constructor temporary (`Parcel.new(i).value`). User function results used
+/// to be treated as borrowed, so every one of them leaked, once per loop
+/// iteration.
+#[test]
+fn heap_statement_temporaries_are_freed() {
+    let source = r##"
+class Parcel
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def value -> Int
+    @n
+  end
+end
+
+def label(n: Int) -> String
+  "v#{n}"
+end
+
+def boxed(n: Int) -> Parcel
+  Parcel.new(n)
+end
+
+i = 0
+while i < 3
+  puts label(i)
+  puts boxed(i).value
+  puts Parcel.new(i).value
+  i = i + 1
+end
+kept = label(9)
+puts kept
+"##;
+    let (stdout, stderr, exit) = compile_and_run_with_tracking("heap_stmt_temps", source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr:\n{stderr}");
+    assert_eq!(stdout, "v0\n0\n0\nv1\n1\n1\nv2\n2\n2\nv9\n");
+    let report = parse_leak_report(&stderr);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "heap statement temporaries leaked: {report:#?}"
+    );
+}
+
+/// A temporary of a class with a `def drop` runs its drop at the end of the
+/// statement that created it, and its storage is freed; a `let`-bound value
+/// is dropped at scope exit. Before, the constructor temporary was dropped
+/// at function exit and the function-returned one never.
+#[test]
+fn drop_class_statement_temporary_drops_at_statement_end() {
+    let source = r##"
+class Noisy
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def drop
+    puts "drop #{@n}"
+  end
+
+  def value -> Int
+    @n
+  end
+end
+
+def make(n: Int) -> Noisy
+  Noisy.new(n)
+end
+
+puts make(1).value
+puts "after 1"
+puts Noisy.new(2).value
+puts "after 2"
+kept = make(3)
+puts "kept #{kept.value}"
+"##;
+    let (stdout, stderr, exit) = compile_and_run_with_tracking("drop_class_stmt_temp", source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "1\ndrop 1\nafter 1\n2\ndrop 2\nafter 2\nkept 3\ndrop 3\n"
+    );
+    let (_, _, outstanding) = parse_leak_marker(&stderr);
+    assert_eq!(outstanding, 0, "drop-class temporaries leaked: {stderr}");
+}
+
+/// A binding that borrows a temporary's field or result (`U.new(..).name`,
+/// `mk(4).name`, `U.new(..).label`, `pick(U.new(..))`) keeps
+/// the temporary alive while the binding is used, then frees it once, in a
+/// loop body every iteration (I-15). The temporary used to be freed at the
+/// end of its statement while the binding still pointed into it.
+#[test]
+fn borrow_of_a_temporary_keeps_it_alive_then_frees_it() {
+    let source = rx("temporary_root_borrow_kept_alive");
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("temporary_root_borrow_kept_alive", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "tmp-3\nmade-4\nlbl-3\nin-fn-5\np-3\nloop-0\nloop-1\nloop-2\n"
+    );
+    let report = parse_leak_report(&stderr);
+    assert_eq!(report.outstanding_allocations, 0, "leak: {report:#?}");
+}
+
+/// A `&var String` parameter is the caller's slot: `push_str` and an
+/// assignment in the callee replace the caller's buffer, the old buffer is
+/// freed exactly once, and the caller frees the final one. Reading the
+/// parameter used to treat the slot address as the String.
+#[test]
+fn var_string_param_writes_neither_leak_nor_double_free() {
+    // A field or element argument, explicit (`&var u.name`) or auto-borrowed
+    // (`u.name`), is evaluated once and written back without freeing the
+    // value the callee already replaced through the slot (I-17, i1).
+    let source = r##"
+def grow(s: &var String) -> nil
+  s.push_str("!")
+  puts "#{s} #{s.size}"
+end
+
+def replace(s: &var String) -> nil
+  s = "new"
+end
+
+class U
+  name: String
+
+  def init(@name: String)
+  end
+end
+
+s = "hi"
+grow(s)
+grow(s)
+replace(s)
+puts s
+
+k = 3
+u = U.new("old-#{k}")
+replace(&var u.name)
+puts u.name
+replace(u.name)
+puts u.name
+grow(&var u.name)
+grow(u.name)
+
+a = ["e-#{k}", "f-#{k}"]
+replace(&var a[0])
+replace(a[1])
+puts a[0]
+puts a[1]
+grow(&var a[0])
+grow(a[1])
+"##;
+    let (stdout, stderr, exit) = compile_and_run_with_tracking("var_string_param", source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "hi! 3\nhi!! 4\nnew\nnew\nnew\nnew! 4\nnew!! 5\nnew\nnew\nnew! 4\nnew! 4\n"
+    );
+    let report = parse_leak_report(&stderr);
+    assert_eq!(
+        report.outstanding_allocations, 0,
+        "&var String writes leaked or double-freed: {report:#?}"
+    );
+}
+
+/// A `def var` String method on a field borrowed with `&var` grows the
+/// field's own buffer through the address of the field's slot (P-8,
+/// `FieldAddr`), so the field never keeps the freed buffer.
+#[test]
+fn var_field_receiver_grows_the_field_in_place() {
+    let source = rx("var_field_receiver_writeback");
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("var_field_receiver_writeback", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "old-3-a-sufficiently-long-suffix-to-force-realloc-of-the-buffer\n64\n"
+    );
+    let report = parse_leak_report(&stderr);
+    assert_eq!(report.outstanding_allocations, 0, "leak: {report:#?}");
+}
+
+/// Writes to a place once the borrows of it have ended (the loan matrix's
+/// "borrow dead before the write" rows): `u.name += t` grows the field's
+/// own buffer through the address of its slot, a parallel
+/// assignment to a field, rebinding an object after a closure literal (the
+/// old object is freed: the closure body no longer drops the enclosing
+/// function's heap locals), a `for` loop writing a field it does not walk,
+/// and two `&var` arguments on disjoint fields of one object.
+#[test]
+fn place_writes_after_borrows_neither_leak_nor_double_free() {
+    let source = rx("place_writes_after_borrows");
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("place_writes_after_borrows", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "old-3\nold-3-more\nmulti-3 2\nmulti-3\nold-5\ne0-5\ne1-5\n2\nboth-s both-t\n"
+    );
+    let report = parse_leak_report(&stderr);
+    assert_eq!(report.outstanding_allocations, 0, "leak: {report:#?}");
+}
+
+/// A closure stored through a type parameter (`Holder.new(-> { 7 })`) is a
+/// stored proc in the specialized body (`Ty::as_type_argument`): the
+/// constructor owns it and the field frees it once. The specialized `T`
+/// parameter used to read as a borrowed block slot, so the caller freed the
+/// closure as well (a double free under Guard Malloc, review probe w2).
+#[test]
+fn a_closure_stored_through_a_type_parameter_is_freed_once() {
+    let source = rx("generic_class_stores_lambda");
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("generic_class_stores_lambda", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr:\n{stderr}");
+    assert_eq!(stdout, "x\n7\n");
+    let report = parse_leak_report(&stderr);
+    assert_eq!(report.outstanding_allocations, 0, "leak: {report:#?}");
+}
+
 fn ruxen_unique_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// A `&var` place points at the real storage (I-24, P-11): a `&var` field
+/// argument, a `r = &var u.name` binding and its forwarding, a scalar field
+/// borrowed `&var`, and a `&var` of a captured variable inside a block, a
+/// lambda or a proc (explicit, auto-borrowed, or a `def var` receiver) all
+/// write the variable itself. No detached copy is freed under the real
+/// storage, and nothing leaks.
+#[test]
+fn var_places_point_at_the_real_storage() {
+    let source = rx("var_places_point_at_storage");
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("var_places_point_at_storage", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr:\n{stderr}");
+    let long = "replaced-a-long-enough-string-to-realloc";
+    let more = "-more-more-more-more-more-more-more";
+    assert_eq!(
+        stdout,
+        format!(
+            "bound-3\n{long}\n21\n{long}\n{long}\npush-3{more}\n5\n{long}\n{long}\nlpush-3{more}\n{long}\n"
+        )
+    );
+    let report = parse_leak_report(&stderr);
+    assert_eq!(report.outstanding_allocations, 0, "leak: {report:#?}");
+}
+
+/// `op=` on an Array element updates the element in its own slot (P-12; it
+/// used to be a silent no-op): a String element appends in place, an Int
+/// or Float element is read, combined and stored back, and a `def var`
+/// method on an element mutates it. Nothing leaks.
+#[test]
+fn compound_assignment_updates_an_array_element() {
+    let source = rx("element_compound_assign");
+    let (stdout, stderr, exit) = compile_and_run_with_tracking("element_compound_assign", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr:\n{stderr}");
+    let s = "x-3-more-more-more-more-more-more";
+    assert_eq!(stdout, format!("{s}\n{s}!\n6\n6\n2.5\n"));
+    let report = parse_leak_report(&stderr);
+    assert_eq!(report.outstanding_allocations, 0, "leak: {report:#?}");
+}
+
+/// `op=` on a place that cannot be updated in place (a Hash value) is a
+/// lowering error, never a silent no-op (P-12).
+#[test]
+fn compound_assignment_to_a_hash_value_is_rejected() {
+    let source = "h = {\"a\" => 1}\nh[\"a\"] += 1\nputs(h[\"a\"])\n";
+    let program = Parser::new(Lexer::new(source).tokenize().expect("lex"))
+        .parse()
+        .expect("parse");
+    let result = typeck::type_check(&program);
+    let err = Lowerer::new(&result.symbols)
+        .lower_program(&result.program)
+        .expect_err("a compound assignment to a Hash value must not lower");
+    assert!(err.contains("cannot update this place in place"), "{err}");
 }

@@ -2,18 +2,17 @@
 //!
 //! Translates MIR to native object files and links executables.
 
+mod backend;
 pub mod cranelift;
-pub mod lang_intrinsics;
+pub mod ir_builder;
 pub mod layout;
+pub mod lower;
 pub mod object;
-pub mod residual_abi;
-pub mod runtime;
 pub mod target;
-// `runtime_table` deleted in #06.95 Phase E-rest FINAL — every
-// dispatch arm migrated to either per-package .rx class lib decls
-// (the FFI alias map handles them) or to
-// `lang_intrinsics::runtime_name` (compiler-internal mangled
-// callees like `Fn(...)_call`, `Float_to_string_prec`, `&str_*`).
+// The lowering policy (`mir::abi`), the compiler-emitted runtime ABI
+// (`mir::residual_abi`) and the callee name mapping
+// (`mir::lang_intrinsics::runtime_name`) are MIR's: MIR applies them once as
+// explicit `MirInst::Convert`s (`mir::coercion`), and each backend reads them.
 
 #[cfg(feature = "llvm")]
 pub mod llvm;
@@ -23,88 +22,9 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 
-use crate::hir::types::Ty;
 use crate::mir::nodes::MirProgram;
 
-// ─── The erased uniform word (B01) ───────────────────────────────────────────
-//
-// Ruxen has ONE storage class for a value whose static type codegen cannot
-// see: a 64-bit **uniform word**. It appears at six boundaries:
-//
-//   1. a generic-collection slot — `RuxenVec` and the hash/set tables store
-//      `int64_t` elements regardless of `T`;
-//   2. an address-taken local's stack slot — uniformly 8 bytes wide so a
-//      `&var` can hand out a stable pointer;
-//   3. a parameter or return whose declared `Ty` is opaque (`TypeParam`,
-//      a class/ref/option/pointer, …), which `ty_to_cranelift` collapses to
-//      `I64`;
-//   4. the parameters and return of a closure reached through an erased
-//      `Fn` box — the generic body that invokes it was lowered ONCE with the
-//      element type abstract, so it can only pass words;
-//   5. a scalar method home's `self`, typed as the FFI shell
-//      `Class{"Float"}` rather than as `Float`;
-//   6. an `Assign` (or `Copy`/`Move`/`Ref`) into a word-typed local.
-//
-// **ABI decision:** a `Float` occupying a uniform word travels as its
-// IEEE-754 **bit pattern**, and is recovered by the inverse reinterpretation.
-// It is NEVER `fcvt`-converted. Getting only one side of that would be worse
-// than getting neither, so every crossing is symmetric: bitcast on write,
-// bitcast on read. `Float32` occupies the low 32 bits of the word, its own
-// 32-bit pattern zero-extended.
-//
-// Integer-class types (`Bool`/i8, `Char`/i32, `Int32`, …) keep the existing
-// width-extension: they already share the integer register class with the
-// word, which is precisely why only `Float` was corrupted.
-//
-// The one crossing that is NOT an erasure is Ruxen's implicit numeric
-// conversion into a **declared** scalar parameter (`def f(x: Float)` called
-// as `f(3)`, `def g(x: Int)` called as `g(2.5)`). Those must stay `fcvt`.
-// `is_erased_word_ty` is what tells the two apart, from the DECLARED `Ty` —
-// the Cranelift/LLVM type alone cannot, because a declared `Int` slot and an
-// erased word are both `i64`.
-
-/// True when a declared Ruxen type is stored as an OPAQUE 64-bit uniform
-/// word rather than as a value of its own numeric class.
-///
-/// Every primitive scalar (the integer family, the float family, `Bool`,
-/// `Char`) is concrete: its declared type IS its representation, so a
-/// mismatch against it is a real numeric conversion. Everything else —
-/// `TypeParam`, classes, refs, options, collections, function values,
-/// pointers — is an opaque word, so a mismatch against it is erasure and
-/// must be bit-reinterpreted.
-///
-/// `Alias` / `Newtype` are deliberately on the word side: they already lower
-/// to `I64` today, so treating them as concrete would change their ABI.
-pub fn is_erased_word_ty(ty: &Ty) -> bool {
-    !matches!(
-        ty,
-        Ty::Bool
-            | Ty::Int8
-            | Ty::UInt8
-            | Ty::Int16
-            | Ty::UInt16
-            | Ty::Int32
-            | Ty::UInt32
-            | Ty::Char
-            | Ty::Int
-            | Ty::Int64
-            | Ty::UInt
-            | Ty::UInt64
-            | Ty::ISize
-            | Ty::USize
-            | Ty::Float
-            | Ty::Float32
-            | Ty::Float64
-    )
-}
-
-/// True when a declared Ruxen type is a float, i.e. the only type whose
-/// uniform-word representation needs a REGISTER-CLASS change (SSE/vector →
-/// integer) rather than a width extension. Used by closure ABI erasure in
-/// MIR lowering.
-pub fn is_float_ty(ty: &Ty) -> bool {
-    matches!(ty, Ty::Float | Ty::Float32 | Ty::Float64)
-}
+pub use backend::Backend;
 
 /// Locate the stdlib package root containing per-package `runtime/*.c`
 /// trees. After #06.95 Phase B-2 each stdlib package owns its own
@@ -546,15 +466,6 @@ fn parse_system_array(toml_contents: &str, key: &str) -> Vec<String> {
     out
 }
 
-/// Which code-generation backend to use.
-pub enum Backend {
-    Cranelift,
-    #[cfg(feature = "llvm")]
-    Llvm {
-        opt_level: u8,
-    },
-}
-
 /// Compile a MIR program to a native executable.
 pub fn compile(program: &MirProgram, output_path: &str) -> Result<(), String> {
     compile_with_options(program, output_path, false, &[], &[], Backend::Cranelift)
@@ -574,8 +485,8 @@ pub fn compile(program: &MirProgram, output_path: &str) -> Result<(), String> {
 ///   caller's responsibility — see [`find_runtime_sources_in_dir`].
 /// - `backend`: which code-generation backend to use.
 ///
-/// Host-target entry point — byte-identical to the pre-4.02 behaviour.
-/// Delegates to [`compile_with_options_for_target`] with `None`.
+/// Host-target entry point. Delegates to [`compile_with_options_for_target`]
+/// with `None`.
 pub fn compile_with_options(
     program: &MirProgram,
     output_path: &str,
@@ -598,17 +509,13 @@ pub fn compile_with_options(
 /// Compile a MIR program to a native executable for an optional
 /// cross-compilation target (tier 4.02).
 ///
-/// `target = None` (or a resolved host target) takes the byte-identical host
-/// path: `cranelift_native::builder()`, plain `cc`, the prebuilt-archive fast
-/// path. A non-host target routes object generation through `isa::lookup` /
-/// `TargetTriple::create`, compiles the stdlib runtime *for the target*, and
-/// links via the resolved [`target::LinkerSpec`] — local `cc -arch` for a
-/// Darwin cross, or the two-stage Docker flow for a Linux target on a host
-/// without a cross toolchain.
-///
-/// The prebuilt-archive fast path is host-only: a host `libruxenrt.a` is the
-/// wrong ABI for a cross target, so cross builds always compile the runtime
-/// from source for the target (no host-object poisoning the target cache).
+/// `target = None` (or a resolved host target) emits for the host and links
+/// with [`link_host`]. A non-host target emits for that target, compiles the
+/// stdlib runtime *for the target*, and links via the resolved
+/// [`target::LinkerSpec`]: local `cc -arch` for a Darwin cross, or the
+/// two-stage Docker flow for a Linux target on a host without a cross
+/// toolchain. The prebuilt-archive fast path is host-only (a host
+/// `libruxenrt.a` is the wrong ABI for a cross target).
 #[allow(clippy::too_many_arguments)]
 pub fn compile_with_options_for_target(
     program: &MirProgram,
@@ -619,29 +526,21 @@ pub fn compile_with_options_for_target(
     backend: Backend,
     target: Option<&target::ResolvedTarget>,
 ) -> Result<(), String> {
-    // A non-host target takes the dedicated cross path.
-    let is_cross = matches!(target, Some(t) if !t.is_host());
-    if is_cross {
-        return compile_cross(
-            program,
-            output_path,
-            extra_link_flags,
-            extra_runtime_sources,
-            backend,
-            target.expect("is_cross implies Some"),
-        );
-    }
-
-    compile_host(
-        program,
-        output_path,
+    let plan = LinkPlan {
         sanitize,
         extra_link_flags,
         extra_runtime_sources,
-        backend,
-        target,
-        None,
-    )
+        runtime_override: None,
+    };
+    match target {
+        Some(target) if !target.is_host() => {
+            compile_cross(program, output_path, &plan, backend, target)
+        }
+        _ => {
+            let object_bytes = backend.emit_object(program, &target::ResolvedTarget::host())?;
+            link_host(&object_bytes, output_path, &plan)
+        }
+    }
 }
 
 /// Compile a MIR program for the host, linking `runtime_sources` in place
@@ -655,155 +554,96 @@ pub fn compile_with_runtime_sources(
     runtime_sources: &[PathBuf],
     extra_link_flags: &[String],
 ) -> Result<(), String> {
-    compile_host(
-        program,
+    let object_bytes = Backend::Cranelift.emit_object(program, &target::ResolvedTarget::host())?;
+    link_host(
+        &object_bytes,
         output_path,
-        false,
-        extra_link_flags,
-        &[],
-        Backend::Cranelift,
-        None,
-        Some(runtime_sources),
+        &LinkPlan {
+            sanitize: false,
+            extra_link_flags,
+            extra_runtime_sources: &[],
+            runtime_override: Some(runtime_sources),
+        },
     )
 }
 
-/// The host path (byte-identical to pre-4.02). `runtime_override`, when
-/// set, replaces the stdlib runtime sources and disables the prebuilt
-/// archive fast path.
-#[allow(clippy::too_many_arguments)]
-fn compile_host(
-    program: &MirProgram,
-    output_path: &str,
-    sanitize: bool,
-    extra_link_flags: &[String],
-    extra_runtime_sources: &[PathBuf],
-    backend: Backend,
-    target: Option<&target::ResolvedTarget>,
-    runtime_override: Option<&[PathBuf]>,
-) -> Result<(), String> {
-    // Step 1: Generate object code via the selected backend
-    let object_bytes = match backend {
-        Backend::Cranelift => {
-            let mut codegen = cranelift::CodeGen::new_for_target(target)?;
-            codegen.compile_program(program)?;
-            codegen.finish()?
-        }
-        #[cfg(feature = "llvm")]
-        Backend::Llvm { opt_level } => {
-            let mut codegen = llvm::CodeGen::new_for_target(
-                opt_level,
-                target.map(|t| t.canonical().to_string()),
-            )?;
-            codegen.compile_program(program)?;
-            codegen.finish()?
-        }
-    };
+/// What an executable link needs besides the program object. It depends on
+/// the target, never on the backend that emitted the object.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LinkPlan<'a> {
+    /// Compile the C runtime with ASan+UBSan and link the sanitizer runtime
+    /// (host links only).
+    pub sanitize: bool,
+    /// Linker flags ahead of the stdlib `[system_libs]` set: FFI `-l` flags,
+    /// dependency `[system_libs]`, frameworks, dependency objects.
+    pub extra_link_flags: &'a [String],
+    /// Project and dependency `runtime/*.c`, compiled and linked beside the
+    /// stdlib runtime even when the prebuilt archive stands in for it.
+    pub extra_runtime_sources: &'a [PathBuf],
+    /// Sources that replace the stdlib runtime (an instrumented test
+    /// runtime); disables the prebuilt archive.
+    pub runtime_override: Option<&'a [PathBuf]>,
+}
 
-    // Step 2: Provide the C runtime to the linker.
-    //
-    // Fast path (opt-in): when `RUXEN_RUNTIME_AR=<archive>` names an
-    // existing static archive (typically the `libruxenrt.a` that
-    // `ruxen_repl`'s build script already produced under
-    // `target/<profile>/build/ruxen_repl-*/out/`), skip the per-
-    // package `cc -c` invocations entirely and arrange for the
-    // linker to whole-archive that archive instead. With 30+ stdlib
-    // runtime `.c` files this drops 30+ `cc` forks per compile to
-    // zero — the dominant cost in the shell e2e harness and the
-    // in-process `release_e2e_smoke` cargo test.
-    //
-    // Slow path (default): compile every `library/std/<pkg>/runtime/*.c`
-    // to its own `.o` (post-#06.95 Phase B-2 standalone translation
-    // units) and link those individually. Used when the env var
-    // isn't set or the archive is missing.
-    //
-    // Sanitize builds always take the slow path: the prebuilt
-    // archive was compiled without ASan/UBSan instrumentation, so
-    // reusing it would silently strip sanitization from runtime calls.
-    // `find_prebuilt_runtime_archive` probes the `RUXEN_RUNTIME_AR` override
-    // first, then the installed `~/.ruxen/lib/` layout, then dev/test
-    // layouts — falling back to `None` (compile the runtime `.c`).
-    //
-    // The fast path is forced OFF in two cases, because the prebuilt archive
-    // is a cache of the *default*, uninstrumented runtime build:
-    //   - `sanitize`: the archive carries no ASan/UBSan instrumentation, so
-    //     reusing it would silently strip sanitization from runtime calls.
-    //   - `runtime_override` or `RUXEN_RUNTIME` set: an explicit runtime-source
-    //     override (e.g. the drop/leak fixtures inject an allocation-tracking
-    //     runtime). The requested source must be compiled — the archive must
-    //     not replace it.
+/// The link flags of every executable link: `extra_link_flags`, then each
+/// stdlib `[system_libs]` flag not already among them.
+///
+/// B3 of `docs/specs/system/zero_rust_stdlib_classes.spec.md` moved the
+/// historically hardcoded `-lc / -lm / -lpthread` set into per-package
+/// Ruxen.toml `[system_libs] libs = [...]` entries, so a new stdlib package
+/// needing (say) `-lssl` declares it in its own toml without compiler edits.
+pub fn aggregate_link_flags(extra_link_flags: &[String]) -> Vec<String> {
+    let mut flags = extra_link_flags.to_vec();
+    if let Ok(system_flags) = collect_system_lib_flags() {
+        push_unique(&mut flags, system_flags);
+    }
+    flags
+}
+
+/// Link a host `object_bytes` into the executable `output_path`: the one
+/// host link of `ruxen build`, `ruxen compile`/`test` and the test harnesses.
+///
+/// The stdlib C runtime arrives as the prebuilt `libruxenrt.a` when
+/// [`find_prebuilt_runtime_archive`] finds one (`RUXEN_RUNTIME_AR`, the
+/// installed `~/.ruxen/lib/`, then dev layouts), which skips 30+ `cc -c`
+/// forks per link; otherwise each `library/std/<pkg>/runtime/*.c` is
+/// compiled to its own object. The archive is a cache of the default,
+/// uninstrumented runtime, so it is not used for a `sanitize` link (it would
+/// strip the sanitizers from runtime calls) or when the runtime sources are
+/// overridden (`plan.runtime_override` or `RUXEN_RUNTIME`): the requested
+/// sources must be compiled. The plan's own runtime sources are always
+/// compiled, with the same `cc -c` as the stdlib's.
+pub fn link_host(object_bytes: &[u8], output_path: &str, plan: &LinkPlan) -> Result<(), String> {
     let runtime_source_overridden =
-        runtime_override.is_some() || std::env::var_os("RUXEN_RUNTIME").is_some();
-    let prebuilt_archive: Option<PathBuf> = if sanitize || runtime_source_overridden {
+        plan.runtime_override.is_some() || std::env::var_os("RUXEN_RUNTIME").is_some();
+    let prebuilt_archive: Option<PathBuf> = if plan.sanitize || runtime_source_overridden {
         None
     } else {
         find_prebuilt_runtime_archive()
     };
 
-    let mut runtime_objects: Vec<PathBuf> = if prebuilt_archive.is_some() {
-        Vec::new()
-    } else {
-        let runtime_sources = match runtime_override {
-            Some(sources) => sources.to_vec(),
-            None => find_runtime_sources()?,
-        };
-        object::compile_runtime_sources(&runtime_sources, sanitize)?
+    let mut sources: Vec<PathBuf> = match (&prebuilt_archive, plan.runtime_override) {
+        (Some(_), _) => Vec::new(),
+        (None, Some(sources)) => sources.to_vec(),
+        (None, None) => find_runtime_sources()?,
     };
+    sources.extend_from_slice(plan.extra_runtime_sources);
+    let runtime_objects =
+        object::compile_c_sources(&sources, |src| object::compile_runtime(src, plan.sanitize))?;
 
-    // Step 2b: Compile any caller-supplied runtime sources (user project
-    // `runtime/*.c` and each path-dep's `runtime/*.c`). These share the
-    // exact compile path as stdlib runtime — same `cc -c` invocation,
-    // same sanitizer flags — so a user `runtime/foo.c` is
-    // indistinguishable from a stdlib package's runtime at link time.
-    // Always honoured, even on the fast path: the prebuilt archive
-    // covers only stdlib runtime, not user runtime sources.
-    // On failure we still need to clean up the stdlib objects we just
-    // wrote, so route through a helper that propagates the cleanup.
-    if !extra_runtime_sources.is_empty() {
-        match object::compile_runtime_sources(extra_runtime_sources, sanitize) {
-            Ok(mut extra) => runtime_objects.append(&mut extra),
-            Err(e) => {
-                for o in &runtime_objects {
-                    let _ = std::fs::remove_file(o);
-                }
-                return Err(e);
-            }
-        }
-    }
-
-    // Step 3: Collect FFI link flags from the program AND from every
-    // stdlib package's `[system_libs]` table. B3 of
-    // `docs/specs/system/zero_rust_stdlib_classes.spec.md` moved the
-    // historically hardcoded `-lc / -lm / -lpthread` set into per-
-    // package Ruxen.toml `[system_libs] libs = [...]` entries so a
-    // new stdlib package needing (say) `-lssl` declares it in its
-    // own toml without compiler edits.
-    let mut all_link_flags: Vec<String> = extra_link_flags.to_vec();
-    if let Ok(system_flags) = collect_system_lib_flags() {
-        for flag in system_flags {
-            if !all_link_flags.contains(&flag) {
-                all_link_flags.push(flag);
-            }
-        }
-    }
-
-    // Step 4: Link into executable. `emit_executable` whole-archives the
-    // prebuilt runtime (so every `ruxen_*` symbol survives) and places it,
-    // like every other input, before the `[system_libs]` flags above.
-    object::emit_executable(
-        &object_bytes,
+    // `emit_executable` whole-archives the prebuilt runtime (so every
+    // `ruxen_*` symbol survives) and places it, like every other input,
+    // before the link flags.
+    let linked = object::emit_executable(
+        object_bytes,
         &runtime_objects,
         prebuilt_archive.as_deref(),
         output_path,
-        sanitize,
-        &all_link_flags,
-    )?;
-
-    // Clean up runtime objects
-    for o in &runtime_objects {
-        let _ = std::fs::remove_file(o);
-    }
-
-    Ok(())
+        plan.sanitize,
+        &aggregate_link_flags(plan.extra_link_flags),
+    );
+    object::remove_objects(&runtime_objects);
+    linked
 }
 
 /// The cross-compilation path (tier 4.02): non-host target.
@@ -815,74 +655,36 @@ fn compile_host(
 fn compile_cross(
     program: &MirProgram,
     output_path: &str,
-    extra_link_flags: &[String],
-    extra_runtime_sources: &[PathBuf],
+    plan: &LinkPlan,
     backend: Backend,
     target: &target::ResolvedTarget,
 ) -> Result<(), String> {
-    // §5.8 backend compatibility: Cranelift can't emit wasm/embedded.
-    if target.requires_llvm_backend() && matches!(backend, Backend::Cranelift) {
-        return Err(format!(
-            "target '{}' requires the LLVM backend. \
-             Build with --release or pass --backend=llvm.",
-            target.canonical()
-        ));
-    }
-
-    // Step 1: object code for the target.
-    let object_bytes = match backend {
-        Backend::Cranelift => {
-            let mut codegen = cranelift::CodeGen::new_for_target(Some(target))?;
-            codegen.compile_program(program)?;
-            codegen.finish()?
-        }
-        #[cfg(feature = "llvm")]
-        Backend::Llvm { opt_level } => {
-            let mut codegen =
-                llvm::CodeGen::new_for_target(opt_level, Some(target.canonical().to_string()))?;
-            codegen.compile_program(program)?;
-            codegen.finish()?
-        }
-    };
+    // `Backend::select` refuses Cranelift for a target that needs LLVM.
+    let object_bytes = backend.emit_object(program, target)?;
 
     // Tier 4.09 (WASM): link the curated heap-core runtime + bundled allocator/
-    // libc shim so `String`/`Array` work. The §5.8 guard above forced the LLVM
-    // backend, which emitted the user's WebAssembly object (with `export_name`
-    // attrs on every `program.wasm_exports` entry). Compile the curated runtime
-    // `.c` subset (WASM_RUNTIME_CORE) + the wasm shim to wasm objects with clang,
-    // then link everything with `wasm-ld`. (Tier 4.03 originally linked the user
-    // object alone — a bare reactor with no heap.)
+    // libc shim so `String`/`Array` work. The LLVM backend emitted the user's
+    // WebAssembly object (with `export_name` attrs on every
+    // `program.wasm_exports` entry). Compile the curated runtime `.c` subset
+    // (WASM_RUNTIME_CORE) + the wasm shim to wasm objects with clang, then
+    // link everything with `wasm-ld`.
     if target.is_wasm() {
-        let all_sources = find_runtime_sources()?;
-        let mut runtime_objects: Vec<PathBuf> = Vec::new();
-        let cleanup = |objs: &[PathBuf]| {
-            for o in objs {
-                let _ = std::fs::remove_file(o);
-            }
-        };
-        for src in &all_sources {
-            let base = src.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if object::WASM_RUNTIME_CORE.contains(&base) {
-                match object::compile_runtime_for_wasm(src) {
-                    Ok(o) => runtime_objects.push(o),
-                    Err(e) => {
-                        cleanup(&runtime_objects);
-                        return Err(e);
-                    }
-                }
-            }
-        }
-        match object::compile_wasm_shim() {
-            Ok(o) => runtime_objects.push(o),
-            Err(e) => {
-                cleanup(&runtime_objects);
-                return Err(e);
-            }
-        }
+        let core_sources: Vec<PathBuf> = find_runtime_sources()?
+            .into_iter()
+            .filter(|src| {
+                let base = src.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                object::WASM_RUNTIME_CORE.contains(&base)
+            })
+            .collect();
+        let mut runtime_objects =
+            object::compile_c_sources(&core_sources, object::compile_runtime_for_wasm)?;
+        let shim = object::compile_wasm_shim()
+            .inspect_err(|_| object::remove_objects(&runtime_objects))?;
+        runtime_objects.push(shim);
         return object::emit_wasm_module(&object_bytes, &runtime_objects, output_path, target);
     }
 
-    // Step 2: resolve the linker strategy for this target on this host.
+    // Resolve the linker strategy for this target on this host.
     let spec = target::linker_for(
         target,
         target::HostOs::current(),
@@ -890,41 +692,18 @@ fn compile_cross(
         which_on_path,
     )?;
 
-    // Step 3: runtime sources for the target. The container path compiles
-    // them inside the container; the local path compiles them here with the
+    // Runtime sources for the target. The container path compiles them
+    // inside the container; the local path compiles them here with the
     // target-aware `cc` so the runtime object matches the target ABI.
-    let runtime_sources = find_runtime_sources()?;
-    let mut all_runtime_sources = runtime_sources.clone();
-    all_runtime_sources.extend_from_slice(extra_runtime_sources);
-
+    let mut all_runtime_sources = find_runtime_sources()?;
+    all_runtime_sources.extend_from_slice(plan.extra_runtime_sources);
     let runtime_objects: Vec<PathBuf> = if spec.needs_container {
-        // Compiled inside the container; nothing to compile locally.
         Vec::new()
     } else {
-        let mut objs = Vec::with_capacity(all_runtime_sources.len());
-        for src in &all_runtime_sources {
-            match object::compile_runtime_for_target(src, target, &spec.target_args) {
-                Ok(o) => objs.push(o),
-                Err(e) => {
-                    for o in &objs {
-                        let _ = std::fs::remove_file(o);
-                    }
-                    return Err(e);
-                }
-            }
-        }
-        objs
+        object::compile_c_sources(&all_runtime_sources, |src| {
+            object::compile_runtime_for_target(src, target, &spec.target_args)
+        })?
     };
-
-    // Step 4: link flags — `[system_libs]` + FFI, same aggregation as host.
-    let mut all_link_flags: Vec<String> = extra_link_flags.to_vec();
-    if let Ok(system_flags) = collect_system_lib_flags() {
-        for flag in system_flags {
-            if !all_link_flags.contains(&flag) {
-                all_link_flags.push(flag);
-            }
-        }
-    }
 
     object::emit_executable_for_target(
         &object_bytes,
@@ -933,7 +712,7 @@ fn compile_cross(
         output_path,
         target,
         &spec,
-        &all_link_flags,
+        &aggregate_link_flags(plan.extra_link_flags),
     )
 }
 
@@ -956,20 +735,7 @@ pub fn compile_no_std(
     output_path: &str,
     backend: Backend,
 ) -> Result<(), String> {
-    // Object code via the selected backend (host triple).
-    let object_bytes = match backend {
-        Backend::Cranelift => {
-            let mut codegen = cranelift::CodeGen::new_for_target(None)?;
-            codegen.compile_program(program)?;
-            codegen.finish()?
-        }
-        #[cfg(feature = "llvm")]
-        Backend::Llvm { opt_level } => {
-            let mut codegen = llvm::CodeGen::new_for_target(opt_level, None)?;
-            codegen.compile_program(program)?;
-            codegen.finish()?
-        }
-    };
+    let object_bytes = backend.emit_object(program, &target::ResolvedTarget::host())?;
 
     // Link the user object alone — no stdlib runtime objects, no
     // `[system_libs]` aggregation, no FFI flags. `emit_executable` with empty

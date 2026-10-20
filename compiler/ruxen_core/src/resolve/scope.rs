@@ -181,6 +181,11 @@ impl ScopeStack {
         false
     }
 
+    /// Returns true when `scope_id` is the global module scope (no parent).
+    pub fn is_global(&self, scope_id: ScopeId) -> bool {
+        self.scopes[scope_id as usize].parent.is_none()
+    }
+
     /// Returns true when `scope_id` is the same scope as `ancestor_id` or is
     /// nested somewhere underneath it.
     pub fn is_within_scope(&self, scope_id: ScopeId, ancestor_id: ScopeId) -> bool {

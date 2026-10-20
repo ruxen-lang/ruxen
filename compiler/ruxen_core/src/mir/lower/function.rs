@@ -8,6 +8,29 @@ impl<'a> Lowerer<'a> {
         self.lower_method(&func.name, func)
     }
 
+    /// The resolver signature `func` was declared with, before any generic
+    /// substitution a monomorphised copy applied to its HIR types.
+    fn declared_signature(
+        &self,
+        func: &HirFuncDef,
+    ) -> Option<&'a crate::resolve::symbols::FnSignature> {
+        use crate::resolve::symbols::DefKind;
+        let symbols: &'a SymbolTable = self.symbols;
+        match &symbols.get(func.def_id)?.kind {
+            DefKind::Method { signature, .. } | DefKind::Function { signature } => Some(signature),
+            _ => None,
+        }
+    }
+
+    /// The declared types of `func`'s parameters (see `declared_signature`),
+    /// or none when the signature does not line up with the HIR params.
+    fn declared_param_tys(&self, func: &HirFuncDef) -> Vec<Ty> {
+        self.declared_signature(func)
+            .filter(|sig| sig.params.len() == func.params.len())
+            .map(|sig| sig.params.iter().map(|p| p.ty.clone()).collect())
+            .unwrap_or_default()
+    }
+
     pub(super) fn lower_method(
         &mut self,
         name: &str,
@@ -16,7 +39,9 @@ impl<'a> Lowerer<'a> {
         // Reset per-function state.
         self.def_to_local.clear();
         self.cell_promoted.clear();
+        self.refmut_slots.clear();
         self.initialized_heap_locals.clear();
+        self.stmt_log = drops::StmtScopeLog::default();
         // Seed the current debug span with the function's own definition line
         // so any pre-body emits (auto-assign SetFields) get a sensible
         // location; body expressions override it per-node in `lower_expr`.
@@ -80,13 +105,48 @@ impl<'a> Lowerer<'a> {
             self_local = Some(local);
         }
 
-        // Create locals for parameters.
-        for param in &func.params {
+        // Create locals for parameters. A slot-addressed `&var T` parameter
+        // (`n: &var Int`, `s: &var String`) receives the address of the
+        // caller's storage (`mir::refmut_abi`): every read loads through it
+        // and every write stores through it, like a cell-promoted local. The
+        // decision reads the DECLARED signature, as the caller does, so a
+        // generic `&var T` stays a handle in a monomorphised copy.
+        let declared = self.declared_param_tys(func);
+        for (index, param) in func.params.iter().enumerate() {
             let local = self
                 .fn_mut()
                 .new_local(&param.name, param.ty.clone(), false);
             self.fn_mut().params.push(local);
             self.def_to_local.insert(param.def_id, local);
+            let declared_ty = declared.get(index).unwrap_or(&param.ty);
+            if crate::mir::refmut_abi::is_slot_refmut(declared_ty) {
+                self.cell_promoted.insert(param.def_id);
+                self.refmut_slots.insert(param.def_id);
+            }
+        }
+        let receiver_mode = self_local.map(|_| {
+            func.self_mode
+                .as_ref()
+                .map_or(ParamMode::Read, crate::mir::param_modes::receiver_mode)
+        });
+        let param_modes = receiver_mode
+            .into_iter()
+            .chain(func.params.iter().enumerate().map(|(index, param)| {
+                crate::mir::param_modes::param_mode(
+                    declared.get(index).unwrap_or(&param.ty),
+                    self.symbols,
+                )
+            }))
+            .collect();
+        self.fn_mut().param_modes = param_modes;
+        let declared_return = self
+            .declared_signature(func)
+            .map_or(&func.return_ty, |sig| &sig.return_ty);
+        if crate::mir::refmut_abi::is_slot_refmut(declared_return) {
+            return Err(format!(
+                "`{name}` returns a `&var` of a scalar or String; returning the address of a \
+                 variable is not supported yet, so return the value instead"
+            ));
         }
 
         // Resolve rejects user params on `main` (E0739); never lower them
@@ -175,12 +235,6 @@ impl<'a> Lowerer<'a> {
         // HIR functions reach here; synthesized MIR functions keep `None`.
         mir_fn.def_span = Some(func.span.clone());
 
-        // Determine the return-value locals so we don't drop them. A
-        // function may return through multiple `Return` terminators (one
-        // per match arm, for example), so we collect every distinct local
-        // referenced in such a terminator.
-        let return_locals = self.find_return_locals(&mir_fn);
-
         // B73: attach the key-kind descriptor to every `Hash` / `Set` this
         // function constructs. Runs before drop elaboration, which keys on
         // callee names — `runtime_abi::FRESH_ALLOC_CALLEES` lists both the
@@ -188,14 +242,11 @@ impl<'a> Lowerer<'a> {
         // rewriting first keeps the drop pass looking at final MIR.
         super::key_desc::install_key_descriptors(&mut mir_fn, self.symbols);
 
-        // Insert Drop instructions for Move-type locals before every Return.
-        insert_drops(
-            &mut mir_fn,
-            &return_locals,
-            self.symbols,
-            &self.user_drop_classes,
-            &|mangled| self.resolve_ffi_alias_callee(mangled),
-        );
+        // Drop elaboration runs once every body is lowered
+        // (`Lowerer::elaborate_drops`); record this body and its statement
+        // boundaries for it.
+        let scopes = std::mem::take(&mut self.stmt_log).scopes;
+        self.drop_pending.insert(mir_fn.name.clone(), scopes);
 
         Ok(mir_fn)
     }

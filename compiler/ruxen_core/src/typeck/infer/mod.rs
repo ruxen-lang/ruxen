@@ -34,7 +34,7 @@ use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
-use crate::parser::ast::Visibility;
+use crate::parser::ast::{ClosureKind, Visibility};
 use crate::resolve::symbols::{DefKind, SymbolTable};
 
 use super::mixins::MixinResolver;
@@ -52,6 +52,11 @@ pub struct InferenceEngine<'a> {
     pub traits: &'a MixinResolver,
     pub diagnostics: Vec<Diagnostic>,
     pub(super) current_return_ty: Option<Ty>,
+    /// The bounds of the function being inferred's own generic params, by
+    /// name. A `where T: Bound` on a class generic (`def get -> T where T:
+    /// Clone` in `class MutexGuard[T]`) is one of them, so it applies to
+    /// the class's `T` inside the body ([`Self::receiver_bounds`]).
+    pub(super) method_bounds: std::collections::HashMap<String, Vec<crate::hir::types::MixinRef>>,
 }
 
 impl<'a> InferenceEngine<'a> {
@@ -66,6 +71,7 @@ impl<'a> InferenceEngine<'a> {
             traits,
             diagnostics: Vec::new(),
             current_return_ty: None,
+            method_bounds: std::collections::HashMap::new(),
         }
     }
 
@@ -256,6 +262,12 @@ impl<'a> InferenceEngine<'a> {
         }
 
         let old_return_ty = self.current_return_ty.replace(func.return_ty.clone());
+        let bounds = func
+            .generic_params
+            .iter()
+            .map(|param| (param.name.clone(), param.bounds.clone()))
+            .collect();
+        let old_bounds = std::mem::replace(&mut self.method_bounds, bounds);
         self.infer_expr(&mut func.body);
 
         // (One-string-type ADR: the Q39 tuple-element `&str`→`String`
@@ -286,6 +298,27 @@ impl<'a> InferenceEngine<'a> {
         }
 
         self.current_return_ty = old_return_ty;
+        self.method_bounds = old_bounds;
+    }
+
+    /// The mixin bounds a method call on `ty` may use when it is (a borrow
+    /// of) a type parameter or an `impl`/`dyn` mixin type: its own bounds,
+    /// plus, for a type parameter, the bounds the enclosing function's
+    /// `where` clause gives the same name. `None` for any other type.
+    pub(super) fn receiver_bounds(&self, ty: &Ty) -> Option<Vec<crate::hir::types::MixinRef>> {
+        match ty.peel_refs() {
+            Ty::TypeParam { name, bounds } => {
+                let mut all = bounds.clone();
+                for extra in self.method_bounds.get(name).into_iter().flatten() {
+                    if !all.iter().any(|b| b.name == extra.name) {
+                        all.push(extra.clone());
+                    }
+                }
+                Some(all)
+            }
+            Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => Some(bounds.clone()),
+            _ => None,
+        }
     }
 
     pub(super) fn infer_statement(&mut self, stmt: &mut HirStatement) {
@@ -322,8 +355,10 @@ impl<'a> InferenceEngine<'a> {
                     // identical to `let s: String = "x"`. There is no `&str`
                     // binding to promote, and no leak.)
                     let val_ty = self.ctx.resolve(&val.ty);
-                    if let Err(e) = self.unify_or_coerce(ty, &val_ty, &val.span) {
-                        self.type_error(e);
+                    if !self.reject_borrow_into_owned(ty, &val_ty, &val.span) {
+                        if let Err(e) = self.unify_or_coerce(ty, &val_ty, &val.span) {
+                            self.type_error(e);
+                        }
                     }
                     self.check_declared_bounds(ty, &val_ty, &val.span);
                 }
@@ -657,6 +692,9 @@ impl<'a> InferenceEngine<'a> {
         self.auto_wrap_option_some(ret_ty, val);
 
         let val_ty = self.ctx.resolve(&val.ty);
+        if self.reject_borrow_into_owned(ret_ty, &val_ty, tail_span(val)) {
+            return val_ty;
+        }
 
         // Auto-ref for fluent/builder methods: a value that is `self` (typed
         // as the receiver class `T`) must satisfy a declared return type of
@@ -728,13 +766,152 @@ impl<'a> InferenceEngine<'a> {
     /// type `param`: equal up to the auto-borrow (`String` to `&String`) or
     /// coercible.
     pub(super) fn arg_fits_param(&mut self, arg: &Ty, param: &Ty, span: &Span) -> bool {
-        let strip = |ty: Ty| match ty {
-            Ty::Ref(inner) | Ty::RefMut(inner) => *inner,
-            other => other,
+        let arg = self.ctx.resolve(arg);
+        let (arg, param) = match (arg, self.ctx.resolve(param)) {
+            // A block parameter only borrows its closure, so a borrowed
+            // closure (a closure field read) fits it as itself.
+            (Ty::Ref(inner), param) if param.is_borrowed_block() && inner.is_callable() => {
+                (*inner, param)
+            }
+            // Only an owned argument is auto-borrowed into a `&T` parameter;
+            // a borrowed `&T` never fits an owned `T` (E0744's rule).
+            (arg @ (Ty::Ref(_) | Ty::RefMut(_)), param) => (arg, param),
+            (arg, Ty::Ref(inner) | Ty::RefMut(inner)) => (arg, *inner),
+            (arg, param) => (arg, param),
         };
-        let arg = strip(self.ctx.resolve(arg));
-        let param = strip(self.ctx.resolve(param));
         self.unify_or_coerce(&param, &arg, span).is_ok()
+    }
+
+    /// [`Self::reject_borrow_into_owned`] for an argument bound to the
+    /// parameter type `param`: a block parameter (`Fn[...]`,
+    /// `Ty::is_borrowed_block`) only borrows the closure it is handed, so a
+    /// borrowed closure (a closure field read) may be passed to it.
+    pub(super) fn reject_borrowed_arg(&mut self, param: &Ty, arg: &Ty, span: &Span) -> bool {
+        let lends_closure = self.ctx.resolve(param).is_borrowed_block()
+            && matches!(self.ctx.resolve(arg), Ty::Ref(inner) if inner.is_callable());
+        !lends_closure && self.reject_borrow_into_owned(param, arg, span)
+    }
+
+    /// E0744: a borrow `&T` of a non-Copy `T` (a field read, a `&T`
+    /// parameter) flowing into a slot that owns a `T` (a by-value parameter,
+    /// a `-> T` return, a `let`/field/variable typed `T`). The slot would
+    /// own a value something else still owns, a double free. Reports with a
+    /// `.clone` fix-it and returns true; false when the slot is not an owned
+    /// `T` of the borrowed type. A type-parameter slot takes a borrow of
+    /// another type (it binds `T = &U`), but not `&T` itself. A tuple owns
+    /// its elements, so each element of an owned tuple slot is checked.
+    pub(super) fn reject_borrow_into_owned(
+        &mut self,
+        expected: &Ty,
+        found: &Ty,
+        span: &Span,
+    ) -> bool {
+        let expected = self.ctx.resolve(expected);
+        // Every reference form borrows: `&T`, `&var T` and their lifetime
+        // spellings (I-18: `u.name = &var s` stored an alias both owners free).
+        let found = self.ctx.resolve(found);
+        if let (Ty::Tuple(slots), Ty::Tuple(values)) = (&expected, &found) {
+            let mut rejected = false;
+            for (slot, value) in slots.iter().zip(values) {
+                rejected |= self.reject_borrow_into_owned(slot, value, span);
+            }
+            return rejected;
+        }
+        let inner = match &found {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner) => (**inner).clone(),
+            _ => return false,
+        };
+        if inner.is_copy_with(self.symbols)
+            || inner.is_infer()
+            || inner.is_error()
+            || expected.is_ref()
+            || matches!(expected, Ty::Infer(_) | Ty::Error | Ty::Never)
+        {
+            return false;
+        }
+        let owned_slot = match (&expected, &inner) {
+            (Ty::TypeParam { name: e, .. }, Ty::TypeParam { name: i, .. }) => e == i,
+            (Ty::TypeParam { .. }, _) => false,
+            _ => unify(&expected, &inner, self.ctx, span).is_ok(),
+        };
+        if owned_slot {
+            self.diagnostics.push(
+                Diagnostic::error_with_code(
+                    format!("expected an owned `{expected}`, found the borrow `{found}`"),
+                    span.clone(),
+                    "E0744",
+                )
+                .with_help("clone the value to own a copy: `<expr>.clone`"),
+            );
+        }
+        owned_slot
+    }
+
+    /// An argument bound to a closure parameter (`f: Fn(Int) -> nil`,
+    /// `Proc[(Int) -> nil]`, `&block: Fn[...]`) must be a callable whose
+    /// parameter types fit the declared ones: anything else reaches
+    /// `CallIndirect` as a non-closure word and crashes (`run(5)`,
+    /// `[1, 2].each(5)`, `->(s: String) { }` where `Fn(Int) -> nil` is
+    /// expected). E0743. Only closure-typed parameters are checked; an
+    /// argument or expected parameter still naming an inference variable or a
+    /// type parameter is left to inference. `param_ty` already has the
+    /// receiver's generics substituted.
+    pub(super) fn check_closure_arg(&mut self, param_ty: &Ty, arg: &HirExpr, callee: &str) {
+        let param_ty = self.ctx.resolve(param_ty);
+        let Some((expected, _)) = param_ty.peel_refs().callable_signature() else {
+            return;
+        };
+        let open =
+            |t: &Ty| t.any(&mut |t| matches!(t, Ty::Infer(_) | Ty::TypeParam { .. } | Ty::Error));
+        let arg_ty = self.ctx.resolve(&arg.ty);
+        // A Ruby block or proc literal may take fewer parameters than the
+        // callable it is bound to (the extra arguments are dropped); a lambda
+        // and any closure value keep exact arity.
+        let loose_arity = matches!(
+            arg.kind,
+            HirExprKind::Closure {
+                kind: ClosureKind::Block | ClosureKind::Proc,
+                ..
+            }
+        );
+        let fits = match arg_ty.peel_refs() {
+            Ty::Never => true,
+            a if open(a) => true,
+            a => match a.callable_signature() {
+                Some((got, _)) => {
+                    let arity_fits = if loose_arity {
+                        got.len() <= expected.len()
+                    } else {
+                        got.len() == expected.len()
+                    };
+                    arity_fits
+                        && got.iter().zip(expected).all(|(g, e)| {
+                            open(e)
+                                || unify(g.peel_refs(), e.peel_refs(), self.ctx, &arg.span).is_ok()
+                                || can_coerce(e, g, self.ctx)
+                        })
+                }
+                None => a.is_callable(),
+            },
+        };
+        if !fits {
+            let spell = |t: &Ty| t.callable_spelling().unwrap_or_else(|| t.to_string());
+            let (expected, found) = (spell(&param_ty), spell(&arg_ty));
+            self.diagnostics.push(
+                Diagnostic::error_with_code(
+                    format!("`{callee}` expects a closure `{expected}` here, found `{found}`"),
+                    arg.span.clone(),
+                    "E0743",
+                )
+                .with_help(format!(
+                    "pass a block or a lambda taking the declared parameters, \
+                     e.g. `{callee} {{ |x| ... }}`"
+                )),
+            );
+        }
     }
 
     /// Returns `true` if the type is acceptable as an argument to `puts`,
@@ -753,5 +930,14 @@ impl<'a> InferenceEngine<'a> {
     pub(super) fn type_error(&mut self, err: TypeError) {
         self.diagnostics
             .push(Diagnostic::error(err.message, err.span));
+    }
+}
+
+/// The span of the value a block evaluates to (its innermost tail), so a
+/// return-slot diagnostic points at `@name`, not at the whole `def`.
+fn tail_span(val: &HirExpr) -> &Span {
+    match &val.kind {
+        HirExprKind::Block(_, Some(tail)) => tail_span(tail),
+        _ => &val.span,
     }
 }

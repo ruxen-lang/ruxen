@@ -87,6 +87,7 @@ impl<'a> Lowerer<'a> {
                             object: Box::new((**object).clone()),
                             method: UNRESOLVED_DEF,
                             resolved: UNRESOLVED_DEF,
+                            requirement_params: None,
                             method_name: "[]".to_string(),
                             generic_args: vec![],
                             args: vec![(**index).clone()],

@@ -1,0 +1,83 @@
+class U
+  name: String
+  count: Int
+
+  def init(@name: String)
+    @count = 0
+  end
+end
+
+def replace(s: &var String) -> nil
+  s = "replaced-a-long-enough-string-to-realloc"
+end
+
+def bump(n: &var Int) -> nil
+  n += 4
+end
+
+def run(&block: Fn[() -> nil]) -> nil
+  yield
+end
+
+def fields(k: Int) -> nil
+  u = U.new("old-#{k}")
+  r = &var u.name
+  r = "bound-#{k}"
+  puts(u.name)
+  replace(r)
+  puts(u.name)
+  c = &var u.count
+  c = 9
+  bump(c)
+  bump(&var u.count)
+  bump(u.count)
+  puts(u.count)
+  replace(&var u.name)
+  replace(u.name)
+  puts(u.name)
+end
+
+def captures(k: Int) -> nil
+  s = "block-#{k}"
+  run do
+    replace(&var s)
+  end
+  puts(s)
+  t = "push-#{k}"
+  run do
+    t.push_str("-more-more-more-more-more-more-more")
+  end
+  puts(t)
+  n = 1
+  run do
+    bump(&var n)
+  end
+  puts(n)
+  l = "lambda-#{k}"
+  f = -> {
+    replace(&var l)
+    puts(l)
+  }
+  f.()
+  a = "auto-#{k}"
+  g = -> {
+    replace(a)
+    puts(a)
+  }
+  g.()
+  m = "lpush-#{k}"
+  h = -> {
+    m.push_str("-more-more-more-more-more-more-more")
+    puts(m)
+  }
+  h.()
+  q = "proc-#{k}"
+  p = proc {
+    replace(&var q)
+    puts(q)
+  }
+  p.()
+end
+
+fields(3)
+captures(3)

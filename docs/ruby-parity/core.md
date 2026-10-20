@@ -304,7 +304,7 @@ Strongest core class. Verified working: builders, `size`/`count`/`capacity`/
 | `index` / `find_index` | PARTIAL | `index {block}` / `find_index {block}` (Enumerable, pin 1061) | predicate form only; the value-arg `index(x)` needs `T` equality (B20). |
 | `rindex` | MISSING | — | |
 | `include?` / `member?` | PARTIAL | `include?` DONE; `member?` MISSING | |
-| `each` | DONE | `ruxen_vec_each` | iteration primitive. |
+| `each` | DONE | `.rx` body (literal blocks MIR-inlined) | iteration primitive. |
 | `each_with_index` | DONE | Enumerable body | |
 | `each_index` / `each_with_object` | PARTIAL | `each_with_object(memo)` `.rx` Enumerable (pin 1062) | `each_index` MISSING. `each_with_object` threads the memo THROUGH the block (`{ |x, memo| ... }` must return it) because Ruxen closures take arguments by value; the Ruby argument ORDER is preserved. |
 | `reverse_each` / `cycle` | DONE | `.rx` Enumerable defaults (pin 1062) | `cycle(n)` counted form only: Ruby's arg-less infinite form and its enumerator form are not expressible. |

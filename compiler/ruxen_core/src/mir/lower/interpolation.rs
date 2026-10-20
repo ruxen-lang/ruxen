@@ -177,9 +177,9 @@ impl<'a> Lowerer<'a> {
 
     /// True when `local` was just defined, in the current block, by a call
     /// whose result is a fresh allocation the caller owns
-    /// (`runtime_abi::callee_ownership`).
+    /// (`runtime_abi::result_ownership`).
     fn is_fresh_call_result(&self, local: LocalId) -> bool {
-        use crate::mir::lower::runtime_abi::{callee_ownership, ResultOwnership};
+        use crate::mir::lower::runtime_abi::{result_ownership, ResultOwnership};
         self.fn_ref().blocks[self.current_block]
             .instructions
             .iter()
@@ -190,7 +190,7 @@ impl<'a> Lowerer<'a> {
                     callee,
                     ..
                 } if *dest == local => {
-                    Some(callee_ownership(callee).result == ResultOwnership::Fresh)
+                    Some(result_ownership(callee, &self.declared_results) == ResultOwnership::Fresh)
                 }
                 _ => None,
             })

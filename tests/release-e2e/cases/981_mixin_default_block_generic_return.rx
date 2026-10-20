@@ -3,7 +3,7 @@
 # that includes the mixin, `U` must bind from the block's inferred return type
 # (`x.n + 100` → Int) so the call yields a concrete `Int`, not an abstract `U`.
 mixin Thenable
-  def transform[U](f: any Fn[Fn(&Self) -> U]) -> U
+  def transform[U](f: Fn(&Self) -> U) -> U
     f.(self)
   end
 end

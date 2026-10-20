@@ -26,7 +26,8 @@
  *
  * Ownership: the `inner` pointer is borrowed, NOT owned. `into_inner`
  * surrenders the original pointer back to Ruxen (caller resumes
- * responsibility for closing it). `_drop` does NOT close the inner File /
+ * responsibility for closing it); BufWriter's flushes first and panics
+ * when that flush fails. `_drop` does NOT close the inner File /
  * TcpStream — the inner has its own drop helper which runs in the same
  * scope-exit pass. We only free our own `buf`.
  *
@@ -376,21 +377,24 @@ void *ruxen_bufwriter_flush(RuxenBufWriter *bw) {
     return ruxen_result_ok_value(0);
 }
 
-/* `BufWriter.into_inner() -> Result[W, IoError]`. Flushes the residual
- * first; on flush failure returns Err (and the inner is NOT surrendered
- * — Rust's `IntoInnerError` carries both the error and the BufWriter,
- * but the v1 surface returns just the error). On success surrenders
- * the inner and marks closed. The returned value is the raw pointer
- * (caller's Result[W, IoError] payload). */
-void *ruxen_bufwriter_into_inner(RuxenBufWriter *bw) {
-    if (!bw) return ruxen_io_error_invalid_input();
-    if (bw->closed) return ruxen_io_error_invalid_input();
+/* `BufWriter#into_inner -> W`. Flushes the residual, surrenders the
+ * inner handle to the caller (who owns it again) and marks the writer
+ * closed, so its drop is a no-op. The public signature returns the bare
+ * `W`, so a flush failure panics with the OS error instead of handing back
+ * a handle whose buffered bytes were lost (Ruxen has no exceptions yet).
+ * Into-inner on a writer already consumed panics too. */
+void *ruxen_bufwriter_into_inner_or_panic(RuxenBufWriter *bw) {
+    if (!bw || bw->closed) {
+        ruxen_panic("BufWriter#into_inner: the writer was already consumed");
+    }
     if (ruxen_bufwriter_emit(bw) != 0) {
-        return ruxen_io_error_from_errno(errno);
+        char msg[192];
+        snprintf(msg, sizeof msg, "BufWriter#into_inner: flush failed: %s", strerror(errno));
+        ruxen_panic(msg);
     }
     void *inner = bw->inner;
     ruxen_bufio_release(bw);
-    return ruxen_result_ok_value((int64_t)inner);
+    return inner;
 }
 
 /* Drop helper — best-effort flush, then frees our buffer. Errors are

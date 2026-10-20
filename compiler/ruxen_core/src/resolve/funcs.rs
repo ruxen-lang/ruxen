@@ -130,6 +130,7 @@ impl Resolver {
             Visibility::Private,
             p.span.clone(),
         );
+        self.symbols.set_display_name(block_def_id, p.name.clone());
         // Bind every name the body / desugar might use for the slot.
         self.scopes.insert("__block".to_string(), block_def_id);
         self.scopes.insert("&block".to_string(), block_def_id);
@@ -509,6 +510,7 @@ impl Resolver {
                 Visibility::Private,
                 f.span.clone(),
             );
+            self.symbols.set_display_name(block_def_id, "block");
             self.scopes.insert("__block".to_string(), block_def_id);
             params.push(HirParam {
                 def_id: block_def_id,

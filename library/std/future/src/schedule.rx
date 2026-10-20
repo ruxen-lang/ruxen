@@ -26,9 +26,9 @@ class Schedule
   max_delay_ns: Int     # cap on a single backoff; 0 = uncapped
   jitter: Bool          # full-jitter: actual delay = random in [0, computed]
   has_pred: Bool        # true → `pred` decides retry-on-error
-  pred: any Fn[Fn(Int) -> Bool]   # retry iff pred(err) (when has_pred)
+  pred: Proc[(Int) -> Bool]   # retry iff pred(err) (when has_pred)
 
-  def init(max_attempts: Int, base_delay_ns: Int, exponential: Bool, max_delay_ns: Int, jitter: Bool, has_pred: Bool, pred: any Fn[Fn(Int) -> Bool])
+  def init(max_attempts: Int, base_delay_ns: Int, exponential: Bool, max_delay_ns: Int, jitter: Bool, has_pred: Bool, pred: Proc[(Int) -> Bool])
     self.max_attempts = max_attempts
     self.base_delay_ns = base_delay_ns
     self.exponential = exponential
@@ -57,25 +57,25 @@ class Schedule
   ## Total tries = `n` (a hard cap on attempts). With `recurs(k)` total is k+1;
   ## `max_attempts` overrides it to exactly `n`.
   def max_attempts(n: Int) -> Schedule
-    Schedule.new(n, self.base_delay_ns, self.exponential, self.max_delay_ns, self.jitter, self.has_pred, self.pred)
+    Schedule.new(n, self.base_delay_ns, self.exponential, self.max_delay_ns, self.jitter, self.has_pred, self.pred.clone)
   end
 
   ## Cap a single backoff delay at `d` (so exponential growth plateaus).
   def max_delay(d: &Duration) -> Schedule
-    Schedule.new(self.max_attempts, self.base_delay_ns, self.exponential, d.as_nanos(), self.jitter, self.has_pred, self.pred)
+    Schedule.new(self.max_attempts, self.base_delay_ns, self.exponential, d.as_nanos(), self.jitter, self.has_pred, self.pred.clone)
   end
 
   ## Full-jitter: the actual backoff is a uniform random value in [0, computed
   ## delay] (decorrelation, AWS/Brooker default). Uses `Rand.random_u64` — fine
   ## for jitter (not crypto).
   def jittered -> Schedule
-    Schedule.new(self.max_attempts, self.base_delay_ns, self.exponential, self.max_delay_ns, true, self.has_pred, self.pred)
+    Schedule.new(self.max_attempts, self.base_delay_ns, self.exponential, self.max_delay_ns, true, self.has_pred, self.pred.clone)
   end
 
   ## Retry-on-error predicate: retry an `Err(e)` only while `pred(e)` holds (a
-  ## non-matching error stops immediately). `&block` is stored as `Fn` so it is
+  ## non-matching error stops immediately). `&block` is stored as a `Proc` so it is
   ## re-invokable per attempt.
-  def while_input(&block: Fn[(Int) -> Bool]) -> Schedule
+  def while_input(&block: Proc[(Int) -> Bool]) -> Schedule
     Schedule.new(self.max_attempts, self.base_delay_ns, self.exponential, self.max_delay_ns, self.jitter, true, block)
   end
 
@@ -89,7 +89,7 @@ class Schedule
   ## The common use is `recurs(k).and_then(recurs(m))` to widen a flat budget;
   ## mixing two DIFFERENT delay policies via `and_then` is a v2 follow-up.
   def and_then(next: &Schedule) -> Schedule
-    Schedule.new(self.max_attempts + next.max_attempts, self.base_delay_ns, self.exponential, self.max_delay_ns, self.jitter, self.has_pred, self.pred)
+    Schedule.new(self.max_attempts + next.max_attempts, self.base_delay_ns, self.exponential, self.max_delay_ns, self.jitter, self.has_pred, self.pred.clone)
   end
 
   ## ── The backoff calculation (shared by both drivers) ──────────────────────
@@ -206,8 +206,8 @@ class Schedule
   ## false; never consulted, but the field must hold a valid closure). Bound to
   ## a `let` first — a brace-closure as a method's bare tail expression is
   ## ambiguous with a block body and won't parse.
-  def self.never_pred -> any Fn[Fn(Int) -> Bool]
-    let p: any Fn[Fn(Int) -> Bool] = { |e| false }
+  def self.never_pred -> Proc[(Int) -> Bool]
+    let p: Proc[(Int) -> Bool] = ->(e: Int) { false }
     p
   end
 end
@@ -230,7 +230,7 @@ end
 ## poisons the satisfaction check for EVERY program). Returning the future as a
 ## raw `Int` ptr sidesteps it entirely — there is no `any Future`-typed value in
 ## the call. Filed as a Q## follow-up. So `Async.retry` takes
-## `block: any Fn[Fn() -> Int]` (the closure body constructs + returns the
+## `block: Proc[() -> Int]` (the closure body constructs + returns the
 ## attempt future, e.g. `Async.retry(sched, { || my_async_fn() })`).
 ##
 ## INNER-POLL via the C step: the attempt is held as a RAW future pointer (Int)
@@ -241,42 +241,41 @@ end
 ## 2=Ready-Err and stashes the Int value. The backoff `TimeSleepFuture` IS
 ## concrete (`Output = nil`) so it polls at the `.rx` level.
 ##
-## `def drop` drops whichever child is LIVE — the current attempt future
-## (`Drop_dynamic_drop` via `ruxen_retry_drop_inner`) and the in-flight backoff
-## timer (`ruxen_retry_drop_child`) — so a cancelled retry tears down its parked
-## timer / attempt deterministically (the §4.6 drop-correctness story).
+## `def drop` drops the live attempt future (`Drop_dynamic_drop` via
+## `ruxen_retry_drop_inner`), then the owned backoff timer field is dropped, so
+## a cancelled retry tears down its parked timer / attempt deterministically
+## (the §4.6 drop-correctness story).
 class RetryFuture
   inner: Int                        # raw ptr of the current attempt future
-  backoff: TimeSleepFuture          # the in-flight backoff timer (live when phase==1)
+  backoff: TimeSleepFuture          # the backoff timer (registered while phase==1)
   sched: Schedule                   # the policy
-  make: any Fn[Fn() -> Int]         # produces a fresh attempt future (as a raw ptr)
+  make: Proc[() -> Int]             # produces a fresh attempt future (as a raw ptr)
   attempt: Int                      # 0-based attempt index
   phase: Int                        # 0 = polling the attempt, 1 = backing off
-  has_backoff: Int                  # 1 once a backoff timer has been constructed
   done: Int
-  result: Result[Int, Int]
+  ok: Int                           # once done: 1 = Ok(value), 0 = Err(value)
+  value: Int
   include Future
   type Output = Result[Int, Int]
 
-  def init(first: Int, sched: Schedule, make: any Fn[Fn() -> Int])
+  def init(first: Int, sched: Schedule, make: Proc[() -> Int])
     self.inner = first
-    # The placeholder backoff is a real (un-registered) TimeSleepFuture, so we
-    # mark has_backoff = 1: it is a LIVE allocated child that must be torn down
-    # (by def drop, or before the first real backoff overwrites it) — otherwise
-    # its heap block leaks once per RetryFuture instance.
+    # The placeholder backoff is a real (un-registered) TimeSleepFuture. The
+    # object owns it: a store into `backoff` drops the old timer, and the
+    # retry's death drops the current one.
     self.backoff = Async.sleep(Duration.from_nanos(0))
     self.sched = sched
     self.make = make
     self.attempt = 0
     self.phase = 0
-    self.has_backoff = 1
     self.done = 0
-    self.result = Result.Err(0)
+    self.ok = 0
+    self.value = 0
   end
 
   def var poll(cx: &var Context) -> Poll[Result[Int, Int]]
     if self.done != 0
-      return Poll.Ready(self.result)
+      return Poll.Ready(self.outcome)
     end
     # Single-poll state machine with an internal DRIVE-THROUGH loop: a backoff
     # that fires immediately re-polls the freshly-built attempt in the SAME poll
@@ -286,16 +285,15 @@ class RetryFuture
     while self.done == 0 && !pending
       if self.phase == 1
         # Backing off: poll the timer (concrete, .rx-level). When it fires,
-        # DEREGISTER the fired timer (its `def drop` releases the reactor slot —
-        # `TimeSleepFuture.poll` does NOT self-deregister on Ready, and we're
-        # about to overwrite `self.backoff` with the next attempt's timer, which
-        # would otherwise leak this slot), then build a fresh attempt and fall
-        # through to poll it. The backoff future returned Ready and carries no
-        # moved-out payload (Output = nil), so dropping it is sound.
+        # DEREGISTER the fired timer by replacing it with an un-registered
+        # placeholder (the store drops the old timer, whose `def drop` releases
+        # the reactor slot; `TimeSleepFuture.poll` does NOT self-deregister on
+        # Ready), then build a fresh attempt and fall through to poll it. The
+        # backoff future returned Ready and carries no moved-out payload
+        # (Output = nil), so dropping it is sound.
         match (&var self.backoff).poll(cx)
           Poll.Ready(_) ->
-            ruxen_retry_drop_child(self.backoff)
-            self.has_backoff = 0
+            self.backoff = Async.sleep(Duration.from_nanos(0))
             self.inner = self.make.()
             self.phase = 0
           Poll.Pending -> pending = true
@@ -320,48 +318,49 @@ class RetryFuture
           self.inner = 0
           if code == 1
             self.done = 1
-            self.result = Result.Ok(v)
+            self.ok = 1
+            self.value = v
           else
             # Err(v) — retry unless the predicate rejects it or budget is spent.
             if self.sched.retry?(v, self.attempt)
               # Park on a fresh backoff timer (the completed attempt was already
-              # consumed above — no drop, leak its block). Tear down the current
-              # backoff child first: the init placeholder on the first retry, so
-              # it doesn't leak. (A prior FIRED backoff is already dropped at the
-              # Ready arm with has_backoff = 0, so the guard skips it — no
-              # double-free.)
-              if self.has_backoff != 0
-                ruxen_retry_drop_child(self.backoff)
-              end
+              # consumed above — no drop, leak its block). The store drops the
+              # current (un-registered placeholder) timer.
               let delay = self.sched.actual_delay_ns(self.attempt)
               self.backoff = Async.sleep(Duration.from_nanos(delay))
-              self.has_backoff = 1
               self.attempt = self.attempt + 1
               self.phase = 1
             else
               self.done = 1
-              self.result = Result.Err(v)
+              self.ok = 0
+              self.value = v
             end
           end
         end
       end
     end
     if self.done != 0
-      Poll.Ready(self.result)
+      Poll.Ready(self.outcome)
     else
       Poll.Pending
     end
   end
 
-  ## Drop whichever child is live: the in-flight backoff timer (its `def drop`
-  ## deregisters the reactor timer) AND the current attempt future (its `def
-  ## drop` via `Drop_dynamic_drop`). A cancelled retry thus deterministically
-  ## releases its parked timer / attempt resources.
-  def drop
-    if self.has_backoff != 0
-      ruxen_retry_drop_child(self.backoff)
-      self.has_backoff = 0
+  # The finished attempt's result, built on each read from the Copy fields
+  # (a field read borrows, so a stored Result could not be moved out).
+  def outcome -> Result[Int, Int]
+    if self.ok != 0
+      Result.Ok(self.value)
+    else
+      Result.Err(self.value)
     end
+  end
+
+  ## Drop the current attempt future (its `def drop` via `Drop_dynamic_drop`)
+  ## when one is live. The backoff timer is an owned field, dropped after this
+  ## (its `def drop` deregisters the reactor timer). A cancelled retry thus
+  ## deterministically releases its parked timer / attempt resources.
+  def drop
     if self.inner != 0
       ruxen_retry_drop_inner(self.inner)
       self.inner = 0
@@ -375,7 +374,7 @@ end
 ## block is stored for re-invocation on retry. Returns a `RetryFuture` to drive
 ## with `block_on` (or `.await`).
 class AsyncRetry
-  def self.retry(sched: Schedule, block: any Fn[Fn() -> Int]) -> RetryFuture
+  def self.retry(sched: Schedule, block: Proc[() -> Int]) -> RetryFuture
     let first = block.()
     RetryFuture.new(first, sched, block)
   end
@@ -387,6 +386,5 @@ end
 lib "runtime/schedule.c"
   def ruxen_retry_poll_inner(inner_ptr: Int, cx: &var Context) -> Int
   def ruxen_retry_inner_value -> Int
-  def ruxen_retry_drop_child(child_ptr: Int) -> nil
   def ruxen_retry_drop_inner(child_ptr: Int) -> nil
 end

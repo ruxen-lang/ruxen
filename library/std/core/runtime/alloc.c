@@ -18,6 +18,18 @@ void ruxen_dealloc(void *ptr) {
     free(ptr);
 }
 
+/* `Proc#clone` (`class Closure` in `std/core/src/lib.rx`) and the derived
+   `clone` of a closure field: one more owner of the closure pair, returned
+   as is (closures are shared, never copied; see `RUXEN_ELEM_CLOSURE` in
+   runtime.h). The pair's drop slot releases one owner at a time. NULL is a
+   no-op. */
+int64_t ruxen_closure_share(int64_t pair) {
+    if (pair) {
+        ((int64_t *)(uintptr_t)pair)[RUXEN_CLOSURE_SHARES_SLOT] += 1;
+    }
+    return pair;
+}
+
 /* ── Heap-owned built-in drops (P0.7) ──────────────────────────────────
  *
  * The drop-elaboration pass emits `Call { callee: "ruxen_string_free" }`

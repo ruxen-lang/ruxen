@@ -6,16 +6,14 @@ def flag(tag: String, val: Bool) -> Bool
   val
 end
 
-def main
-  # `||` with a true LHS skips the RHS.
-  let a = flag(&"A", true) || flag(&"B", true)
-  puts "a=#{a}"
+# `||` with a true LHS skips the RHS.
+a = flag("A", true) || flag("B", true)
+puts "a=#{a}"
 
-  # `&&` with a false LHS skips the RHS.
-  let b = flag(&"C", false) && flag(&"D", true)
-  puts "b=#{b}"
+# `&&` with a false LHS skips the RHS.
+b = flag("C", false) && flag("D", true)
+puts "b=#{b}"
 
-  # The non-deciding path still evaluates the RHS.
-  let c = flag(&"E", false) || flag(&"F", true)
-  puts "c=#{c}"
-end
+# The non-deciding path still evaluates the RHS.
+c = flag("E", false) || flag("F", true)
+puts "c=#{c}"

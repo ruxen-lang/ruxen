@@ -13,13 +13,11 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ruxen_core::borrow_check;
-use ruxen_core::diagnostics::Diagnostic;
+use ruxen_core::codegen::{self, target::ResolvedTarget, Backend, LinkPlan};
+use ruxen_core::driver::{self, Frontend, Options, Stage};
 use ruxen_core::lexer::Lexer;
+use ruxen_core::mir::nodes::MirProgram;
 use ruxen_core::parser::ast::Program;
-use ruxen_core::parser::Parser;
-use ruxen_core::resolve::bootstrap as stdlib_bootstrap;
-use ruxen_core::typeck;
 
 use crate::cache;
 use crate::cache::{
@@ -138,15 +136,21 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // byte-identical cached host path below; a non-host target takes the
     // dedicated cross path (no incremental cache — one-shot compile + cross
     // link), so the host cache key is never perturbed by this feature.
-    let resolved_target =
-        ruxen_core::codegen::target::ResolvedTarget::resolve(target_flag.as_deref())?;
+    let resolved_target = ResolvedTarget::resolve(target_flag.as_deref())?;
+    let options = Options::for_target(&resolved_target, no_std);
 
     // Emit modes short-circuit the cache: they don't produce a binary, so
     // caching them is meaningless and would add complexity. Run the
     // classic single-shot pipeline for these.
     if let Some(mode) = emit_mode {
-        return run_compile_direct(&source, mode);
+        return run_compile_direct(&source, path, mode, &options);
     }
+    let backend = Backend::select(
+        release_mode,
+        backend_override.as_deref(),
+        opt_level_override.as_deref(),
+        &resolved_target,
+    )?;
 
     // ─── Cross-compilation path (tier 4.02) ──────────────────────────────
     // A non-host target bypasses the incremental object cache: cross builds
@@ -158,10 +162,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
         return run_cross_compile(
             &source,
             path,
+            &options,
             &output_path,
-            release_mode,
-            backend_override.as_deref(),
-            opt_level_override.as_deref(),
+            backend,
             &resolved_target,
             &extra_runtime_c,
             &extra_link_args,
@@ -174,7 +177,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // skip the stdlib bootstrap, enforce E1400 (no heap allocation), and link
     // WITHOUT the stdlib C runtime / `[system_libs]`.
     if no_std {
-        return run_no_std_compile(&source, path, &output_path, release_mode);
+        return run_no_std_compile(&source, path, &options, &output_path, backend);
     }
 
     // ─── Cached compile path ─────────────────────────────────────
@@ -197,9 +200,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
         h.finish()
     };
     let flags = format!(
-        "backend={} opt={} release={} runtime_c={:x} link_args={} toolchain={:x}",
-        backend_override.as_deref().unwrap_or("default"),
-        opt_level_override.as_deref().unwrap_or("default"),
+        "backend={:?} release={} runtime_c={:x} link_args={} toolchain={:x}",
+        backend,
         release_mode,
         runtime_c_fingerprint,
         extra_link_args.join(","),
@@ -213,15 +215,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
         flags,
     };
 
-    let backend_override_owned = backend_override.clone();
-    let opt_level_override_owned = opt_level_override.clone();
     let compile_one = move |f: &SourceFile| -> Result<CompileOutput, String> {
-        compile_to_object(
-            &f.source,
-            release_mode,
-            backend_override_owned.as_deref(),
-            opt_level_override_owned.as_deref(),
-        )
+        compile_to_object(&f.source, &f.path, &options, backend)
     };
 
     let files = vec![SourceFile {
@@ -261,92 +256,27 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let object_bytes = fs::read(obj_path)
         .map_err(|e| format!("Failed to read cached object {}: {}", obj_path.display(), e))?;
 
-    // Fast path: `RUXEN_RUNTIME_AR=<archive>` lets a caller skip the
-    // 30+ `cc -c` forks per fixture by pointing at a prebuilt
-    // `libruxenrt.a` (the one `ruxen_repl`'s build script already
-    // produces under `target/<profile>/build/ruxen_repl-*/out/` is a
-    // ready-made match). When set, we leave the stdlib runtime
-    // compilation step empty and pass `-Wl,--whole-archive <ar>
-    // -Wl,--no-whole-archive` to the linker so every `ruxen_*` symbol
-    // survives — the same shape `ruxen_repl/build.rs` and
-    // `src/ruxen_cli/build.rs` use for their own bin links. The
-    // release-e2e harness exploits this to drop per-fixture wall-clock
-    // from ~4s to under a second. Apple ld doesn't honour
-    // `--whole-archive`; it uses `-force_load,<ar>` instead.
-    //
-    // Default path: each `library/std/<pkg>/runtime/*.c` is still
-    // compiled to its own `.o` (post-#06.95 Phase B-2 standalone
-    // translation units) and linked individually, preserving the
-    // dead-code elimination the production binaries depend on.
-    // Prefer a prebuilt `libruxenrt.a` so we skip ~30 `cc -c` forks of the
-    // stdlib runtime C sources on every single-file compile (the dominant
-    // cost — e.g. `ruxen test` recompiled the runtime once per test file).
-    // `find_prebuilt_runtime_archive` checks `RUXEN_RUNTIME_AR` first, then
-    // the installed `<exe>/../lib/libruxenrt.a` (~/.ruxen/lib/), so an
-    // installed toolchain gets the fast path automatically. Falls back to
-    // compiling the runtime sources only when no archive is found.
-    let prebuilt_archive: Option<std::path::PathBuf> =
-        ruxen_core::codegen::find_prebuilt_runtime_archive();
-
-    let mut runtime_objects: Vec<std::path::PathBuf> = if prebuilt_archive.is_some() {
-        Vec::new()
-    } else {
-        let runtime_sources = ruxen_core::codegen::find_runtime_sources()?;
-        ruxen_core::codegen::object::compile_runtime_sources(&runtime_sources, false)
-            .map_err(|e| format!("Failed to compile runtime: {}", e))?
-    };
-
-    // User-side runtime C (`--runtime-c=`): always compiled, independent of
-    // the prebuilt stdlib archive — these are project sources, not stdlib.
-    // A process that opts into the test-only stdlib (`RUXEN_TEST_STDLIB`)
-    // links that stdlib's fixture runtime C the same way.
-    let mut extra_paths: Vec<std::path::PathBuf> = extra_runtime_c
-        .iter()
-        .map(std::path::PathBuf::from)
-        .collect();
+    // User-side runtime C (`--runtime-c=`) and dependency `[system_libs]`
+    // flags (`--link-arg=`, Q32), forwarded by `ruxen test`. A process that
+    // opts into the test-only stdlib (`RUXEN_TEST_STDLIB`) links that
+    // stdlib's fixture runtime C the same way.
+    let mut extra_runtime_sources: Vec<PathBuf> =
+        extra_runtime_c.iter().map(PathBuf::from).collect();
     if let Some(root) = ruxen_core::resolve::bootstrap::test_stdlib_root() {
-        extra_paths.extend(ruxen_core::resolve::bootstrap::test_stdlib_runtime_sources(
+        extra_runtime_sources.extend(ruxen_core::resolve::bootstrap::test_stdlib_runtime_sources(
             &root,
         ));
     }
-    if !extra_paths.is_empty() {
-        let extra_objects =
-            ruxen_core::codegen::object::compile_runtime_sources(&extra_paths, false)
-                .map_err(|e| format!("Failed to compile project runtime C: {}", e))?;
-        runtime_objects.extend(extra_objects);
-    }
-
-    let mut link_flags: Vec<String> = Vec::new();
-    // Dependency `[system_libs]` flags (`-l<lib>`), forwarded by `ruxen test`
-    // so a flat-merged FFI dependency's link needs are satisfied (Q32).
-    link_flags.extend(extra_link_args.iter().cloned());
-    // The stdlib's own `[system_libs]` (`-lc -lm`, ...). `emit_executable`
-    // places every link flag after the runtime archive and objects that
-    // need them.
-    if let Ok(system_flags) = ruxen_core::codegen::collect_system_lib_flags() {
-        for flag in system_flags {
-            if !link_flags.contains(&flag) {
-                link_flags.push(flag);
-            }
-        }
-    }
-
-    if let Err(e) = ruxen_core::codegen::object::emit_executable(
+    codegen::link_host(
         &object_bytes,
-        &runtime_objects,
-        prebuilt_archive.as_deref(),
         &output_path,
-        false,
-        &link_flags,
-    ) {
-        for o in &runtime_objects {
-            let _ = fs::remove_file(o);
-        }
-        return Err(format!("Linking failed: {}", e));
-    }
-    for o in &runtime_objects {
-        let _ = fs::remove_file(o);
-    }
+        &LinkPlan {
+            extra_link_flags: &extra_link_args,
+            extra_runtime_sources: &extra_runtime_sources,
+            ..LinkPlan::default()
+        },
+    )
+    .map_err(|e| format!("Linking failed: {}", e))?;
 
     println!("Compiled {} → {}", path, output_path);
     report_statuses(&result.statuses, verbose);
@@ -368,68 +298,40 @@ fn report_statuses(statuses: &std::collections::HashMap<String, FileStatus>, ver
     }
 }
 
-/// Run the stdlib bootstrap loader and surface any diagnostic as an Err with a
-/// clear `stdlib bootstrap failed:` header. The compiler cannot make progress
-/// without a clean prelude — a missing or broken stdlib is a fatal install/
-/// build issue, not a recoverable user-source error.
-fn load_bootstrap_or_err() -> Result<Vec<(String, Program)>, String> {
-    let mut bootstrap_diags: Vec<Diagnostic> = Vec::new();
-    let programs = stdlib_bootstrap::run_bootstrap_with_package_names(&mut bootstrap_diags);
-    if !bootstrap_diags.is_empty() {
-        let mut msg = String::from("stdlib bootstrap failed:");
-        for d in &bootstrap_diags {
-            msg.push_str("\n  ");
-            msg.push_str(&d.to_string());
-        }
-        return Err(msg);
-    }
-    Ok(programs)
+/// Parse `source`; the errors are rendered with `path` on each line.
+pub fn parse(source: &str, path: &str) -> Result<Program, String> {
+    driver::parse(source).map_err(|ds| driver::render_diagnostics(&ds, Some(Path::new(path))))
 }
 
-/// Curated stdlib bootstrap for the wasm (LLVM) target — tier 4.09.
-///
-/// The *full* bootstrap can't run on wasm: it pulls in `dispatch runtime` mixin
-/// classes (only `future` uses the feature) whose `__rx_classinfo_*` globals the
-/// LLVM backend can't lower, plus libc/host-heavy modules the wasm link has no
-/// allocator for. So load only the heap-core subset. The selection is
-/// overridable via `RUXEN_WASM_BOOTSTRAP` (comma-separated package names) so the
-/// viable set can be tuned without recompiling the toolchain as the wasm runtime
-/// grows. Load order follows `BOOTSTRAP_FILES` (types-before-use), filtered to
-/// the selected packages.
-fn load_wasm_bootstrap_or_err() -> Result<Vec<(String, Program)>, String> {
-    // Single source of truth for the curated wasm package set lives in
-    // ruxen_core (shared with the `ruxen build` path). See
-    // `run_wasm_bootstrap_with_package_names` / `WASM_BOOTSTRAP_DEFAULT`.
-    let mut diags: Vec<Diagnostic> = Vec::new();
-    let programs = stdlib_bootstrap::run_wasm_bootstrap_with_package_names(&mut diags);
-    if !diags.is_empty() {
-        let mut msg = String::from("wasm stdlib bootstrap failed:");
-        for d in &diags {
-            msg.push_str("\n  ");
-            msg.push_str(&d.to_string());
-        }
-        return Err(msg);
+/// Report what [`driver::check`] found: every error of every stage, rendered
+/// by [`Frontend::render`] with `path` on each line, is the `Err`; with no
+/// error the warnings go to stderr.
+fn report(frontend: &Frontend, path: &str) -> Result<(), String> {
+    let rendered = frontend.render(Some(Path::new(path)));
+    if frontend.has_errors() {
+        return Err(rendered);
     }
-    Ok(programs)
+    if !rendered.is_empty() {
+        eprintln!("{rendered}");
+    }
+    Ok(())
 }
 
-fn type_check_with_package_bootstrap(
+/// Run the whole front end on `program` and take its MIR program: the one
+/// front-end step of `ruxen compile`, `ruxen check` and `ruxen build`, so
+/// all three report the same errors in the same format.
+pub fn front_end(
     program: &Program,
-    bootstrap_packages: &[(String, Program)],
-) -> typeck::TypeCheckResult {
-    let mut lowered = program.clone();
-    let e1112_diags = ruxen_core::async_lowering::collect_block_on_in_async_diagnostics(&lowered);
-    let e1116_diags =
-        ruxen_core::async_lowering::collect_task_spawn_outside_async_diagnostics(&lowered);
-    let e1115_diags = ruxen_core::async_lowering::collect_await_in_loop_diagnostics(&lowered);
-    let bootstrap_refs: Vec<&Program> = bootstrap_packages.iter().map(|(_, p)| p).collect();
-    ruxen_core::async_lowering::lower_async_defs_with_bootstrap(&mut lowered, &bootstrap_refs);
-
-    let mut result = typeck::type_check_with_bootstrap_packages(&lowered, bootstrap_packages);
-    result.diagnostics.extend(e1112_diags);
-    result.diagnostics.extend(e1116_diags);
-    result.diagnostics.extend(e1115_diags);
-    result
+    path: &str,
+    options: &Options,
+) -> Result<(Frontend, MirProgram), String> {
+    let mut frontend = driver::check(program, options);
+    report(&frontend, path)?;
+    let mir = frontend
+        .mir
+        .take()
+        .ok_or("internal error: the front end reported no error but produced no MIR")?;
+    Ok((frontend, mir))
 }
 
 /// Compile one source string into its object bytes plus a public signature.
@@ -439,189 +341,40 @@ fn type_check_with_package_bootstrap(
 /// the cache layer is not responsible for compiler error reporting policy.
 fn compile_to_object(
     source: &str,
-    release_mode: bool,
-    backend_override: Option<&str>,
-    opt_level_override: Option<&str>,
+    path: &str,
+    options: &Options,
+    backend: Backend,
 ) -> Result<CompileOutput, String> {
-    // Stdlib bootstrap is loaded BEFORE user lex/parse so the resolver
-    // can merge the prelude in front of the user program. A broken
-    // stdlib aborts the process immediately — see
-    // [`load_bootstrap_or_err`].
-    let bootstrap_programs = load_bootstrap_or_err()?;
-
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().map_err(|ds| {
-        ds.iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().map_err(|ds| {
-        ds.iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    let type_result = type_check_with_package_bootstrap(&program, &bootstrap_programs);
-    let has_errors = type_result
-        .diagnostics
-        .iter()
-        .any(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error);
-    if has_errors {
-        let msg: String = type_result
-            .diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        return Err(msg);
-    }
-
-    let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
-    if !borrow_errors.is_empty() {
-        let msg: String = borrow_errors
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        return Err(msg);
-    }
-
-    // Extract public signature BEFORE MIR lowering (only typed HIR is needed).
-    let signature = extract_signature(&type_result.program);
-
-    let mut lowerer = ruxen_core::mir::lower::Lowerer::new(&type_result.symbols);
-    let mir_program = lowerer
-        .lower_program(&type_result.program)
-        .map_err(|e| format!("MIR lowering error: {}", e))?;
-
-    let backend = resolve_backend(release_mode, backend_override, opt_level_override)?;
-    let object_bytes = match backend {
-        ruxen_core::codegen::Backend::Cranelift => {
-            let mut codegen = ruxen_core::codegen::cranelift::CodeGen::new()?;
-            codegen.compile_program(&mir_program)?;
-            codegen.finish()?
-        }
-        #[cfg(feature = "llvm")]
-        ruxen_core::codegen::Backend::Llvm { opt_level } => {
-            let mut codegen = ruxen_core::codegen::llvm::CodeGen::new(opt_level)?;
-            codegen.compile_program(&mir_program)?;
-            codegen.finish()?
-        }
-    };
-
+    let (frontend, mir_program) = front_end(&parse(source, path)?, path, options)?;
     Ok(CompileOutput {
-        object_bytes,
-        signature,
+        object_bytes: backend.emit_object(&mir_program, &ResolvedTarget::host())?,
+        signature: extract_signature(frontend.hir()),
     })
 }
 
-/// Cross-compilation path (tier 4.02): runs the full front end once, selects a
-/// target-compatible backend, and links via `compile_with_options_for_target`.
+/// Cross-compilation path (tier 4.02): runs the full front end once and links
+/// via `compile_with_options_for_target`.
 ///
 /// Bypasses the incremental object cache (cross builds are infrequent and the
 /// cross link is one-shot), so the host cache key is never perturbed by a
-/// `--target`. The backend is forced to LLVM when the target requires it
-/// (`wasm`/embedded) regardless of `--release`, mirroring spec §5.8.
+/// `--target`.
 #[allow(clippy::too_many_arguments)]
 fn run_cross_compile(
     source: &str,
-    _path: &str,
+    path: &str,
+    options: &Options,
     output_path: &str,
-    release_mode: bool,
-    backend_override: Option<&str>,
-    opt_level_override: Option<&str>,
-    target: &ruxen_core::codegen::target::ResolvedTarget,
+    backend: Backend,
+    target: &ResolvedTarget,
     extra_runtime_c: &[String],
     extra_link_args: &[String],
 ) -> Result<(), String> {
-    // Tier 4.03/4.04: a wasm32 target is a no_std reactor — it does NOT
-    // bootstrap the hosted stdlib. Bootstrapping would pull in
-    // `dispatch runtime` stdlib classes (e.g. `TimeSleepFuture`), whose
-    // vtable/class_info globals the LLVM backend does not yet emit, and would
-    // also pull libc-dependent runtime the wasm link has no allocator for.
-    // The no_std core surface (primitive ops) needs no bootstrap for the
-    // math-export v1 path. (Loading `library/std/core` alone is the staged
-    // remainder — ADR phase4-no-std-wasm decision #1.)
-    // Tier 4.09: wasm bootstraps a CURATED stdlib subset (heap-core: core,
-    // array, string, …) — not the empty set (which left `Array`/`String`
-    // unresolvable) nor the full bootstrap (which drags in `dispatch runtime`
-    // class_info the LLVM backend can't lower). See `load_wasm_bootstrap_or_err`.
-    let bootstrap_programs: Vec<(String, Program)> = if target.is_wasm() {
-        load_wasm_bootstrap_or_err()?
-    } else {
-        load_bootstrap_or_err()?
-    };
+    // The stdlib is `Options::for_target`'s choice: the curated wasm
+    // subset for a wasm target (tier 4.09), none for a no_std unit.
+    let (_, mir_program) = front_end(&parse(source, path)?, path, options)?;
+    let extra_runtime_paths: Vec<PathBuf> = extra_runtime_c.iter().map(PathBuf::from).collect();
 
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().map_err(|ds| {
-        ds.iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().map_err(|ds| {
-        ds.iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    let type_result = type_check_with_package_bootstrap(&program, &bootstrap_programs);
-    let has_errors = type_result
-        .diagnostics
-        .iter()
-        .any(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error);
-    if has_errors {
-        return Err(type_result
-            .diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n"));
-    }
-
-    let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
-    if !borrow_errors.is_empty() {
-        return Err(borrow_errors
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join("\n"));
-    }
-
-    let mut lowerer = ruxen_core::mir::lower::Lowerer::new(&type_result.symbols);
-    let mir_program = lowerer
-        .lower_program(&type_result.program)
-        .map_err(|e| format!("MIR lowering error: {}", e))?;
-
-    // Backend: a target that can't run on Cranelift (wasm/embedded) forces
-    // LLVM, regardless of --release. Otherwise honour the same default/override
-    // logic as the host path.
-    let backend = if target.requires_llvm_backend() {
-        if matches!(backend_override, Some("cranelift")) {
-            return Err(format!(
-                "target '{}' requires the LLVM backend. \
-                 Build with --release or pass --backend=llvm.",
-                target.canonical()
-            ));
-        }
-        // Force LLVM (silent auto-switch per §5.8).
-        resolve_backend(true, Some("llvm"), opt_level_override)?
-    } else {
-        resolve_backend(release_mode, backend_override, opt_level_override)?
-    };
-
-    let extra_runtime_paths: Vec<std::path::PathBuf> = extra_runtime_c
-        .iter()
-        .map(std::path::PathBuf::from)
-        .collect();
-
-    ruxen_core::codegen::compile_with_options_for_target(
+    codegen::compile_with_options_for_target(
         &mir_program,
         output_path,
         false, // no sanitizer on the cross path
@@ -633,7 +386,7 @@ fn run_cross_compile(
 
     println!(
         "Cross-compiled {} → {} (target {})",
-        _path,
+        path,
         output_path,
         target.canonical()
     );
@@ -647,57 +400,12 @@ fn run_cross_compile(
 fn run_no_std_compile(
     source: &str,
     path: &str,
+    options: &Options,
     output_path: &str,
-    release_mode: bool,
+    backend: Backend,
 ) -> Result<(), String> {
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().map_err(|ds| {
-        ds.iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().map_err(|ds| {
-        ds.iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    // no_std: empty bootstrap — the hosted stdlib is not available.
-    let type_result = type_check_with_package_bootstrap(&program, &[]);
-    let mut errors: Vec<String> = type_result
-        .diagnostics
-        .iter()
-        .filter(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error)
-        .map(|d| d.to_string())
-        .collect();
-
-    // E1400: reject heap allocation in the no_std unit.
-    for d in ruxen_core::no_std::validate(&type_result.program) {
-        errors.push(d.to_string());
-    }
-    if !errors.is_empty() {
-        return Err(errors.join("\n"));
-    }
-
-    let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
-    if !borrow_errors.is_empty() {
-        return Err(borrow_errors
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join("\n"));
-    }
-
-    let mut lowerer = ruxen_core::mir::lower::Lowerer::new_no_std(&type_result.symbols);
-    let mir_program = lowerer
-        .lower_program(&type_result.program)
-        .map_err(|e| format!("MIR lowering error: {}", e))?;
-
-    let backend = resolve_backend(release_mode, None, None)?;
-    ruxen_core::codegen::compile_no_std(&mir_program, output_path, backend)?;
+    let (_, mir_program) = front_end(&parse(source, path)?, path, options)?;
+    codegen::compile_no_std(&mir_program, output_path, backend)?;
 
     println!("Compiled {} → {} (no_std)", path, output_path);
     Ok(())
@@ -735,72 +443,42 @@ impl EmitMode {
 
 /// Pipeline used when the user passes an --emit flag. Doesn't touch the
 /// cache; prints the requested stage to stdout and returns.
-fn run_compile_direct(source: &str, emit_mode: EmitMode) -> Result<(), String> {
-    // Bootstrap the stdlib prelude before touching user source so the
-    // emit modes downstream (hir / mir / object) see the prelude-merged
-    // resolver state.
-    let bootstrap_programs = load_bootstrap_or_err()?;
-
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().map_err(|ds| {
-        ds.iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
+fn run_compile_direct(
+    source: &str,
+    path: &str,
+    emit_mode: EmitMode,
+    options: &Options,
+) -> Result<(), String> {
     if emit_mode == EmitMode::Tokens {
+        let tokens = Lexer::new(source)
+            .tokenize()
+            .map_err(|ds| driver::render_diagnostics(&ds, Some(Path::new(path))))?;
         for token in &tokens {
             println!("{:?}", token);
         }
         return Ok(());
     }
 
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().map_err(|ds| {
-        ds.iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
+    let program = parse(source, path)?;
     if emit_mode == EmitMode::Ast {
         println!("{program:#?}");
         return Ok(());
     }
 
-    let type_result = type_check_with_package_bootstrap(&program, &bootstrap_programs);
-    let has_type_errors = type_result
-        .diagnostics
-        .iter()
-        .any(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error);
-    for diag in &type_result.diagnostics {
-        eprintln!("{}", diag);
-    }
-    if has_type_errors {
-        return Err("Type checking failed.".into());
-    }
-
     if emit_mode == EmitMode::Hir {
-        for item in &type_result.program.items {
+        let typeck_only = Options {
+            stop_after: Stage::Typeck,
+            ..*options
+        };
+        let frontend = driver::check(&program, &typeck_only);
+        report(&frontend, path)?;
+        for item in &frontend.hir().items {
             println!("{:#?}", item);
         }
         return Ok(());
     }
 
-    let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
-    if !borrow_errors.is_empty() {
-        for err in &borrow_errors {
-            eprintln!("{}", err);
-        }
-        return Err(format!("{} borrow error(s) found.", borrow_errors.len()));
-    }
-
-    let mut lowerer = ruxen_core::mir::lower::Lowerer::new(&type_result.symbols);
-    let mir_program = lowerer
-        .lower_program(&type_result.program)
-        .map_err(|e| format!("MIR lowering error: {}", e))?;
-
+    let (_, mir_program) = front_end(&program, path, options)?;
     for func in &mir_program.functions {
         println!("=== MIR function: {} ===", func.name);
         println!("  params: {:?}", func.params);
@@ -820,64 +498,6 @@ fn run_compile_direct(source: &str, emit_mode: EmitMode) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-/// Resolve which backend to use based on CLI flags.
-fn resolve_backend(
-    release: bool,
-    backend_override: Option<&str>,
-    opt_level_str: Option<&str>,
-) -> Result<ruxen_core::codegen::Backend, String> {
-    let _opt_level: u8 = match opt_level_str {
-        Some("0") => 0,
-        Some("1") => 1,
-        Some("2") => 2,
-        Some("3") => 3,
-        Some("s") => 4,
-        Some("z") => 5,
-        _ => {
-            if release {
-                2
-            } else {
-                0
-            }
-        }
-    };
-
-    match backend_override {
-        Some("cranelift") => Ok(ruxen_core::codegen::Backend::Cranelift),
-        Some("llvm") => {
-            #[cfg(feature = "llvm")]
-            {
-                Ok(ruxen_core::codegen::Backend::Llvm {
-                    opt_level: _opt_level,
-                })
-            }
-            #[cfg(not(feature = "llvm"))]
-            {
-                Err(
-                    "LLVM backend not available. Install LLVM 18 and rebuild with --features llvm."
-                        .into(),
-                )
-            }
-        }
-        _ => {
-            if release {
-                #[cfg(feature = "llvm")]
-                {
-                    Ok(ruxen_core::codegen::Backend::Llvm {
-                        opt_level: _opt_level,
-                    })
-                }
-                #[cfg(not(feature = "llvm"))]
-                {
-                    Err("LLVM backend not available. Install LLVM 18 and rebuild with --features llvm.".into())
-                }
-            } else {
-                Ok(ruxen_core::codegen::Backend::Cranelift)
-            }
-        }
-    }
 }
 
 /// Find the project root: the nearest ancestor of the cwd holding a

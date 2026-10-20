@@ -86,7 +86,7 @@ impl<'a> Lowerer<'a> {
     /// new sources from which `def drop` can be discovered means
     /// changing only the `class_has_drop_method` closure below — never
     /// fork the walk into a sibling collector. The downstream
-    /// drop-elaboration pass in `mir/lower/drops.rs` consults exactly
+    /// drop-elaboration pass in `mir/lower/drops/` consults exactly
     /// the resulting `user_drop_classes` set; there is no second
     /// registry.
     ///
