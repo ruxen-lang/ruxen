@@ -328,3 +328,53 @@ run(1)
     let codes: Vec<String> = errors(source).into_iter().map(|(code, _)| code).collect();
     assert_eq!(codes, vec!["E0744", "E0744"], "{codes:?}");
 }
+
+/// A method's `where` bound on its owner's generic (`def get -> T where T:
+/// Clone` in `class MutexGuard[T]`) is checked at the call site against the
+/// receiver's instantiation: a payload that is not Clone (it holds a mutex)
+/// is E1015 in typeck, not a link error, and a String payload compiles.
+#[test]
+fn a_where_bound_on_the_receivers_generic_is_checked_at_the_call_site() {
+    let source = "use std.sync.Mutex
+
+class Inner
+  include Send
+  m: Mutex[Int]
+  def init(@m: Mutex[Int])
+  end
+end
+
+def run -> nil
+  held = Mutex.new(Inner.new(Mutex.new(1)))
+  g = held.lock_raw
+  copy = g.get
+  text = Mutex.new(\"abc\")
+  t = text.lock_raw
+  puts(t.get)
+end
+
+run
+";
+    let codes: Vec<String> = errors(source).into_iter().map(|(code, _)| code).collect();
+    assert_eq!(codes, vec!["E1015"], "{codes:?}");
+}
+
+/// A `lib` parameter of type `ElemDesc[T]` is compiler-supplied: a caller
+/// leaves it out and type checking counts only the parameters a caller
+/// writes, for a free function as for a method.
+#[test]
+fn an_elem_desc_parameter_is_not_written_by_the_caller() {
+    let source = "lib \"runtime/pairs.c\"
+  def count_pairs as \"rx_count_pairs\"(xs: &Array[(Int, Int)], d: ElemDesc[(Int, Int)]) -> Int
+end
+
+def run -> nil
+  xs = [(1, 2)]
+  puts(count_pairs(&xs))
+end
+
+run
+";
+    let codes: Vec<String> = errors(source).into_iter().map(|(code, _)| code).collect();
+    assert!(codes.is_empty(), "{codes:?}");
+}

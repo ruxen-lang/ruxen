@@ -1077,6 +1077,13 @@ pub struct ClassDef {
     pub span: Span,
 }
 
+impl ClassDef {
+    /// Whether the class body carried `layout <word>`.
+    pub fn has_layout(&self, word: &str) -> bool {
+        self.layout.iter().any(|s| s == word)
+    }
+}
+
 // ─── Struct ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1357,9 +1364,12 @@ pub struct FfiFunction {
     /// resolver (`ffi_registration.rs`) threads such a predicate into the
     /// registered signature's `generic_params` so the call-site bound seam
     /// can enforce it against the receiver's concrete element. Predicates on
-    /// names that aren't a class generic are dropped (FFI defs have no own
-    /// generics).
+    /// names that aren't a class generic or one of `generic_params` are
+    /// dropped.
     pub where_clause: Option<WhereClause>,
+    /// `def to_h[K, V] as "..."`: generic parameters of the declaration's
+    /// own, named in its parameter and return types.
+    pub generic_params: Option<GenericParams>,
     pub is_variadic: bool,
     pub span: Span,
 }

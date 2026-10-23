@@ -304,13 +304,11 @@ void *ruxen_match_groups(RuxenMatch *m) {
  * that participated in the match. Non-participating named groups are
  * omitted (matches the Option-elision pattern from .group()). */
 void *ruxen_match_named_groups(RuxenMatch *m) {
-    /* Every key here is a capture-group NAME, i.e. a `char*`, so the
-       table is RUXEN_KEY_CSTR by construction (B73). The compiler's
-       key-descriptor post-pass cannot reach a table built inside the C
-       runtime, so runtime-internal constructors state their own kind —
-       `ruxen_hash_new()` would leave it UNSET and the first insert below
-       would panic. */
-    RuxenHash *map = ruxen_hash_new_keyed(RUXEN_KEY_CSTR, 0, 0);
+    /* Every key here is an owned capture-group NAME, a `char*`, so the
+       table's key descriptor is RUXEN_ELEM_CSTR (B73). A table built inside
+       the C runtime states its own: the compiler supplies it only to `.rx`
+       calls. */
+    RuxenHash *map = ruxen_hash_new(RUXEN_ELEM_CSTR);
     if (!m || !m->named_table_copy) return map;
     for (int i = 0; i < m->named_count; i++) {
         const char *entry = m->named_table_copy + (size_t)i * m->named_entry_size;
@@ -332,7 +330,7 @@ void *ruxen_match_named_groups(RuxenMatch *m) {
         memcpy(name_copy, name, name_len + 1);
         ruxen_hash_insert(map,
                           (int64_t)(intptr_t)name_copy,
-                          (int64_t)(intptr_t)buf);
+                          (int64_t)(intptr_t)buf, RUXEN_ELEM_CSTR);
     }
     return map;
 }

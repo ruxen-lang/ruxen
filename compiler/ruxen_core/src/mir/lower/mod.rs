@@ -21,10 +21,10 @@ mod emit;
 mod expr;
 mod function;
 mod impl_block;
+mod instances;
 mod interpolation;
 mod key_desc;
 mod match_arms;
-mod monomorphize;
 pub mod runtime_abi;
 mod statement;
 mod trait_default;
@@ -186,76 +186,13 @@ pub struct Lowerer<'a> {
     /// `MirProgram::ffi_libs`; the first thing `runtime_abi::result_ownership`
     /// reads.
     declared_results: runtime_abi::DeclaredResults,
-    /// Generic-class monomorphization (option 1): eligible generic classes
-    /// keyed by class name. Populated by `collect_mono_instances`; an entry
-    /// exists only for a user-defined generic class with ≥1 user method and
-    /// NO FFI `lib` methods (so `Mutex[T]` & friends are excluded).
-    mono_classes: HashMap<String, crate::hir::nodes::HirClassDef>,
-    /// Class name → distinct fully-concrete generic-arg vectors seen at use
-    /// sites (e.g. `Matcher` → `[[String], [Int], [Bool]]`).
-    mono_instances: HashMap<String, Vec<monomorphize::MonoKey>>,
-    /// Monomorphized bases actually emitted (`Box__mono__String`, …). A
-    /// call/construct site is redirected to a specialized callee only when
-    /// its receiver instantiation's base is in this set — otherwise the
-    /// opaque `{Class}_{method}` fallback is kept.
-    mono_emitted: HashSet<String>,
-    /// MIR function names of the opaque (un-monomorphised) bodies emitted
-    /// for eligible generic classes. Such a body is live only when a
-    /// reachable function calls it; see `prune_unmonomorphised_bodies`.
-    opaque_generic_bodies: HashSet<String>,
-    /// Real (non-FFI) body methods defined directly on an FFI-shell
-    /// generic builtin class (`Array[T]`, `Option[T]`, `Result[T,E]`).
-    /// Keyed by the generic-STRIPPED mangled name (`Array_map`,
-    /// `Option_unwrap_or_else`). These classes are excluded from
-    /// monomorphization (gating rule #1) so their body methods emit as a
-    /// single opaque `{Class}_{method}` function with type params left
-    /// abstract — sound for the closure combinators, which only shuffle
-    /// pointer/word-sized values (push / closure-call / inlined `each`)
-    /// and never dispatch on the concrete `T`. The call site mangles
-    /// `Array[Int]_map`; `resolve_ffi_alias_callee` strips the generic
-    /// suffix to reach the opaque body when the stripped name is in here.
-    lib_body_methods: HashSet<String>,
-    /// Per-`T` monomorphization of BUILTIN-HEAD generic classes (`Array[T]`,
-    /// `Set[T]`, `Hash[K,V]`, `Option[T]`, `Result[T,E]`): the specializations
-    /// to emit, recorded by `collect_builtin_head_mono_instances` from the
-    /// receiver instantiations seen at call sites. Drained by
-    /// `emit_builtin_head_mono_instances` after `lower_items`.
-    builtin_head_mono_instances: Vec<monomorphize::BuiltinHeadMonoInstance>,
-    /// The mangled symbols the pass above emits (`Array__mono__String_join`). A
-    /// receiver-bearing call site is redirected only when its
-    /// `(instantiation, method)` is in here; every other call keeps the opaque
-    /// `{Class}_{method}` body reached through `lib_body_methods`.
-    builtin_head_mono_emitted: HashSet<String>,
-    /// Generic classes that declare `lib` methods (`Array`, `MutexGuard`),
-    /// whose `.rx` bodies are lowered once with their type params abstract
-    /// unless `collect_builtin_head_mono_instances` specializes one.
-    lib_shell_classes: HashSet<String>,
-    /// Shell methods with a `where` bound on a class generic that the
-    /// head pass specializes: their body is meaningful only per
-    /// instantiation, so no opaque body is emitted.
-    specialized_only: HashSet<DefId>,
-    /// Q17: eligible generic FREE functions (≥1 mixin-bounded type param),
-    /// keyed by function name. Populated by `collect_generic_fn_instances`.
-    mono_fns: HashMap<String, crate::hir::nodes::HirFuncDef>,
-    /// Q17: function name → distinct fully-concrete generic-arg vectors
-    /// recovered at call sites (e.g. `paint_all` → `[[RecordingSurface],
-    /// [TallySurface]]`).
-    fn_mono_instances: HashMap<String, Vec<monomorphize::MonoKey>>,
-    /// Q17: function name → emitted `(concrete-args, mangled-base)` pairs. A
-    /// free-fn call site is redirected to the mangled monomorphic callee only
-    /// when its recovered type-args match an entry here.
-    fn_mono_emitted: HashMap<String, Vec<(monomorphize::MonoKey, String)>>,
-    /// Q17b: eligible generic METHODS (methods with at least one
-    /// mixin-bounded type parameter), keyed by their resolved DefId. The
-    /// stored owner-qualified symbol keeps same-named methods on different
-    /// receiver types distinct.
-    mono_methods: HashMap<DefId, monomorphize::MonoMethod>,
-    /// Q17b: method DefId -> distinct fully-concrete generic-arg vectors
-    /// recovered from method-call sites.
-    method_mono_instances: HashMap<DefId, Vec<monomorphize::MonoKey>>,
-    /// Q17b: method DefId -> emitted `(concrete-args, mangled-symbol)` pairs
-    /// consulted by method-call lowering.
-    method_mono_emitted: HashMap<DefId, Vec<(monomorphize::MonoKey, String)>>,
+    /// The instance engine (`instances`): the templates, the instances the
+    /// program reaches, and the opaque bodies `prune_unmonomorphised_bodies`
+    /// may remove.
+    instances: instances::Instances,
+    /// The `lib` declarations whose `ElemDesc[T]` parameters the compiler
+    /// fills in (`key_desc::append_supplied_descriptors`).
+    supplied_params: key_desc::SuppliedParams,
     /// Tier 4.04: no_std mode. Suppresses the synthesized primitive `*_fmt`
     /// Display helpers (`Int_fmt`/`Char_fmt`/…), which reference hosted runtime
     /// symbols (`ruxen_int_to_string`, `Formatter_write_str`) absent in a
@@ -392,21 +329,8 @@ impl<'a> Lowerer<'a> {
             ffi_alias_map: HashMap::new(),
             ffi_by_value: drops::FfiByValue::default(),
             declared_results: runtime_abi::DeclaredResults::default(),
-            lib_body_methods: HashSet::new(),
-            mono_classes: HashMap::new(),
-            mono_instances: HashMap::new(),
-            mono_emitted: HashSet::new(),
-            opaque_generic_bodies: HashSet::new(),
-            builtin_head_mono_instances: Vec::new(),
-            builtin_head_mono_emitted: HashSet::new(),
-            lib_shell_classes: HashSet::new(),
-            specialized_only: HashSet::new(),
-            mono_fns: HashMap::new(),
-            fn_mono_instances: HashMap::new(),
-            fn_mono_emitted: HashMap::new(),
-            mono_methods: HashMap::new(),
-            method_mono_instances: HashMap::new(),
-            method_mono_emitted: HashMap::new(),
+            instances: instances::Instances::default(),
+            supplied_params: key_desc::SuppliedParams::default(),
             no_std: false,
         }
     }
@@ -674,23 +598,16 @@ impl<'a> Lowerer<'a> {
                     lowered.name =
                         Self::symbol_name(&Self::qualified_item_name(module_path, &lowered.name));
                 }
-                // Q17: suppress the opaque (un-monomorphized) body of EVERY
-                // eligible generic free fn — instantiated or not. Its abstract
-                // body can only ever emit bound-placeholder callees
-                // (`T: Paintable_fill_rect`) that link-fail, and no valid call
-                // resolves to it: a concrete call is redirected to a monomorphic
-                // copy (or errors at the call site), and an abstract call lives
-                // only inside another generic body that is itself suppressed.
-                // A NON-eligible fn (`generic_fn_keeps_opaque` → true) is
-                // unaffected. Matched on the un-qualified key the collector
-                // recorded (module-qualified names share it).
-                if !self.generic_fn_keeps_opaque(&func.name) {
-                    return Ok(());
-                }
                 let mir_fn = self.lower_function(&lowered)?;
+                if self.is_template_fn(&func.name) {
+                    self.instances.opaque_bodies.insert(mir_fn.name.clone());
+                }
                 if mir_fn.is_entry {
                     mir.entry = Some(mir_fn.name.clone());
-                } else if !func.is_class_method && module_path.is_empty() {
+                } else if !func.is_class_method
+                    && module_path.is_empty()
+                    && func.generic_params.is_empty()
+                {
                     // Tier 4.03 (WASM): record top-level free defs as wasm
                     // export candidates. A `wasm32-unknown-unknown` module is
                     // a *reactor* (spec §5.3) — it has no `main`; its top-level
@@ -703,8 +620,8 @@ impl<'a> Lowerer<'a> {
                     // nothing — the reactor surface is the whole free-fn set.
                     // A `wasm_export "custom"` rename/opt-in directive is the
                     // staged remainder — see docs/decisions/phase4-no-std-wasm.md.)
-                    // Generic free fns are suppressed above (opaque body never
-                    // reaches here), so only concrete callables are recorded.
+                    // A generic free fn is no callable surface: only its
+                    // instances are concrete.
                     mir.wasm_exports.push(mir_fn.name.clone());
                 }
                 mir.functions.push(mir_fn);
@@ -714,12 +631,6 @@ impl<'a> Lowerer<'a> {
                 let class_symbol = Self::symbol_name(&qualified_class);
                 let first_fn = mir.functions.len();
                 for method in &class.methods {
-                    // Q17b: an eligible generic method's abstract body could
-                    // only dispatch through a mixin-bound placeholder. Calls
-                    // target emitted concrete copies instead.
-                    if !self.generic_method_keeps_opaque(method.def_id) {
-                        continue;
-                    }
                     let mangled = format!("{}_{}", class_symbol, method.name);
                     let mir_fn = self.lower_method(&mangled, method)?;
                     mir.functions.push(mir_fn);
@@ -754,9 +665,16 @@ impl<'a> Lowerer<'a> {
                     mir.functions
                         .extend(self.synthesize_derives(&class_ty, &class.name, &fields));
                 }
-                if self.mono_classes.contains_key(&class.name) {
-                    self.opaque_generic_bodies
+                if self.is_template_class(&class.name) {
+                    self.instances
+                        .opaque_bodies
                         .extend(mir.functions[first_fn..].iter().map(|f| f.name.clone()));
+                } else {
+                    let opaque: Vec<String> = instances::class_methods(class)
+                        .filter(|m| self.is_template_body(m.def_id))
+                        .map(|m| format!("{}_{}", class_symbol, m.name))
+                        .collect();
+                    self.instances.opaque_bodies.extend(opaque);
                 }
 
                 // §4.1 Increment 2: state-indexed drop glue. A synthesised
@@ -791,11 +709,11 @@ impl<'a> Lowerer<'a> {
                 let qualified_struct = Self::qualified_item_name(module_path, &s.name);
                 let struct_symbol = Self::symbol_name(&qualified_struct);
                 for method in &s.methods {
-                    if !self.generic_method_keeps_opaque(method.def_id) {
-                        continue;
-                    }
                     let mangled = format!("{}_{}", struct_symbol, method.name);
                     let mir_fn = self.lower_method(&mangled, method)?;
+                    if self.is_template_body(method.def_id) {
+                        self.instances.opaque_bodies.insert(mangled.clone());
+                    }
                     mir.functions.push(mir_fn);
                 }
                 let struct_ty = Ty::Struct {
@@ -810,11 +728,11 @@ impl<'a> Lowerer<'a> {
                 let qualified_enum = Self::qualified_item_name(module_path, &e.name);
                 let enum_symbol = Self::symbol_name(&qualified_enum);
                 for method in &e.methods {
-                    if !self.generic_method_keeps_opaque(method.def_id) {
-                        continue;
-                    }
                     let mangled = format!("{}_{}", enum_symbol, method.name);
                     let mir_fn = self.lower_method(&mangled, method)?;
+                    if self.is_template_body(method.def_id) {
+                        self.instances.opaque_bodies.insert(mangled.clone());
+                    }
                     mir.functions.push(mir_fn);
                 }
                 let enum_ty = Ty::Enum {
@@ -878,35 +796,11 @@ impl<'a> Lowerer<'a> {
         // monomorphise missing methods into a concrete {Type}_{method}.
         self.collect_trait_default_methods(program);
 
-        // Generic-class monomorphization (option 1): record every concrete
-        // instantiation of an eligible generic class so binop / Display
-        // lowering over a type parameter resolves to the concrete type.
-        // FFI-shell generic classes (`Mutex[T]`, …) are excluded here.
-        self.collect_mono_instances(program);
-
-        // Per-`T` monomorphization of the BUILTIN-HEAD generic classes the
-        // rule above excludes (`Array[T]` & friends carry `lib` blocks): record
-        // one specialization per `(concrete receiver instantiation, method)`
-        // for each `.rx` body method that dispatches on its element type, so
-        // `["a", "b"].join` formats the elements instead of printing their
-        // buffer addresses through the pointer-as-`Int` floor. Must run after
-        // `collect_mono_instances` (it reuses the same mangling) and before
-        // `lower_items` (call sites consult the emitted set while bodies lower).
-        self.collect_builtin_head_mono_instances(program);
-
-        // Q17: record every concrete instantiation of an eligible generic
-        // FREE function (mixin-bounded type param) seen at a call site, so a
-        // dependency's generic (`paint_all[T: Paintable]`) can be specialized
-        // per CONSUMER implementor instead of emitting the bound-placeholder
-        // callee (`T: Paintable_fill_rect`) that link-fails. Runs after
-        // `collect_mono_instances` (the trait-impl table is already built).
-        self.collect_generic_fn_instances(program);
-
-        // Q17b: collect concrete instantiations of generic methods over
-        // mixin bounds. This is deliberately separate from generic-class
-        // monomorphization: the receiver type is fixed; only the method's own
-        // `[T: Mixin]` parameters vary per call.
-        self.collect_generic_method_instances(program);
+        // The instance engine (`instances`): every generic body whose
+        // lowering depends on its type parameters, per concrete
+        // instantiation the program reaches. Runs before `lower_items`, so
+        // call sites redirect to the instances while bodies lower.
+        self.collect_instances(program)?;
 
         // Collect `const` initializer expressions so references are
         // substituted with the RHS value at every use site.
@@ -961,6 +855,7 @@ impl<'a> Lowerer<'a> {
         }
 
         self.ffi_by_value = drops::FfiByValue::from_libs(&mir.ffi_libs);
+        self.supplied_params = key_desc::SuppliedParams::from_libs(&mir.ffi_libs, self.symbols)?;
         self.declared_results = runtime_abi::DeclaredResults::from_libs(&mir.ffi_libs);
 
         let prelude_count = program.prelude_item_count.min(program.items.len());
@@ -975,30 +870,9 @@ impl<'a> Lowerer<'a> {
         }
         self.lower_items(user, &mut mir, &[])?;
 
-        // Generic-class monomorphization (option 1): emit a specialized MIR
-        // copy of every user-defined method (incl. `init`) of each eligible
-        // generic class, once per recorded concrete instantiation. Must run
-        // after `lower_items` so the opaque fallback bodies and the symbol
-        // table are already in place. Call sites are redirected to these
-        // specialized callees in `method_call.rs` via `mono_base_for_ty`.
-        self.emit_mono_instances(&mut mir)?;
-
-        // Per-`T` builtin-head specializations (`Array__mono__String_join`).
-        // Same ordering rationale as `emit_mono_instances`: the opaque body
-        // every un-specialized instantiation still resolves to was emitted by
-        // `lower_items` above.
-        self.emit_builtin_head_mono_instances(&mut mir)?;
-
-        // Q17: emit one specialized MIR copy of every eligible generic free
-        // function, per recorded concrete instantiation, and record the
-        // `(fn, args) → mangled` redirects consulted by `fn_call.rs`. Same
-        // ordering rationale as `emit_mono_instances`; eligible opaque generic
-        // bodies themselves were deliberately suppressed above.
-        self.emit_generic_fn_instances(&mut mir)?;
-
-        // Q17b: emit the specialized method bodies after ordinary items, in
-        // parallel with the free-function specialization pass above.
-        self.emit_generic_method_instances(&mut mir)?;
+        // Lower every instance the engine recorded. After `lower_items`, so
+        // the opaque bodies and the symbol table are already in place.
+        self.emit_instances(&mut mir)?;
 
         // Emit the primitive Display::fmt synth functions (Phase 2 #06.D2.S1).
         // These are program-level, not per-use. Stage 3 (D2)
@@ -1027,10 +901,7 @@ impl<'a> Lowerer<'a> {
         // closure_inline path already sets up Return terminators
         // before pushing into `pending_closures`, so insert_drops
         // sees the same shape it sees for top-level methods.
-        for mut closure_fn in std::mem::take(&mut self.pending_closures) {
-            // B73: a closure body constructs tables too — same post-pass,
-            // same reason. See `key_desc::install_key_descriptors`.
-            key_desc::install_key_descriptors(&mut closure_fn, self.symbols);
+        for closure_fn in std::mem::take(&mut self.pending_closures) {
             self.drop_pending
                 .entry(closure_fn.name.clone())
                 .or_default();
@@ -1063,6 +934,13 @@ impl<'a> Lowerer<'a> {
         //   result = method_ptr(self, args...)
         //   return result
         self.synthesize_dynamic_dispatch_helpers(&mut mir);
+
+        // B73: append the descriptors the `.rx` declarations ask for
+        // (`ElemDesc[T]`, `KeyDesc[K]`) to every call in every body, derived
+        // and synthesized ones included, before the drop pass reads them.
+        for func in &mut mir.functions {
+            key_desc::append_supplied_descriptors(func, &self.supplied_params, self.symbols);
+        }
 
         // Every owner of a boxed Copy value gets its own box before any
         // summary reads a body (a returned copy is not the parameter).
@@ -2241,7 +2119,7 @@ impl<'a> Lowerer<'a> {
         // Strip the balanced generic suffix and, if the stripped name is a
         // recorded lib body method, route to it.
         if let Some(stripped) = strip_generic_suffix(&mangled) {
-            if self.lib_body_methods.contains(&stripped) {
+            if self.instances.lib_body_methods.contains(&stripped) {
                 return stripped;
             }
         }

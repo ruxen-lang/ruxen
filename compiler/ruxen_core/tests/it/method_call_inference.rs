@@ -241,3 +241,65 @@ end
         errs
     );
 }
+
+/// Constructor generic inference binds a class parameter through a nested
+/// generic or compound argument: `init(w: Wrap[T])` from `Wrap[Int]`, and
+/// `init(ps: Array[(K, V)])` from `Array[(String, Int)]` (they stayed
+/// unresolved and a later use bound them wrongly).
+#[test]
+fn constructor_generics_bind_through_nested_and_compound_args() {
+    let source = "class Wrap[T]
+  v: T
+  def init(@v: T)
+  end
+end
+
+class Outer[T]
+  w: Wrap[T]
+  def init(@w: Wrap[T])
+  end
+end
+
+class Table[K, V]
+  ps: Array[(K, V)]
+  def init(@ps: Array[(K, V)])
+  end
+end
+
+def main
+  let o = Outer.new(Wrap.new(3))
+  let t = Table.new([(\"a\", 6)])
+end
+";
+    assert_eq!(
+        let_types_in(source, "main"),
+        vec!["Outer[Int]".to_string(), "Table[String, Int]".to_string()]
+    );
+}
+
+/// A method's own generic parameter named like its class's is E0745: a type
+/// parameter is its name, so it would be typed as the class's `T`.
+#[test]
+fn a_method_generic_shadowing_the_class_generic_is_e0745() {
+    let source = "class Box[T]
+  v: T
+  def init(@v: T)
+  end
+  def show[T](x: &T) -> nil
+    puts(\"#{x}\")
+  end
+end
+";
+    let mut lx = Lexer::new(source);
+    let prog = Parser::new(lx.tokenize().expect("lex"))
+        .parse()
+        .expect("parse");
+    let result = typeck::type_check(&prog);
+    let codes: Vec<String> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .filter_map(|d| d.code.clone())
+        .collect();
+    assert_eq!(codes, vec!["E0745".to_string()], "{codes:?}");
+}

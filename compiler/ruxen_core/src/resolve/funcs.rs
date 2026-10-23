@@ -292,6 +292,28 @@ impl Resolver {
             ));
         }
         let mut generic_params = self.resolve_generic_params(&f.generic_params);
+        // E0745: a method's own generic named like its type's generic would
+        // be indistinguishable from it (a type parameter is its name), so
+        // `def show[T]` inside `class Box[T]` is rejected rather than
+        // silently typed as the class's `T`.
+        for own in &generic_params {
+            let shadows = self
+                .scopes
+                .lookup_type(&own.name)
+                .and_then(|d| self.symbols.get(d))
+                .is_some_and(|d| matches!(d.kind, DefKind::TypeParam { .. }));
+            if shadows {
+                self.error_with_code(
+                    format!(
+                        "generic parameter `{}` shadows the enclosing type's `{}`; rename the \
+                         method's parameter",
+                        own.name, own.name
+                    ),
+                    &own.span,
+                    "E0745",
+                );
+            }
+        }
         // Merge `where T: Bound, ...` predicates into the matching generic
         // parameter's bounds. Predicates whose left-hand side is not a
         // declared type parameter (e.g., associated-type constraints) are
@@ -559,11 +581,27 @@ impl Resolver {
         self.current_return_ty = old_return_ty;
         self.scopes.pop();
 
+        // The signature carries the `where`-merged bounds, including the
+        // synthetic param a predicate on an enclosing generic adds, so the
+        // call site checks them against the receiver's instantiation.
+        let mut signature_generics = self.collect_generic_param_infos(&f.generic_params);
+        for merged in &generic_params {
+            match signature_generics
+                .iter_mut()
+                .find(|g| g.name == merged.name)
+            {
+                Some(info) => info.bounds = merged.bounds.clone(),
+                None => signature_generics.push(GenericParamInfo::type_param(
+                    merged.name.clone(),
+                    merged.bounds.clone(),
+                )),
+            }
+        }
         let sig = FnSignature {
             self_mode,
             is_class_method: f.is_class_method,
             is_async: f.is_async,
-            generic_params: self.collect_generic_param_infos(&f.generic_params),
+            generic_params: signature_generics,
             params: params
                 .iter()
                 .map(|p| ParamInfo {

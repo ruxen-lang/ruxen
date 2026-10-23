@@ -547,9 +547,13 @@ test_cli() {
     record_fail "cli/run output" "missing 'Hello, Ruxen' in stdout"
   fi
 
-  # build --release (may use LLVM backend which isn't shipped)
+  # build --release: the LLVM backend. A ruxen built without the `llvm`
+  # feature must refuse it with an error naming the feature, never fall
+  # back to Cranelift silently (codegen/backend.rs `Backend::select`).
   if (cd "$proj" && ruxen build --release >"$tmp/build-release.log" 2>&1); then
     record_pass "cli/build --release"
+  elif grep -q "built without the \`llvm\` feature" "$tmp/build-release.log"; then
+    record_pass "cli/build --release (no llvm: refused with the feature named)"
   else
     record_fail "cli/build --release" "see $tmp/build-release.log"
   fi

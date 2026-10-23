@@ -1,7 +1,7 @@
 # `.clone` on a generic class instance links: the derived clone body is
 # emitted per monomorphic instance (`Cellish__mono__Int_clone`), and the copy
 # shares the SharedSync cell, so a write through either handle is seen by both.
-class Cellish[T: Send]
+class Cellish[T: Send + Clone]
   id: Int
   cell: SharedSync[Mutex[T]]
   def init(@id: Int, initial: T)

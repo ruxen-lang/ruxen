@@ -71,7 +71,7 @@ pub struct MixinResolver {
     /// structural satisfaction, and consulted only for a struct / class /
     /// enum receiver, so a primitive's method-home class (`class Int`) never
     /// lends `Ty::Int` a nominal `clone`.
-    derived_methods: HashMap<String, Vec<ImplMethod>>,
+    derived_methods: HashMap<String, Vec<(String, ImplMethod)>>,
     /// The method home of a stored closure value: the class the core
     /// library declares `layout closure` (`SymbolTable::closure_shell_name`),
     /// read when the impls are collected. The key `Ty::method_home` gives a
@@ -752,7 +752,16 @@ impl MixinResolver {
             Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. }
         ) {
             if let Some(methods) = self.derived_methods.get(&type_name) {
-                if let Some(m) = Self::select_impl_method(methods, method_name, args) {
+                // An instance (`Box[Mutex[Int]]`) gets a derive only when its
+                // substituted fields support it, as MIR emits it.
+                let applicable: Vec<ImplMethod> = methods
+                    .iter()
+                    .filter(|(trait_name, _)| {
+                        crate::implicit_includes::derive_is_synthesized(ty, symbols, trait_name)
+                    })
+                    .map(|(_, m)| m.clone())
+                    .collect();
+                if let Some(m) = Self::select_impl_method(&applicable, method_name, args) {
                     return Some((m.signature.clone(), None));
                 }
             }
@@ -880,8 +889,8 @@ impl MixinResolver {
             _ => return,
         };
         let subst = HashMap::from([("Self".to_string(), self_ty.clone())]);
-        let mut derived: Vec<ImplMethod> = Vec::new();
-        for (trait_name, method) in crate::implicit_includes::DERIVED_METHODS {
+        let mut derived: Vec<(String, ImplMethod)> = Vec::new();
+        for (trait_name, method) in crate::implicit_includes::synthesized_derives(symbols) {
             if !crate::implicit_includes::derive_is_synthesized(&self_ty, symbols, trait_name) {
                 continue;
             }
@@ -893,21 +902,24 @@ impl MixinResolver {
                 continue;
             };
             for (sig, _) in sigs {
-                derived.push(ImplMethod {
-                    name: method.to_string(),
-                    signature: FnSignature {
-                        params: sig
-                            .params
-                            .iter()
-                            .map(|p| crate::resolve::symbols::ParamInfo {
-                                ty: p.ty.subst_params(&subst),
-                                ..p.clone()
-                            })
-                            .collect(),
-                        return_ty: sig.return_ty.subst_params(&subst),
-                        ..sig.clone()
+                derived.push((
+                    trait_name.to_string(),
+                    ImplMethod {
+                        name: method.to_string(),
+                        signature: FnSignature {
+                            params: sig
+                                .params
+                                .iter()
+                                .map(|p| crate::resolve::symbols::ParamInfo {
+                                    ty: p.ty.subst_params(&subst),
+                                    ..p.clone()
+                                })
+                                .collect(),
+                            return_ty: sig.return_ty.subst_params(&subst),
+                            ..sig.clone()
+                        },
                     },
-                });
+                ));
             }
         }
         if !derived.is_empty() {

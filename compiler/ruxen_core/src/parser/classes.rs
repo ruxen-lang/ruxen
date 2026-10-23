@@ -739,13 +739,16 @@ impl Parser {
                         match self.current_kind().clone() {
                             TokenKind::Identifier(name) => {
                                 self.advance();
-                                if name == "flat_heap_struct" || name == "closure" {
+                                if matches!(
+                                    name.as_str(),
+                                    "flat_heap_struct" | "closure" | "elem_desc" | "key_desc"
+                                ) {
                                     layout.push(name);
                                 } else if name.eq_ignore_ascii_case("c") {
                                     layout.push("C".to_string());
                                 } else {
                                     self.error(&format!(
-                                        "expected `flat_heap_struct`, `closure` or `c` after `layout` in class body, found `{}`",
+                                        "expected `flat_heap_struct`, `closure`, `elem_desc`, `key_desc` or `c` after `layout` in class body, found `{}`",
                                         name
                                     ));
                                 }

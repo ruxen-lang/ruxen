@@ -17,14 +17,16 @@ pub(super) const FIELD_DROP_GLUE_PREFIX: &str = "__ruxen_drop_fields_";
 /// object frees it when it dies or when the field is overwritten: a
 /// `String`, `Array`, `Hash` or `Set`, a tuple (a heap box that owns its
 /// elements; a Copy one gets its own box per owner, `is_boxed_copy`), an
-/// instance of a class, or a closure ([`is_owned_closure`]). Every other field (scalars, references, struct
-/// and enum values, other `any Mixin` objects, an unsubstituted type
-/// parameter) is not freed.
+/// instance of a class, a boxed Copy struct (each owner holds its own box,
+/// `drops::copies`), or a closure ([`is_owned_closure`]). Every other field
+/// (scalars, references, other struct and enum values, other `any Mixin`
+/// objects, an unsubstituted type parameter) is not freed.
 pub(in crate::mir::lower) fn field_owns_value(ty: &Ty, symbols: &SymbolTable) -> bool {
     use crate::resolve::symbols::DefKind;
     match ty {
         Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_) | Ty::Tuple(_) => true,
         _ if is_owned_closure(ty) => true,
+        Ty::Struct { .. } => super::copies::is_boxed_copy(ty, symbols),
         Ty::Class { name, .. } => symbols
             .type_def(name)
             .is_some_and(|def| matches!(def.kind, DefKind::Class { .. })),
@@ -106,13 +108,6 @@ pub(in crate::mir::lower) fn field_drop_glue_name(
     Some(format!("{FIELD_DROP_GLUE_PREFIX}{}", object_glue_key(ty)?))
 }
 
-/// `text` with every character a symbol cannot hold replaced by `_`.
-fn sanitize_symbol(text: &str) -> String {
-    text.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect()
-}
-
 /// The per-type part of a glue name for a class, struct or tuple `ty`.
 fn object_glue_key(ty: &Ty) -> Option<String> {
     Some(match ty {
@@ -122,11 +117,14 @@ fn object_glue_key(ty: &Ty) -> Option<String> {
             name.replace('.', "_")
         }
         Ty::Class { name, generic_args } | Ty::Struct { name, generic_args } => {
-            crate::mir::lower::monomorphize::mono_base(name, generic_args)
+            crate::mir::lower::instances::mono_base(name, generic_args)
         }
         // Spelled from the full type, borrows included: `(&String, Int)`
         // owns nothing that `(String, Int)` owns, so their glue differs.
-        Ty::Tuple(_) => format!("Tuple_{}", sanitize_symbol(&ty.to_string())),
+        Ty::Tuple(_) => format!(
+            "Tuple_{}",
+            crate::mir::lower::instances::symbol_token(&ty.to_string())
+        ),
         _ => return None,
     })
 }
@@ -147,6 +145,7 @@ pub(super) const ELEM_HASH: i64 = 4;
 pub(super) const ELEM_SET: i64 = 5;
 pub(super) const ELEM_OBJ: i64 = 6;
 pub(super) const ELEM_CLOSURE: i64 = 7;
+pub(super) const ELEM_BORROW: i64 = 8;
 
 /// A descriptor is at most 16 four-bit tags (one `i64`).
 pub(super) const ELEM_DESC_MAX_TAGS: usize = 16;
@@ -212,6 +211,35 @@ pub(in crate::mir::lower) fn elem_desc(ty: &Ty, symbols: &SymbolTable) -> ElemDe
         }
     }
     ElemDesc::Word(ELEM_POD)
+}
+
+/// The key descriptor of `ty` (`KeyDesc[K]`, runtime.h): how a table copies,
+/// frees, hashes and compares a key of this type. Its element descriptor,
+/// with a borrowed key described as BORROW followed by what it borrows (a
+/// `&String` key owns nothing but hashes by content). A borrow whose
+/// referent does not fit is a plain BORROW, which hashes by the word.
+pub(in crate::mir::lower) fn key_desc(ty: &Ty, symbols: &SymbolTable) -> ElemDesc {
+    match ty {
+        Ty::Ref(inner)
+        | Ty::RefMut(inner)
+        | Ty::RefLifetime(_, inner)
+        | Ty::RefMutLifetime(_, inner) => match key_desc(inner, symbols) {
+            ElemDesc::Word(word) if word >> 60 == 0 => ElemDesc::Word(ELEM_BORROW | (word << 4)),
+            ElemDesc::Glue {
+                tags,
+                prefix_tags,
+                glue,
+                object,
+            } if prefix_tags < ELEM_OBJ_MAX_PREFIX_TAGS => ElemDesc::Glue {
+                tags: ELEM_BORROW | (tags << 4),
+                prefix_tags: prefix_tags + 1,
+                glue,
+                object,
+            },
+            _ => ElemDesc::Word(ELEM_BORROW),
+        },
+        _ => elem_desc(ty, symbols),
+    }
 }
 
 /// Append the tags for `ty` to `out`, and return the glue function (and the
@@ -337,12 +365,14 @@ impl<'a> Lowerer<'a> {
     /// (`FuncAddr __ruxen_elem_glue_<Type>`, see [`elem_desc`]). Runs once
     /// over the whole program, after every body (and every drop) is lowered.
     ///
-    /// `glue(op, slot)` mirrors a scope-exit drop of a `<Type>` local for
-    /// `op == RUXEN_ELEM_GLUE_DROP` (the type's `def drop`, then
+    /// `glue(op, slot, other)` mirrors a scope-exit drop of a `<Type>` local
+    /// for `op == RUXEN_ELEM_GLUE_DROP` (the type's `def drop`, then
     /// `ruxen_dealloc` unless that drop releases the storage itself; for a
-    /// tuple, its field glue and `ruxen_dealloc`), and returns an owned copy
+    /// tuple, its field glue and `ruxen_dealloc`), returns an owned copy
     /// for `op == RUXEN_ELEM_GLUE_CLONE` (`<Type>_clone(slot)`; for a tuple,
-    /// a new box of element copies). The glue wanted and the type each one
+    /// a new box of element copies), and hashes `slot` or compares it with
+    /// `other` as a table key for `RUXEN_ELEM_GLUE_HASH` / `_EQ`
+    /// ([`Lowerer::build_key_glue_arms`]). The glue wanted and the type each one
     /// serves come from `MirFunction::elem_glue_types`; a glue body names
     /// further glue, so the caller repeats until nothing is added.
     pub(in crate::mir::lower) fn synthesize_elem_glue(
@@ -373,23 +403,37 @@ impl<'a> Lowerer<'a> {
         let mut glue = MirFunction::new(glue_name, Ty::Int);
         let op = glue.new_local("op", Ty::Int, false);
         let slot = glue.new_local("slot", Ty::Int, false);
-        glue.params = vec![op, slot];
+        let other = glue.new_local("other", Ty::Int, false);
+        glue.params = vec![op, slot, other];
 
-        let is_drop = glue.new_temp(Ty::Bool);
+        // `op` is RUXEN_ELEM_GLUE_DROP (0), _CLONE (1), _HASH (2) or _EQ (3).
         let drop_block = glue.new_block();
         let clone_block = glue.new_block();
+        let hash_block = glue.new_block();
+        let eq_block = glue.new_block();
         let entry = glue.entry_block;
-        glue.blocks[entry].instructions.push(MirInst::Compare {
-            dest: is_drop,
-            op: CmpOp::Eq,
-            lhs: MirValue::Use(op),
-            rhs: MirValue::Literal(Literal::Int(0)),
-        });
-        glue.blocks[entry].terminator = Terminator::Branch {
-            cond: MirValue::Use(is_drop),
-            then_block: drop_block,
-            else_block: clone_block,
-        };
+        let mut test = entry;
+        for (code, then_block) in [(0, drop_block), (1, clone_block), (2, hash_block)] {
+            let is_op = glue.new_temp(Ty::Bool);
+            glue.blocks[test].instructions.push(MirInst::Compare {
+                dest: is_op,
+                op: CmpOp::Eq,
+                lhs: MirValue::Use(op),
+                rhs: MirValue::Literal(Literal::Int(code)),
+            });
+            let else_block = if code == 2 {
+                eq_block
+            } else {
+                glue.new_block()
+            };
+            glue.blocks[test].terminator = Terminator::Branch {
+                cond: MirValue::Use(is_op),
+                then_block,
+                else_block,
+            };
+            test = else_block;
+        }
+        self.build_key_glue_arms(&mut glue, object_ty, slot, other, hash_block, eq_block);
         let object = glue.new_temp(object_ty.clone());
         glue.blocks[entry].instructions.push(MirInst::Assign {
             dest: object,
@@ -428,6 +472,63 @@ impl<'a> Lowerer<'a> {
         };
         glue.blocks[clone_block].terminator = Terminator::Return(Some(MirValue::Use(copy)));
         Ok(glue)
+    }
+
+    /// The HASH and EQ arms of `object_ty`'s element glue: a type that
+    /// derives `Hashable` and `PartialEq` hashes and compares through the
+    /// methods those derives define (`hash_code`, `eq`), any other by its
+    /// identity (the word), as Ruby's default `Object#hash` does.
+    fn build_key_glue_arms(
+        &self,
+        glue: &mut MirFunction,
+        object_ty: &Ty,
+        slot: LocalId,
+        other: LocalId,
+        hash_block: BlockId,
+        eq_block: BlockId,
+    ) {
+        let derived = |trait_name: &str| {
+            crate::mir::lower::type_helpers::derived_nominal(object_ty, self.symbols, trait_name)
+                .filter(|name| !name.contains('.'))
+                .zip(self.symbols.derived_method(trait_name))
+                .map(|(name, method)| format!("{name}_{method}"))
+        };
+        let hash = derived(crate::implicit_includes::HASHABLE);
+        let eq = derived("PartialEq");
+        let (hash_value, eq_value) = match hash.zip(eq) {
+            Some((hash_fn, eq_fn)) => {
+                let h = glue.new_temp(Ty::Int);
+                glue.blocks[hash_block].instructions.push(MirInst::Call {
+                    dest: Some(h),
+                    callee: hash_fn,
+                    args: vec![MirValue::Use(slot)],
+                });
+                let e = glue.new_temp(Ty::Bool);
+                glue.blocks[eq_block].instructions.push(MirInst::Call {
+                    dest: Some(e),
+                    callee: eq_fn,
+                    args: vec![MirValue::Use(slot), MirValue::Use(other)],
+                });
+                (h, e)
+            }
+            None => {
+                let e = glue.new_temp(Ty::Bool);
+                glue.blocks[eq_block].instructions.push(MirInst::Compare {
+                    dest: e,
+                    op: CmpOp::Eq,
+                    lhs: MirValue::Use(slot),
+                    rhs: MirValue::Use(other),
+                });
+                (slot, e)
+            }
+        };
+        glue.blocks[hash_block].terminator = Terminator::Return(Some(MirValue::Use(hash_value)));
+        let word = glue.new_temp(Ty::Int);
+        glue.blocks[eq_block].instructions.push(MirInst::Assign {
+            dest: word,
+            value: MirValue::Use(eq_value),
+        });
+        glue.blocks[eq_block].terminator = Terminator::Return(Some(MirValue::Use(word)));
     }
 
     /// The user `def drop` an instance of `ty` runs before its fields and
@@ -568,10 +669,10 @@ pub(in crate::mir::lower) fn owned_value_drop(
     insts
 }
 
-/// The descriptor of a `Hash` key or a `Set` element: CSTR or POD only.
-/// Those tables copy keys by their `key_kind` (`ruxen_set_insert_owned`,
-/// `union`, `from_iter`), which can only say "a string" or "a word", so a
-/// deeper key ownership would free what the copy aliased.
+/// The key part of a `Hash` or `Set` descriptor stream (RUXEN_ELEM_HASH /
+/// _SET): CSTR or POD only, so the value's descriptor that follows it is
+/// found and fits. A table copies and frees its keys by its own installed
+/// key descriptor (`key_desc`, filled from `KeyDesc[K]`), not by this.
 pub(in crate::mir::lower) fn key_elem_desc(ty: &Ty) -> i64 {
     match ty {
         Ty::String => ELEM_CSTR,

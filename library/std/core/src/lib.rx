@@ -63,6 +63,21 @@ end
 ## only borrows its closure.
 type Proc[F] = any Fn[F]
 
+## `ElemDesc[T]`: the element descriptor (`RUXEN_ELEM_*`) of `T`, which
+## `layout elem_desc` declares. A `lib` parameter of this type is filled in by
+## the compiler from `T` at every call, so C can copy or free a `T` the way
+## the compiler's own drops do; a caller never passes it.
+class ElemDesc[T]
+  layout elem_desc
+end
+
+## `KeyDesc[K]`: the key descriptor of `K`, which `layout key_desc` declares:
+## its element descriptor, borrows included, which also says how a `K` hashes
+## and compares as a table key. Filled in by the compiler like `ElemDesc[T]`.
+class KeyDesc[K]
+  layout key_desc
+end
+
 ## `Closure`: the method home of every stored closure value (`Proc[...]`,
 ## `any Fn[...]`), which `layout closure` declares: its values are closure
 ## pairs. Calling one (`p.(x)`, `p.call(x)`) is the closure's own body; the

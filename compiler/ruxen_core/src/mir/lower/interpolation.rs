@@ -314,7 +314,7 @@ impl<'a> Lowerer<'a> {
                 let dest = self.new_temp(Ty::String);
                 self.emit(MirInst::Call {
                     dest: Some(dest),
-                    callee: format!("{}_to_debug", struct_name),
+                    callee: format!("{}_{}", struct_name, self.debug_method()),
                     args: vec![MirValue::Use(src)],
                 });
                 dest
@@ -331,7 +331,7 @@ impl<'a> Lowerer<'a> {
                 let dest = self.new_temp(Ty::String);
                 self.emit(MirInst::Call {
                     dest: Some(dest),
-                    callee: format!("{}_to_debug", enum_name),
+                    callee: format!("{}_{}", enum_name, self.debug_method()),
                     args: vec![MirValue::Use(src)],
                 });
                 dest

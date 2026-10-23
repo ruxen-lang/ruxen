@@ -182,6 +182,7 @@ static int64_t ruxen_elem_desc_skip(int64_t desc) {
     switch (RUXEN_ELEM_TAG(desc)) {
         case RUXEN_ELEM_VEC:
         case RUXEN_ELEM_SET:
+        case RUXEN_ELEM_BORROW:
             return ruxen_elem_desc_skip(rest);
         case RUXEN_ELEM_HASH:
             return ruxen_elem_desc_skip(ruxen_elem_desc_skip(rest));
@@ -233,14 +234,14 @@ int64_t ruxen_elem_clone(int64_t slot, int64_t desc) {
             return (int64_t)(uintptr_t)ruxen_hash_deep_clone(
                 (RuxenHash *)slot, rest, RUXEN_ELEM_POD);
         case RUXEN_ELEM_OBJ:
-            return ((RuxenElemGlue)(uintptr_t)rest)(RUXEN_ELEM_GLUE_CLONE, slot);
+            return ((RuxenElemGlue)(uintptr_t)rest)(RUXEN_ELEM_GLUE_CLONE, slot, 0);
         case RUXEN_ELEM_CLOSURE:
             /* Shared, not copied: one more owner of the same pair. */
             return ruxen_closure_share(slot);
         default:
-            /* RUXEN_ELEM_POD and any pass-through key kind (e.g.
-               RUXEN_KEY_CUSTOM): the slot is a value, copying the word
-               IS the copy. Nothing is allocated and nothing is owned. */
+            /* RUXEN_ELEM_POD and RUXEN_ELEM_BORROW: the slot is a value or a
+               borrow, copying the word IS the copy. Nothing is allocated
+               and nothing is owned. */
             return slot;
     }
 }
@@ -265,7 +266,7 @@ void ruxen_elem_drop(int64_t slot, int64_t desc) {
             ruxen_hash_drop((RuxenHash *)slot, rest, RUXEN_ELEM_POD);
             return;
         case RUXEN_ELEM_OBJ:
-            ((RuxenElemGlue)(uintptr_t)rest)(RUXEN_ELEM_GLUE_DROP, slot);
+            ((RuxenElemGlue)(uintptr_t)rest)(RUXEN_ELEM_GLUE_DROP, slot, 0);
             return;
         case RUXEN_ELEM_CLOSURE: {
             /* The pair's own drop glue releases this owner. */
@@ -290,15 +291,13 @@ void ruxen_elem_drop(int64_t slot, int64_t desc) {
        still fully owned by its own scope when this returns.
      Caller may assume: the result is INDEPENDENT of `v`. Dropping
        either one deep-frees only its own elements, in any order, and
-       the survivor stays intact. This is what lets `ruxen_vec_skip_elem`
+       the survivor stays intact. This is what lets `ruxen_vec_skip`
        be a Fresh callee (see FRESH_ALLOC_CALLEES).
 
-   The 2-argument `ruxen_vec_skip` is the POD-only spelling kept for the
-   `.rx` FFI declaration's arity; MIR rewrites it to this form with the
-   element kind injected from the static element type. It forwards with
-   RUXEN_ELEM_POD, which is correct for a value element and is the
-   pre-existing behaviour for every non-heap `T`. */
-RuxenVec *ruxen_vec_skip_elem(RuxenVec *v, int64_t n, int64_t elem_kind) {
+   `elem_kind` is the element descriptor the `.rx` declaration's
+   `ElemDesc[T]` parameter has the compiler supply, the one the result is
+   dropped with. */
+RuxenVec *ruxen_vec_skip(RuxenVec *v, int64_t n, int64_t elem_kind) {
     RuxenVec *out = ruxen_vec_new();
     if (!v) return out;
     uint64_t start = n <= 0 ? 0 : (uint64_t)n;
@@ -309,10 +308,6 @@ RuxenVec *ruxen_vec_skip_elem(RuxenVec *v, int64_t n, int64_t elem_kind) {
     return out;
 }
 
-RuxenVec *ruxen_vec_skip(RuxenVec *v, int64_t n) {
-    return ruxen_vec_skip_elem(v, n, RUXEN_ELEM_POD);
-}
-
 /* `Iter::chain(other)` — eager-materialise the concatenation of two
    iterators as a fresh `RuxenVec*`. Phase 2 stdlib (#05 batch 3): we
    keep the v1 "every iter is a Vec" invariant; chain copies each
@@ -321,16 +316,13 @@ RuxenVec *ruxen_vec_skip(RuxenVec *v, int64_t n) {
    ownership is shallow-copied — the same contract as
    `ruxen_vec_clone` / `ruxen_vec_take`.
 
-   OWNERSHIP CONTRACT — identical to `ruxen_vec_skip_elem`: both sources
+   OWNERSHIP CONTRACT — identical to `ruxen_vec_skip`: both sources
    are BORROWED and unchanged, every heap element is copied per
    `elem_kind`, and the result is independent of both. The two source
    iters remain owned by their respective scope frames and may be
-   dropped before or after the result, in any order.
-
-   As with skip, the 2-argument spelling is the POD-only form kept for
-   the `.rx` FFI declaration's arity; MIR rewrites it with the element
-   kind injected from the static element type. */
-RuxenVec *ruxen_vec_chain_elem(RuxenVec *a, RuxenVec *b, int64_t elem_kind) {
+   dropped before or after the result, in any order. `elem_kind` is
+   supplied as for skip. */
+RuxenVec *ruxen_vec_chain(RuxenVec *a, RuxenVec *b, int64_t elem_kind) {
     RuxenVec *out = ruxen_vec_new();
     if (a) {
         for (uint64_t i = 0; i < a->len; i++) {
@@ -343,10 +335,6 @@ RuxenVec *ruxen_vec_chain_elem(RuxenVec *a, RuxenVec *b, int64_t elem_kind) {
         }
     }
     return out;
-}
-
-RuxenVec *ruxen_vec_chain(RuxenVec *a, RuxenVec *b) {
-    return ruxen_vec_chain_elem(a, b, RUXEN_ELEM_POD);
 }
 
 /* `Iter::zip(other)` — eager-materialise pairs as a fresh

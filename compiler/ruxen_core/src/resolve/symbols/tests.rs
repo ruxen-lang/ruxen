@@ -68,6 +68,7 @@ fn class_kind() -> DefKind {
             const_predicates: vec![],
             flat_heap_struct: false,
             closure_shell: false,
+            supplied: None,
             runtime_dispatch_includes: Vec::new(),
         },
     }

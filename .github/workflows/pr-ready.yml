@@ -120,6 +120,9 @@ jobs:
     name: Loan matrix memory run (${{ matrix.os }})
     if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ${{ matrix.os }}
+    # A cold release build plus 661 programs (at most 180 s to compile and
+    # 60 s to run each, in parallel); a local run takes about 3 minutes.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

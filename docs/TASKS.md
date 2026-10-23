@@ -24,6 +24,8 @@ and free their elements, a tuple element read borrows (`s.wire = cycle.0` needs
 and quiver are adapted (`dev/gui-stack-v1-issues.md` Q61, `TODO.md` "Tuple
 ownership"). Pins: `it` `field_ownership`, release-e2e 2240-2243.
 
+Instance engine + KeyDesc batch (2026-10-24): built, gate pending; plan ~/.agents/tmp/plans/ruxen-feat-concurrency-adoption-instance-engine.md
+
 B87 fixed 2026-07-30 (a free function whose name ended in `!` compiled clean
 and then did nothing at its call site: `parser/expr/atoms.rs` classified EVERY
 identifier ending in `!` as a macro call, stripped the `!`, and emitted an
@@ -132,7 +134,8 @@ Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 
       push/iterate/closure-call combinators keep their single shared body.
       First users: `Array#join`/`min`/`max`/`uniq` as `.rx` bodies. Pin
       `tests/release-e2e/cases/991`; unit pins in
-      `mir/lower/monomorphize.rs::builtin_head_tests`.
+      `mir/lower/instances/names.rs` and `instances/sites.rs` tests
+      (2026-10-24: `monomorphize.rs` was replaced by the instance engine).
 - [x] **Ruby-style AOT module loading (DONE 2026-07-14,
       `feat/require-autoload`).** `require` and `require_relative` now drive a
       canonical-path-deduplicated source graph from the entry file;

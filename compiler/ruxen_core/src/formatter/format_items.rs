@@ -1286,6 +1286,7 @@ fn format_ffi_function(func: &FfiFunction, comments: &CommentMap) -> Doc {
         params,
         return_type,
         where_clause,
+        generic_params,
         is_variadic,
         span,
     } = func;
@@ -1321,6 +1322,9 @@ fn format_ffi_function(func: &FfiFunction, comments: &CommentMap) -> Doc {
         parts.push(text("self."));
     }
     parts.push(text(name.clone()));
+    if let Some(gp) = generic_params {
+        parts.push(format_generic_params(gp));
+    }
 
     // Preserve the `as "<c-symbol>"` rename clause when present so the
     // formatter round-trips per-decl C-symbol aliases (#06.8).

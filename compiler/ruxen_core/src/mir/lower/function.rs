@@ -235,13 +235,6 @@ impl<'a> Lowerer<'a> {
         // HIR functions reach here; synthesized MIR functions keep `None`.
         mir_fn.def_span = Some(func.span.clone());
 
-        // B73: attach the key-kind descriptor to every `Hash` / `Set` this
-        // function constructs. Runs before drop elaboration, which keys on
-        // callee names — `runtime_abi::FRESH_ALLOC_CALLEES` lists both the
-        // bare and the `_keyed` spellings, so either order is correct, but
-        // rewriting first keeps the drop pass looking at final MIR.
-        super::key_desc::install_key_descriptors(&mut mir_fn, self.symbols);
-
         // Drop elaboration runs once every body is lowered
         // (`Lowerer::elaborate_drops`); record this body and its statement
         // boundaries for it.

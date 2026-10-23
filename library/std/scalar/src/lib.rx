@@ -39,8 +39,8 @@
 ## The parity guard `tests/runtime_abi_derivation.rs` pins every derived
 ## width against the frozen `runtime_signature` table.
 class Int
-  ## A scalar is copied by value, so its copy is itself (Ruby's
-  ## `Integer#clone`); this is what a `where T: Clone` body reaches for it.
+  ## A scalar is copied by value, so its copy is itself (as Ruby's
+  ## `clone` on an immediate value); a `where T: Clone` body reaches it.
   def clone -> Self
     self
   end
@@ -654,8 +654,8 @@ end
 ## The parity guard `tests/runtime_abi_derivation.rs` pins every derived
 ## width against the frozen `runtime_signature` table.
 class Float
-  ## A scalar is copied by value, so its copy is itself (Ruby's
-  ## `Integer#clone`); this is what a `where T: Clone` body reaches for it.
+  ## A scalar is copied by value, so its copy is itself (as Ruby's
+  ## `clone` on an immediate value); a `where T: Clone` body reaches it.
   def clone -> Self
     self
   end
@@ -683,8 +683,8 @@ class Float
 end
 
 class Bool
-  ## A scalar is copied by value, so its copy is itself (Ruby's
-  ## `Integer#clone`); this is what a `where T: Clone` body reaches for it.
+  ## A scalar is copied by value, so its copy is itself (as Ruby's
+  ## `clone` on an immediate value); a `where T: Clone` body reaches it.
   def clone -> Self
     self
   end
@@ -714,8 +714,8 @@ class Bool
 end
 
 class Char
-  ## A scalar is copied by value, so its copy is itself (Ruby's
-  ## `Integer#clone`); this is what a `where T: Clone` body reaches for it.
+  ## A scalar is copied by value, so its copy is itself (as Ruby's
+  ## `clone` on an immediate value); a `where T: Clone` body reaches it.
   def clone -> Self
     self
   end
@@ -849,8 +849,8 @@ class Char
 end
 
 class USize
-  ## A scalar is copied by value, so its copy is itself (Ruby's
-  ## `Integer#clone`); this is what a `where T: Clone` body reaches for it.
+  ## A scalar is copied by value, so its copy is itself (as Ruby's
+  ## `clone` on an immediate value); a `where T: Clone` body reaches it.
   def clone -> Self
     self
   end

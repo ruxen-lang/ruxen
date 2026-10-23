@@ -1,5 +1,5 @@
 use super::*;
-use crate::implicit_includes::{derive_is_synthesized, derived_method, HASHABLE};
+use crate::implicit_includes::{derive_is_synthesized, HASHABLE};
 
 /// Builds one derived body: `(lowerer, fn_name, self_ty, label, fields)`.
 /// `label` is the bare type name `Debug` prints.
@@ -100,10 +100,21 @@ impl<'a> Lowerer<'a> {
         self.synthesize_derives_as(nominal_ty, name, name, fields)
     }
 
+    /// The method a derived `Debug` defines and interpolation calls
+    /// (`to_debug`), as `mixin Debug` declares it (std/fmt). A `Debug` body
+    /// exists only when that mixin does (`derive_applies`).
+    pub(super) fn debug_method(&self) -> &str {
+        self.symbols
+            .derived_method("Debug")
+            .expect("a Debug body exists only with mixin Debug")
+    }
+
     /// [`Self::synthesize_derives`] with the bodies mangled from `fn_prefix`
     /// (`{fn_prefix}_{method}`) instead of the item name: a generic class's
-    /// monomorphic instance (`Box__mono__Int`) gets its own derived bodies,
-    /// over `fields` whose types carry that instantiation's arguments.
+    /// instance (`Box__mono__Int`, `nominal_ty` = `Box[Int]`) gets its own
+    /// derived bodies, over `fields` whose types carry that instantiation's
+    /// arguments; `derive_is_synthesized` checks the instance's substituted
+    /// fields, so `Box[Mutex[Int]]` derives no `clone`.
     pub(super) fn synthesize_derives_as(
         &self,
         nominal_ty: &Ty,
@@ -125,7 +136,10 @@ impl<'a> Lowerer<'a> {
             .iter()
             .filter(|(trait_name, _)| derive_is_synthesized(nominal_ty, self.symbols, trait_name))
             .map(|(trait_name, build)| {
-                let method = derived_method(trait_name).expect("every DERIVES entry has a method");
+                let method = self
+                    .symbols
+                    .derived_method(trait_name)
+                    .expect("every derive builder's mixin declares its method");
                 let fn_name = format!("{}_{}", fn_prefix, method);
                 build(self, &fn_name, self_ty.clone(), name, fields)
             })
@@ -648,7 +662,10 @@ impl<'a> Lowerer<'a> {
         partial: bool,
     ) -> MirFunction {
         let trait_name = if partial { "PartialOrd" } else { "Ord" };
-        let method_name = derived_method(trait_name).expect("Ord and PartialOrd have methods");
+        let method_name = self
+            .symbols
+            .derived_method(trait_name)
+            .expect("Ord and PartialOrd declare their methods");
         let mut mir_fn = MirFunction::new(fn_name, Ty::Int);
         let self_local = mir_fn.new_local("self", self_ty.clone(), false);
         let other_local = mir_fn.new_local("other", Ty::Ref(Box::new(self_ty)), false);
@@ -786,7 +803,7 @@ impl<'a> Lowerer<'a> {
     ///   * Copy types (primitives, references, function pointers,
     ///     `derive Copy` user types) → bitwise reuse of `src`.
     ///   * `String` / `Str`           → `ruxen_string_from(src)`.
-    ///   * `Array[_]`                 → `ruxen_vec_skip_elem(src, 0, elem)`.
+    ///   * `Array[_]`                 → `ruxen_vec_skip(src, 0, elem)`.
     ///   * `Hash[_, _]` / `Set[_]`    → `ruxen_hash_deep_clone(src, key, val)`.
     ///     The element descriptors are the container drop's own
     ///     (`drops::heap_free_call`), so every owned element is copied.
@@ -830,6 +847,15 @@ impl<'a> Lowerer<'a> {
             }
             return dest;
         }
+        // A boxed Copy struct or class is owned by each slot holding it, so
+        // the copy is a new box (the copy pass's own rule).
+        if drops::copies::is_boxed_copy(field_ty, self.symbols) {
+            let dest = mir_fn.new_temp(field_ty.clone());
+            let mut insts = Vec::new();
+            self.emit_box_copy(mir_fn, field_ty, src, dest, &mut insts);
+            mir_fn.blocks[block].instructions.extend(insts);
+            return dest;
+        }
         if ty_is_effectively_copy(field_ty, self.symbols) {
             return src;
         }
@@ -857,7 +883,7 @@ impl<'a> Lowerer<'a> {
         // depth and drop depth agree.
         let deep_clone = match field_ty {
             Ty::Array(elem) => Some((
-                "ruxen_vec_skip_elem",
+                "ruxen_vec_skip",
                 vec![
                     drops::ElemDesc::Word(0),
                     drops::elem_desc(elem, self.symbols),
@@ -902,7 +928,7 @@ impl<'a> Lowerer<'a> {
         // call on it would reach.
         if let Ty::Class { name, .. } = field_ty {
             if drops::field_owns_value(field_ty, self.symbols) {
-                let callee = match self.mono_base_for_ty(field_ty) {
+                let callee = match self.class_instance_base(field_ty) {
                     Some(base) => format!("{base}_clone"),
                     None => {
                         self.resolve_ffi_alias_callee(format!("{}_clone", name.replace('.', "_")))
@@ -1129,7 +1155,7 @@ impl<'a> Lowerer<'a> {
     /// `derive Debug` recurse, anything else renders as `<...>` so the
     /// formatter never panics.
     pub(super) fn synthesize_enum_to_debug(&self, e: &HirEnumDef) -> MirFunction {
-        let fn_name = format!("{}_to_debug", e.name);
+        let fn_name = format!("{}_{}", e.name, self.debug_method());
         let self_ty = Ty::Enum {
             name: e.name.clone(),
             generic_args: vec![],
@@ -1317,7 +1343,7 @@ impl<'a> Lowerer<'a> {
             let dest = mir_fn.new_temp(Ty::String);
             mir_fn.blocks[block].instructions.push(MirInst::Call {
                 dest: Some(dest),
-                callee: format!("{}_to_debug", inner_struct_name),
+                callee: format!("{}_{}", inner_struct_name, self.debug_method()),
                 args: vec![MirValue::Use(field_local)],
             });
             return dest;
@@ -1326,7 +1352,7 @@ impl<'a> Lowerer<'a> {
             let dest = mir_fn.new_temp(Ty::String);
             mir_fn.blocks[block].instructions.push(MirInst::Call {
                 dest: Some(dest),
-                callee: format!("{}_to_debug", inner_enum_name),
+                callee: format!("{}_{}", inner_enum_name, self.debug_method()),
                 args: vec![MirValue::Use(field_local)],
             });
             return dest;
@@ -1588,7 +1614,10 @@ impl<'a> Lowerer<'a> {
             .ok_or_else(|| "rhs of struct ordering has no value".to_string())?;
 
         let trait_name = if partial { "PartialOrd" } else { "Ord" };
-        let method_name = derived_method(trait_name).expect("Ord and PartialOrd have methods");
+        let method_name = self
+            .symbols
+            .derived_method(trait_name)
+            .expect("Ord and PartialOrd declare their methods");
         let cmp = self.new_temp(Ty::Int);
         self.emit(MirInst::Call {
             dest: Some(cmp),

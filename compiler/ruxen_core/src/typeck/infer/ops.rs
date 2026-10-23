@@ -179,6 +179,30 @@ impl<'a> InferenceEngine<'a> {
     /// a `some M` param accepts STRUCTURAL. Derive markers (`Hashable`/`Ord`/…)
     /// and the `Fn`-family satisfy either way, because `check_satisfaction`
     /// checks those BEFORE the `require_nominal` gate.
+    /// A method's `where` predicates on its owner's generics (`def get -> T
+    /// where T: Clone` in `class MutexGuard[T]`), checked against the
+    /// receiver's instantiation: a concrete type must satisfy each bound,
+    /// and a type parameter must declare it (so a generic caller states
+    /// `T: Clone` before calling `get`).
+    pub(super) fn check_owner_where_bounds(
+        &mut self,
+        generic_params: &[crate::resolve::symbols::GenericParamInfo],
+        receiver: &Ty,
+        owner: Option<&str>,
+        span: &Span,
+    ) {
+        let Some(bindings) = self.receiver_generic_bindings(receiver) else {
+            return;
+        };
+        for gp in generic_params.iter().filter(|gp| !gp.bounds.is_empty()) {
+            let Some(found) = bindings.get(&gp.name) else {
+                continue;
+            };
+            let found = self.ctx.resolve(found);
+            self.check_bounds_against(&gp.bounds, &found, owner, span, true);
+        }
+    }
+
     fn check_bounds_against(
         &mut self,
         bounds: &[MixinRef],

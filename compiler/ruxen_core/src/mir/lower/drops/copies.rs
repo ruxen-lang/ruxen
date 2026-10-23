@@ -8,7 +8,7 @@ use super::*;
 /// True when `ty` is a Copy type stored in a heap box its owner frees: a
 /// tuple, struct or class whose fields are all Copy. Enums are left out:
 /// their drop never frees a payload, so a shared box is never freed twice.
-pub(super) fn is_boxed_copy(ty: &Ty, symbols: &SymbolTable) -> bool {
+pub(in crate::mir::lower) fn is_boxed_copy(ty: &Ty, symbols: &SymbolTable) -> bool {
     matches!(ty, Ty::Tuple(_) | Ty::Struct { .. } | Ty::Class { .. })
         && ty_is_effectively_copy(ty, symbols)
 }
@@ -182,7 +182,7 @@ impl<'a> Lowerer<'a> {
     /// Emit into `out` a new box `dest` holding a copy of the boxed Copy
     /// value `src` of type `ty`: every slot copied, and a tuple element that
     /// is itself a boxed Copy value copied into its own box.
-    fn emit_box_copy(
+    pub(in crate::mir::lower) fn emit_box_copy(
         &self,
         func: &mut MirFunction,
         ty: &Ty,

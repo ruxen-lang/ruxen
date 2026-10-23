@@ -605,6 +605,12 @@ Acceptance test for the fix: lib A exporting `struct Color`; lib B with
 > framework is fully unblocked; generic methods are tracked in `docs/TASKS.md`
 > as a follow-up. Also out of scope: true separate-compilation/rlib generics
 > (Q16's flat-merge is the compilation model).
+>
+> (2026-10-24: superseded by the instance engine. `monomorphize.rs` and
+> `fn_mono_callee` are gone; one worklist in `mir/lower/instances/` now
+> specializes classes, lib shell methods, free functions and generic methods.
+> Generic methods and generic calling generic now compile; opaque bodies are
+> pruned when unreached. See the Q17 ADR "Status 2026-10-24" and pin `2247`.)
 
 
 A dependency's generic function (`def paint[S: PaintSurface](s: &var S)`)
@@ -2906,6 +2912,12 @@ well as construction sites (`mir/lower/key_desc.rs`, the `KEYED_TABLE_OPS`
 route), and an operation's RECEIVER is concretely typed in exactly the
 positions a constructor's result temp is not. `f(Hash.new)` is keyed by the
 `insert` inside `f`; pin `1725` holds that.
+(2026-10-24: superseded by `KeyDesc[K]`. `KEYED_TABLE_OPS`, `ensure_key_kind`
+and the `_keyed` runtime forms are gone. `class KeyDesc[K]` in
+`library/std/core/src/lib.rx` is a compiler supplied `lib` parameter like
+`ElemDesc[T]`, declared on the `Hash`/`Set` constructors, `insert`,
+`Array#to_set` and `Array#to_h`, and filled by `append_supplied_descriptors`.
+Tables store `key_desc` and hash, compare, copy and free keys by it.)
 
 **A `refine_rigid_generics` pass was written for this and then deliberately
 removed** — it refined the initializer from a concrete annotation on the `let`
@@ -3039,6 +3051,9 @@ better witness for both `from_iter` forms regardless of the decl, because these
 two constructors populate their table INSIDE the C runtime, where no use-site
 `ensure` can reach it. The `-> Int` decl is still worth correcting when per-`T`
 mono (E1) allows it, but nothing depends on it now.
+(2026-10-24: superseded by `KeyDesc[K]`. `key_ty_from_iterable` is gone;
+`Array#to_h[K, V]` and `Array#to_set` declare a `KeyDesc[K]` parameter that
+the compiler fills from `K`. See the Q60 (a) note above.)
 
 ## Q61 · S2: quiver and rondo relied on aliasing that tuple ownership now rejects (fixed in the apps, 2026-10-24)
 
@@ -3064,9 +3079,10 @@ through a borrow instead: `server_echo_once(&var p.0)`
 (`tests/release-e2e/cases/727_async_tcp_echo.rx`).
 
 **(b) `SharedSync#get` and `MutexGuard#get` no longer alias.** They become `.rx`
-`def get -> T where T: Clone { self.deref.clone }` (in progress, see
-`TODO.md`); before, `get` handed out the cell's own value as an
-owned `T`. Code that shares or mutates the payload uses `deref` (`&T`) or
+`def get -> T where T: Clone { self.deref.clone }` (fixed, 2026-10-24); before,
+`get` handed out the cell's own value as an owned `T`. The `where` bound is
+checked at each call: `get` on a non-Clone payload is E1015, and a generic
+caller declares `T: Clone`. Code that shares or mutates the payload uses `deref` (`&T`) or
 `lock_raw`/`deref_var`. quiver moves its shared state to `SharedSync[Mutex[...]]`
 (`quiver/src/lib.rx`).
 

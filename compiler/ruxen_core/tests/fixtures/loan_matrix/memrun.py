@@ -3,7 +3,13 @@
 `ruxen`, skip the ones the checker rejects, and run the rest under the
 platform memory checker. Exits 1 when an accepted program crashes, exits
 non-zero, gets a memory-checker report, prints other output than its
-`.expect`, or the compiler itself crashes. Leaks are reported, never fatal.
+`.expect`, or the compiler itself crashes. It also exits 1 when it could
+not have tested anything: a compile fails without an `E####` diagnostic
+(link error, missing `cc`, bad flag, missing compiler), no program is
+accepted at all, a `dead` row (or a conflict listed in
+`LOAN_MATRIX_ACCEPTED_CONFLICTS`, read from `tests/it/mir_loan_check.rs`)
+is rejected, or an unlisted `conflict` row is accepted. Leaks are reported,
+never fatal.
 
 usage: memrun.py [--checker gmalloc|asan] [--leaks] [--jobs N]
                  [--results FILE] [PROGRAM.rx | DIR]...
@@ -17,8 +23,9 @@ runtime: the script compiles the stdlib runtime sources once into
 compiler's own link pulls in the sanitizer runtime. On Linux LeakSanitizer
 reports leaks; on macOS `--leaks` runs `leaks --atExit` (slow).
 
-Environment: RX (compiler, default <repo>/target/release/ruxen), OUT
-(scratch dir, default <repo>/tmp/test-cache/loan-matrix-run). Each binary
+Environment: RX (compiler, default <repo>/target/release/ruxen; point it
+at a missing or broken binary to see the failure paths), OUT (scratch dir,
+default <repo>/tmp/test-cache/loan-matrix-run). Each binary
 is deleted after its run."""
 import argparse
 import concurrent.futures
@@ -33,6 +40,7 @@ REPO = os.path.abspath(os.path.join(HERE, "../../../../.."))
 SAN_FLAGS = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g"]
 # Sanitizer, UBSan, system malloc and Guard Malloc error lines (Guard
 # Malloc's start-up banner is not one).
+ACCEPTED_CONFLICTS_SOURCE = os.path.join(HERE, "../../it/mir_loan_check.rs")
 MEMORY_REPORT = re.compile(r"ERROR: AddressSanitizer|runtime error:|malloc: \*\*\*|GuardMalloc\[[^\]]*\]: \*\*\*")
 
 
@@ -44,6 +52,17 @@ def programs(paths):
         else:
             found.append(p)
     return sorted({os.path.abspath(p) for p in found})
+
+
+def accepted_conflicts():
+    """The conflict rows the loan check accepts, from the one list the in
+    process `loan_matrix` test also checks."""
+    with open(ACCEPTED_CONFLICTS_SOURCE, encoding="utf-8") as f:
+        m = re.search(r"LOAN_MATRIX_ACCEPTED_CONFLICTS: &\[&str\] = &\[(.*?)\];", f.read(), re.S)
+    names = set(re.findall(r'"([^"]+)"', m.group(1))) if m else set()
+    if not names:
+        sys.exit(f"memrun: LOAN_MATRIX_ACCEPTED_CONFLICTS not found in {ACCEPTED_CONFLICTS_SOURCE}")
+    return names
 
 
 def runtime_sources():
@@ -70,6 +89,8 @@ def asan_env(out, jobs):
     """Build the sanitized runtime archive and the `cc` wrapper once; return
     the environment a sanitized compile needs."""
     real_cc = shutil.which("cc")
+    if real_cc is None:
+        sys.exit("memrun: no `cc` on PATH; the asan checker needs it to build the runtime")
     work = os.path.join(out, "asan")
     os.makedirs(work, exist_ok=True)
     archive = os.path.join(work, "libruxenrt-asan.a")
@@ -104,6 +125,11 @@ def asan_env(out, jobs):
     return env
 
 
+def read_text(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
 def run_one(path, rx, out, checker, compile_env, leaks):
     name = os.path.basename(path)[:-3]
     binary = os.path.join(out, name + ".bin")
@@ -112,11 +138,18 @@ def run_one(path, rx, out, checker, compile_env, leaks):
                            capture_output=True, text=True, timeout=180)
     except subprocess.TimeoutExpired:
         return name, "COMPILER-CRASH", "compile timed out"
+    except OSError as e:
+        return name, "COMPILE-ERROR", f"cannot run {rx}: {e}"
     text = c.stdout + c.stderr
+    last_line = text.strip().splitlines()[-1][:160] if text.strip() else f"exit={c.returncode}, no output"
     if c.returncode != 0 or not os.path.exists(binary):
         if c.returncode < 0 or "panicked" in text:
-            return name, "COMPILER-CRASH", text.strip().splitlines()[-1][:160] if text.strip() else ""
+            return name, "COMPILER-CRASH", last_line
         codes = ",".join(sorted(set(re.findall(r"E\d{4}", text))))
+        if not codes:
+            # Not a checker verdict: a link error, a missing `cc` or a bad
+            # flag would otherwise pass as a rejection.
+            return name, "COMPILE-ERROR", last_line
         return name, "REJECT", codes
     env = dict(compile_env) if checker == "asan" else dict(os.environ)
     if checker == "gmalloc":
@@ -148,7 +181,7 @@ def run_one(path, rx, out, checker, compile_env, leaks):
         status = "CRASH"
     elif rc != 0:
         status = "EXIT"
-    elif os.path.exists(expect_path) and stdout != open(expect_path).read():
+    elif os.path.exists(expect_path) and stdout != read_text(expect_path):
         status = "WRONG-OUTPUT"
     else:
         status = "CLEAN"
@@ -169,6 +202,11 @@ def main():
     args = ap.parse_args()
     rx = os.environ.get("RX", os.path.join(REPO, "target/release/ruxen"))
     out = os.environ.get("OUT", os.path.join(REPO, "tmp/test-cache/loan-matrix-run"))
+    if not (os.path.isfile(rx) and os.access(rx, os.X_OK)):
+        sys.exit(f"memrun: no compiler at {rx} (run `cargo build --release --bins` or set RX)")
+    if shutil.which("cc") is None:
+        sys.exit("memrun: no `cc` on PATH; the compiler links every program with it")
+    listed = accepted_conflicts()
     os.makedirs(out, exist_ok=True)
     env = asan_env(out, args.jobs) if args.checker == "asan" else dict(os.environ)
     files = programs(args.paths)
@@ -180,20 +218,35 @@ def main():
     by = {}
     for name, status, _ in results:
         by.setdefault(status, []).append(name)
-    fatal = [r for r in results if r[1] not in ("REJECT", "CLEAN")]
-    accepted = [r for r in results if r[1] != "REJECT"]
+    fatal = []
+    accepted = 0
+    for name, status, detail in results:
+        conflict = name.endswith("__conflict")
+        expect_accept = not conflict or name in listed
+        if status == "REJECT":
+            if expect_accept:
+                row = "listed conflict" if conflict else "dead row"
+                fatal.append((name, "REJECTED", f"{row} rejected {detail}"))
+            continue
+        if status in ("COMPILE-ERROR", "COMPILER-CRASH"):
+            fatal.append((name, status, detail))
+            continue
+        accepted += 1
+        if not expect_accept:
+            fatal.append((name, "ACCEPTED", f"conflict accepted, not in LOAN_MATRIX_ACCEPTED_CONFLICTS ({status})"))
+        if status != "CLEAN":
+            fatal.append((name, status, detail))
+        elif "leak" in detail:
+            print(f"leak: {name} {detail}")
+    if not files:
+        fatal.append(("-", "NOTHING-RUN", "no .rx programs found"))
+    elif accepted == 0:
+        fatal.append(("-", "NOTHING-RUN", "no program was accepted, so none ran"))
     print(f"{len(files)} programs ({args.checker}, {rx}): " +
           ", ".join(f"{len(v)} {k.lower()}" for k, v in sorted(by.items())))
-    for name, status, detail in results:
-        if status == "REJECT" and not name.endswith("__conflict"):
-            print(f"note: dead row rejected {name} {detail}")
-        elif status == "CLEAN" and name.endswith("__conflict"):
-            print(f"note: conflict accepted, ran clean {name} {detail}")
-        elif "leak" in detail and status == "CLEAN":
-            print(f"leak: {name} {detail}")
     for name, status, detail in fatal:
         print(f"FAIL {status} {name} {detail}")
-    print(f"{len(accepted)} accepted, {len(fatal)} failed")
+    print(f"{accepted} accepted, {len(fatal)} failed")
     return 1 if fatal else 0
 
 

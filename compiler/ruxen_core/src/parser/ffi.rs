@@ -149,6 +149,10 @@ impl Parser {
         let name = self
             .try_parse_operator_name()
             .unwrap_or_else(|| self.expect_any_identifier());
+        // Generic parameters of the declaration's own (`def to_h[K, V]`).
+        let generic_params = self
+            .at(TokenKind::LBracket)
+            .then(|| self.parse_generic_params());
 
         // Optional `as "<c-symbol>"` rename clause. The C symbol is taken
         // verbatim — no mangling, no namespacing — same contract as
@@ -269,6 +273,7 @@ impl Parser {
             params,
             return_type,
             where_clause,
+            generic_params,
             is_variadic,
             span,
         }

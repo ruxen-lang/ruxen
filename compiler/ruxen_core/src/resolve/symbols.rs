@@ -123,6 +123,29 @@ impl AutoTraitFlags {
     }
 }
 
+/// What a compiler-supplied `lib` parameter carries: its type argument's
+/// element descriptor (`ElemDesc[T]`, how a slot of it is copied and freed)
+/// or key descriptor (`KeyDesc[K]`, the same plus how it hashes and compares
+/// as a table key). Declared in `.rx` by `layout elem_desc` / `layout key_desc`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Supplied {
+    ElemDesc,
+    KeyDesc,
+}
+
+impl Supplied {
+    /// The descriptor class layout directive `class` declares, if any.
+    pub fn of_class(class: &crate::parser::ast::ClassDef) -> Option<Self> {
+        if class.has_layout("elem_desc") {
+            Some(Supplied::ElemDesc)
+        } else if class.has_layout("key_desc") {
+            Some(Supplied::KeyDesc)
+        } else {
+            None
+        }
+    }
+}
+
 /// Information about a class definition.
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
@@ -148,6 +171,11 @@ pub struct ClassInfo {
     /// closure value (`Proc[...]`, `any Fn[...]`). The core library's
     /// `class Closure` declares it; [`SymbolTable::closure_shell`] reads it.
     pub closure_shell: bool,
+    /// Set by a `layout elem_desc` or `layout key_desc` directive: a `lib`
+    /// parameter of this class's type (`ElemDesc[T]`, `KeyDesc[K]` in
+    /// std/core) is a descriptor of its type argument, filled in by the
+    /// compiler, never by a caller.
+    pub supplied: Option<Supplied>,
     /// Mixin vtables Phase B-1: DefIds of mixins this class
     /// `include`s that are marked `dispatch runtime`. Populated by
     /// `resolve_class_def` after looking up each include's mixin
@@ -386,6 +414,9 @@ struct SymbolIndex {
     classes: Vec<DefId>,
     /// The class declared `layout closure` (`ClassInfo::closure_shell`).
     closure_shell: Option<DefId>,
+    /// The classes declared `layout elem_desc` / `layout key_desc`
+    /// (`ClassInfo::supplied`).
+    supplied_shells: Vec<(DefId, Supplied)>,
 }
 
 impl SymbolIndex {
@@ -424,6 +455,9 @@ impl SymbolIndex {
                 self.classes.push(def.id);
                 if info.closure_shell {
                     self.closure_shell = Some(def.id);
+                }
+                if let Some(supplied) = info.supplied {
+                    self.supplied_shells.push((def.id, supplied));
                 }
             }
             DefKind::Variable { .. }
@@ -667,6 +701,47 @@ impl SymbolTable {
         self.closure_shell().map(|def| def.name.as_str())
     }
 
+    /// What `ty` carries and of which type when it is a class that declared
+    /// `layout elem_desc` or `layout key_desc` (`ElemDesc[T]`, `KeyDesc[K]` in
+    /// std/core): a `lib` parameter of that type is filled by the compiler.
+    pub fn supplied_arg<'t>(&self, ty: &'t Ty) -> Option<(Supplied, &'t Ty)> {
+        let Ty::Class { name, generic_args } = ty else {
+            return None;
+        };
+        let (_, supplied) = self
+            .index()
+            .supplied_shells
+            .iter()
+            .find(|(id, _)| self.definitions[*id as usize].name == *name)?;
+        Some((*supplied, generic_args.first()?))
+    }
+
+    /// The method a derive of the mixin `trait_name` defines: the one the
+    /// mixin declares in `.rx` (`mixin Clone` / `def clone -> Self`),
+    /// required first. `None` for a mixin that declares none (`Copy`, `Eq`)
+    /// or is not loaded.
+    pub fn derived_method(&self, trait_name: &str) -> Option<&str> {
+        self.named(trait_name).find_map(|def| match &def.kind {
+            DefKind::Trait { info } => info
+                .required_methods
+                .first()
+                .or(info.default_methods.first())
+                .map(String::as_str),
+            _ => None,
+        })
+    }
+
+    /// Whether the nominal type `type_name` defines the method a derive of
+    /// `trait_name` would ([`Self::derived_method`]) itself, so no body is
+    /// derived for it. The one rule every derive decision reads.
+    pub fn declares_derived_method(&self, type_name: &str, trait_name: &str) -> bool {
+        let Some(method) = self.derived_method(trait_name) else {
+            return false;
+        };
+        self.nominal(type_name)
+            .is_some_and(|def| self.methods_of(def.id, method).next().is_some())
+    }
+
     pub fn class_owns_fields(&self, name: &str) -> bool {
         let Some(DefKind::Class { info }) = self.type_def(name).map(|def| &def.kind) else {
             return false;
@@ -786,218 +861,8 @@ impl Default for SymbolTable {
     }
 }
 
-/// Returns `true` when the type should be treated as `Copy` after consulting
-/// user-defined `derive Copy` metadata in the symbol table.
-pub fn ty_is_effectively_copy(ty: &Ty, symbols: &SymbolTable) -> bool {
-    ty.is_copy_with(symbols)
-}
-
-/// Walk through transparent wrappers and check whether the underlying
-/// user-defined type carries the requested derive trait.
-///
-/// Post ruby-naming.spec.md §3.6: structural mixins (`Copy`, `Clone`,
-/// `Debug`, `Eq`, `Hashable`, `PartialEq`, `Default`, `Ord`, `PartialOrd`)
-/// are *implicitly* included when the type's fields structurally
-/// support them; this helper applies that implicit-include rule.
-pub fn ty_has_derive_trait(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
-    ty_has_derive_trait_seen(
-        ty,
-        symbols,
-        trait_name,
-        &mut std::collections::HashSet::new(),
-    )
-}
-
-/// Cycle-aware core of [`ty_has_derive_trait`]. `seen` holds the nominal
-/// type names currently on the structural-support recursion stack. A
-/// self-referential type (`class Node { children: Array[Node] }`) would
-/// otherwise recurse forever — `ty_has_derive_trait(Node)` →
-/// `Array[Node]` field → `ty_has_derive_trait(Node)` → … (Q8 stack
-/// overflow). On revisiting a name we return `true` (coinductive): a
-/// recursive type structurally supports a derive iff its NON-recursive
-/// parts do, exactly like Rust deriving `Clone`/`Debug` on a recursive
-/// `enum`. The non-recursive fields are still checked on the first visit,
-/// so a genuinely unsupported field still fails (`.all()`/`&&` below).
-fn ty_has_derive_trait_seen(
-    ty: &Ty,
-    symbols: &SymbolTable,
-    trait_name: &str,
-    seen: &mut std::collections::HashSet<String>,
-) -> bool {
-    let name = match ty {
-        Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. } => name,
-        Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) => {
-            return ty_has_derive_trait_seen(inner, symbols, trait_name, seen)
-        }
-        Ty::Alias { target, .. } => {
-            return ty_has_derive_trait_seen(target, symbols, trait_name, seen)
-        }
-        Ty::Newtype { inner, .. } => {
-            return ty_has_derive_trait_seen(inner, symbols, trait_name, seen)
-        }
-        _ => return false,
-    };
-
-    // Cycle: this nominal type is already being evaluated higher up the
-    // stack. Assume it supports the trait (coinductive); the real
-    // determination happens at the first (outermost) visit.
-    if !seen.insert(name.clone()) {
-        return true;
-    }
-
-    symbols.iter().any(|def| {
-        if def.name != *name {
-            return false;
-        }
-        match &def.kind {
-            DefKind::Class { info } => {
-                // ruby-naming.spec.md §3.6: a `class` never implicitly
-                // includes `Copy` (reference semantics). For all other
-                // structural mixins, treat them as implicitly included
-                // when every field structurally supports them.
-                if trait_name == "Copy" {
-                    return false;
-                }
-                // A fieldless class whose methods are C (`lib`) functions is
-                // an opaque handle: a derived clone would copy its box, not
-                // the C object behind it (a copied `Mutex` locked
-                // uninitialized memory). It is Clone only by declaring
-                // `clone` itself (`SharedSync#clone`).
-                if trait_name == "Clone" && info.fields.is_empty() && is_c_handle(symbols, info) {
-                    return false;
-                }
-                struct_or_class_fields_all_support(symbols, &info.fields, trait_name, seen)
-            }
-            DefKind::Struct { info } => {
-                struct_or_class_fields_all_support(symbols, &info.fields, trait_name, seen)
-            }
-            DefKind::Enum { info } => {
-                // ruby-naming.spec.md §3.6: structural mixins apply to
-                // enums too — Debug always; Clone/Eq/Hash/Ord when
-                // every variant field structurally supports them.
-                // `Copy` on enums follows the same field rule but is
-                // conservative — enums in v1 stay non-Copy unless all
-                // variants are unit-only with primitive payloads, so
-                // we still gate on the field check.
-                enum_variant_fields_all_support(symbols, &info.variants, trait_name, seen)
-            }
-            _ => false,
-        }
-    })
-}
-
-/// Whether a class's methods include a C (`lib`) function and none of them
-/// is its own `clone`.
-fn is_c_handle(symbols: &SymbolTable, info: &ClassInfo) -> bool {
-    let methods = info.methods.iter().filter_map(|&m| symbols.get(m));
-    let mut has_c_method = false;
-    for def in methods {
-        if def.name == "clone" {
-            return false;
-        }
-        if let DefKind::Method { signature, .. } = &def.kind {
-            has_c_method |= signature.c_symbol.is_some();
-        }
-    }
-    has_c_method
-}
-
-/// Helper for `ty_has_derive_trait`: returns true when every field's
-/// type structurally supports the requested mixin per the
-/// spec §3.6 implicit-include rule.
-fn enum_variant_fields_all_support(
-    symbols: &SymbolTable,
-    variant_def_ids: &[DefId],
-    trait_name: &str,
-    seen: &mut std::collections::HashSet<String>,
-) -> bool {
-    variant_def_ids.iter().all(|vid| {
-        let def = match symbols.get(*vid) {
-            Some(d) => d,
-            None => return false,
-        };
-        match &def.kind {
-            DefKind::EnumVariant { kind, .. } => match kind {
-                VariantDefKind::Unit => true,
-                VariantDefKind::Tuple(types) => types
-                    .iter()
-                    .all(|ty| ty_supports_structural_mixin(ty, symbols, trait_name, seen)),
-                VariantDefKind::Struct(fields) => fields
-                    .iter()
-                    .all(|(_, ty)| ty_supports_structural_mixin(ty, symbols, trait_name, seen)),
-            },
-            _ => false,
-        }
-    })
-}
-
-fn struct_or_class_fields_all_support(
-    symbols: &SymbolTable,
-    field_def_ids: &[DefId],
-    trait_name: &str,
-    seen: &mut std::collections::HashSet<String>,
-) -> bool {
-    field_def_ids
-        .iter()
-        .all(|field_id| match symbols.get(*field_id).map(|d| &d.kind) {
-            Some(DefKind::Field { ty, .. }) => {
-                ty_supports_structural_mixin(ty, symbols, trait_name, seen)
-            }
-            Some(DefKind::Variable { ty, .. }) => {
-                ty_supports_structural_mixin(ty, symbols, trait_name, seen)
-            }
-            _ => false,
-        })
-}
-
-/// Returns true when the given type structurally supports the named
-/// structural mixin. Primitives & references satisfy everything; nested
-/// nominal types delegate back to `ty_has_derive_trait`.
-fn ty_supports_structural_mixin(
-    ty: &Ty,
-    symbols: &SymbolTable,
-    trait_name: &str,
-    seen: &mut std::collections::HashSet<String>,
-) -> bool {
-    if trait_name == "Copy" {
-        return ty.is_copy_with(symbols);
-    }
-    // For every other structural mixin (Clone, Debug, Eq, Hash, …),
-    // primitives and references satisfy unconditionally; user types
-    // recurse through `ty_has_derive_trait_seen` (which carries the
-    // cycle-detection `seen` set for self-referential types — Q8).
-    match ty {
-        Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => {
-            ty_has_derive_trait_seen(ty, symbols, trait_name, seen)
-        }
-        Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) => {
-            ty_supports_structural_mixin(inner, symbols, trait_name, seen)
-        }
-        Ty::Newtype { inner, .. } | Ty::Alias { target: inner, .. } => {
-            ty_supports_structural_mixin(inner, symbols, trait_name, seen)
-        }
-        Ty::Tuple(elems) => elems
-            .iter()
-            .all(|e| ty_supports_structural_mixin(e, symbols, trait_name, seen)),
-        Ty::FixedArray(elem, _) => ty_supports_structural_mixin(elem, symbols, trait_name, seen),
-        // Array, Map, Set, Option, Result are containers — they
-        // forward the structural mixin to their element type.
-        Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => {
-            ty_supports_structural_mixin(elem, symbols, trait_name, seen)
-        }
-        Ty::Map(k, v) | Ty::Result(k, v) => {
-            ty_supports_structural_mixin(k, symbols, trait_name, seen)
-                && ty_supports_structural_mixin(v, symbols, trait_name, seen)
-        }
-        _ => true,
-    }
-}
+mod derive_support;
+pub use derive_support::{ty_has_derive_trait, ty_is_effectively_copy};
 
 #[cfg(test)]
 mod tests;

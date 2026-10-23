@@ -30,39 +30,25 @@
 ## No residuals — every Hash method has a real C symbol and a statically
 ## substitutable return.
 ##
-## ## The key-kind protocol (B73)
+## ## The key descriptor (B73)
 ##
-## `self.new` / `self.with_capacity` are declared here WITHOUT the key
-## descriptor, but that is not what reaches the linker. A MIR post-pass
-## (`mir/lower/key_desc.rs::install_key_descriptors`) derives
-## `(kind, hash_fn, eq_fn)` from the table's static key type — `String` →
-## FNV-1a + `strcmp`, a struct with both `Hashable` and `PartialEq` → its
-## `<S>_hash_code` / `<S>_eq`, everything else → the raw 64-bit word — and
-## installs it on two routes: it rewrites every CONSTRUCTOR to its
-## `_keyed` form, and it puts an idempotent `ensure_key_kind` ahead of
-## every key-addressed OPERATION, chosen from that operation's receiver.
-## The runtime therefore never inspects a key's bits to decide what a key
-## IS; it is told, from whichever of the two sites has a concrete type.
-##
-## Practical consequences for anyone editing this file:
-##   * A new constructor added to the `lib` block must be listed in
-##     `KEYED_TABLE_CTORS` if it both allocates AND populates a table.
-##   * A new method that HASHES or COMPARES a key must be listed in
-##     `KEYED_TABLE_OPS`. Missing it is safe when the table was already
-##     keyed at construction and a panic otherwise, never a wrong answer.
-##   * A method that returns an EXISTING table needs nothing.
-##   * `K` need not be concrete at the construction site — `f(Hash.new)`
-##     is keyed by the `insert` inside `f`. A table NEITHER site can type
-##     stays UNSET and the runtime panics on the first insert rather than
-##     guessing.
+## How a key hashes, compares, is copied and is freed is decided by its
+## static type: `new`, `with_capacity` and `insert` declare a trailing
+## `keys: KeyDesc[K]` (std/core), which the compiler fills at every call
+## with `K`'s key descriptor and a caller never writes. The table keeps the
+## first one it is given, so a table with entries always has one, and
+## `f(Hash.new)` is keyed by the `insert` inside `f` when its construction
+## site could not be typed. The runtime never inspects a key's bits to
+## decide what a key IS. A new method that adds entries to a table takes a
+## `KeyDesc[K]` too; a method that only looks keys up needs nothing.
 ##
 ## The internal `Ty::Map` variant and the `ruxen_hash_*` runtime
 ## symbols keep their legacy names; only the surface spelling is
 ## Ruby (`Hash`, never the Rust `Map` / `HashMap`).
 class Hash[K, V]
   lib "../hash/runtime/hash.c"
-    def self.new as "ruxen_hash_new" -> Hash[K, V]
-    def self.with_capacity as "ruxen_hash_with_capacity"(cap: Int) -> Hash[K, V]
+    def self.new as "ruxen_hash_new"(keys: KeyDesc[K]) -> Hash[K, V]
+    def self.with_capacity as "ruxen_hash_with_capacity"(cap: Int, keys: KeyDesc[K]) -> Hash[K, V]
     def size as "ruxen_hash_len" -> USize
     def empty? as "ruxen_hash_is_empty" -> Bool
     def get as "ruxen_hash_get"(key: &K) -> Option[&V]
@@ -70,7 +56,7 @@ class Hash[K, V]
     def keys as "ruxen_hash_keys" -> Array[&K]
     def values as "ruxen_hash_values" -> Array[&V]
     def to_a as "ruxen_hash_entries" -> Array[(&K, &V)]
-    def insert as "ruxen_hash_insert"(key: K, value: V)
+    def insert as "ruxen_hash_insert"(key: K, value: V, keys: KeyDesc[K])
     def remove as "ruxen_hash_remove"(key: &K) -> Option[V]
     def clear as "ruxen_hash_clear"
   end

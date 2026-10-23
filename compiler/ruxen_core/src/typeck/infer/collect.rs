@@ -865,9 +865,16 @@ impl<'a> InferenceEngine<'a> {
         let ctor_params = self.constructor_param_types(class_name);
 
         // Walk the parameters and capture TypeParam positions.
+        // The full structural binder first (a class, tuple, map or result
+        // argument binds its parameters: `init(w: Wrap[T])` from `Wrap[Int]`,
+        // `init(ps: Array[(K, V)])` from `Array[(String, Int)]`), then the
+        // shallow walk, which also ties a parameter to an argument's still
+        // unresolved inference variable.
+        let names: std::collections::HashSet<String> = generic_params.iter().cloned().collect();
         let mut bindings: std::collections::HashMap<String, Ty> = std::collections::HashMap::new();
         for (param_ty, arg) in ctor_params.iter().zip(args.iter()) {
             let actual = self.ctx.resolve(&arg.ty);
+            Self::bind_type_params_from_args(&names, param_ty, &actual, &mut bindings);
             Self::collect_typeparam_bindings(param_ty, &actual, &mut bindings);
         }
 

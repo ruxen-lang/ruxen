@@ -94,15 +94,17 @@ class Array[T]
     def extend as "ruxen_vec_extend"(other: &Array[T])
     # Ruby `take(n)` / `drop(n)` eager-materialise a fresh Array.
     def take as "ruxen_vec_take"(n: Int) -> Array[T]
-    def drop as "ruxen_vec_skip"(n: Int) -> Array[T]
+    def drop as "ruxen_vec_skip"(n: Int, elems: ElemDesc[T]) -> Array[T]
     # `a.chain(b)` concatenates two arrays directly.
-    def chain as "ruxen_vec_chain"(other: &Array[T]) -> Array[T]
+    def chain as "ruxen_vec_chain"(other: &Array[T], elems: ElemDesc[T]) -> Array[T]
     # `arr.to_set` → Set[T].
-    def to_set as "ruxen_set_from_iter" -> Set[T]
+    def to_set as "ruxen_set_from_iter"(keys: KeyDesc[T]) -> Set[T]
     # ── residual: laundered `Int` decl kept ONLY for the FFI alias;
     #    the collections.rs resolver (ahead of the bridge) supplies the
     #    user-visible return type. See header.
-    def to_h as "ruxen_hash_from_iter" -> Int
+    #    The pairs' descriptor lets C copy each pair the way its drop frees it;
+    #    the table's key descriptor is bound from the result.
+    def to_h[K, V] as "ruxen_hash_from_iter"(pairs: ElemDesc[T], keys: KeyDesc[K]) -> Hash[K, V]
   end
 
   # Ruby `each` with a closure VALUE: `arr.each(f)` / `arr.each(&block)`.

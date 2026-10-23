@@ -239,7 +239,7 @@ impl<'a> Lowerer<'a> {
                                     // `Box__mono__String_init` so the init body sees the
                                     // concrete field type. Otherwise keep the opaque
                                     // `{Class}_init` fallback.
-                    let init_callee = match self.mono_base_for_ty(&expr.ty) {
+                    let init_callee = match self.class_instance_base(&expr.ty) {
                         Some(base) => format!("{}_init", base),
                         None => format!("{}_init", type_name.replace('.', "_")),
                     };
@@ -663,60 +663,37 @@ impl<'a> Lowerer<'a> {
                 };
                 let mangled = format!("{}_{}", resolved_class_cs, lowered_method_name);
 
-                // Generic-class monomorphization: when the receiver is a
-                // concrete instantiation we specialized (e.g. the receiver
-                // of `box.eq(...)` is `Box[String]`), redirect the callee to
-                // the specialized `Box__mono__String_eq` so the body
-                // dispatches `==` / `#{}` through the concrete type.
-                // `mono_base_for_ty` returns Some only when a copy was
-                // actually emitted (FFI shells / un-specialized
-                // instantiations keep the opaque callee).
-                let mangled = match self.mono_base_for_ty(&receiver_ty) {
+                // The instance engine: a class instance receiver (`Box[String]`)
+                // reaches its `Box__mono__String_eq`, a lib shell receiver
+                // (`Ty::Array(Float)`) its specialized `(instantiation,
+                // method)` body; otherwise the opaque callee, which
+                // `resolve_ffi_alias_callee` routes to the FFI symbol or the
+                // shared `{Class}_{method}` body.
+                let mangled = match self.class_instance_base(&receiver_ty) {
                     Some(base) => format!("{}_{}", base, lowered_method_name),
                     None => mangled,
                 };
+                let mangled = self
+                    .shell_instance_callee(&receiver_ty, lowered_method_name)
+                    .unwrap_or(mangled);
 
-                // Builtin-head per-`T` monomorphization: the receiver of a
-                // collection call is a structural head (`Ty::Array(Float)`),
-                // never `Ty::Class`, so `mono_base_for_ty` above never fires
-                // for it. Redirect to the specialized body when this exact
-                // `(instantiation, method)` was emitted; otherwise keep the
-                // opaque callee, which `resolve_ffi_alias_callee` routes to the
-                // FFI symbol or the shared `{Class}_{method}` body as before.
-                let mangled = match self.builtin_head_mono_callee(&receiver_ty, lowered_method_name)
-                {
-                    Some(specialized) => specialized,
-                    // No copy for an abstract receiver: only an opaque generic
-                    // body calls it, and `prune_unmonomorphised_bodies` drops
-                    // that body (or reports it when something live reaches it).
-                    None if *method != UNRESOLVED_DEF && self.is_specialized_only(*method) => {
-                        monomorphize::abstract_callee(&receiver_ty.to_string(), lowered_method_name)
-                    }
-                    None => mangled,
-                };
-
-                // Q17b: specialize a generic METHOD over a mixin bound using
-                // the concrete types of its user arguments. The receiver is
-                // already the fixed first MIR argument (`self`); it does not
-                // participate in recovery of the method's own `[T: Mixin]`.
+                // A method template (its own generic parameters) reaches the
+                // instance bound from the receiver and the arguments. With
+                // no instance only an opaque body makes this call, so the
+                // callee is abstract and `prune_unmonomorphised_bodies`
+                // removes that body or reports it.
                 let mut method_arg_tys: Vec<Ty> = args.iter().map(|arg| arg.ty.clone()).collect();
                 if let Some(block_expr) = block {
                     method_arg_tys.push(block_expr.ty.clone());
                 }
-                let mangled = if *method != UNRESOLVED_DEF {
-                    if let Some(specialized) = self.method_mono_callee(*method, &method_arg_tys) {
-                        specialized
-                    } else if self.is_generic_mixin_method(*method) {
-                        return Err(format!(
-                            "cannot monomorphize generic method `{method_name}`: its \
-                             mixin-bound type argument did not resolve to a concrete type at \
-                             this call site (generic-calling-generic across methods requires \
-                             a concrete leaf — see docs/decisions/q17-cross-package-\
-                             monomorphization.md)."
-                        ));
-                    } else {
-                        mangled
-                    }
+                let mangled = if *method != UNRESOLVED_DEF && self.is_template_method(*method) {
+                    self.method_instance_callee(*method, &receiver_ty, &method_arg_tys)
+                        .unwrap_or_else(|| {
+                            instances::abstract_callee(
+                                &receiver_ty.to_string(),
+                                lowered_method_name,
+                            )
+                        })
                 } else {
                     mangled
                 };
@@ -738,7 +715,7 @@ impl<'a> Lowerer<'a> {
                 let mangled = if !self.receiver_is_unresolved_bound(&receiver_ty) {
                     mangled
                 } else if let Ty::TypeParam { name, .. } = receiver_ty.peel_refs() {
-                    monomorphize::abstract_callee(name, lowered_method_name)
+                    instances::abstract_callee(name, lowered_method_name)
                 } else {
                     return Err(format!(
                         "cannot lower method `{method_name}` on unresolved mixin-bound \
@@ -748,9 +725,15 @@ impl<'a> Lowerer<'a> {
                     ));
                 };
 
+                // The declared return wins unless it still names a type
+                // parameter the call's HIR type has resolved (`def ident[T](x:
+                // T) -> T` called with a String is a String here, not `T`).
+                let open =
+                    |ty: &Ty| ty.any(&mut |t| matches!(t, Ty::TypeParam { .. } | Ty::Infer(_)));
                 let result_ty = self
                     .declared_method_return_ty(expr)
                     .filter(|ty| !ty.is_infer() && !ty.is_error())
+                    .filter(|ty| !open(ty) || open(&expr.ty))
                     .unwrap_or_else(|| expr.ty.clone());
                 let dest = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
                     Some(self.new_temp(result_ty))

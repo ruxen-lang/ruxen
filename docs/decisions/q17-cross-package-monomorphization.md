@@ -1,9 +1,37 @@
 # ADR: Q17/Q17b — generic callable / mixin-bound monomorphization
 
 Status: Accepted (2026-06-10)
-Updated: Q17b method completion (2026-07-14)
+Updated: Q17b method completion (2026-07-14); instance engine (2026-10-24)
 Branch: `feat/drop-elaboration`
-Scope: `compiler/ruxen_core/src/mir/lower/{monomorphize.rs, mod.rs, expr/fn_call.rs, expr/method_call.rs, expr/field_access.rs}`
+Scope: `compiler/ruxen_core/src/mir/lower/{instances/, mod.rs, expr/fn_call.rs, expr/method_call.rs, expr/field_access.rs}`
+(`monomorphize.rs` was deleted on 2026-10-24; see "Status 2026-10-24".)
+
+## Status 2026-10-24
+
+The separate monomorphization passes are gone. `mir/lower/monomorphize.rs`
+ran five of them: generic class mono, the lib shell (builtin head) pass, Q17
+generic free functions, Q17b generic methods, and `close_class_instances`.
+They are replaced by ONE instance engine in `mir/lower/instances/`
+(`mod.rs` the engine, `names.rs` symbol naming with `mono_base` and
+`symbol_token`, `sites.rs` the site walker and `unify_collect_type_params`).
+Its module doc is the reference.
+
+- One worklist, keyed by injective full type symbols. Every concrete site
+  seeds it, and each new instance's substituted bodies feed it in turn.
+- One specialization predicate decides what is a template, for classes,
+  lib shell methods, free functions and generic methods alike.
+- Opaque template bodies are always lowered once, generic. A concrete call
+  site redirects to its instance, and `prune_unmonomorphised_bodies` removes
+  the opaque bodies nothing live reaches.
+- Lifted: generic calling generic now compiles across methods and functions.
+  The "requires a concrete leaf" error below no longer exists. A template call
+  with no instance becomes an abstract placeholder only inside an opaque body,
+  which is then pruned.
+- New: an instantiation that nests deeper than 32 is error E0746
+  (`docs/errors/E0746.md`).
+
+Pin: `tests/release-e2e/cases/2247_instance_engine_closes_generic_chains.rx`.
+The sections below are the original decision record and stay as history.
 
 ## TL;DR
 
@@ -75,6 +103,7 @@ Findings:
    (`monomorphize.rs`) is for generic CLASSES keyed on the *receiver*
    instantiation, and it explicitly does NOT cover free functions or
    mixin-bound type params.
+   (2026-10-24: superseded by the instance engine, `mir/lower/instances/`.)
 
 ## Decision
 
@@ -123,6 +152,10 @@ backends — they consume `MirProgram`, so no backend-specific work):
    suppressed because they can emit placeholder callees; a call with no
    concrete emitted match receives a clear lowering error.
 
+(2026-10-24: superseded by the instance engine. The collect and emit passes
+named above are one worklist in `mir/lower/instances/`, opaque bodies are
+lowered and then pruned instead of suppressed, and the lowering error is gone.)
+
 ### Why suppressing the abstract fallback is sound
 
 Every concrete call targets a body in which all method-level bounded parameters
@@ -132,6 +165,8 @@ cannot reach a concrete leaf (including a generic-calling-generic method
 boundary), call lowering errors before emitting a dangling or placeholder
 callee. `unique_bound_impl` remains available for ordinary concrete lowering,
 but is no longer the safety mechanism for these generic bodies.
+(2026-10-24: superseded by the instance engine. Opaque bodies are now lowered
+and pruned when unreached, and there is no concrete leaf error.)
 
 ## What is OUT of scope (sound partial boundary)
 
@@ -145,6 +180,8 @@ but is no longer the safety mechanism for these generic bodies.
   leaf call, the type arg stays abstract and cannot be monomorphized. This is
   rejected with a clear diagnostic, NOT miscompiled (see Risks). The common
   shape — a concrete implementor passed to a dep generic — is fully covered.
+  (2026-10-24: superseded by the instance engine. A chain through generic
+  callers now compiles whenever some concrete site reaches it.)
 - **Namespacing** (Q14) — unchanged; flat symbol space.
 
 ## Risks and how the design avoids them
@@ -156,6 +193,9 @@ but is no longer the safety mechanism for these generic bodies.
 | **Compile-time blowup** | Collection is demand-driven: only `(callee, concrete-args)` pairs that literally appear at a call site are recorded, deduped on the mangled base. N call sites with K distinct concrete types → K copies, not K^params. Matches class-mono's cost model. |
 | **Regressing quiver's single-implementor shape** | `unique_bound_impl` is untouched and still runs first for the 1-impl case; a generic fn with a single-implementor bound records ONE instantiation that lowers to the same concrete callee the devirtualize path already produced. An existing-case e2e build is diffed before/after to confirm byte-stability of the single-impl path. |
 | **Different field layouts between implementors** | Each monomorphic copy is a fully concrete body; field slot indices are resolved per concrete class by the normal `Ty::Class` field-access path. Layouts never mix. |
+
+(2026-10-24: the first two rows are superseded by the instance engine. Opaque
+bodies are pruned when unreached, and generic chains compile.)
 
 ## Acceptance bar (non-negotiable — quiver's blocker)
 
@@ -176,3 +216,5 @@ an enum. A generic-calling-generic chain that crosses method boundaries is still
 outside the worklist fixpoint; it is rejected clearly at lowering with no opaque
 fallback, placeholder symbol, or silent miscompile. True separate-compilation
 generics remain out of scope under Q16's source flat-merge model.
+(2026-10-24: superseded by the instance engine. Cross-method generic chains
+now compile; see "Status 2026-10-24" and pin `2247`.)

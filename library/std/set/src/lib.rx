@@ -1,3 +1,10 @@
+## ## The key descriptor (B73)
+##
+## A `Set` is a table whose values are ignored, so its ELEMENT `T` is its
+## key and the same key descriptor applies (`KeyDesc[T]`, see
+## `library/std/map/src/lib.rx`). `union` / `intersection` / `difference`
+## build their result inside the C runtime, so they inherit the descriptor
+## from an operand (`ruxen_set_derived`) and copy elements by it.
 ## std::set — Set (Ruby's Set) method surface.
 ##
 ## Zero-Rust-stdlib migration, Phase 2 (Option C). `class Set[T]` below
@@ -44,8 +51,8 @@
 ## descriptor from an operand instead (`ruxen_set_derived`).
 class Set[T]
   lib "../hash/runtime/hash.c"
-    def self.new as "ruxen_set_new" -> Set[T]
-    def self.with_capacity as "ruxen_set_with_capacity"(cap: Int) -> Set[T]
+    def self.new as "ruxen_set_new"(keys: KeyDesc[T]) -> Set[T]
+    def self.with_capacity as "ruxen_set_with_capacity"(cap: Int, keys: KeyDesc[T]) -> Set[T]
     def size as "ruxen_set_len" -> USize
     def empty? as "ruxen_set_is_empty" -> Bool
     def include? as "ruxen_set_contains"(item: &T) -> Bool
@@ -56,7 +63,7 @@ class Set[T]
     # Ruby `Set#==`: the same elements, by the table's key kind. The binop
     # lowering routes `a == b` (and `a != b`, negated) here.
     def == as "ruxen_set_eq"(other: &Set[T]) -> Bool
-    def insert as "ruxen_set_insert"(item: T)
+    def insert as "ruxen_set_insert"(item: T, keys: KeyDesc[T])
     def remove as "ruxen_set_remove"(item: &T) -> Bool
     def clear as "ruxen_set_clear"
   end

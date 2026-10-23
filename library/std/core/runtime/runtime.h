@@ -166,29 +166,24 @@ typedef struct RuxenVec {
  * were an ODR hazard, since a layout change in one silently corrupted
  * the other. One definition, no drift.
  *
- * ── The key-kind protocol (B73) ─────────────────────────────────────
- * How a key hashes and compares is a property of its TYPE, which the
- * compiler knows statically. The kind is supplied at construction
- * (`ruxen_hash_new_keyed` and friends) and is fixed for the table's
- * life. It is NEVER inferred from a key's bit pattern: the pre-B73
- * runtime dereferenced the first inserted key as a `char*` looking for
- * a NUL, which SIGSEGV'd on `Hash[Int, V]` keys >= 0x1000, made user
- * types unusable as keys, and made a table's behaviour depend on its
- * insertion order. Do not reintroduce a memory probe under any name. */
+ * ── The key descriptor (B73) ─────────────────────────────────────────
+ * How a key hashes, compares, is copied and is freed is a property of its
+ * TYPE, which the compiler knows statically. A table keeps one key
+ * descriptor (`key_desc`): the element descriptor of the key type (see
+ * the RUXEN_ELEM_* block below), with a BORROW tag for a borrowed key. The
+ * compiler supplies it to every constructor and to `insert` (a `KeyDesc[K]`
+ * parameter in `.rx`); the first one installs it and it is fixed for the
+ * table's life. A table with entries therefore always has one: every path
+ * that adds an entry either takes a descriptor or copies its source's. It
+ * is NEVER inferred from a key's bit pattern: the pre-B73 runtime
+ * dereferenced the first inserted key as a `char*` looking for a NUL,
+ * which SIGSEGV'd on `Hash[Int, V]` keys >= 0x1000. Do not reintroduce a
+ * memory probe under any name. */
 typedef struct RuxenHashEntry {
     int64_t key;
     int64_t value;
     struct RuxenHashEntry *next;
 } RuxenHashEntry;
-
-/* Key kinds. An OPEN set — a new key representation adds a value here
- * plus a case in hash.c's `ruxen_hash_key_hash` / `_keys_equal`, and
- * never re-derives the kind from the key's bits. `Symbol` (B29c) joins
- * as a plain RUXEN_KEY_BITS key, a symbol being a 64-bit intern id. */
-#define RUXEN_KEY_UNSET  (-1) /* no descriptor supplied — insert is a bug */
-#define RUXEN_KEY_BITS   0    /* raw 64-bit value: Int/USize/Char/Bool/… */
-#define RUXEN_KEY_CSTR   1    /* NUL-terminated C string: FNV-1a + strcmp */
-#define RUXEN_KEY_CUSTOM 2    /* user type: compiler-supplied hash + eq */
 
 /* ── Element descriptor (the collection-slot ownership rule) ──
  *
@@ -213,13 +208,10 @@ typedef struct RuxenHashEntry {
  * a helper whose result will be deep-dropped must have allocated every
  * slot the drop will free.
  *
- * The CSTR and POD values deliberately COINCIDE with the RUXEN_KEY_* key
- * kinds above (see the _Static_asserts below). A Set's element IS its
- * key, so a Set passes its `key_kind` straight through as an element
- * descriptor. Any other key kind (CUSTOM, UNSET) reads as an unknown tag
- * and so as POD, which is what ownership-wise it is. For the same
- * reason the compiler only ever describes a Hash key or a Set element
- * as CSTR or POD: those tables copy and free their keys by `key_kind`. */
+ * A Hash key or a Set element is described the same way, as the table's
+ * key descriptor, which also says how the key hashes and compares: CSTR by
+ * content (FNV-1a + strcmp), OBJ through its glue (RUXEN_ELEM_GLUE_HASH /
+ * _EQ), a BORROW by what it borrows, and every other tag by its word. */
 #define RUXEN_ELEM_POD   0 /* slot is a value: Int/Float/Bool/Char/&T/… */
 #define RUXEN_ELEM_CSTR  1 /* slot OWNS a NUL-terminated heap string    */
 #define RUXEN_ELEM_VEC   3 /* slot OWNS a RuxenVec; element desc follows */
@@ -227,6 +219,9 @@ typedef struct RuxenHashEntry {
 #define RUXEN_ELEM_SET   5 /* slot OWNS a set table; element desc follows */
 #define RUXEN_ELEM_OBJ   6 /* slot OWNS a user object; glue address follows */
 #define RUXEN_ELEM_CLOSURE 7 /* slot OWNS one share of a closure pair     */
+#define RUXEN_ELEM_BORROW 8  /* slot BORROWS a value described by the rest */
+/* A table whose key descriptor is not installed yet (it has no entries). */
+#define RUXEN_ELEM_UNSET (-1)
 
 /* `RUXEN_ELEM_CLOSURE` describes a slot holding a closure value: a pointer
  * to the compiler's four-word closure pair (`mir/lower/drops/`,
@@ -272,8 +267,13 @@ int64_t ruxen_closure_share(int64_t pair);
  * its `clone`), so the tag is followed not by more tags but by the address
  * of a compiler-synthesised glue function, filling the rest of the word:
  *
- *     glue(RUXEN_ELEM_GLUE_DROP,  slot) runs the type's drop and frees it;
- *     glue(RUXEN_ELEM_GLUE_CLONE, slot) returns an owned copy of it.
+ *     glue(RUXEN_ELEM_GLUE_DROP,  slot, 0)     runs the type's drop and frees it;
+ *     glue(RUXEN_ELEM_GLUE_CLONE, slot, 0)     returns an owned copy of it;
+ *     glue(RUXEN_ELEM_GLUE_HASH,  slot, 0)     returns its hash as a key;
+ *     glue(RUXEN_ELEM_GLUE_EQ,    slot, other) returns 1 when the two keys
+ *                                              are equal, else 0.
+ * A type that derives `Hashable` and `PartialEq` hashes and compares through
+ * its `hash_code` and `eq`; any other type by identity.
  *
  * OBJ is therefore always the LAST tag of a stream: `RUXEN_ELEM_REST` of an
  * OBJ descriptor is the glue address. The compiler (`mir/lower/drops/`
@@ -281,37 +281,12 @@ int64_t ruxen_closure_share(int64_t pair);
  * preceding tags, and otherwise describes the slot as POD. */
 #define RUXEN_ELEM_GLUE_DROP  0
 #define RUXEN_ELEM_GLUE_CLONE 1
-typedef int64_t (*RuxenElemGlue)(int64_t op, int64_t slot);
+#define RUXEN_ELEM_GLUE_HASH  2
+#define RUXEN_ELEM_GLUE_EQ    3
+typedef int64_t (*RuxenElemGlue)(int64_t op, int64_t slot, int64_t other);
 
 #define RUXEN_ELEM_TAG(desc) ((int)((uint64_t)(desc) & 0xFu))
 #define RUXEN_ELEM_REST(desc) ((int64_t)((uint64_t)(desc) >> 4))
-
-/* `RUXEN_ELEM_VEC` is 3, not 2, because 2 is RUXEN_KEY_CUSTOM: a Set of
- * user-typed elements passes key_kind through here, and a custom key is
- * a POD word as far as OWNERSHIP is concerned (its hash/eq callbacks say
- * nothing about who frees it). Keeping 2 unassigned is what lets the
- * pass-through be a plain assignment. */
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-_Static_assert(RUXEN_ELEM_POD == RUXEN_KEY_BITS,
-               "element-kind/key-kind vocabularies must not drift");
-_Static_assert(RUXEN_ELEM_CSTR == RUXEN_KEY_CSTR,
-               "element-kind/key-kind vocabularies must not drift");
-_Static_assert(RUXEN_ELEM_VEC != RUXEN_KEY_CUSTOM &&
-                   RUXEN_ELEM_HASH != RUXEN_KEY_CUSTOM &&
-                   RUXEN_ELEM_SET != RUXEN_KEY_CUSTOM &&
-                   RUXEN_ELEM_OBJ != RUXEN_KEY_CUSTOM &&
-                   RUXEN_ELEM_CLOSURE != RUXEN_KEY_CUSTOM,
-               "a container tag must not collide with a pass-through key kind");
-#endif
-
-/* Callbacks for RUXEN_KEY_CUSTOM. The signatures match the MIR
- * functions `mir/lower/derive.rs` synthesizes for a struct that
- * includes `Hashable` / `PartialEq`:
- *   <Struct>_hash_code(self)        -> Int   (i64)
- *   <Struct>_eq(self, other: &Self) -> Bool  (i8)
- * Both take pointer-width key words, which is what the table stores. */
-typedef int64_t (*RuxenKeyHashFn)(int64_t);
-typedef int8_t (*RuxenKeyEqFn)(int64_t, int64_t);
 
 typedef struct RuxenHash {
     /* Heap-allocated bucket array of length `bucket_count`, doubling
@@ -321,13 +296,11 @@ typedef struct RuxenHash {
     RuxenHashEntry **buckets;
     uint64_t bucket_count;
     uint64_t len;
-    /* One of the RUXEN_KEY_* constants. Installed once, at construction,
-     * from the static key type. `clear` does NOT reset it: emptying a
-     * table does not change what its key type is. */
-    int32_t key_kind;
-    /* RUXEN_KEY_CUSTOM only; NULL otherwise. */
-    RuxenKeyHashFn key_hash;
-    RuxenKeyEqFn key_eq;
+    /* The key descriptor (see the key descriptor note above), or
+     * RUXEN_ELEM_UNSET until the first constructor or insert installs it.
+     * `clear` does NOT reset it: emptying a table does not change what its
+     * key type is. */
+    int64_t key_desc;
 } RuxenHash;
 
 /* RuxenSet is fully package-local to library/std/hash/runtime/hash.c
@@ -455,11 +428,10 @@ RuxenHash *ruxen_hash_deep_clone(RuxenHash *h, int64_t key_desc,
 
 /* ── Hash surface ─────────────────────────────────────────────────── */
 
-RuxenHash *ruxen_hash_new(void);
-RuxenHash *ruxen_hash_new_keyed(int64_t kind, int64_t hash_fn, int64_t eq_fn);
-void ruxen_hash_ensure_key_kind(RuxenHash *h, int64_t kind, int64_t hash_fn,
-                                int64_t eq_fn);
-void ruxen_hash_insert(RuxenHash *h, int64_t key, int64_t value);
+/* `key_desc` is the key descriptor; `insert` installs it on a table that
+ * has none and then owns `key`, freeing it when the key is already there. */
+RuxenHash *ruxen_hash_new(int64_t key_desc);
+void ruxen_hash_insert(RuxenHash *h, int64_t key, int64_t value, int64_t key_desc);
 
 /* ── IO error helpers (cross-package) ──────────────────────────────── */
 

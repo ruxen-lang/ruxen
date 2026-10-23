@@ -82,11 +82,9 @@ impl DeclaredResults {
 
 /// What `callee` does with its result: a declaration's `-> owned T` marker
 /// first, then the hand-listed table ([`callee_ownership`]). The one reader
-/// of result ownership; a descriptor-taking rewrite answers as its base
-/// symbol.
+/// of result ownership.
 pub fn result_ownership(callee: &str, declared: &DeclaredResults) -> ResultOwnership {
-    let base = super::key_desc::base_symbol(callee);
-    if declared.0.contains(callee) || declared.0.contains(base) {
+    if declared.0.contains(callee) {
         return ResultOwnership::Fresh;
     }
     callee_ownership(callee).result
@@ -95,10 +93,6 @@ pub fn result_ownership(callee: &str, declared: &DeclaredResults) -> ResultOwner
 /// THE single ownership lookup. Ordered exactly like the old `Call` arm so the
 /// parity oracle (tests/runtime_abi_parity.rs) reproduces 1:1.
 pub fn callee_ownership(callee: &str) -> CalleeOwnership {
-    // A descriptor-taking rewrite (`ruxen_hash_new_keyed`, `ruxen_vec_skip_elem`)
-    // owns and transfers exactly what its base symbol does.
-    let callee = super::key_desc::base_symbol(callee);
-
     // --- result ownership (old FRESH_ALLOC_CALLEES) ---
     let result = if listed(FRESH_ALLOC_CALLEES, callee) {
         ResultOwnership::Fresh
@@ -653,9 +647,8 @@ const FRESH_ALLOC_CALLEES: &[SymbolRow] = &[
     ("ruxen_string_truncate_chars", &["String_truncate_chars"]),
     ("ruxen_fmt_formatter_buffer", &["Formatter_buffer"]),
     ("ruxen_vec_new", &["Vec_new"]),
-    // `ruxen_vec_skip` materializes the splatted tail into a new Array. MIR
-    // emits it as `ruxen_vec_skip_elem` (key_desc.rs Route 3 appends the
-    // element descriptor), which classifies through this row.
+    // `ruxen_vec_skip` materializes the splatted tail into a new Array, its
+    // elements copied per the declared `ElemDesc[T]` (key_desc.rs).
     ("ruxen_vec_skip", &[]),
     ("ruxen_hash_new", &["Hash_new", "HashMap_new"]),
     // `ruxen_string_into_bytes` is in BOTH this table and CONSUME_HELPERS,
@@ -675,8 +668,6 @@ const FRESH_ALLOC_CALLEES: &[SymbolRow] = &[
     ("ruxen_string_push", &["String_push"]),
     ("ruxen_vec_from_iter", &["Vec_from_iter"]),
     ("ruxen_string_from_iter", &["String_from_iter"]),
-    // B73: the six table constructors below are emitted as their
-    // descriptor-taking `_keyed` forms, which classify through these rows.
     (
         "ruxen_hash_from_iter",
         &["Hash_from_iter", "HashMap_from_iter"],
@@ -709,7 +700,7 @@ const FRESH_ALLOC_CALLEES: &[SymbolRow] = &[
         "ruxen_set_difference",
         &["Set_difference", "HashSet_difference"],
     ),
-    // Emitted as `ruxen_vec_chain_elem` (key_desc.rs Route 3).
+    // Its elements are copied per the declared `ElemDesc[T]` (key_desc.rs).
     ("ruxen_vec_chain", &[]),
     ("ruxen_vec_zip", &[]),
     ("ruxen_command_new", &["Command_new"]),

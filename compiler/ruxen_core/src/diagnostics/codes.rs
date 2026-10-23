@@ -374,6 +374,26 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0744",
         title: "a borrowed value is used where an owned value is required",
     },
+    // E0745: a method's own generic parameter named like a generic of its
+    // enclosing type (`resolve/funcs.rs`).
+    CodeInfo {
+        code: "E0745",
+        title: "a method's generic parameter shadows its type's generic parameter",
+    },
+    // E0746: a generic instantiation nests deeper than the instance
+    // engine's bound (`mir/lower/instances`): a body that instantiates
+    // itself with an ever larger type.
+    CodeInfo {
+        code: "E0746",
+        title: "a generic instantiation nests too deeply",
+    },
+    // E0747: a `lib` declaration with a compiler-supplied parameter
+    // (`ElemDesc[T]`, `KeyDesc[K]`) before one its callers pass
+    // (`mir/lower/key_desc.rs::SuppliedParams::from_libs`).
+    CodeInfo {
+        code: "E0747",
+        title: "a compiler-supplied parameter is not last",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker's `ErrorCode` enum in `borrow_check/errors.rs`
     // reads its titles from these rows.

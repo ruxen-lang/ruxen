@@ -1337,7 +1337,7 @@ end
 }
 
 /// `Array[Array[String]]` and a deep copy of its tail (`drop(1)` lowers to
-/// `ruxen_vec_skip_elem`): the old `ruxen_vec_drop_vec` freed the inner
+/// `ruxen_vec_skip` with its element descriptor): the old `ruxen_vec_drop_vec` freed the inner
 /// spines only, leaking every string. The copy and the source must each
 /// free their own strings, once.
 #[test]
@@ -2624,4 +2624,33 @@ fn compound_assignment_to_a_hash_value_is_rejected() {
         .lower_program(&result.program)
         .expect_err("a compound assignment to a Hash value must not lower");
     assert!(err.contains("cannot update this place in place"), "{err}");
+}
+
+/// A boxed Copy struct in a class field or a tuple is owned by that slot:
+/// overwriting the field frees the replaced box, and the object and the
+/// tuple free theirs, so nothing leaks and nothing is freed twice.
+#[test]
+fn a_copy_struct_slot_owns_its_box() {
+    let source = rx("copy_struct_slot_owns_box");
+    let (stdout, stderr, exit) =
+        compile_and_run_with_tracking("copy_struct_slot_owns_box", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {stderr}");
+    assert_eq!(stdout, "5", "stdout was {stdout:?}");
+    let (allocs, frees, outstanding) = parse_leak_marker(&stderr);
+    assert_eq!(allocs, frees, "copy struct slot leaked: {stderr}");
+    assert_eq!(outstanding, 0, "copy struct slot leaked: {stderr}");
+}
+
+/// `Array#to_h` with object keys (a class, a struct) and a duplicate key
+/// copies each key by the table's key kind and each value through the
+/// pairs' descriptor, so every allocation is freed exactly once.
+#[test]
+fn to_h_with_object_keys_frees_every_copy() {
+    let source = rx("to_h_object_keys_no_leak");
+    let (stdout, stderr, exit) = compile_and_run_with_tracking("to_h_object_keys_no_leak", &source);
+    assert_eq!(exit, Some(0), "fixture exited non-zero. stderr: {stderr}");
+    assert_eq!(stdout, "21", "stdout was {stdout:?}");
+    let (allocs, frees, outstanding) = parse_leak_marker(&stderr);
+    assert_eq!(allocs, frees, "to_h leaked: {stderr}");
+    assert_eq!(outstanding, 0, "to_h leaked: {stderr}");
 }

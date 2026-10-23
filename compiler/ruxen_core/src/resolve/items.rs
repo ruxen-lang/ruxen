@@ -248,8 +248,9 @@ impl Resolver {
             .unwrap_or_default();
         // #06.8 T0c: preserve the `layout flat_heap_struct` marker
         // captured in pass 1 across the pass-2 rewrite.
-        let flat_heap_struct = class.layout.iter().any(|s| s == "flat_heap_struct");
-        let closure_shell = class.layout.iter().any(|s| s == "closure");
+        let flat_heap_struct = class.has_layout("flat_heap_struct");
+        let closure_shell = class.has_layout("closure");
+        let supplied = crate::resolve::symbols::Supplied::of_class(class);
         // #06.8 Phase 3b: append the class-body `lib` FFI methods that
         // pass-1 registered onto the side-map. They were registered as
         // `DefKind::Method` with `parent = def_id` and need to appear
@@ -292,6 +293,7 @@ impl Resolver {
                         const_predicates,
                         flat_heap_struct,
                         closure_shell,
+                        supplied,
                         runtime_dispatch_includes,
                     },
                 };

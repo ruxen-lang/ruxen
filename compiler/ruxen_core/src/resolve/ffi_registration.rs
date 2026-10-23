@@ -70,9 +70,11 @@ impl Resolver {
     }
 
     /// Resolve an FFI decl's declared params and return type. Returns the
-    /// param types, their `ParamInfo`s, the return type (`Unit` when the
-    /// decl names none) and the return type as `HirFfiFunc` records it
-    /// (`None` when the decl names none).
+    /// param types, the `ParamInfo`s of those a caller writes (a
+    /// compiler-supplied `ElemDesc[T]` / `KeyDesc[K]` is filled in by MIR,
+    /// `SymbolTable::supplied_arg`, so typeck never sees it), the return type
+    /// (`Unit` when the decl names none) and the return type as `HirFfiFunc`
+    /// records it (`None` when the decl names none).
     fn resolve_ffi_sig(
         &mut self,
         ffi_fn: &ast::FfiFunction,
@@ -86,6 +88,7 @@ impl Resolver {
             .params
             .iter()
             .zip(param_tys.iter().cloned())
+            .filter(|(_, ty)| self.symbols.supplied_arg(ty).is_none())
             .map(|(p, ty)| ParamInfo {
                 name: p.name.clone(),
                 ty,
@@ -243,7 +246,11 @@ impl Resolver {
         hir_fns: &mut Vec<HirFfiFunc>,
         module_path: &[String],
     ) {
+        // The declaration's own generics are in scope for its types only.
+        self.scopes.push(ScopeKind::Function);
+        let own_generics = self.define_ffi_generics(ffi_fn);
         let (param_tys, params, return_ty, hir_return_ty) = self.resolve_ffi_sig(ffi_fn);
+        self.scopes.pop();
         // The class-method vs instance-method distinction is carried on
         // the AST FfiFunction (set by the parser based on whether the
         // decl was `def self.NAME` or plain `def NAME`). Ruxen's
@@ -256,9 +263,10 @@ impl Resolver {
         // `def sum -> Int where T: Add`). Thread it into the signature as a
         // synthetic bounded generic param so the call-site seam
         // (`bridge_builtin_method`) can bind `{T → element}` and enforce it.
-        // Only predicates naming an actual class generic are kept; FFI defs
-        // have no own generics.
-        let generic_params = self.ffi_receiver_element_bounds(parent, ffi_fn);
+        // Only predicates naming an actual class generic are kept; the
+        // declaration's own generics come first (`define_ffi_generics`).
+        let mut generic_params = own_generics;
+        generic_params.extend(self.ffi_receiver_element_bounds(parent, ffi_fn));
         let signature = FnSignature {
             // `def var NAME` mutates its receiver: MIR passes it as
             // `&var Self` (`emit_rebinding_self_call`).
@@ -411,13 +419,35 @@ impl Resolver {
     /// `String.clone` / `Array.get_mut` / `Array.get_var` migrate to
     /// their `.rx` method-home (they no longer trip E0722); previously
     /// they were forced to stay as `lang_intrinsics` residual arms.
+    /// Define the declaration's own generic parameters (`def to_h[K, V]`) as
+    /// type parameters in the current scope, and return them for its
+    /// signature.
+    fn define_ffi_generics(&mut self, ffi_fn: &ast::FfiFunction) -> Vec<GenericParamInfo> {
+        let own = self.resolve_generic_params(&ffi_fn.generic_params);
+        let mut out = Vec::new();
+        for gp in &own {
+            let def = self.symbols.define(
+                gp.name.clone(),
+                DefKind::TypeParam {
+                    bounds: gp.bounds.clone(),
+                },
+                Visibility::Private,
+                gp.span.clone(),
+            );
+            self.scopes.insert_type(gp.name.clone(), def);
+            out.push(GenericParamInfo::type_param(
+                gp.name.clone(),
+                gp.bounds.clone(),
+            ));
+        }
+        out
+    }
+
     /// Build the synthetic generic-param list for an FFI class method from
     /// its `where` clause: each predicate whose LHS names the ENCLOSING
     /// class's own generic becomes a bounded `GenericParamInfo`. This is
     /// the receiver-element bound seam (`def sum -> Int where T: Add` on
-    /// `class Array[T]`). Predicates on non-class-generic names are dropped
-    /// — an FFI def carries no own generics, so there is nothing else a
-    /// `where` could constrain. Returns an empty vec when there is no
+    /// `class Array[T]`). Predicates on non-class-generic names are dropped. Returns an empty vec when there is no
     /// `where` clause (the historical case), so every existing FFI decl is
     /// byte-identical (`generic_params: vec![]`).
     fn ffi_receiver_element_bounds(
@@ -696,8 +726,9 @@ impl Resolver {
                 // #06.8 T0c: capture the `layout flat_heap_struct`
                 // marker at forward-declaration time so any pre-pass
                 // user (e.g. forward-referenced fn sigs) sees it.
-                let flat_heap_struct = class.layout.iter().any(|s| s == "flat_heap_struct");
-                let closure_shell = class.layout.iter().any(|s| s == "closure");
+                let flat_heap_struct = class.has_layout("flat_heap_struct");
+                let closure_shell = class.has_layout("closure");
+                let supplied = crate::resolve::symbols::Supplied::of_class(class);
 
                 // #06.8 T#21: namespace-anchor mode. When the bootstrap
                 // is merging a `class Foo` whose name already has a
@@ -812,6 +843,7 @@ impl Resolver {
                                 const_predicates: vec![],
                                 flat_heap_struct,
                                 closure_shell,
+                                supplied,
                                 runtime_dispatch_includes: Vec::new(),
                             },
                         },
@@ -839,6 +871,7 @@ impl Resolver {
                                 const_predicates: vec![],
                                 flat_heap_struct,
                                 closure_shell,
+                                supplied,
                                 runtime_dispatch_includes: Vec::new(),
                             },
                         },

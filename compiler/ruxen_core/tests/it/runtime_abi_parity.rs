@@ -158,24 +158,6 @@ fn intentional_fresh_addition(c: &str) -> bool {
     matches!(
         c,
         "ruxen_vec_skip"
-            // B86: the element-descriptor-taking forms of the derived-array
-            // helpers. Same freshly allocated Array their bare spellings
-            // return — only the argument list differs — but they also
-            // deep-copy heap elements, which is what makes the Fresh
-            // classification honest for a `String` element type. Without
-            // Fresh here the new Array leaks at scope exit.
-            | "ruxen_vec_skip_elem"
-            | "ruxen_vec_chain_elem"
-            // B73: the `_keyed` table constructors return the same freshly
-            // allocated table their bare spellings do — only the argument
-            // list differs. Without Fresh here the new table is never freed
-            // at scope exit.
-            | "ruxen_hash_new_keyed"
-            | "ruxen_hash_with_capacity_keyed"
-            | "ruxen_hash_from_iter_keyed"
-            | "ruxen_set_new_keyed"
-            | "ruxen_set_with_capacity_keyed"
-            | "ruxen_set_from_iter_keyed"
             // The scalar-to-text helpers each `malloc` a new string, and
             // `Formatter#buffer` hands over the formatter's buffer. Every
             // interpolation part and every `{Prim}_fmt` body leaked one

@@ -432,7 +432,7 @@ impl<'a> Lowerer<'a> {
         // `Base__mono__Args_method`. Strip the `__mono__Args` segment so the
         // prefix walk below sees the original `Base` (or its dotted form)
         // and recovers the receiver class for self-type derivation.
-        if let Some(base) = crate::mir::lower::monomorphize::strip_mono_suffix(mangled) {
+        if let Some(base) = crate::mir::lower::instances::strip_mono_suffix(mangled) {
             if let Some(def) = self.symbols.type_def(base) {
                 return Some(def.name.clone());
             }

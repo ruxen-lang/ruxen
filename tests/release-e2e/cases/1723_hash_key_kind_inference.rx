@@ -96,11 +96,11 @@ end
 # the temp holding the new table keeps the rigid `K`/`V`. The construction
 # site therefore has nothing concrete to derive a descriptor from.
 #
-# The USE site does. Every key-addressed operation (`insert` / `get` /
-# `key?` / `remove` / `[]`) has a receiver whose type is concrete, and the
-# post-pass emits an idempotent `ensure_key_kind` in front of it. Without
-# that second route these programs abort with the protocol's own panic
-# ("no key-kind descriptor on this table"), which is how this pin fails.
+# The USE site does. `insert` declares a `KeyDesc[K]` (std/map), filled from
+# its receiver, whose type is concrete, and the table keeps the first
+# descriptor it is given. Without that these programs abort with the
+# protocol's own panic ("no key descriptor for this table"), which is how
+# this pin fails.
 #
 # Pinned here: argument position for both a `Hash` and a `Set`, and a
 # table built by a helper whose return type is the only annotation. All

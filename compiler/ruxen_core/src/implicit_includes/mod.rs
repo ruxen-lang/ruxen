@@ -22,28 +22,16 @@ const SUPPORTED_DERIVES: [&str; 9] = [
     "PartialOrd",
 ];
 
-/// The derives whose body the compiler synthesises, each with the method it
-/// defines. MIR emits the body as `{Type}_{method}`; typeck registers the
-/// `.rx` mixin's own `Self`-typed declaration of `method` for the type
-/// (`std/core`, `std/hash`). `Debug`'s `to_debug` is the interpolation hook,
-/// not a method of `mixin Debug`, so typeck finds nothing to register for it.
-pub(crate) const DERIVED_METHODS: [(&str, &str); 7] = [
-    ("Debug", "to_debug"),
-    ("PartialEq", "eq"),
-    (HASHABLE, "hash_code"),
-    ("Default", "default"),
-    ("Ord", "cmp"),
-    ("PartialOrd", "partial_cmp"),
-    ("Clone", "clone"),
-];
-
-/// The method `trait_name`'s derive defines (see [`DERIVED_METHODS`]), or
-/// `None` for a derive with no synthesised body (`Copy`, `Eq`).
-pub(crate) fn derived_method(trait_name: &str) -> Option<&'static str> {
-    DERIVED_METHODS
+/// The derives whose body the compiler synthesises: those whose mixin
+/// declares a method (`SymbolTable::derived_method`), in `SUPPORTED_DERIVES`
+/// order. MIR emits each body as `{Type}_{method}`; typeck registers the
+/// mixin's own `Self`-typed declaration of that method for the type.
+pub(crate) fn synthesized_derives(
+    symbols: &SymbolTable,
+) -> impl Iterator<Item = (&'static str, &str)> {
+    SUPPORTED_DERIVES
         .iter()
-        .find(|(t, _)| *t == trait_name)
-        .map(|(_, m)| *m)
+        .filter_map(|&trait_name| symbols.derived_method(trait_name).map(|m| (trait_name, m)))
 }
 
 /// Peel references, aliases and newtypes down to the nominal (struct,
@@ -70,8 +58,10 @@ pub(crate) fn peel_to_nominal(ty: &Ty) -> Option<&Ty> {
 /// This is the one rule MIR dispatch, the derive synthesis and typeck's
 /// derived signatures share:
 ///
+/// * no type gets a derive whose mixin the program does not declare;
 /// * a **struct** gets every derive it qualifies for
-///   ([`ty_has_derive_trait`], ruby-naming.spec.md §3.6);
+///   ([`ty_has_derive_trait`], ruby-naming.spec.md §3.6; for a generic
+///   instance such as `Box[Mutex[Int]]`, over its substituted fields);
 /// * an **enum** gets `Debug` and `Clone` only (its bodies switch on the
 ///   variant; the other derives have no enum body);
 /// * a **class** gets them only at module root (the bodies mangle from the
@@ -87,6 +77,13 @@ pub(crate) fn derive_applies(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -
     let Some(nominal) = peel_to_nominal(ty) else {
         return false;
     };
+    // A derive needs its mixin: a `--no-std` program has no `mixin Debug`.
+    if !symbols
+        .named(trait_name)
+        .any(|def| matches!(def.kind, crate::resolve::symbols::DefKind::Trait { .. }))
+    {
+        return false;
+    }
     if !ty_has_derive_trait(nominal, symbols, trait_name) {
         return false;
     }
@@ -108,19 +105,14 @@ pub(crate) fn derive_is_synthesized(ty: &Ty, symbols: &SymbolTable, trait_name: 
 }
 
 /// Does the nominal type behind `ty` declare `trait_name`'s derived method
-/// (see [`DERIVED_METHODS`]) itself?
+/// (`SymbolTable::declares_derived_method`) itself?
 fn declares_derived_method(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
-    let Some(method) = derived_method(trait_name) else {
-        return false;
-    };
     let Some(Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. }) =
         peel_to_nominal(ty)
     else {
         return false;
     };
-    symbols
-        .nominal(name)
-        .is_some_and(|def| symbols.methods_of(def.id, method).next().is_some())
+    symbols.declares_derived_method(name, trait_name)
 }
 
 /// Does class `name` have a field of its own or an inherited one?

@@ -86,58 +86,6 @@ pub const RESIDUAL_RUNTIME_FNS: &[ResidualFn] = &[
     f("ruxen_string_cmp", &[Ptr, Ptr], Some(I64), &[R, R]),
     f("ruxen_string_from_iter", &[Ptr], Some(Ptr), &[M]),
     f("ruxen_hash_index", &[Ptr, I64], Some(I64), &[R, R]),
-    // B73 key-kind protocol: MIR rewrites `ruxen_hash_new` and friends to
-    // these and appends `(kind, hash_fn, eq_fn)` (`mir/lower/key_desc.rs`).
-    f(
-        "ruxen_hash_new_keyed",
-        &[I64, I64, I64],
-        Some(Ptr),
-        &[R, R, R],
-    ),
-    f(
-        "ruxen_hash_with_capacity_keyed",
-        &[I64, I64, I64, I64],
-        Some(Ptr),
-        &[R, R, R, R],
-    ),
-    f(
-        "ruxen_hash_from_iter_keyed",
-        &[Ptr, I64, I64, I64, I64],
-        Some(Ptr),
-        &[R, R, R, R, R],
-    ),
-    f(
-        "ruxen_set_new_keyed",
-        &[I64, I64, I64],
-        Some(Ptr),
-        &[R, R, R],
-    ),
-    f(
-        "ruxen_set_with_capacity_keyed",
-        &[I64, I64, I64, I64],
-        Some(Ptr),
-        &[R, R, R, R],
-    ),
-    f(
-        "ruxen_set_from_iter_keyed",
-        &[Ptr, I64, I64, I64],
-        Some(Ptr),
-        &[M, R, R, R],
-    ),
-    // Writes only the key-kind header of a table that has none yet, which
-    // holds no entries, so no view into the table is touched: `R`.
-    f(
-        "ruxen_hash_ensure_key_kind",
-        &[Ptr, I64, I64, I64],
-        None,
-        &[R, R, R, R],
-    ),
-    f(
-        "ruxen_set_ensure_key_kind",
-        &[Ptr, I64, I64, I64],
-        None,
-        &[R, R, R, R],
-    ),
     // `a[i]` / `a[i] = v`, inlined closures and `collect`.
     f("ruxen_vec_get", &[Ptr, I64], Some(I64), &[R, R]),
     f("ruxen_vec_get_or_panic", &[Ptr, I64], Some(I64), &[R, R]),
@@ -145,20 +93,6 @@ pub const RESIDUAL_RUNTIME_FNS: &[ResidualFn] = &[
     // A `&var T` argument naming an Array element (`mir/lower/expr/refmut_place.rs`).
     f("ruxen_vec_slot_addr", &[Ptr, I64], Some(Ptr), &[R, R]),
     f("ruxen_vec_from_iter", &[Ptr], Some(Ptr), &[M]),
-    // `Array#drop` / `Array#chain` with the element descriptor appended
-    // (`mir/lower/key_desc.rs`).
-    f(
-        "ruxen_vec_skip_elem",
-        &[Ptr, I64, I64],
-        Some(Ptr),
-        &[R, R, R],
-    ),
-    f(
-        "ruxen_vec_chain_elem",
-        &[Ptr, Ptr, I64],
-        Some(Ptr),
-        &[R, R, R],
-    ),
     // Allocation and panic.
     f("ruxen_alloc", &[I64], Some(Ptr), &[R]),
     f("ruxen_dealloc", &[Ptr], None, &[V]),

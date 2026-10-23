@@ -1,0 +1,61 @@
+# A method whose `where` bound names its class's generic is lowered once per
+# instantiation, whoever calls it: `MutexGuard#get` (`where T: Clone`, an
+# owned copy) through a generic free function, a generic method and a
+# generic class, and a user class's own `where`-bound method, each with an
+# Int and a String payload.
+use std.sync.{Mutex, SharedSync}
+
+def read_copy[T: Clone](g: &MutexGuard[T]) -> T
+  g.get
+end
+
+class Reader
+  def init
+  end
+
+  def take[T: Clone](g: &MutexGuard[T]) -> T
+    g.get
+  end
+end
+
+class Cell[T: Send + Clone]
+  cell: SharedSync[Mutex[T]]
+
+  def init(initial: T)
+    @cell = SharedSync.new(Mutex.new(initial))
+  end
+
+  def peek -> T
+    m = @cell.deref
+    g = m.lock_raw
+    g.get
+  end
+end
+
+class Wrap[T]
+  v: T
+
+  def init(@v: T)
+  end
+
+  def dup -> T where T: Clone
+    @v.clone
+  end
+end
+
+def run -> nil
+  ints = Mutex.new(42)
+  gi = ints.lock_raw
+  puts(read_copy(&gi))
+  puts(Reader.new.take(&gi))
+  words = Mutex.new("shared")
+  gw = words.lock_raw
+  puts(read_copy(&gw))
+  puts(Reader.new.take(&gw))
+  puts(Cell.new(7).peek)
+  puts(Cell.new("cell").peek)
+  puts(Wrap.new(5).dup)
+  puts(Wrap.new("wrap").dup)
+end
+
+run

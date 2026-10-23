@@ -2069,6 +2069,7 @@ impl<'a> InferenceEngine<'a> {
             owner.as_deref(),
             span,
         );
+        self.check_owner_where_bounds(&signature.generic_params, derefed, owner.as_deref(), span);
         subst_ty
     }
 

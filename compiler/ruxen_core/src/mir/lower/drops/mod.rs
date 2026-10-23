@@ -1,7 +1,7 @@
 use super::*;
 
 mod closures;
-mod copies;
+pub(in crate::mir::lower) mod copies;
 mod flow;
 mod glue;
 
@@ -680,10 +680,7 @@ impl FfiByValue {
     }
 
     /// Whether the FFI callee `callee` takes argument slot `slot` by value.
-    /// A descriptor-taking rewrite (`ruxen_hash_insert_keyed`) answers as
-    /// its base symbol.
     pub(super) fn takes_by_value(&self, callee: &str, slot: usize) -> bool {
-        let callee = super::key_desc::base_symbol(callee);
         self.0
             .get(callee)
             .and_then(|params| params.get(slot))
@@ -1840,8 +1837,8 @@ const FREE_FAMILY_CALLEES: &[&str] = &[
     "ruxen_set_drop",
 ];
 
-/// A register value that can never carry a pointer.
-/// A machine scalar: an integer, float, Bool, Char, unit or never.
+/// A machine scalar, a register value that can never carry a pointer: an
+/// integer, float, Bool, Char, unit or never.
 pub(super) fn is_scalar(ty: &Ty) -> bool {
     ty.is_scalar_primitive() || matches!(ty, Ty::Unit | Ty::Never)
 }

@@ -60,6 +60,9 @@ use crate::mir::param_modes::unknown_param_mode;
 use crate::mir::residual_abi::RESIDUAL_RUNTIME_FNS;
 use crate::resolve::symbols::SymbolTable;
 
+mod closures;
+use closures::{Effect, Effects, Pairs};
+
 /// A path element meaning "somewhere inside the value".
 const INSIDE: usize = usize::MAX;
 
@@ -364,76 +367,6 @@ impl Access {
                 loan.within(accessed) && (loan.path.len() > accessed.path.len() || loan.capped())
             }
         }
-    }
-}
-
-/// What a closure body does below one of its captures: the captures box
-/// `slot`, the path below it, and the access, or `None` for a loan.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Effect {
-    slot: usize,
-    suffix: Vec<usize>,
-    access: Option<Access>,
-}
-
-/// Every closure body's effects, by its function name.
-type Effects = HashMap<String, BTreeSet<Effect>>;
-
-/// The closure pairs a body builds (`View::Closure`), followed through the
-/// locals they are copied into, and what each object slot was filled from.
-#[derive(Default)]
-struct Pairs {
-    /// Each local that may hold a pair, to every local such a pair was
-    /// built in: a join of paths holding different closures holds them all.
-    pair_of: HashMap<LocalId, BTreeSet<LocalId>>,
-    /// The places each object slot was last filled from, by object and slot.
-    stored: HashMap<(LocalId, usize), Places>,
-}
-
-impl Pairs {
-    fn track(&mut self, func: &MirFunction, state: &State, inst: &MirInst) {
-        match inst {
-            MirInst::Assign {
-                dest,
-                value: MirValue::Use(src),
-            }
-            | MirInst::Copy { dest, src }
-            | MirInst::Move { dest, src } => {
-                if let Some(pairs) = self.pair_of.get(src).cloned() {
-                    self.pair_of.entry(*dest).or_default().extend(pairs);
-                }
-            }
-            MirInst::SetField {
-                base,
-                field_index,
-                value: MirValue::Use(value),
-            } if !self.pair_of.contains_key(base) => {
-                self.stored
-                    .insert((*base, *field_index), state.places_of(*value));
-            }
-            _ => {}
-        }
-        if let Some(dest) = inst.dest() {
-            if matches!(func.view(dest), Some(View::Closure { .. })) {
-                self.pair_of.entry(dest).or_default().insert(dest);
-            }
-        }
-    }
-
-    /// The body and captures box of each pair `local` may hold.
-    fn closures<'f>(&self, func: &'f MirFunction, local: LocalId) -> Vec<(&'f str, LocalId)> {
-        self.pair_of
-            .get(&local)
-            .into_iter()
-            .flatten()
-            .filter_map(|&pair| match func.view(pair)? {
-                View::Closure {
-                    body,
-                    captures: Some(captures),
-                } => Some((body.as_str(), *captures)),
-                _ => None,
-            })
-            .collect()
     }
 }
 

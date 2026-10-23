@@ -7,6 +7,80 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Changed
+- **One instance engine replaces the five monomorphization passes.**
+  `mir/lower/instances/` (the generic-class pass, the lib-shell pass, Q17 generic free
+  functions, Q17b generic methods and the class-instance closure) is one worklist over
+  templates (a user generic class, a lib-shell method, a generic function, a method with
+  generics of its own) keyed by the full instantiated type, with one specialization
+  predicate (a bound, a dispatch on a parameter, a parameter-typed field, a
+  compiler-filled descriptor, or a call reaching another template), one emit loop with
+  `self` pinned, and one opaque rule (every template's own body is lowered and pruned when
+  unreached). Generic chains through methods, functions and classes now compile
+  (`Frame#outer[U]` calling `inner[T]`, `describe[T](x) { Holder.new(x).show }`,
+  `build[V](ps) { ps.to_h }`, `joined[T](xs) { xs.join(",") }`). Pinned by release-e2e 2247.
+- **Tables own their keys through a declared key descriptor (B73, I-65).** `class
+  KeyDesc[K]` (`layout key_desc`, std/core) joins `ElemDesc[T]`: `Hash.new`,
+  `with_capacity`, `insert`, the `Set` forms, `to_set` and `to_h[K, V]` declare it, and the
+  compiler fills it with `K`'s key descriptor, the element descriptor with a borrow tag.
+  The table hashes, compares, copies and frees its keys by it (an object key through new
+  `HASH`/`EQ` operations of its element glue). `KEYED_TABLE_CTORS`, `KEYED_TABLE_OPS`,
+  `ensure_key_kind`, the `_keyed` runtime forms, the `RUXEN_KEY_*` kinds and
+  `ELEM_DERIVE_HELPERS` are deleted; `Array#drop`/`chain` declare `ElemDesc[T]`. `to_h`
+  of class keys no longer aliases the source's keys (it panicked "missing key" or read
+  freed memory). A compiler-supplied parameter before one a caller writes is E0747.
+- **`lib` declarations may declare generics of their own** (`def to_h[K, V] as ...`), and
+  compiler-supplied parameters are left out of the signature typeck checks.
+
+### Fixed
+- **An expanding instantiation is error E0746 (I-72).** `Nest[T]#deeper -> Nest[Array[T]]`
+  hung the compiler; the engine stops at 32 levels of nesting.
+- **Derives on nested generic instances (I-64, P-17, I-71).** `ty_has_derive_trait`
+  checks an instance with its arguments substituted into the field types, so
+  `Box[Pair[Int, Mutex[Int]]]` derives no `clone` (it failed to link) and typeck rejects
+  `Box.new(Mutex.new(1)).clone` with E0740. A derive needs its mixin declared, so
+  `--no-std` programs with enums no longer panic.
+- **Instances of nested generic types get distinct names (I-70, I-63).**
+  `Box[Pair[Int, String]]` and `Box[Pair[String, Int]]` (and tuple glue for similar
+  tuples) produced the same symbol, so one body overwrote the other. Instance names and
+  tuple glue keys now come from `monomorphize::symbol_token` over the full type, which
+  keeps letters and digits and escapes every other byte (`_` included) as `_` plus two
+  hex digits, so different types never share a name.
+- **Generic inference fixes (P-13, P-14, P-16).** A constructor argument that is itself
+  generic or compound (`Outer.new(Wrap.new(3))`, `Table.new([("a", 6)])`) now binds the
+  class parameters (`typeck/infer/collect.rs::infer_class_generics`). A method generic
+  that shadows its class generic is the new error E0745 (`resolve/funcs.rs`). A generic
+  method call keeps its inferred result type when the declared return names a type
+  parameter (`mir/lower/expr/method_call.rs`). Pinned by `it/method_call_inference` and
+  release-e2e 2244.
+- **A generic class instance derives only what its substituted fields support (I-64).**
+  `Box[Mutex[Int]]` and `Box[Holder]` (a class holding a mutex) got a derived `clone`
+  that called the missing `Mutex_clone`, so they failed to link. The per-instance call in
+  `emit_mono_instances` (`mir/lower/monomorphize.rs`) passes `substituted: true` to
+  `Lowerer::synthesize_derives_as` (`mir/lower/derive.rs`), and each derive then also
+  needs every substituted field to pass `resolve::symbols::field_supports_derive`, the
+  per-field rule `ty_has_derive_trait` applies. Pinned by release-e2e 2246.
+- **A generic class reached only through a generic body is instantiated (I-54).**
+  `wrapped[T](v) { Wrap.new(v).dup }` left `Wrap[String]` without a body.
+  `Lowerer::close_class_instances` (`mir/lower/monomorphize.rs`) walks every concrete
+  instance body (generic free functions, generic methods, generic class methods) with
+  its parameters substituted, records each new concrete instance of an eligible generic
+  class, and walks that instance's methods in turn until nothing is added. It runs after
+  the generic free-fn and generic-method collections and before
+  `collect_builtin_head_mono_instances` (`mir/lower/mod.rs`). Pinned by release-e2e 2246.
+- **`to_h` with a class or struct key no longer leaks the key copy (I-65).**
+  `ruxen_hash_from_iter_keyed` (`library/std/hash/runtime/hash.c`) copies the key by the
+  table's key kind (how the table frees keys), moves the value out of the pair copy,
+  and drops the rest of the copy with `ruxen_elem_drop(copy, pair_desc)` (its glue skips
+  the emptied slot). Pinned by `it`
+  `drop_fixtures::to_h_with_object_keys_frees_every_copy`
+  (fixture `tests/fixtures/ruxen/to_h_object_keys_no_leak.rx`).
+- **`run.sh`'s `cli/build --release` check matches the F-29 rule.** A ruxen built
+  without the `llvm` feature refuses `--release` with an error naming the
+  feature (`codegen/backend.rs` `Backend::select`); the PR Ready `run.sh` job
+  ran such a binary and expected a successful build. The check now passes on
+  a successful build or on that exact refusal (`tests/release-e2e/run.sh`).
+
 ### Added
 - **A method's `where` bound on a class generic works in its body, and such a method
   of a `lib`-shell generic class is specialized per instantiation.** `def get -> T
@@ -60,11 +134,58 @@ once 1.0.0 ships.
   is not. `let (a, b) = expr` keeps the tuple in a scoped `_tuple` local that owns it
   and the bindings borrow it; destructuring a variable borrows the variable
   (`mir/lower/statement.rs`).
-- **Building a Hash from pairs copies what it inserts.** `ruxen_hash_from_iter_keyed`
-  (`library/std/hash/runtime/hash.c`) takes a fifth argument `val_desc` and copies each
-  key by its key kind and each value by `val_desc`, so the source pairs and the new
-  table drop independently. The compiler appends the value descriptor
-  (`key_desc::pair_value_desc`); `mir/residual_abi.rs` carries the new signature.
+- **Building a Hash from pairs copies what it inserts, and the last pair for a key
+  wins.** `ruxen_hash_from_iter_keyed(iter, pair_desc, kind, hash_fn, eq_fn)`
+  (`library/std/hash/runtime/hash.c`) clones each pair with `pair_desc` and moves the
+  copy's elements into the table, so the source pairs and the new table drop
+  independently. It reads the pairs from the last and skips a key already present, so
+  the last pair for a key wins (Ruby) and a duplicate key leaks nothing (I-61).
+  `mir/residual_abi.rs` and `it` `runtime_abi_derivation` (`ruxen_hash_from_iter` is
+  `(I64, I64)`) carry the signatures.
+- **A declared element descriptor parameter replaces a name-keyed one.** std/core
+  declares `class ElemDesc[T]` with `layout elem_desc` (`library/std/core/src/lib.rx`;
+  `ClassDef::has_layout`, `ClassInfo::elem_desc_shell`, `SymbolTable::elem_desc_arg`).
+  A `lib` parameter of type `ElemDesc[X]` is filled by the compiler at each call with
+  X's element descriptor, X bound from the receiver and arguments
+  (`key_desc::DeclaredElemDescs`, `key_desc::append_declared_elem_descs`, run before
+  `install_key_descriptors`). `Array#to_h` is `def to_h as "ruxen_hash_from_iter"(pairs:
+  ElemDesc[T]) -> Int`; `key_desc::pair_value_desc`, which matched the callee name, is
+  deleted (I-56).
+- **A method's `where` bound on its owner's generic is checked at the call site
+  (I-53).** `resolve/funcs.rs` registers the `where`-merged bounds in
+  `FnSignature.generic_params` (only the written generics reached a call site before),
+  and `typeck/infer/ops.rs::check_owner_where_bounds`, called from
+  `infer_selected_method`, binds the owner's generics from the receiver and checks each
+  bound strictly: a concrete type must satisfy it (E1015 for `MutexGuard[Inner]#get`
+  where `Inner` holds a `Mutex`, which failed at link before), and a type parameter must
+  declare it (a generic caller writes `T: Clone`). e2e 2196 declares
+  `Cellish[T: Send + Clone]`.
+- **Where-bound methods are specialized from every concrete body (I-54).** A user
+  generic class method whose `where` bound names the class generic is
+  `specialized_only` too (`collect_mono_instances`), so its opaque body is not emitted
+  (the opaque `Wrap_dup` linked against `_T_clone`). `collect_builtin_head_mono_instances`
+  runs after the generic free-fn and generic-method collections and walks every concrete
+  instance body with its params substituted, so `read_copy[T: Clone](g: &MutexGuard[T])
+  { g.get }` gets `MutexGuard[Int]#get` (it was a lowering error). The abstract-receiver
+  placeholder fires only when no monomorphized copy exists
+  (`mir/lower/expr/method_call.rs`).
+- **A boxed Copy struct is owned by its slot (I-55).** `drops::glue::field_owns_value`
+  counts a boxed Copy struct (`drops::copies::is_boxed_copy`), so a class field or tuple
+  element frees it, also on overwrite (`h.p = p` in a loop leaked one box per
+  iteration). A derived clone of such a field box-copies it (`Lowerer::emit_box_copy`
+  in `derive.rs::synthesize_clone_field`). A struct object still frees no fields (the
+  pre-existing struct-field leak class).
+- **The C-handle derive rule names no method (I-57).** A fieldless class whose methods
+  include a C (`lib`) function supports a derived mixin only when it declares the method
+  that derive defines, read from the mixin's definition
+  (`SymbolTable::declares_derived_method`), for every mixin
+  (`resolve/symbols/derive_support.rs::is_c_handle`). The `"Clone"` and
+  `"clone"` checks are gone.
+- **The loan-matrix memory run cannot pass vacuously (I-59, I-60).** `memrun.py` fails
+  on a compile failure without an E-code, a missing compiler or `cc`, zero programs
+  found or accepted, a rejected dead row, and an accepted conflict row missing from
+  `LOAN_MATRIX_ACCEPTED_CONFLICTS` (read from `tests/it/mir_loan_check.rs`). The
+  pr-ready `loan-matrix-memory` job has `timeout-minutes: 60`.
 - **A boxed Copy value has one box per owner.** A Copy tuple, struct or class lives in a
   heap box, and `b = a` or `arr.push(a)` left two owners of one box. The new pass
   `Lowerer::duplicate_boxed_copies` (`mir/lower/drops/copies.rs`), run on every lowered
@@ -176,6 +297,31 @@ once 1.0.0 ships.
   `mir_loan_check::loan_check_families` (three `guard_*` rows).
 
 ### Changed
+- **One declaration-driven rule for the method a derive defines (I-57).**
+  `DERIVED_METHODS` is deleted (`implicit_includes/mod.rs`).
+  `SymbolTable::derived_method(trait)` reads the method from the mixin's `.rx`
+  declaration (required first, else default), and
+  `SymbolTable::declares_derived_method(type, trait)` is the one "the type defines it
+  itself" rule, read by `implicit_includes::derive_is_synthesized` and by
+  `derive_support::is_c_handle`. Typeck registers derived methods from
+  `implicit_includes::synthesized_derives` (`typeck/mixins.rs`). `mixin Debug`
+  (`library/std/fmt/src/lib.rx`) now declares `def to_debug -> String` instead of an
+  unused `def fmt`; derive and interpolation name the Debug body through
+  `Lowerer::debug_method()` instead of spelling `to_debug`.
+- **An `ElemDesc[T]` parameter is compiler-supplied in typeck too (I-66, I-69).**
+  `SymbolTable::source_param_count` (the parameters a caller writes) is the free-function
+  arity check (`typeck/infer/expr.rs`), and `method_accepts_arg_count`
+  (`typeck/infer/collect.rs`) leaves such parameters out of the required count.
+  `key_desc::append_declared_elem_descs` turns a call whose descriptor type still names
+  a type parameter into the abstract placeholder (`monomorphize::abstract_callee`),
+  which `prune_unmonomorphised_bodies` removes with its unreachable opaque body or
+  reports, instead of passing a silent POD descriptor. Compiler-supplied parameters are
+  the trailing ones. Pinned by `it`
+  `field_ownership::an_elem_desc_parameter_is_not_written_by_the_caller`.
+- **`loan_check.rs` and `symbols.rs` are split under 1000 lines (I-58).**
+  `mir/loan_check/closures.rs` holds `Effect`, `Effects` and `Pairs`;
+  `resolve/symbols/derive_support.rs` holds the implicit-include rule
+  (`ty_has_derive_trait`, `ty_is_effectively_copy`, re-exported from `symbols.rs`).
 - **A tuple element read borrows, like a field read.** One rule,
   `typeck/infer/helpers.rs::slot_read_ty`, types a value read out of a slot its
   container keeps owning: a non-Copy `T` reads as `&T`. Class field reads
