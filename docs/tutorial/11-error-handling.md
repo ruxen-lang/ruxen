@@ -55,7 +55,7 @@ end
 Without `?`, chaining fallible calls is painful — every step needs a `match`:
 
 ```ruxen
-def process(path: &str) -> Result[Data, AppError]
+def process(path: &String) -> Result[Data, AppError]
   let text = match read_file(path)
     Ok(t)  -> t
     Err(e) -> return Err(e)
@@ -71,7 +71,7 @@ end
 `?` collapses each of those `match`/`return` pairs to a single character: "unwrap on `Ok`, return early on `Err`":
 
 ```ruxen
-def process(path: &str) -> Result[Data, AppError]
+def process(path: &String) -> Result[Data, AppError]
   let text = read_file(path)?       # early return on Err
   let parsed = parse_data(&text)?   # early return on Err
   validate(parsed)
@@ -123,12 +123,12 @@ maybe_user.unwrap!                  # panics on nil
 maybe_user.map { |u| u.name }       # transform if Some
 ```
 
-### Safe navigation (`?.`)
+### Safe navigation (`&.`)
 
 Chain through optionals without nested matches:
 
 ```ruxen
-let name = find_user(42)?.profile?.display_name
+let name = find_user(42)&.profile&.display_name
 ```
 
 If any step is `nil`, the whole chain short-circuits to `nil`.
@@ -179,7 +179,7 @@ extension IoError
   end
 end
 
-def load(path: &str) -> Result[String, AppError]
+def load(path: &String) -> Result[String, AppError]
   fs.read_to_string(path)?         # IoError → AppError automatically via ?
 end
 ```

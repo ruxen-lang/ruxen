@@ -1,5 +1,0 @@
-def main
-  let a = 2 + 3
-  let b = a * 10
-  puts "#{b}"
-end

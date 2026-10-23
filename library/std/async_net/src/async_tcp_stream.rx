@@ -7,13 +7,20 @@
 ## fns (like `accept_state_to_result` below) require their parameter
 ## and return types to be already-declared classes.
 ##
-## Owning wrapper around a non-blocking connected socket fd. 8-byte
-## wire shape (int32 fd + int32 closed) identical to RuxenAsyncFile.
+## Owning wrapper around a non-blocking connected socket fd. Wire shape is
+## C-owned (see runtime/async_net.c::RuxenAsyncTcpStream) — the leading
+## 8 bytes (int32 fd + int32 closed) match RuxenAsyncFile, followed by
+## three persistent i64 reactor handles (read_handle, write_handle,
+## timer_handle) this class never indexes directly, only through the FFI
+## accessors below. NOTE: this comment previously said "8-byte wire shape"
+## unqualified, stale since read_handle/write_handle landed pre-Lever-D.2;
+## corrected here alongside adding timer_handle.
 class AsyncTcpStream
   fd: Int
   closed: Int
   read_handle: Int
   write_handle: Int
+  timer_handle: Int
 
   def self.connect(addr: &String) -> AsyncConnectFuture { AsyncConnectFuture.new(addr) }
 
@@ -25,12 +32,18 @@ class AsyncTcpStream
     )
   end
 
+  ## Lever D.2: the future no longer owns its own deadline timer — it
+  ## reaches the STREAM's persistent idle timer via `stream_ptr` (this
+  ## stream's own heap pointer, threaded through as an Int like every other
+  ## cross-poll-cycle handle). See async_read_with_timeout_future.rx's
+  ## header comment for the full ownership split.
   def var read_with_timeout(max_bytes: Int, timeout_ns: Int) -> AsyncReadWithTimeoutFuture
     AsyncReadWithTimeoutFuture.new(
       ruxen_async_tcp_stream_fd(self),
       max_bytes,
       timeout_ns,
       ruxen_async_tcp_stream_read_handle(self),
+      ruxen_async_tcp_stream_ptr(self),
     )
   end
 
@@ -53,4 +66,8 @@ lib "runtime/async_net.c"
   def ruxen_async_tcp_stream_shutdown(stream: &AsyncTcpStream) -> nil
   def ruxen_async_tcp_stream_read_handle(stream: &AsyncTcpStream) -> Int
   def ruxen_async_tcp_stream_write_handle(stream: &AsyncTcpStream) -> Int
+  def ruxen_async_tcp_stream_ptr(stream: &AsyncTcpStream) -> Int
+  def ruxen_async_tcp_stream_ensure_timer(stream: Int, nanos: Int) -> Int
+  def ruxen_async_tcp_stream_check_timer_fired(stream: Int) -> Int
+  def ruxen_async_tcp_stream_timer_handle(stream: Int) -> Int
 end

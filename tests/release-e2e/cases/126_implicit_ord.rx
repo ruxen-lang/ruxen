@@ -1,0 +1,48 @@
+# ---- from 126_implicit_ord_compare ----
+struct Score
+  v: Int
+end
+
+def run_126
+  let a = Score.new(5)
+  let b = Score.new(10)
+  if a < b
+    puts "a<b"
+  end
+  if b > a
+    puts "b>a"
+  end
+  if a <= b
+    puts "a<=b"
+  end
+end
+
+# ---- from 209_implicit_ord ----
+## Auto-synthesised Ord (and PartialOrd) mixin produces `<Type>_cmp` /
+## `<Type>_partial_cmp` that walks fields in declaration order and
+## returns the first non-equal field's ordering. Confirms lex-tuple
+## semantics: ties on the first field defer to the second.
+struct Pair
+  a: Int
+  b: Int
+end
+
+def run_209
+  let p = Pair.new(1, 5)
+  let q = Pair.new(1, 9)
+  let r = Pair.new(2, 0)
+  if p < q
+    puts "p<q"
+  end
+  if q < r
+    puts "q<r"
+  end
+  if p < r
+    puts "p<r"
+  end
+end
+
+def main
+  run_126
+  run_209
+end

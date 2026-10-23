@@ -1,0 +1,25 @@
+# `Array#to_h` with class and struct keys and a duplicate key: the table
+# copies each key the way it frees keys and each value the way the pairs'
+# drop frees it, so the source array and the table drop independently and
+# nothing leaks.
+
+class Key
+  n: Int
+
+  def init(@n: Int)
+  end
+end
+
+struct Point
+  x: Int
+end
+
+def run -> nil
+  pairs = [(Key.new(1), "one"), (Key.new(2), "two"), (Key.new(1), "uno")]
+  let by_key: Hash[Key, String] = pairs.to_h
+  points = [(Point.new(1), "p"), (Point.new(1), "q")]
+  let by_point: Hash[Point, String] = points.to_h
+  print("#{by_key.size}#{by_point.size}")
+end
+
+run

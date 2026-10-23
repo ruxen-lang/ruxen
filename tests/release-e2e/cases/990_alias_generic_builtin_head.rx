@@ -1,0 +1,64 @@
+# Pins Q58: `alias new old` reached through a receiver whose class name carries
+# a GENERIC suffix (`Hash[String, Int]`, `Array[Int]`, a user `Box[Int]`).
+#
+# MIR's `select_method_symbol_name` and `method_trailing_default_sentinels` both
+# scanned for the method def by comparing the parent def's BARE class name
+# against the call site's INSTANTIATED receiver name, so every generic head
+# matched nothing. Two consequences, both pinned below:
+#   * the alias was never rewritten to its canonical, so `h.has_key?(k)` emitted
+#     a bodiless `Hash[String, Int]_has_key?` and the link failed, and
+#   * a paren-less call to a method with trailing defaults got ZERO default
+#     sentinels, so the defaults silently never filled.
+# Both sites now fall back to the generic-free base class name, matching the
+# order `SymbolTable::canonical_method_name` already used for the alias map.
+class Box[T]
+  value: T
+
+  def init(@value: T)
+  end
+
+  def bump(step: Int = 7) -> Int
+    step
+  end
+
+  # alias to an `.rx` body on a USER generic class.
+  alias tick bump
+end
+
+def main
+  # Alias WITH arguments on a generic builtin head (stdlib `alias has_key? key?`).
+  var h: Hash[String, Int] = Hash.new
+  h.insert("a", 1)
+  h.insert("b", 2)
+  puts(h.has_key?("a"))
+  puts(h.include?("z"))
+  puts(h.member?("b"))
+
+  # Alias called WITH PARENS on a generic builtin head (the `MethodCall` path,
+  # not the paren-less `FieldAccess` one, which already canonicalized).
+  # `Array` declares `alias to_a clone`.
+  var a: Array[Int] = Array.new
+  a.push(7)
+  a.push(8)
+  puts(a.to_a().size)
+
+  # Alias whose target is an `.rx` body taking a block (`alias each_pair each`).
+  var sum = 0
+  h.each_pair do |kv| sum = sum + kv.1 end
+  puts(sum)
+
+  # Alias on a user generic class, called with an explicit argument.
+  let b = Box[Int].new(5)
+  puts(b.tick(3))
+
+  # Trailing defaults through an alias, reached PAREN-LESS: `step` must fill
+  # with 7. This locks `method_trailing_default_sentinels`, the second site the
+  # fix touched. It is a lock rather than a red-green guard: a USER generic
+  # class reaches that site with the BARE `Box` (its generic args live in a
+  # separate `Ty::Class` field), so only a generic BUILTIN head (`Ty::Map` /
+  # `Ty::Array`, whose name Displays WITH the suffix) actually tripped the bug,
+  # and no stdlib collection method declares a trailing default today.
+  # `extension Array[T]` is rejected, so a case file cannot mint one either.
+  puts(b.tick)
+  puts(b.bump)
+end

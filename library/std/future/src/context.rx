@@ -34,5 +34,27 @@ class Context
     def self.test_dummy as "ruxen_context_test_dummy" -> Context
     def self.executor as "ruxen_executor_make_context" -> Context
     def drop as "ruxen_executor_context_drop" -> nil
+    ## §4.1 Increment 3 — cooperative cancellation. A leaf future checks
+    ## `cx.cancelled?` at its await (poll) boundary and early-returns when
+    ## true, instead of parking forever. COOPERATIVE: only takes effect where
+    ## a future checks it — it does NOT preempt an await-free compute loop.
+    ## v1 backing is a thread-local flag (the user body never sees `cx`, so
+    ## the same flag is also readable as the bare free fn
+    ## `ruxen_cancel_requested()` below) — see executor.c.
+    def cancelled? as "ruxen_context_cancelled" -> Bool
   end
+end
+
+## §4.1 Increment 3 — cooperative-cancel control surface as module-level
+## lib decls so user code (and a Scope / timeout / signal path) can flip the
+## thread-local cancel flag by a bare `Identifier` call, mirroring how the
+## reactor free fns (`ruxen_reactor_*`) and the scheduler decls in
+## task_handle.rx are spelled. `ruxen_request_cancel` sets it,
+## `ruxen_clear_cancel` resets it, `ruxen_cancel_requested` reads it (the same
+## flag `cx.cancelled?` reads — provided for poll bodies / user async bodies
+## that do not hold a `cx`).
+lib "runtime/executor.c"
+  def ruxen_request_cancel -> nil
+  def ruxen_clear_cancel -> nil
+  def ruxen_cancel_requested -> Bool
 end

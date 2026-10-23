@@ -110,8 +110,7 @@ arbitrary closure construction. Closures used in `Array.each`,
 
 When a closure captures `foo` by reference (rather than by move),
 the check requires `&Foo: Send` — which for v1 means `Foo: Sync`.
-This is because `&T: Send` iff `T: Sync` (Rust's rule, kept for
-v1 as the natural fit).
+This is because `&T: Send` iff `T: Sync`.
 
 E1100 diagnostic distinguishes by-ref vs by-move in the note:
 ```
@@ -158,11 +157,11 @@ of B3-B8.
 
 (Already shipped — pinned here.)
 
-## B12 — `unsafe impl Send` escape hatch
+## B12 — `unsafe include Send` escape hatch
 
 ```rx
 class WrapsRawPointer
-  include unsafe Send   # asserts safety manually
+  unsafe include Send   # asserts safety manually
 end
 ```
 
@@ -201,9 +200,9 @@ constant time. No measurable performance hit.
 | B2        | `builtin_containers_auto_derive_send_sync_when_t_is` | `concurrency_markers.rs`      |
 | B3        | `mutex_new_rejects_non_send_t_e1101`                 | `concurrency_negative.rs`     |
 | B4        | `sharedsync_new_rejects_non_send_t_e1102`            | `concurrency_negative.rs`     |
-| B5        | `channel_rejects_non_send_t_e1101`                   | `concurrency_negative.rs`     |
+| B5        | none (deferred: no `channel[T]()` constructor in v1)  | —                             |
 | B6        | `thread_spawn_rejects_non_send_capture_e1100`        | `concurrency_negative.rs`     |
-| B7        | `thread_spawn_capture_by_ref_requires_sync_e1100`    | `concurrency_negative.rs`     |
+| B7        | none (deferred: closures do not tell move from ref captures in v1) | — |
 | B8        | `thread_spawn_emits_one_diagnostic_per_bad_capture`  | `concurrency_negative.rs`     |
 | B9        | covered by B3 (transitivity)                         | —                             |
 | B10       | `user_class_with_include_send_passes_thread_spawn`   | `concurrency_markers.rs`      |

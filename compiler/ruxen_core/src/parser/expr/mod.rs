@@ -19,7 +19,8 @@ use crate::parser::Parser;
 
 mod atoms;
 mod calls;
-mod control_flow;
+mod case_expr;
+pub(in crate::parser) mod control_flow;
 mod match_expr;
 mod operators;
 
@@ -27,6 +28,9 @@ mod operators;
 /// Right-associative: left < right. Left-associative: left > right (or left == right-1).
 /// Non-associative: left == right.
 fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
+    if let Some(op) = BinOp::from_token(kind) {
+        return Some(op.binding_power());
+    }
     match kind {
         // Assignment: right-associative (1, 2)
         TokenKind::Eq
@@ -34,44 +38,17 @@ fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
         | TokenKind::MinusEq
         | TokenKind::StarEq
         | TokenKind::SlashEq
-        | TokenKind::PercentEq => Some((1, 2)),
-
-        // Logical OR: left-associative (3, 4)
-        TokenKind::PipePipe => Some((3, 4)),
-
-        // Logical AND: left-associative (5, 6)
-        TokenKind::AmpAmp => Some((5, 6)),
-
-        // Comparison + regex-match: non-associative (7, 8). `~=` sits
-        // at the same precedence as `==`/`!=` per the std.regex spec.
-        TokenKind::EqEq
-        | TokenKind::NotEq
-        | TokenKind::Lt
-        | TokenKind::Gt
-        | TokenKind::LtEq
-        | TokenKind::GtEq
-        | TokenKind::TildeEq => Some((7, 8)),
+        | TokenKind::PercentEq
+        | TokenKind::PipePipeEq
+        | TokenKind::AmpAmpEq
+        | TokenKind::ShlEq
+        | TokenKind::ShrEq
+        | TokenKind::AmpEq
+        | TokenKind::PipeEq
+        | TokenKind::CaretEq => Some((1, 2)),
 
         // Range: non-associative (9, 10)
         TokenKind::DotDot | TokenKind::DotDotDot => Some((9, 10)),
-
-        // Bitwise OR (11, 12)
-        TokenKind::Pipe => Some((11, 12)),
-
-        // Bitwise XOR (13, 14)
-        TokenKind::Caret => Some((13, 14)),
-
-        // Bitwise AND (15, 16)
-        TokenKind::Amp => Some((15, 16)),
-
-        // Shift (17, 18)
-        TokenKind::Shl | TokenKind::Shr => Some((17, 18)),
-
-        // Add/Sub (19, 20)
-        TokenKind::Plus | TokenKind::Minus => Some((19, 20)),
-
-        // Mul/Div/Mod (21, 22)
-        TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Some((21, 22)),
 
         // Cast (23, 24)
         TokenKind::As => Some((23, 24)),
@@ -94,7 +71,7 @@ impl Parser {
     }
 
     /// Core Pratt parser.
-    pub(super) fn parse_expr_bp(&mut self, min_bp: u8) -> Expr {
+    pub(in crate::parser) fn parse_expr_bp(&mut self, min_bp: u8) -> Expr {
         self.skip_newlines();
         let mut lhs = self.parse_prefix();
 
@@ -102,6 +79,21 @@ impl Parser {
             self.skip_newlines_if_continuation();
 
             let kind = self.current_kind().clone();
+
+            // `?` is the postfix try operator when ATTACHED to its operand
+            // (`result?`), and a ternary conditional when separated by
+            // whitespace (`cond ? a : b`). Distinguish by span adjacency: a gap
+            // between the operand's end and the `?` means a ternary. Ternary is
+            // low precedence (`TERNARY_LBP`), so a higher-min-bp context (e.g.
+            // the RHS of `||`) leaves it for the enclosing expression.
+            if matches!(kind, TokenKind::Question) && lhs.span.end < self.current_span().start {
+                const TERNARY_LBP: u8 = 3;
+                if TERNARY_LBP < min_bp {
+                    break;
+                }
+                lhs = self.parse_ternary(lhs);
+                continue;
+            }
 
             // Check for postfix operators
             if self.is_postfix_op(&kind) && POSTFIX_BP >= min_bp {
@@ -191,6 +183,32 @@ impl Parser {
                     span,
                 }
             }
+            TokenKind::Tilde => {
+                self.advance();
+                let operand = self.parse_expr_bp(25);
+                let span = self.span_from(&start);
+                Expr {
+                    kind: ExprKind::UnaryOp {
+                        op: UnaryOp::BitNot,
+                        operand: Box::new(operand),
+                    },
+                    span,
+                }
+            }
+            TokenKind::Not => {
+                self.advance();
+                // Ruby `not` consumes assignment and every tighter operator,
+                // but stops before keyword `and` / `or`.
+                let operand = self.parse_expr_bp(1);
+                let span = self.span_from(&start);
+                Expr {
+                    kind: ExprKind::UnaryOp {
+                        op: UnaryOp::KeywordNot,
+                        operand: Box::new(operand),
+                    },
+                    span,
+                }
+            }
             TokenKind::Amp => {
                 self.advance();
                 let operand = self.parse_expr_bp(25);
@@ -239,6 +257,18 @@ impl Parser {
         matches!(self.current_kind(), TokenKind::Let | TokenKind::Var)
     }
 
+    /// True when the current token is a trailing statement-modifier keyword
+    /// (`if` / `unless` / `while` / `until`). Used both to trigger the modifier
+    /// desugar in `parse_statement` and to stop a jump keyword (`return` /
+    /// `break` / `yield`) from swallowing a trailing modifier as its value, so
+    /// `return if c` is a conditional return, not `return (if c … end)`.
+    pub(in crate::parser) fn at_statement_modifier(&self) -> bool {
+        matches!(
+            self.current_kind(),
+            TokenKind::If | TokenKind::Unless | TokenKind::While | TokenKind::Until
+        )
+    }
+
     /// Check if current token could start an expression.
     pub(crate) fn is_expression_start(&self) -> bool {
         matches!(
@@ -255,6 +285,7 @@ impl Parser {
                 | TokenKind::TypeIdentifier(_)
                 | TokenKind::SelfValue
                 | TokenKind::SelfType
+                | TokenKind::At
                 | TokenKind::SomeKw
                 | TokenKind::OkKw
                 | TokenKind::ErrKw
@@ -263,10 +294,13 @@ impl Parser {
                 | TokenKind::LBrace
                 | TokenKind::Minus
                 | TokenKind::Bang
+                | TokenKind::Not
+                | TokenKind::Tilde
                 | TokenKind::Amp
                 | TokenKind::AmpMut
                 | TokenKind::If
                 | TokenKind::Match
+                | TokenKind::Case
                 | TokenKind::While
                 | TokenKind::For
                 | TokenKind::Loop
@@ -281,30 +315,5 @@ impl Parser {
                 | TokenKind::Unsafe
                 | TokenKind::Nil
         )
-    }
-}
-
-fn token_to_binop(kind: &TokenKind) -> BinOp {
-    match kind {
-        TokenKind::Plus => BinOp::Add,
-        TokenKind::Minus => BinOp::Sub,
-        TokenKind::Star => BinOp::Mul,
-        TokenKind::Slash => BinOp::Div,
-        TokenKind::Percent => BinOp::Mod,
-        TokenKind::EqEq => BinOp::Eq,
-        TokenKind::NotEq => BinOp::NotEq,
-        TokenKind::Lt => BinOp::Lt,
-        TokenKind::Gt => BinOp::Gt,
-        TokenKind::LtEq => BinOp::LtEq,
-        TokenKind::GtEq => BinOp::GtEq,
-        TokenKind::AmpAmp => BinOp::And,
-        TokenKind::PipePipe => BinOp::Or,
-        TokenKind::Amp => BinOp::BitAnd,
-        TokenKind::Pipe => BinOp::BitOr,
-        TokenKind::Caret => BinOp::BitXor,
-        TokenKind::Shl => BinOp::Shl,
-        TokenKind::Shr => BinOp::Shr,
-        TokenKind::TildeEq => BinOp::MatchOp,
-        _ => unreachable!("not a binary operator: {:?}", kind),
     }
 }

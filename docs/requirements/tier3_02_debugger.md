@@ -14,19 +14,19 @@ locals, see a call stack labeled with Ruxen function names, or use any
 of the standard debugging conveniences that every mainstream
 compiled language offers.
 
-The absence is visible: `crates/ruxen-core/src/codegen/llvm/debug.rs`
+The absence is visible: `compiler/ruxen_core/src/codegen/llvm/debug.rs`
 is a three-line stub that says "Full DWARF debug info will be
 implemented in a follow-up phase." No debug info is emitted on either
 Cranelift or LLVM. The `ruxenc` CLI has no `--debug`, `--emit-debug`,
-or `-g` flag (`crates/ruxenc/src/main.rs:40-68`). The `ruxen-cli`
-`build` command has no debug-symbol knob (`crates/ruxen-cli/src/cli.rs:42-52`).
+or `-g` flag (`src/ruxenc/src/main.rs:40-68`). The `ruxen_cli`
+`build` command has no debug-symbol knob (`src/ruxen_cli/src/cli.rs:42-52`).
 
 This doc specifies:
 
 1. DWARF v5 emission through Inkwell's `DebugInfoBuilder` wired into
    the LLVM backend codegen.
 2. A lightweight Debug Adapter Protocol (DAP) server, shipped as a new
-   crate `ruxen-dap`, so VSCode / Neovim / any DAP-capable client can
+   crate `ruxen_dap`, so VSCode / Neovim / any DAP-capable client can
    set breakpoints, step, and inspect locals in a Ruxen program.
 3. Pretty-printer support for the v1 stdlib types (`String`, `Array`,
    `Option`, `Result`, `Map`) — delivered as optional Python
@@ -43,7 +43,7 @@ UI.
 
 ### 2.1 LLVM codegen — no debug info at all
 
-`crates/ruxen-core/src/codegen/llvm/debug.rs:1-3`:
+`compiler/ruxen_core/src/codegen/llvm/debug.rs:1-3`:
 
 ```rust
 //! Debug info generation (stub).
@@ -57,12 +57,12 @@ no `DILocation`, no `dbg.declare` intrinsic calls, no
 `.debug_info` section in the emitted object file.
 
 Verification (grep results from §Step 1 research): the only occurrence
-of any DWARF-related term in the entire `crates/` tree is the comment
+of any DWARF-related term in the entire `compiler/` and `src/` trees is the comment
 line above.
 
 ### 2.2 Cranelift codegen — no debug info
 
-`crates/ruxen-core/src/codegen/cranelift.rs` (1127 lines) has no
+`compiler/ruxen_core/src/codegen/cranelift.rs` (1127 lines) has no
 calls into `cranelift-codegen`'s `debug::write_debuginfo` helper and
 doesn't enable the `emit_dwarf` flag. Cranelift *can* emit DWARF for
 line/column mappings and basic local-variable info, but the
@@ -71,19 +71,19 @@ integration work is non-trivial (see §5.3).
 ### 2.3 CLI flags
 
 `ruxenc` supports `--release`, `--backend=cranelift|llvm`,
-`--opt-level=0..3|s|z` (`crates/ruxenc/src/main.rs:41-57`) but has no
+`--opt-level=0..3|s|z` (`src/ruxenc/src/main.rs:41-57`) but has no
 debug-info flag. `opt-level=0` produces unoptimized code but without
 DWARF, so gdb/lldb show `??` for function names and `<optimized out>`
 for locals.
 
-`ruxen-cli` `build` has `--release` but no `--debug` / `-g` flag
-(`crates/ruxen-cli/src/cli.rs:42-52`). `cargo`-style conventions
+`ruxen_cli` `build` has `--release` but no `--debug` / `-g` flag
+(`src/ruxen_cli/src/cli.rs:42-52`). `cargo`-style conventions
 would give `-g` at opt-level-0 by default in debug profile.
 
 ### 2.4 Runtime C shim
 
-`crates/ruxen-core/runtime/runtime.c` is compiled via `cc` in
-`crates/ruxen-core/src/codegen/object.rs::compile_runtime`. A quick
+The pre-split `runtime.c` (now `library/std/<pkg>/runtime/*.c`) is compiled via `cc` in
+`compiler/ruxen_core/src/codegen/object.rs::compile_runtime`. A quick
 grep shows no `-g` flag is passed. For a working debugger experience,
 the runtime must also ship with DWARF — otherwise stepping into
 `ruxen_string_concat` lands in assembly without source.
@@ -108,7 +108,7 @@ cannot launch a Ruxen debugger today.
    granularity.
 4. The `locals` panel shows every Ruxen `let` and function parameter
    currently in scope, by source name.
-5. Primitive types (`Int`, `Float`, `Bool`, `String`, `&str`) display
+5. Primitive types (`Int`, `Float`, `Bool`, `String`) display
    as their source value, not the underlying pointer / integer.
 6. `Array[T]`, `Option[T]`, `Result[T, E]` display as
    `Array([1, 2, 3])`, `Some(42)`, `Err("msg")` via a pretty-printer.
@@ -158,7 +158,7 @@ opt_level = 0`. `--release` continues to mean `debug = false, opt_level = 2`.
 
 ### 4.3 DAP adapter
 
-Shipped as `crates/ruxen-dap/` with a `ruxen-dap` binary. Communicates
+Shipped as `src/ruxen_dap/` with a `ruxen_dap` binary. Communicates
 over stdio per DAP convention. Launch arguments (JSON):
 
 ```json
@@ -174,7 +174,7 @@ over stdio per DAP convention. Launch arguments (JSON):
 ```
 
 The adapter delegates actual debugging to `lldb-dap` (shipped with
-LLVM 18) or `gdb --interpreter=mi2`. `ruxen-dap` is primarily a thin
+LLVM 18) or `gdb --interpreter=mi2`. `ruxen_dap` is primarily a thin
 shim that:
 
 1. Translates DAP requests to the underlying debugger's protocol.
@@ -261,7 +261,6 @@ Each Ruxen `Ty` maps to a DWARF type tag:
 | `Bool` | `DW_ATE_boolean`, 8 bits | ditto |
 | `Char` | `DW_ATE_UTF`, 32 bits | ditto |
 | `String` | `DW_TAG_structure_type` with `ptr: *u8`, `len: usize`, `cap: usize` members | `create_struct_type` |
-| `&str` | `DW_TAG_structure_type` with `ptr: *u8`, `len: usize` | ditto |
 | `Array[T]` | struct with `ptr: *T, len: usize, cap: usize` | ditto |
 | `Option[T]` | `DW_TAG_enumeration_type` with variants `nil, Some(T)` | `create_enumeration_type` |
 | `Result[T, E]` | similar to Option | ditto |
@@ -302,7 +301,7 @@ Two options:
 
 **Option A (recommended for v1): reuse `lldb-dap`.**
 LLVM 18 ships `lldb-dap` — a DAP server that drives lldb. Our
-`ruxen-dap` binary:
+`ruxen_dap` binary:
 
 1. Starts `lldb-dap` as a child process.
 2. Forwards DAP stdin/stdout.
@@ -320,7 +319,7 @@ Non-trivial; defer to v2.
 
 ### 5.5 MIR span tracking
 
-Current `MirInst` variants (`crates/ruxen-core/src/mir/nodes.rs:184-304`)
+Current `MirInst` variants (`compiler/ruxen_core/src/mir/nodes.rs:184-304`)
 do **not** carry source spans. For DWARF line numbers, each instruction
 needs one. Add:
 
@@ -358,7 +357,7 @@ Ship a single Python script `runtime/debug/ruxen_pp.py` that:
 
 Install location: `<installroot>/share/ruxen/debug/ruxen_pp.py`
 (parallel to the existing runtime.c location at
-`<installroot>/lib/runtime.c`). `ruxen-dap` locates it via the same
+`<installroot>/lib/runtime.c`). `ruxen_dap` locates it via the same
 search order as `find_runtime_c` (`codegen/mod.rs:27-65`).
 
 Example lldb printer for `Array[T]`:
@@ -385,24 +384,24 @@ def vec_summary(valobj, _):
 
 | Phase | File | Change |
 |---|---|---|
-| 1 | `crates/ruxenc/src/main.rs:40-68` | Add `--debug` flag parsing; propagate to backend |
-| 1 | `crates/ruxen-cli/src/cli.rs:42-52` | Add `--debug` + `--profile` to `Build` and `Run` |
-| 1 | `crates/ruxen-cli/src/build.rs` | Thread debug flag into `codegen::compile_with_options` |
-| 1 | `crates/ruxen-core/src/codegen/mod.rs:67-128` | Extend `Backend::Llvm` with `debug: bool`; pass through |
-| 2 | `crates/ruxen-core/src/codegen/llvm/mod.rs` | Plumb `debug: bool` into `CodeGen::new` |
-| 2 | `crates/ruxen-core/src/codegen/llvm/debug.rs` | Replace stub with `DebugInfoBuilder` wrapper (~300 lines) |
-| 2 | `crates/ruxen-core/src/codegen/llvm/emit.rs` | Attach `DILocation` to each generated LLVM instruction |
-| 2 | `crates/ruxen-core/src/mir/nodes.rs` | Add `Span` to `MirInst` (or parallel vec in `BasicBlock`) |
-| 2 | `crates/ruxen-core/src/mir/lower.rs` | Propagate HIR spans through lowering |
-| 2 | `crates/ruxen-core/src/codegen/object.rs` | Pass `-g` to `cc` when compiling the runtime |
-| 2 | `crates/ruxen-core/runtime/runtime.c` | No change (already compiles with `-g` if passed) |
-| 3 | `crates/ruxen-dap/` *new* | DAP shim (~400 lines) |
-| 3 | `crates/ruxen-dap/Cargo.toml` *new* | Deps: `serde`, `serde_json`, `anyhow` |
+| 1 | `src/ruxenc/src/main.rs:40-68` | Add `--debug` flag parsing; propagate to backend |
+| 1 | `src/ruxen_cli/src/cli.rs:42-52` | Add `--debug` + `--profile` to `Build` and `Run` |
+| 1 | `src/ruxen_cli/src/build.rs` | Thread debug flag into `codegen::compile_with_options` |
+| 1 | `compiler/ruxen_core/src/codegen/mod.rs:67-128` | Extend `Backend::Llvm` with `debug: bool`; pass through |
+| 2 | `compiler/ruxen_core/src/codegen/llvm/mod.rs` | Plumb `debug: bool` into `CodeGen::new` |
+| 2 | `compiler/ruxen_core/src/codegen/llvm/debug.rs` | Replace stub with `DebugInfoBuilder` wrapper (~300 lines) |
+| 2 | `compiler/ruxen_core/src/codegen/llvm/emit.rs` | Attach `DILocation` to each generated LLVM instruction |
+| 2 | `compiler/ruxen_core/src/mir/nodes.rs` | Add `Span` to `MirInst` (or parallel vec in `BasicBlock`) |
+| 2 | `compiler/ruxen_core/src/mir/lower.rs` | Propagate HIR spans through lowering |
+| 2 | `compiler/ruxen_core/src/codegen/object.rs` | Pass `-g` to `cc` when compiling the runtime |
+| 2 | the pre-split `runtime.c` (now `library/std/<pkg>/runtime/*.c`) | No change (already compiles with `-g` if passed) |
+| 3 | `src/ruxen_dap/` *new* | DAP shim (~400 lines) |
+| 3 | `src/ruxen_dap/Cargo.toml` *new* | Deps: `serde`, `serde_json`, `anyhow` |
 | 3 | `runtime/debug/ruxen_pp.py` *new* | lldb + gdb pretty-printers |
 | 4 | `editors/vscode/package.json` | Register `type: "ruxen"` debugger |
 | 4 | `editors/vscode/src/debugger.ts` *new* | Thin debug-adapter descriptor factory |
-| 5 | `install.sh` | Copy `share/ruxen/debug/ruxen_pp.py`; copy `ruxen-dap` binary |
-| 5 | `.github/workflows/release.yml:79-103` | Stage `ruxen-dap` into the tarball |
+| 5 | `install.sh` | Copy `share/ruxen/debug/ruxen_pp.py`; copy `ruxen_dap` binary |
+| 5 | `.github/workflows/release.yml:79-103` | Stage `ruxen_dap` into the tarball |
 
 ### Phase breakdown
 
@@ -419,7 +418,7 @@ Add flags, thread them through. No user-visible debug info yet, but
   (breakpoint + step + locals).
 
 **Phase 3 — DAP adapter (3-4 days).**
-- Day 1: `ruxen-dap` skeleton that spawns `lldb-dap` as a child.
+- Day 1: `ruxen_dap` skeleton that spawns `lldb-dap` as a child.
 - Day 2: `initialize` / `launch` / `setBreakpoints` forwarding.
 - Day 3: pretty-printer script loading.
 - Day 4: end-to-end smoke test from VSCode.
@@ -428,7 +427,7 @@ Add flags, thread them through. No user-visible debug info yet, but
 Register the debugger type; package a launch-config template.
 
 **Phase 5 — Distribution (0.5 day).**
-Ship `ruxen-dap` + `ruxen_pp.py` in the release tarball.
+Ship `ruxen_dap` + `ruxen_pp.py` in the release tarball.
 
 **Phase 6 — Pretty printers for stdlib (ongoing; co-develop with Tier-1
 doc 01).**
@@ -492,12 +491,12 @@ Total: 12-16 engineer-days.
    `--release` with `[profile.release] debug = true` (optimized + DWARF).
    Ruxen should follow: `--release --debug` produces a high-opt build
    with debug info. Validated in §4.1.
-5. **OQ-5 — `ruxen-dap` transport.**
+5. **OQ-5 — `ruxen_dap` transport.**
    VSCode's DAP usually runs over stdio. For remote debugging, TCP
    transport is needed. Defer TCP to v2.
 6. **R1 — Inkwell DIBuilder API surface stability.**
    Inkwell's `debug_info` module has seen churn. Lock the inkwell
-   version in `ruxen-core/Cargo.toml:30` and test against LLVM 18
+   version in `ruxen_core/Cargo.toml:30` and test against LLVM 18
    specifically. Document LLVM 18 as required for debug builds.
 7. **R2 — lldb vs gdb differences.**
    lldb handles some DWARF edges gdb doesn't and vice versa. Test the

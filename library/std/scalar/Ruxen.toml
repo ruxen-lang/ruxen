@@ -1,0 +1,7 @@
+[package]
+name = "std-scalar"
+version = "0.1.0"
+description = "Method homes for the scalar primitives (Int, Float, Bool, Char, USize)"
+
+[dependencies]
+std-core = "= 0.1.0"

@@ -58,7 +58,7 @@ channel stays open as long as at least one sender is alive.
 
 **Given** an open channel
 **Then** `rx.try_recv()` returns `Some(value)` if one is available,
-`None` otherwise (non-blocking, no error path — channel-closed is
+`nil` otherwise (non-blocking, no error path — channel-closed is
 not surfaced).
 
 ## B7 — Drop semantics: receiver close → sender error
@@ -117,7 +117,7 @@ sender drops `tx`.
 | B6        | `channel_try_recv_nonblocking`                   | `std_sync_runtime.rs`        |
 | B7        | `channel_receiver_dropped_send_errs`             | `std_sync_runtime.rs`        |
 | B8        | `channel_all_senders_dropped_recv_errs`          | `std_sync_runtime.rs`        |
-| B9        | `channel_rejects_non_send_t_e1101`               | `concurrency_negative.rs`    |
+| B9        | none (deferred: no `channel[T]()` constructor in v1) | —                          |
 | B10       | e2e `cases/542_channel_pingpong.rx`             | release-e2e                  |
 
 ---

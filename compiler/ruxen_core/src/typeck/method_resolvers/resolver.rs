@@ -35,25 +35,6 @@ pub(super) struct MethodResolver {
     pub resolve: fn(&mut InferenceEngine<'_>, &Ty, &str, &[HirExpr], &Span) -> Option<Ty>,
 }
 
-/// The stdlib `Class` names that own a NAMED `new` arm performing
-/// payload-inference and/or a Send/E0714 construction check
-/// (`mod.rs` arms at `Mutex.new` / `Arc`+`SharedSync.new` /
-/// `BufReader.new` / `BufWriter.new`). The declared-method tier (tier 1)
-/// MUST skip these names for `new`: their named arm is the authoritative
-/// constructor typing (E1101/E1102/E0714 + arg-based payload), and it
-/// must keep winning over `lookup_class_method_return` exactly as it did
-/// when the named arm sat positionally before the generic
-/// `(Ty::Class, "new")` declared-lookup arm (legacy `mod.rs:1214`).
-///
-/// This is the empirically-forced refinement of the plan's
-/// `STDLIB_TYPE_NAMES` idea (Task 2 probe): the real stdlib `Mutex`
-/// declares its own FFI `new`, so an unscoped tier-1-first would override
-/// the named arm. Scoping the skip to exactly the names with a named
-/// `new` arm is the minimal rule that (a) preserves stdlib behaviour and
-/// (b) lets a user class with any OTHER stdlib-shaped name (e.g. `File`,
-/// `TcpStream`, `Command`) honour its declared `new` — fixing bug A2.
-const STDLIB_NEW_ARM_NAMES: &[&str] = &["Mutex", "Arc", "SharedSync", "BufReader", "BufWriter"];
-
 /// TIER 1 — declared-method resolver (the bug-A2 fix).
 ///
 /// Generalises the legacy `(Ty::Class, "new")` declared-lookup arm
@@ -61,30 +42,25 @@ const STDLIB_NEW_ARM_NAMES: &[&str] = &["Mutex", "Arc", "SharedSync", "BufReader
 /// receiver calling `new`, return the user-declared `new`'s return type
 /// (`lookup_class_method_return`). It is scoped to `new` only (the legacy
 /// arm only consulted declared methods for `new`; other methods flow to
-/// the trait resolver in `collect.rs`, unchanged) and skips
-/// `STDLIB_NEW_ARM_NAMES` (whose named arms must keep winning). When the
+/// the trait resolver in `collect.rs`, unchanged). When the
 /// receiver has no declared `new`, `resolve` returns `None` and the
 /// pipeline falls through to the structural fallback's `Some(Self)`.
 pub(super) fn declared_method_resolvers() -> Vec<MethodResolver> {
     vec![MethodResolver {
-        matches: |ty, method| {
-            method == "new"
-                && matches!(ty, Ty::Class { name, .. } if !STDLIB_NEW_ARM_NAMES.contains(&name.as_str()))
-        },
-        resolve: |eng, ty, method, _args, _span| {
+        matches: |ty, method| method == "new" && matches!(ty, Ty::Class { .. }),
+        resolve: |eng, ty, method, args, _span| {
             let Ty::Class { name, .. } = ty else {
                 return None;
             };
-            // `new` only, user/other receivers only (see `matches`).
-            if method != "new" || STDLIB_NEW_ARM_NAMES.contains(&name.as_str()) {
+            if method != "new" {
                 return None;
             }
-            eng.lookup_class_method_return(name, "new")
+            eng.lookup_class_method_return(name, "new", args.len())
         },
     }]
 }
 
-/// TIER 3 (tail) — structural fallback + derive resolvers.
+/// TIER 3 (tail) — structural fallback + the `to_s` derive resolver.
 ///
 /// Two concerns, in precedence order:
 ///
@@ -93,25 +69,17 @@ pub(super) fn declared_method_resolvers() -> Vec<MethodResolver> {
 ///    has a compiler-generated all-fields constructor (the `None` branch
 ///    of the legacy `(Ty::Class,"new")` arm — when no declared `new`
 ///    exists, the constructor yields `Self`).
-/// 2. **Derive resolver** — `clone`/`to_s`/`default` resolve through the
-///    DERIVE MECHANISM (`ty_has_derive_trait`), the same predicate the MIR
-///    derive synthesis (`mir/lower/derive.rs`) gates on, so typeck's
-///    return-type answer stays in lockstep with whether codegen will
-///    actually synthesize the body:
-///      - `clone`   → `Self` when the type derives `Clone`.
-///      - `to_s`    → `String` when the type derives `Debug` (Displayable).
-///        The structural implicit-include rule (`ruby-naming.spec.md`
-///        §3.6) makes every aggregate derive `Debug`, so this matches the
-///        old blanket `to_s → String`; the universal `to_s` is routed
-///        through the interpolation display dispatch at lower time.
-///      - `default` → `Self` when the type derives `Default`
-///        (`Struct`/`Class` only; enums are excluded from `Default`, which
-///        the field-default synthesis in `mir/lower/derive.rs` mirrors).
+/// 2. **`to_s`** → `String` when the type derives `Debug` (Displayable).
+///    The structural implicit-include rule (`ruby-naming.spec.md` §3.6)
+///    makes every aggregate derive `Debug`, so this matches the old blanket
+///    `to_s → String`; the universal `to_s` is routed through the
+///    interpolation display dispatch at lower time. `to_s` is not a method
+///    of `mixin Debug`, so it has no `.rx` declaration to register.
 ///
-/// Precedence-LAST: a named stdlib resolver (tier 2), the declared tier
-/// (tier 1), and a user-defined `clone`/`to_s`/`default` method (resolved
-/// via the trait/mixin lookup that follows `builtin_method_type` in
-/// `infer/expr.rs`) all win over these.
+/// The other derived methods (`clone`, `eq`, `hash_code`, `default`, `cmp`,
+/// `partial_cmp`) are typed from their `.rx` mixin declarations, registered
+/// per type by `MixinResolver::register_derived_methods` under the same rule
+/// MIR synthesises them by.
 pub(super) fn structural_fallback_resolvers() -> Vec<MethodResolver> {
     use crate::resolve::symbols::ty_has_derive_trait;
     vec![
@@ -125,24 +93,14 @@ pub(super) fn structural_fallback_resolvers() -> Vec<MethodResolver> {
                 _ => None,
             },
         },
-        // Derive resolver — `clone`/`to_s`/`default` gated on the derive
-        // mechanism, in lockstep with `mir/lower/derive.rs`.
+        // `to_s` gated on the `Debug` derive.
         MethodResolver {
             matches: |ty, method| {
                 matches!(ty, Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. })
-                    && matches!(method, "clone" | "to_s" | "default")
+                    && method == "to_s"
             },
-            resolve: |eng, ty, method, _args, _span| match method {
-                "clone" if ty_has_derive_trait(ty, eng.symbols, "Clone") => Some(ty.clone()),
-                "to_s" if ty_has_derive_trait(ty, eng.symbols, "Debug") => Some(Ty::String),
-                // Default is implicit for Struct/Class (enums excluded).
-                "default"
-                    if matches!(ty, Ty::Class { .. } | Ty::Struct { .. })
-                        && ty_has_derive_trait(ty, eng.symbols, "Default") =>
-                {
-                    Some(ty.clone())
-                }
-                _ => None,
+            resolve: |eng, ty, _method, _args, _span| {
+                ty_has_derive_trait(ty, eng.symbols, "Debug").then_some(Ty::String)
             },
         },
     ]

@@ -181,38 +181,9 @@ impl ScopeStack {
         false
     }
 
-    /// Check if we're inside a function (for return validation).
-    pub fn in_function(&self) -> bool {
-        let mut scope_id = Some(self.current);
-        while let Some(id) = scope_id {
-            let scope = &self.scopes[id as usize];
-            if scope.kind == ScopeKind::Function || scope.kind == ScopeKind::Closure {
-                return true;
-            }
-            scope_id = scope.parent;
-        }
-        false
-    }
-
-    /// Find the nearest enclosing class/impl scope's DefId for `self` resolution.
-    pub fn enclosing_type_scope(&self) -> Option<ScopeKind> {
-        let mut scope_id = Some(self.current);
-        while let Some(id) = scope_id {
-            let scope = &self.scopes[id as usize];
-            if matches!(
-                scope.kind,
-                ScopeKind::Class | ScopeKind::Impl | ScopeKind::Trait
-            ) {
-                return Some(scope.kind);
-            }
-            scope_id = scope.parent;
-        }
-        None
-    }
-
-    /// Get a reference to a scope by ID.
-    pub fn get_scope(&self, id: ScopeId) -> &Scope {
-        &self.scopes[id as usize]
+    /// Returns true when `scope_id` is the global module scope (no parent).
+    pub fn is_global(&self, scope_id: ScopeId) -> bool {
+        self.scopes[scope_id as usize].parent.is_none()
     }
 
     /// Returns true when `scope_id` is the same scope as `ancestor_id` or is
@@ -356,9 +327,6 @@ mod tests {
         assert_eq!(a, 1);
         assert_eq!(b, 2);
         assert_eq!(stack.current_id(), b);
-        assert_eq!(stack.get_scope(b).parent, Some(a));
-        assert_eq!(stack.get_scope(a).parent, Some(0));
-        assert_eq!(stack.get_scope(0).parent, None);
     }
 
     #[test]
@@ -387,56 +355,6 @@ mod tests {
     fn in_loop_false_at_module_root() {
         let stack = ScopeStack::new();
         assert!(!stack.in_loop());
-    }
-
-    #[test]
-    fn in_function_detects_function_and_closure() {
-        let mut stack = ScopeStack::new();
-        assert!(!stack.in_function());
-        stack.push(ScopeKind::Function);
-        assert!(stack.in_function());
-        stack.pop();
-        stack.push(ScopeKind::Closure);
-        assert!(stack.in_function());
-    }
-
-    #[test]
-    fn enclosing_type_scope_finds_nearest_class_impl_or_trait() {
-        let mut stack = ScopeStack::new();
-        assert_eq!(stack.enclosing_type_scope(), None);
-        stack.push(ScopeKind::Class);
-        stack.push(ScopeKind::Function);
-        assert_eq!(stack.enclosing_type_scope(), Some(ScopeKind::Class));
-
-        let mut stack2 = ScopeStack::new();
-        stack2.push(ScopeKind::Trait);
-        assert_eq!(stack2.enclosing_type_scope(), Some(ScopeKind::Trait));
-
-        let mut stack3 = ScopeStack::new();
-        stack3.push(ScopeKind::Impl);
-        stack3.push(ScopeKind::Function);
-        stack3.push(ScopeKind::Block);
-        assert_eq!(stack3.enclosing_type_scope(), Some(ScopeKind::Impl));
-    }
-
-    #[test]
-    fn lookup_local_does_not_walk_parents() {
-        let mut stack = ScopeStack::new();
-        stack.insert("outer".to_string(), 1);
-        stack.push(ScopeKind::Block);
-        let current = stack.current_id();
-        let scope = stack.get_scope(current);
-        // `outer` is in the module scope, not the current block.
-        assert_eq!(scope.lookup_local("outer"), None);
-    }
-
-    #[test]
-    fn lookup_type_local_does_not_walk_parents() {
-        let mut stack = ScopeStack::new();
-        stack.insert_type("T".to_string(), 1);
-        stack.push(ScopeKind::Function);
-        let scope = stack.get_scope(stack.current_id());
-        assert_eq!(scope.lookup_type_local("T"), None);
     }
 
     #[test]

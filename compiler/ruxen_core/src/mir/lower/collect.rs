@@ -4,122 +4,32 @@ use crate::resolve::symbols::DefKind;
 impl<'a> Lowerer<'a> {
     /// Record every (trait → concrete-impl-target) mapping in the program.
     /// Used to dispatch method calls on generic type parameters when the
-    /// trait bound has a unique implementor.
+    /// trait bound has a unique implementor. `impl Into[Dst] for Src`
+    /// blocks also record the `(Src, Dst)` pair in `into_impls`.
     pub(super) fn collect_trait_impls(&mut self, program: &HirProgram) {
-        fn visit(
-            item: &HirItem,
-            map: &mut HashMap<String, Vec<String>>,
-            into_map: &mut HashSet<(String, String)>,
-        ) {
-            match item {
-                HirItem::Impl(imp) => {
-                    let target = type_name_from_ty(&imp.target_ty);
-                    if let Some(ref trait_ref) = imp.trait_ref {
-                        map.entry(trait_ref.name.clone())
-                            .or_default()
-                            .push(target.clone());
-                        if trait_ref.name == "Into" {
-                            if let Some(arg) = trait_ref.generic_args.first() {
-                                let dst = type_name_from_ty(arg);
-                                into_map.insert((target.clone(), dst));
-                            }
-                        }
-                    }
-                    // ruby-naming.spec.md §3.4a: `extension X` body may
-                    // carry `include Mixin` directives. Each include
-                    // declares that target type X implements Mixin —
-                    // semantically equivalent to the legacy
-                    // `impl Mixin for X`.
-                    for item in &imp.items {
-                        if let HirImplItem::Include {
-                            trait_name,
-                            negative_trait,
-                            ..
-                        } = item
-                        {
-                            if *negative_trait {
-                                continue;
-                            }
-                            map.entry(trait_name.clone())
-                                .or_default()
-                                .push(target.clone());
-                        }
+        for (imp, target) in impl_blocks_with_target(&program.items) {
+            if let Some(ref trait_ref) = imp.trait_ref {
+                record_impl(&mut self.trait_impls, &trait_ref.name, &target);
+                if trait_ref.name == "Into" {
+                    if let Some(arg) = trait_ref.generic_args.first() {
+                        self.into_impls
+                            .insert((target.clone(), type_name_from_ty(arg)));
                     }
                 }
-                HirItem::Class(class) => {
-                    for derive_trait in &class.derive_traits {
-                        map.entry(derive_trait.clone())
-                            .or_default()
-                            .push(class.name.clone());
-                    }
-                    for inner in &class.impl_blocks {
-                        if let Some(ref trait_ref) = inner.trait_ref {
-                            map.entry(trait_ref.name.clone())
-                                .or_default()
-                                .push(class.name.clone());
-                            if trait_ref.name == "Into" {
-                                if let Some(arg) = trait_ref.generic_args.first() {
-                                    let dst = type_name_from_ty(arg);
-                                    into_map.insert((class.name.clone(), dst));
-                                }
-                            }
-                        }
-                    }
-                }
-                HirItem::Struct(strukt) => {
-                    for derive_trait in &strukt.derive_traits {
-                        map.entry(derive_trait.clone())
-                            .or_default()
-                            .push(strukt.name.clone());
-                    }
-                    // ruby-naming.spec.md §3.4a: in-body `include Mixin`
-                    // directives on structs register the same impl edges
-                    // an `impl Mixin for Strukt` block would.
-                    for inner in &strukt.impl_blocks {
-                        if let Some(ref trait_ref) = inner.trait_ref {
-                            map.entry(trait_ref.name.clone())
-                                .or_default()
-                                .push(strukt.name.clone());
-                            if trait_ref.name == "Into" {
-                                if let Some(arg) = trait_ref.generic_args.first() {
-                                    let dst = type_name_from_ty(arg);
-                                    into_map.insert((strukt.name.clone(), dst));
-                                }
-                            }
-                        }
-                    }
-                }
-                HirItem::Enum(enm) => {
-                    for derive_trait in &enm.derive_traits {
-                        map.entry(derive_trait.clone())
-                            .or_default()
-                            .push(enm.name.clone());
-                    }
-                    // Same rule as Struct above.
-                    for inner in &enm.impl_blocks {
-                        if let Some(ref trait_ref) = inner.trait_ref {
-                            map.entry(trait_ref.name.clone())
-                                .or_default()
-                                .push(enm.name.clone());
-                            if trait_ref.name == "Into" {
-                                if let Some(arg) = trait_ref.generic_args.first() {
-                                    let dst = type_name_from_ty(arg);
-                                    into_map.insert((enm.name.clone(), dst));
-                                }
-                            }
-                        }
-                    }
-                }
-                HirItem::Module(m) => {
-                    for sub in &m.items {
-                        visit(sub, map, into_map);
-                    }
-                }
-                _ => {}
             }
-        }
-        for item in &program.items {
-            visit(item, &mut self.trait_impls, &mut self.into_impls);
+            // ruby-naming.spec.md §3.4a: an `include Mixin` directive in a
+            // body declares that the target implements Mixin, exactly as
+            // `impl Mixin for X` does.
+            for item in &imp.items {
+                if let HirImplItem::Include {
+                    trait_name,
+                    negative_trait: false,
+                    ..
+                } = item
+                {
+                    record_impl(&mut self.trait_impls, trait_name, &target);
+                }
+            }
         }
     }
 
@@ -176,7 +86,7 @@ impl<'a> Lowerer<'a> {
     /// new sources from which `def drop` can be discovered means
     /// changing only the `class_has_drop_method` closure below — never
     /// fork the walk into a sibling collector. The downstream
-    /// drop-elaboration pass in `mir/lower/drops.rs` consults exactly
+    /// drop-elaboration pass in `mir/lower/drops/` consults exactly
     /// the resulting `user_drop_classes` set; there is no second
     /// registry.
     ///
@@ -255,51 +165,36 @@ impl<'a> Lowerer<'a> {
             // deadlocked at scope exit. Sweep the symbol table for
             // any `DefKind::Method` whose parent matches and whose
             // name is "drop".
-            for def in symbols.iter() {
-                if let DefKind::Method { parent, .. } = &def.kind {
-                    if *parent == class.def_id && def.name == "drop" {
-                        return true;
-                    }
-                }
-            }
-            false
+            symbols
+                .children_of(class.def_id)
+                .any(|def| def.name == "drop" && matches!(def.kind, DefKind::Method { .. }))
         };
 
         fn visit(
             item: &HirItem,
-            set: &mut HashSet<String>,
-            module_path: &[String],
+            set: &mut HashSet<DefId>,
+            symbols: &SymbolTable,
             class_has_drop_method: &dyn Fn(&HirClassDef) -> bool,
         ) {
             match item {
                 HirItem::Class(class) => {
                     if class_has_drop_method(class) {
-                        let qualified = if module_path.is_empty() {
-                            class.name.clone()
-                        } else {
-                            format!("{}.{}", module_path.join("."), class.name)
-                        };
-                        set.insert(qualified);
+                        set.insert(class.def_id);
                     }
                 }
                 HirItem::Impl(impl_block) => {
+                    let has_drop = impl_block
+                        .items
+                        .iter()
+                        .any(|inner| matches!(inner, HirImplItem::Method(m) if m.name == "drop"));
                     let target = type_name_from_ty(&impl_block.target_ty);
-                    if !target.is_empty() {
-                        for inner in &impl_block.items {
-                            if let HirImplItem::Method(m) = inner {
-                                if m.name == "drop" {
-                                    set.insert(target.clone());
-                                    break;
-                                }
-                            }
-                        }
+                    if let Some(def) = has_drop.then(|| symbols.type_def(&target)).flatten() {
+                        set.insert(def.id);
                     }
                 }
                 HirItem::Module(m) => {
-                    let mut child_path: Vec<String> = module_path.to_vec();
-                    child_path.push(m.name.clone());
                     for sub in &m.items {
-                        visit(sub, set, &child_path, class_has_drop_method);
+                        visit(sub, set, symbols, class_has_drop_method);
                     }
                 }
                 _ => {}
@@ -310,9 +205,47 @@ impl<'a> Lowerer<'a> {
             visit(
                 item,
                 &mut self.user_drop_classes,
-                &[],
+                symbols,
                 &class_has_drop_method,
             );
         }
     }
+}
+
+/// Record that `target` implements `trait_name`, once.
+fn record_impl(map: &mut HashMap<String, Vec<String>>, trait_name: &str, target: &str) {
+    let targets = map.entry(trait_name.to_string()).or_default();
+    if !targets.iter().any(|t| t == target) {
+        targets.push(target.to_string());
+    }
+}
+
+/// Every impl block in `items` (recursing into modules), paired with the
+/// name of the type it adds to: a top-level `impl`/`extension` names its
+/// target type, and a class, struct or enum body's blocks name their owner.
+fn impl_blocks_with_target(items: &[HirItem]) -> Vec<(&HirImplBlock, String)> {
+    let mut out = Vec::new();
+    for item in items {
+        match item {
+            HirItem::Impl(imp) => out.push((imp, type_name_from_ty(&imp.target_ty))),
+            HirItem::Class(class) => out.extend(
+                class
+                    .impl_blocks
+                    .iter()
+                    .map(|imp| (imp, class.name.clone())),
+            ),
+            HirItem::Struct(strukt) => out.extend(
+                strukt
+                    .impl_blocks
+                    .iter()
+                    .map(|imp| (imp, strukt.name.clone())),
+            ),
+            HirItem::Enum(enm) => {
+                out.extend(enm.impl_blocks.iter().map(|imp| (imp, enm.name.clone())))
+            }
+            HirItem::Module(m) => out.extend(impl_blocks_with_target(&m.items)),
+            _ => {}
+        }
+    }
+    out
 }

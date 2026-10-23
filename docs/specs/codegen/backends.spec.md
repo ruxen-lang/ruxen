@@ -75,7 +75,7 @@ helpers (`ruxen_string_len`, `ruxen_array_push`, `ruxen_string_clone`,
 | B3 + B4   | `all_opt_levels_correct`                               | `llvm_backend.rs`                 |
 | B5        | `compile_fails_when_calling_unimplemented_iter_flat_map` + `runtime_name_rejects_unknown_inferred_method` | `codegen_unknown_method_rejected.rs` |
 | B6        | `string_literal_lowers_through_string_from_wrapper`    | `string_literal_wrap.rs`          |
-| B7        | `e2e_135_unreserved_idents`                            | `unreserved_idents_runtime.rs`    |
+| B7        | e2e `135_unreserved_idents.rx`                         | release-e2e                       |
 
 The cross-backend equality assertion (`assert_backends_identical`) is
 the load-bearing pin: any optimisation or codegen change that makes

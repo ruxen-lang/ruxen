@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # v1 prompts — actual progress status
 
 Last audited: 2026-05-22. Status reflects in-tree code state, not

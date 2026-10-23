@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # 22 — Phase 5: package manager extensions (T4.01)
 
 > **Status: 🟡 Partial** (audited 2026-05-21). Per-package `Ruxen.toml`

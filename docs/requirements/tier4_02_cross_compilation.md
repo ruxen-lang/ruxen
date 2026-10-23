@@ -6,7 +6,7 @@
 > `docs/decisions/cross-compilation-linker-matrix.md` for the as-built linker
 > matrix and the deltas from this spec.
 >
-> **Path note:** this spec was written against the OLD `crates/ruxen-core`
+> **Path note:** this spec was written against the OLD `compiler/ruxen_core/`
 > layout. The tree is `compiler/ruxen_core/src/codegen/...`; the CLIs are
 > `src/ruxenc` (`ruxen compile`) and `src/ruxen_cli` (`ruxen build/run/check`).
 > Load-bearing path references below are corrected inline.
@@ -19,7 +19,7 @@ Making Ruxen cross-compile is a prerequisite for the WASM target (doc 03), for s
 
 ## 2. Current State
 
-### 2.1 Cranelift backend (`crates/ruxen-core/src/codegen/cranelift.rs:41-75`)
+### 2.1 Cranelift backend (`compiler/ruxen_core/src/codegen/cranelift.rs:41-75`)
 
 ```rust
 pub fn new() -> Result<Self, String> {
@@ -35,7 +35,7 @@ pub fn new() -> Result<Self, String> {
 
 `cranelift_native::builder()` reads `/proc/cpuinfo` (or equivalent) to detect the host. Passing a triple is done through `cranelift_codegen::isa::lookup(triple)` (available in 0.130 — already a dep). Cranelift's supported targets are: `x86_64`, `aarch64`, `s390x`, `riscv64`. Notably **not** `wasm32` (Cranelift has a `wasmtime`-oriented wasm backend but it's for JIT, not for AOT object emission).
 
-### 2.2 LLVM backend (`crates/ruxen-core/src/codegen/llvm/mod.rs:37-83`)
+### 2.2 LLVM backend (`compiler/ruxen_core/src/codegen/llvm/mod.rs:37-83`)
 
 ```rust
 Target::initialize_all(&InitializationConfig::default());
@@ -60,7 +60,7 @@ let target_machine = target
 
 LLVM's target list is broad: `x86_64`, `aarch64`, `arm`, `riscv32`, `riscv64`, `wasm32`, `wasm64`, `mips`, `powerpc`, `thumbv6m`, `thumbv7em`, etc. `wasm32-unknown-unknown` is fully supported.
 
-### 2.3 Linking (`crates/ruxen-core/src/codegen/object.rs:10-92`)
+### 2.3 Linking (`compiler/ruxen_core/src/codegen/object.rs:10-92`)
 
 ```rust
 pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf, String> {
@@ -79,7 +79,7 @@ pub fn emit_executable(...) -> Result<(), String> {
 
 Every invocation is `cc` on the host's `PATH`. Nothing lets the user pick `aarch64-linux-gnu-gcc`, `wasm-ld`, or `clang --target=…`.
 
-### 2.4 Runtime (`crates/ruxen-core/runtime/runtime.c`, 426 lines)
+### 2.4 Runtime (pre-split `runtime.c`, 426 lines; now `library/std/<pkg>/runtime/*.c`)
 
 Unconditionally:
 - Includes `<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<stdint.h>`.
@@ -90,7 +90,7 @@ There is no per-target runtime. No precompiled `runtime_x86_64-unknown-linux-gnu
 
 ### 2.5 target-lexicon dependency
 
-`crates/ruxen-core/Cargo.toml:22` already declares `target-lexicon = "0.13"`. The type is used in Cranelift's internal dependencies but not referenced from Ruxen source. This gives us a tested, zero-new-dep parser for the `arch-vendor-os[-env]` triple grammar.
+`compiler/ruxen_core/Cargo.toml:22` already declares `target-lexicon = "0.13"`. The type is used in Cranelift's internal dependencies but not referenced from Ruxen source. This gives us a tested, zero-new-dep parser for the `arch-vendor-os[-env]` triple grammar.
 
 ### 2.6 Release workflow already targets 4 triples
 
@@ -110,7 +110,7 @@ matrix:
       os: macos-14
 ```
 
-But this is the Rust toolchain cross-compiling the Ruxen *compiler binaries* — not Ruxen cross-compiling a user's project. The `cross` crate (line 53-54) is used only for the aarch64-Linux Rust build. Nothing in `ruxen-core` or `ruxen-cli` touches a triple.
+But this is the Rust toolchain cross-compiling the Ruxen *compiler binaries* — not Ruxen cross-compiling a user's project. The `cross` crate (line 53-54) is used only for the aarch64-Linux Rust build. Nothing in `ruxen_core` or `ruxen_cli` touches a triple.
 
 ### 2.7 Triple awareness elsewhere
 
@@ -307,7 +307,7 @@ LLVM's triple strings are 1:1 with `target-lexicon`'s for the cases we care abou
 
 ### 5.4 `cfg(...)` evaluator
 
-New `crates/ruxen-cli/src/cfg.rs` — also referenced by doc 01 §5.2 for feature gating. Evaluation inputs:
+New `src/ruxen_cli/src/cfg.rs` — also referenced by doc 01 §5.2 for feature gating. Evaluation inputs:
 
 ```rust
 pub struct CfgContext {
@@ -453,31 +453,31 @@ The release workflow (`.github/workflows/release.yml`) grows a matrix job per ti
 
 ### New files
 
-- `crates/ruxen-cli/src/target.rs` — `ruxen target list/add/remove` subcommands.
-- `crates/ruxen-cli/src/cfg.rs` — cfg parser + evaluator (shared with doc 01).
-- `crates/ruxen-core/src/codegen/target.rs` — `Target` struct, triple parsing, linker-selection helper.
+- `src/ruxen_cli/src/target.rs` — `ruxen target list/add/remove` subcommands.
+- `src/ruxen_cli/src/cfg.rs` — cfg parser + evaluator (shared with doc 01).
+- `compiler/ruxen_core/src/codegen/target.rs` — `Target` struct, triple parsing, linker-selection helper.
 
 ### Touched files
 
-- `crates/ruxen-cli/src/cli.rs:24-114` — add `--target <triple>` to `Build`, `Run`, `Check`; add `Target { ... }` subcommand.
-- `crates/ruxen-cli/src/manifest.rs:77-91` — add `[target.<triple>] { linker, link-args, runner, dependencies }` via `BTreeMap<String, TargetSpec>`.
-- `crates/ruxen-cli/src/build.rs:21-118` — thread `Option<Triple>` through `build()`. Re-route `target_dir`.
-- `crates/ruxen-core/src/codegen/mod.rs` — `Backend` variants gain target info; `compile_with_options` accepts `Triple`.
-- `crates/ruxen-core/src/codegen/cranelift.rs:41-75` — `CodeGen::new(triple)` — swap `cranelift_native::builder` for `isa::lookup(triple)`.
-- `crates/ruxen-core/src/codegen/llvm/mod.rs:37-83` — `CodeGen::new(opt_level, triple)` — swap `get_default_triple()` for the provided one.
-- `crates/ruxen-core/src/codegen/object.rs:10-92` — accept `(Triple, &TargetSpec)`; pick linker; drop `-lc -lm` for wasm; thread link-args.
-- `crates/ruxen-core/src/codegen/mod.rs:27-65` — add `find_runtime_obj(triple)` next to `find_runtime_c`.
+- `src/ruxen_cli/src/cli.rs:24-114` — add `--target <triple>` to `Build`, `Run`, `Check`; add `Target { ... }` subcommand.
+- `src/ruxen_cli/src/manifest.rs:77-91` — add `[target.<triple>] { linker, link-args, runner, dependencies }` via `BTreeMap<String, TargetSpec>`.
+- `src/ruxen_cli/src/build.rs:21-118` — thread `Option<Triple>` through `build()`. Re-route `target_dir`.
+- `compiler/ruxen_core/src/codegen/mod.rs` — `Backend` variants gain target info; `compile_with_options` accepts `Triple`.
+- `compiler/ruxen_core/src/codegen/cranelift.rs:41-75` — `CodeGen::new(triple)` — swap `cranelift_native::builder` for `isa::lookup(triple)`.
+- `compiler/ruxen_core/src/codegen/llvm/mod.rs:37-83` — `CodeGen::new(opt_level, triple)` — swap `get_default_triple()` for the provided one.
+- `compiler/ruxen_core/src/codegen/object.rs:10-92` — accept `(Triple, &TargetSpec)`; pick linker; drop `-lc -lm` for wasm; thread link-args.
+- `compiler/ruxen_core/src/codegen/mod.rs:27-65` — add `find_runtime_obj(triple)` next to `find_runtime_c`.
 - `.github/workflows/release.yml` — add a runtime-object job per tier-1 target; publish `runtime-<triple>.tar.gz` alongside the binaries.
 
 ### Tests
 
-- `crates/ruxen-cli/tests/cross_compile.rs` — builds for `aarch64-unknown-linux-gnu` from an x86_64 host, verifies the ELF header is `EM_AARCH64`.
-- `crates/ruxen-core/tests/triple_parsing.rs` — alias resolution, canonicalization, cfg derivation.
-- `crates/ruxen-core/src/codegen/tests.rs` — round-trip a simple program through both backends with `Triple::host()` and compare to the current behavior (regression guard).
+- `src/ruxen_cli/tests/cross_compile.rs` — builds for `aarch64-unknown-linux-gnu` from an x86_64 host, verifies the ELF header is `EM_AARCH64`.
+- `compiler/ruxen_core/tests/triple_parsing.rs` — alias resolution, canonicalization, cfg derivation.
+- `compiler/ruxen_core/src/codegen/tests.rs` — round-trip a simple program through both backends with `Triple::host()` and compare to the current behavior (regression guard).
 
 ## 7. Interactions with Other Tiers
 
-- **Tier 4.01 package manager.** `[target.<triple>.dependencies]` lives in the manifest and is druxen by the resolved triple. `cfg(...)` evaluation in doc 01 §5.2 consumes the `CfgContext` built here.
+- **Tier 4.01 package manager.** `[target.<triple>.dependencies]` lives in the manifest and is driven by the resolved triple. `cfg(...)` evaluation in doc 01 §5.2 consumes the `CfgContext` built here.
 - **Tier 4.03 WASM.** WASM is the first target that *requires* this work — `wasm32-unknown-unknown` has no `cc`, no `-lc`, no `-lm`. Doc 03 §6 lists the specific drops.
 - **Tier 4.04 no_std.** `thumbv7em-none-eabihf` and kin imply `no_std`. The linker is the embedded toolchain's `arm-none-eabi-ld`. No runtime libc. Doc 04 §5.3 covers the runtime subset.
 - **Tier 4.06 CI.** The CI matrix needs to smoke-test cross-compilation. Recommend `aarch64-unknown-linux-gnu` from Ubuntu runners using `qemu-user-static` for `ruxen run` to succeed.
@@ -522,7 +522,7 @@ Best-effort. Document what works. Don't gate releases on tier-3.
 5. **Rustflags via manifest.** `[target.<triple>].rustflags = [...]` echoes Cargo's dangerous-but-useful pattern. Recommend: for v1 accept them raw, pass through to LLVM as `-C <flag>`. Ignore for Cranelift.
 6. **`runner` for non-native `ruxen run`.** If target != host and no runner is configured, we error. Should we auto-detect QEMU? Recommend: no, too magical. Require explicit config.
 7. **Host-triple lock-in.** If a user publishes a piece with a binary runtime in `target/`, it's useless to anyone on a different triple. The `target/` directory is already gitignored (`scaffold.rs:155`), but we should make this explicit in CONTRIBUTING.md.
-8. **LLVM 18 vs 19.** `ruxen-core/Cargo.toml:27` features `llvm18-0`. LLVM 19 is out. Defer upgrade; LLVM 18 covers every target we name.
+8. **LLVM 18 vs 19.** `ruxen_core/Cargo.toml:27` features `llvm18-0`. LLVM 19 is out. Defer upgrade; LLVM 18 covers every target we name.
 9. **Reproducibility.** Cross-compiling the same source from two different hosts should produce the same bytes. `cc` may embed host timestamps. Recommend: pass `-ffile-prefix-map` and `-D__DATE__=…` to normalize; leave as phase 2d polish.
 10. **Symbol naming differences.** macOS prepends `_` to C symbols; ELF does not. Cranelift and LLVM both handle this when given the right triple, but it's a place bugs hide. Regression test: same Ruxen source compiled for both Mach-O and ELF, disassembled, confirm `_ruxen_main` on Mach-O and `ruxen_main` on ELF.
 11. **Environment variables leaking.** `CC`, `CFLAGS`, `LDFLAGS` — Cargo respects these with layered overrides. Recommend: Ruxen v1 ignores them (manifest + CLI only). Revisit if it causes friction.

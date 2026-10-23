@@ -1,0 +1,15 @@
+# Q49 fixture: each `if`/`else` arm binds its OWN owned `String`, so the drop
+# elaborator must free + Drop it inside that arm's block and never hoist the
+# free to the shared exit. (A bare `puts "positive"` is a zero-copy `&String`
+# borrow since the bare-literal optimization, so it would own nothing to drop;
+# binding a local per arm is what exercises Q49's branch-scoped drop sinking.)
+def main
+  let x = 42
+  if x > 0
+    let s = "positive"
+    puts "#{s}"
+  else
+    let s = "non-positive"
+    puts "#{s}"
+  end
+end

@@ -130,16 +130,10 @@ impl<'a> Lowerer<'a> {
                 // each pair below. (Previously a Hash flowed straight into
                 // the Vec ops below and was read as a Vec → garbage / the
                 // value binding stayed unresolved into codegen.)
-                let mut iter_ty = iterable.ty.clone();
-                while let Ty::Ref(inner)
-                | Ty::RefMut(inner)
-                | Ty::RefLifetime(_, inner)
-                | Ty::RefMutLifetime(_, inner) = &iter_ty
-                {
-                    iter_ty = (**inner).clone();
-                }
+                let iter_ty = self.mir_refined_expr_ty(iterable).peel_refs().clone();
                 let elem_ty = if let Ty::Map(k, v) = &iter_ty {
-                    let pair_ty = Ty::Tuple(vec![(**k).clone(), (**v).clone()]);
+                    // Each entry borrows the key and value the table owns.
+                    let pair_ty = Ty::Tuple(vec![Ty::Ref(k.clone()), Ty::Ref(v.clone())]);
                     let entries = self.new_temp(Ty::Array(Box::new(pair_ty.clone())));
                     self.emit(MirInst::Call {
                         dest: Some(entries),
@@ -149,7 +143,7 @@ impl<'a> Lowerer<'a> {
                     iter_id = entries;
                     pair_ty
                 } else {
-                    element_type_of(&iterable.ty)
+                    element_type_of(&iter_ty)
                 };
 
                 // Index counter: _i = 0

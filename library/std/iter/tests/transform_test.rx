@@ -1,0 +1,86 @@
+def dup_pair(x: Int) -> Array[Int]
+  [x, x * 10]
+end
+
+def only_odd(x: Int) -> Int?
+  if x % 2 == 1
+    x
+  else
+    nil
+  end
+end
+
+Tester.describe("Enumerable transforms") do |t: &var Tester|
+  t.it("map, select, filter and find_all") do
+    let v = [1, 2, 3]
+    t.expect(v.map { |n| "#{n}" }.join("")).to_eq("123")
+    t.expect(v.map { |n| "#{n}" }.join(",")).to_eq("1,2,3")
+    t.expect([1, 2, 3, 4, 5, 6].select { |n| n % 2 == 0 }.count).to_eq(3)
+    let evens = [1, 2, 3, 4, 5].filter do |x| x % 2 == 0 end
+    t.expect(evens.join(",")).to_eq("2,4")
+    t.expect([1, 2, 3, 4].find_all do |x| x > 2 end.size).to_eq(2)
+    t.expect(["a", "b", "c"].join("")).to_eq("abc")
+  end
+
+  t.it("partition splits by the predicate") do
+    let v = [1, 2, 3, 4, 5, 6]
+    let (evens, odds) = v.partition { |n| n % 2 == 0 }
+    let even_text: String = evens.join(",")
+    let odd_text: String = odds.join(",")
+    t.expect(even_text).to_eq("2,4,6")
+    t.expect(odd_text).to_eq("1,3,5")
+  end
+
+  t.it("take, drop and their combinations") do
+    let v = [10, 20, 30, 40, 50]
+    t.expect(v.take(3).sum).to_eq(60)
+    t.expect(v.drop(2).sum).to_eq(120)
+    t.expect(v.drop(1).take(3).sum).to_eq(90)
+    t.expect(v.take(99).count).to_eq(5)
+    t.expect(v.drop(99).count).to_eq(0)
+    t.expect(v.take(2).reduce(0) { |acc, n| acc + n }).to_eq(30)
+    t.expect([1, 2, 3, 4, 5].drop(2).all? { |n| n > 2 }).to_eq(true)
+  end
+
+  t.it("take_while and drop_while") do
+    let a = [1, 2, 3, 4, 1]
+    t.expect(a.take_while { |x| x < 3 }.join(",")).to_eq("1,2")
+    t.expect(a.drop_while { |x| x < 3 }.join(",")).to_eq("3,4,1")
+    t.expect(a.take(2).size).to_eq(2)
+    t.expect(a.drop(3).join(",")).to_eq("4,1")
+    t.expect(a.entries.size).to_eq(5)
+    t.expect(a.first.unwrap_or(-1)).to_eq(1)
+  end
+
+  t.it("chain and zip") do
+    t.expect([1, 2, 3].chain([4, 5]).count).to_eq(5)
+    t.expect([1, 2, 3].chain([4, 5]).sum).to_eq(15)
+    let empty: Array[Int] = Array.new
+    t.expect(empty.chain([1, 2, 3]).count).to_eq(3)
+    let e2: Array[Int] = Array.new
+    t.expect([1, 2, 3].chain(e2).count).to_eq(3)
+    t.expect([1, 2, 3].zip([10, 20, 30]).count).to_eq(3)
+    t.expect([4, 5].zip([1, 2, 3]).count).to_eq(2)
+    let e3: Array[Int] = Array.new
+    t.expect([1, 2, 3].zip(e3).count).to_eq(0)
+    let e4: Array[Int] = Array.new
+    t.expect(e4.zip([1, 2, 3]).count).to_eq(0)
+  end
+
+  t.it("zip then to_h builds a Hash") do
+    let keys = [1, 2, 3]
+    let vals = [10, 20, 30]
+    let m: Hash[Int, Int] = keys.zip(vals).to_h
+    t.expect(m.size).to_eq(3)
+    t.expect(m[2]).to_eq(20)
+  end
+
+  t.it("flat_map, collect_concat and filter_map") do
+    let a = [1, 2, 3]
+    t.expect(a.flat_map { |x| dup_pair(x) }.join(",")).to_eq("1,10,2,20,3,30")
+    t.expect(a.collect_concat { |x| dup_pair(x) }.size).to_eq(6)
+    let none: Array[Int] = Array.new
+    t.expect(a.flat_map { |_x| none.clone }.size).to_eq(0)
+    t.expect(a.filter_map { |x| only_odd(x) }.join(",")).to_eq("1,3")
+  end
+end

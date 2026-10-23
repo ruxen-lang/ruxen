@@ -2,7 +2,7 @@
 
 Ruxen ships a pure-Ruxen test framework. Tests live in `tests/**.rx`
 inside your project. Each `.rx` file under `tests/` is a test file —
-no method-name convention, no `#[test]` attribute. Run them with
+no method-name convention, no test attribute. Run them with
 `ruxen test`.
 
 ## A first test

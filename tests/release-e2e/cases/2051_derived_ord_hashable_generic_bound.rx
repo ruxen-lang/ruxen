@@ -1,0 +1,32 @@
+# Derived Ord/PartialOrd and Hashable dispatch through generic trait bounds,
+# including primitives satisfying a Hashable bound.
+struct Score
+  v: Int
+  include Ord
+  include Eq
+  include PartialOrd
+  include PartialEq
+  include Hashable
+end
+
+def cmp_it[T: Ord](a: &T, b: &T) -> Bool
+  a.cmp(b) < 0
+end
+
+def pcmp_it[T: PartialOrd](a: &T, b: &T) -> Bool
+  a.partial_cmp(b) < 0
+end
+
+def hash_it[T: Hashable](a: &T) -> Int
+  a.hash_code
+end
+
+def main
+  let a = Score.new(1)
+  let b = Score.new(2)
+  puts "#{cmp_it(&a, &b)}"
+  puts "#{cmp_it(&b, &a)}"
+  puts "#{pcmp_it(&a, &b)}"
+  puts "#{hash_it(&a) == hash_it(&Score.new(1))}"
+  puts "#{hash_it(&a) == hash_it(&b)}"
+end

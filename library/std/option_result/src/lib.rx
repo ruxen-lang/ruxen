@@ -69,6 +69,21 @@ class Option[T]
     def present? as "ruxen_option_is_some" -> Bool
     def nil? as "ruxen_option_is_none" -> Bool
   end
+  alias expect! expect
+  alias unwrap! unwrap
+
+  # Ruby `==`: two options are equal when both are empty, or both hold
+  # equal values (compared with the element's own `==`).
+  def ==(other: Option[T]) -> Bool
+    match self
+      Some(a) ->
+        match other
+          Some(b) -> a == b
+          nil -> false
+        end
+      nil -> other.nil?
+    end
+  end
 
   # Ruby `Option#ok_or` — convert to a `Result`, using `err` as the `Err`
   # payload when empty. MIGRATED (Task H) to a `.rx` body: the method-level
@@ -87,7 +102,7 @@ class Option[T]
   # `Some`; propagate `nil` unchanged. Lowered ONCE as the opaque
   # `Option_map` body (T/U abstract). Exercises a closure call inside a
   # match arm of an opaque generic body.
-  def map[U](f: any Fn[Fn(T) -> U]) -> Option[U]
+  def map[U](f: Fn(T) -> U) -> Option[U]
     match self
       Some(x) -> Option.Some(f.(x))
       nil -> nil
@@ -98,7 +113,7 @@ class Option[T]
   # otherwise compute the fallback by calling `f` (no argument). Lowered
   # ONCE as the opaque `Option_unwrap_or_else` body (closure call in a
   # match arm of the opaque body, Bug 1 path).
-  def unwrap_or_else(f: any Fn[Fn() -> T]) -> T
+  def unwrap_or_else(f: Fn() -> T) -> T
     match self
       Some(x) -> x
       nil -> f.()
@@ -116,12 +131,14 @@ class Result[T, E]
     def ok as "ruxen_result_ok" -> Option[T]
     def err as "ruxen_result_err" -> Option[E]
   end
+  alias expect! expect
+  alias unwrap! unwrap
 
   # Ruby `Result#map` — apply `f` to the `Ok` value, repackage as `Ok`;
   # propagate `Err` unchanged. Lowered ONCE as the opaque `Result_map`
   # body (T/U/E abstract). Closure call inside a match arm of an opaque
   # generic body.
-  def map[U](f: any Fn[Fn(T) -> U]) -> Result[U, E]
+  def map[U](f: Fn(T) -> U) -> Result[U, E]
     match self
       Ok(x) -> Result.Ok(f.(x))
       Err(e) -> Result.Err(e)
@@ -130,7 +147,7 @@ class Result[T, E]
 
   # Ruby `Result#map_err` — apply `f` to the `Err` value; propagate `Ok`
   # unchanged.
-  def map_err[F](f: any Fn[Fn(E) -> F]) -> Result[T, F]
+  def map_err[F](f: Fn(E) -> F) -> Result[T, F]
     match self
       Ok(x) -> Result.Ok(x)
       Err(e) -> Result.Err(f.(e))
@@ -141,7 +158,7 @@ class Result[T, E]
   # otherwise compute the fallback by calling `f` with the `Err` payload.
   # Lowered ONCE as the opaque `Result_unwrap_or_else` body (closure call
   # in a match arm of the opaque body, Bug 1 path).
-  def unwrap_or_else(f: any Fn[Fn(E) -> T]) -> T
+  def unwrap_or_else(f: Fn(E) -> T) -> T
     match self
       Ok(x) -> x
       Err(e) -> f.(e)

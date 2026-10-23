@@ -5,7 +5,13 @@ Owner: compiler
 Depends on: tier-1 doc 04 (Drop) for vtable drop slot; associated types
             (doc 01) for projection-safety rule
 Blocks: plugin/script interfaces; heterogeneous collections
-        (`Array[Box[any Drawable]]`); event-druxen code
+        (`Array[Box[any Drawable]]`); event-driven code
+
+> **Note.** The stdlib `Iterator` layer that some examples below assume
+> was dropped: Ruxen iteration is `Enumerable[T]` over a single `each`
+> method (`library/std/core/src/lib.rx`). `Iterator` (and `LendingIterator`) here is an
+> illustrative mixin with an associated type, not shipped or planned
+> stdlib API.
 
 ## 1. Summary & Motivation
 
@@ -47,7 +53,7 @@ ship `any Mixin` end-to-end.
 
 The tutorial mentions it (`docs/tutorial/08-mixins.md:98-108`) with a
 note about the difference from `some Mixin`, but no fixture exercises
-it. Today, typing `fn f(x: &any Display)` probably compiles but
+it. Today, typing `def f(x: &any Display)` probably compiles but
 does not produce a real mixin-object argument — the resolver attaches
 `Ty::DynTrait(...)`, the layout says 16 bytes, but method dispatch
 falls back to structural matching via `TraitResolver::lookup_method`
@@ -126,11 +132,11 @@ inherited methods) satisfies:
 - **S2.** Does not use `Self` in an argument type *by value*. Same
   rule — references and box-wrapping are OK.
 - **S3.** Does not have additional generic type parameters
-  (`def foo[T](&self, x: T)`). The vtable would need one slot per
+  (`def foo[T](x: T)`). The vtable would need one slot per
   monomorphization, which is infinite. Generic lifetimes are fine.
 - **S4.** Is not a class method (`def self.new`). No receiver → can't
   dispatch.
-- **S5.** Does not have `consume self` as its receiver (self by-value).
+- **S5.** Is not a `def consume` method (self by value).
   The vtable has a single function pointer; a by-value self can't be
   passed across the abstract boundary without monomorphization.
   (Rust has `where Self: Sized` exemption; we omit for simplicity —
@@ -263,7 +269,7 @@ int64_t __shim_Square_area(void *self_data, ...) {
 ```
 
 The shim is trivial (a cast + tail call). It preserves the
-`def var foo(&var self, ...)` self-mode correctly because Ruxen's
+`def var foo(...)` self-mode correctly because Ruxen's
 calling convention is the same whether self is typed as `*var u8` or
 `&var Concrete` at the ABI level.
 
@@ -389,7 +395,7 @@ E-DYN-GAT.
 
 ### 8.3 With HRTBs (doc 03)
 
-`any for['a] Fn(&'a T)` is object-safe iff `Fn` is. The HRTB affects
+`any for[a] Fn(&a T)` is object-safe iff `Fn` is. The HRTB affects
 only the *type* of the mixin object; the vtable is identical.
 
 ### 8.4 With const generics (doc 02)
@@ -418,7 +424,7 @@ traits must be droppable. Tier-1 is a hard prerequisite.
 - **OQ-1: consume self on mixin objects.** Rule S5 forbids it.
   Exception: Rust has `where Self: Sized` to opt out per method —
   the method is not in the vtable, but is callable on the concrete
-  type. Useful for `mixin IntoIterator; fn into_iter(self) -> Self.Iter`.
+  type. Useful for a `def consume` method that returns an associated type.
   Recommendation: add in 06a or explicitly defer. See tutorial's
   `docs/tutorial/08-mixins.md:108`.
 - **OQ-2: vtable alignment.** 8-byte on 64-bit. ARM32 / wasm32 would
@@ -438,7 +444,7 @@ traits must be droppable. Tier-1 is a hard prerequisite.
   constrains future flexibility. Document as not-guaranteed for
   external ABI use.
 - **R-2: stack usage for large any bodies.** A mixin method that
-  takes `&var self` on a 10MB struct is called with a fat pointer
+  is a `def var` method on a 10MB struct is called with a fat pointer
   and operates through indirection — no stack issue. But a
   `consume self` method on a small struct was rejected (S5); users
   who want move-by-value must refactor.
@@ -456,13 +462,13 @@ traits must be droppable. Tier-1 is a hard prerequisite.
 
 ### 10.1 Positive tests
 
-- T1: `fn show(x: &any Display)` called with `&Square.new(...)`.
+- T1: `def show(x: &any Display)` called with `&Square.new(...)`.
   Displays correctly.
 - T2: `Array[Box[any Display]]` holding three different shape
   types. Iteration produces the right strings.
 - T3: Drop on Box[any Mixin]: a type with a user Drop is dropped
   once when the box drops.
-- T4: Method with `&var self` through vtable: `fn increment(c: &var
+- T4: `def var` method through vtable: `def increment(c: &var
   any Counter)` increments a concrete counter type.
 - T5: `any Iterator[Item = Int]` — bound associated type.
 - T6: Implicit coercion: `let boxed: Box[any Display] =
@@ -470,7 +476,7 @@ traits must be droppable. Tier-1 is a hard prerequisite.
 
 ### 10.2 Negative tests
 
-- N1: Generic method on mixin: `mixin T; def foo[U](self, x: U)
+- N1: Generic method on mixin: `mixin T; def foo[U](x: U)
   end`. Use `any T` → E-DYN-NOT-SAFE (S3).
 - N2: `any Iterator` without bound → E-DYN-ASSOC-UNBOUND (S6).
 - N3: `any LendingIterator` (GAT) → E-DYN-GAT (S7).

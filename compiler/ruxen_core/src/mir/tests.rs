@@ -151,7 +151,11 @@ mod lowering_tests {
             .iter()
             .find(|f| f.name == "main")
             .expect("main not found");
-        assert_eq!(main_fn.params.len(), 0, "main takes no params");
+        assert_eq!(
+            main_fn.params.len(),
+            2,
+            "hosted main takes the C argc/argv params"
+        );
 
         // The entry block should have a Return(None) terminator.
         let entry = &main_fn.blocks[main_fn.entry_block];
@@ -160,6 +164,43 @@ mod lowering_tests {
             "empty main should end with Return(None), got {:?}",
             entry.terminator
         );
+        assert!(
+            matches!(
+                entry.instructions.first(),
+                Some(MirInst::Call { callee, args, .. }) if callee == "ruxen_env_init" && args.len() == 2
+            ),
+            "hosted main should start by calling ruxen_env_init(argc, argv), got {:?}",
+            entry.instructions
+        );
+    }
+
+    #[test]
+    fn no_std_main_skips_env_init() {
+        let symbols = SymbolTable::new();
+        let func = simple_func(
+            0,
+            "main",
+            vec![],
+            Ty::Unit,
+            expr(HirExprKind::Block(vec![], None), Ty::Unit),
+        );
+        let program = program_with_fn(func);
+
+        let mir = Lowerer::new_no_std(&symbols)
+            .lower_program(&program)
+            .expect("lowering failed");
+        let main_fn = mir
+            .functions
+            .iter()
+            .find(|f| f.name == "main")
+            .expect("main not found");
+
+        assert!(main_fn.params.is_empty(), "no_std main takes no params");
+        let calls_env_init =
+            main_fn.blocks.iter().flat_map(|b| &b.instructions).any(
+                |inst| matches!(inst, MirInst::Call { callee, .. } if callee == "ruxen_env_init"),
+            );
+        assert!(!calls_env_init, "no_std main must not call ruxen_env_init");
     }
 
     // ── Test 2: let x = 42 ─────────────────────────────────────────────
@@ -613,12 +654,8 @@ mod lowering_tests {
                 info: crate::resolve::symbols::StructInfo {
                     generic_params: vec![],
                     fields: vec![],
-                    derive_traits: vec!["Copy".to_string(), "Clone".to_string()],
                     layout: vec![],
-                    opt_out_send: false,
-                    opt_out_sync: false,
-                    manual_send: false,
-                    manual_sync: false,
+                    auto_traits: crate::resolve::symbols::AutoTraitFlags::default(),
                     const_predicates: vec![],
                 },
             },
@@ -719,12 +756,8 @@ mod lowering_tests {
                 info: crate::resolve::symbols::StructInfo {
                     generic_params: vec![],
                     fields: vec![string_field],
-                    derive_traits: vec![],
                     layout: vec![],
-                    opt_out_send: false,
-                    opt_out_sync: false,
-                    manual_send: false,
-                    manual_sync: false,
+                    auto_traits: crate::resolve::symbols::AutoTraitFlags::default(),
                     const_predicates: vec![],
                 },
             },
@@ -912,13 +945,12 @@ mod helper_tests {
     /// 3. `Ty::Ref(Box::new(Class { name: "Money", .. }))` → returns
     ///    `Some("Money")` (proves the Ref-recursion path).
     ///
-    /// The helper was previously only validated indirectly through the
-    /// Stage-3 behaviour test `user_impl_display_lowers_t_fmt_function` in
-    /// `tests/stdlib_fmt_display_dispatch.rs`. This direct test closes the
-    /// spec gap surfaced in the Stage 2 spec review.
+    /// The helper is otherwise validated only indirectly, through e2e
+    /// `070_interp_display_dispatch`. This direct test closes the spec gap
+    /// surfaced in the Stage 2 spec review.
     #[test]
     fn user_has_impl_display_resolves_class_int_and_ref() {
-        // Canonical impl-Display fixture (mirrors `tests/stdlib_fmt.rs`).
+        // Canonical impl-Display fixture.
         // `class Money` declares a single `cents: Int` field and an
         // `impl Display` block whose `def fmt` matches the
         // `fmt(&mut Formatter) -> Result[(), FmtError]` contract.

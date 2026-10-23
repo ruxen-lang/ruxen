@@ -1,0 +1,66 @@
+# F-23. The receiver-mutating String methods (`def var` in string.rx) change
+# the receiver in place for every receiver shape: an owned local, a
+# `&var String` parameter, a field, a variable captured by a block, and a
+# `&String` borrow, which they must not free.
+class Doc
+  body: String
+
+  def init(body: String)
+    self.body = body
+  end
+
+  def var add(part: &String)
+    self.body.push_str(part)
+    self.body.push(?\u{21})
+  end
+end
+
+def grow(s: &var String)
+  s.push_str("-tail")
+  s.insert(0, 62)
+  s.insert_str(1, " ")
+  let c = s.remove(0)
+  puts c
+  s.push(?\u{2e})
+end
+
+def peek(s: &String) -> USize
+  var copy = s
+  copy.clear
+  copy.size
+end
+
+def main
+  var s = "ab"
+  s.push(?c)
+  s.push_str("de")
+  s.insert(0, 95)
+  s.insert_str(1, "x")
+  let removed = s.remove(1)
+  puts removed
+  puts s
+  s.truncate(3)
+  puts s
+  s += "+more"
+  puts s
+  grow(&var s)
+  puts s
+
+  var doc = Doc.new("hi")
+  doc.add(" there")
+  puts doc.body
+
+  var log = "log:"
+  [1, 2, 3].each do |n|
+    log.push_str(" #{n}")
+  end
+  puts log
+
+  let kept = "keep"
+  puts peek(&kept)
+  puts kept
+
+  var empty = "x"
+  empty.clear
+  puts empty.size
+end

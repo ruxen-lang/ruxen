@@ -1,0 +1,21 @@
+# F-22. Ruby spellings in the stdlib are `alias`es of one declared method
+# (String#length -> size, strip -> trim, downcase -> to_lower, scalar
+# to_string -> to_s, Duration#+ -> add, Instant#- -> sub) instead of second
+# FFI declarations of the same C symbol.
+def main
+  let s = "  Ruxen  "
+  puts s.length
+  puts s.strip
+  puts s.lstrip.size
+  puts s.rstrip.size
+  puts s.downcase
+  puts s.upcase
+  puts 42.to_string
+  puts true.to_string
+  puts 'x'.to_string
+  let d = Duration.from_secs(2) + Duration.from_millis(500)
+  puts d.as_millis
+  puts((d - Duration.from_secs(1)).as_millis)
+  let a = Instant.now
+  puts((Instant.now - a).as_millis >= 0)
+end

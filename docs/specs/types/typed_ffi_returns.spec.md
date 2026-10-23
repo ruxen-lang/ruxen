@@ -39,8 +39,8 @@ C symbol; only the *reported* surface type changes.
 class-relative surface return
 
 **Given** a generic class `Foo[T]` with a lib decl
-`def bar as "ruxen_foo_bar"(self) -> Int` inside its lib block,
-AND a co-located lib decl `def baz as "ruxen_foo_baz"(self) -> Bar[T]`
+`def bar as "ruxen_foo_bar" -> Int` inside its lib block,
+AND a co-located lib decl `def baz as "ruxen_foo_baz" -> Bar[T]`
 **When** the user writes `f.bar` on `f: Foo[T]`
 **Then** the return type is reported as the **declared** surface
 type. If the lib decl says `-> Int`, the return is Int (B2 doesn't
@@ -59,8 +59,8 @@ Authors who want a typed return write it explicitly:
 class Mutex[T]
   lib "runtime/mutex.c"
     def self.new as "ruxen_mutex_new"(initial: T) -> Mutex[T]
-    def lock_raw as "ruxen_mutex_lock"(self) -> MutexGuard[T]
-    def get as "ruxen_mutex_guard_get"(self) -> T  # on MutexGuard
+    def lock_raw as "ruxen_mutex_lock" -> MutexGuard[T]
+    def get as "ruxen_mutex_guard_get" -> T  # on MutexGuard
   end
 end
 ```
@@ -83,7 +83,7 @@ the class's declared generic params.
 
 ## B4 — T binding from class-generic context
 
-**Given** an instance method declared as `def baz as "..."(self) -> T`
+**Given** an instance method declared as `def baz as "..." -> T`
 inside `class Foo[T]`
 **When** called on `f: Foo[String]`
 **Then** the return type is `String`.
@@ -198,9 +198,9 @@ class) does NOT get the lift. The lift is keyed on
 | B2        | `instance_method_return_type_honours_declaration`    | `typed_ffi_returns.rs`        |
 | B4        | `class_generic_t_substitutes_in_return`              | `typed_ffi_returns.rs`        |
 | B5        | `self_in_return_position_resolves_to_class_t`        | `typed_ffi_returns.rs`        |
-| B6        | e2e `cases/710_mutex_lock_unlock_typed_surface.rx`  | release-e2e                   |
+| B6        | `reads the value through lock_raw`                   | `library/std/sync/tests/sync_test.rx` |
 | B7        | `mutex_drop_emitted_on_typed_scope_exit`             | `typed_ffi_returns.rs`        |
-| B8        | covered by 710 (Mutex), 711 (SharedSync), 712 (Atomic) | release-e2e                 |
+| B8        | Mutex, SharedSync and AtomicI64 cases                | `library/std/sync/tests/sync_test.rx` |
 | B9        | covered by integration tests B1-B7                   | —                             |
 | B10       | `non_generic_class_constructor_returns_int`          | `typed_ffi_returns.rs`        |
 | B11       | `ffi_signature_unchanged_after_lift`                 | `typed_ffi_returns.rs`        |

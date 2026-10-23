@@ -1,9 +1,0 @@
-def append_bang(s: &var String)
-  s.push(?\u{21})
-end
-
-def main
-  var greeting = "hello"
-  append_bang(&var greeting)
-  puts "#{greeting}"
-end

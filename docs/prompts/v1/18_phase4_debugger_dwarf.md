@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # 18 — Phase 4: debugger + DWARF (T3.02 + P0.14)
 
 **Depends on:** prompt 17.

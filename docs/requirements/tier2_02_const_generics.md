@@ -135,7 +135,7 @@ new surface.**
   and is a different feature entirely.
 - **NG2.** Floating-point const generics. Rust omits them because
   `NaN != NaN` breaks type equality. Ruxen follows suit.
-- **NG3.** `String` or `&str` const generics. Rust is moving toward
+- **NG3.** `String` const generics. Rust is moving toward
   this slowly; not in tier 2.
 - **NG4.** Const-generic type parameters: `def foo[const T: Type]`.
   That's Scala's type functions, a separate feature.
@@ -209,13 +209,13 @@ extension SmallArray[T, const N: USize]
     self.len = 0
   end
 
-  def var push(item: T) -> Result[Unit, T]
+  def var push(item: T) -> Result[nil, T]
     if self.len == N
       return Err(item)
     end
     self.data[self.len] = item
     self.len = self.len + 1
-    Ok(())
+    Ok(nil)
   end
 
   def len -> USize { self.len }

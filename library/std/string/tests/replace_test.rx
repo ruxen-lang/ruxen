@@ -1,0 +1,47 @@
+Tester.describe("String substitution") do |t: &var Tester|
+  t.it("sub replaces the first match") do
+    t.expect("hello".sub("l", "L")).to_eq("heLlo")
+    t.expect("hello".sub("z", "Z")).to_eq("hello")
+    t.expect("abc".sub("", "X")).to_eq("Xabc")
+    t.expect("hello".sub("hello", "")).to_eq("")
+    t.expect("".sub("a", "b")).to_eq("")
+  end
+
+  t.it("gsub and replace replace every match") do
+    t.expect("hello".gsub("l", "L")).to_eq("heLLo")
+    t.expect("aaa".gsub("aa", "b")).to_eq("ba")
+    t.expect("abc".gsub("", "-")).to_eq("-a-b-c-")
+    t.expect("hello".gsub("z", "Z")).to_eq("hello")
+    t.expect("".gsub("a", "b")).to_eq("")
+    t.expect("a.b.c".gsub(".", "::")).to_eq("a::b::c")
+    t.expect("hello".replace("l", "L")).to_eq("heLLo")
+    t.expect("hello world hello".replace("hello", "bye")).to_eq("bye world bye")
+    t.expect("hello world hello".replace("xx", "yy")).to_eq("hello world hello")
+  end
+
+  t.it("regex arguments bridge to std.regex") do
+    t.expect("a1".match?(/\d/)).to_eq(true)
+    t.expect("ab".match?(/\d/)).to_eq(false)
+    let cap = match "code=42".match(/code=(\d+)/)
+      Some(m) -> m.group(1).unwrap_or("none")
+      nil     -> "no match"
+    end
+    t.expect(cap).to_eq("42")
+    let miss = match "ab".match(/\d/)
+      Some(m) -> m.matched
+      nil     -> "nil"
+    end
+    t.expect(miss).to_eq("nil")
+    let found = "a1b22c".scan(/\d+/)
+    t.expect(found.join("|")).to_eq("1|22")
+    t.expect("a1b2".sub(/\d/, "#")).to_eq("a#b2")
+    t.expect("a1b2".gsub(/\d/, "#")).to_eq("a#b#")
+    t.expect("a1b22c".split(/\d+/).join("|")).to_eq("a|b|c")
+    t.expect("abc1".index(/\d/).unwrap_or(-1)).to_eq(3)
+    t.expect("abc".index(/\d/).unwrap_or(-1)).to_eq(-1)
+    t.expect("héllo1".index(/\d/).unwrap_or(-1)).to_eq(5)
+    t.expect("a-b".gsub("-", "+")).to_eq("a+b")
+    t.expect("a-b-c".sub("-", "+")).to_eq("a+b-c")
+    t.expect("a1" ~= /\d/).to_eq(true)
+  end
+end

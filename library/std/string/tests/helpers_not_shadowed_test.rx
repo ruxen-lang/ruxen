@@ -1,0 +1,40 @@
+# The stdlib's private helpers are methods, so a user's top-level functions
+# with the same names (and other signatures) cannot replace them.
+def skip_space(x: Int) -> Int
+  x + 100
+end
+
+def radix_prefix(x: Int) -> Int
+  x + 200
+end
+
+def pad_fill(x: Int) -> Int
+  x + 300
+end
+
+def tr_set_position(x: Int) -> Int
+  x + 400
+end
+
+def rounding_unit(x: Int) -> Int
+  x + 500
+end
+
+def string_skip_space(x: Int) -> Int
+  x + 600
+end
+
+Tester.describe("stdlib helpers vs user top-level functions") do |t: &var Tester|
+  t.it("String and Int methods ignore same-named user functions") do
+    t.expect("  7".to_i).to_eq(7)
+    t.expect("0x1f".hex).to_eq(31)
+    t.expect("ab".ljust(5, "-")).to_eq("ab---")
+    t.expect("hello".count("l")).to_eq(2)
+    t.expect(1234.round(-2)).to_eq(1200)
+  end
+
+  t.it("the user functions keep their own meaning") do
+    t.expect(skip_space(1) + string_skip_space(1)).to_eq(702)
+    t.expect(radix_prefix(0) + pad_fill(0) + tr_set_position(0) + rounding_unit(0)).to_eq(1400)
+  end
+end

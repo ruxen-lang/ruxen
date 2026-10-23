@@ -1,8 +1,0 @@
-def apply(f: Fn(Int) -> Int, x: Int) -> Int
-  f.(x)
-end
-
-def main
-  let square = { |n: Int| n * n }
-  puts "#{apply(square, 4)}"
-end

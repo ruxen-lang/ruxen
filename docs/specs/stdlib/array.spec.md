@@ -4,7 +4,7 @@
 [docs/requirements/tier1_01_stdlib.md §5.1](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 2 #04; method surface self-hosted in
-`library/std/src/array.rx` since #06.8 T#14.
+`library/std/array/src/lib.rx` since #06.8 T#14.
 
 `Array[T]` is a growable contiguous heap array with `O(1)` amortised
 push/pop and `O(1)` index access.  The C runtime stores
@@ -15,8 +15,8 @@ push/pop and `O(1)` index access.  The C runtime stores
 ## B1 — `Array.from(v: T)` is currently lenient at typeck
 
 The constructor `Array.from(...)` accepts any single value at typecheck
-time today (v1 simplification — strict `From` impls deferred to v2).
-A v2 cleanup will tighten this so that only `Array.from(iter)` etc. are
+time today (v1 simplification — strict conversion checks deferred to v2).
+A v2 cleanup will tighten this so that only collection arguments are
 accepted.  Until then, `Array.from(1)` typechecks (and the runtime will
 do its best at MIR-lowering time).
 
@@ -36,9 +36,9 @@ Like B1, `Array.with_capacity(...)` is currently lenient — passing a
 `String` typechecks (the runtime coerces).  Tightening to `Int`-only
 is a v2 cleanup.
 
-## B5 — `dedup()` typechecks as `Unit`
+## B5 — `dedup()` returns `nil`
 
-In-place dedup of consecutive equal elements.  Returns nothing.
+In-place dedup of consecutive equal elements.  Returns `nil`.
 
 ## B6 — `retain(|x| pred)` closure typechecks
 
@@ -60,25 +60,30 @@ collection with the Ruby `to_*` conversions instead: `[…].to_set`,
 
 Pairwise comparison of two arrays at corresponding indices.
 
+## B10 — `sort` returns a new array; `sort!` sorts in place
+
+Ruby parity. `sort` returns a NEW `Array[T]` in ascending order by the
+element type's own `<` (stable) and leaves the receiver unchanged.
+`sort!` sorts the receiver in place and returns `nil`.
+
 ---
 
 ## Pin tests
 
 | Behaviour | Test fn                                                | File                       |
 |-----------|--------------------------------------------------------|----------------------------|
-| B1        | `vec_from_int_is_currently_accepted_at_typeck`         | `stdlib_array_negatives.rs`  |
-| B2        | `vec_pop_returns_option_typechecks`                    | `stdlib_array_negatives.rs`  |
-| B3        | `vec_index_yields_element_type`                        | `stdlib_array_negatives.rs`  |
-| B4        | `vec_with_capacity_string_arg_is_currently_accepted_at_typeck` | `stdlib_array_negatives.rs` |
-| B5        | `vec_dedup_typechecks_as_unit`                         | `stdlib_array_negatives.rs`  |
-| B6        | `vec_retain_closure_typechecks`                        | `stdlib_array_negatives.rs`  |
-| B7        | `vec_sort_by_closure_typechecks`                       | `stdlib_array_negatives.rs`  |
+| B1        | _none; `Array.from(123)` is accepted at typeck (TODO.md Known issues)_ | — |
+| B2        | "push and pop, with pop on empty returning nil"        | `library/std/array/tests/mutate_test.rx` |
+| B3        | "indexes by position"                                  | `library/std/array/tests/access_test.rx` |
+| B4        | "with_capacity reserves room"                          | `library/std/array/tests/mutate_test.rx` |
+| B5        | "dedup drops consecutive duplicates only"              | `library/std/array/tests/mutate_test.rx` |
+| B6        | "select! keeps matching elements"                      | `library/std/array/tests/mutate_test.rx` |
+| B7        | "sort_by takes a comparator"                           | `library/std/array/tests/sort_test.rx` |
 | B8        | _removed — `from_iter` retired_                        | —                            |
-| B9        | `vec_equality_yields_bool`                             | `stdlib_array_negatives.rs`  |
+| B9        | "== compares element-wise"                             | `library/std/array/tests/access_test.rx` |
+| B10       | "sort returns a new array and sort! sorts in place", `vec_sort_bang_returns_nil` | `library/std/array/tests/sort_test.rx`, `stdlib_array_negatives.rs` |
 
-Runtime round-trips covered by E2E fixtures
-`tests/release-e2e/cases/107_array_push_pop.rx` and the `60x_iter_*`
-series.
+The `.rx` tests run with `scripts/test-stdlib.sh array`.
 
 ---
 
@@ -86,11 +91,8 @@ series.
 
 - B1, B4: tighten `Array.from(...)` and `Array.with_capacity(...)` to
   reject obviously wrong arg types.
-- `Array.first / last / contains / clone / reverse` now have direct
-  runtime pin tests in `stdlib_array_runtime.rs` (added 2026-05):
-  `vec_first_returns_first_element`, `vec_last_returns_last_element`,
-  `vec_contains_finds_element`, `vec_clone_returns_independent_copy`,
-  `vec_reverse_inverts_order`.
+- `Array.first / last / include? / clone / reverse` are tested in
+  `library/std/array/tests/access_test.rx` and `mutate_test.rx`.
 
 ## Out of scope (v2)
 

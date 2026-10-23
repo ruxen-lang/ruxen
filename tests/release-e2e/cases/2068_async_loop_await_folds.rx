@@ -1,0 +1,70 @@
+# Async while loops with one and two awaits per iteration, and a loop whose
+# crossing-local accumulator is read inside a `Result.Ok(acc)` tail, fold
+# their await results correctly across iterations.
+class TickFuture
+  ticks: Int
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(ticks: Int, payload: Int)
+    self.ticks = ticks
+    self.payload = payload
+  end
+
+  def self.make(ticks: Int, payload: Int) -> TickFuture
+    TickFuture.new(ticks, payload)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.ticks == 0
+      Poll.Ready(self.payload)
+    else
+      self.ticks = self.ticks - 1
+      Poll.Pending
+    end
+  end
+end
+
+async def loop_two -> Int
+  var i: Int = 0
+  var sum: Int = 0
+  while i < 2
+    let v = TickFuture.make(1, 10).await
+    sum = sum + v
+    i = i + 1
+  end
+  sum
+end
+
+async def loop_two_awaits -> Int
+  var i: Int = 0
+  var sum: Int = 0
+  while i < 2
+    let a = TickFuture.make(1, 100 + i * 10).await
+    let b = TickFuture.make(1, a + 10).await
+    sum = sum + a + b
+    i = i + 1
+  end
+  sum
+end
+
+async def fold_to_result -> Result[Int, Int]
+  var i: Int = 0
+  var acc: Int = 0
+  while i < 2
+    let v = TickFuture.make(1, 10).await
+    acc = acc + v
+    i = i + 1
+  end
+  Result.Ok(acc)
+end
+
+def main
+  puts "single=#{block_on(loop_two())}"
+  puts "multi=#{block_on(loop_two_awaits())}"
+  match block_on(fold_to_result())
+    Ok(v)  -> puts "tail=#{v}"
+    Err(e) -> puts "err=#{e}"
+  end
+end

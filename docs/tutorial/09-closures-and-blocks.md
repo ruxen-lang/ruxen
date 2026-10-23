@@ -57,10 +57,10 @@ end
 You can spell them out when you want to:
 
 ```ruxen
-let parse = { |s: &str| s.parse_int }
+let parse = { |s: &String| s.parse_int }
 ```
 
-## Iterator chains
+## Chaining block methods
 
 Closures shine on collections:
 

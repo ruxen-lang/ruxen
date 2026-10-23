@@ -1,72 +1,56 @@
 //! Cranelift code generation backend for the Ruxen compiler.
 //!
-//! Translates MIR programs into native object code via Cranelift's
-//! `ObjectModule`. The pipeline is:
-//!   1. Declare all functions (two-pass: declare then define).
-//!   2. For each function, translate MIR blocks to Cranelift IR.
-//!   3. Emit the finished object bytes.
+//! Translates MIR programs into machine code through a Cranelift module:
+//! `ObjectModule` for an object file, the REPL's `JITModule` for memory.
+//! `CodeGen::compile_program` is the one driver for both:
+//!   1. Declare FFI imports, functions and vtable data.
+//!   2. For each new function, lower it through `codegen::lower`.
+//!   3. Define the vtable data; then `finish` emits object bytes (batch) or
+//!      the JIT finalizes its module.
 //!
-//! This module is split for navigability:
-//!   * `runtime_sigs` — the compiler-internal ABI residual
-//!     (`compiler_internal_signature`); the per-symbol table for
-//!     `.rx`-declared FFI is derived, not hand-rolled (see that module).
-//!   * `helpers`      — pure `Ty`/`CmpOp` ↔ Cranelift mappings.
+//! Every ABI rule (machine classes, signatures, callee lookup, coercion
+//! decisions) is `mir::abi`'s; this module is split for navigability:
+//!   * `helpers`      — the `AbiClass` ↔ Cranelift type map and `CmpOp` codes.
 //!   * `translation_env` — module-state borrow split from `FunctionBuilder`.
-//!   * `emit`         — free functions for MIR instruction / terminator lowering.
+//!   * `emit`         — `ClifBuilder`, this backend's `IrBuilder` for the one
+//!     MIR walk (`codegen::lower`), and its `Coercion`s.
 
 mod emit;
 mod helpers;
-mod runtime_sigs;
 mod translation_env;
 
-/// The compiler-internal runtime ABI residual: signatures of `ruxen_*`
-/// symbols emitted directly by codegen that no `.rx` lib block declares.
-/// `.rx`-declared FFI ABI is derived from the declared `Ty`s at codegen
-/// Pass-0, not from this table. Re-exported `pub` for source
-/// compatibility; the REPL JIT derives its own widths from
-/// `HirFfiFunc::param_types`.
-pub use runtime_sigs::compiler_internal_signature;
-
-/// Module-agnostic Cranelift lowering helpers. These take only
-/// `&mut FunctionBuilder` or pure values and never touch the module, so the
-/// REPL JIT backend shares them verbatim rather than forking. Re-exported as
-/// `pub` (Phase 4); a regression to `pub(super)` breaks `cranelift_share_pin`.
-pub use emit::{
-    build_signature, coerce_call_args, coerce_value, coerce_value_signed, def_local, emit_binop,
-    gen_value, translate_instruction, translate_terminator, use_local,
-};
-pub use helpers::{
-    cmpop_to_floatcc, cmpop_to_intcc, is_string_mir_ty, is_string_typed_value, simple_type_size,
-    ty_to_cranelift,
-};
-/// The borrow-split translation environment, generic over the Cranelift
-/// module (`ObjectModule` for batch, `JITModule` for the REPL JIT). Re-exported
-/// so the REPL constructs the shared env directly instead of forking it.
-pub use translation_env::TranslationEnv;
+use emit::{build_signature, ClifBuilder};
+use helpers::clif_signature;
+/// The `AbiClass` / `Ty` → Cranelift type map, pinned by
+/// `tests/it/runtime_abi_derivation.rs`.
+pub use helpers::{clif_type, ty_to_cranelift};
+use translation_env::TranslationEnv;
 
 use std::collections::{HashMap, HashSet};
 
-use cranelift_codegen::ir::types::{self, Type};
-use cranelift_codegen::ir::{
-    AbiParam, InstBuilder, Signature, StackSlot, StackSlotData, StackSlotKind,
-};
+use cranelift_codegen::isa::OwnedTargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::Context;
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
-use cranelift_module::{FuncId, Linkage, Module};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
+use cranelift_module::{DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
+use crate::codegen::lower::lower_function;
+use crate::mir::abi::{CalleeIndex, CalleeKind};
 use crate::mir::nodes::*;
 
-/// Cranelift code generation engine.
+/// Cranelift code generation engine, generic over the Cranelift module:
+/// `ObjectModule` for batch builds (`new_for_target` + `finish`), the
+/// REPL's `JITModule` (`with_module`). Both drive the same
+/// [`CodeGen::compile_program`].
 ///
-/// Holds the Cranelift module, context objects, and bookkeeping for
-/// string data sections and declared functions.
-pub struct CodeGen {
-    module: ObjectModule,
+/// Holds the module, context objects, and bookkeeping for string data
+/// sections, declared functions and mixin-vtable data.
+pub struct CodeGen<M: Module> {
+    module: M,
     ctx: Context,
     builder_ctx: FunctionBuilderContext,
-    string_data: HashMap<String, cranelift_module::DataId>,
+    string_data: HashMap<String, DataId>,
     string_counter: u32,
     declared_fns: HashMap<String, FuncId>,
     /// Mixin vtables Phase B-5: data sections for `__rx_vtable_*` and
@@ -74,325 +58,76 @@ pub struct CodeGen {
     /// definitions) so MIR `DataAddr { data_sym }` lowering can take
     /// their address from inside function bodies. Defined with their
     /// function-pointer / data-pointer relocations after function
-    /// definitions complete (`emit_mixin_vtables`).
-    vtable_data: HashMap<String, cranelift_module::DataId>,
-    /// Cranelift parameter types for every function declared in this
-    /// module (FFI + user MIR fns), recorded in Pass 0/1. This is the
-    /// DERIVED-ABI source of truth `coerce_call_args` consults FIRST: for
-    /// `.rx`-declared FFI it holds the lib-decl-derived widths (= the
-    /// binding `Linkage::Import` signature); for user fns it holds the
-    /// real narrow-int signature (e.g. synth `Bool_fmt` `(i8, i64)`).
-    /// Compiler-internal residual symbols not declared here fall through
-    /// to `compiler_internal_signature`. Without this, an `i8` argument to
-    /// `Bool_fmt` would be unconditionally widened to `i64` by the
-    /// fallback widening rule and fail Cranelift IR verification.
-    user_fn_param_tys: HashMap<String, Vec<Type>>,
-    /// Tier 4.04: lowered in no_std mode. When `true`, `translate_into_ctx`
-    /// SKIPS the `ruxen_env_init(argc, argv)` injection into `main` — a no_std
-    /// build has no `std.env` and no `ruxen_env_init` runtime symbol to call.
-    /// Set from `MirProgram::no_std` at the top of `compile_program`; `false`
-    /// on every hosted build (unchanged).
-    no_std: bool,
+    /// definitions complete (`define_data`).
+    vtable_data: HashMap<String, DataId>,
+    /// The vtable / class_info symbols already defined, so a repeated
+    /// `compile_program` (the REPL lowers the whole session per input)
+    /// defines each once.
+    defined_data: HashSet<String>,
 }
 
-impl CodeGen {
-    /// Create a new code generator targeting the host machine.
-    ///
-    /// Back-compat shim: equivalent to `new_for_target(None)`. Existing host
-    /// callers keep the byte-identical `cranelift_native::builder()` path.
-    pub fn new() -> Result<Self, String> {
-        Self::new_for_target(None)
-    }
+/// The Cranelift ISA for `target` (the host when `None`), position
+/// independent when `is_pic`: a linked object needs it, JIT code runs at
+/// the absolute addresses it was emitted for.
+///
+/// `None` or a host target uses `cranelift_native::builder()`, which
+/// detects the running CPU. A non-host target routes through
+/// `cranelift_codegen::isa::lookup(triple)`, which picks the ISA and (via
+/// the triple's binary format) the ELF-vs-Mach-O object encoding. The flags
+/// are the same on both paths so a host triple passed explicitly is
+/// byte-identical to the implicit-host path.
+pub fn isa(
+    target: Option<&crate::codegen::target::ResolvedTarget>,
+    is_pic: bool,
+) -> Result<OwnedTargetIsa, String> {
+    let mut flag_builder = settings::builder();
+    flag_builder
+        .set("opt_level", "none")
+        .map_err(|e| format!("Failed to set opt_level: {}", e))?;
+    flag_builder
+        .set("is_pic", if is_pic { "true" } else { "false" })
+        .map_err(|e| format!("Failed to set is_pic: {}", e))?;
+    let flags = settings::Flags::new(flag_builder);
 
-    /// Create a code generator for an optional cross-compilation target
-    /// (tier 4.02).
-    ///
-    /// `None` or a host target uses `cranelift_native::builder()` — the
-    /// pre-4.02 path, which detects the running CPU and emits an identical
-    /// object to the old `new()`. A non-host target routes through
-    /// `cranelift_codegen::isa::lookup(triple)`, which picks the ISA and (via
-    /// the triple's binary format) the ELF-vs-Mach-O object encoding. The
-    /// `is_pic`/`opt_level` flags are the same on both paths so a host triple
-    /// passed explicitly is still byte-identical to the implicit-host path.
-    pub fn new_for_target(
-        target: Option<&crate::codegen::target::ResolvedTarget>,
-    ) -> Result<Self, String> {
-        let mut flag_builder = settings::builder();
-        flag_builder
-            .set("opt_level", "none")
-            .map_err(|e| format!("Failed to set opt_level: {}", e))?;
-        flag_builder
-            .set("is_pic", "true")
-            .map_err(|e| format!("Failed to set is_pic: {}", e))?;
-
-        // Host path (no target, or the resolved host) → native builder, which
-        // reads the running CPU. Cross path → ISA lookup by triple.
-        let use_native = match target {
-            None => true,
-            Some(t) => t.is_host(),
-        };
-
-        let isa = if use_native {
-            let isa_builder = cranelift_native::builder()
-                .map_err(|e| format!("Failed to create native ISA builder: {}", e))?;
-            isa_builder
-                .finish(settings::Flags::new(flag_builder))
-                .map_err(|e| format!("Failed to finish ISA: {}", e))?
-        } else {
-            // Safe: matched `Some` non-host above.
-            let t = target.expect("cross path implies a target");
-            let isa_builder = cranelift_codegen::isa::lookup(t.triple().clone()).map_err(|e| {
+    match target {
+        Some(t) if !t.is_host() => cranelift_codegen::isa::lookup(t.triple().clone())
+            .map_err(|e| {
                 format!(
                     "unsupported Cranelift target '{}': {}. \
                      wasm/embedded targets require the LLVM backend (--release / --backend=llvm).",
                     t.canonical(),
                     e
                 )
-            })?;
-            isa_builder
-                .finish(settings::Flags::new(flag_builder))
-                .map_err(|e| format!("Failed to finish ISA for '{}': {}", t.canonical(), e))?
-        };
+            })?
+            .finish(flags)
+            .map_err(|e| format!("Failed to finish ISA for '{}': {}", t.canonical(), e)),
+        _ => cranelift_native::builder()
+            .map_err(|e| format!("Failed to create native ISA builder: {}", e))?
+            .finish(flags)
+            .map_err(|e| format!("Failed to finish ISA: {}", e)),
+    }
+}
 
+impl CodeGen<ObjectModule> {
+    /// Create a new code generator targeting the host machine.
+    ///
+    /// Back-compat shim: equivalent to `new_for_target(None)`.
+    pub fn new() -> Result<Self, String> {
+        Self::new_for_target(None)
+    }
+
+    /// Create an object code generator for an optional cross-compilation
+    /// target (tier 4.02); see [`isa`].
+    pub fn new_for_target(
+        target: Option<&crate::codegen::target::ResolvedTarget>,
+    ) -> Result<Self, String> {
         let obj_builder = ObjectBuilder::new(
-            isa,
+            isa(target, true)?,
             "ruxen_module",
             cranelift_module::default_libcall_names(),
         )
         .map_err(|e| format!("Failed to create ObjectBuilder: {}", e))?;
-
-        let module = ObjectModule::new(obj_builder);
-        let ctx = module.make_context();
-
-        Ok(CodeGen {
-            module,
-            ctx,
-            builder_ctx: FunctionBuilderContext::new(),
-            string_data: HashMap::new(),
-            string_counter: 0,
-            declared_fns: HashMap::new(),
-            vtable_data: HashMap::new(),
-            user_fn_param_tys: HashMap::new(),
-            no_std: false,
-        })
-    }
-
-    /// Compile all functions in a MIR program.
-    ///
-    /// Two-pass: first declare all functions, then define them.
-    /// FFI declarations from `lib` and `extern "C"` blocks are declared
-    /// as imported functions so they can be called from user code.
-    pub fn compile_program(&mut self, program: &MirProgram) -> Result<(), String> {
-        // Tier 4.04: carry no_std through to the entry-point lowering, which
-        // skips the `ruxen_env_init` injection into `main`.
-        self.no_std = program.no_std;
-        // ── Pass 0: declare FFI functions ────────────────────────────────
-        for lib in &program.ffi_libs {
-            for ffi_fn in &lib.functions {
-                let call_conv = self.module.isa().default_call_conv();
-                let mut sig = Signature::new(call_conv);
-                let mut param_tys: Vec<Type> = Vec::with_capacity(ffi_fn.param_types.len());
-                for param_ty in &ffi_fn.param_types {
-                    if let Some(cl_ty) = ty_to_cranelift(param_ty) {
-                        sig.params.push(AbiParam::new(cl_ty));
-                        param_tys.push(cl_ty);
-                    }
-                }
-                if let Some(ref ret_ty) = ffi_fn.return_type {
-                    if let Some(cl_ty) = ty_to_cranelift(ret_ty) {
-                        sig.returns.push(AbiParam::new(cl_ty));
-                    }
-                }
-                let func_id = self
-                    .module
-                    .declare_function(&ffi_fn.name, Linkage::Import, &sig)
-                    .map_err(|e| {
-                        format!("Failed to declare FFI function '{}': {}", ffi_fn.name, e)
-                    })?;
-                // Register the FFI under BOTH names so call sites resolve no
-                // matter which one MIR Call carries: `ffi_fn.name` is the
-                // linked C symbol (post `as "<sym>"` rewrite), `ffi_fn.ruxen_name`
-                // is the Ruxen-side identifier. They differ exactly when the
-                // `lib` block carried `def NAME as "<c-symbol>"(...)`.
-                self.declared_fns.insert(ffi_fn.name.clone(), func_id);
-                self.user_fn_param_tys
-                    .insert(ffi_fn.name.clone(), param_tys.clone());
-                if ffi_fn.ruxen_name != ffi_fn.name {
-                    self.declared_fns.insert(ffi_fn.ruxen_name.clone(), func_id);
-                    self.user_fn_param_tys
-                        .insert(ffi_fn.ruxen_name.clone(), param_tys.clone());
-                }
-
-                // Also register with the lib-qualified name (e.g., "LibM.sin")
-                if !lib.name.is_empty() {
-                    let qualified = format!("{}_{}", lib.name, ffi_fn.name);
-                    self.declared_fns.insert(qualified.clone(), func_id);
-                    self.user_fn_param_tys.insert(qualified, param_tys);
-                }
-            }
-        }
-
-        // ── Pass 1: declare ──────────────────────────────────────────────
-        for func in &program.functions {
-            let sig = build_signature(&self.module, func);
-            // `main` and any `<Mixin>_dynamic_<method>` helper get
-            // exported linkage. The mixin dispatch helpers
-            // (docs/specs/types/mixin_vtables.spec.md §B5) are
-            // synthesised explicitly to be called from C-side
-            // runtime code — e.g. the sub-phase 5 task scheduler in
-            // library/std/future/runtime/scheduler.c invokes
-            // `Future_dynamic_poll` per queued task. Without
-            // exported linkage the C side fails to link with an
-            // "undefined symbol" error at the host linker.
-            let linkage = if func.name == "main" || is_dynamic_dispatch_helper(&func.name) {
-                Linkage::Export
-            } else {
-                Linkage::Local
-            };
-
-            // Record the cranelift param types so `coerce_call_args` can
-            // apply the correct narrow-int signature when this fn is the
-            // callee (Phase 2 #06.D2.S3: synth `Bool_fmt`/`Char_fmt` etc.
-            // legitimately take narrow params and must not be widened).
-            let param_tys: Vec<Type> = sig.params.iter().map(|p| p.value_type).collect();
-            self.user_fn_param_tys.insert(func.name.clone(), param_tys);
-
-            let func_id = self
-                .module
-                .declare_function(&func.name, linkage, &sig)
-                .map_err(|e| format!("Failed to declare function '{}': {}", func.name, e))?;
-
-            self.declared_fns.insert(func.name.clone(), func_id);
-        }
-
-        // ── Pass 1.5: declare mixin-vtable + class_info data symbols ─────
-        // These must exist as DataIds BEFORE function bodies are
-        // emitted so that MIR `DataAddr { data_sym }` lowering can
-        // resolve them inside function bodies (Phase B-5 init-time
-        // write). They get defined (with their relocations) after all
-        // functions are emitted, in Pass 3.
-        self.declare_mixin_vtable_data(program)?;
-
-        // ── Pass 2: define ───────────────────────────────────────────────
-        for func in &program.functions {
-            self.compile_function(func)?;
-        }
-
-        // ── Pass 3: emit mixin vtables + class_info data sections ────────
-        // Spec: docs/specs/types/mixin_vtables.spec.md §B2-B3.
-        // Each vtable is a sequence of function-pointer relocations
-        // (one per required method). Each class_info is a sequence of
-        // data-pointer relocations (one per vtable). All function
-        // symbols MUST already be declared by Pass 1 (the
-        // `<ClassName>_<method>` symbol is a regular MIR function);
-        // method symbols missing from `declared_fns` indicate an
-        // upstream E1117 escape — surface as a hard codegen error.
-        self.define_mixin_vtable_data(program)?;
-
-        Ok(())
-    }
-
-    /// Declare data symbols for every vtable + class_info up-front so
-    /// MIR `DataAddr` lowering inside function bodies can look them up
-    /// by `DataId`. Definitions (with relocations) happen later in
-    /// `define_mixin_vtable_data` after all functions are emitted.
-    fn declare_mixin_vtable_data(&mut self, program: &MirProgram) -> Result<(), String> {
-        for vt in &program.vtables {
-            let sym = vt.symbol();
-            let data_id = self
-                .module
-                .declare_data(
-                    &sym,
-                    Linkage::Local,
-                    /*writable*/ false,
-                    /*tls*/ false,
-                )
-                .map_err(|e| format!("declare vtable data '{}': {}", sym, e))?;
-            self.vtable_data.insert(sym, data_id);
-        }
-        for ci in &program.class_infos {
-            let sym = ci.symbol();
-            let data_id = self
-                .module
-                .declare_data(
-                    &sym,
-                    Linkage::Local,
-                    /*writable*/ false,
-                    /*tls*/ false,
-                )
-                .map_err(|e| format!("declare class_info data '{}': {}", sym, e))?;
-            self.vtable_data.insert(sym, data_id);
-        }
-        Ok(())
-    }
-
-    /// Define the relocations for every previously-declared vtable +
-    /// class_info data symbol. Spec §B2-B3.
-    fn define_mixin_vtable_data(&mut self, program: &MirProgram) -> Result<(), String> {
-        const PTR_SIZE: u32 = 8;
-
-        // Phase B-2: vtable function-pointer relocations.
-        for vt in &program.vtables {
-            let sym = vt.symbol();
-            let data_id = *self
-                .vtable_data
-                .get(&sym)
-                .ok_or_else(|| format!("vtable data '{}' was not declared", sym))?;
-            let size = (vt.method_symbols.len() as u32) * PTR_SIZE;
-            let mut desc = cranelift_module::DataDescription::new();
-            // ld64 on macOS rejects relocations against BSS
-            // (`define_zeroinit`) — segfaults at link time. Use
-            // explicit zero bytes so the data lands in __const, where
-            // relocations are legal.
-            desc.define(vec![0u8; size as usize].into_boxed_slice());
-            desc.set_align(PTR_SIZE as u64);
-            for (i, method_sym) in vt.method_symbols.iter().enumerate() {
-                let func_id = *self.declared_fns.get(method_sym).ok_or_else(|| {
-                    format!(
-                        "mixin-vtables: method symbol '{}' for vtable '{}' not declared \
-                         — required-method check (E1117) should have caught this",
-                        method_sym, sym
-                    )
-                })?;
-                let func_ref = self.module.declare_func_in_data(func_id, &mut desc);
-                desc.write_function_addr((i as u32) * PTR_SIZE, func_ref);
-            }
-            self.module
-                .define_data(data_id, &desc)
-                .map_err(|e| format!("define vtable data '{}': {}", sym, e))?;
-        }
-
-        // Phase B-3: class_info data-pointer relocations (pointing at
-        // the vtables above).
-        for ci in &program.class_infos {
-            let sym = ci.symbol();
-            let data_id = *self
-                .vtable_data
-                .get(&sym)
-                .ok_or_else(|| format!("class_info data '{}' was not declared", sym))?;
-            let size = (ci.vtable_symbols.len() as u32) * PTR_SIZE;
-            let mut desc = cranelift_module::DataDescription::new();
-            // ld64 on macOS rejects relocations against BSS
-            // (`define_zeroinit`) — segfaults at link time. Use
-            // explicit zero bytes so the data lands in __const, where
-            // relocations are legal.
-            desc.define(vec![0u8; size as usize].into_boxed_slice());
-            desc.set_align(PTR_SIZE as u64);
-            for (i, vt_sym) in ci.vtable_symbols.iter().enumerate() {
-                let vt_data_id = *self.vtable_data.get(vt_sym).ok_or_else(|| {
-                    format!(
-                        "mixin-vtables: class_info '{}' references unknown vtable '{}'",
-                        sym, vt_sym
-                    )
-                })?;
-                let gv = self.module.declare_data_in_data(vt_data_id, &mut desc);
-                desc.write_data_addr((i as u32) * PTR_SIZE, gv, 0);
-            }
-            self.module
-                .define_data(data_id, &desc)
-                .map_err(|e| format!("define class_info data '{}': {}", sym, e))?;
-        }
-        Ok(())
+        Ok(Self::with_module(ObjectModule::new(obj_builder)))
     }
 
     /// Emit the finished object file as raw bytes.
@@ -422,251 +157,309 @@ impl CodeGen {
             .map_err(|e| format!("Failed to emit object: {}", e))?;
         Ok(bytes)
     }
+}
 
-    /// Translate one MIR function into Cranelift IR and define it.
-    fn compile_function(&mut self, func: &MirFunction) -> Result<(), String> {
-        self.translate_into_ctx(func)?;
+impl<M: Module> CodeGen<M> {
+    /// A code generator emitting into `module`. The module's construction
+    /// holds everything module-specific (its ISA flags, a JIT's symbol
+    /// lookup); the lowering below is the same for every module.
+    pub fn with_module(module: M) -> Self {
+        let ctx = module.make_context();
+        CodeGen {
+            module,
+            ctx,
+            builder_ctx: FunctionBuilderContext::new(),
+            string_data: HashMap::new(),
+            string_counter: 0,
+            declared_fns: HashMap::new(),
+            vtable_data: HashMap::new(),
+            defined_data: HashSet::new(),
+        }
+    }
 
-        // Define the function in the module.
-        let func_id = *self
-            .declared_fns
-            .get(&func.name)
-            .ok_or_else(|| format!("Function '{}' was not declared", func.name))?;
+    /// The module, e.g. for a JIT to finalize and look up code.
+    pub fn module(&self) -> &M {
+        &self.module
+    }
 
-        self.module
-            .define_function(func_id, &mut self.ctx)
-            .map_err(|e| format!("Failed to define function '{}': {:?}", func.name, e))?;
+    /// The module, mutably.
+    pub fn module_mut(&mut self) -> &mut M {
+        &mut self.module
+    }
 
-        self.module.clear_context(&mut self.ctx);
+    /// The id a function (or import) was declared under.
+    pub fn func_id(&self, name: &str) -> Option<FuncId> {
+        self.declared_fns.get(name).copied()
+    }
+
+    /// Compile every function and data symbol of `program` this code
+    /// generator has not compiled yet: declare (FFI imports, functions,
+    /// vtable data), then define the new functions, then the new data.
+    ///
+    /// Incremental: a later call compiles only what earlier calls did not,
+    /// which is how the REPL compiles each input's re-lowered session. A
+    /// failed call leaves no function declared without a body, so a later
+    /// call declares and defines it again.
+    pub fn compile_program(&mut self, program: &MirProgram) -> Result<(), String> {
+        let new_fns = self.declare_program(program)?;
+        for (i, func) in new_fns.iter().enumerate() {
+            if let Err(e) = self.define_function(func, &program.callees) {
+                for undefined in &new_fns[i..] {
+                    self.declared_fns.remove(&undefined.name);
+                }
+                return Err(e);
+            }
+        }
+        // Spec: docs/specs/types/mixin_vtables.spec.md §B2-B3. Every
+        // method symbol is declared above; one missing from `declared_fns`
+        // is an upstream E1117 escape, a hard codegen error.
+        self.define_data(program)
+    }
+
+    /// Declare what `program` adds: its FFI imports, its functions not
+    /// declared for definition by an earlier call (returned, in order), and
+    /// its vtable / class_info data symbols, which must exist before
+    /// function bodies take their address (`MirInst::DataAddr`).
+    fn declare_program<'p>(
+        &mut self,
+        program: &'p MirProgram,
+    ) -> Result<Vec<&'p MirFunction>, String> {
+        // Every callee's signature, built by the last lowering step.
+        let callees = &program.callees;
+        let call_conv = self.module.isa().default_call_conv();
+
+        // Each `lib`/`extern` symbol once, under its C name, with the
+        // signature derived from its declared types. A call by its Ruxen
+        // name or lib-qualified alias resolves through the callee index.
+        // Compiler-emitted runtime symbols are declared when first called.
+        for lib in &program.ffi_libs {
+            for ffi_fn in &lib.functions {
+                if self.declared_fns.contains_key(&ffi_fn.name) {
+                    continue;
+                }
+                let callee = callees
+                    .get(&ffi_fn.name)
+                    .expect("the callee index holds every FFI symbol");
+                let sig = clif_signature(call_conv, &callee.abi);
+                let func_id = self
+                    .module
+                    .declare_function(&ffi_fn.name, Linkage::Import, &sig)
+                    .map_err(|e| {
+                        format!("Failed to declare FFI function '{}': {}", ffi_fn.name, e)
+                    })?;
+                self.declared_fns.insert(ffi_fn.name.clone(), func_id);
+            }
+        }
+
+        let new_fns: Vec<&MirFunction> = program
+            .functions
+            .iter()
+            .filter(|f| !self.is_declared_for_definition(&f.name))
+            .collect();
+        for func in &new_fns {
+            let callee = callees
+                .get(&func.name)
+                .filter(|c| c.kind == CalleeKind::Defined)
+                .expect("the callee index holds every MIR function");
+            let sig = clif_signature(call_conv, &callee.abi);
+            // Lowering marks `main` and the `<Mixin>_dynamic_<method>`
+            // helpers C runtime code calls by symbol (e.g. the scheduler's
+            // `Future_dynamic_poll`) as exported.
+            let linkage = match func.linkage {
+                MirLinkage::Export => Linkage::Export,
+                MirLinkage::Local => Linkage::Local,
+            };
+            let func_id = self
+                .module
+                .declare_function(&func.name, linkage, &sig)
+                .map_err(|e| format!("Failed to declare function '{}': {}", func.name, e))?;
+            self.declared_fns.insert(func.name.clone(), func_id);
+        }
+
+        let data_syms = program
+            .vtables
+            .iter()
+            .map(|vt| ("vtable", vt.symbol()))
+            .chain(
+                program
+                    .class_infos
+                    .iter()
+                    .map(|ci| ("class_info", ci.symbol())),
+            );
+        for (what, sym) in data_syms {
+            if self.vtable_data.contains_key(&sym) {
+                continue;
+            }
+            let data_id = self
+                .module
+                .declare_data(
+                    &sym,
+                    Linkage::Local,
+                    /*writable*/ false,
+                    /*tls*/ false,
+                )
+                .map_err(|e| format!("declare {} data '{}': {}", what, sym, e))?;
+            self.vtable_data.insert(sym, data_id);
+        }
+        Ok(new_fns)
+    }
+
+    /// Whether an earlier call declared `name` as a function this module
+    /// defines (an import of the same name does not count).
+    fn is_declared_for_definition(&self, name: &str) -> bool {
+        self.declared_fns.get(name).is_some_and(|&id| {
+            self.module
+                .declarations()
+                .get_function_decl(id)
+                .linkage
+                .is_definable()
+        })
+    }
+
+    /// Define the relocations of every declared vtable and class_info
+    /// symbol not defined yet. Spec §B2-B3.
+    fn define_data(&mut self, program: &MirProgram) -> Result<(), String> {
+        const PTR_SIZE: u32 = 8;
+
+        // Phase B-2: vtable function-pointer relocations.
+        for vt in &program.vtables {
+            let sym = vt.symbol();
+            if self.defined_data.contains(&sym) {
+                continue;
+            }
+            let data_id = *self
+                .vtable_data
+                .get(&sym)
+                .ok_or_else(|| format!("vtable data '{}' was not declared", sym))?;
+            let mut desc = pointer_table(vt.method_symbols.len() as u32 * PTR_SIZE);
+            for (i, method_sym) in vt.method_symbols.iter().enumerate() {
+                let func_id = *self.declared_fns.get(method_sym).ok_or_else(|| {
+                    format!(
+                        "mixin-vtables: method symbol '{}' for vtable '{}' not declared \
+                         — required-method check (E1117) should have caught this",
+                        method_sym, sym
+                    )
+                })?;
+                let func_ref = self.module.declare_func_in_data(func_id, &mut desc);
+                desc.write_function_addr((i as u32) * PTR_SIZE, func_ref);
+            }
+            self.module
+                .define_data(data_id, &desc)
+                .map_err(|e| format!("define vtable data '{}': {}", sym, e))?;
+            self.defined_data.insert(sym);
+        }
+
+        // Phase B-3: class_info data-pointer relocations (pointing at
+        // the vtables above).
+        for ci in &program.class_infos {
+            let sym = ci.symbol();
+            if self.defined_data.contains(&sym) {
+                continue;
+            }
+            let data_id = *self
+                .vtable_data
+                .get(&sym)
+                .ok_or_else(|| format!("class_info data '{}' was not declared", sym))?;
+            let mut desc = pointer_table(ci.vtable_symbols.len() as u32 * PTR_SIZE);
+            for (i, vt_sym) in ci.vtable_symbols.iter().enumerate() {
+                let vt_data_id = *self.vtable_data.get(vt_sym).ok_or_else(|| {
+                    format!(
+                        "mixin-vtables: class_info '{}' references unknown vtable '{}'",
+                        sym, vt_sym
+                    )
+                })?;
+                let gv = self.module.declare_data_in_data(vt_data_id, &mut desc);
+                desc.write_data_addr((i as u32) * PTR_SIZE, gv, 0);
+            }
+            self.module
+                .define_data(data_id, &desc)
+                .map_err(|e| format!("define class_info data '{}': {}", sym, e))?;
+            self.defined_data.insert(sym);
+        }
         Ok(())
+    }
+
+    /// Translate one declared MIR function into Cranelift IR and define it.
+    /// The contexts are cleared either way, so a failure leaves nothing
+    /// behind for the next function.
+    fn define_function(&mut self, func: &MirFunction, callees: &CalleeIndex) -> Result<(), String> {
+        let result = self.translate_into_ctx(func, callees).and_then(|()| {
+            let func_id = *self
+                .declared_fns
+                .get(&func.name)
+                .ok_or_else(|| format!("Function '{}' was not declared", func.name))?;
+            self.module
+                .define_function(func_id, &mut self.ctx)
+                .map_err(|e| format!("Failed to define function '{}': {:?}", func.name, e))
+        });
+        self.module.clear_context(&mut self.ctx);
+        if result.is_err() {
+            // A translation that stopped midway never finalized its builder.
+            self.builder_ctx = FunctionBuilderContext::new();
+        }
+        result
     }
 
     /// Lower a single MIR function into `self.ctx.func` (the Cranelift IR
-    /// function), leaving it built-but-not-yet-defined. Shared by
-    /// `compile_function` (which then defines + clears the context) and by
-    /// the `clif_for_test` hook (which reads back the CLIF text). Splitting
-    /// this out keeps ONE lowering path — the test hook does not fork it.
-    fn translate_into_ctx(&mut self, func: &MirFunction) -> Result<(), String> {
-        let sig = build_signature(&self.module, func);
-        self.ctx.func.signature = sig;
-
-        // We need to split borrows: the FunctionBuilder borrows ctx.func and
-        // builder_ctx, while instruction translation needs module, declared_fns,
-        // string_data, etc. We extract the "env" fields into a separate struct.
-        {
-            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
-
-            let mut env = TranslationEnv {
-                module: &mut self.module,
-                declared_fns: &mut self.declared_fns,
-                string_data: &mut self.string_data,
-                string_counter: &mut self.string_counter,
-                user_fn_param_tys: &self.user_fn_param_tys,
-                vtable_data: &self.vtable_data,
-            };
-
-            // ── Map MIR blocks → Cranelift blocks ────────────────────────
-            let mut block_map: Vec<cranelift_codegen::ir::Block> =
-                Vec::with_capacity(func.blocks.len());
-            for _ in &func.blocks {
-                block_map.push(builder.create_block());
-            }
-
-            // ── Declare Cranelift Variables for all locals ────────────────
-            let mut var_map: HashMap<LocalId, Variable> = HashMap::new();
-            for local in &func.locals {
-                let cl_ty = ty_to_cranelift(&local.ty).unwrap_or(types::I64);
-                let var = builder.declare_var(cl_ty);
-                var_map.insert(local.id, var);
-            }
-
-            // ── Pre-scan for address-taken locals ────────────────────────
-            // Any local whose address is taken via `&mut src` (RefMut) and
-            // whose type is `String`/`Str` must live in a stack slot rather
-            // than a Cranelift SSA variable, so the pointer we hand out
-            // remains valid and observers see buffer reallocations written
-            // through it (e.g. from `push`/`push_str`).
-            //
-            // We restrict promotion to String-typed locals because class
-            // and struct receivers are already heap-pointers: a `&mut Foo`
-            // in current Ruxen is passed by value as the object pointer,
-            // and the callee reaches fields via `GetField(base, off)`.
-            // Promoting those to a pointer-to-pointer would double-indirect
-            // every field access and break class method calls on `&mut`
-            // receivers. String is the only v1 type where the value itself
-            // (a `char*` that grows) must be observably reassigned.
-            let mut address_taken: HashSet<LocalId> = HashSet::new();
-            for block in &func.blocks {
-                for inst in &block.instructions {
-                    if let MirInst::RefMut { src, .. } = inst {
-                        if let Some(local) = func.locals.get(*src as usize) {
-                            if is_string_mir_ty(&local.ty) {
-                                address_taken.insert(*src);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Allocate one 8-byte stack slot per address-taken local.
-            let mut stack_slots: HashMap<LocalId, StackSlot> = HashMap::new();
-            for &local_id in &address_taken {
-                let slot = builder.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    8,
-                    3, // log2(align) = 3 → 8-byte alignment
-                ));
-                stack_slots.insert(local_id, slot);
-            }
-
-            // ── Set up entry block ───────────────────────────────────────
-            let entry_cl_block = block_map[func.entry_block];
-            builder.switch_to_block(entry_cl_block);
-            builder.append_block_params_for_function_params(entry_cl_block);
-
-            // Inject `ruxen_env_init(argc, argv)` at the top of `main` so
-            // `std.env` sees the process args — EXCEPT in a no_std build, which
-            // has no `std.env` and no `ruxen_env_init` runtime symbol.
-            if func.name == "main" && !self.no_std {
-                let params_vals = builder.block_params(entry_cl_block).to_vec();
-                let argc = params_vals
-                    .first()
-                    .copied()
-                    .ok_or_else(|| "missing argc param for main".to_string())?;
-                let argv = params_vals
-                    .get(1)
-                    .copied()
-                    .ok_or_else(|| "missing argv param for main".to_string())?;
-                let env_init = env.declare_runtime_func(
-                    "ruxen_env_init",
-                    &[types::I32, types::I64],
-                    None,
-                    &mut builder,
-                )?;
-                builder.ins().call(env_init, &[argc, argv]);
-            }
-
-            // Bind function parameters to their local variables.
-            if func.name != "main" {
-                let params_vals = builder.block_params(entry_cl_block).to_vec();
-                for (i, &param_id) in func.params.iter().enumerate() {
-                    if i < params_vals.len() {
-                        def_local(
-                            &var_map,
-                            &stack_slots,
-                            &mut builder,
-                            param_id,
-                            params_vals[i],
-                        );
-                    }
-                }
-            }
-
-            // ── Translate each block ─────────────────────────────────────
-            for (mir_idx, mir_block) in func.blocks.iter().enumerate() {
-                let cl_block = block_map[mir_idx];
-
-                if mir_idx != func.entry_block {
-                    builder.switch_to_block(cl_block);
-                }
-
-                for inst in &mir_block.instructions {
-                    if let Err(e) = translate_instruction(
-                        inst,
-                        func,
-                        &var_map,
-                        &stack_slots,
-                        &block_map,
-                        &mut builder,
-                        &mut env,
-                    ) {
-                        return Err(format!(
-                            "Error in function '{}', block {}, instruction {:?}: {}",
-                            func.name, mir_idx, inst, e
-                        ));
-                    }
-                }
-
-                translate_terminator(
-                    &mir_block.terminator,
-                    func,
-                    &var_map,
-                    &stack_slots,
-                    &block_map,
-                    &mut builder,
-                    &mut env,
-                )?;
-            }
-
-            // Seal all blocks after translation so that forward edges
-            // (e.g. from Switch terminators) are registered before sealing.
-            builder.seal_all_blocks();
-
-            builder.finalize();
-        }
-
+    /// function) through the one MIR walk (`codegen::lower`), leaving it
+    /// built-but-not-yet-defined. Shared by `define_function` (which then
+    /// defines + clears the context) and by the `clif_for_test` hook (which
+    /// reads back the CLIF text).
+    fn translate_into_ctx(
+        &mut self,
+        func: &MirFunction,
+        callees: &CalleeIndex,
+    ) -> Result<(), String> {
+        self.ctx.func.signature = build_signature(&self.module, func);
+        // The `FunctionBuilder` borrows the function and its context; the
+        // module state calls and data need is borrowed beside it.
+        let env = TranslationEnv {
+            module: &mut self.module,
+            declared_fns: &mut self.declared_fns,
+            string_data: &mut self.string_data,
+            string_counter: &mut self.string_counter,
+            callees,
+            vtable_data: &self.vtable_data,
+        };
+        let mut builder = ClifBuilder::new(
+            FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx),
+            env,
+        );
+        lower_function(func, &mut builder)?;
+        // Seal after every block is emitted, so forward edges (a `Switch`)
+        // are registered first.
+        builder.builder.seal_all_blocks();
+        builder.builder.finalize();
         Ok(())
     }
 }
 
-/// Test-only hook: compile a single MIR function through the batch
-/// `CodeGen` (ObjectModule) and return its Cranelift IR text. Used by the
-/// `cranelift_share_pin` both-backends parity test. `#[doc(hidden)]` so it
+/// A zeroed, pointer-aligned table of `size` bytes for a vtable or
+/// class_info, its slots written as relocations. Explicit zero bytes, not
+/// `define_zeroinit`: ld64 on macOS rejects relocations against BSS
+/// (it segfaults at link time), so the data must land in `__const`.
+fn pointer_table(size: u32) -> cranelift_module::DataDescription {
+    let mut desc = cranelift_module::DataDescription::new();
+    desc.define(vec![0u8; size as usize].into_boxed_slice());
+    desc.set_align(8);
+    desc
+}
+
+/// Test-only hook: declare `program` in a batch `CodeGen` (ObjectModule)
+/// and return the Cranelift IR text of its function `name`. Used by
+/// `ruxen_repl`'s `tests::cranelift_share_parity`. `#[doc(hidden)]` so it
 /// is not part of the stable public API, but `pub` so the cross-crate test
-/// can reach it. Drives the SAME `translate_into_ctx` lowering as the real
-/// batch path — it does not fork it.
+/// can reach it. Drives the SAME declare and `translate_into_ctx` steps as
+/// `compile_program` — it does not fork them.
 #[doc(hidden)]
-pub fn clif_for_test(func: &MirFunction) -> Result<String, String> {
+pub fn clif_for_test(program: &MirProgram, name: &str) -> Result<String, String> {
     let mut cg = CodeGen::new()?;
-
-    // Minimal declare (mirrors compile_program Pass 1 for one function) so
-    // build_signature + any self-call resolves. Local linkage is fine; the
-    // hook never defines or links the function.
-    let sig = build_signature(&cg.module, func);
-    let param_tys: Vec<Type> = sig.params.iter().map(|p| p.value_type).collect();
-    cg.user_fn_param_tys.insert(func.name.clone(), param_tys);
-    let func_id = cg
-        .module
-        .declare_function(&func.name, Linkage::Local, &sig)
-        .map_err(|e| format!("declare '{}': {}", func.name, e))?;
-    cg.declared_fns.insert(func.name.clone(), func_id);
-
-    cg.translate_into_ctx(func)?;
+    cg.declare_program(program)?;
+    let func = program
+        .functions
+        .iter()
+        .find(|f| f.name == name)
+        .ok_or_else(|| format!("no function '{name}' in the program"))?;
+    cg.translate_into_ctx(func, &program.callees)?;
     Ok(cg.ctx.func.display().to_string())
 }
-
-/// Recognises the synthesised mixin-dispatch helper naming pattern
-/// `<Mixin>_dynamic_<method>` (e.g. `Future_dynamic_poll`).
-///
-/// Spec: docs/specs/types/mixin_vtables.spec.md §B5. The helpers are
-/// produced by `mir::lower::build_dynamic_dispatch_helper`. They get
-/// `Linkage::Export` so C-side runtime code (e.g. the sub-phase 5
-/// scheduler in `library/std/future/runtime/scheduler.c`) can call
-/// them by symbol.
-///
-/// Pattern: identifier starts with an ASCII uppercase letter, contains
-/// `_dynamic_` once, and has at least one char on either side. This is
-/// stricter than `contains("_dynamic_")` — minimises the chance a
-/// user-named function happens to match.
-pub(crate) fn is_dynamic_dispatch_helper(name: &str) -> bool {
-    if !name
-        .chars()
-        .next()
-        .map(|c| c.is_ascii_uppercase())
-        .unwrap_or(false)
-    {
-        return false;
-    }
-    let Some(idx) = name.find("_dynamic_") else {
-        return false;
-    };
-    // Must have at least one char before "_dynamic_" (the uppercase
-    // check above guarantees this, but kept explicit) and at least
-    // one char after — the method name.
-    idx > 0 && idx + "_dynamic_".len() < name.len()
-}
-
-// Re-export the `Module` trait usage that callers need; the original
-// monolithic file relied on `use cranelift_module::Module;` being in
-// scope for `module.declare_function` / `module.finish`.  Submodules
-// already import what they need locally.

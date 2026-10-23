@@ -1,0 +1,55 @@
+mixin Source
+  async def fetch -> Int
+end
+
+struct Point
+  layout c
+  x: Int
+  y: Int
+end
+
+class Handle
+  layout c
+  fd: Int
+
+  protected
+
+  def raw -> Int
+    self.fd
+  end
+
+  public
+
+  lib "runtime/handle.c"
+    def total -> Int where T: Add
+  end
+end
+
+enum Shape
+  layout tagged
+  Circle(Int)
+  Square(Int)
+end
+
+class Box[T] where T: Comparable
+  value: T
+end
+
+unsafe extension Int
+  def twice -> Int { self * 2 }
+end
+
+def greet(name: String, suffix: String = "!") -> String
+  "#{name}#{suffix} #{1 <=> 2} #{10 / 2} \#{literal}"
+end
+
+def receivers(a: Set[Int], b: Set[Int]) -> Int
+  (a | b).size
+end
+
+def blocks(xs: Array[Int]) -> Int
+  xs.each do |x|
+    puts x
+  end
+  xs.sum
+end

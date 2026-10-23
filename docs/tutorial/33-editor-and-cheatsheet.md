@@ -129,8 +129,8 @@ Bool Char nil
 ### Strings
 
 ```ruxen
-"plain &str literal"
-"owned string"
+"owned string"                        # a literal is an owned String
+&"borrowed"                           # &String borrow of a literal
 "hi #{name}"                          # interpolation -> String
 'no \escape \here'                    # raw (single quotes, verbatim)
 'can have "quotes" inside'            # raw can hold double quotes
@@ -307,13 +307,14 @@ move { |x| ... }                      # move-capturing closure
 +  -  *  /  %  **                     # arithmetic, power
 == != <  >  <= >=                     # comparison
 && || !                               # logical
+and or not                            # low-precedence logical
 &  |  ^  ~  << >>                     # bitwise
 ?                                     # try (propagates Err / nil)
 ..  ...                               # range inclusive / exclusive
-?.                                    # safe navigation
+&.                                    # safe navigation (nil-safe call)
 =  += -= *= /= %=                     # assignment
 ->                                    # function return / match arm
-=>                                    # map literal pair
+=>                                    # hash literal pair
 ```
 
 ### Patterns

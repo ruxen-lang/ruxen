@@ -33,6 +33,15 @@ impl TypeLayout {
 /// Round `offset` up to the nearest multiple of `alignment`.
 ///
 /// `alignment` must be a power of two.
+/// The byte offset of MIR field slot `field_index` (`GetField`,
+/// `SetField`, `FieldAddr`): every slot of an object, captures box or
+/// cell is one 8-byte word, the class-info header included. The one rule
+/// both backends (and the REPL JIT, through the Cranelift translator)
+/// address a field with.
+pub fn field_slot_offset(field_index: usize) -> u64 {
+    (field_index as u64) * 8
+}
+
 pub fn align_up(offset: usize, alignment: usize) -> usize {
     debug_assert!(
         alignment.is_power_of_two(),

@@ -281,53 +281,58 @@ impl<'a> Lexer<'a> {
         self.try_numeric_suffix(false)
     }
 
+    /// Consume a numeric suffix at the cursor, if one is present and is
+    /// not the start of a longer identifier. Integer literals take the
+    /// integer suffixes; float literals take `f32` / `f64` and, as they
+    /// always have, `u`.
     pub(super) fn try_numeric_suffix(&mut self, is_int: bool) -> Option<NumericSuffix> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        let remaining: String = self.chars[self.pos..].iter().collect();
-
-        // Try longest suffixes first
-        let suffixes: &[(&str, NumericSuffix, bool)] = &[
-            ("isize", NumericSuffix::ISize, true),
-            ("usize", NumericSuffix::USize, true),
-            ("i64", NumericSuffix::I64, true),
-            ("i32", NumericSuffix::I32, true),
-            ("i16", NumericSuffix::I16, true),
-            ("i8", NumericSuffix::I8, true),
-            ("u64", NumericSuffix::U64, true),
-            ("u32", NumericSuffix::U32, true),
-            ("u16", NumericSuffix::U16, true),
-            ("u8", NumericSuffix::U8, true),
-            ("f64", NumericSuffix::F64, false),
-            ("f32", NumericSuffix::F32, false),
-            ("u", NumericSuffix::U, true),
+        // Longest spelling first so `isize` wins over `i8` and `u64` over `u`.
+        const LONGEST_FIRST: [NumericSuffix; 13] = [
+            NumericSuffix::ISize,
+            NumericSuffix::USize,
+            NumericSuffix::I64,
+            NumericSuffix::I32,
+            NumericSuffix::I16,
+            NumericSuffix::I8,
+            NumericSuffix::U64,
+            NumericSuffix::U32,
+            NumericSuffix::U16,
+            NumericSuffix::U8,
+            NumericSuffix::F64,
+            NumericSuffix::F32,
+            NumericSuffix::U,
         ];
-
-        for &(text, ref suffix, int_only) in suffixes {
-            if !is_int && int_only && *suffix != NumericSuffix::U {
-                // float can have f32/f64 but not int suffixes
+        for suffix in LONGEST_FIRST {
+            let is_float_suffix = matches!(suffix, NumericSuffix::F32 | NumericSuffix::F64);
+            let allowed = if is_int {
+                !is_float_suffix
+            } else {
+                is_float_suffix || suffix == NumericSuffix::U
+            };
+            if !allowed {
                 continue;
             }
-            if is_int && !int_only {
-                // int can have int suffixes and also f32/f64 (wait — no, skip float suffixes for ints)
+            let text = suffix.as_str();
+            let end = self.pos + text.len();
+            let Some(candidate) = self.chars.get(self.pos..end) else {
+                continue;
+            };
+            if !candidate.iter().copied().eq(text.chars()) {
                 continue;
             }
-            if remaining.starts_with(text) {
-                // Ensure the suffix isn't followed by identifier chars
-                let after = remaining.chars().nth(text.len());
-                if after.is_none_or(|c| !c.is_alphanumeric() && c != '_') {
-                    for _ in 0..text.len() {
-                        self.advance();
-                    }
-                    return Some(*suffix);
-                }
+            // The suffix must not run on into identifier characters.
+            if self
+                .chars
+                .get(end)
+                .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+            {
+                continue;
             }
+            for _ in 0..text.len() {
+                self.advance();
+            }
+            return Some(suffix);
         }
-
-        // Special case: float suffixes on int context are actually floats
-        // But we handle that at parse level. For now, just return None.
         None
     }
 
@@ -359,7 +364,9 @@ impl<'a> Lexer<'a> {
         // `empty?`. A trailing `?` after `)`/`]` (the try operator) is
         // unaffected — it is never part of an identifier lex. Uppercase
         // type identifiers do NOT absorb `?` (so `T?` stays an optional type).
-        if !self.is_at_end() && (self.current() == '!' || self.current() == '?') {
+        let method_suffix = !self.is_at_end()
+            && (self.current() == '!' || (self.current() == '?' && self.peek_at(1) != Some('?')));
+        if method_suffix {
             let suffix = self.advance();
             let full_ident: String = format!("{}{}", ident, suffix);
             self.emit(
@@ -477,7 +484,13 @@ impl<'a> Lexer<'a> {
                 }
             }
             '*' => {
-                if !self.is_at_end() && self.current() == '=' {
+                if !self.is_at_end() && self.current() == '*' {
+                    // `**` is exponentiation. (`**=` power-assign is not yet
+                    // supported; it lexes as `**` then `=` and errors in the
+                    // parser, which is acceptable for now.)
+                    self.advance();
+                    self.emit(TokenKind::StarStar, start_byte, start_line, start_col);
+                } else if !self.is_at_end() && self.current() == '=' {
                     self.advance();
                     self.emit(TokenKind::StarEq, start_byte, start_line, start_col);
                 } else {
@@ -503,7 +516,22 @@ impl<'a> Lexer<'a> {
                 }
             }
             '%' => {
-                if !self.is_at_end() && self.current() == '=' {
+                // `%w[...]` / `%w(...)` / `%w{...}` / `%w<...>` — a word-array
+                // literal that desugars to an array of plain string literals
+                // (`%w[a b c]` → `["a", "b", "c"]`). Only in expression context,
+                // so a binary `a % w` (modulo) is untouched.
+                let prev = self.tokens.last().map(|t| t.kind.clone());
+                if !self.is_at_end()
+                    && prev_token_starts_expr_context(prev.as_ref())
+                    && self.current() == 'w'
+                    && matches!(
+                        self.peek_at(1),
+                        Some('[') | Some('(') | Some('{') | Some('<')
+                    )
+                {
+                    self.advance(); // consume `w`
+                    self.lex_word_array(start_byte, start_line, start_col);
+                } else if !self.is_at_end() && self.current() == '=' {
                     self.advance();
                     self.emit(TokenKind::PercentEq, start_byte, start_line, start_col);
                 } else {
@@ -532,10 +560,21 @@ impl<'a> Lexer<'a> {
             '<' => {
                 if !self.is_at_end() && self.current() == '=' {
                     self.advance();
-                    self.emit(TokenKind::LtEq, start_byte, start_line, start_col);
+                    if !self.is_at_end() && self.current() == '>' {
+                        // `<=>` three-way comparison (spaceship).
+                        self.advance();
+                        self.emit(TokenKind::Spaceship, start_byte, start_line, start_col);
+                    } else {
+                        self.emit(TokenKind::LtEq, start_byte, start_line, start_col);
+                    }
                 } else if !self.is_at_end() && self.current() == '<' {
                     self.advance();
-                    self.emit(TokenKind::Shl, start_byte, start_line, start_col);
+                    if !self.is_at_end() && self.current() == '=' {
+                        self.advance();
+                        self.emit(TokenKind::ShlEq, start_byte, start_line, start_col);
+                    } else {
+                        self.emit(TokenKind::Shl, start_byte, start_line, start_col);
+                    }
                 } else {
                     self.emit(TokenKind::Lt, start_byte, start_line, start_col);
                 }
@@ -546,7 +585,12 @@ impl<'a> Lexer<'a> {
                     self.emit(TokenKind::GtEq, start_byte, start_line, start_col);
                 } else if !self.is_at_end() && self.current() == '>' {
                     self.advance();
-                    self.emit(TokenKind::Shr, start_byte, start_line, start_col);
+                    if !self.is_at_end() && self.current() == '=' {
+                        self.advance();
+                        self.emit(TokenKind::ShrEq, start_byte, start_line, start_col);
+                    } else {
+                        self.emit(TokenKind::Shr, start_byte, start_line, start_col);
+                    }
                 } else {
                     self.emit(TokenKind::Gt, start_byte, start_line, start_col);
                 }
@@ -554,7 +598,12 @@ impl<'a> Lexer<'a> {
             '&' => {
                 if !self.is_at_end() && self.current() == '&' {
                     self.advance();
-                    self.emit(TokenKind::AmpAmp, start_byte, start_line, start_col);
+                    if !self.is_at_end() && self.current() == '=' {
+                        self.advance();
+                        self.emit(TokenKind::AmpAmpEq, start_byte, start_line, start_col);
+                    } else {
+                        self.emit(TokenKind::AmpAmp, start_byte, start_line, start_col);
+                    }
                 } else if !self.is_at_end() && self.current() == '.' {
                     // `&.` — Ruby safe navigation (`h&.hello&.now`).
                     self.advance();
@@ -574,6 +623,9 @@ impl<'a> Lexer<'a> {
                         }
                     }
                     self.emit(TokenKind::Amp, start_byte, start_line, start_col);
+                } else if !self.is_at_end() && self.current() == '=' {
+                    self.advance();
+                    self.emit(TokenKind::AmpEq, start_byte, start_line, start_col);
                 } else {
                     self.emit(TokenKind::Amp, start_byte, start_line, start_col);
                 }
@@ -581,13 +633,26 @@ impl<'a> Lexer<'a> {
             '|' => {
                 if !self.is_at_end() && self.current() == '|' {
                     self.advance();
-                    self.emit(TokenKind::PipePipe, start_byte, start_line, start_col);
+                    if !self.is_at_end() && self.current() == '=' {
+                        self.advance();
+                        self.emit(TokenKind::PipePipeEq, start_byte, start_line, start_col);
+                    } else {
+                        self.emit(TokenKind::PipePipe, start_byte, start_line, start_col);
+                    }
+                } else if !self.is_at_end() && self.current() == '=' {
+                    self.advance();
+                    self.emit(TokenKind::PipeEq, start_byte, start_line, start_col);
                 } else {
                     self.emit(TokenKind::Pipe, start_byte, start_line, start_col);
                 }
             }
             '^' => {
-                self.emit(TokenKind::Caret, start_byte, start_line, start_col);
+                if !self.is_at_end() && self.current() == '=' {
+                    self.advance();
+                    self.emit(TokenKind::CaretEq, start_byte, start_line, start_col);
+                } else {
+                    self.emit(TokenKind::Caret, start_byte, start_line, start_col);
+                }
             }
             '.' => {
                 if !self.is_at_end() && self.current() == '.' {
@@ -619,11 +684,21 @@ impl<'a> Lexer<'a> {
                 }
             }
             '?' => {
+                // `??` is the lazy Option fallback operator. Check it before
+                // char-literal and postfix-try disambiguation.
+                if !self.is_at_end() && self.current() == '?' {
+                    self.advance();
+                    self.emit(
+                        TokenKind::QuestionQuestion,
+                        start_byte,
+                        start_line,
+                        start_col,
+                    );
                 // Safe navigation is `&.` (not `?.`), and a trailing `?` on
-                // an identifier is absorbed as a predicate-method name — so a
+                // an identifier is absorbed as a predicate-method name, so a
                 // standalone `?` here is either a char literal (`?a`) or the
                 // try operator.
-                if !self.is_at_end() && {
+                } else if !self.is_at_end() && {
                     // ruby-naming.spec.md §3.10a: `?a` / `?\n` is a char
                     // literal, but only in an expression-context position
                     // so postfix-`?` (try) and optional-type `T?` keep
@@ -676,20 +751,13 @@ impl<'a> Lexer<'a> {
                 self.emit(TokenKind::RBrace, start_byte, start_line, start_col);
             }
             '~' => {
-                // `~=` regex-match operator. There is no bare `~` in
-                // Ruxen today (no bitwise-not — use `!x` and `^` for
-                // the integer surface); a lone `~` falls through to
-                // the unexpected-character path below by design.
+                // `~=` regex-match operator; a lone `~` is the bitwise-complement
+                // prefix operator (`~x` for the integer surface).
                 if !self.is_at_end() && self.current() == '=' {
                     self.advance();
                     self.emit(TokenKind::TildeEq, start_byte, start_line, start_col);
                 } else {
-                    let span = self.make_span(start_byte, start_line, start_col);
-                    self.diagnostics.push(Diagnostic::error_with_code(
-                        format!("unexpected character: '{}'", ch),
-                        span,
-                        "E0006",
-                    ));
+                    self.emit(TokenKind::Tilde, start_byte, start_line, start_col);
                 }
             }
             '\\' => {
@@ -745,7 +813,7 @@ pub(super) fn prev_token_starts_expr_context(prev: Option<&TokenKind>) -> bool {
         // for the RHS).
         | Plus | Minus | Star | SlashEq | Percent
         // Logical operators.
-        | AmpAmp | PipePipe | Bang
+        | AmpAmp | PipePipe | QuestionQuestion | Bang
         // The regex-match operator itself.
         | TildeEq
         // Keywords that introduce an expression position.
@@ -755,6 +823,48 @@ pub(super) fn prev_token_starts_expr_context(prev: Option<&TokenKind>) -> bool {
 }
 
 impl<'a> Lexer<'a> {
+    /// Lex a `%w[...]` word-array literal into the token stream as a normal
+    /// array of string literals (`%w[a b c]` → `[`, `"a"`, `,`, `"b"`, `,`,
+    /// `"c"`, `]`). The opening delimiter (`[`/`(`/`{`/`<`) is the current char;
+    /// whitespace (including newlines) separates words. `%w` has already been
+    /// recognised by the caller. Spans point at the `%w` start (approximate).
+    fn lex_word_array(&mut self, sb: usize, sl: u32, sc: u32) {
+        let open = self.current();
+        let close = match open {
+            '[' => ']',
+            '(' => ')',
+            '{' => '}',
+            '<' => '>',
+            other => other,
+        };
+        self.advance(); // consume the opening delimiter
+        self.emit(TokenKind::LBracket, sb, sl, sc);
+        let mut first = true;
+        loop {
+            // Skip separating whitespace, but never past the close delimiter.
+            while !self.is_at_end() && self.current() != close && self.current().is_whitespace() {
+                self.advance();
+            }
+            if self.is_at_end() || self.current() == close {
+                break;
+            }
+            let mut word = String::new();
+            while !self.is_at_end() && self.current() != close && !self.current().is_whitespace() {
+                word.push(self.current());
+                self.advance();
+            }
+            if !first {
+                self.emit(TokenKind::Comma, sb, sl, sc);
+            }
+            first = false;
+            self.emit(TokenKind::StringLiteral(word), sb, sl, sc);
+        }
+        if !self.is_at_end() && self.current() == close {
+            self.advance(); // consume the closing delimiter
+        }
+        self.emit(TokenKind::RBracket, sb, sl, sc);
+    }
+
     /// Lex a `/pat/flags` regex literal. The opening `/` has already
     /// been consumed by [`lex_operator_or_punct`]. Emits the token on
     /// success; pushes an E1700/E1701/E1703 diagnostic on failure (and

@@ -1,6 +1,0 @@
-def main
-  let v = [1, 2, 3, 4]
-  let s = v.drop(2).sum
-  let out = s.to_string
-  puts "s=#{out}"
-end

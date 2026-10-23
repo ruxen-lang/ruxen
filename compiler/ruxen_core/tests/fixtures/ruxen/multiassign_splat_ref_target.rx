@@ -1,0 +1,6 @@
+def main
+  var values = [1, 2, 3]
+  var first = 0
+  var rest: &Array[Int] = &values
+  first, *rest = 1, 2
+end

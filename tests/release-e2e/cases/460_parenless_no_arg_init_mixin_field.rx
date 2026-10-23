@@ -1,0 +1,40 @@
+## Q46 regression pin: a runtime-dispatch class constructed with the
+## paren-less, zero-argument `.new` form must retain valid class-info when
+## moved into an `any Mixin` field. Before the fix, `Source.new` skipped the
+## class-info header write; dispatch through `Holder.inner` dereferenced null
+## and segfaulted before producing stdout.
+
+mixin Readable dispatch runtime
+  def read -> Int
+end
+
+class Source
+  value: Int
+  include Readable
+
+  def init
+    self.value = 42
+  end
+
+  def read -> Int
+    self.value
+  end
+end
+
+class Holder
+  inner: any Readable
+
+  def init(inner: any Readable)
+    self.inner = inner
+  end
+
+  def read -> Int
+    (&self.inner).read
+  end
+end
+
+def main
+  var source = Source.new
+  var holder = Holder.new(source)
+  puts "value=#{holder.read}"
+end

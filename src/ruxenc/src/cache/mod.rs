@@ -19,9 +19,6 @@
 //!   ├── objects/<hex>.o
 //!   └── signatures/<hex>.sig
 //! ```
-//!
-//! The global cache (`~/.cache/ruxen/`) follows a parallel layout and is
-//! managed via `store::global_cache_dir()` / `clear_global_cache()`.
 
 // ruxenc is a binary crate, so re-exported items without in-binary consumers
 // trip the unused-import lint. The cache module is a coherent library-shaped
@@ -29,7 +26,6 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod driver;
-pub mod graph;
 pub mod hash;
 pub mod manifest;
 pub mod signature;
@@ -39,7 +35,6 @@ pub use driver::{
     build, default_target, BuildOptions, BuildResult, CompileFn, CompileOutput, FileStatus,
     SourceFile,
 };
-pub use graph::{DependencyGraph, FileId, GraphError};
 pub use hash::{compiler_version, hash_bytes, hash_file, to_hex, CacheKey};
 pub use manifest::{
     CacheHeader, CacheManifest, CachedFile, ManifestLoadResult, FORMAT_VERSION, MAGIC,
@@ -49,6 +44,6 @@ pub use signature::{
     PublicItem, SigField, SigFn, SigParam,
 };
 pub use store::{
-    atomic_write, clear_global_cache, global_cache_dir, unix_now_secs, CacheStore,
-    INCREMENTAL_DIRNAME, MANIFEST_FILENAME, OBJECTS_DIRNAME, SIGNATURES_DIRNAME,
+    atomic_write, unix_now_secs, CacheStore, INCREMENTAL_DIRNAME, MANIFEST_FILENAME,
+    OBJECTS_DIRNAME, SIGNATURES_DIRNAME,
 };

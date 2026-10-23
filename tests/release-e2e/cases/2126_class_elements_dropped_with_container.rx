@@ -1,0 +1,45 @@
+# Class elements of an `Array[UserClass]` and the class values of a
+# `Hash[String, UserClass]` are dropped when the container is: each
+# element's `def drop` runs, then its storage is freed.
+#
+# Before, a container drop freed only its spine and every element leaked,
+# with its `def drop` never run. A slot now carries an OBJ element
+# descriptor naming per-type element glue (drop + clone).
+class Res
+  id: Int
+
+  def init(@id: Int)
+  end
+
+  def drop
+    puts "drop #{self.id}"
+  end
+end
+
+class Point
+  x: Int
+  y: Int
+
+  def init(@x: Int, @y: Int)
+  end
+end
+
+def fill
+  var rs: Array[Res] = Array.new
+  rs.push(Res.new(1))
+  rs.push(Res.new(2))
+  rs.push(Res.new(3))
+  puts "filled #{rs.size}"
+end
+
+def table
+  var h: Hash[String, Res] = Hash.new
+  h["only"] = Res.new(10)
+  var ps = [Point.new(1, 2), Point.new(3, 4)]
+  ps.push(Point.new(5, 6))
+  puts "table #{h.size} points #{ps.size} sum #{ps[0].x + ps[2].y}"
+end
+
+fill
+table
+puts "done"

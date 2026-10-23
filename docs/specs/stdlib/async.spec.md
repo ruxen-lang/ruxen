@@ -70,14 +70,14 @@ end
 ```rx
 class Context
   lib "runtime/executor.c"
-    def waker as "ruxen_context_waker"(self) -> &Waker
+    def waker as "ruxen_context_waker" -> &Waker
   end
 end
 
 class Waker
   lib "runtime/executor.c"
-    def wake as "ruxen_waker_wake"(self) -> nil
-    def wake_by_ref as "ruxen_waker_wake_by_ref"(self) -> nil
+    def wake as "ruxen_waker_wake" -> nil
+    def wake_by_ref as "ruxen_waker_wake_by_ref" -> nil
   end
 end
 ```
@@ -150,7 +150,7 @@ diagnostic (E0613).
 ## B7 — `async def foo` parses (no lowering)
 
 ```rx
-async def fetch(url: &str) -> Result[String, IoError]
+async def fetch(url: &String) -> Result[String, IoError]
   Result.Ok(url.to_string)
 end
 ```
@@ -229,10 +229,10 @@ in Ruxen (lowering passes, codegen, FFI registration).
 
 | Behaviour | Test fn                                              | File                                |
 |-----------|------------------------------------------------------|-------------------------------------|
-| B1        | `future_mixin_has_associated_output_and_poll`        | `tests/async_surface.rs`            |
-| B2        | `poll_enum_registered_with_ready_pending_variants`   | `tests/async_surface.rs`            |
+| B1        | e2e `720_handwritten_future_typechecks.rx`, `721`-`731` | release-e2e                     |
+| B2        | e2e `721`-`731` (every hand-poll matches `Poll.Ready`/`Poll.Pending`) | release-e2e |
 | B2 (tag)  | `poll_tag_layout_stability`                          | `tests/async_surface.rs`            |
-| B3        | `context_and_waker_classes_resolve`                  | `tests/async_surface.rs`            |
+| B3        | e2e `2066_block_on_typed_output_and_waker.rx`        | release-e2e                         |
 | B4        | e2e `tests/release-e2e/cases/720_handwritten_future_typechecks.rx` (no execution — just compile) | release-e2e |
 | B5        | `include_future_without_output_rejected_e0612`       | `tests/async_negative.rs`           |
 | B6        | `poll_signature_mismatch_rejected_e0613`             | `tests/async_negative.rs`           |
@@ -252,12 +252,11 @@ in Ruxen (lowering passes, codegen, FFI registration).
 - **Async I/O** (sub-phase 4) — `AsyncTcpStream` / `AsyncFile` / `time.sleep`.
 - **`task.spawn` + `task.yield_now`** (sub-phase 5) — multi-task within the single-threaded executor.
 - **`Send` bound on cross-thread futures** — v2 (paired with multi-threaded scheduler).
-- **`select!` macro** — v2.
-- **Stream / AsyncIterator** — v2.
+- **Stream** — v2.
 - **Pin / Unpin** — replaced by `!Move` semantics per the decision-already-made list in the v1 prompt.
 
 ## Out of scope (v2 — separate roadmap)
 
 - `async def` in mixins.
-- Cancellation tokens / `JoinSet` (Rust's tokio-style task lifecycle).
+- Cancellation tokens / task-group lifecycle.
 - Multi-threaded work-stealing executor.

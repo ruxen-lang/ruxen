@@ -1,3 +1,9 @@
+## The error side of `JoinHandle#join`: the message a panicking thread
+## left behind.
 class ThreadPanic
+  message: String
 
+  def init(message: String)
+    self.message = message
+  end
 end

@@ -199,7 +199,7 @@ Semantics:
 mixin Try
   unstable feature: "try_mixin", issue: "42"
 
-  def into_result(self) -> Result[Self.Ok, Self.Err]
+  def consume into_result -> Result[Self.Ok, Self.Err]
 end
 ```
 
@@ -225,7 +225,7 @@ Semantics:
 ### 4.4 Stable directive
 
 ```ruxen
-def String.trim_ascii(self) -> &str
+def trim_ascii(s: &String) -> String
   stable since: "0.2.0", feature: "string_ext"
 
   ...
@@ -446,7 +446,7 @@ gets a `stability:` field per exported symbol.
 
 ### 5.7 LSP integration
 
-`crates/ruxen-ide/src/hover.rs` should, on hover of a symbol with
+`src/ruxen_ide/src/hover.rs` should, on hover of a symbol with
 deprecation:
 
 - Prepend `**Deprecated since 0.3** — use `Foo.new`.\n\n---\n\n` to
@@ -456,7 +456,7 @@ deprecation:
 - Surface the full rendering to VSCode / whichever client via the
   existing hover pipeline.
 
-`ruxen-ide/src/diagnostics.rs:11-28` already passes `diag.code`
+`ruxen_ide/src/diagnostics.rs:11-28` already passes `diag.code`
 through to LSP; W-prefixed codes work identically.
 
 ---
@@ -518,7 +518,7 @@ alongside.
 1. Serialize `Stability` into `.ruxenmeta`.
 2. Deserialize on import, attach to imported `Definition`.
 3. Fixture: cross-crate deprecation warning.
-4. `ruxen-ide/src/hover.rs` prepends deprecation notice.
+4. `ruxen_ide/src/hover.rs` prepends deprecation notice.
 
 ---
 

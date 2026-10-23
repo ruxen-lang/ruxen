@@ -7,7 +7,2606 @@ once 1.0.0 ships.
 
 ## [Unreleased]
 
+### Changed
+- **One instance engine replaces the five monomorphization passes.**
+  `mir/lower/instances/` (the generic-class pass, the lib-shell pass, Q17 generic free
+  functions, Q17b generic methods and the class-instance closure) is one worklist over
+  templates (a user generic class, a lib-shell method, a generic function, a method with
+  generics of its own) keyed by the full instantiated type, with one specialization
+  predicate (a bound, a dispatch on a parameter, a parameter-typed field, a
+  compiler-filled descriptor, or a call reaching another template), one emit loop with
+  `self` pinned, and one opaque rule (every template's own body is lowered and pruned when
+  unreached). Generic chains through methods, functions and classes now compile
+  (`Frame#outer[U]` calling `inner[T]`, `describe[T](x) { Holder.new(x).show }`,
+  `build[V](ps) { ps.to_h }`, `joined[T](xs) { xs.join(",") }`). Pinned by release-e2e 2247.
+- **Tables own their keys through a declared key descriptor (B73, I-65).** `class
+  KeyDesc[K]` (`layout key_desc`, std/core) joins `ElemDesc[T]`: `Hash.new`,
+  `with_capacity`, `insert`, the `Set` forms, `to_set` and `to_h[K, V]` declare it, and the
+  compiler fills it with `K`'s key descriptor, the element descriptor with a borrow tag.
+  The table hashes, compares, copies and frees its keys by it (an object key through new
+  `HASH`/`EQ` operations of its element glue). `KEYED_TABLE_CTORS`, `KEYED_TABLE_OPS`,
+  `ensure_key_kind`, the `_keyed` runtime forms, the `RUXEN_KEY_*` kinds and
+  `ELEM_DERIVE_HELPERS` are deleted; `Array#drop`/`chain` declare `ElemDesc[T]`. `to_h`
+  of class keys no longer aliases the source's keys (it panicked "missing key" or read
+  freed memory). A compiler-supplied parameter before one a caller writes is E0747.
+- **`lib` declarations may declare generics of their own** (`def to_h[K, V] as ...`), and
+  compiler-supplied parameters are left out of the signature typeck checks.
+
+### Fixed
+- **An expanding instantiation is error E0746 (I-72).** `Nest[T]#deeper -> Nest[Array[T]]`
+  hung the compiler; the engine stops at 32 levels of nesting.
+- **Derives on nested generic instances (I-64, P-17, I-71).** `ty_has_derive_trait`
+  checks an instance with its arguments substituted into the field types, so
+  `Box[Pair[Int, Mutex[Int]]]` derives no `clone` (it failed to link) and typeck rejects
+  `Box.new(Mutex.new(1)).clone` with E0740. A derive needs its mixin declared, so
+  `--no-std` programs with enums no longer panic.
+- **Instances of nested generic types get distinct names (I-70, I-63).**
+  `Box[Pair[Int, String]]` and `Box[Pair[String, Int]]` (and tuple glue for similar
+  tuples) produced the same symbol, so one body overwrote the other. Instance names and
+  tuple glue keys now come from `monomorphize::symbol_token` over the full type, which
+  keeps letters and digits and escapes every other byte (`_` included) as `_` plus two
+  hex digits, so different types never share a name.
+- **Generic inference fixes (P-13, P-14, P-16).** A constructor argument that is itself
+  generic or compound (`Outer.new(Wrap.new(3))`, `Table.new([("a", 6)])`) now binds the
+  class parameters (`typeck/infer/collect.rs::infer_class_generics`). A method generic
+  that shadows its class generic is the new error E0745 (`resolve/funcs.rs`). A generic
+  method call keeps its inferred result type when the declared return names a type
+  parameter (`mir/lower/expr/method_call.rs`). Pinned by `it/method_call_inference` and
+  release-e2e 2244.
+- **A generic class instance derives only what its substituted fields support (I-64).**
+  `Box[Mutex[Int]]` and `Box[Holder]` (a class holding a mutex) got a derived `clone`
+  that called the missing `Mutex_clone`, so they failed to link. The per-instance call in
+  `emit_mono_instances` (`mir/lower/monomorphize.rs`) passes `substituted: true` to
+  `Lowerer::synthesize_derives_as` (`mir/lower/derive.rs`), and each derive then also
+  needs every substituted field to pass `resolve::symbols::field_supports_derive`, the
+  per-field rule `ty_has_derive_trait` applies. Pinned by release-e2e 2246.
+- **A generic class reached only through a generic body is instantiated (I-54).**
+  `wrapped[T](v) { Wrap.new(v).dup }` left `Wrap[String]` without a body.
+  `Lowerer::close_class_instances` (`mir/lower/monomorphize.rs`) walks every concrete
+  instance body (generic free functions, generic methods, generic class methods) with
+  its parameters substituted, records each new concrete instance of an eligible generic
+  class, and walks that instance's methods in turn until nothing is added. It runs after
+  the generic free-fn and generic-method collections and before
+  `collect_builtin_head_mono_instances` (`mir/lower/mod.rs`). Pinned by release-e2e 2246.
+- **`to_h` with a class or struct key no longer leaks the key copy (I-65).**
+  `ruxen_hash_from_iter_keyed` (`library/std/hash/runtime/hash.c`) copies the key by the
+  table's key kind (how the table frees keys), moves the value out of the pair copy,
+  and drops the rest of the copy with `ruxen_elem_drop(copy, pair_desc)` (its glue skips
+  the emptied slot). Pinned by `it`
+  `drop_fixtures::to_h_with_object_keys_frees_every_copy`
+  (fixture `tests/fixtures/ruxen/to_h_object_keys_no_leak.rx`).
+- **`run.sh`'s `cli/build --release` check matches the F-29 rule.** A ruxen built
+  without the `llvm` feature refuses `--release` with an error naming the
+  feature (`codegen/backend.rs` `Backend::select`); the PR Ready `run.sh` job
+  ran such a binary and expected a successful build. The check now passes on
+  a successful build or on that exact refusal (`tests/release-e2e/run.sh`).
+
 ### Added
+- **A method's `where` bound on a class generic works in its body, and such a method
+  of a `lib`-shell generic class is specialized per instantiation.** `def get -> T
+  where T: Clone { self.deref.clone }` in `class MutexGuard[T]` now type-checks
+  (`InferenceEngine::receiver_bounds` adds the enclosing method's bounds to a
+  type-parameter receiver) and lowers to one copy per receiver type
+  (`MutexGuard__mono__String_get`): every generic class with `lib` methods is a shell
+  for the per-`T` specialization pass (`collect_builtin_head_mono_instances`, which now
+  also follows generic-class instantiations such as quiver's `State[Int]`), and a method
+  whose `where` bound names the class generic gets no opaque body. `Int`, `Float`,
+  `Bool`, `Char` and `USize` define `clone -> Self` (a derived clone treated `Int` as an
+  object and returned an uninitialized box). `MutexGuard#get` and `SharedSync#get`
+  return an owned copy; `deref` stays the borrow.
+- **Backend parity suite (F-29 P0).** One fixture list
+  (`compiler/ruxen_core/tests/common/parity_cases.rs`: the 14 former `llvm_backend`
+  fixtures plus F-29 drift fixtures under `tests/fixtures/parity/`) is built and run
+  through Cranelift vs LLVM (`it` `backend_parity`, `llvm` feature) and Cranelift vs the
+  REPL JIT (`ruxen_repl` `it` `jit_parity`, which runs the JIT's `main` in a re-executed
+  child process); stdout and exit code must match. Known drifts are ignored with the
+  F-29 phase that fixes them: LLVM zero-extends a negative `Int32` argument widened to
+  `Int` (P1); the JIT rejects a `Float` passed to an FFI `Int` param and crashes on a
+  `Kernel` default with a `Unit` self (P2). Both lanes run in `pr-ready.yml`'s LLVM job.
+  `RUXEN_E2E_BACKEND=llvm` runs the release-e2e sweep with LLVM (389/390), and a
+  compiler panic now fails its case instead of the sweep. `JITCodeGen::compile_program`
+  compiles a whole MIR program for the REPL and the JIT lane.
+- **Loan checking on MIR.** `mir::loan_check` checks E1002/E1009 on the lowered
+  bodies, in the order the program evaluates operands, so it rejects the I-30 shapes
+  the HIR walker missed (`puts([u.name][reset(u)])`, `h[u.name] = reset(u)`). It
+  agreed with the HIR checker on all 932 loan-matrix programs and fixtures and adds no
+  measurable compile time (prelude bodies are skipped). Every binary runs it through
+  the front-end driver. Pinned by `it` `mir_loan_check::loan_check_families`; the loan
+  matrix (661 programs: the original 485 plus 176 over branch-merge, multi-argument-call and direct-closure-call axes) is in the repo at `compiler/ruxen_core/tests/fixtures/loan_matrix/`,
+  checked in process by the ignored `it` `mir_loan_check::loan_matrix` (every conflict
+  row rejected except 22 listed rows whose write never reaches the view, every dead row
+  accepted), with its generator (`gen.py`) and memory runner (`memrun.py`, Guard Malloc or ASan; the pr-ready job `loan-matrix-memory` runs it) beside it.
+- Shared MIR facts: `mir::dataflow` (liveness, predecessors), `MirInst::dest` /
+  `read_locals`, `Terminator::successors`, declared `ParamMode`s on every function and FFI
+  declaration. Debug spans of instructions emitted after their operands now point at
+  their own expression.
+
+### Fixed
+- **Tuples own their elements and are freed.** A tuple box leaked with everything in
+  it: `drops::heap_free_callee` now has a `Tuple` arm (`ruxen_dealloc`), and tuples get
+  field glue (`owned_field_slots`, `field_drop_glue_name`, `object_glue_key` in
+  `mir/lower/drops/glue.rs`) and element glue (`RUXEN_ELEM_OBJ`), so an `Array` of tuples
+  frees each one. `field_owns_value` counts tuples, a tuple is Clone when its elements
+  are (`implicit_includes::ty_is_effectively_clone`), and a derived `clone` of a tuple
+  field copies the box element by element (`derive::synthesize_clone_field`). A tuple
+  result is caller-owned (`drops::fresh_result_type`) when each element is a scalar, a
+  borrow or itself fresh, so `partition`'s `(Array[T], Array[T])`, which holds aliases,
+  is not. `let (a, b) = expr` keeps the tuple in a scoped `_tuple` local that owns it
+  and the bindings borrow it; destructuring a variable borrows the variable
+  (`mir/lower/statement.rs`).
+- **Building a Hash from pairs copies what it inserts, and the last pair for a key
+  wins.** `ruxen_hash_from_iter_keyed(iter, pair_desc, kind, hash_fn, eq_fn)`
+  (`library/std/hash/runtime/hash.c`) clones each pair with `pair_desc` and moves the
+  copy's elements into the table, so the source pairs and the new table drop
+  independently. It reads the pairs from the last and skips a key already present, so
+  the last pair for a key wins (Ruby) and a duplicate key leaks nothing (I-61).
+  `mir/residual_abi.rs` and `it` `runtime_abi_derivation` (`ruxen_hash_from_iter` is
+  `(I64, I64)`) carry the signatures.
+- **A declared element descriptor parameter replaces a name-keyed one.** std/core
+  declares `class ElemDesc[T]` with `layout elem_desc` (`library/std/core/src/lib.rx`;
+  `ClassDef::has_layout`, `ClassInfo::elem_desc_shell`, `SymbolTable::elem_desc_arg`).
+  A `lib` parameter of type `ElemDesc[X]` is filled by the compiler at each call with
+  X's element descriptor, X bound from the receiver and arguments
+  (`key_desc::DeclaredElemDescs`, `key_desc::append_declared_elem_descs`, run before
+  `install_key_descriptors`). `Array#to_h` is `def to_h as "ruxen_hash_from_iter"(pairs:
+  ElemDesc[T]) -> Int`; `key_desc::pair_value_desc`, which matched the callee name, is
+  deleted (I-56).
+- **A method's `where` bound on its owner's generic is checked at the call site
+  (I-53).** `resolve/funcs.rs` registers the `where`-merged bounds in
+  `FnSignature.generic_params` (only the written generics reached a call site before),
+  and `typeck/infer/ops.rs::check_owner_where_bounds`, called from
+  `infer_selected_method`, binds the owner's generics from the receiver and checks each
+  bound strictly: a concrete type must satisfy it (E1015 for `MutexGuard[Inner]#get`
+  where `Inner` holds a `Mutex`, which failed at link before), and a type parameter must
+  declare it (a generic caller writes `T: Clone`). e2e 2196 declares
+  `Cellish[T: Send + Clone]`.
+- **Where-bound methods are specialized from every concrete body (I-54).** A user
+  generic class method whose `where` bound names the class generic is
+  `specialized_only` too (`collect_mono_instances`), so its opaque body is not emitted
+  (the opaque `Wrap_dup` linked against `_T_clone`). `collect_builtin_head_mono_instances`
+  runs after the generic free-fn and generic-method collections and walks every concrete
+  instance body with its params substituted, so `read_copy[T: Clone](g: &MutexGuard[T])
+  { g.get }` gets `MutexGuard[Int]#get` (it was a lowering error). The abstract-receiver
+  placeholder fires only when no monomorphized copy exists
+  (`mir/lower/expr/method_call.rs`).
+- **A boxed Copy struct is owned by its slot (I-55).** `drops::glue::field_owns_value`
+  counts a boxed Copy struct (`drops::copies::is_boxed_copy`), so a class field or tuple
+  element frees it, also on overwrite (`h.p = p` in a loop leaked one box per
+  iteration). A derived clone of such a field box-copies it (`Lowerer::emit_box_copy`
+  in `derive.rs::synthesize_clone_field`). A struct object still frees no fields (the
+  pre-existing struct-field leak class).
+- **The C-handle derive rule names no method (I-57).** A fieldless class whose methods
+  include a C (`lib`) function supports a derived mixin only when it declares the method
+  that derive defines, read from the mixin's definition
+  (`SymbolTable::declares_derived_method`), for every mixin
+  (`resolve/symbols/derive_support.rs::is_c_handle`). The `"Clone"` and
+  `"clone"` checks are gone.
+- **The loan-matrix memory run cannot pass vacuously (I-59, I-60).** `memrun.py` fails
+  on a compile failure without an E-code, a missing compiler or `cc`, zero programs
+  found or accepted, a rejected dead row, and an accepted conflict row missing from
+  `LOAN_MATRIX_ACCEPTED_CONFLICTS` (read from `tests/it/mir_loan_check.rs`). The
+  pr-ready `loan-matrix-memory` job has `timeout-minutes: 60`.
+- **A boxed Copy value has one box per owner.** A Copy tuple, struct or class lives in a
+  heap box, and `b = a` or `arr.push(a)` left two owners of one box. The new pass
+  `Lowerer::duplicate_boxed_copies` (`mir/lower/drops/copies.rs`), run on every lowered
+  body before the call summaries, gives each new owner its own box: a copy between
+  locals, a store into an object or tuple field (not an enum payload, a closure captures
+  box or a `Ref` borrow), a by-value FFI argument, and a return of a value that is not
+  the frame's own box. A fresh temporary consumed in place moves without a copy. Drop
+  elaboration follows: Copy tuples are drop candidates, a boxed Copy argument to a user
+  callee or closure is not tainted, a closure call's boxed Copy result is owned, and a
+  container of boxed Copy elements is never demoted to a shallow drop. This fixes a
+  double free (exit 134) when a Copy struct was pushed into an Array and also kept.
+  `it` `drop_fixtures::closure_drop_does_not_free_a_moved_out_capture` now expects 3
+  allocations, 3 frees and 0 outstanding: the escaped Buffer is freed once by its new
+  owner instead of leaking.
+- **The MIR loan check sees views of several places and closure calls (I-41, I-42).**
+  A local now denotes a set of places (`loan_check::Places`): a join of paths that bound
+  it differently unions them, as does a call result that may point into several
+  arguments, and a write, move or `&var` through it is checked at each one (paths are
+  capped at `MAX_PLACE_DEPTH`, so the sets stay finite). Before, both collapsed to "own
+  storage" and `al = if c then u.a else w.a end; al.name = ...` or
+  `al = pick(c, u.a, w.a)` freed a string `x = u.a.name` still viewed (a crash).
+  `MirInst::CallIndirect` records how the callee takes each argument (`modes`, from the
+  closure's declared signature; `param_modes::unknown_param_mode`, never `Read`, for an
+  unspelled one) and the closure `pair` it calls, so a closure call mutating a `&var`
+  argument (`f.(&var u)` with `x = u.name` live) is E1002 and one writing a capture
+  (`f = { u.name = ... }; f.()`) is E1009; drop elaboration's closure-call map reads the
+  same `pair`. Pinned by seven new `it` `mir_loan_check::loan_check_families` rows plus a read-only guard row.
+- **The MIR loan check reads recorded borrow facts and guesses none.** Lowering records
+  what each value may point into (`MirFunction::views`, `mir::nodes::View`: scalar,
+  owned, closure pair, `op=` address, call result into given arguments; call results
+  get theirs from `drops::record_default_views`, the rule drop elaboration also reads)
+  and how every body takes its parameters (`param_modes` on derived, closure and
+  indirect-call bodies too, `ResidualFn::modes` for the compiler's own runtime calls).
+  The checker's type-based guesses (`holds_reference`, Copy-ness, "can this container
+  store that value", the `FuncAddr`/`Alloc` closure-pair reconstruction, shared vs
+  mutable loan kinds) are deleted; anything unrecorded is treated as the worst case.
+  `assignment_addresses`, `replaced_values` and the `ResultBorrows` callback are gone.
+  Four shapes the type-based checker accepted and that crashed under Guard Malloc are
+  now rejected: a rebind to a callee that returns `self` on only some paths (its free
+  stays; the frees the elision pass deletes are skipped, `drops::elided_rebind_frees`,
+  the one rule), a view a callee stores into an object's field, a view moved into the
+  object a callee returns (a by-value argument's loans go to the result), and a call
+  of a closure joined from two branches (every closure a local may hold is checked).
+  Pinned by `it` `mir_loan_check::loan_check_families` (`joined_closures`) and its
+  `RECORDED_FACT_CASES`. The two view shapes came from `MutexGuard#get` handing out
+  the mutex's own value; `get` now returns a copy, so those programs are safe and
+  their pins (`copy_stored_by_callee`, `copy_kept_in_result`) expect no error. The
+  checker rule stays for any C getter that returns an alias.
+- **The IDE reports MIR lowering errors (I-43).** `driver::Frontend::into_type_check_result`
+  appends the lowering error as an error diagnostic, so a program `ruxen build` rejects
+  at lowering (returning a slot-addressed `&var`) is an error in the editor too.
+- **The REPL JIT reuses the batch Cranelift driver (F-29 P2).** `codegen::cranelift::CodeGen`
+  is generic over the Cranelift module (`ObjectModule` for builds, `JITModule` for the REPL)
+  and its `compile_program` is incremental: it declares and defines only what an earlier
+  call has not (functions, FFI imports, vtable and class_info data), and a failed call
+  undeclares the functions it did not define. `codegen::cranelift::isa(target, is_pic)`
+  builds the ISA for both. The JIT's forked declare/define/data/entry-binding code and its
+  own callee index are deleted; `jit.rs` keeps only its module construction (runtime
+  shims, allowlisted `dlsym` lookup). Fixed: a `Kernel` default method on a `Unit` self
+  (`puts(x).tap { ... }`) crashed the REPL, since the JIT bound entry params by index
+  (`jit_parity` `unit_self_kernel_default` no longer ignored; no parity lane ignores a
+  fixture now). A translation error no longer leaves the shared function context dirty.
+- **No backend decides any coercion (F-29 P1c).** `mir::coercion` now also lands each
+  instruction's result in its destination's class: an operation, call or address result
+  goes to a temporary of the class it produces (`mir::abi::produced`) followed by a
+  `Convert`; a `Copy`/`Ref` across classes and every `FloatToBits`/`BitsToFloat` become the
+  `Convert`. The passthrough pseudo-call (`yield` with no block in scope) becomes an
+  `Assign` of its argument. Cranelift's and LLVM's `coerce`, `coerce_value`,
+  `coerce_erased_word`, the backends' passthrough arms and LLVM's `llvm_class` are deleted;
+  Cranelift keeps only its `&var` stack-slot word (`slot_word`), a storage detail.
+- **Coercions are explicit MIR (F-29 P1b): no backend decides a value conversion.**
+  The lowering policy moved from `codegen/abi.rs` to `mir/abi.rs` (with the residual
+  runtime ABI, `mir/residual_abi.rs`, and `runtime_name`, `mir/lang_intrinsics.rs`). The
+  last lowering step, `mir::coercion::make_coercions_explicit`, builds the program's
+  `CalleeIndex` (`MirProgram::callees`, which both backends now declare from instead of
+  building their own) and inserts one `MirInst::Convert { dest, src, coercion }` wherever
+  a value crosses into another machine class: an `Assign`, a call argument, a returned
+  value, binary operands and a string comparison's operands. Cranelift and LLVM emit each
+  `Convert` (`emit_coercion`) and trust every other operand; `coerce_call_args`,
+  `unify_binop_operands` and the per-site mode calls are deleted from both. An integer
+  into a pointer-class slot now keeps its signedness on LLVM too (`IntToPtr { signed }`).
+  The REPL JIT declares FFI imports from their derived ABI (`FnAbi::of_ffi`) instead of
+  widening narrow params and returns to `i64`, so a `Float` passed to an FFI `Int` param
+  converts in the REPL as in a build (`jit_parity` `ffi_int_param_takes_float` no longer
+  ignored). An undeclared callee's narrow-integer or variadic argument is widened to
+  `I64` on LLVM as on Cranelift.
+- **One backend lowering policy (F-29 P1a): Cranelift, LLVM and the REPL JIT read
+  `codegen/abi.rs`.** It owns the `Ty` → machine class map (`AbiClass`), signatures
+  (`FnAbi`; the C entry ABI comes from `MirFunction::is_entry`, no longer from the name
+  `main`), one `CalleeIndex` per program (FFI C symbol, Ruxen name, lib-qualified alias, MIR
+  functions, the residual runtime symbols), the B01 erased-word predicates and every
+  coercion decision (assign, call argument, return, binary operands); each backend keeps
+  only its class → type map. Drifts fixed: LLVM zero-extended a negative `Int32` argument
+  widened to `Int` and converted an integer argument to a `Float` param unsigned (now both
+  backends extend and convert by the argument's signedness); LLVM's float → integer
+  conversion is now saturating like Cranelift's (`llvm.fpto[su]i.sat`: clamp, NaN → 0); a
+  `Float` passed to a declared `Int` parameter converts signed on both backends (was the
+  unsigned saturating form, so `-2.5` became 0); LLVM no longer panics on a `Not`/negate of
+  a `&var` scalar parameter's pointer-typed temporary (`2212_var_scalar_param_writes`; LLVM
+  release-e2e 390/390). `cranelift/runtime_sigs.rs` and `llvm/runtime_decl.rs` are gone
+  (the residual is read through the index). Pinned by the parity fixtures
+  `neg_int32_arg_widened` (no longer ignored) and `float_to_int_saturates`.
+- **The MIR loan check no longer rejects field stores and Copy derefs the apps
+  use.** A field store's read of the value it replaces is a move to free it
+  (`MirFunction::replaced_values`), not a borrow of the field; a callable type
+  such as `Proc[(&String) -> Int]` no longer counts as holding a reference
+  (`Ty::holds_reference`); and a Copy value without references (`*v` of a
+  `&Bool`) holds no loan. quiver, rondo and canvas build again. Pinned by `it`
+  `mir_loan_check::loan_check_families` (three `guard_*` rows).
+
+### Changed
+- **One declaration-driven rule for the method a derive defines (I-57).**
+  `DERIVED_METHODS` is deleted (`implicit_includes/mod.rs`).
+  `SymbolTable::derived_method(trait)` reads the method from the mixin's `.rx`
+  declaration (required first, else default), and
+  `SymbolTable::declares_derived_method(type, trait)` is the one "the type defines it
+  itself" rule, read by `implicit_includes::derive_is_synthesized` and by
+  `derive_support::is_c_handle`. Typeck registers derived methods from
+  `implicit_includes::synthesized_derives` (`typeck/mixins.rs`). `mixin Debug`
+  (`library/std/fmt/src/lib.rx`) now declares `def to_debug -> String` instead of an
+  unused `def fmt`; derive and interpolation name the Debug body through
+  `Lowerer::debug_method()` instead of spelling `to_debug`.
+- **An `ElemDesc[T]` parameter is compiler-supplied in typeck too (I-66, I-69).**
+  `SymbolTable::source_param_count` (the parameters a caller writes) is the free-function
+  arity check (`typeck/infer/expr.rs`), and `method_accepts_arg_count`
+  (`typeck/infer/collect.rs`) leaves such parameters out of the required count.
+  `key_desc::append_declared_elem_descs` turns a call whose descriptor type still names
+  a type parameter into the abstract placeholder (`monomorphize::abstract_callee`),
+  which `prune_unmonomorphised_bodies` removes with its unreachable opaque body or
+  reports, instead of passing a silent POD descriptor. Compiler-supplied parameters are
+  the trailing ones. Pinned by `it`
+  `field_ownership::an_elem_desc_parameter_is_not_written_by_the_caller`.
+- **`loan_check.rs` and `symbols.rs` are split under 1000 lines (I-58).**
+  `mir/loan_check/closures.rs` holds `Effect`, `Effects` and `Pairs`;
+  `resolve/symbols/derive_support.rs` holds the implicit-include rule
+  (`ty_has_derive_trait`, `ty_is_effectively_copy`, re-exported from `symbols.rs`).
+- **A tuple element read borrows, like a field read.** One rule,
+  `typeck/infer/helpers.rs::slot_read_ty`, types a value read out of a slot its
+  container keeps owning: a non-Copy `T` reads as `&T`. Class field reads
+  (`field_read_ty`), tuple `.N` reads, tuple destructuring bindings
+  (`propagate_pattern_types` on an owned tuple) and `for (k, v)` bindings all use it;
+  `retype_field_place` covers tuple element writes. E0744 (`reject_borrow_into_owned`)
+  recurses through tuple slots, so `keep((u.name, 1))` into a `(String, Int)` parameter
+  is E0744. Storing an element needs `.clone` (`s.wire = cycle.0.clone`); a non-Clone
+  element is used through a borrow (`server_echo_once(&var p.0)`, ported in
+  `tests/release-e2e/cases/727_async_tcp_echo.rx`).
+- **Hash entries are borrowed views.** `Hash#to_a` returns `Array[(&K, &V)]`, `Hash#each`
+  yields `(&K, &V)` and Hash includes `Enumerable[(&K, &V)]`
+  (`library/std/map/src/lib.rx`); `for (k, v) in h` iterates `(&K, &V)`
+  (`mir/lower/expr/for_loop.rs`, `typeck/infer/expr.rs`).
+- **Element glue is built from a recorded type.** Every emitter of an element
+  descriptor (`heap_free_call`, derive, `key_desc`) records the glue's object type with
+  `drops::glue::record_elem_glue` into `MirFunction::elem_glue_types`, and
+  `synthesize_elem_glue` reads it; `ElemDesc::Glue` carries `object: Ty`. No glue name
+  is parsed back into a type anymore.
+- **LLVM lowers through the one MIR walk (F-29 P4b).** The LLVM backend implements
+  `IrBuilder` as `llvm::emit::builder::LlvmBuilder` (allocas in an `entry` block, the
+  program's string globals, the function's debug scope) and runs `codegen::lower::lower_function`;
+  its own instruction, terminator and call lowerer (`llvm/emit/instructions.rs`,
+  `control_flow.rs`, `calls.rs`) is deleted, so Cranelift, the REPL JIT and LLVM share every
+  instruction decision. Behaviour changes on LLVM: a bitwise or logical `BinOp` on `Float`
+  operands is now a compile error ("`BitAnd` has no float form") where LLVM silently
+  produced the left operand; a zero-sized (`Unit`) parameter's alloca now holds an `i64` 0,
+  as on Cranelift. DWARF line info comes from the walk's locations, unchanged in output.
+- **One MIR walk for code generation (F-29 P4a).** `codegen::lower::lower_function`
+  translates every `MirInst` and `Terminator` once, through the `codegen::ir_builder::IrBuilder`
+  trait (values, blocks and function handles as associated types; int/float operations and
+  comparisons, `Coercion`, loads/stores at offsets, direct/indirect/runtime calls,
+  function/data/string addresses, local def/use/address, return/jump/branch/switch/
+  unreachable, source locations). The walk owns every instruction decision (the `BinOp` to
+  operation map, the runtime string comparison and its `Bool` narrowing, field/payload
+  offsets, the entry's exit status, zero-sized parameter binding); Cranelift (batch and the
+  REPL JIT) implements the trait as `cranelift::emit::ClifBuilder` and its own instruction
+  and terminator translator is deleted. LLVM keeps its own lowerer until P4b. No output
+  change.
+- **One backend rule on every driver (F-29 P3).** `codegen::Backend::select` picks the
+  backend for `ruxen compile`, `ruxen build`/`run`/`test` and the e2e harness, and
+  `Backend::emit_object` is the one dispatch (five copies replaced). User-visible:
+  `ruxen build --release` on a toolchain built without the `llvm` feature now fails with
+  "`--release` needs the LLVM backend, but this ruxen was built without the `llvm`
+  feature; rebuild it with `--features llvm` (LLVM 18)" instead of silently building with
+  Cranelift (`ruxen compile --release` already failed, with another message);
+  `ruxen build` honours `[profile.release]`/`[profile.debug]` `opt-level` (it was fixed
+  at 2); an unknown `--backend=` or `--opt-level=` value is an error (it fell back to the
+  default); a wasm target without `--release` builds at LLVM `-O0` (was `-O2`);
+  `ruxen compile --no-std` honours `--backend=`/`--opt-level=`. Linking has one host path,
+  `codegen::link_host` over a `LinkPlan`, which ruxenc's cached compile now uses too (so
+  `RUXEN_RUNTIME` turns off the prebuilt archive there as well).
+- **MIR owns the loan codes; the HIR loan code is deleted.** The HIR borrow
+  check no longer tracks loans: `borrow_check/borrows.rs`, `places.rs` and
+  `regions.rs`, the operand holds, the last-use pass and the mutating-method
+  name list (`push`, `insert`, ...) are gone, and the driver's filter for a loan
+  error both checkers reported with it. E1002 and E1009 come from the MIR loan
+  check only. E1003 is no longer emitted and stays registered: a shared borrow
+  next to a live `&var` of an object, Array or Hash reads through the same
+  handle and is accepted, and one the write would leave dangling (a `&var`
+  String) is E1002 (`docs/errors/E1003.md`). Shapes that change: `push_str` on
+  a borrowed field chain is E1009 (was E1002); a `&var` of a field beside the
+  object's handle (`hr(&var u.name, &u)`, `v.bump(&var v.name)`, `v.bump(v.name)`,
+  `self.bump(&var @name)` where the callee reads the field after the write) is
+  accepted (was E1002), since the callee sees the new value and no view of the
+  old one exists (Guard Malloc clean). Pinned by `it` `borrowed_places`.
+- **The REPL and the IDE run the same front end as `ruxen build`.** Both
+  call `ruxen_core::driver`, MIR loan check included, so the I-30 shapes
+  (`puts([u.name][reset(u)])`, `h[u.name] = reset(u)`) are E1002 in the
+  REPL (it used to run them and read freed memory) and in the editor. A def
+  is now borrow and loan checked when it is entered. REPL errors print in
+  the driver's format with code and position (`Error: [E0734] error:
+  undefined variable `x` (at 1:1)`; it printed the message alone). The LSP
+  analyses on open and save only, so the added check runs once per save.
+  Pinned by `ruxen_repl` `tests::loan_check` and `ruxen_ide`
+  `analysis::tests::analyze_reports_mir_loan_errors`.
+- **`ruxen check` runs everything `ruxen build` runs before codegen.** It
+  type checks, borrow checks, lowers to MIR and runs the MIR loan check, so a
+  program `ruxen check` accepts no longer fails `ruxen build` with a borrow
+  error (`puts([u.name][reset(u)])` is now E1002 from `check`; it used to
+  pass). It checks against the target's stdlib: a wasm target
+  (`--target wasm32-unknown-unknown` or `[build] target`) is checked against
+  the curated wasm subset `ruxen build` uses, not the hosted stdlib.
+  Warnings print on success; a stdlib diagnostic is always an error.
+- **One diagnostics format for `ruxen check`, `ruxen build` and `ruxen
+  compile`.** All three run one front end (`ruxen_core::driver`) and print
+  its errors the same way, each line prefixed with the entry file's path
+  (`ruxen build` printed no path before; `check` and `build` print the full
+  path of the project's entry file, `ruxen compile` the path as given). `ruxen check` prints the errors themselves as its failure
+  (`Error: ...`), as `ruxen build` does, instead of a separate `type checking
+  failed`. Pinned by `ruxen_cli` `it` `check_front_end`.
+- **`ruxen compile --target wasm32-unknown-unknown --no-std` loads no
+  stdlib.** It used to load the curated wasm subset and ignore `--no-std`;
+  now `--no-std` means a no_std unit on every target: no stdlib, E1400 on
+  heap allocation, and lowering without the hosted runtime helpers.
+  `ruxen compile` also runs the MIR loan check now, so the I-30 shapes are
+  E1002 there.
+- **Structural fixes for the borrow and `&var` families (review round 3,
+  I-19, I-24, I-29 to I-33, P-11, P-12).**
+  - One provenance query (`borrow_check/places.rs`): a value borrows the
+    places of every sub-expression whose type holds a reference
+    (`ty.any(is_ref)`), so an aggregate built from a borrow keeps its root
+    borrowed (`[u.name]`, `(u.name, 1)`, `{"a" => u.name}`, `Some(u.name)`,
+    a lambda holding `x = u.name` put into an Array or `Some`): writing the
+    root while it is live is E1009 (probes b14e, c2, b19, c6, c7, a14, b14,
+    b14c read freed memory).
+  - Operand order: an operand already evaluated is protected while the
+    later operands of the same call, binary operator or literal run, so
+    `show(u.name, reset(u))`, `v.show(u.name, reset(u))`,
+    `replace(&var u.name, reset(&var u))` and `u.name + resets(u)` are E1002
+    (k1, k1b, k2, k3, k9). A free function's trailing block reaches the
+    captures it borrows like a method's block: `h(&var s) { puts(s) }` is
+    E1002 (e5, d3). A `var self` receiver excludes its place from the other
+    operands like a `&var` argument (`u.rename_with(u.name)` read freed
+    memory). A write through a `r = &var u.name` binding keeps the place
+    borrowed until its last use.
+  - A `&var` place is the place's own storage: a field passes the address of
+    its slot (new `MirInst::FieldAddr`, lowered by Cranelift, LLVM and the
+    REPL JIT through one offset rule, `codegen::layout::field_slot_offset`),
+    `r = &var u.name` holds it, and a `&var` or `def var` call on a captured
+    variable writes the variable itself: a block borrows each String or
+    scalar it captures by the enclosing variable's address (no heap cell), a
+    proc or lambda keeps a String it owns in its own slot. Every writeback of
+    a detached copy is deleted. `r = &var u.name; r = ..` (k5), forwarding
+    `r` (k7), `replace(&var s)` inside a block, lambda or proc (m1, o9, o9c,
+    o9e) and `s.push_str(..)` on a captured String (m2, m4) printed garbage
+    or crashed; `c = &var u.count; c = 9` lost the write (k6). A block that
+    assigns a captured String no longer leaks its cell (m5).
+  - `op=` on an Array element updates the element in its own slot
+    (`b[0] += "x"`, `c[0] += 5`); it was a silent no-op. `op=` on a place
+    with no address (a Hash value) is a lowering error.
+  - The method home of a stored closure is the class the core library
+    declares `layout closure` (`class Closure`), read off its declaration
+    (`SymbolTable::closure_shell`); `Ty::method_home` no longer spells
+    `"Closure"` and MIR's `closure_home_method` is gone. `Ty::proc_of` is the
+    one constructor of the `Proc[...]` type. quiver's last paren closure types
+    use `Fn[(T) -> T]`.
+  - Pins: `borrowed_places::semantics_an_aggregate_holding_a_borrow_keeps_its_root_borrowed`,
+    `..._an_evaluated_operand_is_protected_while_later_operands_run`,
+    `..._a_var_binding_keeps_its_place_borrowed_through_writes`,
+    `..._a_var_self_receiver_excludes_its_place_from_the_arguments`,
+    `drop_fixtures::var_places_point_at_the_real_storage`,
+    `drop_fixtures::compound_assignment_updates_an_array_element`,
+    `drop_fixtures::compound_assignment_to_a_hash_value_is_rejected`,
+    `blocks_procs_lambdas::semantics_a_proc_method_resolves_on_the_declared_closure_shell`,
+    e2e `2221`; the loan matrix grows to 485 programs
+    (`tmp/test-cache/loan-matrix/gen.py`, `gen2.py`).
+- **Borrows follow every value shape, and every write checks the same
+  places (F-1, review I-15, I-24, I-25).** One provenance rule in
+  `borrow_check/places.rs` serves both sides. A binding borrows from every
+  place its value may come from, through an `if`/`case` arm, a block tail, a
+  cast, a parallel assignment's value, a copy of a borrow, a pattern binding,
+  a `for` loop over a field (until the loop ends), and a closure that captures
+  a borrow (for as long as the closure lives); the move rule walks the same
+  leaves. Loans carry a field path, so writing `u.count` while `u.name` is
+  borrowed is fine, while a write through an alias (`b = u.a; b.name = ..`)
+  checks the root `b` borrows. `&var` arguments, explicit or auto-borrowed,
+  and `var self` receivers on a borrowed place are E1002, and a `&var` place
+  argument excludes its root from the rest of the call: `u.bump(&var u.name)`,
+  `h(&var u.name, &u)` and `g(&var a[0], &var a)` are E1002 (they freed the
+  field under the callee). A borrowing binding that is never used holds
+  nothing. A `&var` String or scalar argument with no address (a Hash value)
+  is the new E1021 instead of an uncoded MIR error. Pins
+  `tests/it/borrowed_places.rs`; an adversarial matrix of 242 programs
+  (`tmp/test-cache/loan-matrix/gen.py`).
+- **`-> owned T` marks a C function's result as caller-owned (F-25
+  mechanism, review I-19).** A `lib` declaration spelled `-> owned T` is read
+  by `runtime_abi::result_ownership` before the `FRESH_ALLOC_CALLEES` table;
+  `Proc#clone` (`def clone as "ruxen_closure_share" -> owned Self`) uses it and
+  its table row is gone. Pin
+  `lib_c_symbol_alias::owned_result_marker_parses_round_trips_and_classifies_fresh`;
+  `docs/specs/codegen/ffi.spec.md` B13.
+- **`Fn[(A) -> R]` parses in every type position**, not only after `&block:`;
+  quiver's `run_app`/`run_windowed`/`run_native`/`App.build`/`edit_value`
+  and e2e 616 use it instead of the deprecated paren form.
+- **A borrow of a place keeps its root borrowed; a borrow of a temporary
+  keeps the temporary alive.** Reading a non-Copy place (`x = u.name`,
+  `arr[0].name`, a field chain, a method or function returning `&T`, a copy
+  of such a borrow) borrows its variable root until the binding's last use:
+  assigning the root or any field or element of it, `op=`, a parallel
+  assignment target and moving it are E1009 (a `var self` call E1002), where
+  they used to free the value the binding still read. A borrow of a
+  temporary (`U.new(..).name`, `mk(4).name`, `pick(U.new(..))`) keeps the
+  temporary alive until the binding's last use, then frees it once. One
+  place helper (`borrow_check/places.rs`) serves loans and writes; last uses
+  are computed ahead of the walk, so a later use is never missed. Pins
+  `tests/it/borrowed_places.rs`,
+  `drop_fixtures::borrow_of_a_temporary_keeps_it_alive_then_frees_it`, e2e
+  `2219`; drop.spec B16 (TODO.md Decisions, "Borrow of a temporary").
+- **The release-e2e harness and `drop_fixtures` run the borrow checker**, so
+  a pinned program `ruxen build` rejects can no longer pass there. e2e 2198
+  and 616 captured an enclosing closure's capture in a nested owning lambda
+  (E1019); they now clone it in the outer body.
+- **`drops.rs` is split** into `mir/lower/drops/{mod,closures,glue,flow}.rs`;
+  behaviour is unchanged.
+- **Generic type aliases; `Proc` is one.** `type Name[P] = T` now
+  substitutes its parameters at each use, and `Proc` is declared in the core
+  library as `type Proc[F] = any Fn[F]` instead of being special-cased by
+  name in the parser, formatter and resolver. The bare signature `(A) -> R`
+  is a generic argument of any named type (`Callback[A] = Proc[(A) -> nil]`),
+  printed as written by `ruxen fmt`; a parenthesised list without `->` stays
+  a tuple. Pins `tests/release-e2e/cases/2218`,
+  `blocks_procs_lambdas::syntax_signature_generic_arg_works_for_any_alias`.
+- **Drop elaboration reads typed facts, not names.** `.clone` of a Proc is
+  the `.rx` method `Closure#clone` (std/core), a lib method over the C
+  `ruxen_closure_share`, resolved like any method (the `ProcClone` node and
+  the MIR share helper are gone); closure bodies, derived class `clone`s,
+  field glue and the closure drop helper carry a `MirFnRole`; field glue
+  calls are recognised from the calling body's record
+  (`MirFunction::field_glue_calls`), never from a rebuilt name; borrow-check
+  diagnostics read a definition's display name (`block` for `__block`); whether an owned value passed to C
+  moves comes only from the `.rx` declaration (the `arg_transfer` rows are
+  deleted); block parameters come from one reader. Behaviour is unchanged;
+  `runtime_abi_parity` proves every deleted row is derivable.
+- **Closures held by fields and collections are freed.** A lambda or proc
+  stored in a class field or an `Array` / `Hash` element (quiver's
+  `handlers: Array[Proc[...]]`) moves in and is freed exactly once by its
+  owner. The closure pair grew from two words to four: the literal's drop
+  function and an owner count, so field glue and the new `RUXEN_ELEM_CLOSURE`
+  element tag free a closure they never saw built. Reading a closure field is
+  now a borrow (moving it into an owned slot is E0744); `.clone` of a `Proc`
+  shares the pair, as do a derived `clone` and a copied `Array[Proc]`
+  (`Schedule`'s builders and `Tester#context` now `.clone` their procs). A call
+  through a closure no longer counts as an escape of its arguments unless a
+  body that can be the target stores them, so a user `each(&block)` that
+  iterates its own `Array[String]` with `for` keeps freeing the elements
+  (`drop.spec.md` B12, B13). Pins: e2e `2201_closures_owned_by_fields_and_collections`,
+  `drop_fixtures.rs`, `field_ownership.rs`.
+- **Blocks, procs and lambdas have Ruby's ownership rules.** A trailing block
+  bound to a `Fn[...]` parameter (incl. `&block` and implicit `yield`) borrows
+  its captures, so two blocks may share one String and the caller frees it
+  once. `proc { }`, `Proc.new { }`, `->(x) { }`, `lambda { }` and a block bound
+  to a `Proc[...]` / `any Fn[...]` parameter own their captures (reusing a
+  moved capture is E1001). Storing a block is the new error **E1018**; declare
+  the parameter as `Proc[...]` to store it. `Proc[(A) -> R]` is the same type
+  as `any Fn[Fn(A) -> R]`. `ruxen fmt` keeps each spelling and prints a bare
+  closure value as a `->` lambda. Typeck settles each trailing block's kind in
+  one pass, and the borrow checker and MIR read that kind. Inference records
+  the mixin default (`Kernel` and type-param bounds included) it typed a method
+  call with in `MethodCall::resolved`, for positional and block arguments
+  alike, and the borrow checker no longer falls back to an unrelated
+  same-named method. So `b.visit(block)` forwarding to a mixin `Fn[...]`
+  default is no false E1018, and a block on a `T: Walk` receiver borrows its
+  captures instead of moving them (false E1001). Pins: e2e
+  `2195_blocks_procs_lambdas_ownership`, `2197_array_each_closure_value`,
+  `tests/it/blocks_procs_lambdas.rs`.
+- **A block may not move a capture it borrows (new error E1019).** A block's
+  body could return a captured String, bind it, pass it to a by-value
+  parameter, push it, put it in an array literal or capture it in an owning
+  lambda, while the enclosing scope still freed it: a use after free or double
+  free (it only leaked before blocks borrowed). Every by-value use of a
+  non-Copy capture in a block body is now **E1019** with a `.clone` hint, and
+  so is a by-value use, in a closure nested in another closure, of what it
+  takes from the enclosing closure. Reads, `&self` calls, `&T` arguments and
+  forwarding to `Fn[...]` stay allowed. A builtin type constructor (`Array`,
+  `Hash`, ...) read in a closure is no longer recorded as a capture. quiver's
+  tests clone their `State` handles before handing them to a `button` proc
+  inside a layout block. Pins: `tests/it/blocks_procs_lambdas.rs`
+  (`semantics_moving_a_borrowed_capture_out_of_a_block_is_e1019`),
+  `drop_fixtures.rs` (`cloned_block_captures_are_freed_once`).
+- **E1019 is one rule for every closure body, and pattern bindings move.**
+  A proc or lambda body may no longer move its own capture: `-> { eat(s) }`,
+  `-> { s }` or `proc do let t = s ... end` handed the same String out on
+  every call and double freed on the second. The borrow checker now treats
+  every non-Copy capture of any closure body as borrowed and rejects a move
+  of one where it records every move (`record_move`), replacing the
+  per-position `reject_capture_move` list. That also closes the positions the
+  list missed: a cast (`s as String`), a `match s; x -> x` binding, a
+  multi-assign value (`q, n = s, 1`), tuple and enum-variant literals. A proc
+  or lambda nested in an owning lambda owns a clone made in the outer body
+  instead of re-capturing the outer slot (which leaked when it escaped).
+  Those by-value positions now also record moves of ordinary variables, and
+  a branch that `return`s, `break`s or `next`s no longer carries its moves
+  past the branch. A by-value pattern binding of a non-Copy payload moves the
+  scrutinee variable, so two `if let Some(v) = o` on an `Option[String]` (a
+  double free) are E1001; Copy payloads, `_`, literal patterns and temporary
+  scrutinees move nothing. In MIR the binding owns the payload and the arm
+  frees the emptied `Option` / `Result` box of an owned local; a field read
+  only views its payload (`if let Some(v) = @name` freed the field's String),
+  and `Some(_)` on a variable no longer frees the payload. quiver's tests
+  clone `State` handles for `list` closures; a std `iter` test clones a
+  String it put in an array twice. Pins: `tests/it/blocks_capture_moves.rs`,
+  `tests/it/borrow_check_pattern_moves.rs`, `drop_fixtures.rs`
+  (`cloned_capture_moves_pass_borrow_check_and_free_once`,
+  `if_let_binding_owns_the_option_payload`,
+  `match_on_a_place_keeps_its_payload`).
+- **Blocks and procs may take fewer parameters than their `Fn` type** (Ruby
+  arity): `run do puts("y") end` for `def run(f: Fn(Int) -> nil)` compiles
+  again and ignores the extra argument. Lambdas keep exact arity (E0743).
+  E0743 now spells callable types as written (`Fn(Int) -> nil`,
+  `Proc[(Int) -> nil]`), never `()`. Pin: e2e `2199_block_fewer_params`.
+- **Fewer false borrow errors on closures.** Forwarding a `Fn[...]` parameter
+  to a callable value (`invoke.(f)`) or to a mixin requirement with no default
+  body reads that callable's or requirement's declared parameters (no false
+  E1018); among same-arity requirement overloads it reads the one typeck
+  selected by argument type. A proc or lambda passed to a `Send`-bounded
+  parameter owns its captures, so it is no false E1013; a block there still
+  is, and so is any closure capturing a reference (`let r = &s`), whose
+  pointee stays in the caller's frame.
+- **`Proc.new() { ... }`** with empty parentheses is the proc literal, like
+  `Proc.new { ... }`.
+- **Mixin method lookups return the selected default body with the
+  signature** (`MixinResolver::lookup_method_with_args`,
+  `lookup_method_on_bounds`, `lookup_block_method_by_name`); the parallel
+  `trait_method_defs` map and the four `_with_def` lookups are gone.
+- **Concurrency methods are real `.rx` code.** `Thread`, `Mutex`, `Channel` and
+  friends are implemented as stdlib extensions instead of hardcoded Rust method
+  resolvers; `typeck/method_resolvers/concurrency.rs` is gone and the `Send`
+  check has a single owner in `typeck/infer/ops.rs`.
+- **String interpolation is parsed as expressions.** `#{...}` is parsed into
+  `Expr` nodes at parse time instead of carrying raw tokens.
+- **The formatter is exhaustive.** Every `format_*` function destructures its AST
+  node exhaustively, so a new AST field cannot be silently dropped, and retired
+  syntax is no longer emitted. Fixes the `1101_string_regex_bridge.rx`
+  idempotence failure.
+- **Retired syntax removed from the AST and lexer** (`derive_traits`,
+  extern/attribute nodes, `link_attrs`, lifetime tokens); retired macros report
+  E1126. `Hashable` is the only hashing mixin and the dual-name checks are gone.
+  Public stdlib methods are unchanged.
+- **`ruxen clean` removes the whole project target root.**
+- **The test suite is smaller and faster.** Integration tests are one `it`
+  binary per crate (`release_e2e_smoke` stays separate). Stdlib behaviour tests
+  moved into `library/std/<pkg>/tests/*.rx` and run with `scripts/test-stdlib.sh`,
+  since `ruxen test` now works for stdlib packages. Duplicate Rust tests and e2e
+  fixtures are deleted where another test covers the same behaviour, and
+  `scripts/affected-tests.sh` runs only the tests a change needs.
+- **`tests/release-e2e/run.sh` is quicker.** It runs fixtures in parallel, links
+  the prebuilt runtime archive, replays only the cases in `repl-cases.txt`
+  through the REPL (outside the default phases), and its `parity` phase formats
+  one fixture with the binary; `syntax_parity` covers the whole corpus.
+- **CI has a fast and a slow lane.** `ci.yml` runs on every push: workspace
+  tests, a filtered `release_e2e_smoke` and the stdlib package tests.
+  `pr-ready.yml` adds the full smoke on Linux and macOS, the `llvm` feature
+  tests and the `run.sh` binaries, cli and lsp phases. Criterion's `plotters`
+  feature is off.
+- **Shared compiler infrastructure (code-debt batch 1).** A HIR visitor
+  (`hir/visit.rs`) replaces the hand-written walkers in no_std, typeck, MIR,
+  the borrow checker and the IDE; canonical `Ty` helpers replace copied substitution,
+  callable and ref-peeling code; `SymbolTable` has a name and parent index;
+  one residual runtime ABI table serves both backends and the REPL JIT; the
+  bootstrap stdlib tables are generated by `build.rs`; the C runtime shares
+  Option/Result, errno, fd, UTF-8 and allocation helpers.
+- **Async I/O errors use the sync errno table.** Async operations now report
+  precise kinds (`NotFound`, `Interrupted`, ...) where they reported `Other`;
+  EBADF is now `Other` where async reported `InvalidInput`.
+
+- **The compiler keeps what it resolved (code-debt batch 2).**
+  - The HIR records call shape: `&.`, and whether a call had parentheses.
+  - Typeck records the method it chose.
+  - MIR records local kinds and function linkage, and drop classes by DefId.
+  - Builtin statics, String rebinding, derive and the ownership ABI come from `.rx` declarations and one generic mechanism each, instead of Rust name tables.
+  - Mixin-bound generics are monomorphised.
+  - Classes can derive Ord, PartialOrd and Default.
+- **Only `&.` navigates into an optional.** A plain `.` on `T?` no longer reaches the inner value.
+- **`p` and `pp` are generic over `mixin Inspect`.** Int, Float, Bool, Char and String get `inspect`; String's is quoted. `p 7` works without parens.
+- **Stricter type checking.**
+  - `&T` no longer unifies with `T`, and two different type params no longer unify.
+  - An unknown method on a known class is E0740, and a bad builtin-class argument is E0741.
+  - A call that matches no overload is E0742.
+- **`ruxen fmt` keeps the author's layout.**
+  - It does not add parentheses, and keeps `@x`, `T?`, `where` placement, `do`/`{}` blocks, blank lines and multi-line `def`s as written.
+  - Formatting is idempotent over every e2e case and stdlib file.
+- **The stdlib test runner names each failing case** and how it died. Durations are correct on macOS.
+
+### Removed
+- Dead Rust code: the `ruxen_driver` crate, `borrow_check/lifetimes.rs`, the
+  `ruxenc` cache graph, and dead internal runtime C symbols (a guard now checks
+  every exported runtime symbol has a declaration or an emitter).
+- Error codes E1004, E1005 and E1008, which nothing emitted any more.
+
+### Fixed
+- **`(&var u.name).push_str(s)` and `u.name += s` grow the field's own
+  buffer.** The first discarded the receiver's store-back and left the field
+  on the freed buffer (P-8); the second stored the grown buffer back through
+  the freeing field store, a double free under Guard Malloc. Both now store the
+  slot back raw (since replaced by the field's own address, `FieldAddr`).
+  Pins `drop_fixtures::var_field_receiver_grows_the_field_in_place`,
+  `drop_fixtures::place_writes_after_borrows_neither_leak_nor_double_free`.
+- **A closure stored through a type parameter is freed once.**
+  `Holder.new(-> { 7 })` specialized `Holder[T]#init` with `T` as a borrowed
+  block slot, so the caller freed the closure the field also freed. A closure
+  bound to a type parameter is now a stored proc in the specialized body
+  (`Ty::as_type_argument`). Pin
+  `drop_fixtures::a_closure_stored_through_a_type_parameter_is_freed_once`.
+- **Rebinding an object after a closure literal frees the old object.** The
+  closure body's lowering dropped the enclosing function's record of its heap
+  locals, so every later rebind leaked the replaced object.
+- **A parallel assignment to a field types the field as owned** (`u.name, n
+  = "x", 1` was a type mismatch against `&String`).
+- **`x = a and b` declares `x`** like Ruby (`=` binds tighter than the
+  keyword operators); it was "undefined variable". Pin e2e `2220`.
+- **A move before `break` / `next` reaches the code after the loop.** The
+  borrow checker dropped a branch ending in `break` from the merge, so
+  `if c; eat(s); break; end` then `puts s` after the loop compiled and, with
+  an owning callee, read freed memory. Those states now merge into the loop
+  exit; a move before `return` still compiles. Pin
+  `borrow_check_pattern_moves::semantics_a_move_before_break_or_next_reaches_the_code_after_the_loop`.
+- **`&var` field and element arguments free once.** `replace(&var u.name)`
+  freed the old String in the callee and again in the store-back. The
+  object is evaluated once and the field is stored back raw; an Array
+  element passes its own slot (`ruxen_vec_slot_addr`), so `replace(a[0])`
+  no longer makes the Array's drop shallow either. Pins
+  `drop_fixtures::var_string_param_writes_neither_leak_nor_double_free`, e2e
+  `2219`; drop.spec B17.
+- **`u.name = &var s` is E0744**, like `u.name = &s`: every reference form is
+  a borrow that cannot move into an owned slot. An assignment whose value
+  does not fit its target is now reported (it was silently accepted). Pin
+  `field_ownership::a_mutable_borrow_into_an_owned_slot_is_e0744_and_mismatches_are_reported`.
+- `BufWriter#into_inner`'s flush-failure panic is pinned
+  (`stdlib_bufio::bufwriter_into_inner_panics_when_its_flush_fails`); the
+  closure pair layout is one `RuxenClosurePair` in runtime.h with
+  `_Static_assert`s, compared with the compiler's `CLOSURE_PAIR_*` by
+  `closure_pair_slots_match_the_c_runtime`; an LLVM builder `.unwrap()` is an
+  error return.
+- **Top-level programs accept every Ruby statement, and an assignment shadows a
+  method of the same name.** A file's top level now runs `while`, `for`, `if`,
+  `match` and literal-receiver calls (`[1, 2].each { }`), not only statements
+  that start with an identifier, and a statement with an error inside reports
+  that error instead of "expected top-level declaration". `p = "x"` declares a
+  local even though `Kernel#p` exists (it used to resolve to the method), and
+  so does a one-expression closure body (`-> { saved = f }`). The file's last
+  expression is a statement, not `main`'s value, so it may have any type. The
+  formatter keeps consecutive top-level statements together. The
+  blocks/fields/`&var` fixtures, e2e cases 2195 to 2216 and their `it` test
+  programs now use top-level statements, `x = 1`, `@ivar`, parenless `puts`
+  and `->` lambdas. Pin: e2e `2217_assignment_shadows_method_name`.
+- **Merge of the `&var` slot ABI and statement temporaries with fields-own-values,
+  blocks/procs/lambdas.** Fixes found by the combined gate, each derived from
+  the program rather than a Rust name list:
+  a call to a function that returns one of its parameters on every path
+  (`Kernel#tap`, a builder returning `self`; one shared analysis,
+  `drops::single_returned_param`, also used by `elide_returns_self_realloc`)
+  passes a temporary argument's ownership to its result and leaves a named
+  owner in charge (`[1, 2].tap { }` was freed at statement end while bound;
+  `r.with_body(b)` freed `r`); a block passed to a mixin default or `Kernel`
+  method is freed by the caller (`CallSummaries::block_params` reads the
+  callee's lowered body); an owned value passed by value to a `.rx` `lib`
+  declaration moves into C (`SharedSync.new(obj)` freed `obj` at statement
+  end), so read-only C parameters are now declared `&T` (`Hash#key?`/`remove`,
+  `Set#include?`/`remove`, `BufReader`/`BufWriter.new`, `File#seek`,
+  `TcpStream#shutdown`, `Duration`/`Instant` arithmetic, `ruxen_queue_new`);
+  `Array#first` / `#last` return `Option[&T]` (the C side hands back the
+  element itself; `if let Some(v) = a.first` freed it); the `OpenOptions`
+  fluent setters are `.rx` bodies returning `self` and lost their wrong Fresh
+  classification (each chain link freed the same options); a C drop that
+  releases its own storage is declared `def consume drop as "..."` in its
+  `.rx` class, replacing the `DROP_FREES_STORAGE` list (`Mutex`, `SharedSync`,
+  channel ends, atomics; canvas's raw handles); `TestClock.install` returns a
+  fresh guard the caller owns, so a bound guard restores the real clock at
+  scope end. LLVM: a pointer-typed erased word (`self` in `class Float`) is
+  read as an integer word before a float binop. A `match` on a borrowed
+  `Option`/`Result` types its payload from the referent. Pins: e2e `2216`,
+  `lib_c_symbol_alias::def_consume_drop_marks_a_drop_that_releases_its_storage`,
+  stdlib `future`/`io`/`sync`/`iter`/`core` tests, `runtime_abi_parity`
+  `intentional_fresh_removal`.
+- **Rebinding a `&var` parameter that holds a handle is an error (E1020).** A
+  `&var` of a class, struct, enum, `Array`, `Hash`, closure or type parameter
+  is the caller's handle, so `p = Point.new(0)` in the callee never reached the
+  caller and silently did nothing. Borrow check now rejects it, with the help
+  "return the new value, or wrap it in a field". Because such a parameter can
+  no longer be stored or rebound, a value passed to a `&var` parameter or as a
+  `var self` receiver stays owned by the caller and is freed at its scope exit
+  (it leaked). `p = make_point` (a bare nullary function on the right of an
+  assignment) now calls it, as `let p = make_point` does; it stored nothing and
+  crashed. A `match` / `if let` on a borrowed `Option` or `Result` (a field
+  read) types its payload from the referent; it printed the pointer. Pins:
+  `tests/it/refmut_handle_rebind.rs`, e2e `2216_var_handle_param_rebind_fixes`,
+  `drop_fixtures::match_on_a_place_keeps_its_payload`.
+- **Blocks and closure arguments are typed from the parameter they bind to.**
+  A trailing block on a free-function call takes its parameter types from the
+  callee's `Fn[...]` parameter before its body is inferred, so
+  `outer { |n| puts(n) }` with `&block: Fn[(Int) -> nil]` prints the Int
+  instead of segfaulting (`puts(n)` used to pin `n: String`). An argument that
+  is not a closure taking the declared parameters is the new error **E0743**
+  (`run(5)`, `[1, 2].each(5)`, `->(s: String) { }` where `Fn(Int) -> nil` is
+  expected); it used to compile and crash. A closure nested in an owning
+  lambda makes the lambda capture (move) what it reads, so reusing it is
+  E1001, and the lambda's drop frees it once however often it runs (it
+  leaked). E1018's help spells the block's storable type
+  (``Proc[(Int) -> nil]``) and its docs cover `async def` with a `Fn`
+  parameter. The `Array#each` resolver arm is gone; the `.rx` declaration
+  answers it. Pins: `tests/it/blocks_procs_lambdas.rs`, `drop_fixtures`
+  `forwarded_blocks_run_typed_and_free_once`,
+  `nested_closure_capture_is_owned_by_the_lambda_and_freed_once`.
+- **`Array#each` with a closure value** (`arr.each(f)`, `arr.each(&block)`) runs
+  a `.rx` body. It aliased the C `ruxen_vec_each`, which expected a raw
+  function pointer, and crashed with SIGBUS (deleted). Pin: e2e
+  `2197_array_each_closure_value`.
+- **`.clone` on a generic class instance links.** The derived clone body is
+  emitted per monomorphic instance. Pin: e2e `2196_generic_class_derived_clone`.
+- **`&var` of a scalar or String is the caller's storage, and statement
+  temporaries are dropped at the end of their statement.** A `&var Int`,
+  `&var Float`, `&var Bool` or `&var String` parameter is the address of the
+  caller's variable: every read in the callee loads through it and every write
+  (`n += 1`, `s.push_str`, `s = "x"`) lands in the caller, with or without an
+  explicit `&var` at the call site; `MutexGuard#deref_mut` on a `Mutex[Int]`
+  writes through. Reading a `&var String` parameter no longer crashes, and
+  scalar writes are no longer lost (`mir::refmut_abi`, `expr/refmut_place.rs`,
+  one `allocate_refmut_slots` for Cranelift and the REPL JIT, the same rule in
+  LLVM). A temporary that owns a value, including a `MutexGuard` from
+  `m.lock!.get` and a value returned by a function that returns a fresh one, is
+  dropped at the end of its statement, so a helper that locks no longer
+  deadlocks on its second call and such temporaries no longer leak. Drop
+  elaboration now runs once every body is lowered. e2e `2210`-`2213`, `2215`;
+  `drop_fixtures::heap_statement_temporaries_are_freed`,
+  `drop_class_statement_temporary_drops_at_statement_end`,
+  `var_string_param_writes_neither_leak_nor_double_free`.
+- **`BufWriter#into_inner` hands back the inner `File`/`TcpStream`.** It
+  returned a boxed `Result`, so the handle pointed at fd 0 and writes through it
+  went nowhere. A new C entry point flushes, returns the bare handle and panics
+  when the flush fails; the public signatures are unchanged. e2e `2214`, bufio
+  stdlib tests.
+- **Linking on Ubuntu:** `-lm` and the other system libraries now come after the runtime archive, so linkers that default to `--as-needed` no longer drop them (`undefined reference to 'pow'`).
+- **Memory:**
+  - `Mutex#lock` no longer writes 8 bytes past its `Result`. An `Option` or `Result` whose payload is a class with no fields (`MutexGuard`, `PoisonError`) got an 8-byte cell, too small for the tag and the payload.
+  - `sort`/`sort!` on an array of a class no longer double-frees. A loop `let` that only read `v[i]` was freed on every pass.
+  - Class elements of an Array, and class values of a Hash, are freed with the container.
+  - Nested containers are freed too.
+  - Interpolation temporaries and a reassigned String's old value are freed, including in loops and generic bodies.
+  - A user local named `_t…` is no longer treated as a compiler temporary.
+- **Calls:**
+  - User methods named `each`, `map`, `find`, `push_str` and so on run their own bodies.
+  - A parenless call of an overloaded method picks the right overload.
+  - Block parameters over a class array are typed.
+- **Values:**
+  - `Some(3) == Some(3)` is true.
+  - `.unwrap` on an `Option[Class]` from a stdlib method type-checks.
+  - Interpolating `&Float`, `&var Float` or `&var Bool` prints the value, not the machine word.
+  - `p(2.5)` no longer calls the String overload.
+- **Hashing:** a class with its own `hash_code` works as a Hash key, and `hash_code` through a `Hashable` bound links for Int and String.
+- **Arrays:** `Array.from(123)` is a type error instead of a link failure.
+- **`ruxen fmt` keeps comments** on statements, fields, mixin signatures and
+  module or extension items; a comment it cannot place is an error instead of
+  being dropped.
+- **`ruxen fmt` keeps `type X = T` bindings in class bodies and prints class,
+  struct and enum members in source order** (it dropped the binding and moved
+  `include` lines below the methods).
+- **`fmt` writes non-ASCII characters** (`Formatter#write_char`) instead of `?`.
+- **Async functions returning `Int32`, `Char` or `String` lower correctly.**
+- **`struct` and `enum` method bodies are checked in `no_std` mode** (E1400).
+- **A borrowed argument to a module function is no longer reported as moved**
+  (false E1001), and a parenless call of an overloaded method is typed from
+  the zero-argument overload.
+- **The incremental cache finds `Ruxen.toml`**, so it lands in the project's
+  target dir rather than the current directory.
+- **Tests no longer leak a toolchain copy into `/tmp`** on every `ruxenc` run.
+- **Silent stubs removed and dropped input diagnosed.** `?`, `unwrap_or_else`,
+  `super`, `block_on`, the index catch-all and the REPL stubs no longer silently
+  succeed. Bootstrap items, `ruxen compile` flags, `--emit` and the Tester's
+  `expected_substr` now report coded diagnostics (E0734 to E0738, E1127, E1128).
+- **`include` of a non-mixin is E1017.** `include Bar` where `Bar` is a class,
+  struct, enum or type alias used to compile and do nothing; it is now an error,
+  and `include Hash` suggests `include Hashable`.
+- **`def main` with parameters is E0739.** The entry point has the fixed C
+  `main(argc, argv)` ABI; `def main(x: Int)` used to panic Cranelift. Read
+  program arguments with `Env.args`.
+- **`MutexGuard#deref_mut` / `#deref_var` write through the lock.** They were
+  bound to the payload getter, so a write through the `&var T` segfaulted; they
+  now return the payload slot's address, and the compiler loads through it
+  when `T` is not a String (an FFI `-> &var T` for a type parameter `T` is a
+  slot address; `mir::refmut_abi` owns the rule), so `deref_mut` on a
+  `Mutex[Array[Int]]` or `Mutex[Int]` gives the array or the value, not the
+  mutex field's address. `Mutex.new` and `MutexGuard#set` move
+  their value into the mutex, so the caller no longer frees a payload the mutex
+  still holds (a heap payload leaks at mutex drop until typed drop lands).
+- **Cranelift/LLVM drift** (`ruxen_env_init`, Float `%`, `RefMut`) and the LLVM
+  Float-to-`&Float` argument bug are fixed.
+- **Test link helper and reactor.** `drop_fixtures`, `runtime_safety` and
+  `stdlib_json` link again; e2e `416_scope_collect_reactor_child` no longer times out.
+- **A derived collection now OWNS its elements instead of aliasing them
+  (batches B86, Q60(b)).** `["a","b","c"].drop(2)` aborted with a double free
+  (Trace/BPT trap 5, exit 133), and so did `Set[String]` `union` /
+  `intersection` / `difference`, `Array[String]#chain`, and
+  `Array[String]#to_set`. One cause, five entry points, three of which were
+  not filed anywhere.
+
+  A helper listed in `FRESH_ALLOC_CALLEES` has its result deep-dropped at
+  scope exit by the element-aware helper `heap_free_callee` selects. All five
+  copied their SOURCE's element pointers into that result, so both owners
+  freed the same `char*`. `Array#take` and `Array#clone` are the same aliasing
+  shape and never crashed only because they are absent from that list, which
+  buys safety with a silent leak rather than fixing anything — so the fix
+  makes the copies deep instead of adjusting classifications.
+
+  `Set` and `Hash` already carry the B73 `key_kind` descriptor and
+  `ruxen_set_derived` already propagates it, so those paths clone using a
+  descriptor they had all along. `RuxenVec` has none, so MIR injects one
+  (`key_desc.rs` Route 3, the rewrite mechanism B73 established): the new
+  `RUXEN_ELEM_*` element kinds in `runtime.h`, and `_elem` forms of
+  `ruxen_vec_skip` / `ruxen_vec_chain`. The element kind is derived FROM
+  `heap_free_callee` rather than from a second copy of the `Ty` ladder,
+  because the invariant is copy-depth == drop-depth and two copies of that
+  decision are free to drift.
+
+  The full ownership contract, including the corollary that omitting a helper
+  from the list is not a safe default, is now a doc comment on
+  `FRESH_ALLOC_CALLEES` itself. `Hash#keys` / `#values` / `Set#iter` were
+  audited and are correct as they stand: they return `Array[&T]`, and
+  `Ty::Ref(_)` elements make `heap_free_callee` pick the spine-only free, so
+  they own their spine and borrow their elements. Pins
+  `tests/release-e2e/cases/1870` and `1871`.
+- **`puts x` and `puts "#{x}"` now share one lowering (batch B02).**
+  `arr.each { |x| puts(x) }` segfaulted while `arr.each { |n| puts "#{n}" }`
+  worked. The cause was not the `puts` universal-`to_s` conversion, which
+  behaves correctly given what it is told: an unseeded block parameter has
+  `&String` back-propagated onto it from `puts`'s own signature, so the HIR
+  says `Ref(String)` for a local the symbol table types `Int`, the conversion
+  declines to fire on an apparent String, and MIR hands a raw `Int` to
+  `ruxen_puts`, which reads address 1 as a `char*`. Interpolation survived
+  only because `lower_interpolation` already distrusts the HIR type.
+
+  The Display ladder is now extracted as `emit_display_to_string` and both
+  spellings route through it, so they agree by construction rather than by two
+  paths coincidentally reaching the same answer. String-typed and
+  `RawPtr(Char)` arguments pass through untouched, keeping the bare
+  string-literal `.rodata` zero-copy intact. The upstream typeck mistyping is
+  filed as its own batch rather than fixed blind. Pin
+  `tests/release-e2e/cases/1010`.
+
+### Added
+- **`Enumerable` closure-only combinators (batch B07)** — 16 methods added as
+  `mixin Enumerable[T]` defaults in `library/std/core/src/lib.rx`, so one
+  implementation lands on `Array`, `Set` and `Hash` at once (pin 1064 pins that
+  reach): `entries`, `count` (no-arg), `first`, `take(n)`, `drop(n)`,
+  `take_while`, `drop_while`, `flat_map`, `collect_concat`, `filter_map`,
+  `find_index` (predicate form), `each_with_object(memo)`, `each_slice(n)`,
+  `each_cons(n)`, `cycle(n)` and `reverse_each`.
+
+  Every body is expressed over the one required primitive `each` plus `push`
+  and closure calls, so none of them dispatches on the element type `T` and
+  each still lowers as a single opaque body per including head. Edge cases are
+  diffed against CRuby: an empty receiver, a single element, counts past the
+  end, `n <= 0`, a `each_cons` window wider than the collection, and a
+  `each_slice` remainder. Pins `tests/release-e2e/cases/1060` to `1064`.
+
+  Two deviations from Ruby, both deliberate: `each_with_object` threads the
+  memo THROUGH the block (which must return it) because Ruxen closures take
+  their arguments by value, though the Ruby argument order is kept; and
+  `filter_map`'s block returns `Option[U]`, `nil` being the typed form of
+  Ruby's falsy skip. `first(n)` and `collect` are NOT shipped, with reasons
+  recorded in `docs/ruby-parity/core.md`.
+- **`Kernel` conveniences (batch B19)** — `warn(msg)`, `abort(msg)`,
+  `sleep(secs)`, `rand(n)`, and `p` / `pp` as stdlib free functions in
+  `library/std/core/src/lib.rx`. (`exit(code)` was already a bare Kernel FFI
+  decl in `library/std/process/src/lib.rx` and is left alone.) `p` prints the inspect form (a
+  `String` gets quotes) and returns its argument, so it drops into an
+  expression without changing it; it ships as one overload per printable type
+  because Ruxen has no universal `to_s`. `rand(n)` folds the signed 64-bit
+  entropy draw non-negative before the modulo. Pins
+  `tests/release-e2e/cases/1180` to `1183`.
+
+  `srand`, `inspect` and the capitalized conversion functions
+  (`Integer()` / `Float()` / `String()` / `Array()`) are NOT shipped rather
+  than shipped as stubs; each row in `docs/ruby-parity/core.md` carries the
+  blocking reason. `exit!` was on that list too and is now shipped, unblocked
+  by B87 (see Fixed); it is pinned as
+  `tests/release-e2e/cases/1887_kernel_exit_bang.rx`.
+
+### Fixed
+- **A free function whose name ends in `!` no longer compiles to nothing
+  (batch B87).** `def shout!(x: Int) … end` followed by `shout!(5)` compiled
+  without a diagnostic and then did nothing at all — the program printed
+  `before` and `after` with the call silently missing. Used for its value it
+  was worse than a no-op: `let r = twice!(3)` bound `0`, because the dropped
+  call left the destination local at its zero initialiser. Paren-less `bare!`
+  vanished the same way. This is why `exit!` could not ship.
+
+  Root cause: `compiler/ruxen_core/src/parser/expr/atoms.rs` classified
+  **every** identifier ending in `!` as a macro call, stripped the `!`, and
+  emitted `ExprKind::MacroCall`. Nothing downstream recognised a name like
+  `shout`, and the macro lowering in
+  `compiler/ruxen_core/src/mir/lower/expr/misc.rs` ended in a `_ => Ok(None)`
+  catch-all that emitted no MIR — the silent-drop path.
+
+  "Is this a macro?" is now a **closed** question answered in exactly one
+  place, `compiler/ruxen_core/src/parser/macros.rs`. `name!` is a macro only
+  when `name` is in `BUILTIN_MACRO_NAMES` (`panic`, plus the five collection
+  macros retired by `ruby-naming.spec.md` §10a, kept so the old spellings keep
+  their migration message). Every other trailing `!` stays part of the
+  identifier, so the call resolves like any other call and an undefined one is
+  a hard `undefined function` error. Registering a name there now *reserves*
+  that spelling, which is why the list is deliberately minimal.
+
+  The silent-drop path is closed at both layers: `resolve` rejects a
+  `MacroCall` whose name is unregistered with the new **E1126**
+  (`docs/errors/E1126.md`), and the MIR catch-all is an `Err` instead of
+  `Ok(None)`, so a macro registered without a lowering fails loudly rather
+  than deleting the call. Verified across every position — free function with
+  parens, for its return value, paren-less with and without an argument,
+  instance method, method with arguments, static method, the `?` sibling
+  convention — and against the token it disambiguates from: `!x`, `!f(x)`,
+  `!(a == b)` and `!=` all still parse. Pins
+  `tests/release-e2e/cases/1880` to `1887` plus
+  `compiler/ruxen_core/tests/bang_names_are_calls.rs`.
+- **A `Float` crossing an erased uniform word keeps its bits (batch B01).** A
+  `Float` reaching any storage whose static type codegen cannot see was
+  `fcvt`-converted instead of bit-reinterpreted, so it silently arrived as a
+  different number. `[1.5, 2.5][0]` printed `1`; `each` over an `Array[Float]`
+  printed `1` / `2`; `[2.5].map { |v| v + 0.5 }` printed `0`; a
+  `Hash[String, Float]` value truncated; two `Hash[Float, V]` keys that
+  truncate to the same integer COLLIDED (`h[1.25]` returned the entry stored
+  under `1.75`), as did two such `Set[Float]` members; a negative value came
+  back as `0` rather than truncated, because the default conversion was the
+  *unsigned* saturating form; and `&var` on a `Float` local did not compile at
+  all, panicking the Cranelift frontend with `declared type of variable varN
+  doesn't match type of value vN`.
+
+  **The ABI decision.** Ruxen has one storage class for a value whose static
+  type is erased: a 64-bit **uniform word**. It appears at six boundaries — a
+  generic-collection slot (`RuxenVec` and the hash/set tables store `int64_t`
+  elements regardless of `T`), an address-taken local's 8-byte stack slot plus
+  the by-value `Ref` / `RefMut` / `Copy` / `Move` slot moves, a parameter or
+  return whose declared `Ty` is opaque, the parameters and return of a closure
+  reached through an erased `Fn` box, a scalar method home's `self` (typed as
+  the FFI shell `Class{"Float"}`), and an `Assign` into a word-typed local
+  (`p = 9.75` on a `&var Float` parameter). A `Float` in a uniform word
+  now travels as its IEEE-754 **bit pattern** and is recovered by the inverse
+  reinterpretation, symmetrically on write and on read — half the fix would be
+  worse than none. `Float32` occupies the low 32 bits of the word, its own
+  32-bit pattern zero-extended. Integer-class types (`Bool`, `Char`, narrow
+  ints) keep the existing width-extension: they already share the integer
+  register class with the word, which is exactly why only `Float` was
+  corrupted.
+
+  The one crossing that is NOT an erasure is Ruxen's implicit numeric
+  conversion into a **declared** scalar parameter (`def f(x: Float)` called as
+  `f(3)`, `def g(x: Int)` called as `g(2.5)`). Codegen cannot tell the two
+  apart from the machine type — a declared `Int` slot and an erased word are
+  both `i64` — so the decision is keyed on the DECLARED Ruxen type via the new
+  `codegen::is_erased_word_ty`. Pin 1004 is the negative pin that holds that
+  line.
+
+  The closure half is fixed in **MIR lowering**, not per backend: a float
+  closure parameter and return are lowered as uniform words with an explicit
+  `FloatToBits` / the new `BitsToFloat` at each edge, and the matching
+  reinterpretation is emitted at the `Fn`-box `CallIndirect`. Both backends
+  therefore inherit it identically. Everything else is a new, named
+  `coerce_erased_word` in each backend, deliberately distinct from
+  `coerce_value` so a numeric conversion can never be mistaken for an erasure.
+
+  This delivers enabler **E4** and unblocks **B23** (the `Float` method
+  family): a `Float` receiver reaching an `.rx` method body now reads as the
+  value it was called on. Pins `tests/release-e2e/cases/1000` to `1004`.
+
+  Not fixed, and unchanged by this: a whole `Float` still renders as `2` where
+  CRuby prints `2.0` (`ruxen_float_to_string`). That is formatting, not ABI.
+
+- **A `class` now gets the structural derives a `struct` already had (B74).**
+  `mir/lower/mod.rs`'s `HirItem::Class` arm synthesized `Clone` and nothing
+  else, so three things were broken and all three were invisible: `a == b`
+  lowered to a raw comparison of two heap ADDRESSES and answered `false` for
+  every pair of distinct allocations however equal their fields (with **and**
+  without an explicit `include PartialEq`); `"#{a}"` printed that address
+  instead of `Name { … }`; and `a.hash_code` type-checked and then failed at
+  LINK with an undefined `{Class}_hash_code`. Equality needed two fixes, not
+  one — nothing synthesized `{Class}_eq`, *and* `struct_name_with_partial_eq`
+  matched `Ty::Struct` only, so the structural route in `expr/binops.rs` was
+  never reached.
+
+  The derived bodies are now written once against a `&[DeriveField]` slot list
+  instead of twice against `HirStructDef` and `HirClassDef`; the shapes differ
+  only in how a slot index is computed, so a struct yields declaration indices
+  and a class yields its flattened parent-first chain shifted past the
+  `class_info` header. `Ord` / `PartialOrd` / `Default` are deliberately still
+  struct-only: their bodies do not exist for a class, and widening the
+  dispatch alone would turn a silent gap into a link error.
+
+  Downstream, `key_desc.rs` accepts a class key, so a class carrying
+  `Hashable` + `PartialEq` keys a `Hash` / `Set` through B73's protocol
+  instead of falling through to identity. Pins
+  `tests/release-e2e/cases/1730` to `1739`.
+
+  This survived because every pin cited for auto-equality (`133`, `206`,
+  `207`, `139`) spells a `struct` and none spells a `class`. The new pins
+  spell both.
+- **An inherited class field no longer shares a slot with the subclass's own.**
+  `typeck/infer/collect.rs::lookup_field_with_parents` returned
+  `DefKind::Field.index`, which is class-LOCAL and restarts at 0 per class,
+  while a class is laid out ancestors-first (what `alloc_size` budgets and
+  what `get_class_field_names` already returns for `def init(@x:)`
+  auto-assign). For `class Base { id: Int }` / `class Derived < Base { tag:
+  Int }`, `id` and `tag` both resolved to slot 0: `Derived.new(7, 42)` ran
+  `super(7)` writing the slot and `@tag = 42` overwriting it, so `d.id` read
+  back `42` and the last slot stayed uninitialised. The lookup now returns
+  `base + local` from an oldest-first chain walk, still searching
+  newest-class-first so a subclass field shadows an ancestor's of the same
+  name. `16_inheritance.rx` never caught it because `Cat < Animal` declares no
+  field of its own. Pinned by `1733`.
+- **`==` recurses into a nested struct/class field instead of comparing
+  addresses.** `lower_struct_partial_eq` — the inline route `expr/binops.rs`
+  takes for `a == b` — emitted a bare `Compare` per field, so a field that is
+  itself a nominal type compared the two heap addresses it holds:
+  `Inner.new(1) == Inner.new(1)` was `true` while
+  `Outer.new(Inner.new(1)) == Outer.new(Inner.new(1))` was `false`. The
+  synthesized `{Type}_eq` has always recursed; this second implementation of
+  the same fold silently did not. Not class-specific — struct-in-struct was
+  equally broken, and no pin nested a nominal field. A dotted (module-nested)
+  type name still falls back to the address compare rather than naming a
+  symbol that may not exist. Pinned by `1739`.
+- **`return <value>` from an `Option`- or `Result`-returning function no longer
+  SEGFAULTS (batch B84).** A guard-clause early return —
+
+  ```
+  def f(x: Int) -> Int?
+    if x > 1
+      return x * 10
+    end
+    nil
+  end
+  ```
+
+  compiled clean and exited 139, while the tail-expression spelling of the same
+  function (`if x > 1 then x * 10 else nil end`) printed the right answer.
+
+  Cause: a function's return slot is fed by two syntactic positions — the
+  body's TAIL expression and an explicit `return` — and only the tail ran the
+  return-slot pipeline. `infer_function` applied `auto_call_fn_reference`, then
+  the "drop `Some`" wrap (`auto_wrap_option_some`, which rewrites a bare `T`
+  into an `Option::Some` HIR node that MIR lowers to `Alloc`/`SetTag`/
+  `SetField`), then a REPORTED `unify_or_coerce`. The `Return` arm of
+  `infer_expr` did none of it: it called `unify` and discarded the result, and
+  `unify` has no `(Option[T], T)` rule, so the mismatch was silently swallowed.
+  The bare `Int` was then handed to `Terminator::Return` unboxed and the caller
+  dereferenced it as a tagged-enum pointer.
+
+  Fix: both positions now go through one helper,
+  `InferenceEngine::coerce_and_check_return_value`
+  (`compiler/ruxen_core/src/typeck/infer/mod.rs`), which applies the same
+  rewrites and then the same reported check. The mechanism is generic over the
+  return type — it runs the existing contextual rewrites and a normal
+  `unify_or_coerce`, with no per-type special-casing in the `Return` arm.
+
+  Consequences, both intended: `-> T?` now auto-wraps a bare `return <T>`
+  exactly as the tail spelling does; and `-> Result[T, E]`, which has no
+  implicit `Ok` wrap in the language, now produces the SAME type-mismatch
+  diagnostic for `return <bare T>` that it already produced for the tail
+  spelling, instead of the identical silent miscompile it had before.
+
+  Pins `tests/release-e2e/cases/1850` to `1852` deliberately pin BOTH spellings
+  side by side (early `return` and tail expression, for `Option` and `Result`,
+  plus a `return` nested in a `while`/`for` loop and in a `match` arm, and a
+  heap `String` payload). The negative half — a bare `return <T>` into a
+  `-> Result[T, E]` slot must be a diagnostic — lives in
+  `compiler/ruxen_core/src/typeck/tests.rs`, since the e2e harness has no
+  compile-fail expectation. This defect had hidden behind pin `1061`, which
+  exercised only the tail spelling.
+- **Chaining off a combinator no longer iterates the ORIGINAL receiver (B85).**
+  `["alpha", "beta", "gamma"].select { |s| s.size > 4 }.each { … }` ran the
+  block on all three elements instead of the two selected, while the
+  bound-first spelling (`let big = a.select { … }; big.each { … }`) was
+  correct. No crash and no diagnostic, just a plausible wrong answer on Ruby's
+  single most characteristic idiom.
+
+  Cause: `mir/lower/closure_inline/mod.rs::lower_vec_source`. When an inlined
+  combinator's receiver was itself a method call, this helper matched on the
+  RECEIVER's method name and, for `"select" | "reject" | "where_matching"` with
+  a block, recursed into that call's own object instead of lowering the call,
+  discarding the combinator outright. Diffing MIR for the two spellings shows
+  it exactly: the chained form emits no `Array_select` call at all and its loop
+  reads the receiver local, where the bound form calls `Array_select` and loops
+  over its result.
+
+  The fix deletes the helper. An inlined combinator's receiver is an ordinary
+  expression and is now lowered by `lower_expr`, exactly as the bound-first
+  spelling already was, so the chain sees whatever the previous link returned.
+  This removes three hardcoded stdlib method names from the lowerer rather than
+  adding any (`docs/specs/system/generic-compiler.spec.md`), and the surviving
+  arms of the deleted helper were already plain `lower_expr` forwards left over
+  from the removed iterator machinery.
+
+  Verified across `select`, `map`, `reject`, `filter_map`, `take_while`,
+  `drop_while`, `each_with_index`, a user-defined collection method, non-block
+  terminals (`size` / `count` / `join` / `first` / `empty?` / `include?`),
+  three- and four-link chains, an EMPTY intermediate (which used to iterate the
+  full receiver rather than nothing), and a chain nested inside another block.
+  Pins `tests/release-e2e/cases/1860` to `1869`, each pinning the chained and
+  bound-first spellings side by side with counts that differ from the
+  receiver's own; 6 of the 10 fail against the pre-fix compiler.
+- **`flat_map` on an `Array` receiver no longer fails codegen.** It sat on the
+  unimplemented-Vec-combinator blocklist in
+  `compiler/ruxen_core/src/codegen/lang_intrinsics.rs`, a list written when
+  those names had no `.rx` body. Now that B07 gives `flat_map` a real
+  `mixin Enumerable[T]` body, the emitted `Array_flat_map` function was
+  unreachable and the first call site died with "no runtime symbol for
+  `Vec::flat_map`". `flat_map` now falls through to the same arm as `map` /
+  `select` / `reduce`, which were unblocked the same way when they migrated.
+  `min` / `max` / `collect` / `flatten` stay blocked: they need per-`T`
+  monomorphization (enabler E1).
+- **`Integer` Ruby surface (batches B12 / B13 / B14)** — 40-plus methods added
+  as `.rx` bodies on the `class Int` method-home
+  (`library/std/scalar/src/lib.rx`), no new C symbol:
+  - predicates and sign: `abs`/`magnitude`, `even?`, `odd?`, `zero?`,
+    `positive?`, `negative?`, `integer?`, `succ`/`next`, `pred`, `clamp`,
+    `between?`;
+  - rounding with the precision argument: `ceil`, `floor`, `round`,
+    `truncate` (`round` is half-away-from-zero, matching CRuby);
+  - arithmetic and number theory: `div`, `modulo`, `remainder`, `divmod`,
+    `fdiv`, `gcd`, `lcm`, `gcdlcm`, `pow(exp)`, `pow(exp, mod)`,
+    `bit_length`, `bit(i)`, `digits(base = 10)` and the class method
+    `Int.sqrt(n)`;
+  - iteration and conversion: `upto`, `downto`, `step(limit)` /
+    `step(limit, by)`, `to_s(base)`, `to_i`/`to_int`, `ord`, `chr`.
+
+  `div`/`modulo`/`divmod` FLOOR, which is Ruby's convention and NOT the
+  machine `/` and `%` (those truncate, C style, and keep that behavior);
+  `remainder` is the truncating one. Every pin's expected output was diffed
+  line for line against CRuby 3.3. Pins `tests/release-e2e/cases/1110`,
+  `1111`, `1120`, `1121`, `1130`, `1131`.
+
+  Each body reboxes its receiver (`let n = 0 + self`) because a scalar
+  method-home `self` on the LEFT of an arithmetic operator emits a call to a
+  nonexistent `Int_+` / `Int_%` and link-fails.
+- **`Char` and `Bool` scalar methods (batch B18)** — `Char#ord`, `#to_i`
+  (digit value, matching `"7".to_i`), `#chr`, `#upcase`, `#downcase`,
+  `#digit?`, `#alpha?`, `#alnum?`, `#space?`/`#whitespace?`, `#punct?`,
+  `#<=>` (method spelling) and `#succ`/`#next`, plus `Bool#to_i`. Ruby has no
+  `Char` class, so each mirrors the `String` method a Ruby developer calls on
+  `str[0]`; classification is ASCII-only. Ruby's `TrueClass`/`FalseClass`
+  `&`/`|`/`^`/`!` already work as machine operators and are now pinned rather
+  than reimplemented. Pins `tests/release-e2e/cases/1170`, `1171`.
+- **`String` conversion and the Regex bridge (Ruby-parity batch B11)** —
+  `to_i(base = 10)`, `to_f`, `hex`, `oct`, `ord`, `chr`, `to_str`, `dup`, and
+  the String-side regex spellings `match(re)`, `match?(re)`, `scan(re)`,
+  `sub(re, repl)`, `gsub(re, repl)`, `split(re)` and `index(re)`, added as
+  `.rx` methods on `class String`. `to_i` / `to_f` are Ruby's LENIENT
+  parsers: leading whitespace and a sign, `_` between digits, a `0x` / `0b` /
+  `0o` / `0d` prefix when it agrees with the base, scanning stops at the first
+  character that does not fit, and 0 when nothing parses. The strict
+  `Result`-returning `parse_int` / `parse_float` are untouched and remain the
+  spelling to reach for when "not a number" has to be distinguishable from
+  "zero". Each regex method is an overload selected by ARGUMENT TYPE against
+  its string-argument sibling from B10, so one Ruby name (`gsub`, `sub`,
+  `split`, `index`) covers both. Two gaps recorded rather than faked: `=~`
+  cannot be defined, because Ruxen's lexer has no such token (its match
+  operator is `~=`, a Bool-returning dedicated route), so Ruby's `=~` answer
+  is served by Ruby's other name for it, `index(regexp)`, which converts the
+  match's BYTE offset into a CHARACTER index; and `ord` on an empty receiver
+  aborts via `panic!`, since Ruby raises ArgumentError and Ruxen has no
+  exception surface. Pins `tests/release-e2e/cases/1100`-`1102`.
+- **`String` search and replace (Ruby-parity batch B10)** — `sub(pattern,
+  replacement)`, `gsub(pattern, replacement)`, `partition(sep)`,
+  `rpartition(sep)`, `slice(start, len)` and `split(sep, limit)`, added as
+  `.rx` methods on `class String`. `gsub` is implemented in `.rx` rather than
+  delegating to the FFI `replace(from, to)` because the C helper leaves an
+  EMPTY pattern alone, where Ruby matches it at every position including the
+  end (`"abc".gsub("", "-")` is `"-a-b-c-"`). `slice` returns
+  `Option[String]`, reproducing Ruby's edges exactly: nil past the end or for
+  a negative length, the empty string for a start of exactly `length`, and a
+  negative start counting back from the end. `split(sep, limit)` follows
+  Ruby's three-way limit rule (positive caps the field count, zero drops
+  trailing empty fields, negative keeps them). **Name collision, called out
+  deliberately:** the pre-existing `replace(from, to)` is a replace-ALL, so it
+  is Ruxen's spelling of `gsub`, NOT Ruby's one-argument `replace(other)`,
+  which overwrites the receiver in place and is not expressible. Related: the
+  one-argument `split(sep)` keeps trailing empty fields, so it matches Ruby's
+  `split(sep, -1)` rather than Ruby's default; pass an explicit `0` for the
+  Ruby default. Pins `tests/release-e2e/cases/1090`-`1092`.
+- **`String` transformation (Ruby-parity batch B09)** — `swapcase`, `chomp` /
+  `chomp(suffix)`, `chop`, `center(width, pad = " ")`, `delete_prefix`,
+  `delete_suffix`, `prepend`, `delete(set)`, `squeeze` / `squeeze(set)`,
+  `tr(from, to)`, `tr_s(from, to)`, and `succ` / `next`, added as `.rx`
+  methods on `class String`. `delete` / `squeeze` / `tr` / `tr_s` share the
+  tr-style set building blocks introduced with B08's `count`. `succ`
+  implements Ruby's full carry: the rightmost alphanumeric is incremented,
+  the carry runs leftwards across alphanumerics and skips non-alphanumerics,
+  and overflowing the leftmost one seeds a `"1"` / `"a"` / `"A"` in front
+  (`"1999zzz".succ` is `"2000aaa"`). Two internal building blocks,
+  `take_chars` and `drop_chars`, back the edge-trimming methods. Ruby's
+  `!`-suffixed in-place variants are deliberately NOT provided: inside
+  `class String` the receiver is the FFI shell, a buffer pointer held by
+  value, so a `.rx` body cannot rewrite the caller's string, and growing it
+  needs a realloc whose new pointer has nowhere to be stored. Pins
+  `tests/release-e2e/cases/1080`-`1084`.
+- **`String` query and inspection (Ruby-parity batch B08)** — `bytesize`,
+  `codepoints`, `count(set)`, `index(sub, offset = 0)`, `rindex(sub)` /
+  `rindex(sub, offset)`, `casecmp`, `casecmp?`, `eql?`, array-argument
+  `start_with?` / `end_with?`, and `each_char` / `each_byte` / `each_line`,
+  all added as `.rx` methods on `class String`
+  (`library/std/string/src/string.rx`). `count` understands Ruby's tr-style
+  set syntax (`a-z` ranges, a leading `^` negation, `\` escapes) through two
+  shared building blocks, `tr_set_expand` and `tr_set_negated?`, which the
+  B09 `delete` / `squeeze` / `tr` methods reuse. `index` / `rindex` report a
+  CHARACTER index, unlike the pre-existing `find`, which reports a BYTE
+  offset. Notable non-parity points, recorded on the matrix rows rather than
+  papered over: `each_*` requires a block and returns `nil` (Ruby returns
+  `self`, or an Enumerator without a block); `each_line` strips the line
+  terminator because it is built on `lines`; `casecmp` folds ASCII only; and
+  Ruby's splat forms of `start_with?` / `end_with?` are spelled with an
+  array. Pins `tests/release-e2e/cases/1070`-`1073`.
+- **Per-`T` monomorphization of builtin-head collection methods (compiler
+  enabler).** `Array[T]` / `Set[T]` / `Hash[K,V]` / `Option[T]` / `Result[T,E]`
+  are `.rx` classes whose instances are a structural `Ty` head, and they carry
+  `lib` blocks, so generic-CLASS monomorphization skipped them: every `.rx`
+  body method lowered ONCE with its type params abstract. Any body that
+  DISPATCHES on the element type therefore fell to the pointer-as-`Int` floor
+  (`["a","b"].join` printed buffer addresses). MIR now emits one specialized
+  body per `(concrete receiver instantiation, method)` observed at a call site
+  (`Array__mono__String_join`) and redirects those call sites to it
+  (`mir/lower/monomorphize.rs`, `expr/{method_call,field_access}.rs`).
+  Eligibility is structural, never name-based: a body qualifies only when it
+  feeds a type-parameter-typed value into one of MIR's three type-directed
+  lowerings (interpolation, binary operator, method receiver), so the
+  push/iterate/closure-call combinators (`map`, `select`, `reduce`, …) keep
+  their single shared body unchanged. Un-specialized instantiations still
+  resolve to that opaque body, so the pass adds capability without changing
+  any existing dispatch.
+- **`Array#join` / `min` / `max` / `uniq`** — real `.rx` bodies on
+  `class Array[T]` (`library/std/array/src/lib.rx`), the first users of the
+  per-`T` monomorphization above. Ruby semantics: `[].join == ""` with the
+  separator defaulting to `", "`; `min`/`max` return `nil` on an empty array
+  and order by the element type's own `<`/`>`; `uniq` keeps the first
+  occurrence of each distinct element by the element type's own `==` (content
+  equality for `String`, where the old shared body compared raw words). The
+  `ruxen_vec_join` FFI decl is retired — `join` now formats every element type,
+  not just `String`. Pins `tests/release-e2e/cases/991`.
+- **`String#reverse` / `capitalize` / `ljust` / `rjust`** — added as `.rx`
+  methods (`library/std/string/src/string.rx`) built char-by-char over `chars`.
+  A `String` carries no generic element type, so unlike the generic-collection
+  combinators its `.rx` bodies MAY dispatch on the concrete `Char`. `ljust`/
+  `rjust` take a required `pad` (default args are not filled on a builtin-head
+  method). Pins `tests/release-e2e/cases/987`, `988`.
+- **`Hash` key-presence + entry-iteration methods** — `has_key?` / `include?` /
+  `member?` (KEY-membership synonyms of `key?`) and `each_key` / `each_value` /
+  `each_pair`, added as `.rx` methods on `class Hash[K, V]`
+  (`library/std/map/src/lib.rx`). The `each_*` bodies iterate `each` + tuple
+  access on the `(K, V)` pair. The key-presence methods and `each_pair` are pure
+  `alias`es (one `Hash_key?` / `Hash_each` body serves every spelling); they
+  started as delegating bodies to work around Q58 and reverted once Q58 was
+  fixed. Pins `tests/release-e2e/cases/986`, `990`.
+- **`Enumerable#find_all` / `none?` / `one?`** — added as `.rx` mixin-default
+  bodies over `each`/`any?` (`library/std/core/src/lib.rx`), so every includer
+  (Array/Set/Hash) gets them. `find_all` delegates to `select`; `none?` is
+  `!any?`; `one?` counts matches. Pins `tests/release-e2e/cases/985`.
+
+### Fixed
+- **`Hash[k] = v` subscript-assign no longer vanishes silently (B72).**
+  `h["a"] = 42` type-checked, emitted no diagnostic, and stored nothing:
+  `size` stayed `0` and `key?("a")` stayed `false`, while `h.insert("a", 42)`
+  and the subscript READ both worked. `mir/lower/expr/assign.rs` desugared
+  `o[i] = v` to `o.[]=(i, v)` only for a NOMINAL receiver
+  (`Ty::Class`/`Struct`/`Enum`); a `Hash` is `Ty::Map`, so it fell through to
+  the index-assign machine floor, which handles only `Ty::FixedArray` and the
+  backing-Vec heads. `Ty::Map` matched neither arm and the arm returned `Ok`,
+  dropping the store. Index-assign now ALSO routes to the receiver's `[]=`
+  when the receiver is a builtin head (`String`/`Array`/`Hash`/`Set`) whose
+  `.rx` class resolves one — the write-side twin of the existing builtin-head
+  OPERATOR route, sharing that module's head predicate and method probe so the
+  two cannot drift. No method or type name is hardcoded: `Hash[k] = v` works
+  because `class Hash[K, V]` now carries `alias []= insert`, and any other head
+  that declares `[]=` gets the same route for free. A head with no `[]=` still
+  falls through to the machine floor, so `Array`/`FixedArray` index-assign is
+  byte-identical to before. The `.rx` side is an `alias`, not a delegating
+  `def`, so the emitted call is the same `ruxen_hash_insert` that `insert`
+  emits and drop elaboration applies the key/value ownership TRANSFER already
+  recorded for that symbol; a separate `Hash_[]=` body would instead be
+  classified as BORROWING its args by the `Hash_` runtime-prefix rule and
+  double-free the key at scope exit. The machine floor's index-assign arm now
+  returns a lowering ERROR for a receiver it has no store path for, rather than
+  silently discarding the write that produced this bug; the refusal names which
+  of the three reasons applies instead of blanket-advising `define []=`. Two
+  shapes that previously no-op'd silently therefore refuse to compile now, each
+  saying so: parallel assignment through an index (`h["a"], h["b"] = 1, 2` —
+  `MultiAssign` reaches the floor with an already-lowered value, so it cannot
+  take the desugar; assign each index separately) and a fixed-size array
+  `[T; N]` index-assign with a computed index (the floor stores a `[T; N]` slot
+  only for a literal index). Neither ever produced a correct store. Pins
+  `tests/release-e2e/cases/1710`, `1711`.
+- **`Hash` / `Set` decide a key's hashing and equality from its TYPE, not from
+  its bit pattern (B73).** `library/std/hash/runtime/hash.c` used to store every
+  key as an `int64_t` and resolve a tristate `string_keys` flag on the FIRST
+  insert by calling `ruxen_hash_looks_like_string`, which **dereferenced the key
+  value as a `char*`** and scanned up to 256 bytes for a NUL. Three defects, one
+  root:
+  1. **`Hash[Int, V]` SIGSEGV'd for any key >= 4096.** The probe short-circuited
+     below `0x1000`, so `h.insert(4095, v)` worked and `h.insert(5000, v)` died
+     with exit 139. Integer keys are ordinary — ids, ports, status codes, years —
+     so this was a crash on plausible input.
+  2. **A user type could not be a `Hash` key at all.** Keys were compared by
+     object identity, so `h.insert(P.new(1), v)` then `h.key?(P.new(1))` was
+     `false`; the `Hashable` mixin's `hash_code` and the structural `==` derive
+     were never consulted.
+  3. **The key kind latched on the first insert,** so a table's behavior depended
+     on its insertion order (a `Hash[String, V]` whose first key was `""` fell to
+     raw-bits hashing and missed every later content lookup).
+
+  The heuristic is **deleted**, replaced by a real protocol: the key kind travels
+  DOWN from the typed side. A MIR post-pass,
+  `mir/lower/key_desc.rs::install_key_descriptors`, derives `(kind, hash_fn,
+  eq_fn)` from a table's static key type — `String` → FNV-1a + `strcmp`, a struct
+  carrying both `Hashable` and `PartialEq` → its synthesized `<S>_hash_code` /
+  `<S>_eq` passed as `FuncAddr` words, everything else → the raw 64-bit value —
+  and installs it on **two routes**:
+
+  * **Construction sites** are rewritten to a `_keyed` form carrying the
+    descriptor. This is the only route that can serve a table the C runtime
+    populates internally, so the two `from_iter` collectors read their key type
+    off the SOURCE iterable rather than the result (`Array#to_h` is declared
+    `-> Int`, which says nothing about the key; the input `Array` says
+    everything).
+  * **Key-addressed operations** (`insert` / `get` / `key?` / `remove` / `[]`)
+    get an idempotent `ensure_key_kind` in front, chosen from the RECEIVER's key
+    type. A static constructor has no receiver to substitute `-> Hash[K, V]`
+    against, so `f(Hash.new)` cannot be typed where it is BUILT — but it is
+    typed perfectly well where it is USED, and this route generalizes over
+    syntactic position instead of needing one typeck refinement per position.
+
+  It is a post-pass rather than a per-call-site edit because tables are built
+  from more than two dozen `MirInst::Call` emission sites (paren-less
+  `Hash.new`, `Hash.new()`, a map literal, `collect`, `to_set`,
+  `with_capacity`, …); deciding once on the shape of the emitted MIR means a new
+  construction site cannot forget the descriptor. The classification is
+  structural (`Ty` variants plus the generic `ty_has_derive_trait` predicate), so
+  no stdlib type or method name is hardcoded in the compiler.
+
+  **`Hash[UserType, V]` and `Set[UserType]` now work**, which also unblocks
+  **B29c** (`Hash[Symbol, V]`): a symbol is a 64-bit intern id and joins as a
+  plain `RUXEN_KEY_BITS` key with no further runtime work. The kind set is open
+  by construction — adding one means adding a constant and a `switch` case, never
+  widening a range check on a key's value.
+
+  Supporting changes: `clear` no longer resets the key kind (emptying a table
+  does not change its key type); `clone` and the set-algebra operations inherit
+  the descriptor from their source *before* their first insert; `struct
+  RuxenHash` moved from two hand-synced per-TU copies (`hash.c` and `json.c`,
+  behind a shared `RUXEN_HASH_RUNTIME_STRUCTS` guard) into
+  `core/runtime/runtime.h`, since two copies of one layout is an ODR hazard, and
+  `json.c` now constructs its objects with an explicit `RUXEN_KEY_CSTR` instead
+  of poking the old flag.
+
+  Tables built entirely inside the C runtime are out of the post-pass's reach
+  and state or inherit their own kind: `Env.vars` and `Match#named_groups` are
+  `RUXEN_KEY_CSTR` by definition, and `clone` plus the set-algebra operations
+  copy the descriptor from a source table *before* their first insert.
+
+  **Typeck is untouched.** An earlier draft added a `refine_rigid_generics`
+  pass so a static constructor's own expression type would be precise
+  (`let h: Hash[String, Int] = Hash.new` leaves the initializer typed
+  `Hash[K, V]`, because a rigid parameter is not an inference variable and
+  unification has nothing to bind). The use-site route made it unnecessary, and
+  it was measured out rather than kept on faith: with it disabled the e2e stayed
+  at 551 pass / 0 fail and the narrow gate at 655 pass / 0 fail. Refining
+  expression types after unification touches every annotated binding in every
+  program, which is too much blast radius to carry for no measured benefit. The
+  underlying imprecision stays filed as GUI-stack ledger §Q60(a).
+
+  **One residual limit, loud rather than silent.** A table neither route can
+  type keeps `RUXEN_KEY_UNSET`, and the runtime **panics on the first insert**
+  naming the protocol rather than guessing a kind and mis-hashing. No shape in
+  the stdlib, the workspace, or the e2e suite reaches it. Pins
+  `tests/release-e2e/cases/1720`-`1729`.
+
+- **`Hash[K, V].new` now means what it says (found landing B73).** The parser
+  parsed the explicit generic arguments on a type used as a static-call
+  receiver and then **discarded** them
+  (`parse_type_expr_primary`: `let _generic_args = self.parse_generic_args();`),
+  on the reasoning that generic arguments are inferred from the call's
+  arguments anyway. That holds for `Point[Int].new(3)` and cannot hold for a
+  **no-argument** constructor: `Hash[String, Int].new` produced a receiver
+  carrying the declared rigid `K`/`V`, so the call's type stayed `Hash[K, V]`
+  and no later stage could recover what the author had written. Consequences,
+  all verified:
+  * `h["a"]` on such a table typed as the abstract `V`, not `Int`.
+  * `Hash[Int, Int].new` followed by `insert(5000, …)` **SIGSEGV'd** under the
+    old bit-pattern heuristic, while `insert(7, …)` worked, because the key
+    kind was being guessed rather than known.
+  * Under B73 the same tables became `RUXEN_KEY_UNSET` and panicked.
+
+  The written path is now carried through as `ExprKind::GenericTypeRef` and
+  resolved by ordinary type resolution, so `Hash` / `Array` / `Set` need no
+  per-collection special-casing. The refinement is scoped to the BUILTIN type
+  constructors, which are the ones whose value-scope entry leaks its declared
+  rigid parameters. A user generic class keeps the path it had: its `.new` goes
+  through constructor resolution and `Pair[Int, String].new(42, "hi")` already
+  infers its parameters from the arguments, so rerouting it would have swapped
+  a `DefKind::Class` receiver for a synthetic `DefKind::Variable` and broken
+  that path (caught by cases `65`, `73`, `101`, `990` on the first attempt).
+  The resolver registers
+  the INSTANTIATED constructor as its own def rather than refining the
+  expression's type in place, because typeck's `VarRef` arm re-derives an
+  expression's type from its `DefId` and would otherwise put the
+  uninstantiated type straight back. `ruxen fmt` prints the arguments back
+  (verified idempotent); dropping them there would have silently rewritten a
+  program into the shape whose type cannot be recovered, which is the
+  fmt-destructiveness class (Q23/Q30/Q34).
+
+  Both spellings of every construction form are now pinned side by side
+  (`1728`), along with the shapes that put the type somewhere other than the
+  constructor — class field, function return, closure body, array element
+  (`1729`). The previous eight B73 pins all happened to use the
+  annotated-binding spelling, which is why the suite stayed green while this
+  was broken.
+- **`alias` to a method on a GENERIC builtin head no longer link-fails (Q58).**
+  `h.has_key?(k)` on a `Hash[String, Int]` emitted a bodiless
+  `Hash[String, Int]_has_key?` and the linker rejected it. MIR's
+  `select_method_symbol_name` computed the alias's canonical name correctly, then
+  discarded it: its candidate scan compared the parent def's BARE class name
+  against the call site's INSTANTIATED receiver name, so every generic head
+  matched zero defs and the selector returned `None`. The caller then fell back
+  to the raw spelling, because typeck does not pin `*method` for a builtin head.
+  `method_trailing_default_sentinels` carried the same bug on a parallel path,
+  returning zero default sentinels for any generic head, so a paren-less call to
+  a method with trailing defaults emitted one argument too few and aborted in the
+  Cranelift verifier. Both now share `Lowerer::method_defs_on_class`, which scans
+  the exact class name first and falls back to the generic-free base
+  (`Hash[String, Int]` → `Hash`) only when that finds nothing. This is the same
+  full-then-base order `SymbolTable::canonical_method_name` already used for the
+  alias map; no method or type name is hardcoded. `Hash`'s `has_key?` /
+  `include?` / `member?` / `each_pair` reverted from delegating bodies to
+  one-line `alias`es. Pins `tests/release-e2e/cases/990`.
+- **`String#ljust` / `#rjust` overshot the requested width with a
+  multi-character pad.** Both appended the pad WHOLE once per missing
+  character, so `"hi".ljust(7, "12")` produced eight characters
+  (`"hi12121212"`-style overshoot) where Ruby cycles the pad one character at
+  a time and guarantees exactly `max(width, length)`. Both now cycle, as does
+  the new `center`. Single-character pads (the common case, and everything the
+  pre-existing pins 988 / 989 covered) are unaffected. Pin
+  `tests/release-e2e/cases/1081`.
+- **Default arguments now fill on a builtin-head (`String`/`Array`/`Hash`/`Set`)
+  method call.** The default-arg pass (`append_method_default_args`) + the
+  signature-based arg seeding ran only for nominal (`Class`/`Struct`/`Enum`)
+  receivers, so a `.rx` method with a default arg on a builtin head
+  (`String#ljust(width, pad = " ")`) verify/link-failed when the default was
+  omitted (`ljust(5)` passed one arg to a two-arg callee). Typeck now resolves
+  the selected method for builtin heads too (mapping `String`/`Array`/`Hash`/
+  `Set` to their `.rx` class name), WITHOUT pinning `*method` so the bridge +
+  FFI-alias dispatch/mangling is untouched. `ljust`/`rjust` regained their
+  `pad = " "` default. Pins `tests/release-e2e/cases/989`.
+- **Builtin-head collection/string operators that silently miscompiled now
+  work, via `.rx` operator methods.** `"ab" * 3` (was empty/SIGSEGV), `[1,2] +
+  [3,4]` (was `0`/garbage), and `Set` `|`/`&`/`-` (was garbage) previously fell
+  to the machine floor, which integer/bit-ops the heap pointers. They are now
+  ordinary `.rx` operator methods (`String#*`→`repeat`, `Array#+`→`chain`,
+  `Set#|`/`&`/`-`→`union`/`intersection`/`difference`), reached by a new
+  **builtin-head operator route**: the operator desugar (typeck `infer/expr.rs`
+  + MIR `binops.rs`) now routes an arithmetic/bitwise/shift operator on a
+  `String`/`Array`/`Hash`/`Set` receiver to the receiver's `.rx` operator method
+  when one exists — the builtin-head analogue of the existing nominal-receiver
+  route, and the generic-compiler end-state (operators as `.rx` methods).
+  Comparison/equality and `~=`/`??` keep their dedicated routes; a head with no
+  such method falls through unchanged (`String + String` concat, `Array ==`).
+  Pins `tests/release-e2e/cases/984`.
+
+### Changed
+- **`tap` / `then` / `yield_self` are now defined in `.rx` (`mixin Kernel`),
+  not a compiler special-case.** The universal Ruby object combinators moved
+  out of the ~60-line typeck+MIR interception (hardcoded method names + a
+  `__ruxen_builtin_*` marker the two stages had to keep in lockstep) and into
+  ordinary `.rx` mixin defaults on a new `mixin Kernel`
+  (`library/std/core/src/lib.rx`). Four generic mechanisms carry them:
+  (1) a **universal-`Kernel` include** — `MixinResolver::lookup_method_*` consult
+  `Kernel`'s defaults as a last resort for EVERY receiver (own/explicit methods
+  still win, so a user `def tap` overrides), so no per-type registration is
+  needed; (2) **per-receiver body synthesis** — `mir::lower::
+  emit_universal_kernel_bodies` records each `tap`/`then`/`yield_self` call site
+  during lowering and synthesizes the `{Type}_{method}` body (cloned `Kernel`
+  default, `Self` → the concrete receiver) for any primitive / builtin /
+  non-`include`-ing receiver that has no `impl` item to drive the usual
+  per-implementor monomorphization; (3) a codegen fix so a zero-sized
+  (`Unit`/`Never`) `self` param is skipped symmetrically in the signature AND
+  the param→value binding (previously a later real param read the wrong
+  incoming slot → garbage → segfault), which is what makes `puts(x).tap { … }`
+  on a unit receiver work; (4) the parser accepts the `then`/`match` contextual
+  keywords in `def`/`alias` NAME position. Works on `Int`/`Float`/`Bool`/`Char`,
+  `String`, `Array`, and user classes/structs/enums. The block-arity guard
+  (`tap`'s block takes at most one parameter) is now a generic check over any
+  mixin-default block method, not a `tap`/`then` special-case.
+
+### Fixed
+- **Mixin-DEFAULT methods that take a block now resolve on user classes
+  (closure-param `Self`-seeding + method-generic return harvest).** A mixin
+  default such as `def run_with(f: Fn(&Self) -> nil) -> Self` or
+  `def transform[U](f: Fn(&Self) -> U) -> U`, inherited by a class that
+  `include`s the mixin, previously degraded to a fresh `Infer` at the call site
+  (the receiver of any later `.field` on the result mangled to `?T::field`).
+  Three coordinated typeck fixes: (1) the signature-based closure-param seeding
+  now PINS the block parameter's concrete (Self-substituted) type into the
+  symbol table, so `x.field` inside the block body resolves instead of staying
+  abstract; (2) the method-call return path passes the trailing `do…end` block
+  as the effective final argument to `resolve_method_call`, so a block-taking
+  mixin default (never an "own" method, so `select_class_method` skips it)
+  matches arity in `lookup_method_with_args` instead of falling through to a
+  fresh var; (3) `resolve_method_call`'s trait-default arm now runs the same
+  receiver-generic substitution + method-level generic harvest that
+  `bridge_builtin_method` runs for builtin heads, so a method generic `U` binds
+  from the closure's inferred return. This is the generic foundation for
+  defining universal combinators (`tap`/`then`) as `.rx` mixin methods rather
+  than a compiler special-case. Pins `tests/release-e2e/cases/980`–`982`.
+- **Nominal mixin-bound enforcement on value types (Q35 regression) and
+  extension-based includes.** A `[T: M]` generic bound (and an `any M` param)
+  again requires an explicit `include M`: a `struct` with a same-named method
+  but no include no longer satisfies the bound (E1015), which the Q50
+  interpolation fix had silently broken by registering struct/enum methods into
+  the structural-satisfaction registry. Three coordinated changes: (1) an
+  `include M` directive inside an `extension T` body now registers `(T, M)`
+  nominally (`HirImplItem::Include` was previously dropped by the impl-block
+  collector), so `extension Int; include Showable` makes `Int` nominally satisfy
+  `Showable`; (2) `check_satisfaction` checks derive markers (`Hashable`/`Ord`/…)
+  and the `Fn`-family BEFORE the `require_nominal` gate, so auto-derives still
+  satisfy a `[T: Hashable]` bound; (3) the bound seam threads `require_nominal`
+  per caller — `[T: M]`/`any M` require nominal, `some M` keeps structural
+  acceptance. All 487 release-e2e fixtures pass, including the previously-green
+  structural cases (`100_where_clause`, `103_generic_constraint`) and the Q50
+  interpolation pin.
+
+### Changed
+- **Ruby method-name parity on `Enumerable`: `filter`, `detect`, `inject`.**
+  Added as thin delegating default methods on the `Enumerable[T]` mixin (`filter`
+  → `select`, `detect` → `find`, `inject` → `reduce`), so every collection that
+  includes `Enumerable` gets the Ruby spellings alongside the existing ones. They
+  are real delegating methods rather than `alias`es because `alias` does not
+  compose with the per-implementor monomorphization of a mixin default (the
+  aliased name mangles to an undefined `<Class>_<alias>` symbol). `collect` is
+  intentionally NOT aliased to `map` — it is already Ruxen's iterator
+  `collect[Target]` method. Pin `976`; Ruby-parity `core.md`.
+- **`%w[...]` word-array literals.** `%w[foo bar baz]` lexes to the array
+  `["foo", "bar", "baz"]`; the `[]`, `()`, `{}`, and `<>` delimiters are all
+  accepted, whitespace (including newlines) separates words, and `%w[]` is the
+  empty array. The lexer emits the equivalent bracket/string/comma token
+  sequence, so parsing, typeck, and codegen are unchanged. Recognized only in
+  expression context (via the same positional check that distinguishes a regex
+  `/` from division), so a binary `a % w` modulo is untouched. `%i` (symbol
+  arrays) stays out of scope pending a `Symbol` type. Pin `974`; Ruby-parity
+  `language.md` section 1 / P2.19.
+- **Ruby universal block methods `tap`, `then`, `yield_self`.** `x.tap { |v| … }`
+  runs the block with `v = x` for side effects and evaluates to `x`;
+  `x.then { |v| … }` (and its alias `yield_self`) evaluates to the block's
+  result. Both work on any receiver (primitive, String, or user type) and are
+  intercepted before ordinary method resolution: typeck types the result (the
+  receiver type for `tap`, the block's return type for `then`) and pins the
+  block parameter to the receiver type so a `to_s`-driven `puts(v)` inside the
+  block resolves correctly; MIR inlines the block as a single closure invocation
+  (bind the parameter to the receiver's local, lower the body). `then` also
+  needed to parse as a method name (it is otherwise the `case/when … then`
+  keyword), so `.then` now joins `match`/`var` as a contextual keyword accepted
+  in method-name position. The interception is kept in lockstep between typeck
+  and MIR (both require a literal closure block and a receiver with no such
+  method of its own), so a param-less block (`x.tap { side_effect }`) inlines,
+  a user-defined `def tap`/`def then` on the receiver wins, and a forwarded
+  `&block` reports a clean compile error rather than reaching the linker.
+  Pins `973`, `977`; Ruby-parity `language.md` section 11 / P1.16.
+- **Ruby method-name parity on `String`.** Added Ruby spellings as FFI aliases
+  sharing the existing C symbols (the same second-alias mechanism `to_s`/
+  `to_string` already use): `upcase`/`downcase` (→ `to_upper`/`to_lower`),
+  `length` (→ `size`), `strip`/`lstrip`/`rstrip` (→ `trim`/`trim_start`/
+  `trim_end`), and `start_with?`/`end_with?` (→ `starts_with`/`ends_with`). The
+  Ruxen spellings keep working alongside the Ruby ones, so string code reads
+  like Ruby. Pins `972`, `975`; Ruby-parity `core.md`.
+- **`Integer#times` iterator.** `n.times do |i| … end` yields `0, 1, …, n - 1`
+  in order, added as a pure-Ruxen method on the `Int` method-home (a `while` loop
+  over a closure param, the same shape the `Enumerable` combinators use). The
+  block runs for side effects and may mutate a captured outer variable. `upto`
+  and `downto` are a documented follow-up: they need `self` itself in arithmetic,
+  but a scalar method-home `self` is typed nominally as `Class[Int]`, which does
+  not yet flow into the primitive `+`/`-` floor (it routes to a nonexistent
+  `Int_+`); `times` avoids this because its counter starts from the `0` literal
+  (a machine `Int`) and only compares against `self`. Pin `971`; Ruby-parity
+  `language.md` section 6 / P1.15.
+- **General `@ivar` read and write in method bodies.** `@name` in expression
+  position now parses as sugar for `self.name` (a field access on the receiver),
+  so a method can read (`@n`), write (`@n = @n + 1`), and compound-assign
+  (`@n += k`) its instance variables in Ruby style, not only receive them via the
+  `def init(@n: Int)` auto-assign param. The desugar is purely syntactic (parser
+  → `FieldAccess { object: self, field }`), so resolve, typeck, MIR, and codegen
+  are unchanged, and `@name` outside a method reuses the existing "`self` used
+  outside of method context" error. `ruxen fmt` currently renders the desugared
+  `self.name` (surface-preserving `@name` is a follow-up). Pin `970`; Ruby-parity
+  `language.md` section 2 / P1.13.
+- **Endless method definitions `def f(...) = expr`.** A `def` whose signature is
+  followed by `=` takes a single expression as its whole body, with no `end`
+  (`def double(x: Int) -> Int = x * 2`, `def area -> Int = self.w * self.h`). It
+  works for top-level functions and class methods alike (both flow through
+  `parse_func_def`), and the body is stored as a one-expression block, so typeck,
+  MIR, and codegen are unchanged. `ruxen fmt` currently normalizes `= expr` to
+  the equivalent `{ expr }` single-expression form (surface-preserving `= expr`
+  is a follow-up, as with the ternary/`case` desugars). Pin `969`; Ruby-parity
+  `language.md` section 4 / P2.18.
+- **Bitwise complement `~` and bitwise/shift compound-assignments.** `~x` is a
+  new integer prefix operator (`UnaryOp::BitNot`) that lowers to `x ^ -1` (every
+  bit flipped) rather than reusing `MirInst::Not`, which XORs with 1 (logical
+  negation, correct only for `Bool`). Applying `~` to a non-integer is `E0733`.
+  Added the compound-assignments `<<=`, `>>=`, `&=`, `|=`, `^=` (new lexer
+  tokens); each desugars to `a = a OP b` over the existing `Shl`/`Shr`/`BitAnd`/
+  `BitOr`/`BitXor` lowering. `ruxen fmt` preserves all six spellings. The
+  paren-less prefix-argument form (`puts ~5`) is a pre-existing parser
+  limitation shared with `-`/`!` and is unchanged. Pin `968`; Ruby-parity
+  `language.md` section 2 / P2.21.
+- **`Comparable#clamp` plus `Self`-return substitution through mixin
+  defaults.** `clamp(min: &Self, max: &Self) -> &Self` is a new Comparable
+  default that returns a borrow of whichever of `self`/`min`/`max` is in the
+  `[min, max]` range, so no owned value is moved or copied (ownership-safe for
+  owned Comparable types). Making it usable required closing a gap in
+  return-type substitution: a mixin-default method that returns `Self`/`&Self`
+  previously left the abstract `Self: Bound` type param in place at the call
+  site, so the concrete receiver's fields were unreachable on the result
+  (`no field value on Self: Comparable`). `substitute_generics_in_return` now
+  also binds `Self` to the receiver's own concrete type, so `rank.clamp(lo,
+  hi).value` resolves. A `Self`-free return is unaffected (the substitution is
+  a structural no-op when the return names neither `Self` nor a receiver
+  generic). Pin `967`; parity `language.md` section 3.
+- **Lazy nil coalescing with `??`.** Added a dedicated `QuestionQuestion`
+  token and surface-preserving `BinOp::NilCoalesce`. The operator is
+  right-associative, binds between assignment and `||`, and has the contract
+  `Option[T] ?? T -> T`. MIR lowers it to a tag branch, so the fallback is
+  evaluated only for `nil`; chains such as `first ?? second ?? fallback` work
+  when both candidates are Options. Invalid left operands or mismatched
+  fallbacks report `E0732`. Pin `966`; Ruby-parity `language.md` section 3.
+- **User-defined comparison operators and `Comparable` through `<=>`.**
+  `def ==`, `def <`, `def <=`, `def >`, `def >=`, and `def <=>` now parse as
+  operator method names, including explicit calls such as `a.<=>(b)`. Typeck
+  and MIR route comparison syntax to a user method only when the receiver
+  actually exposes it, preserving primitive comparison and auto-derived
+  `PartialEq`/`Ord` as fallbacks. `!=` reuses an available `==` method and
+  inverts its result. The core `Comparable` mixin now requires one
+  `<=>(other: &Self) -> Int` primitive and supplies shared defaults for
+  `==`, `<`, `<=`, `>`, `>=`, and `between?`. Pin `965`; Ruby-parity
+  `language.md` section 3 / P1.11.
+- **Ruby keyword `and`, `or`, and `not` operators.** The lexer now reserves all
+  three spellings, and the parser gives `and`/`or` one shared left-associative
+  tier below assignment while `not` consumes assignment, `||`, comparisons,
+  and tighter operators but stops before keyword `and`/`or`. Dedicated
+  `BinOp::KeywordAnd` / `KeywordOr` and `UnaryOp::KeywordNot` variants preserve
+  the authored spelling through `ruxen fmt`. They use Ruxen's strict-Bool
+  semantics and the existing short-circuit branch CFG; non-Bool operands report
+  `E0731`. A Copy assignment nested directly in a logical operator produces its
+  assigned value, which makes `a = true and false` and the existing
+  `||=`/`&&=` desugars type-correct without creating a second owner for heap
+  values. Pin `964`; Ruby-parity `language.md` section 3 / P1.10.
+- **Block Tier-2 (block ADR, staged): four Ruby-block features.** (1) **Implicit
+  numbered params `_1`..`_9` and bare `it`.** A paramless block referencing them
+  synthesizes the matching closure parameters (`xs.map { _1 * 2 }`, `xs.map { it
+  * 2 }`); the highest index sets arity, and the desugar runs in `resolve` (not
+  the parser) so `ruxen fmt` preserves the authored surface. Pin `943`. (2)
+  **`&:symbol` to-proc.** A `&:name` argument in call position desugars to the
+  one-argument closure `{ |x| x.name }` and fills the call's block slot (new
+  `ExprKind::BlockPass`); a misplaced `&`-block arg is `E1124`. Pin `944`. (3)
+  **`next` as block-value.** Inside a block, `next expr` early-returns `expr` as
+  this iteration's block result (`bare next` yields `nil`); recognized only
+  inside a block (parser `closure_depth` gate), so `.next` field access is
+  untouched. Works in `yield`/`&block` bodies and real-`Array` combinators
+  (`map`/`select`/`find`/etc. over `Enumerable`). A `next` in a MIR-inlined block
+  (`each`, user Vec-wrappers) is rejected at lowering with a clear message rather
+  than miscompiled (it would be a non-local return, which the ADR rejects); use
+  a real-closure combinator or `for ... continue` there. Pin `945`. (4) **`&`
+  block-forwarding.** `g(&block)` (named) and `g(&)` (anonymous) forward the
+  enclosing function's received block to another call, for free-fn and method
+  targets. Pin `946`. A divergent all-`next` closure body (`map { |x| next x }`)
+  now takes its MIR return type from the typeck-inferred `Fn` return and emits
+  `Unreachable` for the diverging fall-through, so the Cranelift verifier is
+  satisfied. Pins: `tests/block_tier2.rs` (19), release-e2e `943`-`946`.
+- **DWARF line-number debug info for the LLVM backend (P0.14).** An unoptimized
+  (`-O0`), non-wasm `--backend=llvm` build now emits minimal DWARF: a
+  `DICompileUnit`, a `DISubprogram` per source-spanned function (at its `def`
+  line), and a `DILocation` on every instruction, so lldb/gdb can map a program
+  counter back to a source line and set breakpoints by function. MIR carries
+  source spans for the first time: `MirFunction::def_span` (function definition
+  line) and `BasicBlock::inst_spans` (per-instruction, kept index-aligned with
+  `instructions` via `push_inst`/`insert_inst`/`remove_inst`), populated during
+  HIR to MIR lowering from `Lowerer::current_span` at the `emit` choke point. The
+  emitter (`codegen/llvm/debug.rs`) sets the `Debug Info Version` / `Dwarf
+  Version` module flags LLVM requires to keep the metadata, and `finalize()`s
+  before verification. Gated on the existing `opt_level` debug/release signal, so
+  release/optimized and wasm builds are byte-identical to before, and the
+  Cranelift default backend is untouched. Scope is line info plus function scopes
+  ONLY; variable/type/lexical-block debug info and multi-file DWARF (one `DIFile`
+  today) are documented follow-ups, as is exact `inst_spans` alignment through
+  the scope-exit drop-elaboration path (synthesized drop/free instructions fall
+  back to the function line). Proven by `tests/llvm_debug_info.rs` (IR assertions
+  plus the `-O0` gate) and `tests/mir_debug_spans.rs` (lowering span population);
+  `llvm_backend` (19/19) and `wasm_codegen` (4/4) confirm vtable and wasm codegen
+  are unaffected.
+- **Autoload's unresolved-name detection is now structured, not text-scraped.**
+  `resolve` collects a `unresolved_names: Vec<String>` of the raw identifiers it
+  could not resolve (at the undefined-variable / function / type and `use`-path
+  sites) and threads it through `ResolveResult` and `TypeCheckResult`. The
+  autoload fixpoint (`module_loader::expand_autoloads`) matches its registrations
+  against that list by whole-name equality (`unresolved_names_match`), replacing
+  the previous `diagnostic_mentions_constant` scrape of `diagnostic.message`
+  text. This removes the coupling to diagnostic wording and cannot be fooled by
+  an unrelated error that merely mentions the constant's name as a substring.
+  Behavior is otherwise unchanged: the multi-round fixpoint + namespace-scoped
+  autoload tests stay green, and a new pin
+  (`unresolved_names_match_uses_name_equality_not_substring`) covers the matcher.
+  The per-round recompile (each iteration re-runs typeck) is inherent to the
+  fixpoint and left as a separate perf follow-up.
+- **Zero-copy `&String` borrow of a string literal.** An immutable borrow of a
+  string literal (`&"x"`) now lowers to the raw `.rodata` `const char*`
+  (`Ty::RawPtr(Char)`) directly, via the new `emit_raw_string_literal` helper in
+  the `unaryops.rs` Borrow arm, instead of heap-copying the literal through
+  `ruxen_string_from` into an owned `String` only to `Ref`-borrow it. A Ruxen
+  `String` is a bare NUL-terminated `char*`, so the `.rodata` pointer IS a valid
+  read-only `&String` (release-e2e `942` pins the ABI by reading a literal's
+  exact bytes and length through the borrow). The pointer is immortal and Copy,
+  so it is never freed: the borrow is zero-copy and cannot leak
+  (`drop_fixtures.rs::borrow_of_string_literal_is_zero_copy` asserts
+  `string_frees == 0`, `outstanding == 0`). Only the immutable borrow changes; a
+  `&var` of a literal and owned literal locals (`let s = "x"`) still heap-copy.
+  The whole release-e2e suite stays green. A bare literal passed to a FREE-FN
+  `&String` param (`f("x")`, `puts "x"`, no explicit `&`) is also zero-copy now,
+  gated by `user_callee_param_is_ref` at the `fn_call.rs` arg loop (pins:
+  `drop_fixtures.rs::bare_string_literal_arg_to_ref_param_is_zero_copy`,
+  release-e2e `947`). The same interception for method-call args
+  (`obj.m("x")`) is a scoped follow-up.
+- **`AsyncTcpStream.read_with_timeout` idle timer is persistent and re-armed in
+  place (Lever D.2).** Previously each `read_with_timeout` registered a FRESH
+  reactor timer on the first EAGAIN and deregistered it on Ready/drop; under
+  closed-loop keep-alive load the read EAGAINs before the next request arrives,
+  so that timer was armed then torn down every request (2 `kevent` syscalls on
+  macOS just for the deadline). The idle timer now lives on the `AsyncTcpStream`
+  (created once on the connection's first EAGAIN, torn down exactly once at
+  stream drop) and is re-armed in place each cycle via the new
+  `ruxen_reactor_rearm_timer` (macOS `EV_ADD` on the same ident; Linux
+  `timerfd_settime` on the same timerfd), turning 2 syscalls/request into 1 on
+  the hot path with identical timeout semantics. The future arms the stream's
+  timer exactly once per read cycle (a per-future `armed` guard), so the fired
+  bit survives to be observed rather than being cleared by a re-arm on the same
+  poll. `rearm_timer` restores `registered_count` when it re-arms a
+  previously-fired timer, keeping the park fast-path bookkeeping balanced.
+  Release-e2e `941` pins the re-arm path (a data read then a timeout read on one
+  connection). No measurable throughput/p99 delta on the macOS loopback
+  plaintext bench (machine-bound; the win is per-request syscall count, expected
+  to show on Linux / syscall-bound workloads).
+- **`AsyncTcpStream.read_with_timeout` arms its deadline timer lazily.** The
+  future now attempts the read BEFORE registering a reactor timer, and arms the
+  timer only when the read reports EAGAIN (a genuine wait). On a loaded
+  keep-alive connection the next request is usually already buffered, so the
+  read succeeds on the first poll and the fast path costs one `read(2)` and zero
+  `kevent(EVFILT_TIMER)` syscalls, instead of arming and immediately tearing
+  down a timer on every request. Timeout semantics are unchanged (a
+  never-readable fd still reaches the EAGAIN branch on its first poll and arms
+  the timer there). Measured on rondo's plaintext bench: kevent syscall time
+  down ~33%, throughput +1-4% (the loopback bench is otherwise machine-bound).
+
+### Added
+- **Trailing assignment splat `a, *rest = values`.** `MultiAssign` now records
+  a final splat target and preserves the `*` through AST, HIR, IDE traversal,
+  and `ruxen fmt`. A single Array RHS is evaluated once: prefix targets receive
+  indexed snapshots and `rest` receives a fresh tail Array. A comma-list RHS
+  (`a, *rest = 1, 2, 3`) snapshots every value and collects the remainder.
+  The splat target must be a pre-declared `var` whose type is `Array[T]`.
+  Element splitting is currently limited to Copy `T`; owned String/class
+  elements produce a clean type error until clone-aware lowering lands. MIR
+  frees the target's prior Array before rebinding it, and classifies
+  `ruxen_vec_skip` as a fresh allocation so the new tail is dropped normally.
+  Parser, formatter, typeck, runtime-ABI parity, Cranelift, and LLVM execution
+  are pinned by `.rx` fixtures and release-e2e case `963`.
+- **`case/when` and `case/in`.** New `case` and `then` keywords. `case/when` is
+  Ruby's `===` dispatch, desugared in the parser to an `if`/`elsif` chain
+  (`when v` → `subject == v`, `when a, b` → `subject == a || subject == b`,
+  `when lo..hi` → a range-membership test; `then` and newline both separate the
+  body). `case/in` is Ruby's pattern matching, desugared to the same `Match` AST
+  the existing `match` keyword produces (`else` becomes a wildcard arm), so
+  `match` remains a full alias. Both are parser-level desugars, so resolve /
+  typeck / MIR are unchanged. The subject in a `case/when` is re-evaluated per
+  branch (v1), and `ruxen fmt` renders the desugared `if`/`match` form; a
+  surface-preserving `Case` node is a follow-up. Pin `960`; `language.md` §6/§7.
+- **`<=>` three-way comparison (spaceship).** New `Spaceship` lexer token and
+  `BinOp::Cmp`. `a <=> b` returns `Int` (-1 / 0 / 1) for two Int, two Float, or
+  two String operands, lowering to `ruxen_int_cmp` / `ruxen_float_cmp` /
+  `ruxen_str_spaceship` (all normalized to -1/0/1). Sits at the comparison
+  precedence tier. Primitive behavior is pinned here; user-defined `<=>` and
+  `Comparable` defaults are pinned separately by case `965`. Pin `959`;
+  Ruby-parity `language.md` §3.
+- **Ternary conditional `cond ? a : b`.** Right-associative (`a ? b : c ? d : e`
+  parses as `a ? b : (c ? d : e)`), desugared in the parser to an `if`/`else`
+  expression. Disambiguated from the `?` try operator by whitespace adjacency:
+  an attached `result?` is the try operator, while a spaced `cond ? a : b` is a
+  ternary. A surface-preserving `Ternary` node so `ruxen fmt` keeps the `? :`
+  form (rather than expanding to `if`/`else`) is a follow-up. Pin `958`;
+  Ruby-parity `language.md` §3 / P0.5.
+- **Parallel assignment `a, b = 1, 2` (and simultaneous swap `a, b = b, a`).**
+  A dedicated `ExprKind::MultiAssign` / `HirExprKind::MultiAssign` node (kept
+  through to MIR so `ruxen fmt` renders the original surface). All right-hand
+  values are lowered into fresh temporaries before any target is written, so a
+  swap is simultaneous rather than sequential. Targets and values must be equal
+  in count (an arity mismatch is a parse error) and targets must be pre-declared
+  `var`s. MIR reuses one `store_value_into_target` helper (factored out of
+  single-`Assign` lowering) for every target kind (variable, field, index).
+  A parallel swap of two heap-owned bindings remains a follow-up. Pin `957`;
+  Ruby-parity `language.md` §2 / P0.3.
+- **`puts` / `print` accept any value (single-argument form).** `puts 42`,
+  `puts 3.14`, `puts true`, and `puts some_struct` now work without the
+  `"#{x}"` interpolation tax. When a `puts`/`eputs`/`print`/`println`/`eprintln`
+  call has a single non-String argument, typeck converts it through its
+  universal `to_s` (`puts x` becomes `puts x.to_s`). The conversion lands in the
+  HIR only, so the AST stays `puts x` and `ruxen fmt` is unaffected. A value
+  with no `to_s` still reports a clear error. Multi-arg `puts a, b` is a
+  follow-up. Pin `956`; Ruby-parity `language.md` §12 / P0.7.
+- **`||=` / `&&=` conditional assignment.** New `PipePipeEq` / `AmpAmpEq` lexer
+  tokens (assignment precedence). `a ||= b` desugars to `a || (a = b)` and
+  `a &&= b` to `a && (a = b)`, so the assign runs only when the value actually
+  changes (relies on the short-circuit fix above). Bool operands, since Ruxen is
+  strict-Bool; Option fallback now uses the `??` nil-coalescing operator
+  (`??=` is not yet available). Same parse-time-desugar `ruxen fmt` caveat as
+  `unless`/`until`. Pin `954`; Ruby-parity `language.md` §2 / P0.4.
+- **`unless` / `until` control flow + trailing statement modifiers.** Block
+  `unless COND … [else …] end` (desugars to `if !COND`) and `until COND … end`
+  (desugars to `while !COND`), plus the Ruby trailing modifiers `EXPR if COND` /
+  `EXPR unless COND` / `EXPR while COND` / `EXPR until COND`. A new `Until` lexer
+  keyword was added (`unless`/`when` already had tokens). Jump keywords stop
+  swallowing a trailing modifier as their value, so `return … unless c` is a
+  conditional return, not `return (unless c … end)` (via `at_statement_modifier`).
+  All four desugar in the parser to existing `if`/`while` HIR, so resolve /
+  typeck / MIR / codegen are unchanged. Pin `953`; Ruby-parity `language.md` §6 /
+  P0.1 and P0.2. Known follow-up: because the desugar happens at parse time, `ruxen
+  fmt` currently rewrites `unless c` to `if !c` and a modifier to its block form;
+  surface-preserving formatting needs dedicated AST nodes (tracked as a
+  follow-up).
+- **`std/base64`: Base64 encode/decode (Ruby `Base64` module parity).**
+  `Base64.strict_encode64` / `strict_decode64` / `urlsafe_encode64` /
+  `urlsafe_decode64` / `encode64` (MIME newlines) / `decode64`, over a small C
+  runtime. First burn-down item of the Ruby-parity effort (`docs/ruby-parity/`).
+  Pinned by release-e2e case `951` (known vectors `Man`->`TWFu`,
+  `hello`->`aGVsbG8=`, round-trip).
+- **`JSON.array_get(value, index) -> Option[Json]`.** Element access for JSON
+  arrays (a borrowed handle into the parent node, like `object_get`); `None` for
+  a non-array, null payload, or out-of-range index. Fills the gap that made it
+  impossible to iterate a decoded array (`array_len` existed but nothing read the
+  elements). Pinned by release-e2e case `950`; exercised end to end by the
+  data-apps demo (`quiver/examples/data_app` renders a list from a fetched JSON
+  array).
+- **`std/http`: a minimal blocking HTTP/1.1 client.** `Http.get(host, port,
+  path)` opens a `TcpStream`, sends a GET, reads the response until it has
+  `Content-Length` bytes (falling back to EOF when there is no length), and
+  returns an `HttpResponse` (`status` / `body` / `ok?`); decode the
+  body with `std/json`. This is the "call a backend API" primitive the data-apps
+  goal needs (`NORTH-STAR.md`): a pure-`.rx` package on `std/net`, registered in
+  the bootstrap + embed lists. It deliberately uses the SYNC `TcpStream`, not
+  async, because the async `block_on` client path silently no-ops without a
+  worker reactor (Q56). Pure parser + `HttpResponse.ok?` pinned by release-e2e
+  case `949`; the networked `Http.get` verified against a localhost server
+  (`status=200 ok=true`, JSON decoded).
+- **`Env.cpu_count`: logical CPU count for default pool/worker sizing.** A thin
+  `sysconf(_SC_NPROCESSORS_ONLN)` FFI returning the online logical processor
+  count (all P + E cores on Apple Silicon, online CPUs on Linux), clamped to a
+  minimum of 1. Lets servers auto-size their worker count to the machine the way
+  Go's `GOMAXPROCS` and nginx's `worker_processes auto` do. Release-e2e `939`
+  pins the invariant (`>= 1`).
+- **`Env.performance_cpu_count`: performance-core count for topology-aware,
+  latency-sensitive pool sizing.** On Apple Silicon it reads
+  `sysctlbyname("hw.perflevel0.logicalcpu")`, the fast performance (P) core
+  count; on homogeneous CPUs (Linux, Intel Macs) every core is "performance", so
+  it falls back to the full online logical count. Clamped to a minimum of 1. A
+  connection is pinned to its accepting worker and never migrates, so a worker
+  landing on a slow efficiency (E) core adds tail latency. Sizing the pool to the
+  P-cores keeps p99 low on heterogeneous chips (measured Go-class tail on an M4)
+  while staying a no-op on homogeneous CPUs. Rondo now defaults its worker count
+  to this. Adds a macOS-guarded `#include <sys/sysctl.h>` to `env.c`. Release-e2e
+  `940` pins the invariant (`>= 1`).
+- **Ruby-style module loading: `require` / `require_relative` / `autoload`;
+  files anywhere, not just `src/`.** The AOT loader follows the entry file's
+  require graph, deduplicates canonical paths, reports Ruby-like `LoadError`
+  diagnostics with searched locations, and expands autoload registrations at
+  unresolved-constant fixpoints. Projects without loading directives retain
+  the existing recursive `src/` discovery behavior, and incremental hashes now
+  cover every loaded file's canonical path and contents.
+- **Implicit main: top-level statements execute without `def main`.** The
+  shared compile/build front end now collects every top-level expression in
+  source order and moves it into a synthesized zero-argument, `nil`-returning
+  `main`; declarations stay hoisted and forward-visible. Existing explicit
+  `main` programs are unchanged, while mixing explicit `main` with loose
+  statements remains E0728. Release-e2e pins `933`–`935` cover script hello,
+  ordered assignment/function-call execution, and explicit-main compatibility.
+- **`AsyncTcpListener.bind_raw` / `from_fd`: portable shared-accept multi-core
+  serving.** macOS/BSD `SO_REUSEPORT` does not load-balance connections across
+  per-worker listening sockets (only Linux 3.9+ does), so a per-worker bind pins
+  all traffic to one core on those platforms. `bind_raw` binds one shared socket
+  and returns its raw fd (no reactor registration); each worker calls `from_fd`
+  to `dup` the fd onto its own per-thread reactor and accept. The kernel wakes
+  the parked workers and one wins each accept, spreading work across every core
+  on both platforms. Mirrors the existing `bind` / `stream_from_fd` void*-as-
+  class FFI ABI. Drives rondo from 130k to 207k RPS across multiple cores on
+  Apple M4 (loopback, co-located load generator; parity with Go net/http).
+
+### Fixed
+- **Review-pass fixes for this session's parity features.** (1) `puts`/`print`
+  of a value with no resolvable `to_s` (Array, Option, Set, tuple, a struct
+  without a Debug/Display derive) now reports a clean compile-time error again
+  instead of leaking a mangled `<Type>_to_s` symbol to the linker (the `to_s`
+  conversion is adopted only when it actually resolves to `String`). (2)
+  Parallel assignment of an owned heap object (Class/Struct/Enum) READ FROM A
+  PLACE (variable/field/index), including the swap `a, b = b, a`, is now a clear
+  compile error rather than a silent use-after-free; Copy types, `String`, and
+  fresh-allocation values remain allowed. (3) `(expr)?` (an attached try after a
+  parenthesized group, e.g. `(check())?`) parses as the try operator again
+  instead of being misread as a ternary (the grouping's span now covers its
+  parens). (4) A line ending in `<=>` now continues onto the next line, like
+  every other binary operator.
+- **Second review pass over the parallel-assignment guard and the `puts`
+  diagnostic.** (1) The owned-heap guard is now an allow-list of freshly-produced
+  values (a method/function call, a constructor, an enum-variant), not a
+  deny-list of the three place-read node kinds. The deny-list only inspected the
+  top-level `HirExprKind`, so an owned place read wrapped in any other node (a
+  ternary or `if`, a `match` arm, a `cast`) slipped through and still
+  double-freed; the allow-list rejects everything that is not provably fresh, so
+  a nested aliasing expression can no longer bypass it. (2) The guard now reports
+  a statement once instead of once per offending value, so a swap `a, b = b, a`
+  no longer prints the identical error twice. (3) The `puts`/`print` no-`to_s`
+  diagnostic no longer recommends `puts "#{expr}"`: that interpolation compiles
+  for the exact types that reach this error and prints a raw heap pointer, so the
+  message now tells the caller to build the String themselves (for a collection,
+  format its elements). Guarded by three typeck tests over `.rx` fixtures
+  (`multiassign_swap_owned_class`, `multiassign_ternary_alias_owned_class`,
+  `multiassign_fresh_alloc`) covering rejection, the ternary-aliasing gap, and
+  the allowed fresh-allocation case.
+- **Third review pass: the parallel-assignment guard no longer over-rejects a
+  wrapper of fresh values.** The allow-list from the second pass rejected every
+  owned value that was not a bare call or constructor, which wrongly caught a
+  ternary/`match` whose branches are all fresh constructors, a cast, and a
+  block-expression value.
+  All of those cannot alias a target and compiled-and-ran correctly before the
+  second pass, so rejecting them regressed valid code. The guard now calls a
+  recursive `multiassign_value_is_fresh` (typeck/infer/helpers.rs) that peels the
+  `if`/`match`/`cast`/block wrappers, requiring every producible value to be
+  fresh; a wrapper of place reads (the aliasing case the second pass fixed) is
+  still rejected. Operator expressions remain conservatively rejected for owned
+  aggregate results because a user overload can forward one of the assignment
+  targets. So `a, b = (flag ? Box.new(1) : Box.new(2)), Box.new(3)` compiles
+  again while `a, b = (flag ? a : b), Box.new(9)` and `a, b = a + b, Box.new(9)`
+  are still clean errors. Pin `962` (compile-and-run) plus typeck tests over the
+  `multiassign_ternary_fresh` and `multiassign_operator_alias_owned_class`
+  fixtures.
+- **`&&` / `||` now short-circuit (were evaluating both operands eagerly).**
+  The MIR lowering emitted an eager `MirInst::BinOp` for logical `&&`/`||`, so
+  the right operand always ran: `true || f()` still called `f()`, and, worse,
+  `ptr != nil && ptr.field` evaluated `ptr.field` even when `ptr` was nil. User
+  `&&`/`||` now lower to a branch CFG (mirroring `if`): the RHS is evaluated only
+  on the path where the LHS did not already decide the result. Struct-derive
+  `PartialEq`/`Ord` combine their field comparisons via directly-emitted
+  `MirInst::BinOp { And }` (already-computed Bools), which is unaffected. Pin
+  `955`. Surfaced while implementing `||=`.
+- **`**` power operator (was a silent miscompile).** `2 ** 8` compiled to `16`
+  (the lexer had no `**` token, so `**` lexed as `*` then a prefix deref `*`,
+  making `2 ** 8` parse as `2 * (*8)`). Added a `StarStar` lexer token and a
+  `BinOp::Pow` AST/MIR node. `**` is right-associative and binds tighter than
+  unary minus and `* / %` (`2 ** 3 ** 2 == 512`, `-2 ** 2 == -4`,
+  `2 * 3 ** 2 == 18`), matching Ruby. `Int ** Int → Int` lowers to a new
+  `ruxen_int_pow` runtime helper (exponentiation by squaring; a negative
+  exponent truncates toward zero as Ruxen has no Rational); any float operand
+  makes the result `Float` via `ruxen_float_pow` (`__builtin_pow`, with the int
+  operand widened to `f64`). The formatter learned the operator's symbol and
+  right-associative re-parenthesisation. Pin `952`.
+- **Q54: wasm string interpolation no longer traps on a fmt ABI mismatch.** On
+  the `wasm32-unknown-unknown` target the fmt runtime helpers
+  `ruxen_fmt_formatter_write_str`/`_write_char` returned a bare `int64_t` tag,
+  while the compiler derives their `.rx` `-> Result[nil, FmtError]` return as a
+  pointer (i32 on wasm32, i64 native). On 64-bit the two widths coincide, so the
+  mismatch was invisible; on wasm32 `wasm-ld` linked the i32 call-site against the
+  i64 definition through a generated `signature_mismatch:` `unreachable` stub, and
+  the first interpolation call trapped (`RuntimeError: unreachable`), breaking
+  every wasm program that interpolates a string (canvas's web quiver-counter). The
+  two helpers now return pointer-width `void *` (`NULL` = Ok tag, `(void *)1` =
+  FmtError tag), the convention the other 28 of 30 `Result`/`Option`-returning
+  runtime helpers already follow (`ruxen_file_open`, `ruxen_vec_pop`,
+  `ruxen_stdout_write_str`, … all return `void *`). The fix is confined to
+  `library/std/fmt/runtime/fmt.c` with zero compiler-code changes, so the native
+  backend is byte-identical: the ABI-classification parity oracle stays green and
+  the full native release-e2e passes. The interpolation lowerer discards the tag,
+  so no consumer sees the representation change. Reproducible gate: `llvm-nm
+  repro.wasm | grep signature_mismatch` is now empty and the exported `render()`
+  returns 0 without trapping under Node. See `docs/dev/gui-stack-v1-issues.md`
+  §Q54.
+- **Q55: `x = f(x)` by-value rebind no longer corrupts `x` on the native
+  backend.** Rebinding a drop-bearing `var` from a function that takes it by
+  value and returns it (`def wrap(p) -> Payload; var r = p; r; end`) lowers to a
+  pre-reassign `ruxen_dealloc(x)` before `x = <call result>`; when the callee
+  hands back the same object, that dealloc frees what the assign then re-reads, a
+  use-after-free (the repro printed `FAIL n=3` for `222`). The post-lowering
+  fixup `elide_returns_self_realloc` removes exactly that dealloc, but it only
+  recognized callees returning `Return(Some(Use(params[0])))` literally, so it
+  missed a returned local traced from a parameter through `Move`/`Assign`/`Copy`,
+  and missed by-value args at any parameter index other than 0. Detection is now
+  a `name -> returned-param-index` map that traces each returning block's local
+  back to its parameter index (all returning blocks must agree on one index),
+  and the elide fires only when the reassigned local was passed at exactly the
+  position the callee returns (`args[k] == Use(x)`), which is stricter than the
+  prior any-arg-aliases check, so it also closes a latent leak. Indirect (closure)
+  dispatch keeps the documented bounded-leak fallback; the receiver-builder form
+  `r = r.with_status(201)` (returns `self`, index 0) stays covered. Pin case
+  `tests/release-e2e/cases/948_by_value_rebind_no_uaf.rx`; rondo W24.
+- **Q55b: the Q55 returned-param detection no longer leaks on a conditional
+  return.** The Q55 detection traced provenance with a linear last-writer walk
+  over the block vector, not a CFG meet-over-paths, so a function that returns a
+  parameter on one branch and a fresh object on another (`if cond; Foo.new;
+  else; a; end`) was misclassified as always returning its parameter; a
+  `x = pick(x, cond)` rebind then elided a needed `dealloc(x)` and leaked the old
+  object on the fresh branch (memory-safe, never a UAF). Replaced the linear walk
+  with a forward dataflow over the CFG (`block_successors` + `transfer_param_prov`
+  in `drops.rs`) that meets per-local provenance at merges by intersection with
+  value agreement (a local survives only when every predecessor agrees on the
+  same parameter index), iterated to a fixpoint. The conditional-return merge now
+  drops the local (leak fixed, `pick`'s dealloc restored), while a single-path
+  `var r = fresh; r = a; r` still resolves to its parameter (no UAF
+  false-negative). release-e2e + parity + drop_fixtures green.
+- **Q53: closure interpolation preserves declared `String` call results.**
+  Q50's removal of the inferred-method name allowlist exposed abstract `.each`
+  parameters whose unresolved call result stayed `Infer`/`TypeParam`; Display
+  then formatted the valid `char*` with `Int_fmt`. Inlined Array closures and
+  for loops now derive bindings from concrete MIR collection types, method
+  lowering selects callees from those refined receivers, and call destinations
+  use the selected declaration's return type with concrete class-generic
+  substitution. This is type/decl-driven and keeps Q50's loud invalid-type
+  guard. Release-e2e `938` covers an unrelated `caption -> String` method,
+  existing case `101` covers a generic `&String` return, and the 19-test LLVM
+  differential including the flagship sample now agrees with Cranelift.
+- **Q50: interpolated calls that return `String` no longer print their raw
+  pointer.** Type checking omitted inline struct/enum methods from the direct
+  method registry, so an included mixin's unannotated required-method
+  signature (`Unit`) could shadow an enum's concrete `-> String` method. MIR
+  then routed the returned `char*` through `Int_fmt`. Struct and enum methods
+  are now registered symmetrically with class methods; MIR also recovers a
+  stale call temporary from the resolved method's declared return type before
+  Display dispatch, and invalid/error types no longer use the integer
+  fallback. The method-name string heuristic was removed. Release-e2e cases
+  `94_custom_error_enum` and `931_interpolation_method_string` pin the fix.
+- **Q52: self-freeing captured handles no longer double-free at closure
+  teardown.** The blockdrop closure destructor always appended a type-directed
+  `ruxen_dealloc` after a captured class's user drop. That is correct for normal
+  Ruxen classes and cleanup-only FFI drops, but `Mutex`, `SharedSync`, atomics,
+  and channel endpoints free or release their own handle storage; captured
+  `Mutex`/`SharedSync` therefore deterministically trapped after an otherwise
+  correct match-arm `MutexGuard` drop. Runtime ABI metadata now identifies
+  storage-consuming drop callees, and both scope and closure drop elaboration
+  suppress only the redundant outer free. The guard still runs
+  `ruxen_mutex_guard_drop` followed by its one spine deallocation in the taken
+  arm. Release-e2e 926/927 now run, and pin 937 invokes the same closure twice
+  to prove the first guard actually unlocks.
+- **Q51: returned Enumerable results survive closure cleanup.** Set and Hash
+  combinators passed a real closure to `each`; the synthesized closure destructor
+  freed a directly captured result Array even when that same enclosing local was
+  the combinator's return value. MIR now records owned capture slots with their
+  source locals and clears slots that flow into a direct or aggregate return
+  before running closure cleanup. The returned collection remains owned by the
+  caller, while the captures block, closure pair, and non-escaping fields retain
+  their existing cleanup. Release-e2e 612/613 confirm `select` sizes, and pin 936
+  covers `select`, `reject`, `map`, and `partition` across Array, Set, and Hash.
+- **Q49: branch-scoped owned temporaries are dropped only on initialized
+  paths.** MIR drop elaboration no longer hoists every owned local to a shared
+  return block, where LLVM could pass an uninitialized stack value to
+  `ruxen_string_free`, `ruxen_dealloc`, or user drop glue. Acyclic arm-local
+  values now drop before their arm's `Goto`; values spanning a wider CFG use
+  definite-initialization flags at returns. This removes the optimized-build
+  SIGABRT while retaining reverse declaration order, type-directed collection
+  frees, user destructors, closure cleanup, and the existing ownership gates.
+  Release-e2e pin `930` covers bare owned strings in both `if` and `match` arms.
+- **Q17b: generic methods over mixin bounds now monomorphize per concrete
+  implementor.** Resolved calls to a generic method declared inside a class,
+  struct, or enum recover the method's concrete type arguments, redirect to a
+  specialized self-bearing body such as
+  `Frame_measure_scaled__mono__Wide`, and suppress the abstract body that could
+  emit a mixin-bound placeholder. Unsupported generic-through-generic method
+  residuals now stop with a clear lowering error. Release-e2e pin `474` runs
+  two distinct implementors; focused pins also cover struct and enum owners.
+- **Closure/block capture drop elaboration.** Heap captures owned by a `{ }` or
+  `do…end` closure are no longer leaked when the closure dies. MIR now records
+  the closure pair's destructor, propagates it along ownership-preserving local
+  moves, and synthesizes reverse-order, NULL-guarded capture cleanup followed by
+  freeing the captures block and pair. Only direct by-value captures proven not
+  to escape are field-dropped; borrowed, returned, aggregate-stored, consuming-
+  call, and nested re-capture shapes stay conservatively undropped, preventing a
+  leak fix from becoming a double-free/UAF. The allocation tracker proves
+  `allocs == frees == 3` for both brace and `do…end` forms; a moved-out-capture
+  pin proves only the pair and captures block are freed. Release-e2e pin 475.
+- **Q48: LLVM resolves FFI method aliases to their linked C symbols.** LLVM's
+  lazy call resolver ignored MIR FFI declarations, so synthesized calls such as
+  `Formatter_new` became undefined mangled externs even though Pass 0 had
+  declared `ruxen_fmt_formatter_new`. The LLVM backend now maps both Ruxen-side
+  and lib-qualified names to the existing C-symbol declaration, matching
+  Cranelift's two-key import lookup. Optimized String/interpolation binaries now
+  link against `libruxenrt.a`; the obsolete wasm-only Formatter wrappers are
+  removed.
+- **Q47: dyn call results retain their declared mixin guarantees.** A call to a
+  closure returning `any Future` produced an existential value that the bound
+  checker immediately re-tested as if it were a concrete type named
+  `any Future`. The mixin registry had no concrete method table under that
+  synthetic name, so it reported that `any Future` did not satisfy `Future`;
+  bootstrap bodies made the false negative appear in every compilation. Opaque
+  `some Mixin` and existential `any Mixin` values now satisfy the exact bounds
+  they carry in their declared dispatch mode (including generic arguments).
+  Release-e2e pin `473` combines the bootstrap-shaped closure call with an
+  unrelated stored `any Future` poll and runs successfully; the focused typeck
+  regression pins the same ordering.
+- **Ruby `alias` follow-ups.** Operator aliases now dispatch through the existing
+  canonical method-name map for `+ - * / % & | ^ << >>`, unary `!`/`-@`, and
+  `[]`/`[]=`; unsupported unary `+@` remains a hard E1123. Aliases may also target
+  a method inherited solely from an included mixin's default body, while a type's
+  own implementation keeps precedence and an absent target remains E1120.
+  Release-e2e pins 470–472 cover shift, index read/write, and default dispatch.
+- **Q41: LLVM release builds now support runtime-dispatch mixins.** The LLVM
+  backend now emits internal constant vtable and class-info globals, lowers
+  MIR `DataAddr` operands to those globals with LLVM 18 opaque pointers, and
+  preserves their function/global relocations through optimized object
+  emission. This unblocks optimized builds of async projects that pull in
+  `TimeSleepFuture`.
+- **Q46: paren-less no-argument constructors now initialize runtime-mixin
+  metadata.** `Class.new` now writes the class-info header after allocation,
+  matching `Class.new()`, so moving the value into an `any Mixin` field and
+  dispatching through that field no longer dereferences a null header.
+- **Q35 — struct/enum `include Mixin` now satisfies generic mixin bounds.**
+  Type checking collected nominal in-body mixin impls only from classes; the
+  `HirItem::Struct` and `HirItem::Enum` collector arms registered derives but
+  skipped `impl_blocks`, so calls through `T: Mixin` failed with E1015 even
+  though direct methods and MIR implementor collection already worked. The
+  nominal satisfaction registry now records value-type includes (including
+  generic include arguments) symmetrically. Release-e2e pin `659` compiles and
+  runs the struct/Q17 free-function path (`one=21`); focused pins keep a
+  non-including struct on E1015 and cover enum symmetry.
+- **Q36: parenthesized multi-reference `yield` forwarding.**
+  `yield(&var app.ui, &var app.root)` was parsed as one tuple argument, so the
+  synthetic `__block` closure received one ABI slot instead of two and mutated
+  an empty/wrong target. Parenthesized `yield(...)` now shares the normal
+  call-argument parser, preserving every argument slot. Release-e2e pin `929`
+  proves both referenced fields mutate (`ui=2 root=1`); the block-semantics
+  suite also pins untyped explicit-`&block` parameter inference.
+- **Concurrency LOW-finding cleanup (post-§4.6 review).** (1) `RetryFuture.init`
+  no longer leaks its placeholder backoff `TimeSleepFuture`: the placeholder is
+  marked a live child (`has_backoff = 1`) and torn down before the first real
+  backoff overwrites it — guard-skipped after a fired backoff, so no double-free
+  (Codex-proved across all paths). (2) New pin `overflow_tag_stability.rs` snapshots
+  the `Overflow` enum ↔ `RUXEN_OVERFLOW_*` tag contract (Suspend=0/DropOldest=1/
+  DropNewest=2). (3) `schedule.c` / `test_clock.c` comments widened to match
+  reality (all C-side Poll blocks leak Pending+Ready; the TestClock seam is a
+  cross-TU call, not an inlined TLS read). (4) The async loop builder's
+  completed-`__sub_i` leak is documented as the intentional completed-future-leak
+  discipline (a drop-before-overwrite "fix" would UAF a moved-out heap payload, à
+  la the Race winner) — reclassified as a v2 typed-completion-drop item.
+
+### Added
+- **Retry / `Schedule` (concurrency §4.6, Feature #6).** A composable IMMUTABLE
+  retry/backoff policy plus SYNC and ASYNC drivers — pure `.rx` over closures +
+  `Duration` + `Rand` + `Async.sleep` + `include Future`/`def drop`, with ONE
+  thin C poll-step (no new compiler machinery).
+  - **`Schedule` value (immutable builder):** `recurs(n)` / `exponential(base)`
+    constructors; `.max_attempts(n)` / `.max_delay(d)` / `.jittered` /
+    `.while_input { |e| … }` / `.and_then(next)` combinators each return a NEW
+    `Schedule` (one field changed). `delay_ns_for` is overflow-SAFE (saturates
+    the exponential doubling before it can wrap i64 negative — Codex high);
+    `actual_delay_ns` applies full-jitter via `Rand.random_u64` (uniform in
+    `[0, base]`). v1 SUBSET: no union/intersection, no repeat-on-success;
+    `and_then` is attempt-budget concatenation keeping self's policy (the
+    phase-switching ZIO algebra is out of v1, documented honestly). Int channel.
+  - **Sync driver:** `Schedule#run do … end` over a `Result[Int, Int]`-returning
+    block — re-invokes per attempt (`yield`), sleeps the backoff via
+    `Thread.sleep`, honours the budget + predicate (pin 444).
+  - **Async driver:** `Async.retry(sched, block) -> RetryFuture` — a hand-written
+    poll STATE MACHINE (NOT an `.await`-in-loop, which is `segment_cfg`-gated).
+    Each attempt is a FRESH future from the `Fn` block; between failing attempts
+    it PARKS on a child `TimeSleepFuture` (the backoff) driven by the reactor —
+    so backoff timing is TestClock-virtualizable (the killer pin 445:
+    `exponential(50ms).max_attempts(5)` advanced through 50/100/200ms backoffs,
+    no real sleep). The block returns the attempt future as a raw `Int` ptr (the
+    `Task.spawn_raw`/`Race` value ABI) — the Int channel remains in place for
+    compatibility with pins `445`–`449`, although the `Fn[() -> any Future]`
+    satisfaction bug is now fixed as Q47. The inner attempt is polled via the C
+    step
+    `ruxen_retry_poll_inner` (a thin wrapper over the EXISTING
+    `Future_dynamic_poll`, mirroring `ruxen_race_step`) since a dyn `any Future`'s
+    `poll -> Poll[Self.Output]` has an indeterminate Output and can't be polled
+    at the `.rx` level. `while_input` short-circuits the async retry (pin 447);
+    `and_then` extends the async attempt budget (pin 448); `jittered` keeps the
+    backoff within `[0, base]` (pin 449).
+  - **Drop correctness (§4.6 story):** `RetryFuture#drop` drops whichever child
+    is live — the in-flight backoff timer (deregisters its reactor slot) AND/OR
+    the current attempt — via `Drop_dynamic_drop`, so a cancelled retry tears
+    down its parked backoff deterministically (pin 446: drop-mid-backoff returns
+    `registered_count` 1→0). A COMPLETED attempt (one whose `poll` returned
+    Ready) is CONSUMED, not dropped — `self.inner` is zeroed and its block leaks,
+    matching the established Race-winner / scheduler-pump completed-future-leak
+    discipline (Codex blocker fix). A FIRED backoff timer is deregistered the
+    moment the machine leaves the backoff phase, before the field is overwritten,
+    so no reactor slot leaks across retries (Codex high fix; pin 445 asserts
+    `slots_after=0`).
+  - C surface: `library/std/future/runtime/schedule.c` —
+    `ruxen_retry_poll_inner`/`ruxen_retry_inner_value` (the dyn-poll step) +
+    `ruxen_retry_drop_child`/`ruxen_retry_drop_inner` (child teardown). Pins
+    `444`–`449`. NEW `src/schedule.rx` in `BOOTSTRAP_FILES`/embedded list.
+- **Deterministic virtual `TestClock` (concurrency §4.7, Feature #7).** A
+  `--test`-style mode where the per-thread reactor swaps its real OS timer for an
+  in-memory virtual clock + ordered timer queue, so timeouts / retries /
+  `Async.sleep` resolve INSTANTLY and deterministically in a test — no real
+  sleeps. **NO compiler change** (the only `.rs` edit is the bootstrap-embedded
+  sibling registration); pure C-runtime seam (new
+  `library/std/future/runtime/test_clock.c` + edits to `time.c`/`reactor.c`) + a
+  `.rx` namespace/guard class (`library/std/future/src/test_clock.rx`).
+  - **Surface:** `TestClock.install` (anchors virtual-now at 0, flips the thread
+    virtual, returns a guard) · `TestClock.advance(d)` (jump forward, fire due
+    timers + wake their tasks) · `TestClock.advance_to_next` (step to the next
+    pending deadline, returning the ns advanced, or -1) · `TestClock.set(d)`
+    (absolute jump; never rewinds) · `TestClock.uninstall` (restore the real
+    clock). The killer property (pin 437): a 60-SECOND `Async.sleep` parks, then
+    `advance(60s)` fires it ready — in 0.85s, no real sleep.
+  - **Which time seams are virtual (spec §4.7 Correction 1, verified against
+    source):** BOTH the async sleep deadline (`ruxen_time_now_ns`, read by
+    `TimeSleepFuture`) AND sync `Instant.now`/`Instant.elapsed` (which sample
+    `clock_gettime` INDEPENDENTLY of `ruxen_time_now_ns`) route their real sample
+    through the TestClock seam — so a test sees virtual time on both (pin 439:
+    `Instant.elapsed` reports the virtual 300s after `advance(300s)` with ~0 real
+    time). Wall-clock `Time.unix_ns` (REALTIME) is NOT virtualized.
+  - **Mechanism:** in virtual mode `register_timer` records the timer's absolute
+    virtual deadline in its slot WITHOUT arming a real timerfd/kevent (same
+    ident-handle ABI); `ruxen_reactor_fire_due_timers(now)` marks fired + wakes
+    tasks for due virtual timers; `check_fired`/`deregister` have a virtual-slot
+    branch (no OS ops); `park_current` does a non-blocking OS poll (so real fd
+    readiness still surfaces — the HYBRID case, only the timer+clock seam is
+    virtual) then returns. The clock seam `ruxen_test_clock_now_ns(real)` is a
+    single thread-local read + branch off-test (zero behaviour change — pins
+    553/554/555/725 real-time still pass).
+  - **v1 limitations (documented):** single-thread (the cell is thread-local —
+    install the clock on the thread driving `block_on`); the install GUARD's
+    `def drop` is the intended RAII restore but a `TestClock.install` result local
+    is tainted out of drop-elaboration today (the Scope/Queue/Stream drop-rooting
+    limit), so v1 tests call `TestClock.uninstall` EXPLICITLY (the
+    `Scope.cancel_remaining` precedent; `def drop` stays a belt-and-braces net).
+    install/uninstall are NESTING-AWARE (depth-counted).
+  - **Codex review (rule 44):** fixed a BLOCKER — `deregister` had no virtual
+    branch, so a fired virtual timer's drop would (Linux) `close((int)ident)` an
+    arbitrary fd and (both) double-decrement `registered_count`, stranding
+    `park_current`'s fast-path; now a virtual-slot branch clears the slot with no
+    OS ops + decrements only if not-already-fired (proven by pin 442, which fails
+    with the fix reverted). Fixed a MEDIUM — nested `install` re-anchored / inner
+    `uninstall` killed the outer clock; now depth-counted (proven by pin 443).
+    Parked LOW: the clock seam is a cross-TU call, not a literal inlined
+    thread-local read (behaviourally transparent; LTO/`static inline` would
+    close it). Pins: `437_testclock_advance_fires_sleep.rx`,
+    `438_testclock_advance_to_next_set.rx`, `439_testclock_sync_instant.rx`,
+    `440_testclock_set_absolute.rx`, `441_testclock_guard_restore.rx`,
+    `442_testclock_deregister_no_strand.rx`, `443_testclock_nested_install.rx`.
+- **Async `Stream` (concurrency §4.5, Feature #5).** A pull-based, backpressured
+  async stream — the async analogue of `Enumerable[T]`. New stdlib
+  `library/std/future/src/stream.rx` + a tiny `library/std/future/runtime/stream.c`
+  (resource helper for the drop-on-cancel pin).
+  - **`mixin Stream dispatch runtime`** over ONE required primitive
+    `def var poll_next(cx) -> Poll[Option[Int]]` (`Some(v)` = next element, `nil`
+    = end, `Pending` = parked), with `for_each`/`count`/`sum` as DEFAULT BODIES
+    built on `poll_next` — exactly how `Enumerable[T]` is defined over `each`.
+    `poll_next` dispatches through the runtime vtable (the `Future` mechanism);
+    this is the first `dispatch runtime` mixin that ALSO carries default-body
+    methods, and it lowers cleanly. Backpressure is intrinsic to pull: the
+    consumer drives `poll_next`, so upstream is polled only on demand.
+  - **`for_each` is a SYNC pump driver** (builds a `Context`, pumps `poll_next`,
+    parks on `Pending` via `Scope.pump_or_park`, stops on `Ready(nil)`) — NOT an
+    `async def` and NOT `.await`-in-loop (both gated), the same hand-pump shape as
+    `block_on` / `Scope.collect`. So the v1 consumer driver is
+    `stream.for_each do |x| … end` from SYNC code, NOT the spec sketch's
+    `for x in stream` (which needs method-level async lowering — v2).
+  - **Adapters `MapStream`/`FilterStream`/`TakeStream`** — each `include`s
+    `Stream`, OWNS its inner stream by value as an `any Stream` (dyn-mixin) field,
+    and implements `poll_next` by polling the inner via the runtime vtable and
+    transforming; chains compose (`take(filter(map(src)))`) and `take` stops
+    pulling the inner once its quota is met (pull backpressure). Each adapter is
+    FUSED (a `done` latch — once the inner returns `nil`, later `poll_next`s
+    return `nil` without re-polling, so a non-fused inner can't leak past end).
+    v1 adapters are constructed DIRECTLY (`MapStream.new(src, f)`), NOT via a
+    fluent `src.map(f)` (that needs by-move-`self`, which `&var self` method
+    bodies can't express — v2).
+  - **Leak-free drop-on-cancel:** a source stream owns its resource (reactor
+    registration / `state_ptr`) and releases it in `def drop` when dropped
+    mid-stream (consumer stops pulling). Pinned via a borrow-driver
+    (`&var stream`) drive then scope-exit drop — fires the source `def drop`
+    exactly once.
+  - **v1 limitations (documented):** Int element channel (`Poll[Option[Int]]`,
+    the Task/Race/Scope/Queue convention; typed `Stream[T]` deferred);
+    single-consumer pull streams; NOT concurrent stages (`mapPar`/`merge`) or
+    reactive-streams interop (v2). Drop-rooting taint: calling a `&var self`
+    mixin method (`src.for_each`) directly on a local taints it out of
+    drop-elaboration (suppresses its scope-exit drop) — the borrow-driver path
+    drops correctly; same drop-rooting follow-up as Scope/Queue.
+  - **Leak-free adapter CHAINS (Increment 4):** dropping an adapter chain drops
+    EVERY stage, each running its own `def drop` (spec §4.5's headline guarantee).
+    The §4.1 narrow Drop-vtable gate (`mir/lower/mod.rs`, was `Future`-only) is
+    WIDENED to `Future OR Stream`, so a `Stream` class gets a Drop vtable slot at
+    the SAME uniform class_info slot (each has one runtime-dispatch mixin → Drop@1;
+    the singleton-slot assert + the single `Drop_dynamic_drop` helper still hold —
+    pinned by `stream_class_with_drop_gets_drop_vtable_slot` in `mixin_vtables.rs`,
+    a layout-stability pin). Each adapter's `def drop` runs its inner `any Stream`'s
+    `def drop` via `ruxen_stream_drop_inner` → `Drop_dynamic_drop(inner)` + free,
+    so `TakeStream(MapStream(ResourceSource))` frees the source's resource. Pin
+    `436_stream_chain_drop.rx` proves the source's `def drop` fires EXACTLY ONCE
+    (a process-wide live-count guard reads 0 after — no leak, no double-drop). The
+    non-async layout is untouched (a plain droppable class still has no header).
+  - **Codex review (rule 44):** Inc1 fixed two highs — `for_each` now pumps the
+    scheduler on `Pending` (`Scope.pump_or_park`, was a bare `Thread.yield_now`)
+    so a TASK-backed source makes progress (pinned by 430, would spin without
+    it); and the misleading explicit `cx.drop` was removed (it didn't fire and
+    masked a bounded per-drive `Context` leak, now documented). Inc2 fixed a
+    medium — adapters are now FUSED (pinned by 435). Inc4 (the gate widening, an
+    ABI/layout change) — Codex VALIDATED no double-drop (moved-in sources/adapters
+    are tainted out of scope-exit drop), the `__weak Drop_dynamic_drop` guard, and
+    no non-async layout regression; one verified low (a stale C comment) fixed.
+    KNOWN sharp edge (pre-existing, reported): a class that `include`s BOTH `Future`
+    AND `Stream` (semantically incoherent) trips the slot-uniformity assert (a loud
+    compiler panic, not a miscompile) — a proper diagnostic for it is a separate
+    maintainer call. Pins: `429_stream_source_drain.rx`,
+    `430_stream_task_backed_pump.rx`, `431_stream_map.rx`, `432_stream_filter.rx`,
+    `433_stream_take_chain.rx`, `434_stream_drop_on_cancel.rx`,
+    `435_stream_adapter_fuse.rx`, `436_stream_chain_drop.rx`.
+- **Async backpressured `Queue` (concurrency §4.4, Feature #4).** A bounded,
+  reactor-aware queue split into `AsyncSender`/`AsyncReceiver` ends (mirrors the
+  sync `Sender`/`Receiver` split so the borrow checker tracks producer/consumer
+  separately). `send`/`recv` PARK THE TASK via the reactor — never block the OS
+  thread (the fatal flaw of the sync MPSC `Receiver.recv` in a thread-per-core
+  model). New stdlib `library/std/future/src/queue.rx` + a C control block +
+  step machines in `library/std/future/runtime/queue.c`; reuses the per-op
+  future shape (`AsyncReadWithTimeoutFuture`), the `Future` mixin, and the
+  reactor wake path (`ruxen_waker_wake` via the parked op's `cx` waker). NO new
+  reactor primitive.
+  - **Surface:** `Queue.bounded(capacity, overflow)` returns a `QueueEnds`
+    handle; pull the typed `sender`/`receiver` ends off it (a handle, not the
+    spec's `let (tx, rx) = ...` tuple — class-typed tuple destructuring doesn't
+    propagate element types today, a separate typeck gap). Capacity MANDATORY;
+    **no unbounded constructor** (Go's discipline). `AsyncSender.share` makes
+    additional producers (named `share`, not `clone` — `clone` is the synthesised
+    field-copy method).
+  - **Overflow policy** `enum Overflow { Suspend; DropOldest; DropNewest }` (the
+    ZIO taxonomy: backpressure / sliding / dropping). The no-payload enum crosses
+    to C as a heap pointer whose int32 tag at offset 0 the constructor reads (the
+    `Shutdown` enum ABI), tag-pinned to `RUXEN_OVERFLOW_*`; an unknown/null tag
+    panics. `send`/`recv` resolve `Result[Int, QueueError]` (v1 Int element
+    channel, the established Task/Race/Scope convention).
+  - **Close→Err semantics:** dropping the last `AsyncSender` marks send-closed so
+    a `recv` on a drained queue resolves `Err(QueueClosed)` (closes Go's
+    abandoned-receiver leak); dropping `AsyncReceiver` marks recv-closed so a
+    `Suspend`-`send` resolves `Err(QueueClosed)` (forgotten-sender leak). The
+    control block is refcounted by BOTH ends, freed only when both reach 0. End
+    `def drop`s are FFI-alias (`ruxen_async_{sender,receiver}_end_drop`), matching
+    the `Sender`/`File` stdlib precedent.
+  - **v1 limitations (documented, not hidden):** SINGLE-REACTOR (cross-core wake
+    — an `AsyncSender` on core A waking an `AsyncReceiver` on core B — is the
+    spec's largest unknown, §4.4 risk 3 / §6, deferred to v2; refcounts are plain
+    int64, not atomic, for the same reason). SINGLE in-flight parked waiter per
+    direction (single-consumer recv; one parked `Suspend`-sender — a second
+    blocking producer would strand the first; a waiter list is the v2 fix).
+    SPAWNED multi-await producers don't self-reschedule (a pre-existing
+    async-lowering limit — a `block_on` ROOT re-polls every iteration so a
+    multi-await root works; pins use single-send producer tasks + a multi-recv
+    consumer root). Pins 427/428 prove the close→Err CODEPATH (the close trigger
+    is called directly — a stdlib-class END local from a method/constructor result
+    is tainted out of drop-elaboration, the same drop-rooting limit Scope worked
+    around; full leak-free ownership cleanup awaits that follow-up).
+  - **Codex review (rule 44):** Inc1 fixed a cancel-while-parked waker UAF
+    (the op future now records its registered waker and clears the slot in `def
+    drop`), a `QueueEnds` duplicate-end UAF (consuming `sender`/`receiver`
+    accessors that zero the founding ptr + panic on re-take), and a capacity
+    overflow guard; Inc2 fixed the overflow-tag-from-pointer ABI (it was reading a
+    bare i64) and made an unknown/null tag panic. Pins:
+    `423_queue_send_recv_basic.rx`, `424_queue_send_backpressure.rx`,
+    `425_queue_overflow_drop_oldest.rx`, `426_queue_overflow_drop_newest.rx`,
+    `427_queue_close_sender_drop.rx`, `428_queue_close_receiver_drop.rx`.
+- **General async `Race` combinator (concurrency §4.3, Feature #3).** The first
+  arm future to complete wins; ALL losers are deterministically cancelled (each
+  loser's `def drop` runs — reactor deregister / fd close / free) BEFORE the
+  winner's value is returned, reusing the §4.1 `Drop_dynamic_drop` path. New
+  stdlib `library/std/future/src/race.rx` + a C step machine in `scheduler.c`
+  (`ruxen_race_*`, mirroring `AsyncReadWithTimeoutFuture`); NO new reactor
+  primitive (both arms share the per-thread reactor, so one `park_current` wakes
+  on either). Surface: `Race.of(a, b)` (2-arm) and `Race.any_of(arr)` (N-way over
+  an `Array[Int]`) — arms are FUTURE VALUES (i64 heap pointers, like
+  `Task.spawn_raw`/`Scope.spawn`; async closures aren't lowered). Named `any_of`
+  not `any` (`any` is a reserved keyword). Results: `enum Race2 First(Int)
+  Second(Int)` / `enum RaceN Won(Int, Int)` (winner index + i64-ABI payload — v1
+  Int channel, same as `TaskJoinFuture.Output`; caller casts). The poll step
+  polls each live arm via the compiler-synthesised `Future_dynamic_poll`,
+  inspects the `Poll`, and on first-Ready cancels the loser(s) + reports the
+  winner; the WINNER block is LEAKED (its `def drop` is NOT run — it returned
+  Ready, moving its Output out, so a heap-pointer payload stays valid — matching
+  the v1 scheduler discipline of leaking completed future blocks). `RaceFuture#drop`
+  cancels both still-live arms (a race dropped before resolving, e.g. via an
+  outer `Scope`). Reentrancy-safe (arms snapshotted + zeroed before any user
+  drop; N-way state has a `busy`/`free_pending` guard). Move-by-value ownership
+  contract (don't reuse/retain an arm value — not enforceable without typed
+  move-only future params, a v1 gap shared with spawn/scope). Empty `Race.any_of`
+  panics (a no-arm race can't resolve). Pins:
+  `417_race_of_two_arm_winner.rx`, `418_race_second_arm_winner.rx`,
+  `419_race_loser_cancel_drop.rx`, `420_race_drop_cancels_both_arms.rx` (via
+  Scope cancel), `421_race_any_n_way.rx`, `422_race_winner_not_dropped.rx`.
+- **Structured task `Scope` (concurrency §4.2, Feature #2 — the keystone).**
+  A `Scope` value OWNS its spawned children and cancels every still-pending child
+  before control leaves the block, so a detached/leaked async task is
+  unrepresentable. New stdlib `library/std/future/src/scope.rx` over the
+  thread-local scheduler + the §4.1 drop machinery; one new C primitive
+  (`ruxen_executor_cancel_task`). Surface (what the current lowering supports):
+  `Scope.open do |s| ... end` yields a `&var Scope`, then runs an explicit
+  join-fence (`cancel_remaining`) after the block; `s.spawn(fut)` takes a FUTURE
+  VALUE (async closures aren't lowered) and records the raw handle PRIVATELY
+  (walled off — returns nil, so a child handle can't escape ownership);
+  `s.collect` is a SYNCHRONOUS scheduler pump (async methods aren't lowered) that
+  parks on the reactor between pumps (`pump_or_park`, mirroring block_on — no
+  busy-spin on a timer/fd child). FAIL-FAST is the default (`s.collect`: first
+  child with a negative-`Int` error sentinel cancels still-pending siblings + and
+  returns the sentinel); `s.collect_supervised` is the named exception (all
+  children run, error count returned, no sibling cancel). Cancellation fires each
+  pending child's `def drop` via `ruxen_executor_cancel_task` → the §4.1
+  `Drop_dynamic_drop` — scoped to THIS scope's children (not the whole-queue
+  `drain_remaining`); reentrancy-safe (the entry is unlinked + marked done before
+  the user `def drop` runs). v1 is single-reactor ("structured concurrency within
+  a worker," matching rondo's thread-per-core model). v1 error channel is `Int`
+  (negative = error) because `TaskHandle.result`/`TaskJoinFuture.Output` is `Int`
+  (typed `Result[T,E]` deferred with the multi-threaded scheduler). Pins:
+  `412_scope_spawn_collect.rx` (spawn+collect happy path),
+  `413_scope_drop_cancels_pending_child.rx` (scope-exit cancels a pending child),
+  `414_scope_fail_fast.rx` (first error cancels siblings), `415_scope_supervised.rx`
+  (independent failures, error count), `416_scope_collect_reactor_child.rx`
+  (collect parks on a reactor-backed timer child, no busy-spin).
+
+- **Cooperative async cancellation + block_on-exit root-future drop (concurrency
+  §4.1 foundation, Increment 3 — Feature #1 COMPLETE).** A leaf future can now
+  observe a cooperative cancel bit at its `poll`/await boundary via
+  `cx.cancelled?` (or the bare free fn `ruxen_cancel_requested()`) and
+  early-return instead of parking forever; the early return lets the awaiting
+  `async def` state machine complete, and its drop then fires the Increment-2
+  state-indexed glue so live `__sub_i` sub-futures are cleaned up. Surface:
+  `ruxen_request_cancel()` / `ruxen_clear_cancel()` / `ruxen_cancel_requested()`
+  (module-level lib decls) + `Context.cancelled?`, all backed by a `_Thread_local`
+  flag in `executor.c` — chosen because the user async-fn body never sees `cx`
+  (only the synthesised `poll(cx)` does), exactly mirroring the thread-local
+  reactor handle. COOPERATIVE: it only takes effect where a future CHECKS the
+  bit — it does NOT preempt an await-free compute loop (spec §4.1 risk 5). The
+  flag is thread-scoped and persists across `block_on` calls until
+  `ruxen_clear_cancel()` (so a cancel requested before `block_on` is observed).
+  **Also fixes a pre-existing leak this surfaced:** a `block_on(async_fn())` root
+  future was NEVER scope-exit-dropped (its local is assigned from a wrapper-call
+  result, which the conservative dealloc analysis tainted), so the root future +
+  its sub-futures leaked on every block_on. Drop elaboration now force-roots a
+  `__block_on_fut_*` Future-typed local — but ONLY when it is structurally never
+  consumed (never passed by-value, stored, moved, or returned; a genuine
+  block_on root is only borrowed by `poll`), so a same-named user local that IS
+  consumed is left tainted (no double-free). This is the spec §4.1 "block_on-exit
+  path calls Drop_dynamic_drop on the future." Pins:
+  `396_async_cooperative_cancel.rx` (cancel → early-return → drop glue fires),
+  `397_block_on_fut_name_collision_safe.rx` (consumed same-named local NOT
+  force-rooted — no double-free), `398_cancel_flag_persists_until_clear.rx`
+  (cancel persists across block_on until clear).
+- **State-indexed drop glue on async future state machines (concurrency §4.1
+  foundation, Increment 2).** A synthesised `async def` state machine owns its
+  awaited sub-futures (`self.__sub_i`) — each itself a `Future` holding the
+  parked resource (reactor timer / fd / read-state). Ruxen has NO automatic
+  per-field drop, so before this increment a drained/cancelled state-machine
+  future ran the Increment-1 `_drop_noop` and those sub-futures' `def drop`s
+  never fired (the reactor slot / fd leaked). MIR now synthesises the state
+  machine's real `<Future>_drop` (`synthesize_future_state_machine_drop`, gated on
+  `include Future` + a `__state` field) that drops each owned `__sub_i`
+  sub-future via the Increment-1 `Drop_dynamic_drop(self.__sub_i)` helper (its
+  concrete `<SubClass>_drop` runs) + `ruxen_dealloc`, in reverse declaration
+  order. Registering the synthesised drop makes the state machine a user-drop
+  class so Increment 1 points its Drop vtable slot at the real drop (not the
+  no-op).
+  **Double-drop safety:** `<Future>_drop` is the SOLE dropper of `__sub_i` (the
+  poll body only *borrows* `self.__sub_i` to poll it; the pump never drops
+  completed futures; a spawned future is tainted out of scope-exit drop), so each
+  sub-future is dropped exactly once.
+  **Partial-init safety (spec §4.1 risk 2):** each sub-future drop is NULL-guarded
+  (`if self.__sub_i != 0`). Linear state machines build every `__sub_i` eagerly
+  in `init`; LOOP state machines build them LAZILY inside `poll` (init only zeroes
+  `__sub_ready_i`), so a loop future drained before its first pump has a zero
+  `__sub_i` — the guard skips it instead of dereferencing a NULL class_info. Bare-
+  named await-binding fields (the `r` in `let r = make().await`) are deliberately
+  NOT dropped: they have no synthesisable default and hold uninitialised memory
+  until their await resolves; dropping cross-suspend user-drop locals needs eager-
+  vs-late metadata threaded from async-lowering and is a tracked follow-up. Pins:
+  `392_async_subfuture_drop_on_drain.rx` (drained-while-parked sub-future drop
+  fires), `393_async_drop_count_exactly_once.rx` (exactly-once / second-drain
+  no-op), `394_async_binding_not_dropped_uninit.rx` (droppable-Output binding NOT
+  dropped while uninitialised — no UB), `395_async_loop_drain_before_pump.rx`
+  (loop future drained before first pump — zero `__sub_0` skipped, no crash). No
+  non-future class layout changes.
+- **Async cancellation/drain runs a future's `def drop` (concurrency §4.1
+  foundation, Increment 1).** A future that is *drained* (still queued, never
+  completed) now runs its user `def drop` — closing the leak the scheduler
+  conceded (`library/std/future/runtime/scheduler.c` drain hook previously freed
+  the queue entry but never fired the future's drop). The fix uses the **NARROW**
+  path (`docs/dev/concurrency-impl-plan.md` Step 1): a `Drop` vtable slot is
+  appended INSIDE the *existing* class_info every future already carries via
+  `mixin Future dispatch runtime` (slot 1, after `Future`@0), so the C drain calls
+  a synthesised `Drop_dynamic_drop(future_ptr)` to reach the concrete
+  `<Class>_drop`. Futures with no `def drop` get a synthesised no-op in that slot
+  so the uniform drain dispatch never reads out of bounds. This is gated on the
+  `Future` mixin specifically — `mixin Drop` is NOT promoted to global
+  `dispatch runtime`, and **no non-future class layout changes** (the spec §4.1
+  risk-4 broad-ABI change is avoided). `ruxen_executor_drain_remaining` is the
+  explicit teardown surface that fires it; the automatic block_on-exit/Scope drain
+  is a follow-up tied to §4.2 task ownership. Pins:
+  `tests/release-e2e/cases/391_async_drop_on_drain.rx` (drop fires on a drained,
+  never-completed spawned future) + layout-stability pins in
+  `compiler/ruxen_core/tests/mixin_vtables.rs`
+  (`runtime_dispatch_class_with_drop_gets_drop_vtable_slot`,
+  `plain_droppable_class_layout_unchanged_by_drop_vtable`).
 - **macOS native backends: compile `.m` Objective-C runtime shims + opt-in
   framework linking.** `find_runtime_sources` now compiles `runtime/*.m`
   (Objective-C — clang detects it by extension) alongside `.c`, and a new opt-in
@@ -486,10 +3085,10 @@ once 1.0.0 ships.
   opaque body of every eligible generic free fn is suppressed (it could only emit
   placeholders); the single-implementor case monomorphizes to one concrete copy,
   byte-equivalent to the old devirtualize path. Backend-agnostic (shared MIR).
-  **Staged remainder:** a generic METHOD over a mixin (a generic `def` inside a
-  class) is not yet monomorphized — it now produces a CLEAR lowering error, never
-  a placeholder symbol. Quiver's paint pass is entirely generic FREE functions,
-  so the framework is unblocked. Design:
+  **Subsequently completed by Q17b:** generic METHODS declared directly inside
+  class/struct/enum receivers now use the same per-concrete-implementor model;
+  no placeholder-prone opaque method body is emitted. Quiver's paint pass was
+  already unblocked by the free-function stage. Design:
   `docs/decisions/q17-cross-package-monomorphization.md`. Pins (COMPILE + RUN +
   assert stdout): `src/ruxen_cli/tests/cross_package_mono.rs` (staged-install,
   two-package, binary + `ruxen test`, asserts `dep=20 mine=9` per-implementor),

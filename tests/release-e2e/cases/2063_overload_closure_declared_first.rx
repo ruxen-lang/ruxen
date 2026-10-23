@@ -1,0 +1,22 @@
+# Overload selection when the closure overload is declared before the
+# &String one: a string literal picks the &String overload and a closure
+# picks the closure overload.
+class Sink
+  out: Array[String]
+  def init
+    self.out = []
+  end
+  def add(f: Fn() -> String) -> nil
+    self.out.push(f.())
+  end
+  def add(s: &String) -> nil
+    self.out.push(s.to_s)
+  end
+end
+
+def main
+  let s = Sink.new
+  s.add("static")
+  s.add({ || "dynamic" })
+  s.out.each do |x| puts x end
+end

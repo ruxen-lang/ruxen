@@ -1,0 +1,33 @@
+# A `match` on a place keeps the payload where it is unless a by-value
+# binding takes it. `Some(_)` on a local moves nothing, so the later
+# `if let` still finds the String (it freed it, then the `if let` read it).
+# Matching a field only views its payload: the object still owns it, so
+# showing it twice reads it twice (the binding freed it on the first call).
+
+def mk(k: Int) -> Option[String]
+  Some("opt-#{k}")
+end
+
+class Holder
+  name: Option[String]
+  def init(k: Int)
+    @name = Some("n-#{k}")
+  end
+  def show -> nil
+    if let Some(v) = @name
+      puts v
+    end
+  end
+end
+
+o = mk(7)
+match o
+  Some(_) -> puts "some"
+  nil -> puts "none"
+end
+if let Some(v) = o
+  puts v
+end
+h = Holder.new(3)
+h.show
+h.show

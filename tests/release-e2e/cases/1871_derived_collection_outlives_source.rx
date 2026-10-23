@@ -1,0 +1,85 @@
+# B86 / Q60(b) — a derived collection must OUTLIVE its source intact.
+#
+# This is the shape that catches an aliasing regression. A same-scope test can
+# pass while still aliasing, because both owners are freed at the same instant
+# and the double free may not be observed. Here the source is dropped FIRST
+# (it dies with the inner scope / the callee frame) and the result is read
+# afterwards, so any surviving alias is a read of freed memory.
+#
+# Covers every helper the ownership audit found violating the
+# FRESH_ALLOC_CALLEES contract, at both a heap element type and an `Int`
+# element type:
+#   drop/skip, chain, Set union / intersection / difference, to_set.
+
+def tail_of(src: &Array[String]) -> Array[String]
+  src.drop(1)
+end
+
+def joined(a: &Array[String], b: &Array[String]) -> Array[String]
+  a.chain(b)
+end
+
+def tail_of_ints(src: &Array[Int]) -> Array[Int]
+  src.drop(1)
+end
+
+def main
+  # ── The source dies in the callee frame; the result is read here. ──
+  var kept: Array[String] = []
+  if true
+    let a = ["alpha", "beta", "gamma"]
+    kept = tail_of(a)
+  end
+  kept.each { |v| puts "kept #{v}" }
+  puts "kept size #{kept.size}"
+
+  var both: Array[String] = []
+  if true
+    let x = ["p", "q"]
+    let y = ["r"]
+    both = joined(x, y)
+  end
+  both.each { |v| puts "both #{v}" }
+  puts "both size #{both.size}"
+
+  # `Int` control: same shape, the kind that never double-freed.
+  var ints: Array[Int] = []
+  if true
+    let n = [7, 8, 9]
+    ints = tail_of_ints(n)
+  end
+  ints.each { |v| puts "ints #{v}" }
+  puts "ints size #{ints.size}"
+
+  # ── Set algebra, results outliving both operands (Q60(b)). ─────────
+  var u: Set[String] = Set.new
+  var i: Set[String] = Set.new
+  var d: Set[String] = Set.new
+  if true
+    var l: Set[String] = Set.new
+    l.insert("one")
+    l.insert("two")
+    var r: Set[String] = Set.new
+    r.insert("two")
+    r.insert("three")
+    u = l.union(&r)
+    i = l.intersection(&r)
+    d = l.difference(&r)
+  end
+  puts "union #{u.size}"
+  puts "inter #{i.size}"
+  puts "diff #{d.size}"
+  puts "inter has two #{i.include?("two")}"
+  puts "diff has one #{d.include?("one")}"
+
+  # ── to_set, result outliving the array it collected. ───────────────
+  var s: Set[String] = Set.new
+  if true
+    let words = ["red", "green", "red"]
+    s = words.to_set
+  end
+  puts "to_set #{s.size}"
+  puts "to_set has green #{s.include?("green")}"
+
+  puts "ok"
+end

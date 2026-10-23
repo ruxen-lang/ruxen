@@ -1,0 +1,9 @@
+1
+drop 1
+after 1
+2
+drop 2
+after 2
+kept 3
+end
+drop 3

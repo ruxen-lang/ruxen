@@ -1,0 +1,11 @@
+# Pins the `**` power operator: Int**Int, right-associativity, tighter
+# binding than unary minus, Float**Int, and the zero/identity edges.
+def main
+  puts "#{2 ** 8}"
+  puts "#{3 ** 3}"
+  puts "#{2 ** 3 ** 2}"
+  puts "#{2.0 ** 10}"
+  puts "#{10 ** 0}"
+  neg = -2 ** 2
+  puts "#{neg}"
+end

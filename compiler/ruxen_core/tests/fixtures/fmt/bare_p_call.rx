@@ -1,0 +1,5 @@
+def main
+  p 7
+  pp 2.5
+  p true
+end

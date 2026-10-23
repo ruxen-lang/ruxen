@@ -1,8 +1,13 @@
 name: CI
 
+# Fast lane: runs on every push to any branch and on PRs. Unit tests,
+# the merged `it` integration binaries, a filtered release-e2e smoke and
+# the stdlib `.rx` package tests. A PR from a branch of this repo is
+# already tested by its push, so the pull_request run is for forks only.
+# The slow lane (full smoke on both OSes, the llvm feature, run.sh
+# cli/lsp/binaries) is pr-ready.yml.
 on:
   push:
-    branches: [master]
   pull_request:
     branches: [master]
 
@@ -13,6 +18,8 @@ env:
 jobs:
   test:
     name: Build + test (${{ matrix.os }})
+    # Same-repo PR branches already run on push; only fork PRs need this.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -27,14 +34,35 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@v2
 
-      - name: cargo build
-        run: cargo build --workspace --all-targets
+      # `cargo test` already builds the lib, bins, examples and every
+      # integration test, so a separate `cargo build --all-targets` only
+      # added the benches (criterion). Type-check those instead of
+      # building them; the step stays in this gating job so a broken
+      # bench still fails CI (the lint job is advisory).
+      - name: cargo check (benches)
+        run: cargo check --workspace --benches
 
+      # Unit tests plus each crate's `it` binary. release_e2e_smoke is
+      # #[ignore]d here; the next step runs a filtered slice of it.
       - name: cargo test
         run: cargo test --workspace --no-fail-fast
 
+      # One fixture per area; the full sweep runs in pr-ready.yml.
+      - name: release-e2e smoke (filtered)
+        env:
+          RUXEN_E2E_CASES: 01_hello,14_classes,19_enums_data,21_mixins,28_closures,134_user_drop_runs,2052_async_enum_variant_tail_local,2057_todo_manager_sample_program,2079_basic_features_smoke
+        run: cargo test -p ruxen_core --test release_e2e_smoke -- --ignored --nocapture
+
+      # `cargo test` above built target/debug/ruxen.
+      - name: stdlib package tests
+        env:
+          RUXEN_BIN: ${{ github.workspace }}/target/debug/ruxen
+        run: scripts/test-stdlib.sh
+
   msrv:
     name: MSRV (1.91)
+    # Same-repo PR branches already run on push; only fork PRs need this.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +78,8 @@ jobs:
 
   lint:
     name: Lint (advisory)
+    # Same-repo PR branches already run on push; only fork PRs need this.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:

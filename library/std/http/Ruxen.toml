@@ -1,0 +1,7 @@
+[package]
+name = "std-http"
+version = "0.1.0"
+description = "Minimal blocking HTTP/1.1 client on std::net"
+
+[dependencies]
+std-net = "= 0.1.0"

@@ -1,0 +1,26 @@
+# Blocks, procs and lambdas: two trailing blocks to a user `each` capture the
+# same String. A block borrows its captures, so the top level frees `prefix`
+# once at scope exit and each block's drop frees only its captures box and
+# pair.
+
+class Bag
+  size: Int
+  def init
+    @size = 2
+  end
+  def each(&block: Fn[(Int) -> nil]) -> nil
+    i = 0
+    while i < @size
+      block.(i)
+      i += 1
+    end
+  end
+end
+
+prefix = "p-"
+bag = Bag.new
+bag.each { |n| puts "#{prefix}#{n}" }
+bag.each do |n|
+  puts "#{prefix}#{n}"
+end
+puts prefix

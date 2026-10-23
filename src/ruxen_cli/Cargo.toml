@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+autotests = false
 
 [lib]
 name = "ruxen_cli"
@@ -39,3 +40,8 @@ tempfile = "3"
 
 [lints]
 workspace = true
+
+# One integration-test binary: tests/it, one module per file.
+[[test]]
+name = "it"
+path = "tests/it/main.rs"

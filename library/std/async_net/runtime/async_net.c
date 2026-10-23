@@ -82,21 +82,31 @@ typedef struct {
     int32_t closed;
     int64_t read_handle;    /* persistent read-readiness registration */
     int64_t write_handle;   /* persistent write-readiness registration */
+    int64_t timer_handle;   /* persistent idle-timeout timer (Lever D.2);
+                              * 0 = not armed yet. Created once on the first
+                              * read_with_timeout EAGAIN, re-armed in place on
+                              * every subsequent cycle — see
+                              * ruxen_async_tcp_stream_ensure_timer below. */
 } RuxenAsyncTcpStream;
 
 _Static_assert(sizeof(RuxenAsyncTcpListener) == 16,
     "RuxenAsyncTcpListener wire layout drifted from documented 16-byte form "
     "(grew from 8 in v1-missing-features to add accept_handle)");
-_Static_assert(sizeof(RuxenAsyncTcpStream) == 24,
-    "RuxenAsyncTcpStream wire layout drifted from documented 24-byte form "
-    "(grew from 8 in v1-missing-features to add read_handle + write_handle)");
+_Static_assert(sizeof(RuxenAsyncTcpStream) == 32,
+    "RuxenAsyncTcpStream wire layout drifted from documented 32-byte form "
+    "(grew from 24 in Lever D.2 to add timer_handle)");
 
 /* Reactor FFI — declared here so we can register persistently at
  * stream/listener construction without going through the Ruxen side.
- * The persistent variants live in library/std/future/runtime/reactor.c. */
+ * The persistent variants + timer primitives live in
+ * library/std/future/runtime/reactor.c. */
 extern int64_t ruxen_reactor_register_fd_read_persistent(int64_t reactor, int64_t fd);
 extern int64_t ruxen_reactor_register_fd_write_persistent(int64_t reactor, int64_t fd);
 extern void    ruxen_reactor_deregister(int64_t reactor, int64_t handle);
+extern int64_t ruxen_reactor_current_handle(void);
+extern int64_t ruxen_reactor_register_timer(int64_t reactor, int64_t nanos);
+extern int64_t ruxen_reactor_rearm_timer(int64_t reactor, int64_t timer_handle, int64_t nanos);
+extern int64_t ruxen_reactor_check_fired(int64_t reactor, int64_t handle);
 
 /* ── socket helpers ────────────────────────────────────────────────── */
 
@@ -162,26 +172,6 @@ static void ruxen_async_net_set_nosigpipe(int fd) {
 #endif
 }
 
-/* Map errno -> IoError tag for socket operations. Covers the codes
- * connect / accept / read / write can produce post-EAGAIN. */
-static int ruxen_async_net_io_error_tag(int err) {
-    switch (err) {
-        case ECONNREFUSED: return RUXEN_IO_ERROR_CONNECTION_REFUSED;
-        case ECONNRESET:   return RUXEN_IO_ERROR_CONNECTION_RESET;
-        case ECONNABORTED: return RUXEN_IO_ERROR_CONNECTION_ABORTED;
-        case ENOTCONN:     return RUXEN_IO_ERROR_NOT_CONNECTED;
-        case EADDRINUSE:   return RUXEN_IO_ERROR_ADDR_IN_USE;
-        case EADDRNOTAVAIL:return RUXEN_IO_ERROR_ADDR_NOT_AVAILABLE;
-        case EPIPE:        return RUXEN_IO_ERROR_BROKEN_PIPE;
-        case EACCES:
-        case EPERM:        return RUXEN_IO_ERROR_PERMISSION_DENIED;
-        case EBADF:
-        case EINVAL:       return RUXEN_IO_ERROR_INVALID_INPUT;
-        case ETIMEDOUT:    return RUXEN_IO_ERROR_TIMED_OUT;
-        default:           return RUXEN_IO_ERROR_OTHER;
-    }
-}
-
 /* ── AsyncTcpListener.bind (B6.5) ──────────────────────────────────── */
 /* Eager bind+listen. No state machine — the syscalls don't block on a
  * fresh socket. The future is single-shot Ready on first poll for
@@ -217,24 +207,19 @@ void *ruxen_async_tcp_listener_bind(const char *addr) {
      * one whose result actually matters; replay only re-binds for
      * let-binding RHS evaluation. */
     if (ruxen_repl_is_replaying) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     if (!addr) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     struct sockaddr_in sa;
     if (ruxen_async_net_parse_addr(addr, &sa) != 0) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(
-                ruxen_async_net_io_error_tag(errno)));
+        return ruxen_io_error_from_errno(errno);
     }
     ruxen_async_net_set_nosigpipe(fd);
     int one = 1;
@@ -252,32 +237,26 @@ void *ruxen_async_tcp_listener_bind(const char *addr) {
     if (ruxen_async_net_set_nonblock(fd) != 0) {
         int saved = errno;
         close(fd);
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(
-                ruxen_async_net_io_error_tag(saved)));
+        return ruxen_io_error_from_errno(saved);
     }
 
     if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
         int saved = errno;
         close(fd);
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(
-                ruxen_async_net_io_error_tag(saved)));
+        return ruxen_io_error_from_errno(saved);
     }
 
     if (listen(fd, 128) != 0) {
         int saved = errno;
         close(fd);
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(
-                ruxen_async_net_io_error_tag(saved)));
+        return ruxen_io_error_from_errno(saved);
     }
 
     RuxenAsyncTcpListener *l =
         (RuxenAsyncTcpListener *)ruxen_alloc(sizeof(RuxenAsyncTcpListener));
     l->fd = fd;
     l->closed = 0;
-    /* Register the listener fd for read-readiness ONCE, edge-triggered,
+    /* Register the listener fd for read-readiness ONCE (level-triggered)
      * on the constructing thread's reactor. AsyncAcceptFuture then just
      * calls accept_step (which loops until EAGAIN) — no per-poll
      * register/deregister syscalls. 0 = "use current-thread reactor",
@@ -286,10 +265,89 @@ void *ruxen_async_tcp_listener_bind(const char *addr) {
     return ruxen_result_ok_value((int64_t)l);
 }
 
+/* ── Shared-accept multi-core model (portable across macOS/BSD) ──────────
+ *
+ * The per-worker `bind` path above relies on SO_REUSEPORT kernel connection
+ * load-balancing. Linux 3.9+ distributes across per-worker sockets, but
+ * macOS/BSD SO_REUSEPORT does NOT: every connection lands on ONE socket, so
+ * only one worker (one core) does any work. The portable alternative is a
+ * SHARED listening socket that every worker accept()s from. Each worker
+ * registers the socket on its own reactor level-triggered (no
+ * EPOLLEXCLUSIVE / EV_ONESHOT), so an incoming connection wakes every parked
+ * worker; one wins the accept() and the rest get EAGAIN and re-park. Work
+ * therefore spreads across all cores on both platforms. The redundant
+ * wakeups are a thundering herd, but under HTTP keep-alive accepts are rare
+ * (once per connection, not per request), so the cost is negligible here.
+ *
+ * `bind_raw` opens + binds + listens ONE socket and returns its raw fd
+ * (no reactor registration, no wrapper struct). The caller hands that fd to
+ * N worker threads; each calls `from_fd` from INSIDE its own thread. */
+int64_t ruxen_async_tcp_listener_bind_raw(const char *addr) {
+    if (ruxen_repl_is_replaying) {
+        return -1;
+    }
+    if (!addr) {
+        return -1;
+    }
+    struct sockaddr_in sa;
+    if (ruxen_async_net_parse_addr(addr, &sa) != 0) {
+        return -1;
+    }
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    ruxen_async_net_set_nosigpipe(fd);
+    int one = 1;
+    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    if (ruxen_async_net_set_nonblock(fd) != 0) {
+        close(fd);
+        return -1;
+    }
+    if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+        close(fd);
+        return -1;
+    }
+    if (listen(fd, 1024) != 0) {
+        close(fd);
+        return -1;
+    }
+    return (int64_t)fd;
+}
+
+/* Wrap an EXISTING shared listening fd for accept on the CURRENT thread's
+ * reactor. `dup`s the fd so this listener owns an independent descriptor:
+ * its `drop` closes only the dup and deregisters from its own reactor, while
+ * the shared socket stays open until every worker's dup (and the original raw
+ * fd) is closed. Registers the dup for read-readiness on the calling thread's
+ * reactor, so each worker must call this from within its own thread. On dup
+ * failure the listener is returned closed (fd = -1); accept then errors. */
+void *ruxen_async_tcp_listener_from_fd(int64_t shared_fd) {
+    RuxenAsyncTcpListener *l =
+        (RuxenAsyncTcpListener *)ruxen_alloc(sizeof(RuxenAsyncTcpListener));
+    int dup_fd = -1;
+    if (shared_fd >= 0) {
+        do {
+            dup_fd = dup((int)shared_fd);
+        } while (dup_fd < 0 && errno == EINTR);
+    }
+    if (dup_fd < 0) {
+        l->fd = -1;
+        l->closed = 1;
+        l->accept_handle = 0;
+        return l;
+    }
+    ruxen_async_net_set_nosigpipe(dup_fd);
+    (void)ruxen_async_net_set_nonblock(dup_fd);
+    l->fd = dup_fd;
+    l->closed = 0;
+    l->accept_handle = ruxen_reactor_register_fd_read_persistent(0, (int64_t)dup_fd);
+    return l;
+}
+
 void *ruxen_async_bind_state_to_result(void *state) {
     if (!state) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     RuxenAsyncBindState *s = (RuxenAsyncBindState *)state;
     if (!s->done) {
@@ -297,8 +355,7 @@ void *ruxen_async_bind_state_to_result(void *state) {
         s->done = 1;
     }
     if (s->result_taken) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     s->result_taken = 1;
     return s->result;
@@ -337,9 +394,7 @@ void ruxen_async_tcp_listener_drop(void *self) {
         l->accept_handle = 0;
     }
     if (!l->closed && l->fd >= 0) {
-        int rc;
-        do { rc = close(l->fd); } while (rc < 0 && errno == EINTR);
-        (void)rc;
+        (void)ruxen_fd_close_retry(l->fd);
         l->closed = 1;
         l->fd = -1;
     }
@@ -351,7 +406,7 @@ typedef struct {
     int listener_fd;     /* borrowed from the listener */
     int accepted_fd;     /* set once accept returns a stream fd */
     char peer_buf[64];   /* "<ip>:<port>" peer address */
-    int err_tag;
+    int err_errno;       /* errno captured at poll time */
     int err_set;
     int done;
     int result_taken;
@@ -363,7 +418,7 @@ void *ruxen_async_accept_state_new(int64_t listener_fd) {
     s->listener_fd = (int)listener_fd;
     s->accepted_fd = -1;
     s->peer_buf[0] = '\0';
-    s->err_tag = 0;
+    s->err_errno = 0;
     s->err_set = 0;
     s->done = 0;
     s->result_taken = 0;
@@ -419,7 +474,7 @@ int64_t ruxen_async_accept_step(void *state) {
                 continue;
             }
             s->err_set = 1;
-            s->err_tag = ruxen_async_net_io_error_tag(errno);
+            s->err_errno = errno;
             return 3;
         }
         ruxen_async_net_set_nosigpipe(new_fd);
@@ -427,7 +482,7 @@ int64_t ruxen_async_accept_step(void *state) {
             int saved = errno;
             close(new_fd);
             s->err_set = 1;
-            s->err_tag = ruxen_async_net_io_error_tag(saved);
+            s->err_errno = saved;
             return 3;
         }
         char ip[INET_ADDRSTRLEN];
@@ -463,8 +518,11 @@ void *ruxen_async_accept_state_take_peer(void *state) {
 int64_t ruxen_async_accept_state_get_err(void *state) {
     if (!state) return -1;
     RuxenAsyncAcceptState *s = (RuxenAsyncAcceptState *)state;
+    /* A repeat take after Ready answers InvalidInput, the post-Ready
+     * contract every step future shares (future/src/step_future.rx). */
+    if (s->result_taken) return EINVAL;
     if (!s->err_set) return -1;
-    return (int64_t)s->err_tag;
+    return (int64_t)s->err_errno;
 }
 
 void ruxen_async_accept_state_mark_taken(void *state) {
@@ -512,6 +570,7 @@ void *ruxen_async_tcp_stream_from_fd(int64_t fd) {
      * filter) is dwarfed by the savings on the hot path. */
     s->read_handle  = ruxen_reactor_register_fd_read_persistent(0, fd);
     s->write_handle = ruxen_reactor_register_fd_write_persistent(0, fd);
+    s->timer_handle = 0;
     return s;
 }
 
@@ -523,7 +582,7 @@ typedef struct {
     int completed;     /* 1 once getsockopt(SO_ERROR) returned success */
     char addr[256];    /* copy of the parsed address — owned by the state */
     struct sockaddr_in sa;
-    int err_tag;
+    int err_errno;       /* errno captured at poll time */
     int err_set;
     int done;
     int result_taken;
@@ -535,7 +594,7 @@ void *ruxen_async_connect_state_new(const char *addr) {
     s->fd = -1;
     s->started = 0;
     s->completed = 0;
-    s->err_tag = 0;
+    s->err_errno = 0;
     s->err_set = 0;
     s->done = 0;
     s->result_taken = 0;
@@ -564,13 +623,13 @@ int64_t ruxen_async_connect_step(void *state) {
     if (!s->started) {
         if (ruxen_async_net_parse_addr(s->addr, &s->sa) != 0) {
             s->err_set = 1;
-            s->err_tag = RUXEN_IO_ERROR_INVALID_INPUT;
+            s->err_errno = EINVAL;
             return 3;
         }
         int fd = socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0) {
             s->err_set = 1;
-            s->err_tag = ruxen_async_net_io_error_tag(errno);
+            s->err_errno = errno;
             return 3;
         }
         ruxen_async_net_set_nosigpipe(fd);
@@ -578,7 +637,7 @@ int64_t ruxen_async_connect_step(void *state) {
             int saved = errno;
             close(fd);
             s->err_set = 1;
-            s->err_tag = ruxen_async_net_io_error_tag(saved);
+            s->err_errno = saved;
             return 3;
         }
         s->fd = fd;
@@ -594,7 +653,7 @@ int64_t ruxen_async_connect_step(void *state) {
             return 1;
         }
         s->err_set = 1;
-        s->err_tag = ruxen_async_net_io_error_tag(errno);
+        s->err_errno = errno;
         return 3;
     }
 
@@ -603,7 +662,7 @@ int64_t ruxen_async_connect_step(void *state) {
     socklen_t slen = sizeof(soerr);
     if (getsockopt(s->fd, SOL_SOCKET, SO_ERROR, &soerr, &slen) != 0) {
         s->err_set = 1;
-        s->err_tag = ruxen_async_net_io_error_tag(errno);
+        s->err_errno = errno;
         return 3;
     }
     if (soerr == 0) {
@@ -615,7 +674,7 @@ int64_t ruxen_async_connect_step(void *state) {
         return 1;
     }
     s->err_set = 1;
-    s->err_tag = ruxen_async_net_io_error_tag(soerr);
+    s->err_errno = soerr;
     return 3;
 }
 
@@ -629,8 +688,11 @@ int64_t ruxen_async_connect_state_take_fd(void *state) {
 int64_t ruxen_async_connect_state_get_err(void *state) {
     if (!state) return -1;
     RuxenAsyncConnectState *s = (RuxenAsyncConnectState *)state;
+    /* A repeat take after Ready answers InvalidInput, the post-Ready
+     * contract every step future shares (future/src/step_future.rx). */
+    if (s->result_taken) return EINVAL;
     if (!s->err_set) return -1;
-    return (int64_t)s->err_tag;
+    return (int64_t)s->err_errno;
 }
 
 void ruxen_async_connect_state_mark_taken(void *state) {
@@ -660,7 +722,7 @@ void ruxen_async_connect_state_free(void *state) {
  * Step states:
  *   1 EAGAIN — register fd for read-readiness
  *   2 done   — out_str populated (possibly empty for clean EOF)
- *   3 error  — err_tag set */
+ *   3 error  — err_errno set */
 
 typedef struct {
     int fd;            /* borrowed from the stream */
@@ -668,7 +730,7 @@ typedef struct {
     char *buf;         /* scratch buffer sized to max_bytes */
     size_t len;
     char *out_str;     /* canonical-pool String pointer once done */
-    int err_tag;
+    int err_errno;       /* errno captured at poll time */
     int err_set;
     int done;
     int result_taken;
@@ -684,11 +746,10 @@ void *ruxen_async_tcp_read_state_new(int64_t fd, int64_t max_bytes) {
     if (max_bytes <= 0) max_bytes = 1;
     if (max_bytes > 65536) max_bytes = 65536;
     s->max_bytes = (size_t)max_bytes;
-    s->buf = (char *)malloc(s->max_bytes + 1);
-    if (!s->buf) ruxen_panic("ruxen_async_tcp_read_state_new: malloc failed");
+    s->buf = (char *)ruxen_xmalloc(s->max_bytes + 1);
     s->len = 0;
     s->out_str = NULL;
-    s->err_tag = 0;
+    s->err_errno = 0;
     s->err_set = 0;
     s->done = 0;
     s->result_taken = 0;
@@ -718,7 +779,7 @@ int64_t ruxen_async_tcp_read_step(void *state) {
                 return 1;
             }
             s->err_set = 1;
-            s->err_tag = ruxen_async_net_io_error_tag(errno);
+            s->err_errno = errno;
             return 3;
         }
         /* got == 0 → clean EOF; got > 0 → at least one byte read.
@@ -735,13 +796,11 @@ int64_t ruxen_async_tcp_read_step(void *state) {
 
 void *ruxen_async_tcp_read_state_take_result(void *state) {
     if (!state) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     RuxenAsyncTcpReadState *s = (RuxenAsyncTcpReadState *)state;
     if (s->result_taken) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     s->result_taken = 1;
     if (s->buf) {
@@ -749,8 +808,7 @@ void *ruxen_async_tcp_read_state_take_result(void *state) {
         s->buf = NULL;
     }
     if (s->err_set) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(s->err_tag));
+        return ruxen_io_error_from_errno(s->err_errno);
     }
     return ruxen_result_ok_value((int64_t)s->out_str);
 }
@@ -769,9 +827,8 @@ void ruxen_async_tcp_read_state_free(void *state) {
  * touching a read-state struct. Used by AsyncReadWithTimeoutFuture
  * when the deadline timer fires before the kernel reports any
  * readiness on the fd. We bypass ruxen_async_tcp_read_state_take_result
- * deliberately — that helper consumes / frees the buffer and would
- * collapse the variant to the *unit* tag form (no payload), but
- * IoError.TimedOut is a message-carrying variant (#06.5 T1).
+ * deliberately — that helper consumes / frees the buffer and reports
+ * only an errno the state recorded, while a deadline has no errno.
  *
  * The state struct is NOT freed here; the future's drop calls
  * ruxen_async_tcp_read_state_free for that. */
@@ -791,7 +848,7 @@ typedef struct {
     const char *content;
     size_t total;
     size_t written;
-    int err_tag;
+    int err_errno;       /* errno captured at poll time (0: short write) */
     int err_set;
     int done;
     int result_taken;
@@ -804,7 +861,7 @@ void *ruxen_async_tcp_write_state_new(int64_t fd, const char *content) {
     s->content = content ? content : "";
     s->total = strlen(s->content);
     s->written = 0;
-    s->err_tag = 0;
+    s->err_errno = 0;
     s->err_set = 0;
     s->done = s->total == 0 ? 1 : 0;
     s->result_taken = 0;
@@ -835,12 +892,12 @@ int64_t ruxen_async_tcp_write_step(void *state) {
                 return 1;
             }
             s->err_set = 1;
-            s->err_tag = ruxen_async_net_io_error_tag(errno);
+            s->err_errno = errno;
             return 3;
         }
         if (put == 0) {
             s->err_set = 1;
-            s->err_tag = RUXEN_IO_ERROR_WRITE_ZERO;
+            s->err_errno = 0; /* short write: WriteZero has no errno */
             return 3;
         }
         s->written += (size_t)put;
@@ -851,18 +908,16 @@ int64_t ruxen_async_tcp_write_step(void *state) {
 
 void *ruxen_async_tcp_write_state_take_result(void *state) {
     if (!state) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     RuxenAsyncTcpWriteState *s = (RuxenAsyncTcpWriteState *)state;
     if (s->result_taken) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     s->result_taken = 1;
     if (s->err_set) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(s->err_tag));
+        return s->err_errno ? ruxen_io_error_from_errno(s->err_errno)
+                            : ruxen_io_error_write_zero();
     }
     /* Return the count written as the Ok payload (matches spec B9). */
     return ruxen_result_ok_value((int64_t)s->written);
@@ -894,12 +949,86 @@ int64_t ruxen_async_tcp_stream_write_handle(void *self) {
     return ((RuxenAsyncTcpStream *)self)->write_handle;
 }
 
-/* Internal helper: tear down both r+w persistent registrations. Idempotent.
+/* Raw self-pointer as an Int. Every other cross-poll-cycle handle on this
+ * struct (state_ptr, handle, timer_handle across the whole async_net/future
+ * packages) is threaded through futures as an opaque `Int`, never a typed
+ * borrow — a Future class field can't carry a borrow's lifetime across
+ * `poll()` calls. AsyncReadWithTimeoutFuture stashes this at construction
+ * (read_with_timeout, which already holds `self`) as its `stream_ptr: Int`
+ * field so later polls can reach ensure_timer/check_timer_fired below
+ * without holding a typed `&AsyncTcpStream`. Safe: the stream is guaranteed
+ * to outlive the future by the same by-reference contract read()/write()
+ * already rely on (the caller owns the stream across the whole
+ * block_on(future) call). */
+int64_t ruxen_async_tcp_stream_ptr(void *self) {
+    return (int64_t)(uintptr_t)self;
+}
+
+/* ── AsyncTcpStream — persistent idle-timeout timer (Lever D.2) ─────
+ *
+ * Owned entirely C-side, mirroring read_handle/write_handle: armed ONCE
+ * (the first EAGAIN of the connection's first read_with_timeout call) and
+ * RE-ARMED IN PLACE on every subsequent cycle instead of paying a fresh
+ * register+deregister pair. Per keep-alive request this turns 2
+ * kevent/timerfd syscalls into 1 (macOS: EV_ADD re-arm on the same ident;
+ * Linux: timerfd_settime on the same timerfd) — see
+ * reactor.c::ruxen_reactor_rearm_timer. Timeout semantics are unchanged: a
+ * genuinely idle connection still times out `nanos` after its most recent
+ * arm/re-arm; a busy connection re-arms the deadline every cycle and never
+ * spuriously fires.
+ *
+ * `ruxen_async_tcp_stream_unregister` (called from both `drop` and
+ * `shutdown` below) is the SOLE teardown point — AsyncReadWithTimeoutFuture
+ * no longer owns or deregisters a timer of its own (see that future's
+ * header comment in async_read_with_timeout_future.rx). */
+
+int64_t ruxen_async_tcp_stream_ensure_timer(void *self, int64_t nanos) {
+    if (!self) return 0;
+    RuxenAsyncTcpStream *s = (RuxenAsyncTcpStream *)self;
+    int64_t reactor = ruxen_reactor_current_handle();
+    if (s->timer_handle == 0) {
+        s->timer_handle = ruxen_reactor_register_timer(reactor, nanos);
+    } else {
+        s->timer_handle = ruxen_reactor_rearm_timer(reactor, s->timer_handle, nanos);
+    }
+    return s->timer_handle;
+}
+
+int64_t ruxen_async_tcp_stream_check_timer_fired(void *self) {
+    if (!self) return 0;
+    RuxenAsyncTcpStream *s = (RuxenAsyncTcpStream *)self;
+    if (s->timer_handle == 0) return 0;
+    return ruxen_reactor_check_fired(ruxen_reactor_current_handle(), s->timer_handle);
+}
+
+int64_t ruxen_async_tcp_stream_timer_handle(void *self) {
+    if (!self) return 0;
+    return ((RuxenAsyncTcpStream *)self)->timer_handle;
+}
+
+/* Internal helper: tear down r+w+timer persistent registrations. Idempotent.
  * Called from both drop and shutdown — close() also implicitly
  * removes the fd from kqueue, but our slot table still owns bookkeeping
  * for `fired` / `registered_count`, and Linux epoll does NOT auto-remove
  * on close (only on the last fd dup closes). Always deregister
- * explicitly. */
+ * explicitly.
+ *
+ * NOTE (pre-existing, not introduced by Lever D.2): the read_handle/
+ * write_handle deregister calls below pass a LITERAL `0` as the reactor
+ * handle. `ruxen_reactor_deregister` in reactor.c early-returns whenever
+ * `reactor_handle == 0` (`if (reactor_handle == 0 || handle == 0) return;`
+ * — unlike the register_fd_*_persistent functions, deregister has NO
+ * lazy-acquire-current-thread-reactor fallback for a 0 handle). That makes
+ * the two calls below permanent no-ops: read_handle/write_handle are never
+ * actually torn down on stream drop/shutdown today. This predates Lever
+ * D.2 and is out of this change's scope (timer-ownership refactor only;
+ * fixing it would touch listener_drop's identical pattern too and is a
+ * separate leak-fix task) — flagged here, NOT fixed, per review protocol.
+ * The NEW timer_handle deregister call below deliberately does NOT copy
+ * this pattern: it passes the real `ruxen_reactor_current_handle()` so the
+ * timer this change introduces is actually torn down and
+ * `registered_count` actually returns to baseline (the task's explicit
+ * no-leak requirement). */
 static void ruxen_async_tcp_stream_unregister(RuxenAsyncTcpStream *s) {
     if (s->read_handle != 0) {
         ruxen_reactor_deregister(0, s->read_handle);
@@ -909,6 +1038,10 @@ static void ruxen_async_tcp_stream_unregister(RuxenAsyncTcpStream *s) {
         ruxen_reactor_deregister(0, s->write_handle);
         s->write_handle = 0;
     }
+    if (s->timer_handle != 0) {
+        ruxen_reactor_deregister(ruxen_reactor_current_handle(), s->timer_handle);
+        s->timer_handle = 0;
+    }
 }
 
 void ruxen_async_tcp_stream_drop(void *self) {
@@ -917,9 +1050,7 @@ void ruxen_async_tcp_stream_drop(void *self) {
     /* Deregister BEFORE close — see listener_drop note. */
     ruxen_async_tcp_stream_unregister(s);
     if (!s->closed && s->fd >= 0) {
-        int rc;
-        do { rc = close(s->fd); } while (rc < 0 && errno == EINTR);
-        (void)rc;
+        (void)ruxen_fd_close_retry(s->fd);
         s->closed = 1;
         s->fd = -1;
     }
@@ -953,9 +1084,7 @@ void ruxen_async_tcp_stream_shutdown(void *self) {
     ruxen_async_tcp_stream_unregister(s);
     if (!s->closed && s->fd >= 0) {
         (void)shutdown(s->fd, SHUT_RDWR);
-        int rc;
-        do { rc = close(s->fd); } while (rc < 0 && errno == EINTR);
-        (void)rc;
+        (void)ruxen_fd_close_retry(s->fd);
         s->closed = 1;
         s->fd = -1;
     }

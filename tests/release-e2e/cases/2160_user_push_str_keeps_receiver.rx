@@ -1,0 +1,22 @@
+# Blocker 13 (F-23). A user method named `push_str` called on a local must
+# leave the local alone. MIR used to overwrite the receiver with the call's
+# return value for any receiver type, not just String.
+class Log
+  lines: Int
+
+  def init(lines: Int)
+    self.lines = lines
+  end
+
+  def var push_str(line: &String) -> Int
+    self.lines = self.lines + 1
+    (line.size as Int) * 10
+  end
+end
+
+def main
+  var log = Log.new(1)
+  let width = log.push_str("abc")
+  puts width
+  puts log.lines
+end

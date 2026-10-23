@@ -5,47 +5,62 @@ the closed set `{File, TcpStream}`.
 
 v1 simplification: no formal `Read` / `Write` mixin. The runtime carves
 a 1-byte `kind` tag into the wrapper spine and branches on it for every
-fill / flush. The user-visible generic surface (`BufReader[R]`) is
-monomorphised at typeck against the closed inner set; anything else
-raises **E0714**. The mixin story lands in v1.5 with the iterator
-trait work.
+fill / flush. `BufReader` / `BufWriter` are modules with one class per
+inner type; calling a method on the module itself (`BufReader.new`)
+raises **E0714**, which names the classes. The formal mixin story is
+deferred to v1.5.
 
 ## Surface
 
+The shipped surface (`library/std/bufio/src/lib.rx`) is one module per
+direction with a class per inner type, sharing the methods through a
+mixin:
+
 ```ruxen
-class BufReader[R]
-  def self.new(inner: R) -> BufReader[R]
-  def self.with_capacity(cap: Int, inner: R) -> BufReader[R]   # 8 KiB default
-  def read_line(self) -> Result[Option[String], IoError]        # None at EOF
-  def read(self, buf: &var Array[U8]) -> Result[Int, IoError]
-  def into_inner(self) -> R                                     # surrenders R, frees buf
+module BufReader
+  mixin Reader
+    def read_line -> Result[String?, IoError]               # nil at EOF
+    def read(buf: &var Array[Int]) -> Result[Int, IoError]
+  end
+
+  class File        # and the parallel `class Tcp` over TcpStream
+    include Reader
+    def self.new(inner: File) -> BufReader.File
+    def self.with_capacity(cap: Int, inner: File) -> BufReader.File   # 8 KiB default
+    def into_inner -> File                                  # surrenders the inner, frees buf
+  end
 end
 
-class BufWriter[W]
-  def self.new(inner: W) -> BufWriter[W]
-  def self.with_capacity(cap: Int, inner: W) -> BufWriter[W]
-  def write(self, bytes: &Array[U8]) -> Result[Int, IoError]
-  def write_all(self, bytes: &Array[U8]) -> Result[nil, IoError]
-  def write_str(self, s: &String) -> Result[nil, IoError]
-  def flush(self) -> Result[nil, IoError]                        # required for guaranteed persistence
-  def into_inner(self) -> Result[W, IoError]                    # flush then surrender
+module BufWriter
+  mixin Writer
+    def write(buf: &Array[Int]) -> Result[Int, IoError]
+    def write_all(buf: &Array[Int]) -> Result[nil, IoError]
+    def write_str(s: &String) -> Result[nil, IoError]
+    def flush -> Result[nil, IoError]                       # required for guaranteed persistence
+  end
+
+  class File        # and the parallel `class Tcp` over TcpStream
+    include Writer
+    def self.new(inner: File) -> BufWriter.File
+    def self.with_capacity(cap: Int, inner: File) -> BufWriter.File
+    def into_inner -> File                                  # flush then surrender
+  end
 end
 ```
 
-- `R` and `W` are restricted to `File` or `TcpStream`. Any other type
-  raises **E0714** at typeck.
-- `BufReader.lines()` and the formal `Read` / `Write` mixins are
-  deferred to v1.5.
+- The inner is restricted to `File` or `TcpStream` by the `File` and
+  `Tcp` classes' declared constructor parameters. `BufReader.new(..)`
+  on the module raises **E0714**.
+- `BufReader#each_line` is deferred to v1.5.
 
 ## Semantics
 
-- Default capacity: 8 KiB (matches Rust's `std::io::BufReader` /
-  `BufWriter` defaults).
+- Default capacity: 8 KiB.
 - `with_capacity(0, inner)` rounds up to 1 to keep `fill_buf` from
   spinning. Negative caps are also rounded to 1.
 - `read_line` returns `Ok(Some(line))` where `line` includes the
   trailing `?\n` if one was seen, or just the remaining bytes at EOF.
-  Returns `Ok(None)` at true EOF (no bytes read). `Err` on real I/O
+  Returns `Ok(nil)` at true EOF (no bytes read). `Err` on real I/O
   failure.
 - `read(buf)` pulls the next chunk from the inner (refilling if empty),
   then drains the buffered window into `buf` as one byte per slot —
@@ -80,8 +95,7 @@ Both classes participate in the user_drop_classes pipeline (see
   File / TcpStream's own drop may close the fd before the BufWriter's
   drop runs — in that case the flush silently fails. Callers who
   require persistence MUST call `.flush()` or `.into_inner()`
-  explicitly before the BufWriter goes out of scope. This matches
-  Rust's `std::io::BufWriter` documented guidance.
+  explicitly before the BufWriter goes out of scope.
 
 ## Wire layout (32 bytes — same shape for reader and writer)
 
@@ -97,7 +111,7 @@ Both classes participate in the user_drop_classes pipeline (see
 ```
 
 Wire layout pinned by `_Static_assert(sizeof(RuxenBufReader) == 32, …)`
-in `library/runtime/io/bufio.c`. If the assertion drifts the runtime
+in `library/std/io/runtime/bufio.c`. If the assertion drifts the runtime
 won't link — that's the design-level pin for this spine.
 
 ## Runtime symbol routing
@@ -125,12 +139,11 @@ they branch on the 1-byte `kind` tag inside the runtime spine.
 
 ## Out of scope (v1)
 
-- No formal `Read` / `Write` mixin — deferred to v1.5.
-- No `BufReader.lines()` iterator — deferred to v1.5 (needs the
-  iterator trait surface).
-- No `into_inner` error-recovery type (Rust's `IntoInnerError` carries
-  both the error and the BufWriter so the caller can retry). v1
-  returns just the error — the BufWriter's own drop will re-attempt
-  the flush on a best-effort basis.
-- No `&dyn Read` / `Box<dyn Read>` — the closed-set monomorphisation
+- No generic `Read` / `Write` mixin over arbitrary inners — deferred
+  to v1.5.
+- No `BufReader#each_line` — deferred to v1.5.
+- No `into_inner` error-recovery type carrying both the error and the
+  BufWriter so the caller can retry. The BufWriter's own drop
+  re-attempts the flush on a best-effort basis.
+- No dynamic `any Reader` dispatch — the closed-set monomorphisation
   is the only dispatch path.

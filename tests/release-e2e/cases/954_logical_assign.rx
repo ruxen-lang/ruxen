@@ -1,0 +1,20 @@
+# Pins `||=` / `&&=` conditional assignment (Bool; Ruxen is strict-Bool).
+# `a ||= b` desugars to `a || (a = b)`, `a &&= b` to `a && (a = b)`, so the
+# assign runs only when the value actually changes (short-circuit).
+def main
+  var flag = false
+  flag ||= true
+  puts "flag=#{flag}"
+
+  var keep = true
+  keep &&= false
+  puts "keep=#{keep}"
+
+  var a = true
+  a ||= false
+  puts "a=#{a}"
+
+  var b = false
+  b &&= true
+  puts "b=#{b}"
+end

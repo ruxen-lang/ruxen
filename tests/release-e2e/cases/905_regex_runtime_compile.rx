@@ -1,6 +1,0 @@
-def main
-  match Regex.new("\\d+", "")
-    Ok(_)  -> puts "ok"
-    Err(_) -> puts "err"
-  end
-end

@@ -1,0 +1,13 @@
+# Pins Kernel's `abort` — write the message to STDERR and terminate with
+# exit status 1. The proof is what is MISSING from stdout: the line after
+# `abort` never runs, and neither does the `exit(0)` that would otherwise
+# have made this fixture exit cleanly.
+#
+# The harness diffs stdout only and tolerates a nonzero exit, so the
+# stderr message and the status-1 exit are deliberately not asserted here.
+def main
+  puts "before abort"
+  abort("fatal: nothing to do")
+  puts "after abort"
+  exit(0)
+end

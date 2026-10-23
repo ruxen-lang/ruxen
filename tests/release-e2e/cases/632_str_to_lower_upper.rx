@@ -1,5 +1,0 @@
-def main
-  let s = "  MixedCase  "
-  puts s.trim.to_lower
-  puts s.trim.to_upper
-end

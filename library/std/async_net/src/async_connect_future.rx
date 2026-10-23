@@ -13,32 +13,20 @@ class AsyncConnectFuture
   end
 
   def var poll(cx: &var Context) -> Poll[Result[AsyncTcpStream, IoError]]
-    if self.done != 0
-      return Poll.Ready(connect_state_to_result(self.state_ptr))
-    end
-    let step = ruxen_async_connect_step(self.state_ptr)
-    if step == 1
-      if self.handle == 0
-        let sfd = ruxen_async_connect_state_get_fd(self.state_ptr)
-        self.handle = ruxen_reactor_register_fd_write(ruxen_reactor_current_handle(), sfd)
+    if self.done == 0
+      if ruxen_async_connect_step(self.state_ptr) == 1
+        let fd = ruxen_async_connect_state_get_fd(self.state_ptr)
+        self.handle = StepFuture.park_fd(cx, self.handle, fd, true)
+        return Poll.Pending
       end
-      let w = cx.waker
-      ruxen_reactor_set_waker(ruxen_reactor_current_handle(), self.handle, w)
-      return Poll.Pending
+      self.handle = StepFuture.release(self.handle)
+      self.done = 1
     end
-    if self.handle != 0
-      ruxen_reactor_deregister(ruxen_reactor_current_handle(), self.handle)
-      self.handle = 0
-    end
-    self.done = 1
     Poll.Ready(connect_state_to_result(self.state_ptr))
   end
 
   def drop
-    if self.handle != 0
-      ruxen_reactor_deregister(ruxen_reactor_current_handle(), self.handle)
-      self.handle = 0
-    end
+    self.handle = StepFuture.release(self.handle)
     if self.state_ptr != 0
       ruxen_async_connect_state_free(self.state_ptr)
       self.state_ptr = 0

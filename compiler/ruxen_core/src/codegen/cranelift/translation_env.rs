@@ -7,24 +7,23 @@
 use std::collections::HashMap;
 
 use cranelift_codegen::ir::types::{self, Type};
-use cranelift_codegen::ir::{AbiParam, Signature};
+use cranelift_codegen::ir::{AbiParam, FuncRef, Signature};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 
-use crate::codegen::runtime::extract_method_name;
-
-use super::runtime_sigs::compiler_internal_signature;
+use super::helpers::clif_signature;
+use crate::mir::abi::{CalleeIndex, CalleeKind};
 
 pub struct TranslationEnv<'a, M: Module> {
     pub module: &'a mut M,
     pub declared_fns: &'a mut HashMap<String, FuncId>,
     pub string_data: &'a mut HashMap<String, cranelift_module::DataId>,
     pub string_counter: &'a mut u32,
-    /// Param types of every previously-declared user / FFI fn.  Read-only:
-    /// instruction lowering never declares new entries here.  Used so that
-    /// `coerce_call_args` can apply the *real* narrow-int signature of
-    /// known user fns instead of the default widen-to-i64 fallback.
-    pub user_fn_param_tys: &'a HashMap<String, Vec<Type>>,
+    /// Every callee's signature by each name a call spells
+    /// (`MirProgram::callees`, a `mir::abi::CalleeIndex`). Read-only:
+    /// `get_or_declare_func` resolves an FFI alias to its C symbol and
+    /// declares an import from it.
+    pub callees: &'a CalleeIndex,
     /// Mixin vtables Phase B-5: pre-declared data symbol IDs for
     /// `__rx_vtable_*` and `__rx_classinfo_*`. Read-only —
     /// instruction lowering never declares new entries here. Used by
@@ -63,95 +62,39 @@ impl<'a, M: Module> TranslationEnv<'a, M> {
 
     /// Get or declare a function by name, returning a `FuncRef` usable inside
     /// the current Cranelift function being built.
+    ///
+    /// A name the callee index knows resolves to its link symbol (an FFI's
+    /// Ruxen name or lib-qualified alias reaches its C symbol) and, for an
+    /// import not declared yet, is declared from its derived signature. Only
+    /// a callee no declaration describes takes its signature from the call.
     pub fn get_or_declare_func(
         &mut self,
         name: &str,
         arg_vals: &[cranelift_codegen::ir::Value],
         has_return: bool,
         builder: &mut FunctionBuilder,
-    ) -> Result<cranelift_codegen::ir::FuncRef, String> {
+    ) -> Result<FuncRef, String> {
         if let Some(&func_id) = self.declared_fns.get(name) {
-            let func_ref = self.module.declare_func_in_func(func_id, builder.func);
-            return Ok(func_ref);
+            return Ok(self.module.declare_func_in_func(func_id, builder.func));
         }
-
-        // TODO (quality review §1.3): the two suffix-fallback paths
-        // below ("shortest-name wins") are unsound — any class whose
-        // mangled name ends with the same suffix wins by chance for an
-        // unresolved generic-typed callee. The proper fix is to
-        // monomorphise generic methods at MIR time so the callee name
-        // is concrete by codegen entry.
-        //
-        // Removing the fallback now breaks the sample fixture's
-        // `Repository[T: Showable].display_all`'s `item.to_display`
-        // call (MIR emits `?T625_to_display`), because mixin-bound
-        // generics aren't monomorphised yet. Leaving the suffix
-        // fallback in place but tracked.
-        //
-        // Blast radius (post-Cranelift-share): this `TranslationEnv` is the
-        // SHARED codegen path, so the fallback now ships in BOTH backends —
-        // the batch `CodeGen` (ObjectModule) and the REPL `JITCodeGen`
-        // (JITModule). A fix here corrects both; a regression here breaks both.
-        //
-        // For inferred-type method calls (?T..._method), search for a
-        // declared function whose name ends with _method.
-        // Prefer the shortest match to avoid picking e.g.
-        // TaskList_find_by_id when we want Task_id.
-        if name.starts_with("?") {
-            let method = extract_method_name(name);
-            let suffix = format!("_{}", method);
-            let match_name = self
-                .declared_fns
-                .keys()
-                .filter(|k| k.ends_with(&suffix) && !k.starts_with("?"))
-                .min_by_key(|k| k.len())
-                .cloned();
-            if let Some(resolved) = match_name {
-                let func_id = self.declared_fns[&resolved];
-                let func_ref = self.module.declare_func_in_func(func_id, builder.func);
-                return Ok(func_ref);
+        if let Some(callee) = self.callees.get(name) {
+            if let Some(&func_id) = self.declared_fns.get(&callee.link_name) {
+                return Ok(self.module.declare_func_in_func(func_id, builder.func));
+            }
+            if callee.kind == CalleeKind::Import {
+                let sig = clif_signature(self.module.isa().default_call_conv(), &callee.abi);
+                let link_name = callee.link_name.clone();
+                return self.declare_import(&link_name, &sig, builder);
             }
         }
 
-        // For unresolved generic type parameters (e.g., T_assign, E_message),
-        // use suffix matching to find the concrete method.
-        if !self.declared_fns.contains_key(name) {
-            let method = extract_method_name(name);
-            let type_prefix = if let Some(pos) = name.find('_') {
-                &name[..pos]
-            } else {
-                ""
-            };
-            // Match single-letter type params or common generic names
-            let is_generic_param =
-                type_prefix.len() <= 2 && type_prefix.chars().all(|c| c.is_ascii_uppercase());
-            if is_generic_param && !type_prefix.is_empty() {
-                let suffix = format!("_{}", method);
-                let match_name = self
-                    .declared_fns
-                    .keys()
-                    .filter(|k| {
-                        k.ends_with(&suffix) && !k.starts_with("?") && k.len() > suffix.len()
-                    })
-                    .min_by_key(|k| k.len())
-                    .cloned();
-                if let Some(resolved) = match_name {
-                    let func_id = self.declared_fns[&resolved];
-                    let func_ref = self.module.declare_func_in_func(func_id, builder.func);
-                    return Ok(func_ref);
-                }
-            }
-        }
-
-        // Compiler-internal residual symbols (alloc, `==`/`<=>` lowering,
-        // drop glue, fmt synthesis, …) are emitted directly by codegen and
-        // declared by no `.rx` lib block, so Pass-0 never put them in
-        // `declared_fns`. Their ABI lives in the residual table. Every
-        // `.rx`-declared FFI symbol was already declared in Pass-0 and
-        // hits the `declared_fns` early-return above, so it never reaches
-        // here — the derived width is its binding signature.
-        if let Some((param_tys, ret_ty)) = compiler_internal_signature(name) {
-            return self.declare_runtime_func(name, &param_tys, ret_ty, builder);
+        // An abstract callee (`?T_method`) has no concrete body; MIR never
+        // lets one reach codegen (`prune_unmonomorphised_bodies`).
+        if name.starts_with('?') {
+            return Err(format!(
+                "internal error: abstract callee `{name}` reached codegen (its receiver is \
+                 still a generic parameter)"
+            ));
         }
 
         // Fall back: infer signature from call-site.
@@ -164,46 +107,53 @@ impl<'a, M: Module> TranslationEnv<'a, M> {
         if has_return {
             sig.returns.push(AbiParam::new(types::I64));
         }
-
-        let func_id = self
-            .module
-            .declare_function(name, Linkage::Import, &sig)
-            .map_err(|e| format!("Failed to declare imported function '{}': {}", name, e))?;
-
-        self.declared_fns.insert(name.to_string(), func_id);
-        let func_ref = self.module.declare_func_in_func(func_id, builder.func);
-        Ok(func_ref)
+        self.declare_import(name, &sig, builder)
     }
 
-    /// Declare a runtime function with an explicit signature.
+    /// A `FuncRef` for a runtime function the compiler emits itself, from
+    /// its `residual_abi` signature (or its `.rx` declaration).
+    pub fn runtime_func(
+        &mut self,
+        name: &str,
+        builder: &mut FunctionBuilder,
+    ) -> Result<FuncRef, String> {
+        if self.callees.get(name).is_none() {
+            return Err(format!(
+                "internal error: runtime function `{name}` has no declared or residual ABI"
+            ));
+        }
+        self.get_or_declare_func(name, &[], false, builder)
+    }
+
+    fn declare_import(
+        &mut self,
+        name: &str,
+        sig: &Signature,
+        builder: &mut FunctionBuilder,
+    ) -> Result<FuncRef, String> {
+        let func_id = self
+            .module
+            .declare_function(name, Linkage::Import, sig)
+            .map_err(|e| format!("Failed to declare imported function '{}': {}", name, e))?;
+        self.declared_fns.insert(name.to_string(), func_id);
+        Ok(self.module.declare_func_in_func(func_id, builder.func))
+    }
+
+    /// Declare a C library function with an explicit signature (libm
+    /// `fmod`, which no `.rx` block declares).
     pub fn declare_runtime_func(
         &mut self,
         name: &str,
         params: &[Type],
         ret: Option<Type>,
         builder: &mut FunctionBuilder,
-    ) -> Result<cranelift_codegen::ir::FuncRef, String> {
+    ) -> Result<FuncRef, String> {
         if let Some(&func_id) = self.declared_fns.get(name) {
-            let func_ref = self.module.declare_func_in_func(func_id, builder.func);
-            return Ok(func_ref);
+            return Ok(self.module.declare_func_in_func(func_id, builder.func));
         }
-
-        let call_conv = self.module.isa().default_call_conv();
-        let mut sig = Signature::new(call_conv);
-        for &p in params {
-            sig.params.push(AbiParam::new(p));
-        }
-        if let Some(r) = ret {
-            sig.returns.push(AbiParam::new(r));
-        }
-
-        let func_id = self
-            .module
-            .declare_function(name, Linkage::Import, &sig)
-            .map_err(|e| format!("Failed to declare runtime function '{}': {}", name, e))?;
-
-        self.declared_fns.insert(name.to_string(), func_id);
-        let func_ref = self.module.declare_func_in_func(func_id, builder.func);
-        Ok(func_ref)
+        let mut sig = Signature::new(self.module.isa().default_call_conv());
+        sig.params.extend(params.iter().map(|&p| AbiParam::new(p)));
+        sig.returns.extend(ret.map(AbiParam::new));
+        self.declare_import(name, &sig, builder)
     }
 }

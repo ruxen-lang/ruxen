@@ -1,0 +1,21 @@
+enum Route
+  Home
+  Missing
+end
+
+def selected_route -> Route
+  Route.Home
+end
+
+def main
+  if 1 > 0
+    puts "positive"
+  else
+    puts "non-positive"
+  end
+
+  match selected_route()
+    Route.Home -> puts "home"
+    Route.Missing -> puts "missing"
+  end
+end

@@ -1,0 +1,26 @@
+def main
+  var first = 0
+  var rest: Array[Int] = []
+  var values = [10, 20, 30, 40]
+  first, *rest = values
+  puts first
+  puts rest.size
+  puts rest[0]
+  puts rest[2]
+
+  var head = 0
+  var tail: Array[Int] = []
+  head, *tail = 7, 8, 9
+  puts head
+  puts tail.size
+  puts tail[0]
+  puts tail[1]
+
+  var self_first = 0
+  var self_rest = [4, 5, 6]
+  self_first, *self_rest = self_rest
+  puts self_first
+  puts self_rest.size
+  puts self_rest[0]
+  puts self_rest[1]
+end

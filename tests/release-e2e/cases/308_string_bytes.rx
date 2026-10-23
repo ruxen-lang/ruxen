@@ -1,5 +1,0 @@
-def main
-  let s = "hi"
-  let bs = s.bytes
-  puts "len=#{bs.size}"
-end

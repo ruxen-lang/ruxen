@@ -10,10 +10,9 @@
 are passed as `"host:port"` strings; the class wrappers own a POSIX
 fd and `close` it on drop. The flat fd-based `tcp_*` free functions
 from the prompt-#06.5-T5 predecessor (Phase 3) have been **removed**
-from the user-facing surface — the underlying C runtime symbols
-(`ruxen_tcp_connect`, `ruxen_tcp_listen`, …) are still linked and
-reused internally by `TcpListener` / `TcpStream`, but they are no
-longer Ruxen-callable.
+from the user-facing surface, and their C runtime symbols
+(`ruxen_tcp_connect`, `ruxen_tcp_listen`, …) were deleted from
+`tcp.c`.
 
 ---
 
@@ -27,21 +26,21 @@ ruxen_dealloc` at scope exit, idempotent with explicit `.close()`.
 ```
 class TcpListener
   def self.bind(addr: &String) -> Result[TcpListener, IoError]
-  def accept(self) -> Result[TcpStream, IoError]        # blocking
-  def local_addr(self) -> Result[String, IoError]
-  def set_nonblocking(self, v: Bool) -> Result[nil, IoError]
-  def close(self) -> Result[nil, IoError]                # also on drop
+  def accept -> Result[TcpStream, IoError]              # blocking
+  def local_addr -> Result[String, IoError]
+  def set_nonblocking(v: Bool) -> Result[nil, IoError]
+  def close -> Result[nil, IoError]                      # also on drop
 end
 
 class TcpStream
   def self.connect(addr: &String) -> Result[TcpStream, IoError]
-  def read(self, buf: &var Array[U8]) -> Result[Int, IoError]
-  def write(self, bytes: &Array[U8]) -> Result[Int, IoError]
-  def peer_addr(self) -> Result[String, IoError]
-  def shutdown(self, how: Shutdown) -> Result[nil, IoError]
-  def set_read_timeout(self, d: &Duration) -> Result[nil, IoError]
-  def set_write_timeout(self, d: &Duration) -> Result[nil, IoError]
-  def close(self) -> Result[nil, IoError]                # also on drop
+  def read(buf: &var Array[Int]) -> Result[Int, IoError]
+  def write(bytes: &Array[Int]) -> Result[Int, IoError]
+  def peer_addr -> Result[String, IoError]
+  def shutdown(how: Shutdown) -> Result[nil, IoError]
+  def set_read_timeout(d: &Duration) -> Result[nil, IoError]
+  def set_write_timeout(d: &Duration) -> Result[nil, IoError]
+  def close -> Result[nil, IoError]                      # also on drop
 end
 
 enum Shutdown
@@ -102,28 +101,26 @@ loops can break out.
 **Given** a peer is listening at `addr`
 **Then** the result is `Ok(stream)` with the connected client fd.
 
-### C8 — `TcpStream.write(bytes: &Array[U8]) -> Result[Int, IoError]`
+### C8 — `TcpStream.write(bytes: &Array[Int]) -> Result[Int, IoError]`
 
 Single `send(2)` call. Returns `Ok(n)` where `n` may be less than
 `bytes.size` on partial writes; caller may loop or use a future
 `write_all`. Returns `Err(IoError.BrokenPipe)` if the peer closed
 mid-write.
 
-### C9 — `TcpStream.read(buf: &var Array[U8]) -> Result[Int, IoError]`
+### C9 — `TcpStream.read(buf: &var Array[Int]) -> Result[Int, IoError]`
 
 Single `recv(2)` call. Returns `Ok(0)` on clean EOF, `Ok(n>0)`
 otherwise. Bytes are appended to `buf` (one int64 slot per byte,
-matching `File.read`'s Vec[U8] convention).
+matching `File.read`'s byte-array convention).
 
 **Binary-safety:** the read path is genuinely binary-safe — embedded
-`0x00` bytes round-trip via `Array[U8]`. The implementation routes
+`0x00` bytes round-trip via `Array[Int]`. The implementation routes
 through the new `ruxen_tcp_read_bytes(fd, buf, max)` runtime helper
 which writes each received byte into a fresh int64 slot, never
 treating the staging buffer as a C string. The legacy
 `ruxen_tcp_read(fd, max) -> char*` helper (which DID truncate on
-embedded NULs) is kept linked but no longer reachable from Ruxen —
-the flat-fn surface that exposed it was removed alongside the rest
-of the Phase-3 free fns.
+embedded NULs) was deleted with the rest of the Phase-3 free fns.
 
 ### C10 — `TcpStream.peer_addr() -> Result[String, IoError]`
 
@@ -158,13 +155,13 @@ streams must not exhaust fds.
 
 Tag values are pinned: `Read=0`, `Write=1`, `Both=2` — pin-tested
 against the runtime `RUXEN_SHUTDOWN_*` defines in
-`library/runtime/net/tcp.c`.
+`library/std/net/runtime/tcp.c`.
 
 ### C15 — Auto-import from prelude
 
 `TcpListener`, `TcpStream`, and `Shutdown` are importable via
 `use std.net.{TcpListener, TcpStream, Shutdown}`. The class
-declarations live in `library/std/src/net.rx` (declarative doc —
+declarations live in `library/std/net/src/lib.rx` (declarative doc —
 executable behavior is wired in resolve/typeck/codegen).
 
 ### C17 — `TcpStream.set_read_timeout(d: &Duration) -> Result[nil, IoError]`
@@ -172,8 +169,7 @@ executable behavior is wired in resolve/typeck/codegen).
 Sets the `SO_RCVTIMEO` socket option to the given Duration. Once the
 timeout fires a subsequent blocking `.read(...)` returns
 `Err(IoError.WouldBlock)` instead of blocking forever. Passing a
-Duration with `nanos == 0` clears the timeout (matches Rust's
-`set_read_timeout(None)` semantic). Sub-microsecond non-zero
+Duration with `nanos == 0` clears the timeout. Sub-microsecond non-zero
 Durations round up to 1µs so a "set as short as possible" intent
 isn't accidentally interpreted as "clear".
 
@@ -189,10 +185,8 @@ can't drain to the kernel buffer within the budget returns
 A byte sequence containing `0x00` (e.g. `[0xFF, 0x00, 0x41, 0x00, 0x42]`)
 sent via `TcpStream.write(&bytes)` and read back via `TcpStream.read(
 &var buf)` round-trips with all bytes intact — no truncation at the
-embedded NUL. Pinned by `tcp_stream_class_read_is_binary_safe` and
-e2e case `541_tcp_stream_connect_write_read` (which exercises a
-clean roundtrip; the binary-safety guarantee piggy-backs on the
-same `ruxen_tcp_read_bytes` path).
+embedded NUL. Pinned by "reads embedded zero bytes" in
+`library/std/net/tests/tcp_test.rx`.
 
 ### C16 — Flat `tcp_*` free fns are no longer exposed
 
@@ -200,8 +194,7 @@ A Ruxen program that writes `use std.net.tcp_connect` must fail at
 resolve time with "name not found in std.net". The 6 C runtime
 symbols (`ruxen_tcp_connect`, `ruxen_tcp_listen`,
 `ruxen_tcp_accept`, `ruxen_tcp_read`, `ruxen_tcp_write`,
-`ruxen_tcp_close`) remain linked and reused by the class wrappers;
-they are simply no longer reachable from Ruxen user code.
+`ruxen_tcp_close`) were deleted from the runtime.
 
 ---
 
@@ -209,30 +202,28 @@ they are simply no longer reachable from Ruxen user code.
 
 | Behaviour | Test fn                                            | File                           |
 |-----------|----------------------------------------------------|--------------------------------|
-| C1 (ok)   | `tcp_listener_class_bind_ok`                       | `stdlib_net.rs`                |
-| C1 (err)  | `tcp_listener_class_bind_malformed_returns_err`    | `stdlib_net.rs`                |
-| C2        | `tcp_listener_class_close_idempotent`              | `stdlib_net.rs`                |
-| C3        | `tcp_listener_class_drop_closes_fd`                | `stdlib_net.rs`                |
-| C4        | `tcp_listener_class_local_addr`                    | `stdlib_net.rs`                |
-| C5        | `tcp_listener_class_set_nonblocking_would_block`   | `stdlib_net.rs`                |
-| C6, C7 (ok), C8, C9 | `tcp_class_loopback_roundtrip`           | `stdlib_net.rs`                |
-| C7 (err)  | `tcp_stream_class_connect_unreachable_returns_err` | `stdlib_net.rs`                |
-| C10       | `tcp_stream_class_peer_addr`                       | `stdlib_net.rs`                |
-| C11       | `tcp_stream_class_shutdown_write_then_read_eof`    | `stdlib_net.rs`                |
-| C12       | `tcp_stream_class_close_idempotent`                | `stdlib_net.rs`                |
-| C13       | `tcp_stream_class_drop_closes_fd`                  | `stdlib_net.rs`                |
+| C1 (ok)   | "binds to port 0 and reports a 127.0.0.1 local_addr" | `library/std/net/tests/tcp_test.rx` |
+| C1 (err)  | "returns Err from bind for a malformed address" | `library/std/net/tests/tcp_test.rx` |
+| C2        | "closes idempotently, then local_addr is Err" | `library/std/net/tests/tcp_test.rx` |
+| C3        | "releases the fd on drop across 200 binds" | `library/std/net/tests/tcp_test.rx` |
+| C4        | "binds to port 0 and reports a 127.0.0.1 local_addr" | `library/std/net/tests/tcp_test.rx` |
+| C5        | "returns WouldBlock from accept when nonblocking and idle" | `library/std/net/tests/tcp_test.rx` |
+| C6, C7 (ok), C8, C9 | "delivers written bytes to the accepted peer, then EOF after close" | `library/std/net/tests/tcp_test.rx` |
+| C7 (err)  | "returns Err from connect when nothing listens" | `library/std/net/tests/tcp_test.rx` |
+| C10       | "reports the listener as peer_addr" | `library/std/net/tests/tcp_test.rx` |
+| C11       | "shows EOF to the peer after shutdown(Write)" | `library/std/net/tests/tcp_test.rx` |
+| C12       | "closes idempotently" | `library/std/net/tests/tcp_test.rx` |
+| C13       | "releases the fd on drop across 200 connections" | `library/std/net/tests/tcp_test.rx` |
 | C14       | `shutdown_tag_values_match_runtime_and_resolver`   | `shutdown_tag_stability.rs`    |
-| C15       | `tcp_class_prelude_auto_import_resolves`           | `stdlib_net.rs`                |
-| C16       | `flat_tcp_free_fns_removed_from_resolver`          | `stdlib_net.rs`                |
-| C17       | `tcp_stream_class_set_read_timeout_would_block`    | `stdlib_net.rs`                |
-| C18       | `tcp_stream_class_set_write_timeout_resolves`      | `stdlib_net.rs`                |
-| C19       | `tcp_stream_class_read_is_binary_safe`             | `stdlib_net.rs`                |
+| C15       | "the `use std.net.{TcpListener, TcpStream, Shutdown}` line" | `library/std/net/tests/tcp_test.rx` |
+| C16       | retired syntax, no pin                             |                                |
+| C17       | "returns WouldBlock from read after the read timeout on an idle peer" | `library/std/net/tests/tcp_test.rx` |
+| C18       | "accepts a write timeout" | `library/std/net/tests/tcp_test.rx` |
+| C19       | "reads embedded zero bytes" | `library/std/net/tests/tcp_test.rx` |
 
-The original Phase-3 flat-fn roundtrip / SIGINT-echo-server pin
-tests have been migrated to use `TcpListener` / `TcpStream` and now
-live in `stdlib_net.rs` under the names above (the SIGINT echo
-server fixture also moved to the class surface — same scenario, new
-types).
+The SIGINT echo server test stays in `stdlib_net.rs`
+(`blocking_tcp_echo_server_with_graceful_sigint_shutdown`): the host
+process has to send the signal.
 
 ---
 
@@ -244,6 +235,5 @@ types).
 - `accept` returning the peer `SocketAddr` alongside the stream — the
   v1 method returns only the stream; `peer_addr` recovers the address
   on demand.
-- `TcpListener.incoming() -> Iterator[Result[TcpStream, IoError]]` —
-  ergonomic loop helper; user code today writes the explicit `loop
-  match listener.accept() ... end` form.
+- A block helper that yields each accepted connection — user code today
+  writes the explicit `loop match listener.accept ... end` form.

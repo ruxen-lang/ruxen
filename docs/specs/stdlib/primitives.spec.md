@@ -105,7 +105,7 @@ fine (literal narrows on assignment).
 | Behaviour | Test fixture / fn                                          | File                                           |
 |-----------|------------------------------------------------------------|------------------------------------------------|
 | B1        | `e2e_02_int_arith.rx` + many interpolation fixtures       | `tests/release-e2e/cases/`                     |
-| B2        | `e2e_03_float_arith.rx` + `interpolation_float_precision` | `stdlib_fmt_runtime.rs`                        |
+| B2        | `e2e_03_float_arith.rx` + `applies width, fill and precision` | `tests/release-e2e/cases/`, `std/fmt` `fmt_test.rx` |
 | B3        | `e2e_04_bool_logic.rx`                                    | `tests/release-e2e/cases/`                     |
 | B4        | `prim_char_unicode_escapes_round_trip`                     | `stdlib_primitives.rs`                         |
 | B5        | `prim_numeric_suffix_int_widths_round_trip`                | `stdlib_primitives.rs`                         |
@@ -126,8 +126,8 @@ fine (literal narrows on assignment).
 
 ## Out of scope (v2)
 
-- Mixin-bound numeric primitives — Rust's `Num`, `One`, `Zero` mixins
-  don't exist in v1; arithmetic is hardwired.
+- Mixin-bound numeric primitives — numeric mixins (`Num`, `One`,
+  `Zero`) don't exist in v1; arithmetic is hardwired.
 - 128-bit integers (`Int128`, `UInt128`) and arbitrary-precision
   big-int.
 - Float NaN / Infinity literal syntax (`Float.NAN`, `Float.INFINITY`).

@@ -17,21 +17,24 @@ Companion index for the five Tier-1 requirements documents. Read this first.
 The five agents independently surfaced issues in code that already exists. None of the Tier-1 work is safe to build on top of the current state without addressing these.
 
 ### B1. `Drop` is a no-op; every program leaks heap memory
-- `MirInst::Drop` is emitted by `insert_drops` (`crates/ruxen-core/src/mir/lower.rs:3346-3407`) but both codegen backends silently discard it (`codegen/cranelift.rs:692-698`, `codegen/llvm/emit.rs:790-792`).
+- `MirInst::Drop` is emitted by `insert_drops` (`compiler/ruxen_core/src/mir/lower.rs:3346-3407`) but both codegen backends silently discard it (`codegen/cranelift.rs:692-698`, `codegen/llvm/emit.rs:790-792`).
 - The whitelist explicitly excludes `String`/`Array`/`Option`/`Result`, so even the existing infrastructure wouldn't free them.
 - Tutorials at `docs/tutorial/15-unsafe.md:62-68` describe `include Drop` as if it works.
 - **Consequence:** all heap allocations survive until process exit. Blocking for any non-trivial stdlib program.
 
-### B2. `derive` is parsed but never consumed
+### B2. `derive` is parsed but never consumed (resolved)
+
+**Resolved:** the `derive` directive was removed from the parser. Structural mixins are implicit includes (explicit `include X` is the loud form; see `docs/specs/mixins/implicit_includes.spec.md`), and `layout` args have their own field. The findings below are kept as history.
+
 - `derive Mixin1, Mixin2` in-body form: parses into `HirStructDef::derive_traits` (`hir/nodes.rs:431`), but no pass in `typeck`, `borrow_check`, `mir`, or `codegen` reads it.
 - `Ty::is_copy()` (`hir/types.rs:189-221`) makes a purely structural decision and ignores `derive_traits` — so `derive Copy` on a struct has zero ownership effect.
 - `parser/mod.rs:499-503` stuffs `layout c` and the like into the same `derive_traits: Vec<String>` field as a string. Must be untangled.
 - Classes and enums have no `derive_traits` field at all.
 
-### B3. `Hash` name collision (flagged by both stdlib and derive docs)
-- `Map[K,V]` is registered as a collection type constructor (`resolve/mod.rs:200`).
-- The conventional `Hash` mixin name can't coexist.
-- Both docs recommend renaming the collection to `Map[K,V]`. This breaks the tutorial and any fixture that uses `Map[K,V]`.
+### B3. `Hash` name collision (flagged by both the stdlib and implicit-includes docs)
+- `Hash[K,V]` is registered as a collection type constructor (`resolve/mod.rs:200`).
+- A hashing mixin also named `Hash` can't coexist with it.
+- Resolution: the collection keeps Ruby's name `Hash[K, V]`; the hashing mixin is `Hashable`. No rename.
 
 ### B4. `?T..._method` codegen fallback masks failures
 - `codegen/runtime.rs`'s `runtime_name()` has a fallback that maps unresolved generic method calls to `ruxen_noop_passthrough`.
@@ -63,7 +66,7 @@ The five agents independently surfaced issues in code that already exists. None 
                  ┌───────────┴───────────┐
                  ▼                       ▼
     ┌────────────────────────┐  ┌─────────────────────┐
-    │ 05: Derive             │  │ 01: Stdlib phase 1a │
+    │ 05: Implicit includes  │  │ 01: Stdlib phase 1a │
     │ (Debug/Clone/Copy/…)   │  │ (io/fmt/string/     │
     │                        │  │  collection methods)│
     └──────────────┬─────────┘  └──────────┬──────────┘
@@ -91,39 +94,39 @@ The five agents independently surfaced issues in code that already exists. None 
 
 Key dependencies:
 
-- **Derive ↔ Drop/Copy/Clone are mutually dependent.** Deriving `Copy` is meaningless without `Ty::is_copy_with(&SymbolTable)` consulting derive data; deriving `Clone`/`Debug` is how users avoid hand-writing boilerplate *for stdlib types*. Implement together.
-- **Stdlib needs derive.** Without `derive Debug` every struct hand-writes a `Display` `include`. Stdlib phase 1a should ship alongside the first derive set (5a: Debug + Clone).
-- **Stdlib depends on working Drop.** Heap-backed types (`String`, `Array`, `Map`, `File`, `TcpStream`) leak without it.
+- **Implicit includes ↔ Drop/Copy/Clone are mutually dependent.** An implicit `Copy` is meaningless without `Ty::is_copy_with(&SymbolTable)` consulting the include data; implicit `Clone`/`Debug` is how users avoid hand-writing boilerplate *for stdlib types*. Implement together.
+- **Stdlib needs implicit includes.** Without an implicit `Debug` every struct hand-writes a `Display` `include`. Stdlib phase 1a should ship alongside the first implicit-include set (5a: Debug + Clone).
+- **Stdlib depends on working Drop.** Heap-backed types (`String`, `Array`, `Hash`, `File`, `TcpStream`) leak without it.
 - **Concurrency's Send/Sync auto-mixins parallel Copy's structural-inference model** (doc 02 §4). Doing Copy first makes Send/Sync cheap to add.
 - **Async depends on concurrency** for the multi-threaded executor path. Single-threaded `block_on` can ship earlier — doc 03 §8 explicitly sequences this.
-- **Runtime int64-slot erasure** (`runtime/runtime.c:220-225`) blocks generic stdlib collections with user-defined keys until monomorphization lands. Doc 01 §Risks R5 restricts v1 `Map` keys to `{Int, UInt, USize, String, &str}`.
+- **Runtime int64-slot erasure** (`runtime/runtime.c:220-225`) blocks generic stdlib collections with user-defined keys until monomorphization lands. Doc 01 §Risks R5 restricts v1 `Hash` keys to `{Int, UInt, USize, String}`.
 
 ## Recommended implementation order
 
 **Phase 0 — pre-flight (1-2 weeks).** Fix B1-B5. Without these, everything downstream is built on sand.
 
-1. B3: rename `Map[K,V]` → `Map[K,V]`; update tutorial + fixtures.
+1. B3: keep the collection as `Hash[K, V]` and name the hashing mixin `Hashable` (no rename).
 2. B5: fix string-literal ownership model (retype to `Ty::Str` or wrap).
 3. B4: remove the `?T..._method` no-op fallback; accept that some existing tests will fail and fix them.
-4. B2: thread the body-level `derive` directive end-to-end and separate it from `layout` storage; widen `Vec<String>` to a structured form; add `derive_traits` to classes and enums.
+4. B2: done. `derive` is retired in favour of implicit includes, and `layout` has its own storage.
 5. B1: don't fix Drop codegen here — that's phase 1.
 
-**Phase 1 — Drop/Copy/Clone + derive foundations (3-4 weeks).**
+**Phase 1 — Drop/Copy/Clone + implicit-include foundations (3-4 weeks).**
 
 1. Drop/Copy/Clone mixin infrastructure (doc 04 phase 4a).
-2. Derive infrastructure + `derive Debug, Clone` (doc 05 phase 5a).
+2. Implicit-include infrastructure + implicit `Debug`, `Clone` (doc 05 phase 5a).
 3. User-written `include Drop` + `def var drop` (doc 04 phase 4b).
 4. MIR drop elaboration with drop flags + real codegen (doc 04 phase 4c). **Closes B1.**
-5. `derive Copy, PartialEq` + `Ty::is_copy_with` (doc 05 phase 5b + doc 04 phase 4c integration).
+5. Implicit `Copy`, `PartialEq` + `Ty::is_copy_with` (doc 05 phase 5b + doc 04 phase 4c integration).
 6. Built-in drops for `String`/`Array`/`Option`/`Result` (doc 04 phase 4d).
 
 **Phase 2 — stdlib phase 1a (2-3 weeks).** Doc 01 phase 1a.
 - `io`: stdin/stdout/stderr, `print`/`println`/`eprintln`/`read_line`.
-- `fmt`: `Debug`/`Display` mixins, formatter, `format!` macro (declarative, blocked on doc 05 phase 5d — or compiler-magic for v1).
-- `String`, `&str` method surface (split/trim/contains/starts_with/…).
-- `Array`, `Map`, `Set`, `Option`, `Result` method surface.
-- `Iterator` mixin + adapters.
-- Remaining derives: `Eq`/`Hash`/`Default`/`Ord`/`PartialOrd` (doc 05 phase 5c).
+- `fmt`: `Debug`/`Display` mixins, formatter, string interpolation (`"#{x}"`).
+- `String` method surface (split/strip/include?/start_with?/…).
+- `Array`, `Hash`, `Set`, `Option`, `Result` method surface.
+- `Enumerable` over `each` (`map`, `select`, `to_a`, …).
+- Remaining implicit includes: `Eq`/`Hashable`/`Default`/`Ord`/`PartialOrd` (doc 05 phase 5c).
 
 **Phase 3 — stdlib phase 1b/1c (3-4 weeks).** Doc 01 phase 1b/1c.
 - `fs`: `read_to_string`/`write`/`File`/`exists`.
@@ -148,13 +151,13 @@ Key dependencies:
 
 ## Total estimate
 
-~17-25 weeks of focused work for one engineer, faster if parallelized across the independent axes (derive+Drop can overlap with concurrency infra once Phase 1 finishes). Phase 0 alone is 1-2 weeks and unblocks everything.
+~17-25 weeks of focused work for one engineer, faster if parallelized across the independent axes (implicit includes + Drop can overlap with concurrency infra once Phase 1 finishes). Phase 0 alone is 1-2 weeks and unblocks everything.
 
 ## Open decisions for the project lead
 
 These surfaced across multiple docs and need a single ruling before implementation begins.
 
-1. **`Hash` naming.** Rename collection to `Map` (recommended by docs 01 and 05) — accept tutorial/fixture churn now, or find another mixin name.
+1. **`Hash` naming.** Decided: the collection keeps Ruby's name `Hash[K, V]`; the hashing mixin is `Hashable`.
 2. **Module system syntax.** Doc 01 §6 proposes Ruby-style `.`. Confirm canonical form.
 3. **`core` vs `std` split.** Doc 01 §6.3 defers it. Decide now whether to pre-adapt so no-std code can land without a later split.
 4. **Async surface syntax.** Doc 03 §5 proposes `.await` postfix with `await expr` prefix allowed. Pick the canonical form.

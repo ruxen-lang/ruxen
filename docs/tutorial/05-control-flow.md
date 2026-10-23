@@ -64,7 +64,7 @@ A few small notes:
 **Pattern matching** is a generalized `switch`: each arm tries a pattern, and the first matching arm runs. The compiler checks that every possible input is handled, so you can't accidentally forget a case.
 
 ```ruxen
-def describe(n: Int) -> &str
+def describe(n: Int) -> String
   match n
     0 -> "zero"
     1 -> "one"
@@ -108,7 +108,7 @@ If you forget to handle `Color.Blue`, the compiler refuses to build until you do
 A **guard** is an extra `if` condition on a match arm:
 
 ```ruxen
-def grade(score: Int) -> &str
+def grade(score: Int) -> String
   match score
     n if n >= 90 -> "A"
     n if n >= 80 -> "B"
@@ -123,7 +123,7 @@ end
 Pipe alternatives into one arm:
 
 ```ruxen
-def kind(day: &str) -> &str
+def kind(day: &String) -> String
   match day
     "Saturday" | "Sunday" -> "weekend"
     _                     -> "weekday"
@@ -327,7 +327,7 @@ Here the `do ... end` is the **block attached to the arm** — it is evaluated i
 let x = if cond
   42
 else
-  "no"        # ERROR: Int and &str don't match
+  "no"        # ERROR: Int and String don't match
 end
 ```
 

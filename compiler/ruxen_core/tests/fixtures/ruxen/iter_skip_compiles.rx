@@ -1,6 +1,0 @@
-def main
-  let v = [10, 20, 30, 40]
-  let n = v.drop(2).count
-  let s = n.to_string
-  puts "n=#{s}"
-end

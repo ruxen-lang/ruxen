@@ -1,0 +1,76 @@
+# Awaiting futures whose Output is Int32, Char or String lowers: each await
+# binding field gets a well-typed placeholder before the first poll.
+class Int32Future
+  value: Int32
+  include Future
+  type Output = Int32
+
+  def init(value: Int32)
+    self.value = value
+  end
+
+  def self.make(value: Int32) -> Int32Future
+    Int32Future.new(value)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int32]
+    Poll.Ready(self.value)
+  end
+end
+
+class CharFuture
+  value: Char
+  include Future
+  type Output = Char
+
+  def init(value: Char)
+    self.value = value
+  end
+
+  def self.make(value: Char) -> CharFuture
+    CharFuture.new(value)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Char]
+    Poll.Ready(self.value)
+  end
+end
+
+class StringFuture
+  value: String
+  include Future
+  type Output = String
+
+  def init(value: String)
+    self.value = value
+  end
+
+  def self.make(value: String) -> StringFuture
+    StringFuture.new(value)
+  end
+
+  def var poll(cx: &var Context) -> Poll[String]
+    Poll.Ready(self.value.clone)
+  end
+end
+
+async def get_int32 -> Int32
+  let v = Int32Future.make(41i32).await
+  v + 1i32
+end
+
+async def get_char -> Char
+  let c = CharFuture.make(?z).await
+  c
+end
+
+async def get_string -> String
+  let s = StringFuture.make("async").await
+  "#{s}!"
+end
+
+def main
+  puts "int32=#{block_on(get_int32())}"
+  puts "char=#{block_on(get_char())}"
+  puts "string=#{block_on(get_string())}"
+end

@@ -109,6 +109,7 @@ mod tests {
             message: "try this".to_string(),
             span: Span::new(0, 5, 0, 0),
             code: None,
+            help: Vec::new(),
         };
         let lsp = to_lsp_diagnostic(&diag, &idx);
         assert_eq!(lsp.severity, Some(DiagnosticSeverity::HINT));

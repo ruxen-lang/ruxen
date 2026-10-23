@@ -1,7 +1,0 @@
-def main
-  var v = ["a", "b", "c"]
-  while let Some(s) = v.pop
-    puts s
-  end
-  puts "len=#{v.size}"
-end

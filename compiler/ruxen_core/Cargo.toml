@@ -5,9 +5,27 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+autotests = false
 
 [lib]
 name = "ruxen_core"
+
+# Integration tests: one binary per crate (tests/it, one module per file),
+# plus two suites that need their own process.
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+
+# CI runs it by name; it is #[ignore]-gated.
+[[test]]
+name = "release_e2e_smoke"
+path = "tests/release_e2e_smoke.rs"
+
+# Opts its whole process into the test-only stdlib (RUXEN_TEST_STDLIB), which
+# the bootstrap caches per process, so it cannot share a process with `it`.
+[[test]]
+name = "trio_leak_pin"
+path = "tests/trio_leak_pin.rs"
 
 [features]
 sanitize = []

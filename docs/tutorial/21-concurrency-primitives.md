@@ -113,7 +113,7 @@ Other methods on `Mutex[T]`:
 
 ## 5. `SharedSync[T]` — sharing a value across threads
 
-A `Mutex[T]` lives in one place. If you want multiple threads to all hold a *reference* to the same mutex, you need a way to share ownership safely. `SharedSync[T]` is Ruxen's shared, reference-counted handle (similar to Rust's `Arc`).
+A `Mutex[T]` lives in one place. If you want multiple threads to all hold a *reference* to the same mutex, you need a way to share ownership safely. `SharedSync[T]` is Ruxen's thread-safe, reference-counted handle.
 
 Each `.clone` bumps an atomic count; each drop decrements it; when the last reference drops, the value is freed.
 

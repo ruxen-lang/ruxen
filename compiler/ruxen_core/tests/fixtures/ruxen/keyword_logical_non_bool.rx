@@ -1,0 +1,5 @@
+def main
+  let bad_binary = 1 and 2
+  let bad_unary = not 3
+  let bad_symbolic = 4 && 5
+end

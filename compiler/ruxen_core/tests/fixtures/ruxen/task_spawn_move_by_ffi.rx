@@ -19,7 +19,7 @@
 ##     pumps the queue until the spawned future completes.
 ##   - `TaskHandle.result(h)` returns the i64 payload (42).
 ##
-## Without the drops.rs fix this fixture SIGSEGV's on the first
+## Without the drops/ fix this fixture SIGSEGV's on the first
 ## `ruxen_executor_pump_tasks()` call after `spawner` returns —
 ## the executor walks the queue and follows a freed pointer.
 

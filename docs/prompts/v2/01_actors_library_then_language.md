@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # v2/01 — Actor model: library first, language later
 
 **Depends on:** v1.0.0 shipped (prompt 25 complete).

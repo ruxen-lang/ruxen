@@ -7,13 +7,28 @@ the compiler's generic mechanisms. Adding a stdlib class or method requires
 ZERO compiler (Rust) edits. No `#[lang]`/registry mechanism — generic language
 features only.
 
+**HARD RULE — `.rx`-first (project directive).** Before writing ANY Rust compiler
+code for a language/stdlib feature, prove it cannot be expressed in `.rx`.
+Ruxen's own features — methods on objects/variables/types, `tap`/`then`,
+string/collection methods, `Comparable`/`Enumerable`, … — MUST be implemented in
+Ruxen (`.rx`). Only touch `compiler/` when it is genuinely impossible in `.rx`
+alone (a missing syntax, lowering, machine op, or a missing generic *mechanism*).
+A per-feature special-case in `typeck`/`mir` (hardcoded method names, a marker
+the two stages keep in lockstep, an interception) is the anti-pattern: bloat,
+fragile, and a north-star violation. If a feature needs a capability `.rx` lacks
+(e.g. a UNIVERSAL method on every type → an implicit `Kernel` base include),
+build that ONE reusable generic *mechanism* in the compiler, then define the
+feature itself in `.rx` on top of it. Also mirrored in the local root
+`CLAUDE.md` (gitignored).
+
 ## The dividing line (what stays in the compiler vs the stdlib)
 **Compiler-only (allowed):**
 - Generic mechanisms: class/method definition, generics, mixins/traits, FFI +
   `repr`, derive machinery, closures.
 - Machine primitives: i64, f64, bool, raw-ptr, byte-slice, array-slice.
 - Syntactic protocols: a literal lowers to a *primitive*; an operator desugars
-  to a *method call by symbol* (`a + b` → `a.+(b)`); operator precedence.
+  to a *method call by symbol* (`a + b` → `a.+(b)`); operator precedence;
+  control-flow operators such as lazy `Option[T] ?? T`.
 
 **Stdlib (`.rx`) — must NOT live in compiler Rust:**
 - Every named type (`Int`/`String`/`Array`/`Mutex`/…) and all their methods.
@@ -27,7 +42,8 @@ registers only `declared_method_resolvers` + `builtin_bridge`.
 
 ## Key architecture decisions (locked)
 1. **Method resolution from `.rx`** via `builtin_bridge` (done for most types).
-2. **Operators are overridable methods** named by the symbol: `a + b` → `a.+(b)`,
+2. **Value operators are overridable methods** named by the symbol:
+   `a + b` → `a.+(b)`,
    `a[i]` → `a.[](i)`, `a[i]=v` → `a.[]=(i,v)`, `-a` → `a.-@()`, `!a` → `a.!()`.
    **Desugar is POST-TYPECK, not in the parser** (corrected during Task OP, Fork 4):
    the machine-primitive floor (`Int`/`Float`/`Bool` + op → direct instruction) vs.
@@ -36,9 +52,12 @@ registers only `declared_method_resolvers` + `builtin_bridge`.
    + `typeck/infer/ops.rs` (shrink to machine-primitive instruction selection;
    non-primitive head → `def OP` method call; delete the migrated operator-synthesis
    arms). The parser learns only operator-symbol method NAMES (`def +`, `a.+(b)`).
-   Comparison/equality (`==`/`<`/…) + `Comparable`/`<=>` are a SEPARATE later
-   increment — left on the existing `binops.rs` paths (PartialEq derive, Vec/Map/Set
-   `==`, Ord-derive) to avoid double-defining.
+   Comparison/equality (`==`/`<`/…) + `Comparable`/`<=>` use the same
+   post-typeck mechanism with an availability gate: a declared/default method
+   wins, while PartialEq/Ord derives and primitive comparisons remain the
+   fallback, avoiding double-definition.
+   `??` is not a value-method protocol: it branches on the built-in Option
+   representation so the fallback remains lazy.
 3. **Shared methods via mixins with default bodies** (Ruby modules). The mixins
    already exist as markers in `library/std/core/src/lib.rx` — fill them:
    - **`Enumerable[T]` over required `each`**: `map`/`select`/`reject`/`reduce`/
@@ -94,7 +113,7 @@ behind.
       `mixin_element_subst` (records each include's trait args so `Fn(T)`
       seeds to `(K, V)` for Hash); cell-promotion retypes the captured local
       to pointer width (fixed `load.i8` verifier error when a real capturing
-      closure is passed to `Set_each`/`Hash_each`). Pins 612/613/614.
+      closure is passed to `Set_each`/`Hash_each`). Pins 612/613/614/936.
       **RESIDUAL:** `collections.rs` Option/Result arms are now `try_op`
       (`?`-intrinsic), `map` (fresh-var return), `ok_or` (arg-derived err);
       Array `each`/`to_h`/`sum`/`select!`/`get_mut`/`get_var`. `ok_or` left
@@ -126,17 +145,13 @@ behind.
       `-> str` arm wrongly claimed a borrowed slice) and `&str.parse_uint`
       (newly declared `def parse_uint -> Result[USize, Error]` on `class
       String`, sharing the `&str` C symbol). Their `strings.rs` `Ty::Str` arms
-      were deleted. GENUINE IRREDUCIBLE residuals kept in `strings.rs` (surface
-      type ≠ derivable ABI width — no single `.rx` decl expresses both):
-      `remove` (Char/I32 surface vs C 16-byte struct-pointer/I64 holding the
-      removed codepoint + rewritten buffer) and the mutation methods
-      `push`/`push_str`/`insert`/`insert_str` (surface `Unit` — the MIR
-      special-case does the `&mut String` deref/store dance and returns no
-      value, pin `48_borrow_var` — vs C `char*` the dance must capture, so
-      `.rx` declares `-> String`). Pins: `630_string_insert_char`,
-      `631_string_push_str`, `632_str_to_lower_upper`, `633_str_parse_uint`
-      (+ existing `311`/`313`/`315`/`45`/`113`). `strings.rs` residual count:
-      5 `String` arms (`remove`+4 mutation), 0 `Str` arms.
+      were deleted. The remaining residuals (`remove` and the mutation
+      methods `push`/`push_str`/`insert`/`insert_str`/`clear`/`truncate`)
+      are now `def var` lib decls: the receiver crosses as `&var String` (the
+      caller's slot address) and the C symbol replaces the buffer in place,
+      so each decl states its true surface type and `strings.rs` is deleted
+      (F-23). Pins: `library/std/string/tests/build_test.rx` and e2e
+      `2161_string_mutators_in_place`.
 - [~] Feature B: trait-bound enforcement. DONE: generalized
       `check_concurrency_bounds` → `check_declared_bounds` +
       `check_generic_param_bounds` (harvested-generic seam) +
@@ -185,10 +200,10 @@ behind.
       loop 0.99–1.06s before & after). Hardcoded Duration/Instant arithmetic arms
       DELETED; Duration declares `def +`/`def -` (Instant `def -`) in `.rx`. Twin
       pins `631`(explicit)/`632`(sugared) with byte-identical `.out` lock
-      desugar↔explicit equivalence. **Remaining:** the SEPARATE comparison/equality
-      + `Comparable` increment (deferred; `==`/`<`/… stay on the existing
-      binops PartialEq-derive / Vec-Map-Set-eq / Ord-derive paths; `<=>` token
-      vs reuse-`cmp` TBD).
+      desugar↔explicit equivalence. **Comparison increment DONE:** `def
+      ==`/`<`/`<=`/`>`/`>=`/`<=>` parse and dispatch when available;
+      primitive and PartialEq/Ord derive paths remain fallbacks.
+      `Comparable` defines shared defaults over required `<=>`; pin `965`.
 - [ ] Literals→primitives + de-primitivize `Ty::String`/`Ty::Array`.
 - [ ] Generic small-method inliner (perf).
 
@@ -228,6 +243,5 @@ behind.
   `Option_map`/`Result_map` body. (3) typeck: `Result#map` dropped the err type
   (returned `Result[U, Error]` not `Result[U, E]`) and `map_err` had ok/err
   swapped; the `map_err` closure-return harvest was missing in
-  `infer_combinator_block`. Pins: `99_map_option` / `115_option_map_chain` /
-  `118_option_map_unwrap_or` (now over `.rx` Option.map) +
-  `tests/release-e2e/cases/606_result_map_chain.rx`.
+  `infer_combinator_block`. Pins:
+  `library/std/option_result/tests/{option,result}_test.rx` (over `.rx` Option.map).

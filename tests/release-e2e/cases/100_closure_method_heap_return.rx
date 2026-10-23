@@ -12,7 +12,7 @@ class Box
   def init(v: Int)
     self.v = v
   end
-  def probe(f: any Fn[Fn(Int) -> Int]) -> Array[Int]
+  def probe(f: Fn(Int) -> Int) -> Array[Int]
     var out: Array[Int] = Array.new
     out.push(f.(3))
     out

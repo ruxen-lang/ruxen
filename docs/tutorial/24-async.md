@@ -94,7 +94,7 @@ def main
 end
 ```
 
-From inside an async fn, use the `.await` form:
+From inside an `async def`, use the `.await` form:
 
 ```ruxen
 use std.time.Duration

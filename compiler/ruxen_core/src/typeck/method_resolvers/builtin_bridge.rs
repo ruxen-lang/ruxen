@@ -28,7 +28,7 @@ use super::resolver::MethodResolver;
 /// Builtin heads currently delegated to their `.rx` method-home. Grows as
 /// each migration step lands (Map/scalars next). The receiver shape that
 /// reaches this resolver is the un-reffed head (the same as the `String`
-/// arm relied on); `method_home_key` and `substitute_generics_in_return`
+/// arm relied on); `Ty::method_home` and `substitute_generics_in_return`
 /// peel any reference layers downstream when the bridge resolves.
 fn is_delegated_head(ty: &Ty) -> bool {
     // Feature A: `Float`/`Bool`/`Char`/`USize` now delegate their
@@ -39,11 +39,10 @@ fn is_delegated_head(ty: &Ty) -> bool {
     // guard passes. Their numeric.rs residual arms are removed.
     //
     // (One-string-type ADR: there is one string type, `Ty::String`. A
-    // `&String` borrow peels to `Ty::String` in `method_home_key`, so all
+    // `&String` borrow peels to `Ty::String` in `Ty::method_home`, so all
     // string methods delegate to `class String`. The old separate `&str`
     // (`Ty::Str`) receiver — wire-identical to `String` at the C ABI — is
-    // gone; `strings.rs`'s irreducible residual arms (`remove`, the mutation
-    // methods) run AHEAD of this bridge and shadow it where surface ≠ ABI.)
+    // gone.)
     // `Option`/`Result` delegate their NON-closure methods (unwrap/
     // expect/unwrap_or/nil?/present?/ok_or/ok?/err?/ok/err) to their
     // builtin enums (option_result/src/lib.rx). Their closure /

@@ -4,6 +4,11 @@ impl<'a> Lowerer<'a> {
     // ── Statement lowering ──────────────────────────────────────────────
 
     pub(super) fn lower_statement(&mut self, stmt: &HirStatement) -> Result<(), String> {
+        // Stamp the debug span for instructions this statement emits (P0.14).
+        match stmt {
+            HirStatement::Let { span, .. } => self.current_span = Some(span.clone()),
+            HirStatement::Expr(expr) => self.current_span = Some(expr.span.clone()),
+        }
         match stmt {
             HirStatement::Let {
                 def_id,
@@ -23,13 +28,25 @@ impl<'a> Lowerer<'a> {
                     };
                     let tuple_id = init_local.unwrap_or_else(|| self.new_temp(ty.clone()));
 
-                    // Create a local for the whole tuple binding
-                    let tuple_local = self.new_local_named("_tuple", ty.clone(), *mutable);
+                    // The tuple binding owns the tuple for the whole scope:
+                    // each element binding borrows it (typeck gave a non-Copy
+                    // element the type `&T`), so it is freed with its scope.
+                    // Destructuring a variable borrows the variable itself.
+                    let names_variable = matches!(
+                        value.as_ref().map(|v| &v.kind),
+                        Some(HirExprKind::VarRef(_))
+                    );
+                    let tuple_local = if names_variable {
+                        tuple_id
+                    } else {
+                        let owner = self.new_local_named("_tuple", ty.clone(), *mutable);
+                        self.emit(MirInst::Assign {
+                            dest: owner,
+                            value: MirValue::Use(tuple_id),
+                        });
+                        owner
+                    };
                     self.def_to_local.insert(*def_id, tuple_local);
-                    self.emit(MirInst::Assign {
-                        dest: tuple_local,
-                        value: MirValue::Use(tuple_id),
-                    });
 
                     // Extract each element via GetField
                     for (i, elem_pat) in elements.iter().enumerate() {
@@ -39,15 +56,16 @@ impl<'a> Lowerer<'a> {
                             ..
                         } = elem_pat
                         {
-                            let elem_ty = match ty {
-                                Ty::Tuple(tys) if i < tys.len() => tys[i].clone(),
+                            let elem_ty = match (self.symbols.def_ty(*elem_def), ty) {
+                                (Some(bound), _) if !bound.is_infer() => bound,
+                                (_, Ty::Tuple(tys)) if i < tys.len() => tys[i].clone(),
                                 _ => Ty::Int,
                             };
                             let elem_local = self.new_local_named(elem_name, elem_ty, *mutable);
                             self.def_to_local.insert(*elem_def, elem_local);
                             self.emit(MirInst::GetField {
                                 dest: elem_local,
-                                base: tuple_id,
+                                base: tuple_local,
                                 field_index: i,
                             });
                         }
@@ -63,26 +81,38 @@ impl<'a> Lowerer<'a> {
                     _ => def_id_name(*def_id, self.symbols),
                 };
 
-                // Refine unresolved Infer types: if the initializer is a
-                // method call known to return a string, use Ty::String
-                // instead.  This ensures correct string interpolation for
-                // variables like `let task_name = ... .unwrap_or(other.clone)`.
+                // Refine an unresolved binding from its initializer's
+                // inferred type. MIR should not need method-name knowledge to
+                // recover the representation of a call result.
                 let refined_ty = if matches!(ty, Ty::Infer(_)) {
-                    if let Some(init_expr) = value {
-                        if is_inferred_string_expr(init_expr) {
-                            Ty::String
-                        } else {
-                            ty.clone()
-                        }
-                    } else {
-                        ty.clone()
-                    }
+                    value
+                        .as_ref()
+                        .map(|init| init.ty.clone())
+                        .filter(|init_ty| !init_ty.is_infer() && !init_ty.is_error())
+                        .unwrap_or_else(|| ty.clone())
                 } else {
                     ty.clone()
                 };
 
                 let local = self.new_local_named(&name, refined_ty.clone(), *mutable);
                 self.def_to_local.insert(*def_id, local);
+
+                // `let r: &var Int = g.deref_var` / `= &var n`: a slot-addressed
+                // `&var T` binding holds the address (`mir::refmut_abi`), so
+                // reads load through it and writes reach the borrowed storage.
+                if let Some(init) = value
+                    .as_ref()
+                    .filter(|_| crate::mir::refmut_abi::is_slot_refmut(&refined_ty))
+                {
+                    let addr = self.lower_refmut_addr(init)?;
+                    self.emit(MirInst::Assign {
+                        dest: local,
+                        value: local_to_value(addr),
+                    });
+                    self.cell_promoted.insert(*def_id);
+                    self.refmut_slots.insert(*def_id);
+                    return Ok(());
+                }
 
                 if let Some(init) = value {
                     let val_local = self.lower_expr(init)?;
@@ -97,10 +127,21 @@ impl<'a> Lowerer<'a> {
                             value: val,
                         });
                     }
-                    if matches!(
-                        refined_ty,
-                        Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
-                    ) {
+                    // An element or field read (`let x = v[i]`, `let x = r.f`)
+                    // aliases storage the collection or the record still owns:
+                    // the binding owns nothing, so a loop back-edge must not free
+                    // it. Freeing it there handed `Array#sort!`'s `var a: T =
+                    // self[j - 1]` a double free on a class element.
+                    let aliases_owner = matches!(
+                        init.kind,
+                        HirExprKind::Index { .. } | HirExprKind::FieldAccess { .. }
+                    );
+                    if !aliases_owner
+                        && matches!(
+                            refined_ty,
+                            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                        )
+                    {
                         self.initialized_heap_locals.insert(local);
                         if let Some(frame) = self.loop_stack.last_mut() {
                             frame.body_locals.push(local);

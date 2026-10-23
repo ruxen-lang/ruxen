@@ -12,8 +12,9 @@
  *   - Forward declarations of `ruxen_*` symbols any cross-file caller
  *     resolves at link time (ruxen_panic, ruxen_alloc,
  *     ruxen_io_error_from_errno, …).
- *   - `static inline` helpers used in more than one TU
- *     (ruxen_result_ok_value / _err_value).
+ *   - `static inline` helpers used in more than one TU: Result and
+ *     Option builders, `ruxen_xmalloc`, `RuxenByteBuf`, the UTF-8 codec
+ *     and the `RuxenFdHandle` close helpers.
  *
  * Owner files (e.g. `library/std/io/runtime/file.c` for RuxenFile)
  * still implement these symbols; this header only declares them. The
@@ -76,6 +77,7 @@ extern int errno;
 #endif
 #else
 #include <stdio.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -155,10 +157,151 @@ typedef struct RuxenVec {
     uint64_t cap;
 } RuxenVec;
 
-/* Hash — opaque to non-owning TUs. Owner: library/std/hash/runtime/hash.c.
- * Bodies inside hash.c access fields directly; cross-file callers use
- * only `RuxenHash *` and the ruxen_hash_* functions. */
-typedef struct RuxenHash RuxenHash;
+/* Hash — chained-bucket table. Owner: library/std/hash/runtime/hash.c.
+ * Most cross-file callers use only `RuxenHash *` and the ruxen_hash_*
+ * functions, but json.c walks the bucket chains directly to stringify
+ * and look up a JSON object, so the body lives HERE rather than being
+ * duplicated per TU. It used to be copy-pasted into hash.c and json.c
+ * behind a shared `RUXEN_HASH_RUNTIME_STRUCTS` guard; the two copies
+ * were an ODR hazard, since a layout change in one silently corrupted
+ * the other. One definition, no drift.
+ *
+ * ── The key descriptor (B73) ─────────────────────────────────────────
+ * How a key hashes, compares, is copied and is freed is a property of its
+ * TYPE, which the compiler knows statically. A table keeps one key
+ * descriptor (`key_desc`): the element descriptor of the key type (see
+ * the RUXEN_ELEM_* block below), with a BORROW tag for a borrowed key. The
+ * compiler supplies it to every constructor and to `insert` (a `KeyDesc[K]`
+ * parameter in `.rx`); the first one installs it and it is fixed for the
+ * table's life. A table with entries therefore always has one: every path
+ * that adds an entry either takes a descriptor or copies its source's. It
+ * is NEVER inferred from a key's bit pattern: the pre-B73 runtime
+ * dereferenced the first inserted key as a `char*` looking for a NUL,
+ * which SIGSEGV'd on `Hash[Int, V]` keys >= 0x1000. Do not reintroduce a
+ * memory probe under any name. */
+typedef struct RuxenHashEntry {
+    int64_t key;
+    int64_t value;
+    struct RuxenHashEntry *next;
+} RuxenHashEntry;
+
+/* ── Element descriptor (the collection-slot ownership rule) ──
+ *
+ * A collection slot is a bare 64-bit word; the runtime cannot tell an
+ * `Int` from an owned `char*` by looking at it (and MUST NOT try — see
+ * the "do not reintroduce a memory probe" warning above). So every
+ * helper that frees or deep-copies slots takes a descriptor from the
+ * compiler saying what a slot owns.
+ *
+ * A descriptor is a stream of 4-bit tags read from the LOW nibble up, in
+ * pre-order: a container tag is followed by the descriptor of its
+ * element (`VEC`, `SET`) or of its key and then its value (`HASH`).
+ * `Array[Array[String]]`'s element descriptor is VEC then CSTR, i.e.
+ * 0x13. Tags past the end of the stream read as POD. The compiler
+ * builds descriptors in exactly one place (`mir/lower/drops/`
+ * `elem_desc`), from the static element type, and the drop and the
+ * deep copy read the same word, so copy depth and drop depth cannot
+ * disagree.
+ *
+ * The obligation this exists to discharge is stated in full on
+ * `FRESH_ALLOC_CALLEES` (compiler/ruxen_core/src/mir/lower/runtime_abi.rs):
+ * a helper whose result will be deep-dropped must have allocated every
+ * slot the drop will free.
+ *
+ * A Hash key or a Set element is described the same way, as the table's
+ * key descriptor, which also says how the key hashes and compares: CSTR by
+ * content (FNV-1a + strcmp), OBJ through its glue (RUXEN_ELEM_GLUE_HASH /
+ * _EQ), a BORROW by what it borrows, and every other tag by its word. */
+#define RUXEN_ELEM_POD   0 /* slot is a value: Int/Float/Bool/Char/&T/… */
+#define RUXEN_ELEM_CSTR  1 /* slot OWNS a NUL-terminated heap string    */
+#define RUXEN_ELEM_VEC   3 /* slot OWNS a RuxenVec; element desc follows */
+#define RUXEN_ELEM_HASH  4 /* slot OWNS a RuxenHash; key, value follow   */
+#define RUXEN_ELEM_SET   5 /* slot OWNS a set table; element desc follows */
+#define RUXEN_ELEM_OBJ   6 /* slot OWNS a user object; glue address follows */
+#define RUXEN_ELEM_CLOSURE 7 /* slot OWNS one share of a closure pair     */
+#define RUXEN_ELEM_BORROW 8  /* slot BORROWS a value described by the rest */
+/* A table whose key descriptor is not installed yet (it has no entries). */
+#define RUXEN_ELEM_UNSET (-1)
+
+/* `RUXEN_ELEM_CLOSURE` describes a slot holding a closure value: a pointer
+ * to the compiler's four-word closure pair (`mir/lower/drops/`,
+ * `CLOSURE_PAIR_SIZE`):
+ *
+ *     [0] fn_ptr  [1] captures_ptr  [2] drop_fn  [3] shares
+ *
+ * Dropping the slot calls `drop_fn(pair)`, the literal's own drop glue,
+ * which releases one owner (`shares` > 0 is decremented; at 0 the owned
+ * captures, the captures box and the pair are freed). Copying the slot adds
+ * an owner (`shares` + 1) and returns the same pair: closures are shared,
+ * never copied. A leaf tag: nothing follows it in the stream.
+ *
+ * The slot numbers and the pair size below are the C side of the layout;
+ * the compiler's `CLOSURE_PAIR_*` constants (`mir/lower/drops/closures.rs`)
+ * are the Rust side, and a test there reads these `#define`s back and
+ * compares them. */
+#define RUXEN_CLOSURE_FN_SLOT       0
+#define RUXEN_CLOSURE_CAPTURES_SLOT 1
+#define RUXEN_CLOSURE_DROP_SLOT     2
+#define RUXEN_CLOSURE_SHARES_SLOT   3
+#define RUXEN_CLOSURE_PAIR_SIZE     32
+typedef struct {
+    int64_t fn_ptr;       /* the body, called with captures_ptr first */
+    int64_t captures_ptr; /* one word per capture, or 0 */
+    int64_t drop_fn;      /* the literal's own `<closure>_drop` */
+    int64_t shares;       /* owners beyond the first */
+} RuxenClosurePair;
+_Static_assert(offsetof(RuxenClosurePair, fn_ptr) == RUXEN_CLOSURE_FN_SLOT * 8,
+               "closure pair: fn_ptr slot");
+_Static_assert(offsetof(RuxenClosurePair, captures_ptr) == RUXEN_CLOSURE_CAPTURES_SLOT * 8,
+               "closure pair: captures_ptr slot");
+_Static_assert(offsetof(RuxenClosurePair, drop_fn) == RUXEN_CLOSURE_DROP_SLOT * 8,
+               "closure pair: drop_fn slot");
+_Static_assert(offsetof(RuxenClosurePair, shares) == RUXEN_CLOSURE_SHARES_SLOT * 8,
+               "closure pair: shares slot");
+_Static_assert(sizeof(RuxenClosurePair) == RUXEN_CLOSURE_PAIR_SIZE, "closure pair: size");
+typedef void (*RuxenClosureDrop)(int64_t pair);
+int64_t ruxen_closure_share(int64_t pair);
+
+/* `RUXEN_ELEM_OBJ` describes a slot holding an instance of a user class or
+ * struct. Freeing or copying one needs the type's own code (its `def drop`,
+ * its `clone`), so the tag is followed not by more tags but by the address
+ * of a compiler-synthesised glue function, filling the rest of the word:
+ *
+ *     glue(RUXEN_ELEM_GLUE_DROP,  slot, 0)     runs the type's drop and frees it;
+ *     glue(RUXEN_ELEM_GLUE_CLONE, slot, 0)     returns an owned copy of it;
+ *     glue(RUXEN_ELEM_GLUE_HASH,  slot, 0)     returns its hash as a key;
+ *     glue(RUXEN_ELEM_GLUE_EQ,    slot, other) returns 1 when the two keys
+ *                                              are equal, else 0.
+ * A type that derives `Hashable` and `PartialEq` hashes and compares through
+ * its `hash_code` and `eq`; any other type by identity.
+ *
+ * OBJ is therefore always the LAST tag of a stream: `RUXEN_ELEM_REST` of an
+ * OBJ descriptor is the glue address. The compiler (`mir/lower/drops/`
+ * `elem_desc`) emits OBJ only when the address still fits after the
+ * preceding tags, and otherwise describes the slot as POD. */
+#define RUXEN_ELEM_GLUE_DROP  0
+#define RUXEN_ELEM_GLUE_CLONE 1
+#define RUXEN_ELEM_GLUE_HASH  2
+#define RUXEN_ELEM_GLUE_EQ    3
+typedef int64_t (*RuxenElemGlue)(int64_t op, int64_t slot, int64_t other);
+
+#define RUXEN_ELEM_TAG(desc) ((int)((uint64_t)(desc) & 0xFu))
+#define RUXEN_ELEM_REST(desc) ((int64_t)((uint64_t)(desc) >> 4))
+
+typedef struct RuxenHash {
+    /* Heap-allocated bucket array of length `bucket_count`, doubling
+     * when `len` would push the load factor past 0.75. The count is a
+     * power of two, so the `% bucket_count` modulo stays clean without
+     * biasing the splitmix/FNV distribution. */
+    RuxenHashEntry **buckets;
+    uint64_t bucket_count;
+    uint64_t len;
+    /* The key descriptor (see the key descriptor note above), or
+     * RUXEN_ELEM_UNSET until the first constructor or insert installs it.
+     * `clear` does NOT reset it: emptying a table does not change what its
+     * key type is. */
+    int64_t key_desc;
+} RuxenHash;
 
 /* RuxenSet is fully package-local to library/std/hash/runtime/hash.c
  * — no other TU dereferences or even references it. The typedef
@@ -168,24 +311,23 @@ typedef struct RuxenHash RuxenHash;
  * Only fmt.c dereferences fields; everyone else holds opaque pointers. */
 typedef struct RuxenFormatter RuxenFormatter;
 
-/* File — wraps an OS fd. Owner: library/std/io/runtime/file.c.
- * io/bufio.c casts `inner` to `RuxenFile *` and reads `->fd` /
- * `->closed`, so the full body is exported. */
-typedef struct RuxenFile {
+/* FdHandle — the 8-byte `{fd, closed}` wire layout every fd-owning class
+ * shares (File, TcpStream, TcpListener, AsyncFile). `closed` is set once
+ * the fd has been released; `fd` is then -1. Close through
+ * `ruxen_fd_handle_close` (below) so the EINTR policy lives in one place.
+ * io/bufio.c casts `inner` to a `RuxenFile *` / `RuxenTcpStream *` and
+ * reads `->fd` / `->closed`, so the body is exported. */
+typedef struct RuxenFdHandle {
     int32_t fd;
     int32_t closed;
-} RuxenFile;
+} RuxenFdHandle;
 
-/* TcpStream — same shape as RuxenFile (just a different tag class).
- * io/bufio.c also reads `->fd` / `->closed` on this. */
-typedef struct RuxenTcpStream {
-    int32_t fd;
-    int32_t closed;
-} RuxenTcpStream;
+/* File — owner: library/std/io/runtime/file.c. */
+typedef RuxenFdHandle RuxenFile;
 
-/* TcpListener — only net/tcp.c dereferences; declare as opaque
- * cross-file. Body in net/tcp.c. */
-typedef struct RuxenTcpListener RuxenTcpListener;
+/* TcpStream / TcpListener — owner: library/std/net/runtime/tcp.c. */
+typedef RuxenFdHandle RuxenTcpStream;
+typedef RuxenFdHandle RuxenTcpListener;
 
 /* Duration — single-field scalar wrapper. Owner: time/time.c.
  * net/tcp.c reads `->nanos` when wiring SO_RCVTIMEO/SO_SNDTIMEO. */
@@ -226,7 +368,6 @@ int ruxen_repl_get_replaying(void);
 void ruxen_panic(const char *message);
 void *ruxen_alloc(uint64_t size);
 void ruxen_dealloc(void *ptr);
-void *ruxen_realloc(void *ptr, uint64_t size);
 
 /* ASM-labeled free helpers — drop_fixtures rewrites `free(` to
  * `ruxen_test_free(`, so the public link symbols carry the original
@@ -248,11 +389,49 @@ char *ruxen_char_to_string(int64_t codepoint);
 
 RuxenVec *ruxen_vec_new(void);
 void ruxen_vec_push(RuxenVec *v, int64_t item);
+RuxenVec *ruxen_vec_clone(RuxenVec *v);
+
+/* Deep-copy ONE collection slot according to its element descriptor.
+ *
+ * OWNERSHIP CONTRACT
+ *   Allocates: a new heap object for every owning tag in `desc`, all the
+ *     way down (a `char*` via `ruxen_string_from` for CSTR, a fresh table
+ *     or spine with deep-copied slots for VEC / HASH / SET, the type's own
+ *     `clone` through the glue for OBJ). Allocates NOTHING for POD.
+ *   Frees: nothing, ever. `slot` is BORROWED for the call's duration and
+ *     is still owned by its original collection when this returns.
+ *   Caller may assume: the returned word is safe to store in a slot that
+ *     will later be freed by `ruxen_elem_drop` with the same descriptor,
+ *     WITHOUT disturbing the source.
+ *   A NULL slot returns NULL for every kind. An unrecognised tag is
+ *     treated as POD, which aliases — so a new heap element kind MUST be
+ *     added here and to `ruxen_elem_drop` in the same change. */
+int64_t ruxen_elem_clone(int64_t slot, int64_t desc);
+
+/* Free ONE collection slot according to its element descriptor,
+ * recursively. The mirror of `ruxen_elem_clone`: a POD or unknown tag
+ * frees nothing. Defined in array/runtime/vec.c. */
+void ruxen_elem_drop(int64_t slot, int64_t desc);
+
+/* The drop glue the MIR drop pass emits, one per container. Each frees
+ * the slots per its descriptor(s) and then the spine. `ruxen_set_drop`
+ * lives in hash.c next to the set layout; a set nested in another
+ * collection is dropped through `ruxen_hash_drop` with a POD value. */
+void ruxen_vec_drop(RuxenVec *v, int64_t elem_desc);
+void ruxen_hash_drop(RuxenHash *h, int64_t key_desc, int64_t val_desc);
+
+/* A new table with the same key descriptor as `h` and every entry
+ * deep-copied per `key_desc` / `val_desc`. Backs `ruxen_elem_clone` for
+ * HASH and SET slots. Defined in hash.c. */
+RuxenHash *ruxen_hash_deep_clone(RuxenHash *h, int64_t key_desc,
+                                 int64_t val_desc);
 
 /* ── Hash surface ─────────────────────────────────────────────────── */
 
-RuxenHash *ruxen_hash_new(void);
-void ruxen_hash_insert(RuxenHash *h, int64_t key, int64_t value);
+/* `key_desc` is the key descriptor; `insert` installs it on a table that
+ * has none and then owns `key`, freeing it when the key is already there. */
+RuxenHash *ruxen_hash_new(int64_t key_desc);
+void ruxen_hash_insert(RuxenHash *h, int64_t key, int64_t value, int64_t key_desc);
 
 /* ── IO error helpers (cross-package) ──────────────────────────────── */
 
@@ -291,6 +470,14 @@ void *ruxen_io_error_unit(int32_t tag);
 void *ruxen_io_error_message(const char *message);
 void *ruxen_io_error_struct(int32_t tag, const char *message);
 void *ruxen_io_error_from_errno(int err);
+/* The IoError itself (not wrapped in Result) for a captured errno: the
+ * variant and strerror payload `ruxen_io_error_from_errno` boxes into
+ * Err. The async runtimes record errno at poll time and build the error
+ * when the result is taken, so the message survives. */
+void *ruxen_io_error_value_from_errno(int err);
+/* errno → RUXEN_IO_ERROR_* tag. The one errno table (io/runtime/io_error.c);
+ * the sync and async runtimes both classify through it. */
+int32_t ruxen_io_error_classify_errno(int err);
 
 /* Stream helpers (defined in io/runtime/io_error.c, called from io/stdio.c
  * and fs.c). FILE-typed → host-only; the io module isn't built for wasm. */
@@ -335,5 +522,180 @@ static inline void *ruxen_result_err_value(int64_t payload) {
     result[1] = payload;
     return result;
 }
+
+/* `Err(IoError::InvalidInput)` — the null-handle / closed-handle / bad
+ * argument result every IO entry point returns. */
+static inline void *ruxen_io_error_invalid_input(void) {
+    return ruxen_result_err_value(
+        (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+}
+
+/* `Err(IoError::WriteZero)` — a write returned 0 with bytes remaining.
+ * No errno describes it, so the message is fixed. */
+static inline void *ruxen_io_error_write_zero(void) {
+    return ruxen_result_err_value((int64_t)ruxen_io_error_struct(
+        RUXEN_IO_ERROR_WRITE_ZERO, "write returned 0 with bytes remaining"));
+}
+
+/* ── Option-construction helpers ──────────────────────────────────── */
+
+/* Box `Some(payload)` / `None` into the canonical 16-byte tagged-enum
+ * layout (`{i32 tag; i32 pad; i64 payload}`, None = 0, Some = 1). Matches
+ * the resolver's variant order and `ruxen_option_unwrap_or` in alloc.c.
+ * MIR builds Options itself; these are for C callers that return one. */
+static inline void *ruxen_option_none(void) {
+    int64_t *out = (int64_t *)ruxen_alloc(16);
+    *(int32_t *)out = 0; /* None */
+    out[1] = 0;
+    return out;
+}
+
+static inline void *ruxen_option_some(int64_t payload) {
+    int64_t *out = (int64_t *)ruxen_alloc(16);
+    *(int32_t *)out = 1; /* Some */
+    out[1] = payload;
+    return out;
+}
+
+/* ── Raw heap helpers ─────────────────────────────────────────────── */
+
+/* `malloc` that panics on OOM. The literal `malloc(` / `realloc(` / `free(`
+ * spellings below are load-bearing: drop_fixtures rewrites them textually
+ * to count raw heap traffic, so they must not hide behind a macro. */
+static inline void *ruxen_xmalloc(size_t size) {
+    void *p = malloc(size);
+    if (!p && size > 0) {
+        ruxen_panic("out of memory");
+    }
+    return p;
+}
+
+/* Growable byte buffer for read-until-EOF / read-line loops. `data` is
+ * a raw `malloc` block the caller owns: hand it off (it is always
+ * NUL-terminable, `cap > len`) or release it with `free(b.data)`. */
+typedef struct RuxenByteBuf {
+    char *data;
+    size_t len;
+    size_t cap;
+} RuxenByteBuf;
+
+static inline void ruxen_byte_buf_init(RuxenByteBuf *b, size_t cap) {
+    b->data = (char *)ruxen_xmalloc(cap);
+    b->len = 0;
+    b->cap = cap;
+}
+
+/* Ensure room for `extra` more bytes plus a trailing NUL, doubling. */
+static inline void ruxen_byte_buf_reserve(RuxenByteBuf *b, size_t extra) {
+    if (b->len + extra + 1 <= b->cap) return;
+    size_t next_cap = b->cap;
+    while (b->len + extra + 1 > next_cap) next_cap *= 2;
+    char *next = (char *)realloc(b->data, next_cap);
+    if (!next) {
+        free(b->data);
+        ruxen_panic("out of memory");
+    }
+    b->data = next;
+    b->cap = next_cap;
+}
+
+static inline void ruxen_byte_buf_push(RuxenByteBuf *b, char c) {
+    ruxen_byte_buf_reserve(b, 1);
+    b->data[b->len++] = c;
+}
+
+/* NUL-terminate and return the buffer; ownership passes to the caller. */
+static inline char *ruxen_byte_buf_finish(RuxenByteBuf *b) {
+    b->data[b->len] = '\0';
+    return b->data;
+}
+
+/* ── UTF-8 codec ──────────────────────────────────────────────────── */
+
+/* Encode `cp` into `out` and return the byte count (1..4). No range
+ * check: callers that accept untrusted codepoints (json) validate first;
+ * a Ruxen `Char` is a valid scalar value by construction. */
+static inline size_t ruxen_utf8_encode(uint32_t cp, char out[4]) {
+    if (cp < 0x80) {
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800) {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    out[0] = (char)(0xF0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+/* Decode one codepoint from the NUL-terminated `p` (`*p != 0`) and store
+ * the bytes consumed in `*len`. A malformed or truncated sequence decodes
+ * as its lead byte with `*len = 1`, so a walk always makes progress and
+ * never reads past the terminator. */
+static inline uint32_t ruxen_utf8_decode(const unsigned char *p, size_t *len) {
+    unsigned char b0 = p[0];
+    if (b0 >= 0x80) {
+        if ((b0 & 0xE0) == 0xC0 && (p[1] & 0xC0) == 0x80) {
+            *len = 2;
+            return ((uint32_t)(b0 & 0x1F) << 6) | (uint32_t)(p[1] & 0x3F);
+        }
+        if ((b0 & 0xF0) == 0xE0
+            && (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80) {
+            *len = 3;
+            return ((uint32_t)(b0 & 0x0F) << 12)
+                 | ((uint32_t)(p[1] & 0x3F) << 6)
+                 |  (uint32_t)(p[2] & 0x3F);
+        }
+        if ((b0 & 0xF8) == 0xF0
+            && (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80
+            && (p[3] & 0xC0) == 0x80) {
+            *len = 4;
+            return ((uint32_t)(b0 & 0x07) << 18)
+                 | ((uint32_t)(p[1] & 0x3F) << 12)
+                 | ((uint32_t)(p[2] & 0x3F) << 6)
+                 |  (uint32_t)(p[3] & 0x3F);
+        }
+    }
+    *len = 1;
+    return b0;
+}
+
+/* ── fd handles (host only) ───────────────────────────────────────── */
+
+#if !defined(__wasm32__)
+/* close(2), retried while it fails with EINTR. Returns close's final
+ * result; on -1, errno holds the cause. The retry is the runtime's
+ * long-standing policy on every target (Linux releases the fd even when
+ * close reports EINTR, so a retry there can only fail with EBADF). */
+static inline int ruxen_fd_close_retry(int fd) {
+    int rc;
+    do {
+        rc = close(fd);
+    } while (rc < 0 && errno == EINTR);
+    return rc;
+}
+
+/* Release `h`'s fd once: a no-op returning 0 when already closed,
+ * otherwise closes it and marks the handle closed (`fd = -1`) whether or
+ * not close(2) succeeded. Returns close's result; errno holds the cause
+ * on -1. */
+static inline int ruxen_fd_handle_close(RuxenFdHandle *h) {
+    if (h->closed) return 0;
+    int rc = h->fd >= 0 ? ruxen_fd_close_retry(h->fd) : 0;
+    h->closed = 1;
+    h->fd = -1;
+    return rc;
+}
+#endif
 
 #endif /* RUXEN_RUNTIME_H */

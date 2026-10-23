@@ -13,7 +13,7 @@
 //!     mangle time (`record_method_alias`).
 //!
 //! Diagnostics: E1120 unknown target, E1121 cycle, E1122 collision/self-alias,
-//! E1123 operator-spelled (staged, ADR D6).
+//! E1123 operator-spelled without a surface dispatch path (ADR D6).
 
 use std::collections::HashMap;
 
@@ -22,9 +22,7 @@ use crate::parser::ast;
 use crate::resolve::symbols::DefKind;
 use crate::resolve::Resolver;
 
-/// An operator-symbol method name (`+`, `<<`, `[]`, `[]=`, `-@`, …). These are
-/// staged out of Tier-1 alias support (ADR D6, E1123) because their desugar
-/// lives in a separate lowering path than ordinary method-name mangling.
+/// An operator-symbol method name (`+`, `<<`, `[]`, `[]=`, `-@`, …).
 fn is_operator_name(name: &str) -> bool {
     matches!(
         name,
@@ -42,22 +40,37 @@ fn is_operator_name(name: &str) -> bool {
             | "[]="
             | "+@"
             | "-@"
+            | "=="
+            | "<"
+            | ">"
+            | "<="
+            | ">="
+            | "<=>"
     )
+}
+
+/// Operator names whose expression forms route through a synthetic method call
+/// in typeck and MIR. The method call consumes the same canonical-name map as a
+/// normal call, so these operators can be aliases without a second dispatch
+/// mechanism. Unary `+@` has no surface expression in Ruxen and remains E1123.
+fn supports_operator_alias(name: &str) -> bool {
+    is_operator_name(name) && name != "+@"
 }
 
 impl Resolver {
     /// Bind a top-level / module-scope `alias new old` free-function synonym.
     /// `old`'s DefId must already be registered (Pass-1b ran first). On success
     /// `new` is inserted into the current value scope pointing at the same
-    /// DefId — one body, two names. Errors: E1123 (operator), E1122
+    /// DefId — one body, two names. Errors: E1123 (operator in free-fn scope), E1122
     /// (self-alias / collision), E1120 (unknown target).
     pub(super) fn bind_free_fn_alias(&mut self, a: &ast::AliasDef) {
-        // ADR D6 — operator aliases are staged.
+        // Operators are methods, not free functions; no top-level operator
+        // expression can dispatch through a free-function alias.
         if is_operator_name(&a.new_name) || is_operator_name(&a.old_name) {
             self.diagnostics.push(Diagnostic::error_with_code(
                 format!(
-                    "operator aliases are not yet supported (`alias {} {}`); \
-                     plain method/function-name aliases work today",
+                    "operator aliases require method scope (`alias {} {}`); \
+                     free-function aliases cannot dispatch operators",
                     a.new_name, a.old_name
                 ),
                 a.span.clone(),
@@ -137,8 +150,8 @@ impl Resolver {
     /// home type's (possibly module-qualified) name. `method_names` is the set
     /// of canonical method names visible on the type (in-body `def`s + included
     /// mixin methods, ADR D7). Flattens alias-of-alias to the root (ADR D4) and
-    /// detects cycles (E1121). Errors: E1123 (operator), E1122 (self/collision),
-    /// E1120 (unknown target).
+    /// detects cycles (E1121). Errors: E1123 (unsupported operator), E1122
+    /// (self/collision), E1120 (unknown target).
     pub(super) fn record_method_aliases(
         &mut self,
         type_key: &str,
@@ -152,10 +165,12 @@ impl Resolver {
         // be flattened to a canonical method name in a settling fixpoint.
         let mut local: HashMap<String, String> = HashMap::new();
         for a in aliases {
-            if is_operator_name(&a.new_name) || is_operator_name(&a.old_name) {
+            if (is_operator_name(&a.new_name) && !supports_operator_alias(&a.new_name))
+                || (is_operator_name(&a.old_name) && !supports_operator_alias(&a.old_name))
+            {
                 self.diagnostics.push(Diagnostic::error_with_code(
                     format!(
-                        "operator aliases are not yet supported (`alias {} {}`)",
+                        "operator alias has no supported expression dispatch path (`alias {} {}`)",
                         a.new_name, a.old_name
                     ),
                     a.span.clone(),
@@ -197,7 +212,7 @@ impl Resolver {
         let entry = self.method_aliases.entry(type_key.to_string()).or_default();
         for a in aliases {
             let Some(start) = local.get(&a.new_name) else {
-                continue; // skipped above (operator / self / collision)
+                continue; // skipped above (unsupported operator / self / collision)
             };
             let mut current = start.clone();
             let mut seen = vec![a.new_name.clone()];

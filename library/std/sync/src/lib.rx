@@ -1,10 +1,11 @@
-## std::sync — thread / Mutex / SharedSync surface (partial).
+## std::sync — thread / Mutex / SharedSync surface.
 ##
 ## Wave 2 (#06.8) — 9 class shells migrated from Rust registrations
 ## (Thread, ThreadId, JoinHandle[T: Send], Mutex[T], MutexGuard[T],
 ## SharedSync[T], PoisonError, ThreadPanic, plus Context / Waker
-## from std::task). Methods on every shell still flow through the
-## runtime_table mangled-name dispatch until T#21 lands.
+## from std::task). Every method is declared in these `.rx` files,
+## as an FFI decl or a `.rx` body over the `_raw` FFI; typeck has no
+## Rust-side table for them.
 ##
 ## Phase D-2 of #06.95 deleted the Rust-side `Arc[T]` backward-compat
 ## alias entirely — `SharedSync[T]` is the only canonical name

@@ -1,4 +1,10 @@
 class Thread
+  id_raw: Int
+
+  def init(id_raw: Int)
+    self.id_raw = id_raw
+  end
+
   lib "runtime/time.c"
     def self.sleep as "ruxen_thread_sleep_duration"(d: &Duration) -> nil
     def self.yield_now as "ruxen_thread_yield" -> nil
@@ -7,7 +13,27 @@ class Thread
   lib "runtime/thread.c"
     def self.current_id as "ruxen_thread_current_id" -> Int
     def self.spawn_raw as "ruxen_thread_spawn"(closure: Int) -> Int
-    def self.spawn as "ruxen_thread_spawn"(closure: Int) -> Int
+  end
+
+  ## Run `f` on a new OS thread and return a handle to join it. Every value
+  ## the closure captures must be `Send` (E1100).
+  def self.spawn[T](f: any Fn[Fn() -> T] + Send) -> JoinHandle[T]
+    JoinHandle.spawn_closure(f)
+  end
+
+  ## The thread this code is running on.
+  def self.current -> Thread
+    Thread.new(Thread.current_id)
+  end
+
+  ## This thread's id.
+  def id -> ThreadId
+    ThreadId.new(self.id_raw)
+  end
+
+  ## Threads are unnamed (`Thread.spawn` takes no name), so this is `nil`.
+  def name -> Option[String]
+    nil
   end
 end
 
@@ -20,25 +46,18 @@ end
 ##
 ## `Thread.sleep(Int)` — the bare-int convenience overload that
 ## maps to `ruxen_thread_sleep_ns` — stays in runtime_table for
-## now. typeck's method_resolver returns `Ty::Unit` for both
-## `Thread.sleep(&Duration)` and `Thread.sleep(Int)`, so adding
-## a second `def self.sleep as "ruxen_thread_sleep_ns"(ns: Int)`
+## now. Adding a second `def self.sleep as "ruxen_thread_sleep_ns"(ns: Int)`
 ## lib decl here would create two FFI aliases keyed on the same
 ## `Thread_sleep` mangled name — runtime_table's existing entry
 ## for the Int form is the cleanest disambiguation point until
 ## the lib-decl grammar grows parameter-type-keyed dispatch.
-## Multithreading round — Thread.spawn / current_id runtime.
-## Both surfaces declared at the i64 ABI; the Ruxen-level type
-## wrappers (`Thread.spawn` returning `JoinHandle[T]`) are layered
-## on top via the same generic-stripping pattern that Array uses
-## (see library/std/array/src/lib.rx).
-# `Thread.spawn(closure)` — the high-level surface a Rubyist
-# reaches for first. Same runtime entry point as `spawn_raw`;
-# both take a closure pointer at the i64 ABI and return the
-# JoinHandle as an Int. The typed JoinHandle[T] lift is layered
-# through the typed-FFI return mechanism
-# (docs/specs/types/typed_ffi_returns.spec.md); callers who
-# want the typed handle explicitly can use `.join_raw` on it.
+## `Thread.spawn(closure)` — the high-level surface a Rubyist
+## reaches for first. It is a `.rx` body over
+## `JoinHandle.spawn_closure`, the same `ruxen_thread_spawn` entry
+## point `spawn_raw` uses; the typed `JoinHandle[T]` comes from the
+## typed-FFI return mechanism
+## (docs/specs/types/typed_ffi_returns.spec.md). The `+ Send` on its
+## closure parameter makes typeck check every capture (E1100).
 # Accept-loop shape:
 #
 #   loop

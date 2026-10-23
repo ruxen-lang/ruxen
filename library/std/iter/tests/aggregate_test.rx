@@ -1,0 +1,62 @@
+Tester.describe("Enumerable aggregates") do |t: &var Tester|
+  t.it("sum, count and reduce, including on an empty array") do
+    let v = [1, 2, 3, 4, 5]
+    t.expect(v.sum).to_eq(15)
+    t.expect([10, 20, 30, 40].count).to_eq(4)
+    t.expect(v.reduce(0) { |acc, n| acc + n }).to_eq(15)
+    let empty: Array[Int] = Array.new
+    t.expect(empty.sum).to_eq(0)
+    t.expect(empty.count).to_eq(0)
+    t.expect(empty.reduce(100) { |acc, n| acc + n }).to_eq(100)
+  end
+
+  t.it("inject and reduce aliases") do
+    let xs = [1, 2, 3, 4, 5]
+    t.expect(xs.inject(0) do |acc, x| acc + x end).to_eq(15)
+    t.expect(xs.reduce(1) do |acc, x| acc * x end).to_eq(120)
+  end
+
+  t.it("all?, any?, none? and one?") do
+    t.expect([2, 4, 6, 8].all? { |n| n % 2 == 0 }).to_eq(true)
+    let mixed = [1, 2, 3]
+    t.expect(mixed.any? { |n| n > 2 }).to_eq(true)
+    t.expect(mixed.any? { |n| n > 100 }).to_eq(false)
+    let empty: Array[Int] = Array.new
+    t.expect(empty.all? { |n| n > 0 }).to_eq(true)
+    t.expect(empty.any? { |n| n > 0 }).to_eq(false)
+    let xs = [1, 2, 3, 4]
+    t.expect(xs.none? do |x| x > 10 end).to_eq(true)
+    t.expect(xs.none? do |x| x > 2 end).to_eq(false)
+    t.expect(xs.one? do |x| x == 3 end).to_eq(true)
+    t.expect(xs.one? do |x| x > 2 end).to_eq(false)
+  end
+
+  t.it("find, detect and find_index") do
+    let v = [1, 2, 3, 4, 5]
+    t.expect(v.find { |n| n > 3 }.unwrap_or(-1)).to_eq(4)
+    t.expect(v.find { |n| n > 100 }.unwrap_or(-1)).to_eq(-1)
+    t.expect(v.detect do |x| x > 3 end.unwrap_or(0)).to_eq(4)
+    let a = [1, 2, 3]
+    t.expect(a.find_index { |x| x == 3 }.unwrap_or(-1)).to_eq(2)
+    t.expect(a.find_index { |x| x == 99 }.unwrap_or(-1)).to_eq(-1)
+  end
+
+  t.it("each and each_with_index visit in order") do
+    let v = [10, 20, 30]
+    var seen = ""
+    v.each { |n| seen = seen + "#{n}," }
+    t.expect(seen).to_eq("10,20,30,")
+    var sum = 0
+    v.each_with_index { |x, i| sum = sum + x + i }
+    t.expect(sum).to_eq(63)
+  end
+
+  t.it("for over an array of tuples") do
+    let xs = [(1, 2), (3, 4)]
+    var s = 0
+    for p in xs
+      s = s + p.0 + p.1
+    end
+    t.expect(s).to_eq(10)
+  end
+end

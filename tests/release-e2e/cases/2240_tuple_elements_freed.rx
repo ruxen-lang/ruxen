@@ -1,0 +1,28 @@
+# Tuples free their elements: a (String, Int) result dropped in a
+# statement, destructured, nested inside another tuple, held in a class
+# field, and copied by the class's Clone.
+class Holder
+  pair: (String, Int)
+
+  def init(@pair: (String, Int))
+  end
+end
+
+def make(i: Int) -> (String, Int)
+  ("name-#{i}", i)
+end
+
+def run -> nil
+  make(1)
+  let (a, b) = make(2)
+  puts("#{a} #{b}")
+  nested = ((make(3), "x-#{3}"), 5)
+  puts("#{nested.0.0.0} #{nested.0.0.1} #{nested.0.1} #{nested.1}")
+  h = Holder.new(make(4))
+  c = h.clone
+  puts("#{c.pair.0} #{c.pair.1}")
+  c = Holder.new(make(5))
+  puts("#{c.pair.0} #{h.pair.0} #{h.pair.1}")
+end
+
+run

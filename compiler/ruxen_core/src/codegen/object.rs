@@ -7,7 +7,7 @@ fn linker_args(sanitize: bool, extra_link_flags: &[String]) -> Vec<String> {
     // B3 of `docs/specs/system/zero_rust_stdlib_classes.spec.md`:
     // `-lc / -lm / -lpthread` are now declared in per-package
     // `Ruxen.toml` `[system_libs]` tables (`library/std/core/Ruxen.toml`,
-    // `library/std/sync/Ruxen.toml`). `codegen::compile_with_options`
+    // `library/std/sync/Ruxen.toml`). `codegen::aggregate_link_flags`
     // aggregates them into `extra_link_flags` BEFORE calling this
     // function, so they arrive here in the caller-supplied slice
     // alongside FFI-attribute flags from `@[link("...")]`. Only
@@ -69,10 +69,8 @@ fn apply_pcre2_flags(cmd: &mut Command, runtime_c_path: &Path) {
 /// Compile a single C runtime source to an object file.
 ///
 /// When `sanitize` is true, the file is compiled with AddressSanitizer
-/// and UndefinedBehaviorSanitizer instrumentation. Kept as the primitive
-/// shared by both the singleton path (legacy unity-build callers via
-/// [`compile_runtime`]) and the multi-source path
-/// ([`compile_runtime_sources`]) introduced in #06.95 Phase B-2.
+/// and UndefinedBehaviorSanitizer instrumentation. [`compile_c_sources`]
+/// runs it over every source of a host link.
 pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -121,27 +119,20 @@ pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf,
     Ok(runtime_o)
 }
 
-/// Compile every per-package C runtime source to its own object file.
-///
-/// After #06.95 Phase B-2, each stdlib package's `.c` files are
-/// standalone translation units (they `#include` the shared
-/// `library/std/core/runtime/runtime.h` for cross-package type and
-/// function declarations). This walks the source list, compiles each
-/// to a uniquely named `.o`, and returns the full set for the linker.
-///
-/// On failure, any objects already produced are best-effort removed.
-pub fn compile_runtime_sources(
+/// Compile each C source in `sources` with `compile_one` (the host
+/// [`compile_runtime`], [`compile_runtime_for_target`] or
+/// [`compile_runtime_for_wasm`]) and return the objects in order. On failure
+/// the objects already produced are removed.
+pub fn compile_c_sources(
     sources: &[PathBuf],
-    sanitize: bool,
+    compile_one: impl Fn(&Path) -> Result<PathBuf, String>,
 ) -> Result<Vec<PathBuf>, String> {
     let mut objects: Vec<PathBuf> = Vec::with_capacity(sources.len());
     for src in sources {
-        match compile_runtime(src, sanitize) {
+        match compile_one(src) {
             Ok(o) => objects.push(o),
             Err(e) => {
-                for partial in &objects {
-                    let _ = std::fs::remove_file(partial);
-                }
+                remove_objects(&objects);
                 return Err(e);
             }
         }
@@ -149,16 +140,80 @@ pub fn compile_runtime_sources(
     Ok(objects)
 }
 
+/// Best-effort removal of temporary object files.
+pub fn remove_objects(objects: &[PathBuf]) {
+    for o in objects {
+        let _ = std::fs::remove_file(o);
+    }
+}
+
+/// The `cc` arguments that link `obj_path` into `output_path`, in the order
+/// the linker needs them: every input file (the program object, the runtime
+/// objects, then the prebuilt runtime archive) before any library flag.
+///
+/// A library flag is resolved only against the inputs to its left. GNU ld
+/// with `--as-needed` (Ubuntu's gcc default) drops a `-lm` that precedes
+/// the archive whose `ruxen_float_pow` calls `pow`, and the link then fails
+/// with an undefined reference. Fedora's gcc does not pass `--as-needed`,
+/// which is why a wrong order links there and fails on Ubuntu CI.
+///
+/// `prebuilt_archive` is whole-archived (`-force_load` on Apple ld, which
+/// does not honour `--whole-archive`) so members no object references, such
+/// as the Cranelift dispatch helpers, survive the link.
+fn link_command_args(
+    obj_path: &Path,
+    runtime_objects: &[PathBuf],
+    prebuilt_archive: Option<&Path>,
+    output_path: &str,
+    sanitize: bool,
+    extra_link_flags: &[String],
+) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = vec![obj_path.into()];
+    args.extend(runtime_objects.iter().map(|o| o.into()));
+    if let Some(ar) = prebuilt_archive {
+        if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
+            let mut force_load = std::ffi::OsString::from("-Wl,-force_load,");
+            force_load.push(ar);
+            args.push(force_load);
+        } else {
+            args.push("-Wl,--whole-archive".into());
+            args.push(ar.into());
+            args.push("-Wl,--no-whole-archive".into());
+        }
+    }
+    args.push("-o".into());
+    args.push(output_path.into());
+    // Match the deployment target of every input object (11.0) so the link
+    // target isn't the lower OS-major default, which makes ld flag the
+    // prebuilt archive as "built for a newer macOS version".
+    if cfg!(target_os = "macos") {
+        args.push("-mmacosx-version-min=11.0".into());
+    }
+    args.extend(
+        linker_args(sanitize, extra_link_flags)
+            .into_iter()
+            .map(std::ffi::OsString::from),
+    );
+    args
+}
+
 /// Write object bytes to a file and link with the runtime into an executable.
+///
+/// The C runtime arrives either as `runtime_objects` (compiled `.o` files,
+/// removed after the link) or as `prebuilt_archive` (a `libruxenrt.a`,
+/// whole-archived and left in place). See [`link_command_args`] for the
+/// argument order this guarantees.
 ///
 /// When `sanitize` is true, the linker is invoked with sanitizer flags so that
 /// the sanitizer runtime is linked into the final binary.
 ///
 /// `extra_link_flags` provides additional linker flags (e.g., `-lfoo` from
-/// `@[link("foo")]` FFI attributes).
+/// `@[link("foo")]` FFI attributes, and the `[system_libs]` set); they all
+/// follow every input file.
 pub fn emit_executable(
     object_bytes: &[u8],
     runtime_objects: &[PathBuf],
+    prebuilt_archive: Option<&Path>,
     output_path: &str,
     sanitize: bool,
     extra_link_flags: &[String],
@@ -169,20 +224,14 @@ pub fn emit_executable(
         .map_err(|e| format!("Failed to write object file: {}", e))?;
 
     let mut cmd = Command::new("cc");
-    cmd.arg(&obj_path);
-    for runtime_o in runtime_objects {
-        cmd.arg(runtime_o);
-    }
-    cmd.arg("-o").arg(output_path);
-    // Match the deployment target of every input object (11.0) so the link
-    // target isn't the lower OS-major default, which makes ld flag the
-    // prebuilt archive as "built for a newer macOS version".
-    #[cfg(target_os = "macos")]
-    cmd.arg("-mmacosx-version-min=11.0");
-
-    for arg in linker_args(sanitize, extra_link_flags) {
-        cmd.arg(arg);
-    }
+    cmd.args(link_command_args(
+        Path::new(&obj_path),
+        runtime_objects,
+        prebuilt_archive,
+        output_path,
+        sanitize,
+        extra_link_flags,
+    ));
 
     let status = cmd
         .status()
@@ -798,21 +847,6 @@ int64_t ruxen_sharedsync_strong_count(int32_t s) { (void)s; return 1; }
 int64_t ruxen_sharedsync_get(int32_t s) { return *(int64_t *)(uintptr_t)s; }
 void ruxen_sharedsync_drop(int32_t s) { (void)s; }
 
-/* --- tier 4.09 wasm fmt shim (gui-stack Q44) -------------------------------
- * The MIR interpolation lowerer emits the mangled callees Formatter_new /
- * Formatter_write_str / Formatter_buffer (NOT the ruxen_fmt_formatter_* FFI
- * aliases), and the wasm backend does not bridge mangled→C-symbol for them, so
- * they leak as host imports. Define them here over the already-bundled fmt.c so
- * string interpolation is self-contained on wasm. ABI matches the emitted call
- * sites: new()->i64, write_str(i32,i32)->void, buffer(i32)->i64. */
-struct RuxenFormatter;
-extern struct RuxenFormatter *ruxen_fmt_formatter_new(void);
-extern int64_t ruxen_fmt_formatter_write_str(struct RuxenFormatter *, const char *);
-extern const char *ruxen_fmt_formatter_buffer(struct RuxenFormatter *);
-int64_t Formatter_new(void) { return (int64_t)(uintptr_t)ruxen_fmt_formatter_new(); }
-void Formatter_write_str(int32_t f, int32_t s) { ruxen_fmt_formatter_write_str((struct RuxenFormatter *)(uintptr_t)f, (const char *)(uintptr_t)s); }
-int64_t Formatter_buffer(int32_t f) { return (int64_t)(uintptr_t)ruxen_fmt_formatter_buffer((struct RuxenFormatter *)(uintptr_t)f); }
-
 /* --- tier 4.09 host->wasm marshalling (gui-stack Q45) ----------------------
  * Export the bundled allocator so a JS host can allocate a buffer inside wasm
  * linear memory, write a NUL-terminated UTF-8 string into it, and pass the
@@ -1121,12 +1155,48 @@ fn shell_quote(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::linker_args;
+    use super::{link_command_args, linker_args};
+    use std::path::{Path, PathBuf};
+
+    /// Every input file precedes every `-l` flag. GNU ld with `--as-needed`
+    /// (Ubuntu's default) drops a library no input to its left uses, so
+    /// `-lm` before the runtime archive left `ruxen_float_pow`'s `pow`
+    /// undefined on Ubuntu CI. Pins the order for both runtime shapes.
+    #[test]
+    fn link_command_puts_library_flags_after_every_input() {
+        let archive = Path::new("target/debug/libruxenrt.a");
+        let runtime_objects = vec![PathBuf::from("string.o"), PathBuf::from("user_shim.o")];
+        let flags = vec![
+            String::from("-lfoo"),
+            String::from("-lc"),
+            String::from("-lm"),
+            String::from("-lpthread"),
+        ];
+        for (objects, ar) in [(Vec::new(), Some(archive)), (runtime_objects, None)] {
+            let args: Vec<String> =
+                link_command_args(Path::new("prog.o"), &objects, ar, "prog", false, &flags)
+                    .into_iter()
+                    .map(|a| a.to_string_lossy().into_owned())
+                    .collect();
+            let first_lib = args
+                .iter()
+                .position(|a| a.starts_with("-l"))
+                .expect("library flags reach the link line");
+            let last_input = args
+                .iter()
+                .rposition(|a| a == "prog.o" || a.ends_with(".a") || a.ends_with(".o"))
+                .expect("inputs reach the link line");
+            assert!(
+                last_input < first_lib,
+                "every input must precede every -l flag; got {args:?}"
+            );
+        }
+    }
 
     // B3 of docs/specs/system/zero_rust_stdlib_classes.spec.md moved
     // `-lc / -lm / -lpthread` out of `linker_args` into per-package
     // Ruxen.toml `[system_libs]` tables. The aggregation now happens
-    // upstream in `codegen::compile_with_options` and arrives here
+    // upstream in `codegen::aggregate_link_flags` and arrives here
     // through the `extra_link_flags` argument — so `linker_args(_,
     // &["-lpthread", "-lc", "-lm"])` is now the right contract to
     // assert. See `compiler/ruxen_core/tests/linker_system_libs.rs`

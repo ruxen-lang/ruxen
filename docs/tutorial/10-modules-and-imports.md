@@ -59,7 +59,7 @@ Items inside a module body are **public by default**. Use `private` and `protect
 
 ```ruxen
 module Database
-  def query(sql: &str) -> Result[Rows, DbError]
+  def query(sql: &String) -> Result[Rows, DbError]
     let conn = connect_internal()
     # ...
   end

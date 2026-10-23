@@ -1,4 +1,0 @@
-
-struct Buf[T, const N: USize]
-  data: [T; N + 1]
-end

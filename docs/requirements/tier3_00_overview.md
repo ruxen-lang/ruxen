@@ -42,14 +42,14 @@ is the 30-second summary.
 
 | Axis | Today |
 |---|---|
-| LSP | `tower-lsp` server with 5 capabilities: `textDocument/didOpen`, `didChange` (FULL sync, no re-analysis), `didSave` (triggers full re-analysis + diagnostics), `hover`, `definition` (same file only), `semanticTokens/full`. No completion, no rename, no references, no inlay hints, no signature help, no document symbols, no code actions, no LSP formatting, no workspace symbols, no `didChangeConfiguration`, no file-watch response. (`crates/ruxen-lsp/src/server.rs:38-238`) |
-| Debugger | Zero. One stub file `crates/ruxen-core/src/codegen/llvm/debug.rs:1-3` says "Full DWARF debug info will be implemented in a follow-up phase." No DWARF emission in Cranelift. No DAP adapter. No `--emit-debug` flag. No `.debug_info` sections. |
-| Test framework | Zero. All tests are Rust `#[test]` inside `crates/ruxen-core/tests/*.rs` and `crates/*/src/**/tests.rs`. There is no Ruxen-language `test` in-body directive, no `ruxen test` subcommand (see `crates/ruxen-cli/src/cli.rs:25-114`), no assertion macros, no test runner. |
-| Doc generator | Zero. Doc comments `## ...` are lexed into `TokenKind::DocComment` (`crates/ruxen-core/src/lexer/mod.rs:211-226`) and immediately *discarded* at four sites in the parser (`parser/mod.rs:455-458`, `:884-887`, `:1112-1115`, `:1187-1190`). No `ruxendoc` binary. No HTML emission. No search index. |
+| LSP | `tower-lsp` server with 5 capabilities: `textDocument/didOpen`, `didChange` (FULL sync, no re-analysis), `didSave` (triggers full re-analysis + diagnostics), `hover`, `definition` (same file only), `semanticTokens/full`. No completion, no rename, no references, no inlay hints, no signature help, no document symbols, no code actions, no LSP formatting, no workspace symbols, no `didChangeConfiguration`, no file-watch response. (`src/ruxen_lsp/src/server.rs:38-238`) |
+| Debugger | Zero. One stub file `compiler/ruxen_core/src/codegen/llvm/debug.rs:1-3` says "Full DWARF debug info will be implemented in a follow-up phase." No DWARF emission in Cranelift. No DAP adapter. No `--emit-debug` flag. No `.debug_info` sections. |
+| Test framework | Zero. All tests are Rust `#[test]` inside `compiler/ruxen_core/tests/*.rs` and `src/*/src/**/tests.rs`. There is no Ruxen-language `test` in-body directive, no `ruxen test` subcommand (see `src/ruxen_cli/src/cli.rs:25-114`), no assertion macros, no test runner. |
+| Doc generator | Zero. Doc comments `## ...` are lexed into `TokenKind::DocComment` (`compiler/ruxen_core/src/lexer/mod.rs:211-226`) and immediately *discarded* at four sites in the parser (`parser/mod.rs:455-458`, `:884-887`, `:1112-1115`, `:1187-1190`). No `ruxendoc` binary. No HTML emission. No search index. |
 | Benchmarking | Partial at the Rust level: `ruxenc/benches/cache_bench.rs` uses `criterion`. No Ruxen-language `bench` in-body directive. No `ruxen bench` subcommand. No statistical harness. No regression-tracking output. |
-| Incremental | **File-level only** via `ruxenc/src/cache/`: content-addressed object cache that hashes the full source file + compiler version + flags, and on hit re-uses the compiled `.o` plus a serialized public `FileSignature` (`ruxenc/src/cache/mod.rs:1-55`). There is **no query-based memoization** inside `ruxen-core`. A single-character edit busts the cache for that file and re-runs lex → parse → resolve → typeck → borrow-check → MIR → codegen from scratch. |
-| MIR opts | Zero. `crates/ruxen-core/src/mir/mod.rs:1-4` declares only `nodes` and `lower`. The lowerer produces MIR and hands it straight to codegen — no `const_fold`, no `simplify_cfg`, no `dce`, no `inline` pass module exists. Inkwell's LLVM optimizer (`codegen/llvm/optimize.rs`) runs on the LLVM IR, not MIR — so Cranelift debug builds have no optimization layer at all. |
-| Property testing | CLAUDE.md claims "`proptest` for property-based testing in `ruxen-core`". `proptest` is in `crates/ruxen-core/Cargo.toml:17` as a dev-dependency. The *only* file that imports it is `crates/ruxen-core/tests/runtime_safety.rs:61`, and the two `proptest!` blocks there are placeholders: `prop_assert!(expected_len <= 100)` and `prop_assert_eq!(n, n)` (`runtime_safety.rs:68-86`). They assert nothing about actual compiler behavior. The claim is effectively false. |
+| Incremental | **File-level only** via `ruxenc/src/cache/`: content-addressed object cache that hashes the full source file + compiler version + flags, and on hit re-uses the compiled `.o` plus a serialized public `FileSignature` (`ruxenc/src/cache/mod.rs:1-55`). There is **no query-based memoization** inside `ruxen_core`. A single-character edit busts the cache for that file and re-runs lex → parse → resolve → typeck → borrow-check → MIR → codegen from scratch. |
+| MIR opts | Zero. `compiler/ruxen_core/src/mir/mod.rs:1-4` declares only `nodes` and `lower`. The lowerer produces MIR and hands it straight to codegen — no `const_fold`, no `simplify_cfg`, no `dce`, no `inline` pass module exists. Inkwell's LLVM optimizer (`codegen/llvm/optimize.rs`) runs on the LLVM IR, not MIR — so Cranelift debug builds have no optimization layer at all. |
+| Property testing | CLAUDE.md claims "`proptest` for property-based testing in `ruxen_core`". `proptest` is in `compiler/ruxen_core/Cargo.toml:17` as a dev-dependency. The *only* file that imports it is `compiler/ruxen_core/tests/runtime_safety.rs:61`, and the two `proptest!` blocks there are placeholders: `prop_assert!(expected_len <= 100)` and `prop_assert_eq!(n, n)` (`runtime_safety.rs:68-86`). They assert nothing about actual compiler behavior. The claim is effectively false. |
 
 ## Cross-doc dependency graph
 
@@ -65,7 +65,7 @@ is the 30-second summary.
        ┌─────────────────────────┐       ┌──────────────────────────┐
        │ 06: Incremental         │       │ 07: MIR opts             │
        │ (query/salsa on top     │       │ (independent of rest;    │
-       │  of ruxen-core)         │       │  improves debug builds)  │
+       │  of ruxen_core)         │       │  improves debug builds)  │
        └────────┬────────────────┘       └──────────────────────────┘
                 │
                 ▼
@@ -91,7 +91,7 @@ is the 30-second summary.
 
 - **LSP completion requires some form of incremental analysis.** Today
   `analyze()` re-runs lex → parse → typeck → borrow-check on every
-  `didSave` (`crates/ruxen-lsp/src/server.rs:136`). A meaningful completion
+  `didSave` (`src/ruxen_lsp/src/server.rs:136`). A meaningful completion
   experience types on every keystroke, which means either (a) ship LSP
   with full-file re-analysis and accept slow response on files >1000 lines,
   or (b) land doc 06 (incremental) first. **We recommend (a) for Phase 1
@@ -103,7 +103,7 @@ is the 30-second summary.
 
 - **Doc 05 (bench) and doc 03 (test) both need an in-body directive
   dispatch that actually works.** Today `@[link]` and `@[repr]` are the
-  only two prefix-attribute forms consumed (`crates/ruxen-core/src/parser/mod.rs:473-511`).
+  only two prefix-attribute forms consumed (`compiler/ruxen_core/src/parser/mod.rs:473-511`).
   Those are retired (replaced by `lib` options and body-level `layout`), but
   the lookup machinery is still in place. Doc 03 and 05 *both* need an
   in-body directive pipeline (test/bench/ignore/should_panic in a fn body)
@@ -136,7 +136,7 @@ is the 30-second summary.
 
 - **Doc 08 (property testing) is a documentation-cleanliness ask.** Either
   fix the CLAUDE.md line ("proptest for property-based testing in
-  ruxen-core") by adding real proptest coverage for lexer / parser /
+  ruxen_core") by adding real proptest coverage for lexer / parser /
   borrow-check round-trips, or delete the claim. Doc 08 recommends adding
   real coverage because the lexer and parser are both excellent candidates
   (arbitrary-input-never-panics; roundtrip-formatter-parser).
@@ -145,11 +145,11 @@ is the 30-second summary.
 
 **Phase 3A — LSP completion + formatting + diagnostics-on-edit (2-3 weeks).**
 Highest-leverage UX wins. No compiler changes required; sits entirely in
-`crates/ruxen-ide` and `crates/ruxen-lsp`. Expected phases:
+`src/ruxen_ide` and `src/ruxen_lsp`. Expected phases:
 
 1. Wire `ruxen_core::formatter::format()` into
    `textDocument/formatting`. Formatter already exists as a library API
-   (`crates/ruxen-core/src/formatter/mod.rs:56-128`) — the LSP handler is
+   (`compiler/ruxen_core/src/formatter/mod.rs:56-128`) — the LSP handler is
    ~30 lines.
 2. Move analysis onto `didChange` with a 200 ms debounce, publish
    diagnostics incrementally. Unlocks live error squigglies.
@@ -157,7 +157,7 @@ Highest-leverage UX wins. No compiler changes required; sits entirely in
    completion after `.`; then keyword completion. (See doc 01 phases.)
 4. Inlay hints (types on `let` without annotation; parameter names at
    call sites) and signature help.
-5. Rename + find-references — both druxen by a reverse index from
+5. Rename + find-references — both driven by a reverse index from
    `DefId` to use-site `Span`s that the LSP builds during `analyze()`.
 
 **Phase 3B — Doc comments + doc generator (2 weeks).**
@@ -195,7 +195,7 @@ runs at coarse granularity.
 
 **Phase 3G — Debugger (3-4 weeks).**
 DWARF emission via Inkwell's `DebugInfoBuilder`. Ship with a minimal
-DAP adapter as a separate crate (`ruxen-dap`). Works only on LLVM
+DAP adapter as a separate crate (`ruxen_dap`). Works only on LLVM
 backend; Cranelift support is a stretch goal.
 
 **Phase 3H — Property testing cleanup (0.5 week).**
@@ -215,16 +215,15 @@ These surfaced in multiple docs and need a single ruling before
 implementation begins:
 
 1. **Doc-comment syntax.** Lexer already emits `##` as
-   `TokenKind::DocComment` (`crates/ruxen-core/src/lexer/mod.rs:211-226`).
+   `TokenKind::DocComment` (`compiler/ruxen_core/src/lexer/mod.rs:211-226`).
    Doc 04 proposes keeping `##` (Ruby-flavored) rather than adding `///`
    or `/**`. Decide.
 2. **Test directive form.** Prefix attribute `test` is retired. Doc 03
    uses an in-body directive — a `test` keyword on its own line inside the
    function body. Confirm in-body form is the canonical surface; reject
    any leftover prefix proposals.
-3. **Test expectation API.** Assert macros? (`assert_eq!`, `assert!`.)
-   Panic-on-fail with a free `expect(actual, expected)` helper? Rust
-   uses both; Go uses neither. Pick one.
+3. **Test expectation API.** Decided by what shipped: the `Tester` DSL's
+   `t.expect(...)` (`library/std/test/`). There are no assert macros.
 4. **`ruxen bench` output format.** `criterion`-compatible JSON, TAP,
    a bespoke format, or all three? Informs doc 05 Phase 2.
 5. **Incremental granularity.** Function-level, file-level, or

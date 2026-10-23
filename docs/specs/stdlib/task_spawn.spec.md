@@ -55,7 +55,7 @@ Ready.
 
 ```rx
 async def long_running()
-  let mut i = 0
+  var i = 0
   while i < 1_000_000
     if i % 1000 == 0
       Task.yield_now.await    # let other tasks run
@@ -91,7 +91,7 @@ awaiting the result.
 ```rx
 class JoinHandle[T: Send]   # already exists for Thread.spawn
   # New method for in-executor tasks:
-  def await(self) -> T
+  def await -> T
     # Suspends the current task until the joined task completes.
     # Synthesized into the calling async fn's state machine.
   end
@@ -136,7 +136,7 @@ registrations and held resources).
 
 Open question for v1: should `block_on` wait for ALL spawned tasks
 to complete (Java `ExecutorService.awaitTermination` shape) or
-just the top-level one (Rust `block_on(future)` shape)? Spec
+just the top-level one? Spec
 chooses the latter — top-level only. Users wanting "wait for all"
 write it explicitly via collecting JoinHandles + awaiting each.
 

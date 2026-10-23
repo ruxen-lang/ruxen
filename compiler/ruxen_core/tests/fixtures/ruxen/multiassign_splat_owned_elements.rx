@@ -1,0 +1,6 @@
+def main
+  var first: String = ""
+  var rest: Array[String] = []
+  var values = ["first", "second"]
+  first, *rest = values
+end

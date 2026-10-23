@@ -4,8 +4,10 @@
 //! The actual `class` / `struct` / `enum` / `mixin` / `extension` parsers
 //! live in `parser/classes.rs`; this module dispatches into them.
 
-use crate::lexer::token::TokenKind;
+use crate::diagnostics::Diagnostic;
+use crate::lexer::token::{Span, TokenKind};
 use crate::parser::ast::*;
+use crate::parser::methods::BodyState;
 use crate::parser::Parser;
 
 impl Parser {
@@ -44,7 +46,7 @@ impl Parser {
             TokenKind::Type => Some(TopLevelItem::TypeAlias(self.parse_type_alias())),
             TokenKind::Newtype => Some(TopLevelItem::Newtype(self.parse_newtype_def())),
             TokenKind::Const => Some(TopLevelItem::Const(self.parse_const_def())),
-            TokenKind::Lib => Some(TopLevelItem::Lib(self.parse_lib_decl(vec![]))),
+            TokenKind::Lib => Some(TopLevelItem::Lib(self.parse_lib_decl())),
             TokenKind::At => {
                 // ruby-naming.spec.md §10a: the `@[...]` prefix-attribute
                 // surface is retired. `@[derive(...)]` → in-body `include
@@ -75,7 +77,7 @@ impl Parser {
                 Some(TopLevelItem::Alias(self.parse_alias_item()))
             }
             TokenKind::Protected => {
-                let vis = self.parse_visibility();
+                let vis = self.parse_visibility().unwrap_or(Visibility::Private);
                 match self.current_kind() {
                     TokenKind::Def | TokenKind::Async => {
                         Some(TopLevelItem::Function(self.parse_func_def(vis)))
@@ -87,38 +89,39 @@ impl Parser {
                 }
             }
             _ => {
-                // A top-level EXPRESSION STATEMENT — e.g. a call with a
-                // trailing `do…end` at module scope (`Tester.describe("…")
-                // do … end`, the shape of every `tests/*.rx`). The compile
-                // path never reaches here for those files (`ruxen test`
-                // hoists items + wraps statements in a synthesised `def
-                // main` first); resolve rejects a `TopLevelItem::Expr` with
-                // E0608 if a raw file is compiled directly. Accepting it
-                // here lets the SHARED parser (and therefore `ruxen fmt`)
-                // round-trip test files instead of erroring at 1:1. (Q23b.)
-                if self.starts_top_level_expr_stmt() {
-                    let before_pos = self.pos;
-                    let before_diags = self.diagnostics.len();
-                    let expr = self.parse_expression();
-                    let consumed = self.pos > before_pos;
-                    let clean = self.diagnostics.len() == before_diags;
-                    let at_boundary = matches!(
-                        self.current_kind(),
-                        TokenKind::Newline | TokenKind::Eof | TokenKind::End
-                    );
-                    // Accept only a fully-clean expression that lands on a
-                    // statement boundary. Anything else falls through to the
-                    // standard error path so a real top-level-declaration typo
-                    // still gets the clear "expected top-level declaration"
-                    // diagnostic instead of being silently swallowed.
-                    if consumed && clean && at_boundary {
-                        return Some(TopLevelItem::Expr(expr));
-                    }
-                    // Reset cursor + drop any diagnostics the speculative
-                    // parse recorded, then fall through.
-                    self.pos = before_pos;
-                    self.diagnostics.truncate(before_diags);
+                // A top-level EXPRESSION STATEMENT: any statement Ruby runs
+                // at the top of a file, such as a call with a trailing
+                // `do…end` (`Tester.describe("…") do … end`, the shape of
+                // every `tests/*.rx`), an assignment, `while` / `for` / `if` /
+                // `match`, or a literal receiver (`[1, 2].each { … }`). The
+                // compile pipeline moves clean expressions into an implicit
+                // `main`; the shared parser retains the raw item so
+                // `ruxen fmt` can round-trip source faithfully.
+                let before_pos = self.pos;
+                let before_diags = self.diagnostics.len();
+                let expr = self.parse_expression();
+                let consumed = self.pos > before_pos;
+                let clean = self.diagnostics.len() == before_diags;
+                let at_boundary = matches!(
+                    self.current_kind(),
+                    TokenKind::Newline | TokenKind::Eof | TokenKind::End
+                );
+                // Accept a fully-clean expression that lands on a statement
+                // boundary.
+                if consumed && clean && at_boundary {
+                    return Some(TopLevelItem::Expr(expr));
                 }
+                // A statement that parsed past its first token but hit an
+                // error inside (`f = ->(x: Int) { |y| y }`) keeps that
+                // error: it says what is wrong with the statement.
+                if consumed && !clean {
+                    return None;
+                }
+                // Anything else (a declaration typo, a stray token) gets the
+                // "expected top-level declaration" diagnostic below; drop
+                // what the speculative parse recorded.
+                self.pos = before_pos;
+                self.diagnostics.truncate(before_diags);
                 self.error(&format!(
                     "expected top-level declaration, found {:?}",
                     self.current_kind()
@@ -128,16 +131,69 @@ impl Parser {
         }
     }
 
-    /// Heuristic: does the cursor begin a plausible top-level expression
-    /// statement (an identifier / type-identifier / `self` that starts a
-    /// call or method-call chain)? Deliberately narrow — we only want to
-    /// accept the `Recv.method(args) do…end` test-file shape, not arbitrary
-    /// expressions that would mask real top-level-declaration typos.
-    fn starts_top_level_expr_stmt(&self) -> bool {
-        matches!(
-            self.current_kind(),
-            TokenKind::Identifier(_) | TokenKind::TypeIdentifier(_) | TokenKind::SelfValue
-        )
+    /// Whether the cursor begins a top-level declaration item (`def`,
+    /// `class`, `use`, `lib`, `protected def`, `unsafe extension`,
+    /// `alias new old`, ...) rather than an expression statement: the
+    /// declaration arms of [`Self::parse_top_level_item`]. The REPL and the
+    /// test runner use it to tell items from statements.
+    pub fn is_item_start(&self) -> bool {
+        match self.current_kind() {
+            TokenKind::Module
+            | TokenKind::Class
+            | TokenKind::Struct
+            | TokenKind::Enum
+            | TokenKind::Mixin
+            | TokenKind::Extension
+            | TokenKind::Use
+            | TokenKind::Type
+            | TokenKind::Newtype
+            | TokenKind::Const
+            | TokenKind::Lib
+            | TokenKind::Async
+            | TokenKind::Def
+            | TokenKind::Protected => true,
+            TokenKind::Unsafe => matches!(self.peek_kind(), TokenKind::Extension),
+            TokenKind::Identifier(_) => self.is_alias_item_start(),
+            _ => false,
+        }
+    }
+
+    /// Split a script-style file (a test file: declarations mixed with
+    /// statements that run in `main`) into its top-level units, in source
+    /// order. Each unit's span starts at its first token, after any `##`
+    /// docs, and ends at its last token.
+    pub fn parse_script_units(&mut self) -> Result<Vec<ScriptUnit>, Vec<Diagnostic>> {
+        let mut units = Vec::new();
+        loop {
+            self.skip_terminators();
+            self.collect_doc_comments();
+            self.pending_doc_comments.clear();
+            if self.at_eof() {
+                break;
+            }
+            let start = self.current_span();
+            let before = self.pos;
+            let item = if self.is_item_start() {
+                self.parse_top_level_item()
+            } else {
+                self.parse_statement();
+                None
+            };
+            if self.pos == before {
+                // Nothing parsed; the error is already recorded.
+                break;
+            }
+            let end = self.tokens[self.pos - 1].span.end;
+            units.push(ScriptUnit {
+                item,
+                span: Span::new(start.start, end, start.line, start.column),
+            });
+        }
+        if self.diagnostics.is_empty() {
+            Ok(units)
+        } else {
+            Err(self.diagnostics.clone())
+        }
     }
 
     /// True if the cursor begins a Ruby `alias new_name old_name` item:
@@ -149,9 +205,10 @@ impl Parser {
     pub(super) fn is_alias_item_start(&self) -> bool {
         matches!(self.current_kind(), TokenKind::Identifier(s) if s == "alias")
             && (matches!(self.peek_kind(), TokenKind::Identifier(_))
-                // An operator-spelled new name (`alias << push`) is parsed
-                // too, so resolve can emit the staged E1123 rather than the
-                // parser tripping a generic error (ADR D6).
+                // Operator-spelled new names (`alias << push`, `alias [] get`)
+                // are parsed too; resolve admits operators with expression
+                // dispatch paths and emits E1123 for the remaining staged
+                // forms (ADR D6).
                 || Self::is_operator_name_start(&self.peek_kind()))
     }
 
@@ -161,11 +218,14 @@ impl Parser {
     /// `alias new, old` is rejected (D1) — a comma after the new name is a
     /// clean parse error here.
     pub(super) fn parse_alias_item(&mut self) -> AliasDef {
+        // `##` docs above an alias document the alias; `AliasDef` keeps no
+        // docs, and left pending they would attach to the next `def`.
+        self.take_pending_docs();
         let start = self.current_span();
         self.advance(); // consume the `alias` contextual keyword
                         // `parse_def_name` accepts both plain/`?`/`!` identifiers and
-                        // operator-symbol names (`<<`, `[]`); operator names are caught at
-                        // resolve with E1123 (ADR D6), so they parse cleanly here.
+                        // operator-symbol names (`<<`, `[]`); resolve admits supported
+                        // operator dispatch paths and rejects the rest with E1123 (ADR D6).
         let new_name = self.parse_def_name();
         // Ruby's `alias` takes NO comma. Reject the comma form explicitly so
         // the diagnostic is actionable instead of a generic "expected
@@ -186,13 +246,15 @@ impl Parser {
         }
     }
 
-    pub(super) fn parse_visibility(&mut self) -> Visibility {
+    /// The explicit `protected` prefix on a `def`, or `None` when the
+    /// declaration has no prefix and takes its context's visibility.
+    pub(super) fn parse_visibility(&mut self) -> Option<Visibility> {
         match self.current_kind() {
             TokenKind::Protected => {
                 self.advance();
-                Visibility::Protected
+                Some(Visibility::Protected)
             }
-            _ => Visibility::Private,
+            _ => None,
         }
     }
 
@@ -206,98 +268,47 @@ impl Parser {
 
         let mut items = Vec::new();
         // ruby-naming.spec.md §3.2: module bodies honour section markers.
-        // Module items inherit `current_vis` only when they expose a
-        // `visibility` field (Function, Const). Nested types
+        // Only module functions take the section's visibility; nested types
         // (Class/Struct/Module/...) carry their own visibility model.
-        let mut current_vis = Visibility::Public;
-        let mut name_list_overrides: Vec<(Visibility, Vec<String>)> = Vec::new();
-        while !self.at(TokenKind::End) && !self.at(TokenKind::Eof) {
-            let __progress = self.pos;
-            self.skip_newlines();
-            if self.at(TokenKind::End) {
+        let mut state = BodyState::new();
+        loop {
+            let progress = self.pos;
+            if !self.at_body_member() {
                 break;
             }
-            // Handle bare section markers BEFORE delegating to
-            // `parse_top_level_item`. `parse_top_level_item` doesn't
-            // know about Public/Private as section markers.
+            // Section markers and unprefixed `def`s first:
+            // `parse_top_level_item` knows neither.
             match self.current_kind().clone() {
-                TokenKind::Public => {
-                    self.advance();
-                    if self.at(TokenKind::Colon) {
-                        let names = self.parse_visibility_name_list();
-                        name_list_overrides.push((Visibility::Public, names));
+                TokenKind::Public => self.parse_section_marker(Visibility::Public, &mut state),
+                TokenKind::Private => self.parse_section_marker(Visibility::Private, &mut state),
+                // `protected def` falls to `parse_top_level_item`.
+                TokenKind::Protected
+                    if !matches!(self.peek_kind(), TokenKind::Def | TokenKind::Async) =>
+                {
+                    self.parse_section_marker(Visibility::Protected, &mut state)
+                }
+                TokenKind::Def | TokenKind::Async => {
+                    items.push(TopLevelItem::Function(
+                        self.parse_func_def(state.current_vis),
+                    ));
+                }
+                _ => {
+                    if let Some(item) = self.parse_top_level_item() {
+                        items.push(item);
                     } else {
-                        current_vis = Visibility::Public;
+                        self.synchronize();
                     }
-                    self.skip_newlines();
-                    self.ensure_loop_progress(__progress);
-                    continue;
                 }
-                TokenKind::Private => {
-                    self.advance();
-                    if self.at(TokenKind::Colon) {
-                        let names = self.parse_visibility_name_list();
-                        name_list_overrides.push((Visibility::Private, names));
-                    } else {
-                        current_vis = Visibility::Private;
-                    }
-                    self.skip_newlines();
-                    self.ensure_loop_progress(__progress);
-                    continue;
-                }
-                TokenKind::Protected => {
-                    // Only treat as bare-marker if not followed by a decl.
-                    let next = self.peek_kind();
-                    let bare = !matches!(next, TokenKind::Def | TokenKind::Async);
-                    if bare {
-                        self.advance();
-                        if self.at(TokenKind::Colon) {
-                            let names = self.parse_visibility_name_list();
-                            name_list_overrides.push((Visibility::Protected, names));
-                        } else {
-                            current_vis = Visibility::Protected;
-                        }
-                        self.skip_newlines();
-                        self.ensure_loop_progress(__progress);
-                        continue;
-                    }
-                    // else: fall through and let parse_top_level_item handle it.
-                }
-                _ => {}
             }
-            if let Some(item) = self.parse_top_level_item() {
-                // Stamp section visibility onto items that did not carry
-                // an explicit prefix. Items without a visibility field
-                // (e.g. nested types) are unaffected here — their own
-                // body parsers apply section markers internally.
-                let stamped = match item {
-                    TopLevelItem::Function(mut f) => {
-                        if f.visibility == Visibility::Private {
-                            f.visibility = current_vis;
-                        }
-                        TopLevelItem::Function(f)
-                    }
-                    other => other,
-                };
-                items.push(stamped);
-            } else {
-                self.synchronize();
-            }
-            self.ensure_loop_progress(__progress);
+            self.skip_newlines();
+            self.ensure_loop_progress(progress);
         }
         self.expect(TokenKind::End);
-        // Apply name-list overrides on functions (top-level methods).
-        for (vis, names) in &name_list_overrides {
-            for n in names {
-                for item in items.iter_mut() {
-                    if let TopLevelItem::Function(f) = item {
-                        if &f.name == n {
-                            f.visibility = *vis;
-                        }
-                    }
-                }
-            }
-        }
+        // Name lists re-mark module functions.
+        state.apply_name_lists(items.iter_mut().filter_map(|item| match item {
+            TopLevelItem::Function(f) => Some(f),
+            _ => None,
+        }));
         let span = self.span_from(&start);
         ModuleDef { name, items, span }
     }

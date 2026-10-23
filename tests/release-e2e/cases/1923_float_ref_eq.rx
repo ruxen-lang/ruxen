@@ -1,0 +1,52 @@
+# Binary operators through a reference to Float work on Float VALUES,
+# not the raw 64-bit words a `&Float` is carried in: `0.0 == -0.0` is
+# true, `NaN == NaN` is false, `-1.5 < -0.5` orders as numbers and `+`
+# adds as floats, the same as on plain Float operands. Hash#== reaches
+# it through the `Option[&V]` that `get` returns.
+def eq(a: &Float, b: &Float) -> Bool
+  a == b
+end
+
+def ne(a: &Float, b: &Float) -> Bool
+  a != b
+end
+
+def lt(a: &Float, b: &Float) -> Bool
+  a < b
+end
+
+def add(a: &Float, b: &Float) -> Float
+  a + b
+end
+
+def mixed(a: &Float, b: Float) -> Bool
+  a == b
+end
+
+def main
+  let z = 0.0
+  let nz = -0.0
+  let nan = 0.0 / 0.0
+  puts "plain_zero=#{z == nz}"
+  puts "ref_zero=#{eq(z, nz)}"
+  puts "ref_zero_ne=#{ne(z, nz)}"
+  puts "ref_nan=#{eq(nan, nan)}"
+  puts "ref_nan_ne=#{ne(nan, nan)}"
+  puts "ref_one=#{eq(1.5, 1.5)}"
+  puts "ref_mixed=#{mixed(z, nz)}"
+  puts "ref_lt=#{lt(-1.5, -0.5)}"
+  puts "ref_add=#{add(1.5, 2.25)}"
+
+  var a: Hash[Int, Float] = Hash.new
+  a.insert(1, 0.0)
+  a.insert(2, 2.5)
+  var b: Hash[Int, Float] = Hash.new
+  b.insert(2, 2.5)
+  b.insert(1, -0.0)
+  var c: Hash[Int, Float] = Hash.new
+  c.insert(1, nan)
+  var d: Hash[Int, Float] = Hash.new
+  d.insert(1, nan)
+  puts "hash_zero=#{a == b}"
+  puts "hash_nan=#{c == d}"
+end

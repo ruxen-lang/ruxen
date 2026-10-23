@@ -29,6 +29,12 @@ impl<'a> Lowerer<'a> {
                                 base: cap_ptr,
                                 field_index: slot.slot_index,
                             });
+                            if self.refmut_slots.contains(def_id) {
+                                let pointee = expr.ty.peel_refs().clone();
+                                return Ok(Some(
+                                    self.load_through_refmut(cell_ptr, &pointee, &expr.ty),
+                                ));
+                            }
                             let dest = self.new_temp(expr.ty.clone());
                             self.emit(MirInst::GetField {
                                 dest,
@@ -43,6 +49,13 @@ impl<'a> Lowerer<'a> {
                     // Cell-promoted locals (mutably captured by a closure
                     // in this frame) hold a pointer to an 8-byte cell;
                     // reads go through the cell.
+                    // A slot-addressed `&var T` (`mir::refmut_abi`) holds the
+                    // caller's address; the read loads a `T` through it.
+                    if self.refmut_slots.contains(def_id) {
+                        let local_ty = self.fn_ref().locals[local as usize].ty.clone();
+                        let pointee = local_ty.peel_refs().clone();
+                        return Ok(Some(self.load_through_refmut(local, &pointee, &local_ty)));
+                    }
                     if self.cell_promoted.contains(def_id) {
                         let dest = self.new_temp(expr.ty.clone());
                         self.emit(MirInst::GetField {

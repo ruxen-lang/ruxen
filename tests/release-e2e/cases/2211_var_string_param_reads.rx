@@ -1,0 +1,26 @@
+## A `&var String` parameter is the address of the caller's String. Every
+## read in the callee (interpolation, `.size`, passing it on as `&String`)
+## loads the String through it, and every write (`push_str`, assignment)
+## lands in the caller's variable. Reading it used to treat the address as
+## the String and crash.
+def shout(s: &String) -> nil
+  puts s.upcase
+end
+
+def grow(s: &var String) -> nil
+  s.push_str("!")
+  puts "#{s} #{s.size}"
+  shout(s)
+end
+
+def replace(s: &var String) -> nil
+  s = "new"
+end
+
+s = "hi"
+grow(s)
+puts s
+grow(&var s)
+puts s
+replace(s)
+puts s

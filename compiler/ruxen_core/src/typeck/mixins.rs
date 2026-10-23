@@ -18,6 +18,10 @@ use crate::hir::nodes::*;
 use crate::hir::types::{MixinRef, Ty};
 use crate::resolve::symbols::{DefKind, FnSignature, MixinInfo, SymbolTable};
 
+/// One overload a mixin declares: its signature and the DefId of its default
+/// body (`None` for a bodiless requirement).
+type MixinMethod = (FnSignature, Option<DefId>);
+
 /// Result of checking whether a type satisfies a trait.
 #[derive(Debug, Clone)]
 pub enum MixinSatisfaction {
@@ -36,10 +40,17 @@ pub struct MixinResolver {
     nominal_impls: HashMap<(String, String), Vec<ImplMethod>>,
     /// Methods defined on types (from class bodies and standalone impls)
     type_methods: HashMap<String, Vec<TypeMethod>>,
-    /// trait_name → (method_name → overload signatures) from the trait *declaration*
+    /// trait_name → (method_name → overloads) from the trait *declaration*
     /// (both required method signatures and default methods). Used to
-    /// dispatch method calls on a generic `T: Trait` receiver.
-    trait_method_sigs: HashMap<String, HashMap<String, Vec<FnSignature>>>,
+    /// dispatch method calls on a generic `T: Trait` receiver. Each overload
+    /// carries the DefId of its default body (`None` for a bodiless
+    /// requirement), so a lookup reports WHICH default it selected and
+    /// typeck can record it in `MethodCall::resolved` for later stages.
+    trait_method_sigs: HashMap<String, HashMap<String, Vec<MixinMethod>>>,
+    /// Subset of `trait_method_sigs` backed by actual default bodies. Alias
+    /// registration uses this to avoid treating an unimplemented requirement
+    /// as a callable alias target with no emitted body.
+    trait_default_method_sigs: HashMap<String, HashMap<String, Vec<FnSignature>>>,
     /// trait_name → its declared generic parameter NAMES, in order
     /// (`mixin Enumerable[T]` → `["T"]`). Paired with `mixin_include_args`
     /// to recover the mixin-element binding an including class chose.
@@ -53,6 +64,19 @@ pub struct MixinResolver {
     /// to the concrete element `(String, Int)` — without it `kv` stays the
     /// abstract `T` and `kv.1` fails (`no field 1 on type T`).
     mixin_include_args: HashMap<(String, String), Vec<Ty>>,
+    /// nominal type name → the methods the compiler synthesises for its
+    /// derives (`clone`, `eq`, `hash_code`, `default`, `cmp`,
+    /// `partial_cmp`), each the `.rx` mixin's own declaration with `Self`
+    /// substituted. Kept apart from `nominal_impls` so a derive stays a
+    /// structural satisfaction, and consulted only for a struct / class /
+    /// enum receiver, so a primitive's method-home class (`class Int`) never
+    /// lends `Ty::Int` a nominal `clone`.
+    derived_methods: HashMap<String, Vec<(String, ImplMethod)>>,
+    /// The method home of a stored closure value: the class the core
+    /// library declares `layout closure` (`SymbolTable::closure_shell_name`),
+    /// read when the impls are collected. The key `Ty::method_home` gives a
+    /// `Proc[...]` receiver.
+    closure_shell: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -73,8 +97,11 @@ impl MixinResolver {
             nominal_impls: HashMap::new(),
             type_methods: HashMap::new(),
             trait_method_sigs: HashMap::new(),
+            trait_default_method_sigs: HashMap::new(),
             trait_generic_params: HashMap::new(),
             mixin_include_args: HashMap::new(),
+            derived_methods: HashMap::new(),
+            closure_shell: None,
         }
     }
 
@@ -140,19 +167,12 @@ impl MixinResolver {
         // `Ty::Fn` arm that binds the method's `[U]` from the closure's
         // return), so selection only needs the coarse "callable vs
         // callable" match here.
-        if Self::param_is_callable(param_ty) && Self::arg_is_callable(arg_ty) {
+        if param_ty.is_callable() && arg_ty.is_callable() {
             return true;
         }
         // Peel a single reference layer on the param so a `&String` param
         // accepts the corresponding owned value arg (the call site auto-refs).
-        let param_inner = match param_ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => Some(inner.as_ref()),
-            _ => None,
-        };
-        if let Some(inner) = param_inner {
+        if let Some(inner) = param_ty.deref_ty() {
             // Owned arg vs borrowing param (`&T` param, `T` arg) — covers a
             // bare `String` literal/value passed where a method declares a
             // `&String` param (`s.include?("needle")` / `s.replace("a","b")`).
@@ -182,21 +202,9 @@ impl MixinResolver {
         // Peel a reference layer off the param (a `&T` / `&Set[T]` borrow
         // is satisfied by the corresponding owned arg, and by a borrowed
         // arg — both shapes show up at call sites like `a.union(&b)`).
-        let param_peeled = match param_ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
-            other => other,
-        };
+        let param_peeled = param_ty.peel_refs();
         // Peel the matching reference layer off the arg too.
-        let arg_peeled = match arg_ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
-            other => other,
-        };
+        let arg_peeled = arg_ty.peel_refs();
         match param_peeled {
             // An unbound generic param accepts any concrete arg.
             Ty::TypeParam { .. } => true,
@@ -217,51 +225,26 @@ impl MixinResolver {
         }
     }
 
-    /// Whether `param_ty` is a callable parameter — a bare function type
-    /// (`Ty::Fn`/`FnMut`/`FnOnce`) or a `some`/`any` mixin bound whose
-    /// first ref names the `Fn` family (`any Fn[Fn(T) -> U]`). Peels one
-    /// reference layer (`&any Fn[…]`). Used by overload selection so a
-    /// closure arg can satisfy the migrated `.rx` combinators' closure
-    /// parameter without the precise `Fn` shape having to match yet.
-    fn param_is_callable(param_ty: &Ty) -> bool {
-        let peeled = match param_ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
-            other => other,
-        };
-        match peeled {
-            Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => true,
-            Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) => bounds
-                .iter()
-                .any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce")),
-            _ => false,
-        }
-    }
-
-    /// Whether `arg_ty` is a callable value — a closure / `Ty::Fn` family
-    /// type produced by a `do…end` block or a passed closure local.
-    fn arg_is_callable(arg_ty: &Ty) -> bool {
-        let peeled = match arg_ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
-            other => other,
-        };
-        matches!(peeled, Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. })
-            || matches!(peeled, Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds)
-            if bounds.iter().any(|b| matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce")))
-    }
-
-    fn select_signature(sigs: Option<&Vec<FnSignature>>, args: &[HirExpr]) -> Option<FnSignature> {
-        let sigs = sigs?;
-        sigs.iter()
-            .find(|sig| sig.params.len() == args.len() && Self::signature_accepts_args(sig, args))
+    /// The overload of `trait_name`'s declaration of `method_name` a call
+    /// with `args` selects (the first whose arity and parameter types fit,
+    /// else the first whose parameter types fit), with the DefId of its
+    /// default body (`None` for a bodiless requirement).
+    fn select_trait_method(
+        &self,
+        trait_name: &str,
+        method_name: &str,
+        args: &[HirExpr],
+    ) -> Option<(FnSignature, Option<DefId>)> {
+        let overloads = self.trait_method_sigs.get(trait_name)?.get(method_name)?;
+        overloads
+            .iter()
+            .find(|(sig, _)| {
+                sig.params.len() == args.len() && Self::signature_accepts_args(sig, args)
+            })
             .or_else(|| {
-                sigs.iter()
-                    .find(|sig| Self::signature_accepts_args(sig, args))
+                overloads
+                    .iter()
+                    .find(|(sig, _)| Self::signature_accepts_args(sig, args))
             })
             .cloned()
     }
@@ -339,8 +322,9 @@ impl MixinResolver {
 
     /// Register Ruby `alias new old` method synonyms (resolver
     /// `method_aliases`: type → {alias → canonical}). For each alias, clone the
-    /// canonical method's already-registered signature under the alias NAME so
-    /// a call via the alias type-checks identically (same arity/params/return).
+    /// canonical method's signature under the alias NAME so a call via the alias
+    /// type-checks identically (same arity/params/return). Type-owned methods win;
+    /// an included mixin's default-body signature is the fallback.
     /// MIR separately rewrites the alias name to the canonical at symbol-mangle
     /// time, so this adds NO method body — it is a pure synonym
     /// (docs/decisions/alias-keyword.md, D2). Run AFTER
@@ -355,11 +339,26 @@ impl MixinResolver {
             // registered for the type, collecting synonym entries first so we
             // don't borrow `type_methods` mutably while reading it.
             let mut synonyms: Vec<(String, FnSignature)> = Vec::new();
-            if let Some(meths) = self.type_methods.get(type_name) {
-                for (alias, canonical) in aliases {
-                    if let Some(m) = meths.iter().find(|m| &m.name == canonical) {
-                        synonyms.push((alias.clone(), m.signature.clone()));
-                    }
+            for (alias, canonical) in aliases {
+                let own_signature = self
+                    .type_methods
+                    .get(type_name)
+                    .and_then(|meths| meths.iter().find(|m| &m.name == canonical))
+                    .map(|m| m.signature.clone());
+                let signature = own_signature.or_else(|| {
+                    self.nominal_impls
+                        .keys()
+                        .filter(|(target, _)| target == type_name)
+                        .find_map(|(_, mixin)| {
+                            self.trait_default_method_sigs
+                                .get(mixin)
+                                .and_then(|methods| methods.get(canonical))
+                                .and_then(|signatures| signatures.first())
+                                .cloned()
+                        })
+                });
+                if let Some(signature) = signature {
+                    synonyms.push((alias.clone(), signature));
                 }
             }
             if synonyms.is_empty() {
@@ -406,6 +405,18 @@ impl MixinResolver {
             };
         }
 
+        match ty {
+            Ty::AnyMixin(bounds) if bounds.iter().any(|bound| bound == trait_ref) => {
+                return MixinSatisfaction::Nominal;
+            }
+            Ty::SomeMixin(bounds)
+                if !require_nominal && bounds.iter().any(|bound| bound == trait_ref) =>
+            {
+                return MixinSatisfaction::Structural;
+            }
+            _ => {}
+        }
+
         let type_name = Self::type_name(ty);
 
         // Check nominal satisfaction first
@@ -414,27 +425,20 @@ impl MixinResolver {
             return MixinSatisfaction::Nominal;
         }
 
-        if require_nominal {
-            return MixinSatisfaction::Unsatisfied {
-                missing_methods: vec![format!(
-                    "no explicit `include {}` in `{}`",
-                    trait_ref.name, type_name
-                )],
-            };
-        }
-
         // Builtin marker FAMILIES are satisfied by their REAL semantics, not by
         // a manual required-method set (their methods are auto-derived /
         // intrinsic, so the structural "does the type define this method" check
-        // below would wrongly reject them). Handle them before that check:
+        // below would wrongly reject them). Handle them before BOTH the
+        // `require_nominal` gate and the structural method check:
         //   * derive markers (`Hashable`/`Ord`/`Eq`/`Clone`/`Copy`/`Default`/
         //     `Debug`/`PartialEq`/`PartialOrd` — the `SUPPORTED_DERIVES` set):
         //     the ruby-naming §3.6 structural auto-derive (primitives +
         //     containers trivially; structs/enums when every field supports it;
-        //     incl. the Hash↔Hashable / Eq↔PartialEq naming duality). Without
+        //     incl. the Eq↔PartialEq naming duality). Without
         //     this a struct that auto-derives Hashable but never writes
         //     `include Hashable` is wrongly rejected (E1015) — regressing every
-        //     Map-key / derived-Ord program.
+        //     Map-key / derived-Ord program. These run BEFORE `require_nominal`
+        //     so an auto-derive still satisfies a `[T: Hashable]` bound.
         //   * `Fn`/`FnMut`/`FnOnce`: any callable value (closure / `Ty::Fn`
         //     family) satisfies it, regardless of the marker's `call` signature.
         // Pure-capability markers with neither (e.g. `Add`, opted into only via
@@ -456,8 +460,8 @@ impl MixinResolver {
                 }
             };
         }
-        if matches!(trait_ref.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
-            return if Self::arg_is_callable(ty) {
+        if trait_ref.is_fn_family() {
+            return if ty.is_callable() {
                 MixinSatisfaction::Structural
             } else {
                 MixinSatisfaction::Unsatisfied {
@@ -466,6 +470,22 @@ impl MixinResolver {
                         ty, trait_ref.name
                     )],
                 }
+            };
+        }
+
+        // A user mixin (not a derive marker, not Fn-family, not Send/Sync) is
+        // satisfied ONLY nominally when `require_nominal` is set — a value type
+        // does not satisfy `[T: Greet]` merely by having a same-named `greet`
+        // method (Q35 negative pin). Ruby mixins are include-based, never
+        // structural; this gate is why `[T: M]` generic bounds require an
+        // explicit `include M`. (The structural fallback below still serves
+        // `some M`-style callers that pass `require_nominal = false`.)
+        if require_nominal {
+            return MixinSatisfaction::Unsatisfied {
+                missing_methods: vec![format!(
+                    "no explicit `include {}` in `{}`",
+                    trait_ref.name, type_name
+                )],
             };
         }
 
@@ -518,7 +538,9 @@ impl MixinResolver {
     /// Look up a method across a slice of trait bounds.
     ///
     /// Returned outcomes:
-    ///   * `Ok(Some(sig))`   — exactly one bound declares `method_name`;
+    ///   * `Ok(Some((sig, def)))` — exactly one bound declares `method_name`;
+    ///     `def` is the selected default body (`None` for a bodiless
+    ///     requirement);
     ///   * `Ok(None)`        — no bound declares it;
     ///   * `Err(Vec<String>)` — the method name is provided by more than one
     ///     bound (caller should report an ambiguity diagnostic listing the
@@ -528,29 +550,14 @@ impl MixinResolver {
         bounds: &[MixinRef],
         method_name: &str,
         args: &[HirExpr],
-    ) -> Result<Option<FnSignature>, Vec<String>> {
-        let mut found: Option<FnSignature> = None;
+    ) -> Result<Option<(FnSignature, Option<DefId>)>, Vec<String>> {
+        let mut found: Option<(FnSignature, Option<DefId>)> = None;
         let mut providers: Vec<String> = Vec::new();
         for b in bounds {
-            if let Some(methods) = self.trait_method_sigs.get(&b.name) {
-                if let Some(sig) = Self::select_signature(methods.get(method_name), args) {
-                    providers.push(b.name.clone());
-                    if found.is_none() {
-                        found = Some(sig);
-                    }
-                }
-            } else if matches!(b.name.as_str(), "Hashable" | "Hash") && method_name == "hash_code" {
+            if let Some(selected) = self.select_trait_method(&b.name, method_name, args) {
                 providers.push(b.name.clone());
                 if found.is_none() {
-                    found = Some(FnSignature {
-                        self_mode: Some(HirSelfMode::Ref),
-                        is_class_method: false,
-                        is_async: false,
-                        generic_params: vec![],
-                        params: vec![],
-                        return_ty: Ty::Int,
-                        c_symbol: None,
-                    });
+                    found = Some(selected);
                 }
             }
         }
@@ -569,6 +576,7 @@ impl MixinResolver {
         symbols: &SymbolTable,
     ) -> Option<FnSignature> {
         self.lookup_method_with_args(ty, method_name, &[], symbols)
+            .map(|(sig, _)| sig)
     }
 
     /// Look up a method's signature by NAME only, with no arity / arg-type
@@ -579,13 +587,61 @@ impl MixinResolver {
     /// zero-arg probe against a one-closure-param method. Returns the first
     /// name-matching method on the type's own home key.
     pub fn lookup_method_by_name(&self, ty: &Ty, method_name: &str) -> Option<FnSignature> {
-        let type_name = Self::method_home_key(ty);
+        self.lookup_method_by_name_where(ty, method_name, |_| true)
+            .map(|(sig, _)| sig)
+    }
+
+    /// [`Self::lookup_method_by_name`] for a call with a block: the first
+    /// signature, in the same lookup order, that declares a callable
+    /// parameter for the block. An own declaration without one (an FFI
+    /// alias or a non-block overload of the same name) gives way to the
+    /// included mixin's declaration (`Enumerable#map(f: Fn(T) -> U)`), which
+    /// is what seeds the block parameter's type. Also returns the DefId of
+    /// the mixin default body it selected; `None` for the receiver's own
+    /// method or a bodiless mixin requirement.
+    pub fn lookup_block_method_by_name(
+        &self,
+        ty: &Ty,
+        method_name: &str,
+    ) -> Option<(FnSignature, Option<DefId>)> {
+        self.lookup_method_by_name_where(ty, method_name, |sig| {
+            sig.params
+                .iter()
+                .any(|p| p.ty.peel_refs().callable_signature().is_some())
+        })
+    }
+
+    fn lookup_method_by_name_where(
+        &self,
+        ty: &Ty,
+        method_name: &str,
+        accept: impl Fn(&FnSignature) -> bool,
+    ) -> Option<(FnSignature, Option<DefId>)> {
+        let type_name = ty.method_home(self.closure_shell.as_deref());
         if let Some(meths) = self.type_methods.get(&type_name) {
             if let Some(m) = meths
                 .iter()
-                .find(|m| Self::name_matches(&m.name, method_name))
+                .find(|m| Self::name_matches(&m.name, method_name) && accept(&m.signature))
             {
-                return Some(m.signature.clone());
+                return Some((m.signature.clone(), None));
+            }
+        }
+        // A receiver typed by a mixin-bound type parameter (`x: &T` with
+        // `T: Walk`, or `some Walk`) has the signatures its bounds declare,
+        // the same ones inference types the call with
+        // (`lookup_method_on_bounds`), ahead of the universal `Kernel`.
+        if let Ty::TypeParam { bounds, .. } | Ty::SomeMixin(bounds) | Ty::AnyMixin(bounds) =
+            ty.peel_refs()
+        {
+            for bound in bounds {
+                if let Some(found) = self
+                    .trait_method_sigs
+                    .get(&bound.name)
+                    .and_then(|methods| methods.get(method_name))
+                    .and_then(|overloads| overloads.iter().find(|(sig, _)| accept(sig)))
+                {
+                    return Some(found.clone());
+                }
             }
         }
         // Fall through to mixin/trait default signatures for any trait the
@@ -599,16 +655,36 @@ impl MixinResolver {
         // `lookup_method_with_args` but selects by name only (no args here).
         for (impl_target, trait_name) in self.nominal_impls.keys() {
             if *impl_target == type_name {
-                if let Some(methods) = self.trait_method_sigs.get(trait_name) {
-                    if let Some(sigs) = methods.get(method_name) {
-                        if let Some(sig) = sigs.first() {
-                            return Some(sig.clone());
-                        }
-                    }
+                if let Some(found) = self
+                    .trait_method_sigs
+                    .get(trait_name)
+                    .and_then(|methods| methods.get(method_name))
+                    .and_then(|overloads| overloads.iter().find(|(sig, _)| accept(sig)))
+                {
+                    return Some(found.clone());
                 }
             }
         }
-        None
+        self.universal_kernel_method(method_name)
+            .filter(|(sig, _)| accept(sig))
+    }
+
+    /// The universal `Kernel` include: every Ruxen value implicitly carries
+    /// `mixin Kernel`'s default methods (`tap` / `then` / `yield_self`), the
+    /// analogue of Ruby's `Kernel`/`Object`. This is the ONE compiler-side
+    /// universal-include MECHANISM — the methods themselves are ordinary `.rx`
+    /// (`library/std/core/src/lib.rx`). Consulted LAST by both method lookups,
+    /// so an own method, an explicit `impl`, or an explicitly-included mixin
+    /// default of the same name always wins (a user is free to define their
+    /// own `tap`). Returns `None` for any name `Kernel` does not declare, so it
+    /// is inert for every non-`Kernel` method. The returned signature still
+    /// carries `Self`; the call site substitutes it to the concrete receiver.
+    fn universal_kernel_method(&self, method_name: &str) -> Option<(FnSignature, Option<DefId>)> {
+        self.trait_method_sigs
+            .get("Kernel")
+            .and_then(|methods| methods.get(method_name))
+            .and_then(|overloads| overloads.first())
+            .cloned()
     }
 
     /// The substitution a receiver's `include Mixin[Args]` chose for the
@@ -620,7 +696,7 @@ impl MixinResolver {
     /// applies this BEFORE the receiver-generic substitution so a combinator
     /// param typed `Fn(T)` resolves through the mixin element binding.
     pub fn mixin_element_subst(&self, ty: &Ty) -> std::collections::HashMap<String, Ty> {
-        let type_name = Self::method_home_key(ty);
+        let type_name = ty.method_home(self.closure_shell.as_deref());
         let mut subst = std::collections::HashMap::new();
         for ((target, trait_name), include_args) in &self.mixin_include_args {
             if *target != type_name {
@@ -639,19 +715,25 @@ impl MixinResolver {
         subst
     }
 
+    /// The method a call on `ty` with `args` selects, with the DefId of the
+    /// mixin default body it selected (an included mixin's default or the
+    /// universal `Kernel` default); `None` for the receiver's own or impl
+    /// method, a derived method, or a bodiless requirement. Inference records
+    /// it in `MethodCall::resolved` so later stages read the signature
+    /// inference chose instead of looking the method up again.
     pub fn lookup_method_with_args(
         &self,
         ty: &Ty,
         method_name: &str,
         args: &[HirExpr],
         symbols: &SymbolTable,
-    ) -> Option<FnSignature> {
-        let type_name = Self::method_home_key(ty);
+    ) -> Option<(FnSignature, Option<DefId>)> {
+        let type_name = ty.method_home(self.closure_shell.as_deref());
 
         // Check direct type methods first
         if let Some(meths) = self.type_methods.get(&type_name) {
             if let Some(m) = Self::select_type_method(meths, method_name, args) {
-                return Some(m.signature.clone());
+                return Some((m.signature.clone(), None));
             }
         }
 
@@ -659,7 +741,28 @@ impl MixinResolver {
         for ((tname, _), methods) in &self.nominal_impls {
             if *tname == type_name {
                 if let Some(m) = Self::select_impl_method(methods, method_name, args) {
-                    return Some(m.signature.clone());
+                    return Some((m.signature.clone(), None));
+                }
+            }
+        }
+
+        // Derived methods, for a nominal receiver only (see `derived_methods`).
+        if matches!(
+            ty.peel_refs(),
+            Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. }
+        ) {
+            if let Some(methods) = self.derived_methods.get(&type_name) {
+                // An instance (`Box[Mutex[Int]]`) gets a derive only when its
+                // substituted fields support it, as MIR emits it.
+                let applicable: Vec<ImplMethod> = methods
+                    .iter()
+                    .filter(|(trait_name, _)| {
+                        crate::implicit_includes::derive_is_synthesized(ty, symbols, trait_name)
+                    })
+                    .map(|(_, m)| m.clone())
+                    .collect();
+                if let Some(m) = Self::select_impl_method(&applicable, method_name, args) {
+                    return Some((m.signature.clone(), None));
                 }
             }
         }
@@ -669,32 +772,36 @@ impl MixinResolver {
         // above), the trait's own default body supplies the signature.
         for (impl_target, trait_name) in self.nominal_impls.keys() {
             if *impl_target == type_name {
-                if let Some(methods) = self.trait_method_sigs.get(trait_name) {
-                    if let Some(sig) = Self::select_signature(methods.get(method_name), args) {
-                        return Some(sig);
-                    }
+                if let Some(selected) = self.select_trait_method(trait_name, method_name, args) {
+                    return Some(selected);
                 }
             }
         }
 
+        // Universal `Kernel` include (`tap`/`then`/`yield_self`), consulted
+        // before the inheritance walk so it applies to every receiver but
+        // AFTER own/explicit-mixin methods above so a user override wins. See
+        // `universal_kernel_method`.
+        if let Some(selected) = self.select_trait_method("Kernel", method_name, args) {
+            return Some(selected);
+        }
+
         // Check parent class (inheritance)
         if let Ty::Class { name, .. } = ty {
-            for def in symbols.iter() {
-                if def.name == *name {
-                    if let DefKind::Class { info } = &def.kind {
-                        if let Some(parent_id) = info.parent {
-                            if let Some(parent_def) = symbols.get(parent_id) {
-                                let parent_ty = Ty::Class {
-                                    name: parent_def.name.clone(),
-                                    generic_args: vec![],
-                                };
-                                return self.lookup_method_with_args(
-                                    &parent_ty,
-                                    method_name,
-                                    args,
-                                    symbols,
-                                );
-                            }
+            for def in symbols.named(name) {
+                if let DefKind::Class { info } = &def.kind {
+                    if let Some(parent_id) = info.parent {
+                        if let Some(parent_def) = symbols.get(parent_id) {
+                            let parent_ty = Ty::Class {
+                                name: parent_def.name.clone(),
+                                generic_args: vec![],
+                            };
+                            return self.lookup_method_with_args(
+                                &parent_ty,
+                                method_name,
+                                args,
+                                symbols,
+                            );
                         }
                     }
                 }
@@ -706,8 +813,117 @@ impl MixinResolver {
 
     /// Collect all impl blocks for the HIR program.
     pub fn collect_impls(&mut self, program: &HirProgram, symbols: &SymbolTable) {
+        self.closure_shell = symbols.closure_shell_name().map(str::to_string);
         for item in &program.items {
             self.collect_item_impls(item, symbols, &[]);
+        }
+        // After the walk, so every mixin declaration is registered whatever
+        // the item order.
+        for item in &program.items {
+            self.register_derived_methods(item, symbols, &[]);
+        }
+    }
+
+    /// Register the derived methods of every struct, class and enum in
+    /// `item` (recursing into modules): for each derive whose body MIR
+    /// synthesises ([`crate::implicit_includes::derive_is_synthesized`], the
+    /// rule MIR itself uses), the method's signature is the one the `.rx`
+    /// mixin declares, with `Self` substituted by the type. A type that
+    /// writes the method itself keeps its own signature (it is an own method,
+    /// found first), and a derive whose mixin is not loaded registers nothing.
+    fn register_derived_methods(
+        &mut self,
+        item: &HirItem,
+        symbols: &SymbolTable,
+        module_path: &[String],
+    ) {
+        let qualified = |name: &str| -> String {
+            if module_path.is_empty() {
+                name.to_string()
+            } else {
+                format!("{}.{}", module_path.join("."), name)
+            }
+        };
+        let as_args = |params: &[crate::hir::nodes::HirGenericParam]| -> Vec<Ty> {
+            params
+                .iter()
+                .map(|gp| Ty::TypeParam {
+                    name: gp.name.clone(),
+                    bounds: gp.bounds.clone(),
+                })
+                .collect()
+        };
+        let (type_name, self_ty) = match item {
+            HirItem::Struct(s) => {
+                let name = qualified(&s.name);
+                let ty = Ty::Struct {
+                    name: name.clone(),
+                    generic_args: as_args(&s.generic_params),
+                };
+                (name, ty)
+            }
+            HirItem::Class(c) => {
+                let name = qualified(&c.name);
+                let ty = Ty::Class {
+                    name: name.clone(),
+                    generic_args: as_args(&c.generic_params),
+                };
+                (name, ty)
+            }
+            HirItem::Enum(e) => {
+                let name = qualified(&e.name);
+                let ty = Ty::Enum {
+                    name: name.clone(),
+                    generic_args: as_args(&e.generic_params),
+                };
+                (name, ty)
+            }
+            HirItem::Module(m) => {
+                let mut child_path = module_path.to_vec();
+                child_path.push(m.name.clone());
+                for sub_item in &m.items {
+                    self.register_derived_methods(sub_item, symbols, &child_path);
+                }
+                return;
+            }
+            _ => return,
+        };
+        let subst = HashMap::from([("Self".to_string(), self_ty.clone())]);
+        let mut derived: Vec<(String, ImplMethod)> = Vec::new();
+        for (trait_name, method) in crate::implicit_includes::synthesized_derives(symbols) {
+            if !crate::implicit_includes::derive_is_synthesized(&self_ty, symbols, trait_name) {
+                continue;
+            }
+            let Some(sigs) = self
+                .trait_method_sigs
+                .get(trait_name)
+                .and_then(|methods| methods.get(method))
+            else {
+                continue;
+            };
+            for (sig, _) in sigs {
+                derived.push((
+                    trait_name.to_string(),
+                    ImplMethod {
+                        name: method.to_string(),
+                        signature: FnSignature {
+                            params: sig
+                                .params
+                                .iter()
+                                .map(|p| crate::resolve::symbols::ParamInfo {
+                                    ty: p.ty.subst_params(&subst),
+                                    ..p.clone()
+                                })
+                                .collect(),
+                            return_ty: sig.return_ty.subst_params(&subst),
+                            ..sig.clone()
+                        },
+                    },
+                ));
+            }
+        }
+        if !derived.is_empty() {
+            self.derived_methods.insert(type_name, derived);
         }
     }
 
@@ -767,9 +983,9 @@ impl MixinResolver {
             // return type degraded to a fresh `Infer` — breaking
             // downstream `ys[i]` index lowering. The `any(name)` dedup
             // keeps lib decls authoritative when a name collides.
-            for m_def in symbols.iter() {
-                if let DefKind::Method { parent, signature } = &m_def.kind {
-                    if *parent == def_id && !methods.iter().any(|(n, _)| n == &m_def.name) {
+            for m_def in symbols.children_of(def_id) {
+                if let DefKind::Method { signature, .. } = &m_def.kind {
+                    if !methods.iter().any(|(n, _)| n == &m_def.name) {
                         methods.push((m_def.name.clone(), signature.clone()));
                     }
                 }
@@ -789,7 +1005,8 @@ impl MixinResolver {
         match item {
             HirItem::Mixin(tdef) => {
                 use crate::resolve::symbols::ParamInfo;
-                let mut new_entries: Vec<(String, FnSignature)> = Vec::new();
+                let mut new_entries: Vec<(String, FnSignature, Option<DefId>)> = Vec::new();
+                let mut default_entries: Vec<(String, FnSignature)> = Vec::new();
                 for ti in &tdef.items {
                     match ti {
                         HirMixinItem::MethodSig {
@@ -817,17 +1034,26 @@ impl MixinResolver {
                                 return_ty: return_ty.clone(),
                                 c_symbol: None,
                             };
-                            new_entries.push((name.clone(), sig));
+                            new_entries.push((name.clone(), sig, None));
                         }
                         HirMixinItem::DefaultMethod(f) => {
-                            new_entries.push((f.name.clone(), self.func_to_sig(f)));
+                            let signature = self.func_to_sig(f);
+                            new_entries.push((f.name.clone(), signature.clone(), Some(f.def_id)));
+                            default_entries.push((f.name.clone(), signature));
                         }
                         HirMixinItem::AssocType { .. } => {}
                     }
                 }
                 let entry = self.trait_method_sigs.entry(tdef.name.clone()).or_default();
-                for (k, v) in new_entries {
-                    entry.entry(k).or_default().push(v);
+                for (k, v, def) in new_entries {
+                    entry.entry(k).or_default().push((v, def));
+                }
+                let defaults = self
+                    .trait_default_method_sigs
+                    .entry(tdef.name.clone())
+                    .or_default();
+                for (k, v) in default_entries {
+                    defaults.entry(k).or_default().push(v);
                 }
                 // Record the mixin's declared generic param names so an
                 // including class's `Enumerable[(K, V)]` args can be mapped
@@ -875,14 +1101,6 @@ impl MixinResolver {
                     }
                 }
                 self.register_impl(&type_name, None, methods);
-                self.register_derived_impls(
-                    &type_name,
-                    &Ty::Class {
-                        name: type_name.clone(),
-                        generic_args: vec![],
-                    },
-                    &class.derive_traits,
-                );
 
                 // Register inner impl blocks
                 for imp in &class.impl_blocks {
@@ -908,24 +1126,85 @@ impl MixinResolver {
                 }
             }
             HirItem::Struct(strukt) => {
-                self.register_derived_impls(
-                    &strukt.name,
-                    &Ty::Struct {
-                        name: strukt.name.clone(),
-                        generic_args: vec![],
-                    },
-                    &strukt.derive_traits,
-                );
+                let type_name = if module_path.is_empty() {
+                    strukt.name.clone()
+                } else {
+                    format!("{}.{}", module_path.join("."), strukt.name)
+                };
+                let methods = strukt
+                    .methods
+                    .iter()
+                    .map(|method| (method.name.clone(), self.func_to_sig(method)))
+                    .collect();
+                self.register_impl(&type_name, None, methods);
+
+                // Struct-body `include Mixin` blocks are nominal impls just
+                // like class-body includes. Recording the edge here is what
+                // lets a concrete struct satisfy a generic `T: Mixin` bound.
+                for imp in &strukt.impl_blocks {
+                    if imp.negative_trait {
+                        continue;
+                    }
+                    if let Some(ref trait_ref) = imp.trait_ref {
+                        let methods: Vec<(String, FnSignature)> = imp
+                            .items
+                            .iter()
+                            .filter_map(|item| match item {
+                                HirImplItem::Method(m) => {
+                                    Some((m.name.clone(), self.func_to_sig(m)))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        self.register_impl(&type_name, Some(&trait_ref.name), methods);
+                        if !trait_ref.generic_args.is_empty() {
+                            self.mixin_include_args.insert(
+                                (type_name.clone(), trait_ref.name.clone()),
+                                trait_ref.generic_args.clone(),
+                            );
+                        }
+                    }
+                }
             }
             HirItem::Enum(enm) => {
-                self.register_derived_impls(
-                    &enm.name,
-                    &Ty::Enum {
-                        name: enm.name.clone(),
-                        generic_args: vec![],
-                    },
-                    &enm.derive_traits,
-                );
+                let type_name = if module_path.is_empty() {
+                    enm.name.clone()
+                } else {
+                    format!("{}.{}", module_path.join("."), enm.name)
+                };
+                let methods = enm
+                    .methods
+                    .iter()
+                    .map(|method| (method.name.clone(), self.func_to_sig(method)))
+                    .collect();
+                self.register_impl(&type_name, None, methods);
+
+                // Enums carry the same HIR impl-block shape as classes and
+                // structs, so keep nominal bound satisfaction symmetric.
+                for imp in &enm.impl_blocks {
+                    if imp.negative_trait {
+                        continue;
+                    }
+                    if let Some(ref trait_ref) = imp.trait_ref {
+                        let methods: Vec<(String, FnSignature)> = imp
+                            .items
+                            .iter()
+                            .filter_map(|item| match item {
+                                HirImplItem::Method(m) => {
+                                    Some((m.name.clone(), self.func_to_sig(m)))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        self.register_impl(&type_name, Some(&trait_ref.name), methods);
+                        if !trait_ref.generic_args.is_empty() {
+                            self.mixin_include_args.insert(
+                                (type_name.clone(), trait_ref.name.clone()),
+                                trait_ref.generic_args.clone(),
+                            );
+                        }
+                    }
+                }
             }
             HirItem::Impl(imp) => {
                 let type_name = Self::type_name(&imp.target_ty);
@@ -938,7 +1217,26 @@ impl MixinResolver {
                         _ => None,
                     })
                     .collect();
-                self.register_impl(&type_name, trait_name, methods);
+                self.register_impl(&type_name, trait_name, methods.clone());
+                // An `include M` directive inside an `extension T` body
+                // nominally implements M for T — the extension's methods
+                // satisfy it — mirroring a class/struct/enum-body `include`.
+                // Without this, `extension Int; include Showable` never records
+                // (Int, Showable), so a `[T: Showable]` / `any Showable` bound
+                // (which requires nominal satisfaction) would wrongly reject
+                // `Int`. `include !M` (negative) is skipped.
+                for item in &imp.items {
+                    if let HirImplItem::Include {
+                        trait_name: included,
+                        negative_trait,
+                        ..
+                    } = item
+                    {
+                        if !negative_trait {
+                            self.register_impl(&type_name, Some(included), methods.clone());
+                        }
+                    }
+                }
             }
             HirItem::Module(m) => {
                 let mut child_path: Vec<String> = module_path.to_vec();
@@ -948,107 +1246,6 @@ impl MixinResolver {
                 }
             }
             _ => {}
-        }
-    }
-
-    fn register_derived_impls(
-        &mut self,
-        type_name: &str,
-        target_ty: &Ty,
-        derive_traits: &[String],
-    ) {
-        for trait_name in derive_traits {
-            let methods = match trait_name.as_str() {
-                "Clone" => vec![(
-                    "clone".to_string(),
-                    FnSignature {
-                        self_mode: Some(HirSelfMode::Ref),
-                        is_class_method: false,
-                        is_async: false,
-                        generic_params: vec![],
-                        params: vec![],
-                        return_ty: target_ty.clone(),
-                        c_symbol: None,
-                    },
-                )],
-                "PartialEq" => vec![(
-                    "eq".to_string(),
-                    FnSignature {
-                        self_mode: Some(HirSelfMode::Ref),
-                        is_class_method: false,
-                        is_async: false,
-                        generic_params: vec![],
-                        params: vec![crate::resolve::symbols::ParamInfo {
-                            name: "other".to_string(),
-                            ty: Ty::Ref(Box::new(target_ty.clone())),
-                            auto_assign: false,
-                            default: None,
-                        }],
-                        return_ty: Ty::Bool,
-                        c_symbol: None,
-                    },
-                )],
-                "Hashable" | "Hash" => vec![(
-                    "hash_code".to_string(),
-                    FnSignature {
-                        self_mode: Some(HirSelfMode::Ref),
-                        is_class_method: false,
-                        is_async: false,
-                        generic_params: vec![],
-                        params: vec![],
-                        return_ty: Ty::Int,
-                        c_symbol: None,
-                    },
-                )],
-                "Default" => vec![(
-                    "default".to_string(),
-                    FnSignature {
-                        self_mode: None,
-                        is_class_method: true,
-                        is_async: false,
-                        generic_params: vec![],
-                        params: vec![],
-                        return_ty: target_ty.clone(),
-                        c_symbol: None,
-                    },
-                )],
-                "Ord" => vec![(
-                    "cmp".to_string(),
-                    FnSignature {
-                        self_mode: Some(HirSelfMode::Ref),
-                        is_class_method: false,
-                        is_async: false,
-                        generic_params: vec![],
-                        params: vec![crate::resolve::symbols::ParamInfo {
-                            name: "other".to_string(),
-                            ty: Ty::Ref(Box::new(target_ty.clone())),
-                            auto_assign: false,
-                            default: None,
-                        }],
-                        return_ty: Ty::Int,
-                        c_symbol: None,
-                    },
-                )],
-                "PartialOrd" => vec![(
-                    "partial_cmp".to_string(),
-                    FnSignature {
-                        self_mode: Some(HirSelfMode::Ref),
-                        is_class_method: false,
-                        is_async: false,
-                        generic_params: vec![],
-                        params: vec![crate::resolve::symbols::ParamInfo {
-                            name: "other".to_string(),
-                            ty: Ty::Ref(Box::new(target_ty.clone())),
-                            auto_assign: false,
-                            default: None,
-                        }],
-                        return_ty: Ty::Int,
-                        c_symbol: None,
-                    },
-                )],
-                _ => vec![],
-            };
-            self.register_impl(type_name, Some(trait_name), methods);
         }
     }
 
@@ -1084,75 +1281,24 @@ impl MixinResolver {
     }
 
     fn find_trait_info<'a>(&self, name: &str, symbols: &'a SymbolTable) -> Option<&'a MixinInfo> {
-        for def in symbols.iter() {
-            if def.name == name {
-                if let DefKind::Trait { ref info } = def.kind {
-                    return Some(info);
-                }
+        for def in symbols.named(name) {
+            if let DefKind::Trait { ref info } = def.kind {
+                return Some(info);
             }
         }
         None
     }
 
     fn type_name(ty: &Ty) -> String {
-        match ty {
-            // Phase E.E of #06.95: peel reference layers so a
-            // method call on `&var BufReader.File` looks up under
-            // `"BufReader.File"`, not `"&mut BufReader.File"` — the
-            // type_methods map is keyed by the underlying class name.
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => Self::type_name(inner),
-            Ty::Class { name, .. } => name.clone(),
-            Ty::Struct { name, .. } => name.clone(),
-            Ty::Enum { name, .. } => name.clone(),
-            Ty::Int => "Int".to_string(),
-            Ty::Float => "Float".to_string(),
-            Ty::Bool => "Bool".to_string(),
-            Ty::String => "String".to_string(),
-            Ty::USize => "USize".to_string(),
-            Ty::Char => "Char".to_string(),
-            Ty::Unit => "()".to_string(),
-            other => format!("{}", other),
-        }
-    }
-
-    /// Lookup key for `type_methods` — the `.rx` class that HOMES a
-    /// type's methods (the zero-Rust-stdlib bridge, Phase B / M3).
-    ///
-    /// Differs from `type_name` only for the builtin generic / borrowed
-    /// heads whose `.rx` method-home class is keyed by a bare,
-    /// generic-arg-free name:
-    ///   * `Ty::Array(_)` → `"Array"`   (vs `type_name`'s `"Array[Int]"`)
-    ///   * `Ty::Set(_)`   → `"Set"`
-    ///   * `Ty::Map(_,_)` → `"Hash"`    (`Ty::Map` Displays as `Hash[K, V]`;
-    ///                                   its method-home class is `class
-    ///                                   Hash[K, V]` in `map/src/lib.rx`,
-    ///                                   keyed in `type_methods` by `"Hash"`)
-    /// (`Ty::String` keys directly as `"String"` — there is no separate
-    /// `&str` head anymore; a `&String` borrow peels to `String` above.)
-    /// References are peeled first. Element-type substitution into the
-    /// looked-up signature's return is handled downstream by
-    /// `InferenceEngine::substitute_generics_in_return`, which carries the
-    /// matching synthetic `(name, generic_args)` mapping for these heads.
-    fn method_home_key(ty: &Ty) -> String {
-        match ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => Self::method_home_key(inner),
-            Ty::Array(_) => "Array".to_string(),
-            Ty::Set(_) => "Set".to_string(),
-            Ty::Map(_, _) => "Hash".to_string(),
-            // `Option[T]` / `Result[T, E]` home their methods on the
-            // builtin `enum Option` / `enum Result` (option_result/src/
-            // lib.rx). Element substitution into the looked-up signature's
-            // return is handled by `substitute_generics_in_return`'s
-            // Option/Result synthetic arms.
-            Ty::Option(_) => "Option".to_string(),
-            Ty::Result(_, _) => "Result".to_string(),
-            other => Self::type_name(other),
+        // Phase E.E of #06.95: peel reference layers so a method call on
+        // `&var BufReader.File` looks up under `"BufReader.File"`, not
+        // `"&mut BufReader.File"` — the type_methods map is keyed by the
+        // underlying class name.
+        match ty.peel_refs() {
+            Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => {
+                name.clone()
+            }
+            other => other.to_string(),
         }
     }
 }

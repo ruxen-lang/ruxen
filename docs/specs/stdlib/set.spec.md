@@ -4,7 +4,7 @@
 [docs/requirements/tier1_01_stdlib.md §5.3](../../requirements/tier1_01_stdlib.md).
 
 **Status:** shipped Phase 2 #04-#05; method surface self-hosted in
-`library/std/src/set.rx` since #06.8 T#16.
+`library/std/set/src/lib.rx` since #06.8 T#16.
 
 `Set[T]` is a thin layer over `Hash[T, nil]` — same hashing
 semantics, same `Hashable` bound on `T`.
@@ -16,10 +16,10 @@ semantics, same `Hashable` bound on `T`.
 `Set.new()` and `[...].to_set` (the `{...}` literal is
 reserved for `Hash` per §3.22) construct the same runtime type.
 
-## B2 — `insert(x)` typechecks as `Unit` (v1 simplification)
+## B2 — `insert(x)` typechecks as returning `nil` (v1 simplification)
 
 The runtime returns whether the element was newly inserted, but the
-typeck surface reports `Unit` today (v2 will surface the `Bool`).
+typeck surface reports `nil` today (v2 will surface the `Bool`).
 
 ## B3 — `remove(x) -> Bool`
 
@@ -32,10 +32,10 @@ otherwise.
 `symmetric_difference(other)` each return a new `Set[T]` —
 operands are not modified.
 
-## B5 — `iter()` returns an `Array[T]`
+## B5 — `to_a` returns an `Array[&T]`
 
-v1 simplification: `iter()` materialises the set into an `Array[T]`.  The
-runtime guarantees no duplicates; order is unspecified.
+`to_a` materialises the set into an `Array[&T]`.  The runtime
+guarantees no duplicates; order is unspecified.
 
 ## B6 — Equality (`==`) yields `Bool`
 
@@ -54,21 +54,19 @@ hashable)
 
 | Behaviour | Test fn                                       | File                          |
 |-----------|-----------------------------------------------|-------------------------------|
-| B1        | `hashset_alias_constructs_via_either_name`    | `stdlib_set.rs`           |
-| B2        | `hashset_insert_typechecks_as_unit_today`     | `stdlib_set.rs`           |
-| B3        | `hashset_remove_returns_bool`                 | `stdlib_set.rs`           |
-| B4        | `hashset_set_ops_return_fresh_set`            | `stdlib_set.rs`           |
-| B5        | `hashset_iter_returns_vec`                    | `stdlib_set.rs`           |
-| B6        | `hashset_equality_yields_bool`                | `stdlib_set.rs`           |
+| B1, B2    | "ignores a duplicate insert"                  | `library/std/set/tests/set_test.rx` |
+| B3        | "reports whether remove found the item"       | `library/std/set/tests/set_test.rx` |
+| B4        | "combines sets with union, intersection and difference" | `library/std/set/tests/set_test.rx` |
+| B5        | "to_set from an array and to_a back"          | `library/std/set/tests/set_test.rx` |
+| B6        | "== ignores insertion order"                  | `library/std/set/tests/set_test.rx` |
 | B7        | `hashset_with_non_hash_element_emits_e0615` + `hashset_of_hashmap_emits_e0615` | `stdlib_map_negatives.rs` |
 
-Runtime round-trips covered by E2E fixture `105_set_basic.rx` and
-`611_iter_collect_set.rx`.
+The `.rx` tests run with `scripts/test-stdlib.sh set`.
 
 ---
 
 ## Out of scope (v2)
 
-- `BTreeSet` / ordered variant.
+- A sorted variant.
 - Surfacing `insert`'s "newly inserted" bool through typeck.
-- True streaming `iter()` that doesn't materialise an `Array`.
+- Enumerating without materialising an `Array` first.

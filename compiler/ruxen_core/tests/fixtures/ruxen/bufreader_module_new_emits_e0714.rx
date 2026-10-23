@@ -1,0 +1,7 @@
+use std.io.File
+
+def main
+  let f = File.open("/dev/null").unwrap
+  # error[E0714]: `BufReader` is a module; use `BufReader.File.new` / `BufReader.Tcp.new`
+  let _br = BufReader.new(f)
+end

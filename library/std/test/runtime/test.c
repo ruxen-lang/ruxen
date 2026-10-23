@@ -55,31 +55,12 @@ int64_t ruxen_test_current_get(void) {
  *
  * ruxen_test_runner_addr:   Runner.self -> Int (for handle_addr)
  * ruxen_test_runner_from_addr: Int -> Runner (for from_handle)
- * ruxen_test_tester_addr:   Tester.self -> Int (for tester_handle)
- * ruxen_test_tester_from_addr: Int -> Tester (for Tester.from_int)
- * ruxen_test_testcase_from_addr: Int -> TestCase (for TestCase.from_int)
  */
 int64_t ruxen_test_runner_addr(int64_t self) {
     return self;
 }
 
 int64_t ruxen_test_runner_from_addr(int64_t addr) {
-    return addr;
-}
-
-int64_t ruxen_test_tester_addr(int64_t self) {
-    return self;
-}
-
-int64_t ruxen_test_tester_from_addr(int64_t addr) {
-    return addr;
-}
-
-int64_t ruxen_test_testcase_addr(int64_t self) {
-    return self;
-}
-
-int64_t ruxen_test_testcase_from_addr(int64_t addr) {
     return addr;
 }
 

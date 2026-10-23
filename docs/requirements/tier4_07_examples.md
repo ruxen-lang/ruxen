@@ -2,7 +2,7 @@
 
 ## 1. Summary & Motivation
 
-The tutorial (`docs/tutorial/01..16`) teaches Ruxen feature-by-feature through small snippets; the test fixtures (`crates/ruxen-core/tests/fixtures/*.rx`, 13 files) exercise compiler paths through small programs. **Neither is a complete, runnable project that a newcomer can `git clone && ruxen run`.** There is no `examples/` directory anywhere in the repo.
+The tutorial (`docs/tutorial/01..16`) teaches Ruxen feature-by-feature through small snippets; the test fixtures (`compiler/ruxen_core/tests/fixtures/*.rx`, 13 files) exercise compiler paths through small programs. **Neither is a complete, runnable project that a newcomer can `git clone && ruxen run`.** There is no `examples/` directory anywhere in the repo.
 
 "Show me a real program written in this language" is the single most common request a new user has. It drives adoption, validates the language's stdlib, and — critically — keeps the language honest: every example that stops building under a compiler change generates CI noise that forces the change to either fix the example or document the break. Examples are the acceptance test for tier 1 / 2 / 3 work.
 
@@ -21,7 +21,7 @@ No `examples/`.
 
 ### 2.2 What exists that's example-adjacent
 
-- `crates/ruxen-core/tests/fixtures/` (13 `.rx` files, most < 50 lines):
+- `compiler/ruxen_core/tests/fixtures/` (13 `.rx` files, most < 50 lines):
   - `arithmetic.rx`, `classes.rx`, `class_methods.rx`, `control_flow.rx`, `enum_data.rx`, `enums.rx`, `functions.rx`, `hello.rx`, `mini_sample.rx`, `sample_program.rx`, `simple_class.rx`, `string_interp.rx`, `tasklist.rx`.
   - `tasklist.rx` and `sample_program.rx` are the largest — still < 100 lines.
   - These are compiler fixtures (they live in `tests/`). Not user-facing.
@@ -33,7 +33,7 @@ No `examples/`.
 - **Nowhere to point a newcomer** beyond "read the tutorial."
 - **No integration tests across the whole stack.** A stdlib change that breaks `read_line + parse + format` wouldn't be caught by fixture tests.
 - **No forcing function for stdlib completeness.** Tier-1 stdlib doc mentions tutorial files use methods that don't exist. An `examples/` entry would fail loudly.
-- **The package manager is untested against real projects.** `ruxen-cli/tests/installed_pkg_manager.rs` uses synthetic `my-dep` fixtures; no real cross-package integration.
+- **The package manager is untested against real projects.** `ruxen_cli/tests/installed_pkg_manager.rs` uses synthetic `my-dep` fixtures; no real cross-package integration.
 
 ## 3. Goals & Non-Goals
 
@@ -149,7 +149,7 @@ def main
   end
 end
 
-def count(text: &str)
+def count(text: &String)
   var lines = 0
   var words = 0
   var bytes = text.size
@@ -341,7 +341,7 @@ Each example's README.md has more detail.
 
 ### 5.1 How examples are not test fixtures
 
-Fixtures live in `crates/ruxen-core/tests/fixtures/`. They are small, single-file, designed to exercise a specific compiler path, and compiled through an in-process `Lexer`/`Parser`/`typeck`/`mir` pipeline.
+Fixtures live in `compiler/ruxen_core/tests/fixtures/`. They are small, single-file, designed to exercise a specific compiler path, and compiled through an in-process `Lexer`/`Parser`/`typeck`/`mir` pipeline.
 
 Examples live in `examples/`. They are multi-file projects built by the user-facing `ruxen` CLI. They exercise the full install path (find stdlib, find runtime, link against it).
 
@@ -371,7 +371,7 @@ A new `examples` job in `ci.yml` (doc 06 §4.2):
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build compiler
-        run: cargo build -p ruxenc -p ruxen-cli
+        run: cargo build -p ruxenc -p ruxen_cli
       - name: Build example
         working-directory: examples/${{ matrix.example }}
         run: ../../target/debug/ruxen build
@@ -407,12 +407,12 @@ Each example has its own `target/` directory (inside the example's folder, gitig
 
 - `README.md` — add an "Examples" section pointing at `examples/`.
 - `.gitignore` (if one exists at root) — ensure `examples/*/target/` is ignored.
-- `crates/ruxen-cli/src/scaffold.rs:154-159` — nothing to change; examples aren't scaffolded, they're authored.
+- `src/ruxen_cli/src/scaffold.rs:154-159` — nothing to change; examples aren't scaffolded, they're authored.
 
 ### Tests
 
 - CI's `examples` matrix (see §5.2) is the test. Each example's `smoke.sh` is an integration test.
-- Optional: `crates/ruxen-cli/tests/examples_build.rs` — runs `ruxen build` on every `examples/*/` in a temp dir clone. Same as the CI matrix but locally runnable. Recommend: skip, CI is enough.
+- Optional: `src/ruxen_cli/tests/examples_build.rs` — runs `ruxen build` on every `examples/*/` in a temp dir clone. Same as the CI matrix but locally runnable. Recommend: skip, CI is enough.
 
 ## 7. Interactions with Other Tiers
 
@@ -508,7 +508,7 @@ Each example has its own `target/` directory (inside the example's folder, gitig
 - [ ] Every example has a `smoke.sh` that exercises the happy path non-interactively.
 - [ ] CI runs every example's `smoke.sh` and fails the workflow on any failure.
 - [ ] `README.md` at repo root links to `examples/`.
-- [ ] A newcomer clone-and-run flow works: `git clone … && cd ruxen && cargo build -p ruxen-cli && cd examples/01-cli-utility && ../../target/debug/ruxen run -- README.md` prints output matching `<lines> <words> <bytes>`.
+- [ ] A newcomer clone-and-run flow works: `git clone … && cd ruxen && cargo build -p ruxen_cli && cd examples/01-cli-utility && ../../target/debug/ruxen run -- README.md` prints output matching `<lines> <words> <bytes>`.
 - [ ] A stdlib API rename PR that breaks an example also updates that example (enforced by CI gating).
 - [ ] No example exceeds 300 lines of Ruxen code.
 - [ ] Every example's `Ruxen.toml` has `description` + `license = "MIT OR Apache-2.0"` fields.

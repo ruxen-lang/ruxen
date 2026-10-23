@@ -9,11 +9,11 @@
 ## captured stderr MUST contain the substring.
 class TestCase
   name: String
-  body: any Fn[Fn() -> nil]
+  body: Proc[() -> nil]
   pending: Bool
   expect_panic_substr: Option[String]
 
-  def init(name: &String, body: any Fn[Fn() -> nil])
+  def init(name: &String, body: Proc[() -> nil])
     self.name = name.clone
     self.body = body
     self.pending = false

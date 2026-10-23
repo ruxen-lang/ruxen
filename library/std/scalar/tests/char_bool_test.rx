@@ -1,0 +1,51 @@
+Tester.describe("Char and Bool") do |t: &var Tester|
+  t.it("Char conversions and case") do
+    let lower = ?a
+    let upper = ?Z
+    let seven = ?7
+    let space = 32.chr
+    let bang = 33.chr
+    t.expect("#{lower.ord} #{upper.ord} #{seven.ord} #{space.ord}").to_eq("97 90 55 32")
+    t.expect("#{seven.to_i} #{lower.to_i} #{48.chr.to_i} #{57.chr.to_i}").to_eq("7 0 0 9")
+    t.expect("#{lower.chr} #{upper.chr}").to_eq("a Z")
+    t.expect("#{lower.upcase} #{upper.upcase} #{seven.upcase} #{bang.upcase}").to_eq("A Z 7 !")
+    t.expect("#{lower.downcase} #{upper.downcase} #{seven.downcase}").to_eq("a z 7")
+  end
+
+  t.it("Char classification") do
+    let lower = ?a
+    let upper = ?Z
+    let seven = ?7
+    let space = 32.chr
+    let bang = 33.chr
+    let tilde = 126.chr
+    let tab = 9.chr
+    t.expect("#{seven.digit?} #{lower.digit?} #{space.digit?}").to_eq("true false false")
+    t.expect("#{lower.alpha?} #{upper.alpha?} #{seven.alpha?} #{bang.alpha?}").to_eq("true true false false")
+    t.expect("#{lower.alnum?} #{seven.alnum?} #{bang.alnum?} #{space.alnum?}").to_eq("true true false false")
+    t.expect("#{space.space?} #{tab.space?} #{lower.space?} #{bang.space?}").to_eq("true true false false")
+    t.expect("#{space.whitespace?} #{lower.whitespace?}").to_eq("true false")
+    t.expect("#{bang.punct?} #{tilde.punct?} #{lower.punct?} #{seven.punct?} #{space.punct?}").to_eq("true true false false false")
+  end
+
+  t.it("Char comparison and successor") do
+    let lower = ?a
+    let upper = ?Z
+    let seven = ?7
+    t.expect("#{lower.<=>(upper)} #{upper.<=>(lower)} #{lower.<=>(lower)}").to_eq("1 -1 0")
+    t.expect("#{lower.succ} #{seven.succ} #{upper.next}").to_eq("b 8 [")
+  end
+
+  t.it("Bool operators and conversions") do
+    let yes = true
+    let no = false
+    t.expect("#{yes & yes} #{yes & no} #{no & yes} #{no & no}").to_eq("true false false false")
+    t.expect("#{yes | yes} #{yes | no} #{no | yes} #{no | no}").to_eq("true true true false")
+    t.expect("#{yes ^ yes} #{yes ^ no} #{no ^ yes} #{no ^ no}").to_eq("false true true false")
+    t.expect("#{!yes} #{!no}").to_eq("false true")
+    t.expect("#{yes && no} #{yes && yes} #{no && yes}").to_eq("false true false")
+    t.expect("#{yes || no} #{no || no} #{no || yes}").to_eq("true false true")
+    t.expect("#{yes.to_s} #{no.to_s}").to_eq("true false")
+    t.expect("#{yes.to_i} #{no.to_i}").to_eq("1 0")
+  end
+end

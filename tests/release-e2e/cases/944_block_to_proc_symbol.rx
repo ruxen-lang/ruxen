@@ -1,0 +1,23 @@
+# Block Tier-2 (block ADR, staged): `&:symbol` to-proc sugar. A `&:name`
+# argument in call position desugars (in `resolve`) to the one-argument closure
+# `{ |x| x.name }` and fills the call's block slot — identical to writing the
+# block by hand. Ordinary `&expr` borrows are unaffected; only `&:sym`,
+# `&block`, and a bare `&` are block arguments.
+
+def main
+  let words = ["ruby", "ox", "c"]
+
+  # &:size — map each element through `.size`.
+  let lens = words.map(&:size)
+  puts "#{lens[0]} #{lens[1]} #{lens[2]}"
+
+  # &:to_s — to-proc over the universal `to_s`.
+  let nums = [1, 2, 3]
+  let strs = nums.map(&:to_s)
+  puts "#{strs[0]}-#{strs[1]}-#{strs[2]}"
+
+  # &:empty? — a Bool-returning to-proc used as a select predicate.
+  let mixed = ["", "x", "", "yz"]
+  let blanks = mixed.select(&:empty?)
+  puts "#{blanks.size}"
+end

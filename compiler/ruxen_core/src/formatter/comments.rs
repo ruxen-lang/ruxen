@@ -1,10 +1,11 @@
-/// Comment collection and attachment for the Ruxen formatter.
+/// Comment classification and attachment for the Ruxen formatter.
 ///
-/// The lexer discards line comments and block comments (only doc comments
-/// are emitted as tokens). The formatter needs all comments, so we re-scan
-/// the raw source text to extract them, then attach each comment to the
+/// The lexer keeps line and block comments out of the token stream but
+/// records every comment's span ([`crate::lexer::Lexer::comment_spans`]).
+/// The formatter classifies those spans, then attaches each comment to the
 /// nearest AST node by byte position.
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 use crate::lexer::token::Span;
 
@@ -56,8 +57,19 @@ pub struct CommentMap {
     pub trailing: HashMap<usize, Vec<Comment>>,
     /// Dangling comments keyed by the byte offset of the enclosing scope.
     pub dangling: HashMap<usize, Vec<Comment>>,
+    /// Own-line comments after the last member of a scope (before its
+    /// `end`), keyed by that member's byte offset.
+    pub after: HashMap<usize, Vec<Comment>>,
     /// Ranges where formatting is suppressed via `# fmt: off` / `# fmt: on`.
     pub fmt_off_ranges: Vec<FmtOffRange>,
+    /// Every source line as `(start byte offset, kind)`, ascending. Read through
+    /// [`Self::blank_line_before`].
+    pub lines: Vec<(usize, LineKind)>,
+    /// Span of every comment in the source, attached or not.
+    all: Vec<Span>,
+    /// Start offsets of the comments the formatter has written out. Filled
+    /// by the accessors below, read by [`Self::dropped`].
+    emitted: RefCell<HashSet<usize>>,
 }
 
 impl CommentMap {
@@ -65,16 +77,122 @@ impl CommentMap {
         Self::default()
     }
 
+    /// Comments leading the node at `span_start`. The caller must write
+    /// every comment returned: reading them marks them emitted.
     pub fn leading_comments(&self, span_start: usize) -> &[Comment] {
-        self.leading.get(&span_start).map_or(&[], |v| v.as_slice())
+        self.mark(self.leading.get(&span_start))
     }
 
+    /// Comments trailing the node at `span_start`; marks them emitted.
     pub fn trailing_comments(&self, span_start: usize) -> &[Comment] {
-        self.trailing.get(&span_start).map_or(&[], |v| v.as_slice())
+        self.mark(self.trailing.get(&span_start))
     }
 
+    /// Own-line comments following the member at `span_start`; marks them
+    /// emitted.
+    pub fn after_comments(&self, span_start: usize) -> &[Comment] {
+        self.mark(self.after.get(&span_start))
+    }
+
+    /// Comments dangling in the scope at `span_start`; marks them emitted.
     pub fn dangling_comments(&self, span_start: usize) -> &[Comment] {
-        self.dangling.get(&span_start).map_or(&[], |v| v.as_slice())
+        self.mark(self.dangling.get(&span_start))
+    }
+
+    fn mark<'m>(&self, comments: Option<&'m Vec<Comment>>) -> &'m [Comment] {
+        let comments = comments.map_or(&[][..], |v| v.as_slice());
+        let mut emitted = self.emitted.borrow_mut();
+        emitted.extend(comments.iter().map(|c| c.span.start));
+        comments
+    }
+
+    /// Whether the author left a blank line right above the node starting at
+    /// `node_start`, or above the comment lines (`#` comments, `##` docs)
+    /// and section marker directly over it. Block statements and type-body
+    /// members keep that separation; fmt neither adds nor removes it.
+    pub fn blank_line_before(&self, node_start: usize) -> bool {
+        // Start from the node's first leading comment: blank lines inside its
+        // comment block are the comments' own layout (`with_comments`).
+        let top = self
+            .leading
+            .get(&node_start)
+            .and_then(|c| c.iter().map(|c| c.span.start).min())
+            .map_or(node_start, |c| c.min(node_start));
+        let mut line = self.skip_comments_above(self.line_of(top));
+        if let Some(marker) = self.marker_above(line) {
+            line = self.skip_comments_above(marker);
+        }
+        line > 0 && self.lines[line - 1].1 == LineKind::Blank
+    }
+
+    /// Whether a blank line separates the node at `node_start` (with its
+    /// comments) from a section marker above it (`private` + blank + `def`).
+    pub fn blank_line_after_marker(&self, node_start: usize) -> bool {
+        let top = self
+            .leading
+            .get(&node_start)
+            .and_then(|c| c.iter().map(|c| c.span.start).min())
+            .map_or(node_start, |c| c.min(node_start));
+        let line = self.skip_comments_above(self.line_of(top));
+        line > 0 && self.lines[line - 1].1 == LineKind::Blank && self.marker_above(line).is_some()
+    }
+
+    /// Whether the line right above the one holding `offset` is blank: the
+    /// gap the author left between two comment groups, or between a comment
+    /// block and the node under it.
+    pub fn blank_line_directly_above(&self, offset: usize) -> bool {
+        let line = self.line_of(offset);
+        line > 0 && self.lines[line - 1].1 == LineKind::Blank
+    }
+
+    /// Whether the scope at `scope_start` has dangling comments, without
+    /// marking them written.
+    pub fn has_dangling(&self, scope_start: usize) -> bool {
+        self.dangling
+            .get(&scope_start)
+            .is_some_and(|c| !c.is_empty())
+    }
+
+    /// Index into `lines` of the line holding `offset`.
+    fn line_of(&self, offset: usize) -> usize {
+        self.lines
+            .partition_point(|&(start, _)| start <= offset)
+            .saturating_sub(1)
+    }
+
+    /// The topmost line of the comment block directly above `line` (or
+    /// `line` itself when there is none).
+    fn skip_comments_above(&self, mut line: usize) -> usize {
+        while line > 0 && self.lines[line - 1].1 == LineKind::Comment {
+            line -= 1;
+        }
+        line
+    }
+
+    /// The section-marker line directly above `line`, past blank lines.
+    fn marker_above(&self, line: usize) -> Option<usize> {
+        let mut above = line;
+        while above > 0 && self.lines[above - 1].1 == LineKind::Blank {
+            above -= 1;
+        }
+        (above > 0 && self.lines[above - 1].1 == LineKind::Marker).then(|| above - 1)
+    }
+
+    /// Whether any comment starts inside `span`.
+    pub fn any_within(&self, span: &Span) -> bool {
+        self.all
+            .iter()
+            .any(|c| span.start <= c.start && c.start < span.end)
+    }
+
+    /// Comments the formatter never wrote out. `format` refuses to rewrite a
+    /// file while this is non-empty, so `ruxen fmt` never deletes a comment.
+    pub fn dropped(&self) -> Vec<&Span> {
+        let emitted = self.emitted.borrow();
+        self.all
+            .iter()
+            .filter(|s| !emitted.contains(&s.start))
+            .collect()
     }
 
     /// Check if a byte position falls within a `# fmt: off` range.
@@ -85,394 +203,62 @@ impl CommentMap {
     }
 }
 
-// ─── Comment Collector ──────────────────────────────────────────────
+// ─── Comment Classification ─────────────────────────────────────────
 
-/// Scans raw source text and extracts all comments with their positions.
-pub struct CommentCollector<'a> {
-    source: &'a str,
-    chars: Vec<char>,
-    pos: usize,
-    byte_pos: usize,
-    line: u32,
-    column: u32,
-    comments: Vec<Comment>,
-    fmt_off_ranges: Vec<FmtOffRange>,
+/// Turn the comment spans the lexer recorded ([`crate::lexer::Lexer::comment_spans`])
+/// into [`Comment`]s, and collect the `# fmt: off` / `# fmt: on` ranges.
+///
+/// The lexer decides what is a comment (so `#` inside strings, raw strings
+/// and `#{...}` interpolation is never mistaken for one); this only reads
+/// each comment's text and whether code precedes it on its line.
+pub fn classify_comments(source: &str, spans: &[Span]) -> (Vec<Comment>, Vec<FmtOffRange>) {
+    let mut comments = Vec::with_capacity(spans.len());
+    let mut fmt_off_ranges: Vec<FmtOffRange> = Vec::new();
+    for span in spans {
+        let raw = &source[span.start..span.end];
+        let (kind, text) = if let Some(rest) = raw.strip_prefix("#=") {
+            (CommentKind::Block, rest.strip_suffix("=#").unwrap_or(rest))
+        } else if let Some(rest) = raw.strip_prefix("##") {
+            (CommentKind::Doc, rest.strip_prefix(' ').unwrap_or(rest))
+        } else {
+            (CommentKind::Line, &raw[1..])
+        };
+        if kind == CommentKind::Line {
+            match text.trim() {
+                "fmt: off" => fmt_off_ranges.push(FmtOffRange {
+                    start_byte: span.start,
+                    end_byte: None,
+                }),
+                "fmt: on" => {
+                    if let Some(range) = fmt_off_ranges.last_mut() {
+                        if range.end_byte.is_none() {
+                            range.end_byte = Some(span.end);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // `##` doc comments always lead the item below them.
+        let position = if kind != CommentKind::Doc && has_code_before_on_line(source, span.start) {
+            CommentPosition::Trailing
+        } else {
+            CommentPosition::Leading
+        };
+        comments.push(Comment {
+            kind,
+            text: text.to_string(),
+            span: span.clone(),
+            position,
+        });
+    }
+    (comments, fmt_off_ranges)
 }
 
-impl<'a> CommentCollector<'a> {
-    pub fn new(source: &'a str) -> Self {
-        Self {
-            source,
-            chars: source.chars().collect(),
-            pos: 0,
-            byte_pos: 0,
-            line: 1,
-            column: 1,
-            comments: Vec::new(),
-            fmt_off_ranges: Vec::new(),
-        }
-    }
-
-    pub fn collect(mut self) -> (Vec<Comment>, Vec<FmtOffRange>) {
-        while !self.is_at_end() {
-            let ch = self.current();
-            match ch {
-                '#' => self.handle_hash(),
-                '"' => self.skip_string(),
-                '\'' => self.skip_char(),
-                'r' if self.peek_at(1) == Some('"') || self.peek_at(1) == Some('#') => {
-                    self.skip_raw_string()
-                }
-                '\n' => {
-                    self.advance();
-                }
-                _ => {
-                    self.advance();
-                }
-            }
-        }
-
-        (self.comments, self.fmt_off_ranges)
-    }
-
-    fn handle_hash(&mut self) {
-        let start_byte = self.byte_pos;
-        let start_line = self.line;
-        let start_col = self.column;
-
-        if self.peek_at(1) == Some('=') {
-            // Block comment #= ... =#
-            self.collect_block_comment(start_byte, start_line, start_col);
-        } else if self.peek_at(1) == Some('#') {
-            // Doc comment ##
-            self.collect_doc_comment(start_byte, start_line, start_col);
-        } else if self.peek_at(1) == Some('{') {
-            // String interpolation `#{...}` — not a comment. Skip the `#`.
-            self.advance();
-        } else {
-            // Line comment
-            self.collect_line_comment(start_byte, start_line, start_col);
-        }
-    }
-
-    fn collect_line_comment(&mut self, start_byte: usize, start_line: u32, start_col: u32) {
-        self.advance(); // skip `#`
-
-        // Skip optional leading space
-        let content_start = self.pos;
-        while !self.is_at_end() && self.current() != '\n' {
-            self.advance();
-        }
-        let content: String = self.chars[content_start..self.pos].iter().collect();
-
-        let span = Span::new(start_byte, self.byte_pos, start_line, start_col);
-
-        // Check for fmt: off/on directives
-        let trimmed = content.trim();
-        if trimmed == "fmt: off" {
-            self.fmt_off_ranges.push(FmtOffRange {
-                start_byte,
-                end_byte: None,
-            });
-        } else if trimmed == "fmt: on" {
-            if let Some(range) = self.fmt_off_ranges.last_mut() {
-                if range.end_byte.is_none() {
-                    range.end_byte = Some(self.byte_pos);
-                }
-            }
-        }
-
-        // Determine if this is a trailing comment (code before it on same line)
-        let is_trailing = self.has_code_before_on_line(start_byte);
-
-        self.comments.push(Comment {
-            kind: CommentKind::Line,
-            text: content,
-            span,
-            position: if is_trailing {
-                CommentPosition::Trailing
-            } else {
-                CommentPosition::Leading
-            },
-        });
-    }
-
-    fn collect_doc_comment(&mut self, start_byte: usize, start_line: u32, start_col: u32) {
-        self.advance(); // first #
-        self.advance(); // second #
-
-        // Skip optional leading space
-        if !self.is_at_end() && self.current() == ' ' {
-            self.advance();
-        }
-
-        let content_start = self.pos;
-        while !self.is_at_end() && self.current() != '\n' {
-            self.advance();
-        }
-        let content: String = self.chars[content_start..self.pos].iter().collect();
-
-        let span = Span::new(start_byte, self.byte_pos, start_line, start_col);
-
-        self.comments.push(Comment {
-            kind: CommentKind::Doc,
-            text: content,
-            span,
-            position: CommentPosition::Leading,
-        });
-    }
-
-    fn collect_block_comment(&mut self, start_byte: usize, start_line: u32, start_col: u32) {
-        self.advance(); // #
-        self.advance(); // =
-
-        let mut depth = 1u32;
-        let content_start = self.pos;
-
-        while !self.is_at_end() && depth > 0 {
-            if self.current() == '#' && self.peek_at(1) == Some('=') {
-                self.advance();
-                self.advance();
-                depth += 1;
-            } else if self.current() == '=' && self.peek_at(1) == Some('#') {
-                depth -= 1;
-                if depth > 0 {
-                    self.advance();
-                    self.advance();
-                } else {
-                    // Don't advance past the closing =# yet
-                    break;
-                }
-            } else {
-                self.advance();
-            }
-        }
-
-        let content: String = self.chars[content_start..self.pos].iter().collect();
-
-        // Skip past closing =#
-        if !self.is_at_end() {
-            self.advance(); // =
-        }
-        if !self.is_at_end() {
-            self.advance(); // #
-        }
-
-        let span = Span::new(start_byte, self.byte_pos, start_line, start_col);
-
-        let is_trailing = self.has_code_before_on_line(start_byte);
-
-        self.comments.push(Comment {
-            kind: CommentKind::Block,
-            text: content,
-            span,
-            position: if is_trailing {
-                CommentPosition::Trailing
-            } else {
-                CommentPosition::Leading
-            },
-        });
-    }
-
-    /// Check if there is non-whitespace content before the given byte offset
-    /// on the same line.
-    fn has_code_before_on_line(&self, byte_offset: usize) -> bool {
-        let source_bytes = self.source.as_bytes();
-        if byte_offset == 0 {
-            return false;
-        }
-        let mut i = byte_offset - 1;
-        loop {
-            if i == 0 || source_bytes.get(i) == Some(&b'\n') {
-                return false;
-            }
-            let ch = source_bytes[i];
-            if ch != b' ' && ch != b'\t' && ch != b'\r' {
-                return true;
-            }
-            if i == 0 {
-                break;
-            }
-            i -= 1;
-        }
-        false
-    }
-
-    fn skip_string(&mut self) {
-        // Check for triple-quoted string
-        if self.peek_at(1) == Some('"') && self.peek_at(2) == Some('"') {
-            self.skip_triple_string();
-            return;
-        }
-
-        self.advance(); // opening "
-        while !self.is_at_end() {
-            match self.current() {
-                '\\' => {
-                    self.advance(); // backslash
-                    if !self.is_at_end() {
-                        self.advance(); // escaped char
-                    }
-                }
-                '#' if self.peek_at(1) == Some('{') => {
-                    // String interpolation — skip #{...}
-                    self.advance(); // #
-                    self.advance(); // {
-                    self.skip_braces(1);
-                }
-                '"' => {
-                    self.advance(); // closing "
-                    return;
-                }
-                _ => {
-                    self.advance();
-                }
-            }
-        }
-    }
-
-    fn skip_triple_string(&mut self) {
-        self.advance(); // "
-        self.advance(); // "
-        self.advance(); // "
-        while !self.is_at_end() {
-            match self.current() {
-                '\\' => {
-                    self.advance();
-                    if !self.is_at_end() {
-                        self.advance();
-                    }
-                }
-                '#' if self.peek_at(1) == Some('{') => {
-                    self.advance(); // #
-                    self.advance(); // {
-                    self.skip_braces(1);
-                }
-                '"' if self.peek_at(1) == Some('"') && self.peek_at(2) == Some('"') => {
-                    self.advance(); // "
-                    self.advance(); // "
-                    self.advance(); // "
-                    return;
-                }
-                _ => {
-                    self.advance();
-                }
-            }
-        }
-    }
-
-    fn skip_raw_string(&mut self) {
-        self.advance(); // r
-                        // Count leading # chars
-        let mut hashes = 0;
-        while !self.is_at_end() && self.current() == '#' {
-            hashes += 1;
-            self.advance();
-        }
-        if !self.is_at_end() && self.current() == '"' {
-            self.advance(); // opening "
-        }
-        // Read until closing " followed by same number of #
-        while !self.is_at_end() {
-            if self.current() == '"' {
-                self.advance();
-                let mut found_hashes = 0;
-                while found_hashes < hashes && !self.is_at_end() && self.current() == '#' {
-                    found_hashes += 1;
-                    self.advance();
-                }
-                if found_hashes == hashes {
-                    return;
-                }
-            } else {
-                self.advance();
-            }
-        }
-    }
-
-    fn skip_char(&mut self) {
-        self.advance(); // opening '
-        if !self.is_at_end() && self.current() == '\\' {
-            self.advance(); // backslash
-            if !self.is_at_end() {
-                self.advance(); // escaped char
-            }
-        } else if !self.is_at_end() {
-            // Check if this is a lifetime ('a) vs char literal
-            let next = self.current();
-            if next.is_alphabetic() || next == '_' {
-                // Could be lifetime — check if followed by more ident chars
-                self.advance();
-                while !self.is_at_end()
-                    && (self.current().is_alphanumeric() || self.current() == '_')
-                {
-                    self.advance();
-                }
-                // If we hit a ', it's a char literal; otherwise it was a lifetime.
-                if !self.is_at_end() && self.current() == '\'' {
-                    self.advance();
-                }
-                return;
-            }
-            self.advance();
-        }
-        if !self.is_at_end() && self.current() == '\'' {
-            self.advance(); // closing '
-        }
-    }
-
-    /// Skip past balanced braces, starting with `depth` open braces already consumed.
-    fn skip_braces(&mut self, mut depth: u32) {
-        while !self.is_at_end() && depth > 0 {
-            match self.current() {
-                '{' => {
-                    depth += 1;
-                    self.advance();
-                }
-                '}' => {
-                    depth -= 1;
-                    self.advance();
-                }
-                '"' => self.skip_string(),
-                '\'' => self.skip_char(),
-                '#' if self.peek_at(1) == Some('{') => {
-                    self.advance();
-                    self.advance();
-                    self.skip_braces(1);
-                }
-                _ => {
-                    self.advance();
-                }
-            }
-        }
-    }
-
-    // ── Navigation helpers ──
-
-    fn is_at_end(&self) -> bool {
-        self.pos >= self.chars.len()
-    }
-
-    fn current(&self) -> char {
-        self.chars[self.pos]
-    }
-
-    fn peek_at(&self, offset: usize) -> Option<char> {
-        self.chars.get(self.pos + offset).copied()
-    }
-
-    fn advance(&mut self) -> char {
-        let ch = self.chars[self.pos];
-        self.byte_pos += ch.len_utf8();
-        self.pos += 1;
-        if ch == '\n' {
-            self.line += 1;
-            self.column = 1;
-        } else {
-            self.column += 1;
-        }
-        ch
-    }
+/// Whether non-whitespace text precedes byte `offset` on its line.
+fn has_code_before_on_line(source: &str, offset: usize) -> bool {
+    let line_start = source[..offset].rfind('\n').map_or(0, |i| i + 1);
+    !source[line_start..offset].trim().is_empty()
 }
 
 // ─── Comment Attacher ───────────────────────────────────────────────
@@ -486,11 +272,13 @@ impl CommentAttacher {
     /// (start_byte, end_byte) pairs for every AST node.
     pub fn attach(
         comments: Vec<Comment>,
-        node_spans: &[(usize, usize)],
+        nodes: &NodeSpans,
         fmt_off_ranges: Vec<FmtOffRange>,
     ) -> CommentMap {
+        let node_spans = nodes.spans.as_slice();
         let mut map = CommentMap::new();
         map.fmt_off_ranges = fmt_off_ranges;
+        map.all = comments.iter().map(|c| c.span.clone()).collect();
 
         for comment in comments {
             let comment_start = comment.span.start;
@@ -515,18 +303,38 @@ impl CommentAttacher {
                     }
                 }
                 CommentPosition::Leading => {
-                    // Attach to the next AST node following this comment.
-                    if let Some(&(node_start, _)) =
-                        Self::find_following_node(node_spans, comment_start)
-                    {
-                        map.leading.entry(node_start).or_default().push(comment);
-                    } else if let Some(&(node_start, _)) =
-                        Self::find_enclosing_node(node_spans, comment_start)
-                    {
-                        // No following node — dangling in enclosing scope.
-                        let mut c = comment;
-                        c.position = CommentPosition::Dangling;
-                        map.dangling.entry(node_start).or_default().push(c);
+                    // Attach to the next AST node, unless that node lies
+                    // outside the scope the comment sits in (a comment just
+                    // before an `end`): then it follows the scope's last
+                    // member, or dangles in the scope when it has none. A
+                    // comment after the last item sits in the outermost
+                    // node, the program.
+                    let following = Self::find_following_node(node_spans, comment_start);
+                    let enclosing =
+                        Self::find_enclosing_node(node_spans, comment_start).or(node_spans.first());
+                    let last_member = enclosing.and_then(|&(scope_start, _)| {
+                        Self::find_preceding_node(&nodes.members, comment_start).filter(|m| {
+                            m.0 > scope_start || (m.0 == scope_start && m.1 <= comment_start)
+                        })
+                    });
+                    match (following, enclosing, last_member) {
+                        (Some(&(node_start, _)), Some(&(_, scope_end)), _)
+                            if node_start < scope_end =>
+                        {
+                            map.leading.entry(node_start).or_default().push(comment);
+                        }
+                        (Some(&(node_start, _)), None, _) => {
+                            map.leading.entry(node_start).or_default().push(comment);
+                        }
+                        (_, Some(_), Some(&(member_start, _))) => {
+                            map.after.entry(member_start).or_default().push(comment);
+                        }
+                        (_, Some(&(scope_start, _)), None) => {
+                            let mut c = comment;
+                            c.position = CommentPosition::Dangling;
+                            map.dangling.entry(scope_start).or_default().push(c);
+                        }
+                        (None, None, _) => {}
                     }
                 }
                 CommentPosition::Dangling => {
@@ -613,21 +421,33 @@ impl CommentAttacher {
 /// not collect those spans, and widening the set could shift comment
 /// attachment. Item-level traversal (modules/classes/funcs/lib decls) stays
 /// hand-rolled: `Visit` covers expressions, not top-level items.
-pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, usize)> {
+pub fn collect_node_spans(program: &crate::parser::ast::Program) -> NodeSpans {
     use crate::parser::ast::*;
     use crate::parser::visit::{walk_expr, walk_pattern, Visit};
 
     struct SpanCollector {
         spans: Vec<(usize, usize)>,
+        members: Vec<(usize, usize)>,
     }
 
     impl SpanCollector {
         fn add(&mut self, span: &Span) {
-            self.spans.push((span.start, span.end));
+            // The parser gives an empty body block an inverted span (start
+            // past end); it encloses nothing, so it cannot carry a comment.
+            if span.start <= span.end {
+                self.spans.push((span.start, span.end));
+            }
+        }
+
+        /// A node the formatter writes on its own line(s) through
+        /// `with_comments` (item, body member, statement).
+        fn member(&mut self, span: &Span) {
+            self.add(span);
+            self.members.push((span.start, span.end));
         }
 
         fn visit_func(&mut self, func: &FuncDef) {
-            self.add(&func.span);
+            self.member(&func.span);
             for p in &func.params {
                 self.add(&p.span);
                 self.visit_type_expr(&p.type_expr);
@@ -638,110 +458,126 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
             self.visit_block(&func.body);
         }
 
+        /// The members every type body shares: methods, inner impls and
+        /// in-body `lib` blocks.
+        fn visit_type_body(&mut self, methods: &[FuncDef], inner_impls: &[InnerImpl]) {
+            for m in methods {
+                self.visit_func(m);
+            }
+            for imp in inner_impls {
+                self.member(&imp.span);
+                self.visit_impl_items(&imp.items);
+            }
+        }
+
+        fn visit_lib(&mut self, lib: &LibDecl) {
+            self.member(&lib.span);
+            for f in &lib.functions {
+                self.member(&f.span);
+            }
+        }
+
+        fn visit_impl_items(&mut self, items: &[ImplItem]) {
+            for ii in items {
+                match ii {
+                    ImplItem::AssocType { span, .. } => self.member(span),
+                    ImplItem::Method(f) => self.visit_func(f),
+                    ImplItem::Include { span, .. } => self.member(span),
+                    ImplItem::Alias(a) => self.member(&a.span),
+                }
+            }
+        }
+
         fn visit_item(&mut self, item: &TopLevelItem) {
             match item {
                 TopLevelItem::Module(m) => {
-                    self.add(&m.span);
+                    self.member(&m.span);
                     for i in &m.items {
                         self.visit_item(i);
                     }
                 }
                 TopLevelItem::Class(c) => {
-                    self.add(&c.span);
+                    self.member(&c.span);
                     for f in &c.fields {
-                        self.add(&f.span);
+                        self.member(&f.span);
                     }
-                    for m in &c.methods {
-                        self.visit_func(m);
-                    }
+                    self.visit_type_body(&c.methods, &c.inner_impls);
                     // Class-body `lib "..." ... end` blocks: register each FFI
                     // def span so `##` doc comments attached above them survive
                     // formatting (otherwise `ruxen fmt` drops the docs).
                     for lib in &c.lib_decls {
-                        self.add(&lib.span);
-                        for f in &lib.functions {
-                            self.add(&f.span);
-                        }
+                        self.visit_lib(lib);
                     }
                     for a in &c.aliases {
-                        self.add(&a.span);
+                        self.member(&a.span);
+                    }
+                    for a in &c.assoc_types {
+                        self.member(&a.span);
+                        self.visit_type_expr(&a.type_expr);
                     }
                 }
                 TopLevelItem::Struct(s) => {
-                    self.add(&s.span);
+                    self.member(&s.span);
                     for f in &s.fields {
-                        self.add(&f.span);
+                        self.member(&f.span);
                     }
+                    self.visit_type_body(&s.methods, &s.inner_impls);
                     for a in &s.aliases {
-                        self.add(&a.span);
+                        self.member(&a.span);
                     }
                 }
                 TopLevelItem::Enum(e) => {
-                    self.add(&e.span);
+                    self.member(&e.span);
                     for v in &e.variants {
-                        self.add(&v.span);
+                        self.member(&v.span);
                     }
+                    self.visit_type_body(&e.methods, &e.inner_impls);
                     for a in &e.aliases {
-                        self.add(&a.span);
+                        self.member(&a.span);
                     }
                 }
                 TopLevelItem::Mixin(t) => {
-                    self.add(&t.span);
+                    self.member(&t.span);
                     for ti in &t.items {
                         match ti {
-                            MixinItem::AssocType { span, .. } => self.add(span),
-                            MixinItem::MethodSig(ms) => self.add(&ms.span),
+                            MixinItem::AssocType { span, .. } => self.member(span),
+                            MixinItem::MethodSig(ms) => self.member(&ms.span),
                             MixinItem::DefaultMethod(f) => self.visit_func(f),
-                            MixinItem::Alias(a) => self.add(&a.span),
+                            MixinItem::Alias(a) => self.member(&a.span),
                         }
+                    }
+                    for lib in &t.lib_decls {
+                        self.visit_lib(lib);
                     }
                 }
                 TopLevelItem::Impl(imp) => {
-                    self.add(&imp.span);
-                    for ii in &imp.items {
-                        match ii {
-                            ImplItem::AssocType { span, .. } => self.add(span),
-                            ImplItem::Method(f) => self.visit_func(f),
-                            ImplItem::Include { span, .. } => self.add(span),
-                            ImplItem::Alias(a) => self.add(&a.span),
-                        }
-                    }
+                    self.member(&imp.span);
+                    self.visit_impl_items(&imp.items);
                 }
                 TopLevelItem::Function(f) => self.visit_func(f),
-                TopLevelItem::Use(u) => self.add(&u.span),
+                TopLevelItem::Use(u) => self.member(&u.span),
                 TopLevelItem::TypeAlias(ta) => {
-                    self.add(&ta.span);
+                    self.member(&ta.span);
                     self.visit_type_expr(&ta.type_expr);
                 }
                 TopLevelItem::Newtype(nt) => {
-                    self.add(&nt.span);
+                    self.member(&nt.span);
                     self.visit_type_expr(&nt.inner_type);
                 }
                 TopLevelItem::Const(c) => {
-                    self.add(&c.span);
+                    self.member(&c.span);
                     self.visit_type_expr(&c.type_expr);
                     self.visit_expr(&c.value);
                 }
-                TopLevelItem::Lib(l) => {
-                    self.add(&l.span);
-                    for f in &l.functions {
-                        self.add(&f.span);
-                    }
-                }
-                TopLevelItem::Extern(e) => {
-                    self.add(&e.span);
-                    for f in &e.functions {
-                        self.add(&f.span);
-                    }
-                }
+                TopLevelItem::Lib(l) => self.visit_lib(l),
                 // Q23b: a top-level expression statement. Register its span
                 // (and recurse into the expression) so comments attach to it
                 // correctly, the same way an in-body statement expr does.
                 TopLevelItem::Expr(e) => {
-                    self.add(&e.span);
+                    self.member(&e.span);
                     self.visit_expr(e);
                 }
-                TopLevelItem::Alias(a) => self.add(&a.span),
+                TopLevelItem::Alias(a) => self.member(&a.span),
             }
         }
     }
@@ -760,7 +596,7 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
                 }
                 ExprKind::Match(match_expr) => {
                     for arm in &match_expr.arms {
-                        self.add(&arm.span);
+                        self.member(&arm.span);
                     }
                     walk_expr(self, expr);
                 }
@@ -807,10 +643,11 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
         }
 
         fn visit_stmt(&mut self, stmt: &Statement) {
-            if let Statement::Let(l) = stmt {
-                // The previous walk attached the `let`-statement span; the
-                // shared `walk_stmt` does not, so record it here.
-                self.add(&l.span);
+            match stmt {
+                // The shared `walk_stmt` does not record the `let`-statement
+                // span, so record it here.
+                Statement::Let(l) => self.member(&l.span),
+                Statement::Expression(e) => self.members.push((e.span.start, e.span.end)),
             }
             crate::parser::visit::walk_stmt(self, stmt);
         }
@@ -884,7 +721,10 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
         }
     }
 
-    let mut collector = SpanCollector { spans: Vec::new() };
+    let mut collector = SpanCollector {
+        spans: Vec::new(),
+        members: Vec::new(),
+    };
     collector.add(&program.span);
     for item in &program.items {
         collector.visit_item(item);
@@ -892,18 +732,66 @@ pub fn collect_node_spans(program: &crate::parser::ast::Program) -> Vec<(usize, 
 
     let mut spans = collector.spans;
     spans.sort_by_key(|&(start, _)| start);
-    spans
+    let mut members = collector.members;
+    members.sort_by_key(|&(start, _)| start);
+    NodeSpans { spans, members }
+}
+
+/// AST node spans for comment attachment, sorted by start offset.
+pub struct NodeSpans {
+    /// Every node.
+    pub spans: Vec<(usize, usize)>,
+    /// The nodes written on their own line(s): items, body members and
+    /// statements.
+    pub members: Vec<(usize, usize)>,
+}
+
+/// What a source line holds, for [`CommentMap::blank_line_before`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineKind {
+    Blank,
+    /// Only a comment (`# ...` or a `##` doc line).
+    Comment,
+    /// A `private` / `public` / `protected` section marker.
+    Marker,
+    Code,
+}
+
+/// Every line of `source` as `(start byte offset, kind)` (see
+/// [`CommentMap::lines`]).
+pub fn source_lines(source: &str) -> Vec<(usize, LineKind)> {
+    let mut out = Vec::new();
+    let mut offset = 0;
+    for line in source.split_inclusive('\n') {
+        let trimmed = line.trim();
+        let kind = if trimmed.is_empty() {
+            LineKind::Blank
+        } else if trimmed.starts_with('#') {
+            LineKind::Comment
+        } else if matches!(trimmed, "private" | "public" | "protected") {
+            LineKind::Marker
+        } else {
+            LineKind::Code
+        };
+        out.push((offset, kind));
+        offset += line.len();
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn collect(source: &str) -> (Vec<Comment>, Vec<FmtOffRange>) {
+        let mut lexer = crate::lexer::Lexer::new(source);
+        lexer.tokenize().expect("fixture lexes");
+        classify_comments(source, lexer.comment_spans())
+    }
+
     #[test]
     fn test_collect_line_comment() {
-        let source = "# hello world\n";
-        let collector = CommentCollector::new(source);
-        let (comments, _) = collector.collect();
+        let (comments, _) = collect("# hello world\n");
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].kind, CommentKind::Line);
         assert_eq!(comments[0].text, " hello world");
@@ -912,9 +800,7 @@ mod tests {
 
     #[test]
     fn test_collect_doc_comment() {
-        let source = "## A doc comment\n";
-        let collector = CommentCollector::new(source);
-        let (comments, _) = collector.collect();
+        let (comments, _) = collect("## A doc comment\n");
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].kind, CommentKind::Doc);
         assert_eq!(comments[0].text, "A doc comment");
@@ -922,9 +808,7 @@ mod tests {
 
     #[test]
     fn test_collect_block_comment() {
-        let source = "#= block content =#\n";
-        let collector = CommentCollector::new(source);
-        let (comments, _) = collector.collect();
+        let (comments, _) = collect("#= block content =#\n");
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].kind, CommentKind::Block);
         assert_eq!(comments[0].text, " block content ");
@@ -932,35 +816,35 @@ mod tests {
 
     #[test]
     fn test_nested_block_comment() {
-        let source = "#= outer #= inner =# still outer =#\n";
-        let collector = CommentCollector::new(source);
-        let (comments, _) = collector.collect();
+        let (comments, _) = collect("#= outer #= inner =# still outer =#\n");
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].kind, CommentKind::Block);
     }
 
     #[test]
     fn test_comment_in_string_ignored() {
-        let source = "\"this # is not a comment\"\n";
-        let collector = CommentCollector::new(source);
-        let (comments, _) = collector.collect();
+        let (comments, _) = collect("\"this # is not a comment\"\n");
+        assert_eq!(comments.len(), 0);
+    }
+
+    /// The old text scanner read `'` as a char literal and took the `#` in
+    /// a single-quoted raw string for a comment.
+    #[test]
+    fn test_comment_in_raw_string_ignored() {
+        let (comments, _) = collect("x = 'a # b'\n");
         assert_eq!(comments.len(), 0);
     }
 
     #[test]
     fn test_trailing_comment() {
-        let source = "let x = 42  # the answer\n";
-        let collector = CommentCollector::new(source);
-        let (comments, _) = collector.collect();
+        let (comments, _) = collect("let x = 42  # the answer\n");
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].position, CommentPosition::Trailing);
     }
 
     #[test]
     fn test_fmt_off_on() {
-        let source = "# fmt: off\ncode here\n# fmt: on\nmore code\n";
-        let collector = CommentCollector::new(source);
-        let (comments, ranges) = collector.collect();
+        let (comments, ranges) = collect("# fmt: off\ncode here\n# fmt: on\nmore code\n");
         assert_eq!(comments.len(), 2);
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].end_byte.is_some());
@@ -968,18 +852,14 @@ mod tests {
 
     #[test]
     fn test_fmt_off_no_on() {
-        let source = "# fmt: off\nrest of file\n";
-        let collector = CommentCollector::new(source);
-        let (_, ranges) = collector.collect();
+        let (_, ranges) = collect("# fmt: off\nrest of file\n");
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].end_byte.is_none());
     }
 
     #[test]
     fn test_interpolation_not_comment() {
-        let source = "\"hello #{name}\"\n# real comment\n";
-        let collector = CommentCollector::new(source);
-        let (comments, _) = collector.collect();
+        let (comments, _) = collect("\"hello #{name}\"\n# real comment\n");
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].kind, CommentKind::Line);
     }

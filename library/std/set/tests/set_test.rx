@@ -1,0 +1,110 @@
+Tester.describe("Set") do |t: &var Tester|
+  t.it("ignores a duplicate insert") do
+    var s: Set[Int] = Set.new
+    s.insert(1)
+    s.insert(2)
+    s.insert(1)
+    t.expect(s.size).to_eq(2)
+    t.expect(s.include?(1)).to_eq(true)
+    t.expect(s.include?(3)).to_eq(false)
+  end
+
+  t.it("reports whether remove found the item") do
+    var s: Set[Int] = Set.new
+    s.insert(1)
+    s.insert(2)
+    t.expect(s.remove(1)).to_eq(true)
+    t.expect(s.remove(99)).to_eq(false)
+    t.expect(s.size).to_eq(1)
+  end
+
+  t.it("empties on clear") do
+    var s: Set[Int] = Set.new
+    s.insert(1)
+    s.clear
+    t.expect(s.empty?).to_eq(true)
+  end
+
+  t.it("combines sets with union, intersection and difference") do
+    var a: Set[Int] = Set.new
+    a.insert(1)
+    a.insert(2)
+    var b: Set[Int] = Set.new
+    b.insert(2)
+    b.insert(3)
+    let u = a.union(&b)
+    t.expect(u.size).to_eq(3)
+    let i = a.intersection(&b)
+    t.expect(i.size).to_eq(1)
+    t.expect(i.include?(2)).to_eq(true)
+    let d = a.difference(&b)
+    t.expect(d.size).to_eq(1)
+    t.expect(d.include?(1)).to_eq(true)
+  end
+
+  t.it("include? on an empty set") do
+    var s: Set[Int] = Set.new
+    t.expect(s.include?(7)).to_eq(false)
+    s.insert(7)
+    t.expect(s.include?(7)).to_eq(true)
+  end
+
+  t.it("intersection and difference keep the right members") do
+    var a: Set[Int] = Set.new
+    a.insert(1)
+    a.insert(2)
+    a.insert(3)
+    var b: Set[Int] = Set.new
+    b.insert(2)
+    b.insert(3)
+    b.insert(4)
+    let i = a.intersection(&b)
+    t.expect(i.size).to_eq(2)
+    t.expect(i.include?(1)).to_eq(false)
+    t.expect(i.include?(3)).to_eq(true)
+    let d = a.difference(&b)
+    t.expect(d.size).to_eq(1)
+    t.expect(d.include?(2)).to_eq(false)
+    let u = a.union(&b)
+    t.expect(u.size).to_eq(4)
+    t.expect(u.include?(4)).to_eq(true)
+  end
+
+  t.it("== ignores insertion order") do
+    var a: Set[Int] = Set.new
+    a.insert(1)
+    a.insert(2)
+    var b: Set[Int] = Set.new
+    b.insert(2)
+    b.insert(1)
+    var c: Set[Int] = Set.new
+    c.insert(1)
+    c.insert(3)
+    t.expect(a == b).to_eq(true)
+    t.expect(a == c).to_eq(false)
+    t.expect(a != c).to_eq(true)
+  end
+
+  t.it("reduce, select, all? and any?") do
+    var s: Set[Int] = Set.new
+    s.insert(1)
+    s.insert(2)
+    s.insert(3)
+    s.insert(4)
+    t.expect(s.reduce(0) do |acc, x| acc + x end).to_eq(10)
+    let evens = s.select do |x| x % 2 == 0 end
+    t.expect(evens.size).to_eq(2)
+    t.expect(s.all? do |x| x > 0 end).to_eq(true)
+    t.expect(s.any? do |x| x > 3 end).to_eq(true)
+    t.expect(s.any? do |x| x < 0 end).to_eq(false)
+  end
+
+  t.it("to_set from an array and to_a back") do
+    let v = [1, 2, 2, 3]
+    let s = v.to_set
+    t.expect(s.size).to_eq(3)
+    t.expect(s.include?(2)).to_eq(true)
+    let items = s.to_a
+    t.expect(items.size).to_eq(3)
+  end
+end

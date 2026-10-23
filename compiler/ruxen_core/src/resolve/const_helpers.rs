@@ -15,7 +15,7 @@
 
 use crate::hir::types::Ty;
 use crate::parser::ast;
-use crate::resolve::symbols::{DefKind, Definition, SymbolTable};
+use crate::resolve::symbols::{Definition, SymbolTable};
 
 /// E0706 "predicate cannot be satisfied" rather than a silent
 /// no-op.
@@ -154,7 +154,7 @@ pub(super) fn ty_is_valid_hash_key(
         Ty::Alias { target, .. } => ty_is_valid_hash_key(target, symbols),
         Ty::Newtype { inner, .. } => ty_is_valid_hash_key(inner, symbols),
         Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => {
-            ty_has_derive_trait(ty, symbols, "Hash") || ty_has_derive_trait(ty, symbols, "Hashable")
+            ty_has_derive_trait(ty, symbols, "Hashable")
         }
         // Type-vars / param types: assume satisfiable (typeck unifies later).
         // Returning true here keeps generic code (e.g. `def f[K]`) compiling;
@@ -165,25 +165,12 @@ pub(super) fn ty_is_valid_hash_key(
     }
 }
 
+/// Mutable access to the definition [`crate::hir::types::nominal_definition`]
+/// finds for `target_ty`.
 pub(super) fn nominal_type_definition_mut<'a>(
     target_ty: &Ty,
     symbols: &'a mut SymbolTable,
 ) -> Option<&'a mut Definition> {
-    let name = match target_ty {
-        Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => name,
-        _ => return None,
-    };
-
-    let def_id = symbols
-        .iter()
-        .find(|def| {
-            def.name == *name
-                && matches!(
-                    def.kind,
-                    DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. }
-                )
-        })
-        .map(|def| def.id)?;
-
+    let def_id = crate::hir::types::nominal_definition(target_ty, symbols)?.id;
     symbols.get_mut(def_id)
 }

@@ -150,7 +150,7 @@ end
 
 def main
   let n = identity(42)         # T = Int
-  let s = identity("hello")    # T = &str
+  let s = identity("hello")    # T = String
   puts "#{n} #{s}"
 end
 ```

@@ -23,7 +23,6 @@ inserted; no double-slash).
 **Given** `a = "/etc"`, `b = "/usr/bin"`
 **When** the program calls `path_join(&a, &b)`
 **Then** the result is `"/usr/bin"` (b's leading `/` overrides a).
-Matches Rust's `Path::join` semantics.
 
 ## B3 — `path_parent(p) -> String` strips the final component
 
@@ -65,10 +64,10 @@ Returns `true` iff `p` starts with `/`.
 
 | Behaviour | Test fn                              | File             |
 |-----------|--------------------------------------|------------------|
-| B1, B3, B4, B5, B6 | `path_module_basic_operations`  | `stdlib_path.rs` |
-| B2        | `path_join_handles_absolute_second`  | `stdlib_path.rs` |
-| B5 (empty cases) | `path_extension_empty_when_missing` | `stdlib_path.rs` |
-| B6        | `path_is_absolute_detects_root`      | `stdlib_path.rs` |
+| B1, B3, B4, B5, B6 | "joins, splits and inspects a path" | `library/std/path/tests/path_test.rx` |
+| B2        | "lets an absolute second part override the first on join" | `library/std/path/tests/path_test.rx` |
+| B5 (empty cases) | "returns an empty extension when there is none" | `library/std/path/tests/path_test.rx` |
+| B6        | "detects an absolute path" | `library/std/path/tests/path_test.rx` |
 
 ---
 

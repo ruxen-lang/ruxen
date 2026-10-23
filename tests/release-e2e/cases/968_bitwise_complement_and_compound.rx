@@ -1,0 +1,29 @@
+# Pins bitwise-complement `~` (an integer prefix operator lowering to `x ^ -1`)
+# and the bitwise/shift compound-assignments `&=`, `|=`, `^=`, `<<=`, `>>=`
+# (each desugars to `a = a OP b` over the existing BinOp lowering).
+def main
+  puts(~5)
+  puts(~0)
+  let n = 6
+  puts(~n)
+
+  var a = 12
+  a &= 10
+  puts(a)
+
+  var b = 12
+  b |= 3
+  puts(b)
+
+  var c = 12
+  c ^= 10
+  puts(c)
+
+  var d = 1
+  d <<= 4
+  puts(d)
+
+  var e = 255
+  e >>= 4
+  puts(e)
+end

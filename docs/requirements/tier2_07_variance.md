@@ -39,7 +39,7 @@ From `typeck/coerce.rs`:
 - Line 84-88: `Option[T] → Option[U]` when `T → U` coerces. This is covariance in `T`.
 - Line 90-95: `Result[T, E] → Result[U, F]` when both coerce. Covariant in *both* parameters.
 - Line 97-106: `&Ref[T] → &Ref[U]` via `is_subtype_class` — class-inheritance-aware covariance through shared references.
-- Line 108-109: **Comments assert** `Array`, `Map`, `Set` and `&var T` are invariant — but the invariance is enforced only by the absence of a coercion rule. There's no test that `&long var T` fails to coerce to `&short var T` specifically because of variance (they fall through to the `_ => Err(...)` arm).
+- Line 108-109: **Comments assert** `Array`, `Hash`, `Set` and `&var T` are invariant — but the invariance is enforced only by the absence of a coercion rule. There's no test that `&long var T` fails to coerce to `&short var T` specifically because of variance (they fall through to the `_ => Err(...)` arm).
 
 `Ty::Never` (`!`) is documented as a bottom type at `hir/types.rs:60` ("subtype of everything") but there's no code that actually exercises subtyping with `Never` — it's handled via unification only.
 
@@ -61,7 +61,7 @@ Types like Rust's `PhantomData[&a T]` exist precisely to let zero-sized marker t
 
 ### 2.6 No fixture exercises variance
 
-Grep across `crates/ruxen-core/tests/fixtures/` for explicit-lifetime names or `static` shows a handful of borrow-check fixtures exist but none test lifetime *subtyping* — the closest is borrow-owner outlives checks. This means today's coercion rules are effectively unchecked for soundness with respect to lifetime variance.
+Grep across `compiler/ruxen_core/tests/fixtures/` for explicit-lifetime names or `static` shows a handful of borrow-check fixtures exist but none test lifetime *subtyping* — the closest is borrow-owner outlives checks. This means today's coercion rules are effectively unchecked for soundness with respect to lifetime variance.
 
 ## 3. Goals & Non-Goals
 
@@ -182,8 +182,8 @@ Invariant dominates.
 
 Run after resolve, before the main typeck pass:
 
-```
-fn infer_variance(def_id: DefId) -> Map<ParamIdx, Variance> {
+```rust
+fn infer_variance(def_id: DefId) -> HashMap<ParamIdx, Variance> {
   # Start: every parameter is bivariant (top).
   var result = bivariant_map(def_id.generic_params);
 
@@ -198,7 +198,7 @@ fn infer_variance(def_id: DefId) -> Map<ParamIdx, Variance> {
   result
 }
 
-fn visit_ty(ty: &Ty, current: Variance, acc: &var Map<ParamIdx, Variance>) {
+fn visit_ty(ty: &Ty, current: Variance, acc: &mut HashMap<ParamIdx, Variance>) {
   match ty {
     Ty::GenericParam(idx) => acc[idx] = acc[idx].join(current),
     Ty::RefLifetime(_, inner) | Ty::Ref(inner) => visit_ty(inner, current, acc),
@@ -266,8 +266,8 @@ Risk: once inference is wired in, changing a private field type can silently cha
 
 ### Files to create
 
-- `crates/ruxen-core/src/typeck/variance.rs` — the inference pass. Exposes `VarianceTable` keyed on `DefId`.
-- `crates/ruxen-core/src/hir/variance.rs` (if the shared type is needed by more than one crate) — the `Variance` enum + lattice operations.
+- `compiler/ruxen_core/src/typeck/variance.rs` — the inference pass. Exposes `VarianceTable` keyed on `DefId`.
+- `compiler/ruxen_core/src/hir/variance.rs` (if the shared type is needed by more than one crate) — the `Variance` enum + lattice operations.
 
 ### Files to modify
 
@@ -275,7 +275,7 @@ Risk: once inference is wired in, changing a private field type can silently cha
 - `resolve/mod.rs`: register `PhantomData` as a built-in type constructor alongside `Array`/`Map`/`Set`.
 - `typeck/mod.rs`: run `variance::infer_all` after symbol collection, before the main inference loop. Store the resulting `VarianceTable` on `TypeckContext`.
 - `typeck/unify.rs:262` and neighboring — replace the ad-hoc "Option covariance" block with a single dispatch through the variance table.
-- `typeck/coerce.rs:60-113`: delete the per-constructor rules and replace with a variance-druxen walk. The `is_subtype_class` helper at line 117 stays — it handles nominal class inheritance, which is orthogonal to parametric variance.
+- `typeck/coerce.rs:60-113`: delete the per-constructor rules and replace with a variance-driven walk. The `is_subtype_class` helper at line 117 stays — it handles nominal class inheritance, which is orthogonal to parametric variance.
 - `borrow_check/lifetimes.rs`: add `check_lifetime_subtype(long: &Ty, short: &Ty) -> Result<(), LifetimeError>` that consumes the `VarianceTable`.
 - `diagnostics`: add error codes `E0705` *invariant lifetime mismatch* and `E0706` *contravariant lifetime mismatch* (see tier-5 doc 04 for the namespace).
 
@@ -311,7 +311,7 @@ Normalized projections `<T as Mixin>.Output` inherit the variance of the mixin's
 
 **Phase 7b — variance inference for user types (2 weeks).** Implement `typeck::variance` with the fixed-point algorithm. Store a `VarianceTable` on `TypeckContext`. Do *not* yet change coercion/unification behavior — the pass runs but its result is only consumed by new fixture-check code.
 
-**Phase 7c — wire variance into coercion/unification (2 weeks).** Replace the ad-hoc rules at `coerce.rs:84-109` with table-druxen dispatch. Add `E0705`/`E0706` diagnostics. Add the `PhantomData` marker type. Update stdlib (once tier-1 is ready) to add `PhantomData` fields to collections that need them.
+**Phase 7c — wire variance into coercion/unification (2 weeks).** Replace the ad-hoc rules at `coerce.rs:84-109` with table-driven dispatch. Add `E0705`/`E0706` diagnostics. Add the `PhantomData` marker type. Update stdlib (once tier-1 is ready) to add `PhantomData` fields to collections that need them.
 
 **Phase 7d — bivariant warning + semver lint (1 week, after tier-3 LSP).** Wire `W0710` (bivariant unused param) and `W0711` (variance-changed-across-edition) into the diagnostic pipeline. Part of the tier-5 stability story.
 
@@ -335,7 +335,7 @@ Total ~6 weeks linear, 3-4 weeks if 7c and the PhantomData work parallelize with
 
 **R1. Fixed-point non-termination for recursive types.** `struct List[T]; next: Option[Box[List[T]]]; end` — the inference pass depends on itself. Standard fix: seed all parameters with bivariant and iterate; the lattice is finite, so convergence is guaranteed.
 
-**R2. Silently breaking existing code when the coercion rewrite lands.** Phase 7c replaces the current ad-hoc rules with table-druxen logic; if the table doesn't exactly match today's behavior, fixture tests fail. Mitigate by shipping phase 7a's fixtures *before* phase 7c.
+**R2. Silently breaking existing code when the coercion rewrite lands.** Phase 7c replaces the current ad-hoc rules with table-driven logic; if the table doesn't exactly match today's behavior, fixture tests fail. Mitigate by shipping phase 7a's fixtures *before* phase 7c.
 
 **R3. `&var T` invariance breaking intuitive-looking code.** Many users expect `&var Child` to coerce to `&var Parent` because single-value mutation seems safe. It isn't. Ensure `E0705` has a `help:` note explaining the soundness rationale (tier-5 doc 05).
 
@@ -352,8 +352,8 @@ Total ~6 weeks linear, 3-4 weeks if 7c and the PhantomData work parallelize with
 | V3 | `&a var Child` → `&a var Parent` | ❌ E0705 (invariant in inner `T`) |
 | V4 | `Option[&long T]` → `Option[&short T]` | ✅ covariance passes through |
 | V5 | `Array[&long T]` → `Array[&short T]` | ❌ E0705 (Array invariant in T) |
-| V6 | `fn(&short T) -> ()` → `fn(&long T) -> ()` | ✅ contravariance of arg |
-| V7 | `fn(&long T) -> ()` → `fn(&short T) -> ()` | ❌ E0706 |
+| V6 | `Fn(&short T) -> nil` → `Fn(&long T) -> nil` | ✅ contravariance of arg |
+| V7 | `Fn(&long T) -> nil` → `Fn(&short T) -> nil` | ❌ E0706 |
 | V8 | `fn() -> &long T` → `fn() -> &short T` | ✅ covariance of return |
 | V9 | `(T1, T2)` tuple with T1 covariant + T2 covariant | ✅ |
 | V10 | `Hash[&long K, V]` → `Hash[&short K, V]` | ❌ E0705 (Hash invariant in K) |
@@ -375,7 +375,7 @@ Total ~6 weeks linear, 3-4 weeks if 7c and the PhantomData work parallelize with
 
 - Variance inference pass runs on every user-defined generic type and memoizes results.
 - All 23 test-matrix cases pass.
-- The existing `coerce.rs:84-109` ad-hoc rules are replaced by a single table-druxen dispatch that passes all existing coercion fixtures *without* changes.
+- The existing `coerce.rs:84-109` ad-hoc rules are replaced by a single table-driven dispatch that passes all existing coercion fixtures *without* changes.
 - `W0710` fires on any user struct with a truly-unused generic parameter, and the suggested `PhantomData` fix is actionable.
 - Documentation in the language reference (tier-5 doc 01) contains the §5.2 variance table verbatim, with normative status.
 
@@ -383,17 +383,17 @@ Total ~6 weeks linear, 3-4 weeks if 7c and the PhantomData work parallelize with
 
 | Path | Line(s) | Relevance |
 |------|---------|-----------|
-| `crates/ruxen-core/src/hir/types.rs` | 60 | `Never` bottom-type note |
+| `compiler/ruxen_core/src/hir/types.rs` | 60 | `Never` bottom-type note |
 | | 82-95 | `Ref` / `RefLifetime` / `RefMut` / `RefMutLifetime` |
 | | 389-390 | `Display` for explicit-lifetime references |
-| `crates/ruxen-core/src/typeck/coerce.rs` | 84-88 | current `Option` covariance |
+| `compiler/ruxen_core/src/typeck/coerce.rs` | 84-88 | current `Option` covariance |
 | | 90-95 | current `Result` covariance on both params |
 | | 97-106 | `&Ref` subtype via class inheritance |
 | | 108-109 | informal invariance comments for `Vec`/`Hash`/`Set`/`&var T` |
 | | 117-145 | `is_subtype_class` |
-| `crates/ruxen-core/src/typeck/unify.rs` | 262 | duplicated `Option` covariance |
-| `crates/ruxen-core/src/borrow_check/lifetimes.rs` | 34-85 | `LifetimeChecker` + three-rule elision |
+| `compiler/ruxen_core/src/typeck/unify.rs` | 262 | duplicated `Option` covariance |
+| `compiler/ruxen_core/src/borrow_check/lifetimes.rs` | 34-85 | `LifetimeChecker` + three-rule elision |
 | | 101 | `check_outlives` (scope-based) |
-| `crates/ruxen-core/src/borrow_check/regions.rs` | (entire) | `ScopeId` region model |
-| `crates/ruxen-core/src/resolve/mod.rs` | ~200 | built-in type-constructor registration — where `PhantomData` will go |
-| `crates/ruxen-core/src/borrow_check/errors.rs` | 6-16 | existing `ErrorCode` range — `E0705`/`E0706` reserved here |
+| `compiler/ruxen_core/src/borrow_check/regions.rs` | (entire) | `ScopeId` region model |
+| `compiler/ruxen_core/src/resolve/mod.rs` | ~200 | built-in type-constructor registration — where `PhantomData` will go |
+| `compiler/ruxen_core/src/borrow_check/errors.rs` | 6-16 | existing `ErrorCode` range — `E0705`/`E0706` reserved here |

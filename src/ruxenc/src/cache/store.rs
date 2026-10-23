@@ -26,7 +26,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::manifest::{CacheManifest, ManifestLoadResult};
 
@@ -35,6 +35,10 @@ pub const INCREMENTAL_DIRNAME: &str = "incremental";
 pub const MANIFEST_FILENAME: &str = "manifest.bin";
 pub const OBJECTS_DIRNAME: &str = "objects";
 pub const SIGNATURES_DIRNAME: &str = "signatures";
+
+/// A `<file>.<pid>.tmp` older than this was left by a process that died
+/// mid-write; no live write takes this long.
+pub const STALE_TMP_AGE: Duration = Duration::from_secs(10 * 60);
 
 /// A project-local cache store rooted at a `target/ruxen/` directory.
 pub struct CacheStore {
@@ -81,6 +85,39 @@ impl CacheStore {
         Ok(())
     }
 
+    /// Delete `*.tmp` files older than `max_age` under `incremental/`
+    /// (the manifest's directory, `objects/` and `signatures/`). A process
+    /// that crashes between write and rename leaves its per-pid temp file
+    /// behind, and no later run would reuse that name. Best effort: errors
+    /// are ignored, since the cache is only an optimization.
+    pub fn remove_stale_tmp_files(&self, max_age: Duration) {
+        let now = SystemTime::now();
+        for dir in [
+            self.incremental_dir(),
+            self.objects_dir(),
+            self.signatures_dir(),
+        ] {
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_none_or(|ext| ext != "tmp") {
+                    continue;
+                }
+                let stale = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|modified| now.duration_since(modified).ok())
+                    .is_some_and(|age| age > max_age);
+                if stale {
+                    let _ = fs::remove_file(&path);
+                }
+            }
+        }
+    }
+
     // ─── Manifest ───────────────────────────────────────────────────
 
     /// Load the manifest if present and compatible with the given target/flags.
@@ -101,8 +138,7 @@ impl CacheStore {
         atomic_write(&self.manifest_path(), &bytes)
     }
 
-    /// Delete the entire `incremental/` tree. Used on corruption and
-    /// `ruxen clean`.
+    /// Delete the entire `incremental/` tree. Used on corruption.
     pub fn clear(&self) -> std::io::Result<()> {
         let dir = self.incremental_dir();
         match fs::remove_dir_all(&dir) {
@@ -166,7 +202,10 @@ impl CacheStore {
     }
 }
 
-/// Atomic, durable write: write to `<path>.tmp`, fsync, then rename.
+/// Atomic, durable write: write to `<path>.<pid>.tmp`, fsync, then rename.
+/// The pid keeps concurrent `ruxen` processes sharing one cache (such as
+/// `scripts/test-stdlib.sh` testing packages in parallel) off each other's
+/// temp file.
 ///
 /// Without `sync_all` between write and rename a hard crash can land a file
 /// of undefined bytes under the final path — a subsequent build would treat
@@ -174,8 +213,8 @@ impl CacheStore {
 /// forces the file contents to stable storage first.
 ///
 /// Rename is atomic on every OS Ruxen targets. If the process dies between
-/// the write and the rename, only the temp file survives and the next build
-/// recomputes the artifact from scratch.
+/// the write and the rename, only the temp file survives; the next build
+/// recomputes the artifact and `remove_stale_tmp_files` later deletes it.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::fs::OpenOptions;
     use std::io::Write;
@@ -205,7 +244,7 @@ fn tmp_path(path: &Path) -> PathBuf {
         .file_name()
         .map(|s| s.to_os_string())
         .unwrap_or_default();
-    name.push(".tmp");
+    name.push(format!(".{}.tmp", std::process::id()));
     path.with_file_name(name)
 }
 
@@ -217,32 +256,6 @@ pub fn unix_now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
-}
-
-/// Delete the global cache directory. Used by `ruxen clean --global`.
-///
-/// Honors `XDG_CACHE_HOME` on Linux, falling back to `$HOME/.cache/ruxen/`.
-pub fn clear_global_cache() -> std::io::Result<()> {
-    let dir = global_cache_dir();
-    match fs::remove_dir_all(&dir) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
-    }
-}
-
-/// Resolve the global cache directory: `$XDG_CACHE_HOME/ruxen/` or
-/// `$HOME/.cache/ruxen/`.
-pub fn global_cache_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("ruxen");
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".cache").join("ruxen");
-    }
-    PathBuf::from(".cache").join("ruxen")
 }
 
 #[cfg(test)]
@@ -333,6 +346,30 @@ mod tests {
         store.store_object("atomic", b"payload").unwrap();
         let tmp = tmp_path(&store.object_path("atomic"));
         assert!(!tmp.exists(), "tmp file should be renamed away");
+    }
+
+    #[test]
+    fn remove_stale_tmp_files_keeps_fresh_ones() {
+        let (_td, store) = store();
+        let stale = store.objects_dir().join("x.o.123.tmp");
+        let fresh = store.objects_dir().join("y.o.456.tmp");
+        fs::write(&stale, b"partial").unwrap();
+        fs::write(&fresh, b"partial").unwrap();
+        let old = SystemTime::now() - 2 * STALE_TMP_AGE;
+        fs::File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+
+        store.remove_stale_tmp_files(STALE_TMP_AGE);
+
+        assert!(!stale.exists(), "stale tmp file should be removed");
+        assert!(
+            fresh.exists(),
+            "a fresh tmp file may belong to a live write"
+        );
     }
 
     #[test]

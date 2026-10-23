@@ -1,0 +1,4 @@
+def main
+  let flipped = ~3.5
+  puts(flipped)
+end

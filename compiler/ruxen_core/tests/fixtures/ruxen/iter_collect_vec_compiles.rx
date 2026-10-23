@@ -1,7 +1,0 @@
-def main
-  let v = [1, 2, 3]
-  let out = v.take(2)
-  let n = out.size
-  let s = n.to_string
-  puts "n=#{s}"
-end

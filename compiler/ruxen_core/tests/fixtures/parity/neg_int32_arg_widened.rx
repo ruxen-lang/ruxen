@@ -1,0 +1,8 @@
+# F-29 drift: a negative Int32 argument widened into an Int parameter must
+# sign-extend (prints -5), not zero-extend (4294967291).
+def widen(x: Int) -> Int
+  x
+end
+
+small = -5i32
+puts widen(small)

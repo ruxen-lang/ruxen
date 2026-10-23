@@ -1,0 +1,44 @@
+receiver=4
+chained=3
+bound=3
+chained-elem=alpha
+chained-elem=gamma
+chained-elem=delta
+bound-elem=alpha
+bound-elem=gamma
+bound-elem=delta
+receiver-sum=21
+chained-sum=42
+bound-sum=42
+chained-widths=6
+receiver=6
+chained=3
+bound=3
+chained-sum=6
+receiver=6
+chained=2
+bound=2
+chained-sum=11
+receiver=6
+take_while-chained=3
+take_while-bound=3
+drop_while-chained-sum=15
+drop_while-bound-sum=15
+select-map-each=180
+bound-bound-each=180
+map-reject-each=30
+four-links=28
+empty-select=0
+empty-reject=0
+empty-take_while=0
+empty-middle=0
+empty-bound=0
+empty-size=0
+receiver=6
+chained 0:4
+chained 1:5
+chained 2:6
+bound 0:4
+bound 1:5
+bound 2:6
+nested-chain=4

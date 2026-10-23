@@ -1,0 +1,80 @@
+class A
+  name: String
+  def init(@name: String)
+  end
+end
+
+class U
+  name: String
+  count: Int
+  a: A
+  items: Array[String]
+  def init(@name: String, @a: A, @items: Array[String])
+    @count = 0
+  end
+
+  def label -> &String
+    @name
+  end
+
+  def var rename(n: String) -> nil
+    @name = n
+  end
+end
+
+def replace(s: &var String) -> nil
+  s = "replaced-value-long-enough-to-need-a-new-buffer"
+end
+
+def eat(u: U) -> nil
+  puts u.name
+end
+
+def mk(k: Int) -> U
+  U.new("old-#{k}", A.new("a-#{k}"), ["e0-#{k}", "e1-#{k}"])
+end
+
+def pick(a: &A, b: &A, c: Bool) -> &A
+  if c
+    a
+  else
+    b
+  end
+end
+
+def pick_s(a: &String, b: &String, c: Bool) -> &String
+  if c
+    a
+  else
+    b
+  end
+end
+
+class W
+  def init
+  end
+
+  def pick(a: &A, b: &A, c: Bool) -> &A
+    if c
+      a
+    else
+      b
+    end
+  end
+end
+
+def run(k: Int) -> nil
+  u = mk(k)
+  w = mk(9)
+  x = w.a.name
+  if k > 1
+    x = u.a.name
+  end
+  puts x
+  u = mk(5)
+  puts u.name
+  puts u.a.name
+  puts w.a.name
+end
+
+run(3)

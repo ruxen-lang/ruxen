@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Ruxen v1 issues found building the GUI stack (quiver / canvas / tally)
 
 Catalog of compiler/toolchain bugs hit while implementing quiver (L2 reactive
@@ -603,6 +605,12 @@ Acceptance test for the fix: lib A exporting `struct Color`; lib B with
 > framework is fully unblocked; generic methods are tracked in `docs/TASKS.md`
 > as a follow-up. Also out of scope: true separate-compilation/rlib generics
 > (Q16's flat-merge is the compilation model).
+>
+> (2026-10-24: superseded by the instance engine. `monomorphize.rs` and
+> `fn_mono_callee` are gone; one worklist in `mir/lower/instances/` now
+> specializes classes, lib shell methods, free functions and generic methods.
+> Generic methods and generic calling generic now compile; opaque bodies are
+> pruned when unreached. See the Q17 ADR "Status 2026-10-24" and pin `2247`.)
 
 
 A dependency's generic function (`def paint[S: PaintSurface](s: &var S)`)
@@ -1470,7 +1478,7 @@ public); `async` modifier drop (`async def` → `def`); plus the catalogued
 bulk-run `ruxen fmt`" caution is LIFTED — `ruxen fmt` is now reparse-faithful
 over the entire corpus (491 files, binary + in-process, green).
 
-## Q35 · S3 — a STRUCT's `include <Mixin>` does not satisfy a generic's mixin bound  ⏳ OPEN (NEW 2026-06-10)
+## Q35 · S3 — a STRUCT's `include <Mixin>` does not satisfy a generic's mixin bound  ✅ FIXED (2026-07-14)
 
 Found 2026-06-10 while independently verifying Q17 on the installed toolchain.
 A struct that `include`s a mixin is rejected by the generic bound-satisfaction
@@ -1502,16 +1510,23 @@ def main
 end
 ```
 
-Repro: `tmp/test-cache/q35-struct-include-bound-repro.rx`. Likely typeck's
-implementor registry records `include` only for classes (struct includes DO
-work for direct method calls and for `Send`-style marker mixins — quiver's
-ListModel relies on that — so the gap is specifically the generic-bound
-satisfaction path). S3: clean diagnostic, no silent miscompile, and no GUI-stack
-code is blocked (quiver's PaintSurface implementors are classes). Fix when
-touching typeck satisfaction next; pin with struct-implementor variants of the
-655/658 e2e cases.
+Root cause: `typeck/mixins.rs::collect_item_impls` registered a class's body
+methods, derives, and `impl_blocks`, but the `HirItem::Struct` and
+`HirItem::Enum` arms registered only derives. Consequently their positive
+`include Mixin` edges never reached `MixinResolver::nominal_impls`, which is the
+registry consulted by E1015 generic-bound satisfaction. Direct method calls,
+marker `Send`/`Sync`, and MIR's downstream implementor collection use separate
+paths, explaining why only this seam failed.
 
-## Q36 · S2 — `yield` with TWO `&var` reference args miscompiles (block sees empty target)  ⏳ OPEN (NEW 2026-06-10)
+Fixed by registering struct and enum inner impl blocks under their concrete
+(module-qualified when applicable) type names, including parameterized mixin
+arguments, exactly as the class path does. The change does not register bare
+body methods as nominal includes: a struct without `include` still emits E1015.
+Release-e2e case `659_generic_fn_mixin_struct_implementor.rx` compiles, links,
+runs through Q17's generic free-function monomorphization, and asserts
+`one=21`; focused typeck pins cover the non-including struct and enum symmetry.
+
+## Q36 · S2 — `yield` with TWO `&var` reference args miscompiles (block sees empty target)  ✅ FIXED 2026-07-14
 
 Found 2026-06-10 migrating quiver's builder DSL to `&block`/`yield` (after the
 block-semantics feature `8a783f9`). A function declaring
@@ -1541,11 +1556,33 @@ Repro: `quiver/tmp/test-cache/ruxen-two-var-yield.md`. S2 (silent wrong build,
 not a crash). Workaround in quiver: `App.build` stays an explicit closure param.
 Likely the synthetic-`__block` call ABI mishandles multiple by-reference args.
 
-**Related (same pass, smaller):** a `&block` parameter's TYPE does not infer
-through the yield seam — an untyped `do |c| … end` against
-`&block: Fn[(&var Col) -> nil]` leaves `c` as `?T` (surfaces at codegen as
-`no runtime symbol for ?T::text`). Typed `do |c: &var Col| … end` works. quiver
-types all builder block params; document as a `&block` ergonomics gap.
+**Related report (same pass, smaller):** the original report also observed an
+untyped `do |c| … end` against `&block: Fn[(&var Col) -> nil]` leaving `c` as
+`?T` (surfacing at codegen as `no runtime symbol for ?T::text`). This was
+retested below against the current tree.
+
+**ROOT CAUSE.** `parser/expr/atoms.rs` parsed the token after `yield` as a
+general expression. For `yield(&var app.ui, &var app.root)`, the general
+parenthesized-expression parser correctly produced a `TupleLiteral`, but that
+meant `ExprKind::Yield` contained ONE argument: the tuple. MIR therefore
+materialized both references into a tuple and emitted `CallIndirect(captures,
+tuple)`, while the block closure ABI expected `CallIndirect(captures, ui,
+root)`. A single parenthesized argument has no comma and is unwrapped by the
+parenthesized-expression parser, explaining why single-`&var` yield worked;
+ordinary `f.(a, b)` already used the call-argument parser and never formed the
+tuple.
+
+**FIX.** Parenthesized `yield(...)` now uses the same `parse_call_args` path as
+ordinary calls, preserving each argument as its own ABI slot. Bare Ruby-style
+`yield a, b` remains supported. Release-e2e pin
+`929_yield_two_var_refs.rx` runs through the in-process compiler and proves
+both references mutate the original `App` fields (`ui=2 root=1`).
+
+**Inference sub-gap.** No residual remains on the current tree: an in-process
+pin with an untyped `do |c|` against `&block: Fn[(&var Col) -> nil]` resolves
+`c` as `&var Col` and runs successfully. The existing signature-based closure
+parameter seeding had already closed this path; Q36 adds the missing regression
+coverage.
 
 ## Q37 · S1 — a yielding/`&block` METHOD poisons an unrelated same-named free fn with a phantom `__block`  ✅ FIXED 2026-06-10
 
@@ -1743,7 +1780,7 @@ investigation. Also reconfirmed by the same quiver report: the
 non-Copy-call-result-as-method-arg landmine at a fresh site (quiver
 `cut`/`clip_write` — let-bind first, as documented).
 
-## Q41 · S2 — LLVM backend can't lower a `DataAddr` class-info ref for a `dispatch runtime` mixin type → `ruxen build --release` blocked for async projects  ⏳ OPEN (NEW 2026-06-14)
+## Q41 · S2 — LLVM backend can't lower a `DataAddr` class-info ref for a `dispatch runtime` mixin type → `ruxen build --release` blocked for async projects  ✅ FIXED 2026-07-14
 
 Found 2026-06-14 in rondo (workaround **W22**, `rondo/docs/ruxen-issues.md`)
 while benchmarking the framework against a Go `net/http` baseline. `ruxen build`
@@ -1787,10 +1824,33 @@ a 16-core Linux box), debug-Cranelift rondo peaked ~113k RPS and cliffed past
 c≈200, versus optimized Go `net/http` ~164k RPS stable through c=400 — the
 debug-build handicap is a real confound.
 
-**Fix direction.** Cranelift already lowers this correctly, so the gap is on the
-LLVM backend: it needs to emit the `DataAddr` reference to a `__rx_classinfo_*`
-class-info symbol for runtime-mixin types (see the `mixin-vtables` lowering path
-referenced in the error). Cross-linked from rondo W22.
+**Root cause.** LLVM's function-emission pass had no equivalent of Cranelift's
+Pass 1.5/Pass 3 mixin-data handling. It neither declared nor initialized the
+`__rx_vtable_*` and `__rx_classinfo_*` globals, so the `MirInst::DataAddr` arm
+deliberately returned the quoted error. A second guard rejected any program
+whose MIR contained vtables/class-info even if instruction lowering could have
+continued.
+
+**Fix.** The LLVM emitter now creates each vtable and class-info as an internal,
+constant array of LLVM 18 opaque pointers after declaring all user functions
+and before emitting bodies. Vtable initializers contain method-function
+pointers; class-info initializers contain pointers to the matching vtable
+globals. `DataAddr` resolves the same symbol in the module, converts its opaque
+pointer to the MIR destination's `Int` slot, and stores it. The module also
+uses the target machine's data layout, leaving native/wasm pointer size and
+alignment to LLVM rather than encoding a typed-pointer or host-width
+assumption. Both former LLVM-only bailouts are removed; an unknown data symbol
+still produces a hard codegen error rather than null/garbage.
+
+**Regression pin.** `q41_runtime_mixin_class_info_lowers_links_and_runs` compiles
+a Ruby-syntax future-like class including `Q41Future dispatch runtime` with
+LLVM `-O2`, links it, executes a call through an `any Q41Future` field, and
+asserts the dynamically dispatched result. Before the fix it failed on
+`__rx_classinfo_TimeSleepFuture`; after the fix it prints the success marker.
+Run with `cargo test -p ruxen_core --features llvm --test llvm_backend
+q41_runtime_mixin_class_info_lowers_links_and_runs -- --exact`.
+
+Cross-linked from rondo W22.
 
 Toolchain: `ruxen 0.1.0`.
 
@@ -1922,19 +1982,14 @@ Toolchain: `ruxen 0.1.0`.
 
 ## Q44 · S3 — string interpolation's `Formatter` C runtime is not bundled for wasm; needs a wasm fmt runtime (or host shims + JS→wasm string marshalling)  ✅ RESOLVED 2026-06-16
 
-> **RESOLVED 2026-06-16.** `fmt.c` was already in `WASM_RUNTIME_CORE`, but the
-> MIR interpolation lowerer emits the mangled callees `Formatter_new`/
-> `Formatter_write_str`/`Formatter_buffer` (not the `ruxen_fmt_formatter_*` FFI
-> aliases), and the wasm backend doesn't bridge them → they leaked as host
-> imports. Fix: the `WASM_RT_C` shim now defines those three mangled symbols as
-> thin wrappers over the bundled `ruxen_fmt_formatter_*`, matching the exact
-> emitted ABI (`new()->i64`, `write_str(i32,i32)->void`, `buffer(i32)->i64`). So
-> interpolation builds real strings in wasm linear memory via `fmt.c` — no host
-> import, no JS→wasm marshalling hack. Verified: `"count: #{n}"` renders correctly
-> on wasm in `quiver/examples/counter-dom` (deterministic in a real browser). The
-> JS Formatter shim + scratch region are gone. (A cleaner future fix would teach
-> the wasm codegen to apply the same mangled→C-symbol mapping as native, but the
-> bundled wrapper is sufficient and wasm-only.)
+> **RESOLVED 2026-06-16; generalized by Q48 on 2026-07-14.** `fmt.c` was already
+> in `WASM_RUNTIME_CORE`, but mangled `Formatter_*` calls leaked as host imports.
+> The original fix added wasm-only wrappers over the bundled
+> `ruxen_fmt_formatter_*` symbols, which made interpolation self-contained and
+> was verified by `quiver/examples/counter-dom`. Q48 fixed the LLVM resolver
+> itself: it now maps every FFI alias to its C declaration on native and wasm,
+> so the temporary mangled wrappers have been removed. The JS Formatter shim
+> and scratch region remain unnecessary.
 
 Found 2026-06-16 wiring the native-element web counter (quiver
 `examples/counter-dom`). A `"count: #{n}"` interpolation lowers to compiler-
@@ -1982,6 +2037,595 @@ UTF-8+NUL, and passes the pointer to an exported `def f(... text: &String)` (the
 i32 ptr IS the `&String`). Verified exported in `quiver/examples/counter-dom`.
 Toolchain: `ruxen 0.1.0`.
 
+## Q46 · S2 — a NO-ARG `def init` class's paren-less `.new` CRASHES (exit=None / segfault) when the value is wrapped/moved into another class's field  ✅ FIXED (2026-07-14)
+
+Found 2026-06-19 building the §4.5 async `Stream` adapters. A class whose `def
+init` takes **no parameters**, constructed paren-less as `X.new`, compiles and
+runs fine in isolation, but the program **crashes (no exit code / segfault, empty
+stdout)** when that value is moved into another class's constructor (e.g. a
+stream adapter holding it as an `any Mixin` field). Giving the source an
+ARG-taking `init` makes the crash vanish — so the trigger is the no-arg-init
+constructor in the wrap-into-field position, NOT the wrapping itself. Pre-existing
+constructor-lowering bug, unrelated to Stream.
+
+**Confirmed root cause:** the parser represents paren-less `Class.new` as a
+`FieldAccess`, so it uses a separate lowering branch in
+`compiler/ruxen_core/src/mir/lower/expr/field_access.rs`. That branch emitted
+`Alloc` and called `Class_init(self)` but omitted the
+`emit_class_info_init(&expr.ty, obj)` performed by the parenthesized
+`Class.new()` branch. For a class including a `dispatch runtime` mixin, slot 0
+therefore remained null. Concrete calls did not consult the header, so the
+object appeared healthy in isolation; dispatch after moving it into an
+`any Mixin` field read slot 0 as a class-info pointer and segfaulted. An
+argument-taking `init` necessarily used call syntax and the already-correct
+parenthesized lowering path, explaining the original asymmetry.
+
+**Reduced repro** (no async or Stream dependency; release-e2e pin 460):
+```ruxen
+mixin Readable dispatch runtime
+  def read -> Int
+end
+
+class Source
+  value: Int
+  include Readable
+
+  def init
+    self.value = 42
+  end
+
+  def read -> Int
+    self.value
+  end
+end
+
+class Holder
+  inner: any Readable
+
+  def init(inner: any Readable)
+    self.inner = inner
+  end
+
+  def read -> Int
+    (&self.inner).read
+  end
+end
+
+def main
+  var source = Source.new
+  var holder = Holder.new(source)
+  puts "value=#{holder.read}"
+end
+```
+
+**Fix:** call `emit_class_info_init` immediately after allocation in the
+paren-less constructor branch, before `_init`, matching all other class
+allocation paths. The helper is already a no-op for structs, ordinary classes,
+and classes with only static mixins. Structural MIR coverage pins the header
+write for paren-less construction; the in-process compile/run test and
+release-e2e case 460 prove the reduced field-move program exits cleanly and
+prints `value=42`. Before the fix, both pins reproduced the missing MIR write
+and the signal exit with empty output.
+
+## Q47 · S2 — calling a `Fn[() -> any Future]` closure inside a BOOTSTRAP class POISONS global `any Future`→`Future` mixin satisfaction for every program  ✅ FIXED (2026-07-14)
+
+Found 2026-06-19 building the §4.6 async `RetryFuture`. A bootstrap (stdlib) class
+that holds a closure field/param typed `any Fn[Fn() -> any Future]` and CALLS it
+(`block.()` / `make.()` — producing an `any Future` value) makes `any Future`
+FAIL to satisfy the `Future` mixin for **every** compiled program, not just the
+one using it. The typeck error `type \`any Future\` does not satisfy \`Future\``
+then fires on unrelated user code (e.g. a future class that polls a stored
+`any Future` via `.poll`), and even a previously-passing Race/spike program
+breaks. The bootstrap class itself compiles clean (signature-only) — the poison
+only surfaces when a user program is typechecked against the now-corrupted
+satisfaction state.
+
+**Bisected (verified 2026-06-19):**
+- A bootstrap class with an `inner: any Future` FIELD alone → FINE.
+- …plus a `make: any Fn[Fn() -> any Future]` FIELD (uncalled) → FINE.
+- …a static/`def` that CALLS the closure (`let first = make.()`, result type
+  `any Future`) → POISONS. Both the `&block: Fn[() -> any Future]` + `yield`
+  form AND the plain `make: any Fn[Fn() -> any Future]` param + `make.()` form
+  trigger it. Switching the closure's return type to `Int`
+  (`any Fn[Fn() -> Int]`, the future-as-raw-ptr channel) → FINE.
+
+**Root cause:** the call resolver correctly returned
+`Ty::AnyMixin([Future])`, but the declared-bound seam then decomposed the
+expected `any Future` and asked `MixinResolver::check_satisfaction` whether the
+found `Ty::AnyMixin([Future])` satisfied `Future`. The resolver did not honor
+the guarantee carried by an opaque/existential mixin value. Instead it formatted
+the found type as the synthetic concrete key `"any Future"`, missed both the
+nominal implementation map and the concrete method map, and emitted
+`type \`any Future\` does not satisfy \`Future\``. There was no mutable
+process-global satisfaction cache: the apparent cross-program poison came from
+the offending bootstrap shape participating in every user compilation.
+
+**Fix:** `MixinResolver::check_satisfaction` now accepts an `any Mixin` value
+nominally, or a `some Mixin` value in static-dispatch mode, when it carries the
+exact queried `MixinRef`, including its generic arguments. This is the general
+existential/opaque rule; it does not special-case `Future` or associated
+`Output`. Concrete values still take the existing nominal/structural paths.
+
+**Workaround (in use, §4.6):** the `Async.retry(sched, block)` block is typed
+`any Fn[Fn() -> Int]` — the closure body constructs the attempt future and returns
+it AS A RAW `Int` ptr (a future value coerces to `Int` at the closure boundary,
+the established `Task.spawn_raw`/`Race` value ABI). The `RetryFuture` then polls
+that raw ptr through the C step `ruxen_retry_poll_inner` (wrapping
+`Future_dynamic_poll`). No `any Future`-typed value appears in any CALL → no
+poison. The workaround remains unchanged in this task because pins `445`–`449`
+and the current retry ABI depend on it; a follow-up may simplify `Async.retry`
+to a typed `any Future` block. **Severity S2** (corrupts an unrelated global
+invariant from one stdlib construct — high blast radius — but a clean,
+already-established workaround exists: every dyn-future value already flows as
+a raw `Int` in Task/Race/Scope/Queue). Release-e2e pin
+`473_any_future_call_no_poison.rx` typechecks the
+bootstrap-shaped `make.()` body, then runs unrelated code that polls a stored
+`any Future`; the Rust `async_surface` regression asserts the same two-shape
+ordering through the production bootstrap/typeck path. Pins `445`–`449` remain
+green. Toolchain: `ruxen 0.1.0` (`fix/q47`).
+
+## Q48 · S1 — LLVM leaves FFI-aliased method calls under mangled Ruxen names, blocking optimized binaries  ✅ FIXED (2026-07-14)
+
+`ruxen build --release` compiled String/interpolation programs to object code
+but failed at the native link with undefined `_String_*` and `_Formatter_*`
+symbols. The runtime archive already exported the corresponding
+`_ruxen_string_*` and `_ruxen_fmt_formatter_*` C symbols, and the default
+Cranelift backend linked the same MIR successfully.
+
+**Root cause:** LLVM Pass 0 correctly declared each `FfiFuncDecl` under its
+linked C symbol, but `codegen/llvm/emit/calls.rs::get_or_declare_func` ignored
+the `MirProgram` and searched only the LLVM module by the incoming callee name.
+Synthesized MIR paths such as interpolation and derived `Display#fmt` retain
+the mangled callee (`Formatter_new`, `Formatter_write_str`,
+`Formatter_buffer`) instead of passing through the ordinary lowerer's alias-map
+rewrite. LLVM therefore missed the existing C declaration and its fallback
+created a fresh external function under the mangled name. Cranelift did not
+fail because Pass 0 registers both `FfiFuncDecl::name` (the C symbol) and
+`ruxen_name` to the same imported `FuncId`.
+
+**Fix:** LLVM's lazy resolver now looks up residual Ruxen-side and
+lib-qualified FFI names in `MirProgram::ffi_libs` and returns the already
+declared C-symbol `FunctionValue`, mirroring Cranelift's two-key import lookup.
+LLVM no longer creates fake lib-qualified external declarations. This is a
+general alias path with no String/Formatter special cases. The obsolete
+wasm-only mangled Formatter wrappers from Q44 were removed because wasm now
+uses the same C-symbol resolution as native LLVM.
+
+**Pin:** `q48_llvm_ffi_alias_calls_reference_only_c_symbols` emits the LLVM
+module for a direct String-construction/push plus interpolation program and
+asserts that its call operands use the String and Formatter C symbols while
+none of their mangled Ruxen aliases occur. It failed before the fix on
+`@Formatter_new`. The existing
+`string_interp_identical` fixture now also links and runs through both backends.
+
+## Q49 · S0 — drop elaboration frees uninitialized branch locals at a shared Return  ✅ FIXED (2026-07-14)
+
+An optimized `ruxen build --release` of the minimal `control_flow.rx` printed
+the correct branch output and then aborted in the function epilogue. Each arm
+created its own owned `String`, but the shared MIR return block unconditionally
+called `ruxen_string_free` for both locals. Whichever arm was not taken left its
+local uninitialized. LLVM's stack slot therefore held garbage and `free` raised
+SIGABRT. Cranelift appeared correct only because its local model yielded a
+zero/NULL value and the String free helper is NULL-safe. Zero-initializing LLVM
+allocas would not solve the general case: user `<Class>_drop` glue dereferences
+its receiver before the backing allocation is freed.
+
+**Root cause:** `mir/lower/drops.rs::insert_drops` selected drop-eligible locals
+with the existing exclusive-ownership analysis, but placement ignored the CFG
+and appended every cleanup sequence before every `Terminator::Return`. The
+ownership proof says a value may be freed if it exists; it does not prove the
+value was initialized along every path reaching that return.
+
+**Fix:** drop placement is now path-sensitive and backend-independent. A local
+whose complete definition/use range is confined to one reachable, acyclic arm
+block ending in `Goto` is destroyed there, in reverse declaration order, before
+control reaches the merge. For a local spanning multiple blocks, a
+definite-initialization dataflow check keeps the zero-cost return cleanup when
+all paths initialize it; otherwise a bool flag is false at entry, set after its
+initializing definition, and guards the return cleanup. The real free, user
+drop glue, closure drop, and `MirInst::Drop` marker all stay on the initialized
+path. `compute_dealloc_safe_locals`, async `__block_on_fut_*` force-rooting,
+loop-edge cleanup, alias-source stripping, type-directed collection frees, FFI
+transfer exclusions, and return-alias exclusions are unchanged.
+
+**Pins:** the LLVM backend test lowers `control_flow.rx` and asserts each
+`ruxen_string_free`/`Drop` pair is in its own arm and absent from the return
+block, then runs the fixture through both backends. Release-e2e case `930`
+exercises bare owned literals in both `if` and `match` arms. The LLVM comparison
+suite also covers the larger class/match programs that previously crashed.
+
+## Q50 · S2 — interpolating a method-returning-`String` formats a raw pointer  ✅ FIXED (2026-07-14)
+
+Surfaced while fixing Q49. In `sample_program.rx`, `puts "  Failed: #{e.message}"`
+(where `e.message` is a user `def message -> String`) prints a large integer that
+looks like a raw pointer (e.g. `4334782334`), **nondeterministically**, instead of
+the returned string. The equivalent `"  Failed: " + e.message` (Ruby `+` concat)
+formats correctly, so the receiver value is fine — the defect is in the
+interpolation Display path for a `#{...}` part whose expression is a **method call
+returning an owned `String`** (as opposed to a bare literal or a variable).
+
+**Root cause:** `MixinResolver::collect_item_impls` registered inline methods for
+classes but omitted `HirItem::Struct.methods` and `HirItem::Enum.methods`. For
+`MyErr include Error`, lookup therefore skipped the concrete inline
+`message -> String` and selected `Error`'s unannotated required-method signature
+(`Unit`). MIR allocated the call result temporary as `Unit`, missed interpolation's
+string pass-through, and used the legacy `Int_fmt` fallback on the valid `char*`.
+ASLR made that pointer-shaped integer change each run; there was no premature
+drop.
+
+**Fix:** struct and enum inline methods now enter the direct-method registry with
+the same precedence as class methods. Interpolation also recovers an unresolved
+or invalid call temporary from its resolved method declaration before Display
+dispatch, recognizes aliased/newtype strings, and rejects `Unit`/`Never`/error
+values rather than formatting them as integers. The name-based list of
+"likely String methods" was removed. `sample_program.rx` now uses
+`#{e.message}` again. Release-e2e `94_custom_error_enum` and the method-name-
+independent `931_interpolation_method_string` pin the behavior.
+
+## Q51 · S2 — `Enumerable#select` over-counts (returns extra elements)  ✅ FIXED 2026-07-14
+
+The `select` body and collection iteration were correct. Instrumentation around
+the push showed exactly two predicate hits, with `out.size` progressing `0 → 1
+→ 2` and remaining `2` after `each`; only the caller's subsequent `evens.size`
+read heap garbage (`5574` in the instrumented run; baseline runs also produced
+`17082`/`5571`). The real defect was closure-capture drop elaboration. Set/Hash
+`each` receive a real heap closure, and its synthesized destructor still treated
+the directly captured `out` Array as owned. At `select` return it freed `out`,
+even though that same source local was the method's return value.
+
+MIR closure-drop metadata now retains each owned capture slot's enclosing source
+local. Before running closure cleanup, drop elaboration finds slots whose source
+flows into the function return (directly or through a returned aggregate) and
+NULLs those slots, transferring the value back to the caller while the normal
+destructor still frees the captures block and closure pair. Release-e2e 612 and
+613 now report `evens=2` / `big=2`; pin 936 covers `select`, `reject`, `map`, and
+`partition` across Array, Set, and Hash.
+
+## Q52 · S1 — `Mutex` guard dropped in a closure/match arm crashes (exit 133)  ✅ FIXED (2026-07-14)
+
+`let reader = { || match m.lock { Ok(g) -> g.get.clone; Err(_) -> "poisoned" } }`
+then `reader.()` **deterministically crashes** (SIGTRAP, empty output). The
+`Mutex[String]` guard `g` is bound in a `match` arm inside a closure, cloned out,
+then dropped at arm/closure exit. Repro: release-e2e `926_mutex_string_lock_capture`
+(closure capture) and `927_mutex_string_sharedsync_roundtrip`.
+
+**Origin:** session regression from `fix/blockdrop` (`e70497d`). The compiler
+binary built before blockdrop runs 926 and prints `v=captured world`; binaries
+built after blockdrop on both implicit-main and Q49 exit 133. Q49 is not the
+cause.
+
+**Root cause:** `mir/lower/expr/closure.rs::synthesize_closure_drop` correctly
+ran the captured class's registered user drop, but unconditionally followed it
+with `heap_free_callee`. `ruxen_mutex_drop` and `ruxen_sharedsync_drop` already
+free/release their handle storage, so closure teardown double-freed the captured
+pointer. The empty stdout was buffered output lost when the later destructor
+trapped; emitted MIR shows the guard itself had already been used correctly.
+
+**Fix:** `mir/lower/runtime_abi.rs::drop_frees_storage` is the single list of FFI
+drop hooks that consume their own storage. Ordinary and synthesized closure
+drop elaboration consult it and suppress only the redundant outer free.
+(Superseded 2026-10-17: the Rust list is gone; such a hook is declared
+`def consume drop as "..."` in its `.rx` class and
+`SymbolTable::drop_consumes_self` answers the same question, so app packages
+such as canvas can declare their own.) The
+`Ok` arm still materializes the cloned String, calls
+`ruxen_mutex_guard_drop(g)` exactly once, then deallocates the guard spine once,
+and the `Err` arm never touches `g`. Pin `937_mutex_guard_match_arm_closure_drop`
+calls the reader twice: the second acquisition proves the first guard really
+unlocked, so the fix cannot be a no-op/leak mask. 926 and 927 are stable across
+five runs.
+
+## Q53 · S2 — String-returning method interpolation in a generic closure prints a pointer  ✅ FIXED (2026-07-14)
+
+This is a Q50 regression. Q50 removed the name-based
+`is_inferred_string_expr` heuristic, correctly eliminating its sample-specific
+method allowlist, but the replacement declaration lookup could not recover a
+method called through an abstract `.each` parameter. The closure HIR kept the
+parameter and call result as `Infer`/`TypeParam`, and the unresolved method had
+no `DefId`; `declared_method_return_ty` therefore had neither a resolved method
+nor a concrete receiver class to query. Interpolation consequently selected
+the opaque `TypeParam -> Int_fmt` ABI fallback for a valid returned `char*`.
+
+MIR inlining now types an Array `.each` parameter from the concrete collection
+element, and for-loop lowering likewise consults the refined MIR iterable type
+instead of falling back to the `Int` sentinel. No-parens and parenthesized
+method calls use that refined receiver for concrete callee selection and type
+their destination from the selected method's declared return, substituting a
+generic receiver's concrete class arguments into that return. Thus
+`Item_to_display`, `Todo_summary`, and any other declared `-> String` method
+produce a `String` local, and interpolation takes its ordinary string
+pass-through. The recovery is entirely type/declaration-driven; no method-name
+list was restored. The Q50 invalid-type guard remains loud for
+`Unit`/`Never`/`Error`.
+
+Release-e2e pin `938_closure_interp_string_method` uses an unrelated `caption`
+method inside `.each`. The flagship `sample_program_identical` differential and
+the full LLVM fixture verifier now pass, so Cranelift and LLVM agree on the
+titles/summaries emitted from generic closures and refined for loops. Existing
+case `101_two_type_params` also confirms that `Pair[Int, String]#second_ref`
+instantiates `&B` as `&String` before interpolation.
+
+## Q54 · S2 — wasm: `ruxen_fmt_formatter_write_str` call-site return width (i32) mismatches the bundled fmt.c definition (i64); wasm-ld traps EVERY string interpolation with an `unreachable` stub  ✅ FIXED 2026-07-22
+
+Found 2026-07-22 re-verifying canvas's web backend (canvas `docs/ROADMAP.md` →
+Web backend, the L839 "render() traps" item) after Q44/Q48 bundled the fmt
+runtime into wasm. Q44/Q48 correctly removed the `Formatter_*` host imports (the
+fmt runtime `library/std/fmt/runtime/fmt.c` is now bundled), but on the wasm
+target the interpolation CALL-SITE and the runtime DEFINITION disagree on
+`ruxen_fmt_formatter_write_str`'s RETURN width:
+
+- **Definition** (`library/std/fmt/runtime/fmt.c:92`):
+  `int64_t ruxen_fmt_formatter_write_str(RuxenFormatter *f, const char *s)` — i64 result.
+- **Call-site** (wasm codegen of the interpolation lowering of the Ruxen decl
+  `library/std/fmt/src/lib.rx:51`,
+  `def write_str as "ruxen_fmt_formatter_write_str"(s: &String) -> Result[nil, FmtError]`):
+  lowered with an **i32** result (the `Result[nil, FmtError]` width).
+- The native path is already correct — `compiler/ruxen_core/tests/runtime_abi_derivation.rs:61`
+  maps this symbol to `([I64, I64], Some(I64))` — so the **wasm** call-site is
+  NOT consulting that runtime-ABI derivation, leaving an i32-vs-i64 return
+  mismatch that native never sees.
+
+Consequence at link time:
+```
+wasm-ld: warning: function signature mismatch: ruxen_fmt_formatter_write_str
+>>> defined as (i32, i32) -> i32 in <app>.o
+>>> defined as (i32, i32) -> i64 in <fmt runtime>.o
+```
+wasm-ld links the mismatching reference to a generated
+`signature_mismatch:ruxen_fmt_formatter_write_str` function whose body is
+`unreachable`, so the FIRST interpolation call traps at runtime (`RuntimeError:
+unreachable`).
+
+**Minimal repro** (compiles cleanly, traps at run time):
+```ruxen
+def render -> Int
+  let n = 5
+  let s = "count: #{n}"
+  puts(s)
+  0
+end
+```
+```
+RUXEN_WASM_CLANG=/opt/homebrew/opt/llvm/bin/clang \
+  ruxen compile repro.rx --target wasm32-unknown-unknown -o repro.wasm
+llvm-nm repro.wasm | grep signature_mismatch
+# → 000000c3 t signature_mismatch:ruxen_fmt_formatter_write_str
+```
+Calling the exported `render()` from a JS host traps `unreachable`.
+
+**Blast radius:** every wasm program that interpolates a string — which is the
+whole point of quiver's reactive `dyn_text` (`"count: #{n.get(ui)}"`). So
+canvas's web-backend quiver-counter proof (`canvas/web/verify_counter.mjs`)
+traps, while the interpolation-free `draw.wasm` (`canvas/web/verify.mjs`) renders
+pixel-exact. This is what still blocks a real quiver app in the browser.
+
+**Root cause (confirmed).** The Ruxen runtime convention is that a pointer-like
+Ruxen return type (`Result`/`Option`) crosses the C-ABI boundary as a
+POINTER-WIDTH value (`void *`), which the compiler's `ty_to_llvm`/`ty_to_cranelift`
+lowering of that type (a pointer) matches on every target: i64 on 64-bit, i32 on
+wasm32. Of the ~30 `Result`/`Option`-returning FFI helpers in the stdlib, 28
+follow that convention (`ruxen_file_open`, `ruxen_vec_pop`, `ruxen_hash_get`,
+`ruxen_stdout_write_str`, … all return `void *`). The two fmt helpers
+`ruxen_fmt_formatter_write_str`/`_write_char` were the ONLY violators: they
+returned a bare `int64_t` tag (0/1). On a 64-bit target `int64_t` and a pointer
+are both 64 bits, so the anomaly was invisible; on wasm32 the pointer is i32 while
+`int64_t` stays i64, so `wasm-ld` linked the i32 call-site against the i64
+definition through a generated `signature_mismatch:` `unreachable` stub, and the
+first interpolation call trapped.
+
+Note the anomaly is NOT derivable from the `.rx` type: `write_str -> Result[nil,
+FmtError]` and `stdout_write_str -> Result[nil, IoError]` have identical Ruxen
+return types but different C return widths (`int64_t` vs `void *`). So a
+compiler-side "map `Result`→i64 on wasm" rule would fix the two fmt symbols and
+newly BREAK the 28 conforming `void *` ones. The correct fix restores the
+runtime's own convention at the two violation sites.
+
+**Fix (landed).** `library/std/fmt/runtime/fmt.c`: `ruxen_fmt_formatter_write_str`
+and `ruxen_fmt_formatter_write_char` now return `void *` (`NULL` = Ok tag, `(void
+*)1` = FmtError tag) instead of `int64_t`. Zero compiler-code changes, so the
+native backend is byte-identical: the ABI-classification parity oracle
+(`runtime_abi_derivation` / `runtime_abi_parity`) stays green (both still derive
+`I64` for these symbols on native, where `void *` == `int64_t` width and returns
+in the same register), and the full native release-e2e passes. The interpolation
+lowerer discards the tag, so no consumer sees the representation change. This is
+the direct sibling of Q44/Q48 (fmt-on-wasm ABI): the NAME was resolved by Q48, the
+SIGNATURE by Q54.
+
+**Reproducible gate (no wasm release-e2e harness exists).** The release-e2e
+harness has no wasm mode, and the `tests/wasm_codegen.rs` lane uses an empty
+stdlib bootstrap (no fmt link), so neither can host a faithful interpolation-link
+pin without new infrastructure. The reproducible check is the `llvm-nm` gate on
+the interpolation repro built for wasm32:
+```
+RUXEN_WASM_CLANG=/opt/homebrew/opt/llvm/bin/clang \
+  ruxen compile repro.rx --target wasm32-unknown-unknown -o repro.wasm
+llvm-nm repro.wasm | grep signature_mismatch      # must be EMPTY post-fix
+```
+plus instantiating the module in Node and calling the exported `render()` (must
+return 0 without a trap). Verified against both the source tree (via
+`RUXEN_STDLIB_ROOT`) and the installed toolchain.
+
+Cross-linked from canvas `docs/ROADMAP.md` (Web backend → L839).
+Toolchain: `ruxen 0.1.0`.
+
+## Q55 · S2 — miscompile: `x = f(x)` where `f` takes `x` by value AND returns it silently corrupts `x` (native)  ✅ FIXED 2026-07-22
+
+Found 2026-07-22 adding rondo's structured-logging `finish` consolidation. A
+`var` holding a class value with drop semantics (fields include an FFI-backed
+`String`/`Hash`), reassigned from a function that takes **that same var by value
+and returns a value of the same type**, comes back corrupted — the result's
+fields read as garbage. This is a silent miscompile (no diagnostic), NOT the
+`def var` receiver-builder form (`r = r.with_status(201)` borrows `self` and is
+safe and used throughout rondo).
+
+**Minimal repro** (single file; compiles cleanly, prints the wrong value):
+```ruxen
+class Payload
+  n: Int
+  tag: String
+  def init(v: Int)
+    self.n = v
+    self.tag = "p"
+  end
+end
+
+def wrap(p: Payload) -> Payload
+  var r = p
+  r
+end
+
+def main
+  var x = wrap(Payload.new(222))
+  x = wrap(x)              # rebind the SAME var through a by-value fn
+  if x.n == 222
+    puts "PASS n=#{x.n}"
+  else
+    puts "FAIL n=#{x.n}"   # ← actually prints: FAIL n=3
+  end
+end
+```
+`ruxen compile` + run prints `FAIL n=3` — `x.n` was 222 before the rebind and
+reads as `3` after. (The `tag` String field is what makes the value
+drop-bearing; a plain-`Int`-only class does not need to reproduce it, but the
+corruption is on the whole value.)
+
+**Production evidence.** In rondo, `finish` first written as
+```ruxen
+var r = self.cors_response(resp)
+r = self.with_request_id(r, &req.request_id)   # by-value arg, rebind to r
+```
+made EVERY dispatched response report a nonsense status (200 → `4`, 404 → `0`)
+across the whole suite; rewriting to the single-binding nested form
+`var r = self.with_request_id(self.cors_response(resp), &req.request_id)` fixed
+all 94 tests. Documented as rondo **W24**.
+
+**Root cause (confirmed).** `x = f(x)` lowers to a pre-reassign
+`ruxen_dealloc(x)` before `Assign x = <call result>`. When `f` returns the very
+object it was handed for `x`, that dealloc frees the object the assign then
+re-reads, a use-after-free. The post-lowering fixup `elide_returns_self_realloc`
+(`compiler/ruxen_core/src/mir/lower/drops.rs`) is meant to remove exactly that
+dealloc, but it only recognized callees whose returning block was LITERALLY
+`Return(Some(Use(params[0])))`: (1) `wrap` returns a local `Move`d from its
+parameter, not the parameter literally, so it was never recognized; (2) it only
+looked at parameter index 0, missing by-value args at any other position (e.g.
+rondo's `with_request_id(self, resp, rid)` returns index 1). So the guarding
+dealloc was left in place and the UAF fired. The receiver-builder form
+`r = r.with_status(201)` returns `self` (index 0) literally, so it was already
+covered and stayed correct.
+
+**Fix + pin.** Generalized the detection to a `name -> returned-param-index`
+map: each returning block's local is traced back to a parameter index through
+intra-function `Move`/`Copy`/`Assign(Use)` aliasing (seeded `params[i] -> i`,
+revoking on any non-aliasing redefinition); a function qualifies with index `k`
+only when every returning block agrees on that `k`. The elide site now removes
+the dealloc only when the callee returns index `k` AND `x` was passed at exactly
+that position (`args[k] == Use(x)`), which is stricter than the prior
+"any-arg-aliases" check and also fixes a latent leak. Indirect (closure)
+dispatch keeps the documented bounded-leak fallback. Pin case:
+`tests/release-e2e/cases/948_by_value_rebind_no_uaf.rx` (asserts `PASS n=222`);
+receiver-builder cases stay green.
+
+**Q55b (memory-safe leak residual)  ✅ FIXED 2026-07-22.** The original Q55
+returned-param detection traced provenance with a LINEAR walk over blocks in
+vector order (last-writer-wins), not a CFG-aware meet-over-paths, so at a
+control-flow merge it could misattribute. FIX: `elide_returns_self_realloc` now
+runs a forward dataflow over the CFG (`block_successors` + `transfer_param_prov`
+in `drops.rs`), meeting per-local provenance at merges by intersection with value
+agreement (a local survives only when every predecessor agrees on the same
+parameter index), iterated to a fixpoint. The merge below now drops the returned
+local, so `pick` is correctly NOT treated as returns-param (`pick`'s
+`dealloc(x)` is restored, verified via `--emit=mir`), while a single-path
+`var r = fresh; r = a; r` still resolves to the parameter (no UAF false-negative,
+verified by the `ftp` repro `PASS n=222`). Gate: release-e2e `1 passed` (all
+~354 fixtures), `runtime_abi_parity` 3, `drop_fixtures` 33, `w24_a` `PASS n=222`.
+The originally-reported shape:
+
+```ruxen
+def pick(a: Payload, cond: Bool) -> Payload
+  if cond
+    Payload.new(999)   # fresh on the `then` path
+  else
+    a                  # parameter 0 on the `else` path
+  end
+end
+```
+
+The if-expression's value merges into one local; in block-vector order the
+`then` block (fresh, revokes the local) is processed before the `else` block
+(sets the local back to param 0), so the trace ends with the returned local at
+param 0 and classifies `pick` as always-returns-param-0. A caller `x = pick(x,
+cond)` then elides `dealloc(x)` unconditionally (verified via `--emit=mir`: no
+dealloc between the `pick` call and the reassign). When `cond` takes the fresh
+branch at runtime, `pick` returns a NEW object, so `x`'s old object is never
+freed: a LEAK. This is memory-safe (never a use-after-free or double-free, since
+elision only ever REMOVES a free), and it is not hit by any release-e2e case or
+by rondo's suite. It was not introduced as a regression in the UAF direction:
+the old detection would not have recognized `pick` either (the return local is
+not `params[0]` literally), so before the fix this shape kept its dealloc.
+
+Note the two cheap "hardenings" are both WRONG: a "must-alias across ALL
+definitions of the returned local" check would disqualify a single-path
+`var r = fresh; r = a; r` (returns param 0 always) and REINTRODUCE a UAF there
+(worse). The sound fix is a proper CFG dataflow: at each return, the returned
+local is param `k` only if EVERY predecessor path yields `k` (meet lattice
+`param k` / `⊤`), which correctly disqualifies `pick` (leak avoided) while still
+eliding the single-path `fresh-then-param` case (UAF avoided). Deferred as a
+scoped follow-up rather than rushed inline, because the current state is
+memory-safe and a wrong dataflow rewrite of a memory-safety pass is a UAF risk.
+
+Cross-linked from rondo `docs/ruxen-issues.md` W24.
+Toolchain: `ruxen 0.1.0`.
+
+## Q56 · S2 — async client I/O via `block_on` (no worker reactor) SILENTLY does nothing
+
+Found 2026-07-23 building the first HTTP client for the data-apps North Star
+(`../NORTH-STAR.md`). A standalone program that does async CLIENT I/O through
+`block_on` fails silently: the connection appears to open, `write` returns a
+byte count as if it sent, but the bytes NEVER reach the peer, and subsequent
+reads time out. rondo only ever runs async I/O inside its per-worker reactors
+(`spawn_async_workers` + `Task.spawn_raw` + the poll loop), so the standalone
+`block_on(AsyncTcpStream.connect(...))` + `block_on(s.write(...))` path was never
+exercised.
+
+**Repro** (server logs prove it):
+```ruxen
+match block_on(AsyncTcpStream.connect(&"127.0.0.1:8799"))
+  Ok(stream) ->
+    var s = stream
+    match block_on(s.write(&"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"))
+      Ok(nw) -> puts "wrote #{nw} bytes"   # prints "wrote 54 bytes"
+      Err(_) -> puts "write err"
+    end
+    match block_on(s.read_with_timeout(65536, 3000000000))
+      Ok(c) -> puts "read #{c.size() as Int}"
+      Err(_) -> puts "read ERR/timeout"    # prints this: nothing ever arrives
+    end
+  Err(_) -> puts "connect err"
+end
+```
+The peer (a logging HTTP server) records the request from `curl` but NOT from
+this program, so the 54-byte `write` was never flushed to the socket.
+
+**Root cause hypothesis.** `block_on` drives ONE future on a minimal executor;
+async net I/O completion depends on a reactor that registers the socket fd and
+services readiness (edge-triggered), which the worker loop provides but a bare
+`block_on` does not. The async write future's `poll` reports completion (returns
+the byte count) without the reactor having actually driven the non-blocking send
+to the wire.
+
+**Severity.** S2 for correctness UX: it is a SILENT wrong result (write claims
+success), which is a footgun for any app doing client-side networking outside
+rondo's server. Either `block_on` should set up a reactor that services client
+socket I/O, or the async net methods should error clearly when driven without a
+reactor.
+
+**Workaround (in use).** Use the SYNC `TcpStream` for a request/response client:
+`TcpStream.connect` + `write(&Array[Int])` + loop `read(&var Array[Int])` (reads
+APPEND to the buffer) until `Ok(0)`, then `String.from_bytes`. Blocking syscalls
+need no reactor and work correctly. This is what the data-apps HTTP client uses.
+
+Toolchain: `ruxen 0.1.0`.
+
 ## Parked Q-candidates (ergonomics / features — not bugs; from the 2026-06-09 GUI push)
 
 Documented at their source, listed here so they aren't lost:
@@ -2012,6 +2656,438 @@ Recommended order: **Q16 → Q17** (unblocks the layering story), then
 **Q1/Q2/Q3/Q5** (silent miscompiles, all small repros), then **Q8/Q9** (DX),
 then **Q14/Q15** (namespacing, biggest), with **Q4/Q22** as the
 language-design pair to settle before Drop semantics land.
+
+## Q57 · S2 — a mixin-DEFAULT method that takes a trailing block silently does nothing (native)
+
+**FIXED 2026-07-28** (typeck; pins `tests/release-e2e/cases/980`–`982`,
+CHANGELOG "Mixin-DEFAULT methods that take a block…"). Three coordinated typeck
+changes landed the fix direction below: (1) the signature-based closure-param
+seeding (`expr.rs`) now PINS the block param's `Self`-substituted concrete type
+into the symbol table so `x.field` in the block body resolves; (2) the method-
+call return path passes the trailing block as the effective final arg to
+`resolve_method_call`, so the block-taking mixin default matches arity in
+`lookup_method_with_args` instead of degrading to a fresh `Infer`; (3)
+`resolve_method_call`'s trait-default arm runs the same receiver-generic
+substitution + method-generic harvest as `bridge_builtin_method`, so the
+`then`-shape's `U` binds from the closure's inferred return. The `tap`-shape,
+`then`-shape, and `Enumerable#map`-on-a-user-class repros below all compile and
+run correctly now. (A residual, SEPARATE pre-existing bug remains: `each` over
+an array of user-class *elements* can segfault at runtime — tracked apart from
+this typeck fix.) Original analysis retained below.
+
+**Pre-existing** (reproduces on 85b24f5a, before the Ruby-parity session — not
+introduced by `tap`/`then`). A method declared on a `mixin` and inherited by a
+class via `include`, when it takes a closure/`&block` param and is CALLED with a
+trailing `do…end` block, does not run its body: the call produces empty output
+(and can segfault if its result is then used, e.g. printed).
+
+Repro:
+```rx
+mixin Wrappable
+  def wrap(f: any Fn[Fn(Int) -> nil]) -> Int
+    puts(100)   # never prints
+    42
+  end
+end
+class Widget
+  v: Int
+  include Wrappable
+  def init(@v: Int)
+  end
+end
+def main
+  let w = Widget.new(4)
+  let r = w.wrap do |x| puts(999) end
+  puts(r)       # empty output; exit 0 or 139
+end
+```
+A mixin default WITHOUT a block param (`def describe -> Int; 77; end`) dispatches
+fine, and an OWN class method with a block works — only the
+mixin-default-plus-trailing-block combination is broken.
+
+**ROOT CAUSE (traced 2026-07-28).** Two distinct call-resolution paths in typeck
+that do NOT agree on closure-param handling:
+
+1. **Closure-param `Self` is not substituted for a mixin-default call.** An OWN
+   class method call seeds its closure argument's type from the (already
+   `Self`→receiver-substituted) declared param type at
+   `typeck/infer/expr.rs:711-716` (`substitute_generics_in_return` + then
+   `seed_closure_param_types`). A MIXIN-DEFAULT method call resolves through a
+   SEPARATE path (`select_class_method` returns `None` for an inherited method,
+   so that seeding loop is skipped; the call is typed via the
+   `bridge`/`lookup_method_with_args` mixin path). That path does NOT seed the
+   block's closure parameter, so a `def m(f: any Fn[Fn(&Self) -> nil])` leaves
+   the block param at the abstract `Self`/`?T`. The block body's `x.field` /
+   `x.method` then mangles to an unresolvable `?T<id>_<name>` symbol and codegen
+   errors, or the value is type-confused. Repro (fails with
+   `no runtime symbol for ?T::n`):
+   ```rx
+   mixin Tappable
+     def do_it(f: any Fn[Fn(&Self) -> nil]) -> Self
+       f.(self)
+       self
+     end
+   end
+   class Box
+     n: Int
+     include Tappable
+     def init(@n: Int)
+     end
+   end
+   Box.new(5).do_it do |x| puts(x.n) end   # ?T::n
+   ```
+   (A block param that does NOT dereference `Self` fields — `do_it { |x| puts(1) }`
+   — happens to link, which is why the trivial `Doer` probe passed.)
+2. **A mixin default that returns `Self` or the block result is mis-lowered** —
+   the `then`-shape (`def m[U](f: any Fn[Fn(&Self) -> U]) -> U; f.(self); end`)
+   returns empty. Related to the same mixin-default monomorphization not carrying
+   the concrete `Self`/`U` bindings through to the body.
+
+**Fix direction (the generic mechanism, per the `.rx`-first rule in `CLAUDE.md`).**
+Make the mixin-default method-call path seed its closure argument from the
+`Self`→receiver-substituted param type, exactly like the own-method path — ideally
+by factoring the own-method seeding loop (`expr.rs:711-716`) into a shared helper
+both paths call, so a `Self`-typed closure param is concrete for own AND inherited
+methods. This is what unblocks `tap`/`then` (and `Enumerable#map` on a USER class,
+which fails for the same reason) as pure `.rx` mixin methods. It needs its own
+careful pass (typeck seam + MIR mono + the full gate + review); it is NOT a
+per-feature special-case.
+
+## Q58 · S3 — `alias` to a method on a GENERIC builtin head doesn't canonicalize through the generic suffix (link error)
+
+**FIXED** (pin `tests/release-e2e/cases/990_alias_generic_builtin_head.rx`).
+
+Symptom: an `alias new old` inside a generic builtin-head class (`class
+Hash[K, V]`, `class Array[T]` when the receiver carries concrete generic args)
+did not rewrite the call-site mangled name to the canonical method.
+`h.has_key?(k)` on a `Hash[String, Int]` mangled to `Hash[String, Int]_has_key?`,
+which never canonicalized to `Hash_key?`, so the linker reported an undefined
+`_Hash[String, Int]_has_key?`.
+
+Repro (link-failed before the fix):
+```rx
+class Hash[K, V]
+  # ... (stdlib) ...
+  alias has_key? key?
+end
+# h.has_key?("a")  =>  undefined _Hash[String, Int]_has_key?
+```
+
+Root cause: `mir/lower/mod.rs::select_method_symbol_name` canonicalized the
+alias name correctly (`canonical_method_name` already peels `[...]` for the
+alias-map lookup), then threw the result away. Its candidate scan matched the
+parent def's BARE class name against the call site's INSTANTIATED receiver name,
+so a generic head matched zero defs and the function returned `None`. The caller
+then fell back to the raw spelling, because typeck does not pin `*method` for a
+builtin head. Only the paren-less `FieldAccess` path escaped, since it calls
+`canonical_method_name` directly with no candidate scan, which is why
+`Array`'s `alias to_a clone` appeared to work and `a.to_a()` did not.
+
+`method_trailing_default_sentinels` (same file) carried the identical bug on a
+parallel path: for every generic head it found no signature and returned zero
+default sentinels, so a paren-less call to a method with trailing defaults
+emitted one argument too few and aborted in the Cranelift verifier
+(`mismatched argument count ... got 1, expected 2`). That half is latent today:
+no stdlib collection method declares a trailing default, and `extension
+Array[T]` is rejected, so it was reproduced with a temporary probe method.
+
+Fix: both sites now share `Lowerer::method_defs_on_class`, which scans the
+receiver's exact class name first and falls back to its generic-free base
+(`Hash[String, Int]` → `Hash`) only when the exact pass finds nothing. That is
+the same full-then-base order `SymbolTable::canonical_method_name` already used
+for the alias map, so the two agree on what "this class" means. No method or
+type name is hardcoded. `library/std/map/src/lib.rx` reverted its `has_key?` /
+`include?` / `member?` / `each_pair` delegating bodies to one-line `alias`es.
+
+Still NOT expressible as an `alias`, for an unrelated reason: the operator
+methods on `Array`/`Set` (`def +`, `def |`, `def &`, `def -`). The builtin-head
+operator route (`mir/lower/expr/binops.rs::builtin_head_has_op_method`) is a
+name-only existence check over `DefKind::Method`, and an `alias` records no def,
+so an aliased operator would fall through to the machine floor and bit-op two
+heap pointers. Those stay real delegating bodies.
+
+## Q59 · S2/S3 — five `.rx`-authoring miscompiles and limits found building the String Ruby-parity batches (B08-B11)
+
+**OPEN.** Each has a clean workaround, all of them in use in
+`library/std/string/src/string.rx`. Grouped because they were all found in one
+pass and share a theme: a value that is correct when bound to an explicitly
+typed local is wrong when used inline. (If a parallel batch already claimed
+`Q59`, renumber; the content is what matters.)
+
+**(a) S2 — a NEGATIVE default argument does not fill on a builtin-head method.**
+```rx
+class String
+  def rindex(sub: &String, offset: Int = -1) -> Option[Int]
+    # ...
+  end
+end
+# "hello".rindex("l")  =>  Cranelift verifier: "mismatched argument count
+#                          for `v6 = call fn3(v3, v5)`: got 2, expected 3"
+```
+A POSITIVE default (`pad: String = " "`, `base: Int = 10`) fills correctly, and
+a negative default on a FREE function (`def neg(a: Int, b: Int = -1)`) also
+works, so the gap is the negated-literal default expression in the builtin-head
+fill path added by `09580b95` (`infer/expr.rs` `selected_method` +
+`append_method_default_args`). **Workaround:** declare two arities instead
+(`def rindex(sub)` delegating to `def rindex(sub, offset)`).
+
+**(b) S2 — indexing an `Array[Int]` / `Array[Char]` / `Array[UInt8]` returned
+INLINE by a call yields garbage.**
+```rx
+puts "#{"ab".chars[0]}"      # => 4352431440   (a pointer, not 'a')
+puts "#{"ab".bytes[0]}"      # => 45852142432
+let cs = "ab".chars
+puts "#{cs[0]}"              # => a            (correct once bound)
+```
+Pre-existing, not introduced by the String batches: it reproduces on the FFI
+`chars` / `bytes`. `Array[String]` is unaffected (`"a,b".split(",")[0]` is
+correct), so it looks like the scalar-element read off a temporary that has
+already been released. **Workaround:** bind the array to a local first.
+
+**(c) S2 — `<Char> as Int` mis-lowers in argument and tail-expression
+position.**
+```rx
+def pa -> Int
+  let c = self.chars[0]
+  c as Int                   # => 4337015680
+end
+out.push(c as Int)           # => pushes garbage
+let n: Int = c as Int        # => 65   (correct)
+```
+Same family as the "rebox a scalar `self` first" rule (`let n = 0 + self`).
+**Workaround:** always bind through an explicitly typed local.
+
+**(d) S2 — `String + &String` (a borrowed PARAMETER) concatenates garbage.**
+```rx
+def probe(other: &String) -> String
+  var r = ""
+  r = r + other              # => "AIySayAMGGARctFT"
+end
+```
+`r + "literal"`, `r + owned_string` and `r + "#{other}"` are all correct, so the
+gap is specifically the borrowed-parameter operand on the right of the concat
+route. **Workaround:** `r.push_str(other)`, which mutates `r` in place and is
+also cheaper than rebuilding.
+
+**(e) S3 — an untyped `[]` literal cannot disambiguate an overload.**
+```rx
+"hello".start_with?([])              # => true   (picks the &String overload)
+let none: Array[String] = []
+"hello".start_with?(none)            # => false  (correct)
+```
+Argument-type-based overload resolution otherwise works well (it is what lets
+`gsub` / `sub` / `split` / `index` take either a `&String` or a `&Regex` under
+one Ruby name), but an empty array literal carries no element type for it to
+match on. **Workaround:** bind a typed local.
+
+## Q60 · S2/S3 — three limits found landing the `Hash` key-kind protocol (B73)
+
+Found while replacing the `Hash` / `Set` key-kind heuristic with a compiler-
+supplied descriptor (B73, CHANGELOG `[Unreleased]`, pins `1720`-`1724`). B73
+itself is FIXED; these are the neighbours it exposed. (If a parallel batch
+already claimed `Q60`, renumber; the content is what matters.)
+
+**(a) S2 — a static constructor on a generic builtin keeps its RIGID type
+parameters at the expression node.** `Hash.new` is declared
+`def self.new as "ruxen_hash_new" -> Hash[K, V]`. A static call has no receiver,
+so `substitute_generics_in_return` has nothing to substitute against, and the
+expression node's type stays `Hash[K, V]` even where the binding is concrete:
+
+```rx
+var h: Hash[String, Int] = Hash.new
+# local `h`   : Map(String, Int)      ← correct
+# the ctor's temp: Map(TypeParam K, TypeParam V)   ← imprecise
+```
+
+Unification does not object, because a rigid parameter is not an inference
+variable and there is nothing to bind. Anything downstream that reads the
+INITIALIZER's own type rather than the binding's therefore sees `K`, not
+`String`. The general fix is to thread an expected type through binding,
+argument and return checking, or to substitute a static ctor's return against
+the expected type at the call.
+
+**OPEN, and severity dropped from S2 to S3**, because B73 no longer depends on
+this being right. The key-kind protocol installs its descriptor at USE sites as
+well as construction sites (`mir/lower/key_desc.rs`, the `KEYED_TABLE_OPS`
+route), and an operation's RECEIVER is concretely typed in exactly the
+positions a constructor's result temp is not. `f(Hash.new)` is keyed by the
+`insert` inside `f`; pin `1725` holds that.
+(2026-10-24: superseded by `KeyDesc[K]`. `KEYED_TABLE_OPS`, `ensure_key_kind`
+and the `_keyed` runtime forms are gone. `class KeyDesc[K]` in
+`library/std/core/src/lib.rx` is a compiler supplied `lib` parameter like
+`ElemDesc[T]`, declared on the `Hash`/`Set` constructors, `insert`,
+`Array#to_set` and `Array#to_h`, and filled by `append_supplied_descriptors`.
+Tables store `key_desc` and hash, compare, copy and free keys by it.)
+
+**A `refine_rigid_generics` pass was written for this and then deliberately
+removed** — it refined the initializer from a concrete annotation on the `let`
+and assignment paths (~190 lines in `typeck/infer/`). It was measured to be
+non-load-bearing once the use-site route existed: with it disabled, release-e2e
+stayed at 551 pass / 0 fail and the narrow gate at 655 pass / 0 fail, including
+a `self.data = Hash.new` class-field-init probe. Refining expression types
+after unification touches every annotated binding in every program, which is a
+large blast radius to carry for no measured benefit. If a future consumer
+genuinely needs a static constructor's own expression type to be precise,
+reintroduce it deliberately with a test that fails without it — do not assume
+it is still needed because this entry mentions it.
+
+**(a2) S1, FIXED — the parser erased explicit generic arguments on a
+static-call receiver.** `parse_type_expr_primary`
+(`parser/expr/atoms.rs:471`) read the `[…]` after a type identifier and threw
+it away:
+
+```rust
+let _generic_args = self.parse_generic_args();
+// Fall through to normal handling as if we had just the TypeIdentifier.
+```
+
+The stated reasoning was that generic args are inferred from the
+constructor/method arguments. True for `Point[Int].new(3)`; false for any
+NO-ARGUMENT constructor. `Hash[String, Int].new` therefore produced a receiver
+typed with `class Hash[K, V]`'s declared rigid parameters, and
+`substitute_generics_in_return` bound the identity map `{K → K}`, so the call's
+type stayed abstract permanently. Verified consequences, all on the pre-B73
+build:
+
+* `Hash[Int, Int].new` then `insert(5000, …)` → **SIGSEGV**, while
+  `insert(7, …)` worked. The key kind was being guessed from the key's bits
+  because no static type was available.
+* `h["a"]` on such a table typed as the abstract `V` rather than `Int`.
+
+So this spelling was never correctly typed; B73 replaced the lucky guess with a
+demand for a real static type and turned it into a loud panic, which is how it
+was found. **Fixed** by carrying the written path as
+`ExprKind::GenericTypeRef { name, ty }` and resolving it through ordinary type
+resolution, so `Hash` / `Array` / `Set` need no per-collection special-casing.
+Three things worth knowing if you touch it:
+
+* The refinement is scoped to the BUILTIN type constructors (the
+  `DefKind::Variable` entries `register_type_constructors` installs in VALUE
+  scope). A user generic class is a `DefKind::Class` reached through type
+  scope; its `.new` goes down the constructor path and already infers its
+  parameters from the call's arguments. Routing it through the new node broke
+  cases `65`, `73`, `101` and `990` on the first attempt, so it falls back to
+  resolving exactly as the bare type name did. **`Pair[Int, String]` is
+  therefore still not refined as a TYPE** — it just does not need to be today,
+  because it always has arguments to infer from. A no-argument static method on
+  a user generic would hit the same class of problem.
+
+* The resolver registers the INSTANTIATED constructor as its own def rather
+  than setting `expr.ty`. Typeck's `VarRef` arm (`typeck/infer/expr.rs:125`)
+  re-derives an expression's type from its `DefId` unconditionally, so an
+  in-place refinement is discarded. Anything else that wants to refine a
+  `VarRef`'s type has the same problem and needs the same shape.
+* Both formatters print the arguments back (`ruxen fmt` verified idempotent).
+  Dropping them there would rewrite the program into the un-inferable shape,
+  which is the fmt-destructiveness class (Q23/Q30/Q34).
+
+Pins `1728` (both spellings × every key kind, `Set`, `with_capacity`) and
+`1729` (class field, function return, closure body, array element).
+
+**(b) S2 — `Set[String]` set-algebra results double-free at scope exit.**
+**FIXED (2026-07-30), together with B86 — they were the same defect.**
+Verified 2026-07-29 and **pre-existing** (reproduces identically before B73):
+
+```rx
+var a: Set[String] = Set.new
+a.insert("red")
+var b: Set[String] = Set.new
+b.insert("blue")
+let u = a.union(&b)
+puts "#{u.size}"        # never prints — exit 133 (SIGTRAP, malloc abort)
+```
+
+`ruxen_set_union` / `_intersection` / `_difference` shallow-copy their element
+words, so the result set ALIASES its source's heap strings — the documented v1
+contract, same as `ruxen_hash_clone`. But the drop selector gives both the
+source and the result `ruxen_set_drop_string` (`drops.rs::heap_free_callee`,
+`Ty::Set(Ty::String)`), so every shared `char*` is freed twice. `Set[Int]` is
+fine (no per-element drop) and so is a `Set[UserStruct]` (the selector picks the
+spine-only `ruxen_set_free`); only heap-owning element types are exposed.
+**Workaround:** none at the `.rx` level. Pin `1724` deliberately uses a struct
+element rather than a `String` so it does not depend on this. The fix is either
+a deep copy in the three set-algebra helpers or an aliasing-aware drop.
+
+**Resolution — the deep copy, and the diagnosis above generalizes.** This is
+not a `Set` bug; it is one instance of a contract violated by five helpers.
+Any callee listed in `FRESH_ALLOC_CALLEES` has its result deep-dropped by the
+helper `heap_free_callee` picks, so a result built from a borrowed source's
+element pointers is a double free by construction. `ruxen_vec_skip`
+(`Array#drop`, filed as B86), `ruxen_vec_chain` and `ruxen_set_from_iter`
+(`to_set`) were failing identically and were NOT filed anywhere.
+
+The three set-algebra helpers now insert through `ruxen_set_insert_owned`,
+which clones per the table's own B73 `key_kind` — a Set's element IS its key,
+so the descriptor needed was already on the table. The `Vec` side needed a new
+`RUXEN_ELEM_*` descriptor injected by MIR. Full audit table and per-helper
+verdicts are in `docs/ruby-parity/QUEUE.md` under B86; the ownership contract
+is now a doc comment on `FRESH_ALLOC_CALLEES` itself. Pins `1870` / `1871`.
+
+Note for whoever reads this next: the "aliasing-aware drop" alternative above
+was considered and rejected. Dropping a helper from `FRESH_ALLOC_CALLEES` (or
+making its result's drop spine-only) does stop the crash, but it converts it
+into a silent leak, and for a result derived from a TEMPORARY source
+(`["a","b","c"].drop(2)`) it would leave the result holding freed pointers —
+trading an abort for a use-after-free.
+
+**(c) S4 — `Array#to_h`'s `lib` declaration launders its return through `Int`.**
+`library/std/array/src/lib.rx:106` reads
+`def to_h as "ruxen_hash_from_iter" -> Int`, with the header comment at
+`:49-50` explaining why: the result key/value types come from the receiver's
+TUPLE element and are "not expressible" in the current return-type surface.
+
+**The user-visible surface is fine** — the `collections.rs` resolver runs ahead
+of the builtin bridge and supplies the real `Hash[K, V]`, so `[("a", 1)].to_h`
+does have `size` / `key?` / `get` on it (pin `1726`). An earlier draft of this
+entry claimed the value arrives as a bare `Int` with no `Hash` methods; that is
+wrong, and the pin disproves it.
+
+What the laundered decl DID break was B73's descriptor: the construction site
+read the key type off the RESULT local, which for `to_h` is `Int` and says
+nothing about the key. Fixed by reading it off the SOURCE instead — a
+`from_iter` constructor's input is always a concrete `Array`, and collecting it
+is what fixes the key type (`key_desc.rs::key_ty_from_iterable`). That is the
+better witness for both `from_iter` forms regardless of the decl, because these
+two constructors populate their table INSIDE the C runtime, where no use-site
+`ensure` can reach it. The `-> Int` decl is still worth correcting when per-`T`
+mono (E1) allows it, but nothing depends on it now.
+(2026-10-24: superseded by `KeyDesc[K]`. `key_ty_from_iterable` is gone;
+`Array#to_h[K, V]` and `Array#to_set` declare a `KeyDesc[K]` parameter that
+the compiler fills from `K`. See the Q60 (a) note above.)
+
+## Q61 · S2: quiver and rondo relied on aliasing that tuple ownership now rejects (fixed in the apps, 2026-10-24)
+
+Found by the strict MIR loan checker on `feat/concurrency-adoption` (CHANGELOG
+`[Unreleased]`, "A tuple element read borrows" and "Tuples own their
+elements"). Not a compiler bug: the language rule changed, and two app shapes
+were real aliases that both owners freed.
+
+**(a) A tuple element read is a borrow.** `typeck/infer/helpers.rs::slot_read_ty`
+types `.N`, destructured bindings and `for (k, v)` bindings as `&T` for a
+non-Copy `T`, the class-field rule. Storing one into an owned slot is E0744
+(`reject_borrow_into_owned`, which recurses through tuple slots):
+
+```rx
+# rondo/src/async_server.rx (before)
+self.wire = cycle.0          # E0744: a borrow stored into an owned field
+# after
+self.wire = cycle.0.clone
+```
+
+A non-Clone element (an `AsyncTcpStream` in `(AsyncTcpStream, String)`) is used
+through a borrow instead: `server_echo_once(&var p.0)`
+(`tests/release-e2e/cases/727_async_tcp_echo.rx`).
+
+**(b) `SharedSync#get` and `MutexGuard#get` no longer alias.** They become `.rx`
+`def get -> T where T: Clone { self.deref.clone }` (fixed, 2026-10-24); before,
+`get` handed out the cell's own value as an owned `T`. The `where` bound is
+checked at each call: `get` on a non-Clone payload is E1015, and a generic
+caller declares `T: Clone`. Code that shares or mutates the payload uses `deref` (`&T`) or
+`lock_raw`/`deref_var`. quiver moves its shared state to `SharedSync[Mutex[...]]`
+(`quiver/src/lib.rx`).
+
+**Fixes are in the apps** (rondo `.clone`, quiver `SharedSync[Mutex[...]]`);
+match these shapes rather than working around the rule.
 
 ## Where the workarounds live (grep-able)
 

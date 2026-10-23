@@ -1,0 +1,38 @@
+## A `&var` parameter of a handle type (class, array) cannot be rebound
+## (E1020): the callee holds a copy of the caller's handle, so the new value
+## would never reach the caller. These are the forms E1020's help points to:
+## mutate through the handle, return the new value, or store it in a field.
+class Point
+  x: Int
+  def init(@x: Int)
+  end
+end
+
+class Slot
+  point: Point
+  def init(@point: Point)
+  end
+end
+
+def shift(p: &var Point, items: &var Array[Int]) -> nil
+  p.x = p.x + 1
+  items.push(4)
+end
+
+def fresh_point -> Point
+  Point.new(0)
+end
+
+def reset_slot(slot: &var Slot) -> nil
+  slot.point = Point.new(9)
+end
+
+p = Point.new(5)
+items = [1, 2, 3]
+shift(p, items)
+puts "#{p.x} #{items.size}"
+p = fresh_point
+puts p.x
+slot = Slot.new(Point.new(1))
+reset_slot(slot)
+puts slot.point.x

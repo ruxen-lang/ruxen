@@ -1,0 +1,127 @@
+Tester.describe("String transforms") do |t: &var Tester|
+  t.it("swapcase") do
+    t.expect("Hello World 123".swapcase).to_eq("hELLO wORLD 123")
+    t.expect("".swapcase).to_eq("")
+  end
+
+  t.it("chomp drops one terminator, or a given suffix, or every newline for empty") do
+    t.expect("line\n".chomp).to_eq("line")
+    t.expect("line\r\n".chomp).to_eq("line")
+    t.expect("line\r".chomp).to_eq("line")
+    t.expect("line".chomp).to_eq("line")
+    t.expect("".chomp).to_eq("")
+    t.expect("hello".chomp("llo")).to_eq("he")
+    t.expect("hello".chomp("z")).to_eq("hello")
+    t.expect("a\n\n\n".chomp("")).to_eq("a")
+  end
+
+  t.it("chop treats a trailing CRLF as one character") do
+    t.expect("hello".chop).to_eq("hell")
+    t.expect("line\r\n".chop).to_eq("line")
+    t.expect("x".chop).to_eq("")
+    t.expect("".chop).to_eq("")
+  end
+
+  t.it("center, ljust and rjust cycle a multi-character pad") do
+    t.expect("hi".center(5)).to_eq(" hi  ")
+    t.expect("hi".center(6, "-")).to_eq("--hi--")
+    t.expect("hi".center(7, "12")).to_eq("12hi121")
+    t.expect("hello".center(3)).to_eq("hello")
+    t.expect("hi".center(5, "")).to_eq("hi")
+    t.expect("hi".ljust(7, "12")).to_eq("hi12121")
+    t.expect("hi".rjust(7, "12")).to_eq("12121hi")
+    t.expect("hi".ljust(5)).to_eq("hi   ")
+    t.expect("hi".rjust(5)).to_eq("   hi")
+    t.expect("abcdef".ljust(3, "-")).to_eq("abcdef")
+  end
+
+  t.it("delete and squeeze read tr-style sets") do
+    t.expect("hello".delete("l")).to_eq("heo")
+    t.expect("hello".delete("a-y")).to_eq("")
+    t.expect("hello".delete("^aeiou")).to_eq("eo")
+    t.expect("aaabbbccc".squeeze).to_eq("abc")
+    t.expect("aaabbbccc".squeeze("a")).to_eq("abbbccc")
+    t.expect("mississippi".squeeze("sp")).to_eq("misisipi")
+    t.expect("".squeeze).to_eq("")
+  end
+
+  t.it("tr and tr_s") do
+    t.expect("hello".tr("el", "ip")).to_eq("hippo")
+    t.expect("hello".tr("a-y", "b-z")).to_eq("ifmmp")
+    t.expect("hello".tr("^aeiou", "*")).to_eq("*e**o")
+    t.expect("hello".tr("el", "")).to_eq("ho")
+    t.expect("hello".tr("el", "x")).to_eq("hxxxo")
+    t.expect("hello".tr_s("l", "r")).to_eq("hero")
+    t.expect("hello".tr_s("el", "*")).to_eq("h*o")
+  end
+
+  t.it("succ carries across alphanumerics and skips the rest") do
+    t.expect("abcd".succ).to_eq("abce")
+    t.expect("THX1138".succ).to_eq("THX1139")
+    t.expect("<<koala>>".succ).to_eq("<<koalb>>")
+    t.expect("1999zzz".succ).to_eq("2000aaa")
+    t.expect("zz".succ).to_eq("aaa")
+    t.expect("99".succ).to_eq("100")
+    t.expect("a9".succ).to_eq("b0")
+    t.expect("Az".succ).to_eq("Ba")
+    t.expect("Zz".succ).to_eq("AAa")
+    t.expect("1.9".succ).to_eq("2.0")
+    t.expect("**".succ).to_eq("*+")
+    t.expect("-".succ).to_eq(".")
+    t.expect("".succ).to_eq("")
+    t.expect("aa".next).to_eq("ab")
+  end
+
+  t.it("prepend, delete_prefix and delete_suffix return new strings") do
+    t.expect("world".prepend("hello ")).to_eq("hello world")
+    t.expect("".prepend("ab")).to_eq("ab")
+    t.expect("ab".prepend("")).to_eq("ab")
+    t.expect("hello".delete_prefix("he")).to_eq("llo")
+    t.expect("hello".delete_prefix("z")).to_eq("hello")
+    t.expect("hello".delete_prefix("hello")).to_eq("")
+    t.expect("hello".delete_suffix("lo")).to_eq("hel")
+    t.expect("hello".delete_suffix("z")).to_eq("hello")
+    t.expect("hello".delete_suffix("hello")).to_eq("")
+  end
+
+  t.it("trim, to_upper, to_lower and repeat") do
+    let s = "   hello   "
+    t.expect(s.trim).to_eq("hello")
+    t.expect(s.trim.size).to_eq(5)
+    let h = "  Hello World  "
+    t.expect(h.trim.to_upper).to_eq("HELLO WORLD")
+    t.expect(h.trim.to_lower).to_eq("hello world")
+    t.expect("ab".repeat(3)).to_eq("ababab")
+  end
+
+  t.it("trim_start, trim_end, strip, lstrip and rstrip") do
+    let s = "   hi   "
+    t.expect(s.trim_start).to_eq("hi   ")
+    t.expect(s.trim_end).to_eq("   hi")
+    let p = "  hi  "
+    t.expect(p.strip).to_eq("hi")
+    t.expect(p.lstrip.length).to_eq(4)
+    t.expect(p.rstrip.length).to_eq(4)
+  end
+
+  t.it("upcase, downcase and their to_ spellings") do
+    let s = "Hello World"
+    t.expect(s.upcase).to_eq("HELLO WORLD")
+    t.expect(s.downcase).to_eq("hello world")
+    t.expect(s.to_upper).to_eq("HELLO WORLD")
+    t.expect(s.to_lower).to_eq("hello world")
+    t.expect("abc".to_upper).to_eq("ABC")
+    let m = "  MixedCase  "
+    t.expect(m.trim.to_lower).to_eq("mixedcase")
+    t.expect(m.trim.to_upper).to_eq("MIXEDCASE")
+  end
+
+  t.it("reverse and capitalize") do
+    t.expect("hello".reverse).to_eq("olleh")
+    t.expect("hello world".capitalize).to_eq("Hello world")
+    t.expect("ABC".capitalize).to_eq("Abc")
+    t.expect("".capitalize).to_eq("")
+    t.expect("ab".ljust(5, "-")).to_eq("ab---")
+    t.expect("ab".rjust(5, "*")).to_eq("***ab")
+  end
+end

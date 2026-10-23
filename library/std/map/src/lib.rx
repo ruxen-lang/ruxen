@@ -30,41 +30,124 @@
 ## No residuals — every Hash method has a real C symbol and a statically
 ## substitutable return.
 ##
+## ## The key descriptor (B73)
+##
+## How a key hashes, compares, is copied and is freed is decided by its
+## static type: `new`, `with_capacity` and `insert` declare a trailing
+## `keys: KeyDesc[K]` (std/core), which the compiler fills at every call
+## with `K`'s key descriptor and a caller never writes. The table keeps the
+## first one it is given, so a table with entries always has one, and
+## `f(Hash.new)` is keyed by the `insert` inside `f` when its construction
+## site could not be typed. The runtime never inspects a key's bits to
+## decide what a key IS. A new method that adds entries to a table takes a
+## `KeyDesc[K]` too; a method that only looks keys up needs nothing.
+##
 ## The internal `Ty::Map` variant and the `ruxen_hash_*` runtime
 ## symbols keep their legacy names; only the surface spelling is
 ## Ruby (`Hash`, never the Rust `Map` / `HashMap`).
 class Hash[K, V]
   lib "../hash/runtime/hash.c"
-    def self.new as "ruxen_hash_new" -> Hash[K, V]
-    def self.with_capacity as "ruxen_hash_with_capacity"(cap: Int) -> Hash[K, V]
+    def self.new as "ruxen_hash_new"(keys: KeyDesc[K]) -> Hash[K, V]
+    def self.with_capacity as "ruxen_hash_with_capacity"(cap: Int, keys: KeyDesc[K]) -> Hash[K, V]
     def size as "ruxen_hash_len" -> USize
     def empty? as "ruxen_hash_is_empty" -> Bool
-    def get as "ruxen_hash_get"(key: K) -> Option[&V]
-    def key? as "ruxen_hash_contains_key"(key: K) -> Bool
+    def get as "ruxen_hash_get"(key: &K) -> Option[&V]
+    def key? as "ruxen_hash_contains_key"(key: &K) -> Bool
     def keys as "ruxen_hash_keys" -> Array[&K]
     def values as "ruxen_hash_values" -> Array[&V]
-    def to_a as "ruxen_hash_entries" -> Array[(K, V)]
-    def insert as "ruxen_hash_insert"(key: K, value: V)
-    def remove as "ruxen_hash_remove"(key: K) -> Option[V]
+    def to_a as "ruxen_hash_entries" -> Array[(&K, &V)]
+    def insert as "ruxen_hash_insert"(key: K, value: V, keys: KeyDesc[K])
+    def remove as "ruxen_hash_remove"(key: &K) -> Option[V]
     def clear as "ruxen_hash_clear"
   end
 
   # The combinator family (`map`/`select`/`reject`/`find`/`reduce`/
   # `all?`/`any?`/`partition`/…) comes from the shared `mixin
   # Enumerable[T]` over the single `each` primitive below. Hash's
-  # ELEMENT is the `(K, V)` pair, so it includes `Enumerable[(K, V)]`:
-  # every combinator closure receives a `(K, V)` tuple (tuple-field
-  # access `kv.0` / `kv.1` is sound — Bug 3, `604_closure_tuple_param_field`).
-  include Enumerable[(K, V)]
+  # ELEMENT is the `(&K, &V)` pair: each entry borrows the key and value
+  # the table keeps owning (as `keys` / `values` do), so every combinator
+  # closure receives a `(&K, &V)` tuple and keeping one takes `.clone`.
+  include Enumerable[(&K, &V)]
 
-  # Generic `each`: yield every `(K, V)` entry to the user closure. The
+  # Generic `each`: yield every `(&K, &V)` entry to the user closure. The
   # `.rx` body is lowered ONCE as the opaque `Hash_each` (K/V abstract);
   # it materializes the entries via the FFI call on `self` (`self.to_a`)
   # and forwards each tuple to `f`. Proves the FFI-on-self result flows
   # out of the opaque body into the iteration.
-  def each(f: any Fn[Fn((K, V)) -> nil]) -> nil
+  def each(f: Fn((&K, &V)) -> nil) -> nil
     let entries = self.to_a
     entries.each do |kv| f.(kv) end
+    nil
+  end
+
+  # Ruby `==` — same size and every key of `self` maps, in `other`, to a
+  # value `==` to its own, by the value type's own equality (String by
+  # content, Float by value). Key lookup uses the table's key kind.
+  def ==(other: Hash[K, V]) -> Bool
+    if self.size != other.size
+      return false
+    end
+    let ks = self.keys
+    let n: Int = ks.size as Int
+    var i: Int = 0
+    while i < n
+      let k = ks[i]
+      var same: Bool = false
+      match self.get(k)
+        Some(x) -> match other.get(k)
+          Some(y) -> if x == y
+            same = true
+          end
+          nil -> same = false
+        end
+        nil -> same = false
+      end
+      if !same
+        return false
+      end
+      i = i + 1
+    end
+    true
+  end
+
+  # Ruby `h[k] = v`. The subscript-assign lowering routes `o[i] = v` to the
+  # receiver's `[]=` for any builtin head that resolves one, so this one line is
+  # the whole of `Hash[k] = v` (B72 — before it, the store type-checked and was
+  # then dropped silently in MIR).
+  #
+  # An `alias`, NOT a delegating `def` (docs/decisions/alias-keyword.md D6 lists
+  # `[]=` among the operator names with a surface dispatch path, so it is a
+  # designed alias form). The distinction is load-bearing for OWNERSHIP: an
+  # alias binds the ONE `Hash_insert` body, so `h[k] = v` emits the exact
+  # `ruxen_hash_insert` call `h.insert(k, v)` does, and drop elaboration applies
+  # the key/value ownership TRANSFER it already records for that symbol
+  # (`runtime_abi::arg_transfer_mask`). A separate `def []=` body would emit a
+  # NEW `Hash_[]=` symbol, which the drop pass classifies by the `Hash_` runtime
+  # prefix as BORROWING its args — the caller would then free the key string the
+  # table had just taken ownership of, double-freeing at scope exit.
+  alias []= insert
+
+  # Ruby key-presence synonyms of `key?` (`Hash#include?` / `#member?` test KEY
+  # membership in Ruby). Pure `alias`es, not delegating bodies: all four names
+  # bind the ONE `Hash_key?` body, so there is no second symbol to emit and no
+  # pair of bodies to drift (docs/decisions/alias-keyword.md D1).
+  alias has_key? key?
+  alias include? key?
+  alias member? key?
+
+  # Ruby `each_pair` is a synonym of `each` (both yield `(K, V)`).
+  alias each_pair each
+
+  # Ruby `each_key` / `each_value` — yield only the key / only the value of
+  # every entry. Expressed over `each` + tuple-field access on the `(K, V)`
+  # pair (`kv.0` / `kv.1`).
+  def each_key(f: Fn(K) -> nil) -> nil
+    self.each do |kv| f.(kv.0) end
+    nil
+  end
+
+  def each_value(f: Fn(V) -> nil) -> nil
+    self.each do |kv| f.(kv.1) end
     nil
   end
 end

@@ -1,0 +1,28 @@
+# A block that calls a `def var` method on a variable it captures does not
+# conflict with its own capture. The borrow checker used to create the
+# capture's shared borrow before checking the block body, so the body's
+# mutable use of the same variable reported E1002 against it. Both spellings
+# are pinned: `c.bump` is a method call too since F-19.
+class Counter
+  n: Int
+
+  def init
+    self.n = 0
+  end
+
+  def var bump -> Int
+    self.n = self.n + 1
+    self.n
+  end
+end
+
+def main
+  var c = Counter.new
+  [1, 2, 3].each do |x|
+    c.bump()
+  end
+  [4, 5].each do |x|
+    c.bump
+  end
+  puts "bumped=#{c.n}"
+end

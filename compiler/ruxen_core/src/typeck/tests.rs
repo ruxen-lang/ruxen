@@ -14,6 +14,13 @@ mod tests {
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
     }
 
+    fn release_rx(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/release-e2e/cases")
+            .join(format!("{name}.rx"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    }
+
     fn span() -> Span {
         Span {
             start: 0,
@@ -127,6 +134,40 @@ mod tests {
         let a = Ty::Ref(Box::new(Ty::Int));
         let b = Ty::Ref(Box::new(Ty::Int));
         assert_eq!(unify(&a, &b, &mut ctx, &span()).unwrap(), a);
+    }
+
+    /// A borrow is not its referent: `&Int` and `Int` are different types,
+    /// in either order.
+    #[test]
+    fn unify_ref_with_its_referent_fails() {
+        let mut ctx = TypeContext::new();
+        let r = Ty::Ref(Box::new(Ty::Int));
+        assert!(unify(&r, &Ty::Int, &mut ctx, &span()).is_err());
+        assert!(unify(&Ty::Int, &r, &mut ctx, &span()).is_err());
+    }
+
+    /// A scalar coerces out of its borrow by value; a non-scalar does not,
+    /// and a value never coerces into a borrow.
+    #[test]
+    fn scalar_coerces_out_of_its_borrow() {
+        let ctx = TypeContext::new();
+        let borrow = |t: Ty| Ty::Ref(Box::new(t));
+        assert!(can_coerce(&borrow(Ty::Int), &Ty::Int, &ctx));
+        assert!(!can_coerce(&borrow(Ty::Int), &Ty::Float, &ctx));
+        assert!(!can_coerce(&borrow(Ty::String), &Ty::String, &ctx));
+        assert!(!can_coerce(&Ty::Int, &borrow(Ty::Int), &ctx));
+    }
+
+    /// Two different type params are different types; the same param unifies.
+    #[test]
+    fn unify_distinct_type_params_fails() {
+        let mut ctx = TypeContext::new();
+        let param = |name: &str| Ty::TypeParam {
+            name: name.to_string(),
+            bounds: vec![],
+        };
+        assert!(unify(&param("T"), &param("U"), &mut ctx, &span()).is_err());
+        assert!(unify(&param("T"), &param("T"), &mut ctx, &span()).is_ok());
     }
 
     #[test]
@@ -317,6 +358,81 @@ mod tests {
             .filter(|d| d.message.contains("type mismatch"))
             .collect();
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn return_value_is_checked_against_the_declared_return_type() {
+        // B84. `return <value>` lands in the SAME slot as the body's tail
+        // expression, so it must run the same check. This arm used to call
+        // `unify` and DISCARD the result, so a bare `Int` returned from a
+        // `-> Result[Int, String]` function type-checked, skipped the `Ok`
+        // box the slot's layout requires, and SIGSEGV'd the caller — a
+        // silent miscompile with no diagnostic.
+        //
+        // The e2e harness has no compile-fail expectation, so the negative
+        // half of the B84 pins (cases 1850-1852) lives here.
+        let result = parse_and_check(
+            "def f(x: Int) -> Result[Int, String]\n  \
+             if x > 1\n    return x * 10\n  end\n  Err(\"small\")\nend",
+        );
+        let has_mismatch = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
+            .any(|d| d.message.contains("type mismatch"));
+        assert!(
+            has_mismatch,
+            "a bare `return <T>` from a `-> Result[T, E]` function must be a \
+             type mismatch, not a silent unboxed return; got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn return_inside_a_block_still_targets_the_function_return_slot() {
+        // B84 follow-up. `current_return_ty` is set once per function and is
+        // NOT reset when inference descends into a block, so a `return`
+        // written inside `a.each do |x| … end` is checked against `scan`'s
+        // declared `Int?`. That is the correct target (a `return` in a Ruby
+        // block returns from the enclosing method), and it is what makes the
+        // escalation from a discarded `unify` to a REPORTED check safe here:
+        // the bare `x` auto-wraps into the `Option` slot exactly as it does
+        // at the top level, rather than becoming a false type mismatch.
+        let result = parse_and_check(
+            "def scan(a: Array[Int]) -> Int?\n  \
+             a.each do |x|\n    if x > 2\n      return x\n    end\n  end\n  nil\nend",
+        );
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "`return <T>` inside a block in a `-> T?` function must auto-wrap, \
+             not error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn return_of_a_bare_value_wraps_into_an_option_return_slot() {
+        // B84, the positive half: the "drop `Some`" sugar that the body's
+        // TAIL expression already got must also fire for an explicit
+        // `return`, otherwise the two spellings disagree about the value's
+        // representation. Must type-check clean.
+        let result = parse_and_check(
+            "def f(x: Int) -> Int?\n  \
+             if x > 1\n    return x * 10\n  end\n  nil\nend",
+        );
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "`return <T>` in a `-> T?` function must auto-wrap, not error: {errors:?}"
+        );
     }
 
     #[test]
@@ -661,5 +777,308 @@ mod tests {
         // real awaited-output unwrap; for now sub-phase 2A pins
         // only the structural reachability.
         let _ = tail;
+    }
+
+    // ─── Parallel-assignment owned-heap guard (v1) ──────────────────
+    // The MIR lowering aliases (does not move/clone) a place-read owned
+    // Class/Struct/Enum value, so a swap or an alias-then-reassign would
+    // double-free. typeck rejects every non-fresh owned value until real
+    // move/clone lowering lands; only a freshly-produced value is allowed.
+
+    #[test]
+    fn multiassign_swap_of_owned_class_is_rejected_once() {
+        let source = rx("multiassign_swap_owned_class");
+        let result = parse_and_check(&source);
+        let guard_errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.message.contains("parallel assignment of an owned"))
+            .collect();
+        // Both swapped values offend, but they share one span — the guard
+        // must report the statement once, not once per value.
+        assert_eq!(
+            guard_errors.len(),
+            1,
+            "expected exactly one parallel-assignment error for a swap, got {:?}",
+            guard_errors
+        );
+    }
+
+    #[test]
+    fn multiassign_ternary_aliased_owned_class_is_rejected() {
+        // A place read wrapped in a ternary (`(flag ? a : b)`) lowers to
+        // `HirExprKind::If`, not a bare VarRef — it must still be caught,
+        // otherwise the double-free the guard exists to stop slips past.
+        let source = rx("multiassign_ternary_alias_owned_class");
+        let result = parse_and_check(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("parallel assignment of an owned")),
+            "expected the ternary-aliased owned value to be rejected, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn multiassign_of_fresh_allocations_is_allowed() {
+        // Freshly-constructed values cannot alias a target, so they are
+        // safe and must NOT trip the guard.
+        let source = rx("multiassign_fresh_alloc");
+        let result = parse_and_check(&source);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("parallel assignment of an owned")),
+            "fresh allocations must be allowed in a parallel assignment, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn multiassign_ternary_of_fresh_values_is_allowed() {
+        // A ternary/`if` wrapping two fresh constructors cannot alias a
+        // target, so the guard must peel the wrapper and allow it — it is
+        // only the ternary of PLACE reads that aliases. Guards against the
+        // allow-list over-rejecting previously-compiling correct code.
+        let source = rx("multiassign_ternary_fresh");
+        let result = parse_and_check(&source);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("parallel assignment of an owned")),
+            "a ternary of fresh allocations must be allowed, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn multiassign_operator_overload_that_can_alias_target_is_rejected() {
+        // `a + b` can desugar to a user operator method that forwards `b`.
+        // Until sugared operators get the same move analysis as explicit
+        // `a.+(b)`, treating the BinaryOp result as fresh reopens the
+        // owned-heap parallel-assignment UAF.
+        let source = rx("multiassign_operator_alias_owned_class");
+        let result = parse_and_check(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("parallel assignment of an owned")),
+            "expected the operator-overload owned value to be rejected, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn multiassign_splat_accepts_copy_array_elements_and_value_lists() {
+        let source = rx("multiassign_splat");
+        let result = parse_and_check(&source);
+        assert!(
+            result.diagnostics.is_empty(),
+            "expected assignment splat fixture to type-check, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn multiassign_splat_rejects_owned_array_elements() {
+        let source = rx("multiassign_splat_owned_elements");
+        let result = parse_and_check(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("requires Copy array elements")),
+            "expected owned-element safety diagnostic, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn multiassign_splat_rejects_a_borrowed_array_target() {
+        let source = rx("multiassign_splat_ref_target");
+        let result = parse_and_check(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("target must be an owned Array")),
+            "expected borrowed-target safety diagnostic, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn multiassign_reports_pairwise_type_mismatches() {
+        let source = rx("multiassign_type_mismatch");
+        let result = parse_and_check(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("type mismatch")),
+            "expected pairwise type mismatch, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn keyword_logical_operators_require_bool_operands() {
+        let source = rx("keyword_logical_non_bool");
+        let result = parse_and_check(&source);
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code.as_deref() == Some("E0731")
+                    && diagnostic.message.contains("operator `and`")
+            }),
+            "expected a strict-Bool `and` diagnostic, got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code.as_deref() == Some("E0731")
+                    && diagnostic.message.contains("operator `not`")
+            }),
+            "expected a strict-Bool `not` diagnostic, got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code.as_deref() == Some("E0731")
+                    && diagnostic.message.contains("operator `&&`")
+            }),
+            "expected a strict-Bool `&&` diagnostic, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn comparable_operator_defaults_typecheck() {
+        let source = release_rx("965_comparable_spaceship");
+        let result = parse_and_check(&source);
+        assert!(
+            result.diagnostics.is_empty(),
+            "expected user-defined comparison operators and Comparable defaults to type-check, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn spaceship_without_a_method_or_primitive_operand_is_rejected() {
+        let source = rx("spaceship_without_method");
+        let result = parse_and_check(&source);
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code.as_deref() == Some("E0707")
+                    && diagnostic.message.contains("operator `<=>`")
+            }),
+            "expected unsupported spaceship diagnostic, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn comparison_operator_method_return_type_is_enforced() {
+        let source = rx("comparison_method_bad_return");
+        let result = parse_and_check(&source);
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code.as_deref() == Some("E0707")
+                    && diagnostic
+                        .message
+                        .contains("operator method `<=>` must return `Int`")
+            }),
+            "expected comparison return-type diagnostic, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn nil_coalesce_accepts_option_and_matching_fallback() {
+        let source = release_rx("966_nil_coalesce");
+        let result = parse_and_check(&source);
+        assert!(
+            result.diagnostics.is_empty(),
+            "expected nil coalescing to type-check, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn nil_coalesce_rejects_invalid_operands() {
+        let source = rx("nil_coalesce_invalid_operands");
+        let result = parse_and_check(&source);
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code.as_deref() == Some("E0732")
+                    && diagnostic.message.contains("requires an Option")
+            }),
+            "expected invalid-left E0732, got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code.as_deref() == Some("E0732")
+                    && diagnostic.message.contains("fallback must have type `Int`")
+            }),
+            "expected fallback-type E0732, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn bitwise_complement_on_non_integer_is_rejected() {
+        // `~` flips integer bits; applying it to a Float is E0733.
+        let source = rx("bitnot_non_integer");
+        let result = parse_and_check(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.code.as_deref() == Some("E0733")),
+            "expected E0733 for `~` on a Float, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn tap_then_block_with_two_params_is_rejected() {
+        // `tap`/`then` blocks take at most one parameter (the receiver); a
+        // wider block must be a clean compile error, not a silent miscompile
+        // that reads an unbound local.
+        let source = rx("tap_then_arity");
+        let result = parse_and_check(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("this block takes at most 1 parameter")),
+            "expected an arity error for a 2-param tap/then block, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn comparable_clamp_self_return_resolves_to_concrete_receiver() {
+        // `Comparable#clamp` returns `&Self`; at the call site on a concrete
+        // `Rank` the abstract `Self: Comparable` must substitute to `Rank`
+        // so `.value` (a Rank field) resolves on the result. Without the
+        // Self-return substitution this reports `no field value on Self`.
+        let source = release_rx("967_comparable_clamp");
+        let result = parse_and_check(&source);
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == crate::diagnostics::DiagnosticLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "clamp's `&Self` return should resolve to the concrete receiver, got {:?}",
+            errors
+        );
     }
 }

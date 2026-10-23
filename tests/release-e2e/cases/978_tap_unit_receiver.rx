@@ -1,0 +1,13 @@
+# Pins tap/then on a UNIT-typed receiver (e.g. `puts(...)` returns unit). The
+# builtin interception must still fire (the block runs) rather than leaking the
+# reserved marker name to the linker.
+def main
+  puts("side").tap do |x|
+    puts("in-tap")
+  end
+  puts("after-tap")
+  puts("side2").then do
+    puts("in-then")
+  end
+  puts("after-then")
+end

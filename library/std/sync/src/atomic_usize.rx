@@ -4,12 +4,12 @@ class AtomicUsize
   include Sync
 
   lib "runtime/atomic.c"
-    def self.new as "ruxen_atomic_usize_new"(initial: Int) -> AtomicUsize
-    def load as "ruxen_atomic_usize_load" -> Int
-    def store as "ruxen_atomic_usize_store"(value: Int) -> nil
-    def fetch_add as "ruxen_atomic_usize_fetch_add"(delta: Int) -> Int
-    def fetch_sub as "ruxen_atomic_usize_fetch_sub"(delta: Int) -> Int
-    def compare_and_swap as "ruxen_atomic_usize_compare_and_swap"(current: Int, new_val: Int) -> Int
-    def drop as "ruxen_atomic_usize_drop" -> nil
+    def self.new as "ruxen_atomic_i64_new"(initial: Int) -> AtomicUsize
+    def load as "ruxen_atomic_i64_load" -> Int
+    def store as "ruxen_atomic_i64_store"(value: Int) -> nil
+    def fetch_add as "ruxen_atomic_i64_fetch_add"(delta: Int) -> Int
+    def fetch_sub as "ruxen_atomic_i64_fetch_sub"(delta: Int) -> Int
+    def compare_and_swap as "ruxen_atomic_i64_compare_and_swap"(current: Int, new_val: Int) -> Int
+    def consume drop as "ruxen_atomic_i64_drop" -> nil
   end
 end

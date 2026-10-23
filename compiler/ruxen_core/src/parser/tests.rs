@@ -4,6 +4,13 @@ mod tests {
     use crate::parser::ast::*;
     use crate::parser::Parser;
 
+    fn rx(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/ruxen")
+            .join(format!("{name}.rx"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    }
+
     fn parse(input: &str) -> Program {
         let mut lexer = Lexer::new(input);
         let tokens = lexer.tokenize().expect("lexer failed");
@@ -805,12 +812,13 @@ end";
         // a.b.c — should parse as (a.b).c
         let expr = parse_expr("a.b.c");
         match &expr.kind {
-            ExprKind::FieldAccess { object, field } => {
+            ExprKind::FieldAccess { object, field, .. } => {
                 assert_eq!(field, "c");
                 match &object.kind {
                     ExprKind::FieldAccess {
                         object: inner,
                         field: f2,
+                        ..
                     } => {
                         assert_eq!(f2, "b");
                         match &inner.kind {
@@ -834,6 +842,7 @@ end";
         let expr = parse_expr("items.each { |x| x }");
         match &expr.kind {
             ExprKind::MethodCall {
+                parens: _,
                 object,
                 method,
                 generic_args,
@@ -865,6 +874,7 @@ end";
         let expr = parse_expr("Thread.spawn({ || 42 })");
         match &expr.kind {
             ExprKind::MethodCall {
+                parens: _,
                 object,
                 method,
                 generic_args,
@@ -1571,6 +1581,7 @@ end";
         let expr = parse_expr("list.push(42)");
         match &expr.kind {
             ExprKind::MethodCall {
+                parens: _,
                 object,
                 method,
                 generic_args,
@@ -1595,6 +1606,7 @@ end";
         let expr = parse_expr("v.iter.collect[Vec[Int]]");
         match &expr.kind {
             ExprKind::MethodCall {
+                parens: _,
                 object,
                 method,
                 generic_args,
@@ -1747,6 +1759,612 @@ end";
         assert!(
             diags.iter().any(|d| d.message.contains("nil")),
             "`()` value should be rejected with a `nil` fix-it; got: {diags:?}"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  unless / until + statement modifiers (parser desugar to if / while)
+    // ═══════════════════════════════════════════════════════════════════
+
+    fn is_negated(cond: &Expr) -> bool {
+        matches!(
+            &cond.kind,
+            ExprKind::UnaryOp {
+                op: UnaryOp::Not,
+                ..
+            }
+        )
+    }
+
+    #[test]
+    fn unless_block_desugars_to_if_with_negated_condition() {
+        match parse_expr("unless x > 0\n  puts 1\nend").kind {
+            ExprKind::If(if_expr) => {
+                assert!(is_negated(&if_expr.condition));
+                assert!(if_expr.elsif_clauses.is_empty());
+                assert!(if_expr.else_body.is_none());
+            }
+            other => panic!("expected If, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn until_block_desugars_to_while_with_negated_condition() {
+        match parse_expr("until x > 0\n  puts 1\nend").kind {
+            ExprKind::While(while_expr) => assert!(is_negated(&while_expr.condition)),
+            other => panic!("expected While, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn if_modifier_wraps_statement_in_block_if() {
+        match parse_stmt("puts 1 if x > 0") {
+            Statement::Expression(Expr {
+                kind: ExprKind::If(if_expr),
+                ..
+            }) => {
+                assert!(!is_negated(&if_expr.condition));
+                assert_eq!(if_expr.then_body.statements.len(), 1);
+            }
+            other => panic!("expected modifier If, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unless_modifier_negates_condition() {
+        match parse_stmt("puts 1 unless x > 0") {
+            Statement::Expression(Expr {
+                kind: ExprKind::If(if_expr),
+                ..
+            }) => assert!(is_negated(&if_expr.condition)),
+            other => panic!("expected modifier If, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn while_and_until_modifiers_produce_while() {
+        assert!(matches!(
+            parse_stmt("puts 1 while x"),
+            Statement::Expression(Expr {
+                kind: ExprKind::While(_),
+                ..
+            })
+        ));
+        match parse_stmt("puts 1 until x") {
+            Statement::Expression(Expr {
+                kind: ExprKind::While(w),
+                ..
+            }) => assert!(is_negated(&w.condition)),
+            other => panic!("expected While, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn return_unless_is_a_conditional_return_not_an_unless_value() {
+        // `return unless c` is a bare `return` wrapped by an `unless` modifier,
+        // NOT `return (unless c … end)`.
+        match parse_stmt("return unless x > 0") {
+            Statement::Expression(Expr {
+                kind: ExprKind::If(if_expr),
+                ..
+            }) => {
+                assert!(is_negated(&if_expr.condition));
+                match &if_expr.then_body.statements[0] {
+                    Statement::Expression(Expr {
+                        kind: ExprKind::Return(v),
+                        ..
+                    }) => assert!(v.is_none(), "return should carry no value"),
+                    other => panic!("expected bare Return in the modifier body, got {other:?}"),
+                }
+            }
+            other => panic!("expected modifier If wrapping a Return, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn or_assign_desugars_to_or_of_inner_assign() {
+        // `a ||= b` → `a || (a = b)`
+        match parse_expr("a ||= b").kind {
+            ExprKind::BinaryOp {
+                op: BinOp::Or,
+                right,
+                ..
+            } => assert!(
+                matches!(right.kind, ExprKind::Assign { .. }),
+                "||= RHS should be an assignment"
+            ),
+            other => panic!("expected `a || (a = b)`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn and_assign_desugars_to_and_of_inner_assign() {
+        // `a &&= b` → `a && (a = b)`
+        match parse_expr("a &&= b").kind {
+            ExprKind::BinaryOp {
+                op: BinOp::And,
+                right,
+                ..
+            } => assert!(
+                matches!(right.kind, ExprKind::Assign { .. }),
+                "&&= RHS should be an assignment"
+            ),
+            other => panic!("expected `a && (a = b)`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nil_coalesce_is_right_associative() {
+        match parse_expr("a ?? b ?? c").kind {
+            ExprKind::BinaryOp {
+                op: BinOp::NilCoalesce,
+                left,
+                right,
+            } => {
+                assert!(matches!(left.kind, ExprKind::Identifier(ref name) if name == "a"));
+                assert!(matches!(
+                    right.kind,
+                    ExprKind::BinaryOp {
+                        op: BinOp::NilCoalesce,
+                        ..
+                    }
+                ));
+            }
+            other => panic!("expected `a ?? (b ?? c)`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nil_coalesce_binds_between_assignment_and_logical_or() {
+        match parse_expr("a = b ?? c || d").kind {
+            ExprKind::Assign { value, .. } => match value.kind {
+                ExprKind::BinaryOp {
+                    op: BinOp::NilCoalesce,
+                    right,
+                    ..
+                } => assert!(matches!(
+                    right.kind,
+                    ExprKind::BinaryOp { op: BinOp::Or, .. }
+                )),
+                other => panic!("expected coalesce assignment value, got {other:?}"),
+            },
+            other => panic!("expected assignment root, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn keyword_and_binds_looser_than_assignment() {
+        match parse_expr("a = true and false").kind {
+            ExprKind::BinaryOp {
+                op: BinOp::KeywordAnd,
+                left,
+                ..
+            } => assert!(
+                matches!(left.kind, ExprKind::Assign { .. }),
+                "assignment should bind before keyword `and`"
+            ),
+            other => panic!("expected `(a = true) and false`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn keyword_and_and_or_share_one_left_associative_tier() {
+        match parse_expr("true or false and false").kind {
+            ExprKind::BinaryOp {
+                op: BinOp::KeywordAnd,
+                left,
+                ..
+            } => assert!(
+                matches!(
+                    left.kind,
+                    ExprKind::BinaryOp {
+                        op: BinOp::KeywordOr,
+                        ..
+                    }
+                ),
+                "keyword `or` should associate before the following keyword `and`"
+            ),
+            other => panic!("expected `(true or false) and false`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn keyword_not_consumes_symbolic_or_but_stops_before_keyword_and() {
+        match parse_expr("not true || false and true").kind {
+            ExprKind::BinaryOp {
+                op: BinOp::KeywordAnd,
+                left,
+                ..
+            } => assert!(
+                matches!(
+                    left.kind,
+                    ExprKind::UnaryOp {
+                        op: UnaryOp::KeywordNot,
+                        operand
+                    } if matches!(
+                        operand.kind,
+                        ExprKind::BinaryOp {
+                            op: BinOp::Or,
+                            ..
+                        }
+                    )
+                ),
+                "`not` should consume `||` and stop before keyword `and`"
+            ),
+            other => panic!("expected `(not (true || false)) and true`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn keyword_not_consumes_assignment() {
+        match parse_expr("not a = false").kind {
+            ExprKind::UnaryOp {
+                op: UnaryOp::KeywordNot,
+                operand,
+            } => assert!(
+                matches!(operand.kind, ExprKind::Assign { .. }),
+                "`not` should consume an assignment operand"
+            ),
+            other => panic!("expected `not (a = false)`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn multiple_assignment_parses_target_and_value_lists() {
+        match parse_stmt("a, b = 1, 2") {
+            Statement::Expression(Expr {
+                kind:
+                    ExprKind::MultiAssign {
+                        targets,
+                        values,
+                        splat_target,
+                    },
+                ..
+            }) => {
+                assert_eq!(targets.len(), 2);
+                assert_eq!(values.len(), 2);
+                assert_eq!(splat_target, None);
+            }
+            other => panic!("expected MultiAssign, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn multiple_assignment_swap_form_parses() {
+        match parse_stmt("a, b = b, a") {
+            Statement::Expression(Expr {
+                kind:
+                    ExprKind::MultiAssign {
+                        targets,
+                        values,
+                        splat_target,
+                    },
+                ..
+            }) => {
+                assert_eq!(targets.len(), 2);
+                assert_eq!(values.len(), 2);
+                assert_eq!(splat_target, None);
+            }
+            other => panic!("expected MultiAssign, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn trailing_assignment_splat_records_its_target() {
+        let program = parse(&rx("multiassign_splat"));
+        let TopLevelItem::Function(main) = &program.items[0] else {
+            panic!("expected main function");
+        };
+        let multiassign = main
+            .body
+            .statements
+            .iter()
+            .find_map(|statement| match statement {
+                Statement::Expression(Expr {
+                    kind:
+                        ExprKind::MultiAssign {
+                            targets,
+                            values,
+                            splat_target,
+                        },
+                    ..
+                }) if splat_target.is_some() => Some((targets, values, splat_target)),
+                _ => None,
+            })
+            .expect("expected assignment splat");
+        assert_eq!(multiassign.0.len(), 2);
+        assert_eq!(multiassign.1.len(), 1);
+        assert_eq!(*multiassign.2, Some(1));
+    }
+
+    #[test]
+    fn assignment_splat_must_be_the_final_target() {
+        let diagnostics = parse_err(&rx("multiassign_splat_nonfinal"));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("final target")),
+            "expected final-target diagnostic, got {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn single_assignment_is_not_a_multiassign() {
+        // A plain `a = 1` (no comma) stays an ordinary assignment.
+        assert!(matches!(
+            parse_stmt("a = 1"),
+            Statement::Expression(Expr {
+                kind: ExprKind::Assign { .. },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn comma_list_without_equals_reports_a_clear_error() {
+        // `puts "a", "b"` (bare multi-arg, never valid) must NOT cascade a
+        // misleading "parallel assignment arity" error; it reports the missing
+        // parentheses clearly.
+        let diags = parse_errors("def f\n  puts \"a\", \"b\"\nend\n");
+        assert!(
+            diags.iter().any(|d| d.message.contains("parentheses")),
+            "expected a clear comma-list error mentioning parentheses; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn ternary_desugars_to_if_else() {
+        // `c ? a : b` becomes `if c then a else b end`.
+        match parse_expr("x > 0 ? 1 : 2").kind {
+            ExprKind::If(if_expr) => {
+                assert!(if_expr.else_body.is_some());
+                assert!(if_expr.elsif_clauses.is_empty());
+            }
+            other => panic!("expected If from ternary, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn attached_question_stays_the_try_operator() {
+        // `foo()?` (no space before `?`) is the try operator, not a ternary.
+        // (A trailing `?` on a bare identifier like `empty?` is absorbed into
+        // the identifier by the lexer, so it never reaches this path.)
+        assert!(matches!(parse_expr("foo()?").kind, ExprKind::Try(_)));
+    }
+
+    #[test]
+    fn parenthesized_group_then_try_is_try_not_ternary() {
+        // `(expr)?` with an attached `?` after the closing paren is the try
+        // operator, not a ternary (the grouping's span must include the parens).
+        assert!(matches!(parse_expr("(foo())?").kind, ExprKind::Try(_)));
+        assert!(matches!(parse_expr("(a || b)?").kind, ExprKind::Try(_)));
+    }
+
+    #[test]
+    fn spaceship_parses_as_cmp_binop() {
+        assert!(matches!(
+            parse_expr("a <=> b").kind,
+            ExprKind::BinaryOp { op: BinOp::Cmp, .. }
+        ));
+    }
+
+    #[test]
+    fn case_when_desugars_to_if() {
+        // `case/when` is `===`-dispatch, desugared to an if/elsif chain.
+        match parse_expr("case n\nwhen 1 then \"a\"\nelse \"b\"\nend").kind {
+            ExprKind::If(if_expr) => assert!(if_expr.else_body.is_some()),
+            other => panic!("expected If from case/when, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn case_in_desugars_to_match() {
+        // `case/in` is pattern matching, an alias of `match`.
+        match parse_expr("case o\nin Some(x) then x\nin nil then 0\nend").kind {
+            ExprKind::Match(m) => assert_eq!(m.arms.len(), 2),
+            other => panic!("expected Match from case/in, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn then_keyword_parses_as_a_method_name() {
+        // `then` is a keyword (case/when) but must also parse as the Ruby
+        // `Object#then` method name in `.then` position.
+        match parse_expr("x.then do |v|\n      v\n    end").kind {
+            ExprKind::MethodCall { method, .. } => assert_eq!(method, "then"),
+            other => panic!("expected MethodCall `then`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_ivar_desugars_to_self_field_access() {
+        match parse_expr("@count").kind {
+            ExprKind::FieldAccess { object, field, .. } => {
+                assert_eq!(field, "count");
+                assert!(
+                    matches!(object.kind, ExprKind::SelfRef),
+                    "object should be `self`, got {:?}",
+                    object.kind
+                );
+            }
+            other => panic!("expected FieldAccess(self, count), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn endless_method_def_parses_body_as_single_expression() {
+        let mut parser = Parser::new(
+            Lexer::new("def double(x: Int) -> Int = x * 2")
+                .tokenize()
+                .unwrap(),
+        );
+        let program = parser.parse().expect("endless def should parse");
+        let func = program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                TopLevelItem::Function(f) if f.name == "double" => Some(f),
+                _ => None,
+            })
+            .expect("expected `double`");
+        assert_eq!(
+            func.body.statements.len(),
+            1,
+            "endless body is one statement"
+        );
+        assert!(
+            matches!(func.body.statements[0], Statement::Expression(_)),
+            "endless body statement should be an expression, got {:?}",
+            func.body.statements[0]
+        );
+    }
+
+    #[test]
+    fn bitwise_complement_parses_as_unary_bitnot() {
+        match parse_expr("~x").kind {
+            ExprKind::UnaryOp { op, .. } => assert_eq!(op, UnaryOp::BitNot),
+            other => panic!("expected UnaryOp(BitNot), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bitwise_compound_assigns_parse_to_the_matching_binop() {
+        for (src, expected) in [
+            ("a <<= b", BinOp::Shl),
+            ("a >>= b", BinOp::Shr),
+            ("a &= b", BinOp::BitAnd),
+            ("a |= b", BinOp::BitOr),
+            ("a ^= b", BinOp::BitXor),
+        ] {
+            match parse_expr(src).kind {
+                ExprKind::CompoundAssign { op, .. } => {
+                    assert_eq!(op, expected, "for `{src}`")
+                }
+                other => panic!("expected CompoundAssign for `{src}`, got {other:?}"),
+            }
+        }
+    }
+
+    /// F-5: `#{...}` is parsed into an expression by the parser.
+    #[test]
+    fn interpolation_parses_to_expression() {
+        let expr = parse_expr("\"#{a <=> b}\"");
+        let ExprKind::InterpolatedString(parts) = expr.kind else {
+            panic!("expected InterpolatedString, got {:?}", expr.kind);
+        };
+        match &parts[..] {
+            [StringPart::Expr { expr, .. }] => assert!(
+                matches!(expr.kind, ExprKind::BinaryOp { op: BinOp::Cmp, .. }),
+                "got {:?}",
+                expr.kind
+            ),
+            other => panic!("expected one expression part, got {other:?}"),
+        }
+    }
+
+    /// F-5: a malformed `#{...}` is a parse error, not a silently dropped
+    /// expression.
+    #[test]
+    fn malformed_interpolation_is_reported() {
+        let diags = parse_err("def f\n  \"#{1 +}\"\nend\n");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("expected expression")),
+            "got {:?}",
+            diags.iter().map(|d| d.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    fn parse_repl(input: &str) -> ReplParseResult {
+        let tokens = Lexer::new(input).tokenize().expect("lexer failed");
+        Parser::new(tokens).parse_repl_input()
+    }
+
+    #[test]
+    fn repl_input_integer_expression() {
+        assert!(matches!(
+            parse_repl("1 + 2"),
+            ReplParseResult::Complete(ReplInput::Expression(_))
+        ));
+    }
+
+    #[test]
+    fn repl_input_let_statement() {
+        assert!(matches!(
+            parse_repl("let x = 42"),
+            ReplParseResult::Complete(ReplInput::Statement(_))
+        ));
+    }
+
+    #[test]
+    fn repl_input_function_definition() {
+        assert!(matches!(
+            parse_repl("def double(n: Int) -> Int\n  n * 2\nend"),
+            ReplParseResult::Complete(ReplInput::TopLevel(_))
+        ));
+    }
+
+    #[test]
+    fn repl_input_incomplete_def() {
+        assert!(matches!(
+            parse_repl("def double(n: Int) -> Int"),
+            ReplParseResult::Incomplete
+        ));
+    }
+
+    #[test]
+    fn repl_input_incomplete_class() {
+        assert!(matches!(
+            parse_repl("class Foo"),
+            ReplParseResult::Incomplete
+        ));
+    }
+
+    #[test]
+    fn repl_input_string_expression() {
+        assert!(matches!(
+            parse_repl("\"hello\""),
+            ReplParseResult::Complete(ReplInput::Expression(_))
+        ));
+    }
+
+    #[test]
+    fn repl_input_boolean_expression() {
+        assert!(matches!(
+            parse_repl("true"),
+            ReplParseResult::Complete(ReplInput::Expression(_))
+        ));
+    }
+
+    /// The canonical closure type `Fn[(A) -> R]` parses in every type
+    /// position, not only after `&block:` (spec section 6, I-22), and the
+    /// formatter keeps the bracket spelling.
+    #[test]
+    fn bracket_closure_type_parses_in_any_type_position() {
+        let source =
+            "def run(build: Fn[(&var Int, String) -> nil], f: Fn[() -> Int]) -> nil\nend\n";
+        let program = parse(source);
+        let TopLevelItem::Function(func) = &program.items[0] else {
+            panic!("expected a function");
+        };
+        for param in &func.params {
+            assert!(
+                matches!(
+                    param.type_expr,
+                    TypeExpr::Function {
+                        spelling: FnTypeSpelling::Bracket,
+                        ..
+                    }
+                ),
+                "{:?}",
+                param.type_expr
+            );
+        }
+        let formatted = crate::formatter::format(source).output;
+        assert!(
+            formatted.contains("build: Fn[(&var Int, String) -> nil]"),
+            "{formatted}"
         );
     }
 }

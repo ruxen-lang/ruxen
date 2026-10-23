@@ -1,0 +1,10 @@
+class Opaque
+  def init
+  end
+end
+
+def main
+  let left = Opaque.new
+  let right = Opaque.new
+  let result = left <=> right
+end

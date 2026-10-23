@@ -1,0 +1,16 @@
+# Pins the bare Kernel `exit(code)` that B19's matrix row now cites. It is
+# NOT new in B19: it already exists as an FFI decl in
+# `library/std/process/src/lib.rx`, and B19 checked for it before adding a
+# second definition of the same name in `core`. The assertion is that
+# "after exit" never reaches stdout, which is what separates a real
+# process exit from a call that returns.
+#
+# Ruby's `exit!` (skip the at-exit handlers) was unshippable when this pin
+# was written, because a free function named with a trailing `!` compiled
+# clean and then did nothing at its call site. B87 fixed that; `exit!` now
+# ships and is pinned separately as case 1887.
+def main
+  puts "before exit"
+  exit(3)
+  puts "after exit"
+end

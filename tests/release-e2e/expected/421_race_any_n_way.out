@@ -1,0 +1,5 @@
+race start
+loser dropped tag=10
+loser dropped tag=20
+won idx=1 p=33
+race done

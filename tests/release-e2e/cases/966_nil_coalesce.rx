@@ -1,0 +1,27 @@
+# Pins lazy Option fallback, right-associative chaining, nil inference, and
+# owned String values through `Option[T] ?? T -> T`.
+def fallback(value: Int) -> Int
+  puts "fallback"
+  value
+end
+
+def main
+  let present: Option[Int] = 7
+  let absent: Option[Int] = nil
+
+  puts "present=#{present ?? fallback(99)}"
+  puts "absent=#{absent ?? fallback(42)}"
+
+  let first: Option[Int] = nil
+  let second: Option[Int] = 11
+  puts "chain=#{first ?? second ?? fallback(100)}"
+  puts "literal=#{nil ?? 5}"
+
+  let text: Option[String] = "ready"
+  let selected = text ?? "backup"
+  puts "text=#{selected}"
+
+  let no_text: Option[String] = nil
+  let selected_fallback = no_text ?? "backup"
+  puts "missing_text=#{selected_fallback}"
+end

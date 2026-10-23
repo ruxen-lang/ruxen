@@ -5,14 +5,12 @@
 ## registrations into self-hosted library/std/src/fmt.rx.
 ##
 ## Display is the canonical interpolation mixin (`"#{x}"` lowers
-## through Display::fmt). Debug is the `"#{x:?}"` and `derive Debug`
-## target. Both share the `fmt(&self, &mut Formatter) ->
-## Result[nil, FmtError]` signature, but the Rust registration only
-## carried the method NAME (`["fmt"]`) — typeck checks
-## `impl Display for T` / `impl Debug for T` provides `fmt` against
-## that name. The minimum-faithful mixin definitions below preserve
-## that contract; the broader generic-signature work lands when
-## mixin default-method lowering does.
+## through Display::fmt). Its `fmt` carries only the method NAME (the
+## Rust registration carried `["fmt"]`); the full `fmt(&self, &mut
+## Formatter) -> Result[nil, FmtError]` signature lands when mixin
+## default-method lowering does. Debug is the `derive Debug` target: it
+## declares `to_debug -> String`, the method a derived Debug defines,
+## and the compiler reads that name from this declaration.
 ##
 ## Formatter and FmtError are placeholder classes (no fields, no
 ## methods registered through DefKind::Method yet). The runtime
@@ -24,8 +22,10 @@ mixin Display
   def fmt
 end
 
+## A derived `Debug` defines `to_debug -> String`, which interpolation calls
+## for a Debug value; the compiler reads the method name from this declaration.
 mixin Debug
-  def fmt
+  def to_debug -> String
 end
 
 ## std::fmt::Formatter — buffered accumulator that `Display::fmt` /

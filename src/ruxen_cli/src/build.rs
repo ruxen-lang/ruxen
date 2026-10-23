@@ -4,18 +4,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use ruxen_core::borrow_check;
-use ruxen_core::codegen;
-use ruxen_core::lexer::Lexer;
-use ruxen_core::mir;
-use ruxen_core::parser::Parser;
-use ruxen_core::typeck;
+use ruxen_core::codegen::target::ResolvedTarget;
+use ruxen_core::codegen::{self, Backend};
+use ruxen_core::driver::Options;
+use ruxen_core::mir::nodes::MirProgram;
+use ruxen_core::module_loader::{ModuleLoader, SourceBundle};
+use ruxenc::compile;
 
 use crate::lock::LockFile;
 use crate::manifest::Manifest;
 use crate::module_discovery::ModuleTree;
 use crate::resolve_deps;
-use crate::rlib::{self, Exports, TypeMetadata};
+use crate::rlib::{self, TypeMetadata};
 
 /// `ruxen build [--release] [--locked] [--bin <name>] [--target <triple>]`
 pub fn build(
@@ -35,8 +35,9 @@ pub fn build(
     let target_str: Option<String> = target
         .map(|s| s.to_string())
         .or_else(|| manifest.build.as_ref().and_then(|b| b.target.clone()));
-    let resolved_target =
-        ruxen_core::codegen::target::ResolvedTarget::resolve(target_str.as_deref())?;
+    let resolved_target = ResolvedTarget::resolve(target_str.as_deref())?;
+    let opt_level = manifest.opt_level(release).map(|level| level.to_string());
+    let backend = Backend::select(release, None, opt_level.as_deref(), &resolved_target)?;
 
     // Advisory: dev-dependencies are parsed + survive `ruxen add --dev`
     // / `ruxen remove`, but `ruxen build` does not yet compile them
@@ -150,9 +151,10 @@ pub fn build(
                 &dep.name,
                 &dep.version,
                 &rlib_path,
-                release,
+                backend,
                 &extern_libs,
                 &dep_deps,
+                &resolved_target,
             )?;
             extern_libs.push((dep.name.clone(), rlib_path));
         }
@@ -176,9 +178,10 @@ pub fn build(
             &package.name,
             &package.version,
             &rlib_path,
-            release,
+            backend,
             &extern_libs,
             &dep_source_dirs,
+            &resolved_target,
         )?;
     } else {
         // Binary: produce an executable
@@ -192,7 +195,7 @@ pub fn build(
             &project_dir,
             &manifest,
             &output_path,
-            release,
+            backend,
             &extern_libs,
             &dep_source_dirs,
             &resolved_target,
@@ -222,7 +225,7 @@ pub fn run(release: bool, target: Option<&str>, args: Vec<String>) -> Result<(),
     // §3 non-goal: `ruxen run --target <non-host>` does not launch an emulator.
     // Resolve and reject up front with an actionable message rather than
     // building a binary the host can't execute.
-    let resolved_target = ruxen_core::codegen::target::ResolvedTarget::resolve(target)?;
+    let resolved_target = ResolvedTarget::resolve(target)?;
     if !resolved_target.is_host() {
         return Err(format!(
             "cannot run a binary cross-compiled for '{}' on the host. \
@@ -254,7 +257,8 @@ pub fn run(release: bool, target: Option<&str>, args: Vec<String>) -> Result<(),
     Ok(())
 }
 
-/// `ruxen check [--target <triple>]` — type-check without codegen.
+/// `ruxen check [--target <triple>]` — run the front end `ruxen build` runs
+/// (type, borrow and loan checks, MIR lowering) without codegen.
 pub fn check(target: Option<&str>) -> Result<(), String> {
     let start = Instant::now();
     let project_dir = find_project_root()?;
@@ -262,32 +266,27 @@ pub fn check(target: Option<&str>) -> Result<(), String> {
     manifest.validate()?;
     let package = manifest.require_package()?;
 
-    // Validate the triple up front (an invalid `--target` is a hard error even
-    // in `check`). Codegen is not run; the resolved target is reserved for
-    // cfg(...) gating (tier 4.01).
+    // The target picks the stdlib the program is checked against, as in
+    // `ruxen build`; an invalid `--target` is a hard error.
     let target_str: Option<String> = target
         .map(|s| s.to_string())
         .or_else(|| manifest.build.as_ref().and_then(|b| b.target.clone()));
-    let _resolved_target =
-        ruxen_core::codegen::target::ResolvedTarget::resolve(target_str.as_deref())?;
+    let resolved_target = ResolvedTarget::resolve(target_str.as_deref())?;
 
     let entry = project_dir.join(manifest.entry_point());
     if !entry.exists() {
         return Err(format!("entry point not found: {}", entry.display()));
     }
 
-    // Discover and gather all module sources. Flat-merge the project's
-    // dependency sources ahead of its own (Q16) so `ruxen check` sees
-    // dependency symbols — the same visibility a binary build gets.
-    let tree = ModuleTree::discover(&project_dir)?;
     let dep_source_dirs = resolve_dep_source_dirs(&project_dir)?;
-    let mut combined = gather_dep_sources(&dep_source_dirs)?;
-    combined.push_str(&gather_sources(&project_dir, &tree, &package.name)?);
+    let combined =
+        gather_project_bundle(&project_dir, &entry, &dep_source_dirs, &package.name)?.source;
 
-    if let Err(e) = check_single_file(&combined, &entry) {
-        eprintln!("{}", e);
-        return Err("type checking failed".to_string());
-    }
+    front_end(
+        &combined,
+        &entry,
+        &Options::for_target(&resolved_target, false),
+    )?;
 
     let elapsed = start.elapsed();
     println!(
@@ -299,10 +298,11 @@ pub fn check(target: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// `ruxen clean` — remove the target/ directory.
+/// `ruxen clean` — remove the project's target root (the workspace
+/// `target/` when run inside a member), incremental cache included.
 pub fn clean() -> Result<(), String> {
     let project_dir = find_project_root()?;
-    let target_dir = project_dir.join("target");
+    let target_dir = find_target_root(&project_dir).join("target");
 
     if target_dir.exists() {
         fs::remove_dir_all(&target_dir)
@@ -313,29 +313,12 @@ pub fn clean() -> Result<(), String> {
     Ok(())
 }
 
-/// Find the project root by searching upward for Ruxen.toml.
-///
-/// Returns the FIRST ancestor with a Ruxen.toml — i.e. the nearest
-/// member when invoked from inside a workspace. The workspace root
+/// The nearest member when invoked inside a workspace. The workspace root
 /// (which may also contain a Ruxen.toml) is found separately by
-/// [`manifest::find_workspace_root`] and used only to compute the
-/// shared `target/` directory; build/run still operate against the
-/// nearest member's package.
-pub fn find_project_root() -> Result<PathBuf, String> {
-    let mut dir =
-        std::env::current_dir().map_err(|e| format!("failed to get current directory: {}", e))?;
-
-    loop {
-        if dir.join("Ruxen.toml").exists() {
-            return Ok(dir);
-        }
-        if !dir.pop() {
-            return Err(
-                "could not find `Ruxen.toml` in this directory or any parent directory".to_string(),
-            );
-        }
-    }
-}
+/// [`manifest::find_workspace_root`] and used only to compute the shared
+/// `target/` directory; build/run still operate against the nearest
+/// member's package.
+pub use ruxenc::compile::find_project_root;
 
 /// Return the directory that owns `target/`. When `project_dir` is a
 /// member of a workspace, this is the workspace root; otherwise the
@@ -358,131 +341,13 @@ pub fn find_target_root(project_dir: &Path) -> PathBuf {
     project_dir.to_path_buf()
 }
 
-/// Compile a single .rx file through the full pipeline: lex → parse → typecheck → borrow check → MIR → codegen.
-fn compile_single_file(
-    source: &str,
-    _file_path: &Path,
-    release: bool,
-) -> Result<(Vec<u8>, TypeMetadata), String> {
-    // Phase 1: Lexing
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().map_err(|diagnostics| {
-        diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    // Phase 2: Parsing
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().map_err(|diagnostics| {
-        diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    // Phase 3: Type checking
-    let type_result = typeck::type_check(&program);
-    let has_errors = type_result
-        .diagnostics
-        .iter()
-        .any(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error);
-
-    if has_errors {
-        let msgs: Vec<String> = type_result
-            .diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect();
-        return Err(msgs.join("\n"));
-    }
-
-    // Phase 4: Borrow checking
-    let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
-    if !borrow_errors.is_empty() {
-        let msgs: Vec<String> = borrow_errors.iter().map(|e| e.to_string()).collect();
-        return Err(msgs.join("\n"));
-    }
-
-    // Phase 5: MIR lowering
-    let mut lowerer = mir::lower::Lowerer::new(&type_result.symbols);
-    let mir_program = lowerer
-        .lower_program(&type_result.program)
-        .map_err(|e| format!("MIR lowering error: {}", e))?;
-
-    // Phase 6: Code generation
-    let backend = if release {
-        #[cfg(feature = "llvm")]
-        {
-            codegen::Backend::Llvm { opt_level: 2 }
-        }
-        #[cfg(not(feature = "llvm"))]
-        {
-            codegen::Backend::Cranelift
-        }
-    } else {
-        codegen::Backend::Cranelift
-    };
-
-    let object_bytes = match backend {
-        codegen::Backend::Cranelift => {
-            let mut cg = codegen::cranelift::CodeGen::new()?;
-            cg.compile_program(&mir_program)?;
-            cg.finish()?
-        }
-        #[cfg(feature = "llvm")]
-        codegen::Backend::Llvm { opt_level } => {
-            let mut cg = codegen::llvm::CodeGen::new(opt_level)?;
-            cg.compile_program(&mir_program)?;
-            cg.finish()?
-        }
-    };
-
-    // Build type metadata from HIR
-    let metadata = build_metadata_from_hir(&type_result);
-
-    Ok((object_bytes, metadata))
-}
-
-/// Type-check a single file (no codegen).
-fn check_single_file(source: &str, file_path: &Path) -> Result<(), String> {
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().map_err(|diagnostics| {
-        diagnostics
-            .iter()
-            .map(|d| format!("{}: {}", file_path.display(), d))
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().map_err(|diagnostics| {
-        diagnostics
-            .iter()
-            .map(|d| format!("{}: {}", file_path.display(), d))
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    let type_result = typeck::type_check(&program);
-    let has_errors = type_result
-        .diagnostics
-        .iter()
-        .any(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error);
-
-    if has_errors {
-        let msgs: Vec<String> = type_result
-            .diagnostics
-            .iter()
-            .map(|d| format!("{}: {}", file_path.display(), d))
-            .collect();
-        return Err(msgs.join("\n"));
-    }
-
-    Ok(())
+/// Run the front end on `source`, the bundle whose entry file is `entry`,
+/// and take its MIR program. Errors (and, on success, warnings) carry the
+/// entry file's path, as `ruxen compile` prints them.
+fn front_end(source: &str, entry: &Path, options: &Options) -> Result<MirProgram, String> {
+    let path = entry.to_string_lossy();
+    let (_, mir_program) = compile::front_end(&compile::parse(source, &path)?, &path, options)?;
+    Ok(mir_program)
 }
 
 /// Gather all source files in a project into a single combined source string.
@@ -523,20 +388,44 @@ fn gather_sources(project_dir: &Path, tree: &ModuleTree, name: &str) -> Result<S
     Ok(combined)
 }
 
+fn gather_project_bundle(
+    project_dir: &Path,
+    entry: &Path,
+    dep_source_dirs: &[PathBuf],
+    name: &str,
+) -> Result<SourceBundle, String> {
+    let mut load_paths = Vec::with_capacity(dep_source_dirs.len() + 1);
+    load_paths.push(project_dir.to_path_buf());
+    load_paths.extend(dep_source_dirs.iter().cloned());
+    let bundle = ModuleLoader::new(load_paths).load(entry)?;
+    if bundle.has_directives {
+        return Ok(bundle);
+    }
+
+    let tree = ModuleTree::discover(project_dir)?;
+    let mut source = gather_dep_sources(dep_source_dirs)?;
+    source.push_str(&gather_sources(project_dir, &tree, name)?);
+    Ok(SourceBundle {
+        source,
+        files: bundle.files,
+        autoloads: bundle.autoloads,
+        has_directives: false,
+    })
+}
+
 /// Wrap the rlib object-extraction call with rich diagnostic context.
 ///
 /// The underlying I/O / archive errors are technically accurate (`No
-/// such file or directory`, `metadata.json not found in .rlib`, …)
+/// such file or directory`, `object code not found in .rlib`, …)
 /// but give the user no path forward.  Surface the dep name and a
 /// concrete fix hint based on the failure shape:
 ///
 /// - Missing rlib → dependency was never built.  Most common cause:
 ///   user edited `[dependencies]` then ran the binary directly without
 ///   `ruxen build` in between.
-/// - Compiler-version mismatch → dependency was built with a different
-///   ruxenc.  Common after upgrading the toolchain.
-/// - Corrupted archive / missing metadata → rlib is truncated or
-///   stale from a build that crashed mid-write.
+/// - Any failure reading an rlib that exists → the archive is
+///   unreadable, truncated or stale from a build that crashed
+///   mid-write; rebuilding regenerates it.
 fn extract_dep_object_code(name: &str, rlib_path: &Path) -> Result<Vec<u8>, String> {
     if !rlib_path.exists() {
         return Err(format!(
@@ -549,38 +438,16 @@ fn extract_dep_object_code(name: &str, rlib_path: &Path) -> Result<Vec<u8>, Stri
         ));
     }
     rlib::extract_object_code(rlib_path).map_err(|e| {
-        let lower = e.to_lowercase();
-        // Pattern-match the underlying error to give an actionable hint.
-        if lower.contains("incompatible") || lower.contains("compiled with ruxenc") {
-            format!(
-                "dependency `{}` was built with an incompatible compiler version\n  \
-                 Path: {}\n  \
-                 Cause: {}\n  \
-                 Hint: run `ruxen clean` then `ruxen build` to rebuild the dep \
-                 with the current toolchain.",
-                name,
-                rlib_path.display(),
-                e
-            )
-        } else if lower.contains("not found in .rlib") || lower.contains("failed to read") {
-            format!(
-                "dependency `{}` rlib is corrupted or incomplete\n  \
-                 Path: {}\n  \
-                 Cause: {}\n  \
-                 Hint: a previous build may have been interrupted; \
-                 run `ruxen clean` then `ruxen build` to regenerate.",
-                name,
-                rlib_path.display(),
-                e
-            )
-        } else {
-            format!(
-                "failed to load dependency `{}`\n  Path: {}\n  Cause: {}",
-                name,
-                rlib_path.display(),
-                e
-            )
-        }
+        format!(
+            "dependency `{}` rlib could not be read\n  \
+             Path: {}\n  \
+             Cause: {}\n  \
+             Hint: a previous build may have been interrupted; \
+             run `ruxen clean` then `ruxen build` to regenerate.",
+            name,
+            rlib_path.display(),
+            e
+        )
     })
 }
 
@@ -688,7 +555,8 @@ fn transitive_dep_source_dirs(
         .collect()
 }
 
-/// Compile a dependency piece into an .rlib file.
+/// Compile a dependency piece into an .rlib file, checked against
+/// `target`'s stdlib.
 ///
 /// `dep_source_dirs` carries the (topologically-sorted) source dirs of
 /// every package this piece depends on, flat-merged ahead of its own
@@ -700,26 +568,28 @@ fn compile_piece(
     name: &str,
     version: &str,
     rlib_path: &Path,
-    release: bool,
+    backend: Backend,
     _extern_libs: &[(String, PathBuf)],
     dep_source_dirs: &[PathBuf],
+    target: &ResolvedTarget,
 ) -> Result<(), String> {
-    let tree = ModuleTree::discover(source_dir)?;
+    let entry_file = if source_dir.join("src/lib.rx").is_file() {
+        source_dir.join("src/lib.rx")
+    } else {
+        source_dir.join("src/main.rx")
+    };
+    let bundle = gather_project_bundle(source_dir, &entry_file, dep_source_dirs, name)?;
+    let combined = bundle.source;
+    let options = Options::for_target(target, false);
+    let object_bytes =
+        backend.emit_object(&front_end(&combined, &entry_file, &options)?, target)?;
+    let metadata = TypeMetadata {
+        compiler_version: rlib::COMPILER_VERSION.to_string(),
+        name: name.to_string(),
+        version: version.to_string(),
+    };
 
-    // Gather all source files: dep sources first (Q16), then entry point
-    // + modules. Flat-merge (not extern-rlib link) keeps a single object
-    // per rlib — no duplicate symbols.
-    let mut combined = gather_dep_sources(dep_source_dirs)?;
-    combined.push_str(&gather_sources(source_dir, &tree, name)?);
-
-    let entry_file = source_dir.join("src/lib.rx");
-    let (object_bytes, mut metadata) = compile_single_file(&combined, &entry_file, release)?;
-
-    // Set the piece metadata
-    metadata.name = name.to_string();
-    metadata.version = version.to_string();
-
-    let source_hash = rlib::hash_sources(source_dir)?;
+    let source_hash = rlib::hash_bytes(combined.as_bytes());
     rlib::create_rlib(rlib_path, name, &object_bytes, &metadata, &source_hash)?;
 
     Ok(())
@@ -731,105 +601,20 @@ fn compile_project(
     project_dir: &Path,
     manifest: &Manifest,
     output_path: &Path,
-    release: bool,
+    backend: Backend,
     extern_libs: &[(String, PathBuf)],
     dep_source_dirs: &[PathBuf],
-    target: &ruxen_core::codegen::target::ResolvedTarget,
+    target: &ResolvedTarget,
 ) -> Result<(), String> {
     let entry = project_dir.join(manifest.entry_point());
     if !entry.exists() {
         return Err(format!("entry point not found: {}", entry.display()));
     }
 
-    let tree = ModuleTree::discover(project_dir)?;
     let package_name = manifest.require_package()?.name.clone();
-    let user_source = gather_sources(project_dir, &tree, &package_name)?;
+    let source = gather_project_bundle(project_dir, &entry, dep_source_dirs, &package_name)?.source;
 
-    // Flat-merge dep sources ahead of user source so the resolver
-    // sees their declarations during typecheck (see `gather_dep_sources`).
-    let mut combined = gather_dep_sources(dep_source_dirs)?;
-    combined.push_str(&user_source);
-    let source = combined;
-
-    // Phase 1: Lex
-    let mut lexer = Lexer::new(&source);
-    let tokens = lexer.tokenize().map_err(|diagnostics| {
-        diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    // Phase 2: Parse
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse().map_err(|diagnostics| {
-        diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-
-    // Phase 3: Type check. On the wasm target use the curated stdlib bootstrap
-    // (heap-core subset) — the full bootstrap drags in `dispatch runtime` stdlib
-    // (TimeSleepFuture) the LLVM/wasm backend can't lower (tier 4.09). Mirrors
-    // the single-file `ruxen compile` wasm path.
-    let type_result = if target.is_wasm() {
-        typeck::type_check_wasm(&program)
-    } else {
-        typeck::type_check(&program)
-    };
-    let has_errors = type_result
-        .diagnostics
-        .iter()
-        .any(|d| d.level == ruxen_core::diagnostics::DiagnosticLevel::Error);
-
-    if has_errors {
-        let msgs: Vec<String> = type_result
-            .diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect();
-        return Err(msgs.join("\n"));
-    }
-
-    // Phase 4: Borrow check
-    let borrow_errors = borrow_check::borrow_check(&type_result.program, &type_result.symbols);
-    if !borrow_errors.is_empty() {
-        let msgs: Vec<String> = borrow_errors.iter().map(|e| e.to_string()).collect();
-        return Err(msgs.join("\n"));
-    }
-
-    // Phase 5: MIR lowering
-    let mut lowerer = mir::lower::Lowerer::new(&type_result.symbols);
-    let mir_program = lowerer
-        .lower_program(&type_result.program)
-        .map_err(|e| format!("MIR lowering error: {}", e))?;
-
-    // Phase 6: Code generation → link → executable
-    // §5.8: a target Cranelift can't emit (wasm/embedded) forces LLVM even in
-    // debug. Otherwise: LLVM for --release (when built), Cranelift for debug.
-    let force_llvm = target.requires_llvm_backend();
-    let backend = if release || force_llvm {
-        #[cfg(feature = "llvm")]
-        {
-            codegen::Backend::Llvm { opt_level: 2 }
-        }
-        #[cfg(not(feature = "llvm"))]
-        {
-            if force_llvm {
-                return Err(format!(
-                    "target '{}' requires the LLVM backend, which this build of \
-                     ruxen was not compiled with (rebuild with --features llvm).",
-                    target.canonical()
-                ));
-            }
-            codegen::Backend::Cranelift
-        }
-    } else {
-        codegen::Backend::Cranelift
-    };
+    let mir_program = front_end(&source, &entry, &Options::for_target(target, false))?;
 
     // Collect link flags from extern libs.  Wrap each rlib extraction
     // with rich error context — the dep name and a concrete fix hint
@@ -860,16 +645,13 @@ fn compile_project(
         extra_link_flags.push(obj_path.to_string_lossy().to_string());
     }
 
-    // Gather user-side C runtime sources: the project's own
-    // `runtime/*.c` plus every path-dep's `runtime/*.c`. Mirrors what
-    // stdlib packages get for free (`library/std/<pkg>/runtime/*.c`)
-    // so a `lib "runtime/foo.c"` decl in user code resolves to symbols
-    // defined in a sibling-of-`src/` C file.
-    let mut user_runtime: Vec<PathBuf> = Vec::new();
-    user_runtime.extend(codegen::find_runtime_sources_in_dir(project_dir)?);
-    for dep_dir in dep_source_dirs {
-        user_runtime.extend(codegen::find_runtime_sources_in_dir(dep_dir)?);
-    }
+    // User-side link inputs, shared with `ruxen test`: the project's and
+    // every path-dep's `runtime/*.c` (what stdlib packages get for free,
+    // so a `lib "runtime/foo.c"` decl resolves), each flat-merged dep's
+    // `[system_libs] libs` (Q32; `collect_system_lib_flags` only walks the
+    // stdlib) and the project's and deps' `[system_libs] frameworks`.
+    let link_inputs = codegen::LinkInputs::for_project(project_dir, dep_source_dirs)?;
+    let mut user_runtime = link_inputs.runtime_sources;
     // `.m` (Objective-C / AppKit) shims are native-only — never compile them for
     // wasm (no AppKit; clang would fail). On the wasm reactor path their symbols
     // become host imports like other deps' runtime, so a quiver web app that
@@ -878,46 +660,19 @@ fn compile_project(
         user_runtime.retain(|p| p.extension().and_then(|s| s.to_str()) != Some("m"));
     }
 
-    // Q32: a flat-merged FFI dependency's `[system_libs]` (e.g. `-lpthread`)
-    // must also reach this binary's link line, the same way its `runtime/*.c`
-    // does above. `collect_system_lib_flags` only walks the STDLIB root, so a
-    // user dep's link needs would otherwise be dropped. Mirrors the test
-    // runner's dep `[system_libs]` forwarding.
-    for dep_dir in dep_source_dirs {
-        let dep_toml = dep_dir.join("Ruxen.toml");
-        if let Ok(contents) = fs::read_to_string(&dep_toml) {
-            for lib in codegen::parse_system_libs(&contents) {
-                let flag = format!("-l{}", lib);
-                if !extra_link_flags.contains(&flag) {
-                    extra_link_flags.push(flag);
-                }
-            }
-        }
+    for lib in &link_inputs.system_libs {
+        extra_link_flags.push(format!("-l{}", lib));
     }
 
-    // macOS frameworks: this binary OR any dep may declare `[system_libs]
-    // frameworks = ["Cocoa", ...]` — e.g. a native AppKit widget backend. Forward
-    // each as `-framework <name>` so plain `ruxen build/run` links them (no env
-    // var). Native macOS targets only — never for wasm (wasm-ld rejects
-    // -framework) so a web app transitively depending on canvas still links.
+    // macOS frameworks (e.g. a native AppKit widget backend's `Cocoa`) go on
+    // as `-framework <name>` so plain `ruxen build/run` links them. Native
+    // macOS targets only, never wasm (wasm-ld rejects -framework), so a web
+    // app transitively depending on canvas still links.
     #[cfg(target_os = "macos")]
     if !target.is_wasm() {
-        let mut fw_tomls: Vec<PathBuf> = vec![project_dir.join("Ruxen.toml")];
-        for dep_dir in dep_source_dirs {
-            fw_tomls.push(dep_dir.join("Ruxen.toml"));
-        }
-        for toml_path in &fw_tomls {
-            if let Ok(contents) = fs::read_to_string(toml_path) {
-                for fw in codegen::parse_system_frameworks(&contents) {
-                    let dup = extra_link_flags
-                        .windows(2)
-                        .any(|w| w[0] == "-framework" && w[1] == fw);
-                    if !dup {
-                        extra_link_flags.push("-framework".to_string());
-                        extra_link_flags.push(fw);
-                    }
-                }
-            }
+        for fw in link_inputs.frameworks {
+            extra_link_flags.push("-framework".to_string());
+            extra_link_flags.push(fw);
         }
     }
 
@@ -935,136 +690,6 @@ fn compile_project(
     )?;
 
     Ok(())
-}
-
-/// Build type metadata from the HIR type checking result.
-fn build_metadata_from_hir(type_result: &typeck::TypeCheckResult) -> TypeMetadata {
-    use ruxen_core::hir::nodes::{HirItem, HirMixinItem};
-
-    let mut exports = Exports::default();
-
-    for item in &type_result.program.items {
-        match item {
-            HirItem::Function(func) => {
-                if func.visibility == ruxen_core::parser::ast::Visibility::Public {
-                    exports.functions.push(rlib::ExportedFunction {
-                        name: func.name.clone(),
-                        params: func
-                            .params
-                            .iter()
-                            .map(|p| rlib::ExportedParam {
-                                name: p.name.clone(),
-                                ty: format!("{:?}", p.ty),
-                            })
-                            .collect(),
-                        return_type: format!("{:?}", func.return_ty),
-                        visibility: "public".to_string(),
-                    });
-                }
-            }
-            HirItem::Class(class) => {
-                exports.types.push(rlib::ExportedType {
-                    name: class.name.clone(),
-                    kind: "class".to_string(),
-                    fields: class
-                        .fields
-                        .iter()
-                        .map(|f| rlib::ExportedField {
-                            name: f.name.clone(),
-                            ty: format!("{:?}", f.ty),
-                            visibility: format!("{:?}", f.visibility),
-                        })
-                        .collect(),
-                    methods: class
-                        .methods
-                        .iter()
-                        .filter(|m| m.visibility == ruxen_core::parser::ast::Visibility::Public)
-                        .map(|m| rlib::ExportedFunction {
-                            name: m.name.clone(),
-                            params: m
-                                .params
-                                .iter()
-                                .map(|p| rlib::ExportedParam {
-                                    name: p.name.clone(),
-                                    ty: format!("{:?}", p.ty),
-                                })
-                                .collect(),
-                            return_type: format!("{:?}", m.return_ty),
-                            visibility: "public".to_string(),
-                        })
-                        .collect(),
-                });
-            }
-            HirItem::Struct(s) => {
-                exports.types.push(rlib::ExportedType {
-                    name: s.name.clone(),
-                    kind: "struct".to_string(),
-                    fields: s
-                        .fields
-                        .iter()
-                        .map(|f| rlib::ExportedField {
-                            name: f.name.clone(),
-                            ty: format!("{:?}", f.ty),
-                            visibility: format!("{:?}", f.visibility),
-                        })
-                        .collect(),
-                    methods: vec![],
-                });
-            }
-            HirItem::Mixin(t) => {
-                let methods = t
-                    .items
-                    .iter()
-                    .filter_map(|item| match item {
-                        HirMixinItem::MethodSig {
-                            name,
-                            params,
-                            return_ty,
-                            ..
-                        } => Some(rlib::ExportedFunction {
-                            name: name.clone(),
-                            params: params
-                                .iter()
-                                .map(|p| rlib::ExportedParam {
-                                    name: p.name.clone(),
-                                    ty: format!("{:?}", p.ty),
-                                })
-                                .collect(),
-                            return_type: format!("{:?}", return_ty),
-                            visibility: "public".to_string(),
-                        }),
-                        HirMixinItem::DefaultMethod(func) => Some(rlib::ExportedFunction {
-                            name: func.name.clone(),
-                            params: func
-                                .params
-                                .iter()
-                                .map(|p| rlib::ExportedParam {
-                                    name: p.name.clone(),
-                                    ty: format!("{:?}", p.ty),
-                                })
-                                .collect(),
-                            return_type: format!("{:?}", func.return_ty),
-                            visibility: "public".to_string(),
-                        }),
-                        _ => None,
-                    })
-                    .collect();
-
-                exports.traits.push(rlib::ExportedTrait {
-                    name: t.name.clone(),
-                    methods,
-                });
-            }
-            _ => {}
-        }
-    }
-
-    TypeMetadata {
-        compiler_version: rlib::COMPILER_VERSION.to_string(),
-        name: String::new(),
-        version: String::new(),
-        exports,
-    }
 }
 
 #[cfg(test)]

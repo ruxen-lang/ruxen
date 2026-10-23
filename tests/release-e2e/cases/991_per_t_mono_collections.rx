@@ -1,0 +1,48 @@
+# Pins per-`T` monomorphization of builtin-head collection methods. A `.rx`
+# body on `class Array[T]` that DISPATCHES on the element type (interpolates
+# one, orders two, compares two) used to lower once with `T` abstract, so it
+# fell back to the pointer-as-`Int` floor: `["a", "b"].join` printed buffer
+# ADDRESSES and `["b", "a", "b"].uniq` kept all three (raw-word compare).
+# MIR now emits one specialized body per concrete element type seen at a call
+# site (`Array__mono__String_join`), so `join` / `min` / `max` / `uniq` format
+# and compare through the concrete element type. Both element types below must
+# be exercised in ONE program — a single-element-type case would pass even with
+# the old shared abstract body.
+def main
+  let nums: Array[Int] = [3, 1, 2, 1]
+  puts(nums.join(", "))
+  puts(nums.join("|"))
+  # The separator defaults to Ruby's ", ".
+  puts(nums.join())
+
+  let words: Array[String] = ["pear", "fig", "pear", "apple"]
+  puts(words.join(", "))
+
+  # `min` / `max` order by the element type's own ordering: numeric for Int,
+  # lexicographic for String.
+  # NOTE: every Option below is read with `unwrap_or`, never `unwrap`, and that
+  # is a WORKAROUND for a pre-existing bug, not a style choice. `let x:
+  # Option[T] = ...` discards the annotation and types `x` as `T`, so `x.unwrap`
+  # fails with `no field 'unwrap' on type Int`. Do not "clean this up" to
+  # `unwrap` until that is fixed (see HANDOFF.md, known pre-existing bugs).
+  # Also never interpolate an Option directly: `"#{nums.min}"` prints the box
+  # POINTER, not the value.
+  let lo: Option[Int] = nums.min()
+  let hi: Option[Int] = nums.max()
+  puts("#{lo.unwrap_or(0)} #{hi.unwrap_or(0)}")
+  let first: Option[String] = words.min()
+  let last: Option[String] = words.max()
+  puts("#{first.unwrap_or("?")} #{last.unwrap_or("?")}")
+
+  # Ruby: `min` / `max` on an empty array are nil; `join` on one is "".
+  let none: Array[Int] = []
+  let empty_min: Option[Int] = none.min()
+  puts("[#{none.join(", ")}] #{empty_min.unwrap_or(-1)}")
+
+  # `uniq` keeps the FIRST occurrence of each distinct element, in order.
+  # The String case is the one that needed content equality.
+  let du: Array[Int] = nums.uniq()
+  let wu: Array[String] = words.uniq()
+  puts(du.join(", "))
+  puts(wu.join(", "))
+end

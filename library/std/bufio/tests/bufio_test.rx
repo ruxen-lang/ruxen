@@ -1,0 +1,147 @@
+def line_of(r: Result[Option[String], IoError]) -> String
+  match r
+    Ok(opt) ->
+      match opt
+        Some(line) -> line
+        nil        -> "EOF"
+      end
+    Err(_)  -> "ERR"
+  end
+end
+
+def file_line(br: &var BufReader.File) -> String
+  line_of(br.read_line())
+end
+
+def tcp_line(br: &var BufReader.Tcp) -> String
+  line_of(br.read_line())
+end
+
+def staged(path: &String, contents: &String) -> File
+  FS.write(path, contents).expect!("write")
+  File.open(path).expect!("open")
+end
+
+Tester.describe("BufReader.File") do |t: &var Tester|
+  t.it("yields each line with its newline, then nil at EOF") do
+    let path = "/tmp/ruxen_std_bufio_read_line.txt"
+    var br = BufReader.File.new(staged(&path, &"alpha\nbeta\ngamma"))
+    t.expect(file_line(&var br)).to_eq("alpha\n")
+    t.expect(file_line(&var br)).to_eq("beta\n")
+    t.expect(file_line(&var br)).to_eq("gamma")
+    t.expect(file_line(&var br)).to_eq("EOF")
+    FS.remove_file(&path).expect!("remove")
+  end
+
+  t.it("returns a whole line longer than its capacity") do
+    let path = "/tmp/ruxen_std_bufio_capacity.txt"
+    let f = staged(&path, &"this-line-is-longer-than-sixteen-bytes\nshort\n")
+    var br = BufReader.File.with_capacity(16, f)
+    t.expect(file_line(&var br)).to_eq("this-line-is-longer-than-sixteen-bytes\n")
+    FS.remove_file(&path).expect!("remove")
+  end
+
+  t.it("hands back a usable File from into_inner") do
+    let path = "/tmp/ruxen_std_bufio_into_inner.txt"
+    var br = BufReader.File.new(staged(&path, &"first-line\nsecond-line-and-tail"))
+    t.expect(file_line(&var br)).to_eq("first-line\n")
+    let inner: File = br.into_inner()
+    let read_ok = match inner.read_to_string()
+      Ok(_)  -> true
+      Err(_) -> false
+    end
+    t.expect(read_ok).to_eq(true)
+    FS.remove_file(&path).expect!("remove")
+  end
+end
+
+Tester.describe("BufWriter.File") do |t: &var Tester|
+  t.it("persists write_all bytes after flush") do
+    let path = "/tmp/ruxen_std_bufio_write_all.txt"
+    let f: File = File.create(&path).expect!("create")
+    let bw = BufWriter.File.new(f)
+    var bytes: Array[Int] = Array.new
+    bytes.push(104)
+    bytes.push(105)
+    bytes.push(33)
+    bw.write_all(&bytes).expect!("write_all")
+    bw.flush().expect!("flush")
+    let back: String = FS.read_to_string(&path).expect!("read")
+    t.expect(back).to_eq("hi!")
+    FS.remove_file(&path).expect!("remove")
+  end
+
+  t.it("persists write_str text after flush") do
+    let path = "/tmp/ruxen_std_bufio_write_str.txt"
+    let f: File = File.create(&path).expect!("create")
+    let bw = BufWriter.File.new(f)
+    bw.write_str(&"persisted").expect!("write_str")
+    bw.flush().expect!("flush")
+    let back: String = FS.read_to_string(&path).expect!("read")
+    t.expect(back).to_eq("persisted")
+    FS.remove_file(&path).expect!("remove")
+  end
+
+  t.it("flushes on into_inner and hands back a writable File") do
+    path = "/tmp/ruxen_std_bufwriter_into_inner.txt"
+    f = File.create(path).expect!("create")
+    bw = BufWriter.File.new(f)
+    bw.write_str("buffered ").expect!("write_str")
+    inner = bw.into_inner
+    inner.write_str("direct").expect!("write through the inner File")
+    back = FS.read_to_string(path).expect!("read")
+    t.expect(back).to_eq("buffered direct")
+    FS.remove_file(path).expect!("remove")
+  end
+
+  t.it("flushes on into_inner and hands back a writable TcpStream") do
+    l = TcpListener.bind("127.0.0.1:0").expect!("bind")
+    addr = l.local_addr.expect!("local_addr")
+    client = TcpStream.connect(addr).expect!("connect")
+    server = l.accept.expect!("accept")
+    bw = BufWriter.Tcp.new(client)
+    bw.write_str("a").expect!("write_str")
+    inner = bw.into_inner
+    inner.write("b".bytes).expect!("write through the inner TcpStream")
+    buf = Array[Int].new
+    got = 0
+    while got < 2
+      got = got + server.read(buf).expect!("read")
+    end
+    t.expect(buf.size).to_eq(2)
+    t.expect(buf[0]).to_eq(97)
+    t.expect(buf[1]).to_eq(98)
+  end
+end
+
+# The peer runs in this process: on loopback, connect completes against the
+# listen backlog before accept is called.
+Tester.describe("BufReader.Tcp and BufWriter.Tcp") do |t: &var Tester|
+  t.it("reads lines a peer sent") do
+    let l: TcpListener = TcpListener.bind(&"127.0.0.1:0").expect!("bind")
+    let addr: String = l.local_addr().expect!("local_addr")
+    let client: TcpStream = TcpStream.connect(&addr).expect!("connect")
+    let server: TcpStream = l.accept().expect!("accept")
+    server.write(&"one\ntwo\n".bytes()).expect!("write")
+    server.close().expect!("close")
+    var br = BufReader.Tcp.new(client)
+    t.expect(tcp_line(&var br)).to_eq("one\n")
+    t.expect(tcp_line(&var br)).to_eq("two\n")
+    t.expect(tcp_line(&var br)).to_eq("EOF")
+  end
+
+  t.it("delivers flushed bytes to the peer") do
+    let l: TcpListener = TcpListener.bind(&"127.0.0.1:0").expect!("bind")
+    let addr: String = l.local_addr().expect!("local_addr")
+    let client: TcpStream = TcpStream.connect(&addr).expect!("connect")
+    let server: TcpStream = l.accept().expect!("accept")
+    let bw = BufWriter.Tcp.new(client)
+    bw.write_str(&"hi").expect!("write_str")
+    bw.flush().expect!("flush")
+    var buf: Array[Int] = Array.new
+    let n: Int = server.read(&var buf).expect!("read")
+    t.expect(n).to_eq(2)
+    t.expect(buf[0]).to_eq(104)
+    t.expect(buf[1]).to_eq(105)
+  end
+end

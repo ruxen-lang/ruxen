@@ -28,9 +28,10 @@ masking catch-all.
 - L64 `"yield" => Ok("ruxen_noop_passthrough")` — the per-call placeholder for
   invoking a block argument; backends inline the closure call elsewhere, so the
   `yield` callee itself is a passthrough.
-- L66 `"&str_as_str" => Ok("ruxen_noop_passthrough")` — a *true semantic
-  identity* (`&str` → `&str`), explicitly commented as "not a stub".
-- L167 / L186 — closure-invocation dispatch (`Fn(...)_call`, `any Fn(...)`,
+- (Removed.) The former `"&str_as_str"` identity arm went away with the `&str`
+  type (`docs/decisions/one-string-type.md`); `as_str` is now an ordinary
+  `class String` FFI declaration.
+- L145 / L164 — closure-invocation dispatch (`Fn(...)_call`, `any Fn(...)`,
   `?T*_call`): the MIR lowerer normally emits a direct indirect call; these arms
   are belt-and-suspenders so a missed lowering produces a deterministic
   passthrough rather than a hard codegen error.
@@ -58,17 +59,17 @@ the construct the ban exists to prevent.
   can resolve it via `dlsym`.
 
 ### Pinned by tests (live behaviour, not a bypass)
-`compiler/ruxen_core/src/codegen/runtime/tests_resolve.rs` L63/L66 assert
-`runtime_name("yield").unwrap() == "ruxen_noop_passthrough"` and the
-`&str_as_str` identity. These tests pass (Task 5 run:
+`compiler/ruxen_core/src/codegen/runtime/tests_resolve.rs` L86 asserts
+`runtime_name("yield").unwrap() == "ruxen_noop_passthrough"` (L87 notes the
+removed `&str_as_str` arm). These tests pass (Task 5 run:
 `tmp/test-cache/phase4-task5-resolve.log`, 6 passed). The same file's L10 pins
 that an *unknown* method now errors instead of resolving to the passthrough —
 i.e. the tests actively guard against the banned masking behaviour returning.
 
 ## Conclusion
 
-`ruxen_noop_passthrough` is a load-bearing identity intrinsic for `yield` /
-`&str_as_str` / closure-dispatch passthroughs, lowered inline and identically in
+`ruxen_noop_passthrough` is a load-bearing identity intrinsic for `yield` and
+closure-dispatch passthroughs, lowered inline and identically in
 the Cranelift and LLVM backends, pinned by `runtime::tests_resolve`. The
 silent-failure catch-all that the ban targets was already removed and is
 test-guarded against reintroduction. The ban therefore does not apply; the

@@ -7,6 +7,8 @@ use crate::hir::nodes::{DefId, HirSelfMode};
 use crate::hir::types::{MixinRef, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::Visibility;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 /// The signature of a function or method.
 #[derive(Debug, Clone)]
@@ -73,6 +75,77 @@ pub struct ParamInfo {
     pub default: Option<crate::parser::ast::Expr>,
 }
 
+/// The `Send`/`Sync` markers a class, struct or enum declares
+/// (`docs/specs/types/send_sync_enforcement.spec.md` B10 to B12).
+///
+/// `include Send` (and `unsafe include Send`) sets `manual_*`;
+/// `include !Send` (`exclude Send`) sets `opt_out_*`. Both start false: v1
+/// has no auto-derive for user types to suppress.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AutoTraitFlags {
+    pub opt_out_send: bool,
+    pub opt_out_sync: bool,
+    pub manual_send: bool,
+    pub manual_sync: bool,
+}
+
+impl AutoTraitFlags {
+    /// Record one `include`/`exclude` of `trait_name`. Names other than
+    /// `Send` and `Sync` are ignored.
+    pub fn record(&mut self, trait_name: &str, negative: bool) {
+        let (opt_out, manual) = match trait_name {
+            "Send" => (&mut self.opt_out_send, &mut self.manual_send),
+            "Sync" => (&mut self.opt_out_sync, &mut self.manual_sync),
+            _ => return,
+        };
+        // The last declaration wins, so `exclude Send` then `include Send`
+        // (or the reverse) never leaves both flags set.
+        *opt_out = negative;
+        *manual = !negative;
+    }
+
+    /// Whether the type explicitly includes `Send` (`is_send`) or `Sync`.
+    pub fn manual(&self, is_send: bool) -> bool {
+        if is_send {
+            self.manual_send
+        } else {
+            self.manual_sync
+        }
+    }
+
+    /// Whether the type explicitly excludes `Send` (`is_send`) or `Sync`.
+    pub fn opted_out(&self, is_send: bool) -> bool {
+        if is_send {
+            self.opt_out_send
+        } else {
+            self.opt_out_sync
+        }
+    }
+}
+
+/// What a compiler-supplied `lib` parameter carries: its type argument's
+/// element descriptor (`ElemDesc[T]`, how a slot of it is copied and freed)
+/// or key descriptor (`KeyDesc[K]`, the same plus how it hashes and compares
+/// as a table key). Declared in `.rx` by `layout elem_desc` / `layout key_desc`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Supplied {
+    ElemDesc,
+    KeyDesc,
+}
+
+impl Supplied {
+    /// The descriptor class layout directive `class` declares, if any.
+    pub fn of_class(class: &crate::parser::ast::ClassDef) -> Option<Self> {
+        if class.has_layout("elem_desc") {
+            Some(Supplied::ElemDesc)
+        } else if class.has_layout("key_desc") {
+            Some(Supplied::KeyDesc)
+        } else {
+            None
+        }
+    }
+}
+
 /// Information about a class definition.
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
@@ -80,11 +153,7 @@ pub struct ClassInfo {
     pub parent: Option<DefId>,
     pub fields: Vec<DefId>,
     pub methods: Vec<DefId>,
-    pub derive_traits: Vec<String>,
-    pub opt_out_send: bool,
-    pub opt_out_sync: bool,
-    pub manual_send: bool,
-    pub manual_sync: bool,
+    pub auto_traits: AutoTraitFlags,
     /// T2.02 S9: where-clause const predicates (`where N > 0`,
     /// `where N + M == 8`).  Evaluated at instantiation time
     /// against the binding map; failing predicates emit E0706.
@@ -97,6 +166,16 @@ pub struct ClassInfo {
     /// check once a real stdlib class is migrated to user-source
     /// `.rx` and gates a `ruxen_<class>_layout_check` symbol.
     pub flat_heap_struct: bool,
+    /// Set when the class body carried a `layout closure` directive: its
+    /// values are closure pairs, so it is the method home of every stored
+    /// closure value (`Proc[...]`, `any Fn[...]`). The core library's
+    /// `class Closure` declares it; [`SymbolTable::closure_shell`] reads it.
+    pub closure_shell: bool,
+    /// Set by a `layout elem_desc` or `layout key_desc` directive: a `lib`
+    /// parameter of this class's type (`ElemDesc[T]`, `KeyDesc[K]` in
+    /// std/core) is a descriptor of its type argument, filled in by the
+    /// compiler, never by a caller.
+    pub supplied: Option<Supplied>,
     /// Mixin vtables Phase B-1: DefIds of mixins this class
     /// `include`s that are marked `dispatch runtime`. Populated by
     /// `resolve_class_def` after looking up each include's mixin
@@ -115,12 +194,8 @@ pub struct ClassInfo {
 pub struct StructInfo {
     pub generic_params: Vec<GenericParamInfo>,
     pub fields: Vec<DefId>,
-    pub derive_traits: Vec<String>,
     pub layout: Vec<String>,
-    pub opt_out_send: bool,
-    pub opt_out_sync: bool,
-    pub manual_send: bool,
-    pub manual_sync: bool,
+    pub auto_traits: AutoTraitFlags,
     /// T2.02 S9: see `ClassInfo::const_predicates`.
     pub const_predicates: Vec<HirConstPredicate>,
 }
@@ -159,11 +234,7 @@ pub enum ConstPredOp {
 pub struct EnumInfo {
     pub generic_params: Vec<GenericParamInfo>,
     pub variants: Vec<DefId>,
-    pub derive_traits: Vec<String>,
-    pub opt_out_send: bool,
-    pub opt_out_sync: bool,
-    pub manual_send: bool,
-    pub manual_sync: bool,
+    pub auto_traits: AutoTraitFlags,
     /// T2.02 S9: see `ClassInfo::const_predicates`.
     pub const_predicates: Vec<HirConstPredicate>,
 }
@@ -215,6 +286,11 @@ pub enum DefKind {
     },
     TypeAlias {
         target: Ty,
+        /// The alias's own generic parameters (`type Proc[F] = any Fn[F]`),
+        /// in order; `target` names them as `Ty::TypeParam`s, which a use
+        /// (`Proc[(Int) -> nil]`) replaces by its arguments
+        /// (`Resolver::instantiate_alias`). Empty for a plain alias.
+        params: Vec<String>,
     },
     Newtype {
         inner: Ty,
@@ -259,6 +335,48 @@ pub enum DefKind {
     },
 }
 
+impl DefKind {
+    /// The signature of a `Function` or `Method`, `None` for every other kind.
+    pub fn signature(&self) -> Option<&FnSignature> {
+        match self {
+            DefKind::Function { signature } | DefKind::Method { signature, .. } => Some(signature),
+            _ => None,
+        }
+    }
+
+    /// The declared generic params of a nominal type (`Class`, `Struct` or
+    /// `Enum`), `None` for every other kind.
+    pub fn generic_params(&self) -> Option<&[GenericParamInfo]> {
+        match self {
+            DefKind::Class { info } => Some(&info.generic_params),
+            DefKind::Struct { info } => Some(&info.generic_params),
+            DefKind::Enum { info } => Some(&info.generic_params),
+            _ => None,
+        }
+    }
+
+    /// The `Send`/`Sync` markers of a nominal type (`Class`, `Struct` or
+    /// `Enum`), `None` for every other kind.
+    pub fn auto_traits(&self) -> Option<&AutoTraitFlags> {
+        match self {
+            DefKind::Class { info } => Some(&info.auto_traits),
+            DefKind::Struct { info } => Some(&info.auto_traits),
+            DefKind::Enum { info } => Some(&info.auto_traits),
+            _ => None,
+        }
+    }
+
+    /// Mutable form of [`Self::auto_traits`].
+    pub fn auto_traits_mut(&mut self) -> Option<&mut AutoTraitFlags> {
+        match self {
+            DefKind::Class { info } => Some(&mut info.auto_traits),
+            DefKind::Struct { info } => Some(&mut info.auto_traits),
+            DefKind::Enum { info } => Some(&mut info.auto_traits),
+            _ => None,
+        }
+    }
+}
+
 /// Kind of enum variant (for construction checking).
 #[derive(Debug, Clone)]
 pub enum VariantDefKind {
@@ -277,10 +395,123 @@ pub struct Definition {
     pub span: Span,
 }
 
-/// The symbol table: stores all definitions indexed by DefId.
+/// The name and parent index over a [`SymbolTable`]. Every list is in
+/// definition (DefId) order, so "the first match in the index" is the same
+/// definition a front-to-back scan of the table would find.
+#[derive(Debug, Default)]
+struct SymbolIndex {
+    /// Definition name → every DefId carrying it.
+    by_name: HashMap<String, Vec<DefId>>,
+    /// MIR symbol spelling (`.` → `_`) → every DefId whose name contains a
+    /// `.` and mangles to it. Names without a `.` are only in `by_name`.
+    by_symbol: HashMap<String, Vec<DefId>>,
+    /// `base` → every DefId whose name starts with `base__overload` (the
+    /// resolver's overload renaming), keyed by every such `base`.
+    overloads: HashMap<String, Vec<DefId>>,
+    /// Parent DefId → its `Method`, `Field` and `EnumVariant` children.
+    children: HashMap<DefId, Vec<DefId>>,
+    /// Every `Class` definition.
+    classes: Vec<DefId>,
+    /// The class declared `layout closure` (`ClassInfo::closure_shell`).
+    closure_shell: Option<DefId>,
+    /// The classes declared `layout elem_desc` / `layout key_desc`
+    /// (`ClassInfo::supplied`).
+    supplied_shells: Vec<(DefId, Supplied)>,
+}
+
+impl SymbolIndex {
+    fn build(definitions: &[Definition]) -> Self {
+        let mut index = Self::default();
+        for def in definitions {
+            index.insert(def);
+        }
+        index
+    }
+
+    fn insert(&mut self, def: &Definition) {
+        self.by_name
+            .entry(def.name.clone())
+            .or_default()
+            .push(def.id);
+        if def.name.contains('.') {
+            self.by_symbol
+                .entry(def.name.replace('.', "_"))
+                .or_default()
+                .push(def.id);
+        }
+        for (pos, _) in def.name.match_indices(OVERLOAD_MARK) {
+            self.overloads
+                .entry(def.name[..pos].to_string())
+                .or_default()
+                .push(def.id);
+        }
+        match &def.kind {
+            DefKind::Method { parent, .. }
+            | DefKind::Field { parent, .. }
+            | DefKind::EnumVariant { parent, .. } => {
+                self.children.entry(*parent).or_default().push(def.id);
+            }
+            DefKind::Class { info } => {
+                self.classes.push(def.id);
+                if info.closure_shell {
+                    self.closure_shell = Some(def.id);
+                }
+                if let Some(supplied) = info.supplied {
+                    self.supplied_shells.push((def.id, supplied));
+                }
+            }
+            DefKind::Variable { .. }
+            | DefKind::Function { .. }
+            | DefKind::OverloadSet { .. }
+            | DefKind::Struct { .. }
+            | DefKind::Enum { .. }
+            | DefKind::Trait { .. }
+            | DefKind::TypeAlias { .. }
+            | DefKind::Newtype { .. }
+            | DefKind::TypeParam { .. }
+            | DefKind::ConstParam { .. }
+            | DefKind::Module { .. }
+            | DefKind::Const { .. }
+            | DefKind::Param { .. }
+            | DefKind::SelfValue { .. } => {}
+        }
+    }
+}
+
+/// The infix the resolver renames an overload with: `name__overload<N>`.
+const OVERLOAD_MARK: &str = "__overload";
+
+/// True for a `Method` named `method` or `method__overload<N>`.
+fn is_method_named(def: &Definition, method: &str) -> bool {
+    matches!(def.kind, DefKind::Method { .. })
+        && (def.name == method
+            || def
+                .name
+                .strip_prefix(method)
+                .is_some_and(|rest| rest.starts_with(OVERLOAD_MARK)))
+}
+
+/// True for a `Class`, `Struct` or `Enum` definition: a nominal type with
+/// fields or variants and methods.
+fn is_nominal(def: &Definition) -> bool {
+    matches!(
+        def.kind,
+        DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. }
+    )
+}
+
+/// The symbol table: stores all definitions indexed by DefId, plus a name and
+/// parent index (see [`SymbolTable::named`]).
+///
+/// The index is maintained by `define` and dropped by `get_mut`, because a
+/// caller holding `&mut Definition` may rename it (overload mangling, module
+/// qualification) or change its kind (a builtin anchor becoming a `Class`).
+/// The next query rebuilds it. `update_ty` changes only types, which the
+/// index does not key on, so it keeps the index.
 #[derive(Debug)]
 pub struct SymbolTable {
     definitions: Vec<Definition>,
+    index: OnceLock<SymbolIndex>,
     /// Ruby `alias new old` method synonyms (docs/decisions/alias-keyword.md):
     /// home-type name → `{alias → canonical}`. Populated by the resolver,
     /// consumed by MIR's `select_method_symbol_name` to rewrite an alias method
@@ -288,14 +519,35 @@ pub struct SymbolTable {
     /// `Set_include?`, not a bodiless `Set_member?`). A pure synonym — no extra
     /// method body exists.
     method_aliases: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    /// The name a diagnostic shows for a definition the resolver
+    /// synthesized under an internal name (the block slot `__block` reads
+    /// `block`). See [`SymbolTable::display_name`].
+    display_names: std::collections::HashMap<DefId, String>,
 }
 
 impl SymbolTable {
     pub fn new() -> Self {
         Self {
             definitions: Vec::new(),
+            index: OnceLock::new(),
             method_aliases: std::collections::HashMap::new(),
+            display_names: std::collections::HashMap::new(),
         }
+    }
+
+    /// Show `id` as `name` in diagnostics (it was defined under an internal
+    /// name lookups use).
+    pub fn set_display_name(&mut self, id: DefId, name: impl Into<String>) {
+        self.display_names.insert(id, name.into());
+    }
+
+    /// The name diagnostics show for `id`: its display name when the
+    /// resolver gave it one, else its definition name.
+    pub fn display_name(&self, id: DefId) -> Option<&str> {
+        self.display_names
+            .get(&id)
+            .map(String::as_str)
+            .or_else(|| self.get(id).map(|def| def.name.as_str()))
     }
 
     /// Record the resolver's method-alias map onto the symbol table so the MIR
@@ -333,13 +585,17 @@ impl SymbolTable {
         span: Span,
     ) -> DefId {
         let id = self.definitions.len() as DefId;
-        self.definitions.push(Definition {
+        let def = Definition {
             id,
             name,
             kind,
             visibility,
             span,
-        });
+        };
+        if let Some(index) = self.index.get_mut() {
+            index.insert(&def);
+        }
+        self.definitions.push(def);
         id
     }
 
@@ -348,9 +604,197 @@ impl SymbolTable {
         self.definitions.get(id as usize)
     }
 
-    /// Get a mutable reference to a definition.
+    /// Get a mutable reference to a definition. Drops the name and parent
+    /// index, since the caller may rename the definition or change its kind.
     pub fn get_mut(&mut self, id: DefId) -> Option<&mut Definition> {
+        self.index.take();
         self.definitions.get_mut(id as usize)
+    }
+
+    fn index(&self) -> &SymbolIndex {
+        self.index
+            .get_or_init(|| SymbolIndex::build(&self.definitions))
+    }
+
+    fn defs<'a>(
+        &'a self,
+        ids: Option<&'a Vec<DefId>>,
+    ) -> impl Iterator<Item = &'a Definition> + 'a {
+        ids.into_iter()
+            .flatten()
+            .map(|&id| &self.definitions[id as usize])
+    }
+
+    /// Every definition named exactly `name`, in definition order.
+    pub fn named<'a>(&'a self, name: &str) -> impl Iterator<Item = &'a Definition> + 'a {
+        self.defs(self.index().by_name.get(name))
+    }
+
+    /// Every definition named `name` or `name__overload…` (the resolver's
+    /// overload renaming), in definition order.
+    pub fn overloads_named(&self, name: &str) -> impl Iterator<Item = &Definition> + '_ {
+        let index = self.index();
+        let mut ids: Vec<DefId> = index
+            .by_name
+            .get(name)
+            .into_iter()
+            .chain(index.overloads.get(name))
+            .flatten()
+            .copied()
+            .collect();
+        ids.sort_unstable();
+        ids.into_iter().map(|id| &self.definitions[id as usize])
+    }
+
+    /// The first `Class`, `Struct` or `Enum` named exactly `name`.
+    pub fn nominal(&self, name: &str) -> Option<&Definition> {
+        self.named(name).find(|def| is_nominal(def))
+    }
+
+    /// The first `Class`, `Struct` or `Enum` whose name, or whose MIR symbol
+    /// spelling (`.` → `_`, so `Net.Socket` is `Net_Socket`), is `symbol`.
+    /// Used to split a mangled `Type_method` callee into its type.
+    pub fn type_def(&self, symbol: &str) -> Option<&Definition> {
+        let exact = self.nominal(symbol);
+        let mangled = self
+            .defs(self.index().by_symbol.get(symbol))
+            .find(|def| is_nominal(def));
+        match (exact, mangled) {
+            (Some(a), Some(b)) => Some(if a.id < b.id { a } else { b }),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// True when the class `name` owns its fields: reading one borrows it,
+    /// storing one frees the old value, and the object's death frees them.
+    /// A synthesised async state machine (it carries a `__state` field) does
+    /// not: its fields mirror the async body's parameters and locals, which
+    /// `poll` moves out of without clearing the field, and its `__sub_i`
+    /// sub-futures are dropped by its own synthesised `def drop`
+    /// (`Lowerer::synthesize_future_state_machine_drop`).
+    /// Whether the type named `name` declares `def consume drop`: its drop
+    /// takes the whole value over and releases its storage itself (a C
+    /// handle whose release is its refcount or handle free, declared
+    /// `def consume drop as "ruxen_mutex_drop"`), so drop elaboration
+    /// emits no storage free after calling it.
+    pub fn drop_consumes_self(&self, name: &str) -> bool {
+        self.type_def(name).is_some_and(|def| {
+            self.methods_of(def.id, "drop").any(|m| {
+                matches!(&m.kind, DefKind::Method { signature, .. }
+                    if signature.self_mode == Some(crate::hir::nodes::HirSelfMode::Consuming))
+            })
+        })
+    }
+
+    /// The class declared `layout closure` (`class Closure` in std/core):
+    /// the method home of every stored closure value. Read off the
+    /// declaration; `None` when no such class is loaded.
+    pub fn closure_shell(&self) -> Option<&Definition> {
+        self.index()
+            .closure_shell
+            .map(|id| &self.definitions[id as usize])
+    }
+
+    /// The name of [`Self::closure_shell`], the home `Ty::method_home`
+    /// gives a stored closure value.
+    pub fn closure_shell_name(&self) -> Option<&str> {
+        self.closure_shell().map(|def| def.name.as_str())
+    }
+
+    /// What `ty` carries and of which type when it is a class that declared
+    /// `layout elem_desc` or `layout key_desc` (`ElemDesc[T]`, `KeyDesc[K]` in
+    /// std/core): a `lib` parameter of that type is filled by the compiler.
+    pub fn supplied_arg<'t>(&self, ty: &'t Ty) -> Option<(Supplied, &'t Ty)> {
+        let Ty::Class { name, generic_args } = ty else {
+            return None;
+        };
+        let (_, supplied) = self
+            .index()
+            .supplied_shells
+            .iter()
+            .find(|(id, _)| self.definitions[*id as usize].name == *name)?;
+        Some((*supplied, generic_args.first()?))
+    }
+
+    /// The method a derive of the mixin `trait_name` defines: the one the
+    /// mixin declares in `.rx` (`mixin Clone` / `def clone -> Self`),
+    /// required first. `None` for a mixin that declares none (`Copy`, `Eq`)
+    /// or is not loaded.
+    pub fn derived_method(&self, trait_name: &str) -> Option<&str> {
+        self.named(trait_name).find_map(|def| match &def.kind {
+            DefKind::Trait { info } => info
+                .required_methods
+                .first()
+                .or(info.default_methods.first())
+                .map(String::as_str),
+            _ => None,
+        })
+    }
+
+    /// Whether the nominal type `type_name` defines the method a derive of
+    /// `trait_name` would ([`Self::derived_method`]) itself, so no body is
+    /// derived for it. The one rule every derive decision reads.
+    pub fn declares_derived_method(&self, type_name: &str, trait_name: &str) -> bool {
+        let Some(method) = self.derived_method(trait_name) else {
+            return false;
+        };
+        self.nominal(type_name)
+            .is_some_and(|def| self.methods_of(def.id, method).next().is_some())
+    }
+
+    pub fn class_owns_fields(&self, name: &str) -> bool {
+        let Some(DefKind::Class { info }) = self.type_def(name).map(|def| &def.kind) else {
+            return false;
+        };
+        !info
+            .fields
+            .iter()
+            .any(|&field| self.get(field).is_some_and(|f| f.name == "__state"))
+    }
+
+    /// The `Method`, `Field` and `EnumVariant` definitions whose parent is
+    /// `parent`, in definition order.
+    pub fn children_of(&self, parent: DefId) -> impl Iterator<Item = &Definition> + '_ {
+        self.defs(self.index().children.get(&parent))
+    }
+
+    /// The methods of `parent` named `method`, including the
+    /// `method__overload<N>` siblings the resolver renames overloads to, in
+    /// definition order.
+    pub fn methods_of<'a>(
+        &'a self,
+        parent: DefId,
+        method: &'a str,
+    ) -> impl Iterator<Item = &'a Definition> + 'a {
+        self.children_of(parent)
+            .filter(move |def| is_method_named(def, method))
+    }
+
+    /// The methods named `method` (overload-aware, see
+    /// [`Self::methods_of`]) of every definition named `owner`, in
+    /// definition order.
+    pub fn methods_named<'a>(
+        &'a self,
+        owner: &str,
+        method: &str,
+    ) -> std::vec::IntoIter<&'a Definition> {
+        let mut found: Vec<&Definition> = Vec::new();
+        for parent in self.named(owner) {
+            found.extend(
+                self.children_of(parent.id)
+                    .filter(|def| is_method_named(def, method)),
+            );
+        }
+        found.sort_by_key(|def| def.id);
+        found.into_iter()
+    }
+
+    /// Every `Class` definition, in definition order.
+    pub fn classes(&self) -> impl Iterator<Item = &Definition> + '_ {
+        self.index()
+            .classes
+            .iter()
+            .map(|&id| &self.definitions[id as usize])
     }
 
     /// Get the total number of definitions.
@@ -372,12 +816,12 @@ impl SymbolTable {
     pub fn update_ty(&mut self, id: DefId, new_ty: Ty) {
         if let Some(def) = self.definitions.get_mut(id as usize) {
             match &mut def.kind {
-                DefKind::Variable { ty, .. } => *ty = new_ty,
-                DefKind::Field { ty, .. } => *ty = new_ty,
-                DefKind::Param { ty, .. } => *ty = new_ty,
-                DefKind::SelfValue { ty } => *ty = new_ty,
-                DefKind::Const { ty } => *ty = new_ty,
-                DefKind::ConstParam { ty } => *ty = new_ty,
+                DefKind::Variable { ty, .. }
+                | DefKind::Field { ty, .. }
+                | DefKind::Param { ty, .. }
+                | DefKind::SelfValue { ty }
+                | DefKind::Const { ty }
+                | DefKind::ConstParam { ty } => *ty = new_ty,
                 _ => {}
             }
         }
@@ -386,27 +830,16 @@ impl SymbolTable {
     /// Get the type associated with a definition, if applicable.
     pub fn def_ty(&self, id: DefId) -> Option<Ty> {
         self.get(id).and_then(|def| match &def.kind {
-            DefKind::Variable { ty, .. } => Some(ty.clone()),
-            DefKind::Field { ty, .. } => Some(ty.clone()),
-            DefKind::Param { ty, .. } => Some(ty.clone()),
-            DefKind::SelfValue { ty } => Some(ty.clone()),
-            DefKind::Const { ty } => Some(ty.clone()),
-            DefKind::ConstParam { ty } => Some(ty.clone()),
-            DefKind::Function { signature } => Some(Ty::Fn {
-                params: signature.params.iter().map(|p| p.ty.clone()).collect(),
-                ret: Box::new(if signature.is_async {
-                    Ty::Class {
-                        name: "Future".to_string(),
-                        generic_args: vec![signature.return_ty.clone()],
-                    }
-                } else {
-                    signature.return_ty.clone()
-                }),
-            }),
+            DefKind::Variable { ty, .. }
+            | DefKind::Field { ty, .. }
+            | DefKind::Param { ty, .. }
+            | DefKind::SelfValue { ty }
+            | DefKind::Const { ty }
+            | DefKind::ConstParam { ty } => Some(ty.clone()),
             DefKind::OverloadSet { candidates } => {
                 candidates.first().and_then(|id| self.def_ty(*id))
             }
-            DefKind::Method { signature, .. } => Some(Ty::Fn {
+            DefKind::Function { signature } | DefKind::Method { signature, .. } => Some(Ty::Fn {
                 params: signature.params.iter().map(|p| p.ty.clone()).collect(),
                 ret: Box::new(if signature.is_async {
                     Ty::Class {
@@ -428,592 +861,8 @@ impl Default for SymbolTable {
     }
 }
 
-/// Returns `true` when the type should be treated as `Copy` after consulting
-/// user-defined `derive Copy` metadata in the symbol table.
-pub fn ty_is_effectively_copy(ty: &Ty, symbols: &SymbolTable) -> bool {
-    ty.is_copy_with(symbols)
-}
-
-/// Walk through transparent wrappers and check whether the underlying
-/// user-defined type carries the requested derive trait.
-///
-/// Post ruby-naming.spec.md §3.6: structural mixins (`Copy`, `Clone`,
-/// `Debug`, `Eq`, `Hash`, `PartialEq`, `Default`, `Ord`, `PartialOrd`)
-/// are *implicitly* included when the type's fields structurally
-/// support them. This helper checks the explicit `derive_traits` first
-/// for backwards compatibility, then falls back to the spec's
-/// implicit-include rule when applicable.
-pub fn ty_has_derive_trait(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
-    ty_has_derive_trait_seen(
-        ty,
-        symbols,
-        trait_name,
-        &mut std::collections::HashSet::new(),
-    )
-}
-
-/// Cycle-aware core of [`ty_has_derive_trait`]. `seen` holds the nominal
-/// type names currently on the structural-support recursion stack. A
-/// self-referential type (`class Node { children: Array[Node] }`) would
-/// otherwise recurse forever — `ty_has_derive_trait(Node)` →
-/// `Array[Node]` field → `ty_has_derive_trait(Node)` → … (Q8 stack
-/// overflow). On revisiting a name we return `true` (coinductive): a
-/// recursive type structurally supports a derive iff its NON-recursive
-/// parts do, exactly like Rust deriving `Clone`/`Debug` on a recursive
-/// `enum`. The non-recursive fields are still checked on the first visit,
-/// so a genuinely unsupported field still fails (`.all()`/`&&` below).
-fn ty_has_derive_trait_seen(
-    ty: &Ty,
-    symbols: &SymbolTable,
-    trait_name: &str,
-    seen: &mut std::collections::HashSet<String>,
-) -> bool {
-    let name = match ty {
-        Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. } => name,
-        Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) => {
-            return ty_has_derive_trait_seen(inner, symbols, trait_name, seen)
-        }
-        Ty::Alias { target, .. } => {
-            return ty_has_derive_trait_seen(target, symbols, trait_name, seen)
-        }
-        Ty::Newtype { inner, .. } => {
-            return ty_has_derive_trait_seen(inner, symbols, trait_name, seen)
-        }
-        _ => return false,
-    };
-
-    // Cycle: this nominal type is already being evaluated higher up the
-    // stack. Assume it supports the trait (coinductive); the real
-    // determination happens at the first (outermost) visit.
-    if !seen.insert(name.clone()) {
-        return true;
-    }
-
-    symbols.iter().any(|def| {
-        if def.name != *name {
-            return false;
-        }
-        match &def.kind {
-            DefKind::Class { info } => {
-                if info.derive_traits.iter().any(|t| t == trait_name) {
-                    return true;
-                }
-                // ruby-naming.spec.md §3.6: a `class` never implicitly
-                // includes `Copy` (reference semantics). For all other
-                // structural mixins, treat them as implicitly included
-                // when every field structurally supports them.
-                if trait_name == "Copy" {
-                    return false;
-                }
-                struct_or_class_fields_all_support(symbols, &info.fields, trait_name, seen)
-            }
-            DefKind::Struct { info } => {
-                if info.derive_traits.iter().any(|t| t == trait_name) {
-                    return true;
-                }
-                struct_or_class_fields_all_support(symbols, &info.fields, trait_name, seen)
-            }
-            DefKind::Enum { info } => {
-                if info.derive_traits.iter().any(|t| t == trait_name) {
-                    return true;
-                }
-                // ruby-naming.spec.md §3.6: structural mixins apply to
-                // enums too — Debug always; Clone/Eq/Hash/Ord when
-                // every variant field structurally supports them.
-                // `Copy` on enums follows the same field rule but is
-                // conservative — enums in v1 stay non-Copy unless all
-                // variants are unit-only with primitive payloads, so
-                // we still gate on the field check.
-                enum_variant_fields_all_support(symbols, &info.variants, trait_name, seen)
-            }
-            _ => false,
-        }
-    })
-}
-
-/// Helper for `ty_has_derive_trait`: returns true when every field's
-/// type structurally supports the requested mixin per the
-/// spec §3.6 implicit-include rule.
-fn enum_variant_fields_all_support(
-    symbols: &SymbolTable,
-    variant_def_ids: &[DefId],
-    trait_name: &str,
-    seen: &mut std::collections::HashSet<String>,
-) -> bool {
-    variant_def_ids.iter().all(|vid| {
-        let def = match symbols.get(*vid) {
-            Some(d) => d,
-            None => return false,
-        };
-        match &def.kind {
-            DefKind::EnumVariant { kind, .. } => match kind {
-                VariantDefKind::Unit => true,
-                VariantDefKind::Tuple(types) => types
-                    .iter()
-                    .all(|ty| ty_supports_structural_mixin(ty, symbols, trait_name, seen)),
-                VariantDefKind::Struct(fields) => fields
-                    .iter()
-                    .all(|(_, ty)| ty_supports_structural_mixin(ty, symbols, trait_name, seen)),
-            },
-            _ => false,
-        }
-    })
-}
-
-fn struct_or_class_fields_all_support(
-    symbols: &SymbolTable,
-    field_def_ids: &[DefId],
-    trait_name: &str,
-    seen: &mut std::collections::HashSet<String>,
-) -> bool {
-    field_def_ids
-        .iter()
-        .all(|field_id| match symbols.get(*field_id).map(|d| &d.kind) {
-            Some(DefKind::Field { ty, .. }) => {
-                ty_supports_structural_mixin(ty, symbols, trait_name, seen)
-            }
-            Some(DefKind::Variable { ty, .. }) => {
-                ty_supports_structural_mixin(ty, symbols, trait_name, seen)
-            }
-            _ => false,
-        })
-}
-
-/// Returns true when the given type structurally supports the named
-/// structural mixin. Primitives & references satisfy everything; nested
-/// nominal types delegate back to `ty_has_derive_trait`.
-fn ty_supports_structural_mixin(
-    ty: &Ty,
-    symbols: &SymbolTable,
-    trait_name: &str,
-    seen: &mut std::collections::HashSet<String>,
-) -> bool {
-    if trait_name == "Copy" {
-        return ty.is_copy_with(symbols);
-    }
-    // For every other structural mixin (Clone, Debug, Eq, Hash, …),
-    // primitives and references satisfy unconditionally; user types
-    // recurse through `ty_has_derive_trait_seen` (which carries the
-    // cycle-detection `seen` set for self-referential types — Q8).
-    match ty {
-        Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => {
-            ty_has_derive_trait_seen(ty, symbols, trait_name, seen)
-        }
-        Ty::Ref(inner)
-        | Ty::RefMut(inner)
-        | Ty::RefLifetime(_, inner)
-        | Ty::RefMutLifetime(_, inner) => {
-            ty_supports_structural_mixin(inner, symbols, trait_name, seen)
-        }
-        Ty::Newtype { inner, .. } | Ty::Alias { target: inner, .. } => {
-            ty_supports_structural_mixin(inner, symbols, trait_name, seen)
-        }
-        Ty::Tuple(elems) => elems
-            .iter()
-            .all(|e| ty_supports_structural_mixin(e, symbols, trait_name, seen)),
-        Ty::FixedArray(elem, _) => ty_supports_structural_mixin(elem, symbols, trait_name, seen),
-        // Array, Map, Set, Option, Result are containers — they
-        // forward the structural mixin to their element type.
-        Ty::Array(elem) | Ty::Set(elem) | Ty::Option(elem) => {
-            ty_supports_structural_mixin(elem, symbols, trait_name, seen)
-        }
-        Ty::Map(k, v) | Ty::Result(k, v) => {
-            ty_supports_structural_mixin(k, symbols, trait_name, seen)
-                && ty_supports_structural_mixin(v, symbols, trait_name, seen)
-        }
-        _ => true,
-    }
-}
+mod derive_support;
+pub use derive_support::{ty_has_derive_trait, ty_is_effectively_copy};
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::lexer::token::Span;
-
-    fn dummy_span() -> Span {
-        Span::new(0, 0, 1, 1)
-    }
-
-    fn var_kind(ty: Ty) -> DefKind {
-        DefKind::Variable { mutable: false, ty }
-    }
-
-    fn fn_kind(ret: Ty) -> DefKind {
-        DefKind::Function {
-            signature: FnSignature {
-                self_mode: None,
-                is_class_method: false,
-                is_async: false,
-                generic_params: Vec::new(),
-                params: Vec::new(),
-                return_ty: ret,
-                c_symbol: None,
-            },
-        }
-    }
-
-    #[test]
-    fn derive_copy_struct_is_effectively_copy() {
-        let mut symbols = SymbolTable::new();
-        symbols.define(
-            "Point".to_string(),
-            DefKind::Struct {
-                info: StructInfo {
-                    generic_params: Vec::new(),
-                    fields: Vec::new(),
-                    derive_traits: vec!["Copy".to_string(), "Clone".to_string()],
-                    layout: Vec::new(),
-                    opt_out_send: false,
-                    opt_out_sync: false,
-                    manual_send: false,
-                    manual_sync: false,
-                    const_predicates: vec![],
-                },
-            },
-            Visibility::Public,
-            dummy_span(),
-        );
-
-        let point = Ty::Struct {
-            name: "Point".to_string(),
-            generic_args: Vec::new(),
-        };
-
-        assert!(ty_is_effectively_copy(&point, &symbols));
-        assert!(ty_is_effectively_copy(
-            &Ty::Tuple(vec![point.clone(), Ty::Int]),
-            &symbols
-        ));
-        assert!(!ty_is_effectively_copy(
-            &Ty::Array(Box::new(point)),
-            &symbols
-        ));
-    }
-
-    fn class_kind() -> DefKind {
-        DefKind::Class {
-            info: ClassInfo {
-                generic_params: Vec::new(),
-                parent: None,
-                fields: Vec::new(),
-                methods: Vec::new(),
-                derive_traits: Vec::new(),
-                opt_out_send: false,
-                opt_out_sync: false,
-                manual_send: false,
-                manual_sync: false,
-                const_predicates: vec![],
-                flat_heap_struct: false,
-                runtime_dispatch_includes: Vec::new(),
-            },
-        }
-    }
-
-    #[test]
-    fn new_table_is_empty() {
-        let table = SymbolTable::new();
-        assert_eq!(table.len(), 0);
-        assert!(table.is_empty());
-    }
-
-    #[test]
-    fn default_matches_new() {
-        let table = SymbolTable::default();
-        assert!(table.is_empty());
-    }
-
-    #[test]
-    fn define_returns_sequential_defids_starting_at_zero() {
-        let mut table = SymbolTable::new();
-        let a = table.define(
-            "a".to_string(),
-            var_kind(Ty::Int),
-            Visibility::Private,
-            dummy_span(),
-        );
-        let b = table.define(
-            "b".to_string(),
-            var_kind(Ty::Bool),
-            Visibility::Private,
-            dummy_span(),
-        );
-        let c = table.define(
-            "c".to_string(),
-            var_kind(Ty::Unit),
-            Visibility::Private,
-            dummy_span(),
-        );
-        assert_eq!(a, 0);
-        assert_eq!(b, 1);
-        assert_eq!(c, 2);
-        assert_eq!(table.len(), 3);
-        assert!(!table.is_empty());
-    }
-
-    #[test]
-    fn get_returns_definition_by_defid() {
-        let mut table = SymbolTable::new();
-        let id = table.define(
-            "foo".to_string(),
-            var_kind(Ty::Int),
-            Visibility::Public,
-            dummy_span(),
-        );
-        let def = table.get(id).expect("definition should be present");
-        assert_eq!(def.id, id);
-        assert_eq!(def.name, "foo");
-        assert_eq!(def.visibility, Visibility::Public);
-    }
-
-    #[test]
-    fn get_returns_none_for_unknown_defid() {
-        let table = SymbolTable::new();
-        assert!(table.get(0).is_none());
-        assert!(table.get(999).is_none());
-    }
-
-    #[test]
-    fn distinguishes_function_class_and_variable_kinds() {
-        let mut table = SymbolTable::new();
-        let v = table.define(
-            "x".to_string(),
-            var_kind(Ty::Int),
-            Visibility::Private,
-            dummy_span(),
-        );
-        let f = table.define(
-            "do_stuff".to_string(),
-            fn_kind(Ty::Unit),
-            Visibility::Public,
-            dummy_span(),
-        );
-        let c = table.define(
-            "Widget".to_string(),
-            class_kind(),
-            Visibility::Public,
-            dummy_span(),
-        );
-
-        assert!(matches!(
-            table.get(v).unwrap().kind,
-            DefKind::Variable { .. }
-        ));
-        assert!(matches!(
-            table.get(f).unwrap().kind,
-            DefKind::Function { .. }
-        ));
-        assert!(matches!(table.get(c).unwrap().kind, DefKind::Class { .. }));
-    }
-
-    #[test]
-    fn span_is_preserved_on_definitions() {
-        let mut table = SymbolTable::new();
-        let span = Span::new(10, 20, 4, 7);
-        let id = table.define(
-            "here".to_string(),
-            var_kind(Ty::Int),
-            Visibility::Private,
-            span.clone(),
-        );
-        let def = table.get(id).unwrap();
-        assert_eq!(def.span, span);
-        assert_eq!(def.span.line, 4);
-        assert_eq!(def.span.column, 7);
-    }
-
-    #[test]
-    fn duplicate_names_allocate_distinct_defids() {
-        // The symbol table itself does not deduplicate — it's the scope
-        // layer that handles shadowing. Two defines with the same name must
-        // get distinct DefIds.
-        let mut table = SymbolTable::new();
-        let a = table.define(
-            "same".to_string(),
-            var_kind(Ty::Int),
-            Visibility::Private,
-            dummy_span(),
-        );
-        let b = table.define(
-            "same".to_string(),
-            var_kind(Ty::Bool),
-            Visibility::Private,
-            dummy_span(),
-        );
-        assert_ne!(a, b);
-        assert_eq!(table.len(), 2);
-    }
-
-    #[test]
-    fn iter_yields_definitions_in_insertion_order() {
-        let mut table = SymbolTable::new();
-        table.define(
-            "a".to_string(),
-            var_kind(Ty::Int),
-            Visibility::Private,
-            dummy_span(),
-        );
-        table.define(
-            "b".to_string(),
-            var_kind(Ty::Bool),
-            Visibility::Private,
-            dummy_span(),
-        );
-        table.define(
-            "c".to_string(),
-            var_kind(Ty::Char),
-            Visibility::Private,
-            dummy_span(),
-        );
-        let names: Vec<_> = table.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names, vec!["a", "b", "c"]);
-    }
-
-    #[test]
-    fn update_ty_changes_variable_type() {
-        let mut table = SymbolTable::new();
-        let id = table.define(
-            "x".to_string(),
-            var_kind(Ty::Int),
-            Visibility::Private,
-            dummy_span(),
-        );
-        table.update_ty(id, Ty::Bool);
-        let def = table.get(id).unwrap();
-        if let DefKind::Variable { ty, .. } = &def.kind {
-            assert_eq!(*ty, Ty::Bool);
-        } else {
-            panic!("expected DefKind::Variable");
-        }
-    }
-
-    #[test]
-    fn update_ty_is_noop_for_class_definitions() {
-        let mut table = SymbolTable::new();
-        let id = table.define(
-            "C".to_string(),
-            class_kind(),
-            Visibility::Public,
-            dummy_span(),
-        );
-        // Class is not one of the variants update_ty touches; it must be a no-op.
-        table.update_ty(id, Ty::Int);
-        assert!(matches!(table.get(id).unwrap().kind, DefKind::Class { .. }));
-    }
-
-    #[test]
-    fn def_ty_returns_type_for_variable() {
-        let mut table = SymbolTable::new();
-        let id = table.define(
-            "x".to_string(),
-            var_kind(Ty::Int),
-            Visibility::Private,
-            dummy_span(),
-        );
-        assert_eq!(table.def_ty(id), Some(Ty::Int));
-    }
-
-    #[test]
-    fn def_ty_returns_fn_type_for_function() {
-        let mut table = SymbolTable::new();
-        let id = table.define(
-            "f".to_string(),
-            fn_kind(Ty::Bool),
-            Visibility::Public,
-            dummy_span(),
-        );
-        match table.def_ty(id) {
-            Some(Ty::Fn { params, ret }) => {
-                assert!(params.is_empty());
-                assert_eq!(*ret, Ty::Bool);
-            }
-            other => panic!("expected Ty::Fn, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn def_ty_returns_none_for_class() {
-        let mut table = SymbolTable::new();
-        let id = table.define(
-            "C".to_string(),
-            class_kind(),
-            Visibility::Public,
-            dummy_span(),
-        );
-        assert_eq!(table.def_ty(id), None);
-    }
-
-    #[test]
-    fn name_lookup_is_case_sensitive_via_iter() {
-        // The symbol table itself has no name-keyed lookup (scopes own that).
-        // Confirm that `iter` sees case-sensitive, distinct names.
-        let mut table = SymbolTable::new();
-        table.define(
-            "Foo".to_string(),
-            var_kind(Ty::Int),
-            Visibility::Private,
-            dummy_span(),
-        );
-        table.define(
-            "foo".to_string(),
-            var_kind(Ty::Int),
-            Visibility::Private,
-            dummy_span(),
-        );
-        let hits: Vec<_> = table.iter().map(|d| d.name.as_str()).collect();
-        assert!(hits.contains(&"Foo"));
-        assert!(hits.contains(&"foo"));
-        assert_eq!(hits.len(), 2);
-    }
-
-    #[test]
-    fn get_mut_allows_in_place_mutation() {
-        let mut table = SymbolTable::new();
-        let id = table.define(
-            "x".to_string(),
-            var_kind(Ty::Int),
-            Visibility::Private,
-            dummy_span(),
-        );
-        {
-            let def = table.get_mut(id).unwrap();
-            def.name = "renamed".to_string();
-        }
-        assert_eq!(table.get(id).unwrap().name, "renamed");
-    }
-
-    #[test]
-    fn visibility_is_preserved_per_definition() {
-        let mut table = SymbolTable::new();
-        let a = table.define(
-            "a".to_string(),
-            var_kind(Ty::Int),
-            Visibility::Private,
-            dummy_span(),
-        );
-        let b = table.define(
-            "b".to_string(),
-            var_kind(Ty::Int),
-            Visibility::Public,
-            dummy_span(),
-        );
-        let c = table.define(
-            "c".to_string(),
-            var_kind(Ty::Int),
-            Visibility::Protected,
-            dummy_span(),
-        );
-        assert_eq!(table.get(a).unwrap().visibility, Visibility::Private);
-        assert_eq!(table.get(b).unwrap().visibility, Visibility::Public);
-        assert_eq!(table.get(c).unwrap().visibility, Visibility::Protected);
-    }
-
-    // NOTE: The task spec mentions "Clear/reset behavior if exposed" — the
-    // current `SymbolTable` does not expose `clear` or `reset`; definitions
-    // are append-only for the lifetime of the table. Documented as ignored.
-    #[test]
-    #[ignore = "SymbolTable exposes no clear/reset API; table is append-only"]
-    fn clear_reset_not_exposed() {}
-}
+mod tests;

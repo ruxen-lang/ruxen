@@ -1,0 +1,100 @@
+# Behaviours the old installed_binary.rs compile-and-run tests checked that no other
+# e2e case covers: Float payload match, Float arithmetic and comparison,
+# guards on enum-variant bindings, a method calling another through self,
+# struct rebind without double drop, upcase/size/chars/split on strings,
+# Hash literal lookup, Array push/pop, select/find with braces.
+enum Shape
+  Circle(radius: Float)
+  Square(side: Float)
+end
+
+def area(s: Shape) -> Float
+  case s
+  in Shape.Circle(r) then 3.14159 * r * r
+  in Shape.Square(x) then x * x
+  end
+end
+
+enum Color
+  Red(Int)
+  Blue(Int)
+end
+
+def describe(c: Color) -> String
+  case c
+  in Color.Red(n) if n > 100 then "bright red"
+  in Color.Red(_) then "red"
+  in Color.Blue(_) then "blue"
+  end
+end
+
+class Box
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def doubled -> Int
+    self.n * 2
+  end
+
+  def quadrupled -> Int
+    self.doubled * 2
+  end
+end
+
+struct Pair
+  left: Int
+  right: Int
+end
+
+def main
+  puts "#{area(Shape.Circle(radius: 2.0))}"
+  puts "#{area(Shape.Square(side: 4.0))}"
+
+  a = 2.5
+  b = 4.0
+  puts "#{a + b} #{b - a} #{b / a}"
+  puts "less" if a < b
+  puts "greater" if b > a
+
+  puts describe(Color.Red(200))
+  puts describe(Color.Red(50))
+  puts describe(Color.Blue(1))
+
+  puts "#{Box.new(5).quadrupled}"
+
+  pair = Pair.new(7, 11)
+  rebound = pair
+  puts "#{rebound.left + rebound.right}"
+
+  s = "hello"
+  puts "#{s.size} #{"abc".upcase}"
+  count = 0
+  for ch in s.chars
+    count += 1
+  end
+  puts "#{count} #{"a,b,c".split(",").size}"
+
+  h = { "a" => 1, "b" => 2 }
+  case h.get("b")
+  in Some(n) then puts "b=#{n}"
+  in nil then puts "b=missing"
+  end
+
+  v = Array[Int].new
+  v.push(1)
+  v.push(2)
+  v.push(3)
+  case v.pop
+  in Some(x) then puts "popped #{x} left #{v.size}"
+  in nil then puts "empty"
+  end
+
+  nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  puts "#{nums.select { |n| n % 2 == 0 }.size}"
+  case nums.find { |n| n > 7 }
+  in Some(n) then puts "first > 7: #{n}"
+  in nil then puts "none"
+  end
+end

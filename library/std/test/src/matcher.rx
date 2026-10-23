@@ -94,28 +94,16 @@ class OptionMatcher
   end
 end
 
-## Element-membership matcher for Array[T]. Loops with indexed `get`
-## rather than `contains?` because the v1 Array surface may not expose
-## contains? uniformly across T (PartialEq required). Marks the case
-## failed when the needle is absent.
+## Element-membership matcher for Array[T], over `Array#include?` (the
+## element type's own `==`). Marks the case failed when the needle is
+## absent.
 class ArrayMatcher[T]
   actual_ref: &Array[T]
 
   def init(actual: &Array[T]) { self.actual_ref = actual }
 
   def to_include(needle: T) -> Bool
-    let n: Int = self.actual_ref.size as Int
-    var i: Int = 0
-    var found: Bool = false
-    while i < n
-      match self.actual_ref.get(i)
-        Some(item) -> if item == needle
-          found = true
-        end
-        nil -> 0
-      end
-      i = i + 1
-    end
+    let found = self.actual_ref.include?(needle)
     if !found
       puts "  to_include failed: array does not contain the expected element"
       Runner.case_mark_failed

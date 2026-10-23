@@ -20,6 +20,7 @@ use lsp_types::{Location, Position, Url};
 
 use ruxen_core::hir::nodes::{DefId, HirExpr, HirExprKind, HirProgram, UNRESOLVED_DEF};
 use ruxen_core::hir::types::Ty;
+use ruxen_core::hir::visit::{walk_expr, Visit};
 use ruxen_core::lexer::token::Span;
 use ruxen_core::resolve::symbols::{DefKind, SymbolTable};
 
@@ -163,246 +164,29 @@ impl MethodCallFinder {
             self.visit_item(item);
         }
     }
+}
 
-    fn visit_item(&mut self, item: &ruxen_core::hir::nodes::HirItem) {
-        use ruxen_core::hir::nodes::{HirImplItem, HirItem, HirMixinItem};
-        match item {
-            HirItem::Function(f) => self.visit_expr(&f.body),
-            HirItem::Class(c) => {
-                for m in &c.methods {
-                    self.visit_expr(&m.body);
-                }
-                for b in &c.impl_blocks {
-                    for it in &b.items {
-                        if let HirImplItem::Method(m) = it {
-                            self.visit_expr(&m.body);
-                        }
-                    }
-                }
-            }
-            HirItem::Struct(s) => {
-                for m in &s.methods {
-                    self.visit_expr(&m.body);
-                }
-                for b in &s.impl_blocks {
-                    for it in &b.items {
-                        if let HirImplItem::Method(m) = it {
-                            self.visit_expr(&m.body);
-                        }
-                    }
-                }
-            }
-            HirItem::Enum(e) => {
-                for m in &e.methods {
-                    self.visit_expr(&m.body);
-                }
-                for b in &e.impl_blocks {
-                    for it in &b.items {
-                        if let HirImplItem::Method(m) = it {
-                            self.visit_expr(&m.body);
-                        }
-                    }
-                }
-            }
-            HirItem::Mixin(t) => {
-                for it in &t.items {
-                    if let HirMixinItem::DefaultMethod(m) = it {
-                        self.visit_expr(&m.body);
-                    }
-                }
-            }
-            HirItem::Impl(b) => {
-                for it in &b.items {
-                    if let HirImplItem::Method(m) = it {
-                        self.visit_expr(&m.body);
-                    }
-                }
-            }
-            HirItem::Module(m) => {
-                for it in &m.items {
-                    self.visit_item(it);
-                }
-            }
-            HirItem::Const(c) => self.visit_expr(&c.value),
-            HirItem::TypeAlias(_) | HirItem::Newtype(_) => {}
-        }
-    }
-
+impl Visit for MethodCallFinder {
     fn visit_expr(&mut self, expr: &HirExpr) {
-        if self.result.is_some() {
+        if self.result.is_some() || !self.contains(&expr.span) {
             return;
         }
-        if !self.contains(&expr.span) {
+        // Children first, so the innermost matching call wins.
+        walk_expr(self, expr);
+        if self.result.is_some() {
             return;
         }
         if let HirExprKind::MethodCall {
             object,
             method_name,
-            args,
-            block,
             ..
         } = &expr.kind
         {
-            // Recurse into the object & args first to find the
-            // innermost match.
-            self.visit_expr(object);
-            for a in args {
-                self.visit_expr(a);
-            }
-            if let Some(b) = block {
-                self.visit_expr(b);
-            }
-            if self.result.is_some() {
-                return;
-            }
             if expr.span.start == self.expected_span.start
                 && expr.span.end == self.expected_span.end
             {
                 self.result = Some((object.ty.clone(), method_name.clone()));
             }
-            return;
-        }
-        // Descend into all child expressions generically.
-        self.descend_children(expr);
-    }
-
-    fn descend_children(&mut self, expr: &HirExpr) {
-        use ruxen_core::hir::nodes::{HirInterpolationPart, HirStatement};
-        match &expr.kind {
-            HirExprKind::FnCall { args, .. } => {
-                for a in args {
-                    self.visit_expr(a);
-                }
-            }
-            HirExprKind::BinaryOp { left, right, .. } => {
-                self.visit_expr(left);
-                self.visit_expr(right);
-            }
-            HirExprKind::UnaryOp { operand, .. } => self.visit_expr(operand),
-            HirExprKind::Borrow { expr: inner, .. } => self.visit_expr(inner),
-            HirExprKind::Block(stmts, tail) | HirExprKind::UnsafeBlock(stmts, tail) => {
-                for s in stmts {
-                    match s {
-                        HirStatement::Let { value, pattern, .. } => {
-                            self.visit_pattern(pattern);
-                            if let Some(v) = value {
-                                self.visit_expr(v);
-                            }
-                        }
-                        HirStatement::Expr(e) => self.visit_expr(e),
-                    }
-                }
-                if let Some(t) = tail {
-                    self.visit_expr(t);
-                }
-            }
-            HirExprKind::If {
-                cond,
-                then_branch,
-                else_branch,
-            } => {
-                self.visit_expr(cond);
-                self.visit_expr(then_branch);
-                if let Some(e) = else_branch {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::Match { scrutinee, arms } => {
-                self.visit_expr(scrutinee);
-                for arm in arms {
-                    self.visit_pattern(&arm.pattern);
-                    if let Some(g) = &arm.guard {
-                        self.visit_expr(g);
-                    }
-                    self.visit_expr(&arm.body);
-                }
-            }
-            HirExprKind::Loop { body } => self.visit_expr(body),
-            HirExprKind::While { condition, body } => {
-                self.visit_expr(condition);
-                self.visit_expr(body);
-            }
-            HirExprKind::For { iterable, body, .. } => {
-                self.visit_expr(iterable);
-                self.visit_expr(body);
-            }
-            HirExprKind::Assign { target, value, .. }
-            | HirExprKind::CompoundAssign { target, value, .. } => {
-                self.visit_expr(target);
-                self.visit_expr(value);
-            }
-            HirExprKind::Return(Some(e)) | HirExprKind::Break(Some(e)) => self.visit_expr(e),
-            HirExprKind::Closure { body, .. } => self.visit_expr(body),
-            HirExprKind::Construct { fields, .. } | HirExprKind::EnumVariant { fields, .. } => {
-                for (_, v) in fields {
-                    self.visit_expr(v);
-                }
-            }
-            HirExprKind::Tuple(elems) | HirExprKind::ArrayLiteral(elems) => {
-                for e in elems {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::MapLiteral(pairs) => {
-                for (k, v) in pairs {
-                    self.visit_expr(k);
-                    self.visit_expr(v);
-                }
-            }
-            HirExprKind::ArrayFill { value, .. } => self.visit_expr(value),
-            HirExprKind::Index { object, index } => {
-                self.visit_expr(object);
-                self.visit_expr(index);
-            }
-            HirExprKind::Cast { expr: inner, .. } => self.visit_expr(inner),
-            HirExprKind::FieldAccess { object, .. } => self.visit_expr(object),
-            HirExprKind::Range { start, end, .. } => {
-                if let Some(s) = start {
-                    self.visit_expr(s);
-                }
-                if let Some(e) = end {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::Interpolation { parts } => {
-                for p in parts {
-                    if let HirInterpolationPart::Expr { expr: e, .. } = p {
-                        self.visit_expr(e);
-                    }
-                }
-            }
-            HirExprKind::MacroCall { args, .. } => {
-                for a in args {
-                    self.visit_expr(a);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn visit_pattern(&mut self, pattern: &ruxen_core::hir::nodes::HirPattern) {
-        use ruxen_core::hir::nodes::HirPattern;
-        match pattern {
-            HirPattern::Literal { expr, .. } => self.visit_expr(expr),
-            HirPattern::Tuple { elements, .. }
-            | HirPattern::Or {
-                patterns: elements, ..
-            } => {
-                for el in elements {
-                    self.visit_pattern(el);
-                }
-            }
-            HirPattern::Enum { fields, .. } => {
-                for f in fields {
-                    self.visit_pattern(f);
-                }
-            }
-            HirPattern::Struct { fields, .. } => {
-                for (_, p) in fields {
-                    self.visit_pattern(p);
-                }
-            }
-            _ => {}
         }
     }
 }

@@ -19,14 +19,14 @@ module geometry
   end
 
   def origin -> Point
-    Point { x: 0, y: 0 }
+    Point.new(0, 0)
   end
 end
 ```
 
 The parser produces a `TopLevelItem::Module(ModuleDef { name,
 items, span })` (see
-[`parser/ast.rs` `ModuleDef`](../../../crates/ruxen-core/src/parser/ast.rs)).
+[`parser/ast.rs` `ModuleDef`](../../../compiler/ruxen_core/src/parser/ast.rs)).
 Nested top-level items inside the module are parsed normally.
 
 ## B2 — Nested modules parse
@@ -86,7 +86,6 @@ existing `use` machinery for `std.*` paths.
 
 ## Out of scope until resolver support lands
 
-- `mod foo;` file-based module declarations (Rust style).
 - `private` visibility markers on user-module items.
 - Re-exports (`use ...` re-exports).
 - Cross-file module trees.

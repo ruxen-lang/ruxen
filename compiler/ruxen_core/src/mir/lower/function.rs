@@ -1,10 +1,34 @@
 use super::*;
+use crate::hir::visit::{walk_expr, Visit};
 
 impl<'a> Lowerer<'a> {
     // ── Function / Method lowering ──────────────────────────────────────
 
     pub(super) fn lower_function(&mut self, func: &HirFuncDef) -> Result<MirFunction, String> {
         self.lower_method(&func.name, func)
+    }
+
+    /// The resolver signature `func` was declared with, before any generic
+    /// substitution a monomorphised copy applied to its HIR types.
+    fn declared_signature(
+        &self,
+        func: &HirFuncDef,
+    ) -> Option<&'a crate::resolve::symbols::FnSignature> {
+        use crate::resolve::symbols::DefKind;
+        let symbols: &'a SymbolTable = self.symbols;
+        match &symbols.get(func.def_id)?.kind {
+            DefKind::Method { signature, .. } | DefKind::Function { signature } => Some(signature),
+            _ => None,
+        }
+    }
+
+    /// The declared types of `func`'s parameters (see `declared_signature`),
+    /// or none when the signature does not line up with the HIR params.
+    fn declared_param_tys(&self, func: &HirFuncDef) -> Vec<Ty> {
+        self.declared_signature(func)
+            .filter(|sig| sig.params.len() == func.params.len())
+            .map(|sig| sig.params.iter().map(|p| p.ty.clone()).collect())
+            .unwrap_or_default()
     }
 
     pub(super) fn lower_method(
@@ -15,7 +39,13 @@ impl<'a> Lowerer<'a> {
         // Reset per-function state.
         self.def_to_local.clear();
         self.cell_promoted.clear();
+        self.refmut_slots.clear();
         self.initialized_heap_locals.clear();
+        self.stmt_log = drops::StmtScopeLog::default();
+        // Seed the current debug span with the function's own definition line
+        // so any pre-body emits (auto-assign SetFields) get a sensible
+        // location; body expressions override it per-node in `lower_expr`.
+        self.current_span = Some(func.span.clone());
         let mir_fn = MirFunction::new(name, func.return_ty.clone());
         self.current_block = mir_fn.entry_block;
         self.current_fn = Some(mir_fn);
@@ -32,6 +62,7 @@ impl<'a> Lowerer<'a> {
                 .unwrap_or(false);
 
         // If this method has a self receiver, add self as the first parameter.
+        let mut self_local = None;
         if has_self_param {
             // Derive the self type from the mangled method name (ClassName_method).
             //
@@ -46,33 +77,100 @@ impl<'a> Lowerer<'a> {
             // Resolve by walking underscore positions right-to-left and
             // accepting the longest prefix that actually names a class
             // (or struct/enum, for methods on those) in the symbol table.
+            // A caller (currently only `emit_universal_kernel_bodies`) may pin
+            // the concrete `self` type when the mangled name cannot name it —
+            // e.g. a synthesized `Array[Int]_tap` whose `Array[Int]` prefix is
+            // neither a symbol-table class nor a primitive, so the derivation
+            // below would fall back to `Ty::Unit`.
             let self_ty = self
-                .class_name_from_mangled(name)
-                .map(|class_name| Ty::Class {
-                    name: class_name.to_string(),
-                    generic_args: vec![],
+                .self_ty_override
+                .clone()
+                .or_else(|| {
+                    self.class_name_from_mangled(name)
+                        .map(|class_name| Ty::Class {
+                            name: class_name.to_string(),
+                            generic_args: vec![],
+                        })
                 })
                 .or_else(|| self.primitive_self_ty_from_mangled(name))
                 .unwrap_or(Ty::Unit);
             let local = self.fn_mut().new_local("self", self_ty, true);
             self.fn_mut().params.push(local);
-            // Register all SelfValue DefIds in the symbol table so self.field works
-            for def in self.symbols.iter() {
-                if def.name == "self" {
-                    if let crate::resolve::symbols::DefKind::SelfValue { .. } = &def.kind {
-                        self.def_to_local.insert(def.id, local);
-                    }
-                }
+            // Bind the `self` this body refers to (its own SelfValue, or the
+            // declaring mixin's for a copied default body) so `self.field`
+            // works. Other methods' SelfValues stay unbound.
+            for self_def in self_value_refs(&func.body, self.symbols) {
+                self.def_to_local.insert(self_def, local);
             }
+            self_local = Some(local);
         }
 
-        // Create locals for parameters.
-        for param in &func.params {
+        // Create locals for parameters. A slot-addressed `&var T` parameter
+        // (`n: &var Int`, `s: &var String`) receives the address of the
+        // caller's storage (`mir::refmut_abi`): every read loads through it
+        // and every write stores through it, like a cell-promoted local. The
+        // decision reads the DECLARED signature, as the caller does, so a
+        // generic `&var T` stays a handle in a monomorphised copy.
+        let declared = self.declared_param_tys(func);
+        for (index, param) in func.params.iter().enumerate() {
             let local = self
                 .fn_mut()
                 .new_local(&param.name, param.ty.clone(), false);
             self.fn_mut().params.push(local);
             self.def_to_local.insert(param.def_id, local);
+            let declared_ty = declared.get(index).unwrap_or(&param.ty);
+            if crate::mir::refmut_abi::is_slot_refmut(declared_ty) {
+                self.cell_promoted.insert(param.def_id);
+                self.refmut_slots.insert(param.def_id);
+            }
+        }
+        let receiver_mode = self_local.map(|_| {
+            func.self_mode
+                .as_ref()
+                .map_or(ParamMode::Read, crate::mir::param_modes::receiver_mode)
+        });
+        let param_modes = receiver_mode
+            .into_iter()
+            .chain(func.params.iter().enumerate().map(|(index, param)| {
+                crate::mir::param_modes::param_mode(
+                    declared.get(index).unwrap_or(&param.ty),
+                    self.symbols,
+                )
+            }))
+            .collect();
+        self.fn_mut().param_modes = param_modes;
+        let declared_return = self
+            .declared_signature(func)
+            .map_or(&func.return_ty, |sig| &sig.return_ty);
+        if crate::mir::refmut_abi::is_slot_refmut(declared_return) {
+            return Err(format!(
+                "`{name}` returns a `&var` of a scalar or String; returning the address of a \
+                 variable is not supported yet, so return the value instead"
+            ));
+        }
+
+        // Resolve rejects user params on `main` (E0739); never lower them
+        // against the fixed C entry signature.
+        if name == "main" && !has_self_param && !func.params.is_empty() {
+            return Err("`main` cannot take parameters (E0739)".to_string());
+        }
+        if name == "main" && !has_self_param {
+            let entry = self.fn_mut();
+            entry.is_entry = true;
+            entry.linkage = MirLinkage::Export;
+        }
+        // The process entry point takes the C `main(argc, argv)` ABI and hands
+        // the arguments to `std.env` before the body runs. A no_std build has
+        // no `std.env` and no `ruxen_env_init`, so its `main` keeps no params.
+        if name == "main" && !has_self_param && !self.no_std {
+            let argc = self.fn_mut().new_local("__argc", Ty::Int32, false);
+            let argv = self.fn_mut().new_local("__argv", Ty::RawPtrVoid, false);
+            self.fn_mut().params.extend([argc, argv]);
+            self.emit(MirInst::Call {
+                dest: None,
+                callee: "ruxen_env_init".to_string(),
+                args: vec![MirValue::Use(argc), MirValue::Use(argv)],
+            });
         }
 
         // Handle auto-assign params (@field) in init methods.
@@ -80,9 +178,7 @@ impl<'a> Lowerer<'a> {
         // The field_index must match the class field order, not the param
         // order, since the class may have fields that aren't auto-assigned
         // (e.g., `status` in Task is set in the init body, not via @param).
-        if func.name == "init" && has_self_param {
-            // Find the self local (should be local 0 if self_mode is set)
-            let self_local = self.def_to_local.values().copied().min().unwrap_or(0);
+        if let Some(self_local) = self_local.filter(|_| func.name == "init") {
             // Recover the owning class name from the mangled method name
             // (see the symmetric note above on why `split('_').next()`
             // doesn't work for `__`-prefixed synth classes — that bug
@@ -135,21 +231,15 @@ impl<'a> Lowerer<'a> {
         }
 
         let mut mir_fn = self.current_fn.take().expect("current_fn must be Some");
+        // Record the function's definition line for DWARF (P0.14). Only real
+        // HIR functions reach here; synthesized MIR functions keep `None`.
+        mir_fn.def_span = Some(func.span.clone());
 
-        // Determine the return-value locals so we don't drop them. A
-        // function may return through multiple `Return` terminators (one
-        // per match arm, for example), so we collect every distinct local
-        // referenced in such a terminator.
-        let return_locals = self.find_return_locals(&mir_fn);
-
-        // Insert Drop instructions for Move-type locals before every Return.
-        insert_drops(
-            &mut mir_fn,
-            &return_locals,
-            self.symbols,
-            &self.user_drop_classes,
-            &|mangled| self.resolve_ffi_alias_callee(mangled),
-        );
+        // Drop elaboration runs once every body is lowered
+        // (`Lowerer::elaborate_drops`); record this body and its statement
+        // boundaries for it.
+        let scopes = std::mem::take(&mut self.stmt_log).scopes;
+        self.drop_pending.insert(mir_fn.name.clone(), scopes);
 
         Ok(mir_fn)
     }
@@ -208,4 +298,44 @@ impl<'a> Lowerer<'a> {
         }
         self.lower_expr(arg)
     }
+}
+
+/// The SelfValue DefIds `body` refers to: every `self` VarRef and every
+/// closure capture of `self`, in first-reference order.
+fn self_value_refs(body: &HirExpr, symbols: &SymbolTable) -> Vec<DefId> {
+    struct SelfRefs<'s> {
+        symbols: &'s SymbolTable,
+        found: Vec<DefId>,
+    }
+    impl SelfRefs<'_> {
+        fn note(&mut self, id: DefId) {
+            let is_self = matches!(
+                self.symbols.get(id).map(|def| &def.kind),
+                Some(crate::resolve::symbols::DefKind::SelfValue { .. })
+            );
+            if is_self && !self.found.contains(&id) {
+                self.found.push(id);
+            }
+        }
+    }
+    impl Visit for SelfRefs<'_> {
+        fn visit_expr(&mut self, expr: &HirExpr) {
+            match &expr.kind {
+                HirExprKind::VarRef(id) => self.note(*id),
+                HirExprKind::Closure { captures, .. } => {
+                    for capture in captures {
+                        self.note(capture.def_id);
+                    }
+                }
+                _ => {}
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut refs = SelfRefs {
+        symbols,
+        found: Vec::new(),
+    };
+    refs.visit_expr(body);
+    refs.found
 }

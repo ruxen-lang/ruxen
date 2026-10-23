@@ -1,0 +1,19 @@
+# A method returning the result of an indirect call on an `Option[any Fn]`
+# field, with an `if let` arm that returns early.
+class Box
+  cb: Option[Proc[() -> Int]]
+  def init
+    self.cb = Some(-> { 42 })
+  end
+  def run -> Int
+    if let Some(f) = self.cb
+      return f.()
+    end
+    return 0
+  end
+end
+
+def main
+  let b = Box.new
+  puts "#{b.run}"
+end

@@ -1,0 +1,24 @@
+# A boxed Copy struct is owned by each slot that holds it: a class field
+# frees its box when it is overwritten and when the object dies, and a tuple
+# frees the copy it holds. Every allocation is freed exactly once.
+
+struct Buffer
+  value: Int
+end
+
+class Holder
+  item: Buffer
+  def init(@item: Buffer)
+  end
+end
+
+def run -> nil
+  b = Buffer.new(1)
+  h = Holder.new(b)
+  h.item = Buffer.new(2)
+  h.item = b
+  t = (b, 3)
+  print("#{h.item.value + t.0.value + t.1}")
+end
+
+run

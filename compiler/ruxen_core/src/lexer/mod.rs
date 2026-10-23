@@ -15,6 +15,10 @@ pub struct Lexer<'a> {
     line: u32,
     column: u32,
     tokens: Vec<Token>,
+    /// Span of every `#`, `##` and `#= =#` comment, in source order. The
+    /// token stream drops line and block comments; tools that must keep them
+    /// (the formatter) read them here instead of re-scanning the source.
+    comments: Vec<Span>,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -28,12 +32,20 @@ impl<'a> Lexer<'a> {
             line: 1,
             column: 1,
             tokens: Vec::new(),
+            comments: Vec::new(),
             diagnostics: Vec::new(),
         }
     }
 
     pub fn source(&self) -> &'a str {
         self.source
+    }
+
+    /// Spans of the comments seen by [`Self::tokenize`] (line, doc and block
+    /// comments alike), in source order. Each span starts at the opening `#`
+    /// and ends after the comment's last byte (`=#` for a block comment).
+    pub fn comment_spans(&self) -> &[Span] {
+        &self.comments
     }
 
     pub fn tokenize(&mut self) -> Result<Vec<Token>, Vec<Diagnostic>> {
@@ -48,15 +60,7 @@ impl<'a> Lexer<'a> {
             match ch {
                 '\n' => self.lex_newline(),
                 '#' => self.lex_comment_or_hash(),
-                '"' => self.lex_string(),
-                // ruby-naming.spec.md §3.10a: single quotes are RAW strings
-                // (verbatim, no interpolation); the Rust-style `r"…"` /
-                // `r#"…"#` raw-string prefix is retired in favour of this.
-                '\'' => self.lex_single_quote(),
-                '0'..='9' => self.lex_number(),
-                'a'..='z' | '_' => self.lex_identifier_or_keyword(),
-                'A'..='Z' => self.lex_type_identifier_or_keyword(),
-                _ => self.lex_operator_or_punct(),
+                _ => self.lex_one_token(ch),
             }
         }
 
@@ -72,6 +76,24 @@ impl<'a> Lexer<'a> {
             Err(self.diagnostics.clone())
         } else {
             Ok(self.tokens.clone())
+        }
+    }
+
+    /// Lex one string, number, identifier, keyword or operator token
+    /// starting at `ch`. Shared by [`Self::tokenize`] and the interpolation
+    /// loop in `format_specs.rs`; each handles newlines (and, at top level,
+    /// `#` comments) before calling this.
+    fn lex_one_token(&mut self, ch: char) {
+        match ch {
+            '"' => self.lex_string(),
+            // ruby-naming.spec.md §3.10a: single quotes are RAW strings
+            // (verbatim, no interpolation); the Rust-style `r"…"` /
+            // `r#"…"#` raw-string prefix is retired in favour of this.
+            '\'' => self.lex_single_quote(),
+            '0'..='9' => self.lex_number(),
+            'a'..='z' | '_' => self.lex_identifier_or_keyword(),
+            'A'..='Z' => self.lex_type_identifier_or_keyword(),
+            _ => self.lex_operator_or_punct(),
         }
     }
 
@@ -193,8 +215,10 @@ impl<'a> Lexer<'a> {
             while !self.is_at_end() && self.current() != '\n' {
                 self.advance();
             }
-            // Don't emit anything for line comments; the newline will be handled normally
+            // Don't emit a token for line comments; the newline will be handled normally
         }
+        let span = self.make_span(start_byte, start_line, start_col);
+        self.comments.push(span);
     }
 
     fn lex_block_comment(&mut self, start_byte: usize, start_line: u32, start_col: u32) {

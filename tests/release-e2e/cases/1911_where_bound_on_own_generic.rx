@@ -1,0 +1,26 @@
+# A `where` predicate on the function's own generic parameter is merged
+# into that parameter's bounds (any other subject is E0737).
+mixin Named
+  def name -> String
+end
+
+class Cat
+  include Named
+  sound: String
+
+  def init
+    self.sound = "meow"
+  end
+
+  def name -> String
+    "cat"
+  end
+end
+
+def greet[T](pet: &T) -> String where T: Named
+  "hello " + pet.name
+end
+
+def main
+  puts(greet(&Cat.new))
+end

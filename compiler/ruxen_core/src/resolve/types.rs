@@ -1,23 +1,16 @@
-#![allow(unused_imports)]
-
-use std::collections::HashMap;
-
 use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
-use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
+use crate::hir::types::{MixinRef, Ty};
 use crate::lexer::token::Span;
-use crate::parser::ast::{self, Visibility};
+use crate::parser::ast::{self};
 
 use super::const_helpers;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
 use super::symbols::*;
-use super::{ClosureCaptureContext, ResolveResult, Resolver};
+use super::Resolver;
 
 /// The built-in collection type names. These are NOT registered as classes
 /// in the type scope by `register_builtins`; their type resolution is the
 /// three hardcoded arms in [`Resolver::resolve_type_expr`] below
-/// (`"Array" | "Vec"` → `Ty::Array`, `"Hash"` → `Ty::Map`,
+/// (`"Array"` → `Ty::Array`, `"Hash"` → `Ty::Map`,
 /// `"Set"` → `Ty::Set`, the last two with E0615 hash-key
 /// validation). The const is the single source of truth shared with
 /// `ffi_registration.rs`'s anchor-only-builtin check, so the membership
@@ -27,7 +20,7 @@ use super::{ClosureCaptureContext, ResolveResult, Resolver};
 /// `resolve_type_expr` collection arms. It de-dups the ffi `matches!`; it
 /// does NOT (and cannot) collapse those three arms, which each produce a
 /// different `Ty` and carry distinct validation.
-pub(crate) const COLLECTION_BUILTINS: &[&str] = &["Array", "Vec", "Hash", "Set"];
+pub(crate) const COLLECTION_BUILTINS: &[&str] = &["Array", "Hash", "Set"];
 
 /// The primitive type names whose method-home `.rx` class is anchored onto
 /// their `register_primitives` `TypeAlias` DefId (then stomped to `Class`),
@@ -39,8 +32,7 @@ pub(crate) const COLLECTION_BUILTINS: &[&str] = &["Array", "Vec", "Hash", "Set"]
 /// original f88d96c fast-path (it predates this table). Generic-args-free
 /// callers only; a parameterised name was never a primitive head.
 ///
-/// Pin: `string_is_class_but_resolves_to_primitive_ty` +
-/// `scalar_class_resolves_to_primitive_ty` in `builtin_anchor_class.rs`.
+/// Covered by every e2e program that types a `String` or a scalar.
 fn primitive_class_ty(name: &str) -> Option<Ty> {
     match name {
         "String" => Some(Ty::String),
@@ -65,6 +57,28 @@ fn primitive_class_ty(name: &str) -> Option<Ty> {
 }
 
 impl Resolver {
+    /// A use of a type alias: its target with the alias's own generic
+    /// parameters replaced by the use's arguments, in order
+    /// (`type Proc[F] = any Fn[F]` used as `Proc[(Int) -> nil]` is
+    /// `any Fn[(Int) -> nil]`). A parameter the use gives no argument for is
+    /// left to inference, as a generic class without arguments is.
+    fn instantiate_alias(&mut self, target: &Ty, params: &[String], args: Vec<Ty>) -> Ty {
+        if params.is_empty() {
+            return target.clone();
+        }
+        let mut args = args.into_iter();
+        let subst: std::collections::HashMap<String, Ty> = params
+            .iter()
+            .map(|param| {
+                let arg = args
+                    .next()
+                    .unwrap_or_else(|| self.type_context.fresh_type_var());
+                (param.clone(), arg)
+            })
+            .collect();
+        target.subst_params(&subst)
+    }
+
     pub fn resolve_type_expr(&mut self, type_expr: &ast::TypeExpr) -> Ty {
         match type_expr {
             ast::TypeExpr::Named(path) => self.resolve_type_path(path),
@@ -83,16 +97,10 @@ impl Resolver {
                 // downstream typeck reuses the existing dyn-mixin
                 // satisfaction path. Codegen of the actual vtable is
                 // Phase B/C.
-                if let Some(mixin_ty) = self.try_resolve_dyn_mixin_ref(inner, ref_span) {
-                    return match (lifetime, mutable) {
-                        (Some(lt), true) => Ty::RefMutLifetime(lt.clone(), Box::new(mixin_ty)),
-                        (Some(lt), false) => Ty::RefLifetime(lt.clone(), Box::new(mixin_ty)),
-                        (None, true) => Ty::RefMut(Box::new(mixin_ty)),
-                        (None, false) => Ty::Ref(Box::new(mixin_ty)),
-                    };
-                }
-
-                let inner_ty = self.resolve_type_expr(inner);
+                let inner_ty = match self.try_resolve_dyn_mixin_ref(inner, ref_span) {
+                    Some(mixin_ty) => mixin_ty,
+                    None => self.resolve_type_expr(inner),
+                };
                 match (lifetime, mutable) {
                     (Some(lt), true) => Ty::RefMutLifetime(lt.clone(), Box::new(inner_ty)),
                     (Some(lt), false) => Ty::RefLifetime(lt.clone(), Box::new(inner_ty)),
@@ -140,29 +148,13 @@ impl Resolver {
             ast::TypeExpr::SomeMixin { bounds, .. } => Ty::SomeMixin(
                 bounds
                     .iter()
-                    .map(|b| MixinRef {
-                        name: b.path.segments.join("."),
-                        generic_args: b
-                            .path
-                            .generic_args
-                            .as_ref()
-                            .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                            .unwrap_or_default(),
-                    })
+                    .map(|b| MixinRef::from_bound(&b.path, |a| self.resolve_type_expr(a)))
                     .collect(),
             ),
             ast::TypeExpr::AnyMixin { bounds, .. } => Ty::AnyMixin(
                 bounds
                     .iter()
-                    .map(|b| MixinRef {
-                        name: b.path.segments.join("."),
-                        generic_args: b
-                            .path
-                            .generic_args
-                            .as_ref()
-                            .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                            .unwrap_or_default(),
-                    })
+                    .map(|b| MixinRef::from_bound(&b.path, |a| self.resolve_type_expr(a)))
                     .collect(),
             ),
             ast::TypeExpr::Never { .. } => Ty::Never,
@@ -277,27 +269,8 @@ impl Resolver {
                 .get(&name)
                 .copied()
                 .and_then(|id| self.symbols.get(id))
-                .and_then(|def| match &def.kind {
-                    DefKind::Class { info } => Some(
-                        info.generic_params
-                            .iter()
-                            .map(|gp| gp.kind.clone())
-                            .collect(),
-                    ),
-                    DefKind::Struct { info } => Some(
-                        info.generic_params
-                            .iter()
-                            .map(|gp| gp.kind.clone())
-                            .collect(),
-                    ),
-                    DefKind::Enum { info } => Some(
-                        info.generic_params
-                            .iter()
-                            .map(|gp| gp.kind.clone())
-                            .collect(),
-                    ),
-                    _ => None,
-                });
+                .and_then(|def| def.kind.generic_params())
+                .map(|gps| gps.iter().map(|gp| gp.kind.clone()).collect());
             for (idx, arg) in ast_args.iter().enumerate() {
                 let is_const_arg = matches!(
                     arg,
@@ -418,12 +391,8 @@ impl Resolver {
                 let declared_params: Vec<crate::resolve::symbols::GenericParamInfo> = self
                     .symbols
                     .get(class_def_id)
-                    .map(|def| match &def.kind {
-                        DefKind::Class { info } => info.generic_params.clone(),
-                        DefKind::Struct { info } => info.generic_params.clone(),
-                        DefKind::Enum { info } => info.generic_params.clone(),
-                        _ => vec![],
-                    })
+                    .and_then(|def| def.kind.generic_params())
+                    .map(<[_]>::to_vec)
                     .unwrap_or_default();
                 let mut bindings = std::collections::HashMap::new();
                 let empty_inner = std::collections::HashMap::new();
@@ -453,10 +422,7 @@ impl Resolver {
 
         // Check built-in generic types
         match name.as_str() {
-            // `Array[T]` was `Vec[T]` pre-Ruby-naming. The legacy spelling
-            // is kept as an alias so older sources still resolve while
-            // the new vocabulary settles.
-            "Array" | "Vec" => {
+            "Array" => {
                 let elem = generic_args
                     .into_iter()
                     .next()
@@ -490,7 +456,7 @@ impl Resolver {
             "Set" => {
                 // `Set[T]` is the Ruby spelling. The Rust `HashSet[T]` is no
                 // longer accepted; the runtime representation is unchanged
-                // (method dispatch in `codegen::runtime::runtime_name` keys
+                // (method dispatch in `mir::lang_intrinsics::runtime_name` keys
                 // off the `HashSet` runtime prefix).
                 let elem = generic_args
                     .into_iter()
@@ -567,7 +533,10 @@ impl Resolver {
         if let Some(&def_id) = self.type_registry.get(&name) {
             if let Some(def) = self.symbols.get(def_id) {
                 match &def.kind {
-                    DefKind::TypeAlias { target } => return target.clone(),
+                    DefKind::TypeAlias { target, params } => {
+                        let (target, params) = (target.clone(), params.clone());
+                        return self.instantiate_alias(&target, &params, generic_args);
+                    }
                     DefKind::Class { .. } => {
                         // Root-cause normalisation for the
                         // String-builtin-anchored-onto-stdlib-class case:
@@ -658,8 +627,9 @@ impl Resolver {
                                 bounds: bounds.clone(),
                             };
                         }
-                        DefKind::TypeAlias { target } => {
-                            return target.clone();
+                        DefKind::TypeAlias { target, params } => {
+                            let (target, params) = (target.clone(), params.clone());
+                            return self.instantiate_alias(&target, &params, generic_args);
                         }
                         _ => {}
                     }
@@ -683,6 +653,10 @@ impl Resolver {
         }
 
         self.error(format!("undefined type `{}`", name), &path.span);
+        // An undefined TYPE in an annotation position (`def f(c: HttpClient)`) is
+        // a primary autoload trigger; record it structurally so the fixpoint can
+        // match it (the old diagnostic-text scrape matched this message too).
+        self.unresolved_names.push(name.to_string());
         Ty::Error
     }
 
@@ -720,17 +694,16 @@ impl Resolver {
         let name = &path.segments[0];
         // A name carrying generic args in a `&Name[..]` position is the
         // PARAMETERIZED COLLECTION type, not a bare mixin reference — even
-        // when the bare name also denotes a mixin. `Hash` is the canonical
-        // collision: the TEC-13 `Hash → Hashable` alias makes `Hash` resolve
-        // to the static-dispatch `Hashable` mixin, so `&Hash[Int, Int]` was
-        // mis-rejected with E1118 in free-fn position (a false positive),
+        // when the bare name also denotes a mixin. `Hash` was the canonical
+        // collision: the retired `Hash` mixin made `Hash` resolve to a
+        // static-dispatch mixin, so `&Hash[Int, Int]` was mis-rejected with E1118 in free-fn position (a false positive),
         // while the method path happened to resolve it to the `Hash[K,V]`
         // collection and compiled. `&Hash[K,V]` / `&Set[T]` are sound by-ref
         // collection params — exactly like the widely-used `&Array[Int]` —
         // so a generic-args-bearing collection builtin must fall through to
         // ordinary collection-ref resolution, making free fns and methods
-        // consistent. The bare `&Hash` (no args, = the `Hashable` mixin) is
-        // still correctly rejected below. (Q25b.)
+        // consistent. A bare static-dispatch mixin ref (`&Hashable`) is
+        // still rejected below. (Q25b.)
         if path.generic_args.is_some() && COLLECTION_BUILTINS.contains(&name.as_str()) {
             return None;
         }

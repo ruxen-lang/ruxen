@@ -1,0 +1,170 @@
+## std::http — a minimal blocking HTTP/1.1 client on std::net.
+##
+## `Http.get(host, port, path)` opens a TCP connection, sends a GET,
+## reads the whole response (the request asks for `Connection: close`,
+## so the server closes and the read loop ends on EOF), and returns the
+## status code plus body. Decode the body with std::json in the caller.
+##
+## This uses the SYNC `TcpStream` on purpose. The async client path
+## (`AsyncTcpStream.connect` + `block_on`) silently does nothing without
+## a running worker reactor — the write returns a byte count but never
+## reaches the peer (ruxen ledger Q56). Blocking syscalls need no
+## reactor and are the right primitive for a request/response client.
+##
+## v1 scope: GET over plain HTTP, host + port + path given explicitly.
+## URL parsing, POST/headers, TLS, and redirects are follow-ups tracked
+## in `../../../NORTH-STAR.md`.
+
+# --- pure helpers (primitive signatures; unit-testable, no network) ---
+
+# Nth element of a String array, or "" out of range.
+def http_seg_at(segs: &Array[String], i: Int) -> String
+  match segs.get(i)
+    Some(x) -> x.clone
+    nil -> ""
+  end
+end
+
+# The GET request line + minimal headers for `host`/`path`.
+def http_request_line(host: &String, path: &String) -> String
+  "GET " + path.clone + " HTTP/1.1\r\nHost: " + host.clone + "\r\nConnection: close\r\nAccept: application/json\r\n\r\n"
+end
+
+# A String's bytes as an `Array[Int]` (the carrier `TcpStream.write`
+# takes; `String.bytes` yields `Array[UInt8]`, so widen each slot).
+def http_str_to_bytes(s: &String) -> Array[Int]
+  let ub = s.bytes()
+  var out: Array[Int] = Array.new
+  let n = ub.size() as Int
+  var i = 0
+  while i < n
+    match ub.get(i)
+      Some(b) -> out.push(b as Int)
+      nil -> 0
+    end
+    i = i + 1
+  end
+  out
+end
+
+# Numeric status from the response line "HTTP/1.1 200 OK". 0 if absent.
+def http_response_status(resp: &String) -> Int
+  let lines = resp.split(&"\r\n")
+  let first = http_seg_at(&lines, 0)
+  let parts = first.split(&" ")
+  let code = http_seg_at(&parts, 1)
+  match code.parse_int
+    Ok(n) -> n
+    Err(_) -> 0
+  end
+end
+
+# Response body: everything after the first CRLFCRLF.
+def http_response_body(resp: &String) -> String
+  let hb = resp.splitn(2, &"\r\n\r\n")
+  http_seg_at(&hb, 1)
+end
+
+# The `Content-Length` value in a response head, or -1 if absent
+# (case-insensitive; the head is lowercased before the lookup).
+def http_content_length(head: &String) -> Int
+  let lower = head.to_lower
+  # Match the header at a line boundary (`\r\ncontent-length:`) so a header
+  # VALUE that happens to contain the text does not false-match. The first
+  # header always follows the status line's CRLF, so this still finds it.
+  if !lower.include?(&"\r\ncontent-length:")
+    return -1
+  end
+  let after = lower.split(&"\r\ncontent-length:")
+  let tail = http_seg_at(&after, 1)
+  let lines = tail.split(&"\r\n")
+  let valstr = http_seg_at(&lines, 0)
+  match valstr.trim.parse_int
+    Ok(n) -> n
+    Err(_) -> -1
+  end
+end
+
+# Total bytes the full response should be, given what has been read so
+# far, or -1 while it is not yet determinable. Once the head terminator
+# (CRLFCRLF) is present AND a Content-Length header is parsed, the total
+# is `head_len + content_length`; the read loop stops there instead of
+# waiting for EOF, so it works with keep-alive servers (which never
+# close). Returns -1 (keep reading, stop on EOF) when the head is
+# incomplete or has no Content-Length.
+def http_expected_total(buf: &Array[Int]) -> Int
+  let sofar = String.from_bytes(buf)
+  if !sofar.include?(&"\r\n\r\n")
+    return -1
+  end
+  let parts = sofar.splitn(2, &"\r\n\r\n")
+  let head = http_seg_at(&parts, 0)
+  let head_len = (head.size() as Int) + 4
+  let cl = http_content_length(&head)
+  if cl < 0
+    return -1
+  end
+  head_len + cl
+end
+
+## The parsed result of an HTTP request: the status code and the body.
+## `ok?` is true for a 2xx status.
+class HttpResponse
+  status: Int
+  body: String
+
+  def init(status: Int, body: String)
+    self.status = status
+    self.body = body
+  end
+
+  def ok? -> Bool
+    self.status >= 200 && self.status < 300
+  end
+end
+
+## The HTTP client entry point.
+class Http
+  ## Blocking HTTP GET to `host:port` for `path`. Returns `nil` when the
+  ## connection cannot be opened; otherwise an `HttpResponse` (its
+  ## status may still be an error code like 404).
+  def self.get(host: &String, port: Int, path: &String) -> Option[HttpResponse]
+    let addr = host.clone + ":" + port.to_s
+    match TcpStream.connect(&addr)
+      Ok(stream) ->
+        let s = stream
+        # Bound each read so a non-conformant server (keep-alive, no
+        # Content-Length, never closes) cannot hang the client forever.
+        let _t = s.set_read_timeout_ns(30000000000)
+        let req = http_request_line(host, path)
+        let req_bytes = http_str_to_bytes(&req)
+        let _w = s.write(&req_bytes)
+        # Read chunks into one buffer (read APPENDS). Stop when we have
+        # the full response by Content-Length, or on EOF if the server
+        # closes / sends no length. `need_total` stays -1 until the head
+        # + a Content-Length are in hand.
+        var buf: Array[Int] = Array.new
+        var need_total: Int = -1
+        var reading = true
+        while reading
+          match s.read(&var buf)
+            Ok(n) ->
+              if n == 0
+                reading = false
+              else
+                if need_total < 0
+                  need_total = http_expected_total(&buf)
+                end
+                if need_total >= 0 && (buf.size() as Int) >= need_total
+                  reading = false
+                end
+              end
+            Err(_) -> reading = false
+          end
+        end
+        let resp = String.from_bytes(&buf)
+        Some(HttpResponse.new(http_response_status(&resp), http_response_body(&resp)))
+      Err(_) -> nil
+    end
+  end
+end

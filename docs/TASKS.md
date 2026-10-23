@@ -17,14 +17,213 @@ where each kind of work lives and what is open *right now*. Keep it current
 
 ## Open now — GUI-stack ledger (`dev/gui-stack-v1-issues.md`)
 
-35 of 39 fixed (Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
+Q61 fixed 2026-10-24 (uncommitted on `feat/concurrency-adoption`): tuples own
+and free their elements, a tuple element read borrows (`s.wire = cycle.0` needs
+`.clone`, E0744), Hash entries are `(&K, &V)` views, and `MutexGuard#get` /
+`SharedSync#get` return owned copies through a per-instantiation `.rx` body; rondo
+and quiver are adapted (`dev/gui-stack-v1-issues.md` Q61, `TODO.md` "Tuple
+ownership"). Pins: `it` `field_ownership`, release-e2e 2240-2243.
+
+Instance engine + KeyDesc batch (2026-10-24): built, gate pending; plan ~/.agents/tmp/plans/ruxen-feat-concurrency-adoption-instance-engine.md
+
+B87 fixed 2026-07-30 (a free function whose name ended in `!` compiled clean
+and then did nothing at its call site: `parser/expr/atoms.rs` classified EVERY
+identifier ending in `!` as a macro call, stripped the `!`, and emitted an
+`ExprKind::MacroCall` no stage recognised, and MIR's macro lowering ended in a
+`_ => Ok(None)` catch-all that emitted no code. The value form was worse than a
+no-op — `let r = twice!(3)` bound `0` off the destination local's zero
+initialiser. "Is this a macro?" is now a closed question answered in one place,
+`parser/macros.rs`; every other trailing `!` stays part of the identifier and
+resolves as an ordinary call. Both silent-drop layers are closed: unregistered
+macro names are rejected in resolve with the new **E1126**, and the MIR
+catch-all is an `Err`. Unblocked Kernel `exit!`, which B19 could not ship. Pins
+`1880`-`1887` plus `compiler/ruxen_core/tests/bang_names_are_calls.rs`.)
+B01 fixed 2026-07-30 (the **Float-in-erased-word ABI**, Ruby-parity queue B01,
+delivering enabler E4 and unblocking B23). Ruxen erases a value's static type to
+a 64-bit **uniform word** at six boundaries — a generic-collection slot
+(`RuxenVec` and the hash/set tables are `int64_t` regardless of `T`), an
+address-taken local's 8-byte stack slot plus the by-value `Ref`/`RefMut`/`Copy`/
+`Move` slot moves, a param/return whose declared `Ty` is opaque, a closure's
+params/return when reached through an erased `Fn` box, and a scalar method
+home's `self` (typed as the FFI shell `Class{"Float"}`), and an `Assign`
+into a word-typed local. Every one of those
+crossings ran through `coerce_value`'s `fcvt_*` arms, i.e. a NUMERIC conversion,
+so a `Float` silently arrived as a different number: `[1.5, 2.5][0]` printed
+`1`, `each` over an `Array[Float]` printed `1`/`2`, `[2.5].map { |v| v + 0.5 }`
+printed `0`, a `Hash[String, Float]` value truncated, two `Hash[Float, V]` keys
+that truncate to the same integer COLLIDED, a negative value came back `0` (the
+default was the *unsigned* saturating form), and `&var` on a `Float` local
+panicked the Cranelift frontend outright. A uniform word now carries the
+IEEE-754 **bit pattern**, reinterpreted symmetrically on write and read, via a
+named `coerce_erased_word` kept deliberately distinct from `coerce_value`; the
+closure half lives in MIR lowering (`FloatToBits` / the new `BitsToFloat`) so
+both backends inherit one implementation. The line that must not move: an
+implicit numeric conversion into a **declared** scalar param (`f(3)` where
+`def f(x: Float)`) is not an erasure, so the decision is keyed on the declared
+Ruxen type (`codegen::is_erased_word_ty`), never the machine type — pin `1004`
+guards that, `1000`-`1003` guard the erasure side. Caveat: the LLVM mirror is
+written but NOT compile-verified (LLVM 18 absent in the landing environment).
+
+B73 fixed 2026-07-29 (the `Hash` / `Set` key-kind protocol: the runtime decided
+how to hash and compare a key by DEREFERENCING it as a `char*` and scanning for
+a NUL, which SIGSEGV'd on any `Hash[Int, V]` key >= 4096, made user types
+unusable as keys, and latched a table's behavior on its first insert. Replaced
+by a descriptor the compiler supplies from the static key type;
+`ruxen_hash_looks_like_string` deleted. `Hash[UserType, V]` now works, which
+unblocks B29c. Landing it also required fixing `Hash[K, V].new`, whose explicit
+generic arguments the parser discarded (§Q60(a2), pre-existing: that spelling
+SIGSEGV'd on a large integer key before B73). Pins `1720`-`1729`, which now
+cover BOTH constructor spellings — the first eight all used the
+annotated-binding form, which is why the suite stayed green while the turbofish
+form was broken. The neighbouring limits it exposed are filed
+as §Q60: a static ctor on a generic builtin keeps its rigid `K`/`V` in argument
+and return position (S3 — a typeck imprecision with no behavioural consequence,
+since the descriptor is also installed at use sites), `Set[String]` set-algebra
+results double-free at scope exit (S2, PRE-EXISTING and still open), and
+`Array#to_h`'s laundered `-> Int` decl (S4, cosmetic)).
+Q58 fixed 2026-07-29 (`alias` to a method on a GENERIC builtin head link-failed:
+MIR's `select_method_symbol_name` and `method_trailing_default_sentinels` both
+matched the parent def's BARE class name against the call site's INSTANTIATED
+receiver, so every generic head found zero candidates; both now share
+`method_defs_on_class`, which falls back to the generic-free base name. `Hash`'s
+`has_key?`/`include?`/`member?`/`each_pair` reverted to one-line `alias`es; pin
+`990`, §Q58).
+45 of 48 fixed (Q56 surfaced 2026-07-23, OPEN — async CLIENT I/O via `block_on`
+without a worker reactor SILENTLY does nothing: `write` returns a byte count but
+never flushes to the socket, reads time out; hit building the data-apps HTTP
+client, workaround is the sync `TcpStream`, §Q56; Q54 fixed 2026-07-22: the wasm fmt `write_str`/`write_char`
+returned a bare `int64_t` tag while the compiler derives their `.rx`
+`-> Result[nil, FmtError]` return as a pointer (i32 on wasm32, i64 native), so
+wasm-ld linked an i32-vs-i64 `signature_mismatch:` `unreachable` stub that trapped
+every string interpolation; fixed by returning pointer-width `void *` from both C
+helpers (the convention the other 28 of 30 Result-returning runtime helpers
+already follow), native byte-identical (parity oracle + full release-e2e green),
+§Q54;
+Q55 fixed 2026-07-22 (miscompile `x = f(x)` by-value rebind silently corrupted
+`x` on native; the pre-reassign `ruxen_dealloc` freed the object the call handed
+back, a UAF); `elide_returns_self_realloc` now traces the returned local to its
+parameter index and elides only the argument position the callee actually
+returns, rondo **W24**, pin `948`, §Q55; Q55b fixed 2026-07-22 (a memory-safe
+residual of the Q55 fix: the returned-param trace was linear over blocks
+(last-writer-wins), not CFG meet-over-paths, so a conditional
+return-param-vs-fresh function (`if cond; fresh; else; a; end`) was misclassified
+as always-returns-param and a `x = pick(x, cond)` rebind elided `dealloc(x)`,
+leaking on the fresh branch; closed by replacing the linear trace with a CFG
+forward dataflow that meets provenance at merges by intersection-with-agreement,
+so the merged local drops and the function is no longer treated as
+returns-param; release-e2e + parity + drop_fixtures green, `pick`'s dealloc
+restored, §Q55b); Q50/Q51/Q52/Q53 fixed 2026-07-14; Q23–Q26 surfaced 2026-06-08; Q16 fixed 2026-06-08 on
 feat/drop-elaboration; Q29 audited 2026-06-09 — already sound, pinned; Q28, Q30,
-Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 fixed 2026-06-10 via the syntax-parity harness; Q37 fixed 2026-06-10 (root cause: a yielding/`&block` method poisoned an unrelated same-named free fn via a bare-name yield map — this covers BOTH the S1 name-collision symptom AND the S2 "generic `frame[S: PaintSurface]` gets a bogus `__block` in binary-consumes-library builds" symptom; they were the same bug) — quiver examples build again; Q38 fixed 2026-06-10 (bare-literal `String` local leaked); Q39 fixed 2026-06-11 (bare `""` in a tuple-element position expecting `String` stayed `&str` — rondo W21; fixed via `coerce_tuple_literal_elements`, pin `924`); Q35, Q36 NEW 2026-06-10, both OPEN** — Q36 from the quiver Ruby-block DSL migration: two-`&var`-arg `yield` miscompile, left filed-open; Q35 a struct `include` not satisfying a generic mixin bound). The
-canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
+Q31 fixed 2026-06-09; Q32, Q33 fixed 2026-06-10; Q17 fixed for generic free fns 2026-06-10; **Q34 fixed 2026-06-10 via the syntax-parity harness; Q37 fixed 2026-06-10 (root cause: a yielding/`&block` method poisoned an unrelated same-named free fn via a bare-name yield map — this covers BOTH the S1 name-collision symptom AND the S2 "generic `frame[S: PaintSurface]` gets a bogus `__block` in binary-consumes-library builds" symptom; they were the same bug) — quiver examples build again; Q38 fixed 2026-06-10 (bare-literal `String` local leaked); Q39 fixed 2026-06-11 (bare `""` in a tuple-element position expecting `String` stayed `&str` — rondo W21; fixed via `coerce_tuple_literal_elements`, pin `924`); Q35 fixed 2026-07-14 (struct/enum in-body includes now populate typeck's nominal mixin registry; pin `659`); Q36 fixed 2026-07-14 (parenthesized multi-argument `yield(a, b)` parsed as one tuple argument; pin `929`); Q46 fixed 2026-07-14 (paren-less no-arg `.new` now installs the runtime-mixin class-info header; pin `460`); Q47 fixed 2026-07-14 (an existential `any Mixin` call result now self-satisfies its exact carried bound instead of probing a nonexistent concrete method table; pin `473`); Q48 fixed 2026-07-14 (LLVM's lazy call resolver now maps residual mangled FFI method callees to their declared C symbols, matching Cranelift); Q49 fixed 2026-07-14 (branch-only drops are sunk into their initializing arms and wider partial-initialization CFGs are flag-guarded; pin `930`); Q52 fixed 2026-07-14 (blockdrop's closure destructor double-freed captured self-freeing `Mutex`/`SharedSync` handles; pins `926`/`927`/`937`)**). The canvas
+`Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
 (canvas 143 green, sub-pixel pinned, live windowed loop verified).
 
 ### Toolchain / tests
 
+- [x] **Per-`T` monomorphization of builtin-head collection methods (DONE
+      2026-07-29, Ruby-parity enabler #1).** `Array[T]`/`Set[T]`/`Hash[K,V]`/
+      `Option[T]`/`Result[T,E]` are `.rx` classes represented by a structural
+      `Ty` head and carrying `lib` blocks, so generic-CLASS monomorphization
+      skipped them and every `.rx` body method lowered once with its type
+      params abstract. Bodies that DISPATCH on the element type therefore fell
+      to the pointer-as-`Int` floor. MIR now emits one specialized body per
+      `(concrete receiver instantiation, method)` seen at a call site
+      (`Array__mono__String_join`) and redirects those sites to it. Eligibility
+      is structural (a type-param-typed value feeding interpolation, a binary
+      operator, or a method receiver) — no method-name knowledge — so the
+      push/iterate/closure-call combinators keep their single shared body.
+      First users: `Array#join`/`min`/`max`/`uniq` as `.rx` bodies. Pin
+      `tests/release-e2e/cases/991`; unit pins in
+      `mir/lower/instances/names.rs` and `instances/sites.rs` tests
+      (2026-10-24: `monomorphize.rs` was replaced by the instance engine).
+- [x] **Ruby-style AOT module loading (DONE 2026-07-14,
+      `feat/require-autoload`).** `require` and `require_relative` now drive a
+      canonical-path-deduplicated source graph from the entry file;
+      `autoload :Const, "path"` expands on an unresolved-name fixpoint. The
+      load path is project root followed by dependency roots, while relative
+      requests use the declaring file's directory. Directive-free projects
+      retain recursive `src/` discovery. The low-level compile cache and rlib
+      hash both consume the combined canonical-path/content source. Seven
+      focused loader tests plus files-anywhere, autoload, cache-invalidation,
+      and legacy-`src/` CLI smokes pin the behavior. Specification:
+      `requirements/module_loading.md`.
+  - [x] **Followup: harden autoload's unresolved-name detection (DONE 2026-07-21).**
+        `resolve` now threads a structured `unresolved_names: Vec<String>`
+        (populated at the undefined-variable / function / type + `use`-path
+        sites) through `ResolveResult` and `TypeCheckResult`; the autoload
+        fixpoint (`module_loader::expand_autoloads`) matches its registrations
+        against that list by NAME EQUALITY (`unresolved_names_match`), replacing
+        the fragile `diagnostic_mentions_constant` scrape of `diagnostic.message`
+        text. Pin: `unresolved_names_match_uses_name_equality_not_substring`; the
+        multi-round fixpoint test (`autoload_expands_to_fixpoint_...`) stays green;
+        lib suite 592/0.
+    - [ ] **Remaining (perf only): the per-round full recompile.** Each fixpoint
+          iteration still re-runs `typeck::type_check` (bootstrap included) to
+          get the unresolved set. Inherent to a load-then-re-resolve fixpoint;
+          making it incremental (cached bootstrap / resolve-only pass) is a
+          separate optimization, not the detection-hardening this item covered.
+- [x] **Q53 — String-returning method interpolation in a generic closure
+      (FIXED 2026-07-14, `fix/q53-closure-interp`).** Q50 removed a fragile
+      inferred-call method-name allowlist, exposing that inlined `.each`
+      parameters and some for-loop iterables retained abstract HIR types. Their
+      valid `String` call results therefore reached interpolation as
+      `TypeParam` and selected `Int_fmt`. MIR now refines collection bindings
+      from concrete element types, resolves the concrete receiver/callee, and
+      types the call destination from the method declaration (including class
+      generic-argument substitution). No name allowlist returned; Q50's
+      invalid-type error remains. Pin: release-e2e `938`; existing case `101`
+      covers a generic `&String` return, and the LLVM differential is 19/19
+      including `sample_program_identical`.
+- [x] **Q50 — interpolating a method-returning-`String` formats the string
+      (FIXED 2026-07-14, `fix/q50-interp`).** Inline struct/enum methods were
+      missing from typeck's direct-method registry, so an included mixin's
+      unannotated required signature (`Unit`) shadowed the enum's concrete
+      `message -> String`; MIR consequently sent the returned `char*` through
+      `Int_fmt`. Direct methods are now registered for structs/enums, and MIR
+      recovers a stale call result from its resolved declaration before Display
+      dispatch. Pins: release-e2e `94_custom_error_enum` and
+      `931_interpolation_method_string`.
+- [x] **Q51 — `Enumerable#select` returned a freed captured Array (FIXED
+      2026-07-14, `fix/q51-select`).** The Set/Hash `each` closure destructor
+      freed its directly captured `out` Array at the combinator return even when
+      the enclosing source local was itself returned. Drop elaboration now NULLs
+      return-escaping capture slots before closure cleanup, preserving the value
+      while still freeing the captures block and pair. Pins 612/613 and 936 cover
+      Array/Set/Hash `select`, `reject`, `map`, and `partition` sizes.
+- [x] **Q52 — `Mutex` guard drop in a closure/match arm (FIXED 2026-07-14,
+      `fix/q52-guarddrop`).** The guard itself was correctly arm-sunk and dropped
+      once. The later synthesized closure destructor called the captured
+      `Mutex`/`SharedSync` self-freeing drop and then freed the same pointer
+      again. Storage-consuming FFI drops are now ABI-classified so closure and
+      ordinary drop glue omit only that second free. This was a `fix/blockdrop`
+      regression: the pre-blockdrop binary passes 926, while post-blockdrop
+      implicit-main and Q49 binaries both exit 133. Pins `926`/`927` plus `937`,
+      whose second lock proves the first guard still unlocks.
+- [x] **Q49 — path-safe MIR drop elaboration (FIXED 2026-07-14,
+      `fix/q49-drop-branch-scope`).** Scope-exit cleanup was appended to every
+      `Return` without proving each local initialized on every incoming path.
+      Cranelift's zero-like local model masked dead-path String frees, while
+      LLVM's uninitialized `alloca` values reached `free` and aborted optimized
+      binaries. Branch-confined drops now execute before the arm `Goto`; a
+      definite-initialization/drop-flag fallback covers locals spanning blocks.
+      The LLVM comparison suite and MIR placement pin cover the original
+      `control_flow.rx`; release-e2e `930` covers `if` plus `match` arms.
+- [x] **Implicit `main` — Ruby-style top-level execution (DONE 2026-07-14,
+      `feat/implicit-main`).** After parse and before resolve, executable
+      `TopLevelItem::Expr` nodes are moved in source order into a synthesized
+      zero-argument, `nil`-returning `main` when no explicit entry point exists.
+      Declarations remain top-level and forward-visible. An explicit `main`
+      remains an AST no-op; combining it with loose statements retains E0728.
+      Release-e2e pins `933`–`935`; focused resolver, syntax-parity, Q23, CLI
+      smoke, and `ruxen test` checks cover the shared compile/build seam.
+- [x] **Q48 — LLVM FFI-alias resolution (FIXED 2026-07-14,
+      `fix/q48-llvm-ffi`).** LLVM Pass 0 already declared aliased FFI methods
+      under their C symbols, but its lazy call resolver ignored
+      `MirProgram::ffi_libs`; synthesized MIR calls such as `Formatter_new`
+      therefore created fresh undefined mangled externs. LLVM now resolves the
+      Ruxen-side and lib-qualified keys to the existing C declaration, matching
+      Cranelift's import map. The LLVM IR pin rejects `String_*`/`Formatter_*`
+      leaks and the String/interpolation backend fixtures link and run.
 - [x] **WASM target (tier 4.03) — `ruxen compile --target wasm32-unknown-unknown`
       (DONE 2026-06-12, `feat/drop-elaboration`).** Spec
       `requirements/tier4_03_wasm_target.md` (path-fixed + checklist annotated),
@@ -73,8 +272,8 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       `docs/decisions/syntax-parity-harness.md`. Two axes: per-surface
       conformance over the cases + stdlib + canvas/quiver/rondo corpus (491
       files), and structural pins (a compile-time exhaustiveness guard over
-      `TopLevelItem`/`MixinItem`/`ImplItem`; an intentional-divergence
-      allowlist for the E0728/E0607 accepted-but-compile-rejected class). The
+      `TopLevelItem`/`MixinItem`/`ImplItem`; an explicit, currently-empty
+      accepted-but-compile-rejected divergence allowlist). The
       fmt axis (reparse-identity + idempotence) caught **Q34** (dropped
       grouping parens) plus four more fmt-destructiveness bugs — zero-arg
       `MethodCall`→field-access, method-visibility-section drop, `async`
@@ -94,8 +293,271 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       release-e2e 920. Verified: quiver counter example builds again. Ledger
       §Q37.
 
+### Concurrency adoption (`decisions/zio-comparison-concurrency-adoption.md`, plan `dev/concurrency-impl-plan.md`)
+
+- [x] **§4.1 First-class cancellation + leak-free `def drop` across `.await`
+      (Feature #1 — COMPLETE, uncommitted on `feat/concurrency-adoption`)** —
+      the foundation (spec §6 build order #1). Decision: NARROW path (Drop vtable
+      slot inside the future's existing class_info; NO global `mixin Drop
+      dispatch runtime`; no non-future layout change). All three increments
+      landed + pinned (`391`–`398`). What a user can now rely on: a cancelled or
+      drained async future runs its `def drop` (and its sub-futures' drops),
+      deterministically and leak-free, via synchronous RAII. Increments:
+      - [x] **Increment 1 — a drained future runs its `def drop`** (in progress on
+            `feat/concurrency-adoption`, uncommitted). `Drop_dynamic_drop` routed
+            through the future class_info; `ruxen_executor_drain_remaining` fires
+            it. Pin `tests/release-e2e/cases/391_async_drop_on_drain.rx` + layout
+            pins in `tests/mixin_vtables.rs`. Explicit-drain surface only; the
+            automatic block_on-exit/Scope drain is deferred to §4.2.
+      - [x] **Increment 2 — state-indexed drop glue** on the synthesised state
+            machine (uncommitted on `feat/concurrency-adoption`). MIR
+            `synthesize_future_state_machine_drop` drops each owned `__sub_i`
+            sub-future via `Drop_dynamic_drop` + `ruxen_dealloc`, reverse decl
+            order, each NULL-guarded (`if self.__sub_i != 0` — loop machines build
+            `__sub_i` lazily, so a loop future drained before first pump has a zero
+            field that must be skipped, else null-deref). Double-drop sound:
+            `<Future>_drop` is the SOLE dropper (poll only borrows; pump never drops
+            completed futures; spawned future tainted out of scope drop). Bare-named
+            await-binding fields NOT dropped (uninitialised until their await
+            resolves — partial-init UB). Pins `392`–`395`. Two FOLLOW-UPS surfaced:
+            (a) dropping cross-suspend USER-DROP class locals needs eager-vs-late
+            metadata threaded from async-lowering; (b) loop re-init overwrites a
+            completed prior iteration's `__sub_i` without dropping the old one
+            (pre-existing intra-loop LEAK in the loop builder, not a UAF — Codex
+            LOW, relayed to user).
+      - [x] **Increment 3 — cooperative `cx.cancelled?` bit** through `Context`.
+            `_Thread_local` flag in executor.c (the user body never sees `cx`, so
+            thread-scoped like the reactor handle) + `cx.cancelled?` /
+            `ruxen_request_cancel`/`clear_cancel`/`cancel_requested`. A leaf future
+            checks it at its await boundary and early-returns → Increment-2 drop
+            glue fires. Cooperative (no preemption of await-free loops). ALSO
+            fixed the pre-existing block_on-root-future leak it surfaced: drop
+            elaboration now force-roots a never-consumed `__block_on_fut_*` Future
+            local (the spec §4.1 block_on-exit drop). Pins `396`/`397`/`398`.
+- [x] **§4.2 Structured `Scope` (keystone — Feature #2 COMPLETE, uncommitted on
+      `feat/concurrency-adoption`).** `library/std/future/src/scope.rx` over the
+      thread-local scheduler + §4.1 drop machinery + one C primitive
+      (`ruxen_executor_cancel_task`, reentrancy-safe). What a user can rely on: a
+      `Scope.open do |s| ... end` block owns its children — `s.spawn(fut)` (handle
+      walled off), `s.collect` (sync pump, reactor-parking, fail-fast) /
+      `s.collect_supervised`, and falling off the block cancels every still-pending
+      child (fires its `def drop`). Single-reactor v1; Int error channel. Pins
+      `399`–`403`. Surface choices (current-lowering): spawn takes a future VALUE
+      (async closures unlowered), collect is SYNC (async methods unlowered) — both
+      documented in scope.rx + the plan. FOLLOW-UPS surfaced: (a) `s.spawn(async_fn())`
+      where the arg is an async-def WRAPPER call fails to link (`_<fn>` undefined) —
+      spawn a direct stdlib future or a hand-written future for now; (b) typed
+      `Result[T,E]` child channel awaits typed `TaskJoinFuture.Output`.
+- [x] **§4.3 General `Race` (Feature #3 COMPLETE, uncommitted on
+      `feat/concurrency-adoption`).** `library/std/future/src/race.rx` +
+      `ruxen_race_*` C step in scheduler.c. `Race.of(a, b)` 2-arm +
+      `Race.any_of(arr)` N-way (renamed from `any` — reserved keyword). First arm
+      to complete wins; losers cancelled (their `def drop` fires via the §4.1
+      `Drop_dynamic_drop`) before the winner is returned; winner block leaked
+      (not dropped → heap payload stays valid). Results `Race2.First/Second(Int)`
+      / `RaceN.Won(idx, Int)` (v1 Int channel). No new reactor primitive.
+      Reentrancy-safe; empty `any_of` panics. Pins `417`–`422`. FOLLOW-UPS: (a)
+      raw-`Int` arm move-contract not enforceable (shared spawn/scope/race gap —
+      needs typed move-only future params); (b) typed-generic Output (the Int
+      channel); (c) heap-payload result ergonomics — `p as String` on the Int
+      payload prints the raw pointer, not the value (no typed re-hydration).
+- [x] **§4.4 Async backpressured `Queue` (Feature #4 COMPLETE, uncommitted on
+      `feat/concurrency-adoption`).** `library/std/future/src/queue.rx` + a C
+      control block + step machines in `library/std/future/runtime/queue.c`.
+      `Queue.bounded(capacity, overflow)` → a `QueueEnds` handle (pull
+      `sender`/`receiver`; not the spec's `let (tx, rx)` tuple — class-tuple
+      destructuring gap); capacity mandatory, no unbounded. `AsyncSender`/
+      `AsyncReceiver` split; `send`/`recv` are hand-written futures that PARK THE
+      TASK via the reactor (never block the OS thread), resolving
+      `Result[Int, QueueError]`. `enum Overflow { Suspend; DropOldest; DropNewest }`
+      (no-payload enum → int32 tag at heap offset 0, `Shutdown` ABI; unknown/null
+      panics). Close→Err: last-sender-drop → recv `Err(QueueClosed)`; receiver-drop
+      → parked Suspend-send `Err`. `share` = multi-producer. v1: SINGLE-REACTOR
+      (cross-core wake deferred to v2, §4.4 risk 3 / §6), single in-flight parked
+      waiter per direction, Int channel. Pins `423`–`428`. Codex fixes: cancel-
+      while-parked waker UAF, `QueueEnds` duplicate-end UAF, capacity guard,
+      overflow-tag-from-pointer ABI, unknown-tag panic. PARKED LOW (orchestrator):
+      add an `Overflow` tag-stability pin (mirroring `shutdown_tag_stability.rs`).
+      FOLLOW-UPS (v2/cross-cutting): cross-core wake + atomic refcounts; a waiter
+      list for multi-producer backpressure + multi-consumer recv; spawned-multi-
+      await self-reschedule; drop-rooting for stdlib-class method-result locals
+      (→ automatic ownership-driven close); class-typed tuple destructuring
+      (restore `let (tx, rx) = ...`); typed `Queue[T]` element channel.
+- [x] **§4.5 Async `Stream` (Feature #5 COMPLETE, uncommitted on
+      `feat/concurrency-adoption`).** `library/std/future/src/stream.rx` + a tiny
+      `runtime/stream.c`. `mixin Stream dispatch runtime` over ONE required
+      `def var poll_next(cx) -> Poll[Option[Int]]`, with `for_each`/`count`/`sum`
+      default bodies (the async `Enumerable[T]` — and the first `dispatch runtime`
+      mixin to also carry default-body methods). `for_each` is a SYNC pump driver
+      (parks via `Scope.pump_or_park`, NOT a bare yield — pumps task-backed
+      sources). Adapters `MapStream`/`FilterStream`/`TakeStream` own their inner
+      as `any Stream` (dyn-mixin), poll via the runtime vtable, compose into
+      chains, and are FUSED (latch on inner-`nil`). LEAK-FREE CHAINS (Inc4):
+      dropping a chain drops every stage — the §4.1 Drop-vtable gate was widened
+      to `Future OR Stream` so a `Stream` class gets a Drop vtable slot (uniform
+      slot 1; layout-pinned), and each adapter's `def drop` runs its inner's
+      `def drop` via `Drop_dynamic_drop` (pin 436 proves exactly-once via a
+      live-count guard). v1: Int channel, single-consumer pull, leak-free
+      drop-on-cancel + leak-free chains. Pins `429`–`436`. Codex fixes: `for_each`
+      pump-on-Pending (pin 430), explicit-`cx.drop` removed, adapter fuse (pin
+      435), Inc4 ABI/layout VALIDATED (no double-drop, slot-uniform). REPORTED
+      sharp edge (pre-existing, NOT fixed): a class including BOTH `Future` AND
+      `Stream` (incoherent) trips the slot-uniformity assert (loud panic) — a
+      proper diagnostic is a maintainer call. FOLLOW-UPS (v2): fluent
+      `.map`/`.filter`/`.take` (by-move-self); `for x in stream` (method-level
+      async lowering); typed `Stream[T]`; concurrent stages; the for_each-then-
+      drop drop-rooting fix; the `Future+Stream` incoherent-include diagnostic;
+      Q46 (no-arg-init source crashing inside an adapter — a separate
+      constructor-lowering bug, filed).
+- [x] **§4.7 deterministic virtual `TestClock` (Feature #7 COMPLETE, uncommitted
+      on `feat/concurrency-adoption`).** `library/std/future/runtime/test_clock.c`
+      + edits to `time.c`/`reactor.c` + `library/std/future/src/test_clock.rx`.
+      A `--test`-style mode: `TestClock.install`/`advance(d)`/`advance_to_next`/
+      `set(d)`/`uninstall` swap the per-thread reactor's real OS timer for a
+      virtual clock, so `Async.sleep`/timeouts resolve INSTANTLY when advanced
+      past (pin 437: 60s sleep fires in 0.85s). Covers BOTH the async-sleep seam
+      AND sync `Instant` (spec §4.7 Correction 1 — they sample the clock
+      independently). HYBRID: real fd readiness untouched. **NO compiler change**
+      (only the bootstrap-embedded sibling registration). v1: single-thread;
+      explicit `uninstall` (the guard's `def drop` is the RAII intent but a
+      method-result local isn't drop-elaborated — the Scope/Queue/Stream
+      drop-rooting limit). Pins `437`–`443`. Codex fixes: a deregister blocker
+      (fired virtual timer would `close` an fd / double-decrement registered_count
+      — pin 442) + nested-install medium (depth-counted — pin 443). FOLLOW-UPS:
+      the guard auto-restore (drop-rooting fix); a `static inline` clock seam
+      (LTO closes the cross-TU-call LOW); multi-thread virtual clock.
+- [x] **§4.6 Retry/Schedule (Feature #6)** — DONE. Composable IMMUTABLE
+      `Schedule` (`recurs`/`exponential` + `max_attempts`/`max_delay`/`jittered`/
+      `while_input`/`and_then`) + SYNC `run do … end` and ASYNC
+      `Async.retry(sched, block) -> RetryFuture` drivers. Pure `.rx` over
+      closures/`Duration`/`Rand`/`Async.sleep`/`include Future`, with ONE thin C
+      dyn-poll step (`ruxen_retry_poll_inner` wrapping the existing
+      `Future_dynamic_poll`, the `ruxen_race_step` pattern) — no new compiler
+      machinery. Backoff timing tested deterministically under the §4.7 TestClock
+      (pin 445: `exponential(50ms).max_attempts(5)` advanced through the backoffs,
+      no real sleep). Drop-mid-backoff tears down the parked timer (pin 446).
+      Pins `444`–`449`. Q47 fixed the compiler bug where a
+      `Fn[() -> any Future]` closure called inside a bootstrap class made the
+      bound checker reject the returned existential's own `Future` guarantee;
+      the Int-ptr channel remains unchanged in this task.
+      Parked LOW (for maintainer): the `schedule.c` Poll-leak inline comment is
+      narrower than the actual leak (documented fully in runtime CLAUDE.md); the
+      `RetryFuture.init` placeholder backoff is a tiny per-instance heap leak.
+
 ### Language features
 
+- [x] **`case/when` + `case/in` (DONE 2026-07-24).** New `case`/`then` keywords.
+      `case/when` (`===` dispatch) desugars to `if`/`elsif` (value ==, `a, b` →
+      ||, `lo..hi` → range membership). `case/in` (pattern) desugars to the same
+      `Match` AST as `match`, which stays a full alias. Parser-only; no
+      downstream or IDE changes. Pin `960`; parity `language.md` §6/§7.
+  - [ ] **Follow-up: surface-preserving `Case` node** so `ruxen fmt` keeps
+        `case/when`/`case/in` instead of `if`/`match`. Also `case/when` subject
+        is re-evaluated per branch (bind to a temp to evaluate once).
+- [x] **`<=>` spaceship operator (DONE 2026-07-24).** `Spaceship` token +
+      `BinOp::Cmp`; `a <=> b -> Int` (-1/0/1) for Int/Float/String via
+      `ruxen_int_cmp` / `ruxen_float_cmp` / `ruxen_str_spaceship`. Same
+      BinOp-as-runtime-call pattern as `**`. Pin `959`; parity `language.md` §3.
+  - [x] **Follow-up: route `Comparable` through `<=>` (DONE 2026-07-27).**
+        User `def ==`/`<`/`<=`/`>`/`>=`/`<=>` operator methods dispatch when
+        available, with primitive and auto-derived comparisons retained as
+        fallbacks. `Comparable` requires `<=>` and supplies `==`, ordering,
+        and `between?` defaults; `!=` inverts the dispatched `==`. Pin `965`.
+  - [x] **Comparable `clamp` (DONE 2026-07-27).** `clamp(min: &Self, max:
+        &Self) -> &Self` returns a borrow of whichever of `self`/`min`/`max`
+        is in range, so no value is moved or copied. Required closing a
+        `Self`-return substitution gap: `substitute_generics_in_return` now
+        binds `Self` to the concrete receiver so a mixin-default returning
+        `Self`/`&Self` resolves its fields at the call site. Pin `967`.
+- [x] **Lazy nil coalescing `Option[T] ?? T` (DONE 2026-07-27).** Added a
+      dedicated `QuestionQuestion` token and formatter-preserving
+      `BinOp::NilCoalesce`. It is right-associative at precedence tier 2
+      (between assignment and `||`) and lowers to an Option-tag branch, so the
+      fallback is evaluated only for `nil`. Invalid operands report `E0732`.
+      Pin `966`; parity `language.md` section 3.
+- [x] **Ternary `cond ? a : b` (DONE 2026-07-24).** Right-associative, desugared
+      in the parser to `if`/`else`. Disambiguated from the `?` try operator by
+      whitespace: an attached `x?` is try, a spaced `c ? a : b` is ternary (span
+      adjacency check in the Pratt loop). Pin `958`; parity `language.md` §3 /
+      P0.5.
+  - [ ] **Follow-up: surface-preserving `Ternary` node** so `ruxen fmt` keeps
+        `? :` instead of expanding to `if`/`else`.
+- [x] **Parallel assignment `a, b = 1, 2` + swap (DONE 2026-07-24).** Dedicated
+      `MultiAssign` AST/HIR node lowered in MIR; all RHS values snapshotted into
+      fresh temps before any store, so `a, b = b, a` swaps simultaneously.
+      Targets must be pre-declared `var`s; without a splat, equal target/value
+      counts are enforced at parse time. MIR `store_value_into_target` helper
+      factored out of `Assign` lowering and shared. Pin `957`; parity
+      `language.md` §2 / P0.3.
+  - [x] **Follow-up: trailing assignment splat `a, *b = xs` (DONE
+        2026-07-27).** A final splat target accepts either one `Array[T]` RHS or
+        a comma-list (`a, *b = 1, 2, 3`), evaluates every RHS before stores, and
+        preserves the `*` in `ruxen fmt`. The splat target is a pre-declared
+        `var Array[T]`; `T` must currently be Copy because splitting owned
+        String/class elements needs clone-aware lowering. The prior target Array
+        is freed before rebind, and the fresh tail result is ownership-classified.
+        Pin `963` plus parser/formatter/typeck `.rx` fixtures.
+  - [ ] **Remaining assignment-splat parity:** leading/middle splats, Ruby's
+        nil-fill behavior when the Array has fewer prefix elements, and owned
+        element splitting. The last item shares the clone-aware ownership work
+        needed by owned parallel assignment.
+  - [ ] **Follow-up: parallel assignment of owned Class/Struct/Enum values read
+        from a place** (e.g. a swap of two objects). This is currently a clean
+        compile error (a review pass found the naive lowering double-frees); it
+        needs proper move/clone lowering. A
+        second review pass flipped the guard to an allow-list of freshly-produced
+        values, so a place read wrapped in a ternary/`if`/`match`/`cast` is also
+        rejected (the deny-list only inspected the top-level node and let those
+        through). A third pass made the freshness check recursive
+        (`multiassign_value_is_fresh`) so a wrapper of FRESH values (a ternary of
+        two constructors) is allowed while a wrapper of place reads stays
+        rejected. Operator-overload expressions stay conservatively rejected for
+        owned aggregate results because they can forward an assignment target.
+        Guarded by typeck tests over `.rx` fixtures and release-e2e pin `962`.
+- [x] **`puts`/`print` accept any value, single-arg (DONE 2026-07-23).** A
+      non-String argument to `puts`/`eputs`/`print`/`println`/`eprintln` is
+      converted via its universal `to_s` in typeck (`puts x` becomes
+      `puts x.to_s`). Inserted into the HIR only, so the AST and `ruxen fmt`
+      stay `puts x`. Pin `956`; parity `language.md` §12 / P0.7.
+  - [ ] **Follow-up: multi-arg `puts a, b`** (prints each on its own line).
+        Needs variadic handling, deferred.
+- [x] **`&&`/`||` short-circuit + `||=`/`&&=` (DONE 2026-07-23).** Fixed a P0
+      correctness bug: logical `&&`/`||` lowered to an eager `MirInst::BinOp`, so
+      both operands always ran (`ptr != nil && ptr.field` touched `ptr.field`
+      when nil). User `&&`/`||` now lower to a branch CFG (`lower_short_circuit`,
+      mirroring `if`). On top of that, added `||=`/`&&=` (`PipePipeEq`/`AmpAmpEq`
+      tokens) desugaring to `a || (a = b)` / `a && (a = b)` (Bool; Option
+      fallback now uses `??`, while `??=` remains unavailable). Pins `955`
+      (short-circuit), `954`
+      (`||=`/`&&=`); parity `language.md` §2 and §3 / P0.4.
+- [x] **Ruby keyword `and`/`or`/`not` (DONE 2026-07-27).** Added reserved
+      keyword tokens and distinct AST operator variants so `ruxen fmt` preserves
+      the authored spelling. `and` and `or` share Ruby's left-associative tier
+      below assignment; `not` consumes assignment and all symbolic operators but
+      stops before keyword `and`/`or`. All three are strict-Bool and reuse the
+      existing short-circuit CFG. Copy assignments nested in a logical operator
+      produce the assigned value; owned assignment results remain Unit until
+      ownership-aware result lowering exists. Pin `964`; parity `language.md`
+      §3 / P1.10.
+- [x] **`unless`/`until` + statement modifiers (DONE 2026-07-23).** Block
+      `unless … end` (→ `if !cond`) and `until … end` (→ `while !cond`), plus the
+      trailing modifiers `EXPR if/unless/while/until COND`. Added the `Until`
+      lexer keyword; jump keywords no longer swallow a trailing modifier as
+      their value (`return … unless c`). All desugar in the parser to `if`/
+      `while` HIR (resolve/typeck/MIR/codegen unchanged). Pin `953`; parity
+      `language.md` §6 / P0.1 and P0.2.
+  - [ ] **Follow-up: surface-preserving `ruxen fmt` for these.** The parse-time
+        desugar means `ruxen fmt` rewrites `unless c` → `if !c` and a modifier →
+        its block form. Preserving the authored surface needs dedicated AST
+        nodes (`Unless`/`Until` + a modifier flag) lowered at resolve time, with
+        formatter rendering. Mirrors the `bracketed`-field precedent (D8).
+- [x] **`**` power operator (DONE 2026-07-23).** Was a **silent miscompile**
+      (`2 ** 8 == 16`): no `**` token, so it lexed as `*` then prefix-deref `*`.
+      Added a `StarStar` lexer token + `BinOp::Pow`. Right-associative, binds
+      tighter than unary minus and `* / %` (`2 ** 3 ** 2 == 512`, `-2 ** 2 ==
+      -4`). `Int ** Int → Int` via `ruxen_int_pow`; any float operand → `Float`
+      via `ruxen_float_pow`. Formatter learned the symbol + right-assoc parens.
+      Pin `952`; Ruby-parity `language.md` §3 / P0.6.
 - [x] **String-literal coercion model — `String.from("literal")` removed
       everywhere we ship (DONE 2026-06-10, `feat/drop-elaboration`).** Verified
       model: `""` is an owned `String` (lowered via `ruxen_string_from`); at a
@@ -148,31 +610,34 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       resolver synonym (one body, two names; zero duplicated codegen), valid in
       class/struct/enum/mixin/extension bodies (method synonym) and at
       top-level/module scope (free-fn synonym). Contextual keyword (not
-      reserved). Plain + `?`/`!` names; operator aliases staged (E1123). New
+      reserved). Plain + `?`/`!` names; operator aliases completed by the S4
+      follow-up below (E1123 remains for unsupported operator forms). New
       diagnostics **E1120/E1121/E1122/E1123** (registered + `docs/errors/`).
       Accepted on every surface (compiler/fmt/repl/lsp/ide). stdlib sweep:
       `Array#to_a` → `alias to_a clone`. Pins: release-e2e 913–918,
       `tests/alias_keyword.rs`.
-- [ ] **Alias follow-up · S4 — operator aliases (`alias << push`, `alias [] get`).**
-      Staged from Tier 1 (E1123). Operator names route through the
-      post-typeck operator-desugar path (`mir/lower/expr/binops.rs` +
-      `typeck/infer/ops.rs`), distinct from ordinary method-name mangling; wiring
-      the synonym map into that path is the remaining work. ADR D6.
-- [ ] **Alias follow-up · S4 — aliasing a mixin DEFAULT-method target.** An alias
-      whose target is a method the type gets ONLY from a mixin default body (not
-      redefined in the type) is rejected with E1120 today. The default's signature
-      lives in `typeck::trait_method_sigs`, not the type's `type_methods`, so the
-      typeck-side synonym registration can't yet bind it. Aliasing a type's OWN
-      method (incl. one satisfying a mixin requirement) works. ADR D7.
-- [ ] **Block follow-up · S3 — closure/block captures are not freed at
-      closure-drop.** A closure (`{ }` OR `do…end`) that captures a heap value
-      leaks that capture: `allocs=3, frees=0` for both forms (verified — this is
-      a PRE-EXISTING closure-capture-drop gap, NOT a block regression; the block
-      surface reuses the same machinery). Drop elaboration over a closure's
-      captures struct (free each owned capture, then the captures block and the
-      pair) is unimplemented. No double-free, no segfault — purely a leak.
-      Repro: `tests/fixtures/ruxen/block_capture_heap_no_leak.rx` (soundness
-      pinned; leak-freedom is this follow-up).
+- [x] **Alias follow-up · S4 — operator aliases (`alias << push`, `alias [] get`)
+      (DONE 2026-07-14, `fix/alias`).** The existing post-typeck operator
+      desugars now consume the same canonical method-name map as ordinary calls.
+      Supported: `+ - * / % & | ^ << >>`, unary `!`/`-@`, and `[]`/`[]=`.
+      Unary `+@` remains E1123 because Ruxen has no unary-plus expression; operator
+      families outside the operator-method grammar remain parser-rejected. Pins
+      470–471 and `tests/alias_keyword.rs`. ADR D6.
+- [x] **Alias follow-up · S4 — aliasing a mixin DEFAULT-method target (DONE
+      2026-07-14, `fix/alias`).** Typeck alias registration still prefers the
+      type's own canonical method, then falls back to the default-body signature
+      of a mixin the type nominally includes. Required methods without a body are
+      not admitted by this fallback. Pin 472 and `tests/alias_keyword.rs`. ADR D7.
+- [x] **Block follow-up · S3 — closure/block captures are freed at
+      closure-drop (FIXED 2026-07-14, `fix/blockdrop`).** Each closure now has
+      synthesized drop glue that NULL-guards and drops provably-owned by-value
+      heap captures in reverse order, then frees the captures block and closure
+      pair. The caller retains ownership across the synthetic `&block` borrow.
+      Capture aliases that return, enter an aggregate, reach a consuming or
+      ambiguous call, or come from a nested re-capture are conservatively not
+      field-dropped. Pins: `closure_and_block_captures_are_freed_at_closure_drop`
+      (`allocs=3, frees=3` for both `{ }` and `do…end`),
+      `closure_drop_does_not_free_a_moved_out_capture`, and release-e2e 475.
 - [x] **Block follow-up · S3 — paren-less blockless call to an optional-block
       METHOD doesn't fill the block slot (FIXED 2026-06-10,
       `feat/drop-elaboration`).** `w.frame` (no parens, no block) on a method
@@ -191,12 +656,22 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       just asserts), `ruby_block_semantics.rs`
       (`parenless_blockless_method_call_fills_block_slot`,
       `explicit_block_param_on_method` extended). ADR known-limitations updated.
-- [ ] **Block follow-up · Tier-2 (staged, per ADR).** `&` block-forwarding
-      (`g(&block)` / anonymous `&`), `next` as block-value, `&:symbol` to-proc
-      sugar, numbered params / `it`. Rejected (see ADR): non-local `return` /
-      Ruby `break`-exits-yielder, `redo`, lenient arity, `instance_eval`
-      self-rebinding. Nested `yield` inside a closure body errors cleanly in
-      Tier 1.
+- [x] **Block follow-up · Tier-2 (staged, per ADR): LANDED 2026-07-21.** All
+      four staged features implemented: numbered params / `it` (resolve-time
+      desugar of `_1`..`_9` / bare `it`, surface preserved for `ruxen fmt`; pin
+      `943`); `&:symbol` to-proc (resolve desugar to `{ |x| x.sym }` via new
+      `ExprKind::BlockPass`; `E1124` for a misplaced `&`-block arg; pin `944`);
+      `next` as block-value (early return from the block's real closure, works in
+      yield / `&block` bodies and real-`Array` `map`/`select`/etc. over
+      `Enumerable`; pin `945`); `&` block-forwarding (`g(&block)` / `g(&)`; pin
+      `946`). Rejected (see ADR): non-local `return`, `redo`, lenient arity,
+      `instance_eval` self-rebinding. **Known limitation:** a `next` in a
+      MIR-inlined block (`each`, user Vec-wrapper combinators) is rejected at
+      lowering (it would be a non-local return the ADR rejects), NOT supported;
+      use `map`/`select`/`find` (real closures) or a `for ... continue` loop.
+      A divergent all-`next` body takes its return type from the inferred `Fn`
+      return and emits `Unreachable` for the fall-through (Cranelift-verifier
+      clean). Pins: release-e2e `943`-`946`; `tests/block_tier2.rs` (19).
 - [x] **Interpolating a closure prints silent pointer garbage → now E0729
       (FIXED 2026-06-10, `feat/drop-elaboration`).** A bare `do … end` is a
       closure literal, NEVER an expression block (parser `atoms.rs`: "do…end is
@@ -253,33 +728,49 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       ownership gap, `State[Array]`/`Mutex[Array]` family). `Mutex[String]` is
       sound for the single-lock-per-scope / SharedSync shapes quiver uses; details
       §Q40.
-- [ ] **Q35 · S3 — a STRUCT's `include <Mixin>` does not satisfy a generic's
-      mixin bound (E1015).** Even a single struct implementor is rejected by a
-      mixin-bounded generic; the identical class works (Q17's 655 fixture runs
-      on the installed CLI). Orthogonal to Q17 — typeck's bound-satisfaction
-      registry records `include` only for classes. Clean diagnostic, nothing in
-      the GUI stack blocked (PaintSurface implementors are classes). Repro:
-      `tmp/test-cache/q35-struct-include-bound-repro.rx`; details §Q35.
-- [ ] **Q36 · S2 — `yield` with two `&var` reference args miscompiles (NEW
-      2026-06-10).** `yield(&var app.ui, &var app.root)` (two `&var` refs in one
-      yield) runs the block against an EMPTY target; single-`&var` yield and the
-      `f.(&var a, &var b)` closure-call form both work. Found migrating quiver's
-      DSL to `&block`/`yield`; quiver works around it (`App.build` stays a closure
-      param). Sub-gap: a `&block` param's type doesn't infer through the yield
-      seam (untyped block param ⇒ `?T`). Likely from `8a783f9` (block semantics).
-      Repro: `quiver/tmp/test-cache/ruxen-two-var-yield.md`; details §Q36.
-- [ ] **Q41 · S2 — LLVM backend can't lower a `DataAddr` class-info ref for a
-      `dispatch runtime` mixin type ⇒ `ruxen build --release` blocked for async
-      projects (NEW 2026-06-14).** `ruxen build` (Cranelift) is fine; `--release`
-      (LLVM) aborts: `mixin-vtables: LLVM backend cannot lower DataAddr { data_sym:
-      '__rx_classinfo_TimeSleepFuture' }`. Fires compiling the `rondo` library
-      itself (its async server pulls `TimeSleepFuture` via `read_with_timeout`), so
-      every release build of any rondo/async-using project hits it — there is no
-      optimized build path (no flag for Cranelift+opt; `RUXEN_BACKEND=cranelift`
-      doesn't override `--release`). Cranelift already lowers this, so the fix is
-      LLVM-side. Found benchmarking rondo vs Go `net/http` (debug-Cranelift rondo
-      ~113k RPS vs optimized Go ~164k — the debug handicap confounds the number).
-      rondo workaround W22; details §Q41.
+- [x] **Q35 · S3 — struct/enum `include <Mixin>` satisfies generic mixin bounds
+      (FIXED 2026-07-14).** Typeck's mixin collector registered inner nominal
+      impls for classes but only derives for structs/enums. Their `impl_blocks`
+      now populate the same nominal registry (and generic include-argument map).
+      Pin `659` compiles/runs the struct + Q17 free-function path as `one=21`;
+      focused typeck pins retain E1015 for a non-including struct and cover enum
+      symmetry. Details §Q35.
+- [x] **Q36 · S2 — `yield` with two `&var` reference args miscompiled (FIXED
+      2026-07-14).** The parser treated parenthesized `yield(a, b)` as one tuple
+      expression, so the synthetic-`__block` indirect call received one tuple
+      slot instead of two reference slots. `yield` now parses parenthesized
+      arguments with the normal call-argument parser. Release pin `929` proves
+      both real fields mutate (`ui=2 root=1`); the in-process block suite also
+      pins untyped explicit-`&block` parameter inference, which is working.
+      Details §Q36.
+- [x] **Q41 · S2 — LLVM backend can lower `DataAddr` class-info refs for
+      `dispatch runtime` mixin types (FIXED 2026-07-14).** LLVM declared user
+      functions but never emitted the vtable/class-info data globals, and its
+      `DataAddr` arm deliberately bailed instead of taking a global address.
+      The backend now mirrors Cranelift's phased lowering: it emits internal
+      constant opaque-pointer arrays with method/global relocations before
+      function bodies, resolves each `DataAddr`, and stores the coerced address.
+      LLVM `-O2` pin `q41_runtime_mixin_class_info_lowers_links_and_runs`
+      verifies, links, and executes dynamic dispatch through a future-like
+      runtime mixin. This restores the optimized path for async/rondo projects;
+      details §Q41.
+- [x] **Q46 · S2 — a no-arg `def init` class's paren-less `.new` CRASHES
+      (exit=None/segfault) when the value is moved into another class's field
+      (FIXED 2026-07-14).** The paren-less `FieldAccess` constructor branch
+      allocated and called `_init` without emitting the runtime-mixin class-info
+      header written by the parenthesized branch; later `any Mixin` dispatch
+      dereferenced slot 0 as null. Found building the §4.5 Stream adapters: a source class
+      with `def init` (no params), constructed `Src.new`, runs fine alone but
+      segfaults (empty stdout) when moved into an adapter's `any Stream` field.
+      Fixed by initializing class info in that branch; pinned by reduced custom
+      runtime-mixin case 460. Details in `dev/gui-stack-v1-issues.md` §Q46.
+- [x] **Q47 · S2 — calling a `Fn[() -> any Future]` closure in bootstrap
+      invalidates `any Future: Future` (FIXED 2026-07-14).** The bound checker
+      treated the returned existential as a concrete type named `any Future`
+      and queried the nominal/structural registry under that synthetic key.
+      `some`/`any` mixin values now satisfy the exact bounds they carry. Pin
+      `473` combines the bootstrap-shaped call with an unrelated stored-dyn
+      poll; a focused Rust typeck pin asserts the same ordering. Details §Q47.
 - [x] **Q42 · S2 — deliver a DOM event to a Ruxen handler on wasm — NOT a
       compiler bug; pure-Ruxen pattern. RESOLVED 2026-06-16 (verified by spike).**
       Spike GREEN: exported `def boot() -> Registry` (holds `handlers: Array[any
@@ -379,16 +870,31 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       (coordinator): canvas 4 `&str` sites (`examples/demo.rx:3`,
       `src/canvas.rx:662,681`, `src/path.rx:101`); quiver 1 comment
       (`src/dsl.rx:25` — the dead landmine note); rondo 0.
-- [ ] **Follow-up (one-string-type ADR): zero-copy `&String` borrow of a literal.**
-      A bare string literal passed DIRECTLY to a `&String` param currently
-      heap-copies (copy-everywhere) and the copy lands in a borrow-typed slot
-      that nobody frees → it LEAKS (pre-existing; see next item for the root
-      cause — it leaked identically under the old `&str` model). The sound fix:
-      when a `StringLiteral` is lowered in a borrow-param position, emit the raw
-      `.rodata` pointer (`Ty::RawPtr(Char)`, an immortal borrow) instead of
-      heap-copying — zero-copy AND leak-free. Needs param-target-type-aware arg
-      lowering (the "deep provenance plumbing" the ADR flagged). Pin: extend the
-      drop matrix with `borrow_len("transient")` once landed.
+- [x] **Zero-copy `&String` borrow of a string literal (LANDED for explicit
+      borrows 2026-07-21).** An immutable borrow of a literal (`&"x"`) now lowers
+      to the raw `.rodata` pointer (`Ty::RawPtr(Char)`) via `emit_raw_string_literal`
+      in the `unaryops.rs` Borrow arm, instead of heap-copying it through
+      `ruxen_string_from` only to `Ref`-borrow it: zero-copy, and (being immortal
+      + Copy) never freed. **The item's original "→ it LEAKS" premise is STALE:**
+      the drop-elaboration work (`user_callee_param_is_ref`) already made the
+      heap copy drop-eligible, so a direct-literal borrow was leak-free before
+      this change (empirically `outstanding == 0`). Pins:
+      `drop_fixtures.rs::borrow_of_string_literal_is_zero_copy` (`string_frees == 0`,
+      `outstanding == 0`) + release-e2e `942` (ABI: reads a literal's bytes and
+      length through the borrow). Whole release-e2e suite (354) green.
+  - [x] **Bare-literal zero-copy, free-fn path (LANDED 2026-07-21).** A bare
+        literal passed to a free-fn `&String` param (`f("x")`, `puts "x"`, no
+        explicit `&`) now lowers to the raw `.rodata` pointer, gated by
+        `user_callee_param_is_ref` at the `fn_call.rs` arg loop (its escape gate
+        guarantees an immutable `&`-param with no mutation channel). Pins:
+        `drop_fixtures.rs::bare_string_literal_arg_to_ref_param_is_zero_copy`
+        (`string_frees == 0`), release-e2e `947`. Covers the common `puts`/`print`
+        case.
+    - [ ] **Remaining (perf only): method-call bare-literal.** The same interception
+          for the ~5 `method_call.rs` arg loops (`obj.m("x")`) is not yet done;
+          those bare literals still heap-copy (leak-free). Each loop resolves its
+          callee differently, so it is a per-site change; low priority (rare for
+          string literals, and the leak is long gone).
 - [x] **Discovered drop-elaboration gap: a `String` passed to a USER function's
       `&String` param suppressed the source's scope-exit free → LEAK (FIXED
       2026-06-11, `feat/drop-elaboration`).** `let owned = "x"; user_fn(owned)`
@@ -494,19 +1000,18 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       implementor (incl. generic-calling-generic via a worklist fixpoint), so a
       consumer binary can define a SECOND `PaintSurface` implementor and call the
       dep's generic against both — quiver's framework cap is lifted. Design:
-      `docs/decisions/q17-cross-package-monomorphization.md`. **STAGED REMAINDER:**
-      generic METHODS over a mixin (a generic `def` inside a class) are not yet
-      monomorphized — now a clear lowering error, never a placeholder symbol (see
-      below). Also out of scope: true rlib/separate-compilation generics (Q16's
-      flat-merge is the model).
-- [ ] **Q17b · S4 — generic METHOD over a mixin (staged remainder).** A generic
-      `def measure[T: Sized](item: &var T)` INSIDE a class still resolves the bound
-      method to a placeholder; lowering rejects it with a clear diagnostic
-      ("move the generic into a free function"). Extend the Q17 free-fn
-      monomorphization to class/struct/enum methods: collect generic-method
-      instantiations, emit specialized method bodies (`Frame_measure__mono__Wide`),
-      redirect the method/field-access call sites. Not on quiver's critical path
-      (its paint pass is all free functions).
+      `docs/decisions/q17-cross-package-monomorphization.md`. Q17b completes the
+      staged generic-method surface below. Still out of scope: true rlib/separate-
+      compilation generics (Q16's flat-merge is the model).
+- [x] **Q17b · S4 — generic METHOD over a mixin (FIXED 2026-07-14).** Generic
+      methods declared directly inside class/struct/enum receivers now use the
+      Q17 demand-driven path: collect concrete method-argument instantiations,
+      suppress the placeholder-prone opaque body, emit specialized self-bearing
+      bodies (`Frame_measure_scaled__mono__Wide`), and redirect resolved method
+      calls. Release-e2e pin `474` compiles+runs two implementors with distinct
+      results; the focused Q17 suite also pins struct and enum receiver owners.
+      Unsupported generic-calling-generic across method boundaries errors clearly
+      at lowering and never falls through to a placeholder or missing symbol.
 - [ ] **Q2 · S1 — `Option[any Fn[...]]` class field returns garbage.** ⏸ Deferred
       pending the closure representation redesign; apps work around with index-into-pool arrays.
 - [ ] **Q22 — closure captures are pointer-copies.** ✅ Audited 2026-06-08 post-P0.2:
@@ -521,10 +1026,10 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
       class/struct/enum/impl/mixin method `##` docs are now emitted
       (`format_func_with_leading_comments`). (b) The shared parser accepts a clean
       top-level expression statement (`TopLevelItem::Expr`) so `ruxen fmt`
-      round-trips `Tester.describe` test files; the direct compile path rejects it
-      with the new E0728 (`ruxen test` wraps in `def main` and is unaffected).
-      Pin: `compiler/ruxen_core/tests/q23_fmt_nondestructive.rs`; doc
-      `docs/errors/E0728.md`.
+      round-trips `Tester.describe` test files. The later implicit-main feature
+      made the same shape executable on direct compile; E0728 now applies only
+      when an explicit `main` is mixed with loose statements. Pin:
+      `compiler/ruxen_core/tests/q23_fmt_nondestructive.rs`.
 - [x] **Q24 · S4 — stale incremental cache replays false move/borrow diagnostics**
       ✅ FIXED 2026-06-08. The cache key's toolchain component was just
       `CARGO_PKG_VERSION`, invariant across a `--from-source` rebuild, so stale
@@ -576,11 +1081,13 @@ canvas `Int`→`Float32` event-coord revert (unblocked by Q28/Q31) has LANDED
 
 ## Open now — pre-flight P0s (`requirements/ROADMAP.md`)
 
-The P0 list blocks tiers downstream. **It predates recent compiler work and its
-file paths reference the old `crates/` layout — re-audit against the current tree
-before picking one up** (several may be partially landed; check `CHANGELOG.md`).
-Highest-leverage, still-relevant:
+**Re-audited against the current tree 2026-07-20; P0.14 landed 2026-07-21.** The
+P0 list predated recent compiler work and its paths referenced the old `crates/`
+layout. **All 15 P0s are now done** (each with the evidence cited below),
+including P0.14 (DWARF line info). Reconcile the `requirements/ROADMAP.md` source
+table to match.
 
+- [x] **P0.1 — license (DONE).** `LICENSE-MIT` + `LICENSE-APACHE` present; README carries a dual-license section.
 - [x] **P0.2 — real `Drop` elaboration (RESOLVED; premise stale).** `MirInst::Drop`
       is an inert marker; `insert_drops` (`mir/lower/drops.rs`) emits per-type free +
       user-destructor calls at scope exit, gated by `compute_dealloc_safe_locals` so a
@@ -588,10 +1095,45 @@ Highest-leverage, still-relevant:
       `user_drop_runs.rs` 19/19, `outstanding == 0`. ADR: `docs/decisions/drop-elaboration.md`.
       Remaining tier1_04 work (drop flags for conditional moves, drop-on-unwind,
       Copy/Clone) is separate and still open.
-- [ ] **P0.5 — unresolved generic method calls fall back to `ruxen_noop_passthrough`**
-      (silent no-op). Violates the "no silent no-op" rule.
-- [ ] **P0.15 — variance rules encoded as comments only; no fixtures prove them.**
-- [ ] Remainder (P0.1, P0.3–P0.14): triage against current tree.
+- [x] **P0.5 — unresolved generic method no-op (RESOLVED).** The blanket
+      `ruxen_noop_passthrough` fallback is gone; an unresolved `?T_xxx_method` call now
+      errors naming the method instead of silently no-op'ing. Pin:
+      `tests/codegen_unknown_method_rejected.rs`.
+- [x] **P0.6 — Hash/Map name collision (RESOLVED).** Resolved the other way from the
+      original proposal: the mixin was renamed `Hashable` (`library/std/hash`); the
+      collection stays `Hash[K,V]` (Ruby's Hash, `library/std/map`). No collision.
+- [x] **P0.7 — string-literal drop double-free (RESOLVED)** via the drop-elaboration +
+      one-string-type work. Pin: `drop_fixtures.rs::string_literal_and_clone_are_drop_safe`.
+- [x] **P0.8 — registry deps rejected (RESOLVED by design).** Distribution is Go-style,
+      git-based (`src/ruxen_cli/src/publish.rs`); there is no central registry, so the old
+      "not yet supported" hard-reject is gone.
+- [x] **P0.9 — MSRV (DONE).** `rust-version = "1.91"` at the workspace root.
+- [x] **P0.10 — proptest tautologies (RESOLVED).** The `len<=100` / `n==n` tautologies are
+      gone; `tests/runtime_safety.rs` proptests now assert real lexer token properties.
+- [x] **P0.11 — inert edition field (RESOLVED).** `manifest.rs` parses, validates, and
+      defaults the edition (`parse_edition` / `edition()`), no longer dead.
+- [x] **P0.12 — async tokens dead code (RESOLVED).** `async`/`await`/`spawn` are fully
+      implemented (async-lowering + `block_on`/`Task`); the tokens are consumed.
+- [x] **P0.13 — doc comments discarded (RESOLVED).** HIR nodes carry `doc_comments: Vec<String>`;
+      `##` is threaded through, not dropped.
+- [x] **P0.15 — variance fixtures (RESOLVED).** `tests/variance.rs` (12/12 green) pins `&mut`
+      and `Vec` invariance and `Option` covariance; e2e `136`/`137` cover the surface cases.
+- [x] **P0.14 — DWARF / debug line info (DONE 2026-07-21).** The LLVM backend emits
+      minimal DWARF for `-O0` non-wasm builds: a `DICompileUnit`, a `DISubprogram`
+      per source-spanned function, and a `DILocation` per instruction. MIR now
+      carries source spans (`MirFunction::def_span`, `BasicBlock::inst_spans`
+      populated from `Lowerer::current_span`); `codegen/llvm/debug.rs` holds the
+      `DebugCtx`. Gated on `opt_level == 0`, so release + wasm + Cranelift are
+      untouched. Pins: `tests/llvm_debug_info.rs`, `tests/mir_debug_spans.rs`;
+      `llvm_backend` 19/19 and `wasm_codegen` 4/4 confirm no codegen regression.
+      Follow-ups (in `debug.rs`): variable/type/lexical-block info, multi-file
+      DWARF, exact drop-path `inst_spans` alignment.
+- [x] **P0.3 / P0.4 — derive untangle (RESOLVED).** `derive Trait` is consumed: the borrow
+      checker routes Copy-ness through `ty_is_effectively_copy` (never bare `Ty::is_copy`) at
+      6+ sites (`borrow_check/checks.rs`, `walk.rs`; see `borrow_check/CLAUDE.md`), and MIR
+      lowering honours `ty_has_derive_trait`. Storage is separated: `derive_traits` and
+      `layout` are distinct `Vec<String>` fields in `parser/ast.rs` + `hir/nodes.rs`
+      ("does NOT include layout args").
 
 ## GUI-stack critical path (what `canvas`/`quiver` are waiting on)
 
@@ -609,13 +1151,13 @@ but its next cycles are gated here. Prioritized by blast radius:
       19 cases. ADR: `docs/decisions/drop-elaboration.md`. **Still open:** drop flags
       for conditionally-moved locals, drop-on-unwind (panic=abort only today),
       Copy/Clone mixins.
-- [x] **Q17 — generic-free-fn / mixin-bound monomorphization (FIXED for free
-      fns, feat/drop-elaboration).** A generic free function over a mixin now
+- [x] **Q17 — generic free-fn/method mixin-bound monomorphization (FIXED).** A
+      generic free function over a mixin now
       monomorphizes per consumer-defined implementor, so quiver's
       single-`PaintSurface` cap is lifted — multiple paint backends now compile +
       run. Generic-calling-generic handled via a worklist fixpoint. **Unblocks:**
-      multiple paint backends + clean L1/L2 generic seams. Generic METHODS over a
-      mixin remain staged (Q17b above; clear diagnostic, no placeholder symbol).
+      multiple paint backends + clean L1/L2 generic seams. Q17b now covers direct
+      generic methods on class/struct/enum receivers as well.
 - [x] **Q16 — dependency symbols in library/`check`/`test` builds (FIXED,
       feat/drop-elaboration).** Dep `src/**.rx` is now flat-merged into library
       (`compile_piece`), `check`, and `ruxen test` builds via the shared
@@ -631,11 +1173,12 @@ but its next cycles are gated here. Prioritized by blast radius:
       2026-06-08. **Unblocks:** reactive `dyn_text`/`button` children inside quiver
       `Row`/`Col` containers (the widget library's core; previously only static
       `text` children worked in containers). S1.
-- [ ] **Enum float payloads + FFI `&String` pointer bugs.** canvas works around
-      both (pointer coords forced to `Int`; `measure_text` forwards a char count
-      not the string). File/repro as `Q##` if not yet tracked, then canvas
-      reverts its deviations. **Unblocks:** correct float event coords + real
-      text advance widths.
+- [x] **Enum float payloads + FFI `&String` pointer bugs (RESOLVED on the ruxen
+      side).** Both were fixed/audited-sound: enum `Float`/`Float32` payloads round-trip
+      (Q28, 2026-06-09, pins `647`/`648`) and a borrowed `&String` forwards the correct
+      data pointer + recoverable length into `lib "C"` (Q29, 2026-06-09, pin `649`). The
+      only remaining work is on the **canvas** side (revert the `Int`-coord and
+      `measure_text` char-count deviations); no ruxen change is outstanding.
 
 ## Long-horizon
 
@@ -645,6 +1188,13 @@ tooling/DX incl. LSP, debugger, docgen, incremental compile (T3) → ecosystem,
 package manager, cross-compile, WASM, stable ABI (T4) → spec & stability,
 language reference, edition/deprecation, error-code registry (T5). Gate is
 `prompts/v1/25_v1_release_checklist.md`.
+
+Forward-looking analysis (not yet committed tasks): [`decisions/zio-comparison-concurrency-adoption.md`](decisions/zio-comparison-concurrency-adoption.md)
+ranks seven async-concurrency capabilities distilled from the Ruby-vs-Scala/ZIO
+comparison — cancellation + runtime-dispatched `Drop`, structured task scopes,
+`Race`, async `Queue`, `Stream`, `Schedule`, and a virtual `TestClock` — each with
+rondo-grounded rationale, market impact, and the maintainer decisions they gate
+(async methods on classes, `segment_cfg` widening, cross-thread reactor wake).
 
 ## How to update this file
 

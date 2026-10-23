@@ -18,7 +18,8 @@ same compiler-generated method body.
 
 `Send` and `Sync` are auto-mixins handled by the same field-rule;
 they are never written explicitly with `include` in ordinary code.
-Users opt out via `exclude Send` / `exclude Sync` in the body, or
+Users opt out via `include !Send` / `include !Sync` in the body (a
+single `exclude Send` spelling is proposed but not implemented), or
 opt in for inference-incompatible structures via
 `unsafe include Send` / `unsafe include Sync` (the only legal use
 of `unsafe include`).
@@ -29,7 +30,7 @@ of `unsafe include`).
 
 **Given** `struct Point` with fields `x: Int, y: Int` (no explicit
 `include Debug`)
-**When** the program evaluates `"#{p:?}"` for `p = Point { x: 1, y: 2 }`
+**When** the program evaluates `"#{p:?}"` for `p = Point.new(1, 2)`
 **Then** the result is `"Point { x: 1, y: 2 }"`.
 
 ## B2 — Implicit `Debug` on a unit-variant enum prints variant name
@@ -70,7 +71,7 @@ and an implicit `Eq` is suppressed when the rule fails.
 
 ## B8 — Implicit `Hashable` synthesises a hash body
 
-Allows the type to be used as a `Map` / `Set` key.  FNV mixer over
+Allows the type to be used as a `Hash` key / `Set` element.  FNV mixer over
 fields in source order.
 
 ## B9 — Implicit `Default` synthesises `Type.default()` class method
@@ -109,7 +110,7 @@ at compile time).
 | E0617  | `include Ord` on struct with non-Ord field               |
 | E0618  | `include PartialOrd` on struct with non-PartialOrd field |
 
-## B13 — Generated impls dispatch through mixin bounds
+## B13 — Generated bodies dispatch through mixin bounds
 
 Generic code constrained by `T: Ord` / `T: Hashable` / `T: Clone` /
 `T: PartialEq` etc. resolves correctly when called with a type
@@ -117,8 +118,8 @@ that picks up the mixin implicitly.
 
 ## B14 — Implicit `Default` emits a concrete class-level method
 
-`Type.default()` is callable directly without `any`-mixin machinery
-(matches Rust's "associated function" emission).
+`Type.default()` is callable directly as a class method, without
+`any`-mixin machinery.
 
 ## B15 — User override wins over implicit body
 
@@ -133,20 +134,19 @@ include does not provide a duplicate body.
 
 | Behaviour | Test fn                                       | File                                     |
 |-----------|-----------------------------------------------|------------------------------------------|
-| B1        | `struct_with_derive_debug_prints_named_fields`| `implicit_debug_formats_struct.rs`         |
-| B2        | `enum_with_derive_debug_unit_variant_prints_name` | `implicit_debug_formats_enum.rs`       |
-| B3        | `enum_with_derive_debug_named_field_variant_prints_braces` | `implicit_debug_formats_enum.rs` |
-| B4        | `enum_with_derive_debug_explicit_debug_spec_dispatches` | `implicit_debug_formats_enum.rs`  |
+| B1        | E2E `139_implicit_debug_format.rx`            | `tests/release-e2e/cases/`               |
+| B2        | E2E `200_implicit_debug_enum_unit.rx`         | `tests/release-e2e/cases/`               |
+| B3        | E2E `210_implicit_debug_enum_tuple.rx`        | `tests/release-e2e/cases/`               |
+| B4        | E2E `212_implicit_debug_enum_explicit_q.rx`   | `tests/release-e2e/cases/`               |
 | B5        | E2E `202_implicit_clone_struct_primitive.rx` + 203/204/205 | `tests/release-e2e/cases/` |
-| B6        | `derive_partial_eq_compares_fields_struct`    | `implicit_partial_eq_returns_correct.rs`   |
-| B6        | E2E `206_implicit_partial_eq.rx` + `133_implicit_partial_eq.rx` | `tests/release-e2e/cases/` |
-| B8        | `derive_hashable_dispatches_through_trait_bounds` | `implicit_mixin_dispatch.rs`           |
-| B8        | E2E `207_implicit_hash.rx` + `132_implicit_hashable.rx` | `tests/release-e2e/cases/`   |
-| B9, B14   | `derive_default_emits_concrete_static_method` | `implicit_mixin_dispatch.rs`               |
+| B6        | E2E `206_implicit_partial_eq.rx`              | `tests/release-e2e/cases/`               |
+| B8        | E2E `2051_derived_ord_hashable_generic_bound.rx` | `tests/release-e2e/cases/`               |
+| B8        | E2E `207_implicit_hashable.rx`                | `tests/release-e2e/cases/`               |
+| B9, B14   | E2E `2069_implicit_default_struct.rx`         | `tests/release-e2e/cases/`               |
 | B9        | E2E `208_implicit_default.rx`                | `tests/release-e2e/cases/`               |
-| B10       | `derive_ord_and_partial_ord_dispatch_through_trait_bounds` | `implicit_mixin_dispatch.rs` |
-| B10       | E2E `126_implicit_ord_compare.rx` + `209_implicit_ord.rx` | `tests/release-e2e/cases/` |
-| B11       | E2E `131_implicit_copy.rx` + `derive_copy_clone_fixture_typechecks_cleanly` | `implicit_diagnostics.rs` |
+| B10       | E2E `2051_derived_ord_hashable_generic_bound.rx` | `tests/release-e2e/cases/`               |
+| B10       | E2E `126_implicit_ord.rx`                     | `tests/release-e2e/cases/`               |
+| B11       | E2E `50_implicit_copy.rx`                     | `tests/release-e2e/cases/`               |
 | B12 E0607 | `derive_invalid_target_reports_e0607`         | `implicit_diagnostics.rs`                  |
 | B12 E0610/E0611 | `derive_clone_on_struct_with_non_clone_field_emits_e0610_or_e0611` + enum equivalent | `implicit_negatives.rs` |
 | B12 E0613 | `derive_partial_eq_on_struct_with_non_eq_field_emits_e0613` | `implicit_negatives.rs`        |

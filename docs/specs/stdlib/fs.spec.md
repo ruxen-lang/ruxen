@@ -72,9 +72,8 @@ Hidden files (`.dotfile`) are included.  `.` and `..` are filtered.
 
 ## B8 — write-side helpers: `create_dir`, `create_dir_all`, `remove_file`, `rename`
 
-These return `Result[nil, IoError]`.  Pin tests exist transitively
-through the E2E pipeline but are not yet covered by dedicated
-`stdlib_fs.rs` tests — flagged as a gap.
+These return `Result[nil, IoError]`, pinned in
+`library/std/fs/tests/fs_test.rx`.
 
 ---
 
@@ -82,16 +81,16 @@ through the E2E pipeline but are not yet covered by dedicated
 
 | Behaviour | Test fn                                       | File             |
 |-----------|-----------------------------------------------|------------------|
-| B1 ok     | `fs_write_then_read_to_string_round_trips`    | `stdlib_fs.rs`   |
-| B1 err    | `fs_read_to_string_missing_returns_err`       | `stdlib_fs.rs`   |
-| B2        | `fs_write_then_read_to_string_round_trips`    | `stdlib_fs.rs`   |
-| B3        | `fs_exists_distinguishes_existing_and_missing`| `stdlib_fs.rs`   |
-| B4        | `fs_is_file_distinguishes_regular_files`      | `stdlib_fs.rs`   |
-| B5        | `fs_is_dir_distinguishes_directories`         | `stdlib_fs.rs`   |
-| B6        | `fs_read_dir_lists_all_entries`               | `stdlib_fs.rs`   |
-| B7        | `fs_read_dir_missing_path_returns_err`        | `stdlib_fs.rs`   |
-| B8 mkdir  | `fs_create_dir_then_is_dir`                   | `stdlib_fs.rs`           |
-| B8 rmfile | `fs_remove_file_then_exists_false`            | `stdlib_fs.rs`           |
+| B1 ok     | "round-trips write and read_to_string" | `library/std/fs/tests/fs_test.rx` |
+| B1 err    | "returns NotFound from read_to_string for a missing file" | `library/std/fs/tests/fs_test.rx` |
+| B2        | "round-trips write and read_to_string" | `library/std/fs/tests/fs_test.rx` |
+| B3        | "tells files, directories and missing paths apart" | `library/std/fs/tests/fs_test.rx` |
+| B4        | "tells files, directories and missing paths apart" | `library/std/fs/tests/fs_test.rx` |
+| B5        | "tells files, directories and missing paths apart" | `library/std/fs/tests/fs_test.rx` |
+| B6        | "lists every entry but . and .. with read_dir" | `library/std/fs/tests/fs_test.rx` |
+| B7        | "returns Err from read_dir for a missing directory" | `library/std/fs/tests/fs_test.rx` |
+| B8 mkdir  | "creates a directory with create_dir" | `library/std/fs/tests/fs_test.rx` |
+| B8 rmfile | "removes a file with remove_file" | `library/std/fs/tests/fs_test.rx` |
 | B8 mkdir-p| `std_fs_create_dir_all_round_trip`            | `std_use_resolution.rs`  |
 | B8 rename | `std_fs_mutation_helpers_round_trip`          | `std_use_resolution.rs`  |
 

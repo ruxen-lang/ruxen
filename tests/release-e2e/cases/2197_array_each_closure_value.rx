@@ -1,0 +1,27 @@
+# `Array#each` called with a closure VALUE runs the `.rx` body (it used to
+# alias a C function that expected a raw function pointer and crashed): a
+# lambda passed positionally, a `&block` forwarded from a user `each`, and a
+# literal trailing block (still MIR-inlined) whose String capture is reused.
+
+class Bag
+  def init
+  end
+  def each(&block: Fn[(Int) -> nil]) -> nil
+    items = [1, 2, 3]
+    items.each(&block)
+  end
+end
+
+f = ->(n: Int) { puts n }
+[1, 2].each(f)
+
+prefix = "bag-"
+bag = Bag.new
+bag.each { |x| puts "#{prefix}#{x}" }
+bag.each { |x| puts "#{prefix}#{x}" }
+puts prefix
+
+s = "arr-"
+arr = [7, 8]
+arr.each { |x| puts "#{s}#{x}" }
+puts s

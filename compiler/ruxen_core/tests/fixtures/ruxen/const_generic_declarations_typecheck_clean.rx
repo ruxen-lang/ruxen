@@ -10,3 +10,108 @@ end
 def rotate[const K: USize](x: Int) -> Int
   x
 end
+
+## Valid const-generic forms that must not raise E0701-E0706.
+
+## A const literal against a const param (no E0704).
+class Wrap[const N: USize]
+  data: USize
+  def init(@data: USize)
+  end
+end
+
+def use_wrap -> Wrap[7]
+  Wrap.new(0)
+end
+
+## 0 and 1 fit a Bool slot; any non-negative literal fits USize (no E0701).
+class Logger[const VERBOSE: Bool]
+  msg: Int
+  def init(@msg: Int)
+  end
+end
+
+def take_quiet(_l: Logger[0])
+end
+
+def take_verbose(_l: Logger[1])
+end
+
+class Sized[const N: USize]
+  payload: Int
+  def init(@payload: Int)
+  end
+end
+
+def take_sized(_b: Sized[42])
+end
+
+## A satisfied `where N > 0`, and no where clause at all (no E0706).
+class Positive[const N: USize] where N > 0
+  data: Int
+end
+
+def take_one(_b: Positive[1])
+end
+
+def take_big(_b: Positive[1024])
+end
+
+class Unbounded[const N: USize]
+  data: Int
+end
+
+def take_zero(_b: Unbounded[0])
+end
+
+## Every integer type and Bool is a valid const param type (no E0705).
+struct OfInt[T, const N: Int]
+  data: [T; 4]
+end
+struct OfInt8[T, const N: Int8]
+  data: [T; 4]
+end
+struct OfInt16[T, const N: Int16]
+  data: [T; 4]
+end
+struct OfInt32[T, const N: Int32]
+  data: [T; 4]
+end
+struct OfInt64[T, const N: Int64]
+  data: [T; 4]
+end
+struct OfUInt8[T, const N: UInt8]
+  data: [T; 4]
+end
+struct OfUInt16[T, const N: UInt16]
+  data: [T; 4]
+end
+struct OfUInt32[T, const N: UInt32]
+  data: [T; 4]
+end
+struct OfUInt64[T, const N: UInt64]
+  data: [T; 4]
+end
+struct OfUSize[T, const N: USize]
+  data: [T; 4]
+end
+struct OfISize[T, const N: ISize]
+  data: [T; 4]
+end
+struct OfBool[T, const N: Bool]
+  data: [T; 4]
+end
+
+## Array sizes: a bare literal, clean literal arithmetic and param
+## arithmetic (no E0702 or E0703).
+struct Plain
+  data: [Int; 4]
+end
+
+struct Folded
+  data: [Int; 2 + 3]
+end
+
+struct Grown[T, const N: USize]
+  data: [T; N + 1]
+end

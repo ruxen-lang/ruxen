@@ -1,10 +1,10 @@
 //! The single source of truth for runtime-callee ownership in MIR lowering.
 //!
-//! Every runtime symbol the drop-elaboration pass (`drops.rs`) or the
+//! Every runtime symbol the drop-elaboration pass (`drops/`) or the
 //! static-constructor fast path (`expr/method_call.rs`) special-cases is
 //! classified HERE, exactly once, by `callee_ownership`. This replaces the six
 //! overlapping, partly-contradicting predicates that previously lived inline in
-//! the `drops.rs` `Call` arm (FRESH_ALLOC_CALLEES, is_runtime_consume_helper,
+//! the `drops/` `Call` arm (FRESH_ALLOC_CALLEES, is_runtime_consume_helper,
 //! is_runtime_borrow_helper ×3 rebinds, is_move_by_ffi_callee,
 //! is_pointer_store_helper, borrows_first_arg) plus the duplicated static-ctor
 //! lists in method_call.rs / util.rs.
@@ -14,8 +14,6 @@
 //! notes, mutex.c, scheduler.c:150-152). A WRONG entry here is a double-free or
 //! use-after-free — every change must move a row, with a visible diff to the
 //! parity oracle (tests/runtime_abi_parity.rs).
-
-use crate::codegen::runtime::extract_method_name;
 
 /// What the callee does with the value it RETURNS into `dest`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,33 +26,8 @@ pub enum ResultOwnership {
     None,
 }
 
-/// Which positional arguments have their ownership TRANSFERRED to the callee
-/// (the arg's local must be tainted / removed from `alloc_rooted`). Small,
-/// bounded set — at most arg0..arg2 ever transfer in v1, so a u8 bitset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct ArgMask(u8);
-
-impl ArgMask {
-    pub const fn none() -> Self {
-        ArgMask(0)
-    }
-    pub const fn single(i: usize) -> Self {
-        ArgMask(1 << i)
-    }
-    pub const fn pair(i: usize, j: usize) -> Self {
-        ArgMask((1 << i) | (1 << j))
-    }
-    pub fn contains(self, i: usize) -> bool {
-        // The mask is a u8 (only arg0..arg7 can ever be flagged as transferred).
-        // `contains` is queried for EVERY arg index in the drops.rs arg loop,
-        // including args >= 8 (e.g. a 9-arg FFI like `ruxen_canvas_draw_rect`),
-        // so guard the shift — a bit beyond the u8 is unset by definition.
-        i < 8 && self.0 & (1 << i) != 0
-    }
-}
-
-/// The full ownership verdict for one callee. Mirrors the four decisions the
-/// `drops.rs` arg loop makes, in the SAME precedence order it applied them.
+/// The full ownership verdict for one callee. Mirrors the decisions the
+/// `drops/` arg loop makes, in the SAME precedence order it applied them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CalleeOwnership {
     /// Result-into-`dest` ownership.
@@ -63,11 +36,6 @@ pub struct CalleeOwnership {
     /// `borrows_first_arg` rule: `_init` ctors + the free/drop family). The
     /// arg loop `continue`s on arg0 when this is set. HIGHEST arg precedence.
     pub borrows_first_arg: bool,
-    /// Args that are explicitly transferred regardless of `args_are_borrowed`
-    /// (Vec/Hash/Set push/insert value+key slots; ruxen_store_ptr arg1). These
-    /// are tainted before the borrow check. Old: transfer_indices +
-    /// is_pointer_store_helper.
-    pub arg_transfer: ArgMask,
     /// All remaining pointer args are BORROWED (not transferred) — the runtime
     /// helper reads/mutates in place. Old: effective is_runtime_borrow_helper.
     /// When false (user callees, move-by-FFI), every remaining Use(arg) is
@@ -84,17 +52,49 @@ impl Default for CalleeOwnership {
         CalleeOwnership {
             result: ResultOwnership::None,
             borrows_first_arg: false,
-            arg_transfer: ArgMask::none(),
             args_are_borrowed: false,
         }
     }
+}
+
+/// The C functions whose `.rx` declaration marks the result owned
+/// (`def clone as "ruxen_closure_share" -> owned Self`,
+/// `ast::FfiFunction::returns_owned`), by C symbol and by Ruxen-side name.
+/// Built once per program from `MirProgram::ffi_libs`; read by
+/// [`result_ownership`] before the hand-listed table, so a helper that
+/// declares its result needs no row (F-25).
+#[derive(Debug, Clone, Default)]
+pub struct DeclaredResults(std::collections::HashSet<String>);
+
+impl DeclaredResults {
+    /// The owned-result declarations of every `lib` block in `libs`.
+    pub fn from_libs(libs: &[crate::mir::nodes::FfiLib]) -> Self {
+        let mut owned = std::collections::HashSet::new();
+        for decl in libs.iter().flat_map(|lib| &lib.functions) {
+            if decl.returns_owned {
+                owned.insert(decl.name.clone());
+                owned.insert(decl.ruxen_name.clone());
+            }
+        }
+        DeclaredResults(owned)
+    }
+}
+
+/// What `callee` does with its result: a declaration's `-> owned T` marker
+/// first, then the hand-listed table ([`callee_ownership`]). The one reader
+/// of result ownership.
+pub fn result_ownership(callee: &str, declared: &DeclaredResults) -> ResultOwnership {
+    if declared.0.contains(callee) {
+        return ResultOwnership::Fresh;
+    }
+    callee_ownership(callee).result
 }
 
 /// THE single ownership lookup. Ordered exactly like the old `Call` arm so the
 /// parity oracle (tests/runtime_abi_parity.rs) reproduces 1:1.
 pub fn callee_ownership(callee: &str) -> CalleeOwnership {
     // --- result ownership (old FRESH_ALLOC_CALLEES) ---
-    let result = if FRESH_ALLOC_CALLEES.contains(&callee) {
+    let result = if listed(FRESH_ALLOC_CALLEES, callee) {
         ResultOwnership::Fresh
     } else {
         ResultOwnership::None
@@ -103,28 +103,25 @@ pub fn callee_ownership(callee: &str) -> CalleeOwnership {
     // --- arg0 borrow (old borrows_first_arg) ---
     let borrows_first_arg = callee.ends_with("_init") || FREE_FAMILY.contains(&callee);
 
-    // --- explicit per-arg transfers (old transfer_indices + pointer-store) ---
-    let arg_transfer = arg_transfer_mask(callee);
-
     // --- remaining-arg borrow (old effective is_runtime_borrow_helper) ---
-    let consumes = CONSUME_HELPERS.contains(&callee);
-    let move_by_ffi = MOVE_BY_FFI.contains(&callee);
-    let builder = COMMAND_BUILDER.contains(&callee);
+    let consumes = FREE_FAMILY.contains(&callee) || listed(CONSUME_HELPERS, callee);
+    let move_by_ffi = listed(MOVE_BY_FFI, callee);
+    let builder = listed(COMMAND_BUILDER, callee);
     let prefix_borrow = has_runtime_prefix(callee);
-    let terminal = COMMAND_TERMINAL_OR_ACCESSOR.contains(&callee);
+    let terminal = listed(COMMAND_TERMINAL_OR_ACCESSOR, callee);
     let args_are_borrowed = ((!consumes && !move_by_ffi && prefix_borrow) || terminal) && !builder;
 
     CalleeOwnership {
         result,
         borrows_first_arg,
-        arg_transfer,
         args_are_borrowed,
     }
 }
 
 /// For a USER callee (a function/method NOT classified by the runtime-ABI
 /// tables above), resolve which of its first `arg_count` *value-carrying*
-/// parameters are declared as a reference (`&T` / `&var T`).
+/// parameters are declared as a reference (`&T` / `&var T`) or are the
+/// synthetic `__block`/`&block` call-duration borrow.
 ///
 /// A value passed to a reference parameter is AUTO-BORROWED, not consumed: the
 /// callee never owns it (drop elaboration unconditionally skips a function's
@@ -141,11 +138,12 @@ pub fn callee_ownership(callee: &str) -> CalleeOwnership {
 /// so a by-DefId lookup would miss. The mangled MIR callee is reduced to its
 /// resolver name:
 ///   * free fn  → the whole callee string (overload/mono suffixes stripped),
-///   * method   → the bare method name via [`extract_method_name`].
+///   * method   → the bare method name via `mir::lang_intrinsics::extract_method_name`.
 ///
 /// SAFETY / no-double-free guard: this is consulted ONLY for callees the
 /// runtime-ABI tables did not classify, and ONLY to UNTAINT a borrow param.
-/// A by-value (consuming) param keeps its taint (returned `false`). When the
+/// A by-value (consuming) param keeps its taint (returned `false`), except for
+/// the explicit block slot whose pair remains caller-owned. When the
 /// name resolves to MULTIPLE candidate signatures (same method name across
 /// classes / an overload set) that DISAGREE on a slot's ref-ness, we
 /// conservatively report `false` for that slot — never untaint on ambiguity.
@@ -165,71 +163,35 @@ pub fn callee_ownership(callee: &str) -> CalleeOwnership {
 /// can be an in-place builder whose returns-self rebind is governed by
 /// `elide_returns_self_realloc`, and a consuming receiver is genuinely moved —
 /// untainting either risks a double-free. This is the provably-safe subset.
+///
+/// Block slots (`Fn[...]`, `Ty::is_borrowed_block`) are always borrows. They
+/// come from `lowered_blocks`, the callee's own lowered parameters, when the
+/// caller has its body (`drops::CallSummaries::block_params`: this also
+/// covers callees name resolution cannot find, such as a mixin default); a
+/// caller that runs before the callee is lowered passes `None` and the
+/// declared signature decides. This is the one place either source is read.
 pub fn user_callee_param_is_ref(
     symbols: &crate::resolve::symbols::SymbolTable,
     mangled_callee: &str,
     arg_count: usize,
+    lowered_blocks: Option<&[bool]>,
 ) -> Vec<bool> {
-    use crate::resolve::symbols::DefKind;
-
     let mut result = vec![false; arg_count];
     if arg_count == 0 {
         return result;
     }
+    let lowered_block = |slot: usize| {
+        lowered_blocks
+            .and_then(|blocks| blocks.get(slot))
+            .copied()
+            .unwrap_or(false)
+    };
 
-    // Strip generic-class mono + overload suffixes so the name matches the
-    // resolver's stored def name. `__mono__` and `__overload` are the two
-    // synthetic separators MIR appends; `mono_base` / the overload mangler are
-    // their producers. We only need the textual base for the name compare.
-    let base = strip_call_suffixes(mangled_callee);
-
-    // Collect every candidate signature this name could resolve to, paired with
-    // whether it is a `self`-taking method (so we know the arg/param offset).
-    let mut candidates: Vec<(&crate::resolve::symbols::FnSignature, bool)> = Vec::new();
-
-    // (1) CLASS-QUALIFIED method: a method callee mangles `Class_method`, so the
-    // base splits into the longest prefix that NAMES a Class/Struct/Enum and the
-    // remaining method name. Resolving on the SPECIFIC parent class (by DefId)
-    // is load-bearing: a bare method name like `read` / `init` collides across
-    // dozens of stdlib classes (File.read, BufReader.read, async readers, …)
-    // whose `self_mode` and param shapes differ, so an unqualified by-name match
-    // would see a mass of contradictory candidates and conservatively untaint
-    // NOTHING. Class-qualification narrows to exactly the parent class's
-    // overload set.
-    if let Some((parent_id, method_name)) = split_class_qualified_method(symbols, base) {
-        for def in symbols.iter() {
-            if let DefKind::Method { parent, signature } = &def.kind {
-                if *parent != parent_id {
-                    continue;
-                }
-                let name_matches = def.name == method_name
-                    || def.name.starts_with(&format!("{}__overload", method_name));
-                if name_matches {
-                    let takes_self = signature.self_mode.is_some();
-                    candidates.push((signature, takes_self));
-                }
-            }
-        }
-    }
-
-    // (2) FREE FUNCTION: no class prefix — match the whole base name. Free-fn
-    // overloads (`name__overload…`) collapse onto the same base; the
-    // all-candidates-agree rule below keeps a disagreeing overload set
-    // conservative.
+    let candidates = user_callee_candidates(symbols, mangled_callee);
     if candidates.is_empty() {
-        for def in symbols.iter() {
-            let name_matches =
-                def.name == base || def.name.starts_with(&format!("{}__overload", base));
-            if name_matches {
-                if let DefKind::Function { signature } = &def.kind {
-                    let takes_self = signature.self_mode.is_some();
-                    candidates.push((signature, takes_self));
-                }
-            }
+        for (slot, slot_is_ref) in result.iter_mut().enumerate() {
+            *slot_is_ref = lowered_block(slot);
         }
-    }
-
-    if candidates.is_empty() {
         return result;
     }
 
@@ -252,6 +214,10 @@ pub fn user_callee_param_is_ref(
     // strictly beats leak-fixing. Pure readers (no `&var` out-param, `&self`
     // or no self) still get their borrow args untainted — the common
     // `include?`/`find`/measure/`to_eq` shapes that motivated the leak fix.
+    //
+    // A `Fn[...]` parameter is exempt from the gate: borrow check rejects
+    // every use of one other than calling or forwarding it (E1018), so its
+    // closure pair cannot escape through any out-channel.
     let has_mut_out_channel = candidates.iter().any(|(sig, _)| {
         matches!(
             sig.self_mode,
@@ -259,9 +225,6 @@ pub fn user_callee_param_is_ref(
                 | Some(crate::hir::nodes::HirSelfMode::Consuming)
         ) || sig.params.iter().any(|p| ty_is_mut_reference(&p.ty))
     });
-    if has_mut_out_channel {
-        return result;
-    }
 
     // For each value-carrying arg slot, decide ref-ness. A slot is BORROWED
     // only when EVERY candidate that maps a parameter to that slot agrees it is
@@ -276,11 +239,17 @@ pub fn user_callee_param_is_ref(
             // params line up with args[1..].
             let param_idx = if *takes_self {
                 if slot == 0 {
-                    // Receiver slot: a borrow only when this candidate's
-                    // `self_mode` is the immutable `Ref` (`&self`). `RefMut`
-                    // and `Consuming` keep the taint (see doc above).
+                    // Receiver slot: a `var self` receiver is always a
+                    // borrow of the caller's object (the out-channel itself,
+                    // see `&var` below); `&self` is one unless the callee has
+                    // an out-channel; `consume self` keeps the taint.
                     saw_any = true;
-                    if !matches!(sig.self_mode, Some(crate::hir::nodes::HirSelfMode::Ref)) {
+                    let receiver_borrows = match sig.self_mode {
+                        Some(crate::hir::nodes::HirSelfMode::RefMut) => true,
+                        Some(crate::hir::nodes::HirSelfMode::Ref) => !has_mut_out_channel,
+                        _ => false,
+                    };
+                    if !receiver_borrows {
                         all_ref = false;
                         break;
                     }
@@ -293,7 +262,24 @@ pub fn user_callee_param_is_ref(
             match sig.params.get(param_idx) {
                 Some(p) => {
                     saw_any = true;
-                    if !ty_is_reference(&p.ty) {
+                    // A `Fn[...]` parameter (incl. the synthetic `__block`)
+                    // is a borrow for the duration of the call. The callee
+                    // never owns or drops the closure pair; the caller
+                    // reclaims it after the call. Treating this slot as
+                    // consuming would leak every block and lambda passed to
+                    // it, with its captures.
+                    //
+                    // A `&var T` parameter is the out-channel itself, never
+                    // what escapes through it: the callee cannot store it
+                    // (a borrow into an owned slot is E0744) or rebind it
+                    // (E1020 for a handle; a String slot write frees the old
+                    // buffer), so the caller still owns and frees the value.
+                    let declared_block = lowered_blocks.is_none() && p.ty.is_borrowed_block();
+                    let borrows = declared_block
+                        || lowered_block(slot)
+                        || ty_is_mut_reference(&p.ty)
+                        || (!has_mut_out_channel && ty_is_reference(&p.ty));
+                    if !borrows {
                         all_ref = false;
                         break;
                     }
@@ -307,10 +293,129 @@ pub fn user_callee_param_is_ref(
                 }
             }
         }
-        *slot_is_ref = saw_any && all_ref;
+        *slot_is_ref = (saw_any && all_ref) || lowered_block(slot);
     }
 
     result
+}
+
+/// Every resolver signature a mangled USER callee could name, each paired
+/// with whether it takes `self` (so the caller knows the arg/param offset).
+///
+/// Strips the generic-class mono and overload suffixes so the name matches
+/// the resolver's stored def name, then resolves:
+///
+/// 1. a CLASS-QUALIFIED method: a method callee mangles `Class_method`, so the
+///    base splits into the longest prefix that NAMES a Class/Struct/Enum and
+///    the remaining method name. Resolving on the SPECIFIC parent class (by
+///    DefId) is load-bearing: a bare method name like `read` / `init`
+///    collides across dozens of stdlib classes whose `self_mode` and param
+///    shapes differ. A generic-class instantiation mangles
+///    `Class__mono__<Args>_method`; it resolves on the generic class itself,
+///    whose declared params are the specialised copy's before substitution.
+/// 2. a FREE FUNCTION: no class prefix, so the whole base name. Free-fn
+///    overloads (`name__overload…`) collapse onto the same base.
+///
+/// An unresolved name yields no candidates.
+fn user_callee_candidates<'s>(
+    symbols: &'s crate::resolve::symbols::SymbolTable,
+    mangled_callee: &'s str,
+) -> Vec<(&'s crate::resolve::symbols::FnSignature, bool)> {
+    use crate::resolve::symbols::DefKind;
+
+    let base = strip_call_suffixes(mangled_callee);
+    let mut candidates = Vec::new();
+    let qualified = split_mono_class_method(symbols, mangled_callee)
+        .or_else(|| split_class_qualified_method(symbols, base));
+    if let Some((parent_id, method_name)) = qualified {
+        for def in symbols.methods_of(parent_id, method_name) {
+            if let DefKind::Method { signature, .. } = &def.kind {
+                candidates.push((signature, signature.self_mode.is_some()));
+            }
+        }
+    }
+    if candidates.is_empty() {
+        for def in symbols.overloads_named(base) {
+            if let DefKind::Function { signature } = &def.kind {
+                candidates.push((signature, signature.self_mode.is_some()));
+            }
+        }
+    }
+    candidates
+}
+
+/// For a USER callee, which of its `arg_count` MIR argument slots bind a
+/// slot-addressed `&var T` parameter (`n: &var Int`, `s: &var String`): the
+/// caller must pass the ADDRESS of the argument's storage there, because the
+/// callee loads and stores through it (`mir::refmut_abi`). The receiver slot
+/// of a `self`-taking method is never one.
+///
+/// The signature comes from the callee's mangled name (the same resolution
+/// `user_callee_param_is_ref` uses), falling back to `preferred` (the def
+/// typeck selected) when the name names none, as for a mixin default copied
+/// into an implementor. Every candidate must agree on a slot; overloads that
+/// disagree are disambiguated by `preferred` when it is one of them.
+///
+/// # Errors
+///
+/// When the candidates disagree on a slot and `preferred` does not settle
+/// it. Passing a value where the callee expects an address (or the reverse)
+/// would corrupt memory, so the call is refused rather than guessed.
+pub fn user_callee_refmut_slot_params(
+    symbols: &crate::resolve::symbols::SymbolTable,
+    mangled_callee: &str,
+    preferred: Option<crate::hir::nodes::DefId>,
+    arg_count: usize,
+) -> Result<Vec<bool>, String> {
+    use crate::resolve::symbols::DefKind;
+
+    let preferred_sig = preferred.and_then(|id| match &symbols.get(id)?.kind {
+        DefKind::Method { signature, .. } | DefKind::Function { signature } => Some(signature),
+        _ => None,
+    });
+    let mut candidates = user_callee_candidates(symbols, mangled_callee);
+    if candidates.is_empty() {
+        if let Some(sig) = preferred_sig {
+            candidates.push((sig, sig.self_mode.is_some()));
+        }
+    }
+    let slot_mask = |sig: &crate::resolve::symbols::FnSignature, takes_self: bool| {
+        (0..arg_count)
+            .map(|slot| {
+                let param_idx = if takes_self {
+                    match slot.checked_sub(1) {
+                        Some(idx) => idx,
+                        None => return false,
+                    }
+                } else {
+                    slot
+                };
+                sig.params
+                    .get(param_idx)
+                    .is_some_and(|p| crate::mir::refmut_abi::is_slot_refmut(&p.ty))
+            })
+            .collect::<Vec<bool>>()
+    };
+    let masks: Vec<Vec<bool>> = candidates
+        .iter()
+        .map(|(sig, takes_self)| slot_mask(sig, *takes_self))
+        .collect();
+    let Some(first) = masks.first() else {
+        return Ok(vec![false; arg_count]);
+    };
+    if masks.iter().all(|m| m == first) {
+        return Ok(first.clone());
+    }
+    if let Some(sig) = preferred_sig {
+        if candidates.iter().any(|(c, _)| std::ptr::eq(*c, sig)) {
+            return Ok(slot_mask(sig, sig.self_mode.is_some()));
+        }
+    }
+    Err(format!(
+        "cannot tell which arguments of `{mangled_callee}` are `&var` parameters: its \
+         overloads disagree, and a `&var` of a scalar or String must be passed as the \
+         address of the caller's variable"
+    ))
 }
 
 /// A declared parameter type that auto-borrows its argument: `&T` / `&var T`
@@ -348,24 +453,41 @@ fn split_class_qualified_method<'s>(
     symbols: &'s crate::resolve::symbols::SymbolTable,
     base: &'s str,
 ) -> Option<(crate::hir::nodes::DefId, &'s str)> {
-    use crate::resolve::symbols::DefKind;
-    let is_type_def = |d: &crate::resolve::symbols::Definition, cand: &str| {
-        matches!(
-            &d.kind,
-            DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. }
-        ) && (d.name == cand || d.name.replace('.', "_") == cand)
-    };
     let mut end = base.len();
     while let Some(pos) = base[..end].rfind('_') {
         let candidate = &base[..pos];
         if !candidate.is_empty() {
-            if let Some(def) = symbols.iter().find(|d| is_type_def(d, candidate)) {
+            if let Some(def) = symbols.type_def(candidate) {
                 return Some((def.id, &base[pos + 1..]));
             }
         }
         end = pos;
     }
     None
+}
+
+/// Split a generic-class method callee `Class__mono__<Args>_method` into the
+/// generic class and the method name. `<Args>` is one or more `mono_arg_token`s
+/// joined by `__`, and a token may itself contain `_`, so the method is the
+/// first `_`-suffix of the remainder that names a method of `Class`. `None`
+/// when the callee is not a mono method of a known type (a mono free fn
+/// `f__mono__Int` has no method suffix and is handled by the free-fn path).
+fn split_mono_class_method<'s>(
+    symbols: &crate::resolve::symbols::SymbolTable,
+    callee: &'s str,
+) -> Option<(crate::hir::nodes::DefId, &'s str)> {
+    const MONO_SEP: &str = "__mono__";
+    let pos = callee.find(MONO_SEP)?;
+    let class_id = symbols.type_def(&callee[..pos])?.id;
+    let rest = &callee[pos + MONO_SEP.len()..];
+    rest.match_indices('_').find_map(|(i, _)| {
+        let method = &rest[i + 1..];
+        let method = method
+            .find("__overload")
+            .map_or(method, |end| &method[..end]);
+        (!method.is_empty() && symbols.methods_of(class_id, method).next().is_some())
+            .then_some((class_id, method))
+    })
 }
 
 /// Strip the synthetic `__mono__…` and `__overload…` suffixes a mangled MIR
@@ -383,76 +505,6 @@ fn strip_call_suffixes(callee: &str) -> &str {
     }
 }
 
-/// Is `type_name::method_name` a static (no-`self`) constructor that dispatches
-/// directly to a runtime symbol? Single source for the static-vs-instance
-/// decision shared by `util.rs::is_builtin_static_method` and the
-/// `method_call.rs` fast-path gate. Reconciles the two formerly-diverged lists
-/// (util.rs:74-132 + method_call.rs:162-214) into one declarative table.
-///
-/// RECONCILIATION DECISIONS (recorded per the plan's obligation):
-///  1. The universal `.new` rule: `method_name == "new"` is a static ctor for
-///     ANY type. This is the behaviour `method_call.rs::is_collection_ctor`
-///     actually ships (line 197); `util.rs` did NOT have it. The union keeps
-///     it — verified against ffi_alias_single_entry + the broad suite that it
-///     does not reroute a user class with a real `init` (the method_call.rs
-///     fast path still gates on `lookup_ffi_alias` / the base-type allowlist
-///     downstream, and the field_access/method_call `is_static` checks OR in
-///     `is_user_static_method`, so a user `.new` with an init still resolves
-///     correctly).
-///  2. `String.from_bytes/from_iter`, `Thread.*`, `Mutex/Arc/SharedSync.new`
-///     came from util.rs; `File.*`, `Duration.*`, `Instant.now`, `Tcp*`,
-///     `BufReader/BufWriter` came from method_call.rs. The union is the set both
-///     sites now read. Widening each site to the union is behaviour-preserving
-///     for the observable compilation outcome (proven by the integration suite
-///     in Task 5): the extra (type, method) pairs a given site gains were
-///     already classified static at the OTHER site, and both sites funnel a
-///     positive answer through the same downstream FFI-alias / `_init` gates.
-pub fn is_static_constructor(type_name: &str, method_name: &str) -> bool {
-    // Any `.new` is a static constructor (method_call.rs is_collection_ctor rule).
-    if method_name == "new" {
-        return true;
-    }
-    let base = match type_name.find('[') {
-        Some(pos) => &type_name[..pos],
-        None => type_name,
-    };
-    STATIC_CTORS
-        .iter()
-        .any(|(b, methods)| *b == base && methods.contains(&method_name))
-}
-
-/// (base_type, static-constructor method names). UNION of the two formerly
-/// duplicated lists (util.rs:74-132 + method_call.rs:162-214). One source.
-/// `new` is handled by the universal rule in `is_static_constructor`, so it is
-/// omitted here.
-const STATIC_CTORS: &[(&str, &[&str])] = &[
-    // `from` REMOVED — the surface `String.from` static method was deleted
-    // (the borrow→owned spelling is `x.clone`). `with_capacity`/`from_iter`/
-    // `from_bytes` remain real static constructors. (The C symbol
-    // `ruxen_string_from` is unaffected — it still backs `clone` and the
-    // string-literal heap-copy machinery.)
-    ("String", &["with_capacity", "from_iter", "from_bytes"]),
-    ("Vec", &["with_capacity", "from_iter"]),
-    ("Array", &["with_capacity", "from_iter"]),
-    ("Hash", &["with_capacity", "from_iter"]),
-    ("HashMap", &["with_capacity", "from_iter"]),
-    ("Map", &["with_capacity", "from_iter"]),
-    ("Set", &["with_capacity", "from_iter"]),
-    ("HashSet", &["with_capacity", "from_iter"]),
-    ("Thread", &["spawn", "current", "sleep", "yield_now"]),
-    // Mutex / Arc / SharedSync: only `.new`, handled by the universal rule.
-    (
-        "Duration",
-        &["from_secs", "from_millis", "from_micros", "from_nanos"],
-    ),
-    ("Instant", &["now"]),
-    ("TcpListener", &["bind"]),
-    ("TcpStream", &["connect"]),
-    ("File", &["open", "create", "append", "open_options"]),
-    ("BufReader", &["with_capacity"]),
-    ("BufWriter", &["with_capacity"]),
-];
-
 /// The three runtime collection families, keyed off the mangled-callee
 /// type prefix. The `Vec` family folds in `Array`, `Hash` folds in `HashMap`
 /// and `Map`, `Set` folds in `HashSet` — the same aliasing the runtime ABI
@@ -465,8 +517,7 @@ enum CollectionFamily {
 }
 
 /// Classify `callee` by its collection-type prefix (e.g. `Vec_push`,
-/// `HashMap[K, V]_insert`). Single source for the prefix ladder that both
-/// `arg_transfer_mask` and `has_runtime_prefix` consumed in duplicate.
+/// `HashMap[K, V]_insert`), for `has_runtime_prefix`.
 fn collection_family(callee: &str) -> Option<CollectionFamily> {
     const VEC: &[&str] = &["Vec_", "Vec[", "Array_", "Array["];
     const HASH: &[&str] = &["Hash_", "Hash[", "HashMap_", "HashMap[", "Map_", "Map["];
@@ -482,29 +533,29 @@ fn collection_family(callee: &str) -> Option<CollectionFamily> {
     }
 }
 
-/// Old `transfer_indices` + `is_pointer_store_helper`, folded into one mask.
-fn arg_transfer_mask(callee: &str) -> ArgMask {
-    if callee == "ruxen_store_ptr" {
-        return ArgMask::single(1);
-    }
-    let m = extract_method_name(callee);
-    let family = collection_family(callee);
-    match (family, m) {
-        (Some(CollectionFamily::Vec), "push") => ArgMask::single(1),
-        (Some(CollectionFamily::Vec), "insert") => ArgMask::single(2),
-        (Some(CollectionFamily::Hash), "insert") => ArgMask::pair(1, 2),
-        (Some(CollectionFamily::Set), "insert") => ArgMask::single(1),
-        _ if callee == "ruxen_vec_push" => ArgMask::single(1),
-        _ if callee == "ruxen_vec_insert" => ArgMask::single(2),
-        _ if callee == "ruxen_hash_insert" => ArgMask::pair(1, 2),
-        _ if callee == "ruxen_set_insert" => ArgMask::single(1),
-        _ => ArgMask::none(),
-    }
+/// Whether a `.rx` FFI declaration's parameter of type `ty` takes an owned
+/// value that moves into C: a parameter that is not the receiver, a
+/// reference, a raw pointer, a block or a scalar. The one rule for "an owned
+/// value passed to C moves" (`drops::FfiByValue`); a C function that only
+/// reads its argument declares it `&T`.
+pub fn ffi_param_takes_value(ty: &crate::hir::types::Ty, is_receiver: bool) -> bool {
+    use crate::hir::types::Ty;
+    let borrowed = matches!(
+        ty,
+        Ty::Ref(_)
+            | Ty::RefMut(_)
+            | Ty::RefLifetime(..)
+            | Ty::RefMutLifetime(..)
+            | Ty::RawPtr(_)
+            | Ty::RawPtrMut(_)
+            | Ty::RawPtrVoid
+    ) || ty.is_borrowed_block();
+    !(is_receiver || borrowed || ty.is_scalar_primitive())
 }
 
-/// Old prefix list inside `is_runtime_borrow_helper` (drops.rs:1091-1107).
-/// The collection-prefix ladder is shared with `arg_transfer_mask` via
-/// `collection_family`; this adds the non-collection runtime prefixes.
+/// Old prefix list inside `is_runtime_borrow_helper` (the pre-split `drops.rs`).
+/// The collection-prefix ladder is `collection_family`; this adds the
+/// non-collection runtime prefixes.
 fn has_runtime_prefix(c: &str) -> bool {
     collection_family(c).is_some()
         || c.starts_with("ruxen_")
@@ -513,27 +564,99 @@ fn has_runtime_prefix(c: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// The declarative tables. 1:1 move of the literals formerly inline in
-// drops.rs (line ranges noted). Not invented — transcribed verbatim.
+// The declarative tables started as a 1:1 move of the literals formerly inline
+// in drops/ (line ranges noted). Intentional additions after extraction carry
+// focused tests and are recorded as deltas in runtime_abi_parity.rs.
+//
+// Each table is keyed once by C symbol. A row's second field lists the
+// mangled `Class_method` spellings a call can still carry when no FFI alias
+// rewrote it, so a symbol and its spellings can never be classified apart.
+// The descriptor-taking forms `key_desc.rs` rewrites calls to are not rows:
+// `callee_ownership` maps them back to their base symbol first.
 // ---------------------------------------------------------------------------
 
+/// One runtime symbol and the mangled spellings that name it.
+type SymbolRow = (&'static str, &'static [&'static str]);
+
+/// Is `callee` a row's C symbol or one of its mangled spellings?
+fn listed(table: &[SymbolRow], callee: &str) -> bool {
+    table
+        .iter()
+        .any(|(symbol, spellings)| *symbol == callee || spellings.contains(&callee))
+}
+
 /// Callees returning a fresh heap allocation owned by `dest`.
-/// Old: drops.rs:694-934 `FRESH_ALLOC_CALLEES`.
-const FRESH_ALLOC_CALLEES: &[&str] = &[
-    "String_from",
-    "Vec_new",
-    "Hash_new",
-    "HashMap_new",
-    "ruxen_string_from",
-    "ruxen_string_concat",
-    "ruxen_vec_new",
-    "ruxen_hash_new",
-    // `String_into_bytes` / `ruxen_string_into_bytes` are in BOTH this list and
-    // CONSUME_HELPERS, and this is NOT a contradiction — they are load-bearing
-    // in two INDEPENDENT axes the drop pass tracks separately:
+/// Old: `FRESH_ALLOC_CALLEES` in the pre-split `drops.rs`. A C function
+/// whose `.rx` declaration says `-> owned T` needs no row here
+/// ([`DeclaredResults`], read first by [`result_ownership`]).
+///
+/// # The obligation you take on by adding a name here
+///
+/// A helper listed here must return a value the destination owns
+/// **completely**: for a collection that means the spine, the backing
+/// array, AND every heap element reachable from a slot. Drop elaboration
+/// will hand that destination the element-aware deep drop built by
+/// [`heap_free_call`](super::drops::heap_free_call), so a slot the
+/// helper did not itself allocate is a **double free by construction**.
+/// Copying a borrowed source's element pointer into a slot the result
+/// will deep-free is exactly that mistake.
+///
+/// This is not hypothetical. `ruxen_vec_skip` (`Array#drop`),
+/// `ruxen_vec_chain`, `ruxen_set_union` / `_intersection` / `_difference`
+/// and `ruxen_set_from_iter` were all listed here while only aliasing
+/// their source's elements, and every one of them aborted on a `String`
+/// element type the moment both owners went out of scope. They now
+/// deep-copy per the `RUXEN_ELEM_*` descriptor (see `runtime.h`), which
+/// is what makes the membership below honest.
+///
+/// # Leaving a helper OUT is not a safe default either
+///
+/// The tempting fix for the above is to drop the name from this list:
+/// with no Fresh classification the destination is tainted, no drop is
+/// emitted, and nothing double-frees. That trades a crash for a silent
+/// leak of the spine and backing array, and it is why `ruxen_vec_take`
+/// and `ruxen_vec_clone` leak today — they are the same aliasing shape as
+/// `skip`, and the only reason they never crashed is that they are absent
+/// here. Neither membership nor absence is automatically correct. The
+/// question to answer is "does this helper allocate everything its result
+/// will be asked to free", and if the answer is no, fix the helper rather
+/// than adjusting its classification to route around the symptom.
+///
+/// # Helpers returning a borrowed VIEW are fine
+///
+/// `ruxen_hash_keys` / `_values` / `ruxen_set_iter` alias their source's
+/// elements deliberately and are still correctly listed here. They are
+/// typed `Array[&T]`, and a `Ty::Ref(_)` element is described as POD, so
+/// `ruxen_vec_drop` frees the result's spine (which this list owns) and
+/// none of its elements (which it borrows). The element type carrying the
+/// borrow is what keeps them honest; a view helper retyped to return owned
+/// elements would become a violator.
+const FRESH_ALLOC_CALLEES: &[SymbolRow] = &[
+    ("ruxen_string_from", &["String_from"]),
+    ("ruxen_string_concat", &[]),
+    // The scalar-to-text helpers each `malloc` a new buffer (string.c), and
+    // `Formatter#buffer` hands over the formatter's buffer and frees the
+    // formatter (fmt.c). Interpolation and the synthesised `{Prim}_fmt`
+    // bodies call them for every formatted part; unclassified, every one of
+    // those strings leaked.
+    ("ruxen_int_to_string", &["Int_to_s", "USize_to_s"]),
+    ("ruxen_float_to_string", &["Float_to_s"]),
+    ("ruxen_bool_to_string", &["Bool_to_s"]),
+    ("ruxen_char_to_string", &["Char_to_s"]),
+    ("ruxen_float_to_string_prec", &["Float_to_string_prec"]),
+    ("ruxen_string_truncate_chars", &["String_truncate_chars"]),
+    ("ruxen_fmt_formatter_buffer", &["Formatter_buffer"]),
+    ("ruxen_vec_new", &["Vec_new"]),
+    // `ruxen_vec_skip` materializes the splatted tail into a new Array, its
+    // elements copied per the declared `ElemDesc[T]` (key_desc.rs).
+    ("ruxen_vec_skip", &[]),
+    ("ruxen_hash_new", &["Hash_new", "HashMap_new"]),
+    // `ruxen_string_into_bytes` is in BOTH this table and CONSUME_HELPERS,
+    // and this is NOT a contradiction — the two are load-bearing in two
+    // INDEPENDENT axes the drop pass tracks separately:
     //   * RESULT (dest): into_bytes produces a fresh Vec[U8] spine the caller
     //     owns. Without Fresh here, the dest is tainted, scope-exit drop emits
-    //     no `ruxen_vec_free`, and the Vec struct + data buffer LEAK (verified:
+    //     no `ruxen_vec_drop`, and the Vec struct + data buffer LEAK (verified:
     //     drop_fixtures::string_into_bytes_transfers_ownership goes to
     //     raw_outstanding=2, vec_frees=0 the moment this membership is removed).
     //   * ARG (arg0): the runtime frees the source `char*` internally, so the
@@ -541,348 +664,129 @@ const FRESH_ALLOC_CALLEES: &[&str] = &[
     // The original "fresh-vs-consume contradiction" hypothesis (Phase 2 plan
     // Task 3b) was disproven by the leak backstop: the result and arg axes are
     // orthogonal, and BOTH classifications are required. Kept as-is.
-    "String_into_bytes",
-    "ruxen_string_into_bytes",
-    "String_push",
-    "ruxen_string_push",
-    "Vec_from_iter",
-    "ruxen_vec_from_iter",
-    "String_from_iter",
-    "HashMap_from_iter",
-    "Hash_from_iter",
-    "Set_from_iter",
-    "HashSet_from_iter",
-    "ruxen_string_from_iter",
-    "ruxen_hash_from_iter",
-    "ruxen_set_from_iter",
-    "Set_new",
-    "HashSet_new",
-    "ruxen_set_new",
-    "HashMap_with_capacity",
-    "Hash_with_capacity",
-    "ruxen_hash_with_capacity",
-    "HashMap_keys",
-    "HashMap_values",
-    "HashMap_iter",
-    "Hash_keys",
-    "Hash_values",
-    "Hash_iter",
-    "ruxen_hash_keys",
-    "ruxen_hash_values",
-    "ruxen_hash_iter",
-    "ruxen_hash_entries",
-    "HashMap_remove",
-    "Hash_remove",
-    "ruxen_hash_remove",
-    "HashSet_with_capacity",
-    "Set_with_capacity",
-    "ruxen_set_with_capacity",
-    "HashSet_iter",
-    "Set_iter",
-    "ruxen_set_iter",
-    "HashSet_union",
-    "HashSet_intersection",
-    "HashSet_difference",
-    "Set_union",
-    "Set_intersection",
-    "Set_difference",
-    "ruxen_set_union",
-    "ruxen_set_intersection",
-    "ruxen_set_difference",
-    "ruxen_vec_chain",
-    "ruxen_vec_zip",
-    "Command_new",
-    "ruxen_command_new",
-    "Command_arg",
-    "ruxen_command_arg",
-    "Command_args",
-    "ruxen_command_args",
-    "Command_env",
-    "ruxen_command_env",
-    "Command_current_dir",
-    "ruxen_command_current_dir",
-    "Command_status",
-    "ruxen_command_status",
-    "Command_output",
-    "ruxen_command_output",
-    "Output_status",
-    "ruxen_output_status",
-    "Output_stdout",
-    "ruxen_output_stdout",
-    "Output_stderr",
-    "ruxen_output_stderr",
-    "File_open",
-    "ruxen_file_open",
-    "File_create",
-    "ruxen_file_create",
-    "File_append",
-    "ruxen_file_append",
-    "File_open_options",
-    "ruxen_file_open_options",
-    "File_metadata",
-    "ruxen_file_metadata",
-    "File_read",
-    "ruxen_file_read",
-    "File_read_to_string",
-    "ruxen_file_read_to_string",
-    "File_read_all",
-    "ruxen_file_read_all",
-    "File_write",
-    "ruxen_file_write",
-    "File_write_all",
-    "ruxen_file_write_all",
-    "File_write_str",
-    "ruxen_file_write_str",
-    "File_flush",
-    "ruxen_file_flush",
-    "File_seek",
-    "ruxen_file_seek",
-    "File_close",
-    "ruxen_file_close",
-    "OpenOptions_new",
-    "ruxen_open_options_new",
-    "OpenOptions_read",
-    "ruxen_open_options_read",
-    "OpenOptions_write",
-    "ruxen_open_options_write",
-    "OpenOptions_append",
-    "ruxen_open_options_append",
-    "OpenOptions_truncate",
-    "ruxen_open_options_truncate",
-    "OpenOptions_create",
-    "ruxen_open_options_create",
-    "OpenOptions_create_new",
-    "ruxen_open_options_create_new",
-    "Mutex_lock_raw",
-    "Mutex_try_lock_raw",
-    "ruxen_mutex_lock",
-    "ruxen_mutex_try_lock",
+    ("ruxen_string_into_bytes", &["String_into_bytes"]),
+    ("ruxen_string_push", &["String_push"]),
+    ("ruxen_vec_from_iter", &["Vec_from_iter"]),
+    ("ruxen_string_from_iter", &["String_from_iter"]),
+    (
+        "ruxen_hash_from_iter",
+        &["Hash_from_iter", "HashMap_from_iter"],
+    ),
+    (
+        "ruxen_set_from_iter",
+        &["Set_from_iter", "HashSet_from_iter"],
+    ),
+    ("ruxen_set_new", &["Set_new", "HashSet_new"]),
+    (
+        "ruxen_hash_with_capacity",
+        &["Hash_with_capacity", "HashMap_with_capacity"],
+    ),
+    ("ruxen_hash_keys", &["Hash_keys", "HashMap_keys"]),
+    ("ruxen_hash_values", &["Hash_values", "HashMap_values"]),
+    ("ruxen_hash_iter", &["Hash_iter", "HashMap_iter"]),
+    ("ruxen_hash_entries", &[]),
+    ("ruxen_hash_remove", &["Hash_remove", "HashMap_remove"]),
+    (
+        "ruxen_set_with_capacity",
+        &["Set_with_capacity", "HashSet_with_capacity"],
+    ),
+    ("ruxen_set_iter", &["Set_iter", "HashSet_iter"]),
+    ("ruxen_set_union", &["Set_union", "HashSet_union"]),
+    (
+        "ruxen_set_intersection",
+        &["Set_intersection", "HashSet_intersection"],
+    ),
+    (
+        "ruxen_set_difference",
+        &["Set_difference", "HashSet_difference"],
+    ),
+    // Its elements are copied per the declared `ElemDesc[T]` (key_desc.rs).
+    ("ruxen_vec_chain", &[]),
+    ("ruxen_vec_zip", &[]),
+    ("ruxen_command_new", &["Command_new"]),
+    ("ruxen_command_arg", &["Command_arg"]),
+    ("ruxen_command_args", &["Command_args"]),
+    ("ruxen_command_env", &["Command_env"]),
+    ("ruxen_command_current_dir", &["Command_current_dir"]),
+    ("ruxen_command_status", &["Command_status"]),
+    ("ruxen_command_output", &["Command_output"]),
+    ("ruxen_output_status", &["Output_status"]),
+    ("ruxen_output_stdout", &["Output_stdout"]),
+    ("ruxen_output_stderr", &["Output_stderr"]),
+    ("ruxen_file_open", &["File_open"]),
+    ("ruxen_file_create", &["File_create"]),
+    ("ruxen_file_append", &["File_append"]),
+    ("ruxen_file_open_options", &["File_open_options"]),
+    ("ruxen_file_metadata", &["File_metadata"]),
+    ("ruxen_file_read", &["File_read"]),
+    ("ruxen_file_read_to_string", &["File_read_to_string"]),
+    ("ruxen_file_read_all", &["File_read_all"]),
+    ("ruxen_file_write", &["File_write"]),
+    ("ruxen_file_write_all", &["File_write_all"]),
+    ("ruxen_file_write_str", &["File_write_str"]),
+    ("ruxen_file_flush", &["File_flush"]),
+    ("ruxen_file_seek", &["File_seek"]),
+    ("ruxen_file_close", &["File_close"]),
+    ("ruxen_open_options_new", &["OpenOptions_new"]),
+    ("ruxen_mutex_lock", &["Mutex_lock_raw"]),
+    ("ruxen_mutex_try_lock", &["Mutex_try_lock_raw"]),
 ];
 
-/// The non-`_init` members of the old `borrows_first_arg` rule
-/// (drops.rs:968-984). The `_init` suffix stays as an `ends_with` check in
-/// `callee_ownership`.
+/// The free and drop glue the drop pass emits (`drops::heap_free_call`) and
+/// `ruxen_dealloc`. Each borrows arg0 (the `borrows_first_arg` rule, whose
+/// `_init` half stays an `ends_with` check in `callee_ownership`) and is a
+/// consume helper; the descriptor args after it are literals.
 const FREE_FAMILY: &[&str] = &[
     "ruxen_dealloc",
     "ruxen_string_free",
-    "ruxen_vec_free",
-    "ruxen_vec_drop_string",
-    "ruxen_vec_drop_vec",
-    "ruxen_hash_free",
-    "ruxen_set_free",
-    "ruxen_hash_drop_string_v",
-    "ruxen_hash_drop_v_string",
-    "ruxen_hash_drop_string_string",
-    "ruxen_hash_drop_v_vec",
-    "ruxen_set_drop_string",
+    "ruxen_vec_drop",
+    "ruxen_hash_drop",
+    "ruxen_set_drop",
 ];
 
-/// Old `is_runtime_consume_helper` (drops.rs:1003-1043).
-const CONSUME_HELPERS: &[&str] = &[
-    "ruxen_dealloc",
-    "ruxen_string_free",
-    "ruxen_vec_free",
-    "ruxen_vec_drop_string",
-    "ruxen_vec_drop_vec",
-    "ruxen_hash_free",
-    "ruxen_set_free",
-    "ruxen_hash_drop_string_v",
-    "ruxen_hash_drop_v_string",
-    "ruxen_hash_drop_string_string",
-    "ruxen_hash_drop_v_vec",
-    "ruxen_set_drop_string",
-    "ruxen_string_into_bytes",
-    "String_into_bytes",
-    "ruxen_vec_from_iter",
-    "Vec_from_iter",
+/// Consume helpers beyond [`FREE_FAMILY`]. Old `is_runtime_consume_helper`
+/// (the pre-split `drops.rs`).
+const CONSUME_HELPERS: &[SymbolRow] = &[
+    ("ruxen_string_into_bytes", &["String_into_bytes"]),
+    ("ruxen_vec_from_iter", &["Vec_from_iter"]),
 ];
 
 /// Does this callee MOVE the ownership of its pointer args into an FFI-owned
 /// runtime structure (the task scheduler / a spawned OS thread)? The single
-/// source of truth, backed by [`MOVE_BY_FFI`]. `drops.rs`'s `moved_to_ffi`
+/// source of truth, backed by [`MOVE_BY_FFI`]. `drops/`'s `moved_to_ffi`
 /// collection consults this instead of re-listing the symbols inline, so the
 /// drop-pass exclusion set and the `callee_ownership` borrow verdict can never
 /// disagree again (they previously did: the inline list carried a dead dotted
 /// `"Task.spawn_raw"` spelling the table never had).
 pub fn is_move_by_ffi(callee: &str) -> bool {
-    MOVE_BY_FFI.contains(&callee)
+    listed(MOVE_BY_FFI, callee)
 }
 
-/// Old `is_move_by_ffi_callee` (drops.rs:1068-1088).
-const MOVE_BY_FFI: &[&str] = &[
-    "ruxen_executor_spawn",
-    "Task_spawn_raw",
-    "ruxen_thread_spawn",
-    "Thread_spawn",
-    "Thread_spawn_raw",
+/// Old `is_move_by_ffi_callee` (the pre-split `drops.rs`).
+const MOVE_BY_FFI: &[SymbolRow] = &[
+    ("ruxen_executor_spawn", &["Task_spawn_raw"]),
+    ("ruxen_thread_spawn", &["Thread_spawn", "Thread_spawn_raw"]),
 ];
 
-/// Old `is_command_builder_method` (drops.rs:1158-1168).
-const COMMAND_BUILDER: &[&str] = &[
-    "Command_arg",
-    "ruxen_command_arg",
-    "Command_args",
-    "ruxen_command_args",
-    "Command_env",
-    "ruxen_command_env",
-    "Command_current_dir",
-    "ruxen_command_current_dir",
+/// Old `is_command_builder_method` (the pre-split `drops.rs`).
+const COMMAND_BUILDER: &[SymbolRow] = &[
+    ("ruxen_command_arg", &["Command_arg"]),
+    ("ruxen_command_args", &["Command_args"]),
+    ("ruxen_command_env", &["Command_env"]),
+    ("ruxen_command_current_dir", &["Command_current_dir"]),
 ];
 
-/// Old `is_command_terminal_or_accessor` (drops.rs:1123-1139).
-const COMMAND_TERMINAL_OR_ACCESSOR: &[&str] = &[
-    "Command_status",
-    "ruxen_command_status",
-    "Command_output",
-    "ruxen_command_output",
-    "Output_status",
-    "ruxen_output_status",
-    "Output_stdout",
-    "ruxen_output_stdout",
-    "Output_stderr",
-    "ruxen_output_stderr",
-    "ExitStatus_code",
-    "ruxen_exit_status_code",
-    "ExitStatus_success",
-    "ruxen_exit_status_success",
+/// Old `is_command_terminal_or_accessor` (the pre-split `drops.rs`).
+const COMMAND_TERMINAL_OR_ACCESSOR: &[SymbolRow] = &[
+    ("ruxen_command_status", &["Command_status"]),
+    ("ruxen_command_output", &["Command_output"]),
+    ("ruxen_output_status", &["Output_status"]),
+    ("ruxen_output_stdout", &["Output_stdout"]),
+    ("ruxen_output_stderr", &["Output_stderr"]),
+    ("ruxen_exit_status_code", &["ExitStatus_code"]),
+    ("ruxen_exit_status_success", &["ExitStatus_success"]),
 ];
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fresh_alloc_constructors_classify_as_fresh() {
-        assert_eq!(callee_ownership("Vec_new").result, ResultOwnership::Fresh);
-        assert_eq!(
-            callee_ownership("ruxen_hash_new").result,
-            ResultOwnership::Fresh
-        );
-        assert_eq!(
-            callee_ownership("Command_new").result,
-            ResultOwnership::Fresh
-        );
-        assert_eq!(callee_ownership("File_open").result, ResultOwnership::Fresh);
-        assert_eq!(
-            callee_ownership("Mutex_lock_raw").result,
-            ResultOwnership::Fresh
-        );
-    }
-
-    #[test]
-    fn free_family_consumes_first_arg_and_returns_nothing() {
-        let o = callee_ownership("ruxen_string_free");
-        assert_eq!(o.result, ResultOwnership::None);
-        // free helpers BORROW arg0 in the drop-pass sense (the arg loop
-        // `continue`s on arg0 so it is NOT tainted) — encoded as the
-        // borrows_first_arg flag.
-        assert!(o.borrows_first_arg);
-    }
-
-    #[test]
-    fn vec_push_transfers_arg1() {
-        assert_eq!(
-            callee_ownership("ruxen_vec_push").arg_transfer,
-            ArgMask::single(1)
-        );
-        assert_eq!(
-            callee_ownership("Vec_push").arg_transfer,
-            ArgMask::single(1)
-        );
-    }
-
-    #[test]
-    fn hashmap_insert_transfers_arg1_and_arg2() {
-        assert_eq!(
-            callee_ownership("ruxen_hash_insert").arg_transfer,
-            ArgMask::pair(1, 2)
-        );
-        assert_eq!(
-            callee_ownership("HashMap_insert").arg_transfer,
-            ArgMask::pair(1, 2)
-        );
-    }
-
-    #[test]
-    fn move_by_ffi_does_not_borrow_args() {
-        let o = callee_ownership("ruxen_executor_spawn");
-        assert!(!o.args_are_borrowed); // default-taint path runs → spawned future moved
-    }
-
-    #[test]
-    fn is_move_by_ffi_matches_table_and_rejects_dotted_and_user() {
-        // Every member of MOVE_BY_FFI is recognized — this is the single
-        // predicate drops.rs's `moved_to_ffi` collection routes through, so
-        // the two can no longer diverge.
-        for &c in MOVE_BY_FFI {
-            assert!(is_move_by_ffi(c), "MOVE_BY_FFI member {c:?} not recognized");
-        }
-        // The dotted `Task.spawn_raw` form is DEAD: MIR call callees are
-        // always underscore-mangled (`Type_method`), so the dotted spelling
-        // never reaches a `MirInst::Call.callee`. It is intentionally NOT in
-        // the table (and absent from the parity SYMBOLS list).
-        assert!(!is_move_by_ffi("Task.spawn_raw"));
-        // User callees never move by FFI.
-        assert!(!is_move_by_ffi("MyClass_method"));
-    }
-
-    #[test]
-    fn pointer_store_transfers_arg1() {
-        assert_eq!(
-            callee_ownership("ruxen_store_ptr").arg_transfer,
-            ArgMask::single(1)
-        );
-    }
-
-    #[test]
-    fn user_callee_is_fully_conservative() {
-        let o = callee_ownership("MyClass_method");
-        assert_eq!(o.result, ResultOwnership::None); // dest tainted
-        assert!(!o.args_are_borrowed); // every Use(arg) tainted
-        assert!(!o.borrows_first_arg);
-    }
-
-    #[test]
-    fn static_constructor_union_is_reconciled() {
-        // From the method_call.rs fast-path cascade:
-        assert!(is_static_constructor("File", "open"));
-        assert!(is_static_constructor("Duration", "from_secs"));
-        assert!(is_static_constructor("Instant", "now"));
-        assert!(is_static_constructor("TcpListener", "bind"));
-        assert!(is_static_constructor("TcpStream", "connect"));
-        assert!(is_static_constructor("BufReader", "new"));
-        assert!(is_static_constructor("BufWriter", "with_capacity"));
-        // From util.rs::is_builtin_static_method (the diverged sibling):
-        // `String.from` was DELETED from the language — it is no longer a
-        // static constructor (borrow→owned is `x.clone`); the negative below
-        // pins that.
-        assert!(!is_static_constructor("String", "from"));
-        assert!(is_static_constructor("String", "from_bytes"));
-        assert!(is_static_constructor("Thread", "spawn"));
-        assert!(is_static_constructor("Mutex", "new"));
-        assert!(is_static_constructor("Arc", "new"));
-        assert!(is_static_constructor("SharedSync", "new"));
-        // Generic-base handling (Vec[T] → Vec):
-        assert!(is_static_constructor("Vec[String]", "with_capacity"));
-        assert!(is_static_constructor("HashMap[K, V]", "from_iter"));
-        // The universal `new` rule that method_call.rs's is_collection_ctor
-        // applies to ANY type:
-        assert!(is_static_constructor("AnyUserClass", "new"));
-        // Negatives:
-        assert!(!is_static_constructor("Vec", "len"));
-        assert!(!is_static_constructor("File", "read"));
-    }
-
-    #[test]
-    fn arg_mask_contains_is_safe_beyond_u8_width() {
-        // A many-arg FFI (e.g. `ruxen_canvas_draw_rect`, 9 args) queries
-        // `contains()` for arg indices >= 8; the u8 mask must NOT overflow-shift
-        // (regression: `1u8 << 8` panicked in debug). Bits beyond the u8 are
-        // unset by definition.
-        let m = ArgMask::single(1);
-        assert!(m.contains(1));
-        assert!(!m.contains(8));
-        assert!(!m.contains(64));
-        assert!(!ArgMask::none().contains(8));
-    }
-}
+#[path = "runtime_abi_tests.rs"]
+mod tests;

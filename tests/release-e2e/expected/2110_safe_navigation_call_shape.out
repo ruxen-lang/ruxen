@@ -1,0 +1,8 @@
+field=3
+field_absent=-1
+option_named_field=7
+call_with_args=6
+call_absent=-1
+parenless_overload=3
+plain_parenless_overload=5
+plain_with_args=scaled by 2

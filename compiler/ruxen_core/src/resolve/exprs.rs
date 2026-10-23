@@ -1,20 +1,36 @@
-#![allow(unused_imports)]
-
-use std::collections::HashMap;
-
 use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
-use crate::lexer::token::Span;
+use crate::hir::types::{MoveSemantics, Ty};
 use crate::parser::ast::{self, Visibility};
 
-use super::const_helpers;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
+use super::implicit_block_params::split_trailing_block_pass;
+use super::scope::ScopeKind;
 use super::symbols::*;
-use super::{ClosureCaptureContext, PatternSpan, ResolveResult, Resolver};
+use super::{PatternSpan, Resolver};
 
 impl Resolver {
+    /// The type of a type name used as a value (the receiver of
+    /// `Point.new(...)`, `Color.Red`, `Outer.Inner.method(...)`): the
+    /// class, struct or enum itself, else a fresh inference variable.
+    fn type_name_value_ty(&mut self, def_id: DefId, name: &str) -> Ty {
+        let name = name.to_string();
+        match self.symbols.get(def_id).map(|d| &d.kind) {
+            Some(DefKind::Class { .. }) => Ty::Class {
+                name,
+                generic_args: vec![],
+            },
+            Some(DefKind::Struct { .. }) => Ty::Struct {
+                name,
+                generic_args: vec![],
+            },
+            Some(DefKind::Enum { .. }) => Ty::Enum {
+                name,
+                generic_args: vec![],
+            },
+            _ => self.type_context.fresh_type_var(),
+        }
+    }
+
     pub(super) fn resolve_expr(&mut self, expr: &ast::Expr) -> HirExpr {
         let span = expr.span.clone();
         match &expr.kind {
@@ -50,19 +66,13 @@ impl Resolver {
                     .iter()
                     .map(|p| {
                         match p {
-                            crate::lexer::token::StringPart::Literal(s) => {
-                                HirInterpolationPart::Literal(s.clone())
-                            }
-                            crate::lexer::token::StringPart::Expr { tokens, spec } => {
-                                // Parse the interpolation tokens as an expression.
-                                // The format spec (Phase 2 #06.B) is threaded through
-                                // unchanged to MIR — Phase C/D consume it.
-                                let inner_expr = self.resolve_interpolation_tokens(tokens, &span);
-                                HirInterpolationPart::Expr {
-                                    expr: inner_expr,
-                                    spec: spec.clone(),
-                                }
-                            }
+                            ast::StringPart::Literal(s) => HirInterpolationPart::Literal(s.clone()),
+                            // The format spec (Phase 2 #06.B) is threaded through
+                            // unchanged to MIR — Phase C/D consume it.
+                            ast::StringPart::Expr { expr, spec } => HirInterpolationPart::Expr {
+                                expr: self.resolve_expr(expr),
+                                spec: spec.clone(),
+                            },
                         }
                     })
                     .collect();
@@ -103,6 +113,9 @@ impl Resolver {
                 span,
             },
             ast::ExprKind::Identifier(name) => {
+                if name == "super" {
+                    self.check_super_context(&span);
+                }
                 // `block_defined?` / `block_given?` (alias) — Ruby-block-semantics
                 // ADR D6. A no-receiver builtin predicate that is `true` iff the
                 // caller passed a block. Desugars to `__block != nil` (the null
@@ -218,21 +231,7 @@ impl Resolver {
                 } else if let Some(def_id) = self.scopes.lookup_type(name) {
                     // Type name used as a value — needed for constructor calls
                     // like Point.new(...), Color.Red, etc.
-                    let ty = match self.symbols.get(def_id).map(|d| &d.kind) {
-                        Some(DefKind::Class { .. }) => Ty::Class {
-                            name: name.clone(),
-                            generic_args: vec![],
-                        },
-                        Some(DefKind::Struct { .. }) => Ty::Struct {
-                            name: name.clone(),
-                            generic_args: vec![],
-                        },
-                        Some(DefKind::Enum { .. }) => Ty::Enum {
-                            name: name.clone(),
-                            generic_args: vec![],
-                        },
-                        _ => self.type_context.fresh_type_var(),
-                    };
+                    let ty = self.type_name_value_ty(def_id, name);
                     HirExpr {
                         kind: HirExprKind::VarRef(def_id),
                         ty,
@@ -249,21 +248,7 @@ impl Resolver {
                     // expression so the trailing `.method(args)`
                     // dispatches as a regular class-method call.
                     if let Some(&def_id) = self.type_registry.get(name) {
-                        let ty = match self.symbols.get(def_id).map(|d| &d.kind) {
-                            Some(DefKind::Class { .. }) => Ty::Class {
-                                name: name.clone(),
-                                generic_args: vec![],
-                            },
-                            Some(DefKind::Struct { .. }) => Ty::Struct {
-                                name: name.clone(),
-                                generic_args: vec![],
-                            },
-                            Some(DefKind::Enum { .. }) => Ty::Enum {
-                                name: name.clone(),
-                                generic_args: vec![],
-                            },
-                            _ => self.type_context.fresh_type_var(),
-                        };
+                        let ty = self.type_name_value_ty(def_id, name);
                         HirExpr {
                             kind: HirExprKind::VarRef(def_id),
                             ty,
@@ -271,6 +256,7 @@ impl Resolver {
                         }
                     } else {
                         self.error(format!("undefined qualified type `{}`", name), &span);
+                        self.unresolved_names.push(name.to_string());
                         HirExpr {
                             kind: HirExprKind::Error,
                             ty: Ty::Error,
@@ -278,12 +264,87 @@ impl Resolver {
                         }
                     }
                 } else {
-                    self.error(format!("undefined variable `{}`", name), &span);
+                    self.error_with_code(format!("undefined variable `{}`", name), &span, "E0734");
+                    self.unresolved_names.push(name.to_string());
                     HirExpr {
                         kind: HirExprKind::Error,
                         ty: Ty::Error,
                         span,
                     }
+                }
+            }
+            ast::ExprKind::GenericTypeRef { name, ty } => {
+                // `Hash[String, Int].new` — a type in value position with the
+                // generic arguments the author wrote. Resolve the written
+                // path through ordinary type resolution (which already knows
+                // `Hash[K, V]` is `Ty::Map`, `Set[T]` is `Ty::Set`, and how to
+                // handle a user generic), and give the receiver THAT type
+                // instead of the constructor entry's declared one.
+                //
+                // This is the whole fix: typeck's `substitute_generics_in_return`
+                // binds the class's declared params against the receiver's
+                // generic args, so a receiver of `Map(String, Int)` turns the
+                // declared `-> Hash[K, V]` into `Hash[String, Int]`. With the
+                // old `Identifier` receiver it bound `{K → K}` and the call's
+                // type stayed abstract forever.
+                // Only the BUILTIN type constructors need refining here.
+                // `register_type_constructors` registers `Array`/`Hash`/`Set`/
+                // … in VALUE scope as a `DefKind::Variable` holding the
+                // declared generic type, and that entry is the thing whose
+                // rigid parameters leak. A user generic class is a
+                // `DefKind::Class` reached through type scope, its `.new` goes
+                // down the constructor path, and `Pair[Int, String].new(42,
+                // "hi")` already infers its parameters from the constructor
+                // arguments. Refining those here would swap a `DefKind::Class`
+                // receiver for a synthetic `DefKind::Variable` and break
+                // constructor resolution, so they keep the path they have.
+                let is_builtin_ctor = self
+                    .scopes
+                    .lookup(name)
+                    .and_then(|id| self.symbols.get(id).map(|d| &d.kind))
+                    .is_some_and(|k| matches!(k, DefKind::Variable { .. }));
+                if !is_builtin_ctor {
+                    // Resolve exactly as the bare type name would, so every
+                    // non-builtin shape behaves precisely as before this node
+                    // existed — including the diagnostics for an undefined one.
+                    let bare = ast::Expr {
+                        kind: ast::ExprKind::Identifier(name.clone()),
+                        span: span.clone(),
+                    };
+                    return self.resolve_expr(&bare);
+                }
+                let resolved_ty = self.resolve_type_expr(ty);
+                // Setting `expr.ty` here would NOT survive: typeck's `VarRef`
+                // arm re-derives an expression's type from its `DefId`
+                // (`typeck/infer/expr.rs:125-130`) and would put the
+                // uninstantiated `Hash[K, V]` straight back. So register the
+                // INSTANTIATED constructor as its own def, which is exactly
+                // the shape `resolve/stdlib/type_constructors.rs` uses for the
+                // uninstantiated one. The type then survives by construction
+                // rather than by every later stage agreeing not to clobber it.
+                //
+                // Method lookup is unaffected: static-method resolution and
+                // MIR's callee mangling both key off the receiver's TYPE
+                // (`method_home_key(Ty::Map) == "Hash"`), never off this
+                // `DefId`. The def is deliberately NOT inserted into any
+                // scope — it is not name-addressable, it exists only to carry
+                // this occurrence's type. That means one extra symbol-table
+                // entry per written `Type[Args].method` expression, which is
+                // the same order as the temporaries every expression already
+                // allocates.
+                let def_id = self.symbols.define(
+                    name.clone(),
+                    DefKind::Variable {
+                        mutable: false,
+                        ty: resolved_ty.clone(),
+                    },
+                    Visibility::Public,
+                    span.clone(),
+                );
+                HirExpr {
+                    kind: HirExprKind::VarRef(def_id),
+                    ty: resolved_ty,
+                    span,
                 }
             }
             ast::ExprKind::SelfRef => {
@@ -370,7 +431,7 @@ impl Resolver {
                     span,
                 }
             }
-            ast::ExprKind::FieldAccess { object, field } => {
+            ast::ExprKind::FieldAccess { object, field, .. } => {
                 let obj_hir = self.resolve_expr(object);
                 let ty = self.type_context.fresh_type_var();
                 HirExpr {
@@ -378,12 +439,14 @@ impl Resolver {
                         object: Box::new(obj_hir),
                         field_name: field.clone(),
                         field_idx: 0, // resolved during type checking
+                        safe_nav: false,
                     },
                     ty,
                     span,
                 }
             }
             ast::ExprKind::MethodCall {
+                parens,
                 object,
                 method,
                 generic_args,
@@ -391,9 +454,16 @@ impl Resolver {
                 block,
             } => {
                 let obj_hir = self.resolve_expr(object);
+                // Block Tier-2: a trailing `&:sym` / `&block` / `&` argument is
+                // hoisted out of the positional args into the block slot.
+                let (pos_args, trailing_bp) = split_trailing_block_pass(args);
                 let mut args_hir: Vec<HirExpr> =
-                    args.iter().map(|a| self.resolve_expr(a)).collect();
-                let block_hir = block.as_ref().map(|b| Box::new(self.resolve_expr(b)));
+                    pos_args.iter().map(|a| self.resolve_expr(a)).collect();
+                let block_hir = if let Some(bp) = trailing_bp {
+                    Some(Box::new(self.resolve_block_pass(bp, &span)))
+                } else {
+                    block.as_ref().map(|b| Box::new(self.resolve_expr(b)))
+                };
                 if block_hir.is_none() {
                     if let HirExprKind::VarRef(module_id) = &obj_hir.kind {
                         if let Some(module_def) = self.symbols.get(*module_id) {
@@ -450,23 +520,34 @@ impl Resolver {
                     kind: HirExprKind::MethodCall {
                         object: Box::new(obj_hir),
                         method: UNRESOLVED_DEF, // resolved during type checking
+                        resolved: UNRESOLVED_DEF,
+                        requirement_params: None,
                         method_name: method.clone(),
                         generic_args: generic_args_hir,
                         args: args_hir,
                         block: block_hir,
+                        safe_nav: false,
+                        parens: *parens,
                     },
                     ty,
                     span,
                 }
             }
             ast::ExprKind::Call {
+                parens,
                 callee,
                 args,
                 block,
             } => {
+                // Block Tier-2: hoist a trailing `&:sym` / `&block` / `&`.
+                let (pos_args, trailing_bp) = split_trailing_block_pass(args);
                 let mut args_hir: Vec<HirExpr> =
-                    args.iter().map(|a| self.resolve_expr(a)).collect();
-                let mut block_hir = block.as_ref().map(|b| Box::new(self.resolve_expr(b)));
+                    pos_args.iter().map(|a| self.resolve_expr(a)).collect();
+                let mut block_hir = if let Some(bp) = trailing_bp {
+                    Some(Box::new(self.resolve_block_pass(bp, &span)))
+                } else {
+                    block.as_ref().map(|b| Box::new(self.resolve_expr(b)))
+                };
 
                 // E1112 (docs/specs/stdlib/executor.spec.md B6) is
                 // detected in `async_lowering::collect_block_on_in_async_diagnostics`,
@@ -481,6 +562,9 @@ impl Resolver {
                 // Try to resolve the callee
                 match &callee.kind {
                     ast::ExprKind::Identifier(name) => {
+                        if name == "super" {
+                            self.check_super_context(&span);
+                        }
                         if let Some(orig_def_id) = self.scopes.lookup(name) {
                             // A trailing `do…end` block on a call whose callee
                             // is a FUNCTION (a `def`, including yield-based
@@ -538,10 +622,14 @@ impl Resolver {
                                         span: callee.span.clone(),
                                     }),
                                     method: UNRESOLVED_DEF,
+                                    resolved: UNRESOLVED_DEF,
+                                    requirement_params: None,
                                     method_name: "call".to_string(),
                                     generic_args: vec![],
                                     args: args_hir,
                                     block: Some(blk),
+                                    safe_nav: false,
+                                    parens: *parens,
                                 },
                                 None => HirExprKind::FnCall {
                                     callee: def_id,
@@ -589,7 +677,12 @@ impl Resolver {
                                     };
                                 }
                             }
-                            self.error(format!("undefined function `{}`", name), &span);
+                            self.error_with_code(
+                                format!("undefined function `{}`", name),
+                                &span,
+                                "E0735",
+                            );
+                            self.unresolved_names.push(name.to_string());
                             HirExpr {
                                 kind: HirExprKind::Error,
                                 ty: Ty::Error,
@@ -597,7 +690,12 @@ impl Resolver {
                             }
                         } else {
                             // Could be a type constructor: Type.new(...)
-                            self.error(format!("undefined function `{}`", name), &span);
+                            self.error_with_code(
+                                format!("undefined function `{}`", name),
+                                &span,
+                                "E0735",
+                            );
+                            self.unresolved_names.push(name.to_string());
                             HirExpr {
                                 kind: HirExprKind::Error,
                                 ty: Ty::Error,
@@ -606,17 +704,21 @@ impl Resolver {
                         }
                     }
                     // FieldAccess could be a static method call: Type.method(...)
-                    ast::ExprKind::FieldAccess { object, field } => {
+                    ast::ExprKind::FieldAccess { object, field, .. } => {
                         let obj_hir = self.resolve_expr(object);
                         let ty = self.type_context.fresh_type_var();
                         HirExpr {
                             kind: HirExprKind::MethodCall {
                                 object: Box::new(obj_hir),
                                 method: UNRESOLVED_DEF,
+                                resolved: UNRESOLVED_DEF,
+                                requirement_params: None,
                                 method_name: field.clone(),
                                 generic_args: vec![],
                                 args: args_hir,
                                 block: block_hir,
+                                safe_nav: false,
+                                parens: *parens,
                             },
                             ty,
                             span,
@@ -629,10 +731,14 @@ impl Resolver {
                             kind: HirExprKind::MethodCall {
                                 object: Box::new(callee_hir),
                                 method: UNRESOLVED_DEF,
+                                resolved: UNRESOLVED_DEF,
+                                requirement_params: None,
                                 method_name: "call".to_string(),
                                 generic_args: vec![],
                                 args: args_hir,
                                 block: block_hir,
+                                safe_nav: false,
+                                parens: *parens,
                             },
                             ty,
                             span,
@@ -661,6 +767,23 @@ impl Resolver {
                         target: Box::new(target_hir),
                         value: Box::new(value_hir),
                         semantics: MoveSemantics::Move, // determined during type checking
+                    },
+                    ty: Ty::Unit,
+                    span,
+                }
+            }
+            ast::ExprKind::MultiAssign {
+                targets,
+                values,
+                splat_target,
+            } => {
+                let targets_hir = targets.iter().map(|t| self.resolve_expr(t)).collect();
+                let values_hir = values.iter().map(|v| self.resolve_expr(v)).collect();
+                HirExpr {
+                    kind: HirExprKind::MultiAssign {
+                        targets: targets_hir,
+                        values: values_hir,
+                        splat_target: *splat_target,
                     },
                     ty: Ty::Unit,
                     span,
@@ -740,34 +863,34 @@ impl Resolver {
                 let iterable = self.resolve_expr(&for_expr.iterable);
                 self.scopes.push(ScopeKind::Loop);
                 let binding_name = self.pattern_binding_name(&for_expr.pattern);
-                let binding_ty = self.type_context.fresh_type_var();
-                let binding_def = self.symbols.define(
-                    binding_name.clone(),
-                    DefKind::Variable {
-                        mutable: false,
-                        ty: binding_ty.clone(),
-                    },
-                    Visibility::Private,
-                    for_expr.pattern.span().clone(),
-                );
-                self.scopes.insert(binding_name.clone(), binding_def);
-                // For tuple patterns like (i, result), also register each sub-binding
-                // and collect their DefIds so the MIR lowerer can destructure.
+                let pattern = self.resolve_pattern(&for_expr.pattern);
+                // A simple `for x in` (or `for &x in`) binds `x` directly.
+                // Any other pattern gets an unscoped def for the whole
+                // element, and a tuple pattern's sub-bindings are handed to
+                // the MIR lowerer.
                 let mut tuple_bindings = Vec::new();
-                if let ast::Pattern::Tuple { elements, .. } = &for_expr.pattern {
-                    self.register_pattern_bindings(
-                        &for_expr.pattern,
-                        false,
-                        for_expr.pattern.span(),
-                    );
-                    for elem in elements {
-                        if let ast::Pattern::Identifier { name, .. } = elem {
-                            if let Some(def_id) = self.scopes.lookup(name) {
-                                tuple_bindings.push((def_id, name.clone()));
+                let binding_def = match &pattern {
+                    HirPattern::Binding { def_id, .. } | HirPattern::Ref { def_id, .. } => *def_id,
+                    _ => {
+                        if let HirPattern::Tuple { elements, .. } = &pattern {
+                            for elem in elements {
+                                if let HirPattern::Binding { def_id, name, .. } = elem {
+                                    tuple_bindings.push((*def_id, name.clone()));
+                                }
                             }
                         }
+                        let binding_ty = self.type_context.fresh_type_var();
+                        self.symbols.define(
+                            binding_name.clone(),
+                            DefKind::Variable {
+                                mutable: false,
+                                ty: binding_ty,
+                            },
+                            Visibility::Private,
+                            for_expr.pattern.span().clone(),
+                        )
                     }
-                }
+                };
                 let body = self.resolve_block_as_expr(&for_expr.body);
                 self.scopes.pop();
                 HirExpr {
@@ -821,6 +944,18 @@ impl Resolver {
                 }
                 HirExpr {
                     kind: HirExprKind::Continue,
+                    ty: Ty::Never,
+                    span,
+                }
+            }
+            ast::ExprKind::Next(value) => {
+                // Block Tier-2: `next [expr]` is the block's value for this
+                // iteration. The parser only produces it inside a closure body,
+                // so no scope check is needed here; it lowers to an early
+                // return from the block's closure.
+                let value_hir = value.as_ref().map(|v| Box::new(self.resolve_expr(v)));
+                HirExpr {
+                    kind: HirExprKind::Next(value_hir),
                     ty: Ty::Never,
                     span,
                 }
@@ -936,10 +1071,14 @@ impl Resolver {
                     kind: HirExprKind::MethodCall {
                         object: Box::new(inner_hir),
                         method: UNRESOLVED_DEF,
+                        resolved: UNRESOLVED_DEF,
+                        requirement_params: None,
                         method_name: "await".to_string(),
                         generic_args: vec![],
                         args: vec![],
                         block: None,
+                        safe_nav: false,
+                        parens: false,
                     },
                     ty,
                     span,
@@ -955,26 +1094,32 @@ impl Resolver {
                     kind: HirExprKind::MethodCall {
                         object: Box::new(inner_hir),
                         method: UNRESOLVED_DEF,
+                        resolved: UNRESOLVED_DEF,
+                        requirement_params: None,
                         method_name: "try_op".to_string(),
                         generic_args: vec![],
                         args: vec![],
                         block: None,
+                        safe_nav: false,
+                        parens: false,
                     },
                     ty: result_ty,
                     span,
                 }
             }
+            // `x&.name`: typeck decides field or method and wraps the
+            // result in `T?`; MIR branches on the receiver's tag.
             ast::ExprKind::SafeNav { object, field } => {
                 let obj_hir = self.resolve_expr(object);
                 let ty = self.type_context.fresh_type_var();
-                // Desugar `x?.field` to match on Option
                 HirExpr {
                     kind: HirExprKind::FieldAccess {
                         object: Box::new(obj_hir),
                         field_name: field.clone(),
                         field_idx: 0,
+                        safe_nav: true,
                     },
-                    ty: Ty::Option(Box::new(ty)),
+                    ty,
                     span,
                 }
             }
@@ -990,51 +1135,51 @@ impl Resolver {
                     kind: HirExprKind::MethodCall {
                         object: Box::new(obj_hir),
                         method: UNRESOLVED_DEF,
+                        resolved: UNRESOLVED_DEF,
+                        requirement_params: None,
                         method_name: method.clone(),
                         generic_args: vec![],
                         args: args_hir,
                         block: None,
+                        safe_nav: true,
+                        parens: true,
                     },
-                    ty: Ty::Option(Box::new(ty)),
+                    ty,
                     span,
                 }
             }
             ast::ExprKind::MacroCall { name, args, .. } => {
                 let args_hir: Vec<HirExpr> = args.iter().map(|a| self.resolve_expr(a)).collect();
+                // B87: no unrecognised macro may survive past this point. It
+                // used to fall through to a fresh type var here and then to a
+                // `_ => Ok(None)` catch-all in MIR, which silently deleted the
+                // whole call. The parser only builds a `MacroCall` for a name
+                // in `parser::macros::BUILTIN_MACRO_NAMES`; of those, the
+                // retired collection macros (ruby-naming.spec.md §10a) are
+                // rejected here with a migration message.
+                let message = if crate::parser::macros::RETIRED_MACRO_NAMES.contains(&name.as_str())
+                {
+                    Some(format!(
+                        "macro `{name}!` is retired: use the literal form \
+                         (`[a, b]`, `{{ k => v }}`, `[a, b].to_set`)"
+                    ))
+                } else if !crate::parser::macros::is_builtin_macro(name) {
+                    Some(format!(
+                        "unknown macro `{name}!` — the compiler has no lowering for it, so \
+                         the call would silently do nothing"
+                    ))
+                } else {
+                    None
+                };
+                if let Some(message) = message {
+                    self.error_with_code(message, &span, "E1126");
+                    return HirExpr {
+                        kind: HirExprKind::Error,
+                        ty: Ty::Error,
+                        span,
+                    };
+                }
                 let ty = match name.as_str() {
-                    // ruby-naming.spec.md §10a:
-                    //   `vec![...]` → `array![...]`
-                    //   `hash!{...}` → `map!{...}`
-                    //   `set!{...}` (unchanged)
-                    // Both old and new macro names produce identical HIR
-                    // while sources transition.
-                    "vec" | "array" => {
-                        let elem_ty = if args_hir.is_empty() {
-                            self.type_context.fresh_type_var()
-                        } else {
-                            args_hir[0].ty.clone()
-                        };
-                        Ty::Array(Box::new(elem_ty))
-                    }
-                    "hash" | "map" => {
-                        let (k, v) = if args_hir.len() >= 2 {
-                            (args_hir[0].ty.clone(), args_hir[1].ty.clone())
-                        } else {
-                            (
-                                self.type_context.fresh_type_var(),
-                                self.type_context.fresh_type_var(),
-                            )
-                        };
-                        Ty::Map(Box::new(k), Box::new(v))
-                    }
-                    "set" => {
-                        let elem = if args_hir.is_empty() {
-                            self.type_context.fresh_type_var()
-                        } else {
-                            args_hir[0].ty.clone()
-                        };
-                        Ty::Set(Box::new(elem))
-                    }
                     "panic" => Ty::Never,
                     _ => self.type_context.fresh_type_var(),
                 };
@@ -1134,10 +1279,14 @@ impl Resolver {
                     kind: HirExprKind::MethodCall {
                         object: Box::new(callee_hir),
                         method: UNRESOLVED_DEF,
+                        resolved: UNRESOLVED_DEF,
+                        requirement_params: None,
                         method_name: "call".to_string(),
                         generic_args: vec![],
                         args: args_hir,
                         block: None,
+                        safe_nav: false,
+                        parens: true,
                     },
                     ty,
                     span,
@@ -1171,10 +1320,14 @@ impl Resolver {
                         kind: HirExprKind::MethodCall {
                             object: Box::new(callee),
                             method: UNRESOLVED_DEF,
+                            resolved: UNRESOLVED_DEF,
+                            requirement_params: None,
                             method_name: "call".to_string(),
                             generic_args: vec![],
                             args: args_hir,
                             block: None,
+                            safe_nav: false,
+                            parens: true,
                         },
                         ty,
                         span,
@@ -1192,32 +1345,32 @@ impl Resolver {
                     }
                 }
             }
-            ast::ExprKind::UnsafeBlock(block) => {
-                // Resolve the unsafe block body just like a regular block.
-                self.scopes.push(ScopeKind::Block);
-                let mut stmts = Vec::new();
-                let mut tail_expr = None;
-                for (i, stmt) in block.statements.iter().enumerate() {
-                    let is_last = i == block.statements.len() - 1;
-                    match stmt {
-                        ast::Statement::Let(binding) => {
-                            stmts.push(self.resolve_let(binding));
-                        }
-                        ast::Statement::Expression(expr) => {
-                            let hir_expr = self.resolve_expr(expr);
-                            if is_last {
-                                tail_expr = Some(Box::new(hir_expr));
-                            } else {
-                                stmts.push(HirStatement::Expr(hir_expr));
-                            }
-                        }
-                    }
+            ast::ExprKind::BlockPass(_) => {
+                // A `&`-form block argument is only valid as the LAST argument
+                // of a call (where the MethodCall/Call arms hoist it into the
+                // block slot). Anywhere else it is malformed.
+                self.diagnostics.push(Diagnostic::error_with_code(
+                    "a `&`-block argument (`&:sym`, `&block`, `&`) must be the last \
+                     argument of a call",
+                    span.clone(),
+                    "E1124",
+                ));
+                HirExpr {
+                    kind: HirExprKind::Error,
+                    ty: Ty::Error,
+                    span,
                 }
-                self.scopes.pop();
-                let ty = tail_expr.as_ref().map(|e| e.ty.clone()).unwrap_or(Ty::Unit);
+            }
+            ast::ExprKind::UnsafeBlock(block) => {
+                // Same body resolution as a regular block (including bare
+                // `x = v` first-assignment bindings), rewrapped as unsafe.
+                let resolved = self.resolve_block_as_expr(block);
+                let HirExprKind::Block(stmts, tail_expr) = resolved.kind else {
+                    unreachable!("resolve_block_as_expr always yields HirExprKind::Block")
+                };
                 HirExpr {
                     kind: HirExprKind::UnsafeBlock(stmts, tail_expr),
-                    ty,
+                    ty: resolved.ty,
                     span,
                 }
             }
@@ -1232,4 +1385,40 @@ impl Resolver {
     }
 
     // ─── Block Resolution ───────────────────────────────────────────
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+    use crate::resolve::Resolver;
+
+    fn resolve_codes(source: &str) -> Vec<Option<String>> {
+        let tokens = Lexer::new(source).tokenize().expect("lexer failed");
+        let program = Parser::new(tokens).parse().expect("parser failed");
+        Resolver::new()
+            .resolve(&program)
+            .diagnostics
+            .into_iter()
+            .map(|d| d.code)
+            .collect()
+    }
+
+    #[test]
+    fn unsafe_block_binds_a_bare_assignment() {
+        let codes = resolve_codes("def main\n  unsafe\n    x = 5\n    x\n  end\nend\n");
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    #[test]
+    fn undefined_variable_is_e0734() {
+        let codes = resolve_codes("def main\n  totl\nend\n");
+        assert_eq!(codes, vec![Some("E0734".to_string())]);
+    }
+
+    #[test]
+    fn undefined_function_is_e0735() {
+        let codes = resolve_codes("def main\n  greet(1)\nend\n");
+        assert_eq!(codes, vec![Some("E0735".to_string())]);
+    }
 }

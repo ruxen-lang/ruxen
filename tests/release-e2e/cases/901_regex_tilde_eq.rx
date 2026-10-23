@@ -1,8 +1,0 @@
-def main
-  let s = "error: 42"
-  if s ~= /error/
-    puts "matched"
-  else
-    puts "missed"
-  end
-end

@@ -11,7 +11,7 @@
 lowering. This sub-phase wires the single-threaded **block_on
 executor** so `block_on(future)` runs a future to completion.
 
-V1 scope is intentionally minimal — no real wake-druxen scheduling
+V1 scope is intentionally minimal — no real wake-driven scheduling
 yet. The wake mechanism only matters once there are concurrent
 tasks (sub-phase 5) or I/O events (sub-phase 4). With just `block_on`
 + user-written CPU-bound futures, a poll loop suffices.
@@ -90,7 +90,7 @@ The lib decls in `library/std/future/src/lib.rx` are updated so
 longer `ruxen_panic`). The "wake" channel is conceptually wired but
 mechanically inert until sub-phase 4.
 
-## B4 — `Context.waker(&self) -> &Waker` returns the executor's waker
+## B4 — `Context#waker -> &Waker` returns the executor's waker
 
 After this sub-phase, `Context.waker` returns a real waker (not the
 panic-stub from sub-phase 1). The waker is the executor's "wake-me"
@@ -178,7 +178,7 @@ that exactly one drop fires after `block_on` returns.
 
 ```rx
 def main
-  let mut i = 0
+  var i = 0
   while i < 1000
     let _ = block_on(make_int())
     i = i + 1
@@ -197,16 +197,16 @@ holds.
 
 | Behaviour | Test fn                                              | File                          |
 |-----------|------------------------------------------------------|-------------------------------|
-| B1        | `block_on_runs_subphase2a_future_to_ready`           | `tests/async_executor.rs`     |
+| B1        | `polls a hand-written future until it is ready`      | `std/executor` `block_on_test.rx` |
 | B2        | (covered by B1, B7, B8 end-to-end runs)              | —                             |
-| B3        | `waker_wake_is_noop_in_subphase3`                    | `tests/async_executor.rs`     |
-| B4        | `context_waker_returns_real_waker_after_subphase3`   | `tests/async_executor.rs`     |
-| B5        | `context_test_dummy_still_works`                     | `tests/async_executor.rs`     |
+| B3        | e2e `cases/2066_block_on_typed_output_and_waker.rx`  | release-e2e                   |
+| B4        | e2e `cases/2066_block_on_typed_output_and_waker.rx`  | release-e2e                   |
+| B5        | e2e `cases/721_async_def_no_await_handpoll.rx`       | release-e2e                   |
 | B6        | `block_on_inside_async_rejected_e1112`               | `tests/async_negative.rs`     |
 | B7        | e2e `cases/723_block_on_subphase2a_future.rx`       | release-e2e                   |
 | B8        | e2e `cases/724_block_on_subphase2b_chained.rx`      | release-e2e                   |
-| B9        | `block_on_drops_future_after_return`                 | `tests/async_executor.rs`     |
-| B10       | `block_on_loop_does_not_leak`                        | `tests/async_executor.rs`     |
+| B9        | none (deferred: needs runtime drop tracking)         | —                             |
+| B10       | none (deferred: needs runtime drop tracking)         | —                             |
 
 ---
 

@@ -54,9 +54,7 @@
 use std::collections::HashMap;
 
 use lsp_types::{Position, Range, TextEdit, Url, WorkspaceEdit};
-use ruxen_core::hir::nodes::{
-    DefId, HirExpr, HirExprKind, HirImplItem, HirItem, HirProgram, HirStatement, UNRESOLVED_DEF,
-};
+use ruxen_core::hir::nodes::{DefId, HirProgram, UNRESOLVED_DEF};
 use ruxen_core::hir::types::Ty;
 use ruxen_core::lexer::token::Span;
 use ruxen_core::resolve::symbols::{DefKind, SymbolTable};
@@ -291,46 +289,10 @@ fn is_valid_new_name(name: &str, class: NameClass) -> bool {
     true
 }
 
-/// Full Ruxen keyword list per the Wave-2 task brief. Kept here rather
-/// than reaching into `ruxen_core::lexer` so the LSP never widens its
-/// rejection list silently when the lexer adds a new keyword — that's
-/// a deliberate review touchpoint.
+/// A name the lexer reserves (`KEYWORD_TABLE`): renaming to it would no
+/// longer lex as an identifier.
 fn is_reserved_keyword(name: &str) -> bool {
-    matches!(
-        name,
-        "def"
-            | "class"
-            | "let"
-            | "var"
-            | "if"
-            | "else"
-            | "end"
-            | "do"
-            | "loop"
-            | "while"
-            | "for"
-            | "in"
-            | "return"
-            | "break"
-            | "continue"
-            | "match"
-            | "async"
-            | "await"
-            | "module"
-            | "mixin"
-            | "include"
-            | "use"
-            | "as"
-            | "lib"
-            | "self"
-            | "Self"
-            | "true"
-            | "false"
-            | "and"
-            | "or"
-            | "not"
-            | "yield"
-    )
+    ruxen_core::lexer::token::lookup_keyword(name).is_some()
 }
 
 // ─── DefId extraction (mirrors `highlight.rs`) ──────────────────────
@@ -354,7 +316,8 @@ fn def_id_for_node(
             if *method != UNRESOLVED_DEF {
                 return Some(*method);
             }
-            let (receiver_ty, method_name) = find_method_call_at(program, byte_offset)?;
+            let (receiver_ty, method_name) =
+                crate::node_finder::method_call_at(program, byte_offset)?;
             resolve_method_def(symbols, &receiver_ty, &method_name)
         }
         NodeAtPosition::FieldAccess { .. } => None,
@@ -486,237 +449,7 @@ fn find_def_by_word(symbols: &SymbolTable, word: &str, byte_offset: usize) -> Op
     best.map(|(id, _)| id).or(first_real)
 }
 
-// ─── HIR walk for MethodCall fallback (mirrors highlight.rs) ────────
-
-fn find_method_call_at(program: &HirProgram, byte_offset: usize) -> Option<(Ty, String)> {
-    let mut finder = MethodCallFinder {
-        target: byte_offset,
-        result: None,
-    };
-    finder.visit_program(program);
-    finder.result
-}
-
-struct MethodCallFinder {
-    target: usize,
-    result: Option<(Ty, String)>,
-}
-
-impl MethodCallFinder {
-    fn contains(&self, span: &Span) -> bool {
-        span.start <= self.target && self.target < span.end
-    }
-
-    fn visit_program(&mut self, program: &HirProgram) {
-        for item in &program.items {
-            self.visit_item(item);
-        }
-    }
-
-    fn visit_item(&mut self, item: &HirItem) {
-        match item {
-            HirItem::Function(f) => self.visit_expr(&f.body),
-            HirItem::Class(c) => {
-                for m in &c.methods {
-                    self.visit_expr(&m.body);
-                }
-                for b in &c.impl_blocks {
-                    for it in &b.items {
-                        if let HirImplItem::Method(f) = it {
-                            self.visit_expr(&f.body);
-                        }
-                    }
-                }
-            }
-            HirItem::Struct(s) => {
-                for m in &s.methods {
-                    self.visit_expr(&m.body);
-                }
-                for b in &s.impl_blocks {
-                    for it in &b.items {
-                        if let HirImplItem::Method(f) = it {
-                            self.visit_expr(&f.body);
-                        }
-                    }
-                }
-            }
-            HirItem::Enum(e) => {
-                for m in &e.methods {
-                    self.visit_expr(&m.body);
-                }
-                for b in &e.impl_blocks {
-                    for it in &b.items {
-                        if let HirImplItem::Method(f) = it {
-                            self.visit_expr(&f.body);
-                        }
-                    }
-                }
-            }
-            HirItem::Impl(b) => {
-                for it in &b.items {
-                    if let HirImplItem::Method(f) = it {
-                        self.visit_expr(&f.body);
-                    }
-                }
-            }
-            HirItem::Module(m) => {
-                for it in &m.items {
-                    self.visit_item(it);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn visit_expr(&mut self, expr: &HirExpr) {
-        if !self.contains(&expr.span) {
-            return;
-        }
-        match &expr.kind {
-            HirExprKind::MethodCall {
-                object,
-                method_name,
-                args,
-                block,
-                ..
-            } => {
-                self.result = Some((object.ty.clone(), method_name.clone()));
-                self.visit_expr(object);
-                for a in args {
-                    self.visit_expr(a);
-                }
-                if let Some(b) = block {
-                    self.visit_expr(b);
-                }
-            }
-            HirExprKind::FnCall { args, .. } => {
-                for a in args {
-                    self.visit_expr(a);
-                }
-            }
-            HirExprKind::FieldAccess { object, .. } => self.visit_expr(object),
-            HirExprKind::BinaryOp { left, right, .. } => {
-                self.visit_expr(left);
-                self.visit_expr(right);
-            }
-            HirExprKind::UnaryOp { operand, .. } => self.visit_expr(operand),
-            HirExprKind::Borrow { expr: inner, .. } => self.visit_expr(inner),
-            HirExprKind::Block(stmts, tail) | HirExprKind::UnsafeBlock(stmts, tail) => {
-                for stmt in stmts {
-                    self.visit_stmt(stmt);
-                }
-                if let Some(t) = tail {
-                    self.visit_expr(t);
-                }
-            }
-            HirExprKind::If {
-                cond,
-                then_branch,
-                else_branch,
-            } => {
-                self.visit_expr(cond);
-                self.visit_expr(then_branch);
-                if let Some(e) = else_branch {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::Match { scrutinee, arms } => {
-                self.visit_expr(scrutinee);
-                for arm in arms {
-                    if let Some(g) = &arm.guard {
-                        self.visit_expr(g);
-                    }
-                    self.visit_expr(&arm.body);
-                }
-            }
-            HirExprKind::While { condition, body } => {
-                self.visit_expr(condition);
-                self.visit_expr(body);
-            }
-            HirExprKind::For { iterable, body, .. } => {
-                self.visit_expr(iterable);
-                self.visit_expr(body);
-            }
-            HirExprKind::Loop { body } => self.visit_expr(body),
-            HirExprKind::Assign { target, value, .. }
-            | HirExprKind::CompoundAssign { target, value, .. } => {
-                self.visit_expr(target);
-                self.visit_expr(value);
-            }
-            HirExprKind::Return(Some(inner)) | HirExprKind::Break(Some(inner)) => {
-                self.visit_expr(inner);
-            }
-            HirExprKind::Closure { body, .. } => self.visit_expr(body),
-            HirExprKind::Construct { fields, .. } | HirExprKind::EnumVariant { fields, .. } => {
-                for (_, v) in fields {
-                    self.visit_expr(v);
-                }
-            }
-            HirExprKind::Tuple(elems) | HirExprKind::ArrayLiteral(elems) => {
-                for e in elems {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::MapLiteral(pairs) => {
-                for (k, v) in pairs {
-                    self.visit_expr(k);
-                    self.visit_expr(v);
-                }
-            }
-            HirExprKind::Index { object, index } => {
-                self.visit_expr(object);
-                self.visit_expr(index);
-            }
-            HirExprKind::Cast { expr: inner, .. } => self.visit_expr(inner),
-            HirExprKind::ArrayFill { value, .. } => self.visit_expr(value),
-            HirExprKind::Range { start, end, .. } => {
-                if let Some(s) = start {
-                    self.visit_expr(s);
-                }
-                if let Some(e) = end {
-                    self.visit_expr(e);
-                }
-            }
-            HirExprKind::Interpolation { parts } => {
-                use ruxen_core::hir::nodes::HirInterpolationPart;
-                for p in parts {
-                    if let HirInterpolationPart::Expr { expr: e, .. } = p {
-                        self.visit_expr(e);
-                    }
-                }
-            }
-            HirExprKind::MacroCall { args, .. } => {
-                for a in args {
-                    self.visit_expr(a);
-                }
-            }
-            HirExprKind::VarRef(_)
-            | HirExprKind::IntLiteral(_)
-            | HirExprKind::FloatLiteral(_)
-            | HirExprKind::StringLiteral(_)
-            | HirExprKind::BoolLiteral(_)
-            | HirExprKind::CharLiteral(_)
-            | HirExprKind::UnitLiteral
-            | HirExprKind::NullLiteral
-            | HirExprKind::RegexLiteral { .. }
-            | HirExprKind::Continue
-            | HirExprKind::Return(None)
-            | HirExprKind::Break(None)
-            | HirExprKind::Error => {}
-        }
-    }
-
-    fn visit_stmt(&mut self, stmt: &HirStatement) {
-        match stmt {
-            HirStatement::Let { value, .. } => {
-                if let Some(v) = value {
-                    self.visit_expr(v);
-                }
-            }
-            HirStatement::Expr(e) => self.visit_expr(e),
-        }
-    }
-}
+// ─── Method resolution ──────────────────────────────────────────────
 
 /// Resolve a method DefId from receiver type + method name. Mirrors
 /// `highlight.rs::resolve_method_def` + `use_index::resolve_method_def`.

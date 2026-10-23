@@ -1,6 +1,6 @@
 ## --- AsyncReadLineFuture -----------------------------------------------
 ##
-## Same shape as AsyncReadToStringFuture (library/std/async_fs/src/lib.rx)
+## Same shape as AsyncReadToStringFuture (library/std/async_fs/src/async_read_to_string_future.rx)
 ## except read terminates at '\n' or EOF rather than only at EOF, and the
 ## fd is implicit (0).
 ##
@@ -23,33 +23,20 @@ class AsyncReadLineFuture
   end
 
   def var poll(cx: &var Context) -> Poll[Result[String, IoError]]
-    if self.done != 0
-      # Defensive: executor shouldn't poll after Ready.
-      return Poll.Ready(ruxen_async_stdin_state_take_result(self.state_ptr))
-    end
-    let step = ruxen_async_stdin_step(self.state_ptr)
-    if step == 1
-      # EAGAIN — register fd 0 for read-readiness if not already.
-      if self.handle == 0
+    if self.done == 0
+      if ruxen_async_stdin_step(self.state_ptr) == 1
         let fd = ruxen_async_stdin_state_get_fd(self.state_ptr)
-        self.handle = ruxen_reactor_register_fd_read(ruxen_reactor_current_handle(), fd)
+        self.handle = StepFuture.park_fd(cx, self.handle, fd, false)
+        return Poll.Pending
       end
-      return Poll.Pending
+      self.handle = StepFuture.release(self.handle)
+      self.done = 1
     end
-    # step == 2 (line/EOF) or step == 3 (error) — both Ready paths.
-    if self.handle != 0
-      ruxen_reactor_deregister(ruxen_reactor_current_handle(), self.handle)
-      self.handle = 0
-    end
-    self.done = 1
     Poll.Ready(ruxen_async_stdin_state_take_result(self.state_ptr))
   end
 
   def drop
-    if self.handle != 0
-      ruxen_reactor_deregister(ruxen_reactor_current_handle(), self.handle)
-      self.handle = 0
-    end
+    self.handle = StepFuture.release(self.handle)
     if self.state_ptr != 0
       ruxen_async_stdin_state_free(self.state_ptr)
       self.state_ptr = 0

@@ -1,0 +1,66 @@
+# F-21: a generic class bounded by a mixin with SEVERAL implementors calls the
+# bound's method on its `T` values. Each instantiation runs a monomorphised
+# copy; the opaque `Holder_show` body, which could only guess a callee, is
+# dropped because nothing calls it. This used to fail MIR lowering ("cannot
+# lower method `to_display` on unresolved mixin-bound receiver").
+mixin Showable
+  def to_display -> String
+end
+
+class Apple
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  include Showable
+
+  def to_display -> String
+    "apple #{self.n}"
+  end
+end
+
+class Pear
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  include Showable
+
+  def to_display -> String
+    "pear #{self.n}"
+  end
+end
+
+class Holder[T: Showable]
+  first: T
+  rest: Array[T]
+
+  def init(@first: T)
+    self.rest = Array.new
+  end
+
+  def var add(item: T) -> nil
+    self.rest.push(item)
+  end
+
+  def show -> String
+    self.first.to_display
+  end
+
+  def show_all -> nil
+    self.rest.each { |x| puts x.to_display }
+  end
+end
+
+def main
+  var apples = Holder.new(Apple.new(1))
+  apples.add(Apple.new(2))
+  apples.add(Apple.new(3))
+  puts apples.show
+  apples.show_all
+
+  let pears = Holder.new(Pear.new(9))
+  puts pears.show
+end

@@ -1,6 +1,0 @@
-def main
-  var s = "hello world"
-  s.truncate(5)
-  puts "len=#{s.size}"
-  puts s
-end

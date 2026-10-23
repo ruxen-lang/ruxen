@@ -1,0 +1,6 @@
+[package]
+name = "std-base64"
+version = "0.1.0"
+description = "Base64 encode/decode (Ruby Base64 module parity)"
+
+[dependencies]

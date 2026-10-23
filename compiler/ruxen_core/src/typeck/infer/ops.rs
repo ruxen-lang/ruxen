@@ -39,18 +39,18 @@ use super::InferenceEngine;
 ///
 /// **This is the preserved-code bridge** for Feature B. The whole reason it
 /// exists: the SAME `Send` bound must report E1011 on a free function
-/// parameter but E1101 when it sits on `class Mutex[T: Send]`, and E1102 on
-/// `Arc`/`SharedSync`. The code is therefore a function of *where the bound
-/// is declared*, which the `.rx` surface does not (yet) carry — so the small
-/// owner→code table lives here. It is deliberately the ONLY place a stdlib
-/// class name maps to a diagnostic code in the bound-checker, and it
-/// REPLACES (does not add to) the per-arm hardcoding the `concurrency.rs`
-/// E1101/E1102 / `collections.rs` E0700 arms used to do. When a future phase
-/// gives the `.rx` bound syntax a code annotation, this table dissolves.
+/// parameter but E1101 when it sits on `class Mutex[T: Send]`, E1102 on
+/// `SharedSync`, and E1100 on a closure handed to `Thread.spawn`. The code is
+/// therefore a function of *where the bound is declared*, which the `.rx`
+/// surface does not (yet) carry — so the small owner→code table lives here.
+/// It is deliberately the ONLY place a stdlib class name maps to a diagnostic
+/// code in the bound-checker. When a future phase gives the `.rx` bound
+/// syntax a code annotation, this table dissolves.
 fn bound_diagnostic_code(owner: Option<&str>, bound_name: &str) -> &'static str {
     match (owner, bound_name) {
+        (Some("Thread"), "Send") => "E1100",
         (Some("Mutex"), "Send") => "E1101",
-        (Some("Arc"), "Send") | (Some("SharedSync"), "Send") => "E1102",
+        (Some("SharedSync"), "Send") => "E1102",
         (_, "Send") => "E1011",
         (_, "Sync") => "E1012",
         // `def sum -> T where T: Add` and any other numeric/element `Add` bound.
@@ -121,8 +121,12 @@ impl<'a> InferenceEngine<'a> {
             _ => return,
         };
 
+        // `some M` accepts STRUCTURAL satisfaction (static dispatch); `any M`
+        // and a bounded type-param require NOMINAL (`include M`). See the mixin
+        // dispatch rule in `typeck/CLAUDE.md`.
+        let require_nominal = !matches!(&expected, Ty::SomeMixin(_));
         // No owner at the param-typed seam — Send/Sync emit E1011/E1012.
-        self.check_bounds_against(bounds, &found, None, span);
+        self.check_bounds_against(bounds, &found, None, span, require_nominal);
     }
 
     /// Generic-param enforcement seam (point b). Given a function/method/
@@ -157,7 +161,10 @@ impl<'a> InferenceEngine<'a> {
             {
                 continue;
             }
-            self.check_bounds_against(&gp.bounds, &concrete, owner, span);
+            // A `[T: M]` generic bound requires NOMINAL satisfaction (an
+            // explicit `include M`); a value type does not satisfy it merely by
+            // having a same-named method (Q35 negative pin).
+            self.check_bounds_against(&gp.bounds, &concrete, owner, span, true);
         }
     }
 
@@ -165,15 +172,44 @@ impl<'a> InferenceEngine<'a> {
     /// emitting the owner-appropriate diagnostic for every unsatisfied
     /// bound. `Send`/`Sync` retain their fast structural predicates (kept
     /// in lockstep with `check_satisfaction`, which special-cases them);
-    /// every other bound dispatches through `check_satisfaction` with
-    /// `require_nominal = false` (static-dispatch / structural acceptance,
-    /// the semantics a `[T: Bound]` generic call site has).
+    /// every other bound dispatches through `check_satisfaction` with the
+    /// caller-supplied `require_nominal`. A `[T: M]` generic bound and an
+    /// `any M` param require NOMINAL (`include M`) — a value type does not
+    /// satisfy them merely by having a same-named method (Q35 negative pin);
+    /// a `some M` param accepts STRUCTURAL. Derive markers (`Hashable`/`Ord`/…)
+    /// and the `Fn`-family satisfy either way, because `check_satisfaction`
+    /// checks those BEFORE the `require_nominal` gate.
+    /// A method's `where` predicates on its owner's generics (`def get -> T
+    /// where T: Clone` in `class MutexGuard[T]`), checked against the
+    /// receiver's instantiation: a concrete type must satisfy each bound,
+    /// and a type parameter must declare it (so a generic caller states
+    /// `T: Clone` before calling `get`).
+    pub(super) fn check_owner_where_bounds(
+        &mut self,
+        generic_params: &[crate::resolve::symbols::GenericParamInfo],
+        receiver: &Ty,
+        owner: Option<&str>,
+        span: &Span,
+    ) {
+        let Some(bindings) = self.receiver_generic_bindings(receiver) else {
+            return;
+        };
+        for gp in generic_params.iter().filter(|gp| !gp.bounds.is_empty()) {
+            let Some(found) = bindings.get(&gp.name) else {
+                continue;
+            };
+            let found = self.ctx.resolve(found);
+            self.check_bounds_against(&gp.bounds, &found, owner, span, true);
+        }
+    }
+
     fn check_bounds_against(
         &mut self,
         bounds: &[MixinRef],
         found: &Ty,
         owner: Option<&str>,
         span: &Span,
+        require_nominal: bool,
     ) {
         // Unresolved / error types are unprovable — never flag them.
         if found.is_infer() || found.is_error() {
@@ -195,15 +231,13 @@ impl<'a> InferenceEngine<'a> {
                 // `T where T: Bound` from flagging its own `T` return, and
                 // keeps a `[U: Bound]` forwarded into another `[V: Bound]`
                 // call site silent (it was silent pre-Feature-B too).
-                _ if matches!(found, Ty::TypeParam { .. }) => {
-                    let Ty::TypeParam { bounds: tp, .. } = found else {
-                        unreachable!()
-                    };
-                    tp.iter().any(|b| b.name == bound.name)
-                }
+                // The enclosing method's `where` clause counts too.
+                _ if matches!(found, Ty::TypeParam { .. }) => self
+                    .receiver_bounds(found)
+                    .is_some_and(|tp| tp.iter().any(|b| b.name == bound.name)),
                 _ => !matches!(
                     self.traits
-                        .check_satisfaction(found, bound, self.symbols, false),
+                        .check_satisfaction(found, bound, self.symbols, require_nominal),
                     MixinSatisfaction::Unsatisfied { .. }
                 ),
             };
@@ -252,13 +286,83 @@ impl<'a> InferenceEngine<'a> {
         }
     }
 
+    /// Send-required closure seam: a closure literal passed to a parameter
+    /// whose declared type carries a `Send` bound (`f: any Fn[Fn() -> T] +
+    /// Send`, `[F: Send] (f: F)`) may only move `Send` values in and only
+    /// borrow `Sync` ones (spec B6/B7 of `send_sync_enforcement.spec.md`).
+    /// One diagnostic per offending capture; the code comes from
+    /// `bound_diagnostic_code`, so `Thread.spawn` reports E1100 and a free
+    /// function reports E1011.
+    pub(super) fn check_send_required_closure(
+        &mut self,
+        param_ty: &Ty,
+        arg: &crate::hir::nodes::HirExpr,
+        owner: Option<&str>,
+    ) {
+        let requires_send = matches!(
+            self.ctx.resolve(param_ty),
+            Ty::TypeParam { ref bounds, .. } | Ty::SomeMixin(ref bounds) | Ty::AnyMixin(ref bounds)
+                if bounds.iter().any(|b| b.name == "Send")
+        );
+        let crate::hir::nodes::HirExprKind::Closure {
+            captures, is_move, ..
+        } = &arg.kind
+        else {
+            return;
+        };
+        if !requires_send {
+            return;
+        }
+        for cap in captures {
+            // The stored `cap.ty` is the resolve-time snapshot (often
+            // `Ty::Infer` for an un-annotated `let`); typeck updates the
+            // binding's def type in place, so re-read it from there.
+            let cap_ty = self.ctx.resolve(&cap.current_ty(self.symbols));
+            // A non-Copy class/struct/enum value is moved into the closure
+            // even without an explicit `move`; primitives are Copy and Send,
+            // so the distinction does not matter for them.
+            let by_move = cap.by_move
+                || *is_move
+                || matches!(
+                    cap_ty,
+                    Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                );
+            let satisfied = if by_move {
+                cap_ty.is_send_with(self.symbols)
+            } else {
+                // B7 — a by-reference capture needs `&T: Send`, i.e. `T: Sync`.
+                cap_ty.is_sync_with(self.symbols)
+            };
+            if satisfied {
+                continue;
+            }
+            let message = if by_move {
+                format!(
+                    "captured value `{}` of type `{}` is not `Send`. \
+                     Add `include Send` to the type if it is safe to share across threads.",
+                    cap.name, cap_ty
+                )
+            } else {
+                format!(
+                    "captured value `{}` is held by reference; the closure \
+                     requires `&{}: Send`, which means `{}` must implement `Sync`.",
+                    cap.name, cap_ty, cap_ty
+                )
+            };
+            self.diagnostics.push(Diagnostic::error_with_code(
+                message,
+                arg.span.clone(),
+                bound_diagnostic_code(owner, "Send"),
+            ));
+        }
+    }
+
     // ─── Operator → method desugar (Task OP, Step 3) ────────────────
     //
-    // The operator→method-name map is `BinOp::method_name` (parser/ast.rs)
-    // — the SINGLE source shared with MIR's `lower_binops`. Only the
-    // MIGRATED families (arithmetic `+ - * / %`, bitwise `& | ^ << >>`)
-    // return a name; comparison/equality/logical/regex-match return `None`
-    // (they keep their existing paths + the later `Comparable` increment).
+    // The operator→method-name map is `BinOp::method_name` (parser/ast.rs),
+    // shared with MIR's `lower_binops`. Comparison routing is conditional so
+    // primitives and nominal types without a matching comparison method keep
+    // their existing instruction / derive paths.
 
     /// True when `ty` is a NOMINAL receiver (user/stdlib class, struct, or
     /// enum) — the receivers whose operators are real overridable `.rx`
@@ -267,20 +371,176 @@ impl<'a> InferenceEngine<'a> {
     /// collection heads (`Array`/`Set`/`Map`) are NOT nominal here: they
     /// keep their machine-floor / special-case binop lowering. Peels refs.
     pub(super) fn is_nominal_operator_receiver(ty: &Ty) -> bool {
-        match ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => Self::is_nominal_operator_receiver(inner),
-            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => true,
+        matches!(
+            ty.peel_refs(),
+            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+        )
+    }
+
+    /// Whether `ty` exposes an operator method that accepts `args`.
+    ///
+    /// Nominal receivers consult their own methods plus included mixin
+    /// defaults. Abstract receivers consult their declared mixin bounds,
+    /// which lets a `Comparable` default body type-check `self <=> other`
+    /// while `Self` is still abstract.
+    pub(super) fn comparison_method_available(
+        &self,
+        ty: &Ty,
+        method: &str,
+        args: &[crate::hir::nodes::HirExpr],
+    ) -> bool {
+        let peeled = ty.peel_refs();
+        match peeled {
+            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => self
+                .traits
+                .lookup_method_with_args(peeled, method, args, self.symbols)
+                .is_some(),
+            Ty::TypeParam { .. } | Ty::SomeMixin(_) | Ty::AnyMixin(_) => {
+                let bounds = self.receiver_bounds(peeled).unwrap_or_default();
+                !matches!(
+                    self.traits.lookup_method_on_bounds(&bounds, method, args),
+                    Ok(None)
+                )
+            }
             _ => false,
         }
+    }
+
+    /// Whether a builtin-head receiver (`String`/`Array`/`Hash`/`Set`) declares
+    /// a `.rx` method for a non-comparison operator (`String#*`, `Array#+`, …).
+    /// These heads are NOT `is_nominal_operator_receiver` (they keep the
+    /// machine floor for ops that map to a machine instruction), but when the
+    /// `.rx` class provides an operator method the arithmetic/bitwise/shift
+    /// operator must route to it so the expression gets the method's declared
+    /// return type — the typeck twin of the MIR builtin-head operator route.
+    pub(super) fn builtin_head_operator_method_available(
+        &self,
+        ty: &Ty,
+        method: &str,
+        args: &[crate::hir::nodes::HirExpr],
+    ) -> bool {
+        let peeled = ty.peel_refs();
+        matches!(
+            peeled,
+            Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Set(_)
+        ) && self
+            .traits
+            .lookup_method_with_args(peeled, method, args, self.symbols)
+            .is_some()
+    }
+
+    /// Comparison operator methods have fixed result contracts even though
+    /// ordinary operator overloads may return an arbitrary declared type.
+    pub(super) fn validate_comparison_method_return(
+        &mut self,
+        op: BinOp,
+        actual: Ty,
+        method: &str,
+        span: &Span,
+    ) -> Ty {
+        let expected = match op {
+            BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
+                Ty::Bool
+            }
+            BinOp::Cmp => Ty::Int,
+            _ => return actual,
+        };
+        if unify(&actual, &expected, self.ctx, span).is_err() {
+            self.diagnostics.push(Diagnostic::error_with_code(
+                format!(
+                    "comparison operator method `{method}` must return `{expected}`, \
+                     found `{actual}`"
+                ),
+                span.clone(),
+                "E0707",
+            ));
+        }
+        expected
     }
 
     // ─── Binary Operation Type Inference ────────────────────────────
 
     pub(super) fn infer_binop(&mut self, op: BinOp, left: &Ty, right: &Ty, span: &Span) -> Ty {
         match op {
+            // `Option[T] ?? T -> T`. The MIR path branches on the Option tag,
+            // so the fallback is evaluated only for None.
+            BinOp::NilCoalesce => {
+                let inner = match left {
+                    Ty::Option(inner) => inner.as_ref().clone(),
+                    Ty::Infer(_) => {
+                        let expected = Ty::Option(Box::new(right.clone()));
+                        let _ = unify(left, &expected, self.ctx, span);
+                        return right.clone();
+                    }
+                    Ty::Error => return Ty::Error,
+                    other => {
+                        self.diagnostics.push(Diagnostic::error_with_code(
+                            format!(
+                                "nil-coalescing operator `??` requires an Option on the left, \
+                                 found `{other}`"
+                            ),
+                            span.clone(),
+                            "E0732",
+                        ));
+                        return Ty::Error;
+                    }
+                };
+                if !right.is_never() && unify(&inner, right, self.ctx, span).is_err() {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "nil-coalescing operator `??` fallback must have type `{inner}`, \
+                             found `{right}`"
+                        ),
+                        span.clone(),
+                        "E0732",
+                    ));
+                }
+                inner
+            }
+            // `**` exponentiation: `Int ** Int -> Int`, and any float operand
+            // makes the result `Float` (`2.0 ** 10 -> Float`). Unlike `+ - * / %`,
+            // the two sides need NOT match (a float base/exponent is coerced to
+            // `f64` in MIR, `ruxen_float_pow`). Both operands must be numeric.
+            BinOp::Pow => {
+                fn is_float_ty(t: &Ty) -> bool {
+                    matches!(t, Ty::Float | Ty::Float32 | Ty::Float64)
+                }
+                if left.is_numeric() && right.is_numeric() {
+                    if is_float_ty(left) || is_float_ty(right) {
+                        return Ty::Float;
+                    }
+                    return left.clone();
+                }
+                self.diagnostics.push(Diagnostic::error_with_code(
+                    format!(
+                        "binary operator `**` (exponentiation) requires numeric \
+                         operands, got `{left}` and `{right}`",
+                    ),
+                    span.clone(),
+                    "E0707",
+                ));
+                left.clone()
+            }
+            // `<=>` three-way comparison: returns `Int` (-1 / 0 / 1). Operands
+            // must be the same comparable type (numeric or String); MIR routes
+            // to `ruxen_int_cmp` / `ruxen_float_cmp` / `ruxen_str_spaceship`.
+            BinOp::Cmp => {
+                let comparable = (left.is_numeric() && right.is_numeric())
+                    || (*left == Ty::String && *right == Ty::String);
+                if !comparable {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "binary operator `<=>` requires two numeric or two String \
+                             operands, got `{left}` and `{right}`",
+                        ),
+                        span.clone(),
+                        "E0707",
+                    ));
+                } else {
+                    let _ = unify(left, right, self.ctx, span);
+                }
+                Ty::Int
+            }
             // Arithmetic: both sides must be numeric, result is same type
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                 // String concatenation: `String + String` produces a
@@ -298,6 +558,13 @@ impl<'a> InferenceEngine<'a> {
                 // no Duration/Instant arm here anymore — the result type
                 // comes from the method's declared return.
 
+                // Arithmetic reads numeric operands through a borrow
+                // (`a + b` with `a: &Float`), and the result is a fresh
+                // value, so it has the numeric type, not `&Float`.
+                let (left, right) = match (left.peel_refs(), right.peel_refs()) {
+                    (l, r) if l.is_numeric() && r.is_numeric() => (l, r),
+                    _ => (left, right),
+                };
                 if left.is_numeric() && right.is_numeric() {
                     // Unify the two sides
                     match unify(left, right, self.ctx, span) {
@@ -314,14 +581,7 @@ impl<'a> InferenceEngine<'a> {
                             // an opaque internal error. Make both operands
                             // share a type (e.g. annotate `a: Float` and
                             // use `1.0`, or keep both sides integers).
-                            let op_sym = match op {
-                                BinOp::Add => "+",
-                                BinOp::Sub => "-",
-                                BinOp::Mul => "*",
-                                BinOp::Div => "/",
-                                BinOp::Mod => "%",
-                                _ => "<op>",
-                            };
+                            let op_sym = op.symbol();
                             self.diagnostics.push(Diagnostic::error_with_code(
                                 format!(
                                     "binary operator `{op_sym}` cannot be applied to \
@@ -350,8 +610,25 @@ impl<'a> InferenceEngine<'a> {
                 Ty::Bool
             }
 
-            // Logical: both sides Bool, result is Bool
-            BinOp::And | BinOp::Or => Ty::Bool,
+            // Logical: both sides Bool, result is Bool. Keyword `and` / `or`
+            // use the same strict-Bool semantics as `&&` / `||`; only their
+            // parser precedence and formatter spelling differ.
+            BinOp::And | BinOp::Or | BinOp::KeywordAnd | BinOp::KeywordOr => {
+                let left_ok = unify(left, &Ty::Bool, self.ctx, span).is_ok();
+                let right_ok = unify(right, &Ty::Bool, self.ctx, span).is_ok();
+                if !left_ok || !right_ok {
+                    let op_name = op.symbol();
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!(
+                            "logical operator `{op_name}` requires Bool operands, \
+                             got `{left}` and `{right}`",
+                        ),
+                        span.clone(),
+                        "E0731",
+                    ));
+                }
+                Ty::Bool
+            }
 
             // Bitwise: both sides integer, result is same type
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
@@ -366,24 +643,10 @@ impl<'a> InferenceEngine<'a> {
             // Mismatch on either side emits E1702.
             BinOp::MatchOp => {
                 fn is_string_like(ty: &Ty) -> bool {
-                    match ty {
-                        Ty::String => true,
-                        Ty::Ref(inner)
-                        | Ty::RefMut(inner)
-                        | Ty::RefLifetime(_, inner)
-                        | Ty::RefMutLifetime(_, inner) => is_string_like(inner),
-                        _ => false,
-                    }
+                    matches!(ty.peel_refs(), Ty::String)
                 }
                 fn is_regex(ty: &Ty) -> bool {
-                    match ty {
-                        Ty::Class { name, .. } => name == "Regex",
-                        Ty::Ref(inner)
-                        | Ty::RefMut(inner)
-                        | Ty::RefLifetime(_, inner)
-                        | Ty::RefMutLifetime(_, inner) => is_regex(inner),
-                        _ => false,
-                    }
+                    matches!(ty.peel_refs(), Ty::Class { name, .. } if name == "Regex")
                 }
                 // Tolerate unresolved Infer vars: they may not be
                 // pinned yet at first inference visit. Emit E1702
@@ -407,7 +670,7 @@ impl<'a> InferenceEngine<'a> {
         }
     }
 
-    pub(super) fn infer_unaryop(&mut self, op: UnaryOp, operand: &Ty, _span: &Span) -> Ty {
+    pub(super) fn infer_unaryop(&mut self, op: UnaryOp, operand: &Ty, span: &Span) -> Ty {
         match op {
             UnaryOp::Neg => operand.clone(),
             UnaryOp::Not => {
@@ -415,6 +678,36 @@ impl<'a> InferenceEngine<'a> {
                     Ty::Bool
                 } else {
                     operand.clone() // bitwise not
+                }
+            }
+            UnaryOp::KeywordNot => {
+                if unify(operand, &Ty::Bool, self.ctx, span).is_err() {
+                    self.diagnostics.push(Diagnostic::error_with_code(
+                        format!("logical operator `not` requires a Bool operand, got `{operand}`"),
+                        span.clone(),
+                        "E0731",
+                    ));
+                }
+                Ty::Bool
+            }
+            UnaryOp::BitNot => {
+                let resolved = self.ctx.resolve(operand);
+                if resolved.is_integer() {
+                    resolved
+                } else {
+                    // Skip unresolved/abstract operands: an inference var can
+                    // still pin to an integer later. Only concrete non-integers
+                    // are a genuine error.
+                    if !matches!(resolved, Ty::Infer(_) | Ty::Error) {
+                        self.diagnostics.push(Diagnostic::error_with_code(
+                            format!(
+                                "bitwise complement `~` requires an integer operand, found `{resolved}`"
+                            ),
+                            span.clone(),
+                            "E0733",
+                        ));
+                    }
+                    resolved
                 }
             }
             UnaryOp::Deref => {

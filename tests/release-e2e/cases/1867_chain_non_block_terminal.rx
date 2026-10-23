@@ -1,0 +1,35 @@
+# B85 — terminals that take NO block off a combinator chain (`size`, `count`,
+# `empty?`, `include?`, `join`, `first`). These route through the ordinary
+# method-call path rather than the MIR closure-inline path, so they pin the
+# other half of the chaining surface. Both spellings side by side; every count
+# differs from the receiver's own (4 / 6).
+def main
+  let a = ["alpha", "beta", "gamma", "delta"]
+  let n = [1, 2, 3, 4, 5, 6]
+  puts("receiver-size=#{a.size}")
+
+  puts("chained-size=#{a.select { |s| s.size > 4 }.size}")
+  let big = a.select { |s| s.size > 4 }
+  puts("bound-size=#{big.size}")
+
+  puts("chained-count=#{a.select { |s| s.size > 4 }.count}")
+  puts("chained-join=#{a.select { |s| s.size > 4 }.join(",")}")
+  puts("bound-join=#{big.join(",")}")
+
+  # `first` returns `Option[T]`; read it through `unwrap_or` (interpolating a
+  # bare `Option` prints the box pointer — pre-existing, not a chaining issue).
+  puts("chained-first=#{n.reject { |x| x > 3 }.first.unwrap_or(0)}")
+  let small = n.reject { |x| x > 3 }
+  puts("bound-first=#{small.first.unwrap_or(0)}")
+
+  puts("chained-empty=#{n.select { |x| x > 100 }.empty?}")
+  puts("chained-nonempty=#{n.select { |x| x > 4 }.empty?}")
+
+  # `include?` is the sharpest non-block witness: 1 IS in the receiver and is
+  # NOT in the chained result.
+  puts("chained-excludes-receiver-elem=#{n.select { |x| x > 4 }.include?(1)}")
+  puts("chained-includes-own-elem=#{n.select { |x| x > 4 }.include?(5)}")
+
+  puts("chained-map-size=#{n.map { |x| x * 2 }.size}")
+  puts("three-link-size=#{n.select { |x| x > 2 }.map { |x| x * 10 }.size}")
+end

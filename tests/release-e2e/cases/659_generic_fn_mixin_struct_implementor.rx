@@ -1,0 +1,25 @@
+# Q35 regression pin — a struct's `include Mixin` must satisfy a generic
+# free-function bound exactly as the identical class shape does. This also
+# compiles, links, runs, and asserts the struct implementation is the method
+# body selected by Q17's per-implementor monomorphization path.
+mixin Paintable
+  def fill_rect(w: Int, h: Int) -> Int
+end
+
+def paint_all[T: Paintable](s: &var T, w: Int, h: Int) -> Int
+  s.fill_rect(w, h)
+end
+
+struct OnlyOne
+  include Paintable
+  tag: Int
+
+  def fill_rect(w: Int, h: Int) -> Int
+    w * h + self.tag
+  end
+end
+
+def main
+  var s = OnlyOne.new(1)
+  puts "one=#{paint_all(&var s, 4, 5)}"
+end

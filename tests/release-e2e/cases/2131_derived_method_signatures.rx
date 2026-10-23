@@ -1,0 +1,45 @@
+# Derived methods are typed by their `.rx` mixin declarations
+# (`std/core`: `def clone -> Self`, `def eq(other: &Self) -> Bool`,
+# `def self.default -> Self`, `def cmp(other: &Self) -> Int`; `std/hash`:
+# `def hash_code -> Int`), with `Self` the deriving type.
+#
+# Before, typeck had no signature for most of them: a parenless
+# `a.hash_code` was rejected ("no field or method"), and `a.eq(b)` typed
+# as an unconstrained variable, so `"#{a.eq(b)}"` printed `1`, not `true`.
+class Key
+  ns: Int
+  name: String
+
+  def init(@ns: Int, @name: String)
+  end
+end
+
+struct Pt
+  x: Int
+  y: Int
+end
+
+struct Wrap[T]
+  v: T
+end
+
+def main
+  let a = Key.new(1, "a")
+  let b = Key.new(1, "a")
+  let c = Key.new(2, "a")
+  puts "parenless_hash=#{a.hash_code == b.hash_code}"
+  puts "hash_differs=#{a.hash_code != c.hash_code}"
+  puts "eq=#{a.eq(Key.new(1, "a"))} ne=#{a.eq(Key.new(2, "a"))}"
+  let h: Int = a.hash_code
+  puts "typed_int=#{h == b.hash_code}"
+
+  let p = Pt.new(1, 2)
+  let q: Pt = p.clone
+  puts "clone=#{q.x},#{q.y} cmp=#{p.cmp(Pt.new(1, 3))} pcmp=#{p.partial_cmp(Pt.new(0, 9))}"
+  let d: Pt = Pt.default
+  puts "default=#{d.x},#{d.y}"
+
+  let w = Wrap.new(5)
+  let w2 = w.clone
+  puts "generic_clone=#{w2.v + 1}"
+end

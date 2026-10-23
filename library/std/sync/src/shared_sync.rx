@@ -1,7 +1,8 @@
 ## Typed FFI return surface (docs/specs/types/typed_ffi_returns.spec.md).
 ## All non-Int-shaped returns lifted: `.new` -> SharedSync[T] with T
 ## inferred from the constructor's first arg (B1+B3); `.clone` ->
-## SharedSync[T] (B5: Self in return); `.get` -> T (B4).
+## SharedSync[T] (B5: Self in return); `.deref` -> &T borrows the shared
+## value, `.get` -> T returns an owned copy of it (the cell keeps owning it).
 ## `SharedSync[T: Send]` — the payload must be `Send` to be shared across
 ## threads. Feature B (generic trait-bound enforcement) checks this bound
 ## at the `SharedSync.new(value)` construction site (E1102), replacing the
@@ -14,8 +15,18 @@ class SharedSync[T: Send]
   lib "runtime/sharedsync.c"
     def self.new as "ruxen_sharedsync_new"(initial: T) -> SharedSync[T]
     def clone as "ruxen_sharedsync_clone" -> SharedSync[T]
-    def strong_count as "ruxen_sharedsync_strong_count" -> Int
-    def get as "ruxen_sharedsync_get" -> T
-    def drop as "ruxen_sharedsync_drop" -> nil
+    def strong_count as "ruxen_sharedsync_strong_count" -> USize
+    def deref as "ruxen_sharedsync_get" -> &T
+    def consume drop as "ruxen_sharedsync_drop" -> nil
+  end
+
+  def get -> T where T: Clone
+    self.deref.clone
+  end
+
+  ## Weak references do not exist yet (there is no `downgrade`), so the
+  ## weak count of a live `SharedSync` is always 0.
+  def weak_count -> USize
+    0 as USize
   end
 end

@@ -1,0 +1,44 @@
+# A closure body borrows its captures, whatever the closure kind, so each
+# by-value use goes through `.clone` (E1019 otherwise): a cast, a match
+# binding and a multi-assign value in a block, and a push and a binding in an
+# owning lambda called twice. Every clone is owned by whatever receives it and
+# freed once; the lambda frees its own capture on drop, the top level frees
+# `s`.
+
+def run(f: Fn() -> nil) -> nil
+  f.()
+end
+
+def give(f: Fn() -> String) -> String
+  f.()
+end
+
+k = 7
+s = "cap-#{k}"
+arr = Array[String].new
+arr.push(give do
+  s.clone as String
+end)
+arr.push(give do
+  match s.clone
+    x -> x
+  end
+end)
+run do
+  q = "a"
+  n = 0
+  q, n = s.clone, 1
+  puts q
+end
+puts arr.size
+t = "own-#{k}"
+f = -> do
+  xs = Array[String].new
+  xs.push(t.clone)
+  u = t.clone
+  xs.push(u)
+  puts xs.size
+end
+f.()
+f.()
+puts s

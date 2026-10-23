@@ -6,8 +6,8 @@
 ## "Module + mixin pattern" section. The single C runtime
 ## (`library/std/io/runtime/bufio.c`) carries a `kind` byte in the
 ## spine and branches on it for every fill / flush; both inner
-## variants share identical 32-byte struct layouts so the runtime's
-## type-erased `_drop` works for either.
+## variants share one 32-byte struct, so only the constructors are
+## per inner type; `into_inner` and `drop` alias one C symbol each.
 ##
 ## Usage:
 ##   BufReader.File.new(file)              # was BufReader.new(file)
@@ -26,9 +26,9 @@ module BufReader
     include Reader
 
     lib "../io/runtime/bufio.c"
-      def self.new as "ruxen_bufreader_new_file"(inner: File) -> BufReader.File
-      def self.with_capacity as "ruxen_bufreader_with_capacity_file"(cap: Int, inner: File) -> BufReader.File
-      def into_inner as "ruxen_bufreader_into_inner_file" -> File
+      def self.new as "ruxen_bufreader_new_file"(inner: &File) -> BufReader.File
+      def self.with_capacity as "ruxen_bufreader_with_capacity_file"(cap: Int, inner: &File) -> BufReader.File
+      def into_inner as "ruxen_bufreader_into_inner" -> File
       def drop as "ruxen_bufreader_drop" -> nil
     end
   end
@@ -37,9 +37,9 @@ module BufReader
     include Reader
 
     lib "../io/runtime/bufio.c"
-      def self.new as "ruxen_bufreader_new_tcp"(inner: TcpStream) -> BufReader.Tcp
-      def self.with_capacity as "ruxen_bufreader_with_capacity_tcp"(cap: Int, inner: TcpStream) -> BufReader.Tcp
-      def into_inner as "ruxen_bufreader_into_inner_tcp" -> TcpStream
+      def self.new as "ruxen_bufreader_new_tcp"(inner: &TcpStream) -> BufReader.Tcp
+      def self.with_capacity as "ruxen_bufreader_with_capacity_tcp"(cap: Int, inner: &TcpStream) -> BufReader.Tcp
+      def into_inner as "ruxen_bufreader_into_inner" -> TcpStream
       def drop as "ruxen_bufreader_drop" -> nil
     end
   end
@@ -59,9 +59,10 @@ module BufWriter
     include Writer
 
     lib "../io/runtime/bufio.c"
-      def self.new as "ruxen_bufwriter_new_file"(inner: File) -> BufWriter.File
-      def self.with_capacity as "ruxen_bufwriter_with_capacity_file"(cap: Int, inner: File) -> BufWriter.File
-      def into_inner as "ruxen_bufwriter_into_inner_file" -> File
+      def self.new as "ruxen_bufwriter_new_file"(inner: &File) -> BufWriter.File
+      def self.with_capacity as "ruxen_bufwriter_with_capacity_file"(cap: Int, inner: &File) -> BufWriter.File
+      ## Flush, then hand back the File; panics when the flush fails.
+      def into_inner as "ruxen_bufwriter_into_inner_or_panic" -> File
       def drop as "ruxen_bufwriter_drop" -> nil
     end
   end
@@ -70,9 +71,10 @@ module BufWriter
     include Writer
 
     lib "../io/runtime/bufio.c"
-      def self.new as "ruxen_bufwriter_new_tcp"(inner: TcpStream) -> BufWriter.Tcp
-      def self.with_capacity as "ruxen_bufwriter_with_capacity_tcp"(cap: Int, inner: TcpStream) -> BufWriter.Tcp
-      def into_inner as "ruxen_bufwriter_into_inner_tcp" -> TcpStream
+      def self.new as "ruxen_bufwriter_new_tcp"(inner: &TcpStream) -> BufWriter.Tcp
+      def self.with_capacity as "ruxen_bufwriter_with_capacity_tcp"(cap: Int, inner: &TcpStream) -> BufWriter.Tcp
+      ## Flush, then hand back the TcpStream; panics when the flush fails.
+      def into_inner as "ruxen_bufwriter_into_inner_or_panic" -> TcpStream
       def drop as "ruxen_bufwriter_drop" -> nil
     end
   end

@@ -55,13 +55,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-/* AsyncFile wire layout — kept binary-compatible with RuxenFile so
- * future cross-package work (BufReader_for_AsyncFile, sendfile bridges)
- * can cast without an adapter. */
-typedef struct {
-    int32_t fd;
-    int32_t closed;
-} RuxenAsyncFile;
+/* AsyncFile wire layout — the shared `RuxenFdHandle` (runtime.h), so it
+ * stays binary-compatible with RuxenFile and cross-package work
+ * (BufReader_for_AsyncFile, sendfile bridges) can cast without an adapter. */
+typedef RuxenFdHandle RuxenAsyncFile;
 
 _Static_assert(sizeof(RuxenAsyncFile) == 8,
     "RuxenAsyncFile wire layout drifted from documented 8-byte form");
@@ -78,8 +75,7 @@ _Static_assert(sizeof(RuxenAsyncFile) == 8,
  * non-blocking behaviour without further code. */
 void *ruxen_async_file_open(const char *path, int64_t flags) {
     if (!path) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     int open_flags;
     int has_mode = 0;
@@ -114,16 +110,7 @@ void *ruxen_async_file_open(const char *path, int64_t flags) {
  * Errors are swallowed (nobody to surface them to at scope exit). */
 void ruxen_async_file_drop(void *self) {
     if (!self) return;
-    RuxenAsyncFile *f = (RuxenAsyncFile *)self;
-    if (!f->closed && f->fd >= 0) {
-        int rc;
-        do {
-            rc = close(f->fd);
-        } while (rc < 0 && errno == EINTR);
-        (void)rc;
-        f->closed = 1;
-        f->fd = -1;
-    }
+    (void)ruxen_fd_handle_close((RuxenAsyncFile *)self);
 }
 
 /* Ruxen-callable "get fd" — used by the read/write future constructors
@@ -143,7 +130,7 @@ typedef struct {
     char *buf;
     size_t len;
     size_t cap;
-    int err_tag;         /* set when err_set != 0 */
+    int err_errno;       /* errno captured at poll time; set when err_set != 0 */
     int err_set;         /* 1 once we've recorded an error */
     int done;            /* 1 once EOF reached */
     int result_taken;    /* 1 once the caller has consumed the result */
@@ -155,10 +142,9 @@ void *ruxen_async_read_state_new(int64_t fd) {
         (RuxenAsyncReadState *)ruxen_alloc(sizeof(RuxenAsyncReadState));
     s->fd = (int)fd;
     s->cap = 256;
-    s->buf = (char *)malloc(s->cap);
-    if (!s->buf) ruxen_panic("ruxen_async_read_state_new: malloc failed");
+    s->buf = (char *)ruxen_xmalloc(s->cap);
     s->len = 0;
-    s->err_tag = 0;
+    s->err_errno = 0;
     s->err_set = 0;
     s->done = 0;
     s->result_taken = 0;
@@ -178,7 +164,7 @@ int64_t ruxen_async_read_state_get_fd(void *state) {
  *       error, so the Ruxen side typically sees only 1 / 2 / 3.)
  *   1 — would block (EAGAIN); caller must park on read-readiness.
  *   2 — EOF reached; result_string is populated.
- *   3 — fatal error; err_tag set.
+ *   3 — fatal error; err_errno set.
  *
  * The Ruxen side calls this until it returns non-0. Looping fully here
  * (rather than returning 0 per chunk) keeps the Ruxen control flow
@@ -196,7 +182,7 @@ int64_t ruxen_async_read_step(void *state) {
             char *next = (char *)realloc(s->buf, next_cap);
             if (!next) {
                 s->err_set = 1;
-                s->err_tag = RUXEN_IO_ERROR_OUT_OF_MEMORY;
+                s->err_errno = ENOMEM;
                 return 3;
             }
             s->buf = next;
@@ -213,14 +199,7 @@ int64_t ruxen_async_read_step(void *state) {
                 return 1;
             }
             s->err_set = 1;
-            switch (errno) {
-                case ENOENT: s->err_tag = RUXEN_IO_ERROR_NOT_FOUND; break;
-                case EACCES:
-                case EPERM:  s->err_tag = RUXEN_IO_ERROR_PERMISSION_DENIED; break;
-                case EBADF:  s->err_tag = RUXEN_IO_ERROR_INVALID_INPUT; break;
-                case EPIPE:  s->err_tag = RUXEN_IO_ERROR_BROKEN_PIPE; break;
-                default:     s->err_tag = RUXEN_IO_ERROR_OTHER; break;
-            }
+            s->err_errno = errno;
             return 3;
         }
         if (got == 0) {
@@ -241,14 +220,12 @@ int64_t ruxen_async_read_step(void *state) {
  * `ruxen_async_read_state_free`. */
 void *ruxen_async_read_state_take_result(void *state) {
     if (!state) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     RuxenAsyncReadState *s = (RuxenAsyncReadState *)state;
     if (s->result_taken) {
         /* Defensive — double-take returns a fresh error. */
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     s->result_taken = 1;
     if (s->buf) {
@@ -256,8 +233,7 @@ void *ruxen_async_read_state_take_result(void *state) {
         s->buf = NULL;
     }
     if (s->err_set) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(s->err_tag));
+        return ruxen_io_error_from_errno(s->err_errno);
     }
     /* out_str points into the canonical String pool; ownership is in
      * the pool itself, so we hand back the pointer without freeing. */
@@ -281,7 +257,7 @@ typedef struct {
     const char *content;   /* points at the canonical-pool String */
     size_t total;
     size_t written;
-    int err_tag;
+    int err_errno;       /* errno captured at poll time (0: short write) */
     int err_set;
     int done;
     int result_taken;
@@ -294,7 +270,7 @@ void *ruxen_async_write_state_new(int64_t fd, const char *content) {
     s->content = content ? content : "";
     s->total = strlen(s->content);
     s->written = 0;
-    s->err_tag = 0;
+    s->err_errno = 0;
     s->err_set = 0;
     s->done = s->total == 0 ? 1 : 0;
     s->result_taken = 0;
@@ -326,18 +302,12 @@ int64_t ruxen_async_write_step(void *state) {
                 return 1;
             }
             s->err_set = 1;
-            switch (errno) {
-                case EBADF:  s->err_tag = RUXEN_IO_ERROR_INVALID_INPUT; break;
-                case EPIPE:  s->err_tag = RUXEN_IO_ERROR_BROKEN_PIPE; break;
-                case EACCES:
-                case EPERM:  s->err_tag = RUXEN_IO_ERROR_PERMISSION_DENIED; break;
-                default:     s->err_tag = RUXEN_IO_ERROR_OTHER; break;
-            }
+            s->err_errno = errno;
             return 3;
         }
         if (put == 0) {
             s->err_set = 1;
-            s->err_tag = RUXEN_IO_ERROR_WRITE_ZERO;
+            s->err_errno = 0; /* short write: WriteZero has no errno */
             return 3;
         }
         s->written += (size_t)put;
@@ -348,18 +318,16 @@ int64_t ruxen_async_write_step(void *state) {
 
 void *ruxen_async_write_state_take_result(void *state) {
     if (!state) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     RuxenAsyncWriteState *s = (RuxenAsyncWriteState *)state;
     if (s->result_taken) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(RUXEN_IO_ERROR_INVALID_INPUT));
+        return ruxen_io_error_invalid_input();
     }
     s->result_taken = 1;
     if (s->err_set) {
-        return ruxen_result_err_value(
-            (int64_t)ruxen_io_error_unit(s->err_tag));
+        return s->err_errno ? ruxen_io_error_from_errno(s->err_errno)
+                            : ruxen_io_error_write_zero();
     }
     /* Ok(()) — unit payload is just 0. */
     return ruxen_result_ok_value(0);

@@ -1,0 +1,36 @@
+## Feature #2 Increment 3b (spec §4.2) — SUPERVISED scope (the named
+## exception, `s.collect_supervised`). Children fail INDEPENDENTLY: all run
+## to completion regardless of errors, no sibling cancellation; collect
+## returns the COUNT of children that errored. Mirrors Kotlin's
+## `supervisorScope` / Java's `Joiner`.
+##
+## Three children all COMPLETE: ok (1), fail (-1), ok2 (2). Unlike fail-fast,
+## the error does NOT cancel siblings — every child runs (all three "ran"
+## lines print), and collect returns 1 (one errored).
+
+async def ok1() -> Int
+  puts "ok1 ran"
+  1
+end
+
+async def failing() -> Int
+  puts "failing ran"
+  0 - 1
+end
+
+async def ok2() -> Int
+  puts "ok2 ran"
+  2
+end
+
+def main
+  puts "scope start"
+  Scope.open do |s|
+    s.spawn(ok1())
+    s.spawn(failing())
+    s.spawn(ok2())
+    let errors = s.collect_supervised
+    puts "errors=#{errors}"
+  end
+  puts "scope done"
+end

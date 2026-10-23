@@ -1,0 +1,51 @@
+Creating tasks...
+  Created task #1
+  Created task #2
+  Created task #3
+  Created task #4
+  Created task #5
+  Failed: Missing required field: title
+
+--- All Tasks ---
+  [#1] Design ownership model | CRITICAL | Pending
+  [#2] Write parser | HIGH | Pending
+  [#3] Add syntax highlighting | MEDIUM | Pending
+  [#4] Update README | LOW | Pending
+  [#5] Fix borrow checker bug | CRITICAL | Pending
+
+Updating statuses...
+  Todo #99 doesn't exist (expected)
+
+--- High Priority ---
+  [#1] Design ownership model | CRITICAL | Completed on 2026-04-11
+  [#2] Write parser | HIGH | In Progress (Dana)
+  [#5] Fix borrow checker bug | CRITICAL | Pending
+
+--- Pending Tasks (3) ---
+  [#3] Add syntax highlighting | MEDIUM | Pending
+  [#4] Update README | LOW | Pending
+  [#5] Fix borrow checker bug | CRITICAL | Pending
+
+Todo #2: Write parser
+Found: Design ownership model
+
+=== Todo Report ===
+Active: 4
+Completed: 1
+
+  [ ] Write parser (HIGH)
+  [ ] Add syntax highlighting (MEDIUM)
+  [ ] Update README (LOW)
+  [ ] Fix borrow checker bug (CRITICAL)
+  [x] Design ownership model (CRITICAL)
+
+--- Final Overview ---
+    Design ownership model (CRITICAL) (done)
+  * Write parser (HIGH)
+  * Add syntax highlighting (MEDIUM)
+  * Update README (LOW)
+  * Fix borrow checker bug (CRITICAL)
+
+Archiving completed tasks...
+Archived 1 completed tasks:
+  [#1] Design ownership model | CRITICAL | Completed on 2026-04-11

@@ -1,7 +1,13 @@
 name: PR Ready
 
-# Runs the heavy coverage that otherwise only happens at release time:
-#   - the 213-fixture release-e2e sweep (compile-and-run each fixture), and
+# Slow lane. Runs the heavy coverage the fast lane (ci.yml) leaves out:
+#   - the full release-e2e sweep (compile-and-run each fixture),
+#   - the `llvm` backend feature's tests, including the Cranelift-vs-LLVM
+#     `backend_parity` suite, plus the Cranelift-vs-REPL-JIT `jit_parity`
+#     suite over the same fixture list,
+#   - tests/release-e2e/run.sh's binaries, cli and lsp phases,
+#   - the loan matrix memory run (every program the borrow checker accepts,
+#     run under AddressSanitizer on Linux and Guard Malloc on macOS), and
 #   - a 4-target cross build check (arm + x86_64 on Linux and macOS).
 # Fires for:
 #   - push to master (post-merge safety net), and
@@ -60,6 +66,96 @@ jobs:
 
       - name: cargo test (release-e2e fixtures)
         run: cargo test -p ruxen_core --test release_e2e_smoke -- --ignored --nocapture
+
+  llvm:
+    name: LLVM backend
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    # Pinned: LLVM 18 comes from Ubuntu 24.04's own archive, so no remote
+    # install script runs as root.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18-dev libpolly-18-dev libzstd-dev clang-18 lld-18
+          echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+
+      # Includes `backend_parity` (Cranelift vs LLVM) in the `it` binary.
+      - name: cargo test (llvm feature)
+        run: cargo test -p ruxen_core --features llvm --no-fail-fast
+
+      - name: REPL JIT parity (Cranelift vs JIT)
+        run: cargo test -p ruxen_repl --test it jit_parity
+
+  run-sh:
+    name: run.sh binaries, cli, lsp
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --release --bins
+
+      - name: run.sh
+        env:
+          PHASES: binaries,cli,lsp
+        run: RUXEN_WORKSPACE="$GITHUB_WORKSPACE" tests/release-e2e/run.sh
+
+  loan-matrix-memory:
+    name: Loan matrix memory run (${{ matrix.os }})
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    runs-on: ${{ matrix.os }}
+    # A cold release build plus 661 programs (at most 180 s to compile and
+    # 60 s to run each, in parallel); a local run takes about 3 minutes.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --release --bins
+
+      # The committed programs must be exactly what the generator writes.
+      - name: Loan matrix matches its generator
+        run: python3 compiler/ruxen_core/tests/fixtures/loan_matrix/gen.py --check
+
+      # Compiles every program, skips the rejected ones and fails on any
+      # crash, memory-checker report or wrong output (ASan+UBSan on Linux,
+      # Guard Malloc on macOS). Leaks are printed, not fatal.
+      - name: Memory run
+        run: python3 compiler/ruxen_core/tests/fixtures/loan_matrix/memrun.py --results loan-matrix-results.txt
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loan-matrix-results-${{ matrix.os }}
+          path: loan-matrix-results.txt
+          if-no-files-found: ignore
 
   build-check:
     name: Build ${{ matrix.target }}

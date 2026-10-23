@@ -1,0 +1,60 @@
+## Increment 2 of the concurrency adoption (§4.1 piece 2 — state-indexed
+## drop glue). An `async def` lowers to a Future STATE MACHINE that owns its
+## awaited sub-future as a `self.__sub_0` field. When that state-machine
+## future is DRAINED while parked at suspend #0, the sub-future is still
+## live — its `def drop` MUST fire. Increment 1 made the drain reach the
+## state machine's `def drop` via Drop_dynamic_drop; Increment 2 synthesises
+## that `def drop` to actually drop the live `__sub_0` field (Ruxen has no
+## automatic per-field drop, so the synthesised drop must do it explicitly).
+##
+## Pre-Increment-2 the state machine got the `_drop_noop` (Increment 1) —
+## draining it ran a no-op and `PendingForever_drop` NEVER fired (the
+## sub-future's reactor/fd analogue leaked). The sentinel below proves the
+## sub-future's drop now runs on drain.
+##
+## Shape: `handler` awaits a `PendingForever` sub-future that never
+## completes. main spawns handler(), pumps once (sub_0 constructed + polled
+## → Pending, so the state machine parks at __state == 0), then drains.
+## Drain → __HandlerFuture_drop → drops self.__sub_0 → PendingForever_drop.
+
+class PendingForever
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(p: Int)
+    self.payload = p
+  end
+
+  def self.make(p: Int) -> PendingForever
+    PendingForever.new(p)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    # Never completes — exists only to be parked then dropped on drain.
+    Poll.Pending
+  end
+
+  def drop
+    puts "PendingForever dropped payload=#{self.payload}"
+  end
+end
+
+## State machine: __sub_0 = PendingForever (eagerly constructed in init),
+## parked at __state == 0 after the first Pending poll.
+async def handler() -> Int
+  let v = PendingForever.make(99).await
+  v
+end
+
+def main
+  let h = Task.spawn_raw(handler())
+  # Pump once: the spawned __HandlerFuture polls, constructs+polls __sub_0
+  # (Pending), and stays queued at __state == 0.
+  let _pumped = ruxen_executor_pump_tasks()
+  puts "parked"
+  # Drain the still-parked state-machine future. Its def drop must drop the
+  # live __sub_0, firing PendingForever_drop exactly once.
+  ruxen_executor_drain_remaining()
+  puts "drained"
+end

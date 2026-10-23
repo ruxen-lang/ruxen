@@ -1,18 +1,13 @@
-#![allow(unused_imports)]
-
-use std::collections::HashMap;
-
 use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
+use crate::hir::types::{MixinRef, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::{self, Visibility};
 
 use super::const_helpers;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
+use super::scope::ScopeKind;
 use super::symbols::*;
-use super::{ClosureCaptureContext, ResolveResult, Resolver};
+use super::Resolver;
 
 impl Resolver {
     pub(super) fn resolve_item(&mut self, item: &ast::TopLevelItem) -> Option<HirItem> {
@@ -26,12 +21,8 @@ impl Resolver {
                 Some(HirItem::Function(self.resolve_func_def(f, None)))
             }
             ast::TopLevelItem::TypeAlias(ta) => {
-                let def_id = self
-                    .type_registry
-                    .get(&ta.name)
-                    .copied()
-                    .unwrap_or(UNRESOLVED_DEF);
-                let ty = self.resolve_type_expr(&ta.type_expr);
+                let def_id = self.own_type_def(&ta.name);
+                let (ty, _) = self.resolve_alias_target(ta);
                 Some(HirItem::TypeAlias(HirTypeAlias {
                     def_id,
                     name: ta.name.clone(),
@@ -40,11 +31,7 @@ impl Resolver {
                 }))
             }
             ast::TopLevelItem::Newtype(nt) => {
-                let def_id = self
-                    .type_registry
-                    .get(&nt.name)
-                    .copied()
-                    .unwrap_or(UNRESOLVED_DEF);
+                let def_id = self.own_type_def(&nt.name);
                 let inner_ty = self.resolve_type_expr(&nt.inner_type);
                 Some(HirItem::Newtype(HirNewtype {
                     def_id,
@@ -81,26 +68,19 @@ impl Resolver {
             // (`bind_free_fn_alias`) so call sites resolve during body
             // resolution; it produces no HIR item (docs/decisions/alias-keyword.md).
             ast::TopLevelItem::Alias(_) => None,
-            ast::TopLevelItem::Lib(_) | ast::TopLevelItem::Extern(_) => {
+            ast::TopLevelItem::Lib(_) => {
                 // FFI declarations are handled during codegen — they don't produce
                 // HIR items. The functions they declare are resolved by name at
                 // call sites during codegen (via runtime_name / get_or_declare_func).
                 None
             }
             ast::TopLevelItem::Expr(e) => {
-                // A top-level expression statement (Q23b). The parser accepts
-                // this so the SHARED parser surface (and therefore `ruxen
-                // fmt`) round-trips test files shaped like
-                // `Tester.describe("…") do … end`. The COMPILE path never
-                // executes a top-level statement directly: `ruxen test`
-                // hoists items + wraps the statements in a synthesised `def
-                // main` first. So reaching resolve with one means a raw file
-                // with top-level statements was compiled directly — reject it
-                // clearly rather than silently dropping it.
+                // The implicit-main pre-pass consumes these unless the program
+                // already declares `main`. Reaching resolve therefore means a
+                // hand-written entry point was mixed with loose executable code.
                 self.diagnostics.push(Diagnostic::error_with_code(
-                    "top-level expression statements are not executable on the \
-                     direct compile path — wrap them in `def main` (or run the \
-                     file through `ruxen test`, which does this for you)"
+                    "top-level expression statements cannot be combined with an \
+                     explicit `def main` — move them into the existing `main`"
                         .to_string(),
                     e.span.clone(),
                     "E0728",
@@ -113,30 +93,12 @@ impl Resolver {
     // ─── Class Resolution ───────────────────────────────────────────
 
     pub(super) fn resolve_class(&mut self, class: &ast::ClassDef) -> HirClassDef {
-        // When this class is nested inside one or more `module` blocks,
-        // pass-1 registered the type under its qualified name (e.g.
-        // `"foo.Bar"`). Look up using the same key first, falling back
-        // to the bare name for top-level classes (or for cases where
-        // pass-1 only registered the unqualified spelling). Without
-        // this, nested classes resolve to `UNRESOLVED_DEF` and their
-        // methods can't see their own fields ("no field x on type
-        // Bar"). Pin: `docs/rondo_v1_blockers.md` B12.
-        let qualified_key = if self.current_module_path.is_empty() {
-            class.name.clone()
-        } else {
-            format!("{}.{}", self.current_module_path.join("."), class.name)
-        };
-        let def_id = self
-            .type_registry
-            .get(&qualified_key)
-            .or_else(|| self.type_registry.get(&class.name))
-            .copied()
-            .unwrap_or(UNRESOLVED_DEF);
-        if !self.current_module_path.is_empty() {
-            if let Some(def) = self.symbols.get_mut(def_id) {
-                def.name = qualified_key.clone();
-            }
-        }
+        // A class nested in `module` blocks was registered by pass 1
+        // under its qualified name (`"foo.Bar"`); without it the methods
+        // can't see their own fields. Pin: `docs/rondo_v1_blockers.md` B12.
+        let qualified_key = self.qualified_type_key(&class.name);
+        let def_id = self.own_type_def(&class.name);
+        self.name_def_qualified(def_id, &class.name);
 
         let generic_params = self.resolve_generic_params(&class.generic_params);
 
@@ -153,17 +115,13 @@ impl Resolver {
         // on type Signal" (Q15). Top-level classes keep their bare name.
         let self_ty = Ty::Class {
             name: qualified_key.clone(),
-            generic_args: generic_params
-                .iter()
-                .map(|gp| Ty::TypeParam {
-                    name: gp.name.clone(),
-                    bounds: gp.bounds.clone(),
-                })
-                .collect(),
+            generic_args: Self::generic_param_args(&generic_params),
         };
 
         let old_self_ty = self.current_self_ty.replace(self_ty.clone());
         let old_class_def = self.current_class_def.replace(def_id);
+        let old_is_subclass =
+            std::mem::replace(&mut self.current_class_is_subclass, class.parent.is_some());
 
         self.scopes.push(ScopeKind::Class);
 
@@ -185,6 +143,7 @@ impl Resolver {
             "Self".to_string(),
             DefKind::TypeAlias {
                 target: self_ty.clone(),
+                params: Vec::new(),
             },
             Visibility::Private,
             class.span.clone(),
@@ -194,13 +153,6 @@ impl Resolver {
         // Resolve fields
         let mut fields = Vec::new();
         let mut field_def_ids = Vec::new();
-        let mut opt_out_send = false;
-        let mut opt_out_sync = false;
-        let mut manual_send = false;
-        let mut manual_sync = false;
-        // Mixin vtables Phase B-1: collected during the inner_impls loop
-        // below, sealed onto ClassInfo at construction time.
-        let mut runtime_dispatch_includes: Vec<crate::hir::nodes::DefId> = Vec::new();
         for (idx, field) in class.fields.iter().enumerate() {
             let ty = self.resolve_type_expr(&field.type_expr);
             let fid = self.symbols.define(
@@ -234,87 +186,22 @@ impl Resolver {
             methods.push(hir_method);
         }
 
-        // Resolve inner impl blocks
-        let mut impl_blocks = Vec::new();
+        // Resolve inner impl blocks, then read the class-level facts off
+        // each `include`: the E1014 checks, the Send/Sync markers and the
+        // runtime-dispatch mixins.
+        let impl_blocks = self.lower_inner_impls(&class.inner_impls, &self_ty, Some(def_id));
+        let mut auto_traits = AutoTraitFlags::default();
+        // Mixin vtables Phase B-1: sealed onto ClassInfo at construction time.
+        let mut runtime_dispatch_includes: Vec<DefId> = Vec::new();
         for inner in &class.inner_impls {
-            let trait_ref = MixinRef {
-                name: inner.trait_name.segments.join("."),
-                generic_args: inner
-                    .trait_name
-                    .generic_args
-                    .as_ref()
-                    .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                    .unwrap_or_default(),
-            };
-
-            // Collect `type Foo = X` bindings from the inner impl block so
-            // that `Self.Foo` in method signatures resolves concretely.
-            let old_assoc = std::mem::take(&mut self.current_impl_assoc_types);
-            for ii in &inner.items {
-                if let ast::ImplItem::AssocType {
-                    name, type_expr, ..
-                } = ii
-                {
-                    let ty = self.resolve_type_expr(type_expr);
-                    self.current_impl_assoc_types.insert(name.clone(), ty);
-                }
-            }
-
-            let mut items = Vec::new();
-            for ii in &inner.items {
-                match ii {
-                    ast::ImplItem::Method(f) => {
-                        items.push(HirImplItem::Method(self.resolve_func_def(f, Some(def_id))));
-                    }
-                    ast::ImplItem::AssocType {
-                        name,
-                        type_expr,
-                        span,
-                    } => {
-                        items.push(HirImplItem::AssocType {
-                            name: name.clone(),
-                            ty: self.resolve_type_expr(type_expr),
-                            span: span.clone(),
-                        });
-                    }
-                    ast::ImplItem::Include {
-                        is_unsafe,
-                        negative_trait,
-                        trait_name,
-                        span,
-                    } => {
-                        items.push(HirImplItem::Include {
-                            is_unsafe: *is_unsafe,
-                            negative_trait: *negative_trait,
-                            trait_name: trait_name.segments.join("."),
-                            span: span.clone(),
-                        });
-                    }
-                    // `alias` inside a class-body inner `include`/impl block is
-                    // not a Tier-1 surface (aliases live at the class-body level);
-                    // ignore it here (docs/decisions/alias-keyword.md).
-                    ast::ImplItem::Alias(_) => {}
-                }
-            }
-            self.current_impl_assoc_types = old_assoc;
-            self.record_auto_trait_flags(
-                &self_ty,
-                Some(&trait_ref.name),
+            let trait_name = inner.trait_name.segments.join(".");
+            self.check_auto_trait_include(
+                &trait_name,
                 inner.negative_trait,
                 inner.is_unsafe,
                 inner.span.clone(),
             );
-            // Spec B10 (send_sync_enforcement.spec.md): plain
-            // `include Send` is a user opt-in marker — equivalent to
-            // `unsafe include Send` (B12) for v1, since user classes
-            // have no auto-derive to suppress.
-            match trait_ref.name.as_str() {
-                "Send" if inner.negative_trait => opt_out_send = true,
-                "Sync" if inner.negative_trait => opt_out_sync = true,
-                "Send" => manual_send = true,
-                "Sync" => manual_sync = true,
-                _ => {}
-            }
+            auto_traits.record(&trait_name, inner.negative_trait);
 
             // Mixin vtables Phase B-1: if the included mixin has
             // `dispatch_mode = Runtime`, record its DefId on the class so
@@ -322,7 +209,7 @@ impl Resolver {
             // Negative includes (`include !Foo`) don't trigger this — the
             // class explicitly opts out of the mixin contract.
             if !inner.negative_trait {
-                if let Some(mixin_def) = self.symbols.iter().find(|d| d.name == trait_ref.name) {
+                if let Some(mixin_def) = self.symbols.iter().find(|d| d.name == trait_name) {
                     let is_runtime_dispatch = matches!(
                         &mixin_def.kind,
                         DefKind::Trait { info }
@@ -336,21 +223,12 @@ impl Resolver {
                     }
                 }
             }
-
-            impl_blocks.push(HirImplBlock {
-                generic_params: vec![],
-                is_unsafe: inner.is_unsafe,
-                negative_trait: inner.negative_trait,
-                trait_ref: Some(trait_ref),
-                target_ty: self_ty.clone(),
-                items,
-                span: inner.span.clone(),
-            });
         }
 
         self.scopes.pop();
         self.current_self_ty = old_self_ty;
         self.current_class_def = old_class_def;
+        self.current_class_is_subclass = old_is_subclass;
 
         // Update the symbol table with full class info.  Pre-compute
         // generic_params (which needs `&mut self` for type-expr
@@ -370,7 +248,9 @@ impl Resolver {
             .unwrap_or_default();
         // #06.8 T0c: preserve the `layout flat_heap_struct` marker
         // captured in pass 1 across the pass-2 rewrite.
-        let flat_heap_struct = class.layout.iter().any(|s| s == "flat_heap_struct");
+        let flat_heap_struct = class.has_layout("flat_heap_struct");
+        let closure_shell = class.has_layout("closure");
+        let supplied = crate::resolve::symbols::Supplied::of_class(class);
         // #06.8 Phase 3b: append the class-body `lib` FFI methods that
         // pass-1 registered onto the side-map. They were registered as
         // `DefKind::Method` with `parent = def_id` and need to appear
@@ -380,6 +260,11 @@ impl Resolver {
             method_def_ids.extend(lib_method_ids.iter().copied());
         }
         if let Some(def) = self.symbols.get_mut(def_id) {
+            // A stdlib `class E` body anchored onto an `enum E` only
+            // contributes methods (parented on the enum's DefId); the enum
+            // keeps its kind so `E` still resolves to `Ty::Enum` and its
+            // variants survive.
+            let anchored_on_enum = matches!(def.kind, DefKind::Enum { .. });
             // Zero-Rust-stdlib migration (Phase B / M3): an anchored
             // builtin (`register_builtins` registered `String` →
             // `TypeAlias { target: Ty::String }`, then the bootstrap merge
@@ -396,24 +281,23 @@ impl Resolver {
             // empty generic args to return `Ty::String` (the primitive
             // head) even when the DefKind is `Class`, so `let s: String`,
             // string literals, and the C ABI / runtime repr are unchanged.
-            // Pin: `string_is_class_but_resolves_to_primitive_ty` in
-            // `builtin_anchor_class.rs`.
-            def.kind = DefKind::Class {
-                info: ClassInfo {
-                    generic_params: class_generic_param_infos,
-                    parent: parent_def,
-                    fields: field_def_ids,
-                    methods: method_def_ids,
-                    derive_traits: class.derive_traits.clone(),
-                    opt_out_send,
-                    opt_out_sync,
-                    manual_send,
-                    manual_sync,
-                    const_predicates,
-                    flat_heap_struct,
-                    runtime_dispatch_includes,
-                },
-            };
+            // Covered by every e2e program that types a `String`.
+            if !anchored_on_enum {
+                def.kind = DefKind::Class {
+                    info: ClassInfo {
+                        generic_params: class_generic_param_infos,
+                        parent: parent_def,
+                        fields: field_def_ids,
+                        methods: method_def_ids,
+                        auto_traits,
+                        const_predicates,
+                        flat_heap_struct,
+                        closure_shell,
+                        supplied,
+                        runtime_dispatch_includes,
+                    },
+                };
+            }
         }
 
         // Ruby `alias new old` method synonyms (docs/decisions/alias-keyword.md).
@@ -437,7 +321,6 @@ impl Resolver {
             fields,
             methods,
             impl_blocks,
-            derive_traits: class.derive_traits.clone(),
             doc_comments: class.doc_comments.clone(),
             span: class.span.clone(),
         }
@@ -485,12 +368,24 @@ impl Resolver {
     // ─── Struct Resolution ──────────────────────────────────────────
 
     pub(super) fn resolve_struct(&mut self, s: &ast::StructDef) -> HirStructDef {
-        let def_id = self
-            .type_registry
-            .get(&s.name)
-            .copied()
-            .unwrap_or(UNRESOLVED_DEF);
+        let def_id = self.own_type_def(&s.name);
+        self.name_def_qualified(def_id, &s.name);
         let generic_params = self.resolve_generic_params(&s.generic_params);
+
+        // The struct's own generic params are in scope for its field types
+        // and method signatures, as for classes and enums.
+        self.scopes.push(ScopeKind::Class);
+        for gp in &generic_params {
+            let gp_def = self.symbols.define(
+                gp.name.clone(),
+                DefKind::TypeParam {
+                    bounds: gp.bounds.clone(),
+                },
+                Visibility::Private,
+                gp.span.clone(),
+            );
+            self.scopes.insert_type(gp.name.clone(), gp_def);
+        }
 
         let mut fields = Vec::new();
         let mut field_def_ids = Vec::new();
@@ -536,12 +431,8 @@ impl Resolver {
                 info: StructInfo {
                     generic_params: struct_generic_param_infos,
                     fields: field_def_ids,
-                    derive_traits: s.derive_traits.clone(),
                     layout: s.layout.clone(),
-                    opt_out_send: false,
-                    opt_out_sync: false,
-                    manual_send: false,
-                    manual_sync: false,
+                    auto_traits: AutoTraitFlags::default(),
                     const_predicates,
                 },
             };
@@ -551,8 +442,8 @@ impl Resolver {
         // and `include Mixin` directives.
         let old_self_ty = self.current_self_ty.take();
         let self_ty = Ty::Struct {
-            name: s.name.clone(),
-            generic_args: vec![],
+            name: self.qualified_type_key(&s.name),
+            generic_args: Self::generic_param_args(&generic_params),
         };
         self.current_self_ty = Some(self_ty.clone());
         let methods = s
@@ -569,6 +460,8 @@ impl Resolver {
             self.record_method_aliases(&s.name, &s.aliases, &method_names);
         }
 
+        self.scopes.pop();
+
         HirStructDef {
             def_id,
             name: s.name.clone(),
@@ -576,7 +469,6 @@ impl Resolver {
             fields,
             methods,
             impl_blocks,
-            derive_traits: s.derive_traits.clone(),
             layout: s.layout.clone(),
             doc_comments: s.doc_comments.clone(),
             span: s.span.clone(),
@@ -585,11 +477,56 @@ impl Resolver {
 
     // ─── Enum Resolution ────────────────────────────────────────────
 
+    /// E1017: an in-body `include X` must name a mixin. Ruby raises
+    /// `TypeError` for `include SomeClass`; without this check the include
+    /// was accepted and gave the type nothing (`include Hash`, the retired
+    /// spelling of `include Hashable`, silently became a no-op). A name
+    /// that does not resolve at all is left to E0608. The collection
+    /// builtins (`Array`, `Hash`, `Set`) are not in the type scope (see
+    /// `COLLECTION_BUILTINS`), so they are matched by name.
+    ///
+    /// The name is looked up lexically, innermost module first, as Ruby
+    /// does: inside `module BufReader`, `include Reader` means the mixin
+    /// `BufReader.Reader` even when the program also has a top-level
+    /// `class Reader`.
+    fn check_include_names_mixin(&mut self, inner: &ast::InnerImpl) {
+        let name = inner.trait_name.segments.join(".");
+        let path = &self.current_module_path;
+        let def = (0..=path.len())
+            .rev()
+            .find_map(|n| {
+                self.type_registry
+                    .get(&Self::qualified_key(&path[..n], &name))
+                    .copied()
+            })
+            .or_else(|| self.scopes.lookup_type(&name))
+            .and_then(|id| self.symbols.get(id));
+        let kind = match def.map(|d| &d.kind) {
+            Some(DefKind::Struct { .. }) => "struct",
+            Some(DefKind::Enum { .. }) => "enum",
+            Some(DefKind::Class { .. } | DefKind::TypeAlias { .. } | DefKind::Newtype { .. }) => {
+                "class"
+            }
+            None if super::types::COLLECTION_BUILTINS.contains(&name.as_str()) => "class",
+            _ => return,
+        };
+        let hint = if name == "Hash" {
+            "; did you mean `include Hashable`?"
+        } else {
+            ""
+        };
+        self.diagnostics.push(Diagnostic::error_with_code(
+            format!("cannot include `{name}`: `{name}` is a {kind}, not a mixin{hint}"),
+            inner.span.clone(),
+            "E1017",
+        ));
+    }
+
     /// Lower a list of AST `InnerImpl` directives (collected from a
-    /// struct or enum body under ruby-naming.spec.md §3.4a) into HIR
-    /// `HirImplBlock` records. The same routine the class path uses,
-    /// minus the class-specific `opt_out_*` tracking — struct/enum
-    /// auto-trait flags live on their own info structs.
+    /// class, struct or enum body under ruby-naming.spec.md §3.4a) into
+    /// HIR `HirImplBlock` records. The class-only facts an `include`
+    /// carries (Send/Sync markers, runtime-dispatch mixins) are read by
+    /// `resolve_class` itself.
     pub(super) fn lower_inner_impls(
         &mut self,
         inner_impls: &[ast::InnerImpl],
@@ -598,64 +535,10 @@ impl Resolver {
     ) -> Vec<HirImplBlock> {
         let mut impl_blocks = Vec::new();
         for inner in inner_impls {
-            let trait_ref = MixinRef {
-                name: inner.trait_name.segments.join("."),
-                generic_args: inner
-                    .trait_name
-                    .generic_args
-                    .as_ref()
-                    .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                    .unwrap_or_default(),
-            };
+            self.check_include_names_mixin(inner);
+            let trait_ref = MixinRef::from_bound(&inner.trait_name, |a| self.resolve_type_expr(a));
 
-            let old_assoc = std::mem::take(&mut self.current_impl_assoc_types);
-            for ii in &inner.items {
-                if let ast::ImplItem::AssocType {
-                    name, type_expr, ..
-                } = ii
-                {
-                    let ty = self.resolve_type_expr(type_expr);
-                    self.current_impl_assoc_types.insert(name.clone(), ty);
-                }
-            }
-
-            let mut items = Vec::new();
-            for ii in &inner.items {
-                match ii {
-                    ast::ImplItem::Method(f) => {
-                        items.push(HirImplItem::Method(self.resolve_func_def(f, parent_def)));
-                    }
-                    ast::ImplItem::AssocType {
-                        name,
-                        type_expr,
-                        span,
-                    } => {
-                        items.push(HirImplItem::AssocType {
-                            name: name.clone(),
-                            ty: self.resolve_type_expr(type_expr),
-                            span: span.clone(),
-                        });
-                    }
-                    ast::ImplItem::Include {
-                        is_unsafe,
-                        negative_trait,
-                        trait_name,
-                        span,
-                    } => {
-                        items.push(HirImplItem::Include {
-                            is_unsafe: *is_unsafe,
-                            negative_trait: *negative_trait,
-                            trait_name: trait_name.segments.join("."),
-                            span: span.clone(),
-                        });
-                    }
-                    // `alias` inside a class-body inner `include`/impl block is
-                    // not a Tier-1 surface (aliases live at the class-body level);
-                    // ignore it here (docs/decisions/alias-keyword.md).
-                    ast::ImplItem::Alias(_) => {}
-                }
-            }
-            self.current_impl_assoc_types = old_assoc;
+            let items = self.lower_impl_items(&inner.items, parent_def);
 
             impl_blocks.push(HirImplBlock {
                 generic_params: vec![],
@@ -670,12 +553,67 @@ impl Resolver {
         impl_blocks
     }
 
+    /// Lower the items of one impl body: an in-body `include` block or an
+    /// `extension`. Its `type Foo = X` bindings are in scope for the whole
+    /// body (so `Self.Foo` in a method signature resolves concretely) and
+    /// are restored on return. An `alias` item lowers to nothing here; the
+    /// caller records it (docs/decisions/alias-keyword.md).
+    fn lower_impl_items(
+        &mut self,
+        impl_items: &[ast::ImplItem],
+        parent_def: Option<DefId>,
+    ) -> Vec<HirImplItem> {
+        let old_assoc = std::mem::take(&mut self.current_impl_assoc_types);
+        for ii in impl_items {
+            if let ast::ImplItem::AssocType {
+                name, type_expr, ..
+            } = ii
+            {
+                let ty = self.resolve_type_expr(type_expr);
+                self.current_impl_assoc_types.insert(name.clone(), ty);
+            }
+        }
+
+        let mut items = Vec::new();
+        for ii in impl_items {
+            match ii {
+                ast::ImplItem::Method(f) => {
+                    items.push(HirImplItem::Method(self.resolve_func_def(f, parent_def)));
+                }
+                ast::ImplItem::AssocType {
+                    name,
+                    type_expr,
+                    span,
+                } => {
+                    items.push(HirImplItem::AssocType {
+                        name: name.clone(),
+                        ty: self.resolve_type_expr(type_expr),
+                        span: span.clone(),
+                    });
+                }
+                ast::ImplItem::Include {
+                    is_unsafe,
+                    negative_trait,
+                    trait_name,
+                    span,
+                } => {
+                    items.push(HirImplItem::Include {
+                        is_unsafe: *is_unsafe,
+                        negative_trait: *negative_trait,
+                        trait_name: trait_name.segments.join("."),
+                        span: span.clone(),
+                    });
+                }
+                ast::ImplItem::Alias(_) => {}
+            }
+        }
+        self.current_impl_assoc_types = old_assoc;
+        items
+    }
+
     pub(super) fn resolve_enum(&mut self, e: &ast::EnumDef) -> HirEnumDef {
-        let def_id = self
-            .type_registry
-            .get(&e.name)
-            .copied()
-            .unwrap_or(UNRESOLVED_DEF);
+        let def_id = self.own_type_def(&e.name);
+        self.name_def_qualified(def_id, &e.name);
         let generic_params = self.resolve_generic_params(&e.generic_params);
 
         // Push a scope so enum generic params are visible while resolving
@@ -758,11 +696,7 @@ impl Resolver {
                 info: EnumInfo {
                     generic_params: enum_generic_param_infos,
                     variants: variant_def_ids,
-                    derive_traits: e.derive_traits.clone(),
-                    opt_out_send: false,
-                    opt_out_sync: false,
-                    manual_send: false,
-                    manual_sync: false,
+                    auto_traits: AutoTraitFlags::default(),
                     const_predicates: vec![],
                 },
             };
@@ -772,8 +706,8 @@ impl Resolver {
         // and `include Mixin` directives.
         let old_self_ty = self.current_self_ty.take();
         let self_ty = Ty::Enum {
-            name: e.name.clone(),
-            generic_args: vec![],
+            name: self.qualified_type_key(&e.name),
+            generic_args: Self::generic_param_args(&generic_params),
         };
         self.current_self_ty = Some(self_ty.clone());
         let methods = e
@@ -799,7 +733,6 @@ impl Resolver {
             variants,
             methods,
             impl_blocks,
-            derive_traits: e.derive_traits.clone(),
             doc_comments: e.doc_comments.clone(),
             span: e.span.clone(),
         }
@@ -808,11 +741,7 @@ impl Resolver {
     // ─── Trait Resolution ───────────────────────────────────────────
 
     pub(super) fn resolve_trait(&mut self, t: &ast::MixinDef) -> HirMixinDef {
-        let def_id = self
-            .type_registry
-            .get(&t.name)
-            .copied()
-            .unwrap_or(UNRESOLVED_DEF);
+        let def_id = self.own_type_def(&t.name);
         let generic_params = self.resolve_generic_params(&t.generic_params);
 
         self.scopes.push(ScopeKind::Trait);
@@ -845,6 +774,7 @@ impl Resolver {
             "Self".to_string(),
             DefKind::TypeAlias {
                 target: self_ty.clone(),
+                params: Vec::new(),
             },
             Visibility::Private,
             t.span.clone(),
@@ -861,15 +791,7 @@ impl Resolver {
         let super_traits: Vec<MixinRef> = t
             .super_traits
             .iter()
-            .map(|b| MixinRef {
-                name: b.path.segments.join("."),
-                generic_args: b
-                    .path
-                    .generic_args
-                    .as_ref()
-                    .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                    .unwrap_or_default(),
-            })
+            .map(|b| MixinRef::from_bound(&b.path, |a| self.resolve_type_expr(a)))
             .collect();
 
         // Make the trait's declared associated-type names visible so
@@ -945,18 +867,14 @@ impl Resolver {
     pub(super) fn resolve_impl(&mut self, imp: &ast::ImplBlock) -> HirImplBlock {
         let generic_params = self.resolve_generic_params(&imp.generic_params);
         let target_ty = self.resolve_type_expr(&imp.target_type);
-        let trait_ref = imp.trait_name.as_ref().map(|tp| MixinRef {
-            name: tp.segments.join("."),
-            generic_args: tp
-                .generic_args
-                .as_ref()
-                .map(|args| args.iter().map(|a| self.resolve_type_expr(a)).collect())
-                .unwrap_or_default(),
-        });
+        let trait_ref = imp
+            .trait_name
+            .as_ref()
+            .map(|tp| MixinRef::from_bound(tp, |a| self.resolve_type_expr(a)));
         if let Some(ref trait_ref) = trait_ref {
             self.record_auto_trait_flags(
                 &target_ty,
-                Some(&trait_ref.name),
+                &trait_ref.name,
                 imp.negative_trait,
                 imp.is_unsafe,
                 imp.span.clone(),
@@ -987,61 +905,14 @@ impl Resolver {
             "Self".to_string(),
             DefKind::TypeAlias {
                 target: target_ty.clone(),
+                params: Vec::new(),
             },
             Visibility::Private,
             imp.span.clone(),
         );
         self.scopes.insert_type("Self".to_string(), self_type_id);
 
-        // First pass: collect `type Foo = X` bindings so that `Self.Foo`
-        // references inside method signatures/bodies resolve to the
-        // concrete type declared here.
-        let old_assoc = std::mem::take(&mut self.current_impl_assoc_types);
-        for ii in &imp.items {
-            if let ast::ImplItem::AssocType {
-                name, type_expr, ..
-            } = ii
-            {
-                let ty = self.resolve_type_expr(type_expr);
-                self.current_impl_assoc_types.insert(name.clone(), ty);
-            }
-        }
-
-        let mut items = Vec::new();
-        for ii in &imp.items {
-            match ii {
-                ast::ImplItem::Method(f) => {
-                    items.push(HirImplItem::Method(self.resolve_func_def(f, class_def)));
-                }
-                ast::ImplItem::AssocType {
-                    name,
-                    type_expr,
-                    span,
-                } => {
-                    items.push(HirImplItem::AssocType {
-                        name: name.clone(),
-                        ty: self.resolve_type_expr(type_expr),
-                        span: span.clone(),
-                    });
-                }
-                ast::ImplItem::Include {
-                    is_unsafe,
-                    negative_trait,
-                    trait_name,
-                    span,
-                } => {
-                    items.push(HirImplItem::Include {
-                        is_unsafe: *is_unsafe,
-                        negative_trait: *negative_trait,
-                        trait_name: trait_name.segments.join("."),
-                        span: span.clone(),
-                    });
-                }
-                // Ruby `alias new old` inside an `extension` body — a method
-                // synonym scoped to the target type (docs/decisions/alias-keyword.md).
-                ast::ImplItem::Alias(_) => {}
-            }
-        }
+        let items = self.lower_impl_items(&imp.items, class_def);
 
         // Record `extension`-body aliases against the target type. The visible
         // method set is the methods this impl resolved (HIR `Method` items).
@@ -1068,7 +939,6 @@ impl Resolver {
             }
         }
 
-        self.current_impl_assoc_types = old_assoc;
         self.scopes.pop();
         self.current_self_ty = old_self_ty;
         self.current_class_def = old_class_def;
@@ -1084,88 +954,63 @@ impl Resolver {
         }
     }
 
+    /// Record an `extension`'s `include Send`/`include !Sync` (and friends)
+    /// on the nominal type it targets. See [`Self::check_auto_trait_include`]
+    /// for the diagnostics.
     pub(super) fn record_auto_trait_flags(
         &mut self,
         target_ty: &Ty,
-        trait_name: Option<&str>,
+        trait_name: &str,
         negative_trait: bool,
         is_unsafe: bool,
         span: Span,
     ) {
-        let Some(trait_name) = trait_name else {
+        if !self.check_auto_trait_include(trait_name, negative_trait, is_unsafe, span) {
             return;
-        };
-
-        let (mark_send, mark_sync) = match trait_name {
-            "Send" => (true, false),
-            "Sync" => (false, true),
-            _ => {
-                if negative_trait {
-                    self.diagnostics.push(Diagnostic::error_with_code(
-                        "negative include (`exclude`) is only supported for Send and Sync",
-                        span,
-                        "E1014",
-                    ));
-                } else if is_unsafe {
-                    self.diagnostics.push(Diagnostic::error_with_code(
-                        "`unsafe include` is only required for Send and Sync",
-                        span,
-                        "E1014",
-                    ));
-                }
-                return;
-            }
-        };
-
-        // Spec B10 (send_sync_enforcement.spec.md): plain `include Send`
-        // / `include Sync` is a user opt-in marker for v1. `unsafe
-        // include Send` (B12) is the explicit-safety-assertion variant
-        // for classes that wrap raw pointers / non-Send containers.
-        // Both forms set `manual_send` / `manual_sync` — v1 has no
-        // user-class auto-derive, so the two are equivalent here.
-        // Negative include (`include !Send`) sets `opt_out_send` (B11).
-        // E1014 stays reserved (was previously raised here when neither
-        // form was present, but the spec promoted the bare marker form).
-        let _ = is_unsafe; // accepted but not differentiated for v1
-
-        let Some(def) = const_helpers::nominal_type_definition_mut(target_ty, &mut self.symbols)
-        else {
-            return;
-        };
-
-        match &mut def.kind {
-            DefKind::Class { info } => {
-                if mark_send {
-                    info.opt_out_send = negative_trait;
-                    info.manual_send = !negative_trait;
-                }
-                if mark_sync {
-                    info.opt_out_sync = negative_trait;
-                    info.manual_sync = !negative_trait;
-                }
-            }
-            DefKind::Struct { info } => {
-                if mark_send {
-                    info.opt_out_send = negative_trait;
-                    info.manual_send = !negative_trait;
-                }
-                if mark_sync {
-                    info.opt_out_sync = negative_trait;
-                    info.manual_sync = !negative_trait;
-                }
-            }
-            DefKind::Enum { info } => {
-                if mark_send {
-                    info.opt_out_send = negative_trait;
-                    info.manual_send = !negative_trait;
-                }
-                if mark_sync {
-                    info.opt_out_sync = negative_trait;
-                    info.manual_sync = !negative_trait;
-                }
-            }
-            _ => {}
         }
+        if let Some(flags) =
+            const_helpers::nominal_type_definition_mut(target_ty, &mut self.symbols)
+                .and_then(|def| def.kind.auto_traits_mut())
+        {
+            flags.record(trait_name, negative_trait);
+        }
+    }
+
+    /// E1014 checks for one `include`/`exclude` of `trait_name`; returns
+    /// whether it names `Send` or `Sync`.
+    ///
+    /// Spec B10 (send_sync_enforcement.spec.md): plain `include Send`
+    /// / `include Sync` is a user opt-in marker for v1. `unsafe
+    /// include Send` (B12) is the explicit-safety-assertion variant
+    /// for classes that wrap raw pointers / non-Send containers.
+    /// Both forms set `manual_send` / `manual_sync`; v1 has no
+    /// user-class auto-derive, so the two are equivalent here.
+    /// Negative include (`include !Send`) sets `opt_out_send` (B11).
+    /// For every other mixin, `exclude` and `unsafe include` are E1014.
+    pub(super) fn check_auto_trait_include(
+        &mut self,
+        trait_name: &str,
+        negative_trait: bool,
+        is_unsafe: bool,
+        span: Span,
+    ) -> bool {
+        if matches!(trait_name, "Send" | "Sync") {
+            return true;
+        }
+        if negative_trait {
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "negative include (`exclude`) is only supported for Send and Sync",
+                span,
+                "E1014",
+            ));
+        } else if is_unsafe {
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "`unsafe include` is only required for Send and Sync",
+                span,
+                "E1014",
+            ));
+        }
+        false
     }
 
     // ─── Function Resolution ────────────────────────────────────────

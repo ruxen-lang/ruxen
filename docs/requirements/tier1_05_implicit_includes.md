@@ -1,6 +1,13 @@
-# Tier 1 — Derive & Macro System
+# Tier 1 — Implicit Includes (formerly Derive & Macro System)
 
-Status: draft
+Status: superseded by the shipped implicit-includes design
+(`docs/specs/mixins/implicit_includes.spec.md`). The `derive` directive
+and the `@[...]` prefix attributes were removed from the parser. The
+structural mixins listed in §4 are included implicitly when every field
+supports them, and `include Debug, Clone` is the explicit (loud) form.
+This document keeps the original derive design as history: read each
+`derive X` below as an implicit (or explicit) `include X`. User-defined
+macros (§7) were never implemented.
 Depends on: tier1_04_drop_copy_clone (pending)
 Blocks: stdlib mixin coverage, every struct/enum that needs `Debug`/`Eq`/`Hash`
 
@@ -42,11 +49,11 @@ representation declarations).
 
 **In-body `derive Mixin1, Mixin2` clause** inside a `struct ... end`.
 Lexed as a dedicated keyword token `TokenKind::Derive`
-(`crates/ruxen-core/src/lexer/token.rs:105`, `:327`) and parsed by
+(`compiler/ruxen_core/src/lexer/token.rs:105`, `:327`) and parsed by
 `parse_struct_def` at
-`crates/ruxen-core/src/parser/mod.rs:832-841` into
+`compiler/ruxen_core/src/parser/mod.rs:832-841` into
 `StructDef.derive_traits: Vec<String>`
-(`crates/ruxen-core/src/parser/ast.rs:597`).
+(`compiler/ruxen_core/src/parser/ast.rs:597`).
 
 The tutorial documents the in-body form
 (`docs/tutorial/06-classes-and-structs.md:135-141`,
@@ -70,7 +77,7 @@ focuses on the derive surface.
 - Formatter round-trips it:
   `formatter/format_items.rs:391-402`, `parser/printer.rs:114-118`.
 
-Grepping `derive_traits` under `crates/ruxen-core/src/typeck`,
+Grepping `derive_traits` under `compiler/ruxen_core/src/typeck`,
 `.../mir`, `.../codegen`, `.../borrow_check` returns **zero** matches. The
 list is syntactic metadata with no semantic effect.
 
@@ -80,7 +87,7 @@ The compiler pre-registers `Copy`, `Clone`, `Debug`, `Drop` as built-in
 traits with empty/minimal method sets
 (`resolve/mod.rs:138-170`, lines 147-150):
 
-```
+```rust
 ("Copy", vec![]),
 ("Clone", vec!["clone"]),
 ("Debug", vec![]),
@@ -164,13 +171,13 @@ AST synthesis pass or a post-HIR extension-synthesis pass. This doc picks one in
 ## 4. Built-in derive catalog
 
 All nine derives are **compiler-built-in**: hard-coded in Rust inside
-`ruxen-core`. Rationale in §5.4. Spec for each is given as: what it
+`ruxen_core`. Rationale in §5.4. Spec for each is given as: what it
 generates, what bounds it adds, what errors are raised.
 
 ### 4.1 `Debug`
 
 **Generates:** an in-body `include Debug` directive on `T[GP]` with method
-`def fmt(&self) -> String`. The returned string is the struct/enum printed
+`def fmt -> String`. The returned string is the struct/enum printed
 in Ruxen source-ish form:
 
 - Named struct `Point { x: 1, y: 2 }` →  `"Point { x: 1, y: 2 }"`
@@ -193,7 +200,7 @@ generated provision, enforced by typeck at provision-definition time.
 ### 4.2 `Clone`
 
 **Generates:** an in-body `include Clone` directive on `T[GP]` with
-`def clone(&self) -> Self`. For each field, emits
+`def clone -> Self`. For each field, emits
 `self.field.clone()`. For an enum, a `match` over variants reconstructing
 each one.
 
@@ -227,7 +234,7 @@ records a derived `Copy` provision for `name` (§5.5).
 ### 4.4 `PartialEq`
 
 **Generates:** an in-body `include PartialEq` directive on `T[GP]` with
-`def eq(&self, other: &Self) -> Bool`. Struct: conjunction of
+`def eq(other: &Self) -> Bool`. Struct: conjunction of
 `self.f_i == other.f_i`. Enum: `match` on `(&self, &other)` returning `true`
 when both sides are the same variant with all corresponding fields equal.
 
@@ -246,7 +253,7 @@ the built-in mixin list at `resolve/mod.rs:139-151`.
 ### 4.6 `Hash`
 
 **Generates:** an in-body `include Hashable` directive on `T[GP]` with
-`def hash(&self, hasher: &var Hasher) -> Unit`. For each field emits
+`def hash(hasher: &var Hasher) -> nil`. For each field emits
 `self.field.hash(hasher)`. For enums, also hashes the variant discriminant
 first.
 
@@ -273,7 +280,7 @@ variant`. For structs with no fields, trivially emit `Self {}` / unit.
 ### 4.8 `Ord`
 
 **Generates:** an in-body `include Ord` directive on `T[GP]` with
-`def cmp(&self, other: &Self) -> Ordering`. Struct: lexicographic over
+`def cmp(other: &Self) -> Ordering`. Struct: lexicographic over
 fields in declaration order. Enum: by variant index first, then
 lexicographic over payload.
 
@@ -349,7 +356,7 @@ codegen
 ```
 
 Concretely: `typeck::type_check` at
-`crates/ruxen-core/src/typeck/mod.rs:37-69` currently runs
+`compiler/ruxen_core/src/typeck/mod.rs:37-69` currently runs
 `Resolver::resolve` then `TraitResolver::collect_impls`. Insert a new
 `DeriveExpander::expand(&var program, &var symbols)` between those two
 lines. It **must** run before `TraitResolver::collect_impls` so collected
@@ -357,7 +364,7 @@ impls include the derived ones.
 
 ### 5.3 `DeriveExpander` module
 
-New file: `crates/ruxen-core/src/implicit_includes/mod.rs` (and submodules per implicit
+New file: `compiler/ruxen_core/src/implicit_includes/mod.rs` (and submodules per implicit
 kind). Public API:
 
 ```rust
@@ -465,11 +472,12 @@ auto-derived — see §9.4 for the span strategy.
 struct Point
   x: Float
   y: Float
-  derive Debug, Clone, Copy
+  include Debug, Clone, Copy   # optional: these are implicit
 end
 ```
 
-The `derive` directive is body-level, alongside `layout` and `include`.
+As shipped, there is no `derive` directive: the explicit form is a
+body-level `include`, alongside `layout`.
 
 ### 6.2 In-body only
 
@@ -511,23 +519,9 @@ This is the 5d milestone, not v1. Sketch only.
 
 ### 7.1 Declarative macros (preferred first step)
 
-Borrowing from Rust's `macro_rules!` but rendered in Ruxen keyword style:
-
-```
-macro array!
-  () => { Array.new }
-  ($x:expr) => {
-    var v = Array.new
-    v.push($x)
-    v
-  end }
-  ($x:expr, $($rest:expr),+) => {
-    var v = array!($($rest),+)
-    v.push($x)
-    v
-  end }
-end
-```
+Not implemented, and no surface syntax is chosen. The original sketch
+copied a Rust `macro_rules!`-style token-pattern form with `=>` arms; it
+is removed because it is not Ruxen syntax.
 
 - Fragment specifiers: `expr`, `ident`, `ty`, `pat`, `stmt`, `tt` (token
   tree), `literal`.
@@ -537,7 +531,7 @@ end
   `TokenStream`/`TokenTree` representation. The lexer emits
   `Vec<Token>` which the parser consumes. For macros we'd grow a
   `TokenTree` enum (`Group`, `Ident`, `Punct`, `Literal`) — add this to
-  `ruxen-core/src/macros/` when 5d lands.
+  `ruxen_core/src/macros/` when 5d lands.
 
 ### 7.2 Function-like and custom derives
 
@@ -566,11 +560,11 @@ actually provides and is good enough for 95% of uses.
 
 ### 7.4 Public API surface
 
-For v1: there is **no** user-facing macro/derive API. `ruxen-core` has no
+For v1: there is **no** user-facing macro/derive API. `ruxen_core` has no
 `TokenStream` in its public surface. Users cannot import from
 `ruxen::macros::*` because no such module exists.
 
-For 5d: introduce `ruxen-core::macros` with `TokenStream`, `TokenTree`,
+For 5d: introduce `ruxen_core::macros` with `TokenStream`, `TokenTree`,
 `Span`, `Spanned<T>`. Intentionally lean; proc-macro-style
 `quote!`/`parse_macro_input!` deferred.
 
@@ -604,12 +598,12 @@ For stdlib mixin definitions themselves (the definition of `mixin Clone
 The built-in mixin list in `resolve/mod.rs` is a bootstrap shim that will
 eventually be removed once stdlib is loaded as a real dependency.
 
-### 8.3 LSP / `ruxen-ide`
+### 8.3 LSP / `ruxen_ide`
 
 Derived provisions must be discoverable by hover and goto-definition.
 The expander attaches a `Span` to each generated item pointing at the
 original `derive MixinName` directive's span — not a synthesized
-span. `ruxen-ide` then treats goto-def on a call to `.clone()` on a
+span. `ruxen_ide` then treats goto-def on a call to `.clone()` on a
 derived struct as "jumps to the `derive Clone` directive on the
 struct definition", which is the right UX.
 
@@ -661,9 +655,9 @@ Each step is a separately reviewable PR.
 - Each with correct required methods (`eq`, `hash`, `default`, `cmp`,
   `partial_cmp`).
 
-### 9.3 Step 3 — Scaffold `ruxen-core::derive` module
+### 9.3 Step 3 — Scaffold `ruxen_core::derive` module
 
-- Create `crates/ruxen-core/src/implicit_includes/mod.rs` with the struct layout
+- Create `compiler/ruxen_core/src/implicit_includes/mod.rs` with the struct layout
   from §5.3.
 - Wire into `typeck::type_check` between phase 1 (resolve) and phase 2
   (collect_impls).
@@ -700,15 +694,15 @@ Each generator:
 Diagnostic codes: E0601–E0609 (reserved block). Template:
 
 ```
-error[E0601]: cannot derive Copy on struct `Foo`
+error[E0601]: cannot synthesize Copy: field has non-Copy type
   --> foo.rx:3:3
 3 |   inner: Array[Int]
   |   ^^^^^^^^^^^^^^^^^ field type `Array[Int]` is not Copy
   |
 note: Copy was requested here
   --> foo.rx:5:3
-5 |   derive Copy
-  |   ^^^^^^^^^^^
+5 |   include Copy
+  |   ^^^^^^^^^^^^
 ```
 
 Two spans always: the offending field (or variant), and the
@@ -746,8 +740,8 @@ default all emits to `derive ...` (cleaner; adopt this).
 ## 10. Test matrix
 
 For each combination cell, a fixture under
-`crates/ruxen-core/tests/fixtures/derive/` and an integration test under
-`crates/ruxen-core/tests/derive_*.rs` asserting
+`compiler/ruxen_core/tests/fixtures/derive/` and an integration test under
+`compiler/ruxen_core/tests/derive_*.rs` asserting
 (1) compiles, (2) produces expected output or expected diagnostic.
 
 ### 10.1 Shape axis
@@ -759,7 +753,7 @@ For each combination cell, a fixture under
 | Tuple struct                    | `struct Wrap(Int)`                        |
 | Unit struct                     | `struct Unit end`                         |
 | Enum, all unit variants         | `enum Color { Red, Green, Blue }`         |
-| Enum, tuple variants            | `enum E { A(Int), B(Str, Bool) }`         |
+| Enum, tuple variants            | `enum E` with `A(Int)`, `B(String, Bool)` |
 | Enum, struct variants           | `enum E { A { x: Int } }`                 |
 | Enum, mixed                     | `enum Shape { Unit, P(Int), R{w:Int,h:Int} }` |
 | Recursive type                  | `struct List[T] { head: T, tail: Option[Box[List[T]]] }` |
@@ -798,7 +792,7 @@ the same HIR.
 
 ### 10.6 LSP / IDE
 
-`ruxen-ide` hover on a `.clone()` call for a derived struct shows the
+`ruxen_ide` hover on a `.clone()` call for a derived struct shows the
 generated provision signature; goto-def lands on the `derive Clone`
 attribute (§8.3).
 
@@ -825,7 +819,7 @@ explicitly deferred.
 
 ### 12.1 `Hashable` vs hash-keyed map
 
-The collection type is `Map[K, V]` (per the syntax spec §3.11). The
+The collection type is `Hash[K, V]` (Ruby's name). The
 mixin describing "value that can be hashed" is `Hashable` (fits the
 existing `Display`, `Ord` pattern at `resolve/mod.rs:140-143`).
 `derive Hash` is the body-level derive spelling; expansion produces an

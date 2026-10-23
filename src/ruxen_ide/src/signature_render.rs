@@ -1,5 +1,5 @@
 //! Single source of truth for rendering a function/method signature in IDE
-//! features. Both `hover` and `signature_help` call [`render`] so they can
+//! features. `hover`, `signature_help` and `completion` call [`render`] so they can
 //! never drift from each other — or from `ruxen fmt`, since the actual
 //! assembly lives in `ruxen_core::formatter::render_fn_signature`.
 

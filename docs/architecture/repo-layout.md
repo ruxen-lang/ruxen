@@ -18,8 +18,7 @@ ruxen/
 │   ├── ruxen_codegen_cranelift/
 │   ├── ruxen_codegen_llvm/
 │   ├── ruxen_diagnostics/
-│   ├── ruxen_formatter/
-│   └── ruxen_driver/               # orchestrator that re-exports the phase crates
+│   └── ruxen_formatter/
 │
 ├── library/                        # everything user code sees at runtime
 │   ├── runtime/                    # C runtime, unity-built from per-module files
@@ -59,8 +58,7 @@ ruxen/
 
 - `compiler/*` may depend on each other in phase order:
   `lexer → parser → ast → hir → resolve → typeck → mir → borrowck → codegen_*`.
-  No upward edges (codegen does not import resolve). The `ruxen_driver`
-  crate sits on top and orchestrates each phase.
+  No upward edges (codegen does not import resolve).
 - `compiler/*` may **not** depend on `library/*`. The compiler is pure
   Rust; the runtime is C and is linked into the user binary, not into
   the compiler.
@@ -72,10 +70,10 @@ ruxen/
   every Ruxen binary.
 - `library/std/*.rx` is read at compile-time by `ruxen_resolve` via
   the implicit-includes pipeline.
-- `src/ruxenc` depends on `compiler/ruxen_driver` plus the codegen
-  backend it chooses at runtime.
+- `src/ruxenc` depends on `compiler/ruxen_core`, which holds every
+  phase and both codegen backends.
 - `tests/*` lives at workspace root and depends on
-  `compiler/ruxen_driver` + `src/ruxenc` only.
+  `compiler/ruxen_core` + `src/ruxenc` only.
 
 ## Why this layout
 

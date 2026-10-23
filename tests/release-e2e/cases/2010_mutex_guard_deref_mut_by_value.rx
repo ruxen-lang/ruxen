@@ -1,0 +1,23 @@
+## `MutexGuard#deref_mut` / `#deref_var` on a non-String payload give the
+## same `&var T` a local would: the array pointer or the scalar itself, not
+## the address of the mutex's payload slot (which corrupted the heap on
+## `push` and printed an address for Int).
+
+def append_three(a: &var Array[Int])
+  a.push(3)
+end
+
+def main
+  m = Mutex.new([1, 2])
+  g = m.lock!
+  append_three(g.deref_mut)
+  append_three(g.deref_var)
+  puts "array: #{g.get.size}"
+
+  c = Mutex.new(41)
+  h = c.lock!
+  let r: &var Int = h.deref_mut
+  puts "int: #{r}"
+  let v: &var Int = h.deref_var
+  puts "int var: #{v}"
+end

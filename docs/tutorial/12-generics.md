@@ -294,4 +294,4 @@ Then try `Stack[String]`. Same class, different concrete type.
 - `extension Type[T] where ...` adds methods conditionally.
 - For runtime polymorphism (mixed types in one collection), reach for `any Mixin` (Chapter 8).
 
-**Next:** [Collections](13-collections.md) — the standard `Array`, `Map`, and `Set` types in everyday use.
+**Next:** [Collections](13-collections.md) — the standard `Array`, `Hash`, and `Set` types in everyday use.

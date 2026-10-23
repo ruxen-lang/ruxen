@@ -25,8 +25,8 @@ This unblocks:
 - **`Display`/`Debug` in `puts "#{any_obj}"` for non-stdlib types** —
   string interpolation could dispatch through a vtable instead of
   the current hardcoded primitive-only path.
-- **`Iterator` and `Iterable`** — generic `each`/`map`/`filter` over
-  a heterogeneous collection.
+- **Block methods over mixed collections** — generic `each`/`map`/
+  `select` over a heterogeneous collection.
 
 ---
 
@@ -158,7 +158,7 @@ Today: `f.poll(ctx)` where `f: TimeSleepFuture` lowers to
 unchanged for direct method calls.
 
 The dynamic path activates when the receiver's type is the **mixin
-itself** (e.g., a `dyn Future` parameter or a polymorphic slot):
+itself** (e.g., a `&var Future` parameter or a polymorphic slot):
 
 ```rx
 def run_one(fut: &var Future) -> nil
@@ -168,7 +168,7 @@ def run_one(fut: &var Future) -> nil
 end
 ```
 
-`fut: &var Future` is a `dyn`-shaped reference. The call lowers to
+`fut: &var Future` is a runtime-dispatched reference. The call lowers to
 `Future_dynamic_poll(fut_ptr, cx_ptr)` instead of a static
 `<ConcreteClass>_poll`. The vtable in fut's header resolves the
 concrete poll fn.
@@ -176,7 +176,7 @@ concrete poll fn.
 For sub-phase 5's task queue, every enqueued future is held as
 `&var Future` — the scheduler calls `Future_dynamic_poll` on each.
 
-## B7 — `dyn Mixin` parameter / field type
+## B7 — `&Mixin` parameter / field type
 
 New syntax: `&Mixin` / `&var Mixin` as parameter / field type
 denotes a runtime-dispatched reference. The static type check
@@ -255,8 +255,8 @@ Each `dispatch runtime` mixin + each implementor class C adds:
 - One init-time write to `self.class_info_ptr`.
 - One indirect call at every `&Mixin`-typed dispatch site.
 
-Per-call overhead: one extra load + one indirect call. Comparable
-to Rust's `dyn Trait`. Acceptable for v1.
+Per-call overhead: one extra load + one indirect call. Acceptable
+for v1.
 
 ## B11 — Memory layout impact on existing classes
 
@@ -316,9 +316,9 @@ sub-phase 5.
 - **Multiple `dispatch runtime` mixins per class** (B8 handles it
   structurally but v1 ships with Future as the only one — single-
   slot class_info struct).
-- **`dyn Mixin` upcasting / downcasting** — Rust's `dyn Trait as dyn
-  OtherTrait` is fancy; v1 doesn't need it.
-- **Mixin generics in runtime dispatch** — `dyn Iterator[T]` where T
+- **Runtime-dispatched mixin upcasting / downcasting** (viewing an
+  `&Mixin` as `&OtherMixin`) — v1 doesn't need it.
+- **Mixin generics in runtime dispatch** — `&Container[T]` where T
   varies across implementors. v1 ships with `Future` whose Output is
   associated (already supported via mixin's `type Output`).
 - **Drop / Display / Hash migration to runtime dispatch** — each is

@@ -56,6 +56,14 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0007",
         title: "malformed format spec",
     },
+    CodeInfo {
+        code: "E0008",
+        title: "`None` is not valid; use `nil`",
+    },
+    CodeInfo {
+        code: "E0009",
+        title: "`..=` is not valid range syntax; use `..`",
+    },
     // ── Reserved diagnostic-test code ────────────────────────────────
     // Used by `diagnostics::tests` to exercise the `code` field.
     CodeInfo {
@@ -215,14 +223,12 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0712",
         title: "SeekFrom arg out of range (negative offset on Start)",
     },
-    // Phase 2 #06.5 T6: BufReader[R] / BufWriter[W] v1 restrict the
-    // inner type to the closed set {File, TcpStream}. The full
-    // Read/Write trait/mixin story is deferred to v1.5 with the
-    // iterator-trait work; until then any other R/W is rejected at
-    // typeck with E0714 (see typeck::method_resolvers::builtin_method_type).
+    // A method called on a `module` name (`BufReader.new`): a module is a
+    // namespace, so the call names one of its classes instead
+    // (`BufReader.File.new`). Emitted by typeck `reject_module_receiver`.
     CodeInfo {
         code: "E0714",
-        title: "BufReader/BufWriter inner type must be File or TcpStream (v1)",
+        title: "method called on a module instead of a class inside it",
     },
     // #06.8 Phase 2: cross-decl FFI signature conflict — two
     // `lib`/`extern` declarations target the same C symbol with
@@ -256,7 +262,7 @@ pub const REGISTRY: &[CodeInfo] = &[
     // page regardless of whether the failure is io, lexer, or parser.
     CodeInfo {
         code: "E0725",
-        title: "stdlib bootstrap failed (file missing / lex / parse error)",
+        title: "stdlib bootstrap failed (file missing / lex / parse error / unsupported item)",
     },
     // Type-directed auto-call: a bare reference to a function/method that
     // requires arguments, used in a value position whose expected type is
@@ -277,7 +283,7 @@ pub const REGISTRY: &[CodeInfo] = &[
     },
     CodeInfo {
         code: "E0728",
-        title: "top-level expression statement is not executable; wrap it in `def main`",
+        title: "top-level expression statement conflicts with explicit `def main`",
     },
     CodeInfo {
         code: "E0729",
@@ -291,10 +297,106 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0730",
         title: "`str` is not a type; use `String` (owned) or `&String` (borrowed)",
     },
+    CodeInfo {
+        code: "E0731",
+        title: "logical operator requires Bool operands",
+    },
+    CodeInfo {
+        code: "E0732",
+        title: "nil-coalescing operator requires Option and a matching fallback",
+    },
+    CodeInfo {
+        code: "E0733",
+        title: "bitwise complement requires an integer operand",
+    },
+    // E0734-E0738 (F-3, no dropped input): resolve / typeck errors that
+    // used to be uncoded or silently skipped. The REPL defers a definition
+    // on E0734/E0735/E0736 by code, never by message text.
+    CodeInfo {
+        code: "E0734",
+        title: "undefined variable",
+    },
+    CodeInfo {
+        code: "E0735",
+        title: "undefined function",
+    },
+    CodeInfo {
+        code: "E0736",
+        title: "could not infer a function's parameter or return type",
+    },
+    CodeInfo {
+        code: "E0737",
+        title: "`where` predicate does not constrain a generic parameter",
+    },
+    CodeInfo {
+        code: "E0738",
+        title: "name in a `use` group not found",
+    },
+    // E0739: the entry point has the fixed C `main(argc, argv)` ABI; user
+    // parameters on a free `def main` used to reach codegen and panic it.
+    CodeInfo {
+        code: "E0739",
+        title: "`main` cannot take parameters",
+    },
+    // E0740: a method name the receiver's home class does not declare
+    // (`Array.from(123)`), from typeck `resolve_method_call`. It used to type
+    // as a fresh variable and fail at link time.
+    CodeInfo {
+        code: "E0740",
+        title: "no method with this name on the receiver's type",
+    },
+    // E0741: an argument of a builtin head's class method that does not fit
+    // the declared parameter (`Array.with_capacity("x")`).
+    CodeInfo {
+        code: "E0741",
+        title: "argument type does not match the class method's parameter",
+    },
+    // E0742: a call of an overloaded free function whose argument fits no
+    // overload (`f(2.5)` with only `f(Int)` and `f(Bool)`). The resolver
+    // falls back to an overload by arity, which passed the value anyway.
+    CodeInfo {
+        code: "E0742",
+        title: "no overload of the function takes this argument type",
+    },
+    // E0743: an argument bound to a closure parameter (`Fn[...]`,
+    // `Proc[...]`) that is not a callable taking the declared parameter types
+    // (`run(5)`, `[1, 2].each(5)`). It used to type-check and crash at the
+    // indirect call.
+    CodeInfo {
+        code: "E0743",
+        title: "argument is not a closure matching the parameter's signature",
+    },
+    // E0744: a borrow `&T` of a non-Copy `T` (a field read, a `&T`
+    // parameter) used where an owned `T` is required: a by-value parameter,
+    // a `-> T` return, a `let`/field typed `T` (TODO.md Decisions, "Fields").
+    // Owning it would free a value its owner still frees.
+    CodeInfo {
+        code: "E0744",
+        title: "a borrowed value is used where an owned value is required",
+    },
+    // E0745: a method's own generic parameter named like a generic of its
+    // enclosing type (`resolve/funcs.rs`).
+    CodeInfo {
+        code: "E0745",
+        title: "a method's generic parameter shadows its type's generic parameter",
+    },
+    // E0746: a generic instantiation nests deeper than the instance
+    // engine's bound (`mir/lower/instances`): a body that instantiates
+    // itself with an ever larger type.
+    CodeInfo {
+        code: "E0746",
+        title: "a generic instantiation nests too deeply",
+    },
+    // E0747: a `lib` declaration with a compiler-supplied parameter
+    // (`ElemDesc[T]`, `KeyDesc[K]`) before one its callers pass
+    // (`mir/lower/key_desc.rs::SuppliedParams::from_libs`).
+    CodeInfo {
+        code: "E0747",
+        title: "a compiler-supplied parameter is not last",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
-    // The borrow checker maintains a parallel `ErrorCode` enum in
-    // `borrow_check/errors.rs`; titles below mirror its `title()`
-    // method. Keep them in sync when adding new codes.
+    // The borrow checker's `ErrorCode` enum in `borrow_check/errors.rs`
+    // reads its titles from these rows.
     CodeInfo {
         code: "E1001",
         title: "value used after move",
@@ -303,17 +405,11 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1002",
         title: "cannot borrow writably — already borrowed read-only",
     },
+    // E1003 is no longer emitted: the MIR loan check reports a conflicting
+    // borrow as E1002 or E1009 (docs/errors/E1003.md). Codes stay registered.
     CodeInfo {
         code: "E1003",
         title: "cannot borrow read-only — already borrowed writably",
-    },
-    CodeInfo {
-        code: "E1004",
-        title: "cannot move out of borrowed reference",
-    },
-    CodeInfo {
-        code: "E1005",
-        title: "borrow outlives owner",
     },
     CodeInfo {
         code: "E1006",
@@ -322,10 +418,6 @@ pub const REGISTRY: &[CodeInfo] = &[
     CodeInfo {
         code: "E1007",
         title: "cannot borrow `let` binding writably",
-    },
-    CodeInfo {
-        code: "E1008",
-        title: "value moved into closure, cannot be used outside",
     },
     CodeInfo {
         code: "E1009",
@@ -362,6 +454,51 @@ pub const REGISTRY: &[CodeInfo] = &[
     CodeInfo {
         code: "E1015",
         title: "type does not satisfy declared mixin bound",
+    },
+    // E1017 — `include X` in a class/struct/enum body where `X` names a
+    // class, struct, enum or type alias rather than a mixin (Ruby:
+    // `TypeError`, expected Module). E1016 stays reserved for the
+    // MutexGuard check in tier1_02_concurrency.md. Emitted by resolve.
+    CodeInfo {
+        code: "E1017",
+        title: "`include` of a type that is not a mixin",
+    },
+    // E1018 — a block parameter (`&block: Fn[...]`, the implicit-yield
+    // `__block`, or any `Fn[...]` parameter) used other than by calling it,
+    // testing it with `block_given?`, or forwarding it to another `Fn[...]`
+    // parameter. A block borrows its captures, so storing it would outlive
+    // them; `Proc[...]` is the storable spelling. Emitted by borrow_check.
+    CodeInfo {
+        code: "E1018",
+        title: "block parameter stored",
+    },
+    // E1019 — a closure body uses a capture it only borrows by value (returns
+    // it, binds it, passes it to a by-value parameter, stores it, or captures
+    // it in an owning proc or lambda). A block borrows every capture, and a
+    // closure nested in another closure borrows what it takes from it; the
+    // owner still frees the value, so a move would free it twice. The fix is
+    // `.clone`. Emitted by borrow_check.
+    CodeInfo {
+        code: "E1019",
+        title: "cannot move a borrowed capture out of a closure body",
+    },
+    // E1020 — assigning to a `&var` parameter whose type is passed as its
+    // handle word (a class, struct, enum, array, hash, closure or type
+    // parameter; see `Ty::refmut_is_slot_address`). The callee holds a copy
+    // of the caller's handle, so the rebinding would never reach the caller:
+    // a silent no-op. Emitted by borrow_check.
+    CodeInfo {
+        code: "E1020",
+        title: "cannot rebind a `&var` parameter that holds a handle",
+    },
+    // E1021 — a `&var` argument for a String or scalar parameter (passed as
+    // the address of the caller's storage) that has no address: a Hash
+    // value, a safe-navigation field read, a field of a non-object
+    // (`HirExpr::is_unaddressable_var_place`). The write would be lost.
+    // Emitted by borrow_check.
+    CodeInfo {
+        code: "E1021",
+        title: "this value has no address to pass to a `&var` parameter",
     },
     // Send/Sync enforcement at thread-boundary construction sites
     // (docs/specs/ownership/send_sync_enforcement.spec.md). E1011 / E1012
@@ -473,11 +610,50 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E1122",
         title: "alias name collides with an existing definition",
     },
-    // E1123 fires for an operator-spelled alias new-name or target
-    // (`alias << push`, `alias [] get`) — staged for Tier 2 (ADR D6).
+    // E1123 fires when an operator-spelled alias new-name or target has no
+    // surface expression dispatch path (`alias +@ value`, ADR D6).
     CodeInfo {
         code: "E1123",
-        title: "operator aliases are not yet supported",
+        title: "operator alias has no supported expression dispatch path",
+    },
+    // Block Tier-2 (docs/decisions/ruby-block-semantics.md, staged). E1124
+    // fires when a `&`-form block argument (`&:sym` to-proc, `&block` / bare
+    // `&` block-forwarding) is used incorrectly — either it is not the last
+    // argument of the call, or a `&block` / `&` forward appears in a function
+    // that has no block parameter to forward.
+    CodeInfo {
+        code: "E1124",
+        title: "invalid `&`-block argument",
+    },
+    // E1125 is NOT ours — it is referenced (in comments only) by the
+    // inlined-combinator `next` rejection and is being reconciled under
+    // B81. E1126 is the next free slot.
+    //
+    // E1126 closes the B87 silent-drop hole: a `name!(...)` that reached
+    // HIR as a `MacroCall` whose name is not in
+    // `parser::macros::BUILTIN_MACRO_NAMES` used to lower to nothing at
+    // all, so the call vanished from the program without a word. It is
+    // now a hard error. The parser only builds a `MacroCall` for a
+    // registered macro, so it fires for the retired collection macros
+    // (`vec!`, `array!`, `map!`, `hash!`, `set!`) and for a macro
+    // registered without a lowering.
+    CodeInfo {
+        code: "E1126",
+        title: "unknown macro",
+    },
+    // E1127 (F-2, no silent stubs): `super(...)` outside the instance
+    // `init` of a class with a parent. It used to lower to a runtime no-op
+    // (`ruxen_noop`), silently skipping the call. Emitted by resolve.
+    CodeInfo {
+        code: "E1127",
+        title: "`super` outside the `init` of a subclass",
+    },
+    // E1128 (F-2): `x[i]` on a receiver with no index lowering (a tuple,
+    // a fixed-size array with a non-literal index, a scalar, ...). The MIR
+    // index catch-all used to yield an unset value. Emitted by typeck.
+    CodeInfo {
+        code: "E1128",
+        title: "value cannot be indexed",
     },
     // ── no_std / embedded (E1400-E1499) ──────────────────────────────
     // Tier 4.04. E1400 fires when a no_std compilation unit constructs a

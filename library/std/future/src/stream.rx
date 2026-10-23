@@ -1,0 +1,266 @@
+## Stream — pull-based, backpressured async stream (spec §4.5). The async
+## analogue of `Enumerable[T]`: defined over ONE required primitive
+## `def var poll_next(cx) -> Poll[Option[Int]]`, with `for_each`/`count`/`map`/
+## `filter`/`take` as DEFAULT BODIES built on `poll_next` — exactly how
+## `Enumerable[T]` is defined over `each`. Backpressure is intrinsic to PULL
+## semantics: the consumer drives `poll_next`, so upstream is polled only when
+## downstream demands. Resource safety from ownership + `def drop`: a source
+## stream owns its reactor registration / `state_ptr` and tears it down at scope
+## exit (including mid-stream cancellation — the consumer stops pulling, drops
+## the stream).
+##
+## v1 surface (what the current lowering supports):
+##   * `mixin Stream dispatch runtime` — `poll_next` dispatches through the
+##     runtime vtable (`Stream_dynamic_poll_next`), so adapters can hold a
+##     heterogeneous inner stream by value and poll it polymorphically. (Same
+##     `dispatch runtime` mechanism as `Future`; the combination of a
+##     runtime-dispatch mixin WITH default-body methods is new here and works.)
+##   * **`for_each` is a SYNCHRONOUS pump driver** — it builds a `Context`,
+##     pumps `poll_next` in a `while` loop, parks on `Poll.Pending` via
+##     `Thread.yield_now` (→ the reactor wait point), and stops on
+##     `Poll.Ready(nil)` (stream end). NOT an `async def` and NOT `.await`-in-
+##     loop (both gated): a hand pump like `block_on` / `Scope.collect`. So the
+##     v1 consumer driver is `stream.for_each do |x| … end` from SYNC code, NOT
+##     the spec sketch's `for x in stream` (which needs method-level async
+##     lowering — deferred to v2; the ergonomic-`for-in` form is the follow-up).
+##   * **v1 element channel is `Int`** (`Poll[Option[Int]]`) — the established
+##     Task/Race/Scope/Queue convention; typed-generic `Stream[T]` deferred.
+##   * v1 = single-consumer pull streams with leak-free cancel. NOT in scope:
+##     concurrent stages (`mapPar`/`merge`), reactive-streams demand-protocol
+##     interop — explicitly v2.
+##
+## `type Item` is declared for documentation/symmetry with `Enumerable[T]`; v1
+## fixes the wire channel at `Int` (the `Poll[Option[Int]]` in the signatures),
+## so adapters and the driver speak `Int` regardless of `Item`.
+mixin Stream dispatch runtime
+  type Item
+
+  ## The ONE required primitive. Ready(Some(v)) = next element; Ready(nil) =
+  ## end of stream; Pending = no element yet, parked (the source registered the
+  ## waker on the reactor). Each source/adapter implements this.
+  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
+
+  ## SYNC consumer driver: pump `poll_next` to exhaustion, calling `f` on each
+  ## element. Builds a `Context` (installs/holds the per-thread reactor for the
+  ## drive). The `while`-with-`match` SYNC pump mirrors the block_on inline loop
+  ## and `Scope.collect` — no `.await`, so it is not gated by the `.await`-in-
+  ## loop `segment_cfg` set.
+  ##
+  ## On `Poll.Pending` it uses `Scope.pump_or_park` (NOT a bare
+  ## `Thread.yield_now`): pump the thread-local scheduler once, and only PARK on
+  ## the reactor if that made no progress AND no task is ready. Without the pump
+  ## a stream whose source returns Pending until a SPAWNED task / Queue producer
+  ## completes would never drive that task → spin forever (Codex high finding;
+  ## same progress rule block_on and `Scope.collect` use). A reactor-backed
+  ## source (timer/fd) parks correctly; a task-backed source gets pumped.
+  ##
+  ## Context lifecycle: v1 leaks ONE Context heap block per `for_each` drive
+  ## (the same bounded leak class block_on has — the per-thread reactor is
+  ## intentionally NOT released, and a `cx` local bound from `Context.executor`
+  ## (a static-method result) is tainted out of drop-elaboration so no
+  ## `ruxen_dealloc` fires). Bounded by the number of drains, not iterations or
+  ## lifetime; documented, not hidden. A `Context`-reuse / explicit-teardown
+  ## driver is a v2 follow-up.
+  def var for_each(f: Fn(Int) -> nil) -> nil
+    var cx = Context.executor
+    var running = true
+    while running
+      match (&var self).poll_next(&var cx)
+        Poll.Ready(item) ->
+          match item
+            Some(v) -> f.(v)
+            nil     -> running = false
+          end
+        Poll.Pending -> Scope.pump_or_park
+      end
+    end
+    nil
+  end
+
+  ## Drain the stream and return how many elements it yielded. A default body
+  ## over `for_each` (which is itself over `poll_next`) — the `Enumerable`
+  ## reuse shape.
+  def var count -> Int
+    var n = 0
+    self.for_each do |x|
+      n = n + 1
+    end
+    n
+  end
+
+  ## Drain the stream and return the SUM of its elements (v1 Int channel).
+  ## Another `for_each`-derived default body; useful for asserting the exact
+  ## element sequence in one number.
+  def var sum -> Int
+    var total = 0
+    self.for_each do |x|
+      total = total + x
+    end
+    total
+  end
+end
+
+## ── Adapters ────────────────────────────────────────────────────────────────
+##
+## Each adapter `include`s `Stream`, OWNS its inner stream BY VALUE as an
+## `any Stream` (dyn-mixin) field, and implements `poll_next` by polling the
+## inner via the runtime vtable (`(&var self.inner).poll_next(cx)`) and
+## transforming. Dropping an adapter chain drops every stage (each runs its own
+## `def drop`) — leak-free teardown by ownership.
+##
+## v1 SURFACE NOTE — adapters are constructed DIRECTLY (`MapStream.new(src, f)`,
+## `FilterStream.new(src, pred)`, `TakeStream.new(src, n)`), NOT via fluent
+## methods (`src.map(f)`). The spec sketch's `stream.map(f) -> MapStream[Self,U]`
+## needs the method to MOVE `self` (the source) into the adapter — but moving
+## `self` out of a `&var self` method body isn't supported (the explicit `(self)`
+## consume form is `lib`-block-only). So the v1 surface takes the inner stream as
+## a constructor ARG by value (the `Race.of`/`Queue` value-construction shape).
+## The fluent `.map`/`.filter`/`.take` form is a v2 follow-up (by-move-self).
+
+## `map` — apply `f` to each element. The output element is `f.(v)` (v1 Int→Int).
+##
+## A `done` latch FUSES the adapter: once the inner returns `nil` (end), every
+## later `poll_next` returns `nil` WITHOUT re-polling the inner — so a non-fused
+## inner that yields a value after its `nil` can't leak past the end (Codex
+## medium finding). `for_each` already stops on the first `nil`, but `poll_next`
+## is the public primitive and a composing adapter / custom driver may re-poll.
+class MapStream
+  inner: any Stream
+  f: Proc[(Int) -> Int]
+  done: Int
+  include Stream
+  type Item = Int
+
+  def init(inner: any Stream, f: Proc[(Int) -> Int])
+    self.inner = inner
+    self.f = f
+    self.done = 0
+  end
+
+  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
+    if self.done != 0
+      return Poll.Ready(nil)
+    end
+    match (&var self.inner).poll_next(cx)
+      Poll.Ready(item) ->
+        match item
+          Some(v) -> Poll.Ready(Some(self.f.(v)))
+          nil ->
+            self.done = 1
+            Poll.Ready(nil)
+        end
+      Poll.Pending -> Poll.Pending
+    end
+  end
+
+  ## Drop the owned inner stream (runs ITS `def drop` via `Drop_dynamic_drop`,
+  ## then frees its block) — so dropping a chain drops every stage (§4.5 Inc4).
+  ## `self.inner` (an `any Stream` heap pointer) flows into the `Int`-typed
+  ## helper at the i64 ABI (the `Task.spawn_raw`/`Race` future-value precedent);
+  ## the helper null-guards, so no `.rx`-side null check is needed.
+  def drop
+    ruxen_stream_drop_inner(self.inner)
+  end
+end
+
+## `filter` — keep only elements where `pred` holds. A dropped element does NOT
+## end the stream — we must KEEP POLLING the inner until it yields a kept element
+## or ends. The inner loop drains rejected elements in one `poll_next` call (so a
+## reactor-backed inner that returns Pending mid-drain still surfaces Pending to
+## the driver, which parks correctly).
+class FilterStream
+  inner: any Stream
+  pred: Proc[(Int) -> Bool]
+  done: Int
+  include Stream
+  type Item = Int
+
+  def init(inner: any Stream, pred: Proc[(Int) -> Bool])
+    self.inner = inner
+    self.pred = pred
+    self.done = 0
+  end
+
+  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
+    if self.done != 0
+      return Poll.Ready(nil)
+    end
+    var looking = true
+    var out: Poll[Option[Int]] = Poll.Pending
+    while looking
+      match (&var self.inner).poll_next(cx)
+        Poll.Ready(item) ->
+          match item
+            Some(v) ->
+              if self.pred.(v)
+                out = Poll.Ready(Some(v))
+                looking = false
+              end
+            nil ->
+              self.done = 1
+              out = Poll.Ready(nil)
+              looking = false
+          end
+        Poll.Pending ->
+          out = Poll.Pending
+          looking = false
+      end
+    end
+    out
+  end
+
+  ## Drop the owned inner stream (chain teardown, §4.5 Inc4).
+  def drop
+    ruxen_stream_drop_inner(self.inner)
+  end
+end
+
+## `take` — yield at most the first `remaining` elements, then end. Tearing the
+## stream off early (dropping the TakeStream) drops the inner too.
+class TakeStream
+  inner: any Stream
+  remaining: Int
+  done: Int
+  include Stream
+  type Item = Int
+
+  def init(inner: any Stream, n: Int)
+    self.inner = inner
+    self.remaining = n
+    self.done = 0
+  end
+
+  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
+    if self.done != 0 || self.remaining <= 0
+      self.done = 1
+      return Poll.Ready(nil)
+    end
+    match (&var self.inner).poll_next(cx)
+      Poll.Ready(item) ->
+        match item
+          Some(v) ->
+            self.remaining = self.remaining - 1
+            Poll.Ready(Some(v))
+          nil ->
+            # Inner ended before the quota — fuse so we don't re-poll it.
+            self.done = 1
+            Poll.Ready(nil)
+        end
+      Poll.Pending -> Poll.Pending
+    end
+  end
+
+  ## Drop the owned inner stream (chain teardown, §4.5 Inc4).
+  def drop
+    ruxen_stream_drop_inner(self.inner)
+  end
+end
+
+## §4.5 Increment 4 — adapter inner-drop helper (defined in runtime/stream.c).
+## Runs the inner `any Stream`'s `def drop` via the compiler-synthesised
+## `Drop_dynamic_drop` (the §4.1 path, now also emitted for Stream classes —
+## the Drop-vtable gate was widened to `Future` OR `Stream`), then frees the
+## inner's heap block. `self.inner` flows in as its i64 heap pointer.
+lib "runtime/stream.c"
+  def ruxen_stream_drop_inner(inner_ptr: Int) -> nil
+end

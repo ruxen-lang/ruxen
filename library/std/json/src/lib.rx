@@ -59,6 +59,7 @@ class JSON
     def self.as_float as "ruxen_json_as_float"(value: &Json) -> Option[Float]
     def self.as_string as "ruxen_json_as_string"(value: &Json) -> Option[String]
     def self.array_len as "ruxen_json_array_len"(value: &Json) -> Option[Int]
+    def self.array_get as "ruxen_json_array_get"(value: &Json, index: Int) -> Option[Json]
     def self.object_len as "ruxen_json_object_len"(value: &Json) -> Option[Int]
     def self.object_has as "ruxen_json_object_has"(value: &Json, key: &String) -> Bool
     def self.object_get as "ruxen_json_object_get"(value: &Json, key: &String) -> Option[Json]

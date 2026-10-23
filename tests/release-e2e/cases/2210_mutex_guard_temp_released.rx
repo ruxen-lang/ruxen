@@ -1,0 +1,14 @@
+## A `MutexGuard` temporary (`m.lock!.get`) is released at the end of the
+## statement that created it. Before, a guard that was never bound to a
+## local was never dropped: a helper that locked deadlocked on its second
+## call, and so did a second `m.lock!` in the same function.
+def peek(m: &Mutex[Int]) -> Int
+  m.lock!.get
+end
+
+m = Mutex.new(5)
+puts peek(m)
+puts peek(m)
+puts m.lock!.get
+puts m.lock!.get + 1
+puts "no deadlock"

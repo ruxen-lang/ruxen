@@ -1,0 +1,4 @@
+before-drain
+drop payload=7
+after-first-drain
+after-second-drain

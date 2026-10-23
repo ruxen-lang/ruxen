@@ -57,7 +57,7 @@ Ruxen looks at the right-hand side and figures out the type for you. You rarely 
 def main
   let x = 42                 # Int
   let y = 3.14               # Float
-  let name = "Ruxen"         # &str (a borrowed piece of text)
+  let name = "Ruxen"         # String (owned text)
   let flag = true            # Bool
   let ch = ?R                # Char (a single Unicode character)
 
@@ -111,22 +111,22 @@ These are the built-in scalar types — values that fit in a register and copy c
 
 ## Strings
 
-Ruxen has two string flavours:
+Ruxen has one string type and one way to borrow it:
 
 | Type | Owned? | Growable? | Use it when |
 |------|--------|-----------|-------------|
 | `String` | Yes — owns its memory | Yes | You need to keep the text around or change it |
-| `&str` | No — borrows from someone else | No | You just need to read existing text |
+| `&String` | No — borrows from someone else | No | You just need to read existing text |
 
-The `&` in `&str` means **borrow** — you're reading data that someone else owns. Borrowing is covered in detail in [Chapter 4](04-ownership-and-borrowing.md); for now, just know that a bare string literal like `"hello"` is an owned `String`, and it coerces to a `&str` (or `&String`) borrow wherever a function only needs to read it. (The full string-literal model — `""` owned vs `&""` borrowed, and when you'd reach for `.clone` to copy a borrow — is in [Chapter 29](29-strings-bytes-numbers.md).)
+The `&` in `&String` means **borrow** — you're reading data that someone else owns. Borrowing is covered in detail in [Chapter 4](04-ownership-and-borrowing.md); for now, just know that a bare string literal like `"hello"` is an owned `String`, and it satisfies a `&String` parameter wherever a function only needs to read it. There is no separate `str` / `&str` type. (The full string-literal model — `""` owned vs `&""` borrowed, and when you'd reach for `.clone` to copy a borrow — is in [Chapter 29](29-strings-bytes-numbers.md).)
 
 ```ruxen
 def main
-  let greeting = "hello"                  # &str — a string literal
-  let owned = "hello"        # String — heap-allocated, owned
+  let greeting = "hello"                  # String — heap-allocated, owned
+  let view = &greeting                    # &String — a read-only borrow
 
   puts greeting
-  puts owned
+  puts view
 end
 ```
 
@@ -254,7 +254,7 @@ let z = x + y         # ERROR: Int and Float don't auto-convert
 
 Convert explicitly: `let z = (x as Float) + y`.
 
-**Treating `&str` and `String` as interchangeable.** They aren't, but Ruxen will often convert for you at call boundaries. When the compiler complains, `&owned` borrows a `String` as `&String`, and `owned.as_str` gets you an `&str`. We'll come back to this once you've met borrowing properly in Chapter 4.
+**Treating `&String` and `String` as interchangeable.** They aren't, but Ruxen will often convert for you at call boundaries. When the compiler complains, `&owned` borrows a `String` as `&String`, and `borrowed.clone` copies a borrow into a fresh owned `String`. We'll come back to this once you've met borrowing properly in Chapter 4.
 
 ## Try it
 
@@ -265,7 +265,7 @@ Change `intro.rx` so that `year` is a `Float` (`let year: Float = 2026`). Recomp
 - `let` is immutable, `var` is mutable. Prefer `let`.
 - Types are usually inferred. Add `: Type` when you need to be specific.
 - Primitives include `Int`, `Float`, `Bool`, `Char`, and the unit type `nil`.
-- `String` is owned and growable; `&str` is borrowed and read-only.
+- `String` is owned and growable; `&String` is borrowed and read-only.
 - `#{expr}` interpolates a value into a string.
 - Tuples group a few values without ceremony; arrays grow.
 

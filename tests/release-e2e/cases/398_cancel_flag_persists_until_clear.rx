@@ -1,0 +1,56 @@
+## Increment 3 — cancel-flag lifecycle contract (makes the persistent,
+## not-auto-cleared semantics explicit). The cooperative cancel flag is
+## thread-scoped and PERSISTS across `block_on` calls until
+## `ruxen_clear_cancel()` is called — it is NOT auto-cleared at block_on entry.
+## This pin locks that behaviour so a future reader cannot "fix" the runtime to
+## auto-clear (which would silently break a cancel requested before block_on).
+##
+## Flow:
+##   1. request cancel; first block_on observes it → worker returns -1.
+##   2. WITHOUT clearing, a second block_on still observes cancel → -1 again.
+##   3. clear cancel; a third block_on no longer observes it → the worker would
+##      park forever, so instead we just assert the flag reads false after
+##      clear via the bare `ruxen_cancel_requested()` accessor.
+
+class CancelAware
+  tag: Int
+  include Future
+  type Output = Int
+
+  def init(t: Int)
+    self.tag = t
+  end
+
+  def self.make(t: Int) -> CancelAware
+    CancelAware.new(t)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if cx.cancelled?
+      Poll.Ready(-1)
+    else
+      Poll.Pending
+    end
+  end
+end
+
+async def worker() -> Int
+  let v = CancelAware.make(1).await
+  v
+end
+
+def main
+  ruxen_request_cancel()
+  let a = block_on(worker())
+  puts "first=#{a}"
+  # No clear in between: the flag persists, so the SECOND block_on still sees it.
+  let b = block_on(worker())
+  puts "second=#{b}"
+  # Now clear it and confirm the accessor reads false.
+  ruxen_clear_cancel()
+  if ruxen_cancel_requested()
+    puts "still-cancelled"
+  else
+    puts "cleared"
+  end
+end

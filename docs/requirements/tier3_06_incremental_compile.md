@@ -9,7 +9,7 @@ Blocks: high-perf LSP for large files; fast `ruxen check` iteration
 ## 1. Summary & motivation
 
 Ruxen has file-level incremental compilation in `ruxenc` via
-`crates/ruxenc/src/cache/`. That layer is excellent at its job: two
+`src/ruxenc/src/cache/`. That layer is excellent at its job: two
 `ruxenc` invocations on an unchanged project re-link the binary in
 <100 ms without recompiling anything. But inside a single compilation
 of a single file, every phase runs from scratch: lex → parse →
@@ -29,13 +29,13 @@ This matters in three scenarios:
    memoization of typeck results.
 
 This doc specifies a query-based (salsa-style) incremental compilation
-layer inside `ruxen-core`, with the following properties:
+layer inside `ruxen_core`, with the following properties:
 
 - Fine-grained: functions and items, not just whole files.
 - Memoized on content-addressed fingerprints — the same input produces
   the same output, always.
 - Backwards-compatible with the file-level cache in `ruxenc`.
-- Available from both the `ruxenc` CLI and from `ruxen-ide` (consumed
+- Available from both the `ruxenc` CLI and from `ruxen_ide` (consumed
   by the LSP).
 
 ---
@@ -71,7 +71,7 @@ Files:
 
 ### 2.2 In-process analysis always full-pipeline
 
-Both `ruxenc` (`main.rs:503-576`) and `ruxen-ide` (`analysis.rs:43-88`)
+Both `ruxenc` (`main.rs:503-576`) and `ruxen_ide` (`analysis.rs:43-88`)
 call the full pipeline in sequence:
 
 ```rust
@@ -88,7 +88,7 @@ between invocations.
 
 ### 2.3 No query infrastructure
 
-Grep for `salsa`, `query`, `memoize` under `crates/ruxen-core`: zero
+Grep for `salsa`, `query`, `memoize` under `compiler/ruxen_core/`: zero
 matches. No `salsa` dependency. No `DashMap`-based memoizer. No
 `OnceCell` / `Lazy` statics keyed by content hash.
 
@@ -149,7 +149,7 @@ state for a single compile. Not reused.
 ### 4.1 `Database` handle
 
 ```rust
-// crates/ruxen-core/src/db/mod.rs (new)
+// compiler/ruxen_core/src/db/mod.rs (new)
 
 pub struct Database {
     // Internal: memoization tables indexed by query key
@@ -195,7 +195,7 @@ No call site changes.
 
 ### 4.3 LSP consumption
 
-`ruxen-ide/src/analysis.rs::analyze` becomes:
+`ruxen_ide/src/analysis.rs::analyze` becomes:
 
 ```rust
 pub fn analyze_incremental(db: &mut Database, source: &str) -> AnalysisResult {
@@ -343,7 +343,7 @@ writers for the *same* key. Multiple threads calling `db.typeck(file)`
 on the first read will race to compute; the loser of the race drops
 its result. Acceptable.
 
-`set_source` takes `&var self`; the LSP guards with its existing
+`set_source` takes `&mut self`; the LSP guards with its existing
 `RwLock`.
 
 ### 5.8 Memory management
@@ -392,23 +392,23 @@ layer.
 
 | Phase | File | Change |
 |---|---|---|
-| 1 | `crates/ruxen-core/src/db/mod.rs` *new* | Database skeleton |
-| 1 | `crates/ruxen-core/src/db/query.rs` *new* | Memoization primitive (DashMap wrapper) |
-| 1 | `crates/ruxen-core/Cargo.toml:29-36` | Add `dashmap` dep |
-| 2 | `crates/ruxen-core/src/lib.rs` | Re-export `db::Database` |
-| 2 | `crates/ruxen-core/src/db/queries/tokens.rs` *new* | Lex query |
-| 2 | `crates/ruxen-core/src/db/queries/ast.rs` *new* | Parse query |
-| 2 | `crates/ruxen-core/src/db/queries/symbols.rs` *new* | Resolve query |
-| 2 | `crates/ruxen-core/src/db/queries/hir.rs` *new* | HIR query |
-| 3 | `crates/ruxen-core/src/typeck/mod.rs:37-80` | Refactor into split global + per-fn |
-| 3 | `crates/ruxen-core/src/db/queries/typeck.rs` *new* | File-level typeck query |
-| 3 | `crates/ruxen-core/src/db/queries/typeck_fn.rs` *new* | Per-fn typeck query |
-| 4 | `crates/ruxen-core/src/borrow_check/mod.rs` | Factor to per-fn |
-| 4 | `crates/ruxen-core/src/db/queries/borrow_check.rs` *new* | Borrow-check query |
-| 4 | `crates/ruxen-core/src/db/queries/mir.rs` *new* | MIR query |
-| 5 | `crates/ruxen-ide/src/analysis.rs:43-88` | Accept optional `&var Database` |
-| 5 | `crates/ruxen-lsp/src/server.rs:17-20` | Hold a `Database` in `ServerState` |
-| 6 | `crates/ruxenc/src/main.rs:503-576` | Optionally use `Database` for within-file caching |
+| 1 | `compiler/ruxen_core/src/db/mod.rs` *new* | Database skeleton |
+| 1 | `compiler/ruxen_core/src/db/query.rs` *new* | Memoization primitive (DashMap wrapper) |
+| 1 | `compiler/ruxen_core/Cargo.toml:29-36` | Add `dashmap` dep |
+| 2 | `compiler/ruxen_core/src/lib.rs` | Re-export `db::Database` |
+| 2 | `compiler/ruxen_core/src/db/queries/tokens.rs` *new* | Lex query |
+| 2 | `compiler/ruxen_core/src/db/queries/ast.rs` *new* | Parse query |
+| 2 | `compiler/ruxen_core/src/db/queries/symbols.rs` *new* | Resolve query |
+| 2 | `compiler/ruxen_core/src/db/queries/hir.rs` *new* | HIR query |
+| 3 | `compiler/ruxen_core/src/typeck/mod.rs:37-80` | Refactor into split global + per-fn |
+| 3 | `compiler/ruxen_core/src/db/queries/typeck.rs` *new* | File-level typeck query |
+| 3 | `compiler/ruxen_core/src/db/queries/typeck_fn.rs` *new* | Per-fn typeck query |
+| 4 | `compiler/ruxen_core/src/borrow_check/mod.rs` | Factor to per-fn |
+| 4 | `compiler/ruxen_core/src/db/queries/borrow_check.rs` *new* | Borrow-check query |
+| 4 | `compiler/ruxen_core/src/db/queries/mir.rs` *new* | MIR query |
+| 5 | `src/ruxen_ide/src/analysis.rs:43-88` | Accept optional `&var Database` |
+| 5 | `src/ruxen_lsp/src/server.rs:17-20` | Hold a `Database` in `ServerState` |
+| 6 | `src/ruxenc/src/main.rs:503-576` | Optionally use `Database` for within-file caching |
 
 ### Phase breakdown
 
@@ -429,7 +429,7 @@ The hard refactor. Split typeck into global + per-fn. Add
 Same pattern as Phase 3.
 
 **Phase 5 — LSP integration (2 days).**
-Plumb `Database` through `ruxen-ide::analyze_incremental`. Benchmark
+Plumb `Database` through `ruxen_ide::analyze_incremental`. Benchmark
 LSP latency before/after.
 
 **Phase 6 — `ruxenc` integration (2 days, optional).**
@@ -447,7 +447,7 @@ Total: 15-20 engineer-days for Phases 1-5.
 - 1000-line file, add a `use` at top → typeck should be <50 ms
   (invalidates `symbols`, cascades to all `typeck_fn`).
 
-Fold into `ruxenc/benches/` or a new `ruxen-core/benches/incremental.rs`.
+Fold into `ruxenc/benches/` or a new `ruxen_core/benches/incremental.rs`.
 
 ---
 
@@ -531,7 +531,7 @@ None hard. The query layer is lateral — it accelerates what's there.
 10. **R4 — Backward compat with existing typeck tests.**
     Phase 3's refactor changes `type_check` internally. The compat
     shim at §4.2 keeps the signature. Validate every existing
-    `ruxen-core/src/typeck/tests.rs` test still passes.
+    `ruxen_core/src/typeck/tests.rs` test still passes.
 11. **OQ-7 — When to evict the database.**
     On file close in LSP? On project switch? Policy to be decided.
     v1: never evict in-memory; flush on server shutdown.
@@ -559,7 +559,7 @@ None hard. The query layer is lateral — it accelerates what's there.
 | LRU eviction correctness | Query result still re-computable after eviction |
 | 10 open files in LSP | Each has its own Database entries; cross-talk free |
 
-Dedicated bench file `crates/ruxen-core/benches/incremental.rs`:
+Dedicated bench file `compiler/ruxen_core/benches/incremental.rs`:
 
 - `bench_repeated_typeck(c)`: 1000 identical calls to `db.typeck(file)`.
 - `bench_edit_one_fn(c)`: 100 alternating edits to two fns.

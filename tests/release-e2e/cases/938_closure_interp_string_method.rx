@@ -1,0 +1,14 @@
+class Entry
+  label: String
+
+  def init(@label: String); end
+
+  def caption -> String
+    "entry: #{self.label}"
+  end
+end
+
+def main
+  let entries = [Entry.new("alpha"), Entry.new("beta")]
+  entries.each { |entry| puts "value=#{entry.caption}" }
+end

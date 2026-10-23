@@ -45,9 +45,9 @@ def main
 end
 ```
 
-- `puts(msg: &str)` — stdout, trailing newline.
-- `eputs(msg: &str)` — stderr, trailing newline.
-- `exit(code: Int) -> !` — never returns. The OS sees `code mod 256`.
+- `puts(msg: &String)` — stdout, trailing newline.
+- `eputs(msg: &String)` — stderr, trailing newline.
+- `exit(code: Int) -> Never` — never returns. The OS sees `code mod 256`.
 
 You usually don't need `exit(0)` — falling off the end of `main` exits with status 0. Use `exit(n)` for non-zero codes from inside helpers where `return` won't propagate that far.
 
@@ -276,7 +276,7 @@ end
 A `panic!(msg)` aborts the process with the message on stderr and a non-zero exit code:
 
 ```ruxen
-def parse_or_die(s: &str) -> Int
+def parse_or_die(s: &String) -> Int
   match s.parse_int
     Ok(n)  -> n
     Err(_) -> panic!("bad number: #{s}")

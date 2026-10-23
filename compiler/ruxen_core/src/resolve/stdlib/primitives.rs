@@ -44,7 +44,10 @@ pub(super) fn register_primitives(r: &mut Resolver) {
     for (name, ty) in builtins {
         let id = r.symbols.define(
             name.to_string(),
-            DefKind::TypeAlias { target: ty },
+            DefKind::TypeAlias {
+                target: ty,
+                params: Vec::new(),
+            },
             Visibility::Public,
             span.clone(),
         );

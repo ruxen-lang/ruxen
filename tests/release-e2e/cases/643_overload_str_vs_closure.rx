@@ -1,12 +1,12 @@
 ## Q1 (gui-stack-v1-issues) — two same-named methods, one taking `&str` and one
-## taking `any Fn[...]`. A closure argument must select the closure overload,
+## taking `Proc[...]`. A closure argument must select the closure overload,
 ## not the `&str` one. Before the fix the closure (often still `Infer` at
 ## overload-selection time) matched the first-declared `&str` overload and was
 ## mis-stored as a String → heap corruption / wrong counts.
 
 class Col
   labels: Array[String]
-  computes: Array[any Fn[Fn() -> String]]
+  computes: Array[Proc[() -> String]]
   def init
     self.labels = Array.new
     self.computes = Array.new
@@ -14,7 +14,7 @@ class Col
   def var text(label: &String) -> nil
     self.labels.push(label.to_string)
   end
-  def var text(f: any Fn[Fn() -> String]) -> nil
+  def var text(f: Proc[() -> String]) -> nil
     self.computes.push(f)
   end
 end

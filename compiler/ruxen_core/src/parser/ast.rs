@@ -3,7 +3,7 @@
 //! Every node carries a `Span` for error reporting. The AST is untyped —
 //! no semantic information is attached at this stage.
 
-use crate::lexer::token::{NumericSuffix, Span, StringPart};
+use crate::lexer::token::{FormatSpec, NumericSuffix, Span, TokenKind};
 
 // ─── Visibility ──────────────────────────────────────────────────────
 
@@ -40,22 +40,37 @@ pub enum TopLevelItem {
     Newtype(NewtypeDef),
     Const(ConstDef),
     Lib(LibDecl),
-    Extern(ExternBlock),
     /// `alias new_name old_name` at top level / module scope — a Ruby-style
     /// free-function synonym. Both names resolve to ONE callable DefId; no
     /// new body is emitted (ADR: docs/decisions/alias-keyword.md, D2).
     Alias(AliasDef),
-    /// A top-level expression statement — e.g. a call with a trailing
-    /// `do…end` block at module scope (`Tester.describe("…") do … end`).
-    /// The compiler's normal pipeline does NOT execute top-level
-    /// statements directly: `ruxen test` HOISTS top-level items and wraps
-    /// the remaining statements in a synthesised `def main` before
-    /// compiling, so this variant only ever survives to `resolve` when a
-    /// raw file is compiled directly — where it is rejected with a clear
-    /// E0728. Its purpose is to let the SHARED parser (compiler + LSP +
-    /// `ruxen fmt`) ACCEPT the test-file surface so the formatter can
-    /// round-trip it instead of erroring at 1:1 (Q23b).
+    /// A top-level executable expression statement. The compile/type-check
+    /// pipeline moves these into an implicit `main` when no explicit `main`
+    /// exists. With an explicit `main`, they remain top-level so resolve can
+    /// report the ambiguous combination as E0728.
     Expr(Expr),
+}
+
+impl TopLevelItem {
+    /// Source span of the whole item.
+    pub fn span(&self) -> &Span {
+        match self {
+            TopLevelItem::Module(m) => &m.span,
+            TopLevelItem::Class(c) => &c.span,
+            TopLevelItem::Struct(s) => &s.span,
+            TopLevelItem::Enum(e) => &e.span,
+            TopLevelItem::Mixin(t) => &t.span,
+            TopLevelItem::Impl(i) => &i.span,
+            TopLevelItem::Function(f) => &f.span,
+            TopLevelItem::Use(u) => &u.span,
+            TopLevelItem::TypeAlias(ta) => &ta.span,
+            TopLevelItem::Newtype(nt) => &nt.span,
+            TopLevelItem::Const(c) => &c.span,
+            TopLevelItem::Lib(l) => &l.span,
+            TopLevelItem::Alias(a) => &a.span,
+            TopLevelItem::Expr(e) => &e.span,
+        }
+    }
 }
 
 // ─── Type Expressions ────────────────────────────────────────────────
@@ -65,6 +80,9 @@ pub struct TypePath {
     pub segments: Vec<String>,
     pub generic_args: Option<Vec<TypeExpr>>,
     pub span: Span,
+    /// `true` when the source wrote the nilable shorthand `T?`, which the
+    /// parser builds as `Option[T]`; `ruxen fmt` writes it back as `T?`.
+    pub nilable: bool,
     /// `true` if the type path was written with a leading `::` —
     /// e.g. `::Foo` or `::Outer.Inner`.  Set by the parser
     /// (`parse_type_path`) when the first token is `ColonColon`.
@@ -75,6 +93,19 @@ pub struct TypePath {
     /// Default `false`; expression-position `::` is not in scope
     /// for #06.93.
     pub rooted: bool,
+}
+
+/// How a function type was written ([`TypeExpr::Function`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FnTypeSpelling {
+    /// The paren form `Fn(T…) -> R` (also the legacy `Block(T…) -> R`).
+    Paren,
+    /// The canonical square-bracket block signature `Fn[(T…) -> R]`
+    /// (Ruby-block-semantics ADR D8).
+    Bracket,
+    /// A bare signature `(T…) -> R` written as a generic argument of any
+    /// named type: `Proc[(Int) -> nil]`.
+    Signature,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,12 +129,10 @@ pub enum TypeExpr {
     Function {
         params: Vec<TypeExpr>,
         return_type: Box<TypeExpr>,
-        /// Surface spelling: `true` for the canonical square-bracket block
-        /// signature `Fn[(T…) -> R]` (Ruby-block-semantics ADR D8), `false`
-        /// for the paren form `Fn(T…) -> R`. Carried so `ruxen fmt` preserves
-        /// whichever the author wrote rather than normalizing one to the other
-        /// (the fmt-destructiveness class — Q23/Q30/Q34). Semantically inert.
-        bracketed: bool,
+        /// Surface spelling, carried so `ruxen fmt` preserves whichever the
+        /// author wrote rather than normalizing one to another (the
+        /// fmt-destructiveness class — Q23/Q30/Q34). Semantically inert.
+        spelling: FnTypeSpelling,
         span: Span,
     },
     /// `some M` — static-dispatch mixin reference (was `impl Trait`
@@ -156,6 +185,26 @@ pub enum TypeExpr {
         expr: Box<Expr>,
         span: Span,
     },
+}
+
+impl TypeExpr {
+    /// Source span of the whole type expression.
+    pub fn span(&self) -> &Span {
+        match self {
+            TypeExpr::Named(tp) => &tp.span,
+            TypeExpr::Reference { span, .. }
+            | TypeExpr::Tuple { span, .. }
+            | TypeExpr::Array { span, .. }
+            | TypeExpr::Function { span, .. }
+            | TypeExpr::SomeMixin { span, .. }
+            | TypeExpr::AnyMixin { span, .. }
+            | TypeExpr::Never { span }
+            | TypeExpr::Inferred { span }
+            | TypeExpr::RawPointer { span, .. }
+            | TypeExpr::ConstLit { span, .. }
+            | TypeExpr::ConstExprArg { span, .. } => span,
+        }
+    }
 }
 
 // ─── Mixin Bounds & Generics ─────────────────────────────────────────
@@ -302,6 +351,14 @@ pub enum LiteralValue {
 
 // ─── Expressions ─────────────────────────────────────────────────────
 
+/// One part of an interpolated string literal: literal text, or a parsed
+/// `#{expr}` with its optional format spec (`#{x:>8.2}`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum StringPart {
+    Literal(String),
+    Expr { expr: Box<Expr>, spec: FormatSpec },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
     pub kind: ExprKind,
@@ -321,6 +378,29 @@ pub enum ExprKind {
 
     // Identifiers
     Identifier(String),
+    /// A type named in VALUE position with explicit generic arguments,
+    /// used as a static-call receiver: the `Hash[String, Int]` in
+    /// `Hash[String, Int].new`.
+    ///
+    /// A plain `Hash` receiver is `Identifier("Hash")`, which resolves to
+    /// the value-scope constructor entry whose type is the DECLARED
+    /// `Hash[K, V]` — rigid parameters and all. That is fine when the call
+    /// has arguments to infer from (`Point[Int].new(3)`), and it is not
+    /// fine for a no-argument constructor: `Hash[String, Int].new` used to
+    /// erase its arguments here and produce a `Hash[K, V]` that nothing
+    /// downstream could ever refine. Carrying the written type instead
+    /// lets the resolver hand back a concrete receiver type, which is all
+    /// `substitute_generics_in_return` needs to type the call properly.
+    ///
+    /// `name` is the base segment, kept separately because the resolver
+    /// still looks it up in value scope to find the constructor's `DefId`;
+    /// `ty` is the whole written path, resolved through the ordinary
+    /// type-expression path so `Hash` / `Array` / `Set` need no special
+    /// casing here.
+    GenericTypeRef {
+        name: String,
+        ty: Box<TypeExpr>,
+    },
     SelfRef,
     SelfType,
 
@@ -343,6 +423,10 @@ pub enum ExprKind {
     FieldAccess {
         object: Box<Expr>,
         field: String,
+        /// `true` when the source wrote the instance-variable form `@field`,
+        /// which the parser builds as `self.field`; `ruxen fmt` writes it
+        /// back as `@field`.
+        ivar: bool,
     },
     MethodCall {
         object: Box<Expr>,
@@ -350,6 +434,10 @@ pub enum ExprKind {
         generic_args: Vec<TypeExpr>,
         args: Vec<Expr>,
         block: Option<Box<Expr>>,
+        /// The source wrote an argument list `(...)`. False for the
+        /// command form `x.m "a"`, a block-only call `x.m { }` and a bare
+        /// `x.m[T]`; `ruxen fmt` writes the call back the same way.
+        parens: bool,
     },
     SafeNav {
         object: Box<Expr>,
@@ -366,6 +454,10 @@ pub enum ExprKind {
         callee: Box<Expr>,
         args: Vec<Expr>,
         block: Option<Box<Expr>>,
+        /// The source wrote an argument list `(...)`. False for the
+        /// command form `puts "x"` and a block-only call `with_x { }`;
+        /// `ruxen fmt` writes the call back the same way.
+        parens: bool,
     },
     Index {
         object: Box<Expr>,
@@ -391,6 +483,17 @@ pub enum ExprKind {
         target: Box<Expr>,
         op: BinOp,
         value: Box<Expr>,
+    },
+    /// Ruby parallel assignment `a, b = 1, 2` (and swap `a, b = b, a`).
+    /// Without a splat, `targets` and `values` have equal length. A trailing
+    /// assignment splat (`a, *rest = xs`) records the target index and permits
+    /// one Array RHS or a value list. All right-hand values are evaluated
+    /// before any target is written. Kept as its own node (not desugared in
+    /// the parser) so `ruxen fmt` preserves the authored surface.
+    MultiAssign {
+        targets: Vec<Expr>,
+        values: Vec<Expr>,
+        splat_target: Option<usize>,
     },
 
     // Control flow
@@ -430,6 +533,21 @@ pub enum ExprKind {
 
     // Yield
     Yield(Vec<Expr>),
+
+    /// Block Tier-2: `next [expr]` inside a block — the block's value for this
+    /// iteration is `expr` (or `nil`), and the rest of the block body is
+    /// skipped. Recognized only inside a closure body (parser `closure_depth`
+    /// gate), so `.next` field access is unaffected. Lowers to an early
+    /// return from the block's closure; rejected inside an inlined combinator
+    /// block (E1125) so it can never become a non-local return.
+    Next(Option<Box<Expr>>),
+
+    /// Block Tier-2: a `&`-form block argument in call position — either the
+    /// `&:symbol` to-proc sugar or `&block` / bare `&` block-forwarding. Lives
+    /// transiently as a call's trailing argument; `resolve` hoists it into the
+    /// call's block slot and desugars it (to a closure or the enclosing block
+    /// slot). It never reaches typeck / MIR.
+    BlockPass(BlockPassKind),
 
     // Macros
     MacroCall {
@@ -484,14 +602,29 @@ pub enum BinOp {
     Mul,
     Div,
     Mod,
+    /// Exponentiation `a ** b` (Ruby power operator, right-associative).
+    /// Lowers to a runtime call (`ruxen_int_pow` / `ruxen_float_pow`), not a
+    /// machine instruction and not a `def **` method; see `mir/lower/expr/binops.rs`.
+    Pow,
     Eq,
     NotEq,
     Lt,
     Gt,
     LtEq,
     GtEq,
+    /// Three-way comparison `a <=> b` (spaceship). Returns `Int` (-1 / 0 / 1).
+    /// Lowers to a runtime call (`ruxen_int_cmp` / `ruxen_float_cmp` /
+    /// `ruxen_str_spaceship`), not a machine instruction; see
+    /// `mir/lower/expr/binops.rs`.
+    Cmp,
     And,
     Or,
+    /// Lazy Option fallback: `Option[T] ?? T -> T`.
+    NilCoalesce,
+    /// Ruby-style low-precedence logical `and`.
+    KeywordAnd,
+    /// Ruby-style low-precedence logical `or`.
+    KeywordOr,
     BitAnd,
     BitOr,
     BitXor,
@@ -503,15 +636,106 @@ pub enum BinOp {
 }
 
 impl BinOp {
-    /// The method name this operator desugars to, for the MIGRATED
-    /// operator families only (Task OP, Step 3): arithmetic (`+ - * / %`)
-    /// and bitwise (`& | ^ << >>`). Comparison / equality / logical /
-    /// regex-match return `None` — they are deliberately EXCLUDED from the
-    /// operator-as-method wave (they stay on the existing binop paths and
-    /// the later `Comparable` increment), so a `None` here means "do not
-    /// desugar; use the structural lowering". This is the SINGLE source of
-    /// the operator→method-name map, shared by typeck (`infer_binop`
-    /// routing) and MIR (`lower_binops`).
+    /// True for the comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`),
+    /// whose result is a `Bool`.
+    pub fn is_comparison(self) -> bool {
+        matches!(
+            self,
+            BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq
+        )
+    }
+
+    /// Every binary operator, in [`Self::spec`] order.
+    const ALL: [BinOp; 24] = [
+        BinOp::KeywordAnd,
+        BinOp::KeywordOr,
+        BinOp::NilCoalesce,
+        BinOp::Or,
+        BinOp::And,
+        BinOp::Eq,
+        BinOp::NotEq,
+        BinOp::Lt,
+        BinOp::Gt,
+        BinOp::LtEq,
+        BinOp::GtEq,
+        BinOp::Cmp,
+        BinOp::MatchOp,
+        BinOp::BitOr,
+        BinOp::BitXor,
+        BinOp::BitAnd,
+        BinOp::Shl,
+        BinOp::Shr,
+        BinOp::Add,
+        BinOp::Sub,
+        BinOp::Mul,
+        BinOp::Div,
+        BinOp::Mod,
+        BinOp::Pow,
+    ];
+
+    /// The operator table: each binary operator's token, source spelling and
+    /// Pratt binding powers `(left, right)`. Higher binds tighter;
+    /// `left < right` is left-associative, `left > right` right-associative,
+    /// equal powers chain to the right (`??`). The parser, the formatter's
+    /// precedence model and the diagnostics that name an operator all read
+    /// it from here. Assignment (1, 2), range (9, 10) and cast (23, 24) are
+    /// not `BinOp`s; `parser::expr::infix_binding_power` places them.
+    fn spec(self) -> (TokenKind, &'static str, (u8, u8)) {
+        match self {
+            // Ruby keyword `and` / `or`: one level, looser than assignment.
+            BinOp::KeywordAnd => (TokenKind::And, "and", (0, 1)),
+            BinOp::KeywordOr => (TokenKind::Or, "or", (0, 1)),
+            BinOp::NilCoalesce => (TokenKind::QuestionQuestion, "??", (2, 2)),
+            BinOp::Or => (TokenKind::PipePipe, "||", (3, 4)),
+            BinOp::And => (TokenKind::AmpAmp, "&&", (5, 6)),
+            // Comparison and regex match: one non-associative level.
+            BinOp::Eq => (TokenKind::EqEq, "==", (7, 8)),
+            BinOp::NotEq => (TokenKind::NotEq, "!=", (7, 8)),
+            BinOp::Lt => (TokenKind::Lt, "<", (7, 8)),
+            BinOp::Gt => (TokenKind::Gt, ">", (7, 8)),
+            BinOp::LtEq => (TokenKind::LtEq, "<=", (7, 8)),
+            BinOp::GtEq => (TokenKind::GtEq, ">=", (7, 8)),
+            BinOp::Cmp => (TokenKind::Spaceship, "<=>", (7, 8)),
+            BinOp::MatchOp => (TokenKind::TildeEq, "~=", (7, 8)),
+            BinOp::BitOr => (TokenKind::Pipe, "|", (11, 12)),
+            BinOp::BitXor => (TokenKind::Caret, "^", (13, 14)),
+            BinOp::BitAnd => (TokenKind::Amp, "&", (15, 16)),
+            BinOp::Shl => (TokenKind::Shl, "<<", (17, 18)),
+            BinOp::Shr => (TokenKind::Shr, ">>", (17, 18)),
+            BinOp::Add => (TokenKind::Plus, "+", (19, 20)),
+            BinOp::Sub => (TokenKind::Minus, "-", (19, 20)),
+            BinOp::Mul => (TokenKind::Star, "*", (21, 22)),
+            BinOp::Div => (TokenKind::Slash, "/", (21, 22)),
+            BinOp::Mod => (TokenKind::Percent, "%", (21, 22)),
+            // `**` binds tighter than `* / %`, cast and unary minus (25),
+            // and is right-associative: `2 ** 3 ** 2 == 512`,
+            // `-2 ** 2 == -4`. Postfix (27) still binds tighter.
+            BinOp::Pow => (TokenKind::StarStar, "**", (26, 25)),
+        }
+    }
+
+    /// The binary operator `kind` spells, if any.
+    pub fn from_token(kind: &TokenKind) -> Option<BinOp> {
+        Self::ALL.into_iter().find(|op| op.spec().0 == *kind)
+    }
+
+    /// The operator's source spelling (`+`, `<=>`, `and`).
+    pub fn symbol(self) -> &'static str {
+        self.spec().1
+    }
+
+    /// Pratt binding powers `(left, right)`.
+    pub fn binding_power(self) -> (u8, u8) {
+        self.spec().2
+    }
+
+    /// The method name this operator can desugar to. Nominal arithmetic and
+    /// bitwise operators always take this route. Comparisons only take it
+    /// when the receiver exposes the method, preserving primitive and
+    /// auto-derive lowering as fallbacks.
+    ///
+    /// `!=` deliberately probes `==`: its dispatched result is inverted by
+    /// MIR, matching Ruby's default relationship between the two operators.
     pub fn method_name(self) -> Option<&'static str> {
         Some(match self {
             BinOp::Add => "+",
@@ -524,14 +748,20 @@ impl BinOp {
             BinOp::BitXor => "^",
             BinOp::Shl => "<<",
             BinOp::Shr => ">>",
-            BinOp::Eq
-            | BinOp::NotEq
-            | BinOp::Lt
-            | BinOp::Gt
-            | BinOp::LtEq
-            | BinOp::GtEq
+            BinOp::Eq | BinOp::NotEq => "==",
+            BinOp::Lt => "<",
+            BinOp::Gt => ">",
+            BinOp::LtEq => "<=",
+            BinOp::GtEq => ">=",
+            BinOp::Cmp => "<=>",
+            // Power remains a numeric runtime operation rather than an
+            // overridable method.
+            BinOp::Pow
             | BinOp::And
             | BinOp::Or
+            | BinOp::NilCoalesce
+            | BinOp::KeywordAnd
+            | BinOp::KeywordOr
             | BinOp::MatchOp => return None,
         })
     }
@@ -541,6 +771,10 @@ impl BinOp {
 pub enum UnaryOp {
     Neg,
     Not,
+    /// Ruby-style low-precedence logical `not`.
+    KeywordNot,
+    /// Bitwise complement: `~expr` (integer surface, primitive-only for now).
+    BitNot,
     /// Dereference: `*expr` — strips one level of reference.
     Deref,
 }
@@ -631,6 +865,15 @@ pub struct LoopExpr {
 
 // ─── Closures ────────────────────────────────────────────────────────
 
+/// The `&`-form of a block argument (Block Tier-2). See `ExprKind::BlockPass`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlockPassKind {
+    /// `&:symbol` — desugars to `{ |x| x.symbol }` (a 1-arg to-proc closure).
+    ToProc(String),
+    /// `&block` / bare `&` — forward the enclosing function's received block.
+    Forward,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClosureExpr {
     pub is_async: bool,
@@ -638,6 +881,45 @@ pub struct ClosureExpr {
     pub params: Vec<ClosureParam>,
     pub body: ClosureBody,
     pub span: Span,
+    /// The source wrote a parameter header (`|x|` or `||`). A block with
+    /// no parameters may omit it (`do ... end`, `x.then { 1 }`); `ruxen
+    /// fmt` writes the header back only when it was there.
+    pub pipes: bool,
+    /// The source wrote `do ... end` rather than `{ ... }`; `ruxen fmt`
+    /// keeps the author's form.
+    pub do_end: bool,
+    /// Block, proc or lambda. The parser marks a trailing block `Block`,
+    /// `proc`/`Proc.new` `Proc`, and every other literal `Lambda`.
+    pub kind: ClosureKind,
+    /// How the source spelled the literal; `ruxen fmt` writes it back, except
+    /// a `Bare` non-block value, which it prints as a `->` lambda.
+    pub spelling: ClosureSpelling,
+}
+
+/// What a closure literal is (plan: blocks, procs and lambdas). A block
+/// borrows its captures for the call it is attached to; a proc or a lambda
+/// owns them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosureKind {
+    Block,
+    Proc,
+    Lambda,
+}
+
+/// The written head of a closure literal. For `Stabby`, `ClosureExpr::pipes`
+/// records whether a `(...)` parameter list was written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosureSpelling {
+    /// `{ |x| ... }` / `do |x| ... end` with no head.
+    Bare,
+    /// `->(x) { ... }` / `->(x) do ... end`.
+    Stabby,
+    /// `lambda { |x| ... }`.
+    Lambda,
+    /// `proc { |x| ... }`.
+    Proc,
+    /// `Proc.new { |x| ... }`.
+    ProcNew,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -725,6 +1007,17 @@ pub struct AliasDef {
     pub span: Span,
 }
 
+/// A class-body `type Name = Concrete` binding of an included mixin's
+/// associated type (ruby-naming.spec.md §3.4). Kept in the AST so the
+/// formatter round-trips it; resolve does not read it yet (the class's
+/// concrete-return method carries the type through codegen).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssocTypeBinding {
+    pub name: String,
+    pub type_expr: TypeExpr,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub auto_assign: bool,
@@ -756,11 +1049,6 @@ pub struct ClassDef {
     pub fields: Vec<FieldDecl>,
     pub methods: Vec<FuncDef>,
     pub inner_impls: Vec<InnerImpl>,
-    /// Traits declared via `@[derive(...)]` at class top level or via an
-    /// in-body `derive Trait1, Trait2` line. Consumed by the tier-1 derive
-    /// expander (pillar 05 phase 5a+). Empty for v1 classes that do not
-    /// opt in.
-    pub derive_traits: Vec<String>,
     /// In-body `layout <kind>` directive args captured at parse time.
     /// Wave 1 (#06.8 T0c) recognises `flat_heap_struct` here, marking a
     /// class whose runtime instances follow the flat-heap-struct C
@@ -784,7 +1072,16 @@ pub struct ClassDef {
     /// Ruby-style `alias new old` items declared in the class body
     /// (docs/decisions/alias-keyword.md). Pure synonyms — no method body.
     pub aliases: Vec<AliasDef>,
+    /// `type Name = Concrete` associated-type bindings in the class body.
+    pub assoc_types: Vec<AssocTypeBinding>,
     pub span: Span,
+}
+
+impl ClassDef {
+    /// Whether the class body carried `layout <word>`.
+    pub fn has_layout(&self, word: &str) -> bool {
+        self.layout.iter().any(|s| s == word)
+    }
 }
 
 // ─── Struct ──────────────────────────────────────────────────────────
@@ -801,10 +1098,6 @@ pub struct StructDef {
     /// Inline `impl Trait for Self` blocks and bare `include Mixin`
     /// directives inside the struct body. Mirrors `ClassDef::inner_impls`.
     pub inner_impls: Vec<InnerImpl>,
-    /// Traits declared via `@[derive(...)]` at top level or via an in-body
-    /// `derive Trait1, Trait2` line. Does NOT include `layout` args —
-    /// those live on `layout`.
-    pub derive_traits: Vec<String>,
     /// In-body `layout <kind>` directive args (ruby-naming.spec.md §3.5):
     /// `c`, `packed`, `transparent`. Kept as raw argument strings for v1;
     /// a real `Layout` enum arrives with the tier-4 stable-ABI / cbindgen
@@ -832,8 +1125,6 @@ pub struct EnumDef {
     /// Inline `impl Trait for Self` blocks and bare `include Mixin`
     /// directives inside the enum body. Mirrors `ClassDef::inner_impls`.
     pub inner_impls: Vec<InnerImpl>,
-    /// Traits declared via `@[derive(...)]` or in-body `derive Trait` line.
-    pub derive_traits: Vec<String>,
     /// In-body `layout <kind>` directive args captured at parse time.
     /// Wave 1 (#06.8 T0c) recognises `tagged` here, which pins variant
     /// declaration order as the runtime tag assignment (the pattern
@@ -1023,15 +1314,6 @@ pub struct ConstDef {
 pub struct LibDecl {
     pub name: String,
     pub functions: Vec<FfiFunction>,
-    pub link_attrs: Vec<LinkAttr>,
-    pub span: Span,
-}
-
-/// An `extern "C" ... end` block (anonymous lib).
-#[derive(Debug, Clone, PartialEq)]
-pub struct ExternBlock {
-    pub abi: String,
-    pub functions: Vec<FfiFunction>,
     pub span: Span,
 }
 
@@ -1046,6 +1328,25 @@ pub struct FfiFunction {
     /// flip `FnSignature.is_class_method`. Top-level FFI decls are always
     /// `false` here — they're free functions, not methods on a type.
     pub is_class_method: bool,
+    /// `true` when the decl was spelled `def var NAME(...)`: an instance
+    /// method that mutates its receiver. The receiver crosses the C ABI as
+    /// `&var Self`, which for a String is the address of the caller's slot
+    /// (`char**`, see `mir/refmut_abi.rs`), so the C symbol can reallocate
+    /// the buffer in place.
+    pub mutates_self: bool,
+    /// `true` when the decl was spelled `def consume NAME(...)`: an instance
+    /// method that takes its receiver over, the same spelling as a
+    /// consuming-self `def`. On a `def consume drop`, the C symbol releases
+    /// the whole handle, its storage included, so drop elaboration emits no
+    /// storage free after it (`SymbolTable::drop_consumes_self`).
+    pub consumes_self: bool,
+    /// `true` when the return type was spelled `-> owned T`: the C function
+    /// returns a fresh value the caller owns outright (for a collection, its
+    /// spine, buffer and every element), so drop elaboration frees the
+    /// result at the caller's scope exit
+    /// (`mir::lower::runtime_abi::result_ownership`). Without it a C result
+    /// is not assumed owned.
+    pub returns_owned: bool,
     /// Optional C-symbol alias declared via `def name as "<c-symbol>"(...)`.
     /// When `None`, the Ruxen-side name (`name`) is the linked C symbol —
     /// the historical behaviour of `lib "X" ... end` blocks. When `Some`,
@@ -1063,9 +1364,12 @@ pub struct FfiFunction {
     /// resolver (`ffi_registration.rs`) threads such a predicate into the
     /// registered signature's `generic_params` so the call-site bound seam
     /// can enforce it against the receiver's concrete element. Predicates on
-    /// names that aren't a class generic are dropped (FFI defs have no own
-    /// generics).
+    /// names that aren't a class generic or one of `generic_params` are
+    /// dropped.
     pub where_clause: Option<WhereClause>,
+    /// `def to_h[K, V] as "..."`: generic parameters of the declaration's
+    /// own, named in its parameter and return types.
+    pub generic_params: Option<GenericParams>,
     pub is_variadic: bool,
     pub span: Span,
 }
@@ -1078,59 +1382,6 @@ pub struct FfiParam {
     pub span: Span,
 }
 
-/// A `@[link]` attribute for library linking.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LinkAttr {
-    pub name: String,
-    pub kind: LinkKind,
-}
-
-/// How to link a library.
-#[derive(Debug, Clone, PartialEq)]
-pub enum LinkKind {
-    Dynamic,
-    Static,
-    Framework,
-}
-
-// ─── Attributes ────────────────────────────────────────────────────
-
-/// A single argument inside an `@[name(args)]` attribute list.
-///
-/// Widened from `String` in tier-1 B2 so downstream passes can distinguish
-/// identifiers (`C` in `@[repr(C)]`) from string literals (`"libc"` in
-/// `@[link("libc")]`). Tier-2 may extend this with key/value and nested
-/// forms; for v1 only the two leaf shapes exist.
-#[derive(Debug, Clone, PartialEq)]
-pub enum AttrArg {
-    /// Bare identifier: `@[repr(C)]` → `Ident("C")`.
-    Ident(String, Span),
-    /// String literal: `@[link("libc")]` → `Str("libc")`.
-    Str(String, Span),
-}
-
-impl AttrArg {
-    pub fn as_str(&self) -> &str {
-        match self {
-            AttrArg::Ident(s, _) | AttrArg::Str(s, _) => s,
-        }
-    }
-
-    pub fn span(&self) -> &Span {
-        match self {
-            AttrArg::Ident(_, s) | AttrArg::Str(_, s) => s,
-        }
-    }
-}
-
-/// A general attribute: `@[name(args)]`
-#[derive(Debug, Clone, PartialEq)]
-pub struct Attribute {
-    pub name: String,
-    pub args: Vec<AttrArg>,
-    pub span: Span,
-}
-
 // ─── REPL Input Types ──────────────────────────────────────────────
 
 /// A single REPL input — may be an expression, statement, or top-level item.
@@ -1139,6 +1390,16 @@ pub enum ReplInput {
     TopLevel(TopLevelItem),
     Statement(Statement),
     Expression(Expr),
+}
+
+/// One top-level unit of a script-style file ([`crate::parser::Parser::parse_script_units`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScriptUnit {
+    /// The declaration item (`def`, `class`, `use`, ...), or `None` for a
+    /// statement.
+    pub item: Option<TopLevelItem>,
+    /// The unit's source, without its leading `##` docs.
+    pub span: Span,
 }
 
 /// Result of attempting to parse REPL input.

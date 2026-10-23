@@ -1,0 +1,22 @@
+## `Thread.spawn` returns a typed `JoinHandle[T]` whose `join`, `join!` and
+## `thread_id` are real `.rx` methods (they used to type-check and then fail
+## to link). `Thread.current` and `Thread#id`/`#name` run too.
+
+def main
+  base = 40
+  handle = Thread.spawn { base + 2 }
+  spawned_id = handle.thread_id
+  match handle.join
+    Ok(v) -> puts "join: #{v}"
+    Err(e) -> puts "join failed: #{e.message}"
+  end
+
+  puts "join!: #{Thread.spawn { 7 }.join! * 2}"
+
+  me = Thread.current
+  puts "other thread: #{spawned_id.raw != me.id.raw}"
+  match me.name
+    Some(n) -> puts "name: #{n}"
+    nil -> puts "name: none"
+  end
+end

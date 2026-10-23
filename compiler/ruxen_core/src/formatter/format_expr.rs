@@ -1,20 +1,39 @@
 /// AST-to-Doc conversion for expressions.
-use crate::lexer::token::{NumericSuffix, StringPart};
+use crate::lexer::token::NumericSuffix;
 use crate::parser::ast::*;
 
 use super::comments::CommentMap;
 use super::doc::*;
+use super::format_items::{dangling_comments_doc, with_comments};
 use super::format_pattern::{format_match_pattern, format_pattern};
 use super::format_type::format_type_expr;
-use super::prec::{binop_prec, needs_parens, Side};
+use super::prec::{binop_prec, expr_prec, needs_parens, Side};
 
 /// Format `child` as an operand of a parent operator, wrapping it in
 /// grouping parentheses iff dropping them would re-associate or change
 /// precedence on re-parse (Q34). `parent_prec` is the parent's tier
 /// (`super::prec`); `side` selects the left/right associativity rule.
-fn format_operand(child: &Expr, parent_prec: u8, side: Side, comments: &CommentMap) -> Doc {
+fn format_operand(
+    child: &Expr,
+    parent_prec: u8,
+    side: Side,
+    right_assoc: bool,
+    comments: &CommentMap,
+) -> Doc {
     let inner = format_expr(child, comments);
-    if needs_parens(child, parent_prec, side) {
+    if needs_parens(child, parent_prec, side, right_assoc) {
+        concat(vec![text("("), inner, text(")")])
+    } else {
+        inner
+    }
+}
+
+/// Format the receiver of a postfix form (`.field`, `.method()`, `[i]`,
+/// `?`, `.await`). Postfix binds tighter than every operator, so an operator
+/// receiver (`&var s`, `a | b`) keeps its grouping parentheses.
+fn format_receiver(object: &Expr, comments: &CommentMap) -> Doc {
+    let inner = format_expr(object, comments);
+    if expr_prec(object).is_some() {
         concat(vec![text("("), inner, text(")")])
     } else {
         inner
@@ -31,12 +50,17 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         ExprKind::IntLiteral(val, suffix) => format_int(*val, suffix),
         ExprKind::FloatLiteral(val, suffix) => format_float(*val, suffix),
         ExprKind::StringLiteral(s) => text(format!("\"{}\"", escape_string(s))),
-        ExprKind::InterpolatedString(parts) => format_interpolated_string(parts),
+        ExprKind::InterpolatedString(parts) => format_interpolated_string(parts, comments),
         ExprKind::CharLiteral(c) => text(format_char_literal(*c)),
         ExprKind::BoolLiteral(b) => text(if *b { "true" } else { "false" }),
         ExprKind::UnitLiteral => text("()"),
         ExprKind::NullLiteral => text("nil"),
         ExprKind::RegexLiteral { pattern, flags } => text(format!("/{}/{}", pattern, flags)),
+        // Block Tier-2 `&`-forms in argument position. `Forward` prints as the
+        // canonical `&block` (bare `&` normalizes to it — both re-parse to
+        // `Forward`, so `format(format(x)) == format(x)`).
+        ExprKind::BlockPass(BlockPassKind::ToProc(sym)) => text(format!("&:{}", sym)),
+        ExprKind::BlockPass(BlockPassKind::Forward) => text("&block"),
 
         // ── Identifiers ──
         ExprKind::Identifier(name) => text(name.clone()),
@@ -52,13 +76,17 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         ExprKind::BorrowMut(inner) => concat(vec![text("&var "), format_expr(inner, comments)]),
 
         // ── Field/Method access ──
-        ExprKind::FieldAccess { object, field } => {
+        // `@field` as written; the parser builds it as `self.field`.
+        ExprKind::FieldAccess {
+            field, ivar: true, ..
+        } => text(format!("@{field}")),
+        ExprKind::FieldAccess { object, field, .. } => {
             // Check if this is part of a method chain
             if is_chain_start(object) {
                 format_method_chain(kind, comments)
             } else {
                 concat(vec![
-                    format_expr(object, comments),
+                    format_receiver(object, comments),
                     text("."),
                     text(field.clone()),
                 ])
@@ -66,21 +94,29 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         }
 
         ExprKind::MethodCall {
+            parens,
             object,
             method,
+            generic_args,
             args,
             block,
-            ..
         } => {
             if is_chain_start(object) {
                 format_method_chain(kind, comments)
             } else {
-                format_single_method_call(object, method, args, block.as_deref(), comments)
+                format_single_method_call(
+                    object,
+                    method,
+                    generic_args,
+                    (args, *parens),
+                    block.as_deref(),
+                    comments,
+                )
             }
         }
 
         ExprKind::SafeNav { object, field } => concat(vec![
-            format_expr(object, comments),
+            format_receiver(object, comments),
             text("&."),
             text(field.clone()),
         ]),
@@ -92,7 +128,7 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         } => {
             let arg_docs: Vec<Doc> = args.iter().map(|a| format_expr(a, comments)).collect();
             concat(vec![
-                format_expr(object, comments),
+                format_receiver(object, comments),
                 text("&."),
                 text(method.clone()),
                 format_call_args(arg_docs),
@@ -101,21 +137,14 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
 
         // ── Calls & Indexing ──
         ExprKind::Call {
+            parens,
             callee,
             args,
             block,
         } => {
             let arg_docs: Vec<Doc> = args.iter().map(|a| format_expr(a, comments)).collect();
             let mut parts = vec![format_expr(callee, comments)];
-            // A `Call` node ONLY exists when the source wrote `(...)` — a bare
-            // `row_height` (no parens) parses as an identifier/path, never a
-            // Call. So ALWAYS emit the parens, even for a zero-arg call:
-            // stripping them (`row_height()` → `row_height`) turns a call
-            // expression into a bare-name reference — a semantic change and a
-            // documented GUI-stack crash shape (Q30). When a block arg is
-            // present but there are no positional args, emit `()` before it so
-            // `f()  do … end` stays a call with a trailing block.
-            parts.push(format_call_args(arg_docs));
+            parts.push(written_call_args(*parens, arg_docs));
             if let Some(blk) = block {
                 parts.push(text(" "));
                 parts.push(format_expr(blk, comments));
@@ -124,7 +153,7 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         }
 
         ExprKind::Index { object, index } => concat(vec![
-            format_expr(object, comments),
+            format_receiver(object, comments),
             text("["),
             format_expr(index, comments),
             text("]"),
@@ -132,30 +161,67 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
 
         ExprKind::ClosureCall { callee, args } => {
             let arg_docs: Vec<Doc> = args.iter().map(|a| format_expr(a, comments)).collect();
-            concat(vec![
+            // Grouped so the separators break only when this call itself is
+            // too long, not whenever an enclosing block breaks.
+            group(concat(vec![
                 format_expr(callee, comments),
                 text(".("),
                 join(concat(vec![text(","), line()]), arg_docs),
                 text(")"),
-            ])
+            ]))
         }
 
         // ── Try operator ──
-        ExprKind::Try(inner) => concat(vec![format_expr(inner, comments), text("?")]),
+        ExprKind::Try(inner) => concat(vec![format_receiver(inner, comments), text("?")]),
 
         // ── Assignment ──
         ExprKind::Assign { target, value } => group(concat(vec![
             format_expr(target, comments),
             text(" = "),
-            nest(INDENT_WIDTH, format_expr(value, comments)),
+            assigned_value(
+                format_operand(value, 1, Side::Right, false, comments),
+                value,
+            ),
         ])),
+
+        ExprKind::MultiAssign {
+            targets,
+            values,
+            splat_target,
+        } => {
+            let render = |exprs: &[Expr], splat: Option<usize>| {
+                join(
+                    text(", "),
+                    exprs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, expr)| {
+                            let rendered = format_expr(expr, comments);
+                            if splat == Some(index) {
+                                concat(vec![text("*"), rendered])
+                            } else {
+                                rendered
+                            }
+                        })
+                        .collect(),
+                )
+            };
+            group(concat(vec![
+                render(targets, *splat_target),
+                text(" = "),
+                nest(INDENT_WIDTH, render(values, None)),
+            ]))
+        }
 
         ExprKind::CompoundAssign { target, op, value } => group(concat(vec![
             format_expr(target, comments),
             text(" "),
             text(compound_assign_op_str(*op)),
             text(" "),
-            nest(INDENT_WIDTH, format_expr(value, comments)),
+            nest(
+                INDENT_WIDTH,
+                format_operand(value, 1, Side::Right, false, comments),
+            ),
         ])),
 
         // ── Control flow ──
@@ -186,11 +252,11 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
             // range keeps its grouping on re-parse.
             let mut parts = Vec::new();
             if let Some(s) = start {
-                parts.push(format_operand(s, 9, Side::Left, comments));
+                parts.push(format_operand(s, 9, Side::Left, false, comments));
             }
             parts.push(text(op));
             if let Some(e) = end {
-                parts.push(format_operand(e, 9, Side::Right, comments));
+                parts.push(format_operand(e, 9, Side::Right, false, comments));
             }
             concat(parts)
         }
@@ -293,9 +359,17 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
             None => text("break"),
         },
 
+        ExprKind::Next(val) => match val {
+            Some(e) => group(concat(vec![
+                text("next "),
+                nest(INDENT_WIDTH, format_expr(e, comments)),
+            ])),
+            None => text("next"),
+        },
+
         ExprKind::Continue => text("continue"),
 
-        ExprKind::Await(inner) => concat(vec![format_expr(inner, comments), text(".await")]),
+        ExprKind::Await(inner) => concat(vec![format_receiver(inner, comments), text(".await")]),
 
         // ── Yield ──
         ExprKind::Yield(exprs) => {
@@ -345,10 +419,17 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
         // when it is a looser operator so `(a + b) as Int` does not collapse
         // to `a + b as Int` = `a + (b as Int)` (Q34).
         ExprKind::Cast { expr, target_type } => concat(vec![
-            format_operand(expr, 23, Side::Left, comments),
+            format_operand(expr, 23, Side::Left, false, comments),
             text(" as "),
             format_type_expr(target_type, comments),
         ]),
+
+        // A type used as a static-call receiver with explicit generic
+        // arguments (`Hash[String, Int].new`). Print the written path, not
+        // the bare name: dropping the arguments here would silently rewrite
+        // the program into the shape whose type inference cannot recover
+        // them, which is the fmt-destructiveness class (Q23/Q30/Q34).
+        ExprKind::GenericTypeRef { name: _, ty } => format_type_expr(ty, comments),
 
         // ── Enum variant construction ──
         ExprKind::EnumVariant {
@@ -367,17 +448,23 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
             } else {
                 let arg_docs: Vec<Doc> = args
                     .iter()
-                    .map(|a| {
-                        if let Some(name) = &a.name {
-                            concat(vec![
-                                text(name.clone()),
-                                text(": "),
-                                format_expr(&a.value, comments),
-                            ])
-                        } else {
-                            format_expr(&a.value, comments)
-                        }
-                    })
+                    .map(
+                        |FieldArg {
+                             name,
+                             value,
+                             span: _,
+                         }| {
+                            if let Some(name) = name {
+                                concat(vec![
+                                    text(name.clone()),
+                                    text(": "),
+                                    format_expr(value, comments),
+                                ])
+                            } else {
+                                format_expr(value, comments)
+                            }
+                        },
+                    )
                     .collect();
                 concat(vec![text(path_str), format_call_args(arg_docs)])
             }
@@ -400,7 +487,7 @@ fn format_expr_kind(kind: &ExprKind, comments: &CommentMap) -> Doc {
 
 fn format_int(val: i64, suffix: &Option<NumericSuffix>) -> Doc {
     match suffix {
-        Some(s) => text(format!("{}{}", val, suffix_str(s))),
+        Some(s) => text(format!("{}{}", val, s.as_str())),
         None => text(format!("{}", val)),
     }
 }
@@ -412,33 +499,19 @@ fn format_float(val: f64, suffix: &Option<NumericSuffix>) -> Doc {
         format!("{}", val)
     };
     match suffix {
-        Some(sf) => text(format!("{}{}", s, suffix_str(sf))),
+        Some(sf) => text(format!("{}{}", s, sf.as_str())),
         None => text(s),
     }
 }
 
-fn suffix_str(s: &NumericSuffix) -> &'static str {
-    match s {
-        NumericSuffix::I8 => "i8",
-        NumericSuffix::I16 => "i16",
-        NumericSuffix::I32 => "i32",
-        NumericSuffix::I64 => "i64",
-        NumericSuffix::U => "u",
-        NumericSuffix::U8 => "u8",
-        NumericSuffix::U16 => "u16",
-        NumericSuffix::U32 => "u32",
-        NumericSuffix::U64 => "u64",
-        NumericSuffix::ISize => "isize",
-        NumericSuffix::USize => "usize",
-        NumericSuffix::F32 => "f32",
-        NumericSuffix::F64 => "f64",
-    }
-}
-
+/// Source form of string-literal text. A literal `#{` is written `\#{` so it
+/// does not re-lex as an interpolation.
 fn escape_string(s: &str) -> String {
     let mut out = String::new();
-    for c in s.chars() {
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
         match c {
+            '#' if chars.peek() == Some(&'{') => out.push_str("\\#"),
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
             '\n' => out.push_str("\\n"),
@@ -470,36 +543,22 @@ fn format_char_literal(c: char) -> String {
     }
 }
 
-fn format_interpolated_string(parts: &[StringPart]) -> Doc {
-    let mut segments = vec![text("\"")];
+/// An interpolated string, quotes included. Each `#{...}` expression is
+/// formatted with `format_expr` and rendered flat, since the string must
+/// stay on one line; the format spec is re-emitted when non-default.
+fn format_interpolated_string(parts: &[StringPart], comments: &CommentMap) -> Doc {
+    let mut out = String::from("\"");
     for part in parts {
         match part {
-            StringPart::Literal(s) => segments.push(text(escape_string(s))),
-            StringPart::Expr { tokens, spec } => {
-                // Reconstruct the interpolation expression from its tokens.
-                // Operators get surrounding spaces so the result re-lexes to
-                // the SAME token stream: a bare `#{w/2}` re-lexes the `/` as a
-                // regex literal ("unterminated regex" / non-idempotent), so we
-                // emit `#{w / 2}`. Non-operators (idents, `.`, `(`, …) stay
-                // tight so `a.b` / `f(x)` are unchanged. Phase 2 #06.B: spec
-                // is reconstructed when non-default (`:?`, `:>10.2`, …).
-                let mut content = String::new();
-                for (i, tok) in tokens.iter().enumerate() {
-                    let src = token_to_source(tok);
-                    let prev_spaced = i > 0 && interp_token_is_spaced(&tokens[i - 1].kind);
-                    let cur_spaced = interp_token_is_spaced(&tok.kind);
-                    if i > 0 && (prev_spaced || cur_spaced) {
-                        content.push(' ');
-                    }
-                    content.push_str(&src);
-                }
-                let spec_str = format_spec_to_source(spec);
-                segments.push(text(format!("#{{{}{}}}", content, spec_str)));
+            StringPart::Literal(s) => out.push_str(&escape_string(s)),
+            StringPart::Expr { expr, spec } => {
+                let inner = print_doc(&format_expr(expr, comments), i32::MAX);
+                out.push_str(&format!("#{{{}{}}}", inner, format_spec_to_source(spec)));
             }
         }
     }
-    segments.push(text("\""));
-    concat(segments)
+    out.push('"');
+    text(out)
 }
 
 /// Phase 2 #06.B: reconstruct a `FormatSpec` to its source form.
@@ -529,150 +588,6 @@ fn format_spec_to_source(spec: &crate::lexer::token::FormatSpec) -> String {
     out
 }
 
-/// Best-effort reconstruction of a token to its source form.
-/// True for interpolation tokens that must carry surrounding spaces when an
-/// interpolation expression is reconstructed, so the result re-lexes to the
-/// same token stream. The critical case is `/` (Slash): `#{w/2}` re-lexes the
-/// `/` as a regex-literal start, but `#{w / 2}` is unambiguous division.
-/// Spacing every binary/comparison/logical/bitwise/assignment operator (and
-/// keyword operators like `as`) is also what keeps the formatter idempotent.
-fn interp_token_is_spaced(kind: &crate::lexer::token::TokenKind) -> bool {
-    use crate::lexer::token::TokenKind as K;
-    matches!(
-        kind,
-        K::Plus
-            | K::Minus
-            | K::Star
-            | K::Slash
-            | K::Percent
-            | K::EqEq
-            | K::NotEq
-            | K::Lt
-            | K::Gt
-            | K::LtEq
-            | K::GtEq
-            | K::AmpAmp
-            | K::PipePipe
-            | K::Eq
-            | K::As
-            | K::Arrow
-            | K::FatArrow
-    )
-}
-
-fn token_to_source(token: &crate::lexer::token::Token) -> String {
-    use crate::lexer::token::TokenKind;
-    match &token.kind {
-        TokenKind::Identifier(s) | TokenKind::TypeIdentifier(s) => s.clone(),
-        TokenKind::IntLiteral(v, sfx) => {
-            let base = format!("{}", v);
-            match sfx {
-                Some(s) => format!("{}{}", base, suffix_str(s)),
-                None => base,
-            }
-        }
-        TokenKind::FloatLiteral(v, sfx) => {
-            let base = format!("{}", v);
-            match sfx {
-                Some(s) => format!("{}{}", base, suffix_str(s)),
-                None => base,
-            }
-        }
-        TokenKind::StringLiteral(s) => format!("\"{}\"", s),
-        TokenKind::CharLiteral(c) => format_char_literal(*c),
-        TokenKind::DocComment(s) => format!("## {}", s),
-        TokenKind::Dot => ".".to_string(),
-        TokenKind::Comma => ",".to_string(),
-        TokenKind::Colon => ":".to_string(),
-        // §3.9: `::` is retired; `.` is the path separator everywhere.
-        TokenKind::ColonColon => ".".to_string(),
-        TokenKind::Semicolon => ";".to_string(),
-        TokenKind::Plus => "+".to_string(),
-        TokenKind::Minus => "-".to_string(),
-        TokenKind::Star => "*".to_string(),
-        TokenKind::Slash => "/".to_string(),
-        TokenKind::Percent => "%".to_string(),
-        TokenKind::EqEq => "==".to_string(),
-        TokenKind::NotEq => "!=".to_string(),
-        TokenKind::Lt => "<".to_string(),
-        TokenKind::Gt => ">".to_string(),
-        TokenKind::LtEq => "<=".to_string(),
-        TokenKind::GtEq => ">=".to_string(),
-        TokenKind::AmpAmp => "&&".to_string(),
-        TokenKind::PipePipe => "||".to_string(),
-        TokenKind::Bang => "!".to_string(),
-        TokenKind::Amp => "&".to_string(),
-        TokenKind::Pipe => "|".to_string(),
-        TokenKind::Caret => "^".to_string(),
-        TokenKind::Shl => "<<".to_string(),
-        TokenKind::Shr => ">>".to_string(),
-        TokenKind::Eq => "=".to_string(),
-        TokenKind::Arrow => "->".to_string(),
-        TokenKind::DotDot => "..".to_string(),
-        TokenKind::DotDotDot => "...".to_string(),
-        TokenKind::Question => "?".to_string(),
-        TokenKind::AmpDot => "&.".to_string(),
-        TokenKind::At => "@".to_string(),
-        TokenKind::AmpMut => "&var".to_string(),
-        TokenKind::LParen => "(".to_string(),
-        TokenKind::RParen => ")".to_string(),
-        TokenKind::LBracket => "[".to_string(),
-        TokenKind::RBracket => "]".to_string(),
-        TokenKind::LBrace => "{".to_string(),
-        TokenKind::RBrace => "}".to_string(),
-        TokenKind::True => "true".to_string(),
-        TokenKind::False => "false".to_string(),
-        TokenKind::SelfValue => "self".to_string(),
-        TokenKind::SelfType => "Self".to_string(),
-        TokenKind::Lifetime(s) => format!("'{}", s),
-        TokenKind::Newline | TokenKind::Eof => String::new(),
-        // Keywords
-        TokenKind::Let => "let".to_string(),
-        TokenKind::Mut => "var".to_string(), // legacy variant — never produced by lexer now
-        TokenKind::If => "if".to_string(),
-        TokenKind::Else => "else".to_string(),
-        TokenKind::Match => "match".to_string(),
-        TokenKind::Return => "return".to_string(),
-        TokenKind::While => "while".to_string(),
-        TokenKind::For => "for".to_string(),
-        TokenKind::In => "in".to_string(),
-        TokenKind::Do => "do".to_string(),
-        TokenKind::End => "end".to_string(),
-        TokenKind::Def => "def".to_string(),
-        TokenKind::Class => "class".to_string(),
-        TokenKind::SomeKw => "Some".to_string(),
-        TokenKind::OkKw => "Ok".to_string(),
-        TokenKind::ErrKw => "Err".to_string(),
-        TokenKind::Nil => "nil".to_string(),
-        TokenKind::As => "as".to_string(),
-        _ => format!("{:?}", token.kind),
-    }
-}
-
-fn bin_op_str(op: BinOp) -> &'static str {
-    match op {
-        BinOp::Add => "+",
-        BinOp::Sub => "-",
-        BinOp::Mul => "*",
-        BinOp::Div => "/",
-        BinOp::Mod => "%",
-        BinOp::Eq => "==",
-        BinOp::NotEq => "!=",
-        BinOp::Lt => "<",
-        BinOp::Gt => ">",
-        BinOp::LtEq => "<=",
-        BinOp::GtEq => ">=",
-        BinOp::And => "&&",
-        BinOp::Or => "||",
-        BinOp::BitAnd => "&",
-        BinOp::BitOr => "|",
-        BinOp::BitXor => "^",
-        BinOp::Shl => "<<",
-        BinOp::Shr => ">>",
-        BinOp::MatchOp => "~=",
-    }
-}
-
 fn compound_assign_op_str(op: BinOp) -> &'static str {
     match op {
         BinOp::Add => "+=",
@@ -680,6 +595,11 @@ fn compound_assign_op_str(op: BinOp) -> &'static str {
         BinOp::Mul => "*=",
         BinOp::Div => "/=",
         BinOp::Mod => "%=",
+        BinOp::Shl => "<<=",
+        BinOp::Shr => ">>=",
+        BinOp::BitAnd => "&=",
+        BinOp::BitOr => "|=",
+        BinOp::BitXor => "^=",
         _ => "=",
     }
 }
@@ -690,19 +610,31 @@ fn format_binary_op(left: &Expr, op: BinOp, right: &Expr, comments: &CommentMap)
     // to the SAME tree — the parser discards grouping parens, so the
     // formatter must re-derive them from tree shape (Q34).
     let p = binop_prec(op);
+    let right_assoc = matches!(op, BinOp::Pow | BinOp::NilCoalesce);
     group(concat(vec![
-        format_operand(left, p, Side::Left, comments),
+        format_operand(left, p, Side::Left, right_assoc, comments),
         text(" "),
-        text(bin_op_str(op)),
+        text(op.symbol()),
         line(),
-        format_operand(right, p, Side::Right, comments),
+        format_operand(right, p, Side::Right, right_assoc, comments),
     ]))
 }
 
 fn format_unary_op(op: UnaryOp, operand: &Expr, comments: &CommentMap) -> Doc {
+    if op == UnaryOp::KeywordNot {
+        return concat(vec![
+            text("not "),
+            // Assignment shares this tier and is consumed by `not`; keyword
+            // `and` / `or` are looser and therefore require grouping.
+            format_operand(operand, 1, Side::Right, true, comments),
+        ]);
+    }
+
     let op_str = match op {
         UnaryOp::Neg => "-",
         UnaryOp::Not => "!",
+        UnaryOp::BitNot => "~",
+        UnaryOp::KeywordNot => unreachable!(),
         UnaryOp::Deref => "*",
     };
     // A prefix unary binds at tier 25 — tighter than every binary/range/cast
@@ -711,7 +643,7 @@ fn format_unary_op(op: UnaryOp, operand: &Expr, comments: &CommentMap) -> Doc {
     // this, `-(a + b)` would reformat to `-a + b` = `(-a) + b` (Q34).
     concat(vec![
         text(op_str),
-        format_operand(operand, 25, Side::Right, comments),
+        format_operand(operand, 25, Side::Right, false, comments),
     ])
 }
 
@@ -752,37 +684,52 @@ fn collect_chain(kind: &ExprKind) -> (Doc, Vec<Doc>) {
     // We need to store intermediate data, not Doc references
     let mut links: Vec<ExprKind> = Vec::new();
     let mut current = kind;
+    let mut base: Option<&Expr> = None;
 
-    while let ExprKind::MethodCall { object, .. } | ExprKind::FieldAccess { object, .. } = current {
+    // An `@field` read is the chain's receiver, not a `.field` link.
+    while let ExprKind::MethodCall { object, .. }
+    | ExprKind::FieldAccess {
+        object,
+        ivar: false,
+        ..
+    } = current
+    {
         links.push(current.clone());
+        base = Some(object);
         current = &object.kind;
     }
 
-    // `current` is now the receiver (base of the chain).
+    // `base` is now the receiver of the chain.
     let comments = CommentMap::new();
-    let receiver = format_expr_kind(current, &comments);
+    let receiver = match base {
+        Some(base) => format_receiver(base, &comments),
+        None => format_expr_kind(current, &comments),
+    };
 
     // Links are in reverse order (innermost first), so reverse.
     links.reverse();
     let link_docs: Vec<Doc> = links
         .iter()
         .map(|link| match link {
-            ExprKind::FieldAccess { field, .. } => concat(vec![text("."), text(field.clone())]),
+            ExprKind::FieldAccess {
+                object: _, field, ..
+            } => concat(vec![text("."), text(field.clone())]),
             ExprKind::MethodCall {
+                parens,
+                object: _,
                 method,
+                generic_args,
                 args,
                 block,
-                ..
             } => {
                 let arg_docs: Vec<Doc> = args.iter().map(|a| format_expr(a, &comments)).collect();
-                let mut parts = vec![text("."), text(method.clone())];
-                // ALWAYS emit `()` — a `MethodCall` link is a call, never a
-                // field access (which is a separate `FieldAccess` link).
-                // Dropping the parens on a zero-arg call in a chain
-                // (`s.bytes().size()` → `s.bytes.size`) silently turns calls
-                // into field accesses (reparse-identity break; cf.
-                // `format_single_method_call`).
-                parts.push(format_call_args(arg_docs));
+                let mut parts = vec![
+                    text("."),
+                    text(method.clone()),
+                    format_method_generic_args(generic_args, &comments),
+                ];
+                // The argument list as written (see `written_call_args`).
+                parts.push(written_call_args(*parens, arg_docs));
                 if let Some(blk) = block {
                     parts.push(text(" "));
                     parts.push(format_expr(blk, &comments));
@@ -819,26 +766,50 @@ fn format_method_chain(kind: &ExprKind, _comments: &CommentMap) -> Doc {
     ]))
 }
 
+/// A call's argument list the way the source wrote it. With `parens` it is
+/// always `(...)`, even when empty: `f()` and `x.m()` are calls, and dropping
+/// the parens would turn them into a name or a field access (Q30). Without
+/// parens it is the command form, ` a` (the parser takes one bare
+/// argument), or nothing for a block-only call (`x.map { }`) and a bare
+/// `x.m[T]`; fmt never adds parens the author left out.
+fn written_call_args(parens: bool, arg_docs: Vec<Doc>) -> Doc {
+    if parens {
+        format_call_args(arg_docs)
+    } else if arg_docs.is_empty() {
+        nil()
+    } else {
+        concat(vec![text(" "), join(text(", "), arg_docs)])
+    }
+}
+
+/// The `[T, U]` explicit type arguments of a method call, or nothing.
+fn format_method_generic_args(generic_args: &[TypeExpr], comments: &CommentMap) -> Doc {
+    if generic_args.is_empty() {
+        return nil();
+    }
+    let docs = generic_args
+        .iter()
+        .map(|t| format_type_expr(t, comments))
+        .collect();
+    concat(vec![text("["), join(text(", "), docs), text("]")])
+}
+
 fn format_single_method_call(
     object: &Expr,
     method: &str,
-    args: &[Expr],
+    generic_args: &[TypeExpr],
+    (args, parens): (&[Expr], bool),
     block: Option<&Expr>,
     comments: &CommentMap,
 ) -> Doc {
     let arg_docs: Vec<Doc> = args.iter().map(|a| format_expr(a, comments)).collect();
     let mut parts = vec![
-        format_expr(object, comments),
+        format_receiver(object, comments),
         text("."),
         text(method.to_string()),
+        format_method_generic_args(generic_args, comments),
     ];
-    // ALWAYS emit the call parens, even for a zero-arg call. A `MethodCall`
-    // node only exists when the source wrote `x.foo()`; a bare `x.foo`
-    // parses as a `FieldAccess`, a DIFFERENT node. Dropping the parens
-    // (`x.foo()` → `x.foo`) silently rewrites a call into a field access — a
-    // semantic change that breaks reparse-identity (same fmt-destructiveness
-    // class as Q30's `Call`/closure shapes). The empty `()` is canonical.
-    parts.push(format_call_args(arg_docs));
+    parts.push(written_call_args(parens, arg_docs));
     if let Some(blk) = block {
         parts.push(text(" "));
         parts.push(format_expr(blk, comments));
@@ -849,35 +820,35 @@ fn format_single_method_call(
 // ─── Control Flow ───────────────────────────────────────────────────
 
 fn format_if_expr(if_expr: &IfExpr, comments: &CommentMap) -> Doc {
+    let IfExpr {
+        condition,
+        then_body,
+        elsif_clauses,
+        else_body,
+        span: _,
+    } = if_expr;
     let mut parts = vec![
         text("if "),
-        format_expr(&if_expr.condition, comments),
-        nest(
-            INDENT_WIDTH,
-            concat(vec![
-                hardline(),
-                format_block_body(&if_expr.then_body, comments),
-            ]),
-        ),
+        format_expr(condition, comments),
+        indented_block(then_body, comments),
     ];
 
-    for elsif in &if_expr.elsif_clauses {
+    for ElsifClause {
+        condition,
+        body,
+        span: _,
+    } in elsif_clauses
+    {
         parts.push(hardline());
         parts.push(text("elsif "));
-        parts.push(format_expr(&elsif.condition, comments));
-        parts.push(nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(&elsif.body, comments)]),
-        ));
+        parts.push(format_expr(condition, comments));
+        parts.push(indented_block(body, comments));
     }
 
-    if let Some(else_body) = &if_expr.else_body {
+    if let Some(else_body) = else_body {
         parts.push(hardline());
         parts.push(text("else"));
-        parts.push(nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(else_body, comments)]),
-        ));
+        parts.push(indented_block(else_body, comments));
     }
 
     parts.push(hardline());
@@ -887,27 +858,25 @@ fn format_if_expr(if_expr: &IfExpr, comments: &CommentMap) -> Doc {
 }
 
 fn format_if_let_expr(if_let: &IfLetExpr, comments: &CommentMap) -> Doc {
+    let IfLetExpr {
+        pattern,
+        value,
+        then_body,
+        else_body,
+        span: _,
+    } = if_let;
     let mut parts = vec![
         text("if let "),
-        format_pattern(&if_let.pattern, comments),
+        format_pattern(pattern, comments),
         text(" = "),
-        format_expr(&if_let.value, comments),
-        nest(
-            INDENT_WIDTH,
-            concat(vec![
-                hardline(),
-                format_block_body(&if_let.then_body, comments),
-            ]),
-        ),
+        format_expr(value, comments),
+        indented_block(then_body, comments),
     ];
 
-    if let Some(else_body) = &if_let.else_body {
+    if let Some(else_body) = else_body {
         parts.push(hardline());
         parts.push(text("else"));
-        parts.push(nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(else_body, comments)]),
-        ));
+        parts.push(indented_block(else_body, comments));
     }
 
     parts.push(hardline());
@@ -917,12 +886,16 @@ fn format_if_let_expr(if_let: &IfLetExpr, comments: &CommentMap) -> Doc {
 }
 
 fn format_match_expr(match_expr: &MatchExpr, comments: &CommentMap) -> Doc {
-    let mut parts = vec![text("match "), format_expr(&match_expr.subject, comments)];
+    let MatchExpr {
+        subject,
+        arms,
+        span: _,
+    } = match_expr;
+    let mut parts = vec![text("match "), format_expr(subject, comments)];
 
-    let arm_docs: Vec<Doc> = match_expr
-        .arms
+    let arm_docs: Vec<Doc> = arms
         .iter()
-        .map(|arm| format_match_arm(arm, comments))
+        .map(|arm| with_comments(arm.span.start, format_match_arm(arm, comments), comments))
         .collect();
 
     parts.push(nest(
@@ -942,15 +915,23 @@ fn format_match_expr(match_expr: &MatchExpr, comments: &CommentMap) -> Doc {
 }
 
 fn format_match_arm(arm: &MatchArm, comments: &CommentMap) -> Doc {
-    let pattern_doc = format_match_pattern(&arm.pattern, arm.guard.as_deref(), comments);
+    let MatchArm {
+        pattern,
+        guard,
+        body,
+        span: _,
+    } = arm;
+    let pattern_doc = format_match_pattern(pattern, guard.as_deref(), comments);
 
-    match &arm.body {
+    match body {
         MatchArmBody::Expr(expr) => {
             // Single expression: Pattern -> expr
+            // The arm's span runs to the next arm, so a comment at the end
+            // of the arm line trails the body expression.
             group(concat(vec![
                 pattern_doc,
                 text(" -> "),
-                format_expr(expr, comments),
+                with_comments(expr.span.start, format_expr(expr, comments), comments),
             ]))
         }
         MatchArmBody::Block(block) => {
@@ -979,55 +960,61 @@ fn format_match_arm(arm: &MatchArm, comments: &CommentMap) -> Doc {
 }
 
 fn format_while_expr(w: &WhileExpr, comments: &CommentMap) -> Doc {
+    let WhileExpr {
+        condition,
+        body,
+        span: _,
+    } = w;
     concat(vec![
         text("while "),
-        format_expr(&w.condition, comments),
-        nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(&w.body, comments)]),
-        ),
+        format_expr(condition, comments),
+        indented_block(body, comments),
         hardline(),
         text("end"),
     ])
 }
 
 fn format_while_let_expr(wl: &WhileLetExpr, comments: &CommentMap) -> Doc {
+    let WhileLetExpr {
+        pattern,
+        value,
+        body,
+        span: _,
+    } = wl;
     concat(vec![
         text("while let "),
-        format_pattern(&wl.pattern, comments),
+        format_pattern(pattern, comments),
         text(" = "),
-        format_expr(&wl.value, comments),
-        nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(&wl.body, comments)]),
-        ),
+        format_expr(value, comments),
+        indented_block(body, comments),
         hardline(),
         text("end"),
     ])
 }
 
 fn format_for_expr(f: &ForExpr, comments: &CommentMap) -> Doc {
+    let ForExpr {
+        pattern,
+        iterable,
+        body,
+        span: _,
+    } = f;
     concat(vec![
         text("for "),
-        format_pattern(&f.pattern, comments),
+        format_pattern(pattern, comments),
         text(" in "),
-        format_expr(&f.iterable, comments),
-        nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(&f.body, comments)]),
-        ),
+        format_expr(iterable, comments),
+        indented_block(body, comments),
         hardline(),
         text("end"),
     ])
 }
 
 fn format_loop_expr(l: &LoopExpr, comments: &CommentMap) -> Doc {
+    let LoopExpr { body, span: _ } = l;
     concat(vec![
         text("loop"),
-        nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(&l.body, comments)]),
-        ),
+        indented_block(body, comments),
         hardline(),
         text("end"),
     ])
@@ -1036,32 +1023,67 @@ fn format_loop_expr(l: &LoopExpr, comments: &CommentMap) -> Doc {
 // ─── Blocks ─────────────────────────────────────────────────────────
 
 pub fn format_block(block: &Block, comments: &CommentMap) -> Doc {
+    let Block {
+        statements,
+        span: _,
+    } = block;
     // `ExprKind::Block` is a synthesized `do ... end` block (e.g. async
     // lowering's tail blocks). The `do`/`end` delimiters are part of the
     // surface syntax — emitting only the inner statements collapses the block
     // into its surrounding context and no longer parses.
-    if block.statements.is_empty() {
+    if statements.is_empty() {
         return concat(vec![text("do"), hardline(), text("end")]);
     }
     concat(vec![
         text("do"),
-        nest(
-            INDENT_WIDTH,
-            concat(vec![hardline(), format_block_body(block, comments)]),
-        ),
+        indented_block(block, comments),
         hardline(),
         text("end"),
     ])
 }
 
-pub fn format_block_body(block: &Block, comments: &CommentMap) -> Doc {
-    let stmt_docs: Vec<Doc> = block
-        .statements
-        .iter()
-        .map(|stmt| format_statement(stmt, comments))
-        .collect();
+/// A block body on its own indented lines under its header, or nothing for
+/// an empty body (no statements, no comments), so `if c` / `else` with
+/// nothing between them gets no blank line.
+fn indented_block(block: &Block, comments: &CommentMap) -> Doc {
+    if block.statements.is_empty() && !comments.has_dangling(block.span.start) {
+        nil()
+    } else {
+        nest(
+            INDENT_WIDTH,
+            concat(vec![hardline(), format_block_body(block, comments)]),
+        )
+    }
+}
 
-    join(hardline(), stmt_docs)
+pub fn format_block_body(block: &Block, comments: &CommentMap) -> Doc {
+    let Block { statements, span } = block;
+    let mut parts = Vec::new();
+    for (i, stmt) in statements.iter().enumerate() {
+        let start = match stmt {
+            Statement::Let(l) => l.span.start,
+            Statement::Expression(e) => e.span.start,
+        };
+        if i > 0 {
+            parts.push(hardline());
+            // Keep one blank line the author left between two statements.
+            if comments.blank_line_before(start) {
+                parts.push(hardline());
+            }
+        }
+        parts.push(with_comments(
+            start,
+            format_statement(stmt, comments),
+            comments,
+        ));
+    }
+    if let Some(tail) = dangling_comments_doc(span.start, comments) {
+        if !parts.is_empty() {
+            parts.push(hardline());
+        }
+        parts.push(tail);
+    }
+    concat(parts)
 }
 
 pub fn format_statement(stmt: &Statement, comments: &CommentMap) -> Doc {
@@ -1072,127 +1094,209 @@ pub fn format_statement(stmt: &Statement, comments: &CommentMap) -> Doc {
 }
 
 fn format_let_binding(binding: &LetBinding, comments: &CommentMap) -> Doc {
+    let LetBinding {
+        mutable,
+        pattern,
+        type_annotation,
+        value,
+        span: _,
+    } = binding;
     // §3.1: `var x = ...` is the writable binding form; `let mut x` is retired.
-    let head = if binding.mutable { "var " } else { "let " };
+    let head = if *mutable { "var " } else { "let " };
     let mut parts = vec![text(head)];
 
-    parts.push(format_pattern(&binding.pattern, comments));
+    parts.push(format_pattern(pattern, comments));
 
-    if let Some(ty) = &binding.type_annotation {
+    if let Some(ty) = type_annotation {
         parts.push(text(": "));
         parts.push(format_type_expr(ty, comments));
     }
 
-    if let Some(val) = &binding.value {
+    if let Some(val) = value {
         parts.push(text(" = "));
-        parts.push(nest(INDENT_WIDTH, format_expr(val, comments)));
+        parts.push(assigned_value(format_expr(val, comments), val));
     }
 
     group(concat(parts))
 }
 
+/// The right side of `=`. A value that wraps onto continuation lines is
+/// indented one step; a block form (`match`, `if`, a call with a `do ... end`
+/// block) keeps its body and `end` aligned with the statement, as written:
+///
+/// ```text
+/// let x = match y
+///   ...
+/// end
+/// ```
+fn assigned_value(doc: Doc, value: &Expr) -> Doc {
+    if ends_in_block_form(value) {
+        doc
+    } else {
+        nest(INDENT_WIDTH, doc)
+    }
+}
+
+fn ends_in_block_form(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::If(_)
+        | ExprKind::IfLet(_)
+        | ExprKind::Match(_)
+        | ExprKind::While(_)
+        | ExprKind::WhileLet(_)
+        | ExprKind::For(_)
+        | ExprKind::Loop(_)
+        | ExprKind::Block(_)
+        | ExprKind::UnsafeBlock(_)
+        | ExprKind::Closure(_) => true,
+        ExprKind::Call { block, .. } | ExprKind::MethodCall { block, .. } => block.is_some(),
+        _ => false,
+    }
+}
+
 // ─── Closures ───────────────────────────────────────────────────────
 
 pub fn format_closure(closure: &ClosureExpr, comments: &CommentMap) -> Doc {
-    let params_doc = format_closure_params(&closure.params, comments);
+    let ClosureExpr {
+        is_async,
+        is_move,
+        params,
+        body,
+        span,
+        pipes,
+        do_end,
+        kind,
+        spelling,
+    } = closure;
+    // A bare closure that is not a block is a lambda value: it prints as
+    // `->(x) { ... }`, the spelling that cannot be misread as a block.
+    let spelling = match spelling {
+        ClosureSpelling::Bare if *kind != ClosureKind::Block => ClosureSpelling::Stabby,
+        other => *other,
+    };
+    let has_header = *pipes || !params.is_empty();
+    // The parameter header as written: `|x|`, `||`, or none at all; a `->`
+    // lambda writes `(x)` / `()` before its body instead.
+    let header = if has_header && spelling != ClosureSpelling::Stabby {
+        concat(vec![format_closure_params(params, comments), text(" ")])
+    } else {
+        nil()
+    };
+    let head = match spelling {
+        ClosureSpelling::Bare => nil(),
+        ClosureSpelling::Stabby if has_header => concat(vec![
+            text("->("),
+            format_closure_param_list(params, comments),
+            text(") "),
+        ]),
+        ClosureSpelling::Stabby => text("-> "),
+        ClosureSpelling::Lambda => text("lambda "),
+        ClosureSpelling::Proc => text("proc "),
+        ClosureSpelling::ProcNew => text("Proc.new "),
+    };
 
     // `async` / `move` modifiers (parser keyword order is `async move`). A move
     // closure written `{ |x| ... }` without the `move` keyword does not re-parse
     // at expression position — the leading `{` is taken as a block — so the
     // modifier must be preserved.
     let mut prefix: Vec<Doc> = Vec::new();
-    if closure.is_async {
+    if *is_async {
         prefix.push(text("async "));
     }
-    if closure.is_move {
+    if *is_move {
         prefix.push(text("move "));
     }
     let prefix_doc = concat(prefix);
 
-    let body = match &closure.body {
-        ClosureBody::Expr(expr) => {
-            // Single expression: normalize to { |params| expr }
-            let body_doc = format_expr(expr, comments);
-            group(concat(vec![
-                text("{ "),
-                params_doc,
-                text(" "),
-                body_doc,
-                text(" }"),
-            ]))
-        }
-        ClosureBody::Block(block) => {
-            if block.statements.len() <= 1 {
-                // Single statement — try brace form first
-                let body_doc = format_block_body(block, comments);
-                let brace_form = group(concat(vec![
-                    text("{ "),
-                    params_doc.clone(),
-                    text(" "),
-                    body_doc.clone(),
-                    text(" }"),
-                ]));
-
-                // If it doesn't fit, use do...end
-                let do_form = concat(vec![
-                    text("do "),
-                    params_doc,
-                    nest(INDENT_WIDTH, concat(vec![hardline(), body_doc])),
-                    hardline(),
-                    text("end"),
-                ]);
-
-                // Use group with if_break to choose between forms
-                group(if_break(do_form, brace_form))
-            } else {
-                // Multi-statement: always use do...end
-                let body_doc = format_block_body(block, comments);
-                concat(vec![
-                    text("do "),
-                    params_doc,
-                    nest(INDENT_WIDTH, concat(vec![hardline(), body_doc])),
-                    hardline(),
-                    text("end"),
-                ])
-            }
-        }
+    // The author's form (`do ... end` or `{ ... }`) and line layout: a body
+    // written on the opening line stays there, any other body gets its own
+    // indented lines.
+    let (open, close) = if *do_end { ("do", "end") } else { ("{", "}") };
+    let one_line = match body {
+        ClosureBody::Expr(expr) => expr.span.line == span.line,
+        ClosureBody::Block(block) => match block.statements.as_slice() {
+            [] => true,
+            [only] => statement_line(only) == span.line,
+            _ => false,
+        },
+    };
+    let body_doc = match body {
+        ClosureBody::Expr(expr) => format_expr(expr, comments),
+        ClosureBody::Block(block) => format_block_body(block, comments),
+    };
+    let empty = match body {
+        ClosureBody::Expr(expr) => matches!(expr.kind, ExprKind::UnitLiteral),
+        ClosureBody::Block(block) => block.statements.is_empty(),
+    };
+    let body = if empty {
+        concat(vec![text(open), text(" "), header, text(close)])
+    } else if one_line {
+        concat(vec![
+            text(open),
+            text(" "),
+            header,
+            body_doc,
+            text(" "),
+            text(close),
+        ])
+    } else {
+        concat(vec![
+            text(open),
+            text(" "),
+            header,
+            nest(INDENT_WIDTH, concat(vec![hardline(), body_doc])),
+            hardline(),
+            text(close),
+        ])
     };
 
-    concat(vec![prefix_doc, body])
+    concat(vec![prefix_doc, head, body])
+}
+
+/// The source line a statement starts on.
+fn statement_line(stmt: &Statement) -> u32 {
+    match stmt {
+        Statement::Let(l) => l.span.line,
+        Statement::Expression(e) => e.span.line,
+    }
 }
 
 fn format_closure_params(params: &[ClosureParam], comments: &CommentMap) -> Doc {
     if params.is_empty() {
-        // A zero-param closure MUST keep an explicit `||` header. The AST does
-        // not distinguish `{ || expr }` from a no-pipe `{ expr }` (both parse
-        // to a `ClosureExpr` with empty params), and emitting the bare `{ expr }`
-        // form is destructive: a brace block with no `||` re-parses ambiguously
-        // (block vs. closure) and is a DOCUMENTED segfault shape on the GUI
-        // stack (Q30) — `{ || App.build(...) }` collapsing to `{ App.build(...) }`
-        // turns compiling code into crashing code. `||` is always a legal,
-        // idempotent closure header, so always emit it. Returning `nil()` here
-        // also left a `{  expr }` double-space.
+        // An empty header the author wrote stays `||`: `{ || App.build(...) }`
+        // collapsing to `{ App.build(...) }` re-parses as a block, not a
+        // closure, in expression position (Q30). `format_closure` asks for
+        // the header only when the source had one (`ClosureExpr::pipes`).
         return text("||");
     }
-
-    let param_docs: Vec<Doc> = params
-        .iter()
-        .map(|p| {
-            if let Some(ty) = &p.type_expr {
-                concat(vec![
-                    text(p.name.clone()),
-                    text(": "),
-                    format_type_expr(ty, comments),
-                ])
-            } else {
-                text(p.name.clone())
-            }
-        })
-        .collect();
-
     concat(vec![
         text("|"),
-        join(concat(vec![text(","), space()]), param_docs),
+        format_closure_param_list(params, comments),
         text("|"),
     ])
+}
+
+/// `x, y: Int` — closure parameters without their delimiters.
+fn format_closure_param_list(params: &[ClosureParam], comments: &CommentMap) -> Doc {
+    let param_docs: Vec<Doc> = params
+        .iter()
+        .map(
+            |ClosureParam {
+                 name,
+                 type_expr,
+                 span: _,
+             }| {
+                if let Some(ty) = type_expr {
+                    concat(vec![
+                        text(name.clone()),
+                        text(": "),
+                        format_type_expr(ty, comments),
+                    ])
+                } else {
+                    text(name.clone())
+                }
+            },
+        )
+        .collect();
+    join(concat(vec![text(","), space()]), param_docs)
 }

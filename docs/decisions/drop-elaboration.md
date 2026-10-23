@@ -48,13 +48,28 @@ For each block ending in `Terminator::Return`, `insert_drops` appends, in
    right C symbol), then
 2. a type-directed free call:
    - `Ty::String` → `ruxen_string_free`
-   - `Ty::Array(elem)` → element-aware `ruxen_vec_drop_string` /
-     `ruxen_vec_drop_vec`, else spine-only `ruxen_vec_free`
-   - `Ty::Map(k,v)` / `Ty::Set(elem)` → element-aware `ruxen_hash_drop_*` /
-     `ruxen_set_drop_string`, else spine-only `ruxen_hash_free` / `ruxen_set_free`
+   - `Ty::Array(elem)` → `ruxen_vec_drop(v, desc(elem))`
+   - `Ty::Map(k,v)` → `ruxen_hash_drop(h, desc(k), desc(v))`
+   - `Ty::Set(elem)` → `ruxen_set_drop(s, desc(elem))`
    - `Ty::Class/Struct/Enum` → `ruxen_dealloc`
-   - any other type reaching this point → `unimplemented!` (loud, not a silent
-     fall-through), since the eligibility filter restricts to exactly these.
+
+   `desc` is an element descriptor (`drops::elem_desc`, the `RUXEN_ELEM_*`
+   block in `runtime.h`): a pre-order stream of 4-bit tags that the C side
+   follows recursively through `ruxen_elem_drop`, so nested containers are
+   freed to any depth. A `Hash` key or `Set` element is described as a
+   string or a plain word only, matching how those tables copy keys. The
+   eligibility filter is `heap_free_callee(ty).is_some()`, so no other type
+   reaches this point.
+
+Closures use the same MIR-call architecture. Lowering attaches a synthesized
+`__closure_N_drop(pair)` function to the fresh pair local. Drop elaboration
+propagates that destructor across `Assign`/`Copy`/`Move` and emits it only when
+`compute_dealloc_safe_locals` still proves the final pair is owned. The helper
+loads the captures pointer, NULL-guards each eligible field in reverse capture
+order, runs its user `def drop` plus type-directed free, then frees the captures
+block and pair. Synthetic `__block`/`&block` parameters are call-duration
+borrows, matching the rule that function parameters are not dropped by the
+callee.
 
 ## How it avoids drop-after-move (the load-bearing soundness argument)
 
@@ -104,6 +119,10 @@ counters + an `atexit` leak report) and asserts `outstanding == 0`. Coverage:
 - e2e behavioural drop pins: `138_struct_drop_no_leak`, `518_file_drop_closes`
   (1024 fds without EMFILE), `545_tcp_listener_drop_closes`,
   `711_sharedsync_clone_drop_refcount`.
+- closure capture glue: `closure_and_block_captures_are_freed_at_closure_drop`
+  balances all three allocations for both closure syntaxes; the moved-out pin
+  proves capture escape suppresses only the field free. Release-e2e 475 covers
+  both surface forms through the normal compiler/runtime path.
 
 ## What this does NOT yet cover (staged remainder — open work)
 
@@ -121,9 +140,27 @@ counters + an `atexit` leak report) and asserts `outstanding == 0`. Coverage:
   feature, tracked separately.
 - **Partial-move field-granular drop** (D6) beyond what the alias/taint analysis
   already handles structurally.
-- **Temporaries**: the current filter drops only `_t*` temps that are built-in
-  heap types proven alloc-rooted; the general "drop every non-Copy temp at
-  end-of-statement" rule (tier1_04 §7.2.6) is not in place.
+- **Precise closure capture drop flags.** A direct by-value capture is dropped
+  only while its extracted MIR alias never returns, enters an aggregate, moves,
+  or reaches a consuming/ambiguous call. Nested re-captures are not assigned a
+  second owner. These conservative cases can leak until path-sensitive capture
+  ownership is represented; they cannot double-free the escaped value.
+- **Temporaries** (partly done 2026-10-17): a compiler temporary that owns a
+  fresh value (a built-in heap type, a plain class or struct, or a class with a
+  `def drop`) and is used only inside its statement is dropped at the end of
+  that statement. Each statement that creates locals ends in a `MirInst::Nop`
+  marker (`lower_scoped_statement`); `insert_drops` sinks the temporary's drop
+  to it when the temporary and every borrow of it are dead after the marker,
+  and strips the markers afterwards. Drop elaboration runs once every body is
+  lowered (`Lowerer::elaborate_drops`), so a call result is owned by the
+  caller when the callee returns a fresh value (`drops::returns_fresh`: every
+  return is an allocation its own frame owned outright; a container only when
+  its elements own no heap). An argument bound to a `&T` parameter the callee
+  may return is no longer treated as a mere borrow. Still open: enum
+  temporaries (a match moves a payload out without stripping the enum), a
+  temporary whose statement spans several blocks (it keeps the
+  function-exit drop), and results of functions that return a field or a
+  parameter, which stay borrowed and are never freed.
 
 ## Notes for whoever picks up the remainder
 

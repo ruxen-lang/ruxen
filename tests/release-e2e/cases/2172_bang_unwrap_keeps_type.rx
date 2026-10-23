@@ -1,0 +1,17 @@
+# F-22. `expect!` / `unwrap!` are `alias`es of `expect` / `unwrap` on Option
+# and Result, so the result keeps the element type without a typed binding.
+# Before, the bang call had no declaration: its type was guessed from the
+# argument (`&String`), so `puts n` crashed or `main` was dropped.
+use std.io.File
+
+def main
+  let opt = Some(3)
+  let n = opt.expect!("present")
+  puts n + 1
+  let res: Result[Int, String] = Ok(41)
+  let m = res.unwrap!
+  puts m + 1
+  var f = File.open("/dev/null").expect!("open")
+  let text = f.read_to_string.expect!("read")
+  puts text.size
+end

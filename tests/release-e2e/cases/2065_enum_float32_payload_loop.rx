@@ -1,0 +1,25 @@
+# Constructing a Float32-payload enum variant 1000 times in a loop and
+# matching each must not overrun the enum allocation.
+enum Ev
+  Move(Float32, Float32)
+  Scroll(Float32, Float32)
+  Key(Int)
+end
+
+def decode(i: Int) -> Ev
+  Ev.Move((i as Float) as Float32, ((i + 1) as Float) as Float32)
+end
+
+def main
+  var i = 0
+  var hits = 0
+  while i < 1000
+    match decode(i)
+      Ev.Move(x, y)   -> hits = hits + 1
+      Ev.Scroll(x, y) -> nil
+      Ev.Key(k)       -> nil
+    end
+    i = i + 1
+  end
+  puts "hits=#{hits}"
+end

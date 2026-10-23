@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # 21 — Phase 5: MIR optimizations (T3.07)
 
 **Depends on:** prompt 11 (incremental, so opts can be cached).

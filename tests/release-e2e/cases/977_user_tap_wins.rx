@@ -1,0 +1,25 @@
+# Pins that a user-defined `tap` on the receiver type wins over the universal
+# builtin `tap`/`then` interception (the builtin only fires when the receiver
+# has no such method).
+class Counter
+  n: Int
+  def init(@n: Int)
+  end
+  # A deliberately non-Ruby `tap` that ignores the block and returns a number.
+  def tap(f: Fn(Int) -> nil) -> Int
+    self.n * 10
+  end
+end
+
+def main
+  let c = Counter.new(4)
+  let r = c.tap do |x|
+    puts(777)
+  end
+  puts(r)
+  # The universal builtin still applies to a type WITHOUT its own tap.
+  let k = 5.tap do |x|
+    puts(x)
+  end
+  puts(k)
+end

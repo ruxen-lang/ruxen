@@ -23,7 +23,7 @@ puts greeter.greet
 Ruxen targets developers coming from Ruby, Python, and JavaScript who want predictable performance and compile-time safety without sacrificing the joy of writing code.
 
 - **Reads like Ruby** — classes, blocks, `do...end`, string interpolation, implicit returns
-- **Compiles like Rust** — ownership, borrowing, no GC, deterministic destruction
+- **Owns its memory** — ownership, borrowing, no GC, deterministic destruction
 - **Types disappear** — aggressive bidirectional inference makes code look dynamically typed while every value has a known type at compile time
 - **Safety by default** — references are always valid, no exceptions, no data races. `Option[T]` and `Result[T, E]` with `?` propagation
 
@@ -180,7 +180,7 @@ class Dog < Animal
 end
 
 mixin Display
-  def fmt(f: &var Formatter) -> Result[(), FmtError]
+  def fmt(f: &var Formatter) -> Result[nil, FmtError]
 end
 ```
 
@@ -199,13 +199,13 @@ end
 
 ```ruxen
 # No exceptions. Result[T, E] and Option[T] only.
-def load_config(path: &str) -> Result[Config, AppError]
+def load_config(path: &String) -> Result[Config, AppError]
   let text = fs.read_to_string(path)?  # ? propagates errors
   let json = Json.parse(&text)?
   Config.from_json(&json)
 end
 
-let user = find_user(42)?.name          # ?. safe navigation
+let user = find_user(42)&.name          # &. safe navigation
 let user = find_user(42).unwrap!        # panics on nil
 ```
 
@@ -231,7 +231,7 @@ Everything ships as one binary, `ruxen`. Subcommands:
 |---------|---------|
 | `ruxen new` / `init` / `build` / `run` / `check` / `clean` | Project lifecycle |
 | `ruxen add` / `remove` / `update` / `tree` / `verify` | Dependency management |
-| `ruxen compile` | Low-level single-file driver (like `rustc`) — `--emit=tokens/ast/hir/mir`, `--release`, `--backend=...` |
+| `ruxen compile` | Low-level single-file driver — `--emit=tokens/ast/hir/mir`, `--release`, `--backend=...` |
 | `ruxen fmt` | Format `.rx` files (`--check`, `--diff`) |
 | `ruxen test` / `bench` | Test runner / microbenchmarks |
 | `ruxen repl` | Interactive REPL (Cranelift JIT) |

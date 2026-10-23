@@ -94,7 +94,7 @@ both mixins are dispatchable on the including type.
 ```ruxen
 mixin Container
   type Item
-  def first(self) -> Self.Item
+  def first -> Self.Item
 end
 ```
 
