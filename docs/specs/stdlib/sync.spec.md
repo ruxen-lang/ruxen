@@ -2,7 +2,7 @@
 
 **Source docs:**
 [docs/requirements/tier1_02_concurrency.md](../../requirements/tier1_02_concurrency.md),
-[docs/prompts/v1/14_phase4_concurrency.md](../../prompts/v1/14_phase4_concurrency.md).
+`docs/prompts/v1/14_phase4_concurrency.md`.
 
 **Status:** typeck surface shipped Phase 1; **runtime + safety markers
 land in this round** (post-#06.95 multithreading). The earlier
@@ -141,23 +141,38 @@ drop if T implements Drop) and the allocation is `free`'d.
 
 ## B10 — Cross-thread sharing pattern
 
-The canonical pattern (covered by the spawn_join e2e case):
+The Ruby shape, `Thread.new { }.value` with `Mutex#synchronize`, is
+[planned](../../../TODO.md#t-thread-api). Today the pattern goes through `JoinHandle` and
+the guard (`tests/release-e2e/cases/1970_thread_spawn_join.rx` covers
+`Thread.spawn` and `join!`). The names need no `use` line.
 
-```rx
-use std.sync.{Thread, Mutex, SharedSync}
+Works today, [deprecated] user-facing `JoinHandle` and `MutexGuard` (replacement `Thread.new { }.value` and `Mutex#synchronize`):
+
+```ruby
+def bump(c: &SharedSync[Mutex[Int]]) -> nil
+  g = c.deref.lock_raw
+  g.set(g.get + 1)
+end
 
 counter = SharedSync.new(Mutex.new(0))
-handles = []
-10.times do
-  c = counter.clone
-  handles.push(Thread.spawn do
-    g = c.lock!
-    g.deref_var.set(g.deref + 1)
-  end)
-end
-handles.each { |h| h.join }
-assert_eq(counter.lock!.deref, 10)
+c = counter.clone
+handle = Thread.spawn { bump(&c) }
+handle.join!
+g = counter.deref.lock_raw
+puts g.get   # 1
 ```
+
+Owner decisions (2026-10-25) for this module:
+
+- D10 a: a class with a C-handle field (`m: Mutex[Int]`) prints its address
+  under `"#{h:?}"` today; the Kernel `inspect` default prints a C handle as
+  `#<Mutex>` [planned](../../../TODO.md#t-d10).
+- D16 a: `Thread.spawn` is a method call, and the Send capture check runs on
+  free calls only today; it moves onto the method-call path, and apps share
+  state through an owned `SharedSync` handle [planned](../../../TODO.md#t-d16).
+- D17 c: the stdlib `sync` test's false reject is re-run first, since
+  `MutexGuard#get` and `SharedSync#get` are now `.rx` clones; then a fix is
+  picked if it is still there [planned](../../../TODO.md#t-d17).
 
 ## B11 — `PoisonError` / `ThreadPanic`
 

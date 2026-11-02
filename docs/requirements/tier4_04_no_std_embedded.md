@@ -68,6 +68,7 @@ void *ruxen_realloc(void *p, size_t sz) { return realloc(p, sz); }
 
 ### 2.2 Link line (`crates/ruxen-core/src/codegen/object.rs:64-70`)
 
+<!-- compiler-rust -->
 ```rust
 let mut cmd = Command::new("cc");
 cmd.arg(&obj_path).arg(runtime_o).arg("-o").arg(output_path)
@@ -143,45 +144,51 @@ link-args = ["-T", "memory.ld", "-T", "link.ld", "--gc-sections"]
 
 ### 4.2 Source directives
 
-**Package-level** (top of `src/lib.rx` or `src/main.rx`):
+The `--no-std` switch and E1400 are [implemented] (see the note at the top);
+every source directive in this section is the staged remainder.
 
-```ruxen
+**Package-level** (top of `src/lib.rx` or `src/main.rx`). The stdlib
+packages are always linked, so no `use` line pulls in `PanicInfo`; the
+draft's `use core.Option` / `use core.Result` lines are gone with the
+[deprecated] `use`, `Option` and `Result`. The directive is [planned](../../TODO.md#t-req-no-std):
+
+```ruby
 no_std                                                      # alternative to [package] no-std = true
-
-use core.Option
-use core.Result
-use core.panic.PanicInfo
 ```
 
-**Panic handler** (required in no_std binaries):
+**Panic handler** (required in no_std binaries). `loop do` is
+[planned](../../TODO.md#t-loop-do) and the directive is [planned](../../TODO.md#t-req-no-std):
 
-```ruxen
+```ruby
 def my_panic(info: &PanicInfo) -> Never
   panic_handler
   # ... do whatever makes sense for the target ...
-  loop; end
+  loop do
+  end
 end
 ```
 
-**Global allocator** (required for no_std if `Array`/`String`/`Map`/`Set` are used):
+**Global allocator** (required for no_std if `Array`/`String`/`Hash`/`Set` are used).
+Constants are [planned](../../TODO.md#t-constants) and the directive is [planned](../../TODO.md#t-req-no-std):
 
-```ruxen
+```ruby
 class MyAllocator
   def alloc(size: USize, align: USize) -> *var UInt8
     # ... MMIO or user-provided allocator ...
   end
+
   def dealloc(ptr: *var UInt8, size: USize, align: USize)
     # ... ...
   end
 end
 
-let ALLOCATOR: MyAllocator = MyAllocator.new
+ALLOCATOR = MyAllocator.new
 global_allocator :ALLOCATOR
 ```
 
-**No-mangle** (for exporting a C-callable function):
+**No-mangle** (for exporting a C-callable function), [planned](../../TODO.md#t-req-no-std):
 
-```ruxen
+```ruby
 def app_main
   no_mangle
   # ... called from assembly or a crt0 you wrote ...
@@ -214,28 +221,32 @@ Following Rust, there's a middle layer: `alloc` — items that need an allocator
 - `Enumerable` includes on the collections.
 - `alloc.Layout`, `alloc.Allocator` mixin (the one a `global_allocator`-marked value includes).
 
-To pull these in, a no_std crate does:
+To pull these in, a no_std package declares `no_std` and uses the types;
+there is no `use` line, because `use` is [deprecated] (replace with
+`require`) and the stdlib packages are always linked. The alloc tier is [planned](../../TODO.md#t-req-no-std):
 
-```ruxen
+```ruby
 no_std
-use core.alloc.Array
-use core.alloc.Box
+
+buf = Array.new        # routed through the global_allocator
 ```
 
 If no `global_allocator` directive is provided and the user tries to use `Array`, the linker emits an unresolved-symbol error naming `__ruxen_global_allocator`. Sharp but clear.
 
 ### 4.5 `PanicInfo`
 
-```ruxen
-struct PanicInfo
-  # Minimal. No downcasting; message is an owned slice.
+`PanicInfo` is [planned](../../TODO.md#t-req-no-std); the `[A, B, C]` tuple type is [planned](../../TODO.md#t-tuple-type):
+
+```ruby
+class PanicInfo
+  # Minimal. No downcasting; message is an owned String.
   message: String
   file: String
   line: UInt32
   col: UInt32
 
-  def message -> &String; self.message; end
-  def location -> (&String, UInt32, UInt32); (self.file, self.line, self.col); end
+  def message -> &String = @message
+  def location -> [&String, UInt32, UInt32] = [@file, @line, @col]
 end
 ```
 
@@ -243,26 +254,29 @@ Passed into a `panic_handler`-marked function by value-of-reference. The compile
 
 ### 4.6 Allocator mixin
 
-```ruxen
-mixin Allocator
-  def alloc(layout: Layout) -> Result[*var UInt8, AllocError]
+The allocator surface is [planned](../../TODO.md#t-req-no-std). Failures raise instead of
+returning a [deprecated] `Result` (exceptions are [planned](../../TODO.md#t-exceptions)), and
+the mixin is declared with `module`, [planned](../../TODO.md#t-module-mixins):
+
+```ruby
+module Allocator
+  def alloc(layout: Layout) -> *var UInt8                 # raises AllocError
   def dealloc(ptr: *var UInt8, layout: Layout)
 
   # Optional, with defaults:
-  def alloc_zeroed(layout: Layout) -> Result[*var UInt8, AllocError]
-  def realloc(ptr: *var UInt8, old: Layout, new: Layout) -> Result[*var UInt8, AllocError]
+  def alloc_zeroed(layout: Layout) -> *var UInt8          # raises AllocError
+  def realloc(ptr: *var UInt8, old: Layout, new: Layout) -> *var UInt8
 end
 
-struct Layout
+class Layout
   size: USize
   align: USize
 
-  def self.new(size: USize, align: USize) -> Result[Layout, LayoutError]
-  def self.for[T] -> Layout                            # compile-time size_of + align_of
+  def self.build(size: USize, align: USize) -> Layout       # raises LayoutError
+  def self.of[T] -> Layout                                 # compile-time size_of + align_of
 end
 
-struct AllocError
-  # Zero-sized marker
+class AllocError < StandardError
 end
 ```
 
@@ -287,7 +301,7 @@ And add:
 
 Current `runtime.c`:
 
-```
+```text
 runtime.c (426 lines)
 ├── Printing (29-55)         [requires libc]
 ├── To-string (59-92)        [requires libc]
@@ -322,7 +336,7 @@ Split into:
 
 ### 5.2 Directive lifecycle
 
-```
+```text
 Source:  def my_panic(info: &PanicInfo) -> !
            panic_handler
            ...
@@ -353,10 +367,12 @@ A hosted binary gets a synthesized `main` (already the case). A no_std binary ge
 - The user's public `def main` becomes a function with LLVM linkage `External`, no wrapping, no argc/argv synthesis.
 - The user is responsible for providing their own `_start` (or whatever the target needs).
 
-For embedded ARM, users typically write:
+For embedded ARM, users typically write the following. The spelling of a
+function's address is undecided (the draft used the [deprecated] `as USize`
+cast), and the directives are [planned](../../TODO.md#t-req-no-std):
 
-```ruxen
-let VECTORS: Array[USize] = array![ ..., main as USize, ... ]
+```ruby
+VECTORS = [..., ENTRY_ADDRESS, ...]   # the entry function's address
 no_mangle :VECTORS
 link_section :VECTORS, ".vector_table"
 ```
@@ -387,7 +403,7 @@ The resolver walks directives in a second pass:
 
 Stdlib source files are partitioned:
 
-```
+```text
 share/ruxen/std/
 ├── core/
 │   ├── prelude.rx
@@ -423,12 +439,13 @@ Resolver behavior:
 
 ### 5.7 panic! macro expansion
 
-Today (tier-1 §7.4 plan):
+Today (tier-1 §7.4 plan), the [deprecated] `panic!` (replace with
+`raise` or `abort`) expands as follows (compiler expansion, shown as text):
 
-```
+```text
 panic!("bad input: #{x}")
   expands to:
-    let __msg = "bad input: #{x}"
+    __msg = "bad input: #{x}"
     ruxen_panic_with_location(&__msg, <file>, <line>, <col>)
 ```
 
@@ -443,6 +460,7 @@ Recommend **(b)** for v1 — simpler users' stories, at the cost of a 200-byte s
 
 `codegen/object.rs:52-92` grows a branch:
 
+<!-- compiler-rust -->
 ```rust
 let is_no_std = opts.no_std;
 let mut cmd = Command::new(linker);

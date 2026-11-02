@@ -16,7 +16,7 @@
 
 ## Invariants & gotchas
 - Comments come from the lexer, never a second scanner. Every comment is leading, trailing, after the last member of a scope, or dangling in an empty scope; the `CommentMap` accessors mark what they return as written.
-- `format` returns the source unchanged with an error naming the comment if any comment was not written (`CommentMap::dropped`): fmt never deletes a comment. A new member kind must go through `with_comments` and be recorded with `member` in `collect_node_spans`.
+- `format` returns the source unchanged with an error naming the comment if any comment was not written (`CommentMap::dropped`): fmt never deletes a comment [implemented]. Comments inside method chains and argument lists, and partial `# fmt: off` ranges, take this error path today; keeping them is [planned](../../../../TODO.md#t-d21-impl). A new member kind must go through `with_comments` and be recorded with `member` in `collect_node_spans`.
 - Output must re-parse to the same AST and be idempotent (`tests/it/syntax_parity.rs` over the whole corpus; `test_comments_everywhere_idempotent`).
 - Class, struct and enum bodies print every member in source order (`format_type_body` sorts by span start); a new body member kind needs a `BodyMember` arm, never a separate section printed after the others.
 - Operator spellings and precedence come from `BinOp`; do not add local tables.

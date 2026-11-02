@@ -66,7 +66,7 @@ CI has two lanes:
 Conventional Commits style is preferred but not enforced. The body
 should explain *why*, not just *what*.
 
-```
+```text
 fix(mir): close P0.2 Drop gaps for reassignment and loop bodies
 ```
 
@@ -93,11 +93,18 @@ Reserved namespaces (see `docs/requirements/ROADMAP.md`):
 `ruxenc` can leak memory on certain inputs. Use the wrapper script when
 running it on large or untrusted sources:
 
-```
+```sh
 RUXENC_BIN=target/debug/ruxen scripts/ruxenc-rss-cap.sh compile <file.rx>
 ```
 
 It SIGKILLs the child if RSS exceeds 8 GiB.
+
+The memory proof for borrow-checked programs is
+`compiler/ruxen_core/tests/fixtures/loan_matrix/memrun.py` (see its
+[README](compiler/ruxen_core/tests/fixtures/loan_matrix/README.md)). It
+keeps its own copy of the compiler's runtime-source list today; a
+`--sanitize=address` compiler switch that replaces that copy is
+[planned](TODO.md#t-d22).
 
 ## License
 

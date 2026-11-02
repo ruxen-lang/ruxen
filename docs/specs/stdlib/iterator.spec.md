@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Spec — `std.iter` (Iterator mixin) — RETIRED
 
 > **RETIRED by the Ruby-surface migration.** The iterator layer no

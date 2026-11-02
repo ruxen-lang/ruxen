@@ -12,7 +12,13 @@ methods on a user-defined class.
 
 ## The cheap path: `extension` in `.rx`
 
-```rx
+The Ruby form is reopening the class (`class Int ... end`),
+[planned](../../TODO.md#t-reopen-class); today a second `class Int` collides
+with the stdlib type (E0727), so `extension` is the form that works.
+
+Works today, [deprecated] `extension` (replacement: reopening the class, above):
+
+```ruby
 extension Int
   ## Double this integer.
   def double -> Int

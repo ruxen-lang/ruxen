@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Ruxen → Ruby Surface Migration — Plan & Handoff
 
 **Goal:** Remove every Rust-flavored surface spelling from Ruxen and replace it

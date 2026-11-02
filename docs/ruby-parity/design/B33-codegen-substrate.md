@@ -248,11 +248,11 @@ what the acceptance grep forbids.
 
 So metadata rides on the mechanism that already exists and costs the compiler
 nothing: **the mixin declares a metadata method with a default body, and a class
-overrides it.**
+overrides it.** The proposed shape, [planned](../../../TODO.md#t-parity-compile-time):
 
-```
-# In the .rx mixin, not in the compiler:
-mixin Model
+```ruby
+# In the .rx module, not in the compiler:
+module Model
   def self.column_name_for(field: &String) -> String
     field                        # default: the column is the field name
   end
@@ -402,10 +402,10 @@ If either did not fall out cleanly the design would be wrong.
 
 ### 9.1 `to_json` / `from_json` (B44's derive half)
 
-**What the library author writes**, once, in `.rx`, with no compiler involvement:
+**What the library author writes**, once, in `.rx`, with no compiler involvement, [planned](../../../TODO.md#t-parity-compile-time):
 
-```
-mixin FieldVisitor
+```ruby
+module FieldVisitor
   def visit_int(name: &String, value: Int) -> nil
   def visit_string(name: &String, value: &String) -> nil
   def visit_bool(name: &String, value: Bool) -> nil
@@ -417,27 +417,27 @@ class JsonWriter
   node: Json
 
   def visit_int(name: &String, value: Int) -> nil
-    JSON.object_set(&var self.node, name, JSON.make_int(value))
+    JSON.object_set(&var @node, name, JSON.make_int(value))
   end
 
   def visit_string(name: &String, value: &String) -> nil
-    JSON.object_set(&var self.node, name, JSON.make_string(value))
+    JSON.object_set(&var @node, name, JSON.make_string(value))
   end
   # … bool, float
 end
 
-mixin Serializable
+module Serializable
   def to_json -> Json
-    var w = JsonWriter.new(JSON.empty_object)
-    self.accept(&var w)          # <- the synthesized member
+    w = JsonWriter.new(JSON.empty_object)
+    accept(&var w)               # <- the synthesized member
     w.node
   end
 end
 ```
 
-**What the user writes:**
+**What the user writes**, [planned](../../../TODO.md#t-parity-compile-time):
 
-```
+```ruby
 class Todo
   include Serializable
   id:    Int
@@ -446,14 +446,27 @@ class Todo
 end
 ```
 
-**What the compiler synthesizes onto `Todo`** (ordinary `.rx`-equivalent HIR,
-the exact shape probe P6 proved compiles and runs):
+**What the compiler synthesizes onto `Todo`** (ordinary `.rx`-equivalent HIR).
+The synthesis is [planned](../../../TODO.md#t-parity-compile-time), and in its Ruby
+spelling the bound is `[V < FieldVisitor]`, [planned](../../../TODO.md#t-d7-respell):
 
-```
+```ruby
 def self.field_names -> Array[String]
   ["id", "label", "done"]
 end
 
+def accept[V < FieldVisitor](v: &var V) -> nil
+  v.visit_int("id", @id)
+  v.visit_string("label", &@label)
+  v.visit_bool("done", @done)
+end
+```
+
+The hand-written form probe P6 compiled and ran (2026-07) uses two spellings
+that are now deprecated: the method `[V: FieldVisitor]` bound and `self.label` field reads.
+Works today, [deprecated] (replace with `[V < FieldVisitor]` and `@label`):
+
+```ruby
 def accept[V: FieldVisitor](v: &var V) -> nil
   v.visit_int("id", self.id)
   v.visit_string("label", &self.label)

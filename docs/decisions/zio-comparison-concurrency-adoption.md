@@ -68,12 +68,14 @@ The rondo evidence is direct. `mixin Drop` in `library/std/core/src/lib.rx` is t
 
 **Design sketch.**
 
-```ruxen
+Design sketch (2026-06-18), [deprecated] `Result`, `Ok`, `Err`, `?` and the `let` that `.await` needs today (replacement: raising, [planned](../../TODO.md#t-exceptions), and `x = ...`):
+
+```ruby
 class DbConn
   fd: Int
   def drop                              # guaranteed to fire even on partial-drive cancel
-    ruxen_reactor_deregister(ruxen_reactor_current_handle(), self.fd)
-    close_fd(self.fd)
+    ruxen_reactor_deregister(ruxen_reactor_current_handle(), @fd)
+    close_fd(@fd)
   end
 end
 
@@ -107,14 +109,16 @@ The synthesized future gets a `def drop` that switches on `self.__state` and dro
 
 **Design sketch.**
 
-```ruxen
+Design sketch (2026-06-18; the shipped API is in `library/std/future/src/scope.rx`), [deprecated] `Result` (replacement: raising, [planned](../../TODO.md#t-exceptions)):
+
+```ruby
 async def fan_out(urls: &Array[String]) -> Result[Array[Body], FetchError]
   Scope.open do |s|                # s: &var Scope; the Scope owns every child
-    var i = 0
-    while i < urls.len
-      let u = urls.get(i)          # borrow proven to outlive children by the drop-fence
-      s.spawn { || fetch(u).await }
-      i = i + 1
+    i = 0
+    while i < urls.size
+      u = urls[i]                  # borrow proven to outlive children by the drop-fence
+      s.spawn { fetch(u).await }
+      i += 1
     end
     s.collect.await                # parent BLOCKS here: joins all children, aggregates
   end                              # <- Scope#drop: any still-pending child is cancelled
@@ -137,11 +141,13 @@ end                                #    (its future's def drop fires) before we 
 
 **Design sketch.**
 
-```ruxen
+Design sketch (2026-06-18; the shipped API is in `library/std/future/src/race.rx`), [deprecated] `Result` and `Err` (replacement: raising, [planned](../../TODO.md#t-exceptions)):
+
+```ruby
 async def read_or_timeout(stream: &var AsyncTcpStream, n: Int, ms: Int) -> Result[String, IoError]
-  match Race.of(stream.read(n), Async.sleep_ms(ms)).await
-    Race.First(bytes) -> bytes               # read won; sleep future dropped
-    Race.Second(_)    -> Err(IoError.TimedOut) # timer won; read future dropped
+  case Race.of(stream.read(n), Async.sleep_ms(ms)).await
+  in Race.First(bytes) then bytes                # read won; sleep future dropped
+  in Race.Second(_) then Err(IoError.TimedOut)   # timer won; read future dropped
   end
 end
 ```
@@ -166,7 +172,9 @@ end
 
 **Design sketch.** One bounded `Queue[T: Send]` split into `AsyncSender`/`AsyncReceiver` ends (mirrors the existing `Sender`/`Receiver` split so the borrow checker tracks producer and consumer separately). Capacity is mandatory; **no unbounded constructor** (Go's deliberate choice). The overflow policy is the ZIO taxonomy as a named enum:
 
-```ruxen
+Design sketch (2026-06-18; the shipped API is in `library/std/future/src/`), [deprecated] `enum` (replacement: symbols, [planned](../../TODO.md#t-symbols)), the tuple destructure (replacement `tx, rx = ...`, [planned](../../TODO.md#t-parallel-assign)), `?` and the `let` that `.await` needs today:
+
+```ruby
 enum Overflow
   Suspend     # producer parks until space frees (backpressure)
   DropOldest  # evict head, enqueue new          (sliding)
@@ -175,7 +183,7 @@ end
 
 let (tx, rx) = Queue[Request].bounded(256, Overflow.Suspend)
 
-async def worker(rx: &var AsyncReceiver[Request])
+async def worker(rx: &var AsyncReceiver[Request]) -> nil
   loop do
     let job = rx.recv.await?    # parks the TASK via the reactor, not the OS thread
     handle(job)
@@ -201,19 +209,21 @@ end
 
 **Design sketch.**
 
-```ruxen
+Design sketch (2026-06-18; the shipped API is in `library/std/future/src/stream.rx`), [deprecated] `mixin` (replacement `module`, [planned](../../TODO.md#t-module-mixins)), `Result`, `Ok` and `?` (replacement: raising, [planned](../../TODO.md#t-exceptions)):
+
+```ruby
 mixin Stream dispatch runtime
   type Item
-  def var poll_next(cx: &var Context) -> Poll[Option[Self.Item]]  # the one required primitive
-  def map[U](f: any Fn[Fn(Self.Item) -> U]) -> MapStream[Self, U]  # default bodies, built on poll_next
+  def var poll_next(cx: &var Context) -> Poll[Self.Item?]  # the one required primitive
+  def map[U](f: Proc[(Self.Item) -> U]) -> MapStream[Self, U]  # default bodies, built on poll_next
   def take(n: Int) -> TakeStream[Self]
 end
 
 async def serve(stream: &var AsyncTcpStream, path: &String) -> Result[Int, IoError]
-  let body = AsyncFile.chunks(path, 16384)?    # ChunkStream, Item = String
-  var sent = 0
+  body = AsyncFile.chunks(path, 16384)?        # ChunkStream, Item = String
+  sent = 0
   for chunk in body.take(1000) do |c|          # `for ... in` = await poll_next per item
-    sent = sent + stream.write(c).await?       # backpressure: next chunk pulled only after write resolves
+    sent += stream.write(c).await?             # backpressure: next chunk pulled only after write resolves
   end
   Ok(sent)
   # body (and its reactor slot) dropped here — or on early return / client disconnect.
@@ -238,8 +248,10 @@ An adapter owns its inner stream by value, so dropping the chain drops every sta
 
 **Design sketch.**
 
-```ruxen
-let conn = Schedule.exponential(Duration.from_millis(50))
+Design sketch (2026-06-18; the shipped API is in `library/std/future/src/schedule.rx`), [deprecated] `Duration.from_millis` (replacement: numeric seconds, [planned](../../TODO.md#t-stdlib-shapes)) and `?` (replacement: raising, [planned](../../TODO.md#t-exceptions)):
+
+```ruby
+conn = Schedule.exponential(Duration.from_millis(50))
              .max_attempts(5)
              .max_delay(Duration.from_secs(2))
              .jittered                       # full-jitter: random in [0, delay]
@@ -248,7 +260,7 @@ let conn = Schedule.exponential(Duration.from_millis(50))
                Database.connect(url)          # re-evaluated each attempt
              end?
 
-let resp = Async.retry(sched) do
+resp = Async.retry(sched) do
              http.get(url).await
            end.await?
 ```
@@ -271,7 +283,9 @@ let resp = Async.retry(sched) do
 
 **Design sketch.**
 
-```ruxen
+Design sketch (2026-06-18; the shipped API is in `library/std/future/src/test_clock.rx`), [deprecated] `Option[Duration]` (replacement `Duration?`):
+
+```ruby
 class TestClock
   lib "runtime/test_clock.c"
     def self.install as "ruxen_test_clock_install" -> TestClock   # guard; def drop restores real clock

@@ -45,6 +45,7 @@ UI.
 
 `compiler/ruxen_core/src/codegen/llvm/debug.rs:1-3`:
 
+<!-- compiler-rust -->
 ```rust
 //! Debug info generation (stub).
 //!
@@ -137,7 +138,7 @@ cannot launch a Ruxen debugger today.
 
 ### 4.1 CLI flags
 
-```
+```sh
 ruxenc hello.rx --debug                 # adds -g at opt 0
 ruxenc hello.rx --debug --opt-level=2   # debug info at -O2 (works but locals may be optimized out)
 ruxenc hello.rx --release --debug       # DWARF + LLVM O2 — best for perf with partial debug
@@ -216,6 +217,7 @@ plan:
 
 1. On `CodeGen::new`, if `debug_info_enabled`, create a
    `DebugInfoBuilder` plus a `DICompileUnit`:
+   <!-- compiler-rust -->
    ```rust
    let (di_builder, di_cu) = module.create_debug_info_builder(
        /* allow_unresolved = */ true,
@@ -323,6 +325,7 @@ Current `MirInst` variants (`compiler/ruxen_core/src/mir/nodes.rs:184-304`)
 do **not** carry source spans. For DWARF line numbers, each instruction
 needs one. Add:
 
+<!-- compiler-rust -->
 ```rust
 pub struct MirInstWithSpan {
     pub inst: MirInst,
@@ -539,6 +542,7 @@ Total: 12-16 engineer-days.
 | Crash inside runtime.c | Backtrace shows `ruxen_vec_push` frame + source if runtime built with -g |
 
 Add one integration test that checks ELF has a `.debug_info` section:
+<!-- compiler-rust -->
 ```rust
 #[test]
 fn debug_build_has_debug_info() {

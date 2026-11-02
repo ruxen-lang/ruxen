@@ -8,7 +8,7 @@ allocator. Demonstrates tier 4.04 (no_std / embedded mode).
 - `ruxen compile --no-std` skips the stdlib bootstrap and links **without** the
   Ruxen C runtime or `[system_libs]` — the user's object is the whole program
   (no `ruxen_*` symbol in the binary).
-- Heap allocation (`String`/`Array`/`Map`/`Set` construction) is rejected at
+- Heap allocation (`String`/`Array`/`Hash`/`Set` construction) is rejected at
   compile time with **E1400** — a no_std build has no allocator.
 - A no_std unit can still compute and signal a result via a minimal libc FFI.
 

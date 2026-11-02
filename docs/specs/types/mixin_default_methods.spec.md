@@ -4,10 +4,16 @@
 the multithreading round (`send_sync_enforcement.spec.md`) and async
 sub-phase 1 (`async.spec.md`).
 
-**Status:** new language feature. Today `mixin Foo; def bar; end`
-only declares a REQUIRED method — implementors must supply the
-body. There's no support for DEFAULT bodies on mixin methods. This
-spec adds that.
+**Status:** [implemented] (pins below). Before this spec, `mixin Foo; def bar;
+end` only declared a REQUIRED method; this spec added DEFAULT bodies.
+
+Spelling today: a mixin is declared with `mixin`, which is [deprecated]; the
+Ruby form `module Foo ... end` with `include Foo` is
+[planned](../../../TODO.md#t-module-mixins). A default body is a full `def ... end` and
+calls another method of the mixin as `self.name`; an endless `def` or a bare
+`name` call in a default does not compile yet [planned](../../../TODO.md#t-implicit-self).
+The examples below use a mixin named `Rankable`, because the stdlib already
+defines `Comparable` (with `<=>`).
 
 The need was surfaced by `library/std/core/src/lib.rx`'s comment:
 "aspirational broader surfaces are intentionally left out — adding
@@ -19,8 +25,10 @@ mixins ships." This spec is the "ships" half.
 
 ## B1 — Mixin can declare a method with a body
 
-```rx
-mixin Comparable
+Works today, [deprecated] `mixin` (replacement `module`, [planned](../../../TODO.md#t-module-mixins)):
+
+```ruby
+mixin Rankable
   def compare(other: &Self) -> Int        # required, no body
   def less_than(other: &Self) -> Bool
     self.compare(other) < 0
@@ -38,42 +46,47 @@ end` (with body) for default.
 
 ## B2 — Implementor inherits defaults automatically
 
-```rx
+Works today, with the [deprecated] `def init` (replacement `def initialize`, [planned](../../../TODO.md#t-initialize)):
+
+```ruby
 class Money
   amount: Int
-  include Comparable
+  include Rankable
+
+  def init(@amount: Int)
+  end
 
   def compare(other: &Money) -> Int      # required — must implement
-    self.amount - other.amount
+    @amount - other.amount
   end
-  # No less_than / greater_than — inherited from Comparable.
+  # No less_than / greater_than — inherited from Rankable.
 end
 
-def main
-  let m1 = Money.new(10)
-  let m2 = Money.new(20)
-  puts "#{m1.less_than(m2)}"    # → true (uses default body)
-end
+m1 = Money.new(10)
+m2 = Money.new(20)
+puts "#{m1.less_than(m2)}"    # → true (uses default body)
 ```
 
 The class doesn't redeclare `less_than`; typeck and codegen treat
-calls to `m1.less_than(m2)` as dispatching to Comparable's default
+calls to `m1.less_than(m2)` as dispatching to Rankable's default
 body, with `self.compare(other)` resolved to `Money.compare`.
 
 ## B3 — Implementor can override defaults
 
-```rx
+Example [implemented]:
+
+```ruby
 class FastInt
   value: Int
-  include Comparable
+  include Rankable
 
   def compare(other: &FastInt) -> Int
-    self.value - other.value
+    @value - other.value
   end
 
   # Override less_than with a more efficient implementation:
   def less_than(other: &FastInt) -> Bool
-    self.value < other.value    # skips the .compare indirection
+    @value < other.value    # skips the .compare indirection
   end
 end
 ```
@@ -84,14 +97,16 @@ emits a call to FastInt.less_than, not the inherited default.
 
 ## B4 — Missing required method still rejected (E0612)
 
-```rx
+Example [implemented], rejected on purpose:
+
+```ruby
 class Broken
-  include Comparable
+  include Rankable
   # No def compare — error.
 end
 ```
 
-→ `[E0612] class Broken includes mixin Comparable but does not
+→ `[E0612] class Broken includes mixin Rankable but does not
 implement required method 'compare'`. Same diagnostic the existing
 mixin satisfaction check emits today; defaults don't change that
 contract.
@@ -117,9 +132,11 @@ list so resolution sees them at the same time as user-written ones.
 
 A default body can reference any method on the mixin's contract —
 required OR default. Resolution happens at the class level after
-synthesis:
+synthesis.
 
-```rx
+Works today, [deprecated] `mixin` (replacement `module`, [planned](../../../TODO.md#t-module-mixins)):
+
+```ruby
 mixin Describable
   def name -> String        # required
   def title -> String       # default — uses name
@@ -137,7 +154,9 @@ resolves cleanly.
 
 ## B7 — Negative: signature mismatch on override (E0613)
 
-```rx
+Rejected on purpose, [deprecated] `mixin` (replacement `module`, [planned](../../../TODO.md#t-module-mixins)):
+
+```ruby
 mixin Foo
   def bar(x: Int) -> Bool
     true
@@ -180,7 +199,21 @@ task's scope):
 - `Comparable`: `less_than`, `greater_than`, `between` on top of `compare`.
 - `Hash`: `hash_bytes` (default) on top of `hash`.
 
-That's task #19's polish-pass.
+That's task #19's polish-pass. (The stdlib `Comparable` now provides `<`,
+`<=`, `==`, `>`, `>=`, `between?` and `clamp` on top of `<=>` [implemented].)
+
+## Owner decisions (2026-10-25)
+
+- D5 a: an `include` keeps its generic arguments in HIR (`include Into[X]`
+  loses `X` today) [planned](../../../TODO.md#t-d5).
+- D7 b: a method that needs a bound on its class's type parameter uses the
+  method `where` bound (`def sum -> T where T: Add`), the form that works
+  today and is [deprecated]; the RBS respelling `[T < Bound]` is
+  [planned](../../../TODO.md#t-d7-respell). OQ-6 stays open.
+- D11 a, X3 a: no associated types in mixin defaults are built for the async
+  step futures; they stay shared functions, the floor until Fibers
+  [planned](../../../TODO.md#t-d11). `Self::Output` projections resolve declared
+  equalities [planned](../../../TODO.md#t-x3).
 
 ## Out of scope
 
@@ -189,4 +222,5 @@ That's task #19's polish-pass.
 - **Specialization** — overriding a default with a different
   signature variant (e.g. for performance) is allowed via B3; full
   specialization (multiple defaults selected by type) is v2.
-- **Mixin inheritance** (`mixin Foo: Bar end`) — not in this task.
+- **Mixin inheritance** (`mixin Foo: Bar end`) — not in this task; that
+  spelling is [deprecated], replaced by `include Bar` inside `module Foo`.

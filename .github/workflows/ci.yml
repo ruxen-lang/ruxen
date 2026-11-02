@@ -28,6 +28,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Living docs against the Ruby-only spec (tags, tracker links, Rust
+      # forms, dead links); first, so it fails before the build starts.
+      - name: docs check
+        run: python3 scripts/check_docs.py --self-test && python3 scripts/check_docs.py
+
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 

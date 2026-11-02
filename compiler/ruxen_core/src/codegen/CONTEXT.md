@@ -40,7 +40,7 @@ to an executable / `.wasm`. Two backends behind one `Backend` enum.
 place of the stdlib one, used by `drop_fixtures`). `LinkInputs::for_project` is
 the one gatherer of a project's and its flat-merged deps' runtime shims and
 `[system_libs]` libs/frameworks, used by both `ruxen build` and `ruxen test`;
-`collect_system_lib_flags` covers the stdlib packages. `mir/residual_abi.rs` is an ABI
+`collect_system_lib_flags` covers the stdlib packages. A package's C headers by package name, with the `[runtime]` table kept beside `[native] include` and one shared manifest reader for both, are [planned](../../../../TODO.md#t-d20); so is one workspace target root for every driver, which `ruxen clean` removes [planned](../../../../TODO.md#t-x4). `find_runtime_sources` is copied by the loan-matrix `memrun.py`; a `--sanitize=address` switch that replaces the copy is [planned](../../../../TODO.md#t-d22). `mir/residual_abi.rs` is an ABI
 **contract** with the C runtime: every signature must match the C function in
 `library/`. A stdlib runtime function's ABI is derived from its `.rx` lib
 declaration, never listed there.

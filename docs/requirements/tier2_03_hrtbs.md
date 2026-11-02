@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Tier 2.03 — Higher-Ranked Mixin Bounds (HRTBs)
 
 Status: Draft (requirements)

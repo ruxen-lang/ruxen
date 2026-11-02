@@ -89,19 +89,19 @@ N4. **Changing Ruxen's region model from scopes to Rust-style free/bound regions
 
 ## 4. Surface Syntax
 
-Variance is **not user-visible** in v1 — users write generic parameters without annotation and the compiler infers variance:
+Variance is **not user-visible** in v1 — users write generic parameters without annotation and the compiler infers variance. The declaration below is [implemented] (a class with a generic parameter, a lifetime and a borrowed field); the inference in the comment is this doc's proposal, [planned](../../TODO.md#t-req-variance):
 
-```
-struct Cow[T]
+```ruby
+class Cow[T, a]
   data: &a T
 end
 # Compiler infers: T covariant, a covariant.
 ```
 
-The only user-visible surface is the `PhantomData` marker, which lives in the stdlib but is deferred to v1:
+The only user-visible surface is the `PhantomData` marker, which would live in the stdlib but is deferred to v1. The stdlib does not define it, so this is [planned](../../TODO.md#t-req-variance):
 
-```
-struct Handle[T]
+```ruby
+class Handle[T]
   id: Int
   _phantom: PhantomData[T]
 end
@@ -113,10 +113,10 @@ end
 #   PhantomData[&var T]  → invariant in T
 ```
 
-An optional future extension (non-goal for v1): a body-level directive
+An optional future extension (non-goal for v1, so it has no tracker item): a body-level directive. It is a hypothetical sketch, not a decided form, so it is shown as plain text:
 
-```
-struct Box[T]
+```text
+class Box[T]
   variance T: covariant
   ...
 end
@@ -130,7 +130,7 @@ would let stdlib authors override inference for soundness-critical types. Listed
 
 Four variance values, forming a lattice:
 
-```
+```text
         bivariant       (top — any lifetime substitution is safe)
        /          \
 covariant     contravariant
@@ -182,6 +182,7 @@ Invariant dominates.
 
 Run after resolve, before the main typeck pass:
 
+<!-- compiler-rust -->
 ```rust
 fn infer_variance(def_id: DefId) -> HashMap<ParamIdx, Variance> {
   # Start: every parameter is bivariant (top).

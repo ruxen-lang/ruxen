@@ -258,14 +258,14 @@ ranks first and B71 second, both found after B01 to B05.
 
 ### B71 — Non-scalar parameter default drops to the null sentinel on a paren-less call
 - **Goal:** `def show(prefix: String = "v=")` called as `p.show` uses the declared default instead of silently substituting the null sentinel.
-- **Repro (verified at baseline 2026-07-29, on a plain non-generic class, so not a Q58 regression):**
+- **Repro (verified at baseline 2026-07-29, on a plain non-generic class, so not a Q58 regression), [deprecated] `def init`, replace with `def initialize` [planned](../../TODO.md#t-initialize):**
 
-  ```
+  ```ruby
   class P
     n: Int
     def init(@n: Int) end
     def show(prefix: String = "v=") -> String
-      "#{prefix}#{self.n}"
+      "#{prefix}#{@n}"
     end
   end
   # p.show      => "3"     <- WRONG, the default vanished
@@ -288,9 +288,9 @@ ranks first and B71 second, both found after B01 to B05.
 
 ### B76 — A defaulted parameter destroys a trailing `do…end` block
 - **Goal:** `def each(sep: String = ", ", &block: …)` called as `each do |x| … end` receives its block.
-- **Repro (verified 2026-07-29):**
+- **Repro (verified 2026-07-29), [implemented] forms with this open bug:**
 
-  ```
+  ```ruby
   def show(prefix: String = "v=", &block: Fn[(Int) -> nil]) -> nil
     yield(1)
   end
@@ -365,6 +365,7 @@ ranks first and B71 second, both found after B01 to B05.
 - **Matrix rows:** `docs/dev/gui-stack-v1-issues.md` Q56; `stdlib.md` §9 net/http (291-328) if the fix changes the client surface.
 - **Pins:** 1040-1049.
 
+<!-- historical -->
 ### B72 — `Hash[k] = v` subscript-assign is a silent no-op — **DONE**
 - **Landed:** index-assign now routes to the receiver's `[]=` for a BUILTIN head
   too, not only a nominal one — the write-side twin of the builtin-head operator
@@ -522,6 +523,7 @@ Equality needed **two** fixes, and either alone leaves it broken: nothing synthe
 - **Status:** READY-NOW (audit), then NEEDS-COMPILER-FEATURE per site.
 - **Pins:** 1830-1839, one per site actually proven broken.
 
+<!-- historical -->
 ### B84 — `return <value>` from an Option-returning function SEGFAULTS — ✅ DONE
 - **Goal:** a guard-clause early return works in an `Option`-returning function.
 - **Repro (verified 2026-07-29 on `4560d00b`, no collection method involved):**
@@ -677,11 +679,11 @@ Equality needed **two** fixes, and either alone leaves it broken: nothing synthe
 - **Status:** NEEDS-RUNTIME-C (or a documented deviation).
 - **Pins:** 1890-1899.
 
-### B89 — A closure body is never wrapped into a declared `Fn(...) -> Option[T]` slot — SEGFAULTS
-- **Goal:** a closure whose declared slot returns `Option[T]` gets the same implicit `Some` box a function's return slot gets.
-- **Repro (verified 2026-07-30, crashes on BOTH the pre-B84 and post-B84 compiler, so it is PRE-EXISTING and NOT fixed by B84):**
+### B89 — A closure body is never wrapped into a declared `Fn[(...) -> T?]` slot — SEGFAULTS
+- **Goal:** a closure whose declared slot returns `T?` (written `Option[T]`, [deprecated], in the repro below) gets the same implicit `Some` box a function's return slot gets.
+- **Repro (verified 2026-07-30, crashes on BOTH the pre-B84 and post-B84 compiler, so it is PRE-EXISTING and NOT fixed by B84).** It keeps the [deprecated] forms it was found with: `def main` (replace with top-level statements), `let` (replace with `x = ...`), `any Fn[Fn(Int) -> Option[Int]]` (replace with `Fn[(Int) -> Int?]`), `unwrap_or` (replace with `r || -1`, [planned](../../TODO.md#t-truthiness)) and a stored `{ |x| }` block (replace with `->(x) { }`):
 
-  ```
+  ```ruby
   def apply(f: any Fn[Fn(Int) -> Option[Int]]) -> Int
     let r = f.(4)
     r.unwrap_or(-1)
@@ -1039,12 +1041,12 @@ offset for a given instant.
 
 | Sub-batch | Goal | Depends on | Status | Pins |
 |---|---|---|---|---|
-| **B35a** calendar kernel | `Calendar.fdiv`/`fmod` floor-division helpers, days-from-civil and civil-from-days, leap year, month lengths, day-of-week, day-of-year, and the `Date` type with day arithmetic and comparison. Pure `.rx`, **no OS, no C, no formatting** | nothing | **READY-NOW** | 1900-1909 |
-| **B35b** the `Time` value type | `Time` as `secs`/`nsec`/`utc_offset`, normalisation, construction from epoch and from civil fields (UTC and explicit-offset only), field accessors, `include Comparable`, seconds arithmetic, `Time`↔`Date` conversion. Still **no OS call** | B35a | BLOCKED-ON-B35a | 1910-1919 |
-| **B35c** the OS boundary | `Time.now` routed through the existing TestClock seam, the new `ruxen_time_local_offset_secs` C shim, `Time.local`/`#localtime`/`#getlocal`/`#utc`/`#zone`/`#utc_offset`/`#dst?`, and the ambiguous-time and gap policies | B35b | **NEEDS-RUNTIME-C**, BLOCKED-ON-B35b | 1920-1929 |
-| **B35d** formatting | `strftime` over the design's v1 directive set, plus `iso8601`, `xmlschema`, `rfc3339`, `rfc2822`, `httpdate`, `to_s`, `inspect` | B35b | BLOCKED-ON-B35b | 1930-1939 |
-| **B35e** parsing | `strptime`, `Time.iso8601`, `Date.iso8601`, the bounded `Time.parse`/`Date.parse` grammar, and the `TimeError` enum | B35d | BLOCKED-ON-B35d | 1940-1949 |
-| **B35f** calendar arithmetic | `>>`, `<<`, `next_month`, `prev_month`, `next_year`, `prev_year`, `next_day`, `prev_day`, `succ`, `step`, `upto`, `downto`, weekday predicates, `Date.jd`, and the `DateTime` delegation layer | B35a, B35b | BLOCKED-ON-B35b | 1950-1959 |
+| **B35a** calendar kernel | `Calendar.fdiv`/`fmod` floor-division helpers, days-from-civil and civil-from-days, leap year, month lengths, day-of-week, day-of-year, and the `Date` type with day arithmetic and comparison. Pure `.rx`, **no OS, no C, no formatting** | nothing | [planned](../../TODO.md#t-parity-time) **READY-NOW** | 1900-1909 |
+| **B35b** the `Time` value type | `Time` as `secs`/`nsec`/`utc_offset`, normalisation, construction from epoch and from civil fields (UTC and explicit-offset only), field accessors, `include Comparable`, seconds arithmetic, `Time`↔`Date` conversion. Still **no OS call** | B35a | [planned](../../TODO.md#t-parity-time) BLOCKED-ON-B35a | 1910-1919 |
+| **B35c** the OS boundary | `Time.now` routed through the existing TestClock seam, the new `ruxen_time_local_offset_secs` C shim, `Time.local`/`#localtime`/`#getlocal`/`#utc`/`#zone`/`#utc_offset`/`#dst?`, and the ambiguous-time and gap policies | B35b | [planned](../../TODO.md#t-parity-time) **NEEDS-RUNTIME-C**, BLOCKED-ON-B35b | 1920-1929 |
+| **B35d** formatting | `strftime` over the design's v1 directive set, plus `iso8601`, `xmlschema`, `rfc3339`, `rfc2822`, `httpdate`, `to_s`, `inspect` | B35b | [planned](../../TODO.md#t-parity-time) BLOCKED-ON-B35b | 1930-1939 |
+| **B35e** parsing | `strptime`, `Time.iso8601`, `Date.iso8601`, the bounded `Time.parse`/`Date.parse` grammar, and the `TimeError` enum | B35d | [planned](../../TODO.md#t-parity-time) BLOCKED-ON-B35d | 1940-1949 |
+| **B35f** calendar arithmetic | `>>`, `<<`, `next_month`, `prev_month`, `next_year`, `prev_year`, `next_day`, `prev_day`, `succ`, `step`, `upto`, `downto`, weekday predicates, `Date.jd`, and the `DateTime` delegation layer | B35a, B35b | [planned](../../TODO.md#t-parity-time) BLOCKED-ON-B35b | 1950-1959 |
 
 **Ship order: B35a, then B35b, then B35d and B35f in parallel (they do not touch
 each other), then B35c, then B35e.**

@@ -49,6 +49,7 @@ This document specifies:
 `parser/ast.rs:787-793` (internal Rust — name retained for compiler
 contributors):
 
+<!-- compiler-rust -->
 ```rust
 pub struct Attribute {
     pub name: String,
@@ -58,7 +59,8 @@ pub struct Attribute {
 ```
 
 Parser (`parser/mod.rs:1572-1610`, `parse_attributes`) currently accepts
-the old `@[name(arg1, arg2, ...)]` prefix form. Dispatch logic at
+the old `@[name(arg1, arg2, ...)]` prefix form, which is [retired] for users
+(E0607 for `@[...]`). Dispatch logic at
 `parser/mod.rs:473-511` handles only the legacy `link`/`repr` cases;
 anything else on the top-level path errors out. The Ruby-flavor
 migration retires the `@[...]` syntax — these forms are now in-body
@@ -141,6 +143,7 @@ ident           ::= <identifier>
 The internal HIR carrier (Rust name preserved for compiler
 contributors) holds the parsed args as a typed list:
 
+<!-- compiler-rust -->
 ```rust
 pub struct Attribute {
     pub name: String,
@@ -163,7 +166,11 @@ pub enum AttrLit {
 
 ### 4.2 Deprecation directive
 
-```ruxen
+Deprecation warnings are the Ruby-side form the language keeps (migration
+row 41 of `docs/specs/syntax/ruby-naming.spec.md`). The directive is not
+built yet, [planned](../../TODO.md#t-req-deprecation):
+
+```ruby
 def from_utf8_lossy_impl(bytes: &Array[UInt8]) -> String
   deprecated since: "0.3",
              note: "use `String.from_utf8_lossy` instead"
@@ -195,11 +202,16 @@ Semantics:
 
 ### 4.3 Unstable directive
 
-```ruxen
-mixin Try
+Stability attributes are not language syntax in the language spec
+(migration row 41: feature gating moves to semver and Bundler-style
+groups), so this directive and the `stable` one in §4.4 are retired
+designs, kept only as the record of the proposal. Example [retired]:
+
+```ruby
+module Try
   unstable feature: "try_mixin", issue: "42"
 
-  def consume into_result -> Result[Self.Ok, Self.Err]
+  def consume into_value -> Int
 end
 ```
 
@@ -224,7 +236,9 @@ Semantics:
 
 ### 4.4 Stable directive
 
-```ruxen
+A [retired] design (see §4.3):
+
+```ruby
 def trim_ascii(s: &String) -> String
   stable since: "0.2.0", feature: "string_ext"
 
@@ -253,9 +267,10 @@ Semantics:
 ### 4.5 Lint-level controls
 
 A small family of in-body directives on any *enclosing* item that
-change the level of specific lints inside its body:
+change the level of specific lints inside its body. Like the deprecation
+directive, it is [planned](../../TODO.md#t-req-deprecation):
 
-```ruxen
+```ruby
 def use_old_api(s: String) -> String
   allow deprecated
 
@@ -306,6 +321,7 @@ Not supported in v1:
 `parser/ast.rs:787-793` — widen the `Attribute` carrier (internal Rust
 name retained; user-facing concept is "in-body directive"):
 
+<!-- compiler-rust -->
 ```rust
 pub struct Attribute {
     pub name: String,
@@ -337,12 +353,14 @@ transitional code paths.
 Each item kind (`HirFuncDef`, `HirStructDef`, `HirClassDef`,
 `HirEnumDef`, `HirMixinDef`) grows a field:
 
+<!-- compiler-rust -->
 ```rust
 pub stability: Stability,
 ```
 
 Where `Stability` is:
 
+<!-- compiler-rust -->
 ```rust
 pub enum Stability {
     Stable { since: Option<Semver>, feature: Option<String> },
@@ -360,6 +378,7 @@ impl Stability {
 
 `resolve/symbols.rs`:
 
+<!-- compiler-rust -->
 ```rust
 pub struct Definition {
     pub name: String,
@@ -390,6 +409,7 @@ needs is available.
 
 Pseudocode sketch:
 
+<!-- compiler-rust -->
 ```rust
 pub fn run_deprecation_lint(
     program: &HirProgram,

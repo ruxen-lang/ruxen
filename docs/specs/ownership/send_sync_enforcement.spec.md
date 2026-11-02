@@ -53,13 +53,18 @@ the user needing to write `include`:
 User classes are **NOT** auto-derived. A class wrapping only `Send`
 fields is still not `Send` until the user writes `include Send`.
 
+`JoinHandle`, `MutexGuard`, `Sender`/`Receiver` and the atomics are today's
+stdlib names [implemented]. As the user-facing shape they are [deprecated],
+replaced by `Thread.new { }.value`, `Mutex#synchronize` and `Thread::Queue`,
+[planned](../../../TODO.md#t-thread-api).
+
 ## B3 — `Mutex.new(value)` rejects non-Send T (E1101)
 
 **Given** a user class `Foo` without `include Send`
 **When** `Mutex.new(Foo.new)` is compiled
 **Then** the typeck (or borrow-check) phase emits E1101 at the call
 site:
-```
+```text
 [E1101] error: cannot construct Mutex[Foo] — type parameter T must
 implement Send, but Foo does not
 note: add `include Send` to Foo if it is safe to share across threads
@@ -88,23 +93,29 @@ constraint.
 
 ## B6 — `Thread.spawn(closure)` rejects non-Send captures (E1100)
 
-**Given** `let foo: Foo = ...` where `Foo` doesn't implement Send
-**When** `Thread.spawn do || foo.bar end` is compiled
+**Given** `foo = Foo.new` where `Foo` doesn't implement Send
+**When** `Thread.spawn do foo.bar end` is compiled
 **Then** the borrow checker computes the closure's capture set,
 finds `foo` is captured by move (or by reference), checks its
 type's mixin set, and on `Send` absent emits:
-```
+```text
 [E1100] error: cannot capture `foo` of type Foo across thread boundary
   — Foo does not implement Send
 note: add `include Send` to Foo if it is safe to share across threads
   --> file.rx:NN:NN
-   | Thread.spawn do || foo.bar end
-   |                    ^^^
+   | Thread.spawn do foo.bar end
+   |                 ^^^
 ```
 
 The check fires **only** at `Thread.spawn` call sites — not at
 arbitrary closure construction. Closures used in `Array.each`,
 `Array.map`, etc. don't trigger the check.
+
+Today the check runs on free-function calls only [implemented]. A method call
+skips it, and `Thread.spawn` is one, so `Thread.spawn(-> { r.size })` with
+`r = &s` compiles and reads freed memory. Owner decision D16 a: the Send
+capture check moves onto the method-call path, and apps share state through an
+owned `SharedSync` handle, [planned](../../../TODO.md#t-d16).
 
 ## B7 — Capture-by-reference check semantics
 
@@ -113,7 +124,7 @@ the check requires `&Foo: Send` — which for v1 means `Foo: Sync`.
 This is because `&T: Send` iff `T: Sync`.
 
 E1100 diagnostic distinguishes by-ref vs by-move in the note:
-```
+```text
 note: foo is captured by reference; the closure requires `&Foo: Send`,
 which means Foo must implement Sync
 ```
@@ -135,7 +146,9 @@ for the transitivity case; B3 covers it.
 
 ## B10 — User opt-in marker pattern
 
-```rx
+Example [implemented] (`...` stands for the class body):
+
+```ruby
 class MyData
   include Send         # marker — no methods required
   include Sync         # marker — no methods required
@@ -159,7 +172,9 @@ of B3-B8.
 
 ## B12 — `unsafe include Send` escape hatch
 
-```rx
+Example [implemented]; OQ-14 may change the opt-out spelling, see the naming spec section 15:
+
+```ruby
 class WrapsRawPointer
   unsafe include Send   # asserts safety manually
 end

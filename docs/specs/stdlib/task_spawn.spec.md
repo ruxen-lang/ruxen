@@ -2,7 +2,7 @@
 
 **Source docs:**
 [docs/requirements/tier1_03_async.md](../../requirements/tier1_03_async.md),
-[docs/prompts/v1/15_phase4_async.md](../../prompts/v1/15_phase4_async.md),
+`docs/prompts/v1/15_phase4_async.md`,
 [docs/specs/stdlib/executor.spec.md](executor.spec.md) (sub-phase 3 block_on),
 [docs/specs/stdlib/async_io.spec.md](async_io.spec.md) (sub-phase 4 I/O).
 
@@ -11,19 +11,25 @@ the surface + lowering + executor + I/O. This sub-phase wires
 **multi-task scheduling** so multiple concurrent futures can be
 polled by one executor on one thread. The final async piece.
 
-After this lands, the full async-server pattern works:
-```rx
-async def server_loop()
-  let listener = AsyncTcpListener.bind("127.0.0.1:8080").await.ok!
-  loop
-    let conn = listener.accept.await.ok!
+**Today** [implemented]: `class Task` (`library/std/future/src/task.rx`)
+has `Task.spawn_raw(future_ptr: Int) -> Int`, `Task.join(h: Int)` and
+`Task.yield_now`; the handle is an opaque `Int`. The typed
+`Task.spawn(future) -> JoinHandle[T]` described below is the target: owner
+decision D14 a gives `Race.any_of` and `Task.spawn_raw` real argument types
+and keeps the raw `Int` boundary internal [planned](../../../TODO.md#t-d14). The async model itself is
+replaced by the Fiber scheduler later [planned](../../../TODO.md#t-fibers).
+
+The target async-server pattern, [planned](../../../TODO.md#t-d14) (it also uses `loop do`, [planned](../../../TODO.md#t-loop-do), and raising I/O, [planned](../../../TODO.md#t-exceptions)):
+```ruby
+async def server_loop -> nil
+  listener = AsyncTcpListener.bind("127.0.0.1:8080").await
+  loop do
+    conn = listener.accept.await
     Task.spawn(handle_connection(conn))   # non-blocking
   end
 end
 
-def main
-  block_on(server_loop())
-end
+block_on(server_loop())
 ```
 
 ---
@@ -35,10 +41,12 @@ Class-static method on `class Task` in `library/std/future/src/lib.rx`
 queue; returns immediately with a `JoinHandle[T]` that can later be
 awaited for the spawned task's Output.
 
-```rx
-let handle = Task.spawn(some_async_fn())
+The target form, [planned](../../../TODO.md#t-d14):
+
+```ruby
+handle = Task.spawn(some_async_fn())
 # ... other work, possibly more spawns ...
-let result = handle.await   # blocks until the spawned task completes
+result = handle.await   # blocks until the spawned task completes
 ```
 
 **Given** an executor running via `block_on`
@@ -53,15 +61,26 @@ Cooperative yield. Returns a future that, on first poll, registers
 a wakeup-on-next-tick and returns Pending; on second poll, returns
 Ready.
 
-```rx
-async def long_running()
-  var i = 0
+This does not compile today, for three reasons: `.await` on a future
+returned by a stdlib class method (`Task.yield_now`) is not seen by the
+`.await` desugar (see the comment above `class Task` in
+`library/std/future/src/task.rx`); `.await` inside an `if` within a loop body
+is E1115; and a bare local such as `i = 0` that lives across an `.await` is
+not hoisted by the async lowering (a typed `var i: Int = 0` is, as in
+`tests/release-e2e/cases/728d_async_loop_minimal.rx`).
+
+The target form, [planned](../../../TODO.md#t-await-gaps):
+
+```ruby
+async def long_running -> Int
+  i = 0
   while i < 1_000_000
     if i % 1000 == 0
       Task.yield_now.await    # let other tasks run
     end
-    i = i + 1
+    i += 1
   end
+  i
 end
 ```
 
@@ -88,7 +107,10 @@ in-executor task handles wrap a result slot the executor fills when
 the task completes, plus a per-task waker queue for callers
 awaiting the result.
 
-```rx
+The target shape, [planned](../../../TODO.md#t-d14). Its bound `[T: Send]` is the [deprecated] spelling of
+`[T < Send]` and stays only until that respelling lands:
+
+```text
 class JoinHandle[T: Send]   # already exists for Thread.spawn
   # New method for in-executor tasks:
   def await -> T
@@ -163,33 +185,34 @@ thread-bridges (one thread per side, two `block_on` calls). With
 sub-phase 5, the echo server can be one process, one `block_on`,
 two `Task.spawn` calls:
 
-```rx
-async def server_loop()
-  let listener = AsyncTcpListener.bind(addr).await.ok!
-  let conn = listener.accept.await.ok!
+The target form, [planned](../../../TODO.md#t-d14) (raising I/O is [planned](../../../TODO.md#t-exceptions)):
+
+```ruby
+async def server_loop(addr: &String) -> nil
+  listener = AsyncTcpListener.bind(addr).await
+  conn = listener.accept.await
   # Echo loop runs as a task; main keeps accepting (in a real server).
   Task.spawn(echo_handler(conn))
 end
 
-async def client_flow(addr: &String)
-  let stream = AsyncTcpStream.connect(addr).await.ok!
+async def client_flow(addr: &String) -> nil
+  stream = AsyncTcpStream.connect(addr).await
   ...
 end
 
-def main
-  let addr = "127.0.0.1:9001"
-  block_on(do
-    let server = Task.spawn(server_loop(addr))
-    let client = Task.spawn(client_flow(addr))
-    server.await
-    client.await
-  end)
+async def both(addr: &String) -> nil
+  server = Task.spawn(server_loop(addr))
+  client = Task.spawn(client_flow(addr))
+  server.await
+  client.await
 end
+
+block_on(both("127.0.0.1:9001"))
 ```
 
-E2E fixture `728_async_tcp_echo_single_block_on.rx` lands as part
-of this sub-phase. Asserts the round-trip in one process, one
-`block_on`.
+E2E fixture `728_async_tcp_echo_single_block_on.rx` was planned for this
+sub-phase; it is not in `tests/release-e2e/cases/` today (the `728d` to `728h`
+async-loop cases are).
 
 ## B10 — Drop semantics
 
@@ -215,7 +238,7 @@ continues polling other tasks. v1: panic = process abort, same as
 | B5        | `waker_wake_re_enqueues_task`                          | `tests/task_scheduler.rs`     |
 | B6        | `block_on_drops_remaining_tasks_on_top_level_complete` | `tests/task_scheduler.rs`     |
 | B7        | `task_spawn_outside_async_rejected_e1116`              | `tests/async_negative.rs`     |
-| B9        | e2e `cases/728_async_tcp_echo_single_block_on.rx`     | release-e2e                   |
+| B9        | e2e `cases/728_async_tcp_echo_single_block_on.rx` (not landed) | release-e2e                   |
 | B10       | `dropped_task_releases_reactor_registrations`          | `tests/task_scheduler.rs`     |
 
 ---
@@ -224,7 +247,7 @@ continues polling other tasks. v1: panic = process abort, same as
 
 - **Multi-threaded work-stealing executor.** v1 single-threaded.
 - **Task priority / fairness policies.** v1 round-robin only.
-- **Task local storage** (`task_local!`). Separate prompt.
+- **Task local storage** (Rust's `task_local!`). Separate prompt.
 - **Cancellation** (`JoinHandle.cancel`). v2 — needs cooperative drop discipline.
 - **`select!` macro across multiple futures.** v2.
 

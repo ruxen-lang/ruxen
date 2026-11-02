@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Tier 1 — Implicit Includes (formerly Derive & Macro System)
 
 Status: superseded by the shipped implicit-includes design

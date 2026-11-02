@@ -2,7 +2,7 @@
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §4.3](../../requirements/tier1_01_stdlib.md),
-[docs/prompts/v1/06_phase2_stdlib_io_fmt.md](../../prompts/v1/06_phase2_stdlib_io_fmt.md).
+`docs/prompts/v1/06_phase2_stdlib_io_fmt.md`.
 
 **Status:** shipped Phase 2 #06 (first batch, 2026-04 → 2026-05).
 `metadata` deferred to v2.

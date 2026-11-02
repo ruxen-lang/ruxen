@@ -2,7 +2,7 @@
 
 **Source docs:**
 [docs/requirements/tier1_03_async.md](../../requirements/tier1_03_async.md) §4.4,
-[docs/prompts/v1/15_phase4_async.md](../../prompts/v1/15_phase4_async.md),
+`docs/prompts/v1/15_phase4_async.md`,
 [docs/specs/stdlib/async.spec.md](../stdlib/async.spec.md) (sub-phase 1 — surface).
 
 **Status:** sub-phase 2 of the async round. Sub-phase 1 (commit
@@ -29,8 +29,10 @@ Land 2A first; commit; then 2B.
 
 ### B1 — `async def foo() -> T` typechecks as returning `some Future[Output = T]`
 
-```rx
-async def make_int() -> Int
+Example [implemented]:
+
+```ruby
+async def make_int -> Int
   42
 end
 ```
@@ -45,15 +47,15 @@ the existential return `some Future[Output = Int]`.
 Calling `make_int()` returns a Future-implementing value. The
 non-async caller can poll it manually:
 
-```rx
-def main
-  var fut = make_int()
-  # Hand-written Context for testing — see B6
-  let ctx = Context.test_dummy
-  match (&var fut).poll(&var ctx)
-    Poll.Ready(v) -> puts "#{v}"
-    Poll.Pending  -> puts "pending"
-  end
+Example [implemented]:
+
+```ruby
+fut = make_int()
+# Hand-written Context for testing — see B6
+ctx = Context.test_dummy
+case (&var fut).poll(&var ctx)
+in Poll.Ready(v) then puts "#{v}"
+in Poll.Pending then puts "pending"
 end
 ```
 
@@ -61,9 +63,9 @@ For Milestone 2A this should print `42`.
 
 ### B2 — Each `async def` generates an anonymous state-machine class
 
-The lowering pass synthesizes one class per `async def`:
+The lowering pass synthesizes one class per `async def`. Pseudo-code of what the compiler generates (not user syntax):
 
-```rx
+```text
 # Pseudocode for what the compiler generates for `async def make_int() -> Int  42 end`:
 class __MakeIntFuture
   __state: Int            # 0 = start, 1 = completed
@@ -97,9 +99,9 @@ initial state field set to 0 and arg fields populated from the
 call site.
 
 Function arguments (if any) become fields on the state-machine
-struct:
+struct. Pseudo-code of what the compiler generates (not user syntax):
 
-```rx
+```text
 async def add(a: Int, b: Int) -> Int
   a + b
 end
@@ -150,8 +152,14 @@ that does nothing. Wired in `library/std/future/runtime/executor.c`
 
 ### B7 — `.await` desugars to a poll loop with a `return Pending` on Pending
 
-```rx
-async def f() -> Int
+A local that holds an `.await` result is declared with `let` today: the
+bare `x = g().await` is not hoisted by the lowering and fails typeck (E0740,
+"no method `poll` on type `Future[Int]`").
+
+Works today, [deprecated] `let` (replacement `x = ...`, blocked by the gap above):
+
+```ruby
+async def f -> Int
   let x = g().await
   x + 1
 end
@@ -161,7 +169,7 @@ The compiler rewrites the body to a state machine with TWO states:
 state 0 = "before awaiting g", state 1 = "after .await, computing x + 1".
 
 Pseudo-MIR for the generated poll:
-```
+```text
 match self.__state
   0 ->
     # Construct g()'s future, store in self.__sub
@@ -188,8 +196,10 @@ one global — each await may produce a different Future type).
 
 ### B8 — Locals live across `.await` are captured as state-machine fields
 
-```rx
-async def add_async() -> Int
+Works today, [deprecated] `let` (see B7):
+
+```ruby
+async def add_async -> Int
   let a = compute().await
   let b = compute_other().await
   a + b
@@ -228,8 +238,10 @@ generated MIR.
 
 
 
-```rx
-async def conditional() -> Int
+Example [implemented] (typechecks today; the deferral note above predates it):
+
+```ruby
+async def conditional -> Int
   if check_condition()
     g().await
   else
@@ -249,14 +261,14 @@ limit clearly.
 
 ### B12 — `.await` outside async context rejected (E1110)
 
-```rx
-def main
-  some_future.await    # E1110
-end
+Example [implemented], rejected on purpose:
+
+```ruby
+some_future().await    # E1110
 ```
 
 **Then** the resolver (or typeck — wherever's natural) emits:
-```
+```text
 [E1110] error: `.await` is only valid inside `async def` or `async { }`
    |   some_future.await
    |               ^^^^^
@@ -283,9 +295,9 @@ be flagged. The borrowed value sits on the caller's stack but the
 suspended future may be polled later from a different stack frame,
 so the borrow could outlive its referent.
 
-**Given:**
-```rx
-async def bad() -> Int
+**Given** this sketch, [deprecated] `let` (see B7):
+```ruby
+async def bad -> Int
   let v = compute_vec()
   let r = &v[0]                # borrow
   some_other_future().await    # suspend — &v could dangle
@@ -349,9 +361,13 @@ Pin test: a state machine in state 1 holds `__sub_0` Ready and
 
 ## Milestone 2B v1 scope reductions (shipped 2026-05-20)
 
-The v1 cut of 2B supports a canonical straight-line `.await` shape:
+The v1 cut of 2B supports a canonical straight-line `.await` shape. It is a
+grammar sketch (`<...>` are placeholders), and it needs the [deprecated] `let`:
+the bare `x = ... .await` is not accepted yet.
 
-```rx
+Shape, [deprecated] `let` (replacement `x_1 = ...`, blocked as above):
+
+```ruby
 async def f(args...) -> R
   let x_1 = g_1(<args from outer / consts>).await
   let x_2 = g_2(<args from outer / consts>).await

@@ -95,6 +95,33 @@ The tutorial (`docs/tutorial/`) *already* writes code that calls methods not yet
 
 ## 4. Scope — Modules, Types, Functions
 
+**Ruby shapes.** The language spec replaces the Rust-shaped module surfaces
+drafted in 4.2 to 4.10 (`use std.*`, `Result` returns, `struct`/`enum`) with
+Ruby's stdlib shapes, [planned](../../TODO.md#t-stdlib-shapes):
+
+```ruby
+text = File.read("config.toml")
+path = File.join(Dir.pwd, "out.txt")
+puts ARGV.size
+home = ENV["HOME"]
+ok = system("ls", "-l")
+start = Time.now
+server = TCPServer.new(8080)
+```
+
+Works today: each module is a class with `Result`-returning class methods
+(`FS`, `Env`, `Path`, `Instant`, `Command`, `TcpStream` in `library/std/<pkg>`),
+in scope without an import; replaced by the Ruby shapes above, [deprecated]:
+
+```ruby
+case FS.read_to_string("config.toml")
+in Ok(text) then puts text.size
+in Err(e) then puts e.message
+end
+puts Path.join("a", "b")
+puts Env.args.size
+```
+
 Every module below is a Ruxen module under `std`. Unless stated otherwise, items are public (sectionless top-level items are public by default). Names follow the conventions in `docs/tutorial/16`: `snake_case` for functions, `UpperCamelCase` for types, `SCREAMING_SNAKE_CASE` for constants.
 
 ### 4.1 `std.prelude` (auto-imported)
@@ -108,7 +135,9 @@ Everything listed here is in scope without a `use`. Matches Ruby's "core" feel (
 
 ### 4.2 `std.io`
 
-```ruxen
+The v1 draft below. Built today in `library/std/io`: `File` (`open`, `create`, `read`, `write`, `read_to_string`, `flush`, …), `Stdin` (`read_line`, `read_to_string`, `lines`), `Stdout`, `Stderr`, and `IoError` as a class with a `kind` (`IoErrorKind`) instead of the drafted enum; these `Result`-returning shapes are replaced by Ruby's `gets`, `$stdout.write`, `File.read` and raised exceptions, [deprecated]. Drafted pieces not built (the free `read_line`/`stdin`/`stdout`/`stderr` functions, the per-variant `IoError` payloads) are [planned](../../TODO.md#t-stdlib-shapes):
+
+```ruby
 use std.io
 
 def read_line -> Result[String, IoError]
@@ -145,7 +174,9 @@ Backing C functions: `fgets`, `fread`, `fwrite`, `fflush`, `ferror`, `errno`. `I
 
 ### 4.3 `std.fs`
 
-```ruxen
+The v1 draft below. Built today in `library/std/fs`: the drafted functions as class methods on `FS` (`FS.read_to_string`, `FS.write`, `FS.exists`, `FS.is_file`, `FS.is_dir`, `FS.read_dir`, `FS.metadata`, `FS.remove_file`, `FS.create_dir`, `FS.create_dir_all`, `FS.rename`), taking `&String` paths, plus `File` and `Metadata` in `library/std/io`; replaced by Ruby's `File.read`, `File.write`, `File.exist?`, `Dir` and raised exceptions, [deprecated]. The `AsRef[Path]` parameters, `remove_dir` and `File#sync` are not built, [planned](../../TODO.md#t-stdlib-shapes):
+
+```ruby
 use std.fs
 use std.path.{Path, PathBuf}
 
@@ -186,9 +217,11 @@ end
 
 ### 4.4 `std.net` (minimal)
 
-Deferred to phase 1c. Surface:
+Planned for phase 1c; part of it shipped (see below).
 
-```ruxen
+The v1 draft below. Built today in `library/std/net`: `TcpStream` (`connect`, `read`, `write`, `shutdown`, `peer_addr`, timeouts) and `TcpListener` (`bind`, accept), `Result`-returning; replaced by Ruby's `TCPSocket` and `TCPServer`, [deprecated]. The drafted `incoming` enumerator is not built, [planned](../../TODO.md#t-stdlib-shapes):
+
+```ruby
 use std.net
 
 class TcpStream
@@ -210,7 +243,9 @@ No DNS resolver beyond what `getaddrinfo` gives us; no UDP; no TLS. These are fu
 
 ### 4.5 `std.time`
 
-```ruxen
+The v1 draft below. Built today in `library/std/time`: `Duration` (`from_secs`/`from_millis`/`from_micros`/`from_nanos`, `as_*`, `add`, `sub`, as `Int`s) and `Instant` (`now`, `elapsed`), as classes rather than the drafted `struct`s; replaced by Ruby's `Time.now` and `Float` seconds, [deprecated]. `SystemTime`, `UNIX_EPOCH`, `subsec_nanos` and the operator mixins are not built, [planned](../../TODO.md#t-stdlib-shapes):
+
+```ruby
 use std.time
 
 struct Duration
@@ -251,7 +286,9 @@ Backing: `clock_gettime(CLOCK_MONOTONIC)` for `Instant`, `CLOCK_REALTIME` for `S
 
 ### 4.6 `std.env`
 
-```ruxen
+The v1 draft below. Built today in `library/std/env`: `Env.args`, `Env.get` (the drafted `var`), `Env.vars` (a `Hash`), `Env.current_dir`, plus `Env.cpu_count`; replaced by Ruby's `ARGV`, `ENV[...]` and `Dir.pwd`, [deprecated]. `set_var`, `remove_var`, `set_current_dir`, `home_dir`, `VarError` and the `ARCH`/`OS`/`FAMILY` constants are not built, [planned](../../TODO.md#t-stdlib-shapes):
+
+```ruby
 use std.env
 
 def args -> Array[String]                          # argv, owned strings
@@ -277,7 +314,9 @@ const FAMILY: String    # "unix"
 
 ### 4.7 `std.process`
 
-```ruxen
+The v1 draft below. Built today in `library/std/process`: `Process.exit`, and `Command` (`new`, `arg`, `args`, `env`, `output`, `status`) with `Output` and `ExitStatus` (`success`, `code`); replaced by Ruby's `exit`, `system` and backticks, [deprecated]. `abort`, `id`, `spawn` and `Child` are not built, [planned](../../TODO.md#t-stdlib-shapes):
+
+```ruby
 use std.process
 
 def exit(code: Int32) -> Never            # uses Ty::Never
@@ -319,7 +358,9 @@ Backing: `execvp`, `fork`, `waitpid`, `pipe` on Unix.
 
 This module is *definitional* — it publishes the traits and types that format macros rely on. Implementation of the macros themselves lives in the compiler (see §7.4).
 
-```ruxen
+The v1 draft below. Built today in `library/std/fmt`: the `Display` and `Debug` mixins and `Formatter` (`write_str`, `write_char`, `buffer`), not the drafted width/precision knobs or `Alignment`; user types define `to_s` and `inspect` instead (`def to_s` is [implemented]), so the `Display`/`Debug` mixins are [deprecated]:
+
+```ruby
 module std.fmt
   mixin Display
     def fmt(f: &var Formatter) -> Result[nil, FmtError]
@@ -357,7 +398,9 @@ Formatting goes through string interpolation `"#{x}"` (see §7.4); there is no `
 
 ### 4.9 `std.path`
 
-```ruxen
+The v1 draft below. Built today in `library/std/path`: `Path.join`, `Path.parent`, `Path.file_name`, `Path.extname` and `Path.is_absolute` as class methods over `String`; replaced by Ruby's `File.join`, `File.dirname`, `File.basename` and `File.extname`, [deprecated]. The drafted `Path`/`PathBuf` value types and the `AsRef` mixin were dropped, [retired]:
+
+```ruby
 use std.path
 
 struct Path          # an unsized borrowed slice over a &[UInt8]; modeled as a newtype around String for v1
@@ -400,7 +443,9 @@ For v1 `Path` is a thin newtype wrapper on `String`; on Windows (future work) it
 
 Defines the `Hashable` *mixin* (for hashable keys) separately from the `Hash[K, V]` *type* (see §9 on the name collision).
 
-```ruxen
+The v1 draft below. Built today in `library/std/hash`: only the `Hashable` mixin, with `def hash_code -> Int`; hash keys are moving to Ruby's `eql?` and `hash` ([planned](../../TODO.md#t-d8)), so `hash_code` is [deprecated]. The drafted `Hasher`, `DefaultHasher` and `BuildHasher` are not built, [planned](../../TODO.md#t-stdlib-shapes):
+
+```ruby
 module std.hash
   mixin Hasher
     def var write(bytes: &[UInt8])
@@ -434,7 +479,9 @@ This replaces the skeleton `Hashable` mixin registered at `resolve/mod.rs:143`. 
 
 `std.collections` re-exports `Array`, `Hash`, `Set`, and also exposes:
 
-```ruxen
+Draft names for later collections, not built [planned](../../TODO.md#t-more-collections):
+
+```ruby
 class ArrayDeque[T]        # ring buffer — phase 1c
 class BTreeMap[K, V]       # sorted map — phase 2
 class BTreeSet[T]
@@ -604,30 +651,23 @@ Operators: `s1 + s2` (consumes `s1`, borrows `s2`), `s1 == s2`, `<`, `>`, etc.
 
 ### 5.7 Primitive numeric methods
 
-Minimum surface for v1:
-
-```ruxen
-extension Int
-  def self.MIN / MAX                         # constants
-  def abs / pow / saturating_add / checked_add / wrapping_add
-  def to_string -> String
-  def to_string_radix(r: UInt32) -> String
-end
-
-extension Float
-  def self.INFINITY / NAN / EPSILON
-  def abs / sqrt / sin / cos / tan / ln / log2 / log10 / exp
-  def floor / ceil / round / trunc / fract
-  def is_nan / is_infinite / is_finite
-  def to_string -> String
-end
-```
+Minimum surface for v1. The methods live on the reopened `class Int` and
+`class Float` in `library/std/scalar/src/lib.rx` (the draft's `extension Int`
+spelling is [retired]). Built today [implemented]: `abs`, `pow`, `floor`,
+`ceil`, `round`, `truncate`, `to_s`, `to_i`, `to_f`, `zero?`, `even?`,
+`odd?`, `gcd`, `lcm`, `divmod`, `clamp`, `times`, `upto`, `downto`, `step`
+and `Int.sqrt`. The draft's `to_string` and `is_nan`-style names are replaced
+by `to_s`, `to_s(base)` and `nan?`/`infinite?`/`finite?`. Not built yet:
+the `MIN`/`MAX`/`INFINITY`/`NAN`/`EPSILON` constants
+([planned](../../TODO.md#t-constants)), the saturating/checked/wrapping family and the
+`Float` math methods (`sqrt`, `sin`, `cos`, `tan`, `ln`, `log2`, `log10`,
+`exp`, `fract`, `nan?`, `infinite?`, `finite?`), [planned](../../TODO.md#t-float-math).
 
 Backed by `libm` (already linked via `-lm` in `codegen/object.rs:70`).
 
 ### 5.8 Iteration (`Enumerable`)
 
-There is no `Iterator` / `IntoIterator` / `FromIterator` layer: the `std.iter` design that stood here was dropped. Collections `include Enumerable[T]` (`library/std/core/src/lib.rx`), whose combinators (`map`, `select`, `reject`, `find`, `each_with_index`, `reduce`, `entries`, …) are written once over a single required `each` primitive and take Ruby blocks:
+There is no `Iterator` / `IntoIterator` / `FromIterator` layer: the `std.iter` design that stood here was dropped. Collections `include Enumerable[T]` (`library/std/core/src/lib.rx`), whose combinators (`map`, `select`, `reject`, `find`, `each_with_index`, `reduce`, `entries`, …) are written once over a single required `each` primitive and take Ruby blocks [implemented]:
 
 ```ruxen
 [1, 2, 3].each do |x|
@@ -641,9 +681,11 @@ With this in place, `Array`'s map/select/find stop being runtime-stubbed: each i
 
 ### 6.1 Syntax
 
-Ruxen already parses `use Foo.Bar`, `use Foo.Bar as B`, `use Foo.Bar.{X, Y}` (see §2.3 and `parser/ast.rs:692-704`). Stdlib reuses this machinery with a distinguished root name `std`:
+Ruxen already parses `use Foo.Bar`, `use Foo.Bar as B`, `use Foo.Bar.{X, Y}` (see §2.3 and `parser/ast.rs:692-704`). Stdlib reuses this machinery with a distinguished root name `std`.
+The `use` paths still parse but are replaced by `require` / `require_relative`
+[implemented] and by the stdlib classes being in scope without an import, [deprecated]:
 
-```ruxen
+```ruby
 use std.io.{read_line, stdin}
 use std.fs
 use std.collections.Hash                      # canonical collection name
@@ -669,7 +711,7 @@ The Rust split `core`/`alloc`/`std` is attractive but premature for v1. We pre-a
 
 ### 6.4 File layout of the stdlib source tree
 
-```
+```text
 library/std/
   Cargo.toml                       # bookkeeping only — not compiled by cargo
   src/
@@ -742,7 +784,7 @@ One blend per module (P3). The table below pins the call for each v1 module.
 
 Phase 1a adds ~18 functions:
 
-```
+```text
 ruxen_vec_pop, ruxen_vec_clear, ruxen_vec_first, ruxen_vec_last
 ruxen_vec_remove, ruxen_vec_insert, ruxen_vec_extend_from_ptr
 ruxen_vec_sort_i64 (initial, scalar only), ruxen_vec_reverse
@@ -758,7 +800,7 @@ ruxen_panic_with_location (file, line, col)
 
 Phase 1b adds ~12 I/O functions:
 
-```
+```text
 ruxen_file_open, ruxen_file_close, ruxen_file_read, ruxen_file_write
 ruxen_fs_read_to_string, ruxen_fs_write, ruxen_fs_exists
 ruxen_fs_remove_file, ruxen_fs_create_dir, ruxen_fs_rename

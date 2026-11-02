@@ -1,5 +1,3 @@
-> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
-
 # Ruxen v1 issues found building the GUI stack (quiver / canvas / tally)
 
 Catalog of compiler/toolchain bugs hit while implementing quiver (L2 reactive
@@ -13,8 +11,18 @@ Severity key: **S1** silent miscompile (wrong values / memory corruption),
 
 Partial fixes already exist locally (see "Existing partial work" at the end).
 
+**Reading this ledger (2026-11).** It is the live quirk ledger. Entries that
+are fixed or resolved carry a `<!-- historical -->` marker and keep the
+syntax of their day. The repros in open entries were respelled in Ruby form
+in 2026-11 and checked to typecheck on the current build; each caption tags
+the forms it still needs. Owner decision D17 c: the stdlib `sync` test's
+false reject (`library/std/sync/tests/sync_test.rx`) is re-run first, since
+`MutexGuard#get` and `SharedSync#get` are now `.rx` clones, and a fix is
+picked only if it is still there [planned](../../TODO.md#t-d17).
+
 ---
 
+<!-- historical -->
 ## Q1 · S1 — `&str`-vs-closure method overload misdispatches → heap corruption  ✅ FIXED (and DISSOLVED 2026-06-11)
 
 > **DISSOLVED by the `&str` removal (2026-06-11, one-string-type ADR).** With
@@ -96,20 +104,27 @@ lowering. Workaround in quiver: distinct method names (`text` / `dyn_text`).
 > `any Fn` value), so the fat-pointer enum-payload issue that motivated this is no
 > longer in the block path.
 
+`Proc[() -> String]?` is the same type as the old `Option[any Fn[Fn() ->
+String]]`. The fully Ruby assignment `h.compute = -> { "hi" }` does not
+typecheck yet (a field assignment does not wrap a bare value into `T?`), so
+the repro still spells the wrap with `Some(...)`.
 
-```ruxen
+Repro (2026-11 respelling; the bug was last confirmed on the 2026-06-10 build), [deprecated] `Some(...)` and the `Some(f)` pattern (replacement: the bare value and `in f`) and `def init` (replacement `def initialize`):
+
+```ruby
 class Holder
-  compute: Option[any Fn[Fn() -> String]]
-  def init { self.compute = nil }
+  compute: Proc[() -> String]?
+
+  def init
+    @compute = nil
+  end
 end
 
-def main
-  var h = Holder.new
-  h.compute = Some({ || String.from("hi") })
-  match &h.compute
-    Some(f) -> puts "got: #{f.()}"    # prints a garbage Int, e.g. 838718384
-    nil     -> puts "none"
-  end
+h = Holder.new
+h.compute = Some(-> { "hi" })
+case h.compute
+in Some(f) then puts "got: #{f.()}"    # prints a garbage Int, e.g. 838718384
+in nil then puts "none"
 end
 ```
 
@@ -118,6 +133,7 @@ through a field. Suspect: enum payload layout/size for `any Fn` (vtable +
 env pair?) in MIR/codegen treats it as one word. Workaround: parallel arrays —
 `computes: Array[any Fn[...]]` + `compute_of: Array[Int]` with `-1` sentinel.
 
+<!-- historical -->
 ## Q3 · S1 — `do…end` block to a FREE function with explicit closure param segfaults  ✅ FIXED
 
 > **FIXED** (stdlib-rust-cleanup): in `resolve/exprs.rs`, a block-bearing free
@@ -154,6 +170,7 @@ free-function + explicit closure param + `do…end` is broken — the block
 sugar lowering for that path passes a bad closure value. Also broken with
 params (`withn do |n| … end`) and with plain `Fn() -> nil` (not just `any Fn`).
 
+<!-- historical -->
 ## Q4 · S1 — `move` closures cannot capture non-Copy class values (false E1001)  ✅ FIXED
 
 > **FIXED** (stdlib-rust-cleanup): `borrow_check/walk.rs::check_closure` recorded
@@ -193,6 +210,7 @@ covers only that). Borrowck models the move-capture then flags the body's use
 of the captured name. Non-`move` capture works (pointer-copy semantics) and is
 what quiver relies on — but that in turn depends on Q22 (drop semantics).
 
+<!-- historical -->
 ## Q5 · S2 — every `as Float32` cast crashes the compiler  ✅ FIXED
 
 > **FIXED** (stdlib-rust-cleanup): `coerce_value_signed` (cranelift `emit.rs`)
@@ -231,6 +249,7 @@ lowering emits an i64→f32 conversion under a variable declared f32 without
 the convert instruction. Workaround (tally): unit-addition loop —
 `var f = 0.0f32; while i < n { f = f + 1.0f32; … }`.
 
+<!-- historical -->
 ## Q6 · S1 — arithmetic inside string interpolation miscomputes  ✅ FIXED (pinned)
 
 > **ALREADY FIXED** on this branch (master merge); was reproducing as a bug
@@ -253,6 +272,7 @@ Verified in tally's PPM header: `"#{cv.width / 2} #{height_px / 2}"` printed
 Suspect: interpolation segment parsing splits on `/` or the embedded
 expression lowering. (Method calls and plain idents in `#{}` work fine.)
 
+<!-- historical -->
 ## Q7 · S1/S3 — brace-block match arms parse as closures; stale captures when executed  ✅ FIXED
 
 > **FIXED** (stdlib-rust-cleanup): per the decision, `-> do … end` is now the
@@ -293,6 +313,7 @@ named helper. Both quiver and canvas now carry comments warning about this.
 > block (leave `{` for the single-expression case so the closure ambiguity
 > never arises), and fix the stale-capture codegen bug for executed blocks.
 
+<!-- historical -->
 ## Q8 · S2 — recursive class types crash the compiler (stack overflow)  ✅ FIXED
 
 > **FIXED** (stdlib-rust-cleanup): two type-walks recursed through the
@@ -332,6 +353,7 @@ layout/size computation recursing without indirection through class
 references. Workaround (quiver): flat arena — parallel arrays indexed by
 Int node ids.
 
+<!-- historical -->
 ## Q9 · S3 — `arr[identifier]` parses as a generic-argument list; no index assignment  ✅ FIXED
 
 > **FIXED** (stdlib-rust-cleanup): the non-literal-index READ (`xs[i]`) was
@@ -359,6 +381,7 @@ lowering; Array has no `set` FFI either). Workarounds: `.get(i)` (returns
 `Option[&T]`) for reads; push-only arrays or `Hash[Int, V].insert`
 (insert overwrites) for writes.
 
+<!-- historical -->
 ## Q10 · S3 — doc comments between signature-only defs in a mixin break parsing  ✅ FIXED
 
 > **FIXED** (stdlib-rust-cleanup): `parser/classes.rs::parse_trait_item` now
@@ -379,6 +402,7 @@ end
 The parser starts parsing a *body* for the first bodiless `def` and chokes.
 Workaround: hoist all docs above the `mixin` keyword.
 
+<!-- historical -->
 ## Q11 · S3 — Hash tuple-iteration values don't type-resolve for method calls  ✅ FIXED
 
 > **FIXED** (stdlib-rust-cleanup): two layers. (1) typeck — the for-loop now
@@ -403,6 +427,7 @@ The value binding stays an inference variable all the way into codegen
 (should also fail earlier, in typeck, with a real diagnostic). Workaround:
 `for sid in self.subs.keys` + `if let Some(scopes) = self.subs.get(sid)`.
 
+<!-- historical -->
 ## Q12 · S3 — a closure passing its `&var T` param as an argument twice: false move error  ✅ FIXED
 
 ```ruxen
@@ -426,6 +451,7 @@ rule but make the diagnostic suggest `&var *x`.
 > (Rust-like). A reference-typed param passed as an argument is reborrowed,
 > not moved. Fix borrowck so `flag.get(u)` then `a.get(u)` is clean.
 
+<!-- historical -->
 ## Q13 · S3 — zero-arg method + `?` parses as a field access  ✅ FIXED (diagnostic)
 
 ```ruxen
@@ -445,6 +471,7 @@ error should hint at adding `()`).
 > no field/method, hint "did you mean `obj.foo()?` (try-operator) or
 > `obj&.foo` (safe navigation)?".
 
+<!-- historical -->
 ## Q14 · S3/S1 — flat global symbol namespace: user classes collide with std  ✅ FIXED (diagnostic)
 
 > **FIXED (resolve-time diagnostic)** (stdlib-rust-cleanup): a user top-level
@@ -481,6 +508,7 @@ namespacing is the bigger fix (see the B12 note in
 `src/ruxen_cli/src/build.rs::compile_project`). At minimum: a resolve-time
 diagnostic instead of a codegen `DuplicateDefinition` panic.
 
+<!-- historical -->
 ## Q15 · S3 — module-wrapped generic classes lose field resolution  ✅ FIXED (core)
 
 > **FIXED** (stdlib-rust-cleanup): a module-nested class is registered under
@@ -515,6 +543,7 @@ Known resolver gap (same note in build.rs: nested classes don't propagate
 field DefIds into method-body scope). Fixing this would also unlock module
 namespacing as a Q14 workaround.
 
+<!-- historical -->
 ## Q16 · S4 — library builds, `ruxen check`, and `ruxen test` can't see dependency symbols  ✅ FIXED
 
 > **FIXED** (feat/drop-elaboration, 2026-06-08): the dep-source flat-merge that
@@ -559,6 +588,7 @@ Acceptance test for the fix: lib A exporting `struct Color`; lib B with
 `ruxen check`, and `ruxen test` must all pass in B.
 **Partial fix exists locally** — see "Existing partial work" below.
 
+<!-- historical -->
 ## Q17 · S4 — generic-free-function / mixin-bound monomorphization for consumer types  ✅ FIXED (free fns + generic-calling-generic) · generic METHODS staged
 
 > **FIXED for generic FREE FUNCTIONS** (feat/drop-elaboration, 2026-06-10).
@@ -626,6 +656,7 @@ the generic (quiver's own `RecordingSurface` links fine from an app).
 Consequence: apps cannot implement a dependency's mixin and pass it to the
 dependency's generics — tally/examples carry a duplicated paint loop instead.
 
+<!-- historical -->
 ## Q18 · S4 — test-file synthesis gaps (`ruxen test`)  ✅ FIXED
 
 > **FIXED** (stdlib-rust-cleanup): `synthesise_wrapper` wrapped the WHOLE test
@@ -650,6 +681,7 @@ The runner wraps each test file's body in a synthesized `def main`
   found Use" mid-file) — own-package symbols are already merged; the line
   must be omitted.
 
+<!-- historical -->
 ## Q19 · S4 — `Stdin.new` doesn't link; tutorial shows the wrong API  ✅ FIXED
 
 > **FIXED** (stdlib-rust-cleanup): (1) typeck now emits a clear error for `.new`
@@ -668,6 +700,7 @@ is the free fn `stdin()` (`library/std/io`). But
 Either synthesize a default init for FFI-only classes (or error at typeck),
 and fix the tutorial.
 
+<!-- historical -->
 ## Q20 · S3 — `T: Send` bound required for `Mutex[T]`/`SharedSync[T]` construction in generics  ✅ FIXED (diagnostic)
 
 > **FIXED** (stdlib-rust-cleanup): the E1101/E1102 message now detects when the
@@ -685,6 +718,7 @@ class is declared `class Cell[T: Send]`. Probably by design — listed here
 because the diagnostic doesn't say *where* to add the bound (the error points
 at the construction site, not the class header).
 
+<!-- historical -->
 ## Q21 · S3 — phantom-generic struct constructors don't infer  ✅ FIXED
 
 > **FIXED** (stdlib-rust-cleanup): `infer_class_generics` now (a) handles
@@ -761,6 +795,7 @@ i.e. captured handles **leak** rather than dangle. No quiver code change is requ
 for safety; the open item is that escaped-into-closure handles are not yet
 deterministically freed (intentional leak), pending the owning-capture design.
 
+<!-- historical -->
 ## Q23 · S4 — `ruxen fmt` strips `##` doc comments and cannot parse test files  ✅ FIXED
 
 Surfaced 2026-06-08 building canvas `draw_path`. Two distinct `ruxen fmt` faults,
@@ -810,6 +845,7 @@ trailing `do…end` block at module top level).
 > formatter corpus round-trip (1), formatter unit (72), parser unit (79),
 > error-code registry (3), implicit-codes (3), all green.
 
+<!-- historical -->
 ## Q24 · S4 — stale incremental cache replays false move/borrow diagnostics  ✅ FIXED
 
 Surfaced 2026-06-08 (canvas), and the same mechanism amplified the Q18 stale-
@@ -844,6 +880,7 @@ span no longer matches.
 > hash.rs`). Regression-checked: ruxenc cache unit (60) + `cache_integration`
 > (6), all green.
 
+<!-- historical -->
 ## Q25 · S1 — `Hash.key?`/`Hash.get` on an EMPTY hash SEGFAULTs; `&Hash`/`&Set` params unsound  ✅ FIXED
 
 Surfaced 2026-06-08 building quiver's arena nesting. Two faults:
@@ -905,6 +942,7 @@ the free-fn `E1118`) or give the mixins runtime dispatch.
 > checked: `stdlib_map` (7), `stdlib_set` (5), `stdlib_map_negatives` (8),
 > `mixin_vtables` (17), `runtime_safety` (6), all green.
 
+<!-- historical -->
 ## Q26 · S1 — a capturing closure STORED under a `&var *self` reborrow loses its captures  ✅ FIXED
 
 Surfaced 2026-06-08 (quiver `Row`/`Col` containers). A builder method runs a
@@ -973,10 +1011,10 @@ unaffected (it passes `&var local.field`, not a self-reborrow).
 ## Q27 · S4 — `any` is a reserved word, but as a local-variable name it gives a cryptic parse error
 
 Surfaced 2026-06-08 building canvas `draw_paragraph` pixel-readback tests. A
-local named `any` (`var any = false`) fails to parse with errors that name an
+local named `any` (`any = false`) fails to parse with errors that name an
 internal token, not the real cause:
 
-```
+```text
 error: expected pattern, found AnyBound (at <line>)
 error: expected expression, found AnyBound (at <line>)
 ```
@@ -989,7 +1027,7 @@ things make it a DX trap:
    "expected pattern/expression" cascade, with no hint that the offending token
    is the identifier `any` or that it is reserved. A user reads it as a parser
    bug, not "rename your variable."
-2. `any` is an extremely common loop-flag name (`var any = false; … any = true`),
+2. `any` is an extremely common loop-flag name (`any = false; … any = true`),
    so it gets hit early and often in exactly the kind of pixel-scan loops GUI
    tests are full of.
 
@@ -1001,6 +1039,7 @@ uses `inked`.
 
 ---
 
+<!-- historical -->
 ## Q28 · S1 — `Float32` field/payload store-via-local miscompiles to 0 / crashes  ✅ FIXED 2026-06-09
 
 > **FIXED (2026-06-09, feat/drop-elaboration).** Root cause: the struct / enum /
@@ -1132,6 +1171,7 @@ end
 
 </details>
 
+<!-- historical -->
 ## Q29 · S1 — borrowed `&String` into a `lib "C"` FFI call (claimed wrong pointer)  ✅ FIXED / NOT-A-BUG (pinned)
 
 The ledger and canvas ROADMAP claimed `measure_text` "forwards a char count, not
@@ -1183,6 +1223,7 @@ the legacy `measure_text_n_raw(n: Int)` char-count fallback).
 > (`borrowed_string_arg_passes_borrow_check_with_no_false_move`). See CHANGELOG
 > `[Unreleased] › Fixed`.
 
+<!-- historical -->
 ## Q30 · S4 — `ruxen fmt` rewrites builder-closure call shapes into a known segfault form  ✅ FIXED 2026-06-09
 
 > **FIXED (2026-06-09, feat/drop-elaboration).** Two formatter defects in
@@ -1254,6 +1295,7 @@ round-trip cases over these three shapes. **No app workaround beyond "do not run
 
 ---
 
+<!-- historical -->
 ## Q31 · S1 — repeated `Float`-payload enum construction crashes (enum UNDER-ALLOCATION)  ✅ FIXED 2026-06-09
 
 > **ROOT CAUSE (not a drop double-free — an under-allocation).** `alloc_size`
@@ -1335,6 +1377,7 @@ a dedicated drop-elaboration pass.
 
 </details>
 
+<!-- historical -->
 ## Q32 · S3 — Q16's flat-merge pulls an FFI dependency's bodies into a test/binary build without linking its C runtime  ✅ FIXED 2026-06-10
 
 Surfaced 2026-06-09 by quiver after Q16 landed. A package that declares a
@@ -1388,6 +1431,7 @@ FFI-dep `ruxen test` links + the test passes (4*10+1 == 41); a binary that ALSO
 declares the dep directly builds + runs with NO duplicate-symbol; a non-FFI dep
 still links. The Q16 `dep_visibility.rs` suite stays green.
 
+<!-- historical -->
 ## Q33 · S2 — `Float32 == <negative Int literal>` comparison miscompiles to false  ✅ FIXED 2026-06-10
 
 Surfaced 2026-06-09 by canvas's `Scroll(-1, 3)` round-trip pin while reverting
@@ -1435,6 +1479,7 @@ extra instructions on the hot matched-width path). Pins (RUN + assert stdout):
 `654_enum_f32_payload_negative_compare`, and
 `compiler/ruxen_core/tests/q33_negative_literal_float_compare.rs`.
 
+<!-- historical -->
 ## Q34 · S2 — `ruxen fmt` drops grouping parentheses, silently changing arithmetic  ✅ FIXED 2026-06-10
 
 Surfaced 2026-06-10 by the quiver text-metrics work. `ruxen fmt` removed the
@@ -1478,6 +1523,7 @@ public); `async` modifier drop (`async def` → `def`); plus the catalogued
 bulk-run `ruxen fmt`" caution is LIFTED — `ruxen fmt` is now reparse-faithful
 over the entire corpus (491 files, binary + in-process, green).
 
+<!-- historical -->
 ## Q35 · S3 — a STRUCT's `include <Mixin>` does not satisfy a generic's mixin bound  ✅ FIXED (2026-07-14)
 
 Found 2026-06-10 while independently verifying Q17 on the installed toolchain.
@@ -1526,6 +1572,7 @@ Release-e2e case `659_generic_fn_mixin_struct_implementor.rx` compiles, links,
 runs through Q17's generic free-function monomorphization, and asserts
 `one=21`; focused typeck pins cover the non-including struct and enum symmetry.
 
+<!-- historical -->
 ## Q36 · S2 — `yield` with TWO `&var` reference args miscompiles (block sees empty target)  ✅ FIXED 2026-07-14
 
 Found 2026-06-10 migrating quiver's builder DSL to `&block`/`yield` (after the
@@ -1584,6 +1631,7 @@ pin with an untyped `do |c|` against `&block: Fn[(&var Col) -> nil]` resolves
 parameter seeding had already closed this path; Q36 adds the missing regression
 coverage.
 
+<!-- historical -->
 ## Q37 · S1 — a yielding/`&block` METHOD poisons an unrelated same-named free fn with a phantom `__block`  ✅ FIXED 2026-06-10
 
 Found 2026-06-10: all three quiver examples fail `ruxen build` on the installed
@@ -1631,6 +1679,7 @@ unrelated generic free fn `frame`, both called, compiled + run). Verified: the
 quiver counter example builds again (`canvas`/`quiver`/`counter` pieces compile
 clean) with the fixed compiler.
 
+<!-- historical -->
 ## Q38 · S4 — a `String` local bound from a BARE LITERAL was not freed at scope exit (leaked)  ✅ FIXED 2026-06-10
 
 Found 2026-06-10 while sweeping `String.from("literal")` → `"literal"` across all
@@ -1675,6 +1724,7 @@ this fix lets stay green on the bare form. Pins:
 `string_literal_wrap.rs::bare_string_literal_let_binds_owned_string` (type
 promotion + the `&str`-annotation-untouched negative).
 
+<!-- historical -->
 ## Q39 · S3 — a bare string literal in a TUPLE-ELEMENT position expecting `String` was not coerced (stayed `&str`)  ✅ FIXED 2026-06-11
 
 Found 2026-06-11 in rondo (workaround W21) while finishing the `String.from`
@@ -1780,6 +1830,7 @@ investigation. Also reconfirmed by the same quiver report: the
 non-Copy-call-result-as-method-arg landmine at a fresh site (quiver
 `cut`/`clip_write` — let-bind first, as documented).
 
+<!-- historical -->
 ## Q41 · S2 — LLVM backend can't lower a `DataAddr` class-info ref for a `dispatch runtime` mixin type → `ruxen build --release` blocked for async projects  ✅ FIXED 2026-07-14
 
 Found 2026-06-14 in rondo (workaround **W22**, `rondo/docs/ruxen-issues.md`)
@@ -1854,6 +1905,7 @@ Cross-linked from rondo W22.
 
 Toolchain: `ruxen 0.1.0`.
 
+<!-- historical -->
 ## Q42 · S2 — deliver a DOM event to a Ruxen handler on wasm — NOT a compiler bug; a pure-Ruxen pattern  ✅ RESOLVED 2026-06-16 (verified by spike)
 
 > **RESOLVED 2026-06-16 (same day it was filed).** The falsification spike is
@@ -1940,6 +1992,7 @@ in a separate call, observing the Ruxen-side counter increment. Cross-linked fro
 
 Toolchain: `ruxen 0.1.0`.
 
+<!-- historical -->
 ## Q43 · S3 — `Mutex`/`SharedSync` pthread C runtime is not bundled for wasm; quiver's reactive core needs a single-threaded sync shim  ✅ RESOLVED 2026-06-16
 
 > **RESOLVED 2026-06-16.** A single-threaded wasm sync runtime is now bundled in
@@ -1980,6 +2033,7 @@ supply the `ruxen_mutex_*` (and `ruxen_sharedsync_*`) imports. Cross-linked from
 
 Toolchain: `ruxen 0.1.0`.
 
+<!-- historical -->
 ## Q44 · S3 — string interpolation's `Formatter` C runtime is not bundled for wasm; needs a wasm fmt runtime (or host shims + JS→wasm string marshalling)  ✅ RESOLVED 2026-06-16
 
 > **RESOLVED 2026-06-16; generalized by Q48 on 2026-07-14.** `fmt.c` was already
@@ -2025,6 +2079,7 @@ scribbling into a guessed scratch offset. Cross-linked from
 
 Toolchain: `ruxen 0.1.0`.
 
+<!-- historical -->
 ## Q45 · S3 — no JS→wasm string path (host could read strings OUT of wasm, never write them IN)  ✅ RESOLVED 2026-06-16
 
 Found 2026-06-16 planning native `<input>` for quiver's web backend. A host could
@@ -2037,6 +2092,7 @@ UTF-8+NUL, and passes the pointer to an exported `def f(... text: &String)` (the
 i32 ptr IS the `&String`). Verified exported in `quiver/examples/counter-dom`.
 Toolchain: `ruxen 0.1.0`.
 
+<!-- historical -->
 ## Q46 · S2 — a NO-ARG `def init` class's paren-less `.new` CRASHES (exit=None / segfault) when the value is wrapped/moved into another class's field  ✅ FIXED (2026-07-14)
 
 Found 2026-06-19 building the §4.5 async `Stream` adapters. A class whose `def
@@ -2107,6 +2163,7 @@ release-e2e case 460 prove the reduced field-move program exits cleanly and
 prints `value=42`. Before the fix, both pins reproduced the missing MIR write
 and the signal exit with empty output.
 
+<!-- historical -->
 ## Q47 · S2 — calling a `Fn[() -> any Future]` closure inside a BOOTSTRAP class POISONS global `any Future`→`Future` mixin satisfaction for every program  ✅ FIXED (2026-07-14)
 
 Found 2026-06-19 building the §4.6 async `RetryFuture`. A bootstrap (stdlib) class
@@ -2164,6 +2221,7 @@ bootstrap-shaped `make.()` body, then runs unrelated code that polls a stored
 ordering through the production bootstrap/typeck path. Pins `445`–`449` remain
 green. Toolchain: `ruxen 0.1.0` (`fix/q47`).
 
+<!-- historical -->
 ## Q48 · S1 — LLVM leaves FFI-aliased method calls under mangled Ruxen names, blocking optimized binaries  ✅ FIXED (2026-07-14)
 
 `ruxen build --release` compiled String/interpolation programs to object code
@@ -2198,6 +2256,7 @@ none of their mangled Ruxen aliases occur. It failed before the fix on
 `@Formatter_new`. The existing
 `string_interp_identical` fixture now also links and runs through both backends.
 
+<!-- historical -->
 ## Q49 · S0 — drop elaboration frees uninitialized branch locals at a shared Return  ✅ FIXED (2026-07-14)
 
 An optimized `ruxen build --release` of the minimal `control_flow.rx` printed
@@ -2234,6 +2293,7 @@ block, then runs the fixture through both backends. Release-e2e case `930`
 exercises bare owned literals in both `if` and `match` arms. The LLVM comparison
 suite also covers the larger class/match programs that previously crashed.
 
+<!-- historical -->
 ## Q50 · S2 — interpolating a method-returning-`String` formats a raw pointer  ✅ FIXED (2026-07-14)
 
 Surfaced while fixing Q49. In `sample_program.rx`, `puts "  Failed: #{e.message}"`
@@ -2262,6 +2322,7 @@ values rather than formatting them as integers. The name-based list of
 `#{e.message}` again. Release-e2e `94_custom_error_enum` and the method-name-
 independent `931_interpolation_method_string` pin the behavior.
 
+<!-- historical -->
 ## Q51 · S2 — `Enumerable#select` over-counts (returns extra elements)  ✅ FIXED 2026-07-14
 
 The `select` body and collection iteration were correct. Instrumentation around
@@ -2281,6 +2342,7 @@ destructor still frees the captures block and closure pair. Release-e2e 612 and
 613 now report `evens=2` / `big=2`; pin 936 covers `select`, `reject`, `map`, and
 `partition` across Array, Set, and Hash.
 
+<!-- historical -->
 ## Q52 · S1 — `Mutex` guard dropped in a closure/match arm crashes (exit 133)  ✅ FIXED (2026-07-14)
 
 `let reader = { || match m.lock { Ok(g) -> g.get.clone; Err(_) -> "poisoned" } }`
@@ -2315,6 +2377,7 @@ calls the reader twice: the second acquisition proves the first guard really
 unlocked, so the fix cannot be a no-op/leak mask. 926 and 927 are stable across
 five runs.
 
+<!-- historical -->
 ## Q53 · S2 — String-returning method interpolation in a generic closure prints a pointer  ✅ FIXED (2026-07-14)
 
 This is a Q50 regression. Q50 removed the name-based
@@ -2345,6 +2408,7 @@ titles/summaries emitted from generic closures and refined for loops. Existing
 case `101_two_type_params` also confirms that `Pair[Int, String]#second_ref`
 instantiates `&B` as `&String` before interpolation.
 
+<!-- historical -->
 ## Q54 · S2 — wasm: `ruxen_fmt_formatter_write_str` call-site return width (i32) mismatches the bundled fmt.c definition (i64); wasm-ld traps EVERY string interpolation with an `unreachable` stub  ✅ FIXED 2026-07-22
 
 Found 2026-07-22 re-verifying canvas's web backend (canvas `docs/ROADMAP.md` →
@@ -2448,6 +2512,7 @@ return 0 without a trap). Verified against both the source tree (via
 Cross-linked from canvas `docs/ROADMAP.md` (Web backend → L839).
 Toolchain: `ruxen 0.1.0`.
 
+<!-- historical -->
 ## Q55 · S2 — miscompile: `x = f(x)` where `f` takes `x` by value AND returns it silently corrupts `x` (native)  ✅ FIXED 2026-07-22
 
 Found 2026-07-22 adding rondo's structured-logging `finish` consolidation. A
@@ -2587,20 +2652,27 @@ reads time out. rondo only ever runs async I/O inside its per-worker reactors
 `block_on(AsyncTcpStream.connect(...))` + `block_on(s.write(...))` path was never
 exercised.
 
-**Repro** (server logs prove it):
-```ruxen
-match block_on(AsyncTcpStream.connect(&"127.0.0.1:8799"))
-  Ok(stream) ->
-    var s = stream
-    match block_on(s.write(&"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"))
-      Ok(nw) -> puts "wrote #{nw} bytes"   # prints "wrote 54 bytes"
-      Err(_) -> puts "write err"
-    end
-    match block_on(s.read_with_timeout(65536, 3000000000))
-      Ok(c) -> puts "read #{c.size() as Int}"
-      Err(_) -> puts "read ERR/timeout"    # prints this: nothing ever arrives
-    end
-  Err(_) -> puts "connect err"
+**Repro** (server logs prove it; respelled 2026-11, it typechecks on the current build):
+
+Repro, [deprecated] `Ok`/`Err` patterns (replacement: raising I/O with `rescue`, [planned](../../TODO.md#t-exceptions)):
+```ruby
+def talk(stream: AsyncTcpStream) -> nil
+  s = stream
+  wrote = block_on(s.write(&"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"))
+  case wrote
+  in Ok(nw) then puts "wrote #{nw} bytes"   # prints "wrote 54 bytes"
+  in Err(_) then puts "write err"
+  end
+  got = block_on(s.read_with_timeout(65536, 3000000000))
+  case got
+  in Ok(c) then puts "read #{c.size}"
+  in Err(_) then puts "read ERR/timeout"    # prints this: nothing ever arrives
+  end
+end
+
+case block_on(AsyncTcpStream.connect(&"127.0.0.1:8799"))
+in Ok(stream) then talk(stream)
+in Err(_) then puts "connect err"
 end
 ```
 The peer (a logging HTTP server) records the request from `curl` but NOT from
@@ -2657,6 +2729,7 @@ Recommended order: **Q16 → Q17** (unblocks the layering story), then
 then **Q14/Q15** (namespacing, biggest), with **Q4/Q22** as the
 language-design pair to settle before Drop semantics land.
 
+<!-- historical -->
 ## Q57 · S2 — a mixin-DEFAULT method that takes a trailing block silently does nothing (native)
 
 **FIXED 2026-07-28** (typeck; pins `tests/release-e2e/cases/980`–`982`,
@@ -2753,6 +2826,7 @@ which fails for the same reason) as pure `.rx` mixin methods. It needs its own
 careful pass (typeck seam + MIR mono + the full gate + review); it is NOT a
 per-feature special-case.
 
+<!-- historical -->
 ## Q58 · S3 — `alias` to a method on a GENERIC builtin head doesn't canonicalize through the generic suffix (link error)
 
 **FIXED** (pin `tests/release-e2e/cases/990_alias_generic_builtin_head.rx`).
@@ -2815,9 +2889,11 @@ typed local is wrong when used inline. (If a parallel batch already claimed
 `Q59`, renumber; the content is what matters.)
 
 **(a) S2 — a NEGATIVE default argument does not fill on a builtin-head method.**
-```rx
+
+Repro, stdlib source shape (`library/std/string/src/string.rx`) [implemented]; the call aborts in codegen:
+```ruby
 class String
-  def rindex(sub: &String, offset: Int = -1) -> Option[Int]
+  def rindex(sub: &String, offset: Int = -1) -> Int?
     # ...
   end
 end
@@ -2833,10 +2909,12 @@ fill path added by `09580b95` (`infer/expr.rs` `selected_method` +
 
 **(b) S2 — indexing an `Array[Int]` / `Array[Char]` / `Array[UInt8]` returned
 INLINE by a call yields garbage.**
-```rx
+
+Repro [implemented] (the first two lines print garbage):
+```ruby
 puts "#{"ab".chars[0]}"      # => 4352431440   (a pointer, not 'a')
 puts "#{"ab".bytes[0]}"      # => 45852142432
-let cs = "ab".chars
+cs = "ab".chars
 puts "#{cs[0]}"              # => a            (correct once bound)
 ```
 Pre-existing, not introduced by the String batches: it reproduces on the FFI
@@ -2846,9 +2924,11 @@ already been released. **Workaround:** bind the array to a local first.
 
 **(c) S2 — `<Char> as Int` mis-lowers in argument and tail-expression
 position.**
-```rx
+
+Repro inside `class String` (fragments), [deprecated] `as` cast (replacement `to_i`) and typed `let` (replacement `n: Int = ...`, [planned](../../TODO.md#t-typed-local)):
+```ruby
 def pa -> Int
-  let c = self.chars[0]
+  c = self.chars[0]
   c as Int                   # => 4337015680
 end
 out.push(c as Int)           # => pushes garbage
@@ -2858,9 +2938,11 @@ Same family as the "rebox a scalar `self` first" rule (`let n = 0 + self`).
 **Workaround:** always bind through an explicitly typed local.
 
 **(d) S2 — `String + &String` (a borrowed PARAMETER) concatenates garbage.**
-```rx
+
+Repro [implemented] (the result is garbage):
+```ruby
 def probe(other: &String) -> String
-  var r = ""
+  r = ""
   r = r + other              # => "AIySayAMGGARctFT"
 end
 ```
@@ -2870,10 +2952,16 @@ route. **Workaround:** `r.push_str(other)`, which mutates `r` in place and is
 also cheaper than rebuilding.
 
 **(e) S3 — an untyped `[]` literal cannot disambiguate an overload.**
-```rx
-"hello".start_with?([])              # => true   (picks the &String overload)
-let none: Array[String] = []
-"hello".start_with?(none)            # => false  (correct)
+
+Repro, [deprecated] typed `let` (replacement `none: Array[String] = []`, [planned](../../TODO.md#t-typed-local)):
+```ruby
+def demo
+  puts "hello".start_with?([])         # => true   (picks the &String overload)
+  let none: Array[String] = []
+  puts "hello".start_with?(none)       # => false  (correct)
+end
+
+demo()
 ```
 Argument-type-based overload resolution otherwise works well (it is what lets
 `gsub` / `sub` / `split` / `index` take either a `&String` or a `&Regex` under
@@ -2891,9 +2979,11 @@ already claimed `Q60`, renumber; the content is what matters.)
 parameters at the expression node.** `Hash.new` is declared
 `def self.new as "ruxen_hash_new" -> Hash[K, V]`. A static call has no receiver,
 so `substitute_generics_in_return` has nothing to substitute against, and the
-expression node's type stays `Hash[K, V]` even where the binding is concrete:
+expression node's type stays `Hash[K, V]` even where the binding is concrete.
 
-```rx
+Shape inside a `def`, [deprecated] typed `var` (replacement `h: Hash[String, Int] = ...`, [planned](../../TODO.md#t-typed-local); the empty Hash literal `{}` is [planned](../../TODO.md#t-empty-hash)):
+
+```ruby
 var h: Hash[String, Int] = Hash.new
 # local `h`   : Map(String, Int)      ← correct
 # the ctor's temp: Map(TypeParam K, TypeParam V)   ← imprecise
@@ -2936,6 +3026,7 @@ static-call receiver.** `parse_type_expr_primary`
 (`parser/expr/atoms.rs:471`) read the `[…]` after a type identifier and threw
 it away:
 
+<!-- compiler-rust -->
 ```rust
 let _generic_args = self.parse_generic_args();
 // Fall through to normal handling as if we had just the TypeIdentifier.
@@ -2986,15 +3077,21 @@ Pins `1728` (both spellings × every key kind, `Set`, `with_capacity`) and
 
 **(b) S2 — `Set[String]` set-algebra results double-free at scope exit.**
 **FIXED (2026-07-30), together with B86 — they were the same defect.**
-Verified 2026-07-29 and **pre-existing** (reproduces identically before B73):
+Verified 2026-07-29 and **pre-existing** (reproduces identically before B73).
 
-```rx
-var a: Set[String] = Set.new
-a.insert("red")
-var b: Set[String] = Set.new
-b.insert("blue")
-let u = a.union(&b)
-puts "#{u.size}"        # never prints — exit 133 (SIGTRAP, malloc abort)
+Repro (fixed since), [deprecated] typed `var` (replacement `a: Set[String] = ...`, [planned](../../TODO.md#t-typed-local)):
+
+```ruby
+def demo
+  var a: Set[String] = Set.new
+  a.insert("red")
+  var b: Set[String] = Set.new
+  b.insert("blue")
+  u = a.union(&b)
+  puts "#{u.size}"        # never printed before the fix — exit 133 (SIGTRAP, malloc abort)
+end
+
+demo()
 ```
 
 `ruxen_set_union` / `_intersection` / `_difference` shallow-copy their element
@@ -3055,6 +3152,7 @@ mono (E1) allows it, but nothing depends on it now.
 `Array#to_h[K, V]` and `Array#to_set` declare a `KeyDesc[K]` parameter that
 the compiler fills from `K`. See the Q60 (a) note above.)
 
+<!-- historical -->
 ## Q61 · S2: quiver and rondo relied on aliasing that tuple ownership now rejects (fixed in the apps, 2026-10-24)
 
 Found by the strict MIR loan checker on `feat/concurrency-adoption` (CHANGELOG

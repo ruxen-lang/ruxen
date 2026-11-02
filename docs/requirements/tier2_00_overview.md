@@ -96,6 +96,14 @@ these docs; here is where it lives:
   non-primitive — to `I64` (`codegen/cranelift.rs:965-984`). **This is
   the defining constraint on Tier-2.** See the dependency section below.
 
+**Bounds on a class's type parameter (decision D7, option b).** A method
+that needs a bound on its class's type parameter uses a method `where`
+bound today (`def sum -> T where T: Add`); that is the form that works, and
+it is [deprecated] in favour of the RBS-style bound in the `[...]` list,
+`[T < Bound]`, which is [planned](../../TODO.md#t-d7-respell). The exact rule for a
+conditional method through a bounded reopen (`class Box[T < Comparable]`) is
+still open as OQ-6 of the language spec.
+
 ## Dependency on int64-slot erasure
 
 Every Tier-2 feature lands in one of three buckets with respect to the
@@ -143,7 +151,7 @@ tier-2 features that can ship are: mixin existentials (doc 06), variance
 
 ## Recommended implementation order
 
-```
+```text
            ┌──────────────────────────────────┐
            │ M0 pre-flight: named lifetimes   │
            │      (region solver rewrite)     │

@@ -51,7 +51,7 @@ The five agents independently surfaced issues in code that already exists. None 
 
 ## Cross-doc dependency graph
 
-```
+```text
           ┌───────────────────────────────────────┐
           │ B1-B5: pre-existing bug fixes         │
           └──────────────────┬────────────────────┘

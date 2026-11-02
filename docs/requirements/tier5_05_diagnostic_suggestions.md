@@ -24,6 +24,7 @@ colourised `help:` line. All from one source of truth.
 Ruxen today has a primitive free-form `help: Vec<String>` on
 `BorrowError` (`compiler/ruxen_core/src/borrow_check/errors.rs:61`):
 
+<!-- compiler-rust -->
 ```rust
 help: vec![format!("consider cloning the value: `{}.clone`", name)]
 ```
@@ -45,6 +46,7 @@ usage guidelines.
 
 `compiler/ruxen_core/src/borrow_check/errors.rs:50-62`:
 
+<!-- compiler-rust -->
 ```rust
 pub struct SpanLabel {
     pub span: Span,
@@ -73,6 +75,7 @@ applicability marker.
 
 `src/ruxen_ide/src/diagnostics.rs:30-60`:
 
+<!-- compiler-rust -->
 ```rust
 pub fn borrow_error_to_lsp(err, line_index, uri) -> LspDiagnostic {
     // ... builds LspDiagnostic with related_information from secondary
@@ -88,6 +91,7 @@ Fix button.
 
 `compiler/ruxen_core/src/diagnostics/mod.rs:21-27`:
 
+<!-- compiler-rust -->
 ```rust
 pub struct Diagnostic {
     pub level: DiagnosticLevel,
@@ -133,6 +137,7 @@ No help field at all. `BorrowError` has help; `Diagnostic` does not.
 
 ### 4.1 `Suggestion` type
 
+<!-- compiler-rust -->
 ```rust
 // compiler/ruxen_core/src/diagnostics/suggestion.rs
 
@@ -196,6 +201,7 @@ must present a form.
 
 Extend the new unified `Diagnostic` (tier5_04 §4.5):
 
+<!-- compiler-rust -->
 ```rust
 pub struct Diagnostic {
     pub code: Option<ErrorCode>,
@@ -216,6 +222,7 @@ Two help channels intentionally:
 
 ### 4.4 Builder API
 
+<!-- compiler-rust -->
 ```rust
 impl Diagnostic {
     pub fn error(code: ErrorCode, primary: Label) -> Self { ... }
@@ -258,6 +265,7 @@ impl Diagnostic {
 
 Common patterns become one-liners:
 
+<!-- compiler-rust -->
 ```rust
 Diagnostic::error(E1007, primary_label)
     .with_secondary(decl_label)
@@ -273,12 +281,12 @@ Diagnostic::error(E1007, primary_label)
 
 Example output:
 
-```
+```text
 error[E1001]: value used after move
   --> src/main.rx:9:8
    |
- 7 | let name = "Ruxen"
-   |     ---- value created here
+ 7 | name = "Ruxen"
+   | ---- value created here
  8 | consume(name)
    |         ---- value given to `consume()` here
  9 |   puts name
@@ -308,6 +316,7 @@ Multi-edit suggestions show all edits in the same block.
 
 `src/ruxen_ide/src/diagnostics.rs` gets a new function:
 
+<!-- compiler-rust -->
 ```rust
 pub fn diagnostic_to_lsp(
     diag: &Diagnostic,
@@ -319,6 +328,7 @@ pub fn diagnostic_to_lsp(
 Returns both the diagnostic (as today) *and* a list of code actions.
 Each `Suggestion` becomes a `CodeAction`:
 
+<!-- compiler-rust -->
 ```rust
 CodeAction {
     title: suggestion.message,

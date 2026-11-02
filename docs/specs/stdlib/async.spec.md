@@ -2,7 +2,7 @@
 
 **Source docs:**
 [docs/requirements/tier1_03_async.md](../../requirements/tier1_03_async.md),
-[docs/prompts/v1/15_phase4_async.md](../../prompts/v1/15_phase4_async.md).
+`docs/prompts/v1/15_phase4_async.md`.
 
 **Status:** **Sub-phase 1 of the async round — pure stdlib surface.**
 The Future mixin, Poll enum, and Context/Waker shells type-check and
@@ -14,11 +14,27 @@ The surface is staged ahead of the runtime so user-facing API shape
 can stabilise. Same expansion pattern as `sync.spec.md` followed
 during the multithreading round.
 
+**Today:** [implemented]. Later sub-phases added the lowering
+(`async_lowering.spec.md`), `block_on` (`executor.spec.md`) and async I/O
+(`async_io.spec.md`), so the "no lowering yet" notes below describe sub-phase 1
+only. `async def`, `.await`, `Future`, `Poll`, `Waker` and `block_on` are the
+working model until the Fiber scheduler (`Async do ... end`, `task.wait`)
+replaces them [planned](../../../TODO.md#t-fibers); then they become [deprecated].
+
+**Owner decisions (2026-10-25).** D11 a: the 11 async step futures stay
+shared functions, the floor until Fibers; no associated types in mixin
+defaults are built for them [planned](../../../TODO.md#t-d11). X3 a: `Self::Output`
+projections stay and resolve declared equalities [planned](../../../TODO.md#t-x3). D14 a:
+`Race.any_of` and `Task.spawn_raw` get real argument types, with the raw
+`Int` boundary kept internal [planned](../../../TODO.md#t-d14).
+
 ---
 
 ## B1 — `mixin Future` with associated `type Output`
 
-```rx
+Stdlib source, [deprecated] `mixin` (replacement `module`, [planned](../../../TODO.md#t-module-mixins)):
+
+```ruby
 mixin Future
   type Output
   def var poll(cx: &var Context) -> Poll[Self.Output]
@@ -37,12 +53,14 @@ that ships today). The expansion adds:
    may override but must satisfy the wire-shape (`&var Context` arg,
    `Poll[Self.Output]` return).
 
-Resolvable via `use std.core.Future` (the new canonical path) or
-`Future` directly (member of the global prelude).
+`Future` is in the global prelude and needs no import [implemented];
+`use std.core.Future` also resolves, but `use` is [deprecated].
 
 ## B2 — `enum Poll[T] { Ready(T), Pending }`
 
-```rx
+Stdlib source, [deprecated] `enum` (replacement `Data` variants, [planned](../../../TODO.md#t-data-define)):
+
+```ruby
 enum Poll[T]
   Ready(T)
   Pending
@@ -58,16 +76,22 @@ for cross-build stability.
 **Match exhaustiveness:** the typeck enforces all variants are
 covered, same as Option/Result.
 
-```rx
-match poll_result
-  Ready(v) -> v
-  Pending  -> # waiting
+Example [implemented] (`case/in` with the `Enum.Variant(pat)` pattern that parses today):
+
+```ruby
+def settle(poll_result: Poll[Int]) -> Int
+  case poll_result
+  in Poll.Ready(v) then v
+  in Poll.Pending then -1   # still waiting
+  end
 end
 ```
 
 ## B3 — `class Context` + `class Waker` with the v1 API
 
-```rx
+Stdlib source [implemented]:
+
+```ruby
 class Context
   lib "runtime/executor.c"
     def waker as "ruxen_context_waker" -> &Waker
@@ -96,21 +120,22 @@ they're currently empty shells.)
 
 ## B4 — Hand-written Future round-trip (typeck-only)
 
-```rx
+Works today, with the [deprecated] `def init` (replacement `def initialize`, [planned](../../../TODO.md#t-initialize)):
+
+```ruby
 class CountdownFuture
   remaining: Int
   include Future
   type Output = Int
 
-  def init(n: Int)
-    self.remaining = n
+  def init(@remaining: Int)
   end
 
   def var poll(cx: &var Context) -> Poll[Int]
-    if self.remaining == 0
+    if @remaining == 0
       Poll.Ready(0)
     else
-      self.remaining = self.remaining - 1
+      @remaining = @remaining - 1
       Poll.Pending
     end
   end
@@ -127,8 +152,8 @@ Calling `f.poll(&var ctx)` at runtime panics until sub-phase 3 lands
 
 ## B5 — Negative: `include Future` without `type Output` rejected
 
-**Given**
-```rx
+**Given** this class, [implemented] and rejected on purpose:
+```ruby
 class BadFuture
   include Future
   def var poll(cx: &var Context) -> Poll[Int]
@@ -149,9 +174,11 @@ diagnostic (E0613).
 
 ## B7 — `async def foo` parses (no lowering)
 
-```rx
+Example, [deprecated] `Result` and `Ok` (replacement: return the value and raise, [planned](../../../TODO.md#t-exceptions)):
+
+```ruby
 async def fetch(url: &String) -> Result[String, IoError]
-  Result.Ok(url.to_string)
+  Ok(url.clone)
 end
 ```
 
@@ -164,23 +191,32 @@ and lowers.
 
 ## B8 — `async { ... }` block parses (no lowering)
 
-```rx
-let fut = async { 42 }
+Example [implemented]:
+
+```ruby
+fut = async { 42 }
 ```
 
-Same caveat as B7. Today this is equivalent to `let fut = 42`.
+Same caveat as B7. In sub-phase 1 this was equivalent to `fut = 42`.
 Sub-phase 2 makes it return a `some Future`.
 
 ## B9 — `.await` parses (sub-phase 2 wires the lowering)
 
-```rx
-async def main
-  let x = some_future.await
+Example [implemented] (`.await` applies to a direct call of a free function):
+
+```ruby
+async def fetch_number -> Int
+  7
+end
+
+async def compute -> Int
+  x = fetch_number().await
+  x
 end
 ```
 
 `.await` is a postfix operator the parser recognises. In sub-phase
-1 it elides to a no-op (`x = some_future`); sub-phase 2 makes it a
+1 it elided to a no-op (`x = fetch_number()`); sub-phase 2 makes it a
 real suspension point.
 
 This means user code written against the async surface in
@@ -202,9 +238,11 @@ A new package created during sub-phase 1:
 ## B11 — Declare Poll as an .rx enum (not register_builtins)
 
 `Poll[T]` lives in `library/std/future/src/lib.rx` as a plain
-Ruxen enum:
+Ruxen enum.
 
-```rx
+Stdlib source, [deprecated] `enum` (replacement `Data` variants, [planned](../../../TODO.md#t-data-define)):
+
+```ruby
 enum Poll[T]
   Ready(T)
   Pending

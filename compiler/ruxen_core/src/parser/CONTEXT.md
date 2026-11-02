@@ -21,6 +21,7 @@
 - Binary operators' token, spelling and precedence live only in `BinOp::spec`; assignment, range and cast powers are in `expr::infix_binding_power`.
 - REPL incompleteness is structured: an error raised at end of input, or a missing `end`, bumps `maybe_incomplete_errors`; never match diagnostic text.
 - Body loops call `ensure_loop_progress` with the position taken before `at_body_member`, so a member parser that consumes nothing cannot spin.
+- The entry point is the top-level statements; a user `def main` still works as the entry but is [deprecated] (top-level statements replace it). Four codegen sites still test `name == "main"`; `implicit_main.rs` deciding the entry once and marking it, so later stages read that flag instead of the name, is [planned](../../../../TODO.md#t-d3).
 - `##` docs collected before a member are pending until the member takes them; `alias` drops them so they cannot land on the next `def`.
 - A paren-less call takes a non-string argument only for the names in `is_bare_call_arg_start` (`puts`, `print`, `eputs`, `include`, `raise`, `p`, `pp`); any other `foo bar` is two expressions. `p`/`pp` take value tokens only, so `p & 3` stays an operator on a local `p`.
 - The AST records surface spellings that sugar would otherwise erase, for `ruxen fmt`: `parens` on `Call`/`MethodCall`, `ivar` on `FieldAccess` (`@x`), `nilable` on `TypePath` (`T?`), `pipes`/`do_end` on `ClosureExpr`. They are semantically inert; a node the compiler synthesizes sets them to the plain spelling.

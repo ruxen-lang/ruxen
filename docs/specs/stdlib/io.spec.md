@@ -2,12 +2,18 @@
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §4.2](../../requirements/tier1_01_stdlib.md),
-[docs/prompts/v1/06_phase2_stdlib_io_fmt.md](../../prompts/v1/06_phase2_stdlib_io_fmt.md).
+`docs/prompts/v1/06_phase2_stdlib_io_fmt.md`.
 
 **Status:** shipped Phase 2 #06.1 (2026-05-09) + #06.5 IoError promotion (2026-05-13).
 
 `std.io` provides line-oriented stdin reading and stdout/stderr
 writing.  Errors are surfaced via the `IoError` tagged enum.
+
+`Stdout.println` and the other calls below are today's surface
+[implemented]; everyday user code writes the Kernel `puts`, `print` and
+`warn` (naming spec section 12.1). Owner decision D23 a: BufReader and
+BufWriter per inner type are among the leftovers re-verified first
+[planned](../../../TODO.md#t-d23).
 
 ---
 

@@ -5,210 +5,209 @@ You need to read a config file, send some data to a web service, or store struct
 Three pieces to know:
 
 - **`Json`** — an opaque, heap-allocated value-tree node. Every JSON value — object, array, string, number, bool, null — is represented by one.
-- **`JsonKind`** — an enum tag (`Object`, `Array`, `String`, `Number`, `Bool`, `Null`) used when you want to ask "what kind is this node?".
+- **`JsonKind`** — a tag (`Object`, `Array`, `String`, `Number`, `Bool`, `Null`) used when you want to ask "what kind is this node?".
 - **`JSON`** — a namespace class with all the parse / inspect / build / stringify operations as `def self.*` methods.
 
-```ruxen
-use std.json.{JSON, Json, JsonKind}
-```
+All three are available without a `require` [implemented]. The old `use std.json.{JSON, Json, JsonKind}` import is [deprecated], replace it with the bare names.
+
+Parsing and stringifying return a `Result`, and the accessors return an optional value. The examples take them apart with `case/in` and the `Ok(...)`, `Err(...)` and `Some(...)` patterns, which are [deprecated]: errors become Ruby exceptions [planned](../../TODO.md#t-exceptions), and an optional value is matched with `in nil` and a plain binding (today a binding arm after `in nil` still binds the optional value [known issue](../../TODO.md#t-case-in-nil), so the examples keep `Some(...)`).
 
 ---
 
 ## 1. A complete round-trip
 
-Save as `round_trip.rx`:
+Save as `round_trip.rx`. Works today [deprecated] (`Result` and `Some` patterns, replaced as described above):
 
-```ruxen
-use std.json.{JSON, Json}
-
-def main
-  let source = "{\"name\": \"ruxen\", \"version\": 1}"
-  let root = JSON.parse(&source).expect!("parse")
-
-  match JSON.object_get(&root, "name")
-    Some(v) -> match JSON.as_string(&v)
-      Some(s) -> puts "name = #{s}"
-      nil    -> puts "name not a string"
+```ruby
+def show_name(root: &Json)
+  case JSON.object_get(root, "name")
+  in Some(v) then
+    case JSON.as_string(v)
+    in Some(s) then puts "name = #{s}"
+    in nil then puts "name not a string"
     end
-    nil -> puts "no name"
+  in nil then puts "no name"
   end
+end
 
-  let back = JSON.stringify(&root).expect!("stringify")
-  puts back
+source = "{\"name\": \"ruxen\", \"version\": 1}"
+case JSON.parse(source)
+in Ok(root) then
+  case JSON.stringify(root)
+  in Ok(back) then puts back
+  in Err(_) then puts "stringify failed"
+  end
+  show_name(root)
+in Err(_) then puts "parse failed"
 end
 ```
 
 Run it:
 
-```bash
+```sh
 ruxen run round_trip.rx
 ```
 
 Output:
 
-```
-name = ruxen
+```text
 {"name":"ruxen","version":1}
+name = ruxen
 ```
 
-Two operations, both via `JSON.*` static methods: `parse` turned the string into a tree; `stringify` turned the tree back into a compact string. The middle bit walked into the object to fish out one field. The rest of the chapter is a tour of those operations.
+Two operations, both via `JSON.*` static methods: `parse` turned the string into a tree; `stringify` turned the tree back into a compact string. The last bit walked into the object to fish out one field. It comes last on purpose: today the value `JSON.object_get` returns is freed when it goes out of scope even though it still belongs to the tree, so any later use of the tree reads freed memory [known issue](../../TODO.md#t-json-get-borrow). Until that is fixed, finish with a tree before you read fields from it, and read each field once. The rest of the chapter is a tour of those operations.
 
 ## 2. Parsing
 
-Two parser entry points:
+Two parser entry points. Works today [deprecated] (`Result` with `Ok` / `Err` patterns, replaced by exceptions [planned](../../TODO.md#t-exceptions)):
 
-```ruxen
-def main
-  let source = "{\"name\": \"ruxen\", \"answer\": 42}"
-  match JSON.parse(&source)
-    Ok(root) -> puts "parsed"
-    Err(_)   -> puts "fail"
-  end
+```ruby
+source = "{\"name\": \"ruxen\", \"answer\": 42}"
+case JSON.parse(source)
+in Ok(root) then puts "parsed"
+in Err(_) then puts "fail"
 end
 ```
 
-- **`JSON.parse(input: &String) -> Result[Json, JsonError]`** — relaxed parser. Accepts `// line` and `/* block */` comments, trailing commas, and a few config-file niceties. Good for reading hand-written config files.
-- **`JSON.parse_strict(input: &String) -> Result[Json, JsonError]`** — RFC-style strict. No comments, no trailing commas, no NaN / Infinity. Good for wire data from untrusted sources.
+- **`JSON.parse(input)`** [implemented] — relaxed parser, returning `Result[Json, JsonError]`. Accepts `// line` and `/* block */` comments, trailing commas, and a few config-file niceties. Good for reading hand-written config files.
+- **`JSON.parse_strict(input)`** [implemented] — RFC-style strict, same return type. No comments, no trailing commas, no NaN / Infinity. Good for wire data from untrusted sources.
 
-`JsonError` is an enum with variants `Syntax(message)`, `DepthLimit`, `InvalidUtf8`, and `NumberOutOfRange`.
+`JsonError` has cases `Syntax(message)`, `DepthLimit`, `InvalidUtf8`, and `NumberOutOfRange`.
 
 ## 3. Inspecting a parsed value
 
-Every accessor takes a borrowed `&Json`. To find out what kind a node is, use `JSON.kind(&v)` or one of the `is_*` predicates:
+Every accessor takes a borrowed `&Json` (the call site passes the value; the borrow is automatic). To find out what kind a node is, use `JSON.kind(v)` or one of the `is_*` predicates. Works today [deprecated] (`Result` with `Ok` / `Err` patterns, replaced by exceptions [planned](../../TODO.md#t-exceptions)):
 
-```ruxen
-def main
-  let source = "{\"items\": [1, 2, 3]}"
-  let root = JSON.parse(&source).expect!("parse")
-
-  puts "is_object=#{JSON.is_object(&root)}"
-  puts "has_items=#{JSON.object_has(&root, "items")}"
-
-  match JSON.kind(&root)
-    JsonKind.Object -> puts "kind is object"
-    _               -> puts "other kind"
+```ruby
+source = "{\"items\": [1, 2, 3]}"
+case JSON.parse(source)
+in Ok(root) then
+  puts "is_object=#{JSON.is_object(root)}"
+  puts "has_items=#{JSON.object_has(root, "items")}"
+  case JSON.kind(root)
+  in JsonKind.Object then puts "kind is object"
+  in _ then puts "other kind"
   end
+in Err(_) then puts "parse failed"
 end
 ```
 
 ### Object surface
 
-- `JSON.object_has(v: &Json, key: &String) -> Bool`
-- `JSON.object_len(v: &Json) -> Option[Int]`
-- `JSON.object_get(v: &Json, key: &String) -> Option[Json]`
+- `JSON.object_has(v, key)` [implemented] — a `Bool`.
+- `JSON.object_len(v)` [implemented] — the number of keys, or `nil` if `v` is not an object.
+- `JSON.object_get(v, key)` [implemented] — the value under `key`, or `nil`.
 
 ### Array surface
 
-- `JSON.array_len(v: &Json) -> Option[Int]`
+- `JSON.array_len(v)` [implemented] — the number of elements, or `nil` if `v` is not an array.
+- `JSON.array_get(v, index)` [implemented] — the element at `index`, or `nil`.
 
-(Walking array elements by index is not in v1 — collect into an `Array[Json]` builder-side if you need to iterate.)
+Both `object_get` and `array_get` hand back a child that the tree still owns, and today that child is freed when your copy goes out of scope, which corrupts the tree [known issue](../../TODO.md#t-json-get-borrow). Use them as the last reads of a tree, once per field, as in section 1.
 
 ### Scalar extraction
 
-Each returns `Option[T]` — `nil` when the underlying kind doesn't match:
+Each returns an optional value (`T?`) — `nil` when the underlying kind doesn't match. All [implemented]:
 
-- `JSON.as_bool   (v: &Json) -> Option[Bool]`
-- `JSON.as_int    (v: &Json) -> Option[Int]`
-- `JSON.as_float  (v: &Json) -> Option[Float]`
-- `JSON.as_string (v: &Json) -> Option[String]`
+- `JSON.as_bool(v)` — `Bool?`
+- `JSON.as_int(v)` — `Int?`
+- `JSON.as_float(v)` — `Float?`
+- `JSON.as_string(v)` — `String?`
 
-```ruxen
-def show_int(v: Json, label: &String)
-  match JSON.as_int(&v)
-    Some(n) -> puts "#{label}=#{n}"
-    nil    -> puts "#{label}=missing"
+Works today [deprecated] (the `Some` pattern, replaced by a plain binding after `in nil` once the [known issue](../../TODO.md#t-case-in-nil) is fixed):
+
+```ruby
+def show_int(v: &Json, label: &String)
+  case JSON.as_int(v)
+  in Some(n) then puts "#{label}=#{n}"
+  in nil then puts "#{label}=missing"
   end
 end
 ```
 
 ## 4. Building JSON
 
-Scalar builders return a fresh `Json`:
+Scalar builders return a fresh `Json`. Example [implemented]:
 
-```ruxen
-let n = JSON.null_value
-let b = JSON.bool(true)
-let i = JSON.int(7)
-let f = JSON.float(1.5)
-let s = JSON.string("hi")
+```ruby
+n = JSON.null_value
+b = JSON.bool(true)
+i = JSON.int(7)
+f = JSON.float(1.5)
+s = JSON.string("hi")
 ```
 
-Composite builders take ownership of an `Array[Json]` or `Hash[String, Json]`:
+Composite builders take ownership of an `Array[Json]` or `Hash[String, Json]`. Example [implemented]:
 
-```ruxen
-var items: Array[Json] = Array.new
-items.push(JSON.int(1))
-items.push(JSON.int(2))
-let arr = JSON.array(items)
+```ruby
+items = [JSON.int(1), JSON.int(2)]
+arr = JSON.array(items)
 
-var fields: Hash[String, Json] = Hash.new
-fields.insert("name", JSON.string("ruxen"))
-fields.insert("items", arr)
-let obj = JSON.object(fields)
+fields = { "name" => JSON.string("ruxen"), "items" => arr }
+obj = JSON.object(fields)
 ```
 
-Shortcuts for empty containers:
+Shortcuts for empty containers, both [implemented]:
 
-- `JSON.empty_array  -> Json`  (produces `[]`)
-- `JSON.empty_object -> Json`  (produces `{}`)
+- `JSON.empty_array` — produces `[]`
+- `JSON.empty_object` — produces `{}`
 
 ## 5. Stringifying
 
-Two modes:
+Two modes. Works today [deprecated] (`Result` with `Ok` / `Err` patterns, replaced by exceptions [planned](../../TODO.md#t-exceptions)):
 
-```ruxen
-def main
-  let value = JSON.bool(true)
+```ruby
+value = JSON.bool(true)
 
-  match JSON.stringify(&value)
-    Ok(s)  -> puts s
-    Err(_) -> puts "fail"
-  end
+case JSON.stringify(value)
+in Ok(s) then puts s
+in Err(_) then puts "fail"
+end
 
-  match JSON.stringify_pretty(&value, 2)
-    Ok(s)  -> puts s
-    Err(_) -> puts "fail"
-  end
+case JSON.stringify_pretty(value, 2)
+in Ok(s) then puts s
+in Err(_) then puts "fail"
 end
 ```
 
-- `JSON.stringify(v: &Json) -> Result[String, JsonError]` — compact, no whitespace.
-- `JSON.stringify_pretty(v: &Json, indent: Int) -> Result[String, JsonError]` — `indent` is spaces per level (2 or 4 typical).
+- `JSON.stringify(v)` [implemented] — compact, no whitespace; returns `Result[String, JsonError]`.
+- `JSON.stringify_pretty(v, indent)` [implemented] — `indent` is spaces per level (2 or 4 typical).
 
 ## 6. A full build-and-stringify
 
-```ruxen
-use std.json.{JSON, Json}
+Works today [deprecated] (`Result` and `Some` patterns, replaced as described at the top of the chapter):
 
-def main
-  var items: Array[Json] = Array.new
-  items.push(JSON.int(1))
-  items.push(JSON.int(2))
-  let arr = JSON.array(items)
-
-  var fields: Hash[String, Json] = Hash.new
-  fields.insert("title", JSON.string("demo"))
-  fields.insert("items", arr)
-  let obj = JSON.object(fields)
-
-  let text = JSON.stringify(&obj).expect!("stringify")
-  puts text
-
-  let round = JSON.parse(&text).expect!("parse")
-
-  match JSON.object_get(&round, "title")
-    Some(title) -> match JSON.as_string(&title)
-      Some(v) -> puts "title=#{v}"
-      nil    -> puts "title=missing"
+```ruby
+def show_title(round: &Json)
+  case JSON.object_get(round, "title")
+  in Some(title) then
+    case JSON.as_string(title)
+    in Some(v) then puts "title=#{v}"
+    in nil then puts "title=missing"
     end
-    nil -> puts "title=missing"
+  in nil then puts "title=missing"
   end
+end
+
+items = [JSON.int(1), JSON.int(2)]
+arr = JSON.array(items)
+fields = { "title" => JSON.string("demo"), "items" => arr }
+obj = JSON.object(fields)
+
+case JSON.stringify(obj)
+in Ok(text) then
+  puts text
+  case JSON.parse(text)
+  in Ok(round) then show_title(round)
+  in Err(_) then puts "parse failed"
+  end
+in Err(_) then puts "stringify failed"
 end
 ```
 
-Output (the exact field order of the first line depends on map insertion order):
+Output (the exact field order of the first line depends on `Hash` insertion order):
 
-```
+```text
 {"title":"demo","items":[1,2]}
 title=demo
 ```
@@ -216,20 +215,20 @@ title=demo
 ## 7. Common mistakes
 
 - **Calling `as_int` on a node that was parsed as a float.** JSON numbers with a `.` parse as `Float`-tagged nodes; `as_int` returns `nil`. Use `as_float` and convert if you want an integer view.
-- **`unwrap!` on the parse `Result` for wire data.** Even strict-mode JSON from a trusted source can be truncated. Match and report a clean error instead.
-- **Assuming key order in objects.** The stringifier emits keys in iteration order of the source `Hash`, which is insertion order for `std.map.Hash`. Don't rely on this for cross-language protocol compatibility — JSON itself says key order is unspecified.
+- **`unwrap!` ([deprecated]) on the parse `Result` for wire data.** Even strict-mode JSON from a trusted source can be truncated. Match and report a clean error instead.
+- **Assuming key order in objects.** The stringifier emits keys in iteration order of the source `Hash`, which is insertion order. Don't rely on this for cross-language protocol compatibility — JSON itself says key order is unspecified.
 - **Mutating an existing `Json`.** The API is build-then-stringify, not mutate-in-place. To change a field, build a new object containing the new field set.
 
-> **Try it:** modify the round-trip example to also pull out the `items` array and print its length.
+> **Try it:** modify the round-trip example to also pull out the `items` array and print its length with `JSON.array_len`.
 
 ---
 
 ## Recap
 
-- `JSON.parse(&s)` for relaxed input; `JSON.parse_strict(&s)` for wire data.
-- `JSON.kind`, `JSON.is_object`, `JSON.object_get`, `JSON.array_len` to inspect.
-- `JSON.as_int / as_float / as_string / as_bool` to extract scalars — each returns `Option`.
-- `JSON.int / string / array / object` to build new `Json` values.
-- `JSON.stringify` (compact) or `JSON.stringify_pretty(v, 2)` (indented) to emit.
+- `JSON.parse(s)` for relaxed input; `JSON.parse_strict(s)` for wire data [implemented].
+- `JSON.kind`, `JSON.is_object`, `JSON.object_get`, `JSON.array_len`, `JSON.array_get` to inspect [implemented].
+- `JSON.as_int / as_float / as_string / as_bool` to extract scalars — each returns an optional value [implemented].
+- `JSON.int / string / array / object` to build new `Json` values [implemented].
+- `JSON.stringify` (compact) or `JSON.stringify_pretty(v, 2)` (indented) to emit [implemented].
 
 **Next:** [Chapter 27 — Ruxen.toml and Dependencies](27-manifest-and-deps.md).

@@ -84,7 +84,7 @@ The fine-grained citations are in the per-doc §2 sections. Top-level status:
 
 ## 4. Cross-doc dependency graph
 
-```
+```text
           ┌───────────────────────────────────────────┐
           │  03: Deprecation / stability attributes    │
           │   (attribute surface, warning emission)    │

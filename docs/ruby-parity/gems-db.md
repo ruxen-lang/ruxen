@@ -1,7 +1,7 @@
 # gems-db.md — ActiveRecord + Sequel parity, at compile time
 
 DB parity matrix: the ActiveRecord and Sequel API surface mapped onto a
-**compile-time Ruxen ORM** built over the [`ledger`](../../../ledger) SQLite
+**compile-time Ruxen ORM** built over the `ledger` SQLite
 layer. Ruby's ORMs are the canonical case of runtime metaprogramming
 (`define_method` for every attribute, `method_missing` for dynamic finders,
 class macros for `has_many`/`validates`/`scope`). Ruxen is a pure compiler with
@@ -55,9 +55,9 @@ So the whole ORM factors into: **one new derive** (the schema surface), then a
 ## The one new compiler feature: the `Model` synthesis
 
 Declared like any Ruxen class, with an opt-in `include Model` (the same
-in-body `include` used for `Debug`/`Clone` today):
+in-body `include` used for `Debug`/`Clone` today), [planned](../../TODO.md#t-parity-orm):
 
-```ruxen
+```ruby
 class Todo
   include Model
 
@@ -103,14 +103,14 @@ extends the derive registry.
 
 | AR/Sequel feature | Compile-time Ruxen design | Needs | Status |
 |---|---|---|---|
-| `class User < ApplicationRecord` with dynamic attribute accessors read from the DB | `class User` with `include Model`; declared fields are the schema; accessors are plain public fields | Model synth | NOT-STARTED |
-| `attr_accessor`-style getters/setters | Fields public by default (direct `user.name`); no synthesis needed for read/write | `.rx only` (PRIMITIVE-PRESENT) | NOT-STARTED |
-| `self.table_name = "people"` | Default `table_name` generated from class name; override by defining `def self.table_name` | Model synth | NOT-STARTED |
-| `User.column_names` | Generated `def self.columns -> Array[String]` | Model synth | NOT-STARTED |
-| `User.primary_key` | `id: Int` default; header option `primary_key: :uuid` | Model synth | NOT-STARTED |
-| `User.new(attrs)` / `User.build` | `.new` (Ruxen `def init`) + generated `self.build` over non-PK fields | Model synth | NOT-STARTED |
-| Sequel `Sequel::Model(:users)` (table binding, no field decl) | Not mirrored: Ruxen needs static field types, so fields are always declared. Schema stays the single source of truth | Model synth | NOT-STARTED |
-| STI (`type` column) | A `type: String` field + a generated dispatch in `from_row`; subclass filtering via `where("type = ?")`. v2 | Model synth | NOT-STARTED |
+| `class User < ApplicationRecord` with dynamic attribute accessors read from the DB | `class User` with `include Model`; declared fields are the schema; accessors are plain public fields | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `attr_accessor`-style getters/setters | Fields public by default (direct `user.name`); no synthesis needed for read/write | `.rx only` (PRIMITIVE-PRESENT) | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `self.table_name = "people"` | Default `table_name` generated from class name; override by defining `def self.table_name` | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `User.column_names` | Generated `def self.columns -> Array[String]` | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `User.primary_key` | `id: Int` default; header option `primary_key: :uuid` | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `User.new(attrs)` / `User.build` | `.new` (Ruxen `def init`) + generated `self.build` over non-PK fields | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| Sequel `Sequel::Model(:users)` (table binding, no field decl) | Not mirrored: Ruxen needs static field types, so fields are always declared. Schema stays the single source of truth | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| STI (`type` column) | A `type: String` field + a generated dispatch in `from_row`; subclass filtering via `where("type = ?")`. v2 | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
 
 Design note: in Rails the DB is the source of truth and the model infers
 columns at boot. Ruxen cannot introspect a DB at compile time, so the
@@ -128,39 +128,40 @@ synthesized surface. Because `T` exposes `table_name`/`columns`/`to_row`/
 
 | AR/Sequel feature | Compile-time Ruxen design | Needs | Status |
 |---|---|---|---|
-| `Model.create(attrs)` | `self.build(...)` then `save`; returns the instance with `id` set from `last_insert_rowid` | `.rx + Model synth` | NOT-STARTED |
-| `record.save` / `save!` | `INSERT` (new) or `UPDATE` (persisted) built from `columns`/`to_row`, run via `Db.exec_params`; `save!` returns `Result`, `save` a `Bool` | `.rx + Model synth` | NOT-STARTED |
-| `record.update(attrs)` | assign fields, then `save` on the changed columns | `.rx + Model synth` | NOT-STARTED |
-| `record.destroy` / `destroy!` | `DELETE FROM t WHERE id = ?` bound | `.rx + Model synth` | NOT-STARTED |
-| `record.reload` | re-`SELECT` by PK, overwrite fields from `from_row` | `.rx + Model synth` | NOT-STARTED |
-| `Model.find(id)` | `SELECT * WHERE id = ?`, decode one row; `Result`/`Option` return, no exception raised for the missing case | `.rx + Model synth` | NOT-STARTED |
-| `Model.find_by(cond)` / `find_by!` | thin wrapper over `where(...).first`; `!` variant returns `Err` when absent | `.rx + Model synth` | NOT-STARTED |
-| `Model.all` | `SELECT *`, map `from_row` over the parsed JSON array into `Array[Self]` | `.rx + Model synth` | NOT-STARTED |
-| `Model.first` / `last` | `ORDER BY id ASC/DESC LIMIT 1` | `.rx + Model synth` | NOT-STARTED |
-| `Model.exists?(cond)` | `SELECT 1 ... LIMIT 1`, test row count | `.rx + Model synth` | NOT-STARTED |
-| `Model.count` | `SELECT COUNT(*)`, read scalar | `.rx + Model synth` | NOT-STARTED |
-| `Model.find_each` / `in_batches` | keyset pagination loop yielding a block; avoids loading all rows | `.rx + Model synth` | NOT-STARTED |
-| `insert_all` / `upsert_all` (bulk) | one multi-VALUES `INSERT` from an `Array[Self]`; `ON CONFLICT` for upsert | `.rx + Model synth` | NOT-STARTED |
+| `Model.create(attrs)` | `self.build(...)` then `save`; returns the instance with `id` set from `last_insert_rowid` | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `record.save` / `save!` | `INSERT` (new) or `UPDATE` (persisted) built from `columns`/`to_row`, run via `Db.exec_params`; `save!` returns `Result`, `save` a `Bool` | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `record.update(attrs)` | assign fields, then `save` on the changed columns | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `record.destroy` / `destroy!` | `DELETE FROM t WHERE id = ?` bound | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `record.reload` | re-`SELECT` by PK, overwrite fields from `from_row` | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `Model.find(id)` | `SELECT * WHERE id = ?`, decode one row; `Result`/`Option` return, no exception raised for the missing case | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `Model.find_by(cond)` / `find_by!` | thin wrapper over `where(...).first`; `!` variant returns `Err` when absent | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `Model.all` | `SELECT *`, map `from_row` over the parsed JSON array into `Array[Self]` | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `Model.first` / `last` | `ORDER BY id ASC/DESC LIMIT 1` | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `Model.exists?(cond)` | `SELECT 1 ... LIMIT 1`, test row count | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `Model.count` | `SELECT COUNT(*)`, read scalar | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `Model.find_each` / `in_batches` | keyset pagination loop yielding a block; avoids loading all rows | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `insert_all` / `upsert_all` (bulk) | one multi-VALUES `INSERT` from an `Array[Self]`; `ON CONFLICT` for upsert | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
 
 Return-shape decision, stated once: Ruby's `find` raises
-`RecordNotFound`; `find_by` returns `nil`. Ruxen mirrors the *distinction* but
-in its own idiom: the plain forms return `Option[Self]` / `Result[Self,
-DbError]` and the `!` forms return `Result` with an `Err(NotFound)`, so callers
-use `match`/`?` instead of rescue. This is the compiled-language adaptation the
-README sanctions (Ruby semantics, Ruxen mechanism).
+`RecordNotFound`; `find_by` returns `nil`. Ruxen keeps the same shapes:
+`find_by` returns `Self?`, and `find` raises `RecordNotFound` once Ruby
+exceptions land ([planned](../../TODO.md#t-exceptions)), so callers `rescue` as in
+Rails. Until then the working spelling is a `Result` return matched with
+`case/in`, which is [deprecated].
 
-Sketch of the generic `all` (illustrates the whole pattern):
+Sketch of the generic `all` (illustrates the whole pattern), [planned](../../TODO.md#t-parity-orm):
 
-```ruxen
-mixin Model
+```ruby
+module Model
   # Provided by the synthesis on each including class:
   def self.table_name -> String
   def self.columns -> Array[String]
   def self.from_row(row: &Json) -> Self
 
-  def self.all(db: Int) -> Result[Array[Self], DbError]
-    let sql  = "SELECT * FROM " + Self.table_name + " ORDER BY id"
-    let rows = Db.query_json(db, &sql)
+  # Raises DbError when the query fails.
+  def self.all(db: Int) -> Array[Self]
+    sql  = "SELECT * FROM " + Self.table_name + " ORDER BY id"
+    rows = Db.query_json(db, &sql)
     Relation.decode_all(&rows)   # parse JSON array, from_row each element
   end
 end
@@ -179,31 +180,31 @@ finder family.
 
 | AR/Sequel feature | Compile-time Ruxen design | Needs | Status |
 |---|---|---|---|
-| `.where("age > ?", 18)` (string + placeholder) | `.where(&"age > ?", &["18"])`: fragment appended, params bound. The primary, always-safe form | `.rx + Model synth` | NOT-STARTED |
-| `.where(name: "x", active: true)` (hash) | `.where_eq(Hash[String,String])`: each pair → `col = ?` AND-joined. Homogeneous `String→String` hash covers equality; richer conditions use the fragment form or generated column predicates | `.rx + Model synth` | NOT-STARTED |
-| `.where(id: [1,2,3])` (IN) | `.where_in(&"id", &["1","2","3"])` → `id IN (?,?,?)` | `.rx + Model synth` | NOT-STARTED |
-| `.where.not(...)` | `.where_not(&"status = ?", &["x"])` | `.rx + Model synth` | NOT-STARTED |
-| `.or(other_relation)` | `.or(...)`: wrap two clause groups in `( ... OR ... )` | `.rx + Model synth` | NOT-STARTED |
-| `.order(:name)` / `.order(name: :desc)` | `.order(&"name")` / `.order_desc(&"name")` | `.rx + Model synth` | NOT-STARTED |
-| `.limit(n)` / `.offset(n)` | `.limit(n)` / `.offset(n)` | `.rx + Model synth` | NOT-STARTED |
-| `.group(:x).having("...")` | `.group(&"x").having(&"count(*) > ?", &["5"])` | `.rx + Model synth` | NOT-STARTED |
-| `.joins(:posts)` | `.joins(&"INNER JOIN posts ON posts.user_id = users.id")`; association-aware `.joins_assoc` once associations land | `.rx + Model synth` | NOT-STARTED |
-| `.includes(:posts)` (eager load, N+1 kill) | two-query batched preload: run the base query, collect ids, `SELECT * FROM posts WHERE user_id IN (...)`, stitch in `.rx`. See §5 | `.rx + Model synth` | NOT-STARTED |
-| `.pluck(:name)` | `SELECT name`, decode a single-column `Array[String/Int]` | `.rx + Model synth` | NOT-STARTED |
-| `.select(:a, :b)` | override the projection list | `.rx + Model synth` | NOT-STARTED |
-| `.distinct` | `SELECT DISTINCT` | `.rx + Model synth` | NOT-STARTED |
-| chained + lazy | `Relation` is a value; each method returns a new `Relation` (Clone-derived); nothing runs until a terminal | `.rx only` (PRIMITIVE-PRESENT) | NOT-STARTED |
-| `.to_sql` | return the built SQL string + a debug of the bound params | `.rx only` | NOT-STARTED |
-| Sequel `DB[:users].where{age > 18}` (virtual-row block) | Ruxen has no runtime `method_missing` on a virtual row; a block form needs generated column tokens (below). v1 uses the fragment form | Model synth (typed columns) | NOT-STARTED |
-| Typed column predicates `User.col(:age).gt(18)` | The synthesis additionally emits a column-token per field (`User.age_col`) carrying name + type, so `.where(User.age_col.gt(18))` is fully typed and needs no raw string. The AR-parity endgame for the builder | Model synth (typed columns) | NOT-STARTED |
+| `.where("age > ?", 18)` (string + placeholder) | `.where(&"age > ?", &["18"])`: fragment appended, params bound. The primary, always-safe form | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `.where(name: "x", active: true)` (hash) | `.where_eq(Hash[String,String])`: each pair → `col = ?` AND-joined. Homogeneous `String→String` hash covers equality; richer conditions use the fragment form or generated column predicates | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `.where(id: [1,2,3])` (IN) | `.where_in(&"id", &["1","2","3"])` → `id IN (?,?,?)` | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `.where.not(...)` | `.where_not(&"status = ?", &["x"])` | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `.or(other_relation)` | `.or(...)`: wrap two clause groups in `( ... OR ... )` | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `.order(:name)` / `.order(name: :desc)` | `.order(&"name")` / `.order_desc(&"name")` | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `.limit(n)` / `.offset(n)` | `.limit(n)` / `.offset(n)` | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `.group(:x).having("...")` | `.group(&"x").having(&"count(*) > ?", &["5"])` | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `.joins(:posts)` | `.joins(&"INNER JOIN posts ON posts.user_id = users.id")`; association-aware `.joins_assoc` once associations land | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `.includes(:posts)` (eager load, N+1 kill) | two-query batched preload: run the base query, collect ids, `SELECT * FROM posts WHERE user_id IN (...)`, stitch in `.rx`. See §5 | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `.pluck(:name)` | `SELECT name`, decode a single-column `Array[String/Int]` | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `.select(:a, :b)` | override the projection list | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `.distinct` | `SELECT DISTINCT` | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| chained + lazy | `Relation` is a value; each method returns a new `Relation` (Clone-derived); nothing runs until a terminal | `.rx only` (PRIMITIVE-PRESENT) | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `.to_sql` | return the built SQL string + a debug of the bound params | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| Sequel `DB[:users].where{age > 18}` (virtual-row block) | Ruxen has no runtime `method_missing` on a virtual row; a block form needs generated column tokens (below). v1 uses the fragment form | Model synth (typed columns) | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| Typed column predicates `User.col(:age).gt(18)` | The synthesis additionally emits a column-token per field (`User.age_col`) carrying name + type, so `.where(User.age_col.gt(18))` is fully typed and needs no raw string. The AR-parity endgame for the builder | Model synth (typed columns) | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
 
-Usage the way a Rails dev expects, all lazy:
+Usage the way a Rails dev expects, all lazy, [planned](../../TODO.md#t-parity-orm):
 
-```ruxen
-let overdue = Todo.where(&"done = ?", &["0"])
-                  .where(&"created_at < ?", &[cutoff.iso8601])
-                  .order_desc(&"created_at")
-                  .limit(20)
+```ruby
+overdue = Todo.where(&"done = ?", &["0"])
+              .where(&"created_at < ?", &[cutoff.iso8601])
+              .order_desc(&"created_at")
+              .limit(20)
 overdue.to_a(db)   # <- only here does SQL run
 ```
 
@@ -222,21 +223,21 @@ single record. No `define_method`, no runtime.
 
 | AR/Sequel feature | Compile-time Ruxen design | Needs | Status |
 |---|---|---|---|
-| `belongs_to :user` | declaration → `def user(db) -> Result[Option[User], DbError]` = `User.find(self.user_id)`; generates the `user_id: Int` foreign-key expectation | Model synth | NOT-STARTED |
-| `has_many :posts` | → `def posts -> Relation[Post]` = `Post.where(&"user_id = ?", &[self.id.to_s])` | Model synth | NOT-STARTED |
-| `has_one :profile` | → `def profile(db) -> Option[Profile]` = `Profile.where(...).first` | Model synth | NOT-STARTED |
-| `has_many :through` | → `def tags -> Relation[Tag]` emitting the join through the join table | Model synth | NOT-STARTED |
-| polymorphic `belongs_to :subject, polymorphic: true` | `subject_type: String` + `subject_id: Int` fields; generated accessor `match`es on `subject_type` to the right model's `find`. Closed set of target models declared with the association | Model synth | NOT-STARTED |
-| `dependent: :destroy` | generated `destroy` also deletes children in the same transaction | Model synth | NOT-STARTED |
-| eager load `includes(:posts)` (the N+1 fix) | batched two-query preload in `.rx`: fetch parents, gather PKs, one `WHERE fk IN (...)`, group children by fk, attach into a `preloaded` slot on each parent | `.rx + Model synth` | NOT-STARTED |
-| `counter_cache` | generated `save`/`destroy` bump a `*_count` column in the same tx | Model synth | NOT-STARTED |
+| `belongs_to :user` | declaration → `def user(db) -> Result[Option[User], DbError]` = `User.find(self.user_id)`; generates the `user_id: Int` foreign-key expectation | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `has_many :posts` | → `def posts -> Relation[Post]` = `Post.where(&"user_id = ?", &[self.id.to_s])` | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `has_one :profile` | → `def profile(db) -> Option[Profile]` = `Profile.where(...).first` | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `has_many :through` | → `def tags -> Relation[Tag]` emitting the join through the join table | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| polymorphic `belongs_to :subject, polymorphic: true` | `subject_type: String` + `subject_id: Int` fields; generated accessor `match`es on `subject_type` to the right model's `find`. Closed set of target models declared with the association | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `dependent: :destroy` | generated `destroy` also deletes children in the same transaction | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| eager load `includes(:posts)` (the N+1 fix) | batched two-query preload in `.rx`: fetch parents, gather PKs, one `WHERE fk IN (...)`, group children by fk, attach into a `preloaded` slot on each parent | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `counter_cache` | generated `save`/`destroy` bump a `*_count` column in the same tx | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
 
 Hand-written equivalent (what the generated `has_many` expands to, so the
-codegen target is obvious and a user can always drop to it):
+codegen target is obvious and a user can always drop to it), [planned](../../TODO.md#t-parity-orm):
 
-```ruxen
+```ruby
 def posts -> Relation[Post]
-  Post.where(&"user_id = ?", &[self.id.to_s])
+  Post.where(&"user_id = ?", &[@id.to_s])
 end
 ```
 
@@ -255,14 +256,14 @@ from the declarations.
 
 | AR/Sequel feature | Compile-time Ruxen design | Needs | Status |
 |---|---|---|---|
-| `validates :name, presence: true` | generated check `self.name.blank?` → push error | Model synth | NOT-STARTED |
-| `validates :email, uniqueness: true` | generated `SELECT 1 WHERE email = ? AND id <> ?` count check (needs `db`); paired with a DB unique index for the race (see below) | `.rx + Model synth` | NOT-STARTED |
-| `validates :name, length: {minimum: 2, maximum: 40}` | generated bounds check on `name.length` | Model synth | NOT-STARTED |
-| `validates :email, format: {with: /.../}` | generated `Regexp` match | Model synth + `std/regexp` | NOT-STARTED |
-| `validates :age, numericality: {greater_than: 0}` | generated numeric comparison | Model synth | NOT-STARTED |
-| custom `validate :some_method` | generated `valid?` calls the user-defined method if the class defines it (the synthesis has the method list) | Model synth | NOT-STARTED |
-| `errors.full_messages` | generated `errors: Array[String]` accumulator; `valid? -> Bool` clears then fills it | Model synth | NOT-STARTED |
-| `save` runs validations | generated `save` calls `valid?` first, returns `Err(Invalid(errors))` on failure | `.rx + Model synth` | NOT-STARTED |
+| `validates :name, presence: true` | generated check `self.name.blank?` → push error | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `validates :email, uniqueness: true` | generated `SELECT 1 WHERE email = ? AND id <> ?` count check (needs `db`); paired with a DB unique index for the race (see below) | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `validates :name, length: {minimum: 2, maximum: 40}` | generated bounds check on `name.length` | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `validates :email, format: {with: /.../}` | generated `Regexp` match | Model synth + `std/regexp` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `validates :age, numericality: {greater_than: 0}` | generated numeric comparison | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| custom `validate :some_method` | generated `valid?` calls the user-defined method if the class defines it (the synthesis has the method list) | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `errors.full_messages` | generated `errors: Array[String]` accumulator; `valid? -> Bool` clears then fills it | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `save` runs validations | generated `save` calls `valid?` first, returns `Err(Invalid(errors))` on failure | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
 
 Concurrency truth, stated plainly: a `uniqueness` validation is a check, not a
 guarantee. Two requests in the same second both pass the `SELECT` and both
@@ -281,13 +282,13 @@ hook is defined (the compile-time analogue of Rails registering a callback).
 
 | AR/Sequel feature | Compile-time Ruxen design | Needs | Status |
 |---|---|---|---|
-| `before_save` / `after_save` | generated `save` calls `self.before_save` (if defined), does the write, then `self.after_save` | Model synth | NOT-STARTED |
-| `before_create` / `after_create` | same, on the INSERT path only | Model synth | NOT-STARTED |
-| `before_update` / `after_update` | same, on the UPDATE path only | Model synth | NOT-STARTED |
-| `before_destroy` / `after_destroy` | wrap the DELETE | Model synth | NOT-STARTED |
-| `before_validation` | called ahead of `valid?` | Model synth | NOT-STARTED |
-| halting a callback (`throw :abort`) | hook returns `Result`; an `Err` aborts the save and rolls back the tx | Model synth | NOT-STARTED |
-| `after_commit` / `after_rollback` | fired by the `transaction` helper (§9) after COMMIT/ROLLBACK | `.rx + Model synth` | NOT-STARTED |
+| `before_save` / `after_save` | generated `save` calls `self.before_save` (if defined), does the write, then `self.after_save` | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `before_create` / `after_create` | same, on the INSERT path only | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `before_update` / `after_update` | same, on the UPDATE path only | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `before_destroy` / `after_destroy` | wrap the DELETE | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `before_validation` | called ahead of `valid?` | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| halting a callback (`throw :abort`) | hook returns `Result`; an `Err` aborts the save and rolls back the tx | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `after_commit` / `after_rollback` | fired by the `transaction` helper (§9) after COMMIT/ROLLBACK | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
 
 No conditional-callback DSL (`if:`/`unless:`) in v1: the user writes the guard
 inside the hook method. Keeps the synthesis reading a fixed set of well-known
@@ -304,24 +305,25 @@ Rails feel with no compiler support.
 
 | AR/Sequel feature | Compile-time Ruxen design | Needs | Status |
 |---|---|---|---|
-| `create_table :users do |t| ... end` | `create_table(db, &"users") do |t: &var Table| ... end` builds + execs DDL | `.rx only` | NOT-STARTED |
-| `t.string/integer/boolean/datetime/...` | `t.string(&"name")`, `t.integer(&"age")`, etc. append a column def | `.rx only` | NOT-STARTED |
-| `t.timestamps` | appends `created_at`/`updated_at TEXT` | `.rx only` | NOT-STARTED |
-| `t.references :user` (FK column + index) | `t.references(&"user")` → `user_id INTEGER` + index | `.rx only` | NOT-STARTED |
-| `add_column` / `remove_column` / `rename_column` | `alter_table` helpers emitting `ALTER TABLE` | `.rx only` | NOT-STARTED |
-| `add_index` / `add_index unique: true` | `add_index(db, &"users", &["email"], unique: true)` | `.rx only` | NOT-STARTED |
-| reversible `change` / `up`+`down` | mirror global rule 12: `change` for the reversible subset, explicit `down` otherwise. Migration runner runs `down` on rollback | `.rx only` | NOT-STARTED |
-| migration versioning / `schema_migrations` | a `schema_migrations` table tracks applied version strings; runner skips applied ones | `.rx only` | NOT-STARTED |
-| `db:migrate` runner | a `.rx` function (or a `ruxen`-invoked script) that loads pending migrations in order | `.rx only` | NOT-STARTED |
-| Sequel `DB.create_table` / migrations dir | same builder; Sequel's API maps onto the same helpers | `.rx only` | NOT-STARTED |
-| **generate schema from the model** | the `Model` field-walk emits a `create_table` DDL, so model fields are the one source of truth for both accessors and DDL | Model synth | NOT-STARTED |
+| `create_table :users do \|t\| ... end` | `create_table(db, &"users") do \|t: &var Table\| ... end` builds + execs DDL | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `t.string/integer/boolean/datetime/...` | `t.string(&"name")`, `t.integer(&"age")`, etc. append a column def | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `t.timestamps` | appends `created_at`/`updated_at TEXT` | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `t.references :user` (FK column + index) | `t.references(&"user")` → `user_id INTEGER` + index | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `add_column` / `remove_column` / `rename_column` | `alter_table` helpers emitting `ALTER TABLE` | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `add_index` / `add_index unique: true` | `add_index(db, &"users", &["email"], unique: true)` | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| reversible `change` / `up`+`down` | mirror global rule 12: `change` for the reversible subset, explicit `down` otherwise. Migration runner runs `down` on rollback | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| migration versioning / `schema_migrations` | a `schema_migrations` table tracks applied version strings; runner skips applied ones | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `db:migrate` runner | a `.rx` function (or a `ruxen`-invoked script) that loads pending migrations in order | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| Sequel `DB.create_table` / migrations dir | same builder; Sequel's API maps onto the same helpers | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| **generate schema from the model** | the `Model` field-walk emits a `create_table` DDL, so model fields are the one source of truth for both accessors and DDL | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
 
 Because the migration builder is entirely string assembly over `ledger`, it is
 the part with the **least** compiler risk and a good first shippable piece.
+The migration below is [planned](../../TODO.md#t-parity-orm); `change` raises `DbError` on a failed statement:
 
-```ruxen
+```ruby
 class CreateTodos < Migration
-  def change(db: Int) -> Result[nil, DbError]
+  def change(db: Int)
     create_table(db, &"todos") do |t: &var Table|
       t.primary_key(&"id")
       t.string(&"label")
@@ -341,18 +343,19 @@ Immediately-invoked `do …end` fits exactly.
 
 | AR/Sequel feature | Compile-time Ruxen design | Needs | Status |
 |---|---|---|---|
-| `ActiveRecord::Base.transaction do ... end` | `transaction(db) do ... end`: `BEGIN`; run block; `COMMIT`, or `ROLLBACK` if the block returns `Err`/raises | `.rx only` | NOT-STARTED |
-| nested transactions / savepoints | `SAVEPOINT`/`RELEASE`/`ROLLBACK TO` when already inside a tx | `.rx only` | NOT-STARTED |
-| `requires_new: true` | force a savepoint | `.rx only` | NOT-STARTED |
-| isolation levels | pass through as `PRAGMA`/`BEGIN` variants per adapter | `.rx only` | NOT-STARTED |
-| rollback propagation to in-memory state | block returns `Result`; caller decides. No autoload of reverted attributes in v1 | `.rx only` | NOT-STARTED |
+| `ActiveRecord::Base.transaction do ... end` | `transaction(db) do ... end`: `BEGIN`; run block; `COMMIT`, or `ROLLBACK` if the block returns `Err`/raises | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| nested transactions / savepoints | `SAVEPOINT`/`RELEASE`/`ROLLBACK TO` when already inside a tx | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `requires_new: true` | force a savepoint | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| isolation levels | pass through as `PRAGMA`/`BEGIN` variants per adapter | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| rollback propagation to in-memory state | block returns `Result`; caller decides. No autoload of reverted attributes in v1 | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
 
-```ruxen
+The Ruby form, [planned](../../TODO.md#t-parity-orm) (it needs Ruby exceptions, [planned](../../TODO.md#t-exceptions)):
+
+```ruby
 transaction(db) do
-  from.withdraw(amount)?
-  to.deposit(amount)?
-  Ok(nil)
-end   # COMMIT on Ok, ROLLBACK on the first ? that short-circuits an Err
+  from.withdraw(amount)
+  to.deposit(amount)
+end   # COMMIT when the block finishes, ROLLBACK when it raises
 ```
 
 ---
@@ -366,11 +369,11 @@ safe to share across threads concurrently).
 
 | AR/Sequel feature | Compile-time Ruxen design | Needs | Status |
 |---|---|---|---|
-| connection pool with checkout/checkin | `Pool` holding `Array[Int]` handles + a guard; `pool.with(db) do ... end` checks one out and returns it | `.rx only` + `new stdlib` (mutex) | NOT-STARTED |
-| `pool_size` / timeout config | fields on `Pool`; block until a handle frees or time out | `.rx only` + `new stdlib` | NOT-STARTED |
-| per-thread / per-request connection | `rondo` checks out one handle per request, checks it back in on response | `.rx only` | NOT-STARTED |
-| `ActiveRecord::Base.connection` | ambient current handle: passed explicitly in v1 (a `db: Int` arg threaded through), not a global. A `Current`-style thread-local is a later ergonomic | `.rx only` | NOT-STARTED |
-| reconnect / dead-connection eviction | pool health-checks a handle on checkout | `.rx only` | NOT-STARTED |
+| connection pool with checkout/checkin | `Pool` holding `Array[Int]` handles + a guard; `pool.with(db) do ... end` checks one out and returns it | `.rx only` + `new stdlib` (mutex) | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `pool_size` / timeout config | fields on `Pool`; block until a handle frees or time out | `.rx only` + `new stdlib` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| per-thread / per-request connection | `rondo` checks out one handle per request, checks it back in on response | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `ActiveRecord::Base.connection` | ambient current handle: passed explicitly in v1 (a `db: Int` arg threaded through), not a global. A `Current`-style thread-local is a later ergonomic | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| reconnect / dead-connection eviction | pool health-checks a handle on checkout | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
 
 The one honest dependency here is a **mutex/condition primitive** from `std`
 for the pool guard. Check what `SharedSync` (used in `quiver`) already provides
@@ -389,12 +392,12 @@ model or query layer.
 
 | AR/Sequel feature | Compile-time Ruxen design | Needs | Status |
 |---|---|---|---|
-| SQLite adapter | `ledger` as-is | PRIMITIVE-PRESENT | NOT-STARTED |
-| Postgres adapter | new FFI over libpq; `Adapter` mixin: `$1` placeholders, `RETURNING id`, `"ident"` quoting, real types/arrays | new FFI | NOT-STARTED |
-| MySQL adapter | new FFI over libmysqlclient; backtick quoting, `?` placeholders | new FFI | NOT-STARTED |
-| dialect abstraction (placeholder style, RETURNING, quoting, upsert) | `Adapter` mixin methods (`placeholder(n)`, `quote_ident`, `insert_returning?`); `Relation` calls them so one builder serves all backends | `.rx only` (mixin) | NOT-STARTED |
-| `last_insert_id` differences | `Adapter` method: SQLite `last_insert_rowid()` vs Postgres `RETURNING` | `.rx only` + per-FFI | NOT-STARTED |
-| connection URL parsing (`postgres://...`) | a `.rx` URL parser choosing the adapter | `.rx only` | NOT-STARTED |
+| SQLite adapter | `ledger` as-is | PRIMITIVE-PRESENT | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| Postgres adapter | new FFI over libpq; `Adapter` mixin: `$1` placeholders, `RETURNING id`, `"ident"` quoting, real types/arrays | new FFI | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| MySQL adapter | new FFI over libmysqlclient; backtick quoting, `?` placeholders | new FFI | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| dialect abstraction (placeholder style, RETURNING, quoting, upsert) | `Adapter` mixin methods (`placeholder(n)`, `quote_ident`, `insert_returning?`); `Relation` calls them so one builder serves all backends | `.rx only` (mixin) | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `last_insert_id` differences | `Adapter` method: SQLite `last_insert_rowid()` vs Postgres `RETURNING` | `.rx only` + per-FFI | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| connection URL parsing (`postgres://...`) | a `.rx` URL parser choosing the adapter | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
 
 FFI is the cost center for multi-adapter support. The `.rx` layers above the
 `Adapter` mixin do not change per backend, which is the payoff of routing all
@@ -410,11 +413,11 @@ field-walk already visits every field, so it folds serialization in for free.
 
 | AR/Sequel feature | Compile-time Ruxen design | Needs | Status |
 |---|---|---|---|
-| `to_json` | generated `def to_json -> Json` building a `JSON.object` node field by field | Model synth | NOT-STARTED |
-| `as_json(only:/except:/methods:)` | generated `to_json_with(fields: Array[String])` honoring an allow/deny list | Model synth | NOT-STARTED |
-| `from_row` / hydrate from DB | already generated (§ the synthesis) as `self.from_row(&Json)` | Model synth | NOT-STARTED |
-| serialize a whole `Relation`/`Array[Model]` | map `to_json` and wrap in `JSON.array` | `.rx only` | NOT-STARTED |
-| `serialize :prefs, coder: JSON` (a JSON column) | a `Json`-typed field encoded as a TEXT column via `to_row`/`from_row` | Model synth | NOT-STARTED |
+| `to_json` | generated `def to_json -> Json` building a `JSON.object` node field by field | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `as_json(only:/except:/methods:)` | generated `to_json_with(fields: Array[String])` honoring an allow/deny list | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `from_row` / hydrate from DB | already generated (§ the synthesis) as `self.from_row(&Json)` | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| serialize a whole `Relation`/`Array[Model]` | map `to_json` and wrap in `JSON.array` | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `serialize :prefs, coder: JSON` (a JSON column) | a `Json`-typed field encoded as a TEXT column via `to_row`/`from_row` | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
 
 This directly serves `rondo`: a controller can `render(model.to_json)` with no
 hand-built JSON, closing a gap noted in `std/json` (serializing a user class is
@@ -426,14 +429,14 @@ manual today).
 
 | AR/Sequel feature | Compile-time Ruxen design | Needs | Status |
 |---|---|---|---|
-| `scope :active, -> { where(active: true) }` | a plain class method returning a `Relation`: `def self.active -> Relation[Self]; where(&"active = ?", &["1"]); end`. A `scope` macro is optional sugar over this | `.rx + Model synth` | NOT-STARTED |
-| default scope | a generated base `Relation` all queries start from. Use sparingly (same footguns as Rails) | Model synth | NOT-STARTED |
-| `enum status: {draft: 0, live: 1}` | a real Ruxen `enum` field; `to_row`/`from_row` map tag ↔ column int/string. Predicates `status.live?` / setters are `match` arms or generated | Model synth | NOT-STARTED |
-| enum bang/predicate (`user.active!`, `active?`) | generated per-value predicate + setter, or hand-written `match`. Ruxen enums make this natural | Model synth | NOT-STARTED |
-| `timestamps` (`created_at`/`updated_at` auto-set) | generated `create` sets both, `update` sets `updated_at`; needs a usable `Time` | `.rx + Model synth` + `std/time` | NOT-STARTED |
-| `touch` | `UPDATE ... SET updated_at = ?` | `.rx + Model synth` | NOT-STARTED |
-| dirty tracking `changed?` / `name_was` | on load, keep a `Clone`-derived snapshot; `changed?` compares live vs snapshot (whole-record cheaply via the existing `Clone`/`PartialEq` derives); per-field `name_changed?` is a later synthesis extension | `.rx + Model synth` (whole-record) / Model synth (per-field) | NOT-STARTED |
-| `previous_changes` after save | swap the snapshot on save, expose the prior copy | Model synth | NOT-STARTED |
+| `scope :active, -> { where(active: true) }` | a plain class method returning a `Relation`: `def self.active -> Relation[Self]; where(&"active = ?", &["1"]); end`. A `scope` macro is optional sugar over this | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| default scope | a generated base `Relation` all queries start from. Use sparingly (same footguns as Rails) | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `enum status: {draft: 0, live: 1}` | a real Ruxen `enum` field; `to_row`/`from_row` map tag ↔ column int/string. Predicates `status.live?` / setters are `match` arms or generated | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| enum bang/predicate (`user.active!`, `active?`) | generated per-value predicate + setter, or hand-written `match`. Ruxen enums make this natural | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `timestamps` (`created_at`/`updated_at` auto-set) | generated `create` sets both, `update` sets `updated_at`; needs a usable `Time` | `.rx + Model synth` + `std/time` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `touch` | `UPDATE ... SET updated_at = ?` | `.rx + Model synth` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| dirty tracking `changed?` / `name_was` | on load, keep a `Clone`-derived snapshot; `changed?` compares live vs snapshot (whole-record cheaply via the existing `Clone`/`PartialEq` derives); per-field `name_changed?` is a later synthesis extension | `.rx + Model synth` (whole-record) / Model synth (per-field) | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `previous_changes` after save | swap the snapshot on save, expose the prior copy | Model synth | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
 
 Whole-record dirty checking is nearly free: `Clone` and `PartialEq` already
 derive today, so a snapshot-and-compare needs no new compiler work. Per-attribute
@@ -448,13 +451,13 @@ optional. The `Relation` above already IS a dataset, so Sequel maps cleanly.
 
 | Sequel feature | Compile-time Ruxen design | Needs | Status |
 |---|---|---|---|
-| `DB[:users]` dataset without a model | a `Table` dataset value producing `Array[Json]`/`Hash` rows, no typed model required | `.rx only` | NOT-STARTED |
-| `dataset.where(...).all` | same `Relation` machinery, untyped row output | `.rx only` | NOT-STARTED |
-| `dataset.insert/update/delete` | `Db.exec_params` wrappers on the dataset | `.rx only` | NOT-STARTED |
-| virtual-row blocks `where{age > 18}` | needs generated column tokens (see §3 typed columns); fragment form until then | Model synth (typed columns) | NOT-STARTED |
-| `Sequel::Model` plugins system | not mirrored: plugins are runtime module injection. The equivalent is `include`-ing extra mixins at compile time | `.rx only` (mixins) | NOT-STARTED |
-| prepared statements / bound variables | `ledger` already binds params; a named-prepared cache is a later FFI addition | PRIMITIVE-PRESENT / new FFI | NOT-STARTED |
-| `DB.transaction` | same `transaction` helper (§8) | `.rx only` | NOT-STARTED |
+| `DB[:users]` dataset without a model | a `Table` dataset value producing `Array[Json]`/`Hash` rows, no typed model required | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `dataset.where(...).all` | same `Relation` machinery, untyped row output | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `dataset.insert/update/delete` | `Db.exec_params` wrappers on the dataset | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| virtual-row blocks `where{age > 18}` | needs generated column tokens (see §3 typed columns); fragment form until then | Model synth (typed columns) | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `Sequel::Model` plugins system | not mirrored: plugins are runtime module injection. The equivalent is `include`-ing extra mixins at compile time | `.rx only` (mixins) | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| prepared statements / bound variables | `ledger` already binds params; a named-prepared cache is a later FFI addition | PRIMITIVE-PRESENT / new FFI | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
+| `DB.transaction` | same `transaction` helper (§8) | `.rx only` | [planned](../../TODO.md#t-parity-orm) NOT-STARTED |
 
 ---
 

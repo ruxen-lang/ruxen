@@ -11,6 +11,8 @@ Every closure owned its by-value captures, and the borrow checker treated a
 plain closure's captures as shared borrows. The two disagreed whenever two
 closures captured the same non-Copy local: both drop glues freed it.
 
+The shape that double-freed before this decision (the syntax is [implemented]; the double free is fixed):
+
 ```ruby
 prefix = "p-"
 bag.each { |n| puts(prefix + n) }   # user each(&block)
@@ -136,3 +138,11 @@ Proc or Lambda stores the local and frees its owned captures in its drop glue
 `2195_blocks_procs_lambdas_ownership`, `2197_array_each_closure_value`,
 `2199_block_fewer_params` and `2201_closures_owned_by_fields_and_collections`;
 `docs/errors/E1018.md`, `docs/errors/E1019.md`.
+
+## Owner decisions (2026-10-25)
+
+- D4 a: calling a callable value (`f.(x)`, `f.call(x)`, `yield`) gets its own
+  HIR node instead of a `MethodCall` named `call`; a user method named `call`
+  stays an ordinary method [planned](../../TODO.md#t-d4).
+- X2 a: a block result is discarded only at a declared nil-result block
+  boundary [planned](../../TODO.md#t-x2).

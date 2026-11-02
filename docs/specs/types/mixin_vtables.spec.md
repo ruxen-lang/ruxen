@@ -32,9 +32,12 @@ This unblocks:
 
 ## B1 — Vtable opt-in via `mixin Foo dispatch runtime`
 
-The mixin author marks the mixin as runtime-dispatched:
+The mixin author marks the mixin as runtime-dispatched. `Future` itself is
+[implemented] and stays until the Fiber scheduler [planned](../../../TODO.md#t-fibers).
 
-```rx
+Stdlib source, [deprecated] `mixin` (replacement `module`, [planned](../../../TODO.md#t-module-mixins)):
+
+```ruby
 mixin Future dispatch runtime
   type Output
   def var poll(cx: &var Context) -> Poll[Self.Output]
@@ -56,7 +59,7 @@ warranted.
 For every class C that includes a `dispatch runtime` mixin M, the
 compiler prepends an 8-byte header field to C's heap allocation:
 
-```
+```text
 +------------------+ offset 0
 | vtable_ptr (i64) | → points to a static M-vtable for C
 +------------------+ offset 8
@@ -66,7 +69,7 @@ compiler prepends an 8-byte header field to C's heap allocation:
 If C includes multiple `dispatch runtime` mixins (M1 + M2), the
 header is widened to one slot per mixin:
 
-```
+```text
 +----------------+ offset 0
 | M1_vtable_ptr  |
 +----------------+ offset 8
@@ -103,9 +106,10 @@ existing FFI ABI.
 ## B4 — Class construction populates the vtable header slot
 
 At class construction (every `__init` method, including the
-synth-generated `<Class>.new`), the codegen emits:
+synth-generated `<Class>.new`), the codegen emits the equivalent of this pseudo-code (not user syntax; the
+`@` field write is [implemented], `@vtable_slot_for` is compiler-internal):
 
-```rx
+```text
 # Synthesised at the head of every __init:
 @vtable_slot_for(Future) = &__future_vtable_<Class>
 ```
@@ -160,9 +164,11 @@ unchanged for direct method calls.
 The dynamic path activates when the receiver's type is the **mixin
 itself** (e.g., a `&var Future` parameter or a polymorphic slot):
 
-```rx
+Example [implemented] (`...` stands for the arms):
+
+```ruby
 def run_one(fut: &var Future) -> nil
-  match fut.poll(cx)
+  case fut.poll(cx)
     ...
   end
 end
@@ -183,7 +189,9 @@ denotes a runtime-dispatched reference. The static type check
 verifies the receiver's class includes the mixin; the runtime
 dispatch reads the vtable.
 
-```rx
+Example, [deprecated] `let` with a type (replacement `tasks: Array[&var Future] = []`, [planned](../../../TODO.md#t-typed-local)); it works inside a `def`:
+
+```ruby
 let tasks: Array[&var Future] = Array.new()    # heterogeneous task queue
 tasks.push(some_future_a)
 tasks.push(some_future_b)   # different concrete type, both Future-includers

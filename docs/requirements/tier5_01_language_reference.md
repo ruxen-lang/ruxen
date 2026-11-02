@@ -137,7 +137,7 @@ The proposed TOC. Each chapter maps to a directory/file under
 
 ### 4.1 Structure
 
-```
+```text
 docs/reference/
 ├── README.md                         # entry point; edition badge
 ├── 01-conventions.md                 # grammar notation, "normative", etc.
@@ -193,7 +193,7 @@ docs/reference/
 
 The reference uses an extended EBNF:
 
-```
+```text
 # Comments start with '#' in grammar blocks.
 rule-name   ::= alternative-1
               | alternative-2
@@ -224,7 +224,7 @@ because true EBNF for infix-with-precedence is unreadable. Example:
 
 Every chapter has frontmatter:
 
-```
+```yaml
 ---
 status: normative   # or: informative
 edition: 2026       # first edition in which this is normative
@@ -291,7 +291,7 @@ test `tests/reference_coverage.rs` does two things:
 Naming: `tests/reference/03-expressions/02-precedence-mul-over-add.rx`.
 Each fixture has a header:
 
-```
+```text
 # reference: expressions-precedence-mul-over-add
 # expect: accept
 # expect-hir: (BinOp (Add (Int 1) (BinOp (Mul (Int 2) (Int 3)))))
@@ -299,7 +299,7 @@ Each fixture has a header:
 
 And for rejection fixtures:
 
-```
+```text
 # reference: ownership-use-after-move
 # expect: reject
 # expect-error: E1001

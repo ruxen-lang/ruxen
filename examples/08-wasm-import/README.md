@@ -3,9 +3,9 @@
 Tier 4.09. The other half of the wasm foundation (with `07-wasm-heap`): a Ruxen
 wasm module can **call into the host**. A top-level `lib "<module>"` block on the
 wasm target declares functions the host supplies — the lib name is the wasm import
-**module**, each `def name as "<symbol>"` the import **field**. So:
+**module**, each `def name as "<symbol>"` the import **field**. So, [implemented] on the wasm target:
 
-```ruxen
+```ruby
 lib "env"
   def host_mul as "host_mul"(a: Int, b: Int) -> Int
 end

@@ -1,312 +1,309 @@
 # I/O and CLI Tools
 
-Most useful programs talk to the world — read files, parse command-line arguments, print output, return an exit code. This chapter is the working guide to writing CLI tools in Ruxen: stdout / stderr, `args()`, file read / write, buffered I/O for line-oriented work, stdin, error reporting, and the `ruxen explain` tool for debugging compiler messages. By the end you'll have a complete file-to-uppercase CLI as a reference template.
+Most useful programs talk to the world — read files, parse command-line arguments, print output, return an exit code. This chapter is the working guide to writing CLI tools in Ruxen: stdout / stderr, command-line arguments, file read / write, buffered I/O for line-oriented work, stdin, error reporting, and the `ruxen explain` tool for debugging compiler messages. By the end you'll have a complete file-to-uppercase CLI as a reference template.
+
+The file and argument APIs are moving to Ruby's names (`File.read`, `File.write`, `File.foreach`, `ARGV`) [planned](../../TODO.md#t-stdlib-shapes), and their errors to Ruby exceptions [planned](../../TODO.md#t-exceptions). Today they return a `Result`, taken apart with `case/in` and `Ok(...)` / `Err(...)` patterns, which are [deprecated]. Every class used here (`Env`, `FS`, `File`, `OpenOptions`, `SeekFrom`, `BufReader`, `BufWriter`) is available without a `require`; the old `use std.io.{...}` imports are [deprecated], replace them with the bare names.
 
 ---
 
 ## 1. A complete first CLI
 
-Save as `shout.rx`:
+Save as `shout.rx`. Example [implemented]:
 
-```ruxen
-use std.io.puts
-
-def main
-  puts "hello on stdout"
-end
+```ruby
+puts "hello on stdout"
 ```
 
 Run it:
 
-```bash
+```sh
 ruxen run shout.rx
 ```
 
 Output:
 
-```
+```text
 hello on stdout
 ```
 
 `puts` writes a string plus a newline to stdout. That's the smallest possible CLI — we'll grow it through the rest of this chapter.
 
-## 2. `puts`, `eputs`, and `exit`
+## 2. `puts`, `warn`, and `exit`
 
-Three functions you'll use in nearly every CLI:
+Three methods you'll use in nearly every CLI. Example [implemented]:
 
-```ruxen
-use std.io.{puts, eputs}
-use std.process.exit
-
-def main
-  puts "hello on stdout"
-  eputs "hello on stderr"
-  exit(0)
-end
+```ruby
+puts "hello on stdout"
+warn "hello on stderr"
+exit(0)
 ```
 
-- `puts(msg: &String)` — stdout, trailing newline.
-- `eputs(msg: &String)` — stderr, trailing newline.
-- `exit(code: Int) -> Never` — never returns. The OS sees `code mod 256`.
+- `puts msg` [implemented] — stdout, trailing newline.
+- `warn msg` [implemented] — stderr, trailing newline. `eputs` is the [deprecated] spelling.
+- `exit(code)` [implemented] — never returns (its type is `Never`). The OS sees `code mod 256`. The parenless `exit 1` is [planned](../../TODO.md#t-f45).
+- `abort(msg)` [implemented] — prints `msg` to stderr and exits with status 1.
 
-You usually don't need `exit(0)` — falling off the end of `main` exits with status 0. Use `exit(n)` for non-zero codes from inside helpers where `return` won't propagate that far.
+You usually don't need `exit(0)` — falling off the end of the program exits with status 0. Use `exit(n)` for non-zero codes from inside helpers where `return` won't propagate that far.
 
 ## 3. Reading command-line arguments
 
-```ruxen
-use std.env.args
-use std.process.exit
-use std.io.{puts, eputs}
+The Ruby form, `ARGV` [planned](../../TODO.md#t-stdlib-shapes):
 
-def main
-  let argv = args()
-  if argv.size < 2
-    eputs "usage: tool <input>"
-    exit(1)
-  end
-  let path = argv.get(1).expect!("path")
-  puts "processing #{path}"
-end
+```ruby
+abort("usage: tool <input>") if ARGV.empty?
+puts "processing #{ARGV[0]}"
 ```
 
-`args() -> Array[String]` always has at least element 0 (the program name). Real flag parsing — `--verbose`, subcommands, `KEY=val` env-style overrides — is your responsibility today; v1 doesn't ship a built-in clap-style parser.
+Works today [implemented]:
+
+```ruby
+argv = Env.args
+if argv.size < 2
+  warn "usage: tool <input>"
+  exit(1)
+end
+path = argv[1]
+puts "processing #{path}"
+```
+
+`Env.args` returns an `Array[String]` that always has at least element 0 (the program name); Ruby's `ARGV` will leave the program name out. Real flag parsing — `--verbose`, subcommands, `KEY=val` env-style overrides — is your responsibility today; there's no built-in option parser.
 
 ## 4. Reading files
 
-The one-shot read:
+The Ruby form, one-shot [planned](../../TODO.md#t-stdlib-shapes):
 
-```ruxen
-use std.fs.read_to_string
+```ruby
+puts File.read("/etc/hostname")
+```
 
-def main
-  match read_to_string("/etc/hostname")
-    Ok(text) -> puts text
-    Err(_)   -> puts "read failed"
-  end
+Works today [deprecated] (`Result` with `Ok` / `Err` patterns, replaced by the form above):
+
+```ruby
+case FS.read_to_string("/etc/hostname")
+in Ok(text) then puts text
+in Err(_) then puts "read failed"
 end
 ```
 
-If you need more control — incremental reads, seeks, metadata — use the `File` API:
+If you need more control — incremental reads, seeks, metadata — use the `File` API. Works today [deprecated] (`Result` with `Ok` / `Err` patterns, replaced by exceptions):
 
-```ruxen
-use std.io.File
-
+```ruby
 def show(f: File)
-  match f.read_to_string()
-    Ok(s)  -> puts s
-    Err(_) -> puts "read failed"
+  fv = f
+  case fv.read_to_string
+  in Ok(s) then puts s
+  in Err(_) then puts "read failed"
   end
 end
 
-def main
-  match File.open("/etc/hostname")
-    Ok(f)  -> show(f)
-    Err(_) -> puts "open failed"
-  end
+case File.open("/etc/hostname")
+in Ok(f) then show(f)
+in Err(_) then puts "open failed"
 end
 ```
 
-Notice the pattern: each `match` arm calls a single helper, never inlines a multi-line body. This keeps the arms short and easy to read.
+Notice the pattern: each `case` arm calls a single helper, never inlines a multi-line body. This keeps the arms short and easy to read. (`fv = f` gives the helper its own changeable binding: reading moves the file's position.)
 
 ### `OpenOptions` — read / write / append / create flags
 
-```ruxen
-use std.io.{File, OpenOptions}
+Ruby's mode strings (`File.open(path, "a+")`) are [planned](../../TODO.md#t-stdlib-shapes). Works today [deprecated] (`Result` with `Ok` / `Err` patterns):
 
+```ruby
 def write_first_line(f: File)
-  let _ = f.write_str("hello\n")
+  fv = f
+  fv.write_str("hello\n")
 end
 
-def main
-  let opts = OpenOptions.new().read(true).write(true).create(true)
-  match File.open_options("/tmp/log.txt", opts)
-    Ok(f)  -> write_first_line(f)
-    Err(_) -> puts "open failed"
-  end
+opts = OpenOptions.new.read(true).write(true).create(true)
+case File.open_options("/tmp/log.txt", opts)
+in Ok(f) then write_first_line(f)
+in Err(_) then puts "open failed"
 end
 ```
 
 ### Seeking
 
-```ruxen
-use std.io.{File, SeekFrom}
+Works today [deprecated] (`Result` with `Ok` / `Err` patterns; Ruby's `f.seek(3)` is [planned](../../TODO.md#t-stdlib-shapes)):
 
-def tail(f: File)
-  match f.read_to_string()
-    Ok(rest) -> puts "rest=#{rest}"
-    Err(_)   -> puts "read failed"
+```ruby
+def tail(f: &var File)
+  case f.read_to_string
+  in Ok(rest) then puts "rest=#{rest}"
+  in Err(_) then puts "read failed"
   end
 end
 
 def after_seek(f: File)
-  match f.seek(SeekFrom.Start(offset: 3))
-    Ok(_)  -> tail(f)
-    Err(_) -> puts "seek failed"
+  fv = f
+  case fv.seek(SeekFrom.Start(offset: 3))
+  in Ok(_) then tail(&var fv)
+  in Err(_) then puts "seek failed"
   end
 end
 ```
 
-`SeekFrom` has variants `Start(offset)`, `Current(offset)`, and `End(offset)`. `seek` returns the resulting absolute position.
+`SeekFrom` has cases `Start(offset)`, `Current(offset)`, and `End(offset)`. `seek` returns the resulting absolute position.
 
 ### Metadata
 
-```ruxen
-def show_meta(f: File)
-  match f.metadata()
-    Ok(m)  -> puts "size=#{m.size} file=#{m.is_file}"
-    Err(_) -> puts "meta failed"
+Works today [deprecated] (`Result` with `Ok` / `Err` patterns; Ruby's `File.size(path)` and `File.file?(path)` are [planned](../../TODO.md#t-stdlib-shapes)):
+
+```ruby
+def show_meta(f: &File)
+  case f.metadata
+  in Ok(m) then puts "size=#{m.size} file=#{m.is_file}"
+  in Err(_) then puts "meta failed"
   end
 end
 ```
 
 ## 5. Writing files
 
-One-shot write:
+The Ruby form, one-shot [planned](../../TODO.md#t-stdlib-shapes):
 
-```ruxen
-use std.fs.write
+```ruby
+File.write("/tmp/out.txt", "hello\n")
+```
 
-def main
-  write("/tmp/out.txt", "hello\n").expect!("write")
+Works today [deprecated] (`Result` with `Ok` / `Err` patterns, replaced by the form above):
+
+```ruby
+case FS.write("/tmp/out.txt", "hello\n")
+in Ok(_) then nil
+in Err(e) then warn "write failed: #{e.message}"
 end
 ```
 
-Incremental writes via `File.create` + `write_str`:
+Incremental writes via `File.create` + `write_str`. Works today [deprecated] (`Result` with `Ok` / `Err` patterns):
 
-```ruxen
-use std.io.File
-
+```ruby
 def body(f: File)
-  let _ = f.write_str("hello\n")
-  let _ = f.write_str("world\n")
+  fv = f
+  fv.write_str("hello\n")
+  fv.write_str("world\n")
 end
 
-def main
-  match File.create("/tmp/out.txt")
-    Ok(f)  -> body(f)
-    Err(_) -> puts "create failed"
-  end
+case File.create("/tmp/out.txt")
+in Ok(f) then body(f)
+in Err(_) then puts "create failed"
 end
 ```
+
+### Socket timeouts
+
+The same `Result` shape covers sockets (see [Chapter 18](18-stdlib-tour.md)). To bound a blocking read or write on a `TcpStream`, use `set_read_timeout_ns(ns)` and `set_write_timeout_ns(ns)` [implemented], which take nanoseconds. A `set_read_timeout(duration)` taking a `&Duration` is [planned](../../TODO.md#t-d24); the `set_read_timeout` method that exists today does not match its C side, so do not call it.
 
 ## 6. Buffered I/O
 
-For line-by-line reading or batched writes, wrap a `File` in `BufReader` / `BufWriter`:
+The Ruby form, `File.foreach(path) { |line| ... }` [planned](../../TODO.md#t-stdlib-shapes):
 
-```ruxen
-use std.io.File
-use std.bufio.{BufReader, BufWriter}
+```ruby
+File.foreach("/tmp/in.txt") do |line|
+  puts "line=#{line}"
+end
+```
 
+For line-by-line reading or batched writes today, wrap a `File` in `BufReader` / `BufWriter`. Works today [deprecated] (`Result` with `Ok` / `Err` patterns and the `Some` pattern, replaced by the form above):
+
+```ruby
 def show(line: String) -> Bool
   puts "line=#{line}"
   false
 end
 
 def handle(opt: String?) -> Bool
-  match opt
-    Some(line) -> show(line)
-    nil       -> true            # EOF
+  case opt
+  in Some(line) then show(line)
+  in nil then true            # EOF
   end
 end
 
 def drain(br: BufReader.File)
-  var done = false
+  b = br
+  done = false
   while !done
-    match br.read_line()
-      Ok(opt) -> done = handle(opt)
-      Err(_)  -> done = true
+    case b.read_line
+    in Ok(opt) then done = handle(opt)
+    in Err(_) then done = true
     end
   end
 end
 
-def main
-  match File.open("/tmp/in.txt")
-    Ok(f)  -> drain(BufReader.File.new(f))
-    Err(_) -> puts "open failed"
-  end
+case File.open("/tmp/in.txt")
+in Ok(f) then drain(BufReader.File.new(f))
+in Err(_) then puts "open failed"
 end
 ```
 
-`BufReader.read_line` returns `Result[Option[String], IoError]` — `Ok(nil)` means clean EOF.
+`BufReader.File#read_line` returns a `Result` holding a `String?` — `Ok(nil)` means clean EOF. The arm `in Some(line)` is used because a binding arm after `in nil` still binds the optional value today [known issue](../../TODO.md#t-case-in-nil).
 
-`BufWriter` is the writing equivalent:
+`BufWriter` is the writing equivalent. Example [implemented]:
 
-```ruxen
-let bw = BufWriter.File.new(f)
-let _ = bw.write_all(&bytes)
-let _ = bw.flush()
+```ruby
+def write_buffered(f: &File, bytes: &Array[Int])
+  bw = BufWriter.File.new(f)
+  bw.write_all(bytes)
+  bw.flush
+end
 ```
 
-**Always `flush()` before dropping a `BufWriter`** — drop alone does not guarantee the buffered tail is written.
+**Always `flush` before dropping a `BufWriter`** — drop alone does not guarantee the buffered tail is written.
 
 ## 7. Reading stdin
 
-```ruxen
-use std.io.Stdin
+The Ruby form, `STDIN.each_line` [planned](../../TODO.md#t-stdlib-shapes):
 
-def show(text: String)
-  puts "> #{text}"
-end
+```ruby
+STDIN.each_line { |text| puts "> #{text}" }
+```
 
-def report
-  puts "read error"
-end
+Works today [deprecated] (`Result` with `Ok` / `Err` patterns). `Stdin` is a handle type with no constructor — get one from the method `stdin()` (likewise `stdout()` / `stderr()`):
 
-def handle(line: Result[String, IoError])
-  match line
-    Ok(text) -> show(text)
-    Err(_)   -> report
-  end
-end
-
-def main
-  # `Stdin` is a handle type with no constructor — get one from the free
-  # function `stdin()` (likewise `stdout()` / `stderr()`).
-  let stdin = stdin()
-  for line in stdin.lines()
-    handle(line)
+```ruby
+for line in stdin().lines
+  case line
+  in Ok(text) then puts "> #{text}"
+  in Err(_) then puts "read error"
   end
 end
 ```
 
-`stdin.lines()` returns `Array[Result[String, IoError]]` — fully buffered, not streaming. For a "read forever" streaming loop, wrap raw stdin in `BufReader`.
+`stdin().lines` returns `Array[Result[String, IoError]]` — fully buffered, not streaming. For a "read forever" streaming loop, wrap raw stdin in `BufReader`.
 
-## 8. Panics vs. graceful errors
+## 8. Aborts vs. graceful errors
 
-A `panic!(msg)` aborts the process with the message on stderr and a non-zero exit code:
+`abort(msg)` ends the process with the message on stderr and exit status 1. Works today [deprecated] (`parse_int`'s `Result` with `Ok` / `Err` patterns; Ruby's `Integer(s)` with `rescue` is [planned](../../TODO.md#t-exceptions)):
 
-```ruxen
+```ruby
 def parse_or_die(s: &String) -> Int
-  match s.parse_int
-    Ok(n)  -> n
-    Err(_) -> panic!("bad number: #{s}")
+  case s.parse_int
+  in Ok(n) then n
+  in Err(_) then abort("bad number: #{s}")
   end
 end
 ```
 
-Use `panic!` for *invariants and never-supposed-to-happen* conditions — bugs in your code, not bad input from the user.
+Use `abort` for *invariants and never-supposed-to-happen* conditions — bugs in your code, not bad input from the user. `panic!(msg)` is the [deprecated] spelling of the same thing, replaced by `abort` or by `raise` [planned](../../TODO.md#t-exceptions).
 
-For expected user-facing errors, the conventional shape is "print to stderr, exit non-zero." Pull the error path into a helper so each match arm stays a single expression:
+For expected user-facing errors, the conventional shape is "print to stderr, exit non-zero." Pull the error path into a helper so each `case` arm stays a single expression. Works today [deprecated] (`Result` with `Ok` / `Err` patterns):
 
-```ruxen
-def die(msg: String)
-  eputs "error: #{msg}"
+```ruby
+def die(msg: String) -> Never
+  warn "error: #{msg}"
   exit(1)
 end
 
-def main
-  match parse(s)
-    Ok(v)  -> use_it(v)
-    Err(e) -> die(e.message)
-  end
+case "12".parse_int
+in Ok(v) then puts v
+in Err(e) then die("not a number")
 end
 ```
 
 ## 9. `ruxen explain` — looking up compiler errors
 
-Every compiler diagnostic carries a code (e.g. `E0702`). Look one up with:
+Every compiler diagnostic carries a code (e.g. `E0702`). Look one up with [implemented]:
 
-```bash
+```sh
 ruxen explain E0702
 ruxen explain E1117
 ```
@@ -315,68 +312,73 @@ The output expands on the inline message with examples and the recommended fix. 
 
 ## 10. A full skeleton: file-to-uppercase CLI
 
-```ruxen
-use std.env.args
-use std.fs.read_to_string
-use std.io.{puts, eputs}
-use std.process.exit
+The Ruby form, with `ARGV` and `File.read` [planned](../../TODO.md#t-stdlib-shapes) and `begin/rescue` [planned](../../TODO.md#t-exceptions):
 
-def emit(path: &String) -> Result[nil, IoError]
-  let text = read_to_string(path)?
-  puts text.to_upper
-  Ok(nil)
+```ruby
+abort("usage: shout <file>") if ARGV.empty?
+
+begin
+  puts File.read(ARGV[0]).upcase
+rescue IOError => e
+  abort("shout: #{e.message}")
+end
+```
+
+Works today [deprecated] (`Result` with `Ok` / `Err` patterns, replaced by `rescue` [planned](../../TODO.md#t-exceptions)):
+
+```ruby
+def emit(path: &String) -> Bool
+  case FS.read_to_string(path)
+  in Ok(text) then
+    puts text.upcase
+    true
+  in Err(e) then
+    warn "shout: #{e.message}"
+    false
+  end
 end
 
-def die(msg: String)
-  eputs "shout: #{msg}"
+argv = Env.args
+if argv.size < 2
+  warn "usage: shout <file>"
   exit(1)
 end
-
-def main
-  let argv = args()
-  if argv.size < 2
-    eputs "usage: shout <file>"
-    exit(1)
-  end
-  let path = argv.get(1).expect!("path")
-  match emit(path)
-    Ok(_)  -> nil
-    Err(e) -> die(e.message)
-  end
+if !emit(argv[1])
+  exit(1)
 end
 ```
 
 Build and run:
 
-```bash
+```sh
 ruxen build
 ./target/debug/shout README.md
 ```
 
 This is the canonical CLI shape:
 
-- Short `main` — argv parsing, one call into a helper, one error funnel.
-- All real work lives in `Result`-returning helpers.
-- One `die` helper isolates the "print and exit" pattern from the match arms.
+- Short top level — argv parsing, one call into a helper, one error funnel.
+- All real work lives in helpers that report success or failure.
+- The error path prints to stderr and exits non-zero. (A top-level statement modifier such as `exit(1) unless emit(path)` is [planned](../../TODO.md#t-toplevel-stmts); it works inside a method today.) The postfix `?` that earlier drafts used to pass errors up is [deprecated]; exceptions will propagate on their own.
 
 ## 11. Common mistakes
 
-- **Calling `exit(0)` at the end of `main`.** Don't. Falling off the end exits cleanly; `exit` short-circuits drops and can mask resource leaks.
-- **Forgetting to `flush()` a `BufWriter`.** The last batch of writes may never reach disk. Always `flush` before dropping.
-- **Using `panic!` for user errors.** Reserve `panic!` for bugs. For bad input or missing files, print to stderr and `exit(1)`.
-- **Inlining multi-statement match arms.** Pull each arm body into a helper. Single-expression arms read far better.
-- **Treating `Stdin.lines()` as streaming.** It buffers the whole input. For a "process line, then read another" loop, wrap stdin in `BufReader`.
+- **Calling `exit(0)` at the end of the program.** Don't. Falling off the end exits cleanly; `exit` short-circuits drops and can mask resource leaks.
+- **Forgetting to `flush` a `BufWriter`.** The last batch of writes may never reach disk. Always `flush` before dropping.
+- **Using `abort` for user errors.** Reserve `abort` for bugs. For bad input or missing files, print to stderr with `warn` and `exit(1)`.
+- **Inlining multi-statement `case` arms.** Pull each arm body into a helper. Single-expression arms read far better.
+- **Treating `stdin().lines` as streaming.** It buffers the whole input. For a "process line, then read another" loop, wrap stdin in `BufReader`.
 
-> **Try it:** extend the `shout` example to take multiple file arguments (`argv[1..]`) and concatenate them all to uppercase output.
+> **Try it:** extend the `shout` example to take multiple file arguments (every element of `argv` after the first) and concatenate them all to uppercase output.
 
 ---
 
 ## Recap
 
-- `puts` / `eputs` / `exit(n)` plus `args()` cover most CLI plumbing.
-- `read_to_string` / `write` for one-shot file I/O; `File` + `OpenOptions` for fine control.
+- `puts` / `warn` / `exit(n)` plus `Env.args` cover most CLI plumbing [implemented].
+- `FS.read_to_string` / `FS.write` for one-shot file I/O; `File` + `OpenOptions` for fine control. Ruby's `File.read` / `File.write` are [planned](../../TODO.md#t-stdlib-shapes).
 - `BufReader` / `BufWriter` for line-oriented or batched I/O — remember to `flush`.
-- `panic!` for bugs; "stderr + `exit(1)`" for user-facing errors.
+- `abort` for bugs; "stderr + `exit(1)`" for user-facing errors.
 - `ruxen explain CODE` looks up the full text of any compiler error.
 
 **Next:** [Chapter 32 — Idiomatic Patterns](32-idiomatic-patterns.md).

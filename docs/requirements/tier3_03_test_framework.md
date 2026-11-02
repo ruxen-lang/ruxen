@@ -108,18 +108,24 @@ here.
 
 ### 4.1 In-body directives
 
-Primary test directive:
+The in-body directives in this section were never built: `ruxen test` runs
+the `Tester` DSL instead (`docs/tutorial/19-writing-and-running-tests.md`),
+so every directive example here is [retired]. Keeping `ArrayMatcher`,
+`StringMatcher`, `BoolMatcher` and `OptionMatcher` and making them reachable
+through `Tester.expect` is [planned](../../TODO.md#t-d12).
 
-```
+Primary test directive, [retired]:
+
+```ruby
 def adds_two_numbers
   test
   assert_eq(2 + 2, 4)
 end
 ```
 
-Extended directives (v1, written on their own lines at the top of the fn body):
+Extended directives (v1, written on their own lines at the top of the method body), [retired]:
 
-```
+```ruby
 def x
   test
   ignore                       # mark test as skipped (still discovered)
@@ -143,9 +149,9 @@ def z
 end
 ```
 
-v2 extensions (post-macros doc 05):
+v2 extensions (post-macros doc 05), [retired]:
 
-```
+```ruby
 def x
   test
   timeout 1000                 # ms; v2, needs threading
@@ -156,7 +162,7 @@ end
 
 ### 4.2 CLI
 
-```
+```sh
 ruxen test                                  # build + run all tests
 ruxen test --release                        # release-mode tests
 ruxen test foo.bar                          # filter by substring (run tests whose path contains "foo.bar")
@@ -178,19 +184,20 @@ Ship as compiler-builtin function calls. There are no user macros, so
 stringifying the asserted expression needs compiler support.
 
 v1 functions (in `std.test` module once stdlib ships; before that
-as builtins registered by `resolve::mod::register_builtins`):
+as builtins registered by `resolve::mod::register_builtins`). None of them
+exists; the `Tester` matchers replaced them, so this API is [retired]:
 
-```
+```ruby
 def assert(cond: Bool)
 def assert_msg(cond: Bool, msg: &String)
-def assert_eq[T](actual: T, expected: T)  where T: Debug + Eq
-def assert_ne[T](actual: T, expected: T)  where T: Debug + Eq
+def assert_eq[T < Inspect](actual: T, expected: T)
+def assert_ne[T < Inspect](actual: T, expected: T)
 def fail(msg: &String) -> Never
 ```
 
 Failure message format:
 
-```
+```text
 assertion failed: actual != expected
   actual:   Array([1, 2, 3])
   expected: Array([1, 2, 4])
@@ -204,7 +211,7 @@ Accept the slight degradation.
 
 Default (`--format=pretty`, Rust-style):
 
-```
+```text
 running 5 tests
 test tests.arithmetic.adds_two_numbers ... ok
 test tests.arithmetic.subtracts ... ok
@@ -225,7 +232,7 @@ test result: FAILED. 3 passed; 1 failed; 1 skipped; finished in 0.04s
 
 TAP output (`--format=tap`):
 
-```
+```text
 TAP version 13
 1..5
 ok 1 - tests.arithmetic.adds_two_numbers
@@ -267,6 +274,10 @@ parsed `def`; if it's a bare identifier matching one of these keywords
 (optionally followed by a literal argument), record it on the AST node
 and consume.
 
+This parser sketch belongs to the body-directive design, which was never
+built and is [retired] (it is kept as history):
+
+<!-- compiler-rust -->
 ```rust
 // pseudocode
 fn parse_func_body(&mut self) -> FuncBody {
@@ -308,6 +319,7 @@ See §5.3 for the harness generation mechanics.
 
 Add to `src/ruxen_cli/src/cli.rs::Command`:
 
+<!-- compiler-rust -->
 ```rust
 Test {
     #[arg(long)] release: bool,
@@ -325,6 +337,7 @@ Test {
 
 New module `src/ruxen_cli/src/test.rs`:
 
+<!-- compiler-rust -->
 ```rust
 pub fn test(opts: TestOptions) -> Result<(), String> {
     // 1. Discover test files:
@@ -344,20 +357,17 @@ in the requested format based on args it receives.
 ### 5.3 Harness generation
 
 The harness is a generated `.rx` file (or directly-generated MIR
-function) that looks like:
+function) that looks like this. The generated harness was never built
+(`ruxen test` runs the `tests/**.rx` files through the `Tester` DSL), so it is [retired]:
 
-```rx
+```ruby
 # Auto-generated; do not edit.
-use std.test.internal.{TestCase, run_all}
-
-def main
-  let tests: Array[TestCase] = [
-    TestCase.new("tests.arithmetic.adds_two_numbers", adds_two_numbers_0xabc),
-    TestCase.new("tests.arithmetic.subtracts",         subtracts_0xdef),
-    # ...
-  ]
-  run_all(tests)
-end
+tests = [
+  TestCase.new("tests.arithmetic.adds_two_numbers", adds_two_numbers_0xabc),
+  TestCase.new("tests.arithmetic.subtracts",         subtracts_0xdef),
+  # ...
+]
+run_all(tests)
 ```
 
 Each `*_0xHASH` is the mangled name of a test function. The mangling

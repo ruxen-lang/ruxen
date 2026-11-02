@@ -50,6 +50,7 @@ Concretely:
 1. **Extract** the inline dep-source flat-merge in `compile_project`
    (lines ~577–589) into a free helper:
 
+   <!-- compiler-rust -->
    ```rust
    fn gather_dep_sources(dep_source_dirs: &[PathBuf]) -> Result<String, String>
    ```

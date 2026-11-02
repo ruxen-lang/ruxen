@@ -35,10 +35,16 @@ Declared in `initialize` at `server.rs:40-72`:
 
 | Capability | Status | Location |
 |---|---|---|
-| `textDocumentSync` | Full-document sync, `save` fires `didSave`, `change` does not re-analyze | `server.rs:43-52`, `:109-123` |
-| `hoverProvider` | Simple provider | `server.rs:53` |
-| `definitionProvider` | Single-location; same-file only | `server.rs:54` |
-| `semanticTokensProvider` | Full-document tokens, no range, no delta | `server.rs:55-67` |
+| `textDocumentSync` | [implemented]: full-document sync, `save` fires `didSave`, `change` does not re-analyze | `server.rs:43-52`, `:109-123` |
+| `hoverProvider` | [implemented]: simple provider | `server.rs:53` |
+| `definitionProvider` | [implemented]: single-location; same-file only | `server.rs:54` |
+| `semanticTokensProvider` | [implemented]: full-document tokens, no range, no delta | `server.rs:55-67` |
+
+This table is the state when this doc was drafted. `server.rs:53-84` now
+also declares type definition, completion, signature help, document and
+workspace symbols, inlay hints, folding ranges, formatting, code actions,
+references, document highlight and rename, so check the code before
+treating a gap below as open.
 
 Everything else on the LSP capability ladder is absent: no
 `completionProvider`, no `renameProvider`, no `referencesProvider`, no
@@ -128,7 +134,7 @@ The following `DefKind` enum variants (`resolve/symbols.rs:70-128`) are
 already distinguishable and therefore serve as the basis for document
 symbols, workspace symbols, and the semantic-tokens mapping:
 
-```
+```text
 Variable, Function, Class, Struct, Enum, EnumVariant, Mixin,
 TypeAlias, Newtype, TypeParam, Module, Field, Method, Const,
 Param, SelfValue
@@ -232,6 +238,7 @@ Each new LSP feature maps to one new public function in `ruxen_ide`.
 The signatures below are the target — server handlers are thin adapters
 that convert LSP types to these and back.
 
+<!-- compiler-rust -->
 ```rust
 // src/ruxen_ide/src/completion.rs (new)
 pub fn completions(result: &AnalysisResult, position: lsp_types::Position,
@@ -293,6 +300,7 @@ a `DefId -> Vec<Span>` map of *use-sites*. `goto_def.rs` walks forward
 
 Add to `AnalysisResult`:
 
+<!-- compiler-rust -->
 ```rust
 pub struct UseIndex {
     // All references to each DefId (includes the definition span as the first entry).
@@ -410,6 +418,7 @@ is a match on the code string.
 
 Two handlers:
 
+<!-- compiler-rust -->
 ```rust
 async fn formatting(params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>>
 async fn range_formatting(params: DocumentRangeFormattingParams) -> Result<Option<Vec<TextEdit>>>

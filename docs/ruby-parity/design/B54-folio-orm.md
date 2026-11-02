@@ -32,7 +32,7 @@ system dependency). Its entire public surface is six class methods on `Db`:
 
 **Verified running** (`ruxen run` in `examples/smoke`, 7.09s build):
 
-```
+```text
 rows json: [{"id":1,"label":"buy milk","done":0},{"id":2,"label":"walk o'dog","done":1},…]
 done rows: [{"label":"walk o'dog"}]
 parsed 3 rows from the db
@@ -57,7 +57,9 @@ BEGIN/COMMIT/ROLLBACK helper** (though `Db.exec(db, "BEGIN")` works).
 
 ### 1.2 `where` is a reserved keyword (R1)
 
-```
+The probe and its diagnostics (freeing the keyword is [planned](../../../TODO.md#t-free-keywords)):
+
+```text
 def where(frag: &String) -> Relation[T]
   error: expected expression, found RParen
   error: expected identifier, found Where
@@ -69,7 +71,9 @@ compiles immediately (R2), so nothing else about the shape is wrong.
 
 ### 1.3 A phantom-typed lazy `Relation[T]` works today (R2)
 
-```
+Probe R2, [implemented]:
+
+```ruby
 Relation[User].new("SELECT * FROM users").filter(&"age > ?").limit(10)
 # prints: SELECT * FROM users WHERE age > ? LIMIT 10
 ```
@@ -138,15 +142,15 @@ There are only three ways out:
 3. **Carry the metadata as a value** (R6). Works today, needs no compiler change,
    and keeps the generic CRUD in `.rx` where the north star wants it.
 
-Option 3 is a repository. The model descriptor is an ordinary value:
+Option 3 is a repository. The model descriptor is an ordinary value, [planned](../../../TODO.md#t-parity-orm):
 
-```
+```ruby
 # What B33's field walk provides, wrapped as a value rather than dispatched as statics
-struct ModelDesc[T]
+class ModelDesc[T]
   table:   String
   columns: Array[String]
-  decode:  any Fn[Fn(&Json) -> T]      # closure, per R6
-  encode:  any Fn[Fn(&T) -> Array[String]]
+  decode:  Proc[(&Json) -> T]           # closure, per R6
+  encode:  Proc[(&T) -> Array[String]]
 end
 ```
 
@@ -167,9 +171,9 @@ the compiler:
 
 ### The facade, so Ruby developers still recognise it
 
-Per model, one line each:
+Per model, one line each, [planned](../../../TODO.md#t-parity-orm):
 
-```
+```ruby
 class User
   include Model               # B33 field walk, provides the descriptor
   id: Int
@@ -190,9 +194,9 @@ the core does not change.** That is the test of a good factoring.
 ## 3. The schema at compile time
 
 Built on [`B33-codegen-substrate.md`](B33-codegen-substrate.md). What the user
-writes:
+writes, [planned](../../../TODO.md#t-parity-orm):
 
-```
+```ruby
 class Todo
   include Model
   id:         Int
@@ -202,12 +206,13 @@ class Todo
 end
 ```
 
-What B33 synthesizes (its three members, unchanged):
+What B33 synthesizes (its three members, unchanged), [planned](../../../TODO.md#t-parity-orm); the bounds are
+spelled `[V < FieldVisitor]`, [planned](../../../TODO.md#t-d7-respell):
 
-```
+```ruby
 def self.field_names -> Array[String]                      # ["id","label","done","created_at"]
-def accept[V: FieldVisitor](v: &var V) -> nil              # one visit_* per field
-def self.from_fields[R: FieldReader](r: &var R) -> Todo    # one read_* per field
+def accept[V < FieldVisitor](v: &var V) -> nil              # one visit_* per field
+def self.from_fields[R < FieldReader](r: &var R) -> Todo    # one read_* per field
 ```
 
 What folio adds in `.rx`, with **no new compiler work**:
@@ -235,16 +240,16 @@ nothing here.
 ## 4. `Relation[T]`: typed, lazy, and composable today
 
 Proven by R2. `Relation[T]` carries the accumulated SQL fragments and a parallel
-`Array[String]` of bound parameters, plus the phantom `T`:
+`Array[String]` of bound parameters, plus the phantom `T`, [planned](../../../TODO.md#t-parity-orm):
 
-```
-struct Relation[T]
+```ruby
+class Relation[T]
   desc:     ModelDesc[T]
   wheres:   Array[String]      # fragments, each with ? placeholders
   params:   Array[String]      # the bound values, positionally
   orders:   Array[String]
-  limit:    Option[Int]
-  offset:   Option[Int]
+  limit:    Int?
+  offset:   Int?
 end
 ```
 
@@ -269,9 +274,9 @@ rather than a pretence that one form covers everything.
 
 | Tier | Form | Covers | Status |
 |---|---|---|---|
-| **1. Bound fragment** | `.filter(&"age > ?", &["18"])` | **everything**: `>`, `LIKE`, `IN`, `OR`, subqueries, functions | works **today** |
-| **2. Typed predicate** | `.filter(User.age.gt(18))` | every operator, fully typed, column names checked | needs a column-descriptor per field (a B33 extension) |
-| **3. kwargs equality** | `.filter(name: "ada")` | **equality only** | needs B27c, which needs B29a |
+| **1. Bound fragment** | `.filter(&"age > ?", &["18"])` | **everything**: `>`, `LIKE`, `IN`, `OR`, subqueries, functions | [implemented]: the shape compiles today (probe R2); folio itself is [planned](../../../TODO.md#t-parity-orm) |
+| **2. Typed predicate** | `.filter(User.age.gt(18))` | every operator, fully typed, column names checked | [planned](../../../TODO.md#t-parity-orm): needs a column-descriptor per field (a B33 extension) |
+| **3. kwargs equality** | `.filter(name: "ada")` | **equality only** | [planned](../../../TODO.md#t-kwargs): needs B27c, which needs B29a |
 
 **The important honesty:** tier 3 is the one Ruby developers ask for and it is
 the **least capable of the three**. `where(name: "ada")` is equality-and-AND by
@@ -418,14 +423,14 @@ is not.**
 
 | Layer | Blocked by | Status |
 |---|---|---|
-| `Relation[T]`, `Repo`, `ModelDesc`, migrations, transactions, preload | nothing | **designable and buildable today** (R2, R6, and ledger verified running) |
-| The `desc` value's contents (`columns`, `to_row`, `from_row`) | **B33** (field walk). Hand-writable until then, which is exactly Phase 0's plan. | designable now |
-| `User.all` style facade | nothing (concrete statics work), but it is per-model boilerplate until **B33** generates it | designable now |
-| **Generic CRUD inherited from `mixin Model`** | **B77** (static dispatch on an abstract type). This is `gems-db.md`'s Phase 2 as written, and it **cannot be built**. | **undesignable as specified**; re-specified here as `Repo` plus `desc` |
-| `.where(...)` by that name | **B78** (`where` is a reserved keyword) | ships as `filter`, renamed later |
-| `where(name: "ada")` kwargs form | **B27c**, itself gated on **B29a** | tier 3, last |
-| `create` returning the new id | ledger `last_insert_rowid` | small addition, needed early |
-| Numeric predicate exactness | ledger typed binds | works via affinity meanwhile |
+| `Relation[T]`, `Repo`, `ModelDesc`, migrations, transactions, preload | nothing | [planned](../../../TODO.md#t-parity-orm): **designable and buildable today** (R2, R6, and ledger verified running) |
+| The `desc` value's contents (`columns`, `to_row`, `from_row`) | **B33** (field walk). Hand-writable until then, which is exactly Phase 0's plan. | [planned](../../../TODO.md#t-parity-orm): designable now |
+| `User.all` style facade | nothing (concrete statics work), but it is per-model boilerplate until **B33** generates it | [planned](../../../TODO.md#t-parity-orm): designable now |
+| **Generic CRUD inherited from `mixin Model`** | **B77** (static dispatch on an abstract type). This is `gems-db.md`'s Phase 2 as written, and it **cannot be built**. | [planned](../../../TODO.md#t-parity-orm): **undesignable as specified**; re-specified here as `Repo` plus `desc` |
+| `.where(...)` by that name | **B78** (`where` is a reserved keyword) | [planned](../../../TODO.md#t-free-keywords): ships as `filter`, renamed later |
+| `where(name: "ada")` kwargs form | **B27c**, itself gated on **B29a** | [planned](../../../TODO.md#t-kwargs): tier 3, last |
+| `create` returning the new id | ledger `last_insert_rowid` | [planned](../../../TODO.md#t-parity-orm): small addition, needed early |
+| Numeric predicate exactness | ledger typed binds | [implemented]: works via affinity meanwhile; typed binds [planned](../../../TODO.md#t-parity-orm) |
 
 ---
 

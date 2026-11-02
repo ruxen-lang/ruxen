@@ -15,6 +15,13 @@ paths, each new feature has to touch (and risk breaking) all of
 them. Consolidating them locally is more important than abstract
 "cleanup" — the diagnosis already exists from this session.
 
+
+**Owner decisions (2026-10-25).** D2 b: compiler-emitted calls name a `.rx`
+declaration by a declared role marker, and generated functions get ids
+[planned](../../../TODO.md#t-d2). D19 a: the REPL slot redesign (slots hold more than
+`Int`) deletes the C replay guards [planned](../../../TODO.md#t-d19). D23 a: the F-31,
+F-39 and F-40 leftovers are re-verified first [planned](../../../TODO.md#t-d23).
+
 ---
 
 ## B1 — Method dispatch in `mir/lower/expr/method_call.rs`: one path

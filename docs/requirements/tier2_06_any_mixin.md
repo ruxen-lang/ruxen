@@ -63,6 +63,7 @@ which has no any-specific path.
 
 `typeck/traits.rs:83-133` splits on `require_nominal`:
 
+<!-- compiler-rust -->
 ```rust
 if require_nominal {
     return TraitSatisfaction::Unsatisfied { ... };
@@ -186,7 +187,7 @@ Errors:
 Each `any Mixin` produces exactly one vtable per concrete (type, mixin)
 pair. The vtable is a read-only global:
 
-```
+```text
 struct VTable_<Mixin>_<Type> {
     drop: fn(*var u8),                  // slot 0: drop glue
     size: usize,                         // slot 1: byte size of T
@@ -226,7 +227,7 @@ This matches the 16-byte / 8-align layout at `codegen/layout.rs:334`.
 
 `x.method(args)` where `x: &any Mixin`:
 
-```
+```text
 load vtbl = x.vtbl
 load fn = vtbl.method_N       // N = method's index in the mixin
 call fn(x.data, args...)
@@ -241,7 +242,7 @@ shim. See §5.5 for ABI detail.
 
 `drop(box_val)` where `box_val: Box[any Mixin]`:
 
-```
+```text
 load vtbl = box_val.vtbl
 load drop_fn = vtbl.drop
 load size = vtbl.size
@@ -294,16 +295,27 @@ No new syntax. `any Mixin` already parses.
 
 ### 6.2 Construction
 
-```ruxen
+`Describable` stands for any user mixin (it requires `def describe -> String`);
+the earlier draft used the [deprecated] `Display` mixin, whose Ruby twin is
+`to_s`. Typed locals are [planned](../../TODO.md#t-typed-local), `Box.new` is
+[planned](../../TODO.md#t-box-new) and `initialize` is [planned](../../TODO.md#t-initialize).
+The coercion of a local to `&any Describable` is rejected today
+(type mismatch), so the whole example is [planned](../../TODO.md#t-oq) (OQ-11):
+
+```ruby
 class Square
   side: Float
-  include Display
-  def to_display -> String; "Square"; end
+  include Describable
+
+  def initialize(@side: Float)
+  end
+
+  def describe -> String = "Square"
 end
 
-let s = Square.new(1.0)
-let d: &any Display = &s            # coercion
-let boxed: Box[any Display] = Box.new(s)  # unsized coercion
+s = Square.new(1.0)
+d: &any Describable = &s                    # coercion
+boxed: Box[any Describable] = Box.new(s)    # unsized coercion
 ```
 
 Rules:
@@ -315,16 +327,17 @@ Rules:
   or one of the shared owning forms.)
 - `Box[T] → Box[any Mixin]` same.
 - No other types may be coerced (e.g., `Array[T] → Array[any Mixin]` is
-  an E-DYN-NO-DEEP-COERCE; the user writes `vec.map(|x| Box.new(x))`).
+  an E-DYN-NO-DEEP-COERCE; the user writes `xs.map { |x| Box.new(x) }`).
 - `as any Mixin` explicit coercion is legal and documented.
 
 ### 6.3 Use
 
-```ruxen
-def print_all(items: &Array[Box[any Display]])
-  for item in items
-    puts item.to_display
-  end
+A method call through `Box[any Describable]` is E0740 today ("no field or
+method"), so this is [planned](../../TODO.md#t-oq) (OQ-11):
+
+```ruby
+def print_all(items: &Array[Box[any Describable]])
+  items.each { |item| puts item.describe }
 end
 ```
 

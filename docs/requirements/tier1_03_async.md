@@ -1,6 +1,15 @@
 # Tier 1 — Feature 03: Async / Await
 
-Status: Proposed (no code in-tree).
+Status: Proposed (no code in-tree) when drafted. Since then `async def`,
+postfix `.await`, the `Future` mixin with `Poll`, `Context` and `Waker`
+(`library/std/future/`) and `block_on(future)` (`library/std/executor/`) are
+[implemented] (pins such as `tests/release-e2e/cases/2100_async_await_int32_char_string.rx`).
+They stay until Ruby's Fiber scheduler replaces them, [planned](../../TODO.md#t-fibers).
+An `.await` is lowered only as a `let` initializer today: `x = f().await`,
+an `.await` in a tail expression or as a statement fails to type-check at the
+`block_on` call (E0740) [known issue](../../TODO.md#t-await-gaps).
+Real argument types for `Race.any_of` and `Task.spawn_raw`, with the raw
+boundary kept internal, are [planned](../../TODO.md#t-d14).
 Target: Ruxen v0.3 — v0.5 (phased).
 Owner: Compiler team.
 
@@ -24,20 +33,18 @@ cleanly with the rest of the language.
 
 This document specifies how async/await integrates into Ruxen's six-phase
 pipeline (lexer → parser → resolve → typeck → borrow_check → mir → codegen)
-and defines a minimum viable executor so that a user can write:
+and defines a minimum viable executor so that a user can write the
+following (the HTTP client is illustrative). The `HttpError` it raises
+instead of returning a [deprecated] `Result` needs exceptions, [planned](../../TODO.md#t-exceptions):
 
-```ruxen
-async def fetch_user(id: UInt64) -> Result[User, HttpError]
-  let response = await http.get("/users/#{id}")
+```ruby
+async def fetch_user(id: Int) -> User
+  response = Http.get("/users/#{id}").await
   response.json[User]
 end
 
-def main
-  runtime.block_on do
-    let user = await fetch_user(42)
-    puts(user.name)
-  end
-end
+user = block_on(fetch_user(42))
+puts user.name
 ```
 
 ---
@@ -170,18 +177,37 @@ compilation target, not a runtime".
 
 ### 5.1 Async functions
 
-```ruxen
-async def fetch(url: &String) -> Result[String, IoError]
-  let conn = await net.connect(url)
-  let bytes = await conn.read_all()
-  Ok(String.from_utf8(bytes)?)
+In the Ruby form, I/O errors raise instead of returning a [deprecated]
+`Result` (exceptions are [planned](../../TODO.md#t-exceptions)):
+
+```ruby
+async def fetch(url: &String) -> String
+  conn = Net.connect(url).await
+  bytes = conn.read_all.await
+  String.from_utf8(bytes)
 end
+```
+
+Each `.await` is a `let` initializer here [known issue](../../TODO.md#t-await-gaps).
+Works today, [deprecated] (`let` is replaced by a plain local):
+
+```ruby
+async def answer -> Int
+  41
+end
+
+async def plus_one -> Int
+  let x = answer().await
+  x + 1
+end
+
+puts "#{block_on(plus_one())}"
 ```
 
 Grammar addition (parser/mod.rs at the item-level dispatcher around
 `:513` and `:517`):
 
-```
+```text
 FuncDef   ::= "async"? "def" ...
 ```
 
@@ -195,8 +221,13 @@ preserve it.
 
 ### 5.2 Async closures
 
-```ruxen
-let f = async do |x| await process(x) end
+Its body uses the postfix `.await` (prefix `await` is rejected, see §5.4).
+An async closure parses and type-checks [implemented]:
+
+```ruby
+f = async do |x: Int|
+  process(x).await
+end
 ```
 
 `ClosureExpr` gains `pub is_async: bool` (alongside existing `is_move`).
@@ -205,10 +236,13 @@ introducer.
 
 ### 5.3 Async block
 
-```ruxen
-let fut = async do
-  let a = await op_a()
-  let b = await op_b()
+Bind each awaited value with `let` today [known issue](../../TODO.md#t-await-gaps).
+An async block type-checks [implemented]:
+
+```ruby
+fut = async do
+  a = op_a().await
+  b = op_b().await
   a + b
 end
 ```
@@ -222,39 +256,39 @@ has `|params|`.
 
 ### 5.4 Await
 
-Preferred form — postfix, Ruby/Rust-style method-chain feel:
+Preferred form — postfix, method-chain feel, [implemented]:
 
-```ruxen
-let user = fetch_user(id).await
-let bytes = conn.read_all().await?
+```ruby
+user = fetch_user(id).await
+bytes = conn.read_all.await
 ```
 
-Rationale: keeps `?` composable (`.await?`), reads left-to-right, and
+Rationale: keeps `?` composable (`.await?`; `?` is [deprecated], replace
+with exceptions that propagate on their own), reads left-to-right, and
 avoids prefix-operator precedence hazards. Postfix `.await` is implemented
 as a **keyword-method** token sequence: the parser, when it sees a `.`
 followed by the `Await` token, produces an `ExprKind::Await(Box<Expr>)`
 node. This special-case lives in the postfix-chain loop in
 `parser/expr.rs` (alongside `MethodCall` and `FieldAccess`).
 
-Alternative form — prefix `await expr`:
+Alternative form — prefix `await expr`. The parser rejects it with "prefix
+`await` is not supported; use postfix `.await`", so it is [retired]:
 
-```ruxen
-let user = await fetch_user(id)
+```ruby
+user = await fetch_user(id)
 ```
 
-**Decision**: support both. Prefix `await` is parsed in the unary/primary
-dispatcher like `return`/`yield`. Precedence is unary-tight, binding
-tighter than binary operators but looser than method calls. The formatter
-normalizes to postfix `.await` (more Ruby-like chaining).
+History: the draft decided to support both forms (prefix `await` parsed
+like `return`/`yield`, with the formatter normalizing to postfix). That was
+dropped: only postfix `.await` shipped, and prefix `await` is [retired].
 
 ### 5.5 Grammar summary (new productions)
 
-```
+```text
 Item          ::= "async"? "def" ...
 ClosureExpr   ::= "async"? "move"? ("do" ... "end" | "{" ... "}")
 AsyncBlock    ::= "async" "do" Block "end"
-PrimaryExpr   ::= ... | "await" Expr               # prefix form
-PostfixOp     ::= ... | "." "await"                # postfix form
+PostfixOp     ::= ... | "." "await"                # the only await form (prefix "await" Expr is retired)
 ```
 
 ---
@@ -263,7 +297,12 @@ PostfixOp     ::= ... | "." "await"                # postfix form
 
 ### 6.1 Definition (in `core`)
 
-```ruxen
+`library/std/future/src/lib.rx` declares these today ([implemented]). The
+`enum` and `mixin` spellings are [deprecated] (replace with `Data`
+variants or symbols and `module`), and `Future`, `Poll` and `Waker` in user
+code go [deprecated] with `async def` once Fibers land. As drafted, [deprecated]:
+
+```ruby
 enum Poll[T]
   Ready(T)
   Pending
@@ -359,7 +398,7 @@ place.** Rationale:
 1. **Collect live state**: every local variable, parameter, and temporary
    whose live range crosses any `await` point.
 2. **Generate state enum**:
-   ```
+   ```text
    enum Foo_State
      Init(...params...)
      Suspend0 { <live locals>, inner: F0 }
@@ -370,7 +409,7 @@ place.** Rationale:
    ```
    where `Fi` is the type of the inner future being awaited at point `i`.
 3. **Generate struct**:
-   ```
+   ```text
    struct FooFuture
      state: Foo_State
    end
@@ -382,12 +421,13 @@ place.** Rationale:
    corresponding basic block.
 5. **Rewrite call sites**: a call `foo(args)` in an async context becomes
    `FooFuture { state: Init(args) }`; it does not execute until polled.
-6. **Rewrite `await` expressions** in the original body:
-   ```ruxen
-   let x = expr.await
+6. **Rewrite `await` expressions** in the original body. An awaited
+   binding is [implemented] (only as a `let` initializer today, [known issue](../../TODO.md#t-await-gaps)):
+   ```ruby
+   x = expr.await
    ```
    becomes, inside the MIR CFG:
-   ```
+   ```text
    BB_pre_await:
      tmp_fut = <compute expr>
      state = Suspendi { ..., inner: tmp_fut }
@@ -408,6 +448,7 @@ place.** Rationale:
 
 Add to `mir/nodes.rs`:
 
+<!-- compiler-rust -->
 ```rust
 pub enum Terminator {
     ...existing variants...,
@@ -434,22 +475,23 @@ Run on HIR (`borrow_check::borrow_check`, `borrow_check/mod.rs:30`)
   (new error code in `borrow_check/errors.rs`). The diagnostic must
   point at the borrow, the await, and the subsequent use.
 
-Example rejected:
+Example to be rejected. A borrow held across `.await` is not rejected yet
+(TODO.md "Async spec gaps", B13), [planned](../../TODO.md#t-await-borrow):
 
-```ruxen
+```ruby
 async def bad(v: &var Array[Int])
-  let r = &var v[0]        # &var borrow
-  await yield_now()        # suspension
+  r = &var v[0]            # &var borrow
+  Task.yield_now.await     # suspension
   *r += 1                  # ERROR: &var borrow held across await
 end
 ```
 
-Example accepted (borrow released before await):
+Example the same check accepts (borrow released before await), [planned](../../TODO.md#t-await-borrow):
 
-```ruxen
+```ruby
 async def good(v: &var Array[Int])
   v[0] += 1
-  await yield_now()
+  Task.yield_now.await
   v[0] += 2                # fresh borrow after resume
 end
 ```
@@ -466,19 +508,22 @@ struct: if any field is `!Send`, the whole future is `!Send`.
 Phase 3c ships **one** executor: a single-threaded event-loop reactor
 patterned after smol / tokio's current-thread runtime.
 
-Public surface (in `core.runtime`):
+Public surface as drafted (in `core.runtime`). What shipped instead is the
+free function `block_on(future)` (a compiler intrinsic, `library/std/executor/src/lib.rx`),
+`Task.yield_now` and `Task.spawn_raw` (`library/std/future/src/task.rx`).
+The RBS-style bounds below are [planned](../../TODO.md#t-d7-respell):
 
-```ruxen
+```ruby
 # Drive a future to completion on the calling thread.
 # Blocks the thread until the future resolves.
-def runtime.block_on[F: Future](fut: F) -> F.Output
+def runtime.block_on[F < Future](fut: F) -> F.Output
 
 # Inside an async context, yield to the reactor once.
-async def runtime.yield_now() -> nil
+async def runtime.yield_now -> nil
 
 # Spawn an additional task onto the current-thread executor.
-# Requires F: Future + static (task outlives its creator).
-def runtime.spawn[F: Future + static](fut: F) -> JoinHandle[F.Output]
+# Requires the future to own everything it uses (task outlives its creator).
+def runtime.spawn[F < Future](fut: F) -> TaskHandle
 ```
 
 ### 8.2 Reactor abstraction
@@ -518,14 +563,10 @@ No allocator per `.await` beyond the one boxed root future in
 
 ### 8.4 Startup
 
-**Explicit**, not implicit:
+**Explicit**, not implicit. Top-level statements call `block_on`, [implemented]:
 
-```ruxen
-def main
-  runtime.block_on do
-    app.run()
-  end
-end
+```ruby
+block_on(app.run())
 ```
 
 Rationale: matches Ruxen's
@@ -599,10 +640,10 @@ Phase 1 (3b-3c): **abort-on-drop only.** Dropping a future causes its
 state machine to drop, which drops all live locals. There is no
 `CancellationToken`, no cooperative cancellation signal, no `select!`.
 
-Timeouts are built on drop:
+Timeouts are built on drop. The combinator is [planned](../../TODO.md#t-req-async):
 
-```ruxen
-let result = runtime.timeout(5.seconds, fetch_user(id)).await
+```ruby
+result = runtime.timeout(5.seconds, fetch_user(id)).await
 ```
 
 `timeout` is a combinator future that wakes on a timer and drops the
@@ -623,23 +664,25 @@ Create a new stdlib module `core.async_io`. Do **not** re-export
 blocking `fs`/`net` with an `async_` prefix — keep the namespaces
 separated to avoid ambiguity about which API a user is using.
 
-Minimum viable surface for Phase 3d:
+Minimum viable surface for Phase 3d, in the Ruby stdlib shapes
+([planned](../../TODO.md#t-stdlib-shapes)); every method raises `IOError` instead of
+returning a [deprecated] `Result` (exceptions are [planned](../../TODO.md#t-exceptions)):
 
-```ruxen
+```ruby
 # async_io.net
-async def TcpStream.connect(addr: &String) -> Result[TcpStream, IoError]
-async def var TcpStream.read(buf: &var [UInt8]) -> Result[USize, IoError]
-async def var TcpStream.write(buf: &[UInt8]) -> Result[USize, IoError]
-async def TcpListener.bind(addr: &String) -> Result[TcpListener, IoError]
-async def var TcpListener.accept -> Result[(TcpStream, SocketAddr), IoError]
+async def TCPSocket.connect(addr: &String) -> TCPSocket
+async def var TCPSocket.read(buf: &var Array[UInt8]) -> Int
+async def var TCPSocket.write(buf: &Array[UInt8]) -> Int
+async def TCPServer.bind(addr: &String) -> TCPServer
+async def var TCPServer.accept -> [TCPSocket, Addrinfo]
 
 # async_io.time
-async def sleep(duration: Duration) -> nil
-def Instant.now() -> Instant
+async def sleep(seconds: Float) -> nil
+def Time.now -> Time
 
 # async_io.fs (Phase 3d+1)
-async def fs.read_to_string(path: &String) -> Result[String, IoError]
-async def fs.write(path: &String, data: &[UInt8]) -> Result[nil, IoError]
+async def File.read(path: &String) -> String
+async def File.write(path: &String, data: &Array[UInt8]) -> Int
 ```
 
 ### 12.2 Under the hood

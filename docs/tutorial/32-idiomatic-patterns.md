@@ -1,60 +1,93 @@
 # Idiomatic Patterns
 
-A handful of small patterns show up across well-written Ruxen code. Each one is a shape — not a library — that plays to Ruxen's strengths: owned values, exhaustive matching, and short pure functions. This chapter walks through nine of them. None is novel on its own, but together they form the vocabulary you'll see in the standard library and in any non-trivial Ruxen program.
+A handful of small patterns show up across well-written Ruxen code. Each one is a shape — not a library — that plays to Ruxen's strengths: owned values, `case/in` branching, and short pure methods. This chapter walks through nine of them. None is novel on its own, but together they form the vocabulary you'll see in the standard library and in any non-trivial Ruxen program.
+
+Several patterns lean on features that are still being built. Each section shows the Ruby form with its status, and when that form is not built yet, a version that works today.
 
 ---
 
 ## 1. The builder
 
-When a value has a few required fields and a lot of optional configuration, give it a small `init` for the essentials and a chain of fluent `with_*` methods for the rest. Each setter mutates in place and returns `self`, so calls compose:
+When a value has a few required fields and a lot of optional configuration, give it a small constructor for the essentials and a chain of fluent `with_*` methods for the rest. Each setter changes the receiver and returns `self`, so calls compose. Example [implemented], with the `def init` constructor [deprecated] (replace with `def initialize` [planned](../../TODO.md#t-initialize)):
 
-```ruxen
+```ruby
 class Request
   url: String
   method: String
   timeout_ms: Int
 
   def init(@url: String)
-    self.method = "GET"
-    self.timeout_ms = 30_000
+    @method = "GET"
+    @timeout_ms = 30_000
   end
 
   def var with_method(m: String) -> Request
-    self.method = m
+    @method = m
     self
   end
 
   def var with_timeout(ms: Int) -> Request
-    self.timeout_ms = ms
+    @timeout_ms = ms
     self
   end
 end
 
-def main
-  let r = Request.new("https://example.com")
-    .with_method("POST")
-    .with_timeout(5_000)
-  puts "#{r.method} #{r.url} timeout=#{r.timeout_ms}"
-end
+r = Request.new("https://example.com")
+  .with_method("POST")
+  .with_timeout(5_000)
+puts "#{r.method} #{r.url} timeout=#{r.timeout_ms}"
 ```
 
 Notice three things:
 
-- The setters are `def var` — they mutate in place. Returning `self` is what makes them chainable.
-- `init` sets sensible defaults for every non-essential field.
+- The setters are `def var` [implemented]: they may change `self`. Returning `self` is what makes them chainable.
+- The constructor sets sensible defaults for every non-essential field.
 - There's no separate `Builder` class. The value *is* its own builder — the way `OpenOptions` and `Command` work in the standard library.
 
 ## 2. Type-state — encoding "what state am I in" in the type
 
-Use a generic parameter to represent the current state. The same class supports different operations depending on which state it's in.
+Use a generic parameter to represent the current state, and add methods only for the state where they make sense. In Ruby form you reopen the class for one type argument, which is [planned](../../TODO.md#t-oq) (OQ-6, reopening with a bound or a type argument):
 
-```ruxen
-class Phase end
-
+```ruby
 module Phases
-  class Draft end
-  class Submitted end
-  class Approved end
+  class Draft
+  end
+  class Submitted
+  end
+  class Approved
+  end
+end
+
+class Workflow[P]
+  data: String
+
+  def initialize(@data: String)
+  end
+
+  def submit -> Workflow[Phases::Submitted]
+    Workflow.new(@data.clone)
+  end
+end
+
+class Workflow[Phases::Submitted]
+  def approve -> Workflow[Phases::Approved]
+    Workflow.new(@data.clone)
+  end
+end
+```
+
+The goal: once you call `submit` on a draft you hold a `Workflow[Phases::Submitted]`, and only that type has `approve`, so a misordered transition is a compile error instead of a runtime bug.
+
+Works today [deprecated] (`extension` and `def init`, replaced by reopening the class and `def initialize`):
+
+```ruby
+module Phases
+  class Draft
+  end
+  class Submitted
+  end
+  class Approved
+  end
 end
 
 class Workflow[P]
@@ -64,246 +97,315 @@ class Workflow[P]
   end
 
   def submit -> Workflow[Phases.Submitted]
-    Workflow.new(self.data)
+    Workflow.new(@data.clone)
   end
 end
 
 extension Workflow[Phases.Submitted]
   def approve -> Workflow[Phases.Approved]
-    Workflow.new(self.data)
+    Workflow.new(@data.clone)
   end
 end
+
+w = Workflow[Phases.Draft].new("doc")
+s = w.submit
+a = s.approve
 ```
 
-Once you call `.submit()` on a `Draft`, you get a `Submitted` and the type system forgets it was ever a draft — there's no way to call `submit` twice on the same workflow. Misordered transitions become compile errors instead of runtime bugs.
+This compiles, but it does not enforce the state yet: the type checker also accepts `approve` on the draft `w` [known issue](../../TODO.md#t-extension-type-arg). Treat the type parameter as documentation until the planned form lands.
 
-## 3. Newtype wrappers
+## 3. Value wrappers (newtypes)
 
-A **newtype** is a single-field struct around an existing type that makes two otherwise-interchangeable values distinct at the type level. The cost is zero (no extra bytes); the protection against mix-ups is real:
+A **newtype** is a one-field value around an existing type that makes two otherwise-interchangeable values distinct. Use one for identifiers (`UserId`, `OrderId`), units (`Meters`, `Seconds`), and any time an `Int` or `String` is too easy to confuse with another. The Ruby form is a one-field `Data` [planned](../../TODO.md#t-data-define):
 
-```ruxen
-newtype UserId(Int)
-newtype OrderId(Int)
+```ruby
+UserId = Data.define(value: Int)
+OrderId = Data.define(value: Int)
 
 def cancel_order(id: OrderId)
-  puts "cancel order #{id.0}"
+  puts "cancel order #{id.value}"
 end
 
-def main
-  let user  = UserId(42)
-  let order = OrderId(99)
-
-  cancel_order(order)    # OK
-  # cancel_order(user)   # compile error — UserId is not OrderId
-end
+user = UserId.new(value: 42)
+order = OrderId.new(value: 99)
+cancel_order(order)      # OK
+# cancel_order(user)     # meant to be a compile error: UserId is not OrderId
 ```
 
-Use newtypes for identifiers (`UserId`, `OrderId`), units (`Meters`, `Seconds`), and any time `Int` or `String` is too easy to confuse with another `Int` or `String`.
+The old `newtype UserId(Int)` with `id.0` access is [deprecated], replaced by the `Data` form above. Works today [deprecated] (`def init`, replaced by `Data.define`): a small class per wrapper.
 
-## 4. The `From` / conversion style
+```ruby
+class UserId
+  value: Int
 
-The standard library uses a consistent vocabulary for type conversions. For infallible cases, define `def self.from(input) -> Self`:
-
-```ruxen
-class Url
-  raw: String
-
-  def init(@raw: String)
-  end
-
-  def self.from(s: &String) -> Url
-    Url.new(s.to_string)
+  def init(@value: Int)
   end
 end
 
-def main
-  let u = Url.from("https://example.com")
-  puts u.raw
+class OrderId
+  value: Int
+
+  def init(@value: Int)
+  end
 end
+
+def cancel_order(id: &OrderId)
+  puts "cancel order #{id.value}"
+end
+
+user = UserId.new(42)
+order = OrderId.new(99)
+cancel_order(order)
 ```
 
-For fallible cases, use `def self.from_<kind>(input) -> Result[Self, E]` and pull each error branch into its own helper:
+The protection relies on call arguments being type-checked, and today they are not: `cancel_order(user)` is accepted [planned](../../TODO.md#t-d14). Keep the wrappers anyway; they document intent and start catching mistakes once that check lands.
 
-```ruxen
+## 4. Conversions
+
+Ruby converts with `to_*` methods on the source value (`"42".to_i`, `3.to_f`, `obj.to_s`) [implemented], and builds a value from another with a class method such as `Url.parse(text)` [implemented]. A conversion that can fail returns `nil` instead of a value; the return type ends in `?`. Example [implemented], with the `def init` constructor [deprecated] (replace with `def initialize` [planned](../../TODO.md#t-initialize)) and the `Some` pattern [deprecated] (replace with a plain binding after `in nil` once the [known issue](../../TODO.md#t-case-in-nil) is fixed):
+
+```ruby
 class Port
-  value: UInt16
+  value: Int
 
-  def init(@value: UInt16)
+  def init(@value: Int)
   end
 
-  def self.out_of_range -> Result[Port, String]
-    Err("port out of range")
-  end
-
-  def self.not_a_number -> Result[Port, String]
-    Err("not a number")
-  end
-
-  def self.from_str(s: &String) -> Result[Port, String]
-    match s.parse_int
-      Ok(n)  -> Port.classify(n)
-      Err(_) -> Port.not_a_number
-    end
-  end
-
-  def self.classify(n: Int) -> Result[Port, String]
+  def self.parse(s: &String) -> Port?
+    n = s.to_i
     if n > 0 && n < 65_536
-      Ok(Port.new(n as UInt16))
+      Port.new(n)
     else
-      Port.out_of_range
+      nil
     end
   end
 end
+
+case Port.parse("8080")
+in Some(port) then puts "port #{port.value}"
+in nil then puts "bad port"
+end
+puts Port.parse("99999").nil?
 ```
 
-Each match arm stays one expression; the construction logic and error formatting live in their own named functions.
+Output:
 
-## 5. `Option` / `Result` first
+```text
+port 8080
+true
+```
 
-The strict pattern that pervades the standard library: any operation that *can* fail returns `Result`; any operation that *can* be empty returns `Option`. Never a sentinel value (`-1`, empty string), never a boolean "did it work":
+A conversion that should explain *why* it failed raises an exception in Ruby (`Integer("x")` raises `ArgumentError`), which is [planned](../../TODO.md#t-exceptions). Today such a method returns a `Result` and the caller matches `Ok(...)` / `Err(...)` with `case/in` [deprecated]; section 6 shows one. The old spellings `def self.from(input)` and `def self.from_str(input) -> Result[Self, E]` are [deprecated], replaced by `parse` and `to_*` methods.
 
-```ruxen
+## 5. Make "missing" and "failed" part of the type
+
+Never return a sentinel value (`-1`, an empty string) or a boolean "did it work". A lookup that can come back empty returns `T?` [implemented]; an operation that can fail raises [planned](../../TODO.md#t-exceptions):
+
+```ruby
 # YES
-def find_user(id: Int) -> Option[User]
-def parse_port(s: &String) -> Result[Port, String]
+def find_user(id: Int) -> User?               # nil when there is no such user
+def parse_port(s: &String) -> Port            # raises ArgumentError on bad input
 
 # NO
-def find_user(id: Int) -> User              # what does "not found" return?
-def parse_port(s: &String) -> Int              # what does -1 mean? 0?
+def find_user(id: Int) -> User                # what does "not found" return?
+def parse_port(s: &String) -> Int             # what does -1 mean? 0?
 ```
 
-At the call site, `match` exhaustively or compose with `?`:
+At the call site, test the optional value before you use it (`user.nil?`, or `case/in` as in section 4) [implemented], so the "not found" path is impossible to forget. Until exceptions land, a method that can fail returns `Result[T, E]` [deprecated], as in section 6.
 
-```ruxen
-match find_user(42)
-  Some(user) -> greet(user)
-  nil       -> puts "not found"
+## 6. Short top level, fat helpers
+
+Keep the top of a script to the shape "read the arguments, call one helper, report the result". All real work lives in named methods. Ruby form, [planned](../../TODO.md#t-exceptions) (exceptions with `begin` / `rescue`):
+
+```ruby
+def line_count(path: &String) -> Int
+  File.read(path).lines.size
 end
-```
 
-The error path is impossible to forget.
-
-## 6. Short `main`, fat helpers
-
-Keep `main` to the shape "parse args → call one helper → report the result". All real work lives in named functions that return `Result`:
-
-```ruxen
-def die(msg: String)
-  eputs "tool: #{msg}"
+argv = Env.args
+if argv.size < 2
+  warn "usage: tool <file>"
   exit(1)
 end
-
-def run(path: &String) -> Result[nil, AppError]
-  let text = read_to_string(path)?
-  process(&text)?
-  Ok(nil)
-end
-
-def main
-  let argv = args()
-  if argv.size < 2
-    eputs "usage: tool <file>"
-    exit(1)
-  end
-  match run(argv.get(1).expect!("path"))
-    Ok(_)  -> nil
-    Err(e) -> die(e.message)
-  end
+begin
+  puts "#{line_count(argv[1])} lines"
+rescue => e
+  warn "tool: #{e.message}"
+  exit(1)
 end
 ```
 
-`main` doesn't `match` on deep details — it funnels errors through one helper. Helpers compose because they all speak the same `Result` dialect.
+Works today [deprecated] (`Result` with `Ok` / `Err` and the `as` cast, replaced by exceptions and `size` returning `Int` [planned](../../TODO.md#t-size-int)):
 
-## 7. RAII via `def drop`
+```ruby
+def line_count(path: &String) -> Result[Int, String]
+  case FS.read_to_string(path)
+  in Ok(text) then Ok(text.lines.size as Int)
+  in Err(_) then Err("cannot read #{path}")
+  end
+end
 
-Any class with a `def drop` method runs that method automatically when the value goes out of scope. Use it for resource cleanup — file handles, sockets, locks, FFI handles.
+argv = Env.args
+if argv.size < 2
+  warn "usage: tool <file>"
+  exit(1)
+end
+case line_count(argv[1])
+in Ok(n) then puts "#{n} lines"
+in Err(msg) then
+  warn "tool: #{msg}"
+  exit(1)
+end
+```
 
-```ruxen
+The top level doesn't dig into details — it funnels every error through one place. The older shape with `def main`, `args()`, `eputs` and the `?` operator is [deprecated], replaced by top-level statements, `Env.args`, `warn` and exceptions.
+
+## 7. Cleanup via `def drop`
+
+A class with a `def drop` method runs it automatically when the value goes out of scope [implemented]. Use it for resource cleanup — file handles, sockets, locks, C handles. Example [implemented], with the `def init` constructor [deprecated] (replace with `def initialize` [planned](../../TODO.md#t-initialize)):
+
+```ruby
 class Timer
   label: String
   start_ns: Int
 
   def init(@label: String)
-    self.start_ns = unix_ns()
+    @start_ns = Time.unix_ns
   end
 
   def drop -> nil
-    let elapsed = unix_ns() - self.start_ns
-    puts "#{self.label}: #{elapsed} ns"
+    elapsed = Time.unix_ns - @start_ns
+    puts "#{@label}: #{elapsed} ns"
     nil
   end
 end
 
-def main
-  let _t = Timer.new("hot loop")
-  # ... work ...
-  # `drop` runs at end of main: prints "hot loop: ... ns"
+def work
+  t = Timer.new("hot loop")
+  puts "working"
 end
+
+work
 ```
 
-The pattern: own the resource as a class field; release it in `def drop`. Callers don't have to remember to close anything.
+Output (the number varies):
 
-## 8. `match` instead of `if / elsif`
-
-Whenever you're branching on a discrete value, prefer `match`. The compiler forces you to handle every variant:
-
-```ruxen
-let label = match status
-  Status.Pending     -> "pending"
-  Status.Running     -> "running"
-  Status.Done(_)     -> "done"
-  Status.Failed(msg) -> "failed: #{msg}"
-end
+```text
+working
+hot loop: 1250 ns
 ```
 
-If you later add a `Status.Cancelled` variant, every `match` that forgot it becomes a compile error — you can't accidentally ship the "if/elsif fell through to else" branch.
+The pattern: own the resource as a field and release it in `def drop`, so callers don't have to remember to close anything. Ruby's `ensure` and block-scoped resources (`File.open(path) do |f| ... end`) built on the same drop are [planned](../../TODO.md#t-exceptions).
 
-## 9. Tiny pure functions, then compose
+## 8. `case/in` instead of `if / elsif`
 
-A function that does one thing and returns a value is trivial to test, trivial to inline mentally, and never has to be re-read. The Ruxen idiom is to prefer many small functions over one medium one — especially when walking enums, where each arm naturally maps to one helper:
+Whenever you're branching on a discrete value, prefer `case/in` [implemented]. In Ruby form the variants are `Data` classes grouped in a module, and the compiler checks that every variant has an arm, which is [planned](../../TODO.md#t-oq) (OQ-1, how a module declares its closed set of variants):
 
-```ruxen
-def handle_get(path: &String) -> Response { ... }
-def handle_post(path: &String, body: &String) -> Response { ... }
-def handle_delete(path: &String) -> Response { ... }
+```ruby
+module Status
+  Pending = Data.define
+  Running = Data.define
+  Failed = Data.define(msg: String)
+end
 
-def reply(req: Request) -> Response
-  match req
-    Request.Get(path)        -> handle_get(&path)
-    Request.Post(path, body) -> handle_post(&path, &body)
-    Request.Delete(path)     -> handle_delete(&path)
+def label(s: Status) -> String
+  case s
+  in Status::Pending then "pending"
+  in Status::Running then "running"
+  in Status::Failed(msg:) then "failed: #{msg}"
   end
 end
 ```
 
-Reading, testing, and editing all get easier the moment you stop inlining bodies into match arms.
+Works today [deprecated] (`enum` and `Status.Running`, replaced by the `Data` variants above):
+
+```ruby
+enum Status
+  Pending
+  Running
+  Failed(msg: String)
+end
+
+def label(s: &Status) -> String
+  case s
+  in Status.Pending then "pending"
+  in Status.Running then "running"
+  in Status.Failed(msg) then "failed: #{msg}"
+  end
+end
+
+puts label(Status.Running)
+puts label(Status.Failed("disk full"))
+```
+
+Output:
+
+```text
+running
+failed: disk full
+```
+
+Today the type checker does not report a missing arm ([planned](../../TODO.md#t-case-exhaustive)), so don't rely on it to catch a forgotten variant until the planned check lands. The `match v ... pat -> expr ... end` expression is [deprecated], replaced by `case/in`.
+
+## 9. Tiny pure methods, then compose
+
+A method that does one thing and returns a value is trivial to test and never has to be re-read. Prefer many small methods over one medium one — especially when branching, where each arm naturally maps to one helper. Example [implemented]:
+
+```ruby
+def handle_get(path: &String) -> String = "GET #{path}"
+def handle_post(path: &String, body: &String) -> String = "POST #{path} with #{body}"
+def handle_delete(path: &String) -> String = "DELETE #{path}"
+
+def reply(verb: &String, path: &String, body: &String) -> String
+  case verb
+  in "GET" then handle_get(path)
+  in "POST" then handle_post(path, body)
+  in "DELETE" then handle_delete(path)
+  in _ then "405 #{verb}"
+  end
+end
+
+puts reply("GET", "/users", "")
+puts reply("POST", "/users", "name=ada")
+puts reply("PATCH", "/users", "")
+```
+
+Output:
+
+```text
+GET /users
+POST /users with name=ada
+405 PATCH
+```
+
+The one-line methods use the endless `def name(...) = expr` form [implemented]. Reading, testing, and editing all get easier the moment you stop inlining bodies into `case` arms.
 
 ---
 
 ## 10. Common mistakes
 
-- **Mutable builders without `self` return.** A `def var with_foo(...)` that doesn't `return self` won't chain. The `with_*` setter must end with `self`.
-- **Newtype with no inner access.** `newtype UserId(Int)` lets you read the inner via `id.0`. Don't add an explicit accessor — the `.0` field is the idiom.
-- **Building deep `if / elsif` chains over enum variants.** Use `match` instead; the compiler will tell you when you forget a variant.
-- **Returning sentinels (`-1`, `""`, `false`) instead of `Option` / `Result`.** Every caller has to remember the special value; eventually one forgets. The type-level form forces the check.
-- **Doing real work in `main`.** It quickly grows unreadable. Push everything into helpers and keep `main` to argument parsing plus one funnel.
+- **Builder setters that don't return `self`.** A `def var with_foo(...)` that doesn't end with `self` won't chain.
+- **Reaching into a wrapper with `.0`.** The tuple-style `id.0` belongs to the [deprecated] `newtype`; give the wrapper a named field (`id.value`).
+- **Building deep `if / elsif` chains over a fixed set of cases.** Use `case/in` instead.
+- **Returning sentinels (`-1`, `""`, `false`) instead of `nil` or an error.** Every caller has to remember the special value; eventually one forgets. `T?` makes the check part of the type.
+- **Doing real work at the top level.** It quickly grows unreadable. Push everything into helpers and keep the top to argument handling plus one funnel.
 
-> **Try it:** rewrite a function in your code (any function!) that ends with `if x then ... elsif y then ... else ... end` as a `match`. Notice whether the compiler asks you to add any missing branches you'd forgotten.
+> **Try it:** rewrite a method in your code that ends with `if x ... elsif y ... else ... end` as a `case/in`. Does it read more clearly?
 
 ---
 
 ## Recap
 
-- **Builder** — `init` for essentials, fluent `with_*` setters for the rest.
-- **Type-state** — encode the current state in a generic parameter; misordered transitions become compile errors.
-- **Newtype** — single-field wrapper to keep two `Int`s (or two `String`s) from being mixed up.
-- **`From`** — `def self.from(input)` for infallible, `def self.from_<kind>(input) -> Result` for fallible.
-- **`Option` / `Result` first** — never sentinels; the type encodes "could be missing" or "could fail".
-- **Short `main`, fat helpers** — argv → helper → one error funnel.
-- **`def drop`** — RAII; clean up resources without callers remembering.
-- **`match` over `if / elsif`** — exhaustive by construction.
-- **Tiny functions** — one job each; pull match-arm bodies into named helpers.
+- **Builder** — a constructor for essentials, fluent `with_*` setters for the rest [implemented].
+- **Type-state** — encode the current state in a generic parameter; enforced transitions are [planned](../../TODO.md#t-oq).
+- **Value wrappers** — a one-field `Data` [planned](../../TODO.md#t-data-define) (a small class today) keeps two `Int`s from being mixed up.
+- **Conversions** — `to_*` methods and `parse` class methods returning `T?` [implemented]; raising conversions [planned](../../TODO.md#t-exceptions).
+- **No sentinels** — `T?` for "could be missing" [implemented], exceptions for "could fail" [planned](../../TODO.md#t-exceptions).
+- **Short top level, fat helpers** — arguments, then one helper, then one error funnel.
+- **`def drop`** — clean up resources without callers remembering [implemented].
+- **`case/in` over `if / elsif`** [implemented]; exhaustive checks over `Data` variants [planned](../../TODO.md#t-oq).
+- **Tiny methods** — one job each; pull `case` arm bodies into named helpers.
 
-These patterns repeat throughout `library/std`. Reading one of the stdlib packages end to end — `library/std/io/src/open_options.rx` for the builder, `library/std/sync/src/mutex.rx` for RAII, `library/std/option_result` for the conversion style — is the fastest way to internalise them.
+These patterns repeat throughout `library/std`. Reading one of the stdlib packages end to end — `library/std/io/src/open_options.rx` for the builder, `library/std/sync/src/mutex.rx` for cleanup in `def drop` — is the fastest way to internalise them.
 
 **Next:** [Chapter 33 — Editor Setup and Cheatsheet](33-editor-and-cheatsheet.md).

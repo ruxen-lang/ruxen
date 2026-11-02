@@ -30,7 +30,7 @@ Tier 4 is about the *outside* of the compiler — the surfaces that make Ruxen a
 
 ## Cross-doc dependency graph
 
-```
+```text
                ┌──────────────────────────────────────┐
                │ 06: CI (ship FIRST — unblocks        │
                │     everything else, protects master)│

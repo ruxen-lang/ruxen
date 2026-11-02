@@ -2,8 +2,8 @@
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §4.7](../../requirements/tier1_01_stdlib.md),
-[docs/prompts/v1/06_phase2_stdlib_io_fmt.md](../../prompts/v1/06_phase2_stdlib_io_fmt.md),
-[docs/prompts/v1/06_5_phase2_sync_io_completeness.md](../../prompts/v1/06_5_phase2_sync_io_completeness.md).
+`docs/prompts/v1/06_phase2_stdlib_io_fmt.md`,
+`docs/prompts/v1/06_5_phase2_sync_io_completeness.md`.
 
 **Status:** `exit` shipped Phase 2 #06.  `Command` builder shipped
 Phase 2 #06 (status / output terminals).  The flat `process_run`

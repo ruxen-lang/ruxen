@@ -53,14 +53,26 @@ in. Instance-method return types are user-chosen and may legitimately
 be raw Int (e.g., `ruxen_thread_join` returning the closure's i64
 result before unwrapping to `Result[T, ThreadPanic]`).
 
-Authors who want a typed return write it explicitly:
+Authors who want a typed return write it explicitly. `MutexGuard` is
+today's stdlib type [implemented]; as the user-facing shape it is
+[deprecated], replaced by `Mutex#synchronize` [planned](../../../TODO.md#t-thread-api).
+Since 2026-10-24 `MutexGuard#get` is a `.rx` method,
+`def get -> T where T: Clone` over `def deref as "ruxen_mutex_guard_get" -> &T`,
+so it returns a clone, not the cell's own value.
 
-```rx
+Stdlib source (`library/std/sync/src/mutex.rx`, `mutex_guard.rx`), [deprecated] user-facing `MutexGuard`:
+
+```ruby
 class Mutex[T]
   lib "runtime/mutex.c"
     def self.new as "ruxen_mutex_new"(initial: T) -> Mutex[T]
     def lock_raw as "ruxen_mutex_lock" -> MutexGuard[T]
-    def get as "ruxen_mutex_guard_get" -> T  # on MutexGuard
+  end
+end
+
+class MutexGuard[T]
+  lib "runtime/mutex.c"
+    def deref as "ruxen_mutex_guard_get" -> &T
   end
 end
 ```
@@ -100,12 +112,12 @@ the spelling. Codegen emits the same i64-returning C call.
 ## B6 — Chained access typechecks
 
 **Given** the typed Mutex decl from B2
-**Then** the following typechecks:
-```rx
-let m = Mutex.new(7)           # m: Mutex[Int]
-let g = m.lock_raw             # g: MutexGuard[Int]
-let v = g.get                  # v: Int
-g.set(99)                      # OK: set takes Int
+**Then** the following typechecks. Works today, with the [deprecated] user-facing `MutexGuard` (replacement `Mutex#synchronize`):
+```ruby
+m = Mutex.new(7)           # m: Mutex[Int]
+g = m.lock_raw             # g: MutexGuard[Int]
+v = g.get                  # v: Int (a clone)
+g.set(99)                  # OK: set takes Int
 ```
 
 The lift propagates through the chain without any explicit casts.
@@ -123,6 +135,17 @@ preserves Drop semantics — the codegen knows the value is a
 The list above covers the multithreading surface. Future generic
 stdlib classes get the lift automatically via the mechanism in B9
 — no resolver-side registration needed.
+
+## Owner decisions (2026-10-25)
+
+- D13 a: E0722 is re-tightened strictly. `get_var` is declared over a true
+  slot accessor and `get_mut` becomes `alias get_mut get_var`
+  [planned](../../../TODO.md#t-d13). Today `get`, `get_mut` and `get_var` share one C
+  helper that boxes a copy, so a write through `get_mut` does not reach the
+  collection; no example here relies on it.
+- X5 a: `def var` on a free `lib` function (outside a class) is silently
+  ignored today; it becomes an error, and mutation needs an explicit `&var`
+  parameter [planned](../../../TODO.md#t-x5).
 
 ## B9 — Mechanism
 

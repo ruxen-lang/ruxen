@@ -15,7 +15,9 @@ what the layout rules guarantee.
 
 ## B1 — `unsafe ... end` block parses
 
-```ruxen
+Example [implemented] (whether `unsafe` stays is OQ-9 in the naming spec):
+
+```ruby
 unsafe
   ptr.deref
 end
@@ -30,14 +32,18 @@ resolves to a raw-pointer absence value per §3.10 of the canonical
 syntax spec.  Raw pointer types are spelled `*T` (read-only) and `*var T`
 (writable).
 
-A pointer-typed `nil` reaching outside an `unsafe` block emits
-`E-NIL-RAW-OUTSIDE-UNSAFE`.
+The old draft named a diagnostic `E-NIL-RAW-OUTSIDE-UNSAFE` for a
+pointer-typed `nil` reaching outside an `unsafe` block; that name was never
+registered (naming spec section 22).
 
 ## B3 — `lib "name"` declaration parses
 
-```ruxen
+Example [implemented]. C's `void *` is spelled `*var UInt8` today; `*Void`
+is rejected as an undefined type, [planned](../../../TODO.md#t-void-ptr):
+
+```ruby
 lib "c"
-  def malloc(n: USize) -> *var Void
+  def malloc(n: USize) -> *var UInt8
 end
 ```
 
@@ -63,9 +69,9 @@ Accepts arbitrarily many parameters, mixing scalars and pointers.
 ## B7 — Variadic C functions
 
 The parser accepts a trailing `...` inside `lib` block `def`
-signatures:
+signatures. Example [implemented]:
 
-```ruxen
+```ruby
 lib "c"
   def printf(fmt: *UInt8, ...) -> Int32
 end
@@ -79,19 +85,23 @@ typeck error.
 
 `layout c` at the top of a struct body guarantees C-compatible
 layout (fields in declaration order, native alignment, no
-reordering).
+reordering). [implemented]. `struct` itself is [deprecated] (replacement
+`Data.define`, [planned](../../../TODO.md#t-data-define)); `layout c` moves to `Data.define`
+bodies with it (OQ-9).
 
 ## B9 — Implicit structural mixin inclusion on struct / class / enum
 
 Structural mixins (`Debug`, `Clone`, `Eq`, `Hashable`, …) are
-implicitly included when the fields support them; an explicit
-`include D1, D2` inside the body is the loud form and lowers to
-the same AST node.  See [implicit_includes.spec.md](../mixins/implicit_includes.spec.md).
+implicitly included when the fields support them [implemented]; an explicit
+`include` inside the body is the loud form and lowers to the same AST node.
+The Rust-named mixins (`Debug`, `Eq`) are to become [deprecated] `.rx`
+adapters over `inspect`, `==`, `hash` and `eql?`, [planned](../../../TODO.md#t-d6).  See [implicit_includes.spec.md](../mixins/implicit_includes.spec.md).
 
 ## B10 — In-body `include` clause syntax
 
-An `include Foo, Bar` clause inside a struct/class/enum body parses
-the loud form of the implicit-include rule.
+An `include Foo` clause inside a struct/class/enum body parses as the
+loud form of the implicit-include rule [implemented], one `include` per
+module. `include Foo, Bar` on one line is [planned](../../../TODO.md#t-include-many).
 
 ## B11 — Layout invariants
 
@@ -122,7 +132,11 @@ it at the caller's scope exit (`mir::lower::runtime_abi::result_ownership`
 reads the marker before its hand-listed table). `def var NAME` passes the
 receiver as `&var Self`, and `def consume NAME` takes it over (`def consume
 drop` frees the handle's storage). A by-value parameter moves into C; a
-read-only parameter is declared `&T`.
+read-only parameter is declared `&T`. [implemented]
+
+`def var` on a free `lib` function (one outside a class) is silently ignored
+today; it is to become an error, since mutation needs an explicit `&var`
+parameter [planned](../../../TODO.md#t-x5).
 
 ---
 

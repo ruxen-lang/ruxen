@@ -131,6 +131,9 @@ formal `Read`/`Write` mixin (also v1.5), `Stdin/Stdout/Stderr` BufReader
 flavour, and the `IntoInnerError` recovery type Rust ships on
 `BufWriter`.
 
+These are the Rust-shaped names that shipped; their Ruby shapes (`File.read`,
+`Time.now`, `system`) are [planned](../TODO.md#t-stdlib-shapes).
+
 ### Wedge #3 — "A flagship app" (slowest but most defensible)
 
 Rails made Ruby. Phoenix made Elixir. TensorFlow made Python ML.
@@ -188,8 +191,9 @@ need the guarantees.
 
 ### First-class Ruby FFI
 
-`extern "Ruby" fn foo(x: VALUE) -> VALUE` style. Marshal Ruby objects
-in and out cleanly. This is the unlock for Wedge #1.
+[planned](../TODO.md#t-ruby-ffi), not built: a `lib "ruby"` block whose functions take and return Ruby `VALUE`s
+(`def foo(x: VALUE) -> VALUE`), the same shape as Ruxen's C FFI. Marshal
+Ruby objects in and out cleanly. This is the unlock for Wedge #1.
 
 ### WASM as a first-class target
 
@@ -266,8 +270,8 @@ the Cloudflare Workers story. Re-evaluate then. If Wedge #1
   default is compile-to-binary.
 - **Ruby-syntax fidelity.** Don't drift toward Rust syntax under
   engineering pressure. The whole point is "this feels like Ruby."
-  Every concession ("Rubyists will accept `let mut` instead of
-  `var`") is a death-by-paper-cuts loss of the differentiator.
+  Every concession ("Rubyists will accept `let x = 1` instead of
+  `x = 1`") is a death-by-paper-cuts loss of the differentiator.
 
 ---
 

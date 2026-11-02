@@ -38,12 +38,15 @@ position it stops in a way that is entangled with named arguments.**
 
 ### 1.2 `&:sym` already works, with no symbol type (the important one)
 
-```
-let a = ["ab", "cd"]
-let b = a.map(&:to_upper)     # prints AB then CD
+S3 [implemented] (probed then with `to_upper`; `upcase` is the Ruby name):
+
+```ruby
+a = ["ab", "cd"]
+b = a.map(&:upcase)
+b.each { |s| puts s }         # prints AB then CD
 ```
 
-**S3 compiles and runs correctly.** Reading the implementation explains why:
+**S3 compiled and ran correctly in 2026-07 (spelled with `to_upper`); the `upcase` form above rests on the docs probe `p7_s3_symbol_to_proc`.** Reading the implementation explains why:
 `parser/expr/calls.rs::try_parse_block_pass` special-cases the three-token
 sequence `&` `:` `identifier` into `BlockPass(ToProc(name))`, and
 `resolve/control_flow.rs` desugars that at **resolve time** into the closure
@@ -163,11 +166,12 @@ costs a GC that Ruxen does not have and will not grow.
 ### Decision: the symbol set is closed at compile time
 
 **No symbol can be created at runtime.** The table is static and read-only, and
-`String#to_sym` **looks up** rather than interns:
+`String#to_sym` **looks up** rather than interns. The proposed signature,
+[planned](../../../TODO.md#t-symbols):
 
-```
-def to_sym -> Option[Symbol]     # Some(sym) if this exact name was interned at
-                                 # compile time, nil otherwise
+```ruby
+def to_sym -> Symbol?     # the symbol if this exact name was interned at
+                          # compile time, nil otherwise
 ```
 
 This is a **deliberate, visible deviation from Ruby**, and it is the right one:

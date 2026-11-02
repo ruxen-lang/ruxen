@@ -2,7 +2,7 @@
 
 **Source docs:**
 [docs/requirements/tier1_02_concurrency.md](../../requirements/tier1_02_concurrency.md),
-[docs/prompts/v1/14_phase4_concurrency.md](../../prompts/v1/14_phase4_concurrency.md).
+`docs/prompts/v1/14_phase4_concurrency.md`.
 
 **Status:** new in the multithreading round. Reader-writer lock for
 read-heavy workloads where `Mutex` would serialise unnecessarily.

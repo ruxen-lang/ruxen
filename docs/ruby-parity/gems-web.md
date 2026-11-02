@@ -358,7 +358,7 @@ Unblocks `deliver_later`.
 **Stage 6 — Streaming + realtime.** Add the streaming `Response` primitive
 (chunked writer over the async socket) → **SSE** first, then the **WebSocket**
 frame layer (handshake from stage 4) and an ActionCable-style channel registry.
-Turbo Streams follow, tying into [`gems-frontend.md`](gems-frontend.md).
+Turbo Streams follow, tying into `gems-frontend.md` (not written yet, QUEUE.md B70).
 
 **Stage 7 — Mailers + TLS.** Land `std/net` **TLS** and a `net-smtp` client,
 then ActionMailer (templates from stage 3, delivery over SMTPS/STARTTLS,
@@ -380,5 +380,5 @@ note (`ruby-naming.spec.md` §16 and §21 item 16), and the `std/hash` auto-deri
 stdlib gaps verified against the `library/std/` module list (`json`, `http`,
 `net`, `regex`, `time`, `rand` present; no `digest`/`hmac`/`base64`/`openssl`/
 `uri`/`net-smtp`). Cross-refs [`gems-db.md`](gems-db.md),
-[`stdlib.md`](stdlib.md), [`gems-frontend.md`](gems-frontend.md) are being
+[`stdlib.md`](stdlib.md) and `gems-frontend.md` (not written yet) are being
 authored in parallel; reconcile status rows when they land.

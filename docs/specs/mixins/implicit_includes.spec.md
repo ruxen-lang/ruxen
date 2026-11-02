@@ -7,7 +7,16 @@ canonical surface-syntax §3.6
 
 **Status:** shipped Phase 2 #C1-#C2 (Debug for struct + enum) + extended
 implicit includes Phase 2 #C3-#C4 (Clone, PartialEq, Eq, Hashable,
-Default, Ord, PartialOrd, Copy).
+Default, Ord, PartialOrd, Copy) [implemented]. The Rust-named mixins
+(`Debug`, `PartialEq`, `Eq`, `Ord`, `PartialOrd`) are [deprecated] as the
+user-facing names (naming spec section 13).
+
+**Owner decisions (2026-10-25).** D6 a, X1 a: scalars and `String` include
+`Comparable`, `Hashable` and `Clone` (plus `Default` where Ruby has a zero),
+with `==`, `<=>`, `to_s` and `inspect` in `.rx`; the Rust-named mixins become
+[deprecated] `.rx` adapters, and a bound that needs only equality checks that
+the type has a `.rx` `==`, with no marker mixin [planned](../../../TODO.md#t-d6)
+[planned](../../../TODO.md#t-x1).
 
 For the fixed set of **structural mixins** listed in §3.6 of the
 canonical surface-syntax spec, the compiler treats the `include`

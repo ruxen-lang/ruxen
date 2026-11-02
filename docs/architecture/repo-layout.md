@@ -3,7 +3,7 @@
 Ruxen follows rust-lang/rust's top-level partition between compiler,
 library (runtime + std), tooling drivers, and tests.
 
-```
+```text
 ruxen/
 ├── compiler/                       # one crate per compiler phase
 │   ├── ruxen_lexer/

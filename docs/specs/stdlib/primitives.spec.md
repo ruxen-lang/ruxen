@@ -11,6 +11,15 @@ Ruxen primitives (`Int`, sized `Int8..64` / `UInt8..64`, `ISize`,
 type-stable method surfaces.  This spec lists the methods that the
 typechecker resolves and the runtime helpers that back them.
 
+**Owner decisions (2026-10-25).** D6 a, X1 a: scalars and `String` include
+`Comparable`, `Hashable` and `Clone` (plus `Default` where Ruby has a zero),
+with `==`, `<=>`, `to_s` and `inspect` in `.rx`; the Rust-named mixins become
+[deprecated] `.rx` adapters, and a bound that needs only equality checks that
+the type has a `.rx` `==`, with no marker mixin [planned](../../../TODO.md#t-d6)
+[planned](../../../TODO.md#t-x1). D18 a: the scalar name-to-type tables in the resolver
+stay as a floor for machine primitives; the collection heads and `String`
+move to `.rx` later, in the de-primitivize phase [planned](../../../TODO.md#t-d18).
+
 ---
 
 ## B1 — `Int.to_string() -> String`

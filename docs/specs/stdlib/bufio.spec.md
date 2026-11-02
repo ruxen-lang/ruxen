@@ -14,9 +14,15 @@ deferred to v1.5.
 
 The shipped surface (`library/std/bufio/src/lib.rx`) is one module per
 direction with a class per inner type, sharing the methods through a
-mixin:
+mixin. The Ruby shape is planned: `module` for the shared methods
+([planned](../../../TODO.md#t-module-mixins)) and methods that return the value and raise
+`IOError` instead of returning `Result` ([planned](../../../TODO.md#t-exceptions)). Owner
+decision D23 a re-verifies the "one class per inner type" leftover first
+[planned](../../../TODO.md#t-d23).
 
-```ruxen
+Today's surface [implemented], with [deprecated] `mixin`, `Result` returns and `with_capacity` (replacements above; `with_capacity` becomes `new`):
+
+```ruby
 module BufReader
   mixin Reader
     def read_line -> Result[String?, IoError]               # nil at EOF
@@ -99,7 +105,7 @@ Both classes participate in the user_drop_classes pipeline (see
 
 ## Wire layout (32 bytes — same shape for reader and writer)
 
-```
+```text
 +0   uint8  kind     0 = File, 1 = TcpStream
 +1   uint8  closed   1 once into_inner / drop has emptied the buffer
 +2   uint16 _pad     reserved (zeroed)

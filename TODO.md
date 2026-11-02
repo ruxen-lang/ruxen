@@ -288,17 +288,17 @@ Run as three build batches (2026-10-16). Each family's leftovers are listed unde
     - **Also from valgrind: `Mutex#lock` (`.rx`, returning `Result`)** allocates 8 bytes and reads and writes 8 bytes past them, on every `m.lock`. The `Result[MutexGuard, _]` allocation is probably too small. Not fixed.
     - Not run before the checkpoint: MSRV `cargo +1.91 build` and `cargo check --workspace --benches`. CI on the push will run them.
 - [ ] Batch 2 leftovers:
-  - **High, not in the audit: ordinary call arguments are never type-checked.** Every call site in typeck does `let _ = unify(arg, param)`, so `baz("s")` compiles for `def baz(x: Int)`. It is blocked by the Int-erased concurrency surface (`Race.any_of`, `spawn_raw(future_ptr: Int)`), by unify lacking `any Fn + Send` vs `any Fn`, and by a block returning into a `-> ()` slot.
+  - [ ] <a id="t-d14"></a> <a id="t-x2"></a> **High, not in the audit: ordinary call arguments are never type-checked.** Every call site in typeck does `let _ = unify(arg, param)`, so `baz("s")` compiles for `def baz(x: Int)`. Unblock it with real argument types for the Int-erased concurrency surface (`Race.any_of`, `Task.spawn_raw`), the raw boundary kept internal (D14 a), and with a block result discarded only at a declared nil-result block boundary (X2 a). Also blocked by unify lacking `any Fn + Send` vs `any Fn`.
   - F-19 (decided 2026-10-17, see Decisions: `&` operator params): operators as method calls. Rewriting `a == b` to a call made by-value operator params move their operand. Choose between auto-borrowing operator operands and `&` operator params in the stdlib. `&String <=> &String` is still E0707.
-  - F-20: `MirInst::Call` structured callee (about 154 sites), so callee strings are still re-parsed in MIR and codegen. Extension methods on builtin heads are registered as free functions, so their parenless overloads are still wrong; register them as methods of the shell class. Not recorded for mixin defaults and `.new`.
+  - [ ] <a id="t-d2"></a> F-20: `MirInst::Call` structured callee (about 154 sites), so callee strings are still re-parsed in MIR and codegen. Calls the compiler emits itself name a `.rx` declaration by a declared role marker, and generated functions get ids (D2 b). Extension methods on builtin heads are registered as free functions, so their parenless overloads are still wrong; register them as methods of the shell class. Not recorded for mixin defaults and `.new`.
   - F-21: generic-calling-generic across classes (`Outer[T]` holding `Holder[T]`) is not monomorphised; it needs a worklist. `unique_bound_impl` still guesses.
-  - F-22 (decided 2026-10-17, see Decisions): Option and Result declared in `.rx` need stdlib enums to export bare variants. E0722 cannot be re-tightened while Array `get`/`get_mut` share one C symbol with different surface types.
-  - F-23: `def var` on a top-level lib function is silently ignored. Mutating through `&String` runs on a copy.
-  - F-24 (decided 2026-10-17, see Decisions: Ruby `to_s`/`inspect`): the `Int_fmt` fallback for Array, Option, Hash and type params (needs Display formatters). Primitive fmt via `.rx` `include Display` (needs `Formatter#precision` in `.rx`). `to_s` as a Kernel default. IO_TEXT_BUILTINS. Displayable, Display and Debug as one protocol. User classes have no `inspect`.
+  - [ ] <a id="t-d13"></a> F-22 (decided 2026-10-17, see Decisions): Option and Result declared in `.rx` need stdlib enums to export bare variants. Re-tighten E0722 strictly: `get_var` is declared over a true slot accessor (`ruxen_vec_slot_addr`) and `alias get_mut get_var` (D13 a); today `get`, `get_mut` and `get_var` share `ruxen_vec_get_opt`, which boxes a copy.
+  - [ ] <a id="t-x5"></a> F-23: `def var` on a top-level lib function is silently ignored; make it an error, mutation needs an explicit `&var` parameter (X5 a). Mutating through `&String` runs on a copy.
+  - [ ] <a id="t-d9"></a> F-24 (decided 2026-10-17, see Decisions: Ruby `to_s`/`inspect`): `#{x:?}` lowers to `inspect` and is deprecated; width and precision stay deprecated until `format` lands (D9 a). The `Int_fmt` fallback for Array, Option, Hash and type params goes with it. Primitive fmt via `.rx` `include Display` (needs `Formatter#precision` in `.rx`). `to_s` as a Kernel default. IO_TEXT_BUILTINS. Displayable, Display and Debug as one protocol. User classes have no `inspect`. C-handle printing is [the D10 item](#t-d10).
   - F-25: the Mutex payload leak (`get` returns an alias and `into_inner` does not consume). Ownership markers in the lib grammar.
-  - F-27 (decided 2026-10-17, see Decisions: Comparable only): Ord/PartialOrd/PartialEq into Comparable. A derived `eq(other: &Self)` is treated as a move by the borrow checker. Enums have no derived bodies. Bool, Char, Float and the collections have no `hash_code`.
-  - F-28: the `__state`/`__sub_` checks need async lowering to mark generated classes. Four codegen sites still test `name == "main"`. `include Into[X]` loses its generic argument in HIR.
-  - F-41: TypeParam against a concrete type is still lenient (`Array#sum`'s `var total: T = 0`, user generic statics, `Self::Output` as a TypeParam).
+  - [ ] <a id="t-d8"></a> F-27 (decided 2026-10-17, see Decisions: Comparable only): Ord/PartialOrd/PartialEq into Comparable; value types get a structural `==`, hash keys use `hash` and `eql?`, `eql?` defaults to `==` in Kernel `.rx`, and `hash_code` becomes a deprecated alias of `hash` (D8 a). A derived `eq(other: &Self)` is treated as a move by the borrow checker. Enums have no derived bodies. Bool, Char, Float and the collections have no `hash_code`.
+  - [ ] <a id="t-d3"></a> <a id="t-d5"></a> F-28: the `__state`/`__sub_` checks need async lowering to mark generated classes. Four codegen sites still test `name == "main"`: `parser/implicit_main.rs` decides the entry once and marks it, later stages read the flag, and a user `def main` stays the entry while deprecated (D3 a). `include Into[X]` loses its generic argument in HIR: keep include generic arguments in HIR (D5 a).
+  - [ ] <a id="t-d15"></a> <a id="t-x3"></a> F-41: TypeParam against a concrete type is still lenient (`Array#sum`'s `var total: T = 0`, user generic statics, `Self::Output` as a TypeParam). `Array#sum` becomes Ruby `sum(init)` plus a no-argument form where `T` is numeric (D15 a); `Self::Output` projections stay and resolve declared equalities (X3 a).
   - Leaks (valgrind on the scratch program: 778 bytes definitely lost before, 0 after). Fixed: class elements in Array and Hash values (per-type glue descriptor `RUXEN_ELEM_OBJ`), interpolation temporaries, and String rebinding in loops and mono bodies. Still open:
     - A class's own String or container fields are never freed (decided 2026-10-17, see Decisions "Fields": reads borrow, the object frees its fields). Next card after the checkpoint.
     - `Set[Class]` elements and `Hash[Class, _]` keys (needs key copying through the glue in `hash.c`). Generic classes and enums as elements.
@@ -313,7 +313,7 @@ Run as three build batches (2026-10-16). Each family's leftovers are listed unde
   - Found with the one-rule E1019 change (2026-10-17):
     - The borrow checker does not see a move repeat across loop iterations: `while c; eat(s); end` compiles. Walk loop bodies so a move of an outer variable inside a loop is E1001. (A move before `break` / `next` now reaches the code after the loop, I-16.)
     - A by-value binding out of a call result or element (`if let Some(v) = arr.get(0)`, a getter returning a field's Option) owns the payload though the container or object still does (same root as the `v.find` segfault). A binding out of a field read or reference now only views it.
-    - I-13 remainder: a method call skips the `Send` capture check (`check_send_required_closure` runs on free calls only), so `Thread.spawn(-> { r.size })` with `r = &s` compiles and reads freed memory (review probes x4/x4h). Closing it rejects rondo's `Thread.spawn({ || async_worker_shared(app, shared_fd) })` in `src/async_server.rx`, which sends a `&Rondo` to worker threads; rondo needs an owned, shared app handle first (owner decision).
+    - [ ] <a id="t-d16"></a> I-13 remainder: a method call skips the `Send` capture check (`check_send_required_closure` runs on free calls only), so `Thread.spawn(-> { r.size })` with `r = &s` compiles and reads freed memory (review probes x4/x4h). Close it in batch 4, and move rondo's `Thread.spawn({ || async_worker_shared(app, shared_fd) })` (`src/async_server.rx`) to an owned `SharedSync` app handle in the same batch (D16 a).
 - [ ] **F-29 first** (owner, 2026-10-17: Cranelift, LLVM and the REPL JIT must share one place and one set of rules). Do it right after the batch 2 merge and commit, before the rest of batch 3 and before any further backend fix.
   - One backend-neutral `codegen::abi` (machine class per type, every coercion and signedness rule, parameter word slots, callee and FFI lookup); `CodeGen` generic over `M: Module` so the JIT reuses the batch driver (done, P2); one `Backend` interface (`emit_object`, `aggregate_link_flags`, `compile_c_sources`); backend dispatch written once (today `codegen/mod.rs` x3 and `ruxenc`).
   - Guard: a parity test that compiles and runs the same fixture set through Cranelift, LLVM and the JIT and compares output; an LLVM lane in CI.
@@ -321,9 +321,9 @@ Run as three build batches (2026-10-16). Each family's leftovers are listed unde
 - [ ] **Batch 3 (rest of G):** F-29 backend lowering policy, F-30 one front-end driver, F-34 parser desugaring, F-35 IDE definition resolution, F-36 REPL replay, F-45 remaining stale docs.
   - F-30 includes a bug: `ruxen check` never runs the borrow checker, so it passes code that `ruxen build` rejects.
   - F-34 includes bugs: `case` re-evaluates its subject per branch; `x ||= y` evaluates `x` twice.
-  - F-45 includes a bug: a bare call with a brace block and no block parameters (`run { puts("z") }`) does not parse as a call (E0726 on `run`); `run() { ... }`, `run do ... end` and `run { |x| ... }` do. (The release-e2e harness and `drop_fixtures` now run the borrow checker, I-20.)
-  - F-36: if the slot redesign is too big for one pass, do the interim (rewrite the REPL walkers on the AST `Visit`; handle `MultiAssign`) and list the rest here.
-- [ ] **Batch 3 addition: C headers by package name** (owner decision 2026-10-17, see Decisions). Build it with F-37 (`LinkInputs`, the `[runtime]` table) and F-30 (one front-end driver), so `ruxen build`, `ruxen test`, `ruxenc` and the test harness share one native-input path.
+  - [ ] <a id="t-f45"></a> F-45 (Decisions: calls without parentheses): Ruby's general bare-call rule replaces the parser's allowlist, so `exit 1`, `sleep 0`, `puts [1, 2].sum` (parsed as an index today) and `puts five` (passes the zero-argument function as a value today) are calls. Includes a bug: a bare call with a brace block and no block parameters (`run { puts("z") }`) does not parse as a call (E0726 on `run`); `run() { ... }`, `run do ... end` and `run { |x| ... }` do. (The release-e2e harness and `drop_fixtures` now run the borrow checker, I-20.)
+  - [ ] <a id="t-d19"></a> F-36: the interim is done (the REPL walkers run on the AST `Visit`, `src/ruxen_repl/src/eval.rs:22`). The full REPL slot redesign (slots hold more than `Int`) is in batch 5 and deletes the ~40 C replay guards (D19 a).
+- [ ] <a id="t-d20"></a> **Batch 3 addition: C headers by package name** (owner decision 2026-10-17, see Decisions). Build it with F-37 (`LinkInputs`, the `[runtime]` table) and F-30 (one front-end driver), so `ruxen build`, `ruxen test`, `ruxenc` and the test harness share one native-input path. The `[runtime]` table stays a separate table beside `[native] include`, and one shared manifest reader reads both (D20 b).
   - Manifest: `[native] include`, defaulting to `runtime/include` when present.
   - Build: `target/include/<pkg>/` for the dependency closure (stdlib as `std/<name>`), `-I target/include` on every C compile. Delete the PCRE2 `-I` special case in `codegen/object.rs` if the vendor tree can use the same mechanism.
   - Errors: an include of an undeclared package names the missing dependency; a relative include that leaves the package root fails with a `<pkg/header.h>` hint. Both get registry codes and `docs/errors` pages.
@@ -338,18 +338,18 @@ Run as three build batches (2026-10-16). Each family's leftovers are listed unde
     - Set and Hash share one `each`.
     - Array `min`/`max` share one private `extremum`.
   - Compiler:
-    - Scalars and String `include Comparable, Hashable, PartialEq, Clone, Display, Default` in `.rx`.
+    - [ ] <a id="t-d6"></a> <a id="t-x1"></a> Scalars and String include `Comparable`, `Hashable` and `Clone` (plus `Default` where Ruby has a zero), with `==`, `<=>`, `to_s` and `inspect` in `.rx`; the Rust-named mixins become deprecated `.rx` adapters, then errors after the codemod (D6 a). A bound that needs only equality is a structural check that the type has a `.rx` `==`, with no marker mixin (X1 a).
     - Then delete the per-type Rust arms:
       - `derive.rs`: `synthesize_primitive_fmt_displays`, `format_field_for_debug`, `build_eq`/`build_hash_code`/`build_cmp`, `synthesize_clone_field`, `synthesize_default_value`
       - `interpolation.rs`: the `fmt_callee` ladder
       - `implicit_includes`: `ty_is_effectively_clone` / `ty_satisfies_named_trait`
       - both backends: the String `Compare` special case
-    - Needs: `Float#hash_code`, Set/Hash `clone` declarations, conditional container impls (`Array[T]: PartialEq where T: PartialEq`), and `Formatter#precision` in `.rx`.
+    - Needs: `Float#hash_code`, Set/Hash `clone` declarations, container `==`/`hash` only when the element has them (the method `where` bound of [D7](#t-d7), checked as in [X1](#t-x1)), and `Formatter#precision` in `.rx`.
     - Fixes a latent bug: Array/Hash/Set fields of a derived class are compared and hashed by pointer.
-  - Array-only `join`, `min`, `max`, `uniq`, `include?`, `sum` become `Enumerable` defaults with where-bounds, so Set and Hash get them.
+  - [ ] <a id="t-d7"></a> Array-only `join`, `min`, `max`, `uniq`, `include?`, `sum` become `Enumerable` defaults, so Set and Hash get them. They use the method `where` bound that works today (`def sum -> T where T: Add`); the RBS respelling is [priority 2](#t-d7-respell), and OQ-6 stays open (D7 b).
   - Int `clamp`/`between?` come from `Comparable`; Char gains them.
-  - The 11 async step futures: `mixin StepFuture` (needs associated types in mixin defaults).
-  - Check whether `ArrayMatcher`, `StringMatcher`, `BoolMatcher` and `OptionMatcher` in std/test are unreachable (`Tester.expect` returns only `Matcher[T]`); delete them if so.
+  - [ ] <a id="t-d11"></a> The 11 async step futures stay shared functions, the floor until Fibers replace async; no associated types in mixin defaults are built for them (D11 a).
+  - [ ] <a id="t-d12"></a> Keep `ArrayMatcher`, `StringMatcher`, `BoolMatcher` and `OptionMatcher` in std/test (canvas, quiver and rondo use them directly) and make them reachable through `Tester.expect`, which returns only `Matcher[T]` today (D12 a).
 - **Running batch 3 on macOS (Apple Silicon):**
   - valgrind does not run there. Use `leaks --atExit -- <binary>`, or build with `-fsanitize=address` for the leak and double-free checks.
   - The stale-toolchain-copy sweep in `src/ruxenc/tests/support/installed_binary.rs` is Linux-only. Check that test temp dirs do not pile up in `CARGO_TARGET_TMPDIR`.
@@ -358,7 +358,7 @@ Run as three build batches (2026-10-16). Each family's leftovers are listed unde
 
 - [ ] **Ruby lambdas** (after batch 3; decision "Blocks, procs and lambdas"; ADR `docs/decisions/blocks-procs-lambdas.md`):
   - Counted shared captures, so procs and lambdas share a variable without `.clone`, plus a cycle rule (compile error or weak capture) so they still cannot leak.
-  - A proc's `return` leaves the enclosing method; a proc called with fewer arguments than it has parameters (the missing ones are `nil`; taking fewer parameters than the `Fn` type is done); `.call`, `[]` and `lambda?`.
+  - [ ] <a id="t-lambda-call"></a> A proc's `return` leaves the enclosing method; a proc called with fewer arguments than it has parameters (the missing ones are `nil`; taking fewer parameters than the `Fn` type is done); `blk[x]` and `lambda?` (`blk.call(x)` works).
   - `lambda`/`proc` followed by `{` or `do` should call a user method of that name when one is defined.
 
 ### Debt added or found by the blocks/fields/`&var` merge (2026-10-17)
@@ -375,7 +375,7 @@ Run as three build batches (2026-10-16). Each family's leftovers are listed unde
 - [x] `Lowerer::mutates_slot_receiver` (`method_call.rs:1000`) applies the `&var` slot rule through `refmut_is_slot_address` alone; `emit_rebinding_self_call` handles a scalar receiver (a plain copy into the slot). No stdlib type declares a scalar `def var` lib method today and a user cannot (E0727), so only the String path is exercised.
 - [x] `Proc[(A) -> R]` was special-cased by name in the parser, formatter and resolver. `Proc` is now `type Proc[F] = any Fn[F]` in `library/std/core/src/lib.rx:64`, through a new generic type-alias mechanism (`resolve/helpers.rs:49` `resolve_alias_target`, `resolve/types.rs:65` `instantiate_alias`); the bare signature `(A) -> R` is a generic argument of any named type (`parser/types.rs:340` `at_signature`, `FnTypeSpelling::Signature`, printed as written by `formatter/format_type.rs:81`). Pins: e2e 2218, `blocks_procs_lambdas::syntax_signature_generic_arg_works_for_any_alias`.
 - [ ] Floor, documented: `Proc.new { }` is recognised by name in the parser (`parser/expr/calls.rs:185`), like `proc { }` and `lambda { }`: each is closure-literal syntax whose kind (proc or lambda arity) no `.rx` method can produce. `ClosureSpelling` keeps it lossless; no later stage reads the name.
-- [ ] Floor, documented: the borrow checker reads the method name `call` (`borrow_check/checks.rs:413`, `:579`) because resolve lowers every callable-value call (`f.(x)`, `f.call(x)`, `yield`) to a `MethodCall` named `call`, which typeck and MIR also read (pre-existing protocol). Retire it with a distinct HIR node for calling a callable value.
+- [ ] <a id="t-d4"></a> The `call` name protocol (D4 a): resolve lowers every callable-value call (`f.(x)`, `f.call(x)`, `yield`) to a `MethodCall` named `call`, which the borrow checker (`borrow_check/checks.rs:413`, `:579`), typeck and MIR read. Retire it in batch 2 with a distinct HIR node for calling a callable value; a user method named `call` stays an ordinary method.
 - [x] Place loans (I-15, F-1, `borrow_check/places.rs`) are one provenance rule: loans carry a field path (writing `u.age` while `x = u.name` is live is fine), follow every value shape (`if`/`case` arms, block tails, casts, multi-assign values, pattern bindings, `for` over a field, a closure holding a borrow lives as long as the closure), and every write, `var self` receiver, `&var` argument (I-24: also exclusive for its call) and move checks them. A never-used borrowing binding holds nothing (I-25). A `&var` String/scalar argument with no address is E1021 (I-27). Adversarial matrix: `tmp/test-cache/loan-matrix/gen.py` (242 programs).
 - [x] Review round 3 structural fixes (2026-10-17): one provenance query over every sub-expression whose type holds a reference (aggregates, constructor arguments, closures reaching their borrowed captures; I-29); evaluated operands of calls, operators and literals held while the later ones run (I-30); free-function trailing blocks checked like method blocks (I-31); a `var self` receiver excludes its place from the other operands; every `&var` place is the place's own storage (`MirInst::FieldAddr`, block captures by address, owned capture slots; I-24, P-11), the writeback paths deleted; `op=` on an Array element through its slot, an error elsewhere (P-12). Matrix: `gen.py` + `gen2.py`, 485 programs, results `tmp/test-cache/loan-matrix/classify-r3.txt`.
 - [ ] Leaks the round-3 matrix still shows, all pre-existing families (no crash, no wrong output): a tuple box was never freed (fixed 2026-10-24, tuple ownership: `drops::heap_free_callee` has a `Tuple` arm and tuples get field glue, so a tuple frees its box and the elements it owns); an `Option` box built by `Some(..)` and never matched leaks (see the Option/Result item under Known issues); a lambda holding a borrow of a field plus a by-value move of the object (`y = u.name; f = -> { puts(y) }; f.(); eat(u)`, 8 blocks, also in the round-2 matrix). A lambda or proc that assigns a captured Int still shares a heap cell with the enclosing frame that nobody frees (16 bytes).
@@ -388,13 +388,13 @@ Run as three build batches (2026-10-16). Each family's leftovers are listed unde
 - [x] (fixed 2026-10-24: the call keeps the inferred type when the declared return names a type parameter; it/method_call_inference, e2e 2244) A generic METHOD call is mistyped at the call site, even a single one: `r.ident("only-s")` (`def ident[T](x: T) -> T`) prints an address, and `r.ident(42)` then `r.ident("word")` types the second call `Int`. The per-instance bodies are right (`Reader_ident__mono__String`); the call's result type is wrong. Pre-existing (reproduced on 9cee2056, 2026-10-24; P-16 corrected the scope); e2e 2244 calls its generic method with one type only until this is fixed.
 - [x] (fixed 2026-10-24: constructor arguments bind class parameters through nested and compound types; it/method_call_inference) A generic class constructor whose argument is itself generic or compound (`Outer.new(Wrap.new(3))`, `Table.new([("a", 6)])`) leaves the class parameter unresolved; a later use binds it (`puts` makes it `&String`), so an `Outer[&String]` holding an Int crashes. Pre-existing (base 9cee2056, a0b982c8; review P-13, `typeck/infer/expr.rs`).
 - [x] (fixed 2026-10-24: the shadowing is error E0745; it/method_call_inference) A method generic that shadows its class generic (`class Box[T]; def show[T: Clone](x: &T) -> T`) is typed as the class `T`, so `b.show(&s)` on `Box[NoClone]` reads a String as `NoClone`. Pre-existing (base 9cee2056, a0b982c8; review P-14, `typeck/infer/expr.rs`).
-- [ ] `"#{h:?}"` of a class with a C-handle field (`class H; m: Mutex[Int]`, or `Box[Mutex[Int]]`) prints the object's address instead of `H { m: <...> }`: since I-57 a C handle supports no derived mixin as a field, so the container gets no Debug body, although the Debug builder renders a field it has no body for as `<...>`. The installed pre-round-3 toolchain prints `H { m: <...> }`. Needs an owner decision: a per-derive field rule in the derive table (grows `SUPPORTED_DERIVES`) or the F-24 `inspect` default (Decisions, Printing). Found 2026-10-24 (probe e03).
-- [ ] `h = Hash.new` then `h[K.new(1)] = v` leaves the key type an inference variable (typeck), so the table gets no key descriptor and the insert panics "no key descriptor for this table (B73)". The installed pre-batch toolchain panics the same way; `{K.new(1) => v}` or a typed parameter works. Found 2026-10-24.
+- [ ] <a id="t-d10"></a> `"#{h:?}"` of a class with a C-handle field (`class H; m: Mutex[Int]`, or `Box[Mutex[Int]]`) prints the object's address instead of `H { m: <...> }`: since I-57 a C handle supports no derived mixin as a field. Fix it through the F-24 Kernel `inspect` default, where a C handle prints `#<Mutex>`; the derive table does not grow (D10 a). Found 2026-10-24 (probe e03).
+- [ ] <a id="t-hash-new-key"></a> `h = Hash.new` then `h[K.new(1)] = v` (or a String key, `h["a"] = 1`) leaves the key type an inference variable (typeck), so the table gets no key descriptor and the insert panics "no key descriptor for this table (B73)". The installed pre-batch toolchain panics the same way; `{K.new(1) => v}`, a typed binding or a typed parameter works. Found 2026-10-24; String key reproduced by the 2026-10-25 docs probes.
 - [ ] A subclass without its own `init` (`class Kid < Base`, `Kid.new(P.new(1))`) fails to link: `_Kid_init` is undefined. Pre-existing (base 9cee2056, a0b982c8; review P-15, `mir/lower`).
 - [ ] A `Mutex` local leaks its C object (`m = Mutex.new(1); g = m.lock_raw; puts(g.get)`: 1 leak, 96 bytes, `ruxen_mutex_new`). Pre-existing (reproduced on 9cee2056, 2026-10-24); belongs with the leak-sweep round.
 - [ ] Audit the other FFI `-> T` getters that return an alias without a copy (tuple ownership fixed `ruxen_hash_from_iter_keyed`; `SharedSync#get`/`MutexGuard#get` move to `.rx` clone).
 - [ ] The closure captures box (typed `Int`) is recorded as `View::Scalar` in `MirFunction::views` (false but harmless today).
-- [ ] The three residual C names added in steps 2-3 (`ruxen_vec_get_or_panic`, `ruxen_vec_skip_elem`, `ruxen_vec_chain_elem` in `mir/residual_abi.rs`) are a grown C-symbol table; their home is a `.rx` lib declaration.
+- [ ] <a id="t-d1"></a> `Array#[]`, `#[]=` and `Hash#[]` become ordinary `.rx` lib declarations and `Index` an ordinary method call, with `[]=` through a declared mutable place accessor (D1 a). That deletes the C names MIR still emits for indexing (`ruxen_vec_get_or_panic`, `ruxen_hash_index`, `ruxen_vec_get`, `ruxen_vec_set` in `mir/residual_abi.rs`, `mir/lower/expr/index.rs`); the `skip_elem`/`chain_elem` rows are already gone.
 - [x] Debt added by tuple ownership: `pair_value_desc` (`mir/lower/key_desc.rs`) checked the callee name `ruxen_hash_from_iter`. Deleted in review round 2: `Array#to_h` declares `pairs: ElemDesc[T]` and `key_desc::append_declared_elem_descs` fills any `lib` parameter of that type.
 - [ ] The `to_h` resolver arm in `typeck/method_resolvers/collections.rs` and the key-descriptor name table `KEYED_TABLE_CTORS` (`mir/lower/key_desc.rs`) remain (pre-existing debt).
 - [ ] A method returning `&T` borrows its whole receiver (no field path; MIR: a call result points `INSIDE` its argument). (The HIR `LastUses` loop false positive went with the HIR loan code: MIR liveness accepts `x = u.name; puts x; u.name = ..` rebound each iteration of a loop.)
@@ -403,6 +403,18 @@ Run as three build batches (2026-10-16). Each family's leftovers are listed unde
 - [ ] A function returning an `Array` (or `Hash`) of heap elements is never caller-owned (`returns_fresh` accepts a container only when its elements own no heap), so `a = names(3)` and `names(3)[0]` leak the result (review probe g7, 3 blocks; HEAD too). Needs element provenance: a spine whose every element was a fresh owned value moved in.
 - [ ] e2e 616 (`Box` holding `Array[Proc]` built through `&var *self`) leaks 5 blocks under `leaks --atExit`; not triaged.
 - [ ] Observed while pinning e2e 2218, not yet triaged against the pre-batch compiler: a closure passed BY VALUE to a user `Proc[...]` parameter leaks its pair (48 bytes), and an owned `String` passed by value to a user `String` parameter leaks it (16 bytes). Repro: `def fire(cb: Proc[(String) -> nil], word: String); cb.(word); end` then `fire(->(s: String) { puts s }, "hi")` under `leaks --atExit`. A callee never drops its own parameters, so a by-value parameter needs the callee to free it.
+
+### Debt decisions (owner, 2026-10-25)
+
+Decisions from the priority 1 decision sheet that had no item above. The rest are recorded on the items they change.
+
+- [ ] <a id="t-d17"></a> Stdlib `sync` test false reject (`library/std/sync/tests/sync_test.rx`): re-run it first, since `MutexGuard#get` and `SharedSync#get` are now `.rx` clones; close it if moot, otherwise pick a per-function "p stored into q" summary or a strict check with a clone in the test (D17 c).
+- [ ] <a id="t-d18"></a> F-17 scalar name-to-`Ty` tables in resolve: machine primitives are a floor; the collection heads and `String` move to `.rx` later, in the de-primitivize phase (D18 a).
+- [ ] <a id="t-d21"></a> fmt comments inside method chains and argument lists, and partial `# fmt: off` ranges: fmt keeps reporting an error instead of losing them, and support is [priority 2 work](#t-d21-impl) (D21 b).
+- [ ] <a id="t-d22"></a> `memrun.py` copies `codegen::find_runtime_sources`: expose the driver's existing `sanitize` flag as a `--sanitize=address` switch and delete the copied list (D22 a).
+- [ ] <a id="t-d23"></a> F-31, F-39 and F-40 leftovers in no batch (resolve scope pushes, `const_predicates`, magic codepoints, BufReader/BufWriter per inner type, Enumerable re-declarations): re-verify each first (some are done), then add the verified remainder to batch 1 or 5 (D23 a).
+- [ ] <a id="t-d24"></a> `TcpStream#set_read_timeout(d: Int)` (`library/std/net/src/lib.rx:49`) declares `Int` while the C takes `RuxenDuration*` (`library/std/net/runtime/tcp.c:488`): `net` depends on `time` and takes `&Duration`; the `_ns` forms stay (D24 a).
+- [ ] <a id="t-x4"></a> Workspace member caches: one workspace target root for every driver, which `ruxen clean` removes (X4 a; `src/ruxenc/src/compile.rs:520` vs `src/ruxen_cli/src/build.rs:305`).
 
 ## Then: Ruby parity (priority 2)
 
@@ -414,18 +426,43 @@ Order from [the Rust-isms audit](docs/audits/2026-10-rust-isms.md), section 6. R
   - `spec/*_spec.rx` holds tests, because the stdlib test DSL is RSpec-style `describe`/`it` (`test/*_test.rx` would fit a Minitest-style DSL instead).
   - `Ruxen.toml` stays as the manifest (one file playing the role of the gemspec plus Gemfile).
   - Migration: `ruxen new`, `ruxen build`/`test`/`run` discovery, `module_discovery.rs`, the stdlib packages under `library/std/*`, quiver, rondo and canvas, and the docs and tutorial. Old layouts keep working with a deprecation warning for one release.
-- [ ] Owner decides OQ-1 to OQ-16 (spec section 20).
+- [ ] <a id="t-oq"></a> Owner decides OQ-1 to OQ-16 (spec section 20).
 - [ ] b1: add the missing Ruby forms to the parser, each with an e2e fixture, a negative test, and parity across the compiler, REPL, LSP, IDE and fmt:
-  - `begin`/`rescue`/`ensure`/`retry` and `raise`
-  - `initialize`, `attr_reader`/`attr_writer`/`attr_accessor`
-  - symbols, `Struct.new`, `Data.define`
-  - `->(x) { }`, `loop do`, `next` in every loop
-  - `{}` as an empty Hash
-  - array and hash patterns
-  - keyword arguments
-  - `=~` (spelled `~=` today)
-  - `||` and `&&` on `T?`
-  - `exclude Send`
+  - [ ] <a id="t-exceptions"></a> `begin`/`rescue`/`ensure`/`retry` and `raise`, and `ensure` and block-scoped resources lowering onto drop
+  - [ ] <a id="t-initialize"></a> `initialize`
+  - [ ] <a id="t-attr-accessors"></a> `attr_reader`/`attr_writer`/`attr_accessor`
+  - [ ] <a id="t-symbols"></a> symbols (`:active`, `%i[a b]`, symbol hash keys)
+  - [ ] <a id="t-struct-new"></a> `Struct.new`
+  - [ ] <a id="t-data-define"></a> `Data.define`, including one-field `Data` for newtypes and `Data` variants
+  - [x] `->(x) { }` (lambdas compile and run; checked by the 2026-10-25 docs probes)
+  - [ ] <a id="t-loop-do"></a> `loop do ... end`
+  - [ ] <a id="t-next-loops"></a> `next` in every loop (`while`, `until`, `for`)
+  - [ ] <a id="t-empty-hash"></a> `{}` as an empty Hash
+  - [ ] <a id="t-patterns"></a> patterns: array, hash, typed record, class check with binding, pin, and ranges of literals (`in 3..5`)
+  - [ ] <a id="t-kwargs"></a> keyword arguments, Crystal's rule (OQ-4 decided by the owner 2026-11-03): definitions keep `name: Type`; any parameter may be passed by name at a call site (`connect(host: "x", port: 80)`, any order; mixed `connect("x", port: 8080)`, positional first); a bare `*` makes the following parameters keyword-only (`def connect(*, host: String, port: Int = 80)`; `connect("x")` is an error). Today a call-site `f(w: 3)` is a parse error.
+  - [ ] <a id="t-match-op"></a> `=~` (spelled `~=` today)
+  - [ ] <a id="t-truthiness"></a> `||` and `&&` on `T?` (truthiness, `x || default`, `||=` on a `T?`)
+  - [ ] <a id="t-exclude-send"></a> `exclude Send`
+  - [ ] <a id="t-constants"></a> constants `NAME = v` at top level and in class and module bodies (replaces `const`)
+  - [ ] <a id="t-typed-local"></a> typed locals `x: Int = 0` (replaces `let x: Int = 0`)
+  - [ ] <a id="t-parallel-assign"></a> parallel assignment to new names (`a, b = 1, 2`) and from a returned pair (`q, r = divmod(17, 5)`); today every target must already be declared
+  - [ ] <a id="t-toplevel-stmts"></a> top-level statements: parallel assignment, statement modifiers (`x += 1 while x < 10`), `inline def`, `var x: T = ...` and `a = 1; puts a` do not parse at top level
+  - [ ] <a id="t-heredoc"></a> `<<~EOS` heredocs
+  - [ ] <a id="t-begin-comment"></a> `=begin ... =end` block comments
+  - [ ] <a id="t-type-colons"></a> `::` in type positions (`req: Http::Request`)
+  - [ ] <a id="t-alias-method"></a> `alias_method :new, :old`
+  - [ ] <a id="t-rest-args"></a> rest arguments (`*parts`, `**opts`)
+  - [ ] <a id="t-narrowing"></a> assignment-in-condition narrowing (`if (user = find(id))`, `while (x = q.pop)`)
+  - [ ] <a id="t-module-mixins"></a> `module` as a mixin with `include` (replaces `mixin`)
+  - [ ] <a id="t-include-many"></a> `include A, B`
+  - [ ] <a id="t-extend"></a> `extend`
+  - [ ] <a id="t-reopen-class"></a> reopening a class (`class String ... end`), replacing `extension` and E0727
+  - [ ] <a id="t-nested-class"></a> nested classes and constants in a class body
+  - [ ] <a id="t-tuple-type"></a> the RBS tuple type `[Int, String]`
+  - [ ] <a id="t-type-alias"></a> type aliases `Id = Int` (replaces `type Id = Int`)
+  - [ ] <a id="t-sized-conv"></a> sized conversions `to_i8`, `to_u8`, `to_i32`, ... (replace `as`)
+  - [ ] <a id="t-implicit-self"></a> implicit-self calls (a bare `name` calling a method of `self`), and an endless `def` in a `mixin` body
+  - [ ] <a id="t-free-keywords"></a> free the keywords that block Ruby method names (`match`, `where`, `any`, `loop`, `type`, `use`, `static`, `macro`, `package`)
 - [ ] d: `ruxen fmt` prints the canonical Ruby forms: `@x`, no `let`, `case/in`, `require`, endless `def`, no `'a`.
   - Calls keep the parentheses the author wrote: `puts "x"` stays `puts "x"` and `x.map { }` stays `x.map { }`, never `x.map() { }`. Today the formatter always prints `()` because the AST does not record whether a call had them. Record that in the parser's call nodes first; F-19 then carries it into the HIR. Add a `ruxen fix --ruby` codemod built on the same formatter.
 - [ ] c: rewrite with the codemod, per module, with tests green after each:
@@ -433,10 +470,48 @@ Order from [the Rust-isms audit](docs/audits/2026-10-rust-isms.md), section 6. R
   - then canvas, quiver and rondo, which were not audited; read `rondo/docs/ruxen-issues.md` first
   - then rewrite the Rust-flavoured `##` comments
 - [ ] b2 and b3: warn on Rust forms (new coded diagnostics with fix-its), lowest usage first, ending with `use`, `match` and `let`. Then make them errors.
-- [ ] a2: the second docs pass. Rewrite the tutorial (33 chapters), README, error docs and requirement tiers to the spec.
+- [ ] <a id="t-d7-respell"></a> Respell the method `where` bound as the RBS form `[T < Bound]` (and `[T < A & B]`), from D7 b.
+- [ ] <a id="t-d21-impl"></a> fmt keeps comments inside method chains and argument lists, and honours partial `# fmt: off` ranges (D21 b).
+- [ ] <a id="t-protected"></a> Ruby `protected` semantics: callable with an explicit receiver of the same class family from inside it.
+- [ ] <a id="t-ivar-privacy"></a> Ivars are private; reach them from outside through accessors (today declared fields are public).
+- [ ] <a id="t-super"></a> `super` in any method (E1127 allows it only in `init` today), with Ruby's lookup order: the superclass method first, then the module default.
+- [ ] <a id="t-enumerable-infer"></a> Plain `include Enumerable` with `T` inferred from `each`.
+- [ ] <a id="t-size-int"></a> `size` and `length` return `Int`, not `USize` (Decisions, defaults taken).
+- [ ] <a id="t-shared"></a> `Shared[T]`, the single-threaded reference count.
+- [ ] <a id="t-box-new"></a> `Box.new(x)`: the `Box[T]` type resolves but nothing constructs one.
+- [ ] <a id="t-stdlib-shapes"></a> Ruby stdlib shapes: `File.read`, `File.join`, `ARGV`, `ENV`, `system`, `Time.now`, `TCPServer` replace the Rust `fs`/`env`/`process`/`path`/`time`/`net` shapes.
+- [ ] <a id="t-thread-api"></a> Ruby thread API: `Thread.new { }.value`, `Mutex#synchronize`, `Thread::Queue`, `Thread.current[:x]` replace `JoinHandle`, `MutexGuard`, atomics with `Ordering`, mpsc and `thread_local!`.
+- [x] a2: the second docs pass (2026-11-03, the `[docs]` commit). Rewrite the tutorial (33 chapters), README, error docs and requirement tiers to the spec.
 - [ ] Update code comments that cite old `ruby-naming.spec.md` section numbers (§3.x, §10a).
 - [ ] Make `%` floored for Int and Float on both backends and the REPL, add `remainder`, and update e2e 1950.
-- [ ] Later: the Fiber scheduler replaces `async`/`await`.
+- [ ] Planned features the living docs link to (2026-11 docs pass):
+  - [ ] <a id="t-collection-fetch"></a> `Array#fetch`/`Hash#fetch` (with a default) and `dig` (tutorial 13).
+  - [ ] <a id="t-hash-each-pair"></a> `h.each { |k, v| }` on a Hash: the block takes one parameter today (tutorial 13).
+  - [ ] <a id="t-case-exhaustive"></a> Exhaustiveness check for `case/in` and `case/when`: a missing arm passes typeck with no diagnostic (tutorial 05, 07, 32).
+  - [ ] <a id="t-optional-borrow-return"></a> Returning an optional borrow (`&String` or `nil`) from a loop over an array does not type-check (tutorial 30).
+  - [ ] <a id="t-const-generics"></a> Const generics: a class body that uses its const parameter (a field `data: [T; N]` read or indexed) does not compile; per-instantiation sizes (tutorial 20, tier2_02).
+  - [ ] <a id="t-test-framework-next"></a> Test framework next steps: `let`/`subject`, `before(:all)`/`around`, custom matchers, doubles, shared examples, property tests, `--timeout`, `it_panics` substring check, after-hook inheritance (tutorial 19).
+  - [ ] <a id="t-multi-bin"></a> `[[bin]]` tables build several executables per package; accepted and ignored today (tutorial 27, 33).
+  - [ ] <a id="t-dev-deps"></a> `[dev-dependencies]` are built for tests and benches; recorded and ignored today (tutorial 27).
+  - [ ] <a id="t-once"></a> `Once`/`OnceLock` in `library/std` (E0734 today); `once.spec.md` is wholly planned.
+  - [ ] <a id="t-ruby-ffi"></a> First-class Ruby FFI: a `lib "ruby"` block taking and returning Ruby `VALUE`s (STRATEGY.md, Wedge #1).
+  - [ ] <a id="t-more-collections"></a> Later collections from `tier1_01_stdlib.md` (draft names, not built).
+  - [ ] <a id="t-float-math"></a> Float math methods (`exp`, `fract`, `nan?`, `infinite?`, `finite?`, ...) from `tier1_01_stdlib.md`.
+  - [ ] <a id="t-req-async"></a> The drop-based timeout combinator (`tier1_03_async.md`).
+  - [ ] <a id="t-req-variance"></a> Variance inference and a stdlib `PhantomData` (`tier2_07_variance.md`).
+  - [ ] <a id="t-req-docgen"></a> The doc generator that renders `##` comments (`tier3_04_doc_generator.md`).
+  - [ ] <a id="t-req-wasm"></a> The wasm target: imports, exports and the rename directive (`tier4_03_wasm_target.md`, `tier4_07_examples.md`).
+  - [ ] <a id="t-req-no-std"></a> no_std directives: no-mangle, the alloc tier, `PanicInfo`, the allocator surface (`tier4_04_no_std_embedded.md`).
+  - [ ] <a id="t-req-cabi"></a> Stable C ABI: `cbindgen_alias`, `layout opaque` and header emission (`tier4_05_stable_abi_cbindgen.md`).
+  - [ ] <a id="t-req-deprecation"></a> Deprecation and stability directives (`tier5_03_deprecation_stability_attrs.md`).
+- [ ] Ruby parity backlog (`docs/ruby-parity/`), one checkbox per queue:
+  - [ ] <a id="t-parity-core"></a> Missing Ruby core-class methods (QUEUE B07-B24, `core.md`).
+  - [ ] <a id="t-parity-stdlib"></a> Missing bundled stdlib libraries (QUEUE B36-B53, `stdlib.md`).
+  - [ ] <a id="t-parity-language"></a> Direct-parity syntax gaps (`language.md` Backlog A).
+  - [ ] <a id="t-parity-compile-time"></a> Tier-2 compile-time metaprogramming (QUEUE B33/B34, `language.md` Backlog B).
+  - [ ] <a id="t-parity-time"></a> Civil `Time`/`Date`/`DateTime` (QUEUE B35a-f, `design/B35-time-date.md`).
+  - [ ] <a id="t-parity-orm"></a> The folio ORM (QUEUE B54-B61, `gems-db.md`).
+- [ ] <a id="t-fibers"></a> Later: the Fiber scheduler replaces `async`/`await`.
 
 ## Known issues and loose ends
 
@@ -467,7 +542,7 @@ Order from [the Rust-isms audit](docs/audits/2026-10-rust-isms.md), section 6. R
 - [ ] Release: the owner pushes and merges `feat/concurrency-adoption` into master.
 - [ ] Async spec gaps that had only empty `#[ignore]` placeholder tests (removed):
   - `async_lowering.spec.md` B11: `.await` inside `if` or `match` arms does not lower.
-  - B13: a `&` or `&var` borrow held across `.await` is not rejected (should reuse E1010).
+  - [ ] <a id="t-await-borrow"></a> B13: a `&` or `&var` borrow held across `.await` is not rejected (should reuse E1010) (`tier1_03_async.md`, tutorial 24).
   - B14: dropping a state machine mid-run drops every field, not only the current state's.
   - `executor.spec.md` B9: no runtime check that `block_on` drops the future exactly once.
   - B10: no runtime check that repeated `block_on` does not leak (the `Context` still leaks 8 bytes per call).
@@ -478,11 +553,11 @@ Order from [the Rust-isms audit](docs/audits/2026-10-rust-isms.md), section 6. R
 - [ ] `Result#expect!` and `IoError#message()` results lose their type when used without a typed binding. `t.expect(FS.read_to_string(p).expect!("r")).to_eq("x")` compares String pointers and fails, and `let f = File.open(p).expect!("o")` then `f.read_to_string()` fails codegen with "no runtime symbol for `?T::read_to_string`". The std package tests work around it with `let s: String = ...` and `let f: File = ...`.
 - [x] (fixed in 9cee205, re-checked 2026-10-17 on a clean HEAD build) A parenless `e.message` or `e.kind` on an `IoError` value is rejected as "cannot access field `message` on enum `IoError`"; only `e.message()` works. Ruby parity wants the parenless call.
 - [ ] The `std::net` blocking echo server with a SIGINT shutdown stays a Rust test (`stdlib_net.rs`) because a `.rx` test cannot signal its own blocked `accept`. Move it once `ruxen test` can drive a child process.
-- [ ] A class whose implicit init (from its fields) is called only inside a block fails to link (`Point_init` undefined). `library/std/fmt/tests/fmt_test.rx` gives `Point` an explicit init to work around it.
+- [ ] <a id="t-positional-new"></a> **Owner decision (2026-11-03): `def init` is optional.** A class with fields and no `def init` gets a generated, ordinary `init` over its fields, so it takes both forms like Ruby's `Data.define`: positional in field order, `Klass.new(1, 2, 3)`, and keywords, `Klass.new(a: 1, b: 2, c: 3)` (keywords come from [t-kwargs](#t-kwargs)). A keyword-only class writes `def init(*, a: Int, b: Int)` by hand; no class-level marker yet (a `keyword_init` class line may come later). Today the positional call typechecks but `_<Class>_init` is never emitted, so the program fails to link (installed toolchain too; P4 docs probes, tutorial 06). `library/std/fmt/tests/fmt_test.rx` gives `Point` an explicit init to work around it.
 - [x] (fixed in 9cee205, re-checked 2026-10-17 on a clean HEAD build) `.unwrap` or `.nil?` on an `Option[C]` returned by a stdlib method, where `C` is a class (`JSON.object_get`, `Regex#find`, `Mutex#try_lock`), fails typeck with "no field `unwrap` on type `Json`". `.unwrap_or` works.
 - [x] (fixed in 9cee205, re-checked 2026-10-17 on a clean HEAD build) `Some(3) == Some(3)` is `false`: Option equality compares pointers, so `t.expect(opt).to_eq(Some(x))` always fails.
 - [ ] `Formatter#write_str` and `#write_char` return a null pointer for success, so `.ok?` on their result is `false`.
-- [ ] `.await` on a hand-written `include Future` class passed as an `async def` parameter fails to link (`CountDown_await`, `Future_poll` undefined).
+- [ ] <a id="t-await-param-future"></a> `.await` on a hand-written `include Future` class passed as an `async def` parameter fails to link (`CountDown_await`, `Future_poll` undefined).
 - [ ] `"#{x:?}"` ignores a user `include Debug` `fmt` and prints the derived `Tag { name: x }` form. Check whether that is intended (`fmt.spec.md` B2).
 - [ ] `t.expect(x).to_eq(y)` compares pointers when `x` is an `Array[String]`, an `Option`, or a `String` from a destructured tuple (`let (evens, odds) = v.partition { ... }`, then `evens.join(",")`), so equal values fail. The std package tests compare `join` strings or bind a typed `let s: String`.
 - [x] A block that assigns a captured `var` without reading it (`last = x` inside `[1, 2].each do |x| ... end`) was rejected with E1009. It compiles and prints the last value (rechecked 2026-10-17).
@@ -490,7 +565,7 @@ Order from [the Rust-isms audit](docs/audits/2026-10-rust-isms.md), section 6. R
 - [x] (fixed in 9cee205, re-checked 2026-10-17 on a clean HEAD build) A parenless `a.hash_code` on a class with derived `Hashable` is rejected as "no field `hash_code`"; only `a.hash_code()` works.
 - [x] (fixed in 9cee205, re-checked 2026-10-17 on a clean HEAD build) `Array.from(123)` is accepted at typeck and fails only at link time (the old `vec_from_int_is_currently_accepted_at_typeck` pin), and `Array.with_capacity` does not check that its argument is an `Int`.
 - [ ] `ruxen test` has no stdout capture, so Kernel `p` / `pp` (e2e 1180) and `warn` (e2e 1181) stay e2e fixtures instead of `library/std/core/tests`.
-- [ ] `case opt in nil ... in x` on an `Option[Int]` binds `x` to the Option pointer, not the payload, so `puts "#{x}"` prints an address (the ruby-naming spec marks this form [implemented]). `in Some(x)` works; e2e 2079 uses it.
+- [ ] <a id="t-case-in-nil"></a> `case opt in nil ... in x` on an `Option[Int]` binds `x` to the Option pointer, not the payload, so `puts "#{x}"` prints an address, and `puts x` is E0740 (no `to_s` on `Option[Int]`) (the ruby-naming spec marks `in nil` [implemented] with this known issue). `in Some(x)` works; e2e 2079 uses it.
 - [ ] `Task.join(h).await` inside `block_on` hangs: the deferred e2e cases `728_async_spawn_join_basic` and `728c_async_spawn_loop` (removed; never run) compiled but did not finish within 10 s. Add an e2e case once spawned tasks join.
 - [ ] Stdlib top-level helpers share the user's global namespace, and `private` is not enforced: a user `def connect_state_to_result(x: Int)` replaces the stdlib helper inside stdlib bodies. Resolve stdlib bodies in their own package scope first, or enforce `private`; add a negative fixture.
 - [ ] Async I/O now classifies errno through the shared sync table: EBADF gives `Other("Bad file descriptor")` where async used to give `InvalidInput`.
@@ -500,3 +575,31 @@ Order from [the Rust-isms audit](docs/audits/2026-10-rust-isms.md), section 6. R
 - [ ] `compiler/ruxen_core/build.rs` reruns only on edits in existing packages' `src/`; a new `library/std/<pkg>/src/lib.rx` is left out of the generated bootstrap tables until something else reruns it. Add a test that compares the package set on disk with `BOOTSTRAP_FILES`.
 - [ ] No `CONTEXT.md` yet for lexer, typeck, mir/lower, borrow_check, async_lowering, diagnostics and resolve, or for the io, net and async_net runtime dirs and the `src/` crates.
 - [ ] A class body's `include Send`/`include !Send` always overrides the same declaration in an `extension` of that class, whatever the source order (body `include !Send` plus `extension ... include Send` stays not Send). Decide the rule (last wins, or E1014 on a conflict) and pin it with a test.
+- [ ] <a id="t-range-methods"></a> `Range` methods fail MIR lowering: `(0..3).each { }`, `.size` and `.to_a` report "calls `T…_each` on a value whose type is still a generic parameter" (generic-calling-generic). `for i in 0..3` and `case/when 3..9` work. Found by the 2026-10-25 docs probes.
+- [ ] <a id="t-next-block"></a> `next` in blocks: a bare `next if cond` (no value) does not parse ("expected End"), and `next` inside an inlined `each` block fails MIR lowering; `next 0 if cond` inside `map` works. Found by the 2026-10-25 docs probes.
+- [ ] <a id="t-struct-typeck"></a> A `struct` without `layout c` (plain, `layout packed` or `layout transparent`) fails typeck with "no field or method `inspect` on type `T`" at `library/std/core/src/lib.rx:760` (`p`'s body). Found by the 2026-10-25 docs probes.
+- [ ] <a id="t-interp-to-s"></a> Interpolation ignores a user `to_s`: `"#{m}"` prints `Money { cents: 5 }` while `puts m` prints the user's `$5`. Found by the 2026-10-25 docs probes.
+- [ ] <a id="t-float-to-s"></a> A whole `Float` prints without `.0`: `puts 3.to_f` and `puts 3.0` print `3` (Ruby prints `3.0`). Found by the 2026-10-25 docs probes.
+- [ ] <a id="t-string-shovel"></a> **High:** `<<` does not append: `t = "a"; t << "b"; puts t` prints `a`, and `<<` on a `&var String` parameter crashes (SIGSEGV); `push_str` works. `Array#<<` and `Set#<<` also compile and silently do nothing (tutorial 13). Found by the 2026-10-25 docs probes.
+- [ ] <a id="t-some-return"></a> `some Mixin` as a return type is rejected (`def make -> some Shape` returning a `Sq` that includes `Shape`: "expected `some Shape`, found `Sq`"); as a parameter type it passes typeck (see t-some-any-lower). Found by the 2026-10-25 docs probes.
+- [ ] <a id="t-void-ptr"></a> `*Void` / `*var Void` in a `lib` declaration is "undefined type `Void`", though `resolve/types.rs` maps it to a void pointer after resolving the inner type. Found by the 2026-10-25 docs probes.
+- [ ] <a id="t-json-get-borrow"></a> **High, memory safety:** `JSON.object_get` and `JSON.array_get` return a borrowed child typed as an owned `Option[Json]` (`library/std/json/runtime/json.c`, `ruxen_json_array_get` and `ruxen_json_object_get`, about :820 and :848). Dropping it frees a node the tree still owns: use-after-free and a likely double free (tutorial 26).
+- [ ] <a id="t-optional-arg-wrap"></a> **High, memory safety:** a bare value passed to a `T?` parameter is not wrapped: `describe(3)` for `value: Int?` compiles and segfaults (exit 139) (tutorial 07). Field assignment does not wrap into `T?` either (`h.compute = -> { ... }`, P5 probes).
+- [ ] <a id="t-fn-ref-value"></a> **High, memory safety:** a named function passed as a `Fn` value: `f(1, 2)` fails to link and `f.call(1, 2)` segfaults (`docs/errors/E0726.md`).
+- [ ] <a id="t-bare-field-read"></a> **High, wrong results:** a bare field name inside a method (`x` for the field `@x`) compiles but reads `0`/`false`; `@x` reads correctly (P4 docs probes).
+- [ ] <a id="t-e0607-unregistered"></a> E0607 (retired `@[...]` attribute) is emitted at `compiler/ruxen_core/src/parser/items.rs:62` but is not in `diagnostics::codes::REGISTRY` and has no `docs/errors/E0607.md`, so the registry test cannot see it. Fix in a code batch.
+- [ ] <a id="t-dangling-tail-ref"></a> **High, soundness:** a method whose last expression is `&local` (no `return`) compiles and returns a dangling reference; only an explicit `return &local` is E1010 (tutorial 04, `docs/errors/E1010.md`).
+- [ ] <a id="t-array-borrow-check"></a> **Soundness:** a borrow of an array (`first = &v[0]`, `all = &v`) stays usable after `v.push(4)`; not rejected (tutorial 04).
+- [ ] <a id="t-await-gaps"></a> `.await` outside a `let` initializer: a bare `a = f().await` in an `async def` is E0740; `.await` on a stdlib-class future (`Task.yield_now`) is not recognised; `.await` inside an `if` in a loop is E1115; `block_on` of an `async def` that awaits another `async def` fails at hir ("no method `poll` on `Future[Int]`") (`tier1_03_async.md`, `task_spawn.spec.md`, tutorial 24, 33).
+- [ ] <a id="t-some-any-lower"></a> Calling a method on a `some Mixin`/`any Mixin` parameter fails MIR lowering ("unresolved mixin-bound receiver") (tutorial 08).
+- [ ] <a id="t-visibility-enforce"></a> `private` and `protected` are parsed but not enforced on class or module members: `c.helper(3)`, `a.audit_id` and `Store.secret_table` compile from outside (tutorial 03, 06, 10).
+- [ ] <a id="t-module-self-call"></a> A module method cannot call a sibling: bare `helper(x)` is E0735 and `Store.helper(x)` is E0714; a sibling class is not visible by its bare name in the module body, and `Geometry::origin` does not parse (tutorial 10, `user-modules.spec.md`).
+- [ ] <a id="t-module-zero-arg"></a> A zero-argument module method fails MIR lowering when called ("a value whose type is still a generic parameter") (tutorial 10).
+- [ ] <a id="t-nested-module-methods"></a> A method in a nested module (`App::Services.create_user`) type-checks but fails to link (`_Services_create_user` undefined) (tutorial 10).
+- [ ] <a id="t-raw-deref"></a> `*p` on a raw pointer keeps the pointer type, and no `unsafe` block is required around a C call or a raw-pointer operation (tutorial 15).
+- [ ] <a id="t-if-branch-types"></a> `if` branches of different types pass typeck (tutorial 05).
+- [ ] <a id="t-unbounded-generic-call"></a> A method call with arguments on an unbounded `T` passes typeck (tutorial 12).
+- [ ] <a id="t-int-literal-types"></a> An integer literal does not take a sized declared type: `puts` of a `UInt8` fails and `P: UInt16 = 8080` needs `8080u16` (tutorial 02, P1 probes).
+- [ ] <a id="t-extension-type-arg"></a> `extension Workflow[Phases.Submitted]` adds its methods to every instantiation, so type-state is not enforced (`approve` on a draft compiles) (tutorial 32).
+- [ ] <a id="t-sharedsync-deref"></a> No auto-deref through `SharedSync`: `shared.lock!` on `SharedSync[Mutex[Int]]` is E0740; write `shared.deref.lock!` (`tier1_02_concurrency.md`).
+- [ ] <a id="t-string-size-chars"></a> `String#size` and `#length` count bytes; Ruby counts characters (tutorial 29).

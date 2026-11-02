@@ -10,6 +10,13 @@
 `Hashable + Eq`.  The runtime uses FNV-style hashing; collisions resolve
 by walking a linked list per bucket.
 
+**Owner decisions (2026-10-25).** D1 a: `Hash#[]` and `#[]=` become ordinary
+`.rx` lib declarations, `[]=` through a declared mutable place accessor
+[planned](../../../TODO.md#t-d1). D8 a: keys use `hash` and `eql?`, `eql?` defaults to `==`,
+and `hash_code` becomes a [deprecated] alias of `hash` [planned](../../../TODO.md#t-d8).
+`Option[V]` in the signatures below is the internal spelling of `V?`; user code
+writes `V?` (naming spec section 7).
+
 ---
 
 ## B1 — Constructors typecheck

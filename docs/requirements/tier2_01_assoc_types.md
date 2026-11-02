@@ -10,27 +10,54 @@ Blocks: GATs (doc 05)
 > that these examples assume was dropped: Ruxen iteration is
 > `Enumerable[T]` over a single `each` method (`library/std/core/src/lib.rx`).
 > `Iterator` (with `IntoIterator` / `FromIterator`) below is an illustrative mixin with an associated type,
-> not shipped or planned stdlib API.
+> not shipped or planned stdlib API. The code examples call that
+> illustrative mixin `Cursor` (with `IntoCursor` / `FromCursor`), since
+> `Iterator` is a retired stdlib name; the prose keeps the draft's names.
 
 ## 1. Summary & Motivation
 
 An *associated type* is a type-level member of a mixin that each
 `include` directive resolves to a concrete type. The canonical example
-is `Iterator.Item`:
+is `Iterator.Item`. In the Ruby form, reopening `Array` is
+[planned](../../TODO.md#t-reopen-class) and a mixin declared with `module` is [planned](../../TODO.md#t-module-mixins):
 
-```ruxen
-mixin Iterator
+```ruby
+module Cursor
   type Item
-  def var next -> Option[Self.Item]
+  def var next -> Self.Item?
 end
 
 class Array[Int]
   # ... existing array methods ...
 
-  include Iterator
+  include Cursor
   type Item = Int
-  def var next -> Option[Int]
+  def var next -> Int?
     self.pop
+  end
+end
+```
+
+The associated type itself (`type Item` in the mixin, `type Item = Int` in
+the including class) is [implemented]. Works today, on a user class
+instead of a reopened `Array`, [deprecated] (`mixin` is replaced by `module`):
+
+```ruby
+mixin Cursor
+  type Item
+  def var next -> Self.Item?
+end
+
+class Stack
+  items: Array[Int]
+  include Cursor
+  type Item = Int
+
+  def init(@items: Array[Int])
+  end
+
+  def var next -> Int?
+    @items.pop
   end
 end
 ```
@@ -72,6 +99,7 @@ and the MIR / codegen story post-monomorphization.
 `TraitItem::AssocType { name: String, span: Span }` is defined at
 `parser/ast.rs:644-648` and parsed at `parser/mod.rs:908-914`:
 
+<!-- compiler-rust -->
 ```rust
 if self.at(TokenKind::Type) {
     self.advance();
@@ -93,6 +121,7 @@ The HIR equivalents (`HirTraitItem::AssocType` at `hir/nodes.rs:483-486`;
 `TraitInfo::assoc_types: Vec<String>`
 (`resolve/symbols.rs:65`) records the names. `resolve/mod.rs:444`:
 
+<!-- compiler-rust -->
 ```rust
 ast::TraitItem::AssocType { name, .. } => assoc.push(name.clone()),
 ```
@@ -179,28 +208,33 @@ pure type-check elaboration.
 
 ### 4.1 Declaration
 
-```ruxen
-mixin Iterator
+In the Ruby form, `module` is [planned](../../TODO.md#t-module-mixins), the RBS-style
+bound `[I < Cursor]` is [planned](../../TODO.md#t-d7-respell), and a binding in a type
+argument (`Cursor[Item = T]`) and a bound on an associated type are [planned](../../TODO.md#t-oq) (OQ-11):
+
+```ruby
+module Cursor
   type Item
-  def var next -> Option[Self.Item]
+  def var next -> Self.Item?
 end
 
-mixin FromIterator[T]
-  def self.from_iter[I: Iterator[Item = T]](iter: I) -> Self
+module FromCursor[T]
+  def self.from_cursor[I < Cursor[Item = T]](cursor: I) -> Self
 end
 
-mixin IntoIterator
+module IntoCursor
   type Item
-  type IntoIter: Iterator[Item = Self.Item]
-  def consume into_iter -> Self.IntoIter
+  type IntoCur < Cursor[Item = Self.Item]
+  def consume into_cursor -> Self.IntoCur
 end
 ```
 
 Rules:
 
 - Associated types have no bounds at the `mixin` declaration today,
-  but may acquire bounds via `type IntoIter: Iterator[Item = Self.Item]`
-  syntax (see `IntoIterator` above). The bound is checked at every include.
+  but may acquire bounds via `type IntoCur < Cursor[Item = Self.Item]`
+  syntax (see `IntoCursor` above; the draft spelled it
+  `type IntoIter: Iterator[Item = Self.Item]`). The bound is checked at every include.
 - Each associated type is introduced in a `type Name` line, terminated
   by newline. No `end`.
 - Associated types live in the mixin's namespace. Outside the mixin
@@ -209,21 +243,24 @@ Rules:
 
 ### 4.2 Binding via `include`
 
-```ruxen
-extension Array[Int]
-  include Iterator
+The draft used `extension` blocks, which are [deprecated] (replace with
+reopening the class). Reopening `Array` is [planned](../../TODO.md#t-reopen-class):
+
+```ruby
+class Array[Int]
+  include Cursor
   type Item = Int
-  def var next -> Option[Int]
+  def var next -> Int?
     self.pop
   end
 end
 
-extension Array[T]
-  include IntoIterator
+class Array[T]
+  include IntoCursor
   type Item = T
-  type IntoIter = ArrayIntoIter[T]
-  def consume into_iter -> ArrayIntoIter[T]
-    ArrayIntoIter.new(self)
+  type IntoCur = ArrayCursor[T]
+  def consume into_cursor -> ArrayCursor[T]
+    ArrayCursor.new(self)
   end
 end
 ```
@@ -232,7 +269,7 @@ Rules:
 
 - Every associated type declared on the mixin must be bound in the
   type body that includes it, else E-ASSOC-MISSING.
-- A bound like `type IntoIter: Iterator[Item = Self.Item]` must be
+- A bound like `type IntoCur < Cursor[Item = Self.Item]` must be
   satisfied by the binding. Ruxen checks this at include-registration
   time (§5.3).
 - Defaulted associated types (NG4) would skip the required-to-bind
@@ -240,23 +277,25 @@ Rules:
 
 ### 4.3 Use-site projection syntax
 
-Two forms, equivalent:
+Two forms, equivalent. Both use the RBS-style bound [planned](../../TODO.md#t-d7-respell),
+the `Cursor[Item = Int]` binding [planned](../../TODO.md#t-oq), and
+`while (x = i.next)` narrowing [planned](../../TODO.md#t-narrowing):
 
-```ruxen
+```ruby
 # Dot form (Ruby-style, matches tutorial 08:31):
-def sum[I: Iterator[Item = Int]](i: &var I) -> Int
-  var total = 0
-  while let Some(x) = i.next
+def sum[I < Cursor[Item = Int]](i: &var I) -> Int
+  total = 0
+  while (x = i.next)
     total = total + x
   end
   total
 end
 
-# Generic-over-Item form:
-def sum_all[I: Iterator](i: &var I) -> I.Item
-  where I.Item: Add[Output = I.Item] + Default
-  var total = I.Item.default
-  while let Some(x) = i.next
+# Generic-over-Item form. Ruby has no `Default` or `Add` mixin, so the
+# starting value is an argument and `I.Item` must define `+`:
+def sum_all[I < Cursor](i: &var I, zero: I.Item) -> I.Item
+  total = zero
+  while (x = i.next)
     total = total + x
   end
   total
@@ -279,12 +318,18 @@ Rules:
 
 ### 4.4 Equality constraints
 
-```ruxen
-def process[I: Iterator[Item = Int]](i: &var I) ...
-def collect_strings[I: Iterator[Item = String]](i: I) -> Array[String] ...
+A binding in a bound's type argument does not parse today, [planned](../../TODO.md#t-oq) (OQ-11):
+
+```ruby
+def process[I < Cursor[Item = Int]](i: &var I) ...
+def collect_strings[I < Cursor[Item = String]](i: I) -> Array[String] ...
 ```
 
-Sugar for: `I: Iterator where I.Item = Int`.
+Sugar for the bound `I < Cursor` plus the equality `I.Item = Int`.
+Projections resolve such declared equalities, and `Self::Output`-style
+projections stay [planned](../../TODO.md#t-x3). The async step futures that would
+need associated types in mixin defaults stay shared functions, the floor
+until Fibers replace async [planned](../../TODO.md#t-d11).
 
 ## 5. Type-System Changes
 
@@ -292,6 +337,7 @@ Sugar for: `I: Iterator where I.Item = Int`.
 
 Add to `hir/types.rs:39-166`:
 
+<!-- compiler-rust -->
 ```rust
 /// `<T as Iterator>.Item` — an associated-type projection.
 ///
@@ -321,6 +367,7 @@ preceding segment's bounds, rewrite into `Ty::Projection`.
 Pseudocode (new helper, next to `resolve_type_path` at `resolve/mod.rs:
 2527`):
 
+<!-- compiler-rust -->
 ```rust
 fn try_project(&self, base_ty: &Ty, assoc_name: &str) -> Option<Ty> {
     // base_ty must be a TypeParam or Self — look at its bounds.
@@ -352,6 +399,7 @@ fn try_project(&self, base_ty: &Ty, assoc_name: &str) -> Option<Ty> {
 
 `resolve/symbols.rs:60-66`:
 
+<!-- compiler-rust -->
 ```rust
 pub struct TraitInfo {
     pub generic_params: Vec<GenericParamInfo>,
@@ -379,6 +427,7 @@ New `ImplInfo` stored per-include (replacing the existing per-type
 `nominal_impls: HashMap<(String, String), Vec<ImplMethod>>` in
 `TraitResolver`, `typeck/traits.rs:32-36`):
 
+<!-- compiler-rust -->
 ```rust
 pub struct ImplInfo {
     pub trait_ref: TraitRef,       // Trait[generic_args]
@@ -396,6 +445,7 @@ entries into `assoc_bindings`.
 
 A new module `typeck/project.rs` provides:
 
+<!-- compiler-rust -->
 ```rust
 pub fn normalize(ty: &Ty, resolver: &TraitResolver, symbols: &SymbolTable) -> Ty;
 ```
@@ -428,6 +478,7 @@ Build an AST `AssocEqConstraint { name, ty }` and attach to the bound.
 
 AST addition (`parser/ast.rs` near `TraitBound:100-104`):
 
+<!-- compiler-rust -->
 ```rust
 pub struct TraitBound {
     pub path: TypePath,

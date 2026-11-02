@@ -53,7 +53,7 @@ is the 30-second summary.
 
 ## Cross-doc dependency graph
 
-```
+```text
                     ┌────────────────────────────────┐
                     │ Tier 1 prerequisites           │
                     │ (structural mixins, Drop,      │

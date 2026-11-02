@@ -41,6 +41,7 @@ This doc specifies:
 The lexer recognizes **`##`** as the doc-comment syntax
 (`compiler/ruxen_core/src/lexer/mod.rs:170-172`, `:211-226`):
 
+<!-- compiler-rust -->
 ```rust
 } else if self.peek_at(1) == Some('#') {
     // Doc comment ##
@@ -68,6 +69,7 @@ comments.
 
 Every site that expects a new item skips any leading `DocComment`s:
 
+<!-- compiler-rust -->
 ```rust
 // parser/mod.rs:455-458
 while let TokenKind::DocComment(_) = self.current_kind() {
@@ -143,16 +145,18 @@ Private}`) and are tracked on `Definition.visibility`
 
 ### 4.1 Syntax for authors
 
-```
+`##` doc comments are [implemented]; the generator that renders them is [planned](../../TODO.md#t-req-docgen):
+
+```ruby
 ## Adds two integers.
 ##
-## Panics if the addition overflows.
+## Aborts if the addition overflows.
 ##
 ## # Examples
 ##
-## ```rx
-## let result = add(2, 3)
-## assert_eq(result, 5)
+## ```ruby
+## result = add(2, 3)
+## puts result   # => 5
 ## ```
 ##
 ## See also: [sub], [Array.push]
@@ -172,7 +176,7 @@ Rules:
 
 ### 4.2 CLI
 
-```
+```sh
 ruxendoc                             # docs for project at cwd
 ruxendoc src/main.rx                # docs for a single file
 ruxendoc --output docs/              # output directory (default: target/doc/)
@@ -188,6 +192,7 @@ ruxen doc --open
 
 Add to `src/ruxen_cli/src/cli.rs::Command`:
 
+<!-- compiler-rust -->
 ```rust
 Doc {
     #[arg(long)] open: bool,
@@ -202,7 +207,7 @@ Implementation: shell out to `ruxendoc` binary (parallel to
 
 ### 4.4 Output layout
 
-```
+```text
 target/doc/
 ├── index.html                # project overview + module list
 ├── search-index.json         # fuzzy search data
@@ -258,6 +263,7 @@ New field `doc_comments: Vec<String>` on every documentable AST node:
 
 Then update the four parser sites that currently discard:
 
+<!-- compiler-rust -->
 ```rust
 // parser/mod.rs:455-458 — was:
 while let TokenKind::DocComment(_) = self.current_kind() {
@@ -284,6 +290,7 @@ HIR node (`HirFuncDef`, `HirStructDef`, etc. in `hir/nodes.rs`).
 
 And into `Definition`:
 
+<!-- compiler-rust -->
 ```rust
 // resolve/symbols.rs:140-146
 pub struct Definition {
@@ -303,7 +310,7 @@ doc rendering (doc 01 §7).
 
 New crate `src/ruxendoc/`:
 
-```
+```text
 src/ruxendoc/
 ├── Cargo.toml
 ├── src/
@@ -337,6 +344,7 @@ Reuse `ruxen_core::{lexer, parser, resolve, typeck}`. After `typeck`,
 `TypeCheckResult.symbols` has every definition with its span and
 (after §5.1) doc comments. Walk `symbols.iter()` and produce:
 
+<!-- compiler-rust -->
 ```rust
 struct CollectedItem {
     path: String,         // "my_app.math.add"
@@ -390,6 +398,7 @@ Disable: raw HTML, autolinks, footnotes (can be re-enabled later).
 Reuse `ruxen_core::lexer::Lexer` to tokenize the code, then emit HTML
 spans:
 
+<!-- compiler-rust -->
 ```rust
 fn highlight(code: &str) -> String {
     let mut out = String::new();
@@ -408,7 +417,7 @@ logic.
 
 ### 5.8 Module/item URL scheme
 
-```
+```text
 crate-path/module/module/item.html
 ```
 

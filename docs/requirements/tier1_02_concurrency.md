@@ -115,7 +115,7 @@ specific intrinsic support anywhere in the pipeline.
 - **G2.** Ship OS-thread-based concurrency (1:1 threading model) via
   `Thread.spawn` with a Ruby-flavored surface syntax (`Thread.spawn do ... end`).
 - **G3.** Ship a minimal but complete set of sync primitives: `Mutex[T]`,
-  `RwLock[T]`, `Atomic*`, `SharedSync[T]`, `Condvar`, `Barrier`, `Once`.
+  `RwLock[T]`, `Atomic*`, `SharedSync[T]`, `ConditionVariable`, `Barrier`, `Once`.
 - **G4.** Ship `Channel[T]` (MPSC) as the primary message-passing primitive.
 - **G5.** Borrow-check thread-crossing closures: every value captured by a
   `spawn`ed closure must be `Send`; every `&T` captured must have `T: Sync`.
@@ -156,7 +156,7 @@ the type's fields unless the author explicitly opts out.
 Given a type `T`, the compiler computes `is_send(T)` and `is_sync(T)` as the
 greatest fixed-point under these rules (exactly mirroring Rust):
 
-```
+```text
 is_send(T) is true iff:
   T is a primitive scalar (Int*, UInt*, Float*, Bool, Char, Unit, Never) → yes
   T is String                                                             → yes
@@ -178,7 +178,7 @@ is_send(T) is true iff:
 
 `is_sync(T)` follows the same shape with rules:
 
-```
+```text
   is_sync(T) iff is_send(&T)   # implicit lifetime, any borrow
 
   Concretely:
@@ -199,6 +199,7 @@ is_send(T) is true iff:
 
 Add to `compiler/ruxen_core/src/hir/types.rs`, alongside `is_copy()`:
 
+<!-- compiler-rust -->
 ```rust
 impl Ty {
     /// Returns true if this type is Send (safe to transfer across threads).
@@ -216,6 +217,7 @@ touch the context.
 
 A new enum tracks why a type is *not* `Send`/`Sync`, for diagnostics:
 
+<!-- compiler-rust -->
 ```rust
 #[derive(Debug, Clone)]
 pub enum SendSyncViolation {
@@ -232,6 +234,7 @@ pub enum SendSyncViolation {
 Add to `DefKind::Struct` (and `Class`, `Enum`) in
 `compiler/ruxen_core/src/resolve/symbols.rs`:
 
+<!-- compiler-rust -->
 ```rust
 pub struct StructInfo {
     pub generic_params: Vec<GenericParamInfo>,
@@ -247,10 +250,12 @@ pub struct StructInfo {
 
 ### 4.5 Surface syntax
 
-**Inference is the default.** Users rarely write anything:
+**Inference is the default.** Users rarely write anything. Whether the
+markers are inferred or written by hand is still open (OQ-14 of the language
+spec), so inference as the default is [planned](../../TODO.md#t-oq):
 
-```ruxen
-struct Point
+```ruby
+class Point
   x: Float
   y: Float
 end
@@ -262,7 +267,9 @@ end
 not-`Sync`. Only valid for `Send` and `Sync`; rejected for other mixins with a
 diagnostic.
 
-```ruxen
+The `exclude` spelling is [planned](../../TODO.md#t-exclude-send); `*Void` is [planned](../../TODO.md#t-void-ptr):
+
+```ruby
 class RawHandle
   fd: *var Void
 
@@ -272,16 +279,32 @@ class RawHandle
 end
 ```
 
+Works today: the `include !Send` spelling (the default until OQ-14 picks one),
+with a byte pointer since `*Void` does not resolve yet [implemented]:
+
+```ruby
+class RawHandle
+  fd: *var UInt8
+
+  include !Send
+  include !Sync
+end
+```
+
 **Manual positive provision** (unsafe — the escape hatch):
 
-```ruxen
+`unsafe include Send` is [implemented]. Making it hold only when `T` is `Send`
+uses the RBS-style bound on the class, [planned](../../TODO.md#t-d7-respell) (the draft wrote a
+[deprecated] `where T: Send` on each include). The Ruby form, [planned](../../TODO.md#t-d7-respell):
+
+```ruby
 # A hand-rolled lock-free queue that the author has verified is thread-safe.
-struct LockFreeQueue[T]
+class LockFreeQueue[T < Send]
   head: *var Node[T]
   tail: *var Node[T]
 
-  unsafe include Send where T: Send
-  unsafe include Sync where T: Send
+  unsafe include Send
+  unsafe include Sync
 end
 ```
 
@@ -291,10 +314,20 @@ type that the auto-inference would otherwise reject into being treated as
 an inference-incompatible type is an error (aligns with P1: crossing an
 auto-mixin boundary manually is explicit danger).
 
-**Bound usage**:
+**Bound usage**. In the Ruby thread API the block passed to `Thread.new` must
+be `Send` and own what it captures, [planned](../../TODO.md#t-thread-api):
 
-```ruxen
-def spawn_task[F: FnOnce() -> nil + Send + static](f: F) -> JoinHandle[nil]
+```ruby
+def spawn_task(&block) -> Thread
+  Thread.new(&block)
+end
+```
+
+Works today (`Thread.spawn` and `JoinHandle` are replaced by
+`Thread.new { }.value`), [deprecated]:
+
+```ruby
+def spawn_task(f: any Fn[Fn() -> Int] + Send) -> JoinHandle[Int]
   Thread.spawn(f)
 end
 ```
@@ -357,28 +390,43 @@ declared mixin bounds. `Thread.spawn`'s signature bakes in
 
 ### 5.1 Surface syntax
 
-```ruxen
-use std.thread.Thread
+The Ruby form, [planned](../../TODO.md#t-thread-api):
 
-# Ruby-ish block form — the primary idiom.
-let handle = Thread.spawn do
+```ruby
+# Ruby block form — the primary idiom.
+t = Thread.new do
   puts "hello from thread"
-  compute_42()
+  compute_42
 end
 
-let result = handle.join!   # result is Int (the return type of the block)
+result = t.value   # result is Int (the block's value)
 ```
 
-Equivalent closure form (for point-free style):
+Equivalent stored-proc form (for point-free style), [planned](../../TODO.md#t-thread-api):
 
-```ruxen
-let handle = Thread.spawn({ || compute_42() })
+```ruby
+work = -> { compute_42 }
+t = Thread.new(&work)
 ```
 
-Both lower to the same HIR: `Thread.spawn` is a class method with signature
+Works today (as in `tests/release-e2e/cases/1970_thread_spawn_join.rx`),
+[deprecated] (`Thread.spawn` and `join!` are replaced by `Thread.new { }.value`):
 
+```ruby
+def compute_42 -> Int
+  42
+end
+
+handle = Thread.spawn { compute_42() }
+puts "result: #{handle.join!}"
 ```
-def self.spawn[F: FnOnce() -> T + Send + static, T: Send + static](f: F) -> JoinHandle[T]
+
+Both lower to the same HIR: `Thread.spawn` is a class method. Its signature
+today (`library/std/sync/src/thread.rx`), as a user-facing shape replaced by
+`Thread.new { }.value`, [deprecated]:
+
+```ruby
+def self.spawn[T](f: any Fn[Fn() -> T] + Send) -> JoinHandle[T]
 ```
 
 The Ruby `do ... end` block is desugared by the existing closure/block machinery
@@ -387,7 +435,10 @@ to a `move` closure (because `Thread.spawn`'s parameter bound is
 
 ### 5.2 `JoinHandle[T]`
 
-```
+As built in `library/std/sync/src/join_handle.rx`; as a user-facing shape it
+is replaced by `Thread#value` and `Thread#join`, [deprecated]:
+
+```ruby
 class JoinHandle[T: Send]
   # Opaque — holds a pthread_t under the hood.
 
@@ -417,19 +468,22 @@ end
 
 ### 5.4 Thread-local storage
 
-```ruxen
-thread_local! REQUEST_ID: UInt64 = 0
+The Ruby form is fiber-and-thread-local storage through `Thread.current`
+(symbols and `Thread.current[:key]` are [planned](../../TODO.md#t-thread-api)):
 
-def current_request -> UInt64
-  REQUEST_ID.get
+```ruby
+def current_request -> Int
+  Thread.current[:request_id] || 0
 end
 
-def set_request(id: UInt64)
-  REQUEST_ID.set(id)
+def set_request(id: Int)
+  Thread.current[:request_id] = id
 end
 ```
 
-The `thread_local!` macro (new in the macro set, alongside the native `[…]`
+The draft's `thread_local!` macro (`thread_local! REQUEST_ID: UInt64 = 0`) is
+[deprecated] in the language spec (replace with `Thread.current[:x]`). It was
+planned as new in the macro set, alongside the native `[…]`
 and `{ k => v, … }` collection literals) expands to a `ThreadLocal[T]` static
 whose accessors wrap `pthread_key_create`
 / `pthread_getspecific` / `pthread_setspecific`. Phase 2b may defer this to 2d
@@ -442,15 +496,15 @@ if schedule pressure requires.
 - `Thread.yield_now` — calls `sched_yield`.
 - `Thread.id` — returns `ThreadId` (newtype on `UInt64`).
 - `Thread.name` — returns `Option[String]`.
-- Builder pattern via `ThreadBuilder` (set name, stack size):
+- Builder pattern via `ThreadBuilder` (set name, stack size). It is not
+  built. In the Ruby thread API the name is set with `Thread#name=`, and Ruby
+  has no stack-size setting, so that part stays open ([planned](../../TODO.md#t-thread-api)):
 
-```ruxen
-let handle = ThreadBuilder.new
-  .name("worker")
-  .stack_size(2 * 1024 * 1024)
-  .spawn do
-    work()
-  end
+```ruby
+t = Thread.new do
+  work
+end
+t.name = "worker"
 ```
 
 ### 5.6 Runtime ABI (C side)
@@ -496,9 +550,20 @@ unsafe internals. Users see a clean surface API; the implementation lives in
 
 ### 6.1 `Mutex[T]`
 
-```ruxen
-class Mutex[T]
-  def self.new(value: T) -> Mutex[T]
+The Ruby form holds the lock for the length of a block (`Mutex#synchronize`);
+the exact block signature is part of the thread API item, [planned](../../TODO.md#t-thread-api):
+
+```ruby
+counter = Mutex.new(0)
+total = counter.synchronize { |n| n + 1 }   # the lock is held only inside the block
+```
+
+The API as built (`library/std/sync/src/mutex.rx`, `mutex_guard.rx`); as a
+user-facing shape it is replaced by `Mutex#synchronize`, [deprecated]:
+
+```ruby
+class Mutex[T: Send]
+  def self.new(initial: T) -> Mutex[T]
   def lock -> Result[MutexGuard[T], PoisonError]
   def lock! -> MutexGuard[T]
   def try_lock -> Option[MutexGuard[T]]
@@ -507,9 +572,25 @@ end
 
 class MutexGuard[T]
   # Drop implementation unlocks the mutex.
+  def get -> T            # copy of the guarded value (T: Clone)
+  def set(value: T)
   def deref -> &T
   def deref_var -> &var T
 end
+```
+
+Works today (as in `tests/release-e2e/cases/2213_mutex_guard_deref_mut_int.rx`);
+replaced by `Mutex#synchronize`, [deprecated]:
+
+```ruby
+def bump(n: &var Int)
+  n += 1
+end
+
+m = Mutex.new(41)
+g = m.lock!
+bump(g.deref_var)
+puts g.get
 ```
 
 - **Send/Sync:** `Mutex[T]: Send if T: Send`; `Mutex[T]: Sync if T: Send`
@@ -528,14 +609,17 @@ end
 
 ### 6.2 `RwLock[T]`
 
-```ruxen
+Not built. The draft returned `Result`-wrapped guards; the Ruby form holds the
+lock for a block, like `Mutex#synchronize`, and raises on a poisoned lock,
+[planned](../../TODO.md#t-thread-api):
+
+```ruby
 class RwLock[T]
   def self.new(value: T) -> RwLock[T]
-  def read -> Result[RwLockReadGuard[T], PoisonError]
-  def read! -> RwLockReadGuard[T]
-  def write -> Result[RwLockWriteGuard[T], PoisonError]
-  def write! -> RwLockWriteGuard[T]
-  def try_read, try_write
+  def read(&block)        # shared lock for the block; yields &T
+  def write(&block)       # exclusive lock for the block; yields &var T
+  def try_read(&block) -> Bool
+  def try_write(&block) -> Bool
 end
 ```
 
@@ -544,41 +628,42 @@ end
   concurrently — so `T: Sync` is required.
 - **Runtime:** `pthread_rwlock_t`.
 
-### 6.3 `Condvar`
+### 6.3 `ConditionVariable`
 
-```ruxen
-class Condvar
-  def self.new -> Condvar
-  def wait[T](guard: MutexGuard[T]) -> Result[MutexGuard[T], PoisonError]
-  def wait_timeout[T](guard: MutexGuard[T], dur: Duration) -> Result[(MutexGuard[T], WaitTimeoutResult), PoisonError]
-  def notify_one
-  def notify_all
+Not built. The draft's Rust-style `Condvar` (`wait` returning a
+`Result`-wrapped guard, `notify_one`/`notify_all`) becomes Ruby's
+`ConditionVariable`, [planned](../../TODO.md#t-thread-api):
+
+```ruby
+class ConditionVariable
+  def wait(mutex: Mutex[T], timeout: Float? = nil)   # call inside mutex.synchronize
+  def signal        # wake one waiter
+  def broadcast     # wake every waiter
 end
 ```
 
-Follows Rust almost exactly. Runtime: `pthread_cond_*`.
+Follows Ruby's `ConditionVariable`. Runtime: `pthread_cond_*`.
 
 ### 6.4 Atomics
 
 Primitive types only — one atomic per scalar width.
 
-```ruxen
-AtomicBool
-AtomicI32  AtomicI64  AtomicIsize
-AtomicU32  AtomicU64  AtomicUsize
-```
+Built today: `AtomicBool`, `AtomicI64` and `AtomicUsize`
+(`library/std/sync/src/atomic_*.rx`), each with `new(initial)`, `load`,
+`store(v)`, `fetch_add`, `fetch_sub` and `compare_and_swap(current, new)`,
+all sequentially consistent with no ordering argument [implemented]. The draft
+also listed `AtomicI32`, `AtomicIsize`, `AtomicU32`, `AtomicU64` and
+`fetch_and`/`fetch_or`/`fetch_xor`/`swap`; those are not built
+[planned](../../TODO.md#t-thread-api). The draft's `Ordering` argument (`Relaxed`,
+`Acquire`, `Release`, `AcqRel`, `SeqCst`) is [deprecated] in the
+language spec, replaced by the ordering-free methods above.
 
-Each has `new(initial)`, `load(order)`, `store(v, order)`,
-`compare_exchange(expected, new, success_order, failure_order)`,
-`fetch_add`, `fetch_sub`, `fetch_and`, `fetch_or`, `fetch_xor`, `swap`.
-`Ordering` is an enum matching C11 memory orderings: `Relaxed`, `Acquire`,
-`Release`, `AcqRel`, `SeqCst`.
+Works today [implemented]:
 
-```ruxen
-use std.sync.atomic.{AtomicI64, Ordering}
-
-let counter = AtomicI64.new(0)
-counter.fetch_add(1, Ordering.Relaxed)
+```ruby
+counter = AtomicI64.new(0)
+counter.fetch_add(1)
+puts counter.load
 ```
 
 - **Send/Sync:** all atomics are `Send + Sync`. Hard-coded special case in
@@ -591,14 +676,19 @@ counter.fetch_add(1, Ordering.Relaxed)
 
 Atomic reference counting — the primary way to share ownership across threads.
 
-```ruxen
+`downgrade` and `Weak[T]` are not built, and calls do not auto-deref
+through a `SharedSync` yet (write `shared.deref.lock!`, not `shared.lock!`), a
+[known issue](../../TODO.md#t-sharedsync-deref).
+As built in `library/std/sync/src/shared_sync.rx` [implemented]:
+
+```ruby
 class SharedSync[T]
-  def self.new(value: T) -> SharedSync[T]
+  def self.new(initial: T) -> SharedSync[T]
   def clone -> SharedSync[T]                 # increments refcount
   def strong_count -> USize
   def weak_count -> USize
-  def downgrade -> Weak[T]
-  def deref -> &T                      # SharedSync[T] auto-derefs to &T in method calls
+  def get -> T                               # copy of the value (T: Clone)
+  def deref -> &T
 end
 ```
 
@@ -616,22 +706,26 @@ end
 
 ### 6.6 `Barrier`
 
-```ruxen
+Not built, [planned](../../TODO.md#t-thread-api):
+
+```ruby
 class Barrier
-  def self.new(n: USize) -> Barrier
-  def wait -> BarrierWaitResult  # .is_leader returns true for one thread
+  def self.new(n: Int) -> Barrier
+  def wait -> Bool  # true for exactly one thread (the leader)
 end
 ```
 
 Runtime: `pthread_barrier_t` on Linux; on macOS (no pthread_barrier), emulate
-with `Mutex` + `Condvar` + counter.
+with `Mutex` + `ConditionVariable` + counter.
 
 ### 6.7 `Once`
 
-```ruxen
+Not built, [planned](../../TODO.md#t-thread-api):
+
+```ruby
 class Once
   def self.new -> Once
-  def call_once(f: FnOnce() -> nil)
+  def call_once(&block)   # runs the block the first time only
 end
 ```
 
@@ -652,44 +746,59 @@ MPMC deferred.
 
 ### 7.1 Surface API
 
-```ruxen
-use std.sync.channel
+The Ruby form is `Thread::Queue`; the draft's `channel.unbounded` pair of
+`Sender`/`Receiver` returning `Result` is [deprecated] in the language
+spec, replaced by it. The Ruby form, [planned](../../TODO.md#t-thread-api):
 
-let (sender, receiver) = channel.unbounded[Int]
+```ruby
+queue = Thread::Queue.new
 
 # Spawn 4 producers.
-for i in 0..4
-  let s = sender.clone
-  Thread.spawn do
-    for j in 0..10
-      s.send(i * 100 + j)!
-    end
+producers = (0...4).map do |i|
+  Thread.new do
+    10.times { |j| queue << i * 100 + j }
   end
 end
-drop(sender)   # close the sending side from main
+producers.each { |t| t.join }
+queue.close   # close the queue from main
 
-while let Ok(v) = receiver.recv
+while (v = queue.pop)
   puts v
 end
 ```
 
 ### 7.2 Types
 
-```ruxen
-class Sender[T]
-  def send(v: T) -> Result[nil, SendError[T]]
-  def clone -> Sender[T]                 # cloning extends producer count
+The Ruby queue types, [planned](../../TODO.md#t-thread-api):
+
+```ruby
+class Thread::Queue[T]
+  def push(v: T)              # also <<; raises once the queue is closed
+  def pop -> T?               # blocks; nil once closed and empty
+  def pop(timeout: Float) -> T?
+  def close
+  def each(&block)            # yields each item until closed
 end
 
-class Receiver[T]
-  def recv -> Result[T, RecvError]         # blocks until msg or disconnected
-  def try_recv -> Result[T, TryRecvError]  # non-blocking
-  def recv_timeout(d: Duration) -> Result[T, RecvTimeoutError]
-  def each(&block: Fn[(T) -> nil])       # yields each message until disconnected
+class Thread::SizedQueue[T]   # bounded: push blocks while full
+  def self.new(max: Int) -> Thread::SizedQueue[T]
+end
+```
+
+What is built today is only the runtime binding (`library/std/sync/src/sender.rx`,
+`receiver.rx`), with no constructor in `.rx`; it is replaced by
+`Thread::Queue`, [deprecated]:
+
+```ruby
+class Sender[T: Send]
+  def send_raw(value: T) -> Int     # status code
+  def clone -> Sender[T]            # cloning extends producer count
 end
 
-def channel.unbounded[T: Send] -> (Sender[T], Receiver[T])
-def channel.bounded[T: Send](cap: USize) -> (Sender[T], Receiver[T])
+class Receiver[T: Send]
+  def recv_raw -> T                 # blocks until a message arrives
+  def try_recv_raw -> T
+end
 ```
 
 ### 7.3 Semantics
@@ -712,7 +821,7 @@ def channel.bounded[T: Send](cap: USize) -> (Sender[T], Receiver[T])
 
 Internally a channel is:
 
-```
+```text
 struct Channel[T] {
   mutex:    pthread_mutex_t
   not_full: pthread_cond_t     // bounded only
@@ -742,6 +851,7 @@ later as `channel.mpmc_unbounded`/`mpmc_bounded` without breaking anything.
 
 A new file: `compiler/ruxen_core/src/borrow_check/thread_safety.rs`. It exposes:
 
+<!-- compiler-rust -->
 ```rust
 pub struct ThreadSafetyChecker<'a> {
     symbols: &'a SymbolTable,
@@ -783,6 +893,7 @@ satisfaction is decided by `ThreadSafetyChecker::is_send`, not by method-based
 
 Extend `compiler/ruxen_core/src/borrow_check/errors.rs`:
 
+<!-- compiler-rust -->
 ```rust
 pub enum ErrorCode {
     /* existing ... */
@@ -849,6 +960,7 @@ unwieldy. Proposal: add a second file `runtime_thread.c` in the same
 directory, compiled and linked alongside. `codegen/object.rs:compile_runtime`
 changes to:
 
+<!-- compiler-rust -->
 ```rust
 cc -c runtime.c runtime_thread.c -o runtime.o    // -c with multiple inputs isn't legal;
 // actually: compile each to a separate .o and link both into the final binary.
@@ -932,7 +1044,7 @@ through this table.
 
 ### 9.5 Platform matrix
 
-| Platform | pthread | pthread_barrier | atomic intrinsics | Status |
+| Platform | pthread | pthread_barrier | atomic intrinsics | Support tier |
 |----------|---------|-----------------|-------------------|--------|
 | Linux glibc | Yes | Yes | Yes | **Tier 1** |
 | Linux musl  | Yes | Yes | Yes | Tier 1 |
@@ -944,6 +1056,7 @@ through this table.
 
 Add to `codegen/object.rs` in `emit_executable`:
 
+<!-- compiler-rust -->
 ```rust
 cmd.arg("-lpthread");          // unconditional after Phase 2b lands
 ```
@@ -955,83 +1068,73 @@ is harmless there. Windows build path will diverge when Tier 2 arrives.
 
 ## 10. Surface Syntax Examples
 
+Every example in this section is the Ruby thread API, [planned](../../TODO.md#t-thread-api).
+
 ### 10.1 SharedSync + Mutex counter
 
-```ruxen
-use std.thread.Thread
-use std.sync.{SharedSync, Mutex}
+The Ruby form, [planned](../../TODO.md#t-thread-api):
 
-def main
-  let counter = SharedSync.new(Mutex.new(0))
-  var handles = []
+```ruby
+counter = SharedSync.new(Mutex.new(0))
 
-  for _ in 0..8
-    let c = counter.clone
-    let h = Thread.spawn do
-      for _ in 0..1000
-        var guard = c.lock!
-        *guard += 1          # deref_var
-      end
+threads = (0...8).map do
+  c = counter.clone
+  Thread.new do
+    1000.times do
+      c.synchronize { |n| n + 1 }
     end
-    handles.push(h)
   end
-
-  for h in handles
-    h.join!
-  end
-
-  puts "final = #{counter.lock!}"   # 8000
 end
+
+threads.each { |t| t.join }
+
+puts "final = #{counter.synchronize { |n| n }}"   # 8000
 ```
 
 Borrow-check expectations:
 
 - `counter.clone` produces a new `SharedSync[Mutex[Int]]`. `SharedSync[T]: Send + Sync if T: Send + Sync`.
   `Mutex[Int]: Send + Sync` because `Int: Send`. ✓
-- Closure captures `c` by move (inferred because `Thread.spawn`'s bound is
-  `F: FnOnce + Send + static`). Captured `c: SharedSync[Mutex[Int]]` is `Send`. ✓
-- Inside closure, `c.lock!` returns `MutexGuard[Int]`. The guard owns a live
-  borrow of the mutex; NLL expires it at end of loop iteration. ✓
+- The `Thread.new` block captures `c` by move (a thread body must own what it
+  captures). Captured `c: SharedSync[Mutex[Int]]` is `Send`. ✓
+- Inside the block, `c.synchronize { |n| n + 1 }` holds the lock only for the
+  inner block; the borrow of the guarded value ends when that block returns,
+  so nothing borrowed from the mutex outlives the lock. ✓
 
-### 10.2 Channel pipeline
+### 10.2 Queue pipeline
 
-```ruxen
-use std.sync.channel
-use std.thread.Thread
+The Ruby form, [planned](../../TODO.md#t-thread-api):
 
-def main
-  let (tx, rx) = channel.bounded[String](16)
+```ruby
+queue = Thread::SizedQueue.new(16)
 
-  Thread.spawn do
-    for i in 0..100
-      tx.send("msg-#{i}")!
-    end
-    # tx dropped → receiver sees Disconnected after draining
-  end
+Thread.new do
+  100.times { |i| queue << "msg-#{i}" }
+  queue.close      # the consumer sees nil after draining
+end
 
-  while let Ok(msg) = rx.recv
-    puts msg
-  end
+while (msg = queue.pop)
+  puts msg
 end
 ```
 
-### 10.3 Producer group via `SharedSync`
+### 10.3 Producer group
 
-```ruxen
-let (tx, rx) = channel.unbounded[Int]
+The Ruby form, [planned](../../TODO.md#t-thread-api):
 
-for i in 0..4
-  let t = tx.clone             # each producer owns a Sender
-  Thread.spawn do
-    for j in 0..25
-      t.send(i * 25 + j)!
-    end
+```ruby
+queue = Thread::Queue.new
+
+producers = (0...4).map do |i|
+  Thread.new do
+    25.times { |j| queue << i * 25 + j }
   end
 end
-drop(tx)                       # drop main's handle so rx disconnects when all producers finish
+producers.each { |t| t.join }
+queue.close                    # close once every producer is done
 
-var total = 0
-while let Ok(v) = rx.recv
+total = 0
+while (v = queue.pop)
   total += v
 end
 puts total                     # 0+1+...+99 = 4950
@@ -1039,22 +1142,24 @@ puts total                     # 0+1+...+99 = 4950
 
 ### 10.4 Borrow-check rejection: capturing non-Send
 
-```ruxen
+The Ruby form (`exclude Send` and `Thread.new`), [planned](../../TODO.md#t-thread-api):
+
+```ruby
 class NonSendThing
-  ptr: *var Void
+  ptr: *var UInt8
 
   exclude Send                     # explicit — inferred anyway
 end
 
-let x = NonSendThing { ptr: nil }
-Thread.spawn do
+x = NonSendThing.new(nil)
+Thread.new do
   use_it(&x)           # ERROR E1011: value of type `NonSendThing` is not `Send`
 end
 ```
 
 Diagnostic (rendered via existing `BorrowError::fmt`):
 
-```
+```text
 error[E1011]: value of type `NonSendThing` is not `Send`
   --> src/main.rx:9:1
    | 9:3 — `NonSendThing` is not Send because it contains a raw pointer
@@ -1066,51 +1171,49 @@ error[E1011]: value of type `NonSendThing` is not `Send`
 
 ### 10.5 Atomic counter
 
-```ruxen
-use std.sync.atomic.{AtomicI64, Ordering}
-use std.sync.SharedSync
-use std.thread.Thread
+The Ruby form, [planned](../../TODO.md#t-thread-api):
 
-def main
-  let counter = SharedSync.new(AtomicI64.new(0))
-  var handles = []
+```ruby
+counter = SharedSync.new(AtomicI64.new(0))
 
-  for _ in 0..4
-    let c = counter.clone
-    handles.push(Thread.spawn do
-      for _ in 0..250_000
-        c.fetch_add(1, Ordering.Relaxed)
-      end
-    end)
+threads = (0...4).map do
+  c = counter.clone
+  Thread.new do
+    250_000.times { c.fetch_add(1) }
   end
-
-  for h in handles
-    h.join!
-  end
-
-  puts counter.load(Ordering.SeqCst)       # 1_000_000
 end
+
+threads.each { |t| t.join }
+
+puts counter.load       # 1_000_000
+```
+
+Works today with one thread; `Thread.spawn`, `join!` and the explicit
+`deref` are replaced by `Thread.new { }.value` and auto-deref, [deprecated]:
+
+```ruby
+counter = SharedSync.new(AtomicI64.new(0))
+c = counter.clone
+h = Thread.spawn { c.deref.fetch_add(1) }
+h.join!
+puts counter.deref.load
 ```
 
 ### 10.6 `Once` for lazy init
 
-```ruxen
-use std.sync.Once
+Process-global runtime state goes through a library wrapper
+(`SharedSync[Mutex[T]]`, `Once`, `Atomic*`): per spec §3.14, `static` is only
+a lifetime keyword in Ruxen and there is no item-level storage class. The
+example shows a writable log fd guarded by `Once` for initialization, held in
+constants ([planned](../../TODO.md#t-constants)); the Ruby form, [planned](../../TODO.md#t-thread-api):
 
-# Process-global runtime state goes through a library wrapper (SharedSync[Mutex[T]],
-# Once, Atomic*) — per spec §3.14, `static` is only a lifetime keyword in Ruxen
-# and there is no item-level storage class. The example below shows a writable
-# log-fd guarded by `Once` for initialization; the underlying mutability is
-# expressed through the wrapper, not a `static var` binding.
-let INIT: Once = Once.new
-let LOG_FD: SharedSync[Mutex[Int]] = SharedSync.new(Mutex.new(-1))
+```ruby
+INIT = Once.new
+LOG_FD = SharedSync.new(Mutex.new(-1))
 
 def init_logger
   INIT.call_once do
-    unsafe
-      let var guard = LOG_FD.lock
-      guard.set(open("app.log"))
-    end
+    LOG_FD.synchronize { |_fd| open("app.log") }
   end
 end
 ```
@@ -1148,7 +1251,7 @@ Panic propagation. Includes `Drop` wiring for `MutexGuard` (lock release).
 
 ### Phase 2c — Channels
 `channel.unbounded` + `channel.bounded` (MPSC). `Sender`/`Receiver`/iter.
-Pure Ruxen + `SharedSync` + `Mutex` + `Condvar` — minimal new C code (Condvar is
+Pure Ruxen + `SharedSync` + `Mutex` + `ConditionVariable` — minimal new C code (the condition variable is
 the only new primitive).
 **Deliverable:** `std.sync.channel` module, disconnect semantics,
 bounded back-pressure tests.
@@ -1275,7 +1378,7 @@ Files to modify (Phase 2b):
 
 Files to modify (Phase 2c):
 
-- `compiler/ruxen_core/src/codegen/runtime.rs` — Condvar entries.
+- `compiler/ruxen_core/src/codegen/runtime.rs` — ConditionVariable entries.
 - `runtime_thread.c` — `pthread_cond_*` wrappers.
 - Stdlib Ruxen source: `std.sync.channel`, `Sender`, `Receiver`,
   `SendError`, `RecvError`, `TryRecvError`.

@@ -34,10 +34,10 @@ need a generation counter.
 
 ## Examples
 
-```ruxen
-var v: Array[Int] = Array.new
-v.push(1)
-v.push(2)
+Example [implemented]; the last three lines are rejected on purpose (E1002):
+
+```ruby
+v = [1, 2]
 
 # OK: only a shared borrow is live across the loop.
 for x in v
@@ -45,7 +45,7 @@ for x in v
 end
 
 # Rejected: `v.push` needs `&var v`, but `r` holds `&v`.
-let r = &v
+r = &v
 v.push(3)        # E1002: cannot borrow `v` as mutable while `r` lives
 puts "#{r.size}"
 ```

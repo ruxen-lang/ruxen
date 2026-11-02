@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Tier 5 — Edition / Stability Mechanism
 
 Status: draft

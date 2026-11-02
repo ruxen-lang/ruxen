@@ -31,14 +31,16 @@ is full Ruby parity. Ruxen adds two things to Ruby and nothing else:
 Any other Rust syntax or vocabulary in the language is a mistake made by
 earlier drafts and is being removed. Docs must not teach it.
 
+<!-- tag-vocabulary -->
+
 ### 0.1 Status tags
 
 Every construct below carries one tag:
 
 | Tag | Meaning |
 |---|---|
-| **[implemented]** | The lexer and parser accept it today. Verified by reading `compiler/ruxen_core/src/lexer` and `parser` (and the cited resolver, typeck or stdlib file where the meaning lives there) on 2026-10-15. Appendix A lists the evidence. |
-| **[planned]** | Decided by the owner, not built yet. Docs may show it only when marked as planned. |
+| **[implemented]** | The compiler accepts it today and it does what this file says. Verified on 2026-10-25 by a probe per claim on a fresh release build of `6bf146ac`: `ruxen compile --emit=ast` for syntax, `--emit=hir` for typing, and compile and run for behaviour. A claim that compiles but misbehaves keeps the tag with a "known issue" link. Appendix A lists the source locations. |
+| **[planned]** | Decided by the owner, not built yet. Docs may show it only when marked as planned, and the tag links its open checkbox in `TODO.md` or `docs/TASKS.md`. |
 | **[deprecated]** | A Rust form still accepted during the migration. The entry names its replacement. It will first get a warning with a fix-it, then become an error. |
 | **[retired]** | Already rejected by the compiler. Listed only so docs stop teaching it. |
 
@@ -61,23 +63,27 @@ the day the rename lands". The migration is:
 twin (`len` next to `size`, `to_string` next to `to_s`) becomes a
 deprecated alias. It is never deleted.
 
+<!-- /tag-vocabulary -->
+
 ---
 
 ## 1. Programs and files
 
 | Construct | Ruby form | Status |
 |---|---|---|
-| Entry point | Top-level statements run in order; there is no `main`. | [implemented] (the parser moves top-level expression statements into a synthesized `main`) |
-| Explicit entry point | `def main ... end` | [deprecated], replace with top-level statements |
+| Entry point | Top-level statements run in order; there is no `main`. | [implemented] (the parser moves top-level expression statements into a synthesized `main`). A top-level parallel assignment, statement modifier or `inline def` does not parse yet: [planned](../../../TODO.md#t-toplevel-stmts) |
+| Explicit entry point | `def main ... end` | [deprecated], replace with top-level statements. The parser will decide the entry once and mark it, so later stages stop matching the name `main` [planned](../../../TODO.md#t-d3) |
 | Loading code | `require "lib/thing"`, `require_relative "../thing"` | [implemented] |
 | Importing names | `use std.io.Stdout`, `use a.b.{C, D}`, `use x as y` | [deprecated], replace with `require` and qualified names (`IO::Stdout`) |
 | "This package" path root | `package.utils` | [deprecated], replace with `require_relative` |
 | Namespace separator (expressions) | `Http::Request.new`, `Color::Red` | [implemented] (`.` is also accepted today) |
-| Namespace separator (type positions) | `req: Http::Request` | [planned]; today only `Http.Request` parses, plus a leading `::` for a root path |
+| Namespace separator (type positions) | `req: Http::Request` | [planned](../../../TODO.md#t-type-colons); today only `Http.Request` parses, plus a leading `::` for a root path |
 | Line comment | `# text` | [implemented] |
 | Doc comment | `## text` on the line(s) before an item | [implemented] |
-| Block comment | `=begin ... =end` | [planned] |
+| Block comment | `=begin ... =end` | [planned](../../../TODO.md#t-begin-comment) |
 | Block comment (Ruxen form) | `#= ... =#` (nestable) | [implemented]; kept until `=begin` lands, then (OQ-12) |
+
+Example [implemented]:
 
 ```ruby
 require_relative "models/user"
@@ -97,14 +103,14 @@ greet_all(["Ada", "Matz"])
 | Construct | Ruby form | Status |
 |---|---|---|
 | Local variable | `count = 0`; later `count += 1` | [implemented] on this branch: an assignment to an undeclared name declares a mutable local (`resolve/control_flow.rs`) |
-| Typed local (Ruxen addition) | `bytes: Array[UInt8] = []` | [planned]; today write `let bytes: Array[UInt8] = []` |
+| Typed local (Ruxen addition) | `bytes: Array[UInt8] = []` | [planned](../../../TODO.md#t-typed-local); today write `let bytes: Array[UInt8] = []` inside a `def` (a top-level `let` does not parse) |
 | Immutable / mutable binding keywords | `let x = 1`, `var x = 1` | [deprecated], replace with `x = 1`. Ruby locals are always reassignable. |
-| Constant | `MAX_RETRIES = 3` at top level or in a class/module body | [planned]; today `const MAX_RETRIES = 3` |
+| Constant | `MAX_RETRIES = 3` at top level or in a class/module body | [planned](../../../TODO.md#t-constants); today `const MAX_RETRIES = 3` |
 | `const` item | `const NAME: Type = value` | [deprecated], replace with `NAME = value` |
-| Parallel assignment | `a, b = 1, 2`; swap `a, b = b, a`; splat `first, *rest = xs` | [implemented] (the splat target must be a pre-declared Array of Copy elements today) |
-| Destructuring a returned pair | `q, r = divmod(17, 5)` | [planned]; today a single right-hand value destructures only from an Array, and pairs use `let (q, r) = ...` |
+| Parallel assignment | `a, b = 1, 2`; swap `a, b = b, a`; splat `first, *rest = xs` | [planned](../../../TODO.md#t-parallel-assign) for new names and at top level. Today it works inside a `def` when every target, the splat target included, is already declared (`a = 0; b = 0; a, b = 1, 2`) [implemented] |
+| Destructuring a returned pair | `q, r = divmod(17, 5)` | [planned](../../../TODO.md#t-parallel-assign); today a single right-hand value destructures only from an Array, and pairs use `let (q, r) = ...` inside a `def` |
 | Tuple / struct destructuring with `let` | `let (a, b) = pair`, `let Point { x, y } = p` | [deprecated], replace with `a, b = pair` and `case p in {x:, y:}` |
-| Conditional and compound assignment | `x ||= 1`, `x &&= y`, `+=`, `-=`, `<<=` and the rest | [implemented] |
+| Conditional and compound assignment | `x \|\|= 1`, `x &&= y`, `+=`, `-=`, `<<=` and the rest | [implemented] for `+=`, `-=`, `<<=` and the rest, and for `\|\|=` / `&&=` on a `Bool`; `\|\|=` on a `T?` or an `Int` [planned](../../../TODO.md#t-truthiness) (E0731 today) |
 
 A local's type is fixed by its first assignment (static typing). Assigning
 a value of another type later is a type error, not a new binding. A local
@@ -117,21 +123,21 @@ that may be absent is typed `T?` (section 7).
 | Construct | Ruby form | Status |
 |---|---|---|
 | Absence / truth | `nil`, `true`, `false` | [implemented] |
-| Integers | `42`, `1_000_000` | [implemented] (hex, binary and octal prefixes: see the lexer before documenting) |
-| Floats | `3.14` | [implemented] |
+| Integers | `42`, `1_000_000`, `0xff`, `0b101`, `0o17` | [implemented] |
+| Floats | `3.14` | [implemented]; a whole Float prints without `.0` (`puts 3.0` prints `3`) [known issue](../../../TODO.md#t-float-to-s) |
 | Interpolated string | `"hi #{name}\n"` | [implemented] |
 | Literal string | `'C:\Users\me'` (no interpolation, no escapes) | [implemented] |
-| Multi-line string | `<<~EOS ... EOS` | [planned]; today `"""..."""` is the multi-line form |
+| Multi-line string | `<<~EOS ... EOS` | [planned](../../../TODO.md#t-heredoc); today `"""..."""` is the multi-line form |
 | Character | `?a`, `?\n` (type `Char`, a Ruxen addition) | [implemented] |
 | Word array | `%w[a b c]` | [implemented] |
-| Symbol | `:active`, `%i[a b]` | [planned]. Today a `:name` token is read only in `private :a, :b` and `&:upcase`. |
+| Symbol | `:active`, `%i[a b]` | [planned](../../../TODO.md#t-symbols). Today a `:name` token is read only in `private :a, :b` and `&:upcase`. |
 | Array | `[1, 2, 3]` | [implemented] |
 | Hash | `{ "k" => 1 }` | [implemented] |
-| Hash with symbol keys | `{ name: "Ada", age: 36 }` | [planned] |
-| Empty Hash | `{}` | [planned]; today `{}` parses as an empty block, so write `Hash.new` |
-| Ranges | `0..3` (inclusive), `0...3` (exclusive) | [implemented] |
+| Hash with symbol keys | `{ name: "Ada", age: 36 }` | [planned](../../../TODO.md#t-symbols) |
+| Empty Hash | `{}` | [planned](../../../TODO.md#t-empty-hash); today `{}` parses as an empty block, so write a typed `Hash.new` (`let h: Hash[String, Int] = Hash.new` inside a `def`); an untyped `Hash.new` panics on its first insert [known issue](../../../TODO.md#t-hash-new-key) |
+| Ranges | `0..3` (inclusive), `0...3` (exclusive) | [implemented] in `for` and `case/when`; `Range` methods (`each`, `size`, `to_a`) fail to compile [known issue](../../../TODO.md#t-range-methods) |
 | Regex | `/ab+c/i` | [implemented] |
-| Regex match operator | `str =~ /re/` | [planned]; today the operator is spelled `~=` |
+| Regex match operator | `str =~ /re/` | [planned](../../../TODO.md#t-match-op); today the operator is spelled `~=` |
 | Numeric suffixes | `200u8`, `3.14f32` | [implemented] (OQ-8) |
 | Rust format specs in interpolation | `"#{x:?}"`, `"#{n:>5}"` | [deprecated], replace with `x.inspect`, `n.to_s.rjust(5)` or `format("%5d", n)` |
 | `None`, `r"..."`, `'\r'` char, `'\u{...}'`, `..=`, `()` | | [retired] (E0008, E0009 and parse errors): use `nil`, `'...'`, `?\r`, `"\u{...}"`, `..`, `nil` |
@@ -154,13 +160,13 @@ type (E0730); a borrowed string is `&String`.
 | Operator methods | `def +(o: Vec2) -> Vec2`, `def ==`, `def <=>`, `def [](i: Int)`, `def []=`, `def <<`, unary `def -@` | [implemented] |
 | Class methods | `def self.parse(s: String) -> Version` | [implemented] |
 | Aliases | `alias size length` (space form, no comma) | [implemented] |
-| `alias_method :new, :old` | | [planned] |
+| `alias_method :new, :old` | | [planned](../../../TODO.md#t-alias-method) |
 | Visibility | `private` / `protected` / `public` as section markers, and `private :a, :b` | [implemented] |
-| Protected semantics | Ruby's: callable with an explicit receiver of the same class family from inside it | [planned]; the 2026-05 draft specified subclass-only visibility, so check behaviour against this |
-| Calls without parentheses | `puts "hi"`, `box.button "Save" do ... end` | [implemented] |
-| Keyword arguments at call sites | `connect(host: "x", port: 80)` | [planned] (OQ-4 for the definition syntax) |
-| Rest arguments | `def log(*parts: String)`, `**opts` | [planned] |
-| Inline hint (Ruxen addition) | `inline def fast(x: Int) -> Int` | [implemented] |
+| Protected semantics | Ruby's: callable with an explicit receiver of the same class family from inside it | [planned](../../../TODO.md#t-protected); the 2026-05 draft specified subclass-only visibility, so check behaviour against this |
+| Calls without parentheses | `puts "hi"`, `box.button "Save" do ... end` | [implemented] for a method call with arguments and for `puts`, `print`, `p`, `warn` and `abort` with an argument. Other bare calls (`exit 1`, `sleep 0`), an argument that starts with `[` (`puts [1, 2].sum`), a bare zero-argument call used as a value (`puts five` passes the function) and a brace block on a bare call with no block parameters (`run { ... }`) are [planned](../../../TODO.md#t-f45); write the parentheses today |
+| Keyword arguments at call sites | `connect(host: "x", port: 80)`; `def connect(*, host: String, port: Int = 80)` for keyword-only | [planned](../../../TODO.md#t-kwargs) (OQ-4 decided 2026-11-03, Crystal's rule: any parameter may be passed by name, positional arguments first; a bare `*` makes the following parameters keyword-only; definitions keep `name: Type`). Today `f(w: 3)` is a parse error |
+| Rest arguments | `def log(*parts: String)`, `**opts` | [planned](../../../TODO.md#t-rest-args) |
+| Inline hint (Ruxen addition) | `inline def fast(x: Int) -> Int` | [implemented] on a method in a class body; on a top-level function [planned](../../../TODO.md#t-toplevel-stmts) |
 | Explicit receiver parameter | `def m(&self)`, `def m(self, x)` | [retired] outside `lib` blocks (`parse_param` requires `name: Type`) |
 
 ---
@@ -175,11 +181,12 @@ type (E0730); a borrowed string is `&String`.
 | `block_given?` | | [implemented] (alias of `block_defined?`) |
 | Symbol to proc | `names.map(&:upcase)` | [implemented] |
 | Block forwarding | `@items.each(&block)` | [implemented] (`&block` / bare `&` in argument position; the receiving parameter still needs its type, `&block: Fn[...]`) |
-| `next` | ends the current block iteration, optionally with a value | [implemented] inside blocks only; see section 6 for loops |
+| `next` | ends the current block iteration, optionally with a value | [implemented] inside blocks only (`next 0 if x == 2` in `map`); a bare `next if cond` does not parse and `next` inside `each` fails to compile [known issue](../../../TODO.md#t-next-block); see section 6 for loops |
 | Calling a stored block | `blk.(x)` | [implemented] |
-| `blk.call(x)`, `blk[x]` | | [planned] (card "Ruby lambdas") |
+| `blk.call(x)` | | [implemented] |
+| `blk[x]` | | [planned](../../../TODO.md#t-lambda-call) |
 | Lambda | `double = ->(x: Int) { x * 2 }`, `-> { work }`, `->(x) do ... end` | [implemented]; owns its captures (capturing a non-Copy variable moves it). See `docs/decisions/blocks-procs-lambdas.md` |
-| `lambda { \|x\| ... }`, `proc { \|x\| ... }`, `Proc.new { ... }` | | [implemented]; own their captures. Strict arity and `return` semantics for procs: [planned] |
+| `lambda { \|x\| ... }`, `proc { \|x\| ... }`, `Proc.new { ... }` | | [implemented]; own their captures. Strict arity and `return` semantics for procs: [planned](../../../TODO.md#t-lambda-call) |
 | Closure types | `Fn[(Int) -> Int]` for a block (borrowed for the call, cannot be stored: E1018); `Proc[(Int) -> Int]` for a stored proc or lambda | [implemented]; OQ-5 decided 2026-10-17 |
 | Closure type, paren form | `Fn(Int) -> Int`, `\|Int\| -> Bool` | [deprecated], replace with `Fn[(Int) -> Int]` |
 | Capture-capability types | `FnMut(...)`, `FnOnce(...)` bounds | [implemented] (OQ-5) |
@@ -194,34 +201,35 @@ type (E0730); a borrowed string is `&String`.
 |---|---|---|
 | Conditionals | `if` / `elsif` / `else` / `end`, `unless ... else ... end` | [implemented] |
 | Loops | `while`, `until`, `for x in xs` | [implemented] |
-| Statement modifiers | `return if done`, `x += 1 while x < 10`, `unless`, `until` | [implemented] |
+| Statement modifiers | `return if done`, `x += 1 while x < 10`, `unless`, `until` | [implemented] in a method body; at top level [planned](../../../TODO.md#t-toplevel-stmts) |
 | Ternary | `ok ? "yes" : "no"` | [implemented] |
 | Low-precedence logic | `and`, `or`, `not` | [implemented] |
 | Value dispatch | `case x when 1, 2 then ... when 3..9 then ... else ... end` | [implemented] |
 | Pattern matching | `case v in pattern [if guard] then ... else ... end` | [implemented] (`then` or a newline separates the pattern from the body) |
 | `->` arm separator inside `case/in` | `in 1 -> "one"` | [deprecated], replace with `then` or a newline |
 | `match` expression | `match v; pat -> expr; end` | [deprecated], replace with `case/in`. Frees the name for `String#match`. |
-| `if let` / `while let` | `if let Some(x) = opt` | [deprecated], replace with `if (x = opt)` [planned] or `case opt in nil ... in x ...` [implemented] |
-| Infinite loop | `loop do ... end` (a `Kernel` method taking a block) | [planned]; today the `loop ... end` keyword form, which is [deprecated] |
-| Skip to next iteration | `next` in `while`, `until`, `for` | [planned]; `next` only works inside blocks today |
+| `if let` / `while let` | `if let Some(x) = opt` | [deprecated], replace with `if (x = opt)` [planned](../../../TODO.md#t-narrowing) or `case opt in nil ... in x ...` [implemented] |
+| Infinite loop | `loop do ... end` (a `Kernel` method taking a block) | [planned](../../../TODO.md#t-loop-do); today the `loop ... end` keyword form, which is [deprecated] |
+| Skip to next iteration | `next` in `while`, `until`, `for` | [planned](../../../TODO.md#t-next-loops); `next` only works inside blocks today |
 | `continue` | | [deprecated], replace with `next` |
 | `break` with optional value | | [implemented] |
-| Truthiness of `T?` | `if user`, `user \|\| default` | [planned]; today `&&`, `\|\|`, `and`, `or` require `Bool` operands (E0731) |
+| Truthiness of `T?` | `if user`, `user \|\| default` | [planned](../../../TODO.md#t-truthiness); today `&&`, `\|\|`, `and`, `or` require `Bool` operands (E0731) |
 
 ### 6.1 Patterns (`case/in`)
 
 | Pattern | Example | Status |
 |---|---|---|
-| Literal, range of literals | `in 0`, `in "x"`, `in true` | [implemented] |
-| `nil` | `in nil` | [implemented] |
+| Literal | `in 0`, `in "x"`, `in true` | [implemented] |
+| Range of literals | `in 3..5` | [planned](../../../TODO.md#t-patterns) |
+| `nil` | `in nil` | [implemented]; a binding arm after it (`in x`) binds the `T?`, not the value [known issue](../../../TODO.md#t-case-in-nil) |
 | Binding, wildcard | `in n`, `in _` | [implemented] |
 | Alternatives | `in 1 \| 2` | [implemented] |
 | Guard | `in n if n > 10` | [implemented] |
-| Typed record pattern | `in Point(x:, y:)`, `in Shape::Circle(radius:)` | [planned]; today `TypeName(field: pat)` and `Enum.Variant(pat)` parse |
-| Array pattern | `in [first, *rest]` | [planned] |
-| Hash pattern | `in {name: String => name}` | [planned] |
-| Class check with binding | `in Integer => n` | [planned] |
-| Pin | `in ^expected` | [planned] |
+| Typed record pattern | `in Point(x:, y:)`, `in Shape::Circle(radius:)` | [planned](../../../TODO.md#t-patterns); today `TypeName(field: pat)` and `Enum.Variant(pat)` parse |
+| Array pattern | `in [first, *rest]` | [planned](../../../TODO.md#t-patterns) |
+| Hash pattern | `in {name: String => name}` | [planned](../../../TODO.md#t-patterns) |
+| Class check with binding | `in Integer => n` | [planned](../../../TODO.md#t-patterns) |
+| Pin | `in ^expected` | [planned](../../../TODO.md#t-patterns) |
 | `Some(x)`, `Ok(v)`, `Err(e)` patterns | | [deprecated], replace with `in nil` / `in x` for absence, and `rescue` for errors |
 
 ---
@@ -236,9 +244,9 @@ There is one way to say "maybe missing": the type `T?` and the value `nil`.
 | Absent value | `nil` | [implemented] |
 | Present value | the value itself: `return user` in a `-> User?` method | [implemented] for typed bindings, the tail expression and `return` (automatic wrapping) |
 | Safe navigation | `user&.name&.upcase` | [implemented] |
-| Default when nil | `name = user&.name \|\| "guest"` | [planned] (needs truthiness, section 6) |
-| Narrowing | `if (user = find(id))` ... `user` is `User` inside | [planned] |
-| Must be present | `find(id) or raise NotFound` | [planned] (needs section 8) |
+| Default when nil | `name = user&.name \|\| "guest"` | [planned](../../../TODO.md#t-truthiness) (needs truthiness, section 6) |
+| Narrowing | `if (user = find(id))` ... `user` is `User` inside | [planned](../../../TODO.md#t-narrowing) |
+| Must be present | `find(id) or raise NotFound` | [planned](../../../TODO.md#t-exceptions) (needs section 8) |
 | `Some(x)` constructor | | [deprecated], replace with `x` |
 | `Option[T]` in user code | | [deprecated], replace with `T?` |
 | `??` operator | `a ?? b` | [deprecated], replace with `a \|\| b` |
@@ -261,13 +269,13 @@ no hidden runtime cost. Users never write `Result`, `Ok`, `Err` or `?`.
 
 | Construct | Ruby form | Status |
 |---|---|---|
-| Raise | `raise "boom"` (a `RuntimeError`), `raise NotFound, "no user #{id}"`, `raise NotFound.new(id)` | [planned]. The parser already takes `raise` as a paren-less call name, but nothing defines it. |
-| Re-raise | bare `raise` inside `rescue` | [planned] |
-| Handle | `begin ... rescue NotFound => e ... rescue => e ... else ... ensure ... end` | [planned] |
-| Method-level handlers | `def load ... rescue IOError => e ... ensure ... end` | [planned] |
-| Retry | `retry` inside `rescue` restarts the `begin` body | [planned] |
-| Exception classes | `class NotFound < StandardError; end` with `message` | [planned]; replaces `mixin Error` (`def message`) in `std/core` |
-| Abort the process | `abort "msg"`, `exit 1`, `exit! 1` | [implemented] (`std/core`, `std/process`) |
+| Raise | `raise "boom"` (a `RuntimeError`), `raise NotFound, "no user #{id}"`, `raise NotFound.new(id)` | [planned](../../../TODO.md#t-exceptions). The parser already takes `raise` as a paren-less call name, but nothing defines it. |
+| Re-raise | bare `raise` inside `rescue` | [planned](../../../TODO.md#t-exceptions) |
+| Handle | `begin ... rescue NotFound => e ... rescue => e ... else ... ensure ... end` | [planned](../../../TODO.md#t-exceptions) |
+| Method-level handlers | `def load ... rescue IOError => e ... ensure ... end` | [planned](../../../TODO.md#t-exceptions) |
+| Retry | `retry` inside `rescue` restarts the `begin` body | [planned](../../../TODO.md#t-exceptions) |
+| Exception classes | `class NotFound < StandardError; end` with `message` | [planned](../../../TODO.md#t-exceptions); replaces `mixin Error` (`def message`) in `std/core` |
+| Abort the process | `abort "msg"`, `abort(msg)`, `exit(1)`, `exit!(1)` | [implemented] (`std/core`, `std/process`); the parenless `exit 1` [planned](../../../TODO.md#t-f45) |
 | `panic!("msg")` | | [deprecated], replace with `raise "msg"` (recoverable) or `abort "msg"` (not recoverable) |
 | `Result[T, E]` return types, `Ok(v)`, `Err(e)` | | [deprecated], replace with returning `T` and raising |
 | Postfix `?` try operator | `read(path)?` | [deprecated], replace with nothing: exceptions propagate on their own |
@@ -285,6 +293,8 @@ Static rules:
   the same cleanup path as `drop` (section 15).
 - An exception that escapes the top level prints its message and class to
   STDERR and exits with status 1, as Ruby does.
+
+The Ruby form [planned](../../../TODO.md#t-exceptions):
 
 ```ruby
 class NotFound < StandardError
@@ -317,19 +327,21 @@ Classes are heap objects with identity.
 |---|---|---|
 | Class and inheritance | `class Admin < User ... end` | [implemented] |
 | Construction | `User.new("Ada")` | [implemented] |
-| Constructor | `def initialize(name: String)` | [planned]; today the constructor is `def init` |
+| Constructor | `def initialize(name: String)` | [planned](../../../TODO.md#t-initialize); today the constructor is `def init` |
 | `def init` | | [deprecated], replace with `def initialize` |
 | Instance variables | `@name` (read), `@name = v` (write) | [implemented] (sugar for the field) |
 | Assigning parameters to ivars | `def initialize(@name: String, @age: Int)` | [implemented] in the `def init(@name: String)` spelling |
 | `self.name` field access inside the class | | [deprecated], replace with `@name` |
 | Ivar type declaration (Ruxen addition) | `name: String` in the class body | [implemented] (OQ-3: possible RBS-style `@name: String`) |
-| Accessors | `attr_reader :name`, `attr_writer :name`, `attr_accessor :name` | [planned] |
-| Ivar privacy | ivars are private; reach them from outside through accessors | [planned]; today declared fields are public by default and readable as `obj.name` |
-| `super` | `super`, `super(args)` | [implemented] |
-| Reopening a class | `class String; def shout = upcase + "!"; end` | [planned]. Today a second `class String` collides with the stdlib type (E0727). |
-| Nested classes and constants in a class body | `class Http; class Request; end; TIMEOUT = 30; end` | [planned]; today nest inside `module` |
+| Accessors | `attr_reader :name`, `attr_writer :name`, `attr_accessor :name` | [planned](../../../TODO.md#t-attr-accessors) |
+| Ivar privacy | ivars are private; reach them from outside through accessors | [planned](../../../TODO.md#t-ivar-privacy); today declared fields are public by default and readable as `obj.name` |
+| `super` | `super`, `super(args)` | [implemented] inside `init` (`super(n)`); in any other method [planned](../../../TODO.md#t-super) (E1127 today) |
+| Reopening a class | `class String; def shout = upcase + "!"; end` | [planned](../../../TODO.md#t-reopen-class). Today a second `class String` collides with the stdlib type (E0727). |
+| Nested classes and constants in a class body | `class Http; class Request; end; TIMEOUT = 30; end` | [planned](../../../TODO.md#t-nested-class); today nest inside `module` |
 | `Self` in signatures (Ruxen addition) | `def <=>(other: &Self) -> Int` | [implemented] |
 | `layout c` (FFI, Ruxen addition) | first line of the class body | [implemented] |
+
+The Ruby form; `initialize` and `attr_reader` are [planned](../../../TODO.md#t-initialize):
 
 ```ruby
 class Account
@@ -357,9 +369,11 @@ ownership surface, section 15.)
 ## 10. Value types: `Struct.new` and `Data.define`
 
 Small values without identity are Ruby `Struct` (mutable) and `Data`
-(immutable). Both are [planned]. The typed spelling below is the proposed
+(immutable). Both are [planned](../../../TODO.md#t-data-define). The typed spelling below is the proposed
 form (OQ-1); the owner decision is "value types are `Struct.new` /
 `Data.define`".
+
+Proposed form [planned](../../../TODO.md#t-data-define):
 
 ```ruby
 Point = Data.define(x: Int, y: Int)          # immutable value
@@ -376,21 +390,23 @@ p.x                                          # reader
 
 | Construct | Ruby form | Status |
 |---|---|---|
-| Immutable value type | `Point = Data.define(x: Int, y: Int)` | [planned] |
-| Mutable value type | `Pixel = Struct.new(x: Int, y: Int)` | [planned] |
-| Copy semantics | a `Data` value whose fields are all Copy is Copy | [planned]; today Copy requires `struct` (E0603) |
-| `struct Name ... end` | | [deprecated], replace with `Data.define` or `Struct.new` |
+| Immutable value type | `Point = Data.define(x: Int, y: Int)` | [planned](../../../TODO.md#t-data-define) |
+| Mutable value type | `Pixel = Struct.new(x: Int, y: Int)` | [planned](../../../TODO.md#t-struct-new) |
+| Copy semantics | a `Data` value whose fields are all Copy is Copy | [planned](../../../TODO.md#t-data-define); today Copy requires `struct` (E0603) |
+| `struct Name ... end` | | [deprecated], replace with `Data.define` or `Struct.new`. Without `layout c` it fails typeck today [known issue](../../../TODO.md#t-struct-typeck) |
 | `newtype UserId(Int)` | | [deprecated], replace with `UserId = Data.define(value: Int)` |
-| Tuples `(a, b)`, tuple types `(Int, String)`, `.0` access | | [deprecated], replace with arrays `[a, b]`, the tuple type `[Int, String]` [planned, RBS style], indexing `pair[0]` and `a, b = pair` |
+| Tuples `(a, b)`, tuple types `(Int, String)`, `.0` access | | [deprecated], replace with arrays `[a, b]`, the tuple type `[Int, String]` (RBS style) [planned](../../../TODO.md#t-tuple-type), indexing `pair[0]` and `a, b = pair` |
 | Struct literal `Point { x: 1, y: 2 }` | | [retired]: never implemented (no AST node), remove from docs |
-| `layout c` / `layout packed` / `layout transparent` | in a `struct` body | [implemented] for FFI; moves to `Data.define` bodies with `Data` (OQ-9) |
+| `layout c` / `layout packed` / `layout transparent` | in a `struct` body | [implemented] for FFI (`layout packed` and `layout transparent` hit the `struct` typeck failure above, [known issue](../../../TODO.md#t-struct-typeck)); moves to `Data.define` bodies with `Data` (OQ-9) |
 
 ---
 
 ## 11. Enums: `Data` variants and symbols
 
-Both forms are [planned]. Pick symbols for plain tags and `Data` variants
+Symbols are [planned](../../../TODO.md#t-symbols) and `Data` variants are [planned](../../../TODO.md#t-data-define). Pick symbols for plain tags and `Data` variants
 when a case carries values. Match either one with `case/in`.
+
+Proposed form [planned](../../../TODO.md#t-data-define):
 
 ```ruby
 # Plain tags: symbols
@@ -416,8 +432,8 @@ end
 
 | Construct | Status |
 |---|---|
-| Symbol tags matched with `case/in` | [planned] (needs symbols, section 3) |
-| `Data` variants grouped in a module and used as one type (`s: Shape`) with exhaustive `case/in` | [planned] (OQ-1: how the closed set of variants is declared) |
+| Symbol tags matched with `case/in` | [planned](../../../TODO.md#t-symbols) (needs symbols, section 3) |
+| `Data` variants grouped in a module and used as one type (`s: Shape`) with exhaustive `case/in` | [planned](../../../TODO.md#t-oq) (OQ-1: how the closed set of variants is declared) |
 | `enum Color ... end`, payload variants `Circle(radius: Float)`, `Color.Red` | [deprecated], replace with the forms above |
 
 ---
@@ -427,28 +443,30 @@ end
 | Construct | Ruby form | Status |
 |---|---|---|
 | Namespace | `module Http ... end`; refer to members as `Http::Request` | [implemented] |
-| Mixin module | `module Greetable ... end`, then `include Greetable` in a class | [planned]; today the mixin is declared with `mixin Greetable` |
+| Mixin module | `module Greetable ... end`, then `include Greetable` in a class | [planned](../../../TODO.md#t-module-mixins); today the mixin is declared with `mixin Greetable` |
 | `mixin Name ... end` | | [deprecated], replace with `module Name ... end` |
 | Required method (Ruxen addition) | a signature with no body inside the module: `def name -> String` | [implemented] in `mixin` bodies; carries over to `module` |
-| Default method | a full `def` inside the module | [implemented] in `mixin` bodies |
+| Default method | a full `def` inside the module | [implemented] in `mixin` bodies as `def ... end`, calling another method of the mixin as `self.name`; an endless `def` there, or a bare `name` call, does not compile yet [planned](../../../TODO.md#t-implicit-self) |
 | `include` | `include Comparable` | [implemented] |
-| Several modules at once | `include A, B` | [planned]; today one `include` per module |
-| `extend` (class-level methods from a module) | `extend Forwardable` | [planned] |
-| Adding methods to an existing class | reopen it: `class Array ... end` | [planned] |
+| Several modules at once | `include A, B` | [planned](../../../TODO.md#t-include-many); today one `include` per module |
+| `extend` (class-level methods from a module) | `extend Forwardable` | [planned](../../../TODO.md#t-extend) |
+| Adding methods to an existing class | reopen it: `class Array ... end` | [planned](../../../TODO.md#t-reopen-class) |
 | `extension Type ... end` | | [deprecated], replace with reopening the class |
-| Methods that exist only when a type argument meets a bound | reopen with a bound: `class Box[T < Comparable] ... end` | [planned] (OQ-6) |
+| Methods that exist only when a type argument meets a bound | reopen with a bound: `class Box[T < Comparable] ... end` | [planned](../../../TODO.md#t-oq) (OQ-6) |
 | `extension C[T] where T: B` | | [deprecated], replace with the line above |
 | Mixin inheritance `mixin A: B` | | [deprecated], replace with `include B` inside `module A` |
-| Two included modules defining the same method | Ruby's rule: the module included last wins; the class's own method beats both | [planned]; the 2026-05 draft made this an error (OQ-7) |
-| `super` from an override | reaches the superclass method first, then the module default (Ruby's lookup order) | `super` parses [implemented]; this lookup rule was specified by the 2026-05 draft and was not re-verified for this rewrite |
+| Two included modules defining the same method | Ruby's rule: the module included last wins; the class's own method beats both | [planned](../../../TODO.md#t-oq); the 2026-05 draft made this an error (OQ-7) |
+| `super` from an override | reaches the superclass method first, then the module default (Ruby's lookup order) | [planned](../../../TODO.md#t-super); `super` outside `init` is E1127 today |
 
 ### 12.1 The core modules
 
 | Module | You provide | You get | Status |
 |---|---|---|---|
 | `Comparable` | `def <=>(other: &Self) -> Int` | `<`, `<=`, `==`, `>`, `>=`, `between?`, `clamp` | [implemented] (`std/core`, declared with `mixin` today) |
-| `Enumerable` | `def each(f: any Fn[Fn(T) -> nil]) -> nil` today; `def each(&block: Fn[(T) -> nil])` is the target | `map`, `select`, `reverse_each`, `entries` and the rest of the combinator family defined once in `std/core` | [implemented] as `include Enumerable[T]`; plain `include Enumerable` with `T` inferred from `each` is [planned] |
-| `Kernel` | nothing (included everywhere) | `tap`, `then`, `yield_self`, plus the free functions `puts`, `print`, `p`, `warn`, `abort`, `exit`, `sleep` | [implemented] (`p` covers only `Int`, `Bool` and `String` today) |
+| `Enumerable` | `def each(f: any Fn[Fn(T) -> nil]) -> nil` today; `def each(&block: Fn[(T) -> nil])` is the target | `map`, `select`, `reverse_each`, `entries` and the rest of the combinator family defined once in `std/core` | [implemented] as `include Enumerable[T]`; plain `include Enumerable` with `T` inferred from `each` is [planned](../../../TODO.md#t-enumerable-infer) |
+| `Kernel` | nothing (included everywhere) | `tap`, `then`, `yield_self`, plus the free functions `puts`, `print`, `p`, `warn`, `abort`, `exit`, `sleep` | [implemented] (`p` takes any value that includes `Inspect`) |
+
+The Ruby form; `initialize`, Array `<=>` and the bare `major` call are [planned](../../../TODO.md#t-initialize):
 
 ```ruby
 class Version
@@ -479,16 +497,20 @@ Ruby's method names replace the Rust trait vocabulary.
 
 | Purpose | Ruby form | Status | Replaces ([deprecated]) |
 |---|---|---|---|
-| Human text | `def to_s -> String`; used by `puts` and `"#{x}"` | [implemented]: a user `to_s` wins; every value has a default | `Display`, `Displayable`, `to_display`, `to_string` |
-| Debug text | `def inspect -> String`; used by `p x` | [planned] | `Debug`, `to_debug`, `#{x:?}` |
-| Default rendering | `#<data Point x=3, y=4>`, `#<struct Pixel x=1, y=2>`, `#<Account @balance=10>` | [planned]; today the default prints the Rust shape `Point { x: 3, y: 4 }` | Rust `Debug` output |
-| Equality | `def ==(other: &Self) -> Bool` | [implemented] | `PartialEq`, `Eq`, `eq` |
-| Hash-key identity | `def eql?(other) -> Bool` and `def hash -> Int` | [planned] for user types (`String#eql?` exists) | `Hashable`, the `Hash` mixin |
+| Human text | `def to_s -> String`; used by `puts` and `"#{x}"` | [implemented]: a user `to_s` wins; every value has a default. Interpolation (`"#{x}"`) still prints the default for a user class [known issue](../../../TODO.md#t-interp-to-s) | `Display`, `Displayable`, `to_display`, `to_string` |
+| Debug text | `def inspect -> String`; used by `p x` | [planned](../../../TODO.md#t-d9) | `Debug`, `to_debug`, `#{x:?}` |
+| Default rendering | `#<data Point x=3, y=4>`, `#<struct Pixel x=1, y=2>`, `#<Account @balance=10>` | [planned](../../../TODO.md#t-d9); today the default prints the Rust shape `Point { x: 3, y: 4 }` | Rust `Debug` output |
+| Equality | `def ==(other: &Self) -> Bool` | [implemented]. A generic bound that needs only equality becomes a check that the type has a `.rx` `==`, with no marker mixin [planned](../../../TODO.md#t-x1); value types get a structural `==` [planned](../../../TODO.md#t-d8) | `PartialEq`, `Eq`, `eq` |
+| Hash-key identity | `def eql?(other) -> Bool` and `def hash -> Int` | [planned](../../../TODO.md#t-d8) for user types (`String#eql?` exists): hash keys use `hash` and `eql?`, `eql?` defaults to `==`, and `hash_code` becomes a [deprecated] alias of `hash` | `Hashable`, the `Hash` mixin |
 | Ordering | `include Comparable` and `def <=>` | [implemented] | `Ord`, `PartialOrd`, `cmp`, `partial_cmp` |
 | Arithmetic | `def +(o)`, `def -(o)`, `def *(o)`, ... | [implemented] | `Add` and the other operator mixins |
 | Conversion | `to_s`, `to_i`, `to_f`, `to_a`, `to_h`, `to_set` | `to_s`, `to_i`, `to_f` [implemented]; the collection conversions per the stdlib specs | `Into[T]`, `From`, `from_iter`, `collect` |
 | Copying a value | `dup` (shallow) and `clone` | `clone` [implemented]; `dup` [implemented] on `String` only | (`Clone` stays as the ownership marker, section 15) |
-| Default value | arguments with defaults, or `initialize` with no parameters | [implemented] | `Default`, `default` |
+| Default value | arguments with defaults, or `initialize` with no parameters | arguments with defaults [implemented]; `def init` with no parameters [deprecated]; `initialize` [planned](../../../TODO.md#t-initialize) | `Default`, `default` |
+
+Scalars and `String` will include `Comparable`, `Hashable` and `Clone` (and
+`Default` where Ruby has a zero), with `==`, `<=>`, `to_s` and `inspect` in
+`.rx`; the Rust-named mixins stay as [deprecated] `.rx` adapters [planned](../../../TODO.md#t-d6).
 
 The marker modules `Copy`, `Clone`, `Drop`, `Send` and `Sync` are not on
 this list; they belong to ownership (section 15).
@@ -504,24 +526,24 @@ other type is inferred.
 |---|---|---|
 | Parameter and return annotations | `def f(x: Int) -> String` | [implemented] |
 | Field (ivar) types | `name: String` in a class body | [implemented] |
-| Typed local | `x: Int = 0` | [planned] (section 2) |
+| Typed local | `x: Int = 0` | [planned](../../../TODO.md#t-typed-local) (section 2) |
 | Optional | `T?` | [implemented] |
 | Generic class or method | `class Stack[T]`, `def first[T](xs: Array[T]) -> T?` | [implemented] |
-| Bound on a type parameter (RBS style) | `[T < Comparable]` | [planned] |
-| Several bounds | `[T < Comparable & Hashable]` | [planned] |
+| Bound on a type parameter (RBS style) | `[T < Comparable]` | [planned](../../../TODO.md#t-d7-respell) |
+| Several bounds | `[T < Comparable & Hashable]` | [planned](../../../TODO.md#t-d7-respell) |
 | `[T: Bound]`, `T: A + B` | | [deprecated], replace with `[T < Bound]`, `[T < A & B]` |
-| `where` clauses | `where T: Display` | [deprecated], replace with bounds in the `[...]` list |
-| Tuple type | `[Int, String]` (RBS) | [planned]; `(Int, String)` is [deprecated] |
-| Type alias | `Id = Int` | [planned]; `type Id = Int` is [deprecated] (OQ-10 for generic aliases) |
+| `where` clauses | `where T: Display` | [deprecated], replace with bounds in the `[...]` list [planned](../../../TODO.md#t-d7-respell). Until then a method `where` bound (`def sum -> T where T: Add`) is the form that works for a method that needs a bound on its class's type parameter; OQ-6 stays open |
+| Tuple type | `[Int, String]` (RBS) | [planned](../../../TODO.md#t-tuple-type); `(Int, String)` is [deprecated] |
+| Type alias | `Id = Int` | [planned](../../../TODO.md#t-type-alias); `type Id = Int` is [deprecated] (OQ-10 for generic aliases) |
 | Bottom type | `Never` (for `abort`, `exit`, `raise`) | [implemented] |
-| Existentials | `some Mixin`, `any Mixin`, `Box[any Mixin]` | [implemented] (OQ-11) |
-| Associated types | `type Item` in a mixin, `Iterator[Item = Int]` | [implemented] (OQ-11) |
+| Existentials | `some Mixin`, `any Mixin`, `Box[any Mixin]` | [implemented] (OQ-11) as parameter types; `some Mixin` as a return type is rejected today [planned](../../../TODO.md#t-some-return) |
+| Associated types | `type Item` in a mixin, `type Item = Int` in the class, `Iterator[Item = Int]` | `type Item` and `type Item = Int` [implemented] (OQ-11); a binding in a type argument (`Container[Item = Int]`) does not parse, [planned](../../../TODO.md#t-oq) (OQ-11) |
 | Fixed arrays and const generics | `[T; N]`, `[T, const N: USize]` | [implemented] (OQ-8) |
 | Numeric types | `Int` and `Float` everyday; sized types (`Int8` ... `UInt64`, `USize`, `Float32`) | [implemented]; sized types for FFI and storage only (OQ-8) |
 | Numeric conversion | `x.to_i`, `x.to_f` | [implemented] |
-| Sized conversion | `x.to_i8`, `x.to_u8`, `x.to_i32`, ... | [planned] |
+| Sized conversion | `x.to_i8`, `x.to_u8`, `x.to_i32`, ... | [planned](../../../TODO.md#t-sized-conv) |
 | `as` cast | `n as UInt8` | [deprecated], replace with `n.to_u8` |
-| `size` / `length` result type | `Int` | [planned]; today `USize`, which forces about 67 `as Int` casts in the stdlib |
+| `size` / `length` result type | `Int` | [planned](../../../TODO.md#t-size-int); today `USize`, which forces about 67 `as Int` casts in the stdlib |
 | `str`, `&str` | | [retired] (E0730): use `String` / `&String` |
 | HRTB `for[a]`, GATs, specialization | | [retired]: never implemented, remove from docs |
 
@@ -539,28 +561,37 @@ like Ruby.
 | 3 | Mutability | Ruby locals are always reassignable, so `var` survives only in `&var`, `*var` and `def var` | target; `var x = ...` as a binding is [deprecated] (section 2) |
 | 4 | `move` closures | `move { \|x\| x + n }`, `move do ... end`: every capture is owned (needed when a block outlives its scope, such as a thread body) | [implemented] |
 | 5 | Lifetimes | rare escape hatch: lowercase names in the generic list and after `&`: `def longest[a](x: &a String, y: &a String) -> &a String`. Elision is the default. | [implemented]. The `'a` sigil is [retired] (it lexes as an unterminated string, E0002). |
-| 6 | `Copy`, `Clone`, `Drop` | values of Copy types are copied; `clone` (Ruby twin `dup`) makes an explicit copy; `def drop` is the destructor (see `docs/decisions/drop-elaboration.md`) | [implemented]. `ensure` and block-scoped resources (`File.open(path) do \|f\| ... end`) lowering onto drop is [planned]. |
+| 6 | `Copy`, `Clone`, `Drop` | values of Copy types are copied; `clone` (Ruby twin `dup`) makes an explicit copy; `def drop` is the destructor (see `docs/decisions/drop-elaboration.md`) | [implemented]. `ensure` and block-scoped resources (`File.open(path) do \|f\| ... end`) lowering onto drop is [planned](../../../TODO.md#t-exceptions). |
 | 7 | `Send`, `Sync` | thread-safety markers; opt out with `include !Send`, opt in for a hand-checked type with `unsafe include Send` | both spellings parse [implemented]. OQ-14: pick one opt-out spelling (`exclude Send` is proposed, not implemented) and settle whether the markers are inferred or written by hand (current docs disagree). |
-| 8 | Owning pointers | `Box[T]` (single owner, heap), `SharedSync[T]` (atomic reference count, thread-safe) | [implemented]. `Shared[T]` (single-threaded reference count) is [planned]: the stdlib does not define it. Names: OQ-15. |
+| 8 | Owning pointers | `Box[T]` (single owner, heap), `SharedSync[T]` (atomic reference count, thread-safe) | `Box[T]` as a type and `SharedSync[T]` [implemented]; `Box.new(x)` is not defined yet [planned](../../../TODO.md#t-box-new). `Shared[T]` (single-threaded reference count) is [planned](../../../TODO.md#t-shared): the stdlib does not define it. Names: OQ-15. |
 | 9 | Binding modes in patterns | `ref name`, `ref var name` | [implemented] (OQ-16) |
 
 Raw pointers `*T` and `*var T` exist only for FFI (section 16).
+
+Example [implemented]. Its constructor is still spelled `def init` [deprecated] until `initialize` lands [planned](../../../TODO.md#t-initialize):
 
 ```ruby
 def longest[a](x: &a String, y: &a String) -> &a String
   x.size > y.size ? x : y
 end
 
-def var rename(name: String)    # may change self
-  @name = name
-end
+class Person
+  name: String
 
-def consume into_bytes -> Array[UInt8]   # takes ownership of self
-  # ...
+  def init(@name: String)
+  end
+
+  def var rename(name: String)    # may change self
+    @name = name
+  end
+
+  def consume into_name -> String  # takes ownership of self
+    @name.clone
+  end
 end
 
 total = 0
-add = move { |x: Int| x + total }        # captures are owned
+add = move { |x: Int| x + total }   # captures are owned
 ```
 
 ---
@@ -575,10 +606,11 @@ FFI stays as Ruxen's own `lib` block, which reads like Ruby FFI's
 | Library block | `lib "m" ... end`, `lib "ssl", version: "3" ... end` | [implemented] (the trailing options are parsed and ignored today) |
 | Renamed C symbol | `def open as "ruxen_file_open"(path: &String) -> Int` | [implemented]. This `as` is the C symbol name, not a cast; it stays. |
 | Receiver mode of a C method | `def var push as "ruxen_vec_push"(v: T)`, `def consume drop as "ruxen_mutex_free"` | [implemented]. Same spellings as a Ruby-side `def var` / `def consume`; a `def consume drop` frees the handle's storage itself. |
+| `def var` on a free `lib` function (outside a class) | | an error: mutation needs an explicit `&var` parameter [planned](../../../TODO.md#t-x5). Today the mode is silently ignored. |
 | Owned C result | `def clone as "ruxen_closure_share" -> owned Self` | [implemented]. The caller owns the result outright (for a collection: its spine, buffer and every element) and frees it. Without `owned`, a C result is not assumed owned. |
 | Library block inside a class | `class File; lib "ruxen_runtime" ... end; end` | [implemented] |
 | Variadic C function | `def printf(fmt: *UInt8, ...) -> Int32` | [implemented] |
-| Raw pointers | `*UInt8`, `*var Void`; null is `nil` | [implemented] |
+| Raw pointers | `*UInt8`, `*var UInt8`; null is `nil` | [implemented]; `*Void` is rejected as an undefined type [planned](../../../TODO.md#t-void-ptr) |
 | `unsafe ... end` blocks | | [implemented] (OQ-9) |
 | `extern "C"`, `@[link(...)]`, `@[repr(C)]` | | [retired] (E0607 for `@[...]`) |
 
@@ -589,9 +621,9 @@ FFI stays as Ruxen's own `lib` block, which reads like Ruby FFI's
 | Construct | Form | Status |
 |---|---|---|
 | `async def`, `expr.await` | | [implemented]. Kept for now: it is the working model today. |
-| Fiber scheduler | `Async do ... end`, `task.wait` (Ruby's `Fiber.scheduler` model) | [planned, later]. When it lands, `async def` / `.await` become [deprecated]. |
+| Fiber scheduler | `Async do ... end`, `task.wait` (Ruby's `Fiber.scheduler` model) | [planned](../../../TODO.md#t-fibers). When it lands, `async def` / `.await` become [deprecated]. |
 | `Future`, `Poll`, `Waker`, `block_on` in user code | | to be [deprecated] together with `async def` |
-| Threads | `Thread.new { ... }.value`, `Mutex#synchronize`, `Thread::Queue`, `Thread.current[:key]` | [planned] (stdlib) |
+| Threads | `Thread.new { ... }.value`, `Mutex#synchronize`, `Thread::Queue`, `Thread.current[:key]` | [planned](../../../TODO.md#t-thread-api) (stdlib) |
 | `JoinHandle`, `MutexGuard`, `lock() -> Result`, atomics with `Ordering`, mpsc channels, `thread_local!` | | [deprecated] as the user-facing shape, replaced by the line above |
 
 ---
@@ -667,7 +699,7 @@ as keywords internally, but users must be able to read them as Ruby calls.
 | OQ-1 | Typed spelling of `Struct.new` / `Data.define` (`Data.define(x: Int, y: Int)` proposed), and how a module declares the closed set of `Data` variants for exhaustive `case/in` | the proposal in sections 10 and 11 |
 | OQ-2 | Can a method declare its raise set explicitly, and how? | inferred only |
 | OQ-3 | Ivar type declarations: keep `name: Type` in the class body, or the RBS form `@name: Type`? | `name: Type` |
-| OQ-4 | Keyword parameters in definitions: Ruby's `def f(host:, port: 80)` collides with `name: Type` annotations | positional parameters with defaults |
+| OQ-4 | Keyword parameters in definitions: Ruby's `def f(host:, port: 80)` collides with `name: Type` annotations | Decided 2026-11-03 (Crystal's rule), [planned](../../../TODO.md#t-kwargs): definitions keep `name: Type`; any parameter may be passed by name (`connect(host: "x", port: 80)`, any order, or mixed `connect("x", port: 8080)` with positional first); a bare `*` makes the following parameters keyword-only (`def connect(*, host: String, port: Int = 80)`, so `connect("x")` is an error); the automatic constructor is a generated `init` over the fields and takes both forms; a keyword-only class writes `def init(*, x: Int, y: Int)` by hand, no class-level marker yet |
 | OQ-5 | Block and proc types | Decided 2026-10-17: `Fn[(A) -> R]` is a borrowed block, `Proc[(A) -> R]` a stored proc or lambda. `FnMut`/`FnOnce` capability inference stays open |
 | OQ-6 | Conditional methods via a bounded reopen (`class Box[T < Comparable]`): exact rule | as in section 12 |
 | OQ-7 | Two included modules with the same default method: Ruby's "last include wins", or keep an error? | Ruby's rule is the target |
@@ -688,51 +720,51 @@ as keywords internally, but users must be able to read them as Ruby calls.
 Item numbers follow the 2026-10 Rust-ism audit inventory. "Status" is the
 status of the Ruby replacement.
 
-| # | Rust form | Ruby form | Status of Ruby form |
-|---|---|---|---|
-| 1 | `let x = 1`, `var x = 1` | `x = 1`; constants `MAX = 3` | `x = 1` [implemented]; constants [planned] |
-| 2 | `Option[T]`, `Some(x)` | `T?`, `nil`, the bare value | [implemented] |
-| 3 | `Result[T, E]`, `Ok`, `Err`, "no exceptions" | `raise`, `begin/rescue/ensure`, `retry` | [planned] |
-| 4 | postfix `?` | exceptions propagate on their own | [planned] (with item 3) |
-| 5 | `?.` taught as safe navigation | `&.` | [implemented] |
-| 6 | `match ... pat -> expr ... end` | `case ... in ... then ... end` | [implemented] |
-| 7 | `if let` / `while let` | `if (x = opt)`, `while (x = q.pop)`, `case/in` | `case/in` [implemented]; assignment-in-condition narrowing [planned] |
-| 8 | `panic!` and the `!` macro convention | `raise "msg"`, `abort "msg"` | `abort` [implemented]; `raise` [planned] |
-| 9 | `unwrap!`, `expect!`, `unwrap_or`, `ok_or`, `map_err`, `and_then` | `x \|\| default`, `fetch`, `x or raise` | [planned] |
-| 10 | `struct`, `Point { x: 1 }` literals | `class`, `Struct.new`, `Data.define`, `Point.new(x: 1)` | `class` [implemented]; the rest [planned] |
-| 11 | `enum` with payload variants | `Data.define` per variant, symbols, `case/in` | [planned] |
-| 12 | `newtype`, tuples with `.0`, `type X =` | one-field `Data`, arrays and `a, b = pair`, `X = Y` | [planned] |
-| 13 | unit `()`, `Result[(), E]` | `nil` | [implemented] (`()` is [retired]) |
-| 14 | `[T; N]`, const generics, `const NAME =` | `MAX = 3`; maybe `StaticArray[T, N]` | [planned] (OQ-8) |
-| 15 | `Display`, `Debug`, `PartialEq`, `Eq`, `Ord`, `PartialOrd`, `Default`, `Into`, `Add`, `Hashable` | `to_s`, `inspect`, `==`, `eql?` + `hash`, `include Comparable` + `<=>`, defaults, `to_*`, `def +` | mixed, see section 13 |
-| 16 | `derive`, `@[attr]`, `#[attr]` | implicit includes, body directives | [implemented] (the attribute forms are [retired], E0607) |
-| 17 | `iter`, `into_iter`, `collect`, `Iterator`, `FromIterator`, `type Item` | `Enumerable` (`each`, `map`, `to_a`) | [implemented] |
-| 18 | `len`, `is_empty`, `to_string`, `push_str`, `to_upper`, `starts_with`, `trim`, `with_capacity`, `get_mut`, `insert`/`get` | `size`, `empty?`, `to_s`, `<<`, `upcase`, `start_with?`, `strip`, `[]`, `[]=` | mostly [implemented]; Rust names become [deprecated] aliases |
-| 19 | Rust `std::io/fs/env/process/path/time/net` shapes | `File.read`, `File.join`, `ARGV`, `ENV`, `system`, `Time.now`, `TCPServer` | [planned] (stdlib) |
-| 20 | `JoinHandle`, `MutexGuard`, `lock() -> Result`, atomics with `Ordering`, mpsc, `thread_local!` | `Thread.new { }.value`, `Mutex#synchronize`, `Thread::Queue`, `Thread.current[:x]` | [planned] (stdlib) |
-| 21 | `println!`, `format!`, `dbg!`, `assert!` with `{}` | `puts`, `p`, `format("%d", n)` | `puts` [implemented]; `p` partial; `format` [planned] |
-| 22 | `#{x:?}`, `#{n:>5}`, Debug output `Foo { x: 1 }` | `inspect`, `rjust`, `format`, `#<Foo x=1>` | `rjust` [implemented]; the rest [planned] |
-| 23 | `&str`, `str`, `&static str` | `String`, `&String` | [implemented] (`str` is [retired], E0730) |
-| 24 | `Fn(A) -> R`, `FnMut`, `FnOnce`, `FnVar`, `{ \|\| }`, bare `\|x\| e` | `&block` with `yield`, `Fn[(A) -> R]` (or `Proc`), `->(x) { }` | `&block`/`yield`/`Fn[...]` [implemented]; lambdas [planned] |
-| 25 | `(&self)`, `(self, ...)`, `self: &Self` receivers | `def m`, `def var m`, `def consume m` | [implemented] |
-| 26 | `use a.b.{C, D}` | `require`, `require_relative` | [implemented] |
-| 27 | `as` numeric casts | `to_i`, `to_f`, `to_i8`-style methods | `to_i`/`to_f` [implemented]; sized [planned] |
-| 28 | `USize`, `UInt8`, ... everywhere; `255u8` suffixes | `Int`/`Float`; sized types for FFI only | [planned] (OQ-8) |
-| 29 | `some`/`any`, `[T: B]`, `where`, associated types, GAT, HRTB, specialization | `[T < B]`; no GAT, HRTB or specialization | [planned] (OQ-11 for `some`/`any`) |
-| 30 | `async def`, `.await`, `Future`, `Poll`, `Waker`, `block_on` | Fiber scheduler, `Async do ... end`, `task.wait` | [planned, later] |
-| 31 | `unsafe` blocks and modifiers | `lib` FFI only | OQ-9 |
-| 32 | `loop ... end`, `continue`, `next` only in blocks | `loop do ... end`, `next` in every loop | [planned] |
-| 33 | `def f -> T { e }` | `def f = e` | [implemented] |
-| 34 | `mixin`, `extension`; reopening a class is an error | `module` with `include`; reopening a `class` | [planned] |
-| 35 | `init`, `self.field`, no `attr_*` | `initialize`, `@x`, `attr_reader` | `@x` [implemented]; `initialize`, `attr_*` [planned] |
-| 36 | explicit `def main` | top-level statements | [implemented] |
-| 37 | keywords that block Ruby method names (`match`, `where`, `any`, `loop`, `type`, `use`, `static`, `macro`, `package`); `~=` | free them; `=~` | [planned] |
-| 38 | `fn`, `pub`, `impl`, `mod`, `::<>`, `Box<dyn>`, `Lazy<T>`, `Vec`, `Arc` in examples | `def`, `include`, `Array`, `SharedSync` | Ruby forms [implemented]; Rust forms never parsed (docs only) |
-| 39 | `Map[K, V]` | `Hash[K, V]` | [implemented] |
-| 40 | `None`, `r"..."`, `'\r'`, `'\u{...}'`, `..=` | `nil`, `'...'`, `?\r`, `"\u{...}"`, `..` | [implemented] (Rust forms [retired]) |
-| 41 | editions, `no_std`, `cfg(feature)`, stability attributes, `r#ident`, `macro_rules!` | semver, Bundler-style groups, deprecation warnings | not language syntax; remove from language docs (`no_std` lives in `docs/decisions/phase4-no-std-wasm.md`) |
-| 42 | Rust prose and compiler internals in user docs ("matches Rust's ...", `Ty::Infer`, `crates/` paths) and Rust wording in `##` comments | Ruby and Ruxen wording | docs rule |
-| 43 | dead plumbing: `TokenKind::Lifetime` / `Mut` / `AmpMut`, empty `derive_traits`, unparsed `macro`/`static`/`package` keywords, formatter printing `'a` | delete | compiler cleanup |
+| # | Rust form | Ruby form | Status of Ruby form | Detect |
+|---|---|---|---|---|
+| 1 | `let x = 1`, `var x = 1` | `x = 1`; constants `MAX = 3` | `x = 1` [implemented]; constants [planned](../../../TODO.md#t-constants) | `^\s*(let\|var)\s+[\w(]` |
+| 2 | `Option[T]`, `Some(x)` | `T?`, `nil`, the bare value | [implemented] | `\bSome\(\|\bOption\[` |
+| 3 | `Result[T, E]`, `Ok`, `Err`, "no exceptions" | `raise`, `begin/rescue/ensure`, `retry` | [planned](../../../TODO.md#t-exceptions) | `\bResult\[\|\bOk\(\|\bErr\(` |
+| 4 | postfix `?` | exceptions propagate on their own | [planned](../../../TODO.md#t-exceptions) (with item 3) | `\)\?(?=[\s.;)]\|$)` |
+| 5 | `?.` taught as safe navigation | `&.` | [implemented] | `\)\?\.\w` |
+| 6 | `match ... pat -> expr ... end` | `case ... in ... then ... end` | [implemented] | `^\s*match\s+\S` |
+| 7 | `if let` / `while let` | `if (x = opt)`, `while (x = q.pop)`, `case/in` | `case/in` [implemented]; assignment-in-condition narrowing [planned](../../../TODO.md#t-narrowing) | `\b(if\|elsif\|while)\s+let\b` |
+| 8 | `panic!` and the `!` macro convention | `raise "msg"`, `abort "msg"` | `abort` [implemented]; `raise` [planned](../../../TODO.md#t-exceptions) | `\bpanic!` |
+| 9 | `unwrap!`, `expect!`, `unwrap_or`, `ok_or`, `map_err`, `and_then` | `x \|\| default`, `fetch`, `x or raise` | [planned](../../../TODO.md#t-truthiness) | `\.(unwrap\|expect!\|unwrap_or\w*\|ok_or\|map_err\|and_then)(?!\w)` |
+| 10 | `struct`, `Point { x: 1 }` literals | `class`, `Struct.new`, `Data.define`, `Point.new(x: 1)` | `class` [implemented]; `Struct.new` [planned](../../../TODO.md#t-struct-new); `Data.define` and `Point.new(x: 1)` [planned](../../../TODO.md#t-data-define) | `^\s*struct\s+[A-Z]\|\b[A-Z]\w*\s*\{\s*\w+:\s` |
+| 11 | `enum` with payload variants | `Data.define` per variant, symbols, `case/in` | [planned](../../../TODO.md#t-data-define) | `^\s*enum\s+[A-Z]` |
+| 12 | `newtype`, tuples with `.0`, `type X =` | one-field `Data`, arrays and `a, b = pair`, `X = Y` | one-field `Data` [planned](../../../TODO.md#t-data-define); arrays for tuples [planned](../../../TODO.md#t-tuple-type); `X = Y` [planned](../../../TODO.md#t-type-alias) | `^\s*newtype\b\|(?<=[a-z_)\]])\.\d+\b\|^type\s+[A-Z]\w*(\[[^\]]*\])?\s*=` |
+| 13 | unit `()`, `Result[(), E]` | `nil` | [implemented] (`()` is [retired]) | `->\s*\(\)\s*$\|=\s*\(\)\s*$\|\[\(\)\s*,` |
+| 14 | `[T; N]`, const generics, `const NAME =` | `MAX = 3`; maybe `StaticArray[T, N]` | `MAX = 3` [planned](../../../TODO.md#t-constants); `StaticArray` (OQ-8) [planned](../../../TODO.md#t-oq) | `^\s*const\s+[A-Z]` |
+| 15 | `Display`, `Debug`, `PartialEq`, `Eq`, `Ord`, `PartialOrd`, `Default`, `Into`, `Add`, `Hashable` | `to_s`, `inspect`, `==`, `eql?` + `hash`, `include Comparable` + `<=>`, defaults, `to_*`, `def +` | `to_s`, `==`, `include Comparable` + `<=>`, `def +`, `to_i`/`to_f` and arguments with defaults [implemented]; `inspect` [planned](../../../TODO.md#t-d9); `eql?` + `hash` [planned](../../../TODO.md#t-d8) | `\binclude\s+(Display\|Displayable\|Debug\|PartialEq\|Eq\|Ord\|PartialOrd\|Into\|Add)\b\|\.(to_display\|to_debug\|partial_cmp)\b` |
+| 16 | `derive`, `@[attr]`, `#[attr]` | implicit includes, body directives | [implemented] (the attribute forms are [retired], E0607) | `^\s*(derive\b\|@\[\|#\[)` |
+| 17 | `iter`, `into_iter`, `collect`, `Iterator`, `FromIterator`, `type Item` | `Enumerable` (`each`, `map`, `to_a`) | [implemented] | `\.(iter\|into_iter\|iter_mut\|collect)\b\|\b(FromIterator\|Iterator)\b` |
+| 18 | `len`, `is_empty`, `to_string`, `push_str`, `to_upper`, `starts_with`, `trim`, `with_capacity`, `get_mut`, `insert`/`get` | `size`, `empty?`, `to_s`, `<<`, `upcase`, `start_with?`, `strip`, `[]`, `[]=` | mostly [implemented]; Rust names become [deprecated] aliases. `<<` on a `String` does not append today (use `push_str`) [known issue](../../../TODO.md#t-string-shovel) | `\.(len\|is_empty\|to_string\|push_str\|to_upper\|to_lower\|starts_with\|ends_with\|contains\|trim\|with_capacity\|get_mut)\b` |
+| 19 | Rust `std::io/fs/env/process/path/time/net` shapes | `File.read`, `File.join`, `ARGV`, `ENV`, `system`, `Time.now`, `TCPServer` | [planned](../../../TODO.md#t-stdlib-shapes) (stdlib) | `\bfs\.\w+\|\benv\.(args\|var)\b\|\bprocess\.command\b\|\bInstant\.now\b\|\bDuration\.from_\w+` |
+| 20 | `JoinHandle`, `MutexGuard`, `lock() -> Result`, atomics with `Ordering`, mpsc, `thread_local!` | `Thread.new { }.value`, `Mutex#synchronize`, `Thread::Queue`, `Thread.current[:x]` | [planned](../../../TODO.md#t-thread-api) (stdlib) | `\b(JoinHandle\|MutexGuard\|mpsc)\b\|\bthread_local!\|\bOrdering::` |
+| 21 | `println!`, `format!`, `dbg!`, `assert!` with `{}` | `puts`, `p`, `format("%d", n)` | `puts` and `p` [implemented]; `format` [planned](../../../TODO.md#t-d9) | `\b(println\|eprintln\|format\|dbg\|assert\|assert_eq\|assert_ne\|write\|writeln\|vec)!` |
+| 22 | `#{x:?}`, `#{n:>5}`, Debug output `Foo { x: 1 }` | `inspect`, `rjust`, `format`, `#<Foo x=1>` | `rjust` [implemented]; the rest [planned](../../../TODO.md#t-d9) | `#\{[^}]*:[?<>^#.0-9]` |
+| 23 | `&str`, `str`, `&static str` | `String`, `&String` | [implemented] (`str` is [retired], E0730) | `&('static\s+\|static\s+)?str\b\|[:>]\s*str\b` |
+| 24 | `Fn(A) -> R`, `FnMut`, `FnOnce`, `FnVar`, `{ \|\| }`, bare `\|x\| e` | `&block` with `yield`, `Fn[(A) -> R]` (or `Proc`), `->(x) { }` | `&block`/`yield`/`Fn[...]` and lambdas `->(x) { }` [implemented] | `\bFn(Var)?\(\|\{\s*[\|][\|]` |
+| 25 | `(&self)`, `(self, ...)`, `self: &Self` receivers | `def m`, `def var m`, `def consume m` | [implemented] | `\bdef\s+\S+?\s*\(\s*&?(var\s+\|mut\s+)?self\b\|\bself:\s*&` |
+| 26 | `use a.b.{C, D}` | `require`, `require_relative` | [implemented] | `^\s*use\s+[\w.:]+\|\bpackage\.\w` |
+| 27 | `as` numeric casts | `to_i`, `to_f`, `to_i8`-style methods | `to_i`/`to_f` [implemented]; sized [planned](../../../TODO.md#t-sized-conv) | `\bas\s+(U?Int(8\|16\|32\|64)?\|USize\|Float(32\|64)?\|Char\|Bool)\b` |
+| 28 | `USize`, `UInt8`, ... everywhere; `255u8` suffixes | `Int`/`Float`; sized types for FFI only | [planned](../../../TODO.md#t-oq) (OQ-8) | editorial |
+| 29 | `some`/`any`, `[T: B]`, `where`, associated types, GAT, HRTB, specialization | `[T < B]`; no GAT, HRTB or specialization | `[T < B]` [planned](../../../TODO.md#t-d7-respell); `some`/`any` and associated types (OQ-11) [planned](../../../TODO.md#t-oq) | `\[\s*[A-Z]\w*\s*:\s*[A-Z]\|\bwhere\s+[A-Z]\w*\s*:\|\bfor\[` |
+| 30 | `async def`, `.await`, `Future`, `Poll`, `Waker`, `block_on` | Fiber scheduler, `Async do ... end`, `task.wait` | [planned](../../../TODO.md#t-fibers) | editorial |
+| 31 | `unsafe` blocks and modifiers | `lib` FFI only | [planned](../../../TODO.md#t-oq) (OQ-9) | editorial |
+| 32 | `loop ... end`, `continue`, `next` only in blocks | `loop do ... end`, `next` in every loop | `loop do` [planned](../../../TODO.md#t-loop-do); `next` in every loop [planned](../../../TODO.md#t-next-loops) | `^\s*loop\s*(#.*)?$\|^\s*continue\b` |
+| 33 | `def f -> T { e }` | `def f = e` | [implemented] | `^\s*def\s[^=#]*\{[^}]*\}\s*$` |
+| 34 | `mixin`, `extension`; reopening a class is an error | `module` with `include`; reopening a `class` | `module` [planned](../../../TODO.md#t-module-mixins); reopening [planned](../../../TODO.md#t-reopen-class) | `^\s*(mixin\|extension)\s+[A-Z]` |
+| 35 | `init`, `self.field`, no `attr_*` | `initialize`, `@x`, `attr_reader` | `@x` [implemented]; `initialize` [planned](../../../TODO.md#t-initialize); `attr_*` [planned](../../../TODO.md#t-attr-accessors) | `\bdef\s+init\b\|\bself\.[a-z_]\w*\s*=(?!=)` |
+| 36 | explicit `def main` | top-level statements | [implemented] | `^\s*def\s+main\b` |
+| 37 | keywords that block Ruby method names (`match`, `where`, `any`, `loop`, `type`, `use`, `static`, `macro`, `package`); `~=` | free them; `=~` | freed keywords [planned](../../../TODO.md#t-free-keywords); `=~` [planned](../../../TODO.md#t-match-op) | `\s~=\s` |
+| 38 | `fn`, `pub`, `impl`, `mod`, `::<>`, `Box<dyn>`, `Lazy<T>`, `Vec`, `Arc` in examples | `def`, `include`, `Array`, `SharedSync` | Ruby forms [implemented]; Rust forms never parsed (docs only) | `^\s*(pub\s+)?fn\s+\w+\s*[(<]\|\bimpl\s*[<A-Z]\|^\s*(pub\s+)?mod\s+\w\|::<\|\bBox<\|\bdyn\s+[A-Z]\|\bLazy<\|\bVec[<\[]\|\bArc[<\[]\|^\s*pub\s` |
+| 39 | `Map[K, V]` | `Hash[K, V]` | [implemented] | `\bMap\[` |
+| 40 | `None`, `r"..."`, `'\r'`, `'\u{...}'`, `..=` | `nil`, `'...'`, `?\r`, `"\u{...}"`, `..` | [implemented] (Rust forms [retired]) | `\bNone\b\|\br\"\|\.\.=\|'\\[a-z]'\|'\\u\{` |
+| 41 | editions, `no_std`, `cfg(feature)`, stability attributes, `r#ident`, `macro_rules!` | semver, Bundler-style groups, deprecation warnings | not language syntax; remove from language docs (`no_std` lives in `docs/decisions/phase4-no-std-wasm.md`) | editorial |
+| 42 | Rust prose and compiler internals in user docs ("matches Rust's ...", `Ty::Infer`, `crates/` paths) and Rust wording in `##` comments | Ruby and Ruxen wording | docs rule | editorial |
+| 43 | dead plumbing: `TokenKind::Lifetime` / `Mut` / `AmpMut`, empty `derive_traits`, unparsed `macro`/`static`/`package` keywords, formatter printing `'a` | delete | compiler cleanup | editorial |
 
 ---
 
@@ -741,7 +773,7 @@ status of the Ruby replacement.
 - Every [implemented] form has at least one positive e2e fixture in
   `tests/release-e2e/cases/`, and parses identically in the compiler, REPL,
   LSP, IDE and formatter (`compiler/ruxen_core/tests/parser_feature_parity.rs`).
-- A [planned] form moves to [implemented] only with a positive fixture, a
+- A `[planned]` form moves to `[implemented]` only with a positive fixture, a
   negative unit test asserting its error code, and an update to this file.
 - A [deprecated] form gets a registered warning code with a `docs/errors/`
   page and a fix-it that produces the Ruby form.
@@ -751,10 +783,13 @@ status of the Ruby replacement.
 
 ---
 
-## Appendix A. Status evidence (2026-10-15)
+## Appendix A. Status evidence (2026-10-25)
 
-Paths are relative to `compiler/ruxen_core/src/` unless they start with
-`library/` or `tests/`.
+Every [implemented] claim above was probed on 2026-10-25 on a fresh release
+build of `6bf146ac`: `ruxen compile --emit=ast` for syntax, `--emit=hir` for
+typing, and compile and run with the output compared for behaviour. The rows
+below are the source locations behind the claims. Paths are relative to
+`compiler/ruxen_core/src/` unless they start with `library/` or `tests/`.
 
 | Claim | Evidence |
 |---|---|
@@ -777,7 +812,7 @@ Paths are relative to `compiler/ruxen_core/src/` unless they start with
 | Generic params `[T: B]`, `const N`, bare lowercase lifetimes | `parser/types.rs` (`parse_generic_param`) |
 | `::` in expressions; type paths use `.` | `parser/expr/atoms.rs`; `parser/types.rs` (`parse_type_path`) |
 | Class body accepts fields, `def`, `include` (single, `!`, `unsafe`), `lib`, `layout`, `alias`, `type X =` | `parser/classes.rs` (`parse_class_def`); `parser/methods.rs` (`parse_include_directive`) |
-| Built-in macros `panic`, `array`, `vec`, `map`, `hash`, `set` | `parser/macros.rs` (`BUILTIN_MACRO_NAMES`) |
+| Built-in macro `panic!`; the collection macros (`vec!` and the rest) are rejected | `parser/macros.rs` (`BUILTIN_MACRO_NAMES`) |
 | `unwrap!` / `expect!` intrinsics | `mir/lower/expr/field_access.rs` |
 | `raise` only allowed as a paren-less call name | `parser/expr/calls.rs` (`is_bare_call_fn`) |
 | `block_given?` | `resolve/exprs.rs` |

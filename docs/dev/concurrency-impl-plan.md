@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Concurrency adoption — implementation plan (§4.1 foundation first)
 
 Authoritative spec: `docs/decisions/zio-comparison-concurrency-adoption.md`.

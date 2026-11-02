@@ -45,6 +45,7 @@ same feature and can ship independently.
 
 `hir/types.rs:112-113`:
 
+<!-- compiler-rust -->
 ```rust
 /// `some Mixin` — static dispatch, structural satisfaction OK
 ImplTrait(Vec<TraitRef>),
@@ -59,6 +60,7 @@ Resolver: `resolve/mod.rs:2484-2491` builds `Ty::ImplTrait(Vec<TraitRef>)`.
 
 `codegen/layout.rs:337-339`:
 
+<!-- compiler-rust -->
 ```rust
 // ── some Mixin (static dispatch) ────────────────────────────────────
 // The concrete type is erased here; we conservatively return pointer size.
@@ -140,22 +142,42 @@ see §9 risk).
 
 ### 4.1 Argument-position `some Mixin`
 
-```ruxen
-def print_all(items: some Iterator[Item = String])
-  for s in items
-    puts s
-  end
-end
+With a user mixin `Named` that requires `def name -> String`, the
+argument-position form is [implemented]:
 
-# Equivalent:
-def print_all[I: Iterator[Item = String]](items: I) ...
+```ruby
+def greet(x: some Named)
+  puts "hi #{x.name}"
+end
 ```
 
-Multiple bounds:
+It is equivalent to a bounded generic parameter. The RBS-style bound is
+[planned](../../TODO.md#t-d7-respell):
 
-```ruxen
-def log(x: some Display + Serializable)
-  puts x.to_display
+```ruby
+def greet[T < Named](x: T)
+  puts "hi #{x.name}"
+end
+```
+
+Works today, [deprecated] (replace with `[T < Named]`):
+
+```ruby
+def greet[T: Named](x: T)
+  puts "hi #{x.name}"
+end
+```
+
+Over the stdlib `Enumerable[T]` (`some Enumerable[String]`), the argument
+form does not type-check yet: `Array[String]` is reported as not
+satisfying `Enumerable` (E1015) and the element type does not resolve
+to `String` inside the body ([planned](../../TODO.md#t-oq), OQ-11).
+
+Multiple bounds, spelled with `&` as in the RBS-style bound list [planned](../../TODO.md#t-d7-respell):
+
+```ruby
+def log(x: some Inspect & Serializable)
+  puts x.inspect
   save(x.serialize)
 end
 ```
@@ -164,13 +186,15 @@ end
 
 ### 4.2 Return-position `some Mixin`
 
-```ruxen
-def ones -> some Iterator[Item = Int]
-  (1..).map { |_| 1 }
+Return position is rejected today ([planned](../../TODO.md#t-some-return)):
+
+```ruby
+def ones -> some Enumerable[Int]
+  [1, 1, 1]
 end
 
-def make_closure(x: Int) -> some Fn(Int) -> Int
-  { |y| x + y }
+def make_closure(x: Int) -> some Proc[(Int) -> Int]
+  ->(y: Int) { x + y }
 end
 ```
 
@@ -185,11 +209,13 @@ Rules:
 
 ### 4.3 Named opaque types (phase 04c, optional)
 
-```ruxen
-type FizzBuzzIter = some Iterator[Item = String]
+Both the opaque return and the `X = Y` type alias are [planned](../../TODO.md#t-type-alias):
 
-def fizzbuzz -> FizzBuzzIter
-  (1..101).map { |n| ... }
+```ruby
+FizzBuzzSeq = some Enumerable[String]
+
+def fizzbuzz -> FizzBuzzSeq
+  (1..100).map { |n| ... }
 end
 ```
 
@@ -202,6 +228,7 @@ Allows storing the opaque type in struct fields.
 In the resolver, `Ty::ImplTrait(bounds)` in an argument position is
 replaced by a fresh synthetic generic parameter:
 
+<!-- compiler-rust -->
 ```rust
 // In resolve_func_def when walking params:
 let param_ty = self.resolve_type_expr(&param.type_expr);
@@ -229,6 +256,7 @@ normally.
 Return position is fundamentally different. The type must be hidden
 from the caller:
 
+<!-- compiler-rust -->
 ```rust
 pub enum Ty {
     ...
@@ -400,9 +428,12 @@ See §6.2.
 ### 9.1 The feature
 
 Specialization lets multiple impls of the same mixin overlap, with
-the compiler picking the *most specific* one at each call site:
+the compiler picking the *most specific* one at each call site.
+Specialization is [retired] (never implemented; the language spec removes
+it, section 14 of `docs/specs/syntax/ruby-naming.spec.md`). The shape it
+would have taken, in the [retired] extension spelling:
 
-```ruxen
+```ruby
 # Blanket extension:
 extension[T] T where T: Clone
   include Transform
@@ -459,6 +490,9 @@ problem.
   free function or use a helper mixin with a `where` bound."
 
 ### 9.4 If specialization eventually ships
+
+Specialization is [retired] in the language spec, so this section records
+the analysis only; no tracker item exists for it.
 
 Minimum viable spec (future):
 

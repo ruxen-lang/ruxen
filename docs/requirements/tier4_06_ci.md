@@ -10,7 +10,7 @@ This document specifies a single `ci.yml` workflow that ships *before* any other
 
 ### 2.1 Workflows present
 
-```
+```text
 .github/workflows/
 └── release.yml       # build matrix, tags-only, 144 lines
 ```
@@ -83,7 +83,7 @@ Unknown from repo inspection; typically configured via GitHub UI. Assume nothing
 
 ### 4.1 Workflow files
 
-```
+```text
 .github/workflows/
 ├── ci.yml                # PR + push-to-master; fast, required
 ├── fuzz.yml              # scheduled + workflow_dispatch; long-running
@@ -327,7 +327,7 @@ Each member crate then references `rust-version.workspace = true` (requires the 
 
 ### 4.7 Fuzz harness layout
 
-```
+```text
 fuzz/
 ├── Cargo.toml
 ├── .gitignore                 # /target, /artifacts, /corpus
@@ -343,6 +343,7 @@ fuzz/
 
 Example `fuzz_targets/lexer.rs`:
 
+<!-- compiler-rust -->
 ```rust
 #![no_main]
 use libfuzzer_sys::fuzz_target;
@@ -358,6 +359,7 @@ fuzz_target!(|data: &[u8]| {
 
 Example `fuzz_targets/parser.rs`:
 
+<!-- compiler-rust -->
 ```rust
 #![no_main]
 use libfuzzer_sys::fuzz_target;
@@ -377,6 +379,7 @@ fuzz_target!(|data: &[u8]| {
 
 Example `fuzz_targets/typeck.rs`:
 
+<!-- compiler-rust -->
 ```rust
 #![no_main]
 use libfuzzer_sys::fuzz_target;

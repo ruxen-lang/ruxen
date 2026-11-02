@@ -78,7 +78,7 @@ Ruxen parses `layout c` on struct/class declarations (`parser/mod.rs:499-503`), 
 
 ### 4.1 CLI
 
-```
+```sh
 ruxenc --emit=c-header file.rx -o file.h
 ruxenc --emit=c-header file.rx                    # writes to stdout
 ruxenc --emit=c-header file.rx --include-guard=MYLIB_H
@@ -108,9 +108,14 @@ namespace = []                        # (future) for C++ namespacing; ignored in
 
 ### 4.3 Source directives
 
-The existing `link` / `layout` directive syntax extends:
+The existing `link` / `layout` directive syntax extends. `layout c` in a
+`struct` body is [implemented] today; the `abi`, `no_mangle`,
+`cbindgen_alias` and `layout opaque` directives are [planned](../../TODO.md#t-req-cabi).
+`Data.define` and symbols or `Data` variants are [planned](../../TODO.md#t-data-define),
+and `layout c` moves with them (OQ-9). Until then the C-layout types are
+spelled with `struct` and `enum`, which are [deprecated] (replace with `Data.define`):
 
-```ruxen
+```ruby
 struct Point
   layout c                                          # enforces C-compatible layout
   x: Float32
@@ -156,9 +161,10 @@ end
 
 ### 4.4 Generated header example
 
-Input `mylib.rx`:
+Header emission is [planned](../../TODO.md#t-req-cabi). Input `mylib.rx`, in the
+same `struct` / `enum` spelling, [deprecated] (replace with `Data.define` and symbols):
 
-```ruxen
+```ruby
 struct Point
   layout c
   x: Float32
@@ -269,9 +275,9 @@ uint32_t ruxen_abi_version(void);
 #define RUXEN_EXPECTED_ABI_VERSION 0x00020000u  /* bake compiler version */
 ```
 
-Compiler emits:
+Compiler emits ([planned](../../TODO.md#t-req-cabi)):
 
-```ruxen
+```ruby
 # Auto-generated; always public
 def ruxen_abi_version -> UInt32
   abi "c"

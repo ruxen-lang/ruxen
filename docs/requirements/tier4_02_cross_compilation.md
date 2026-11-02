@@ -21,6 +21,7 @@ Making Ruxen cross-compile is a prerequisite for the WASM target (doc 03), for s
 
 ### 2.1 Cranelift backend (`compiler/ruxen_core/src/codegen/cranelift.rs:41-75`)
 
+<!-- compiler-rust -->
 ```rust
 pub fn new() -> Result<Self, String> {
     // ...
@@ -37,6 +38,7 @@ pub fn new() -> Result<Self, String> {
 
 ### 2.2 LLVM backend (`compiler/ruxen_core/src/codegen/llvm/mod.rs:37-83`)
 
+<!-- compiler-rust -->
 ```rust
 Target::initialize_all(&InitializationConfig::default());
 let target_triple = TargetMachine::get_default_triple();
@@ -62,6 +64,7 @@ LLVM's target list is broad: `x86_64`, `aarch64`, `arm`, `riscv32`, `riscv64`, `
 
 ### 2.3 Linking (`compiler/ruxen_core/src/codegen/object.rs:10-92`)
 
+<!-- compiler-rust -->
 ```rust
 pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf, String> {
     let mut cmd = Command::new("cc");
@@ -145,7 +148,7 @@ So the release infrastructure already thinks in triples; the compiler does not.
 
 ### 4.1 CLI
 
-```
+```sh
 ruxen build  [--target <triple>] [--release] [--features ...] ...
 ruxen run    [--target <triple>] [--release] ...         # errors if target != host
 ruxen check  [--target <triple>] ...
@@ -225,7 +228,7 @@ Tiers adapted from Rust's model.
 
 ### 4.4 File layout
 
-```
+```text
 ~/.ruxen/
 ├── bin/
 ├── lib/
@@ -255,7 +258,7 @@ Tiers adapted from Rust's model.
 
 ### 5.1 Triple data flow
 
-```
+```text
 CLI (--target)   OR   Ruxen.toml ([build] default-target)   OR   $RUXEN_TARGET   OR   host triple
        │                                                                                   │
        └───────────────────────────┬───────────────────────────────────────────────────────┘
@@ -272,6 +275,7 @@ CLI (--target)   OR   Ruxen.toml ([build] default-target)   OR   $RUXEN_TARGET  
 
 Replace `cranelift_native::builder()` in `codegen/cranelift.rs:50-55` with:
 
+<!-- compiler-rust -->
 ```rust
 use cranelift_codegen::isa;
 use target_lexicon::Triple;
@@ -291,6 +295,7 @@ Pass the triple through `CodeGen::new` signature. Cranelift supports only x86_64
 
 Replace `TargetMachine::get_default_triple()` in `codegen/llvm/mod.rs:42` with the user-provided triple. The `initialize_all()` call already registers every target built into the linked LLVM 18, so no feature-gate change is needed.
 
+<!-- compiler-rust -->
 ```rust
 let target_triple = if let Some(t) = opts.target {
     TargetTriple::create(&t)
@@ -309,6 +314,7 @@ LLVM's triple strings are 1:1 with `target-lexicon`'s for the cases we care abou
 
 New `src/ruxen_cli/src/cfg.rs` — also referenced by doc 01 §5.2 for feature gating. Evaluation inputs:
 
+<!-- compiler-rust -->
 ```rust
 pub struct CfgContext {
     pub target_arch: &'static str,          // "x86_64", "aarch64", "wasm32", ...
@@ -324,6 +330,7 @@ pub struct CfgContext {
 
 Derive from `target_lexicon::Triple`:
 
+<!-- compiler-rust -->
 ```rust
 fn cfg_from_triple(triple: &Triple, features: HashSet<String>) -> CfgContext {
     CfgContext {
@@ -347,7 +354,7 @@ fn cfg_from_triple(triple: &Triple, features: HashSet<String>) -> CfgContext {
 
 Grammar (subset of Rust's `cfg!`):
 
-```
+```text
 cfg_expr := 'all' '(' cfg_expr (',' cfg_expr)* ')'
           | 'any' '(' cfg_expr (',' cfg_expr)* ')'
           | 'not' '(' cfg_expr ')'
@@ -359,6 +366,7 @@ cfg_expr := 'all' '(' cfg_expr (',' cfg_expr)* ')'
 
 `codegen/object.rs:20,64` hard-codes `Command::new("cc")`. Replace with a lookup:
 
+<!-- compiler-rust -->
 ```rust
 fn linker_for(triple: &Triple, manifest: &Manifest) -> Result<(String, Vec<String>), String> {
     // 1. Explicit [target.<triple>].linker override from manifest
@@ -398,7 +406,7 @@ New: `codegen/mod.rs::find_runtime_obj(triple: &Triple) -> Result<PathBuf, Strin
 
 If the runtime is missing and the user hasn't run `ruxen target add <triple>`, emit:
 
-```
+```text
 error: runtime for target 'aarch64-unknown-linux-gnu' not installed.
        Run `ruxen target add aarch64-unknown-linux-gnu` to download it,
        or set RUXEN_RUNTIME_OBJ to a path you built yourself.
@@ -412,6 +420,7 @@ Tomorrow: `target/<triple>/debug/myapp`, `target/<triple>/release/myapp`. The ho
 
 `build.rs:27-28` changes:
 
+<!-- compiler-rust -->
 ```rust
 let target_dir = project_dir.join("target");
 let target_dir = if let Some(triple) = &opts.target {

@@ -207,6 +207,19 @@ behind.
 - [ ] Literals→primitives + de-primitivize `Ty::String`/`Ty::Array`.
 - [ ] Generic small-method inliner (perf).
 
+## Owner decisions (2026-10-25)
+
+- D2 b: calls the compiler emits itself name a `.rx` declaration by a
+  declared role marker, and generated functions get ids, so callee strings
+  stop being re-parsed in MIR and codegen [planned](../../../TODO.md#t-d2).
+- D18 a: machine primitives stay a floor in the resolver's scalar tables;
+  the collection heads and `String` move to `.rx` in the de-primitivize
+  phase [planned](../../../TODO.md#t-d18).
+- D23 a: the F-31, F-39 and F-40 leftovers in no batch (resolve scope
+  pushes, `const_predicates`, magic codepoints, BufReader/BufWriter per inner
+  type, Enumerable re-declarations) are re-verified first, then the verified
+  remainder joins a batch [planned](../../../TODO.md#t-d23).
+
 ## Known gaps / findings to respect
 - Method-level closure-return generic inference: `Ty::Fn` arm in
   `bind_type_params_from_args` + bridge via `harvest_and_subst_generics` (done,

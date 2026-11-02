@@ -14,12 +14,12 @@ No `--target` → the host, byte-identical to the pre-4.02 behaviour.
 
 | Triple | Aliases | Status on a macOS-arm64 dev host |
 |---|---|---|
-| `aarch64-apple-darwin` | `aarch64-macos`, `arm64-darwin` | host — verified |
-| `x86_64-apple-darwin` | `x86_64-macos`, `x86_64-darwin` | cross-arch, links locally, runs under **Rosetta** — **verified** |
-| `aarch64-unknown-linux-gnu` | `aarch64-linux` | cross-OS, **two-stage Docker** link — **verified** (runs in a `linux/arm64` container) |
-| `x86_64-unknown-linux-gnu` | `x86_64-linux` | cross-OS+arch — **config-ready, CI-proven-at-push** (the sibling repos' ubuntu-latest x64 CI exercises this triple natively at push time) |
-| `aarch64-linux-android` | `android`, `aarch64-android` | **config-ready, NDK-gated** — linker logic wired, untested (no NDK on this host) |
-| `wasm32-unknown-unknown` | `wasm32`, `wasm` | **verified** (tier 4.03, LLVM backend). `ruxen compile --target wasm32-unknown-unknown` emits a `.wasm` (no libc, no C runtime); top-level `def`s become host-callable exports. Runs in node — see `examples/05-wasm/` + `scripts/wasm_verify.sh`. Needs a toolchain built with `--features llvm`. |
+| `aarch64-apple-darwin` | `aarch64-macos`, `arm64-darwin` | [implemented]: host, verified |
+| `x86_64-apple-darwin` | `x86_64-macos`, `x86_64-darwin` | [implemented]: cross-arch, links locally, runs under **Rosetta**, **verified** |
+| `aarch64-unknown-linux-gnu` | `aarch64-linux` | [implemented]: cross-OS, **two-stage Docker** link, **verified** (runs in a `linux/arm64` container) |
+| `x86_64-unknown-linux-gnu` | `x86_64-linux` | [implemented], unverified as a cross target: **config-ready**. The triple itself is CI-proven at push as a native build (this repo's `ci.yml` and `pr-ready.yml` and the sibling repos run on ubuntu-latest x64), but cross-compiling to it from a macOS host has not been run |
+| `aarch64-linux-android` | `android`, `aarch64-android` | [implemented], unverified: **config-ready, NDK-gated**; the linker logic is wired but has never run (no NDK on this host) |
+| `wasm32-unknown-unknown` | `wasm32`, `wasm` | [implemented]: **verified** (tier 4.03, LLVM backend). `ruxen compile --target wasm32-unknown-unknown` emits a `.wasm` (no libc, no C runtime); top-level `def`s become host-callable exports. Runs in node — see `examples/05-wasm/` + `scripts/wasm_verify.sh`. Needs a toolchain built with `--features llvm`. |
 
 Short aliases are normalized to the canonical triple before parsing.
 (Note: `target-lexicon` 0.13 does *not* canonicalize these itself — it parses

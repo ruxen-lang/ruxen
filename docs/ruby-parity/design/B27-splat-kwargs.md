@@ -59,13 +59,13 @@ output at runtime". That caution is filed under metaprogramming; it is actually 
 
 ### 1.3 `f(*xs)` at a call site is a silent no-op
 
-**K16:**
+**K16** ([implemented] forms; the silently dropped `*` is the bug):
 
-```
+```ruby
 def first_of(a: Array[Int]) -> Int
   a[0]
 end
-let xs = [7, 8]
+xs = [7, 8]
 first_of(*xs)        # compiles, prints 7
 ```
 
@@ -95,9 +95,9 @@ B27 must not be built on top of this.
 
 ### 1.5 B71 reproduces on a builtin head
 
-**bh2**, a `String` method whose only parameter is defaulted:
+**bh2**, a `String` method whose only parameter is defaulted ([implemented] call forms, B71's open bug):
 
-```
+```ruby
 s.probe_all_default     # [ab]      <- default vanished
 s.probe_all_default()   # [a,b,]    correct
 s.probe_all_default("|")# [a|b|]    correct

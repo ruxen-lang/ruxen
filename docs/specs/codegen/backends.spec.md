@@ -9,6 +9,12 @@ behind `--features llvm` since Phase 4.
 Ruxen compiles MIR through one of two backends.  Both must accept the
 same MIR and produce binaries that pass the same E2E suite.
 
+
+**Owner decision D2 b (2026-10-25).** Calls the compiler emits itself name a
+`.rx` declaration by a declared role marker instead of a C or method name
+string, so both backends stop re-parsing callee strings
+[planned](../../../TODO.md#t-d2).
+
 ---
 
 ## B1 — Default backend is Cranelift

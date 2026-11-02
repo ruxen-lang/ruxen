@@ -3,7 +3,7 @@
 Status: Implemented (2026-07-14)
 
 Ruxen exposes Ruby's module-loading ergonomics while compiling ahead of time.
-The directives are source-loading forms, not runtime function calls:
+The directives are source-loading forms, not runtime function calls [implemented]:
 
 ```ruby
 require "lib/json"

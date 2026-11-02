@@ -2,7 +2,7 @@
 
 Ruxen uses **Spec-Driven Development (SDD)**.  Every feature flows:
 
-```
+```text
 docs/requirements (or tutorial / prompts)
         ↓
 docs/specs/<area>/<feature>.spec.md         ← this directory

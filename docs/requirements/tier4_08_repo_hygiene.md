@@ -52,7 +52,7 @@ If `LICENSE` doesn't exist, the command fails, `2>/dev/null` hides it, `|| true`
 
 Scaffold generates a per-project `.gitignore` (`src/ruxen_cli/src/scaffold.rs:154-159`):
 
-```
+```text
 /target
 Ruxen.lock                       # only for library projects
 ```
@@ -87,7 +87,7 @@ No root-level `.gitignore` in the repo itself — but given the root doesn't hav
 
 ### 4.1 File layout
 
-```
+```text
 /
 ├── LICENSE-MIT                                  # MIT text (see §5.2)
 ├── LICENSE-APACHE                               # Apache-2.0 text (see §5.2)
@@ -142,7 +142,7 @@ Insert badges after the tagline (after line 3):
 
 ### 4.4 `CONTRIBUTING.md` — skeleton
 
-```markdown
+~~~~markdown
 # Contributing to Ruxen
 
 Thanks for considering a contribution! This document covers the practical bits.
@@ -221,7 +221,7 @@ You do not need a DCO sign-off. By submitting a PR, you agree to license your co
 
 - File an issue on GitHub for anything that needs discussion.
 - Security issues: **do not** open a public issue. See [SECURITY.md](SECURITY.md).
-```
+~~~~
 
 ### 4.5 `CODE_OF_CONDUCT.md` — Contributor Covenant 2.1
 
@@ -312,7 +312,7 @@ All notable changes to Ruxen are documented here. The format follows [Keep a Cha
 
 ### 4.8 `.github/ISSUE_TEMPLATE/bug_report.md`
 
-```markdown
+~~~~markdown
 ---
 name: Bug report
 about: Report a miscompilation, panic, or unexpected behavior
@@ -341,7 +341,7 @@ labels: bug
 ## Extra context
 
 <!-- Anything else: stack trace, backtrace via RUST_BACKTRACE=1, related issues. -->
-```
+~~~~
 
 ### 4.9 `.github/ISSUE_TEMPLATE/feature_request.md`
 
@@ -406,7 +406,7 @@ Fixes #<issue-number>
 
 ### 4.12 `CODEOWNERS`
 
-```
+```text
 # Default owner for everything.
 *                           @sherazp995
 
@@ -434,7 +434,7 @@ Once tier 4.01 workspace inheritance lands, these become `*.workspace = true` re
 
 ### 4.14 Root `.gitignore`
 
-```
+```text
 /target
 /fuzz/target
 /fuzz/corpus

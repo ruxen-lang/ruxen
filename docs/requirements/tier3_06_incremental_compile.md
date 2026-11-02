@@ -74,7 +74,7 @@ Files:
 Both `ruxenc` (`main.rs:503-576`) and `ruxen_ide` (`analysis.rs:43-88`)
 call the full pipeline in sequence:
 
-```rust
+```text
 lexer.tokenize()  → parser.parse()  → typeck::type_check()
                  → borrow_check::borrow_check()
                  → mir::lower::lower_program()
@@ -148,6 +148,7 @@ state for a single compile. Not reused.
 
 ### 4.1 `Database` handle
 
+<!-- compiler-rust -->
 ```rust
 // compiler/ruxen_core/src/db/mod.rs (new)
 
@@ -182,6 +183,7 @@ pub type FileId = u32;
 
 Existing APIs continue to work — they just become thin wrappers:
 
+<!-- compiler-rust -->
 ```rust
 // typeck/mod.rs
 pub fn type_check(program: &ast::Program) -> TypeCheckResult {
@@ -197,6 +199,7 @@ No call site changes.
 
 `ruxen_ide/src/analysis.rs::analyze` becomes:
 
+<!-- compiler-rust -->
 ```rust
 pub fn analyze_incremental(db: &mut Database, source: &str) -> AnalysisResult {
     let file = db.intern_source(source);
@@ -247,7 +250,7 @@ queries (§5.2). The manual code is maybe 400 lines.
 
 ### 5.2 Query graph
 
-```
+```text
 set_source(file, text)               [input]
   └─▶ tokens(file)                   [derived]
         └─▶ ast(file)                [derived]
@@ -366,7 +369,7 @@ invocation.
 
 Relationship:
 
-```
+```text
 ruxenc invocation
   └── Database (in-memory, one per process)
          └── File-level cache (on-disk, shared across processes)

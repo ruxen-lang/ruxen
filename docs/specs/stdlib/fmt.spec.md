@@ -2,7 +2,7 @@
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §4.8](../../requirements/tier1_01_stdlib.md),
-[docs/prompts/v1/06_phase2_stdlib_io_fmt.md](../../prompts/v1/06_phase2_stdlib_io_fmt.md).
+`docs/prompts/v1/06_phase2_stdlib_io_fmt.md`.
 
 **Status:** shipped Phase A/B/C/D MVP (2026-05-10) → Phase D2 (2026-05-13) → Phase D4 (2026-05-13).
 
@@ -11,6 +11,15 @@ This spec describes the **observable behaviour** of `std.fmt` — the
 interpolation lowering, and the format-spec surface (`width`, `align`,
 `fill`, `precision`, `:?`).  Each behaviour is numbered and pinned by
 one or more Rust integration tests in `compiler/ruxen_core/tests/`.
+
+**Owner decisions (2026-10-25).** D9 a: `#{x:?}` lowers to `inspect` and is
+[deprecated]; width and precision specs (`#{n:>5}`) stay [deprecated] until
+`format("%5d", n)` lands, and the `Int_fmt` fallback goes with them
+[planned](../../../TODO.md#t-d9). Until then the spec forms below are the working surface.
+D10 a: a class with a C-handle field prints its address under `:?` today; the
+Kernel `inspect` default prints a C handle as `#<Mutex>`
+[planned](../../../TODO.md#t-d10). `Display` and `Debug` give way to `to_s` and `inspect`
+(naming spec section 13).
 
 ---
 

@@ -2,7 +2,7 @@
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §4.4](../../requirements/tier1_01_stdlib.md),
-[docs/prompts/v1/06_5_phase2_stdlib_io_completeness.md §4](../../prompts/v1/06_5_phase2_stdlib_io_completeness.md).
+`docs/prompts/v1/06_5_phase2_stdlib_io_completeness.md §4`.
 
 **Status:** shipped Phase 2 #06.5 T5 — class-only TCP surface.
 
@@ -23,7 +23,14 @@ from the user-facing surface, and their C runtime symbols
 in the user_drop_classes pipeline so the MIR emits `<Type>_drop +
 ruxen_dealloc` at scope exit, idempotent with explicit `.close()`.
 
-```
+The Ruby shape is `TCPServer` / `TCPSocket` with methods that raise
+`IOError` instead of returning `Result` ([planned](../../../TODO.md#t-stdlib-shapes),
+[planned](../../../TODO.md#t-exceptions)), and `Shutdown` as symbols
+([planned](../../../TODO.md#t-symbols)).
+
+Today's surface (`library/std/net/src/lib.rx`) [implemented], with [deprecated] `Result` returns and `enum Shutdown` (replacements above):
+
+```ruby
 class TcpListener
   def self.bind(addr: &String) -> Result[TcpListener, IoError]
   def accept -> Result[TcpStream, IoError]              # blocking
@@ -37,9 +44,9 @@ class TcpStream
   def read(buf: &var Array[Int]) -> Result[Int, IoError]
   def write(bytes: &Array[Int]) -> Result[Int, IoError]
   def peer_addr -> Result[String, IoError]
-  def shutdown(how: Shutdown) -> Result[nil, IoError]
-  def set_read_timeout(d: &Duration) -> Result[nil, IoError]
-  def set_write_timeout(d: &Duration) -> Result[nil, IoError]
+  def shutdown(how: &Shutdown) -> Result[nil, IoError]
+  def set_read_timeout_ns(ns: Int) -> Result[nil, IoError]
+  def set_write_timeout_ns(ns: Int) -> Result[nil, IoError]
   def close -> Result[nil, IoError]                      # also on drop
 end
 
@@ -159,12 +166,20 @@ against the runtime `RUXEN_SHUTDOWN_*` defines in
 
 ### C15 — Auto-import from prelude
 
-`TcpListener`, `TcpStream`, and `Shutdown` are importable via
-`use std.net.{TcpListener, TcpStream, Shutdown}`. The class
+`TcpListener`, `TcpStream`, and `Shutdown` are in the prelude and need no
+import [implemented]; the `use std.net.{TcpListener, TcpStream, Shutdown}`
+form also resolves but `use` is [deprecated] (replacement `require` and
+qualified names). The class
 declarations live in `library/std/net/src/lib.rx` (declarative doc —
 executable behavior is wired in resolve/typeck/codegen).
 
 ### C17 — `TcpStream.set_read_timeout(d: &Duration) -> Result[nil, IoError]`
+
+Owner decision D24 a: this signature is [planned](../../../TODO.md#t-d24). Today the `.rx`
+declaration takes an `Int` (`library/std/net/src/lib.rx:49`) while the C
+takes a `RuxenDuration*` (`library/std/net/runtime/tcp.c:488`), so do not call
+it; use `set_read_timeout_ns(ns: Int)` [implemented], which stays. Once D24
+lands, `net` depends on `time` and the call below holds.
 
 Sets the `SO_RCVTIMEO` socket option to the given Duration. Once the
 timeout fires a subsequent blocking `.read(...)` returns
@@ -174,6 +189,9 @@ Durations round up to 1µs so a "set as short as possible" intent
 isn't accidentally interpreted as "clear".
 
 ### C18 — `TcpStream.set_write_timeout(d: &Duration) -> Result[nil, IoError]`
+
+Same status as C17: [planned](../../../TODO.md#t-d24); use `set_write_timeout_ns(ns: Int)`
+[implemented] today.
 
 Sets the `SO_SNDTIMEO` socket option. Same semantics as
 `set_read_timeout` but applied to writes — a `.write(...)` that

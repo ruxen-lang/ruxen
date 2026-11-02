@@ -44,6 +44,7 @@ measures per-iteration time, warmup, outliers, stddev, or regression.
 
 `ruxenc/benches/cache_bench.rs:10` shows the compile-time usage:
 
+<!-- compiler-rust -->
 ```rust
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 ```
@@ -87,13 +88,22 @@ count auto-scaling, mean + stddev, outlier detection via MAD
 
 ### 4.1 In-body directive
 
-```
+The `bench` directive in this section was never built, so its examples are
+[retired]. What shipped is `ruxen bench FILE`, which runs the
+`def bench_*(b: &var Bencher)` methods in that file through the `.rx`
+`Bencher` class (`library/std/bench/src/lib.rx`, `iter(name, f)` with
+`f: Fn() -> Int`; a bench method calls `b.iter("sum", -> { ... })` with a
+lambda that returns an `Int`) [implemented].
+
+The directive form, [retired]:
+
+```ruby
 ## Measures the cost of allocating an Array of 1000 ints.
 def alloc_vec(ctx: &var Bencher)
   bench
   ctx.iter do
-    var v = Array.new()
-    for i in 0..1000
+    v = []
+    for i in 0...1000
       v.push(i)
     end
     black_box(v)
@@ -101,9 +111,9 @@ def alloc_vec(ctx: &var Bencher)
 end
 ```
 
-Variants (additional directives on their own lines at the head of the body):
+Variants (additional directives on their own lines at the head of the body), [retired]:
 
-```
+```ruby
 def x(ctx: &var Bencher)
   bench
   ignore                              # discovered but not run
@@ -122,7 +132,7 @@ end
 
 ### 4.2 CLI
 
-```
+```sh
 ruxen bench                          # build + run all benches
 ruxen bench --filter="foo"
 ruxen bench --format=pretty|json|csv
@@ -138,16 +148,18 @@ ruxen bench --bin foo                # limit to a specific binary
 
 ### 4.3 `Bencher` type and `black_box`
 
-```
+The shipped `Bencher#iter` takes a name and an `Fn() -> Int`, and
+`Bencher.black_box` takes an `Int`. The proposed API, [retired]:
+
+```ruby
 # In std.test.bench (same module as test-directive helpers)
 
 class Bencher
-  def iter[F](f: F) where F: Fn -> nil
+  def iter(&block: Fn[() -> nil])
     # Internally: warmup + sample loop + timing
   end
 
-  def iter_with_setup[F, G, S](setup: G, run: F)
-    where G: Fn -> S, F: Fn(S) -> nil
+  def iter_with_setup[S](setup: Fn[() -> S], run: Fn[(S) -> nil])
     # Amortize setup cost
   end
 end
@@ -159,7 +171,7 @@ end
 
 ### 4.4 Output format (pretty)
 
-```
+```text
 running 3 benches
 bench tests.vec.alloc_1000             ...   1.24 µs ± 0.03 µs  (804 Melem/s)  [n=500]
 bench tests.hash.insert_1000           ...  12.31 µs ± 0.22 µs  ( 81 Melem/s)  [n=500]
@@ -186,7 +198,7 @@ JSON format: one record per benchmark:
 
 ### 4.5 Baseline comparison
 
-```
+```text
 # On master:
 $ ruxen bench --save-baseline=master
 # ... runs benches, saves results to target/bench/baselines/master.json

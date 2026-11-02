@@ -76,7 +76,7 @@ a portability liability we would inherit for no gain.
 **Ruxen integer division truncates toward zero, and `%` takes the sign of the
 dividend (probed):**
 
-```
+```text
 -7 / 2       ==  -3      (not -4)
 -7 % 2       ==  -1      (not 1)
 -719468 / 146097 == -4   (not -5)
@@ -149,7 +149,7 @@ would poison every call site for a syscall with no practical failure mode.
 
 **New C function, the only new one:**
 
-```
+```c
 int64_t ruxen_time_local_offset_secs(int64_t utc_secs)
 ```
 
@@ -165,7 +165,7 @@ Implementation: `localtime_r` into a `struct tm`, read `tm_gmtoff`. Fall back to
 
 **Portability risk, stated plainly:**
 
-| Platform | Status |
+| Platform | `tm_gmtoff` support |
 |---|---|
 | Linux, macOS, BSD | `tm_gmtoff` is available and correct. This is the supported path. |
 | Windows | `tm_gmtoff` does not exist in the MSVC CRT. Needs a separate implementation over `GetTimeZoneInformationForYear`. **Not in v1.** On Windows the shim returns `0`, so local time equals UTC and every UTC-based API stays correct. |
@@ -197,7 +197,9 @@ programmers expect `Date` to be date-only.
 
 ### 4.1 `Time`: an absolute instant plus an offset
 
-```
+Proposed, [planned](../../../TODO.md#t-parity-time):
+
+```ruby
 class Time
   secs:       Int   # seconds since 1970-01-01T00:00:00Z, may be negative
   nsec:       Int   # 0 .. 999_999_999, always non-negative
@@ -230,7 +232,9 @@ accessor.
 
 ### 4.2 `Date`: a day number
 
-```
+Proposed, [planned](../../../TODO.md#t-parity-time):
+
+```ruby
 class Date
   days: Int   # days since 1970-01-01, proleptic Gregorian, may be negative
 end
@@ -480,7 +484,7 @@ Adding a month is not a well-defined operation on all dates, and every date
 library has to choose. Ruby clamps to the last valid day of the target month, and
 Ruxen matches Ruby exactly:
 
-```
+```text
 2026-01-31 >> 1   ==  2026-02-28      (clamped, not 2026-03-03)
 2024-01-31 >> 1   ==  2024-02-29      (leap year)
 2026-03-31 >> 1   ==  2026-04-30
@@ -516,60 +520,60 @@ follow-up. Mapped against CRuby's `Time`, `Date`, and `DateTime`.
 
 | Ruby | Status | Note |
 |---|---|---|
-| `Time.now` | v1 | Through a **new realtime** test seam (§3.1 — the existing one is monotonic-only). Local offset attached. |
-| `Time.at(secs)`, `Time.at(secs, subsec)` | v1 | |
-| `Time.utc(y,m,d,h,mi,s)` / `Time.gm` | v1 | |
-| `Time.local(...)` / `Time.mktime` | v1 | Ambiguity and gap policy per §6.3 and §6.4. |
-| `Time.new(y,m,d,h,mi,s, offset)` | v1 | Explicit offset accepted as `Int` seconds or `"+05:30"`. |
-| `Time.parse`, `Time.iso8601`, `Time.xmlschema` | v1 | Bounded grammar per §7.4. |
-| `Time.strptime(str, fmt)` | v1 | |
-| `Time.at(secs, in: zone_name)` | defer | Needs named zones. |
+| `Time.now` | [planned](../../../TODO.md#t-parity-time) v1 | Through a **new realtime** test seam (§3.1 — the existing one is monotonic-only). Local offset attached. |
+| `Time.at(secs)`, `Time.at(secs, subsec)` | [planned](../../../TODO.md#t-parity-time) v1 | |
+| `Time.utc(y,m,d,h,mi,s)` / `Time.gm` | [planned](../../../TODO.md#t-parity-time) v1 | |
+| `Time.local(...)` / `Time.mktime` | [planned](../../../TODO.md#t-parity-time) v1 | Ambiguity and gap policy per §6.3 and §6.4. |
+| `Time.new(y,m,d,h,mi,s, offset)` | [planned](../../../TODO.md#t-parity-time) v1 | Explicit offset accepted as `Int` seconds or `"+05:30"`. |
+| `Time.parse`, `Time.iso8601`, `Time.xmlschema` | [planned](../../../TODO.md#t-parity-time) v1 | Bounded grammar per §7.4. |
+| `Time.strptime(str, fmt)` | [planned](../../../TODO.md#t-parity-time) v1 | |
+| `Time.at(secs, in: zone_name)` | [planned](../../../TODO.md#t-parity-time) defer | Needs named zones. |
 
 ### 9.2 `Time` accessors and predicates
 
 | Ruby | Status |
 |---|---|
-| `#year #month #mon #day #mday #hour #min #sec` | v1 |
-| `#usec #nsec #subsec` | v1 (`#subsec` returns `Float`, deviating from Ruby's `Rational`) |
-| `#wday #yday` | v1 |
-| `#monday?` … `#sunday?` | v1 |
-| `#to_i #to_f` | v1 |
-| `#to_r` | defer (no `Rational`) |
-| `#utc? #utc #getutc #localtime #getlocal(offset) #utc_offset #gmt_offset #zone` | v1 |
-| `#dst? #isdst` | v1, weak: true only when the local offset at this instant differs from the local offset in January of the same year. Documented as a heuristic. |
-| `#round(n) #ceil(n) #floor(n)` | v1 |
-| `#hash #eql?` | v1 |
-| `#to_a`, `#gmtime`, `#succ` | defer (deprecated or rare in Ruby) |
+| `#year #month #mon #day #mday #hour #min #sec` | [planned](../../../TODO.md#t-parity-time) v1 |
+| `#usec #nsec #subsec` | [planned](../../../TODO.md#t-parity-time) v1 (`#subsec` returns `Float`, deviating from Ruby's `Rational`) |
+| `#wday #yday` | [planned](../../../TODO.md#t-parity-time) v1 |
+| `#monday?` … `#sunday?` | [planned](../../../TODO.md#t-parity-time) v1 |
+| `#to_i #to_f` | [planned](../../../TODO.md#t-parity-time) v1 |
+| `#to_r` | [planned](../../../TODO.md#t-parity-time) defer (no `Rational`) |
+| `#utc? #utc #getutc #localtime #getlocal(offset) #utc_offset #gmt_offset #zone` | [planned](../../../TODO.md#t-parity-time) v1 |
+| `#dst? #isdst` | [planned](../../../TODO.md#t-parity-time) v1, weak: true only when the local offset at this instant differs from the local offset in January of the same year. Documented as a heuristic. |
+| `#round(n) #ceil(n) #floor(n)` | [planned](../../../TODO.md#t-parity-time) v1 |
+| `#hash #eql?` | [planned](../../../TODO.md#t-parity-time) v1 |
+| `#to_a`, `#gmtime`, `#succ` | [planned](../../../TODO.md#t-parity-time) defer (deprecated or rare in Ruby) |
 
 ### 9.3 `Time` formatting and arithmetic
 
 | Ruby | Status |
 |---|---|
-| `#strftime(fmt)` | v1, directive set per §7.1 |
-| `#iso8601 #xmlschema #rfc3339 #rfc2822 #httpdate` | v1 |
-| `#to_s #inspect` | v1 |
-| `#+ #- #<=> #== #between? #clamp` | v1 |
+| `#strftime(fmt)` | [planned](../../../TODO.md#t-parity-time) v1, directive set per §7.1 |
+| `#iso8601 #xmlschema #rfc3339 #rfc2822 #httpdate` | [planned](../../../TODO.md#t-parity-time) v1 |
+| `#to_s #inspect` | [planned](../../../TODO.md#t-parity-time) v1 |
+| `#+ #- #<=> #== #between? #clamp` | [planned](../../../TODO.md#t-parity-time) v1 |
 
 ### 9.4 `Date`
 
 | Ruby | Status | Note |
 |---|---|---|
-| `Date.new(y,m,d)` / `Date.civil` | v1 | Proleptic Gregorian, no reform date (§4.2). |
-| `Date.today` | v1 | Uses the local offset to decide which day it is. |
-| `Date.parse` / `Date.iso8601` / `Date.strptime` | v1 | |
-| `Date.jd(n)` | v1 | Julian Day Number conversion is pure arithmetic. |
-| `Date.ordinal` / `Date.commercial` | defer | |
-| `#year #month #mon #day #mday #wday #yday` | v1 | |
-| `#cwday #cweek #cwyear` | defer | ISO week-based, pairs with the deferred `%V`. |
-| `#leap?` | v1 | |
-| `#julian? #gregorian?` | defer | No reform date, so these are constants. |
-| `#+ #- #<< #>> #<=> #==` | v1 | Clamping per §8.2. |
-| `#next_day #prev_day #next_month #prev_month #next_year #prev_year #succ #next` | v1 | |
-| `#step(limit, step) #upto #downto` | v1 | |
-| `#strftime #iso8601 #rfc3339 #httpdate #jd` | v1 | |
-| `#mjd #ajd` | defer | |
-| `#to_time #to_date #to_datetime` | v1 | `#to_time` is midnight local. |
-| `#monday?` … `#sunday?` | v1 | |
+| `Date.new(y,m,d)` / `Date.civil` | [planned](../../../TODO.md#t-parity-time) v1 | Proleptic Gregorian, no reform date (§4.2). |
+| `Date.today` | [planned](../../../TODO.md#t-parity-time) v1 | Uses the local offset to decide which day it is. |
+| `Date.parse` / `Date.iso8601` / `Date.strptime` | [planned](../../../TODO.md#t-parity-time) v1 | |
+| `Date.jd(n)` | [planned](../../../TODO.md#t-parity-time) v1 | Julian Day Number conversion is pure arithmetic. |
+| `Date.ordinal` / `Date.commercial` | [planned](../../../TODO.md#t-parity-time) defer | |
+| `#year #month #mon #day #mday #wday #yday` | [planned](../../../TODO.md#t-parity-time) v1 | |
+| `#cwday #cweek #cwyear` | [planned](../../../TODO.md#t-parity-time) defer | ISO week-based, pairs with the deferred `%V`. |
+| `#leap?` | [planned](../../../TODO.md#t-parity-time) v1 | |
+| `#julian? #gregorian?` | [planned](../../../TODO.md#t-parity-time) defer | No reform date, so these are constants. |
+| `#+ #- #<< #>> #<=> #==` | [planned](../../../TODO.md#t-parity-time) v1 | Clamping per §8.2. |
+| `#next_day #prev_day #next_month #prev_month #next_year #prev_year #succ #next` | [planned](../../../TODO.md#t-parity-time) v1 | |
+| `#step(limit, step) #upto #downto` | [planned](../../../TODO.md#t-parity-time) v1 | |
+| `#strftime #iso8601 #rfc3339 #httpdate #jd` | [planned](../../../TODO.md#t-parity-time) v1 | |
+| `#mjd #ajd` | [planned](../../../TODO.md#t-parity-time) defer | |
+| `#to_time #to_date #to_datetime` | [planned](../../../TODO.md#t-parity-time) v1 | `#to_time` is midnight local. |
+| `#monday?` … `#sunday?` | [planned](../../../TODO.md#t-parity-time) v1 | |
 
 ### 9.5 `DateTime`
 

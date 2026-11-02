@@ -16,11 +16,21 @@ random seed.  Custom hashers and incremental builders are explicit
 v2 work; v1 ships exactly enough for `Hash[K, V]` and
 `Set[T]` to key on user types via implicit `include Hashable`.
 
+**Direction (owner decision D8 a).** The Ruby hash-key protocol replaces this
+mixin: value types get a structural `==`, hash keys use `hash` and `eql?`,
+`eql?` defaults to `==`, and `hash_code` becomes a [deprecated] alias of
+`hash`, [planned](../../../TODO.md#t-d8). Until then `Hashable` and `hash_code` below are
+the working surface [implemented]. Owner decision D1 a: `Hash#[]` and
+`#[]=` become ordinary `.rx` lib declarations, `[]=` through a declared
+mutable place accessor [planned](../../../TODO.md#t-d1).
+
 ---
 
 ## B1 — The `Hashable` mixin
 
-```ruxen
+Stdlib source, [deprecated] `mixin` (replacement `module`, [planned](../../../TODO.md#t-module-mixins)) and `hash_code` (replacement `hash`, above):
+
+```ruby
 mixin Hashable
   def hash_code -> Int
 end
@@ -72,14 +82,19 @@ emits **E0615** when any field violates the bound (e.g. a struct
 field of type `Array[Int]` rejects implicit `Hashable` because `Array`
 isn't `Hashable`).
 
-```ruxen
-struct Score
+Works today, with the [deprecated] `def init` (replacement `def initialize`, [planned](../../../TODO.md#t-initialize)):
+
+```ruby
+class Score
   player: String
   v: Int
   include Hashable
+
+  def init(@player: String, @v: Int)
+  end
 end
 
-let s = Score.new("alice", 42)
+s = Score.new("alice", 42)
 puts "#{s.hash_code}"   # prints a stable Int
 ```
 
@@ -100,9 +115,11 @@ mirroring the mixin dispatch the front-end performs.
 
 Any generic function with the bound resolves `.hash_code` against
 the mixin method, even when the receiver type is a user struct
-that gained the include implicitly:
+that gained the include implicitly.
 
-```ruxen
+Works today, [deprecated] bound `[T: Hashable]` (replacement `[T < Hashable]`, [planned](../../../TODO.md#t-d7-respell)):
+
+```ruby
 def hash_it[T: Hashable](a: &T) -> Int
   a.hash_code
 end

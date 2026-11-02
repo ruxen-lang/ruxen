@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Ruby-parity push — session handoff
 
 Read this first to resume the Ruby-parity work in a fresh session. It captures

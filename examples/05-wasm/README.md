@@ -31,7 +31,7 @@ node examples/05-wasm/run.mjs examples/05-wasm/add.wasm
 
 Expected output:
 
-```
+```text
 ok   add(2, 3) = 5 (want 5)
 ok   mul(6, 7) = 42 (want 42)
 ok   square(9) = 81 (want 81)

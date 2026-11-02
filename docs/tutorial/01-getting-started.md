@@ -4,9 +4,9 @@ Welcome. This chapter gets Ruxen installed on your machine and a working program
 
 ## Your first program in 30 seconds
 
-Create a file called `hello.rx`:
+Create a file called `hello.rx` [implemented]:
 
-```ruxen
+```ruby
 puts "Hello, Ruxen!"
 ```
 
@@ -19,15 +19,23 @@ ruxen compile hello.rx
 
 You should see:
 
-```
+```text
 Hello, Ruxen!
 ```
 
 That's it — you wrote, compiled, and ran a Ruxen program. Like Ruby, Ruxen
 executes top-level statements from top to bottom. Definitions remain available
 regardless of where they appear; the compiler collects the executable
-statements into an implicit `main`. You can still write an explicit `def main`
-when you prefer, but do not mix one with loose top-level statements.
+statements into an implicit `main` [implemented]. An explicit `def main`
+still compiles but is [deprecated]. Write top-level statements in new code,
+and never mix a `def main` with loose top-level statements. The compiler will
+decide the entry point once and mark it, so later stages stop matching the
+name `main` [planned](../../TODO.md#t-d3).
+
+Not every statement works at the top level yet: a top-level parallel
+assignment, statement modifier (`x += 1 if ready`) or `inline def` does not
+parse today [planned](../../TODO.md#t-toplevel-stmts). Put those inside a
+`def`.
 
 The rest of this chapter is reference material you can skim now and come back
 to later.
@@ -56,7 +64,7 @@ ruxen --version
 
 ### What gets installed
 
-```
+```text
 ~/.ruxen/
   bin/
     ruxen          # the toolchain — every feature is a subcommand
@@ -122,7 +130,7 @@ cd my_app
 
 This creates:
 
-```
+```text
 my_app/
   Ruxen.toml       # project manifest (name, version, dependencies)
   src/
@@ -174,11 +182,11 @@ A **REPL** is an interactive shell that reads an expression, evaluates it, and p
 ruxen repl
 ```
 
-```
+```text
 Ruxen 0.1.0 REPL — Type :help for commands
 > 1 + 2
 => 3 : Int
-> let x = "world"
+> x = "world"
 > "hello #{x}"
 => "hello world" : String
 > :type 1.0 + 2.0
@@ -215,13 +223,11 @@ Install the VSCode extension from `editors/vscode/` in the Ruxen repo for syntax
 
 ## Try it
 
-Change `"Hello, Ruxen!"` to `"Hello, " + your name`. Recompile and rerun — you should see your name printed back. Then try:
+Change `"Hello, Ruxen!"` to `"Hello, " + your name`. Recompile and rerun — you should see your name printed back. Then try this [implemented]:
 
-```ruxen
-def main
-  let name = "world"
-  puts "Hello, #{name}!"
-end
+```ruby
+name = "world"
+puts "Hello, #{name}!"
 ```
 
 The `#{...}` syntax interpolates a value into a string — we'll see plenty more of it in the next chapter.

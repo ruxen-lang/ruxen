@@ -91,7 +91,7 @@ dependencies = ["tls"]
 
 ### 2.4 CLI (`src/ruxen_cli/src/cli.rs`, 115 lines) — existing subcommands
 
-```
+```sh
 ruxen new <name> [--lib] [--no-git]
 ruxen init
 ruxen build [--release] [--locked] [--bin <name>]
@@ -238,7 +238,7 @@ publish = ["mycorp"]                                        # or `false` to bloc
 
 ### 4.2 CLI additions
 
-```
+```sh
 ruxen publish [--registry <name>] [--token <token>] [--dry-run] [--allow-dirty] [--no-verify]
 ruxen package [--list]                                      # produce the publish tarball without uploading
 ruxen search <query> [--registry <name>] [--limit N]
@@ -260,7 +260,7 @@ ruxen tree  [-p <pkg>] [--edges features] [--duplicates]
 
 ### 4.3 File layout
 
-```
+```text
 ~/.ruxen/
 ├── bin/
 ├── lib/
@@ -303,7 +303,8 @@ The protocol is deliberately a near-copy of crates.io's sparse protocol (RFC 278
 
 - `Manifest::load` grows a second entry point `Workspace::load(dir)` that walks up looking for a `Ruxen.toml` with a `[workspace]` table.
 - `find_project_root` (`build.rs:201-215`) returns `(workspace_root, member_dir)`.
-- A shared `target/` lives at the workspace root. `Ruxen.lock` lives at the workspace root.
+- A shared `target/` lives at the workspace root. `Ruxen.lock` lives at the workspace root. Every driver (`ruxen build`, `ruxen test`, `ruxenc`) uses that one workspace target root, and `ruxen clean` removes it [planned](../../TODO.md#t-x4).
+- Native inputs: the `[runtime]` table stays a separate table beside `[native] include`, and one shared manifest reader reads both, so every driver shares one native-input path [planned](../../TODO.md#t-d20).
 - Member crates inherit `[package.workspace = true]` fields from `[workspace.package]`.
 - `[workspace.dependencies]` is the canonical source of versions. Members say `http.workspace = true` and don't restate the version. This is Cargo's pattern and avoids version drift.
 - Feature unification happens at workspace-resolve time: if member A activates `http/tls` and member B does not, the single resolved `http` sees `tls` active.

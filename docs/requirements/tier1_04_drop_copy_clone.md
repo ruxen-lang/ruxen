@@ -64,6 +64,7 @@ semantics** — the implicit-`include Copy` rule per syntax spec §3.6
 `Copy`, `Clone`, and `Drop` are registered as built-in mixins with the
 right method-name lists in `resolve/mod.rs:147-151`:
 
+<!-- compiler-rust -->
 ```rust
 ("Copy",  vec![]),
 ("Clone", vec!["clone"]),
@@ -224,9 +225,20 @@ otherwise a completely ordinary method.
 
 ### 4.1 Declaration (compiler built-in)
 
-```ruxen
-mixin Drop
+The Ruby form; a mixin declared with `module` is [planned](../../TODO.md#t-module-mixins):
+
+```ruby
+module Drop
   def var drop
+end
+```
+
+`library/std/core/src/lib.rx` declares it with `mixin` and a plain `def drop`.
+Works today, [deprecated] (replace with `module Drop`):
+
+```ruby
+mixin Drop
+  def drop
 end
 ```
 
@@ -245,33 +257,72 @@ Ruxen follows the same rule.
 
 ### 4.2 User implementation
 
-In the class body:
+In the class body. The Ruby form, where `*Void` is [planned](../../TODO.md#t-void-ptr)
+and `initialize` is [planned](../../TODO.md#t-initialize):
 
-```ruxen
-class File
+```ruby
+class LogFile
   handle: *var Void
-  def init(@handle: *var Void) end
-
   include Drop
+
+  def initialize(@handle: *var Void)
+  end
 
   def var drop
     unsafe
-      ruxen_fclose(self.handle)
+      ruxen_fclose(@handle)
     end
   end
 end
 ```
 
-Out-of-line via an extension block:
+The handle is shown as an `Int` here, since `*Void` does not resolve yet.
+Works today, [deprecated] (`def init` is replaced by `def initialize`):
 
-```ruxen
-extension File
+```ruby
+class LogFile
+  handle: Int
+
+  def init(@handle: Int)
+  end
+
+  include Drop
+
+  def var drop
+    puts "closing #{@handle}"
+  end
+end
+
+def open_log
+  log = LogFile.new(3)
+  puts "writing"
+end
+
+open_log()
+```
+
+Out-of-line, by reopening the class [planned](../../TODO.md#t-reopen-class):
+
+```ruby
+class LogFile
   include Drop
 
   def var drop
     unsafe
-      ruxen_fclose(self.handle)
+      ruxen_fclose(@handle)
     end
+  end
+end
+```
+
+Works today, [deprecated] (`extension` is replaced by reopening the class):
+
+```ruby
+extension LogFile
+  include Drop
+
+  def var drop
+    puts "closing #{self.handle}"
   end
 end
 ```
@@ -363,12 +414,25 @@ Drop`, that is rejected with E-COPY-DROP-CONFLICT (see §5).
 
 ### 5.1 Declaration (compiler built-in)
 
-```ruxen
-mixin Copy: Clone end
+The Ruby form [planned](../../TODO.md#t-module-mixins):
+
+```ruby
+module Copy
+  include Clone
+end
+```
+
+`library/std/core/src/lib.rx` declares a marker with no super-mixin; the
+`mixin Copy: Clone` inheritance spelling is [deprecated] too (replace with
+`include Clone` inside the module). Works today, [deprecated] (replace with `module Copy`):
+
+```ruby
+mixin Copy
+end
 ```
 
 A **marker mixin**: no required methods. Having `Clone` as a super-mixin
-makes "`Copy: Clone`" natural (§6.3).
+makes "`Copy` includes `Clone`" natural (§6.3).
 
 Registered in `resolve/mod.rs:147` (already present as a zero-method
 mixin; needs the `super_traits` field populated with `Clone`).
@@ -456,7 +520,18 @@ satisfy C1–C4) is a hard error.
 
 ### 6.1 Declaration (compiler built-in)
 
-```ruxen
+The Ruby form [planned](../../TODO.md#t-module-mixins):
+
+```ruby
+module Clone
+  def clone -> Self
+end
+```
+
+As declared in `library/std/core/src/lib.rx`.
+Works today, [deprecated] (replace with `module Clone`):
+
+```ruby
 mixin Clone
   def clone -> Self
 end
@@ -516,14 +591,16 @@ is a hard error:
 For a struct/enum/class whose every field is Clone, the implicit-include
 pass synthesises:
 
-- struct `S { a: A, b: B }` →
+- value type `S` with fields `a: A`, `b: B` → the equivalent of this
+  reopened class (the synthesis is internal, so users never write it;
+  reopening is [planned](../../TODO.md#t-reopen-class)):
 
-```ruxen
-extension S
+```ruby
+class S
   include Clone
 
   def clone -> S
-    S { a: self.a.clone, b: self.b.clone }
+    S.new(@a.clone, @b.clone)
   end
 end
 ```
@@ -644,13 +721,27 @@ does **drop elaboration**, analogous to rustc's `drop_elaboration`.
 `Copy` and `Clone` are structural mixins; the implicit-include rule
 (§3.6) applies them automatically when every field satisfies the mixin.
 Authors who want the loud form for documentation or early-failure write
-the include explicitly in the type body:
+the include explicitly in the type body. In the Ruby form, several modules
+in one `include` are [planned](../../TODO.md#t-include-many) and `Data.define`
+is [planned](../../TODO.md#t-data-define):
 
-```ruxen
+```ruby
+Point = Data.define(x: Float, y: Float) do
+  include Copy, Clone   # loud form; equivalent to implicit
+end
+```
+
+A `struct` without `layout c` fails typeck today
+[known issue](../../TODO.md#t-struct-typeck), so this one carries it.
+Works today, [deprecated] (`struct` is replaced by `Data.define`; one `include` per mixin):
+
+```ruby
 struct Point
+  layout c
   x: Float
   y: Float
-  include Copy, Clone   # loud form; equivalent to implicit
+  include Copy
+  include Clone
 end
 ```
 

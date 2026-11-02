@@ -9,6 +9,10 @@
 `Set[T]` is a thin layer over `Hash[T, nil]` — same hashing
 semantics, same `Hashable` bound on `T`.
 
+**Owner decision D8 a (2026-10-25).** Elements are compared and hashed
+through `eql?` and `hash`, `eql?` defaults to `==`, and `hash_code` becomes a
+[deprecated] alias of `hash` [planned](../../../TODO.md#t-d8).
+
 ---
 
 ## B1 — `Set[T]` is the canonical name

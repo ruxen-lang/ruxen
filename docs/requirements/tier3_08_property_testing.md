@@ -28,7 +28,7 @@ v1 property set.
 
 `compiler/ruxen_core/Cargo.toml:16-17`:
 
-```
+```toml
 [dev-dependencies]
 proptest = "1"
 ```
@@ -40,7 +40,7 @@ Present. No workspace-level `proptest` in `Cargo.toml`, just the
 
 Grep `use proptest|proptest!\s*\{|proptest::` across the whole repo:
 
-```
+```text
 compiler/ruxen_core/tests/runtime_safety.rs:61:    use proptest::prelude::*;
 compiler/ruxen_core/tests/runtime_safety.rs:68:    proptest! {
 ```
@@ -48,6 +48,7 @@ compiler/ruxen_core/tests/runtime_safety.rs:68:    proptest! {
 One file, one `proptest!` block. That block contains two tests
 (`runtime_safety.rs:68-86`):
 
+<!-- compiler-rust -->
 ```rust
 proptest! {
     /// Verify that string concatenation produces the expected length.
@@ -176,7 +177,7 @@ generate cleanly (tokens are a richer alphabet) but higher value.
 
 **Hypothesis.** For any valid Ruxen program `src`:
 
-```
+```text
 format(src) = format(format(src))
 ```
 
@@ -202,7 +203,7 @@ Recommend both: (a) immediately, (b) in a follow-up.
 
 **Hypothesis.** For any successfully-parsed program:
 
-```
+```text
 typecheck(parse(unparse(parse(src)))) == typecheck(parse(src))
 ```
 
@@ -220,7 +221,7 @@ results diverge. Catches formatter precedence bugs.
 **Hypothesis.** For any source string `s`, compiler version `v`, and
 flags `f`:
 
-```
+```text
 CacheKey::compute(s, v, f) == CacheKey::compute(s, v, f)
 ```
 
@@ -237,7 +238,7 @@ means false cache hits → silent miscompilation. Worth guarding.
 
 **Hypothesis.** For any valid Ruxen program `src`:
 
-```
+```text
 borrow_check(typeck(parse(src))) == borrow_check(typeck(parse(src)))
 ```
 
@@ -421,6 +422,7 @@ proptest_lexer`). Running all six: `cargo test -p ruxen_core --test
 
 One smoke test confirms the property-test infrastructure works:
 
+<!-- compiler-rust -->
 ```rust
 // compiler/ruxen_core/tests/proptest_smoke.rs
 #[test]

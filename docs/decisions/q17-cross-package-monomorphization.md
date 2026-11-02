@@ -49,9 +49,14 @@ there is no unique impl and the placeholder leaks to the linker — exactly the
 
 ## Empirical failure modes (measured, not assumed)
 
-Repro (single file, `ruxen compile q17.rx`):
+Repro (single file, `ruxen compile q17.rx`). It uses two spellings that are
+the only working ones today: `mixin` (to become `module`,
+[planned](../../TODO.md#t-module-mixins)) and the bound `[T: Paintable]` (to
+become `[T < Paintable]`, [planned](../../TODO.md#t-d7-respell)).
 
-```ruxen
+Repro, [deprecated] `mixin` and `[T: Paintable]` (replacements above):
+
+```ruby
 mixin Paintable
   def fill_rect(w: Int, h: Int) -> Int
 end
@@ -60,13 +65,12 @@ def paint_all[T: Paintable](s: &var T, w: Int, h: Int) -> Int
 end
 class RecordingSurface include Paintable; … def var fill_rect(...) … end
 class TallySurface    include Paintable; … def var fill_rect(...) … end
-def main
-  let a = paint_all(&var RecordingSurface.new, 4, 5)
-  let b = paint_all(&var TallySurface.new, 4, 5)   # 2nd implementor
-end
+
+a = paint_all(&var RecordingSurface.new, 4, 5)
+b = paint_all(&var TallySurface.new, 4, 5)   # 2nd implementor
 ```
 
-```
+```text
 Undefined symbols for architecture arm64:
   "_T: Paintable_fill_rect", referenced from:
       _paint_all in q17.o
@@ -74,7 +78,7 @@ Undefined symbols for architecture arm64:
 
 The emitted MIR for `paint_all` is a single opaque body:
 
-```
+```text
 === MIR function: paint_all ===
     Call { dest: Some(3), callee: "T: Paintable_fill_rect", args: [Use(0), Use(1), Use(2)] }
 ```

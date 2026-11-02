@@ -38,7 +38,7 @@ The research agents independently uncovered broken or aspirational-but-nonfuncti
 
 ## Cross-tier dependency graph
 
-```
+```text
                             ┌──────────────────────────────────┐
                             │ Phase 0 — pre-flight fixes       │
                             │ P0.1 LICENSE, P0.2 Drop,         │
