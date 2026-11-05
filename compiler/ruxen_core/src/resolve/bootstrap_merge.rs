@@ -242,6 +242,7 @@ impl Resolver {
                 items.push(hir_item);
             }
         }
+        self.attach_field_hints();
 
         self.check_result_sources();
 

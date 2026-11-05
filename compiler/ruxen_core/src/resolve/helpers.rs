@@ -7,7 +7,7 @@ use crate::parser::ast::{self, Visibility};
 use super::const_helpers;
 use super::scope::ScopeKind;
 use super::symbols::*;
-use super::Resolver;
+use super::{PendingFieldHint, Resolver};
 
 impl Resolver {
     /// Tier-2 const generics S5: walk the AST `GenericParams` and
@@ -263,6 +263,83 @@ impl Resolver {
             .push(Diagnostic::error_with_code(message, span.clone(), code));
     }
 
+    /// E0734 for a bare name that is no local, parameter or function. A bare
+    /// name is never a field (Ruby's rule). Inside a class or struct method
+    /// the E0734 is queued for [`Self::attach_field_hints`], which runs
+    /// after pass 2, when a parent class declared later in the file has its
+    /// fields too.
+    pub(super) fn error_undefined_variable(&mut self, name: &str, span: &Span) {
+        let type_def = match self.current_self_ty.as_ref() {
+            Some(Ty::Class { name, .. } | Ty::Struct { name, .. }) => {
+                self.type_registry.get(name).copied()
+            }
+            _ => None,
+        };
+        if let Some(type_def) = type_def {
+            self.pending_field_hints.push(PendingFieldHint {
+                diagnostic: self.diagnostics.len(),
+                type_def,
+                name: name.to_string(),
+                has_self: self.scopes.lookup("self").is_some(),
+            });
+        }
+        self.diagnostics.push(Diagnostic::error_with_code(
+            format!("undefined variable `{name}`"),
+            span.clone(),
+            "E0734",
+        ));
+    }
+
+    /// Give each queued E0734 whose name is a field of its type, or of an
+    /// ancestor class, a help line saying how to read it: `@name` in an
+    /// instance method, through an instance in a class method (no `self`).
+    pub(super) fn attach_field_hints(&mut self) {
+        for hint in std::mem::take(&mut self.pending_field_hints) {
+            let Some(owner) = self.field_owner(hint.type_def, &hint.name) else {
+                continue;
+            };
+            let name = &hint.name;
+            let help = if hint.has_self {
+                format!(
+                    "`{name}` is a field of `{owner}`; read it as `@{name}`. \
+                     A bare name is a local variable or a method call."
+                )
+            } else {
+                format!(
+                    "`{name}` is a field of `{owner}`, but a class method has no instance; \
+                     read it from an instance, such as `{}.{name}`.",
+                    instance_name(&owner)
+                )
+            };
+            if let Some(diag) = self.diagnostics.get_mut(hint.diagnostic) {
+                diag.help.push(help);
+            }
+        }
+    }
+
+    /// The name of the type that declares the field `name`: `type_def`
+    /// itself, else its nearest ancestor class. A visited set stops a
+    /// malformed parent cycle.
+    fn field_owner(&self, type_def: DefId, name: &str) -> Option<String> {
+        let mut current = Some(type_def);
+        let mut visited = std::collections::HashSet::new();
+        while let Some(def_id) = current.filter(|&id| visited.insert(id)) {
+            let def = self.symbols.get(def_id)?;
+            if self
+                .symbols
+                .children_of(def_id)
+                .any(|c| c.name == name && matches!(c.kind, DefKind::Field { .. }))
+            {
+                return Some(def.name.clone());
+            }
+            current = match &def.kind {
+                DefKind::Class { info } => info.parent,
+                _ => None,
+            };
+        }
+        None
+    }
+
     /// T2.02 S8.S4 follow-up: surface pure-literal overflow /
     /// div-zero in a `ConstExpr` as **E0703**.  Called immediately
     /// after the S8.S4 normal-form pass at every const-arg /
@@ -332,4 +409,18 @@ impl Resolver {
             ));
         }
     }
+}
+
+/// A variable name for an instance of the type `type_name` in a hint:
+/// the last path segment in snake case (`Geo.PointPair` -> `point_pair`).
+fn instance_name(type_name: &str) -> String {
+    let short = type_name.rsplit('.').next().unwrap_or(type_name);
+    let mut out = String::with_capacity(short.len() + 2);
+    for (i, ch) in short.chars().enumerate() {
+        if ch.is_uppercase() && i > 0 {
+            out.push('_');
+        }
+        out.extend(ch.to_lowercase());
+    }
+    out
 }

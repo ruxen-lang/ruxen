@@ -1,0 +1,13 @@
+class Pt
+  x: Int
+
+  def init(@x: Int)
+  end
+
+  def bump -> Int
+    x += 1
+    @x
+  end
+end
+
+puts Pt.new(5).bump

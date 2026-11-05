@@ -1,0 +1,9 @@
+struct Pair
+  x: Int
+
+  def bare -> Int
+    x
+  end
+end
+
+puts Pair.new(5).bare

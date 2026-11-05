@@ -264,7 +264,7 @@ impl Resolver {
                         }
                     }
                 } else {
-                    self.error_with_code(format!("undefined variable `{}`", name), &span, "E0734");
+                    self.error_undefined_variable(name, &span);
                     self.unresolved_names.push(name.to_string());
                     HirExpr {
                         kind: HirExprKind::Error,

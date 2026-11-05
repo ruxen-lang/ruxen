@@ -1,0 +1,12 @@
+class Box[T]
+  v: T
+
+  def init(@v: T)
+  end
+
+  def get -> T
+    v
+  end
+end
+
+puts Box.new(9).get

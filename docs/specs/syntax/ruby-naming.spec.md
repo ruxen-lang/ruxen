@@ -330,6 +330,7 @@ Classes are heap objects with identity.
 | Constructor | `def initialize(name: String)` | [planned](../../../TODO.md#t-initialize); today the constructor is `def init` |
 | `def init` | | [deprecated], replace with `def initialize` |
 | Instance variables | `@name` (read), `@name = v` (write) | [implemented] (sugar for the field) |
+| A bare field name in a method | `name` for the field `@name` | Never a field read: a bare name is a local variable or a method call. With neither in scope it is E0734, whose help says to read it as `@name` (or, in a class method, from an instance) [implemented] |
 | Assigning parameters to ivars | `def initialize(@name: String, @age: Int)` | [implemented] in the `def init(@name: String)` spelling |
 | `self.name` field access inside the class | | [deprecated], replace with `@name` |
 | Ivar type declaration (Ruxen addition) | `name: String` in the class body | [implemented] (OQ-3: possible RBS-style `@name: String`) |
@@ -487,7 +488,10 @@ Version.new(1, 2) < Version.new(1, 3)   # => true
 ```
 
 (Array `<=>` and implicit-self calls such as bare `major` in this example
-are target forms; check them before relying on the example as a fixture.)
+are target forms; check them before relying on the example as a fixture. A
+bare `major` needs [implicit-self calls](../../../TODO.md#t-implicit-self)
+plus `attr_reader :major`; until then it is E0734 and the method reads
+`@major`.)
 
 ---
 
@@ -800,6 +804,7 @@ below are the source locations behind the claims. Paths are relative to
 | `const` item; top-level `let` is not an item | `parser/items.rs` (`parse_top_level_item`, `parse_const_def`) |
 | Parallel assignment and splat target | `parser/methods.rs` (statement parser); `typeck/infer/expr.rs` (Copy-element and Array rules) |
 | `@x` read/write; `@param` auto-assign; `&block:` parameter | `parser/expr/atoms.rs` (`TokenKind::At`); `parser/methods.rs` (`parse_param`) |
+| A bare field name is E0734 with a field hint, never a field read | `resolve/items.rs` (`resolve_class`: fields are not value-scope names); `resolve/helpers.rs` (`error_undefined_variable`); `tests/it/bare_field_name.rs` |
 | Endless and brace-bodied `def` | `parser/methods.rs` (body parsing after the signature) |
 | `case/when`, `case/in`, `->` still accepted in `case/in` | `parser/expr/case_expr.rs` |
 | `match`, `if let`, `while let`, `loop ... end`, `unless`, `until`, ternary | `parser/expr/match_expr.rs`, `parser/expr/control_flow.rs` |

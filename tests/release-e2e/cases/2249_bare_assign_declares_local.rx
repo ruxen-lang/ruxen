@@ -1,0 +1,23 @@
+# `x = 42` inside a method declares a local, as in Ruby, even when the
+# class has a field named `x`; `@x` still reads the field. Before the fix
+# the assignment failed with a misleading E1006.
+class Counter
+  x: Int
+
+  def init(@x: Int)
+  end
+
+  def local_x -> Int
+    x = 42
+    x
+  end
+
+  def field_after_local -> Int
+    x = 42
+    x + @x
+  end
+end
+
+c = Counter.new(1)
+puts c.local_x
+puts c.field_after_local

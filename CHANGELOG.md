@@ -64,6 +64,17 @@ once 1.0.0 ships.
   compiler-supplied parameters are left out of the signature typeck checks.
 
 ### Fixed
+- **A bare field name inside a method is error E0734, not a silent wrong value
+  (`t-bare-field-read`).** A bare `x` for the field `@x` compiled and read `0`, `false`
+  or a null string, in instance and class methods, blocks, lambdas and generic classes.
+  A bare name is now a local variable or a method call (Ruby's rule): the resolver no
+  longer puts class fields in the value scope, and E0734 gets a help line naming the
+  class or ancestor that declares the field (read it as `@x`; in a class method, read
+  it from an instance). `x = 1` inside a method declares a local instead of failing
+  with E1006, and MIR refuses a field read without a receiver. The E0606, E0613, E0617,
+  E0618, E1115 and E1117 examples read fields as `@field` (E0617's `Card.new(9) <
+  Card.new(2)` printed `true`). Pinned by release-e2e 2248 and 2249 and
+  `tests/it/bare_field_name.rs`.
 - **An expanding instantiation is error E0746 (I-72).** `Nest[T]#deeper -> Nest[Array[T]]`
   hung the compiler. The bound counts type nodes (256), not depth, so a doubling
   `Nest[(T, T)]` is E0746 in milliseconds instead of hanging; E0746 names the template

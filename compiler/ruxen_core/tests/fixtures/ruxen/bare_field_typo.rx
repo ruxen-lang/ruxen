@@ -1,0 +1,12 @@
+class Pt
+  total: Int
+
+  def init(@total: Int)
+  end
+
+  def get -> Int
+    totl
+  end
+end
+
+puts Pt.new(5).get

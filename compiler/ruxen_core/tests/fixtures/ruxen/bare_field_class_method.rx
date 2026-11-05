@@ -1,0 +1,12 @@
+class Pt
+  x: Int
+
+  def init(@x: Int)
+  end
+
+  def self.make -> Int
+    x
+  end
+end
+
+puts Pt.make

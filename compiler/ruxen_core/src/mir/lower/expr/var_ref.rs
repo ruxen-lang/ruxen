@@ -70,6 +70,18 @@ impl<'a> Lowerer<'a> {
                     // Reference to a top-level `const` — substitute the
                     // initializer expression inline at this use site.
                     self.lower_expr(&const_expr)
+                } else if let Some(field) = self
+                    .symbols
+                    .get(*def_id)
+                    .filter(|d| matches!(d.kind, crate::resolve::symbols::DefKind::Field { .. }))
+                {
+                    // The resolver never makes a field a `VarRef` (a bare
+                    // field name is E0734); one reaching here would read
+                    // "no value", a silent 0, false or null.
+                    Err(format!(
+                        "internal: a field read without a receiver reached MIR (`{}`)",
+                        field.name
+                    ))
                 } else {
                     // Might be a top-level function reference — just return None
                     // for now; calls use the callee_name directly.

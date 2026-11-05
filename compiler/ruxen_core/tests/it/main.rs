@@ -20,6 +20,7 @@ mod autocall_fn_references;
 #[cfg(feature = "llvm")]
 mod backend_parity;
 mod bang_names_are_calls;
+mod bare_field_name;
 mod block_tier2;
 mod blocks_capture_moves;
 mod blocks_procs_lambdas;

@@ -150,7 +150,10 @@ impl Resolver {
         );
         self.scopes.insert_type("Self".to_string(), self_def_id);
 
-        // Resolve fields
+        // Resolve fields. A field is not a value-scope name: a method reads
+        // it as `@x`, and a bare `x` is a local or a method call (Ruby's
+        // rule), as in a struct method. A bare field name is E0734 with a
+        // hint (`error_undefined_variable`, `attach_field_hints`).
         let mut fields = Vec::new();
         let mut field_def_ids = Vec::new();
         for (idx, field) in class.fields.iter().enumerate() {
@@ -165,7 +168,6 @@ impl Resolver {
                 field.visibility,
                 field.span.clone(),
             );
-            self.scopes.insert(field.name.clone(), fid);
             field_def_ids.push(fid);
             fields.push(HirFieldDef {
                 def_id: fid,

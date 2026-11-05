@@ -210,6 +210,23 @@ pub struct Resolver {
     /// type body (docs/decisions/alias-keyword.md). Type name → `{alias →
     /// canonical}`. Moved into `ResolveResult.method_aliases` at the end.
     pub(super) method_aliases: HashMap<String, HashMap<String, String>>,
+
+    /// E0734s for bare names inside a class or struct method, waiting for
+    /// the end of pass 2 (`attach_field_hints`), when every type's fields
+    /// and parent are known, to get the field hint.
+    pub(super) pending_field_hints: Vec<PendingFieldHint>,
+}
+
+/// An E0734 whose name may be a field of the type whose method it is in.
+#[derive(Debug)]
+pub(super) struct PendingFieldHint {
+    /// Index of the E0734 in `Resolver::diagnostics`.
+    pub(super) diagnostic: usize,
+    /// The class or struct whose method holds the bare name.
+    pub(super) type_def: DefId,
+    pub(super) name: String,
+    /// Whether `self` was in scope (an instance method, not a class method).
+    pub(super) has_self: bool,
 }
 
 #[derive(Debug)]
@@ -246,6 +263,7 @@ impl Resolver {
             bootstrap_package_item_ids: HashMap::new(),
             emitted_e1118_spans: std::collections::HashSet::new(),
             method_aliases: HashMap::new(),
+            pending_field_hints: Vec::new(),
         }
     }
 
