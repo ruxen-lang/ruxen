@@ -11,7 +11,10 @@ use std::fmt;
 use crate::resolve::symbols::SymbolTable;
 
 mod ty_helpers;
-pub use ty_helpers::BUILTIN_HEAD_HOMES;
+pub use ty_helpers::{
+    declared_result, result_carries, result_source, DeclaredResult, ResultSource,
+    BUILTIN_HEAD_HOMES, MAX_TYPE_NODES,
+};
 
 /// Unique identifier for type variables during inference.
 pub type TypeId = u32;

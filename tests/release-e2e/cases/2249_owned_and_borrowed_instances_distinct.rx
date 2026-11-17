@@ -1,0 +1,39 @@
+# `Box[String]` and `Box[&String]` are different instances: an instance name
+# spells its arguments with their references, so the borrowed body never
+# frees the value a `set` replaces and the owned body still does.
+class Box[T]
+  item: T
+
+  def init(@item: T)
+  end
+
+  def set(v: T) -> Int
+    @item = v
+    0
+  end
+
+  def get -> &T
+    &@item
+  end
+end
+
+def owned_round -> Int
+  b = Box.new("o-1".clone)
+  b.set("o-2".clone)
+  puts(b.get)
+  1
+end
+
+def borrowed_round(x: &String, y: &String) -> Int
+  b = Box.new(x)
+  b.set(y)
+  puts(b.get)
+  1
+end
+
+x = "s-1"
+y = "s-2"
+owned_round
+borrowed_round(&x, &y)
+puts(x)
+puts(y)

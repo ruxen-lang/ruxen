@@ -719,8 +719,8 @@ impl<'a> Lowerer<'a> {
                 } else {
                     return Err(format!(
                         "cannot lower method `{method_name}` on unresolved mixin-bound \
-                         receiver `{resolved_class}`: no concrete monomorphization reached \
-                         this call (generic-calling-generic requires a concrete leaf — see \
+                         receiver `{resolved_class}`: a `some`/`any` mixin value has no \
+                         concrete type to dispatch on here (see \
                          docs/decisions/q17-cross-package-monomorphization.md)."
                     ));
                 };
@@ -1018,9 +1018,10 @@ impl<'a> Lowerer<'a> {
             .flatten()
             .find_map(|ty| ty.peel_refs().callable_signature())
             .map(|(params, result)| (params.to_vec(), result.clone()));
+        // A generic result, or one whose fields may hold references its type
+        // does not show (a class), may point into the arguments.
         let result = signature.as_ref().and_then(|(_, result)| {
-            let generic = result.any(&mut |t: &Ty| matches!(t, Ty::TypeParam { .. }));
-            (!generic && !result.holds_reference()).then_some(View::Own)
+            (!result.may_hold_reference(&mut |_| true)).then_some(View::Own)
         });
         let params = signature.map(|(params, _)| params).unwrap_or_default();
         let symbols = self.symbols;

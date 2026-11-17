@@ -1,0 +1,45 @@
+# F-2: `get` and `remove` results carry the table's references and point
+# into nothing of the lookup key, so changing the key afterwards is accepted
+# (it was E1009), also for a user class key. A string the table references
+# stays borrowed: a wrapper that only carries (table in by value, `remove`'s
+# result out) still keeps `s` borrowed until the result is used.
+class Key
+  id: Int
+
+  def init(@id: Int)
+  end
+end
+
+def take_one(h: Hash[Int, &String]) -> Option[&String]
+  h.remove(&1)
+end
+
+value = "payload".clone
+key = "key".clone
+table = {"key".clone => &value}
+removed = table.remove(&key)
+key = "changed".clone
+puts(removed.unwrap)
+puts(key)
+
+h = {"a".clone => "val".clone}
+lookup = "a".clone
+got = h.get(&lookup)
+lookup = "zzz".clone
+puts(got.unwrap)
+puts(lookup)
+
+by_key = {Key.new(1) => "kval".clone}
+k = Key.new(1)
+kv = by_key.get(&k)
+k = Key.new(2)
+puts(kv.unwrap)
+gone = by_key.remove(&k)
+puts(gone.nil?)
+
+s = "kept".clone
+t = {1 => &s}
+r = take_one(t)
+puts(r.unwrap)
+s = "other".clone
+puts(s)

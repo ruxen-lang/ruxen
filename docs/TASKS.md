@@ -26,6 +26,26 @@ ownership"). Pins: `it` `field_ownership`, release-e2e 2240-2243.
 
 Instance engine + KeyDesc batch (2026-10-24): built, gate pending; plan ~/.agents/tmp/plans/ruxen-feat-concurrency-adoption-instance-engine.md
 
+Fresh review round 1 (2026-11-02, uncommitted): I-72/I-76/I-77/I-79/I-80 fixed,
+I-78 fixed as E0729 (D10 stays in B3), I-82 four parts fixed; pins e2e 2248-2251
+and `it`. New F-2 card for P-22/P-23/P-24 (+P-21 recorded). New pre-existing
+P-25 to P-31 recorded in `TODO.md` (P-28 since fixed by F-2).
+
+Review round 2 (2026-11-05, uncommitted): the F-2 card's result-borrow part
+(I-77, I-85) is done: a call result borrows what the callee's signature names
+by Rust's lifetime elision, an ambiguous source is E0748; E0746 names a stdlib
+template's package (I-86); the derive memo has no depth cap. P-22, P-23 and
+P-24 stay open (not result-borrow cases). Pins e2e 2252-2253 and `it`.
+
+F-2 rethink after review round 3 (2026-11-17): one fact per call
+result (borrows, carries) read by the loan check and drops; C value results
+borrow every argument unless Fresh; body summaries from the loan checker's
+transfer in one fixpoint with closure effects. Closes I-87, I-77 rest, I-88,
+P-32. Review round 4 (2026-11-18): a by-reference parameter a result
+stores or returns is borrowed, not carried (I-77). Pins e2e 2254-2258 and
+`it`. Follow-ups in `TODO.md` "F-2 follow-ups"; design in
+`docs/dev/f2-call-facts.md`.
+
 B87 fixed 2026-07-30 (a free function whose name ended in `!` compiled clean
 and then did nothing at its call site: `parser/expr/atoms.rs` classified EVERY
 identifier ending in `!` as a macro call, stripped the `!`, and emitted an

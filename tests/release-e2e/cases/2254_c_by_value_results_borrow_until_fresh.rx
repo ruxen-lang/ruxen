@@ -1,0 +1,35 @@
+# F-2: a C function returning a value borrows nothing only when it provably
+# allocates a new one (`-> owned`); `clone`, `take` and `reverse` share or
+# return their receiver's storage and a JSON child points into its document,
+# so each original stays borrowed until the result's last use. Reassigning
+# the original after that last use is accepted and frees nothing still read.
+def copies -> Int
+  a = ["alpha".clone, "beta".clone]
+  t = a.clone
+  puts(t[0])
+  a = ["x".clone]
+  puts(a[0])
+  b = ["alpha".clone, "beta".clone]
+  u = b.take(1)
+  puts(u[0])
+  b = ["y".clone]
+  puts(b[0])
+  c = ["alpha".clone, "beta".clone]
+  w = c.reverse
+  puts(w[0])
+  c = ["z".clone]
+  puts(c[0])
+  0
+end
+
+def json_child -> Int
+  j = JSON.parse(&"[1, 2]".clone).unwrap
+  c = JSON.array_get(&j, 0).unwrap
+  puts(JSON.as_int(&c).unwrap)
+  j = JSON.parse(&"[3]".clone).unwrap
+  puts(JSON.array_len(&j).unwrap)
+  0
+end
+
+copies
+json_child

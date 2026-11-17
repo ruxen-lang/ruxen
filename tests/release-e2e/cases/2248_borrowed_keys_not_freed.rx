@@ -1,0 +1,33 @@
+# A table whose keys are borrowed (`Hash[&String, V]`) never frees them:
+# the key descriptor is bound from the key type as written, references
+# included, so dropping or clearing the table leaves the owner's strings
+# alone. Built from `to_h`, a literal, a literal in a function taking a
+# borrow, and `Hash.new` plus `insert`; `to_set` of borrowed elements too.
+def literal_in_fn(a: &String) -> USize
+  h = {a => 1}
+  h.size
+end
+
+def inserted(a: &String) -> Hash[&String, Int]
+  h = Hash.new
+  h.insert(a, 1)
+  h
+end
+
+a = "alpha-key"
+b = "beta-key"
+pairs = [(&a, 1)].to_h
+puts(pairs.size)
+cleared = [(&a, 1), (&b, 2)].to_h
+cleared.clear
+puts(cleared.size)
+puts(literal_in_fn(&a))
+local = {&b => 2}
+puts(local.size)
+filled = inserted(&a)
+puts(filled.size)
+filled.clear
+s = [&a, &b].to_set
+puts(s.size)
+puts(a)
+puts(b)

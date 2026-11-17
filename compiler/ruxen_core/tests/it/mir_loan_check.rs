@@ -237,7 +237,7 @@ def hs(s: &String, &block: Fn[() -> nil]) -> nil
   puts(s)
 end
 
-def pick(c: Bool, a: &A, b: &A) -> &A
+def pick[l](c: Bool, a: &l A, b: &l A) -> &l A
   if c
     a
   else
@@ -465,6 +465,34 @@ fn loan_check_families() {
             "y = u.label\n  f = if u.items.size > 1\n    ->() { u.name = \"a-long-enough-string-to-force-a-realloc-of-name\" }\n  else\n    ->() { puts \"a\" }\n  end\n  f.()\n  puts y",
             &["E1009"],
         ),
+        // I-77: a fresh runtime result holding references (`keys`, `to_a`)
+        // borrows its table; `clear` / `remove` free the keys it points at.
+        (
+            "table_keys_across_clear",
+            "h = {u.name.clone => 1}\n  ks = h.keys\n  h.clear\n  puts(ks[0])",
+            &["E1002"],
+        ),
+        (
+            "table_entries_across_remove",
+            "h = {u.name.clone => 1}\n  es = h.to_a\n  h.remove(&u.name)\n  puts(es.size)",
+            &["E1002"],
+        ),
+        (
+            "set_view_across_clear",
+            "s = [u.name.clone].to_set\n  vs = s.to_a\n  s.clear\n  puts(vs[0])",
+            &["E1002"],
+        ),
+        // Guard: the view's last use is before the table is changed.
+        (
+            "guard_table_keys_then_clear",
+            "h = {u.name.clone => 1}\n  ks = h.keys\n  puts(ks[0])\n  h.clear",
+            &[],
+        ),
+        (
+            "guard_set_view_then_remove",
+            "s = [u.name.clone].to_set\n  vs = s.to_a\n  puts(vs.size)\n  s.remove(&u.name)\n  puts(s.size)",
+            &[],
+        ),
     ];
     let set =
         |codes: &[&str]| -> BTreeSet<String> { codes.iter().map(|c| c.to_string()).collect() };
@@ -484,4 +512,1143 @@ fn loan_check_families() {
     // Guard: an iterator's element moved into a by-value call inside a for loop.
     let lines = include_str!("../fixtures/ruxen/stdin_lines_yields_each_line.rx");
     assert_eq!(loan_codes(lines).expect("fixture type-checks"), set(&[]));
+}
+
+/// A call result's borrow comes from the callee's declared signature by
+/// the one elision rule (`hir::types::result_source`): a result holding a
+/// reference borrows from the receiver, else the reference parameters, and
+/// the loan is on what the argument denotes, owned or reached through a
+/// reference. A declared result with no reference (`remove -> Option[V]`)
+/// borrows nothing and keeps only the loans its arguments held.
+#[test]
+fn elided_result_borrows() {
+    let cases: &[(&str, &str, &[&str])] = &[
+        (
+            "view_through_ref_param",
+            "def wipe(h: &var Hash[String, Int]) -> Int\n  ks = h.keys\n  h.clear\n  puts(ks[0])\n  0\nend\n\nh = {\"alpha\".clone => 1}\nwipe(&var h)\n",
+            &["E1002"],
+        ),
+        (
+            "view_through_field",
+            "class Reg\n  t: Hash[String, Int]\n\n  def init\n    @t = {\"alpha\".clone => 1}\n  end\n\n  def var wipe -> Int\n    ks = @t.keys\n    @t.clear\n    puts(ks[0])\n    0\n  end\nend\n\nr = Reg.new\nr.wipe\n",
+            &["E1002"],
+        ),
+        (
+            "view_through_ref_local",
+            "h = {\"alpha\".clone => 1}\nr = &var h\nks = r.keys\nr.clear\nputs(ks[0])\n",
+            &["E1002"],
+        ),
+        (
+            "view_from_a_wrapper",
+            "def key_view(h: &Hash[String, Int]) -> Array[&String]\n  h.keys\nend\n\nh = {\"alpha\".clone => 1}\nks = key_view(&h)\nh.clear\nputs(ks[0])\n",
+            &["E1002"],
+        ),
+        (
+            "view_from_a_wrapper_of_a_wrapper",
+            "def key_view(h: &Hash[String, Int]) -> Array[&String]\n  h.keys\nend\n\ndef outer(h: &Hash[String, Int]) -> Array[&String]\n  key_view(h)\nend\n\nh = {\"alpha\".clone => 1}\nks = outer(&h)\nh.clear\nputs(ks[0])\n",
+            &["E1002"],
+        ),
+        (
+            "guard_view_used_before_clear_through_ref",
+            "def wipe(h: &var Hash[String, Int]) -> Int\n  ks = h.keys\n  puts(ks[0])\n  h.clear\n  0\nend\n\nh = {\"alpha\".clone => 1}\nwipe(&var h)\n",
+            &[],
+        ),
+        (
+            "removed_value_outlives_clear",
+            "s = \"kept\"\nh = {1 => &s}\nr = h.remove(&1)\nh.clear\nputs(r.unwrap)\n",
+            &[],
+        ),
+        // A named lifetime (`def longest[l](x: &l String, y: &l String)`)
+        // borrows every parameter that carries it.
+        (
+            "named_lifetime_borrows_each_named_param",
+            "def longest[l](x: &l String, y: &l String) -> &l String\n  if x.size > y.size\n    x\n  else\n    y\n  end\nend\n\na = \"hello\".clone\nb = \"hi\".clone\nr = longest(&a, &b)\nb.push_str(\"!\")\nputs(r)\n",
+            &["E1002"],
+        ),
+        (
+            "removed_value_keeps_its_loan",
+            "s = \"kept\".clone\nh = {1 => &s}\nr = h.remove(&1)\ns.push_str(\"!\")\nputs(r.unwrap)\n",
+            &["E1002"],
+        ),
+        // The F-2 provenance rows (review round 3): what a call result
+        // points into (`borrows`) and whose references it carries
+        // (`carries`), each rejected form next to its form accepted after
+        // the last use. The same programs run under Guard Malloc in
+        // `tmp/f2-rethink/check-probes.sh`.
+        (
+            "t1_take_rebind",
+            r#"a = ["alpha".clone, "beta".clone]
+t = a.take(1)
+a = ["x".clone]
+puts(t[0])
+puts(a[0])
+"#,
+            &["E1009"],
+        ),
+        (
+            "t_clone",
+            r#"a = ["alpha".clone, "beta".clone]
+t = a.clone
+a = ["x".clone]
+puts(t[0])
+puts(a[0])
+"#,
+            &["E1009"],
+        ),
+        (
+            "t_reverse",
+            r#"a = ["alpha".clone, "beta".clone]
+t = a.reverse
+a = ["x".clone]
+puts(t[0])
+puts(a[0])
+"#,
+            &["E1009"],
+        ),
+        // `j` is a view of the parse result's temporary (`unwrap` is a C
+        // value result that is not provably new, so it points into its
+        // receiver) and `c` borrows through `j`: rebinding the view `j`
+        // writes no storage (as rebinding a `&Json` in Rust), and the
+        // temporary lives while `c` is used.
+        (
+            "json_get",
+            r#"j = JSON.parse(&"[1, 2]".clone).unwrap
+c = JSON.array_get(&j, 0).unwrap
+j = JSON.parse(&"[3]".clone).unwrap
+puts(JSON.as_int(&c).unwrap)
+"#,
+            &[],
+        ),
+        (
+            "c3_method_view",
+            r#"class Viewer
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def key_view(h: &Hash[String, Int]) -> Array[&String]
+    h.keys
+  end
+end
+
+v = Viewer.new(1)
+h = {"alpha".clone => 1}
+ks = v.key_view(&h)
+h.clear
+puts(ks[0])
+"#,
+            &["E1002"],
+        ),
+        (
+            "method_to_method",
+            r#"class Viewer
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def key_view(h: &Hash[String, Int]) -> Array[&String]
+    h.keys
+  end
+
+  def outer(h: &Hash[String, Int]) -> Array[&String]
+    self.key_view(h)
+  end
+end
+
+v = Viewer.new(1)
+h = {"alpha".clone => 1}
+ks = v.outer(&h)
+h.clear
+puts(ks[0])
+"#,
+            &["E1002"],
+        ),
+        (
+            "method_to_free_fn",
+            r#"def key_view(h: &Hash[String, Int]) -> Array[&String]
+  h.keys
+end
+
+class Viewer
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def outer(h: &Hash[String, Int]) -> Array[&String]
+    key_view(h)
+  end
+end
+
+v = Viewer.new(1)
+h = {"alpha".clone => 1}
+ks = v.outer(&h)
+h.clear
+puts(ks[0])
+"#,
+            &["E1002"],
+        ),
+        (
+            "mixin_method_view",
+            r#"mixin Keyed
+  def key_view(h: &Hash[String, Int]) -> Array[&String]
+    h.keys
+  end
+end
+
+class Viewer
+  include Keyed
+  n: Int
+
+  def init(@n: Int)
+  end
+end
+
+v = Viewer.new(1)
+h = {"alpha".clone => 1}
+ks = v.key_view(&h)
+h.clear
+puts(ks[0])
+"#,
+            &["E1002"],
+        ),
+        (
+            "c1_remove_key",
+            r#"value = "payload".clone
+key = "key".clone
+h = {"key".clone => &value}
+result = h.remove(&key)
+key = "changed".clone
+puts(result.unwrap)
+puts(key)
+"#,
+            &[],
+        ),
+        (
+            "fp1_get_key",
+            r#"h = {"a".clone => "val".clone}
+key = "a".clone
+v = h.get(&key)
+key = "zzz".clone
+puts(v.unwrap)
+puts(key)
+"#,
+            &[],
+        ),
+        (
+            "user_key_get",
+            r#"class Key
+  id: Int
+
+  def init(@id: Int)
+  end
+end
+
+h = {Key.new(1) => "val".clone}
+k = Key.new(1)
+v = h.get(&k)
+k = Key.new(2)
+puts(v.unwrap)
+r = h.remove(&k)
+puts(r.nil?)
+"#,
+            &[],
+        ),
+        (
+            "h1_remove_heldloan",
+            r#"s = "kept".clone
+h = {1 => &s}
+r = h.remove(&1)
+s = "other".clone
+puts(r.unwrap)
+"#,
+            &["E1009"],
+        ),
+        (
+            "h2_remove_drop_owner",
+            r#"def make(h: &var Hash[Int, &String]) -> Option[&String]
+  h.remove(&1)
+end
+
+s = "kept".clone
+h = {1 => &s}
+r = make(&var h)
+s = "other".clone
+puts(r.unwrap)
+"#,
+            &["E1009"],
+        ),
+        (
+            "carries_only_wrapper",
+            r#"def take_one(h: Hash[Int, &String]) -> Option[&String]
+  h.remove(&1)
+end
+
+s = "kept".clone
+t = {1 => &s}
+r = take_one(t)
+s = "other".clone
+puts(r.unwrap)
+"#,
+            &["E1009"],
+        ),
+        (
+            "sf_tmp",
+            r#"class Bag
+  ks: Array[&String]
+
+  def init(@ks: Array[&String])
+  end
+
+  def first -> &String
+    @ks[0]
+  end
+end
+
+b = Bag.new({"alpha".clone => 1}.keys)
+puts(b.first)
+"#,
+            &[],
+        ),
+        (
+            "field_ref_method",
+            r#"class Holder
+  r: &String
+
+  def init(@r: &String)
+  end
+
+  def get -> &String
+    @r
+  end
+end
+
+s = "kept".clone
+hd = Holder.new(&s)
+g = hd.get
+s = "other".clone
+puts(g)
+"#,
+            &["E1009"],
+        ),
+        // A `->` closure moves `s` into its captures, so reassigning `s`
+        // is sound.
+        (
+            "closure_returns_class",
+            r#"class Holder
+  r: &String
+
+  def init(@r: &String)
+  end
+
+  def get -> &String
+    @r
+  end
+end
+
+s = "kept".clone
+f = -> { Holder.new(&s) }
+hd = f.call
+s = "other".clone
+puts(hd.get)
+"#,
+            &[],
+        ),
+        (
+            "fn_payload_view",
+            r#"def first_val(h: &Hash[String, String]) -> &String
+  h.get(&"a".clone).unwrap
+end
+
+h = {"a".clone => "val".clone}
+v = first_val(&h)
+h.clear
+puts(v)
+"#,
+            &["E1002"],
+        ),
+        (
+            "fn_param_alias",
+            r#"def key_view(h: &Hash[String, Int]) -> Array[&String]
+  x = h
+  x.keys
+end
+
+h = {"alpha".clone => 1}
+ks = key_view(&h)
+h.clear
+puts(ks[0])
+"#,
+            &["E1002"],
+        ),
+        (
+            "fn_aggregate_store",
+            r#"class Bag
+  ks: Array[&String]
+
+  def init(@ks: Array[&String])
+  end
+
+  def first -> &String
+    @ks[0]
+  end
+end
+
+def bag(h: &Hash[String, Int]) -> Bag
+  Bag.new(h.keys)
+end
+
+h = {"alpha".clone => 1}
+b = bag(&h)
+h.clear
+puts(b.first)
+"#,
+            &["E1002"],
+        ),
+        (
+            "fn_recursive",
+            r#"def kv(h: &Hash[String, Int], n: Int) -> Array[&String]
+  if n > 0
+    kv(h, n - 1)
+  else
+    h.keys
+  end
+end
+
+h = {"alpha".clone => 1}
+ks = kv(&h, 2)
+h.clear
+puts(ks[0])
+"#,
+            &["E1002"],
+        ),
+        (
+            "tmp_payload",
+            r#"v = {"a".clone => "val".clone}.get(&"a".clone).unwrap
+puts(v)
+"#,
+            &[],
+        ),
+        (
+            "tmp_struct",
+            r#"class Bag
+  ks: Array[&String]
+
+  def init(@ks: Array[&String])
+  end
+
+  def first -> &String
+    @ks[0]
+  end
+end
+
+def bag(h: &Hash[String, Int]) -> Bag
+  Bag.new(h.keys)
+end
+
+b = bag(&{"alpha".clone => 1})
+puts(b.first)
+"#,
+            &[],
+        ),
+        (
+            "tmp_closure_call",
+            r#"f = ->(h: &Hash[String, Int]) { h.keys }
+ks = f.call(&{"alpha".clone => 1})
+puts(ks[0])
+"#,
+            &[],
+        ),
+        (
+            "tmp_copied_param",
+            r#"def key_view(h: &Hash[String, Int]) -> Array[&String]
+  x = h
+  x.keys
+end
+
+ks = key_view(&{"alpha".clone => 1})
+puts(ks[0])
+"#,
+            &[],
+        ),
+        (
+            "c4_wrapper_view",
+            r#"def key_view(h: &Hash[String, Int]) -> Array[&String]
+  h.keys
+end
+
+h = {"alpha".clone => 1}
+ks = key_view(&h)
+h.clear
+puts(ks[0])
+"#,
+            &["E1002"],
+        ),
+        (
+            "s1_get_clear",
+            r#"h = {"alpha".clone => "one".clone}
+v = h.get(&"alpha".clone)
+h.clear
+puts(v.unwrap)
+"#,
+            &["E1002"],
+        ),
+        (
+            "s2_values_remove",
+            r#"h = {"alpha".clone => "one".clone}
+vs = h.values
+h.remove(&"alpha".clone)
+puts(vs[0])
+"#,
+            &["E1002"],
+        ),
+        (
+            "s3_set_remove",
+            r#"s = Set.new
+s.insert("alpha".clone)
+xs = s.to_a
+s.remove(&"alpha".clone)
+puts(xs[0])
+"#,
+            &["E1002"],
+        ),
+        (
+            "s5_method_chain",
+            r#"class Reg
+  t: Hash[String, Int]
+
+  def init
+    @t = {"alpha".clone => 1}
+  end
+
+  def table -> &Hash[String, Int]
+    @t
+  end
+
+  def var wipe
+    @t.clear
+  end
+end
+
+r = Reg.new
+ks = r.table.keys
+r.wipe
+puts(ks[0])
+"#,
+            &["E1002"],
+        ),
+        (
+            "s6_generic",
+            r#"def wipe[K](h: &var Hash[K, Int]) -> Int
+  ks = h.keys
+  h.clear
+  puts(ks.size)
+  0
+end
+
+h = {"alpha".clone => 1}
+wipe(&var h)
+"#,
+            &["E1002"],
+        ),
+        (
+            "s9_store_view",
+            r#"class Holder
+  ks: Array[&String]
+
+  def init(@ks: Array[&String])
+  end
+
+  def show -> Int
+    puts(@ks[0])
+    0
+  end
+end
+
+h = {"alpha".clone => 1}
+hd = Holder.new(h.keys)
+h.clear
+hd.show
+"#,
+            &["E1002"],
+        ),
+        (
+            "s11_first_key",
+            r#"def first_key(h: &Hash[String, Int]) -> &String
+  ks = h.keys
+  ks[0]
+end
+
+h = {"alpha".clone => 1}
+k = first_key(&h)
+h.clear
+puts(k)
+"#,
+            &["E1002"],
+        ),
+        (
+            "s12_closure_view",
+            r#"h = {"alpha".clone => 1}
+ks = h.keys
+f = -> { puts(ks[0]) }
+h.clear
+f.call
+"#,
+            &["E1002"],
+        ),
+        (
+            "s13_struct_field",
+            r#"struct Reg
+  t: Hash[String, Int]
+end
+
+r = Reg.new({"alpha".clone => 1})
+ks = r.t.keys
+r.t.clear
+puts(ks[0])
+"#,
+            &["E1002"],
+        ),
+        (
+            "s14_entries_clear",
+            r#"h = {"alpha".clone => "one".clone}
+es = h.to_a
+h.clear
+puts(es[0].0)
+"#,
+            &["E1002"],
+        ),
+        (
+            "s15_two_args",
+            r#"def keys_of(n: Int, h: &Hash[String, Int]) -> Array[&String]
+  h.keys
+end
+
+h = {"alpha".clone => 1}
+ks = keys_of(1, &h)
+h.clear
+puts(ks[0])
+"#,
+            &["E1002"],
+        ),
+        (
+            "s16_owned_arg_elems",
+            r#"def pick(xs: Array[&String]) -> &String
+  xs[0]
+end
+
+h = {"alpha".clone => 1}
+k = pick(h.keys)
+h.clear
+puts(k)
+"#,
+            &["E1002"],
+        ),
+        (
+            "s17_mixed",
+            r#"def pick(s: &String, xs: Array[&String]) -> &String
+  xs[0]
+end
+
+t = "x".clone
+h = {"alpha".clone => 1}
+k = pick(&t, h.keys)
+h.clear
+puts(k)
+"#,
+            &["E1002"],
+        ),
+        (
+            "s18_valid_after",
+            r#"h = {"alpha".clone => 1}
+ks = h.keys
+puts(ks[0])
+h.clear
+h.insert("beta".clone, 2)
+vs = h.values
+puts(vs.size)
+r = h.remove(&"beta".clone)
+puts(r.unwrap)
+"#,
+            &[],
+        ),
+        (
+            "c3_method_view_after",
+            r#"class Viewer
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def key_view(h: &Hash[String, Int]) -> Array[&String]
+    h.keys
+  end
+end
+
+v = Viewer.new(1)
+h = {"alpha".clone => 1}
+ks = v.key_view(&h)
+puts(ks[0])
+h.clear
+puts(h.size)
+"#,
+            &[],
+        ),
+        (
+            "carries_only_wrapper_after",
+            r#"def take_one(h: Hash[Int, &String]) -> Option[&String]
+  h.remove(&1)
+end
+
+s = "kept".clone
+t = {1 => &s}
+r = take_one(t)
+puts(r.unwrap)
+s = "other".clone
+puts(s)
+"#,
+            &[],
+        ),
+        (
+            "clone_after",
+            r#"a = ["alpha".clone, "beta".clone]
+t = a.clone
+puts(t[0])
+a = ["x".clone]
+puts(a[0])
+"#,
+            &[],
+        ),
+        (
+            "closure_returns_class_after",
+            r#"class Holder
+  r: &String
+
+  def init(@r: &String)
+  end
+
+  def get -> &String
+    @r
+  end
+end
+
+s = "kept".clone
+f = -> { Holder.new(&s) }
+hd = f.call
+puts(hd.get)
+s = "other".clone
+puts(s)
+"#,
+            &[],
+        ),
+        (
+            "field_ref_method_after",
+            r#"class Holder
+  r: &String
+
+  def init(@r: &String)
+  end
+
+  def get -> &String
+    @r
+  end
+end
+
+s = "kept".clone
+hd = Holder.new(&s)
+g = hd.get
+puts(g)
+s = "other".clone
+puts(s)
+"#,
+            &[],
+        ),
+        (
+            "fn_aggregate_store_after",
+            r#"class Bag
+  ks: Array[&String]
+
+  def init(@ks: Array[&String])
+  end
+
+  def first -> &String
+    @ks[0]
+  end
+end
+
+def bag(h: &Hash[String, Int]) -> Bag
+  Bag.new(h.keys)
+end
+
+h = {"alpha".clone => 1}
+b = bag(&h)
+puts(b.first)
+h.clear
+puts(h.size)
+"#,
+            &[],
+        ),
+        (
+            "fn_param_alias_after",
+            r#"def key_view(h: &Hash[String, Int]) -> Array[&String]
+  x = h
+  x.keys
+end
+
+h = {"alpha".clone => 1}
+ks = key_view(&h)
+puts(ks[0])
+h.clear
+puts(h.size)
+"#,
+            &[],
+        ),
+        (
+            "fn_payload_view_after",
+            r#"def first_val(h: &Hash[String, String]) -> &String
+  h.get(&"a".clone).unwrap
+end
+
+h = {"a".clone => "val".clone}
+v = first_val(&h)
+puts(v)
+h.clear
+puts(h.size)
+"#,
+            &[],
+        ),
+        (
+            "fn_recursive_after",
+            r#"def kv(h: &Hash[String, Int], n: Int) -> Array[&String]
+  if n > 0
+    kv(h, n - 1)
+  else
+    h.keys
+  end
+end
+
+h = {"alpha".clone => 1}
+ks = kv(&h, 2)
+puts(ks[0])
+h.clear
+puts(h.size)
+"#,
+            &[],
+        ),
+        (
+            "json_get_after",
+            r#"j = JSON.parse(&"[1, 2]".clone).unwrap
+c = JSON.array_get(&j, 0).unwrap
+puts(JSON.as_int(&c).unwrap)
+j = JSON.parse(&"[3]".clone).unwrap
+puts(JSON.array_len(&j).unwrap)
+"#,
+            &[],
+        ),
+        (
+            "method_to_free_fn_after",
+            r#"def key_view(h: &Hash[String, Int]) -> Array[&String]
+  h.keys
+end
+
+class Viewer
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def outer(h: &Hash[String, Int]) -> Array[&String]
+    key_view(h)
+  end
+end
+
+v = Viewer.new(1)
+h = {"alpha".clone => 1}
+ks = v.outer(&h)
+puts(ks[0])
+h.clear
+puts(h.size)
+"#,
+            &[],
+        ),
+        (
+            "method_to_method_after",
+            r#"class Viewer
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def key_view(h: &Hash[String, Int]) -> Array[&String]
+    h.keys
+  end
+
+  def outer(h: &Hash[String, Int]) -> Array[&String]
+    self.key_view(h)
+  end
+end
+
+v = Viewer.new(1)
+h = {"alpha".clone => 1}
+ks = v.outer(&h)
+puts(ks[0])
+h.clear
+puts(h.size)
+"#,
+            &[],
+        ),
+        (
+            "mixin_method_view_after",
+            r#"mixin Keyed
+  def key_view(h: &Hash[String, Int]) -> Array[&String]
+    h.keys
+  end
+end
+
+class Viewer
+  include Keyed
+  n: Int
+
+  def init(@n: Int)
+  end
+end
+
+v = Viewer.new(1)
+h = {"alpha".clone => 1}
+ks = v.key_view(&h)
+puts(ks[0])
+h.clear
+puts(h.size)
+"#,
+            &[],
+        ),
+        (
+            "reverse_after",
+            r#"a = ["alpha".clone, "beta".clone]
+t = a.reverse
+puts(t[0])
+a = ["x".clone]
+puts(a[0])
+"#,
+            &[],
+        ),
+        (
+            "take_after",
+            r#"a = ["alpha".clone, "beta".clone]
+t = a.take(1)
+puts(t[0])
+a = ["x".clone]
+puts(a[0])
+"#,
+            &[],
+        ),
+        // I-77: a by-reference parameter stored in or returned from a
+        // result is borrowed by it (the caller's `&x` loan stays), while
+        // what the parameter only stores is carried (`rm` keeps the
+        // value's loan, not the key's).
+        (
+            "q9_holder_wrap",
+            r#"class Holder
+  s: &String
+
+  def init(@s: &String)
+  end
+
+  def get -> &String
+    @s
+  end
+end
+
+def wrap(s: &String) -> Holder
+  Holder.new(s)
+end
+
+x = "alpha".clone
+w = wrap(&x)
+x = "beta".clone
+puts(w.get)
+puts(x)
+"#,
+            &["E1009"],
+        ),
+        (
+            "q9_holder_wrap_after",
+            r#"class Holder
+  s: &String
+
+  def init(@s: &String)
+  end
+
+  def get -> &String
+    @s
+  end
+end
+
+def wrap(s: &String) -> Holder
+  Holder.new(s)
+end
+
+x = "alpha".clone
+w = wrap(&x)
+puts(w.get)
+x = "beta".clone
+puts(x)
+"#,
+            &[],
+        ),
+        (
+            "q11_method_wrap",
+            r#"class Holder
+  s: &String
+
+  def init(@s: &String)
+  end
+
+  def get -> &String
+    @s
+  end
+end
+
+class Maker
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def make(s: &String) -> Holder
+    Holder.new(s)
+  end
+end
+
+m = Maker.new(1)
+x = "alpha".clone
+w = m.make(&x)
+x = "beta".clone
+puts(w.get)
+puts(x)
+"#,
+            &["E1009"],
+        ),
+        (
+            "q11_method_wrap_after",
+            r#"class Holder
+  s: &String
+
+  def init(@s: &String)
+  end
+
+  def get -> &String
+    @s
+  end
+end
+
+class Maker
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def make(s: &String) -> Holder
+    Holder.new(s)
+  end
+end
+
+m = Maker.new(1)
+x = "alpha".clone
+w = m.make(&x)
+puts(w.get)
+x = "beta".clone
+puts(x)
+"#,
+            &[],
+        ),
+        (
+            "rm_wrapper_key_change",
+            r#"def rm(h: &var Hash[String, &String], k: String) -> Option[&String]
+  h.remove(k)
+end
+
+value = "payload".clone
+key = "key".clone
+h = {"key".clone => &value}
+r = rm(&var h, key.clone)
+key = "changed".clone
+puts(r.unwrap)
+puts(key)
+"#,
+            &[],
+        ),
+        (
+            "rm_wrapper_value_change",
+            r#"def rm(h: &var Hash[String, &String], k: String) -> Option[&String]
+  h.remove(k)
+end
+
+value = "payload".clone
+key = "key".clone
+h = {"key".clone => &value}
+r = rm(&var h, key.clone)
+value = "changed".clone
+puts(r.unwrap)
+puts(value)
+"#,
+            &["E1009"],
+        ),
+    ];
+    let set =
+        |codes: &[&str]| -> BTreeSet<String> { codes.iter().map(|c| c.to_string()).collect() };
+    let wrong: Vec<String> = cases
+        .iter()
+        .filter_map(|(name, source, expected)| {
+            let codes = loan_codes(source).unwrap_or_else(|| panic!("{name}: does not type-check"));
+            (codes != set(expected))
+                .then(|| format!("{name}: got {codes:?}, expected {expected:?}"))
+        })
+        .collect();
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The body summary fixpoint ends in at most chain depth plus two rounds,
+/// on a forwarding chain of three functions and on a recursive pair, and
+/// the chain's caller still borrows the table (E1002).
+#[test]
+fn summary_rounds_are_bounded() {
+    let chain = "def c3(h: &Hash[String, Int]) -> Array[&String]\n  h.keys\nend\n\ndef c2(h: &Hash[String, Int]) -> Array[&String]\n  c3(h)\nend\n\ndef c1(h: &Hash[String, Int]) -> Array[&String]\n  c2(h)\nend\n\nh = {\"a\".clone => 1}\nks = c1(&h)\nh.clear\nputs(ks[0])\n";
+    let pair = "def f(h: &Hash[String, Int], n: Int) -> Array[&String]\n  if n > 0\n    g(h, n - 1)\n  else\n    h.keys\n  end\nend\n\ndef g(h: &Hash[String, Int], n: Int) -> Array[&String]\n  f(h, n)\nend\n\nh = {\"a\".clone => 1}\nks = g(&h, 3)\nh.clear\nputs(ks[0])\n";
+    for (name, source) in [("chain", chain), ("pair", pair)] {
+        let codes = loan_codes(source).expect("type-checks");
+        assert_eq!(codes, BTreeSet::from(["E1002".to_string()]), "{name}");
+        // The accepted form lowers to MIR, which records the round count.
+        let accepted = source.replace("h.clear\nputs(ks[0])", "puts(ks[0])\nh.clear");
+        let frontend = driver::check(
+            &parse(&accepted).expect("parse"),
+            &driver::Options::default(),
+        );
+        let rounds = frontend.mir.as_ref().expect("lowered").summary_rounds;
+        assert!((1..=5).contains(&rounds), "{name}: {rounds} rounds");
+    }
+}
+
+/// E0748: a free function returning a reference from several reference
+/// parameters has no single source to borrow from (Rust's E0106); Ruby's
+/// surface has no lifetime to name one, so it is an error with a help line.
+#[test]
+fn ambiguous_result_source_is_e0748() {
+    let source = "class A\n  name: String\n  def init(@name: String)\n  end\nend\n\ndef pick(c: Bool, a: &A, b: &A) -> &A\n  if c\n    a\n  else\n    b\n  end\nend\n\nx = A.new(\"x\")\ny = A.new(\"y\")\nputs(pick(true, &x, &y).name)\n";
+    let frontend = driver::check(&parse(source).expect("parse"), &driver::Options::default());
+    let e0748: Vec<_> = frontend
+        .diagnostics()
+        .iter()
+        .filter(|d| d.code.as_deref() == Some("E0748"))
+        .collect();
+    assert_eq!(e0748.len(), 1, "{:?}", frontend.diagnostics());
+    assert!(
+        e0748[0].message.contains("(`a`, `b`)"),
+        "{}",
+        e0748[0].message
+    );
+    assert!(e0748[0].help[0].contains("method of the value it borrows from"));
+    assert!(e0748[0].help[0].contains("def f[a](x: &a T, y: &a T) -> &a T"));
 }

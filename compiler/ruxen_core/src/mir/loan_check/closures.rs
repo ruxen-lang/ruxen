@@ -10,14 +10,14 @@ use crate::mir::nodes::{LocalId, MirFunction, MirInst, MirValue, View};
 /// What a closure body does below one of its captures: the captures box
 /// `slot`, the path below it, and the access, or `None` for a loan.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct Effect {
+pub struct Effect {
     pub(super) slot: usize,
     pub(super) suffix: Vec<usize>,
     pub(super) access: Option<Access>,
 }
 
 /// Every closure body's effects, by its function name.
-pub(super) type Effects = HashMap<String, BTreeSet<Effect>>;
+pub type Effects = HashMap<String, BTreeSet<Effect>>;
 
 /// The closure pairs a body builds (`View::Closure`), followed through the
 /// locals they are copied into, and what each object slot was filled from.

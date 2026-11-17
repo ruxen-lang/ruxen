@@ -216,11 +216,18 @@ Run as three build batches (2026-10-16). Each family's leftovers are listed unde
     - Pending: full gate, new commit (a0b982c8 is on origin), recheck round 3.
   - Instance engine (2026-10-24, rule-44 rethink after round 3, uncommitted; plan `~/.agents/tmp/plans/ruxen-feat-concurrency-adoption-instance-engine.md`): fixes I-54, I-63, I-64, I-65, I-69, I-70, I-71, I-72, I-73, I-75, P-13, P-14, P-16, P-17.
     - Typeck: constructor args bind class params through nested types (P-13), a method generic shadowing its type's is E0745 (P-14), a generic method call keeps its inferred result (P-16).
-    - `mir/lower/instances/` is the one worklist for every generic body (monomorphize.rs deleted): one specialization predicate, injective full-type keys (`symbol_token`), `self` pinned, opaque bodies always lowered and pruned, E0746 at 32 levels (I-72). Pin: e2e 2247.
+    - `mir/lower/instances/` is the one worklist for every generic body (monomorphize.rs deleted): one specialization predicate, injective full-type keys (`symbol_token`), `self` pinned, opaque bodies always lowered and pruned, E0746 past 256 type nodes (I-72, changed from 32 levels in fresh review round 1). Pin: e2e 2247.
     - Derives: `ty_has_derive_trait` substitutes an instance's args (nested included); typeck gates derived methods per instance (P-17); a derive needs its mixin (`--no-std`, I-71); `field_supports_derive` deleted.
     - `KeyDesc[K]` (`layout key_desc`): tables hash, compare, copy and free keys by a compiler-filled key descriptor; `KEYED_TABLE_CTORS`/`OPS`, `ensure_key_kind`, the `_keyed` forms, `RUXEN_KEY_*` and `ELEM_DERIVE_HELPERS` deleted; object glue gains HASH/EQ; `lib` decls take own generics (`to_h[K, V]`); supplied params never reach typeck (`source_param_count` deleted); E0747 (I-69).
     - Known gap: no program is known to reach a live opaque body any more, so the prune diagnostic has no pin.
     - Pending: full gate, timing, amend, fresh review round 1.
+  - Fresh review round 1 and round 2 (2026-11-02 to 2026-11-05, uncommitted; record `tmp/review-r1/`):
+    - Fixed: I-72 (E0746 counts 256 type nodes, not depth), I-76 (one type-parameter binder, borrowed keys), I-77 (table views hold a loan), I-79 (instance names keep references), I-80 (derive memo, no depth cap). Pins: e2e 2248-2253, `it` q17, implicit_diagnostics, mir_loan_check, no_silent_stubs.
+    - I-78: a class with no text form is E0729 (owner kept the eager error); D10 (arrays, options, tuples) stays in B3.
+    - I-82 parts fixed: the E0746 message and span, the stale prune text, the arity mismatch, the E0747 pin (`it` lib_in_class_body_wired). I-74: the set/src/lib.rx splice is fixed and the derive_support.rs splice is gone with the rewrite.
+    - I-86: E0746 for a standard library template names its package (`SymbolTable::origin`).
+    - F-2 result borrows (I-77, I-85): what a call result borrows comes from the callee's signature by Rust's lifetime elision (`hir::types::result_source`); an ambiguous source is E0748.
+    - Still parked: I-81, the ffi_registration.rs I-74 splice, the duplicated mixin-default walk and `json_force_cstr_keys` (I-82 rest).
   - Owner decisions (2026-10-21): rethink after three review rounds; F-30 + F-29 as one card, commit per phase by amending; all three backends stay; Float->Int saturates; `--release` without llvm is an error; MIR emits explicit coercions; parity test in the pr-ready lane; IDE runs the loan check debounced; stdlib diagnostics always fatal; warnings shown on success; `ruxen check` runs full lowering so check and build agree; build steps run in background subagents.
   - Pre-existing bug found in A1 (both builds): in script mode (top-level statements) diagnostics report the line after the real one (`u.name = "new"` on line 9 reported at 10:1); likely the implicit-main synthesis shifting spans. Fix with the driver work (A2) or its own card.
   - Open findings from the MIR card: collection mutators (`push`, `[]=`) are declared without `var`, so MIR cannot see `v.push` invalidating an element view; per-compile stdlib typeck (~35 ms) + lowering (~33 ms) for a tiny program (perf card, owner goal: Go-level speed); review round 4 lows I-35 to I-40 parked; quiver/rondo/canvas edits uncommitted in their repos.
@@ -404,6 +411,36 @@ Run as three build batches (2026-10-16). Each family's leftovers are listed unde
 - [ ] e2e 616 (`Box` holding `Array[Proc]` built through `&var *self`) leaks 5 blocks under `leaks --atExit`; not triaged.
 - [ ] Observed while pinning e2e 2218, not yet triaged against the pre-batch compiler: a closure passed BY VALUE to a user `Proc[...]` parameter leaks its pair (48 bytes), and an owned `String` passed by value to a user `String` parameter leaks it (16 bytes). Repro: `def fire(cb: Proc[(String) -> nil], word: String); cb.(word); end` then `fire(->(s: String) { puts s }, "hi")` under `leaks --atExit`. A callee never drops its own parameters, so a by-value parameter needs the callee to free it.
 
+### Found by fresh review rounds 1 and 2 (2026-11-05)
+
+- [ ] F-2 card, pre-existing ownership holes (owner decision 2026-11-02). The result-borrow part (I-77, I-85) is done; these stay open because they are not result-borrow cases:
+  - [ ] P-22: consuming methods (`into_bytes` and others) are accepted on read-only receivers (probe c1).
+  - [ ] P-23: `push` reallocates under a live `&var a[i]` (probe c2).
+  - [ ] P-24: `def var` methods are accepted through a shared `&T` (quiver src/lib.rx:91, e2e 639).
+  - [ ] P-21: a method returning `"#{@v}"` for a String field returns the field's own pointer (use after free, probe i01).
+- [ ] P-25: an un-annotated `h = Hash.new` local filled by `insert` in a function stays `Hash[?, ?]`, so it gets no key descriptor and panics B73 at runtime (probe tmp/review-r1/probes/r1c.rx; the installed toolchain panics too). Same root as [t-hash-new-key](#t-hash-new-key).
+- [ ] P-26: a field read on a value of a recursive class from outside the class (`copy.kids` after `copy = tree.clone`, `n.kids[0]` through `n: &Tree`) is E0740 "no field or method"; the same read inside the class works (probes nd.rx, nd2.rx, nd3.rx).
+- [ ] P-27: CLI single-file diagnostics report lines one too high (`ruxen compile` on a 5-line file reports E1002 at 5:1 for line 4; E0746 at 2:1 for a class on line 1); the in-process `it` harness reports the right line (probe sp.rx).
+- [x] P-28 (fixed by F-2, 2026-11-05): `View::Holds` took loans on every non-scalar argument of a fresh runtime result whose type holds references. The loan now follows the declared signature's elided source, and a result with no reference in its type borrows nothing, so `v = h.remove(&k); h.clear; puts(v)` is accepted.
+- [ ] P-29: `Hash#insert` / `Set#insert` are not `def var`, so a live `keys` view across an `insert` is accepted; whether a rehash moves what the view points at is unchecked (same family as P-23).
+- [ ] P-30: `:?` of an Array or an Option prints a raw word (with D10).
+- [ ] P-31: a discarded `h.remove` result leaks its 32-byte Option box.
+- [x] F-2 rethink (2026-11-17, review round 3: I-87, I-77 rest, I-88, P-32): one fact per call result (borrows, carries) read by the loan check and drops; C value results borrow every argument unless Fresh; body summaries from the loan checker's transfer in one fixpoint with closure effects (docs/dev/f2-call-facts.md). Pins: `it` mir_loan_check, e2e 2254-2257.
+- [x] I-77 rest (review round 4, 2026-11-18): a by-reference parameter that a result stores or returns is borrowed, not carried: the body summary seeds it as a loan on a phantom caller place holding `Held(p)` (`mir/loan_check/summary.rs`), so `w = wrap(&x)` keeps `x` borrowed while `w` is used. Pins: `it` mir_loan_check q9/q11 rows, e2e 2258.
+- [ ] F-2 follow-ups:
+  - [ ] Body check against the elided result source (Rust's): today a user callee's result borrows its signature's source plus its body summary (I-92; docs/errors/E0748.md; docs/dev/f2-call-facts.md).
+  - [ ] Make `borrows_of` read the checker's transfer (it skips copies of its seed, payload reads and field stores), then delete today's body fallback (`call_result_may_borrow_arg` for bodies).
+  - [ ] `reverse` reverses its receiver in place through a read-only receiver (Ruby's returns a new array): `library/std/array/runtime/vec.c` `ruxen_vec_reverse`.
+  - [ ] `make.take(1)` / `make.clone` on a call with no parentheses fail in the type checker (tmp/f2-rethink/current-results.txt t2-t4).
+  - [ ] `BufReader.new` keeps its `&File` pointer (P-33 second half), not probed.
+  - [ ] Declared keeps is type-based: `def rm[l](h: &l var Hash[String, &String], k: &String)` is taken to keep `k` in `h` (its values are `&String`), so changing the key after `rm(&var h, &key)` is E1009 while the result is used. Rust gives the inner `&String` its own lifetime and accepts it; narrowing needs the body-vs-signature check above.
+  - [ ] `tmp/review-r1/gate-r2.sh` always exits 0; make it fail when a lane fails.
+  - [ ] A by-value argument is kept by every other non-scalar argument of the call, a read-only receiver too (`param_modes::call_stores` `(Move, _)`): `t.expect(x)` keeps `x`'s loans in `t` for good. Rust's `&self` stores nothing; narrowing it needs the C helpers that store through a read-only receiver (a channel `send`) declared first. Surfaced in the F-2 end gate (std bufio test, canvas file_drop), fixed there by declaring the fresh C string results `-> owned`.
+- [ ] Batch B1: a by-value C return is owned (Rust's rule); then delete the `FRESH_ALLOC_CALLEES` rows ruxen_hash_keys/_values/_entries/_remove and ruxen_set_iter (their borrow half is now the declaration) and the rest.
+- [ ] E0729 location is "(at line:col)" with no package for an interpolation inside a stdlib generic body (I-86 sibling; E0746 now names the package).
+- [ ] canvas `canvas_dash` "control: a SOLID line inks the gap pixel the dash left blank" panics `draw_line failed` (233/234). Same failure with the HEAD 29ab0b5c toolchain (log: tmp/test-cache/review-r2/canvas-head.log), so it predates review round 2.
+- [ ] A 64-level nested expression (`C1.new(C2.new(...))`, a 63-step `.v` chain) overflows the 2 MiB test-thread stack in a debug build of the in-process e2e harness (release is fine). Reproduced at HEAD 29ab0b5c (tmp/test-cache/review-r2/head-nested64.log, program tmp/test-cache/review-r2/nested_64.rx); the front end recurses per expression level. Case 2252 builds its chain through locals instead.
+
 ### Debt decisions (owner, 2026-10-25)
 
 Decisions from the priority 1 decision sheet that had no item above. The rest are recorded on the items they change.
@@ -470,6 +507,7 @@ Order from [the Rust-isms audit](docs/audits/2026-10-rust-isms.md), section 6. R
   - then canvas, quiver and rondo, which were not audited; read `rondo/docs/ruxen-issues.md` first
   - then rewrite the Rust-flavoured `##` comments
 - [ ] b2 and b3: warn on Rust forms (new coded diagnostics with fix-its), lowest usage first, ending with `use`, `match` and `let`. Then make them errors.
+- [ ] <a id="t-infer-borrow-source"></a> Infer a user function's borrow source from its body, so `def longest(x: &String, y: &String) -> &String` needs no `[a]`; then deprecate the `[a]` lifetime form (ruby-naming.spec.md:563) with a fmt rewrite (owner: full Ruby parity, 2026-11-05).
 - [ ] <a id="t-d7-respell"></a> Respell the method `where` bound as the RBS form `[T < Bound]` (and `[T < A & B]`), from D7 b.
 - [ ] <a id="t-d21-impl"></a> fmt keeps comments inside method chains and argument lists, and honours partial `# fmt: off` ranges (D21 b).
 - [ ] <a id="t-protected"></a> Ruby `protected` semantics: callable with an explicit receiver of the same class family from inside it.

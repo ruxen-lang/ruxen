@@ -8,6 +8,37 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- What a call result borrows is one fact per call, read by both the borrow check
+  and drop elaboration: what it points into, and whose references it carries
+  (F-2 rethink, I-87, I-77, I-88, P-32). `r = h.remove(&key)` or `v = h.get(&key)`
+  then changing `key` is accepted (it was E1009); changing a string the table
+  referenced is still E1009. A C function returning a value borrows nothing only
+  when it provably allocates (`-> owned`), so `t = a.clone`, `a.take(1)` or
+  `a.reverse` then reassigning `a` while `t` is used is E1009 instead of reading
+  freed memory. A method or function returning a view of a parameter it got from
+  another call (`h.keys` through a second method, a free function, a mixin
+  method, a struct or a recursive call) keeps that parameter borrowed: `h.clear`
+  while the view is used is E1002 instead of a use-after-free. A temporary table
+  whose keys an object holds (`Bag.new({..}.keys)`) and one passed to a closure
+  call live while the result is used (they were freed early). A `def var` method
+  keeps a reference argument in its receiver only when the receiver's fields can
+  hold a reference to that type (`Holder.new(&s)` with a `&String` field keeps
+  `s` borrowed; a surface holding a `&var Canvas` keeps no `&String` it draws).
+  `SharedSync#clone` and `BufReader#read_line` are declared `-> owned` (a new
+  refcount owner, a freshly allocated line). A block's captures reach a result
+  only through what the block returns, so `x = Box.new(5).tap do .. end` keeps
+  nothing the block borrowed. An object a function or method builds from a
+  by-reference parameter borrows the caller's value, as `&x` does (I-77): after
+  `w = wrap(&x)` (`def wrap(s: &String) -> Holder; Holder.new(s)`), reassigning
+  `x` while `w` is used is E1009 instead of reading freed memory. Pinned by `it`
+  mir_loan_check `elided_result_borrows`, `summary_rounds_are_bounded` and
+  release-e2e 2254-2258.
+- Binding a generic `T` against a reference now keeps the reference in typeck too
+  (`&T` against `&var String` is `T = String`; `Array[T]` against `&Array[Int]`
+  binds `T = Int`), the one rule MIR uses.
+- The prune error for a generic body with no instance no longer says
+  "requires a concrete leaf"; an instance site with the wrong number of type
+  arguments is an internal error instead of being skipped (I-82).
 - **One instance engine replaces the five monomorphization passes.**
   `mir/lower/instances/` (the generic-class pass, the lib-shell pass, Q17 generic free
   functions, Q17b generic methods and the class-instance closure) is one worklist over
@@ -34,7 +65,46 @@ once 1.0.0 ships.
 
 ### Fixed
 - **An expanding instantiation is error E0746 (I-72).** `Nest[T]#deeper -> Nest[Array[T]]`
-  hung the compiler; the engine stops at 32 levels of nesting.
+  hung the compiler. The bound counts type nodes (256), not depth, so a doubling
+  `Nest[(T, T)]` is E0746 in milliseconds instead of hanging; E0746 names the template
+  and its location, and for a standard library template its package (I-86) (`it` q17).
+- Tables with borrowed keys (`Hash[&String, V]`, `{&a => 1}`, `[(&a, 1)].to_h`,
+  `Hash.new` plus `insert(a, 1)` with `a: &String`) no longer free the owner's
+  strings on drop or `clear`: one type-parameter binder for typeck and MIR
+  (`Ty::bind_type_params`) binds `K = &String` as written, and the key
+  descriptor follows (I-76, e2e 2248).
+- `Box[String]` and `Box[&String]` are different instances (`Box__mono__String`
+  vs `Box__mono___26String`): instance names keep references, so a borrowed
+  body never frees what an owned one would (I-79, e2e 2249).
+- `Hash#clear` / `#remove` and `Set#clear` / `#remove` take the table `var`, and
+  a fresh runtime result holding references (`keys`, `to_a`) holds a loan on its
+  table (`View::Holds`): `ks = h.keys; h.clear; ks[0]` is E1002, where it read
+  freed keys (I-77, e2e 2250, `it` mir_loan_check).
+- A view of a table (`keys`, `values`, `to_a`) taken through a reference (a
+  field `@t`, a `&var` parameter, a `&` local) or returned by a user function
+  keeps the table borrowed: `clear` or `remove` while the view is still used
+  is E1002 instead of a use-after-free. What a call result borrows comes from
+  the callee's declared signature by Rust's lifetime elision (the receiver,
+  else the one reference parameter, or every parameter carrying the result's
+  named lifetime; a result with no reference in its type borrows nothing), so
+  `r = h.remove(&1); h.clear; r.unwrap` is accepted. A user function returning
+  `h.keys` now hands its spine to the caller, who frees it (it leaked). Pinned
+  by `it` mir_loan_check `elided_result_borrows` and
+  `tests/release-e2e/cases/2253_views_through_references_freed`.
+- The derive check walks fields with a recursion stack and keeps every answer for
+  the whole query, with no depth cap: a class with many distinct field types and a
+  `Mutex` field is E0740 on `.clone` instead of a link error; `class Boom[T]`
+  holding a `Boom[(T, T)]` is E0746 instead of a hang; a cycle of classes reached
+  along many paths (30 classes, each with two `Array` fields of the next) is
+  checked once per class instead of hanging; a struct chain of any depth keeps
+  its derived `clone`. A handle field anywhere in a cycle still takes the derive
+  away (I-80, e2e 2251 and
+  `tests/release-e2e/cases/2252_deep_struct_chain_clones`, `it`
+  implicit_diagnostics `cycle_of_thirty_classes_derives_clone_quickly` and
+  `cycle_with_a_handle_leaf_has_no_clone`, q17).
+- Formatting a class, struct or enum with no text form (`"#{h:?}"` of a class
+  holding a `Mutex`, also through `&`) is E0729 instead of printing an address
+  (I-78; D10 stays in B3) (`it` no_silent_stubs).
 - **Derives on nested generic instances (I-64, P-17, I-71).** `ty_has_derive_trait`
   checks an instance with its arguments substituted into the field types, so
   `Box[Pair[Int, Mutex[Int]]]` derives no `clone` (it failed to link) and typeck rejects
@@ -82,6 +152,11 @@ once 1.0.0 ships.
   a successful build or on that exact refusal (`tests/release-e2e/run.sh`).
 
 ### Added
+- E0748: a function returning a reference with no receiver and several
+  reference parameters, and no lifetime naming the source, is rejected
+  (Rust's E0106): make it a method of the value it borrows from, return an
+  owned value, or name the lifetime (`def pick[a](x: &a A, y: &a A) -> &a A`).
+  `docs/errors/E0748.md`.
 - **A method's `where` bound on a class generic works in its body, and such a method
   of a `lib`-shell generic class is specialized per instantiation.** `def get -> T
   where T: Clone { self.deref.clone }` in `class MutexGuard[T]` now type-checks

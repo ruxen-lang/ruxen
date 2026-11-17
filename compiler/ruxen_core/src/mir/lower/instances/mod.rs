@@ -35,9 +35,9 @@
 //! by its injective symbol (`names::mono_base`), its bodies are substituted
 //! once, and their sites feed the worklist in turn, so every instance any
 //! concrete body reaches exists, through any chain of templates. An
-//! instance whose arguments nest deeper than [`MAX_INSTANCE_DEPTH`] is error
-//! E0746 (an expanding instantiation such as `Nest[T]` building
-//! `Nest[Array[T]]` would otherwise never end).
+//! instance whose arguments hold more than [`MAX_TYPE_NODES`] type nodes is
+//! error E0746 (an expanding instantiation such as `Nest[T]` building
+//! `Nest[Array[T]]` or `Nest[(T, T)]` would otherwise never end).
 //!
 //! ── The opaque rule ──
 //! Every template's own body is still lowered once, generic, and recorded
@@ -57,14 +57,12 @@ pub(super) use sites::unify_collect_type_params;
 
 use super::derive::DeriveField;
 use super::*;
+use crate::hir::types::MAX_TYPE_NODES;
 use crate::hir::visit::{walk_item, Visit};
 use sites::{
-    is_bare_type_param, is_fully_concrete, mentions_type_param, type_depth, walk_expr_sites,
-    walk_func_sites, Site,
+    is_bare_type_param, is_fully_concrete, mentions_type_param, walk_expr_sites, walk_func_sites,
+    Site,
 };
-
-/// The deepest type nesting an instance argument may reach (error E0746).
-const MAX_INSTANCE_DEPTH: usize = 32;
 
 /// A generic body family the engine instantiates (see the module docs).
 #[derive(Clone)]
@@ -134,6 +132,40 @@ impl Template {
             Template::ShellMethod { def, .. }
             | Template::Function(def)
             | Template::Method { def, .. } => &def.name,
+        }
+    }
+    /// Where this template is declared, as a diagnostic location: its line
+    /// and column, and for a standard library template its package (a
+    /// user template's file is the one the diagnostic is reported in).
+    fn location(&self, symbols: &SymbolTable) -> String {
+        let span = self.span();
+        let home = match self {
+            Template::Class(c) => Some(c.def_id),
+            Template::Function(def) => Some(def.def_id),
+            Template::ShellMethod { class, .. } => symbols.type_def(class).map(|d| d.id),
+            Template::Method { owner_ty, .. } => match owner_ty.peel_refs() {
+                Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => {
+                    symbols.type_def(name).map(|d| d.id)
+                }
+                _ => None,
+            },
+        };
+        match home.and_then(|id| symbols.origin(id)) {
+            Some(package) => format!(
+                "{}:{} in the standard library package `{package}`",
+                span.line, span.column
+            ),
+            None => format!("{}:{}", span.line, span.column),
+        }
+    }
+
+    /// Where this template is declared.
+    fn span(&self) -> &crate::lexer::token::Span {
+        match self {
+            Template::Class(c) => &c.span,
+            Template::ShellMethod { def, .. }
+            | Template::Function(def)
+            | Template::Method { def, .. } => &def.span,
         }
     }
 }
@@ -629,9 +661,14 @@ impl<'a> Lowerer<'a> {
         let template = &self.instances.templates[j];
         let params = template.params();
         if args.len() != params.len() {
-            return Ok(());
+            return Err(format!(
+                "internal error: `{}` takes {} type arguments but an instance site gave {}",
+                template.name(),
+                params.len(),
+                args.len()
+            ));
         }
-        if args.iter().map(type_depth).max().unwrap_or(0) > MAX_INSTANCE_DEPTH {
+        if args.iter().any(|a| a.exceeds_nodes(MAX_TYPE_NODES)) {
             let mut spelled = format!(
                 "{}[{}]",
                 template.name(),
@@ -649,9 +686,11 @@ impl<'a> Lowerer<'a> {
                 spelled.push_str("...");
             }
             return Err(format!(
-                "error[E0746]: the generic instantiation `{spelled}` nests deeper than \
-                 {MAX_INSTANCE_DEPTH} levels: a generic body instantiates itself with an ever \
-                 larger type"
+                "error[E0746]: `{}` instantiates itself with an ever larger type: the \
+                 instantiation `{spelled}` holds more than {MAX_TYPE_NODES} type nodes \
+                 (polymorphic recursion is not supported) (at {})",
+                template.name(),
+                template.location(self.symbols)
             ));
         }
         let symbol = self.instance_symbol(j, &args);

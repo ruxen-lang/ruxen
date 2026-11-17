@@ -25,6 +25,7 @@ mod patterns;
 #[cfg(test)]
 mod tests_funcs;
 mod types;
+pub(crate) use types::primitive_class_ty;
 
 use std::collections::HashMap;
 

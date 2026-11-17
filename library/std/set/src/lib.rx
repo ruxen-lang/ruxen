@@ -1,10 +1,3 @@
-## ## The key descriptor (B73)
-##
-## A `Set` is a table whose values are ignored, so its ELEMENT `T` is its
-## key and the same key descriptor applies (`KeyDesc[T]`, see
-## `library/std/map/src/lib.rx`). `union` / `intersection` / `difference`
-## build their result inside the C runtime, so they inherit the descriptor
-## from an operand (`ruxen_set_derived`) and copy elements by it.
 ## std::set — Set (Ruby's Set) method surface.
 ##
 ## Zero-Rust-stdlib migration, Phase 2 (Option C). `class Set[T]` below
@@ -41,14 +34,16 @@
 ## element vector), forwarding each element to the closure — the same
 ## shape as `Hash#each` (`605_generic_self_ffi_method`).
 ##
-## ## The key-kind protocol (B73)
+## ## The key descriptor (B73)
 ##
 ## A `Set` is a table whose values are ignored, so its ELEMENT `T` is its
-## key and the same key-kind descriptor applies. See the protocol section
-## in `library/std/map/src/lib.rx` — it is one mechanism serving both
-## heads. `union` / `intersection` / `difference` build their result set
-## inside the C runtime, out of the compiler's reach, so they inherit the
-## descriptor from an operand instead (`ruxen_set_derived`).
+## key and the same key descriptor applies (`KeyDesc[T]`, see
+## `library/std/map/src/lib.rx`). `union` / `intersection` / `difference`
+## build their result inside the C runtime, so they inherit the descriptor
+## from an operand (`ruxen_set_derived`) and copy elements by it. `remove`
+## and `clear` free the elements they drop, so they take the set `var`: a
+## live `to_a` view of those elements is an E1002 borrow conflict, not a
+## read of freed memory.
 class Set[T]
   lib "../hash/runtime/hash.c"
     def self.new as "ruxen_set_new"(keys: KeyDesc[T]) -> Set[T]
@@ -64,8 +59,8 @@ class Set[T]
     # lowering routes `a == b` (and `a != b`, negated) here.
     def == as "ruxen_set_eq"(other: &Set[T]) -> Bool
     def insert as "ruxen_set_insert"(item: T, keys: KeyDesc[T])
-    def remove as "ruxen_set_remove"(item: &T) -> Bool
-    def clear as "ruxen_set_clear"
+    def var remove as "ruxen_set_remove"(item: &T) -> Bool
+    def var clear as "ruxen_set_clear"
   end
 
   # The combinator family (`map`/`select`/`reject`/`find`/`reduce`/

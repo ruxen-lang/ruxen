@@ -143,8 +143,8 @@ impl<'a> Lowerer<'a> {
             if let Some(callee) = poisoned.get(name) {
                 return Err(format!(
                     "cannot lower `{name}`{}: it calls `{}` on a value whose type is still a \
-                     generic parameter, and no monomorphised copy replaces this call \
-                     (generic-calling-generic requires a concrete leaf — see \
+                     generic parameter, and no concrete body reaches an instance of it with \
+                     that parameter bound (see \
                      docs/decisions/q17-cross-package-monomorphization.md).",
                     caller
                         .map(|c| format!(" (called from `{c}`)"))

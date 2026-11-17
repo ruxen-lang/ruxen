@@ -7,7 +7,7 @@ use crate::hir::nodes::{DefId, HirSelfMode};
 use crate::hir::types::{MixinRef, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::Visibility;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 /// The signature of a function or method.
@@ -523,6 +523,10 @@ pub struct SymbolTable {
     /// synthesized under an internal name (the block slot `__block` reads
     /// `block`). See [`SymbolTable::display_name`].
     display_names: std::collections::HashMap<DefId, String>,
+    /// The standard library package each top-level item merged from the
+    /// bootstrap programs was declared in, recorded at the merge
+    /// (`Resolver::merge_bootstrap_programs`). A user item has none.
+    origins: std::collections::HashMap<DefId, String>,
 }
 
 impl SymbolTable {
@@ -532,6 +536,25 @@ impl SymbolTable {
             index: OnceLock::new(),
             method_aliases: std::collections::HashMap::new(),
             display_names: std::collections::HashMap::new(),
+            origins: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Record that the top-level item `id` comes from the standard library
+    /// package `package`.
+    pub fn set_origin(&mut self, id: DefId, package: &str) {
+        self.origins.insert(id, package.to_string());
+    }
+
+    /// The standard library package `id` was declared in (a method's is
+    /// its owner's), or `None` for the user's own code.
+    pub fn origin(&self, id: DefId) -> Option<&str> {
+        if let Some(package) = self.origins.get(&id) {
+            return Some(package);
+        }
+        match &self.get(id)?.kind {
+            DefKind::Method { parent, .. } => self.origin(*parent),
+            _ => None,
         }
     }
 
@@ -740,6 +763,45 @@ impl SymbolTable {
         };
         self.nominal(type_name)
             .is_some_and(|def| self.methods_of(def.id, method).next().is_some())
+    }
+
+    /// Whether the user class `name` may hold a reference to one of
+    /// `pointees` in its own fields or a parent's, as a Rust struct holds
+    /// one only through a field of a lifetime it names: each field's
+    /// declared type is asked [`Ty::may_hold_reference_to`] (a type
+    /// parameter field holds what its argument holds, which the caller's
+    /// type shows), a class field recursively. A class not found counts as
+    /// holding one.
+    pub fn fields_may_hold_reference_to(&self, name: &str, pointees: &[Ty]) -> bool {
+        self.fields_hold_reference(name, pointees, &mut HashSet::new())
+    }
+
+    fn fields_hold_reference(
+        &self,
+        name: &str,
+        pointees: &[Ty],
+        seen: &mut HashSet<String>,
+    ) -> bool {
+        if !seen.insert(name.to_string()) {
+            return false;
+        }
+        let Some(DefKind::Class { info }) = self.type_def(name).map(|def| &def.kind) else {
+            return true;
+        };
+        let parent = info
+            .parent
+            .and_then(|id| self.get(id))
+            .map(|def| def.name.clone());
+        info.fields
+            .iter()
+            .any(|&field| match self.get(field).map(|def| &def.kind) {
+                Some(DefKind::Field { ty, .. }) => ty
+                    .may_hold_reference_to(pointees, &mut |inner| {
+                        self.fields_hold_reference(inner, pointees, seen)
+                    }),
+                _ => true,
+            })
+            || parent.is_some_and(|parent| self.fields_hold_reference(&parent, pointees, seen))
     }
 
     pub fn class_owns_fields(&self, name: &str) -> bool {

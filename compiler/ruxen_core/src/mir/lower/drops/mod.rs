@@ -1,14 +1,19 @@
 use super::*;
+use crate::hir::types::{DeclaredResult, ResultSource};
+use crate::mir::nodes::CallFact;
 
 mod closures;
 pub(in crate::mir::lower) mod copies;
 mod flow;
 mod glue;
+mod views;
 
 pub(super) use closures::*;
 pub(crate) use closures::{CLOSURE_PAIR_CAPTURES, CLOSURE_PAIR_FN};
 pub(super) use flow::*;
 pub(super) use glue::*;
+use views::borrows_of;
+pub(super) use views::record_default_views;
 
 /// The ONE parameter `func` returns on every path, by MIR argument slot, if
 /// any: every `Return(Some(Use(local)))` must have `local` proven to alias
@@ -634,10 +639,19 @@ pub(super) struct CallSummaries {
     /// The `.rx` FFI declarations whose result is owned (`-> owned T`),
     /// read before the runtime ABI table (`runtime_abi::result_ownership`).
     pub(super) declared_results: crate::mir::lower::runtime_abi::DeclaredResults,
+    /// What each callee's result may borrow and carry, read off its
+    /// declared signature (`hir::types::declared_result`), keyed by MIR name
+    /// (and for a `.rx` FFI declaration by C symbol and Ruxen name too).
+    /// A C function has no body, so for it the declaration is the whole
+    /// contract; a user body adds what [`Self::returned_params`] and the
+    /// conservative rule of [`call_result_may_borrow_arg`] find.
+    pub(super) result_sources: HashMap<String, (DeclaredResult, Declared)>,
     /// Functions that only read their one argument and return a new owner
     /// (a derived class `clone`), from the role lowering gave them
     /// ([`Self::record_roles`]). Each is also in `fresh`.
     pub(super) reads_argument: HashSet<String>,
+    /// Every callee's declared parameter modes, the loan check's own.
+    pub(super) modes: crate::mir::param_modes::CalleeModes,
 }
 
 /// Per C symbol (and Ruxen spelling) of a `.rx` `lib` declaration, which
@@ -689,7 +703,38 @@ impl FfiByValue {
     }
 }
 
+/// Whose declaration a [`CallSummaries::result_sources`] entry reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Declared {
+    /// A `.rx` `lib` declaration: a C function, whose result borrows only
+    /// what its signature says.
+    Ffi,
+    /// A lowered body: its signature adds to what the body may return.
+    Body,
+}
+
 impl CallSummaries {
+    /// Record the elided result source of every FFI declaration in `libs`
+    /// and every lowered body in `functions`.
+    pub(super) fn record_result_sources(
+        &mut self,
+        libs: &[crate::mir::nodes::FfiLib],
+        functions: &[MirFunction],
+    ) {
+        for decl in libs.iter().flat_map(|lib| &lib.functions) {
+            for key in [&decl.name, &decl.ruxen_name] {
+                self.result_sources
+                    .insert(key.clone(), (decl.declared_result.clone(), Declared::Ffi));
+            }
+        }
+        for func in functions {
+            self.result_sources.insert(
+                func.name.clone(),
+                (func.declared_result.clone(), Declared::Body),
+            );
+        }
+    }
+
     /// Whether `callee` may return its parameter at MIR argument slot `slot`.
     pub(super) fn may_return_param(&self, callee: &str, slot: usize) -> bool {
         self.returned_params
@@ -783,13 +828,14 @@ pub(super) fn returns_fresh(
 /// its elements as an object owns its fields, so it qualifies when each
 /// element is a scalar, a borrow (which owns nothing) or itself qualifies.
 fn fresh_result_type(ty: &Ty) -> bool {
+    // A scalar or a borrow owns no heap, so a container of them owns all
+    // its drop frees: its spine (`h.keys` handed back by a wrapper).
+    let owns_none = |e: &Ty| is_scalar(e) || matches!(e, Ty::Ref(_) | Ty::RefMut(_));
     match ty {
         Ty::String | Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. } => true,
-        Ty::Array(elem) | Ty::Set(elem) => is_scalar(elem),
-        Ty::Map(key, value) => is_scalar(key) && is_scalar(value),
-        Ty::Tuple(elems) => elems.iter().all(|e| {
-            is_scalar(e) || matches!(e, Ty::Ref(_) | Ty::RefMut(_)) || fresh_result_type(e)
-        }),
+        Ty::Array(elem) | Ty::Set(elem) => owns_none(elem),
+        Ty::Map(key, value) => owns_none(key) && owns_none(value),
+        Ty::Tuple(elems) => elems.iter().all(|e| owns_none(e) || fresh_result_type(e)),
         _ => false,
     }
 }
@@ -913,130 +959,6 @@ fn nth_marker(block: &BasicBlock, ordinal: usize) -> Option<usize> {
         .filter(|(_, inst)| matches!(inst, MirInst::Nop))
         .nth(ordinal)
         .map(|(index, _)| index)
-}
-
-/// `local` and every local holding a borrow of it or of storage it owns:
-/// all of them must be dead before `local` may be dropped. A borrow is a
-/// `Ref`/`RefMut` of it, a copy of a borrow word, a field read
-/// (`GetField`: `U.new(..).name` points into the object) or a call result
-/// that may point into it, per the [`View`] recorded for the result
-/// ([`record_default_views`]); a scalar or an owned result borrows nothing.
-fn borrows_of(func: &MirFunction, local: LocalId) -> HashSet<LocalId> {
-    let mut set = HashSet::from([local]);
-    let view = |dest: LocalId| !matches!(func.view(dest), Some(View::Scalar | View::Own));
-    let into = |dest: LocalId, slot: usize| match func.view(dest) {
-        Some(View::Args(slots)) => slots.contains(&slot),
-        Some(View::Scalar | View::Own) => false,
-        _ => true,
-    };
-    loop {
-        let before = set.len();
-        for inst in func.blocks.iter().flat_map(|block| &block.instructions) {
-            match inst {
-                MirInst::Ref { dest, src }
-                | MirInst::RefMut { dest, src }
-                | MirInst::FieldAddr {
-                    dest, base: src, ..
-                } if set.contains(src) => {
-                    set.insert(*dest);
-                }
-                MirInst::GetField { dest, base, .. } if set.contains(base) && view(*dest) => {
-                    set.insert(*dest);
-                }
-                MirInst::Call {
-                    dest: Some(dest),
-                    callee,
-                    args,
-                } if args.iter().enumerate().any(|(slot, arg)| {
-                    matches!(arg, MirValue::Use(a) if set.contains(a)) && into(*dest, slot)
-                }) =>
-                {
-                    set.insert(*dest);
-                }
-                MirInst::Copy { dest, src } | MirInst::Move { dest, src }
-                    if *src != local && set.contains(src) =>
-                {
-                    set.insert(*dest);
-                }
-                MirInst::Assign {
-                    dest,
-                    value: MirValue::Use(src),
-                } if *src != local && set.contains(src) => {
-                    set.insert(*dest);
-                }
-                _ => {}
-            }
-        }
-        if set.len() == before {
-            return set;
-        }
-    }
-}
-
-/// Record in `func.views` the [`View`]s read off its finished body, for
-/// each parameter and each value lowering recorded no view of where it made
-/// it: a scalar is `View::Scalar`, and a call result points into the
-/// non-scalar arguments [`call_result_may_borrow_arg`] names (a closure
-/// call result into all of them). Runs once
-/// every callee's body exists, before the loan check and drop elaboration
-/// read the views.
-pub(super) fn record_default_views(func: &mut MirFunction, summaries: &CallSummaries) {
-    let scalar = |local: LocalId| is_scalar(&func.locals[local as usize].ty);
-    let mut found: Vec<(LocalId, View)> = func
-        .params
-        .iter()
-        .filter(|&&param| scalar(param) && !func.views.contains_key(&param))
-        .map(|&param| (param, View::Scalar))
-        .collect();
-    for inst in func.blocks.iter().flat_map(|block| &block.instructions) {
-        let Some(dest) = inst.dest() else {
-            continue;
-        };
-        if func.views.contains_key(&dest) {
-            continue;
-        }
-        let pointed_into = |args: &[MirValue], may_borrow: &dyn Fn(usize) -> bool| {
-            let slots = (0..args.len()).filter(|&slot| {
-                args[slot].local().is_some_and(|arg| !scalar(arg)) && may_borrow(slot)
-            });
-            View::Args(slots.collect())
-        };
-        let view = match inst {
-            _ if scalar(dest) => View::Scalar,
-            MirInst::Call { callee, args, .. } => pointed_into(args, &|slot| {
-                call_result_may_borrow_arg(func, dest, callee, slot, summaries)
-            }),
-            // A closure call whose declared result could not be shown to
-            // own itself (`closure_call_facts`) may point into every
-            // argument.
-            MirInst::CallIndirect { args, .. } => pointed_into(args, &|_| true),
-            _ => continue,
-        };
-        found.push((dest, view));
-    }
-    for (dest, view) in found {
-        func.record_view(dest, view);
-    }
-}
-
-/// Whether the result `dest` of a call to `callee` may point into the
-/// argument at `slot` (see [`record_default_views`]).
-fn call_result_may_borrow_arg(
-    func: &MirFunction,
-    dest: LocalId,
-    callee: &str,
-    slot: usize,
-    summaries: &CallSummaries,
-) -> bool {
-    use crate::mir::lower::runtime_abi::{result_ownership, ResultOwnership};
-    if func.locals[dest as usize].ty.is_ref() || summaries.may_return_param(callee, slot) {
-        return true;
-    }
-    let user_callee = summaries.block_params.contains_key(callee);
-    !user_callee
-        && !summaries.fresh.contains(callee)
-        && result_ownership(callee, &summaries.declared_results) != ResultOwnership::Fresh
-        && !FREE_FAMILY_CALLEES.contains(&callee)
 }
 
 /// Insert each statement temporary's drop instructions immediately before
@@ -1432,7 +1354,7 @@ pub(super) fn insert_drops(
     // What each droppable local must outlive: itself and every borrow of it.
     let lifetimes: HashMap<LocalId, HashSet<LocalId>> = active_drop_locals
         .iter()
-        .map(|&local| (local, borrows_of(func, local)))
+        .map(|&local| (local, borrows_of(func, local, symbols, summaries)))
         .collect();
     let (statement_sites, block_end_sites) =
         statement_drop_sites(func, &statement_candidates, stmt_scopes, &lifetimes);

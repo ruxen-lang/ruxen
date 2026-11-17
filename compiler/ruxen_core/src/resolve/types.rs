@@ -33,7 +33,7 @@ pub(crate) const COLLECTION_BUILTINS: &[&str] = &["Array", "Hash", "Set"];
 /// callers only; a parameterised name was never a primitive head.
 ///
 /// Covered by every e2e program that types a `String` or a scalar.
-fn primitive_class_ty(name: &str) -> Option<Ty> {
+pub(crate) fn primitive_class_ty(name: &str) -> Option<Ty> {
     match name {
         "String" => Some(Ty::String),
         "Int" => Some(Ty::Int),

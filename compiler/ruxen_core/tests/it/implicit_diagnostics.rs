@@ -240,3 +240,67 @@ fn derived_method_return_types_are_checked() {
         "a derived method must resolve — got errors {messages:?}"
     );
 }
+
+/// The derive check follows every field of a class with more than 32
+/// distinct field types: a `Mutex` field (an opaque C handle with no
+/// `clone`) still makes `.clone` E0740, where a cap on the visited types
+/// used to assume support and the program failed to link.
+#[test]
+fn wide_class_with_a_handle_field_has_no_clone() {
+    let mut source = String::new();
+    for i in 1..=34 {
+        source.push_str(&format!("struct S{i}\n  v: Int\nend\n\n"));
+    }
+    source.push_str("class Big\n");
+    for i in 1..=34 {
+        source.push_str(&format!("  f{i}: S{i}\n"));
+    }
+    source.push_str("  m: Mutex[Int]\n\n  def init\n");
+    for i in 1..=34 {
+        source.push_str(&format!("    @f{i} = S{i}.new({i})\n"));
+    }
+    source.push_str("    @m = Mutex.new(0)\n  end\nend\n\nb = Big.new\nc = b.clone\n");
+    let diags = typecheck_diagnostics_from_source(&source);
+    assert!(has_code(&diags, "E0740"), "{diags:?}");
+}
+
+/// `K1 .. K{n}` in a cycle, each holding two `Array` fields of the next, so
+/// every class is reachable along 2^n paths; `leaf` adds a field to `K{n}`.
+fn class_cycle(n: usize, leaf: &str) -> String {
+    let mut source = String::new();
+    for i in 1..=n {
+        let next = i % n + 1;
+        source.push_str(&format!(
+            "class K{i}\n  a: Array[K{next}]\n  b: Array[K{next}]\n"
+        ));
+        if i == n {
+            source.push_str(leaf);
+        }
+        source.push_str("\n  def init\n    @a = []\n    @b = []\n");
+        if i == n && !leaf.is_empty() {
+            source.push_str("    @m = Mutex.new(0)\n");
+        }
+        source.push_str("  end\nend\n\n");
+    }
+    source.push_str("x = K1.new\ny = x.clone\n");
+    source
+}
+
+/// I-83: the derive walk keeps every answer for the query, so a cycle whose
+/// classes are each reached along 2^30 paths is walked once per class. The
+/// bound is generous: before the fix 20 classes took over two minutes.
+#[test]
+fn cycle_of_thirty_classes_derives_clone_quickly() {
+    let start = std::time::Instant::now();
+    let diags = typecheck_diagnostics_from_source(&class_cycle(30, ""));
+    assert!(!has_code(&diags, "E0740"), "{diags:?}");
+    assert!(start.elapsed() < std::time::Duration::from_secs(10));
+}
+
+/// A handle field anywhere in the cycle still takes `clone` away from the
+/// whole cycle, though the walk reaches it after assuming the others.
+#[test]
+fn cycle_with_a_handle_leaf_has_no_clone() {
+    let diags = typecheck_diagnostics_from_source(&class_cycle(20, "  m: Mutex[Int]\n"));
+    assert!(has_code(&diags, "E0740"), "{diags:?}");
+}

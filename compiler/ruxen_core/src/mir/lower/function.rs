@@ -142,6 +142,28 @@ impl<'a> Lowerer<'a> {
         let declared_return = self
             .declared_signature(func)
             .map_or(&func.return_ty, |sig| &sig.return_ty);
+        // What the result borrows, read off the declared signature (an
+        // instance's substituted `T = &String` is not a borrow of an
+        // argument): the one elision rule.
+        let declared_params: Vec<Ty> = (0..func.params.len())
+            .map(|index| {
+                declared
+                    .get(index)
+                    .unwrap_or(&func.params[index].ty)
+                    .clone()
+            })
+            .collect();
+        let receiver_ty = self_local.map(|local| {
+            let ty = self.fn_mut().locals[local as usize].ty.clone();
+            self.declared_receiver(&ty)
+        });
+        let symbols = self.symbols;
+        self.fn_mut().declared_result = crate::hir::types::declared_result(
+            receiver_ty.as_ref(),
+            &declared_params,
+            declared_return,
+            &mut |name, pointees| symbols.fields_may_hold_reference_to(name, pointees),
+        );
         if crate::mir::refmut_abi::is_slot_refmut(declared_return) {
             return Err(format!(
                 "`{name}` returns a `&var` of a scalar or String; returning the address of a \

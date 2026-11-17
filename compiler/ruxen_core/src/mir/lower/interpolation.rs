@@ -258,7 +258,8 @@ impl<'a> Lowerer<'a> {
             //   6. abstract type parameter        → synth `Int_fmt` (opaque generic ABI)
             //   7. unresolved inference variable  → abstract callee (pruned or reported)
             //   8. Unit / Never / Error           → lowering error
-            //   9. other concrete type            → synth `Int_fmt` (raw word; see the arm)
+            //   9. nominal type with no text form → lowering error E0729
+            //  10. other concrete type            → synth `Int_fmt` (raw word; see the arm)
             //
             // A borrowed scalar is formatted as its pointee
             // (`deref_borrowed_scalar`) before the ladder runs.
@@ -384,6 +385,19 @@ impl<'a> Lowerer<'a> {
                 } else if matches!(effective_ty, Ty::Unit | Ty::Never | Ty::Error) {
                     return Err(format!(
                         "cannot interpolate value of type `{effective_ty}`: the type has no Display formatter"
+                    ));
+                } else if let Some(nominal) =
+                    crate::implicit_includes::peel_to_nominal(&effective_ty)
+                        .filter(|nominal| nominal.builtin_head().is_none())
+                {
+                    // A class, struct or enum (behind references, aliases
+                    // or newtypes) that reached here defines no text form
+                    // and cannot derive `Debug` (a field such as a C handle
+                    // has none): its word is an address, never its text.
+                    return Err(format!(
+                        "error[E0729]: a value of type `{nominal}` cannot be formatted into a \
+                         string: `{nominal}` defines no text form and cannot derive `Debug` \
+                         (one of its fields has no text form)"
                     ));
                 } else {
                     // A concrete type with no formatter (`Array`, `Option`,

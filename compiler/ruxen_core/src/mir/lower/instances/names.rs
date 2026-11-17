@@ -32,9 +32,20 @@ pub(in crate::mir::lower) fn mono_base(name: &str, args: &[Ty]) -> String {
         if i > 0 {
             s.push_str("__");
         }
-        s.push_str(&symbol_token(&a.peel_refs().to_string()));
+        s.push_str(&symbol_token(&without_lifetimes(a).to_string()));
     }
     s
+}
+
+/// `ty` with every named lifetime dropped (`&'a String` is `&String`), so a
+/// type keys one instance however its borrows are annotated. References
+/// themselves stay: `Box[String]` and `Box[&String]` are different instances.
+fn without_lifetimes(ty: &Ty) -> Ty {
+    match ty {
+        Ty::RefLifetime(_, inner) => Ty::Ref(Box::new(without_lifetimes(inner))),
+        Ty::RefMutLifetime(_, inner) => Ty::RefMut(Box::new(without_lifetimes(inner))),
+        other => other.clone().map_inner(&mut without_lifetimes),
+    }
 }
 
 /// `text` as a C symbol fragment, injectively: ASCII letters and digits stay,
@@ -79,6 +90,18 @@ mod tests {
         let (sc, sa) = Ty::builtin_head(&structural).expect("structural head");
         let (nc, na) = Ty::builtin_head(&nominal).expect("nominal head");
         assert_eq!(mono_base(sc, &sa), mono_base(nc, &na));
+    }
+
+    #[test]
+    fn owned_and_borrowed_args_give_distinct_bases() {
+        let owned = mono_base("Box", &[Ty::String]);
+        let borrowed = mono_base("Box", &[Ty::Ref(Box::new(Ty::String))]);
+        let borrowed_mut = mono_base("Box", &[Ty::RefMut(Box::new(Ty::String))]);
+        assert_ne!(owned, borrowed);
+        assert_ne!(owned, borrowed_mut);
+        assert_ne!(borrowed, borrowed_mut);
+        let annotated = Ty::RefLifetime("a".into(), Box::new(Ty::String));
+        assert_eq!(borrowed, mono_base("Box", &[annotated]));
     }
 
     #[test]

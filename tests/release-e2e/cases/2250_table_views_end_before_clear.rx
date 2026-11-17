@@ -1,0 +1,20 @@
+# `Hash#clear` / `#remove` and `Set#clear` / `#remove` free the keys they
+# drop, so they take the table `var`. A `keys` / `to_a` view of a table
+# holds a loan on it: its last use must come before the table changes
+# (a live view across the change is E1002). Each key is freed once.
+h = {"alpha".clone => 1, "beta".clone => 2}
+ks = h.keys
+puts(ks.size)
+h.remove(&"alpha")
+puts(h.size)
+es = h.to_a
+puts(es.size)
+h.clear
+puts(h.size)
+s = ["gamma".clone, "delta".clone].to_set
+vs = s.to_a
+puts(vs.size)
+s.remove(&"gamma")
+puts(s.size)
+s.clear
+puts(s.size)

@@ -188,6 +188,19 @@ impl Ty {
         self.any_within(pred, &mut |_| true)
     }
 
+    /// True when `self` is made of more than `limit` type nodes (itself and
+    /// every type nested in it). Stops counting at `limit + 1`, so it is
+    /// cheap on a type of any size. The one size bound for checks that must
+    /// stop a type from growing without end (instance arguments, E0746, and
+    /// the derive check).
+    pub fn exceeds_nodes(&self, limit: usize) -> bool {
+        let mut seen = 0usize;
+        self.any(&mut |_| {
+            seen += 1;
+            seen > limit
+        })
+    }
+
     /// [`Ty::any`], searching the children of only those types `descend`
     /// accepts (`pred` still sees every type it reaches).
     pub fn any_within(
@@ -313,6 +326,81 @@ impl Ty {
         Some(format!("({}) -> {}", params.join(", "), surface(ret)))
     }
 
+    /// Whether a value of this type may hold a reference, counting those its
+    /// type does not show: a reference, a callable (what it captures), a
+    /// class, struct or enum (its fields; a builtin head spelled as its class
+    /// shows its type arguments), a `some`/`any` mixin value (its
+    /// implementor's fields), or a type parameter `param` accepts (an
+    /// instance may bind it to a reference). The one test for what a value
+    /// may carry; elision reads only written references
+    /// ([`Ty::holds_reference`]).
+    pub fn may_hold_reference(&self, param: &mut impl FnMut(&str) -> bool) -> bool {
+        self.any_within(
+            &mut |t: &Ty| match t {
+                Ty::TypeParam { name, .. } => param(name),
+                other => other.hides_contents() || other.is_ref(),
+            },
+            &mut |_| true,
+        )
+    }
+
+    /// Whether a value of this type may hold what its type does not show: a
+    /// class, struct or enum (its fields; a builtin head spelled as its
+    /// class, `Hash[K, V]` as the receiver of a `.rx` shell method, shows
+    /// its type arguments), a `some`/`any` mixin value (its implementor's
+    /// fields) or a callable (what it captures). The one list
+    /// [`Ty::may_hold_reference`], [`Ty::may_hold_reference_to`] and
+    /// [`result_carries`] read.
+    pub fn hides_contents(&self) -> bool {
+        match self {
+            Ty::Class { .. } => self.builtin_head().is_none(),
+            Ty::Struct { .. }
+            | Ty::Enum { .. }
+            | Ty::SomeMixin(_)
+            | Ty::AnyMixin(_)
+            | Ty::Fn { .. }
+            | Ty::FnMut { .. }
+            | Ty::FnOnce { .. } => true,
+            _ => false,
+        }
+    }
+
+    /// Whether a value of this type may hold a reference to one of
+    /// `pointees` (as Rust's struct can hold a reference only through a
+    /// field whose lifetime it names): a reference to such a type (a type
+    /// parameter pointee on either side matches any), a callable, mixin
+    /// value, struct or enum (what it holds is not shown), or a user class
+    /// `class` says may through its fields. A bare type parameter holds
+    /// none; a class's type arguments are searched.
+    pub fn may_hold_reference_to(
+        &self,
+        pointees: &[Ty],
+        class: &mut impl FnMut(&str) -> bool,
+    ) -> bool {
+        let generic = |ty: &Ty| matches!(ty, Ty::TypeParam { .. });
+        self.any_within(
+            &mut |t: &Ty| match t {
+                Ty::TypeParam { .. } => false,
+                Ty::Class { name, .. } => t.hides_contents() && class(name),
+                other if other.hides_contents() => true,
+                other => other.deref_ty().is_some_and(|inner| {
+                    generic(inner) || pointees.iter().any(|p| p == inner || generic(p))
+                }),
+            },
+            &mut |_| true,
+        )
+    }
+
+    /// The types the references inside this type point at.
+    pub fn pointees(&self) -> Vec<Ty> {
+        let mut found = Vec::new();
+        self.any(&mut |t: &Ty| {
+            found.extend(t.deref_ty().cloned());
+            false
+        });
+        found
+    }
+
     /// Whether this is a callable shape, looking through references: a bare
     /// `Fn`/`FnMut`/`FnOnce`, or a `some`/`any` mixin with an `Fn`-family
     /// bound (with or without a spelled-out signature).
@@ -413,6 +501,310 @@ impl Ty {
         let pointee = self.peel_refs();
         pointee.is_string_form() || pointee.is_scalar_primitive()
     }
+
+    /// Match `self`, a declared type naming type parameters, against the
+    /// `actual` type at a use, recording `param → actual` into `out` for
+    /// every parameter `is_param` accepts. The one type-parameter binder
+    /// shared by typeck and MIR instance selection.
+    ///
+    /// - A bare parameter binds the actual type as it is, references
+    ///   included: `T` against `&String` is `T = &String`, so an instance
+    ///   over borrowed values is never confused with one over owned values.
+    ///   `bindable` filters what may bind (typeck skips unresolved variables,
+    ///   MIR takes only fully concrete types). The first binding wins.
+    /// - Reference layers match structurally, of any kind: `&T` against
+    ///   `&String` or `&var String` is `T = String`. A reference formal
+    ///   against an owned actual (a value passed where the signature
+    ///   borrows) matches the pointee, and a non-reference formal against a
+    ///   reference actual (an auto-dereferenced receiver) matches through it.
+    /// - Every generic head matches its own head, nominal types by name and
+    ///   arity, callable types (`Fn(...)`, `any Fn[...]`) by parameters and
+    ///   return. A shape mismatch binds nothing.
+    pub fn bind_type_params(
+        &self,
+        actual: &Ty,
+        is_param: &dyn Fn(&str) -> bool,
+        bindable: &dyn Fn(&Ty) -> bool,
+        out: &mut HashMap<std::string::String, Ty>,
+    ) {
+        let mut bind = |formal: &Ty, actual: &Ty| {
+            formal.bind_type_params(actual, is_param, bindable, &mut *out)
+        };
+        if let Ty::TypeParam { name, .. } = self {
+            if is_param(name) && bindable(actual) {
+                out.entry(name.clone()).or_insert_with(|| actual.clone());
+            }
+            return;
+        }
+        match (self.deref_ty(), actual.deref_ty()) {
+            (Some(formal), Some(actual)) => return bind(formal, actual),
+            (Some(formal), None) => return bind(formal, actual),
+            (None, Some(actual)) => return bind(self, actual),
+            (None, None) => {}
+        }
+        if let (Some((fparams, fret)), Some((aparams, aret))) =
+            (self.callable_signature(), actual.callable_signature())
+        {
+            if fparams.len() == aparams.len() {
+                for (f, a) in fparams.iter().zip(aparams) {
+                    bind(f, a);
+                }
+            }
+            return bind(fret, aret);
+        }
+        match (self, actual) {
+            (Ty::Array(f), Ty::Array(a))
+            | (Ty::Set(f), Ty::Set(a))
+            | (Ty::Option(f), Ty::Option(a))
+            | (Ty::FixedArray(f, _), Ty::FixedArray(a, _)) => bind(f, a),
+            (Ty::Map(fk, fv), Ty::Map(ak, av)) | (Ty::Result(fk, fv), Ty::Result(ak, av)) => {
+                bind(fk, ak);
+                bind(fv, av);
+            }
+            (Ty::Tuple(fs), Ty::Tuple(as_)) if fs.len() == as_.len() => {
+                for (f, a) in fs.iter().zip(as_) {
+                    bind(f, a);
+                }
+            }
+            (
+                Ty::Class {
+                    name: fname,
+                    generic_args: fargs,
+                },
+                Ty::Class {
+                    name: aname,
+                    generic_args: aargs,
+                },
+            )
+            | (
+                Ty::Struct {
+                    name: fname,
+                    generic_args: fargs,
+                },
+                Ty::Struct {
+                    name: aname,
+                    generic_args: aargs,
+                },
+            )
+            | (
+                Ty::Enum {
+                    name: fname,
+                    generic_args: fargs,
+                },
+                Ty::Enum {
+                    name: aname,
+                    generic_args: aargs,
+                },
+            ) if fname == aname && fargs.len() == aargs.len() => {
+                for (f, a) in fargs.iter().zip(aargs) {
+                    bind(f, a);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The most type nodes ([`Ty::exceeds_nodes`]) a type argument the compiler
+/// builds by itself may hold: past it, an instance argument is error E0746
+/// and the derive check stops looking. A real program's types stay far
+/// below; only a type that grows on every step (`Nest[(T, T)]` built from
+/// `Nest[T]`) reaches it, and it does so within a few steps however the
+/// type grows, where a depth bound lets a doubling type reach `2^depth`
+/// nodes first.
+pub const MAX_TYPE_NODES: usize = 256;
+
+/// What a call's result may borrow, read off the callee's DECLARED
+/// signature by [`result_source`]: Rust's lifetime elision with Ruby's
+/// surface, so no lifetime is ever spelled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResultSource {
+    /// The declared result holds no reference (`-> Option[V]`, `-> Int`):
+    /// it borrows nothing of the arguments. A reference a type argument
+    /// brings in (`V = &String`) is one an argument already held, so the
+    /// result keeps that argument's loans and takes none.
+    Nothing,
+    /// The declared result holds a reference and borrows from the
+    /// arguments at these MIR slots (receiver first). A named lifetime in
+    /// the result (`def longest[a](x: &a String, y: &a String) -> &a
+    /// String`) names every parameter whose reference carries it; an
+    /// unnamed one is elided to the receiver when there is one, else the
+    /// one reference parameter.
+    Slots(Vec<usize>),
+    /// The declared result holds a reference but there is no receiver and
+    /// no reference parameter, or no declaration: a caller assumes it may
+    /// point into every argument.
+    Unknown,
+    /// The declared result holds a reference, there is no receiver and
+    /// several reference parameters (these MIR slots), and the result's
+    /// reference names no lifetime: which one it borrows from is
+    /// ambiguous, error E0748 (Rust's E0106). The fix is a method of the
+    /// value it borrows from, an owned result, or a named lifetime.
+    Ambiguous(Vec<usize>),
+}
+
+/// The one elision rule: what a callee declared with `params` (excluding
+/// the receiver; `has_receiver` says whether one comes first) and result
+/// `ret` may borrow. A `&block` / `Fn` parameter is not a reference
+/// parameter: a block is only called, never borrowed from.
+pub fn result_source(has_receiver: bool, params: &[Ty], ret: &Ty) -> ResultSource {
+    if !ret.holds_reference() {
+        return ResultSource::Nothing;
+    }
+    // Named lifetimes: the result borrows from every parameter whose
+    // reference carries one of them (a receiver cannot name one).
+    let lifetimes = |ty: &Ty| {
+        let mut names = Vec::new();
+        ty.any(&mut |t: &Ty| {
+            if let Ty::RefLifetime(name, _) | Ty::RefMutLifetime(name, _) = t {
+                names.push(name.clone());
+            }
+            false
+        });
+        names
+    };
+    let result_names = lifetimes(ret);
+    if !result_names.is_empty() {
+        let first_param = usize::from(has_receiver);
+        let slots = params
+            .iter()
+            .enumerate()
+            .filter(|(_, ty)| lifetimes(ty).iter().any(|n| result_names.contains(n)))
+            .map(|(index, _)| first_param + index)
+            .collect();
+        return ResultSource::Slots(slots);
+    }
+    if has_receiver {
+        return ResultSource::Slots(vec![0]);
+    }
+    let refs: Vec<usize> = params
+        .iter()
+        .enumerate()
+        .filter(|(_, ty)| ty.is_ref() && !ty.peel_refs().is_callable())
+        .map(|(index, _)| index)
+        .collect();
+    match refs.as_slice() {
+        [] => ResultSource::Unknown,
+        [slot] => ResultSource::Slots(vec![*slot]),
+        _ => ResultSource::Ambiguous(refs),
+    }
+}
+
+/// What a callee's DECLARED signature says about its result: what it
+/// points into ([`result_source`], the elision rule) and whose existing
+/// references it may carry ([`result_carries`]). Rust keeps the two apart:
+/// `h.remove(&key)` points into nothing of `key` and carries the table's
+/// references, so changing `key` afterwards is fine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredResult {
+    pub source: ResultSource,
+    /// The MIR slots (receiver first) whose references the result may hold.
+    pub carries: Vec<usize>,
+    /// The `(from, into)` slots where the callee, when it may write
+    /// `into`, may keep the references `from` passes ([`declared_keeps`]).
+    pub keeps: Vec<(usize, usize)>,
+}
+
+impl DeclaredResult {
+    /// A body with no declared signature. A reader treats an `Unknown`
+    /// source as pointing into and carrying every argument, so `carries`
+    /// stays empty here.
+    pub fn unknown() -> Self {
+        DeclaredResult {
+            source: ResultSource::Unknown,
+            carries: Vec::new(),
+            keeps: Vec::new(),
+        }
+    }
+}
+
+/// [`result_source`], [`result_carries`] and [`declared_keeps`] of one
+/// declaration; `receiver` is the receiver's declared type when there is
+/// one, and `class` answers whether a user class's fields may hold a
+/// reference to one of the given pointees
+/// (`SymbolTable::fields_may_hold_reference_to`).
+pub fn declared_result(
+    receiver: Option<&Ty>,
+    params: &[Ty],
+    ret: &Ty,
+    class: &mut impl FnMut(&str, &[Ty]) -> bool,
+) -> DeclaredResult {
+    DeclaredResult {
+        source: result_source(receiver.is_some(), params, ret),
+        carries: result_carries(receiver, params, ret),
+        keeps: declared_keeps(receiver, params, class),
+    }
+}
+
+/// The `(from, into)` slot pairs (receiver first) where a callee writing
+/// slot `into` may keep the references slot `from` passes: `into`'s
+/// declared type, below its own top reference, may hold a reference to
+/// what `from` points at ([`Ty::may_hold_reference_to`]; a type parameter
+/// never: a `Hash[K, V]` holds `K`s, not a `&K` passed to `remove`; a user
+/// class when `class` says its fields may). `def init(@r: &String)` keeps
+/// `r` in a class with a `&String` field; a class holding a `&var Canvas`
+/// keeps no `&String`. Rust's `fn set(&mut self, r: &'a T)` likewise keeps
+/// `r` only through a field of lifetime `'a`.
+pub fn declared_keeps(
+    receiver: Option<&Ty>,
+    params: &[Ty],
+    class: &mut impl FnMut(&str, &[Ty]) -> bool,
+) -> Vec<(usize, usize)> {
+    let slots: Vec<&Ty> = receiver.into_iter().chain(params).collect();
+    let mut keeps = Vec::new();
+    for (from, from_ty) in slots.iter().enumerate() {
+        let pointees = from_ty.pointees();
+        if pointees.is_empty() {
+            continue;
+        }
+        for (into, into_ty) in slots.iter().enumerate() {
+            let container = into_ty.deref_ty().unwrap_or(into_ty);
+            if from != into
+                && container.may_hold_reference_to(&pointees, &mut |name| class(name, &pointees))
+            {
+                keeps.push((from, into));
+            }
+        }
+    }
+    keeps
+}
+
+/// The slots (receiver first) whose references a result declared `ret`
+/// may carry: none when `ret` can hold no reference, else each slot whose
+/// declared type below its own top reference may hold one
+/// ([`Ty::may_hold_reference`]), counting a type parameter only when it
+/// also occurs in `ret`. `get(key: &K) -> Option[&V]` carries the receiver
+/// (`V`), not the key.
+pub fn result_carries(receiver: Option<&Ty>, params: &[Ty], ret: &Ty) -> Vec<usize> {
+    if !ret.may_hold_reference(&mut |_| true) {
+        return Vec::new();
+    }
+    let mut in_result = HashSet::new();
+    ret.any(&mut |t: &Ty| {
+        if let Ty::TypeParam { name, .. } = t {
+            in_result.insert(name.clone());
+        }
+        false
+    });
+    // A callable's captures reach the result only through what it returns
+    // or a result that can store a callable (Rust: `fn tap<F: Fn(&Self)>(self,
+    // f: F) -> Self` names none of `F`'s lifetimes); a bare type parameter
+    // gets only the references of the slots that name it.
+    let stores_callable = ret.any_within(&mut |t: &Ty| t.hides_contents(), &mut |_| true);
+    receiver
+        .into_iter()
+        .chain(params)
+        .enumerate()
+        .filter(|(_, ty)| {
+            let ty = ty.deref_ty().unwrap_or(ty);
+            let mut named = |name: &str| in_result.contains(name);
+            match ty.callable_signature() {
+                Some((_, returns)) if !stores_callable => returns.may_hold_reference(&mut named),
+                _ => ty.may_hold_reference(&mut named),
+            }
+        })
+        .map(|(slot, _)| slot)
+        .collect()
 }
 
 /// Class shells whose instances are represented by a structural `Ty` head
@@ -481,6 +873,137 @@ mod map_inner_tests {
 #[cfg(test)]
 mod ty_helper_tests {
     use super::*;
+
+    #[test]
+    fn result_source_follows_rust_elision() {
+        let r = |t: Ty| Ty::Ref(Box::new(t));
+        let k = Ty::TypeParam {
+            name: "K".to_string(),
+            bounds: vec![],
+        };
+        let keys = Ty::Array(Box::new(r(k.clone())));
+        // A receiver is the source of a result holding a reference.
+        assert_eq!(
+            result_source(true, &[], &keys),
+            ResultSource::Slots(vec![0])
+        );
+        // A declared result with no reference borrows nothing, even when an
+        // instance's `V` is a reference.
+        assert_eq!(
+            result_source(true, &[r(k.clone())], &Ty::Option(Box::new(k.clone()))),
+            ResultSource::Nothing
+        );
+        // Without a receiver: the one reference parameter (a block is
+        // none); several are ambiguous.
+        let block = r(Ty::Fn {
+            params: vec![],
+            ret: Box::new(Ty::Unit),
+        });
+        assert_eq!(
+            result_source(false, &[Ty::Int, r(Ty::String), block], &r(Ty::String)),
+            ResultSource::Slots(vec![1])
+        );
+        assert_eq!(
+            result_source(false, &[r(Ty::String), r(Ty::String)], &r(Ty::String)),
+            ResultSource::Ambiguous(vec![0, 1])
+        );
+        assert_eq!(
+            result_source(false, &[Ty::Int], &r(Ty::String)),
+            ResultSource::Unknown
+        );
+        // A named lifetime picks every parameter carrying it.
+        let named = |t: Ty| Ty::RefLifetime("a".to_string(), Box::new(t));
+        assert_eq!(
+            result_source(
+                false,
+                &[named(Ty::String), r(Ty::String), named(Ty::String)],
+                &named(Ty::String)
+            ),
+            ResultSource::Slots(vec![0, 2])
+        );
+    }
+
+    /// The carries half: the receiver and each parameter whose declared type
+    /// below its top reference may hold a reference the result can hold.
+    #[test]
+    fn result_carries_reads_the_declared_types() {
+        let r = |t: Ty| Ty::Ref(Box::new(t));
+        let table = Ty::Map(Box::new(tp("K")), Box::new(tp("V")));
+        let opt = |t: Ty| Ty::Option(Box::new(t));
+        // `get(key: &K) -> Option[&V]` and `remove(key: &K) -> Option[V]`,
+        // as a method and as a C declaration (the same receiver type):
+        // the receiver only.
+        for ret in [opt(r(tp("V"))), opt(tp("V"))] {
+            let facts = declared_result(Some(&table), &[r(tp("K"))], &ret, &mut |_, _| true);
+            assert_eq!(facts.carries, vec![0], "{ret:?}");
+        }
+        // `make(h: &var Hash[Int, &String]) -> Option[&String]`: slot 0.
+        let held = Ty::RefMut(Box::new(Ty::Map(
+            Box::new(Ty::Int),
+            Box::new(r(Ty::String)),
+        )));
+        assert_eq!(result_carries(None, &[held], &opt(r(Ty::String))), vec![0]);
+        // `pick(s: &String, xs: Array[&String]) -> &String`: `xs` only.
+        let xs = Ty::Array(Box::new(r(Ty::String)));
+        assert_eq!(
+            result_carries(None, &[r(Ty::String), xs], &r(Ty::String)),
+            vec![1]
+        );
+        // A user class, a `Proc` and a `some` mixin value may hold
+        // references their types do not show.
+        let class = Ty::Class {
+            name: "W".into(),
+            generic_args: vec![],
+        };
+        let some = Ty::SomeMixin(vec![MixinRef {
+            name: "Show".into(),
+            generic_args: vec![],
+        }]);
+        let proc_ty = any_fn(vec![], Ty::Int);
+        assert_eq!(
+            result_carries(None, &[r(class.clone()), proc_ty, some], &class),
+            vec![0, 1, 2]
+        );
+        // A closure's captures reach the result only through what it
+        // returns: `tap(f: Fn(&Self) -> nil) -> Self` carries the receiver,
+        // `then[U](f: Fn(&Self) -> U) -> U` carries `f`.
+        let self_ty = tp("Self");
+        let block = |ret: Ty| Ty::Fn {
+            params: vec![r(self_ty.clone())],
+            ret: Box::new(ret),
+        };
+        assert_eq!(
+            result_carries(Some(&self_ty), &[block(Ty::Unit)], &self_ty),
+            vec![0]
+        );
+        assert_eq!(
+            result_carries(Some(&self_ty), &[block(tp("U"))], &tp("U")),
+            vec![1]
+        );
+        // A result that can hold no reference carries nothing.
+        assert!(result_carries(Some(&table), &[], &Ty::Int).is_empty());
+        // What a written slot may keep: a class receiver whose fields may
+        // hold a `&String` and a `&var Array[&String]` keep a `&String`;
+        // a class whose fields cannot keeps nothing, and a `Hash[K, V]`
+        // never keeps a `&K` (it holds `K`s).
+        let arr = Ty::RefMut(Box::new(Ty::Array(Box::new(r(Ty::String)))));
+        assert_eq!(
+            declared_keeps(Some(&class), &[r(Ty::String), arr.clone()], &mut |_, _| {
+                true
+            }),
+            vec![(1, 0), (1, 2), (2, 0)]
+        );
+        assert_eq!(
+            declared_keeps(Some(&class), &[r(Ty::String), arr], &mut |_, _| false),
+            vec![(1, 2)]
+        );
+        assert!(declared_keeps(Some(&table), &[r(tp("K"))], &mut |_, _| true).is_empty());
+        let shell = Ty::Class {
+            name: "Hash".into(),
+            generic_args: vec![tp("K"), tp("V")],
+        };
+        assert!(declared_keeps(Some(&shell), &[r(tp("K"))], &mut |_, _| true).is_empty());
+    }
 
     fn tp(name: &str) -> Ty {
         Ty::TypeParam {
@@ -699,6 +1222,15 @@ mod ty_helper_tests {
                 "Ty::from_builtin_head is not the inverse of Ty::builtin_head for {ty:?}"
             );
         }
+    }
+
+    #[test]
+    fn exceeds_nodes_counts_every_nested_type() {
+        let pair = Ty::Tuple(vec![Ty::Int, Ty::Int]);
+        assert!(!pair.exceeds_nodes(3));
+        assert!(pair.exceeds_nodes(2));
+        assert!(!Ty::Int.exceeds_nodes(1));
+        assert!(Ty::Int.exceeds_nodes(0));
     }
 
     #[test]

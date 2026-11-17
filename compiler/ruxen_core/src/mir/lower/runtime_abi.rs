@@ -630,7 +630,10 @@ fn listed(table: &[SymbolRow], callee: &str) -> bool {
 /// `ruxen_vec_drop` frees the result's spine (which this list owns) and
 /// none of its elements (which it borrows). The element type carrying the
 /// borrow is what keeps them honest; a view helper retyped to return owned
-/// elements would become a violator.
+/// elements would become a violator. That same element type makes the
+/// result `View::Holds` of what it points into and carries (its `CallFact`,
+/// `drops::record_default_views`), so
+/// the loan check keeps the source borrowed while the view is used.
 const FRESH_ALLOC_CALLEES: &[SymbolRow] = &[
     ("ruxen_string_from", &["String_from"]),
     ("ruxen_string_concat", &[]),

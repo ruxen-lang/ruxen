@@ -17,7 +17,7 @@
 module BufReader
   mixin Reader
     lib "../io/runtime/bufio.c"
-      def read_line as "ruxen_bufreader_read_line" -> Result[Option[String], IoError]
+      def read_line as "ruxen_bufreader_read_line" -> owned Result[Option[String], IoError]
       def read as "ruxen_bufreader_read"(buf: &var Array[Int]) -> Result[Int, IoError]
     end
   end

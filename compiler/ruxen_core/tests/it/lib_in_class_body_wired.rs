@@ -177,3 +177,27 @@ fn mixin_lib_method_resolves_mixin_generic_param() {
         signature.return_ty
     );
 }
+
+/// A `lib` declaration whose compiler-supplied descriptor parameter comes
+/// before a parameter callers pass is E0747: the appended descriptor would
+/// land in a caller's argument position.
+#[test]
+fn supplied_parameter_before_a_passed_one_is_e0747() {
+    let source = "\
+class Box[T]
+  lib \"box.c\"
+    def self.lead as \"box_lead\"(elems: ElemDesc[T], n: Int) -> Int
+  end
+end
+
+puts(Box.lead(1))
+";
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize().expect("lex");
+    let program = Parser::new(tokens).parse().expect("parse");
+    let result = typeck::type_check(&program);
+    let err = Lowerer::new(&result.symbols)
+        .lower_program(&result.program)
+        .expect_err("a supplied parameter before a passed one must fail");
+    assert!(err.contains("error[E0747]"), "unexpected diagnostic: {err}");
+}

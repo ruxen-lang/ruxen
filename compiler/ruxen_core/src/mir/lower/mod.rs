@@ -846,6 +846,19 @@ impl<'a> Lowerer<'a> {
                                 .map(|ty| crate::mir::param_modes::param_mode(ty, self.symbols)),
                         )
                         .collect(),
+                    declared_result: crate::hir::types::declared_result(
+                        hir_fn
+                            .param_types
+                            .first()
+                            .filter(|_| hir_fn.has_receiver)
+                            .map(|ty| self.declared_receiver(ty))
+                            .as_ref(),
+                        &hir_fn.param_types[usize::from(hir_fn.has_receiver)..],
+                        hir_fn.return_type.as_ref().unwrap_or(&Ty::Unit),
+                        &mut |name, pointees| {
+                            self.symbols.fields_may_hold_reference_to(name, pointees)
+                        },
+                    ),
                 });
             }
             mir.ffi_libs.push(crate::mir::nodes::FfiLib {
@@ -951,11 +964,25 @@ impl<'a> Lowerer<'a> {
             }
         }
         let summaries = self.call_summaries(&mir);
-        for func in &mut mir.functions {
-            if self.drop_pending.contains_key(&func.name) {
-                drops::record_default_views(func, &summaries);
-            }
-        }
+        // One fact per call result: each body's view of its call results
+        // reads its callees' body summaries, found by the loan checker's
+        // transfer in one fixpoint with the closure loan effects. Each
+        // round starts again from lowering's own views. Every body gets
+        // views, synthesized ones too (a derived `clone` is summarised).
+        let mut lowered_views = HashMap::new();
+        let fixpoint = crate::mir::loan_check::summary::fixpoint(
+            &mut mir,
+            &summaries.modes,
+            self.symbols,
+            |func, facts| {
+                let lowered = lowered_views
+                    .entry(func.name.clone())
+                    .or_insert_with(|| func.views.clone());
+                func.views = lowered.clone();
+                drops::record_default_views(func, &summaries, facts);
+            },
+        );
+        mir.summary_rounds = fixpoint.rounds;
         if self.check_loans {
             // The rebind frees elision deletes never run, so they are not
             // checked (`drops::elided_rebind_frees`, the one rule).
@@ -968,7 +995,13 @@ impl<'a> Lowerer<'a> {
                     (func.name.as_str(), sites.into_iter().collect())
                 })
                 .collect();
-            self.loan_errors = crate::mir::loan_check::check_program(&mir, self.symbols, &elided);
+            self.loan_errors = crate::mir::loan_check::check_program(
+                &mir,
+                &summaries.modes,
+                self.symbols,
+                &elided,
+                &fixpoint.effects,
+            );
         }
 
         // Drop elaboration for every lowered body, now that every callee's
@@ -1015,6 +1048,40 @@ impl<'a> Lowerer<'a> {
         Ok(mir)
     }
 
+    /// A receiver's declared type: a class spelled without its generic
+    /// arguments (a `.rx` shell method's `Hash`, `self` from a mangled
+    /// name) gets its declared parameters, so `Hash` reads as
+    /// `Hash[K, V]` and shows what it holds; a primitive home (`String`)
+    /// is its primitive type.
+    fn declared_receiver(&self, ty: &Ty) -> Ty {
+        let Ty::Class { name, generic_args } = ty else {
+            return ty.clone();
+        };
+        if let Some(primitive) =
+            crate::resolve::primitive_class_ty(name).filter(|_| generic_args.is_empty())
+        {
+            return primitive;
+        }
+        let params = self
+            .symbols
+            .type_def(name)
+            .and_then(|def| def.kind.generic_params())
+            .unwrap_or_default();
+        if !generic_args.is_empty() || params.is_empty() {
+            return ty.clone();
+        }
+        Ty::Class {
+            name: name.clone(),
+            generic_args: params
+                .iter()
+                .map(|p| Ty::TypeParam {
+                    name: p.name.clone(),
+                    bounds: p.bounds.clone(),
+                })
+                .collect(),
+        }
+    }
+
     /// Run drop elaboration (`drops::insert_drops`) on every function
     /// lowered from a body, then remove the statement markers.
     ///
@@ -1033,9 +1100,11 @@ impl<'a> Lowerer<'a> {
         let mut summaries = drops::CallSummaries {
             ffi_by_value: self.ffi_by_value.clone(),
             declared_results: self.declared_results.clone(),
+            modes: crate::mir::param_modes::CalleeModes::new(mir),
             ..Default::default()
         };
         summaries.record_roles(&mir.functions);
+        summaries.record_result_sources(&mir.ffi_libs, &mir.functions);
         for func in mir
             .functions
             .iter()

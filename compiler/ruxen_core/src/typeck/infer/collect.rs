@@ -864,18 +864,22 @@ impl<'a> InferenceEngine<'a> {
         // positional `.new`). Structs typically take the field path.
         let ctor_params = self.constructor_param_types(class_name);
 
-        // Walk the parameters and capture TypeParam positions.
-        // The full structural binder first (a class, tuple, map or result
-        // argument binds its parameters: `init(w: Wrap[T])` from `Wrap[Int]`,
-        // `init(ps: Array[(K, V)])` from `Array[(String, Int)]`), then the
-        // shallow walk, which also ties a parameter to an argument's still
-        // unresolved inference variable.
+        // Walk the parameters and capture TypeParam positions with the one
+        // structural binder (`init(w: Wrap[T])` from `Wrap[Int]`,
+        // `init(ps: Array[(K, V)])` from `Array[(String, Int)]`). Per
+        // argument, a resolved type binds first; a second pass then also ties
+        // a parameter to that argument's still unresolved inference variable.
         let names: std::collections::HashSet<String> = generic_params.iter().cloned().collect();
         let mut bindings: std::collections::HashMap<String, Ty> = std::collections::HashMap::new();
         for (param_ty, arg) in ctor_params.iter().zip(args.iter()) {
             let actual = self.ctx.resolve(&arg.ty);
             Self::bind_type_params_from_args(&names, param_ty, &actual, &mut bindings);
-            Self::collect_typeparam_bindings(param_ty, &actual, &mut bindings);
+            param_ty.bind_type_params(
+                &actual,
+                &|name| names.contains(name),
+                &|_| true,
+                &mut bindings,
+            );
         }
 
         // Assemble generic args in declaration order. A param not determined
@@ -957,38 +961,6 @@ impl<'a> InferenceEngine<'a> {
             }
             _ => None,
         })
-    }
-
-    /// Walk a parameter type and an argument type in parallel, capturing
-    /// every TypeParam name → concrete type binding encountered.
-    fn collect_typeparam_bindings(
-        param: &Ty,
-        arg: &Ty,
-        bindings: &mut std::collections::HashMap<String, Ty>,
-    ) {
-        match (param, arg) {
-            (Ty::TypeParam { name, .. }, concrete) => {
-                bindings
-                    .entry(name.clone())
-                    .or_insert_with(|| concrete.clone());
-            }
-            (Ty::Ref(a), Ty::Ref(b)) | (Ty::RefMut(a), Ty::RefMut(b)) => {
-                Self::collect_typeparam_bindings(a, b, bindings);
-            }
-            (Ty::Ref(a), b) | (Ty::RefMut(a), b) => {
-                Self::collect_typeparam_bindings(a, b, bindings);
-            }
-            (a, Ty::Ref(b)) | (a, Ty::RefMut(b)) => {
-                Self::collect_typeparam_bindings(a, b, bindings);
-            }
-            (Ty::Array(a), Ty::Array(b)) => {
-                Self::collect_typeparam_bindings(a, b, bindings);
-            }
-            (Ty::Option(a), Ty::Option(b)) => {
-                Self::collect_typeparam_bindings(a, b, bindings);
-            }
-            _ => {}
-        }
     }
 
     /// Substitute every `TypeParam { name: X }` in `ret_ty` with the
@@ -1113,10 +1085,10 @@ impl<'a> InferenceEngine<'a> {
     /// Generic free-function call inference: harvest `{ type_param → concrete }`
     /// bindings by structurally matching each declared formal parameter type
     /// (which may contain the function's own `TypeParam`s) against the
-    /// resolved actual argument type. One-directional — only names in
+    /// resolved actual argument type, through the one shared binder
+    /// ([`Ty::bind_type_params`]). One-directional — only names in
     /// `param_names` (the function's own generic params) are bound; every
-    /// other position is walked for nested bindings. Mirrors the
-    /// `subst_generics_in_return` direction so the two stay consistent.
+    /// other position is walked for nested bindings.
     ///
     /// Used by the `FnCall` handler so `expect[T](actual: T) -> Matcher[T]`
     /// called as `expect(aString)` yields `{ T → String }`, making the call
@@ -1128,206 +1100,16 @@ impl<'a> InferenceEngine<'a> {
         actual: &Ty,
         out: &mut std::collections::HashMap<String, Ty>,
     ) {
-        // Peel matching reference layers on both sides so `&T` vs `&String`
-        // binds `T → String`. If only one side is a reference, fall through
-        // to the structural match below (the `TypeParam` arm still binds the
-        // whole actual, which is the safe over-approximation).
-        match (formal, actual) {
-            (Ty::Ref(f), Ty::Ref(a))
-            | (Ty::RefMut(f), Ty::RefMut(a))
-            | (Ty::RefLifetime(_, f), Ty::RefLifetime(_, a))
-            | (Ty::RefMutLifetime(_, f), Ty::RefMutLifetime(_, a)) => {
-                Self::bind_type_params_from_args(param_names, f, a, out);
-                return;
-            }
-            // A `&T` / `&var T` formal matched against a non-reference actual
-            // (callers commonly pass an owned value where the signature
-            // borrows): bind `T` to the actual value type.
-            (Ty::Ref(f), _) | (Ty::RefMut(f), _) => {
-                Self::bind_type_params_from_args(param_names, f, actual, out);
-                return;
-            }
-            _ => {}
-        }
-
-        match formal {
-            Ty::TypeParam { name, .. } if param_names.contains(name) => {
-                // Don't bind to a still-unresolved inference variable; that
-                // would only restate the unknown and risk over-eager
-                // substitution. Leave `T` free so the existing
-                // `wrap_async_return` behaviour (TypeParam passthrough) is
-                // preserved for return-only / turbofish cases.
-                if !matches!(actual, Ty::Infer(_) | Ty::TypeParam { .. }) {
-                    // First binding wins; consistent re-binding is a no-op.
-                    out.entry(name.clone()).or_insert_with(|| actual.clone());
-                }
-            }
-            Ty::Option(f) => {
-                if let Ty::Option(a) = actual {
-                    Self::bind_type_params_from_args(param_names, f, a, out);
-                }
-            }
-            Ty::Array(f) => {
-                if let Ty::Array(a) = actual {
-                    Self::bind_type_params_from_args(param_names, f, a, out);
-                }
-            }
-            Ty::Set(f) => {
-                if let Ty::Set(a) = actual {
-                    Self::bind_type_params_from_args(param_names, f, a, out);
-                }
-            }
-            Ty::Map(fk, fv) => {
-                if let Ty::Map(ak, av) = actual {
-                    Self::bind_type_params_from_args(param_names, fk, ak, out);
-                    Self::bind_type_params_from_args(param_names, fv, av, out);
-                }
-            }
-            Ty::Result(fo, fe) => {
-                if let Ty::Result(ao, ae) = actual {
-                    Self::bind_type_params_from_args(param_names, fo, ao, out);
-                    Self::bind_type_params_from_args(param_names, fe, ae, out);
-                }
-            }
-            Ty::Tuple(fs) => {
-                if let Ty::Tuple(as_) = actual {
-                    if fs.len() == as_.len() {
-                        for (f, a) in fs.iter().zip(as_.iter()) {
-                            Self::bind_type_params_from_args(param_names, f, a, out);
-                        }
-                    }
-                }
-            }
-            Ty::Class {
-                name: fname,
-                generic_args: fargs,
-            } => {
-                if let Ty::Class {
-                    name: aname,
-                    generic_args: aargs,
-                } = actual
-                {
-                    if fname == aname && fargs.len() == aargs.len() {
-                        for (f, a) in fargs.iter().zip(aargs.iter()) {
-                            Self::bind_type_params_from_args(param_names, f, a, out);
-                        }
-                    }
-                }
-            }
-            Ty::Struct {
-                name: fname,
-                generic_args: fargs,
-            } => {
-                if let Ty::Struct {
-                    name: aname,
-                    generic_args: aargs,
-                } = actual
-                {
-                    if fname == aname && fargs.len() == aargs.len() {
-                        for (f, a) in fargs.iter().zip(aargs.iter()) {
-                            Self::bind_type_params_from_args(param_names, f, a, out);
-                        }
-                    }
-                }
-            }
-            Ty::Enum {
-                name: fname,
-                generic_args: fargs,
-            } => {
-                if let Ty::Enum {
-                    name: aname,
-                    generic_args: aargs,
-                } = actual
-                {
-                    if fname == aname && fargs.len() == aargs.len() {
-                        for (f, a) in fargs.iter().zip(aargs.iter()) {
-                            Self::bind_type_params_from_args(param_names, f, a, out);
-                        }
-                    }
-                }
-            }
-            // Closure-typed formal parameter — the load-bearing arm for
-            // the `.rx` closure combinators (`map[U](f: any Fn[Fn(T) ->
-            // U])`). The function's own generic `U` lives in the closure's
-            // RETURN position, so it can only be bound from the actual
-            // closure argument's return type. Match the formal's params
-            // and ret against the actual's structurally; the `TypeParam`
-            // arm above binds `U` once it reaches the ret leaf.
-            Ty::Fn {
-                params: fparams,
-                ret: fret,
-            }
-            | Ty::FnMut {
-                params: fparams,
-                ret: fret,
-            }
-            | Ty::FnOnce {
-                params: fparams,
-                ret: fret,
-            } => {
-                if let Ty::Fn {
-                    params: aparams,
-                    ret: aret,
-                }
-                | Ty::FnMut {
-                    params: aparams,
-                    ret: aret,
-                }
-                | Ty::FnOnce {
-                    params: aparams,
-                    ret: aret,
-                } = actual
-                {
-                    if fparams.len() == aparams.len() {
-                        for (f, a) in fparams.iter().zip(aparams.iter()) {
-                            Self::bind_type_params_from_args(param_names, f, a, out);
-                        }
-                    }
-                    Self::bind_type_params_from_args(param_names, fret, aret, out);
-                }
-            }
-            // `any Fn[Fn(T) -> U]` / `some Fn[...]` formal — the surface
-            // spelling the `.rx` combinators use. The underlying
-            // `Ty::Fn { params, ret }` rides in the `Fn`/`FnMut`/`FnOnce`
-            // bound's first generic arg (mirrors the `call` dispatch peel
-            // at the top of `resolve_method_call`). Peel the bound and
-            // recurse so the inner `Ty::Fn` arm above binds `U`. The
-            // actual closure arg may itself be a bare `Ty::Fn` (a closure
-            // literal) or an identically-wrapped mixin (a forwarded dyn
-            // closure value) — both are handled by recursing with the
-            // peeled formal against the un-peeled actual (the inner arm
-            // peels the actual's wrapper too if present).
-            Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) => {
-                for bound in bounds {
-                    if bound.is_fn_family() {
-                        if let Some(inner) = bound.generic_args.first() {
-                            let actual_inner = Self::peel_fn_mixin(actual);
-                            Self::bind_type_params_from_args(param_names, inner, actual_inner, out);
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Peel an `any Fn[Fn(...)]` / `some Fn[...]` wrapper down to the
-    /// underlying `Ty::Fn { params, ret }` it carries. A bare `Ty::Fn`
-    /// (closure literal) is returned unchanged. Used by
-    /// `bind_type_params_from_args` so a closure ARGUMENT that is itself
-    /// dyn-erased (a forwarded `any Fn` value) still exposes its
-    /// `params`/`ret` for generic-param harvesting.
-    fn peel_fn_mixin(ty: &Ty) -> &Ty {
-        if let Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) = ty {
-            for bound in bounds {
-                if bound.is_fn_family() {
-                    if let Some(inner) = bound.generic_args.first() {
-                        return inner;
-                    }
-                }
-            }
-        }
-        ty
+        // Don't bind to a still-unresolved inference variable or another
+        // type parameter; that would only restate the unknown. Leave `T` free
+        // so return-only / turbofish params keep the `wrap_async_return`
+        // TypeParam passthrough.
+        formal.bind_type_params(
+            actual,
+            &|name| param_names.contains(name),
+            &|ty| !matches!(ty, Ty::Infer(_) | Ty::TypeParam { .. }),
+            out,
+        );
     }
 
     /// Harvest `{generic_param → concrete}` bindings from (args × formal

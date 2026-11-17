@@ -359,7 +359,7 @@ def operand_section():
 # ---------------------------------------------------------------------------
 
 MERGE_PRELUDE = SHAPE_PRELUDE + '''
-def pick(a: &A, b: &A, c: Bool) -> &A
+def pick[l](a: &l A, b: &l A, c: Bool) -> &l A
   if c
     a
   else
@@ -367,7 +367,7 @@ def pick(a: &A, b: &A, c: Bool) -> &A
   end
 end
 
-def pick_s(a: &String, b: &String, c: Bool) -> &String
+def pick_s[l](a: &l String, b: &l String, c: Bool) -> &l String
   if c
     a
   else

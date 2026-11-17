@@ -41,6 +41,9 @@
 ## site could not be typed. The runtime never inspects a key's bits to
 ## decide what a key IS. A new method that adds entries to a table takes a
 ## `KeyDesc[K]` too; a method that only looks keys up needs nothing.
+## `remove` and `clear` free the keys (and values) they drop, so they take
+## the table `var`: a live `keys` / `to_a` view of those keys is an E1002
+## borrow conflict, not a read of freed memory.
 ##
 ## The internal `Ty::Map` variant and the `ruxen_hash_*` runtime
 ## symbols keep their legacy names; only the surface spelling is
@@ -57,8 +60,8 @@ class Hash[K, V]
     def values as "ruxen_hash_values" -> Array[&V]
     def to_a as "ruxen_hash_entries" -> Array[(&K, &V)]
     def insert as "ruxen_hash_insert"(key: K, value: V, keys: KeyDesc[K])
-    def remove as "ruxen_hash_remove"(key: &K) -> Option[V]
-    def clear as "ruxen_hash_clear"
+    def var remove as "ruxen_hash_remove"(key: &K) -> Option[V]
+    def var clear as "ruxen_hash_clear"
   end
 
   # The combinator family (`map`/`select`/`reject`/`find`/`reduce`/

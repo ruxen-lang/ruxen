@@ -97,6 +97,7 @@ impl Resolver {
     ) -> ResolveResult {
         // Read before the post-merge fixup consumes the package list.
         let package_aware = !self.bootstrap_auto_packages.is_empty();
+        let packages = self.bootstrap_auto_packages.clone();
         self.register_builtins();
 
         // Collected FFI library declarations (filled by the
@@ -203,7 +204,8 @@ impl Resolver {
         // stdlib class drop methods, and codegen lowers any user-body
         // method (e.g. `def var poll` on a hand-written future).
         let mut bootstrap_items: Vec<HirItem> = Vec::new();
-        for bs_program in bootstrap_programs {
+        for (idx, bs_program) in bootstrap_programs.iter().enumerate() {
+            let from = self.symbols.len();
             for item in &bs_program.items {
                 if !Self::is_bootstrap_supported_item(item) {
                     continue;
@@ -227,6 +229,7 @@ impl Resolver {
                     bootstrap_items.push(hir_item);
                 }
             }
+            self.record_origins(packages.get(idx).map(|(name, _)| name.as_str()), from);
         }
 
         // Pass 2: Fully resolve all items. Bootstrap (prelude) items are the
@@ -239,6 +242,8 @@ impl Resolver {
                 items.push(hir_item);
             }
         }
+
+        self.check_result_sources();
 
         let hir_program = HirProgram {
             items,
@@ -262,6 +267,73 @@ impl Resolver {
             type_registry: self.type_registry,
             method_aliases: self.method_aliases,
         }
+    }
+
+    /// Record that every definition made since `from` (a `SymbolTable::len`
+    /// taken before a bootstrap program's step) comes from that program's
+    /// standard library `package` (`SymbolTable::origin`): its top-level
+    /// items, their methods and fields alike. Nothing for the legacy
+    /// package-less path.
+    fn record_origins(&mut self, package: Option<&str>, from: usize) {
+        let Some(package) = package else {
+            return;
+        };
+        for id in from..self.symbols.len() {
+            self.symbols.set_origin(id as DefId, package);
+        }
+    }
+
+    /// E0748: a function whose declared result holds a reference, with no
+    /// receiver and several reference parameters, leaves what the result
+    /// borrows ambiguous (`hir::types::result_source`, the one elision
+    /// rule the loan check reads at every call; Rust's E0106).
+    fn check_result_sources(&mut self) {
+        let mut errors = Vec::new();
+        // A function is defined once per resolve pass that registers its
+        // signature (pass 1b, then its body): one error per declaration.
+        let mut reported = std::collections::HashSet::new();
+        for def in self.symbols.iter() {
+            let (DefKind::Function { signature } | DefKind::Method { signature, .. }) = &def.kind
+            else {
+                continue;
+            };
+            let has_receiver = !signature.is_class_method
+                && (signature.self_mode.is_some() || matches!(def.kind, DefKind::Method { .. }));
+            let params: Vec<crate::hir::types::Ty> =
+                signature.params.iter().map(|p| p.ty.clone()).collect();
+            let crate::hir::types::ResultSource::Ambiguous(slots) =
+                crate::hir::types::result_source(has_receiver, &params, &signature.return_ty)
+            else {
+                continue;
+            };
+            if !reported.insert((def.span.start, def.span.end)) {
+                continue;
+            }
+            let names: Vec<String> = slots
+                .iter()
+                .map(|&slot| format!("`{}`", signature.params[slot].name))
+                .collect();
+            let mut diagnostic = crate::diagnostics::Diagnostic::error_with_code(
+                format!(
+                    "`{}` returns `{}`, which holds a reference, but it has no receiver and \
+                     {} reference parameters ({}), so which one the result borrows from is \
+                     ambiguous",
+                    def.name,
+                    signature.return_ty,
+                    slots.len(),
+                    names.join(", ")
+                ),
+                def.span.clone(),
+                "E0748",
+            );
+            diagnostic.help.push(format!(
+                "make `{}` a method of the value it borrows from, return an owned value, or \
+                 name the lifetime: `def f[a](x: &a T, y: &a T) -> &a T`",
+                def.name
+            ));
+            errors.push(diagnostic);
+        }
+        self.diagnostics.extend(errors);
     }
 
     /// Merge parsed stdlib `Program`s into the resolver scope.
@@ -307,7 +379,15 @@ impl Resolver {
         // lib-decl processing on the first walk lets the second walk
         // resolve those once every class name is registered.
         let first_walk_ctx = super::ffi_registration::RegistrationCtx::bootstrap_first_walk();
+        let packages: Vec<Option<String>> = (0..programs.len())
+            .map(|idx| {
+                self.bootstrap_auto_packages
+                    .get(idx)
+                    .map(|(name, _)| name.clone())
+            })
+            .collect();
         for (idx, program) in programs.iter().enumerate() {
+            let from = self.symbols.len();
             for item in &program.items {
                 if Self::is_bootstrap_supported_item(item) {
                     self.register_top_level_type_with_ffi(item, ffi_libs, first_walk_ctx);
@@ -333,6 +413,7 @@ impl Resolver {
                     );
                 }
             }
+            self.record_origins(packages[idx].as_deref(), from);
             // (Q37: stdlib `yield` helpers get their `__block` from their own
             // body in `funcs.rs::resolve_function`, the same as user code —
             // no name-keyed pre-scan, so no cross-function collision.)
@@ -382,12 +463,14 @@ impl Resolver {
         // Second walk: every class name in every bootstrap program is
         // now forward-declared in `type_registry`, so the deferred
         // class-body lib decls can resolve cross-class return types.
-        for program in programs {
+        for (idx, program) in programs.iter().enumerate() {
+            let from = self.symbols.len();
             for item in &program.items {
                 if Self::is_bootstrap_supported_item(item) {
                     self.process_deferred_class_lib_decls(item, ffi_libs, &[]);
                 }
             }
+            self.record_origins(packages[idx].as_deref(), from);
         }
     }
 

@@ -40,10 +40,15 @@
 //!   0) are its effects. A closure pair passed to a call, or called, does
 //!   them to the places its captures box slots were filled from: it takes
 //!   those loans, then each access is checked with the call's other
-//!   operands in use. Effects are summarised before the bodies are checked,
-//!   rerunning the closure bodies until they stop growing (a pair passed
-//!   inside a body is an access below that body's captures), at most
+//!   operands in use. The loan effects come from the summary fixpoint
+//!   ([`summary`]); the checking replay adds the access effects, rerunning
+//!   the closure bodies until they stop growing (a pair passed inside a
+//!   body is an access below that body's captures), at most
 //!   `SUMMARY_ROUNDS` times.
+//! - What a call result borrows and carries ([`CallFact`]) is the callee's
+//!   declared fact plus its body summary: the transfer below run in summary
+//!   mode, where each parameter holds a [`LoanOn::Held`] marker for the
+//!   references it already holds ([`summary`]).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -51,17 +56,17 @@ use crate::borrow_check::errors::{BorrowError, ErrorCode, SpanLabel};
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 use crate::mir::dataflow::{Liveness, LocalSet};
-use crate::mir::lang_intrinsics::runtime_name;
 use crate::mir::nodes::{
-    BlockId, LocalId, LocalKind, MirFnRole, MirFunction, MirInst, MirProgram, MirValue, ParamMode,
-    View,
+    BlockId, CallFact, LocalId, LocalKind, MirFnRole, MirFunction, MirInst, MirProgram, MirValue,
+    ParamMode, View,
 };
-use crate::mir::param_modes::unknown_param_mode;
-use crate::mir::residual_abi::RESIDUAL_RUNTIME_FNS;
+use crate::mir::param_modes::{call_stores, resolve_modes, CalleeModes};
 use crate::resolve::symbols::SymbolTable;
 
 mod closures;
-use closures::{Effect, Effects, Pairs};
+pub mod summary;
+pub use closures::Effects;
+use closures::{Effect, Pairs};
 
 /// A path element meaning "somewhere inside the value".
 const INSIDE: usize = usize::MAX;
@@ -88,12 +93,15 @@ const MAX_PLACE_DEPTH: usize = 8;
 ///
 /// `elided` holds, by function name, the instructions a later pass deletes
 /// (`drops::elided_rebind_frees`): they never run, so they are skipped.
+/// `published` holds the closure bodies' loan effects the summary fixpoint
+/// found ([`summary::fixpoint`]); the replay adds their access effects.
 pub fn check_program(
     mir: &MirProgram,
+    modes: &CalleeModes,
     symbols: &SymbolTable,
     elided: &HashMap<&str, HashSet<(BlockId, usize)>>,
+    published: &Effects,
 ) -> Vec<BorrowError> {
-    let modes = CalleeModes::new(mir);
     let none = HashSet::new();
     let skipped = |func: &MirFunction| elided.get(func.name.as_str()).unwrap_or(&none);
     let checked = |func: &MirFunction| {
@@ -107,16 +115,19 @@ pub fn check_program(
     // Each round checks every closure body with the effects the last round
     // found; effects only grow, so a round that finds the same ones is the
     // fixpoint, and its errors are the closure bodies' final ones.
-    let mut effects = Effects::new();
+    let mut effects = published.clone();
     let mut closure_errors: Option<HashMap<&str, Vec<BorrowError>>> = None;
     for _ in 0..SUMMARY_ROUNDS {
-        let mut found = Effects::new();
+        let mut found = published.clone();
         let mut round_errors = HashMap::new();
         for func in &closures {
             let (errors, effects_of) =
-                FnChecker::new(func, &modes, symbols, &effects, skipped(func)).run();
+                FnChecker::new(func, modes, symbols, &effects, skipped(func)).run();
             if !effects_of.is_empty() {
-                found.insert(func.name.clone(), effects_of);
+                found
+                    .entry(func.name.clone())
+                    .or_default()
+                    .extend(effects_of);
             }
             round_errors.insert(func.name.as_str(), errors);
         }
@@ -137,7 +148,7 @@ pub fn check_program(
         let errors_of = match closure_errors.remove(func.name.as_str()) {
             Some(errors) => errors,
             None => {
-                FnChecker::new(func, &modes, symbols, &effects, skipped(func))
+                FnChecker::new(func, modes, symbols, &effects, skipped(func))
                     .run()
                     .0
             }
@@ -154,43 +165,6 @@ pub fn check_program(
         }
     }
     errors
-}
-
-/// Every callee's declared [`ParamMode`]s, by the names a `Call` spells:
-/// the runtime symbols the compiler emits itself (`residual_abi`), then the
-/// `.rx` declarations (which win), then the program's functions.
-struct CalleeModes<'a> {
-    by_callee: HashMap<&'a str, &'a [ParamMode]>,
-}
-
-impl<'a> CalleeModes<'a> {
-    fn new(mir: &'a MirProgram) -> Self {
-        let mut by_callee: HashMap<&str, &[ParamMode]> = RESIDUAL_RUNTIME_FNS
-            .iter()
-            .map(|residual| (residual.name, residual.modes))
-            .collect();
-        for lib in &mir.ffi_libs {
-            for decl in &lib.functions {
-                by_callee.insert(decl.name.as_str(), &decl.param_modes);
-                by_callee.insert(decl.ruxen_name.as_str(), &decl.param_modes);
-            }
-        }
-        for func in &mir.functions {
-            by_callee.insert(func.name.as_str(), &func.param_modes);
-        }
-        CalleeModes { by_callee }
-    }
-
-    /// The modes `callee` declares, under its own name or the runtime
-    /// symbol it is linked as (`lang_intrinsics::runtime_name`); empty when
-    /// it declares none.
-    fn of(&self, callee: &str) -> &[ParamMode] {
-        let linked = runtime_name(callee).unwrap_or(callee);
-        [callee, linked]
-            .iter()
-            .find_map(|name| self.by_callee.get(name).copied())
-            .unwrap_or(&[])
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -248,11 +222,21 @@ impl Place {
 }
 
 struct Loan {
-    place: Place,
+    on: LoanOn,
     span: Option<Span>,
 }
 
+/// What a loan is on: a place, or (summary mode only) the references
+/// parameter `Held(p)` already held on entry. Conflict checks ignore
+/// `Held` loans, so they never produce an error.
+enum LoanOn {
+    Place(Place),
+    Held(usize),
+}
+
 type LoanId = usize;
+/// A callee's argument modes and the `(from, into)` slots it may keep.
+type CalleeShape<'a> = (&'a [ParamMode], Option<&'a [(usize, usize)]>);
 
 /// The places a local's value may denote: its own storage
 /// (`Place::local` of itself) when it may hold a value of its own, and each
@@ -306,6 +290,19 @@ impl State {
         self.alias
             .get(&local)
             .is_none_or(|places| places.contains(&Place::local(local)))
+    }
+
+    /// The loans stored in what `local` denotes: its own when it may own
+    /// its value, else those of each local owning a place it denotes (a
+    /// view's loan on that place is not stored in it).
+    fn stored(&self, local: LocalId) -> BTreeSet<LoanId> {
+        if self.may_own(local) {
+            return self.held(local);
+        }
+        self.places_of(local)
+            .iter()
+            .flat_map(|place| self.held(place.root))
+            .collect()
     }
 
     fn places_of(&self, local: LocalId) -> Places {
@@ -372,7 +369,7 @@ impl Access {
 
 struct FnChecker<'a> {
     func: &'a MirFunction,
-    modes: &'a CalleeModes<'a>,
+    modes: &'a CalleeModes,
     symbols: &'a SymbolTable,
     /// The closure bodies' effects, as summarised so far.
     effects: &'a Effects,
@@ -394,7 +391,7 @@ struct Here<'s> {
 impl<'a> FnChecker<'a> {
     fn new(
         func: &'a MirFunction,
-        modes: &'a CalleeModes<'a>,
+        modes: &'a CalleeModes,
         symbols: &'a SymbolTable,
         effects: &'a Effects,
         skipped: &'a HashSet<(BlockId, usize)>,
@@ -415,11 +412,48 @@ impl<'a> FnChecker<'a> {
     /// The body's errors, and its effects when it is a closure body.
     fn run(mut self) -> (Vec<BorrowError>, BTreeSet<Effect>) {
         let func = self.func;
-        let mut entry: Vec<Option<State>> = vec![None; func.blocks.len()];
+        let start = self.start();
+        let entry = self.transfer(start);
+        let liveness = Liveness::compute(func);
+        let mut errors = Vec::new();
+        for (block_id, block_entry) in entry.iter().enumerate() {
+            let Some(mut state) = block_entry.clone() else {
+                continue;
+            };
+            let live_after = liveness.after_each(func, block_id);
+            for (index, live) in live_after.iter().enumerate() {
+                let here = Here {
+                    live_after: live,
+                    errors: &mut errors,
+                };
+                self.step(&mut state, block_id, index, Some(here));
+            }
+        }
+        let found = self.loan_effects();
+        (errors, found)
+    }
+
+    /// This closure body's effects found so far, with a loan effect for
+    /// each loan below its captures.
+    fn loan_effects(mut self) -> BTreeSet<Effect> {
+        for (_, _, place) in self.loan_ids.keys() {
+            if let Some((slot, suffix)) = self.below_captures(place) {
+                self.found.insert(Effect {
+                    slot,
+                    suffix,
+                    access: None,
+                });
+            }
+        }
+        self.found
+    }
+
+    /// The state on entry: a parameter taken by value owns its storage;
+    /// one taken by reference denotes the caller's place. Without recorded
+    /// modes, the body owns each parameter (every access to it is checked).
+    fn start(&self) -> State {
+        let func = self.func;
         let mut start = State::default();
-        // A parameter taken by value owns its storage; one taken by
-        // reference denotes the caller's place. Without recorded modes, the
-        // body owns each parameter (every access to it is checked).
         for (position, &param) in func.params.iter().enumerate() {
             let places = match func.param_modes.get(position) {
                 Some(ParamMode::Read | ParamMode::Mut) => {
@@ -429,6 +463,14 @@ impl<'a> FnChecker<'a> {
             };
             start.define(param, BTreeSet::new(), places);
         }
+        start
+    }
+
+    /// The state on entry to each block (`None` when unreachable), the
+    /// transfer run to its fixpoint from `start`.
+    fn transfer(&mut self, start: State) -> Vec<Option<State>> {
+        let func = self.func;
+        let mut entry: Vec<Option<State>> = vec![None; func.blocks.len()];
         entry[func.entry_block] = Some(start);
         let mut pending = vec![func.entry_block];
         while let Some(block_id) = pending.pop() {
@@ -451,32 +493,7 @@ impl<'a> FnChecker<'a> {
                 }
             }
         }
-
-        let liveness = Liveness::compute(func);
-        let mut errors = Vec::new();
-        for (block_id, block_entry) in entry.iter().enumerate() {
-            let Some(mut state) = block_entry.clone() else {
-                continue;
-            };
-            let live_after = liveness.after_each(func, block_id);
-            for (index, live) in live_after.iter().enumerate() {
-                let here = Here {
-                    live_after: live,
-                    errors: &mut errors,
-                };
-                self.step(&mut state, block_id, index, Some(here));
-            }
-        }
-        for (_, _, place) in self.loan_ids.keys() {
-            if let Some((slot, suffix)) = self.below_captures(place) {
-                self.found.insert(Effect {
-                    slot,
-                    suffix,
-                    access: None,
-                });
-            }
-        }
-        (errors, self.found)
+        entry
     }
 
     /// The captures box slot and the path below it, when `place` lies inside
@@ -499,16 +516,6 @@ impl<'a> FnChecker<'a> {
         self.func.view(local) == Some(&View::Scalar)
     }
 
-    /// How the callee takes the argument at `position`: as declared, else
-    /// as an unknown callee would (`unknown_param_mode`).
-    fn mode(&self, declared: &[ParamMode], position: usize, arg: &MirValue) -> ParamMode {
-        match (declared.get(position), arg.local()) {
-            (Some(&mode), _) => mode,
-            (None, Some(local)) => unknown_param_mode(self.ty(local), self.symbols),
-            (None, None) => ParamMode::Read,
-        }
-    }
-
     fn loan(&mut self, block: BlockId, index: usize, place: Place) -> LoanId {
         let key = (block, index, place.clone());
         if let Some(&id) = self.loan_ids.get(&key) {
@@ -516,7 +523,7 @@ impl<'a> FnChecker<'a> {
         }
         let id = self.loans.len();
         self.loans.push(Loan {
-            place,
+            on: LoanOn::Place(place),
             span: self.func.blocks[block].span_at(index),
         });
         self.loan_ids.insert(key, id);
@@ -631,21 +638,10 @@ impl<'a> FnChecker<'a> {
                 state.define(*dest, BTreeSet::new(), own(*dest));
             }
             MirInst::Call { dest, callee, args } => {
-                // Field drop glue (recorded by its one emitter) frees what
-                // the object owns: it consumes the object, as the free
-                // after it does.
-                let declared = if func.field_glue_calls.contains_key(callee) {
-                    &[ParamMode::Move]
-                } else {
-                    self.modes.of(callee)
-                };
-                let modes: Vec<ParamMode> = args
-                    .iter()
-                    .enumerate()
-                    .map(|(position, arg)| self.mode(declared, position, arg))
-                    .collect();
+                let modes = self.modes.of_call(func, callee, args, self.symbols);
+                let keeps = self.modes.keeps(callee);
                 self.closure_effects(state, block, index, args, None, here.as_mut());
-                self.call(state, block, index, *dest, args, &modes, here);
+                self.call(state, block, index, *dest, args, (&modes, keeps), here);
             }
             MirInst::CallIndirect {
                 dest,
@@ -654,13 +650,9 @@ impl<'a> FnChecker<'a> {
                 pair,
                 ..
             } => {
-                let modes: Vec<ParamMode> = args
-                    .iter()
-                    .enumerate()
-                    .map(|(position, arg)| self.mode(modes, position, arg))
-                    .collect();
+                let modes = resolve_modes(modes, func, args, self.symbols);
                 self.closure_effects(state, block, index, args, *pair, here.as_mut());
-                self.call(state, block, index, *dest, args, &modes, here);
+                self.call(state, block, index, *dest, args, (&modes, None), here);
             }
             MirInst::SetField {
                 base,
@@ -685,11 +677,25 @@ impl<'a> FnChecker<'a> {
                     state.store(*base, &stored);
                 }
             }
-            other => {
-                if let Some(dest) = other.dest() {
-                    state.define(dest, BTreeSet::new(), own(dest));
-                }
+            // A value computed fresh: it holds no loan and owns itself.
+            MirInst::BinOp { dest, .. }
+            | MirInst::Negate { dest, .. }
+            | MirInst::Not { dest, .. }
+            | MirInst::Compare { dest, .. }
+            | MirInst::Alloc { dest, .. }
+            | MirInst::StackAlloc { dest, .. }
+            | MirInst::GetTag { dest, .. }
+            | MirInst::StringLiteral { dest, .. }
+            | MirInst::FuncAddr { dest, .. }
+            | MirInst::DataAddr { dest, .. }
+            | MirInst::FloatToBits { dest, .. }
+            | MirInst::BitsToFloat { dest, .. }
+            // (No pass before codegen sees a `Convert`.)
+            | MirInst::Convert { dest, .. } => {
+                state.define(*dest, BTreeSet::new(), own(*dest));
             }
+            // A tag write, a drop and a statement marker move no loan.
+            MirInst::SetTag { .. } | MirInst::Drop { .. } | MirInst::Nop => {}
         }
     }
 
@@ -706,7 +712,7 @@ impl<'a> FnChecker<'a> {
         index: usize,
         dest: Option<LocalId>,
         args: &[MirValue],
-        modes: &[ParamMode],
+        (modes, keeps): CalleeShape<'_>,
         mut here: Option<Here>,
     ) {
         let arg_locals: Vec<(usize, LocalId)> = args
@@ -743,49 +749,59 @@ impl<'a> FnChecker<'a> {
                 self.check(state, block, index, access, &places, local, &others, here);
             }
         }
-        // A callee can keep what it takes by value in any other argument it
-        // takes by reference (`push(x: T)` into an `Array[&String]`, a
-        // closure into a field); a scalar keeps nothing.
-        for &(position, stored) in &arg_locals {
-            if modes[position] != ParamMode::Move {
+        // What the callee may keep in another argument (`call_stores`):
+        // that argument holds the stored value's loans from then on.
+        let stores = call_stores(self.func, args, modes, keeps, |local| self.is_scalar(local));
+        for (from, into) in stores {
+            let (Some(value), Some(container)) = (args[from].local(), args[into].local()) else {
                 continue;
-            }
-            let loans = state.held(stored);
-            if loans.is_empty() {
-                continue;
-            }
-            for &(other, container) in &arg_locals {
-                if other != position
-                    && modes[other] != ParamMode::Move
-                    && !self.is_scalar(container)
-                {
-                    state.store(container, &loans);
-                }
-            }
+            };
+            let loans = state.held(value);
+            state.store(container, &loans);
         }
         let Some(dest) = dest else {
             return;
         };
-        let into: Vec<usize> = match self.func.view(dest) {
-            Some(View::Args(positions)) => positions.clone(),
-            Some(View::Scalar | View::Own) => Vec::new(),
-            _ => arg_locals
-                .iter()
-                .filter(|(_, local)| !self.is_scalar(*local))
-                .map(|(position, _)| *position)
-                .collect(),
+        // What the result points into (`borrows`) and whose loans it
+        // carries, from its recorded call fact; with none recorded, every
+        // non-scalar argument in both halves (when it may hold a
+        // reference). A `Holds` result points into the arguments too, but
+        // it is a fresh value: it keeps denoting its own storage.
+        let owns_storage = matches!(self.func.view(dest), Some(View::Holds(_)));
+        let fact = match self.func.view(dest) {
+            Some(View::Args(fact) | View::Holds(fact)) => fact.clone(),
+            Some(View::Scalar | View::Own) => CallFact::default(),
+            _ => {
+                let all: Vec<usize> = arg_locals
+                    .iter()
+                    .filter(|(_, local)| !self.is_scalar(*local))
+                    .map(|(position, _)| *position)
+                    .collect();
+                let carries = if self.ty(dest).may_hold_reference(&mut |_| true) {
+                    all.clone()
+                } else {
+                    Vec::new()
+                };
+                CallFact {
+                    borrows: all,
+                    carries,
+                }
+            }
         };
         let mut holds = BTreeSet::new();
         let mut pointed_into = Places::new();
         // A value the callee took may be kept in a result that can hold
         // anything (`wrap(v)` returning an object holding `v`): the result
-        // keeps that value's loans, whether or not it points into it.
+        // keeps that value's loans, whether or not it points into it, as
+        // it keeps the loans of each argument it carries.
         let result_holds = !self.is_scalar(dest);
         for &(position, local) in &arg_locals {
             let taken = modes[position] == ParamMode::Move;
-            if !into.contains(&position) {
+            if !fact.borrows.contains(&position) {
                 if taken && result_holds {
                     holds.extend(state.held(local));
+                } else if fact.carries.contains(&position) && result_holds {
+                    holds.extend(state.stored(local));
                 }
                 continue;
             }
@@ -795,18 +811,19 @@ impl<'a> FnChecker<'a> {
             if taken {
                 continue;
             }
+            // The loan is on what the argument denotes, whether it owns
+            // that storage or reaches it through a reference (a field
+            // `@t`, a `&var` parameter, a `&` local).
             let inside = children(&state.places_of(local), INSIDE);
-            if state.may_own(local) {
-                for place in &inside {
-                    holds.insert(self.loan(block, index, place.clone()));
-                }
+            for place in &inside {
+                holds.insert(self.loan(block, index, place.clone()));
             }
             pointed_into.extend(inside);
         }
         // A view into arguments denotes a place inside each of them
         // (`ruxen_vec_slot_addr(its, 0)` is a slot of `its`;
         // `pick(c, a, b)` is inside `a` or `b`).
-        let alias = if pointed_into.is_empty() {
+        let alias = if owns_storage || pointed_into.is_empty() {
             own(dest)
         } else {
             pointed_into
@@ -927,9 +944,12 @@ impl<'a> FnChecker<'a> {
             .flat_map(|(_, loans)| loans.iter())
             .map(|&loan| &self.loans[loan])
             .find_map(|loan| {
+                let LoanOn::Place(on) = &loan.on else {
+                    return None;
+                };
                 places
                     .iter()
-                    .find(|place| access.conflicts_with(&loan.place, place))
+                    .find(|place| access.conflicts_with(on, place))
                     .map(|place| (loan, place))
             });
         let Some((conflict, place)) = conflict else {

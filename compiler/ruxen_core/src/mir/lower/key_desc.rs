@@ -96,10 +96,13 @@ pub(super) fn append_supplied_descriptors(
     if decls.0.is_empty() {
         return;
     }
+    // A builtin head in either spelling, as the structural head; any other
+    // type as written, references kept, so `K` against `&String` binds
+    // `K = &String` (a borrowed key the table must not free).
     let head = |ty: &Ty| {
         ty.builtin_head()
             .and_then(|(home, args)| Ty::from_builtin_head(home, &args))
-            .unwrap_or_else(|| ty.peel_refs().clone())
+            .unwrap_or_else(|| ty.clone())
     };
     let mut glue_descs: Vec<super::drops::ElemDesc> = Vec::new();
     for block in 0..func.blocks.len() {

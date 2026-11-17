@@ -1,0 +1,584 @@
+# I-84: a 64-deep struct chain keeps `clone` (the derive walk has no depth
+# cap; the recursion stack and the type-size bound end it), and so does its
+# 33-deep tail. Built through locals so no expression nests 64 deep.
+
+struct C1
+  v: C2
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C2
+  v: C3
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C3
+  v: C4
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C4
+  v: C5
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C5
+  v: C6
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C6
+  v: C7
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C7
+  v: C8
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C8
+  v: C9
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C9
+  v: C10
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C10
+  v: C11
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C11
+  v: C12
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C12
+  v: C13
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C13
+  v: C14
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C14
+  v: C15
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C15
+  v: C16
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C16
+  v: C17
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C17
+  v: C18
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C18
+  v: C19
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C19
+  v: C20
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C20
+  v: C21
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C21
+  v: C22
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C22
+  v: C23
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C23
+  v: C24
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C24
+  v: C25
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C25
+  v: C26
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C26
+  v: C27
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C27
+  v: C28
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C28
+  v: C29
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C29
+  v: C30
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C30
+  v: C31
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C31
+  v: C32
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C32
+  v: C33
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C33
+  v: C34
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C34
+  v: C35
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C35
+  v: C36
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C36
+  v: C37
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C37
+  v: C38
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C38
+  v: C39
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C39
+  v: C40
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C40
+  v: C41
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C41
+  v: C42
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C42
+  v: C43
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C43
+  v: C44
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C44
+  v: C45
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C45
+  v: C46
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C46
+  v: C47
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C47
+  v: C48
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C48
+  v: C49
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C49
+  v: C50
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C50
+  v: C51
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C51
+  v: C52
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C52
+  v: C53
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C53
+  v: C54
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C54
+  v: C55
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C55
+  v: C56
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C56
+  v: C57
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C57
+  v: C58
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C58
+  v: C59
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C59
+  v: C60
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C60
+  v: C61
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C61
+  v: C62
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C62
+  v: C63
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C63
+  v: C64
+
+  def leaf -> &String
+    @v.leaf
+  end
+end
+
+struct C64
+  s: String
+
+  def leaf -> &String
+    @s
+  end
+end
+
+c64 = C64.new("deep")
+c63 = C63.new(c64)
+c62 = C62.new(c63)
+c61 = C61.new(c62)
+c60 = C60.new(c61)
+c59 = C59.new(c60)
+c58 = C58.new(c59)
+c57 = C57.new(c58)
+c56 = C56.new(c57)
+c55 = C55.new(c56)
+c54 = C54.new(c55)
+c53 = C53.new(c54)
+c52 = C52.new(c53)
+c51 = C51.new(c52)
+c50 = C50.new(c51)
+c49 = C49.new(c50)
+c48 = C48.new(c49)
+c47 = C47.new(c48)
+c46 = C46.new(c47)
+c45 = C45.new(c46)
+c44 = C44.new(c45)
+c43 = C43.new(c44)
+c42 = C42.new(c43)
+c41 = C41.new(c42)
+c40 = C40.new(c41)
+c39 = C39.new(c40)
+c38 = C38.new(c39)
+c37 = C37.new(c38)
+c36 = C36.new(c37)
+c35 = C35.new(c36)
+c34 = C34.new(c35)
+c33 = C33.new(c34)
+c32 = C32.new(c33)
+t = c32.clone
+c31 = C31.new(c32)
+c30 = C30.new(c31)
+c29 = C29.new(c30)
+c28 = C28.new(c29)
+c27 = C27.new(c28)
+c26 = C26.new(c27)
+c25 = C25.new(c26)
+c24 = C24.new(c25)
+c23 = C23.new(c24)
+c22 = C22.new(c23)
+c21 = C21.new(c22)
+c20 = C20.new(c21)
+c19 = C19.new(c20)
+c18 = C18.new(c19)
+c17 = C17.new(c18)
+c16 = C16.new(c17)
+c15 = C15.new(c16)
+c14 = C14.new(c15)
+c13 = C13.new(c14)
+c12 = C12.new(c13)
+c11 = C11.new(c12)
+c10 = C10.new(c11)
+c9 = C9.new(c10)
+c8 = C8.new(c9)
+c7 = C7.new(c8)
+c6 = C6.new(c7)
+c5 = C5.new(c6)
+c4 = C4.new(c5)
+c3 = C3.new(c4)
+c2 = C2.new(c3)
+c1 = C1.new(c2)
+x = c1.clone
+puts(x.leaf)
+puts(t.leaf)

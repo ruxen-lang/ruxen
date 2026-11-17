@@ -394,6 +394,13 @@ pub const REGISTRY: &[CodeInfo] = &[
         code: "E0747",
         title: "a compiler-supplied parameter is not last",
     },
+    // E0748: a function returning a reference with no receiver and several
+    // reference parameters, so the elision rule cannot name what the result
+    // borrows (`hir::types::result_source`, checked in resolve).
+    CodeInfo {
+        code: "E0748",
+        title: "the result's borrow source is ambiguous",
+    },
     // ── Borrow checking + mixin/include (E1001-E1099) ────────────────
     // The borrow checker's `ErrorCode` enum in `borrow_check/errors.rs`
     // reads its titles from these rows.

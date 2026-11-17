@@ -1,0 +1,36 @@
+# F-2: a temporary table lives while a value built from it is used: an
+# object holding its keys, a struct a function builds from a temporary
+# argument, a closure call's result, a copied parameter's view and a
+# payload read. Each was freed at the end of its statement (or read freed
+# keys under Guard Malloc) before.
+class Bag
+  ks: Array[&String]
+
+  def init(@ks: Array[&String])
+  end
+
+  def first -> &String
+    @ks[0]
+  end
+end
+
+def bag(h: &Hash[String, Int]) -> Bag
+  Bag.new(h.keys)
+end
+
+def key_view(h: &Hash[String, Int]) -> Array[&String]
+  x = h
+  x.keys
+end
+
+b = Bag.new({"alpha".clone => 1}.keys)
+puts(b.first)
+c = bag(&{"beta".clone => 1})
+puts(c.first)
+f = ->(h: &Hash[String, Int]) { h.keys }
+ks = f.call(&{"gamma".clone => 1})
+puts(ks[0])
+vs = key_view(&{"delta".clone => 1})
+puts(vs[0])
+v = {"a".clone => "val".clone}.get(&"a".clone).unwrap
+puts(v)

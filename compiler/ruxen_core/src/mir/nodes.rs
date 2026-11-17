@@ -5,7 +5,7 @@
 //! terminators. Instructions within a block are simple three-address code.
 
 use super::abi::{CalleeIndex, Coercion};
-use crate::hir::types::Ty;
+use crate::hir::types::{DeclaredResult, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::BinOp;
 
@@ -60,6 +60,9 @@ pub struct MirProgram {
     /// from the functions and FFI declarations above. The conversions that
     /// step inserts and every backend's declarations read this one index.
     pub callees: CalleeIndex,
+    /// How many rounds the body summary fixpoint took
+    /// (`loan_check::summary::fixpoint`), for its bound test and timing.
+    pub summary_rounds: usize,
 }
 
 /// Phase B-2: one static vtable struct per `(class, mixin)` pair.
@@ -142,6 +145,10 @@ pub struct FfiFuncDecl {
     /// How each entry of `param_types` receives its argument (receiver
     /// first when `has_receiver`); see [`ParamMode`].
     pub param_modes: Vec<ParamMode>,
+    /// What the result points into (the elision rule) and whose references
+    /// it may carry, read off the declared signature
+    /// (`hir::types::declared_result`, receiver type included).
+    pub declared_result: DeclaredResult,
 }
 
 /// How a callee receives one argument, recorded on its declaration
@@ -189,10 +196,28 @@ pub enum View {
     /// writes through (`s += t` appends through the slot): it views the
     /// place, and passing it assigns that place rather than mutating it.
     Assignee,
-    /// A call result that may point into the arguments at these positions
-    /// (a reference result, a callee that may return that parameter, a
-    /// runtime result the callee does not allocate fresh).
-    Args(Vec<usize>),
+    /// A call result that may point into the arguments its [`CallFact`]
+    /// names (a reference result, a callee that may return that parameter,
+    /// a runtime result the callee does not allocate fresh).
+    Args(CallFact),
+    /// A fresh value a runtime call allocated, whose type holds references
+    /// that may point into the arguments its [`CallFact`] names: `h.keys`
+    /// is a new `Array[&K]` of `h`'s own keys. It holds loans on those
+    /// arguments as an `Args` result does, and it still owns its own
+    /// storage, so it is moved and freed as a value of its own.
+    Holds(CallFact),
+}
+
+/// The one fact per call result, by argument position, that the loan check
+/// and drop elaboration both read: what the result points into
+/// (`borrows`: it holds loans on those arguments' storage) and whose
+/// existing references it carries (`carries`: it holds the loans those
+/// arguments held). `h.remove(&key)` carries the table's references and
+/// points into nothing of `key`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallFact {
+    pub borrows: Vec<usize>,
+    pub carries: Vec<usize>,
 }
 
 impl MirFunction {
@@ -225,6 +250,7 @@ impl MirProgram {
             class_infos: Vec::new(),
             wasm_exports: Vec::new(),
             callees: CalleeIndex::new(),
+            summary_rounds: 0,
         }
     }
 }
@@ -364,6 +390,11 @@ pub struct MirFunction {
     /// or `None` (definitions recorded different facts), may point into
     /// whatever its defining instruction reads.
     pub views: std::collections::HashMap<LocalId, Option<View>>,
+    /// What the result points into (the elision rule) and whose references
+    /// it may carry, read off the DECLARED signature
+    /// (`hir::types::declared_result`, before any instance substitution);
+    /// [`DeclaredResult::unknown`] for a synthesized body.
+    pub declared_result: DeclaredResult,
     /// Counter used by `new_temp()` to generate unique names.
     next_temp: u32,
 }
@@ -390,6 +421,7 @@ impl MirFunction {
             param_modes: Vec::new(),
             from_prelude: false,
             views: std::collections::HashMap::new(),
+            declared_result: DeclaredResult::unknown(),
             next_temp: 0,
         }
     }
@@ -421,6 +453,7 @@ impl MirFunction {
             param_modes: Vec::new(),
             from_prelude: false,
             views: std::collections::HashMap::new(),
+            declared_result: DeclaredResult::unknown(),
             next_temp: 0,
         }
     }

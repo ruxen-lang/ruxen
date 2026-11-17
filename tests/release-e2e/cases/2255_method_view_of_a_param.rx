@@ -1,0 +1,90 @@
+# F-2: a method or function returning a view of a parameter (`h.keys`),
+# directly or through another method, a free function, a mixin method, a
+# copied parameter, a payload, a struct holding the view or a recursive call,
+# keeps that parameter borrowed while the view is used (`h.clear` before the
+# last use is E1002). Used first, then cleared, each runs clean.
+def key_view(h: &Hash[String, Int]) -> Array[&String]
+  h.keys
+end
+
+def aliased(h: &Hash[String, Int]) -> Array[&String]
+  x = h
+  x.keys
+end
+
+def first_val(h: &Hash[String, String]) -> &String
+  h.get(&"a".clone).unwrap
+end
+
+def kv(h: &Hash[String, Int], n: Int) -> Array[&String]
+  if n > 0
+    kv(h, n - 1)
+  else
+    h.keys
+  end
+end
+
+mixin Keyed
+  def mixin_view(h: &Hash[String, Int]) -> Array[&String]
+    h.keys
+  end
+end
+
+class Bag
+  ks: Array[&String]
+
+  def init(@ks: Array[&String])
+  end
+
+  def first -> &String
+    @ks[0]
+  end
+end
+
+def bag(h: &Hash[String, Int]) -> Bag
+  Bag.new(h.keys)
+end
+
+class Viewer
+  include Keyed
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def method_view(h: &Hash[String, Int]) -> Array[&String]
+    h.keys
+  end
+
+  def through_method(h: &Hash[String, Int]) -> Array[&String]
+    self.method_view(h)
+  end
+
+  def through_fn(h: &Hash[String, Int]) -> Array[&String]
+    key_view(h)
+  end
+end
+
+v = Viewer.new(1)
+h = {"alpha".clone => 1}
+ks = v.method_view(&h)
+puts(ks[0])
+ks = v.through_method(&h)
+puts(ks[0])
+ks = v.through_fn(&h)
+puts(ks[0])
+ks = v.mixin_view(&h)
+puts(ks[0])
+ks = aliased(&h)
+puts(ks[0])
+ks = kv(&h, 2)
+puts(ks[0])
+b = bag(&h)
+puts(b.first)
+h.clear
+puts(h.size)
+s = {"a".clone => "val".clone}
+f = first_val(&s)
+puts(f)
+s.clear
+puts(s.size)

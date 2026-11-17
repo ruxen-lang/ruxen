@@ -101,92 +101,23 @@ pub(super) fn mentions_type_param(ty: &Ty, params: &[String]) -> bool {
     ty.any(&mut |t| matches!(t, Ty::TypeParam { name, .. } if params.contains(name)))
 }
 
-/// True when `ty` (after peeling refs) contains no unresolved type: no
+/// True when `ty` contains no unresolved type: no
 /// `TypeParam` or `Infer` anywhere. Only such instantiations are recorded.
 pub(super) fn is_fully_concrete(ty: &Ty) -> bool {
     !ty.any(&mut |t| matches!(t, Ty::TypeParam { .. } | Ty::Infer(_)))
 }
 
-/// How deeply `ty` nests: 1 for a leaf, one more per enclosing type.
-pub(super) fn type_depth(ty: &Ty) -> usize {
-    let mut deepest = 0;
-    ty.clone().map_inner(&mut |child| {
-        deepest = deepest.max(type_depth(child));
-        child.clone()
-    });
-    deepest + 1
-}
-
-/// Unify a declared type (which may mention `Ty::TypeParam`) against a
-/// concrete actual type, recording each `param-name → concrete-ty` binding
-/// into `out`. Structural and conservative: it descends through refs and the
-/// generic heads, binding a `TypeParam` leaf to whatever concrete type sits
-/// opposite it. A shape mismatch contributes no binding — the caller gates
-/// on "every param bound to a concrete type".
+/// Bind the type parameters `decl` names against the concrete `actual`
+/// type at an instance site, through the one shared binder
+/// ([`Ty::bind_type_params`]): references bind as written, so `T` against
+/// `&String` is `T = &String`. Only fully concrete types bind; the caller
+/// gates on "every param bound".
 pub(in crate::mir::lower) fn unify_collect_type_params(
     decl: &Ty,
     actual: &Ty,
     out: &mut HashMap<String, Ty>,
 ) {
-    let decl = decl.peel_refs();
-    let actual = actual.peel_refs();
-    match (decl, actual) {
-        (Ty::TypeParam { name, .. }, concrete) => {
-            if is_fully_concrete(concrete) {
-                out.entry(name.clone()).or_insert_with(|| concrete.clone());
-            }
-        }
-        (Ty::Array(d), Ty::Array(a))
-        | (Ty::Set(d), Ty::Set(a))
-        | (Ty::Option(d), Ty::Option(a))
-        | (Ty::FixedArray(d, _), Ty::FixedArray(a, _)) => {
-            unify_collect_type_params(d, a, out);
-        }
-        (Ty::Map(dk, dv), Ty::Map(ak, av)) | (Ty::Result(dk, dv), Ty::Result(ak, av)) => {
-            unify_collect_type_params(dk, ak, out);
-            unify_collect_type_params(dv, av, out);
-        }
-        (Ty::Tuple(de), Ty::Tuple(ae)) if de.len() == ae.len() => {
-            for (d, a) in de.iter().zip(ae.iter()) {
-                unify_collect_type_params(d, a, out);
-            }
-        }
-        (
-            Ty::Class {
-                generic_args: dargs,
-                ..
-            },
-            Ty::Class {
-                generic_args: aargs,
-                ..
-            },
-        )
-        | (
-            Ty::Struct {
-                generic_args: dargs,
-                ..
-            },
-            Ty::Struct {
-                generic_args: aargs,
-                ..
-            },
-        )
-        | (
-            Ty::Enum {
-                generic_args: dargs,
-                ..
-            },
-            Ty::Enum {
-                generic_args: aargs,
-                ..
-            },
-        ) if dargs.len() == aargs.len() => {
-            for (d, a) in dargs.iter().zip(aargs.iter()) {
-                unify_collect_type_params(d, a, out);
-            }
-        }
-        _ => {}
-    }
+    decl.bind_type_params(actual, &|_| true, &is_fully_concrete, out);
 }
 
 #[cfg(test)]
@@ -213,12 +144,5 @@ mod tests {
         // `T`-carrying container counts.
         assert!(mentions_type_param(&nested, &params));
         assert!(!mentions_type_param(&Ty::Array(Box::new(Ty::Int)), &params));
-    }
-
-    #[test]
-    fn type_depth_counts_nesting() {
-        assert_eq!(type_depth(&Ty::Int), 1);
-        let nested = Ty::Array(Box::new(Ty::Array(Box::new(Ty::Int))));
-        assert_eq!(type_depth(&nested), 3);
     }
 }
