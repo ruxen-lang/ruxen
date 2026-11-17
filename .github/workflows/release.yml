@@ -35,10 +35,10 @@ jobs:
           # 'arm64', required architecture 'x86_64'"). Skip them via
           # cross_arch, exactly as the aarch64-linux cross build does.
           - target: x86_64-apple-darwin
-            os: macos-14
+            os: macos-15
             cross_arch: true
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-15
 
     steps:
       - uses: actions/checkout@v4
@@ -60,7 +60,9 @@ jobs:
 
       - name: Install cross (Linux aarch64 only)
         if: matrix.cross
-        run: cargo install cross --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
 
       - name: Run installed-binary tests (native only)
         # Skip on cross builds — we can't execute aarch64 Linux binaries on

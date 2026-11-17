@@ -156,9 +156,14 @@ mod object_cache {
         /// Store a freshly compiled object. Written beside the entry and
         /// renamed into place, so a concurrent reader never sees half a file.
         pub(super) fn store(&self, object: &Path) {
-            let partial = self
-                .path
-                .with_extension(format!("{}.partial", std::process::id()));
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static WRITES: AtomicU64 = AtomicU64::new(0);
+            // One partial file per writer: test threads share the pid.
+            let partial = self.path.with_extension(format!(
+                "{}-{}.partial",
+                std::process::id(),
+                WRITES.fetch_add(1, Ordering::Relaxed)
+            ));
             if std::fs::copy(object, &partial).is_ok()
                 && std::fs::rename(&partial, &self.path).is_err()
             {
@@ -169,6 +174,15 @@ mod object_cache {
 
     /// The entry for compiling `source` with `cmd`'s flags (no `-c`/`-o` yet).
     pub(super) fn lookup(cmd: &Command, source: &Path) -> Option<Entry> {
+        lookup_in(
+            &std::env::temp_dir().join("ruxen-runtime-objects"),
+            cmd,
+            source,
+        )
+    }
+
+    /// [`lookup`] with the cache folder given, so tests use their own.
+    fn lookup_in(dir: &Path, cmd: &Command, source: &Path) -> Option<Entry> {
         let mut hasher = Sha256::new();
         hasher.update(cc_version()?);
         for arg in cmd.get_args() {
@@ -176,16 +190,15 @@ mod object_cache {
             hasher.update([0]);
         }
         hasher.update(std::fs::read(source).ok()?);
-        hasher.update(headers_in(source.parent()?)?);
-        hasher.update(stdlib_headers()?);
+        hasher.update(files_in(source.parent()?, &["h"])?);
+        hasher.update(stdlib_files()?);
         let key: String = hasher
             .finalize()
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
 
-        let dir = std::env::temp_dir().join("ruxen-runtime-objects");
-        std::fs::create_dir_all(&dir).ok()?;
+        std::fs::create_dir_all(dir).ok()?;
         Some(Entry {
             path: dir.join(format!("{key}.o")),
         })
@@ -202,9 +215,9 @@ mod object_cache {
             .as_deref()
     }
 
-    /// The names and bytes of every header in the stdlib runtime folders,
-    /// read once per process.
-    fn stdlib_headers() -> Option<&'static [u8]> {
+    /// The names and bytes of every `.h` and `.c` file in the stdlib runtime
+    /// folders (PCRE2 `#include`s some of its `.c` files), read once per process.
+    fn stdlib_files() -> Option<&'static [u8]> {
         static HEADERS: OnceLock<Option<Vec<u8>>> = OnceLock::new();
         HEADERS
             .get_or_init(|| {
@@ -216,20 +229,24 @@ mod object_cache {
                     .collect();
                 let mut all = Vec::new();
                 for dir in dirs {
-                    all.extend(headers_in(&dir)?);
+                    all.extend(files_in(&dir, &["h", "c"])?);
                 }
                 Some(all)
             })
             .as_deref()
     }
 
-    /// The names and bytes of every `.h` file directly in `dir`, in name order.
-    fn headers_in(dir: &Path) -> Option<Vec<u8>> {
+    /// The names and bytes of every file directly in `dir` with one of the
+    /// `extensions`, in name order.
+    fn files_in(dir: &Path, extensions: &[&str]) -> Option<Vec<u8>> {
         let mut headers: Vec<PathBuf> = std::fs::read_dir(dir)
             .ok()?
             .flatten()
             .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "h"))
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|ext| extensions.iter().any(|want| ext == *want))
+            })
             .collect();
         headers.sort();
         let mut bytes = Vec::new();
@@ -238,6 +255,72 @@ mod object_cache {
             bytes.extend(std::fs::read(&header).ok()?);
         }
         Some(bytes)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::lookup_in;
+        use std::path::PathBuf;
+        use std::process::Command;
+
+        fn scratch(name: &str) -> PathBuf {
+            let dir =
+                std::env::temp_dir().join(format!("ruxen_objcache_{}_{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        }
+
+        #[test]
+        fn stored_object_is_hit_by_the_same_source_at_another_path() {
+            let dir = scratch("hit");
+            let (a, b) = (dir.join("a.c"), dir.join("sub_b.c"));
+            std::fs::write(&a, "int f(void) { return 1; }\n").unwrap();
+            std::fs::write(&b, "int f(void) { return 1; }\n").unwrap();
+            let cmd = Command::new("cc");
+            let cache = dir.join("cache");
+            let entry = lookup_in(&cache, &cmd, &a).unwrap();
+            assert!(entry.hit().is_none());
+            let object = dir.join("a.o");
+            std::fs::write(&object, b"object bytes").unwrap();
+            entry.store(&object);
+            let again = lookup_in(&cache, &cmd, &b).unwrap().hit().unwrap();
+            assert_eq!(std::fs::read(again).unwrap(), b"object bytes");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn source_header_or_flag_change_misses() {
+            let dir = scratch("miss");
+            let src = dir.join("a.c");
+            std::fs::write(&src, "int f(void) { return 1; }\n").unwrap();
+            let cache = dir.join("cache");
+            let mut cmd = Command::new("cc");
+            let first = lookup_in(&cache, &cmd, &src).unwrap();
+            std::fs::write(dir.join("a.o"), b"x").unwrap();
+            first.store(&dir.join("a.o"));
+
+            std::fs::write(dir.join("a.h"), "#define N 2\n").unwrap();
+            assert!(
+                lookup_in(&cache, &cmd, &src).unwrap().hit().is_none(),
+                "header added"
+            );
+            std::fs::remove_file(dir.join("a.h")).unwrap();
+            assert!(lookup_in(&cache, &cmd, &src).unwrap().hit().is_some());
+
+            cmd.arg("-O2");
+            assert!(
+                lookup_in(&cache, &cmd, &src).unwrap().hit().is_none(),
+                "flag added"
+            );
+            let cmd = Command::new("cc");
+            std::fs::write(&src, "int f(void) { return 2; }\n").unwrap();
+            assert!(
+                lookup_in(&cache, &cmd, &src).unwrap().hit().is_none(),
+                "source edited"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }
 

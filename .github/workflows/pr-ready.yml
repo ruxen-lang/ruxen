@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-15]
     steps:
       - uses: actions/checkout@v4
 
@@ -89,6 +89,11 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@v2
 
+      # Copies the prebuilt runtime archive to target/debug/, so the tests
+      # link it instead of compiling the runtime C for every fixture.
+      - name: Build runtime archive (fast-path link)
+        run: cargo build -p ruxen_cli
+
       # Includes `backend_parity` (Cranelift vs LLVM) in the `it` binary.
       - name: cargo test (llvm feature)
         run: cargo test -p ruxen_core --features llvm --no-fail-fast
@@ -127,7 +132,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-15]
     steps:
       - uses: actions/checkout@v4
 
@@ -175,9 +180,9 @@ jobs:
           # runner; `cargo build --target` produces a valid artifact (we
           # only build here, never run, so no host/target mismatch).
           - target: x86_64-apple-darwin
-            os: macos-14
+            os: macos-15
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -191,7 +196,9 @@ jobs:
 
       - name: Install cross (Linux aarch64 only)
         if: matrix.cross
-        run: cargo install cross --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
 
       - name: Build release binary
         shell: bash
