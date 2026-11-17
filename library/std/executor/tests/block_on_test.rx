@@ -1,0 +1,47 @@
+## Pending on the first `pending_polls` polls, then Ready(value).
+class CountDown
+  pending_polls: Int
+  value: Int
+  include Future
+  type Output = Int
+
+  def init(pending_polls: Int, value: Int)
+    self.pending_polls = pending_polls
+    self.value = value
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.pending_polls > 0
+      self.pending_polls = self.pending_polls - 1
+      return Poll.Pending
+    end
+    Poll.Ready(self.value)
+  end
+end
+
+async def make_result -> Result[Int, Int]
+  Ok(7)
+end
+
+async def nine -> Int
+  9
+end
+
+async def add_one -> Int
+  let v = nine().await
+  v + 1
+end
+
+Tester.describe("block_on") do |t: &var Tester|
+  t.it("polls a hand-written future until it is ready") do
+    t.expect(block_on(CountDown.new(3, 42))).to_eq(42)
+  end
+
+  t.it("keeps an async def's Output type") do
+    t.expect(block_on(make_result()).unwrap_or(-1)).to_eq(7)
+  end
+
+  t.it("drives an await inside an async def") do
+    t.expect(block_on(add_one())).to_eq(10)
+  end
+end

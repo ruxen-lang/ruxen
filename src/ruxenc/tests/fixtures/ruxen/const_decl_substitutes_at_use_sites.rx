@@ -1,5 +1,0 @@
-const MAX = 100
-
-def main
-  puts "#{MAX}"
-end

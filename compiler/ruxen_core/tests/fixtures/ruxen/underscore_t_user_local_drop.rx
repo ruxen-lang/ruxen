@@ -1,0 +1,9 @@
+struct Buffer
+  value: Int
+end
+
+def main
+  let _total = Buffer.new(10)
+  let _tally = Buffer.new(32)
+  puts "#{_total.value + _tally.value}"
+end

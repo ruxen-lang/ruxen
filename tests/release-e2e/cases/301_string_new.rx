@@ -1,5 +1,0 @@
-def main
-  let s = String.new
-  puts "len=#{s.size}"
-  puts "empty=#{s.empty?}"
-end

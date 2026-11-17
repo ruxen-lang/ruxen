@@ -1,0 +1,48 @@
+# `any Fn(...)` dyn-erased closure dispatch in four contexts: let-binding,
+# Array element, class field (router) and return position.
+class Router
+  handlers: Array[any Fn(Int) -> Int]
+
+  def init
+    self.handlers = Array.new
+  end
+
+  def add(h: any Fn(Int) -> Int) -> nil
+    self.handlers.push(h)
+  end
+
+  def dispatch_all(x: Int) -> Int
+    var acc: Int = 0
+    for h in self.handlers
+      acc = acc + h.(x)
+    end
+    acc
+  end
+end
+
+def make_adder(n: Int) -> any Fn(Int) -> Int
+  let f = { |x: Int| x + n }
+  f
+end
+
+def main
+  let h: any Fn(Int) -> Int = { |n: Int| n + 1 }
+  puts "#{h.(5)}"
+
+  var hs: Array[any Fn(Int) -> Int] = Array.new
+  hs.push({ |n: Int| n + 10 })
+  hs.push({ |n: Int| n * 3 })
+  var acc: Int = 0
+  for f in hs
+    acc = acc + f.(5)
+  end
+  puts "#{acc}"
+
+  let r = Router.new
+  r.add({ |n: Int| n + 10 })
+  r.add({ |n: Int| n * 3 })
+  puts "#{r.dispatch_all(5)}"
+
+  let g = make_adder(3)
+  puts "#{g.(4)}"
+end

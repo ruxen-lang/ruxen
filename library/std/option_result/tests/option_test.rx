@@ -1,0 +1,55 @@
+def find(n: Int) -> Int?
+  if n > 0
+    n
+  else
+    nil
+  end
+end
+
+Tester.describe("Option") do |t: &var Tester|
+  t.it("map chains on Some and skips on nil") do
+    let r = find(5).map { |n| n + 1 }.map { |n| n * 2 }.map { |n| n - 3 }
+    t.expect(r.unwrap_or(-1)).to_eq(9)
+    let z = find(-1).map { |n| n + 1 }.map { |n| n * 2 }
+    t.expect(z.unwrap_or(-1)).to_eq(-1)
+  end
+
+  t.it("map can change the payload type") do
+    let a = find(7).map { |n| "vv#{n}" }.map { |s| s.size }
+    t.expect(a.unwrap_or(0)).to_eq(3)
+    let b = find(-1).map { |n| "vv#{n}" }.map { |s| s.size }
+    t.expect(b.unwrap_or(0)).to_eq(0)
+  end
+
+  t.it("unwrap_or, unwrap_or_else and expect!") do
+    t.expect(find(5).unwrap_or(0)).to_eq(5)
+    t.expect(find(-1).unwrap_or(99)).to_eq(99)
+    let some_v: Int? = 5
+    let none_v: Int? = nil
+    t.expect(some_v.map { |n| n * 10 }.unwrap_or(0)).to_eq(50)
+    t.expect(none_v.map { |n| n * 10 }.unwrap_or(0)).to_eq(0)
+    let seven: Option[Int] = Option.Some(7)
+    t.expect(seven.unwrap_or_else do 99 end).to_eq(7)
+    let missing: Option[Int] = nil
+    t.expect(missing.unwrap_or_else do 99 end).to_eq(99)
+    let a: Int? = 7
+    t.expect(a.expect!("must be present")).to_eq(7)
+  end
+
+  t.it("ok_or turns nil into an Err") do
+    let some_v: Int? = 5
+    let none_v: Int? = nil
+    let r1: Result[Int, String] = some_v.ok_or("missing")
+    let r2: Result[Int, String] = none_v.ok_or("missing")
+    let t1 = match r1
+      Ok(v)  -> "ok #{v}"
+      Err(e) -> "err #{e}"
+    end
+    let t2 = match r2
+      Ok(v)  -> "ok #{v}"
+      Err(e) -> "err #{e}"
+    end
+    t.expect(t1).to_eq("ok 5")
+    t.expect(t2).to_eq("err missing")
+  end
+end

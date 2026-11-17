@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+autotests = false
 
 [features]
 llvm = ["ruxen_core/llvm"]
@@ -14,7 +15,6 @@ ruxen_core = { path = "../../compiler/ruxen_core" }
 sha2 = "0.10"
 postcard = { version = "1.1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
-rayon = "1.10"
 
 [dev-dependencies]
 # Pull in the unified `ruxen` driver so integration tests can resolve
@@ -22,7 +22,7 @@ rayon = "1.10"
 # binary users get from `install.sh`.
 ruxen_cli = { path = "../ruxen_cli" }
 tempfile = "3"
-criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]
 name = "cache_bench"
@@ -61,3 +61,8 @@ path = "benches/codegen_bench.rs"
 
 [lints]
 workspace = true
+
+# One integration-test binary: tests/it, one module per file.
+[[test]]
+name = "it"
+path = "tests/it/main.rs"

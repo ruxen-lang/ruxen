@@ -1,6 +1,0 @@
-def main
-  let v = [1, 2, 3]
-  let out = v.map { |n| "#{n}" }
-  let joined = out.join(",")
-  puts joined
-end

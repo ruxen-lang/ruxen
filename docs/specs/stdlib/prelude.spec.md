@@ -22,17 +22,17 @@ The following type names are in scope at program start without any
 | `Int`, `Int8` `Int16` `Int32` `Int64`, `ISize` | builtin |
 | `UInt`, `UInt8` `UInt16` `UInt32` `UInt64`, `USize` | builtin |
 | `Float`, `Float32`, `Float64` | builtin |
-| `Bool`, `Char`, `String`, `str` (= `&str`) | builtin |
+| `Bool`, `Char`, `String` | builtin |
 | `Array[T]`      | `std.array`        |
-| `Hash[K, V]`    | `std.collections`  |
-| `Set[T]`        | `std.collections`  |
-| `Option[T]`     | `std.option`       |
-| `Result[T, E]`  | `std.result`       |
+| `Hash[K, V]`    | `std.map`          |
+| `Set[T]`        | `std.set`          |
+| `Option[T]`     | `std.option_result`|
+| `Result[T, E]`  | `std.option_result`|
 | `IoError`       | `std.io`           |
 | `VarError`      | `std.env`          |
 | `FmtError`      | `std.fmt`          |
 | `Formatter`     | `std.fmt`          |
-| `Display`, `Debug`, `PartialEq`, `Eq`, `Hashable`, `Clone`, `Copy`, `Default`, `Ord`, `PartialOrd`, `Drop`, `Iterator`, `FromIterator` | mixins |
+| `Display`, `Debug`, `PartialEq`, `Eq`, `Hashable`, `Clone`, `Copy`, `Default`, `Ord`, `PartialOrd`, `Drop` | mixins |
 
 ## B2 — Auto-imported free functions
 
@@ -60,7 +60,7 @@ needing `use std.option.Option`.  Bare `Some(x)` / `nil` / `Ok(x)` /
 | Behaviour | Test fn / fixture                                         | File                       |
 |-----------|-----------------------------------------------------------|----------------------------|
 | B1, B3    | every release-e2e fixture that uses `Array` / `Option` / `Result` without `use` (hundreds) | `tests/release-e2e/cases/` |
-| B2        | `01_hello.rx` (`puts`) + `e2e_24_result.rx` (`panic!`)  | `tests/release-e2e/cases/` |
+| B2        | `01_hello.rx` (`puts`) + `24_result.rx` (`panic!`)  | `tests/release-e2e/cases/` |
 
 The prelude is *implicitly* pin-tested by every program that
 compiles without importing these names.  A regression would
@@ -72,5 +72,5 @@ fixture set.
 ## Out of scope (v2)
 
 - User-defined prelude extension (`use prelude.X` to opt-in extra names).
-- Per-package prelude (Rust's `core.prelude` vs `std.prelude`).
+- Per-package prelude (separate `core.prelude` and `std.prelude`).
 - Glob re-exports inside the prelude (`use std.io.*`).

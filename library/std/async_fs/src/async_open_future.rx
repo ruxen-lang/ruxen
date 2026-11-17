@@ -2,24 +2,27 @@
 ##
 ## open(2) is non-blocking on regular files even without O_NONBLOCK,
 ## and our paths *will* be regular files in the 4B fixtures, so this
-## future eagerly performs the open in `init` and returns Ready on
-## first poll. The async wrapper exists for surface symmetry with
-## AsyncTcpStream.connect (which genuinely blocks pending TCP
-## handshake completion).
+## future performs the open on its first poll and returns Ready. The
+## async wrapper exists for surface symmetry with AsyncTcpStream.connect
+## (which genuinely blocks pending TCP handshake completion).
 ##
-## State: a single `result: Result[AsyncFile, IoError]` field that is
-## populated by `init` and replayed by `poll`. There is no reactor
-## registration because the open call never returns EAGAIN.
+## State: the `path` and `flags` the open uses, stored by `init`; `poll`
+## performs the open and hands its result to the caller. The future owns
+## its fields, so the result is built in `poll` rather than stored and
+## moved out of a field. There is no reactor registration because the
+## open call never returns EAGAIN.
 class AsyncOpenFuture
-  result: Result[AsyncFile, IoError]
+  path: String
+  flags: Int
   include Future
   type Output = Result[AsyncFile, IoError]
 
   def init(path: &String, flags: Int)
-    self.result = ruxen_async_file_open(path, flags)
+    self.path = path.clone
+    self.flags = flags
   end
 
   def var poll(cx: &var Context) -> Poll[Result[AsyncFile, IoError]]
-    Poll.Ready(self.result)
+    Poll.Ready(ruxen_async_file_open(self.path, self.flags))
   end
 end

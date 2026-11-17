@@ -1,0 +1,17 @@
+# A type alias with its own generic parameters: each use substitutes its
+# arguments. `Proc[(A) -> R]` is one, declared in the core library.
+type Pair[T] = Array[T]
+type Callback[A] = Proc[(A) -> nil]
+
+def total(p: &Pair[Int]) -> Int
+  p[0] + p[1]
+end
+
+def fire(cb: &Callback[String], word: &String)
+  cb.(word)
+end
+
+nums = [3, 4]
+puts total(nums)
+shout = ->(s: String) { puts "#{s}!" }
+fire(shout, "hi")

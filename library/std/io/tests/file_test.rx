@@ -1,0 +1,88 @@
+def kind_name(e: IoError) -> String
+  match e.kind()
+    IoErrorKind.NotFound     -> "NotFound"
+    IoErrorKind.InvalidInput -> "InvalidInput"
+    _                        -> "other"
+  end
+end
+
+Tester.describe("File") do |t: &var Tester|
+  t.it("opens a file and reads it back with read_to_string") do
+    let path = "/tmp/ruxen_std_io_file_open.txt"
+    FS.write(&path, &"hello file").expect!("write")
+    let f: File = File.open(&path).expect!("open")
+    let back: String = f.read_to_string().expect!("read")
+    t.expect(back).to_eq("hello file")
+    FS.remove_file(&path).expect!("remove")
+  end
+
+  t.it("returns NotFound when opening a missing file") do
+    let kind = match File.open("/no/such/path/ever/exists/here/io_test")
+      Ok(_)  -> "ok"
+      Err(e) -> kind_name(e)
+    end
+    t.expect(kind).to_eq("NotFound")
+  end
+
+  t.it("truncates an existing file on create") do
+    let path = "/tmp/ruxen_std_io_file_create.txt"
+    FS.write(&path, &"long original contents that should be truncated").expect!("write")
+    let f: File = File.create(&path).expect!("create")
+    f.write_str("short").expect!("write_str")
+    let back: String = FS.read_to_string(&path).expect!("read")
+    t.expect(back).to_eq("short")
+    FS.remove_file(&path).expect!("remove")
+  end
+
+  t.it("keeps the existing bytes on append") do
+    let path = "/tmp/ruxen_std_io_file_append.txt"
+    FS.write(&path, &"foo").expect!("write")
+    let f: File = File.append(&path).expect!("append")
+    f.write_str("bar").expect!("write_str")
+    let back: String = FS.read_to_string(&path).expect!("read")
+    t.expect(back).to_eq("foobar")
+    FS.remove_file(&path).expect!("remove")
+  end
+
+  t.it("creates and writes through OpenOptions") do
+    let path = "/tmp/ruxen_std_io_file_options.txt"
+    let opts = OpenOptions.new().read(true).write(true).create(true)
+    let f: File = File.open_options(&path, opts).expect!("open_options")
+    f.write_str("from OpenOptions").expect!("write_str")
+    let back: String = FS.read_to_string(&path).expect!("read")
+    t.expect(back).to_eq("from OpenOptions")
+    FS.remove_file(&path).expect!("remove")
+  end
+
+  t.it("returns InvalidInput for OpenOptions without an access mode") do
+    let path = "/tmp/ruxen_std_io_file_no_mode.txt"
+    let opts = OpenOptions.new().create(true)
+    let kind = match File.open_options(&path, opts)
+      Ok(_)  -> "ok"
+      Err(e) -> kind_name(e)
+    end
+    t.expect(kind).to_eq("InvalidInput")
+    t.expect(FS.exists(&path)).to_eq(false)
+  end
+
+  t.it("seeks from the start and from the end") do
+    let path = "/tmp/ruxen_std_io_file_seek.txt"
+    FS.write(&path, &"0123456789ABCDEF").expect!("write")
+    let f: File = File.open(&path).expect!("open")
+    t.expect(f.seek(SeekFrom.End(offset: 0)).expect!("seek end")).to_eq(16)
+    f.seek(SeekFrom.Start(offset: 3)).expect!("seek start")
+    let back: String = f.read_to_string().expect!("read")
+    t.expect(back).to_eq("3456789ABCDEF")
+    FS.remove_file(&path).expect!("remove")
+  end
+
+  t.it("reports the size and kind in metadata") do
+    let path = "/tmp/ruxen_std_io_file_meta.txt"
+    FS.write(&path, &"exactly twelve").expect!("write")
+    let f: File = File.open(&path).expect!("open")
+    let m: Metadata = f.metadata().expect!("metadata")
+    t.expect(m.size).to_eq(14)
+    t.expect(m.is_file).to_eq(true)
+    FS.remove_file(&path).expect!("remove")
+  end
+end

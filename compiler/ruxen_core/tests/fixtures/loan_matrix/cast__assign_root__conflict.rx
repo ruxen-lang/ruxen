@@ -1,0 +1,47 @@
+class A
+  name: String
+  def init(@name: String)
+  end
+end
+
+class U
+  name: String
+  count: Int
+  a: A
+  items: Array[String]
+  def init(@name: String, @a: A, @items: Array[String])
+    @count = 0
+  end
+
+  def label -> &String
+    @name
+  end
+
+  def var rename(n: String) -> nil
+    @name = n
+  end
+end
+
+def replace(s: &var String) -> nil
+  s = "replaced-value-long-enough-to-need-a-new-buffer"
+end
+
+def eat(u: U) -> nil
+  puts u.name
+end
+
+def mk(k: Int) -> U
+  U.new("old-#{k}", A.new("a-#{k}"), ["e0-#{k}", "e1-#{k}"])
+end
+
+def run(k: Int) -> nil
+  u = mk(k)
+  x = u.label as &String
+  u = mk(5)
+  puts x
+  puts u.name
+  puts u.a.name
+  puts(u.items.size)
+end
+
+run(3)

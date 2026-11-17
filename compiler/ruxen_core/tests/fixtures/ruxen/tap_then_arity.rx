@@ -1,0 +1,6 @@
+def main
+  let r = 10.then do |x, y|
+    y * 7
+  end
+  puts(r)
+end

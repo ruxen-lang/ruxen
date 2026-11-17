@@ -10,7 +10,7 @@
 > (spec §9 Q6's preferred mechanism — NOT `--export=<mangled>`), links it with
 > `wasm-ld --no-entry --export-dynamic` (no libc, no C runtime — a reactor
 > module), and the result RUNS in Node.js with asserted results
-> (`examples/05-wasm/`, `scripts/wasm_verify.sh`, pin `tests/wasm_codegen.rs`).
+> (`examples/05-wasm/`, `scripts/wasm_verify.sh`, pin `compiler/ruxen_core/tests/it/wasm_codegen.rs`).
 > A wasm build does NOT bootstrap the hosted stdlib — it is the no_std reality,
 > which also sidesteps the LLVM backend's not-yet-emitted vtable/class_info
 > globals (`llvm/mod.rs`). `wasm32-wasi`, the bundled `dlmalloc` allocator,
@@ -36,6 +36,7 @@ Doc 02 §2 documents the absence of `--target`. A fortiori there is no wasm32 su
 
 ### 2.2 Linker assumptions (`crates/ruxen-core/src/codegen/object.rs:52-92`)
 
+<!-- compiler-rust -->
 ```rust
 let mut cmd = Command::new("cc");
 cmd.arg(&obj_path).arg(runtime_o).arg("-o").arg(output_path)
@@ -117,7 +118,7 @@ Recommendation: introduce `ruxen_slot_t` in the runtime, `typedef` to `intptr_t`
 
 ### 4.1 CLI
 
-```
+```sh
 ruxen build --target wasm32-unknown-unknown [--release]
 ruxen build --target wasm32-wasi [--release]
 ```
@@ -126,9 +127,13 @@ Output: `target/wasm32-<env>/<profile>/<pkg-name>.wasm`.
 
 ### 4.2 Source directives
 
-**Exports** (wasm32-unknown-unknown or wasi):
+**Exports** (wasm32-unknown-unknown or wasi). Exporting every top-level `def`
+by its source name is [implemented] for `wasm32-unknown-unknown` (LLVM
+backend; `examples/05-wasm/`, `compiler/ruxen_core/tests/it/wasm_codegen.rs`). The `wasm_export`
+directive, wasi and the pointer-returning export below are the staged
+remainder, [planned](../../TODO.md#t-req-wasm):
 
-```ruxen
+```ruby
 def add(a: Int32, b: Int32) -> Int32
   wasm_export "add"
   a + b
@@ -140,9 +145,9 @@ def greet(name: *UInt8, len: USize) -> *UInt8
 end
 ```
 
-**Imports** (host-provided):
+**Imports** (host-provided), [planned](../../TODO.md#t-req-wasm):
 
-```ruxen
+```ruby
 lib "wasm:env"                              # new ABI link string; "c" is the existing one
   def console_log(ptr: *UInt8, len: USize)
     wasm_import "env", "console_log"
@@ -174,7 +179,7 @@ link-args = []
 
 ### 4.4 Runtime layout
 
-```
+```text
 ~/.ruxen/lib/runtime/
 ├── wasm32-unknown-unknown/
 │   ├── runtime.o              # Compiled from runtime_wasm.c with bump allocator
@@ -257,10 +262,11 @@ $WASI_SDK_PATH/bin/clang --target=wasm32-wasi \
 
 ### 5.8 `std.wasm` module (host API surface)
 
-New hidden module. Users don't write `wasm_import` directives directly; they call:
+New hidden module. Users don't write `wasm_import` directives directly; they
+call its functions by qualified name (the stdlib is always linked, so no
+`require` is needed). [planned](../../TODO.md#t-req-wasm):
 
-```ruxen
-use std.wasm
+```ruby
 std.wasm.debug_log("hello")                 # wraps in-body wasm_import("env", "debug_log")
 std.wasm.memory_size_bytes() -> USize
 std.wasm.memory_grow_pages(n: USize) -> USize
@@ -316,7 +322,7 @@ Explicitly deferred. Call out in the book that the Component Model will be Ruxen
 
 ### Tests
 
-- `crates/ruxen-core/tests/wasm_codegen.rs` — gated on `cfg(feature = "llvm")`. Compiles a trivial program for `wasm32-unknown-unknown`, loads the `.wasm` via `wasmi` (small, pure-Rust wasm interpreter), invokes an exported function, asserts the return value.
+- `compiler/ruxen_core/tests/it/wasm_codegen.rs` — gated on `cfg(feature = "llvm")`. Compiles a trivial program for `wasm32-unknown-unknown`, loads the `.wasm` via `wasmi` (small, pure-Rust wasm interpreter), invokes an exported function, asserts the return value.
 - `crates/ruxen-core/tests/wasi_codegen.rs` — same but for `wasm32-wasi`, using `wasmi_wasi` or shelling out to `wasmtime`.
 - Example `examples/04-wasm-hello/` doubles as an end-to-end acceptance test.
 
@@ -396,8 +402,8 @@ Phase 3a — wasm32-wasi:
 
 Phase 3b — wasm32-unknown-unknown:
 
-- [x] `ruxen compile --target wasm32-unknown-unknown` on a program with `def add(a: Int32, b: Int32) -> Int32` produces a `.wasm` whose exports include `add`. **DELTA:** no in-body `wasm_export "add"` directive in v1 — every top-level `def` is exported by source name (the directive parser is the staged remainder; ADR decision #4). Validated via `WebAssembly.instantiate` exports list in `tests/wasm_codegen.rs` rather than `wasm-objdump`.
-- [x] Loading that `.wasm` in Node.js via `WebAssembly.instantiate` and calling `instance.exports.add(2, 3)` returns `5`. (`scripts/wasm_verify.sh`, `examples/05-wasm/run.mjs`, `tests/wasm_codegen.rs::emits_valid_wasm_with_expected_exports`.)
+- [x] `ruxen compile --target wasm32-unknown-unknown` on a program with `def add(a: Int32, b: Int32) -> Int32` produces a `.wasm` whose exports include `add`. **DELTA:** no in-body `wasm_export "add"` directive in v1 — every top-level `def` is exported by source name (the directive parser is the staged remainder; ADR decision #4). Validated via `WebAssembly.instantiate` exports list in `compiler/ruxen_core/tests/it/wasm_codegen.rs` rather than `wasm-objdump`.
+- [x] Loading that `.wasm` in Node.js via `WebAssembly.instantiate` and calling `instance.exports.add(2, 3)` returns `5`. (`scripts/wasm_verify.sh`, `examples/05-wasm/run.mjs`, `compiler/ruxen_core/tests/it/wasm_codegen.rs::emits_valid_wasm_with_expected_exports`.)
 - [ ] A program using `std.wasm.debug_log("hello")` … imports `env.console_log`. **FILED** — host imports + `std.wasm` are the staged remainder.
 - [ ] A `lib "wasm:host"` block … `wasm_import "host", "now_ms"` … **FILED** — `wasm_import` directive is the staged remainder.
 - [ ] Binary size of `fib(n)` ≤ 50KB in `--release`. **FILED** (size budget not measured this pass; the math-export `.wasm` is ~180 bytes for `add`/`mul`/`square`, far under budget, but `fib` + `--release` size was not formally pinned).
@@ -410,4 +416,4 @@ Phase 3c — std.wasm:
 Phase 3d — CI + examples:
 
 - [x] `examples/05-wasm/` has the Ruxen source, a hand-written `run.mjs` Node loader, and a README. **DELTA:** the spec named `examples/04-wasm-hello/` with an HTML+button harness; `04` was taken, and the headline RUN bar is node (no browser tooling required), so the example is `05-wasm/` with a `node run.mjs` harness that asserts results. (Browser `index.html` is a trivial follow-up — filed.)
-- [ ] CI `wasm32-wasi` + `wasmtime` smoke. **FILED** — wasm32-wasi is out of this pass; the wasm32-unknown-unknown bar is gated by `scripts/wasm_verify.sh` + `tests/wasm_codegen.rs` instead.
+- [ ] CI `wasm32-wasi` + `wasmtime` smoke. **FILED** — wasm32-wasi is out of this pass; the wasm32-unknown-unknown bar is gated by `scripts/wasm_verify.sh` + `compiler/ruxen_core/tests/it/wasm_codegen.rs` instead.

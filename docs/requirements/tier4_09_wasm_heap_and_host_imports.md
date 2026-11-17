@@ -83,7 +83,7 @@ a vendored `snprintf` header. No multi-month mini-libc.
 
 Three seams change:
 
-```
+```text
 compiler (ruxen_core)
   parser/HIR/MIR : new `wasm_import "module","name"` directive on FFI fns
   codegen/llvm/emit : emit wasm-import-{module,name} attrs on imported fns

@@ -1,0 +1,13 @@
+class Box
+  n: Int
+  def init(@n: Int)
+  end
+end
+
+def main
+  var a = Box.new(1)
+  var b = Box.new(2)
+  var flag = true
+  a, b = (flag ? a : b), Box.new(9)
+  puts a.n
+end

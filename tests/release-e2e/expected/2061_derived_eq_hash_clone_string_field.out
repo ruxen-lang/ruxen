@@ -1,0 +1,4 @@
+eq=true
+neq=false
+clone_eq=true
+hash_match=true

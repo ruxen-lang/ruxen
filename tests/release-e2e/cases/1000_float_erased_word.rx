@@ -1,0 +1,309 @@
+# ---- from 1000_float_erased_word_array ----
+# B01 — the erased uniform word ABI, `Array[Float]` half.
+#
+# A generic collection stores `int64_t` elements regardless of `T`, so a
+# `Float` element crosses into an ERASED UNIFORM WORD on push and back out on
+# read. Codegen used to run those crossings through `coerce_value`'s `fcvt_*`
+# arms, i.e. a NUMERIC conversion: `[1.5, 2.5][0]` printed `1`, and `each`
+# printed `1` / `2`. The word now carries the IEEE-754 bit pattern, bitcast
+# symmetrically on write and on read.
+#
+# Every value below is chosen so a truncating bug CANNOT pass by luck:
+#   * `1.25` and `1.75` truncate to the SAME integer (1), so a pin using only
+#     one of them would still pass under `fcvt`;
+#   * `-2.5` is negative, which the old default (`fcvt_to_uint_sat`) clamped
+#     to 0 rather than truncating toward zero;
+#   * `0.1` has no exact binary representation, so any width mistake shows;
+#   * `0.0` and `-0.0` differ ONLY in the sign bit — a bit-preserving word
+#     keeps them distinct, a numeric one cannot.
+def run_1000
+  let a: Array[Float] = [1.25, 1.75, -2.5, 0.1]
+
+  # Index — the `ruxen_vec_get_or_panic` result crossing OUT of the word.
+  puts("idx=#{a[0]} #{a[1]} #{a[2]} #{a[3]}")
+
+  # `each` — the `ruxen_vec_get` result inside the inlined loop.
+  a.each { |v| puts("each=#{v}") }
+
+  # Round trip: push into a fresh array, then read back. This is the pair of
+  # crossings (in AND out) in one statement; getting only one side would show
+  # up here even if each side alone looked plausible.
+  var round: Array[Float] = []
+  round.push(1.25)
+  round.push(-2.5)
+  round.push(0.1)
+  puts("round=#{round[0]} #{round[1]} #{round[2]} #{round.size}")
+
+  # Signed zero: bit-distinct, numerically equal.
+  var zeros: Array[Float] = []
+  zeros.push(0.0)
+  zeros.push(-0.0)
+  puts("zeros=#{zeros[0]} #{zeros[1]}")
+
+  # A nested collection erases twice.
+  let nested: Array[Array[Float]] = [[1.25], [-2.5]]
+  puts("nested=#{nested[0][0]} #{nested[1][0]}")
+end
+
+# ---- from 1001_float_erased_word_closure ----
+# B01 — the erased uniform word ABI, CLOSURE half.
+#
+# A closure is only ever reached through the erased `Fn` box, and the generic
+# body that invokes it (`Array_map`, `Array_select`, …) was lowered ONCE with
+# the element type abstract, so its argument and result locals are `TypeParam`
+# — 64-bit uniform WORDS. A `Float` closure parameter was therefore declared
+# in a vector register the caller never wrote, so
+# `[2.5].map { |v| v + 0.5 }` produced `0`; a `Float` closure RETURN was
+# read back out of the wrong register class the same way.
+#
+# Closures now take and return floats as uniform words carrying the IEEE-754
+# bit pattern, reinterpreted on both edges. Both directions are pinned side by
+# side, because fixing only one is worse than fixing neither.
+#
+# BOTH CALLER SHAPES are pinned too, for the same reason. A GENERIC caller
+# (`Array#map`) already holds words, so no conversion fires there; a CONCRETE
+# caller (`f.call(2.5)` on an `Fn(Float) -> Float`) holds real floats and must
+# convert at both edges. A fix that handled only one shape would leave the
+# other silently wrong, and only one of them appears in the reported symptom.
+def apply_once(f: Fn(Float) -> Float, x: Float) -> Float
+  # NOTE: `f.call(x)`, not `f(x)`. Calling an `Fn`-typed FUNCTION PARAMETER
+  # with bare call syntax emits a direct call to a symbol named after the
+  # parameter (`Undefined symbols: _f` at link time). That is a separate
+  # pre-existing defect, unrelated to B01; the spelling here is the one that
+  # works today.
+  f.call(x)
+end
+
+def run_1001
+  let src: Array[Float] = [1.25, 1.75]
+
+  # Float closure ARGUMENT and Float closure RETURN in one call.
+  let plus: Array[Float] = src.map { |v| v + 0.5 }
+  puts("argret=#{plus[0]} #{plus[1]}")
+
+  # Float argument, NON-float return (only the inbound edge crosses).
+  let shown: Array[String] = src.map { |v| "#{v}" }
+  puts("arg=#{shown[0]} #{shown[1]}")
+
+  # Non-float argument, Float return (only the outbound edge crosses).
+  let ints: Array[Int] = [1, 2]
+  let scaled: Array[Float] = ints.map { |n| 0.125 }
+  puts("ret=#{scaled[0]} #{scaled[1]}")
+
+  # A Float argument feeding a Bool result — the predicate must see the real
+  # value, not a truncation. `1.25` and `1.75` truncate to the SAME integer,
+  # so a truncating bug cannot pass this by luck.
+  let big: Array[Float] = src.select { |v| v > 1.5 }
+  puts("pred=#{big.size} #{big[0]}")
+
+  # `each` over Float elements — the inlined-closure spelling, which takes a
+  # different lowering path from `map`'s boxed closure and so proves nothing
+  # about it. Both are pinned deliberately.
+  src.each { |v| puts("each=#{v}") }
+
+  # A negative and a fraction-only value, which the old numeric conversion
+  # clamped to 0 rather than truncating.
+  let signed: Array[Float] = [-2.5, 0.1]
+  let same: Array[Float] = signed.map { |v| v }
+  puts("ident=#{same[0]} #{same[1]}")
+
+  # The CONCRETE caller shape: an `Fn(Float) -> Float` value invoked from a
+  # body that holds real floats, not words. Distinct lowering from `map`'s.
+  let dbl = { |v: Float| v * 2.0 }
+  puts("concrete=#{apply_once(dbl, 1.25)}")
+
+  # A closure CAPTURING a float, so the value reaches the body through the
+  # captures block rather than the parameter word.
+  let base: Float = 0.25
+  let shifted: Array[Float] = src.map { |v| v + base }
+  puts("capture=#{shifted[0]} #{shifted[1]}")
+
+  # `reduce`: the accumulator AND the element are both floats, so two word
+  # parameters cross on every iteration and the result crosses back.
+  let total: Float = [1.25, 1.75, -2.5].reduce(0.0) { |acc, v| acc + v }
+  puts("reduce=#{total}")
+end
+
+# ---- from 1002_float_erased_word_hash_set ----
+# B01 — the erased uniform word ABI, keyed-collection half.
+#
+# `ruxen_hash_insert(h, k, v)` and `ruxen_set_insert(s, x)` are `.rx`-declared
+# over `K` / `V` / `T`, so both the key and the value slots are erased uniform
+# words. Under the old numeric conversion:
+#   * a Float VALUE truncated — `h["k"] = 1.5` read back as `1`;
+#   * a Float KEY collided — `1.25` and `1.75` both became the key `1`, so
+#     `h2[1.25]` returned the entry stored under `1.75`.
+#
+# The key case is why this pin uses 1.25 / 1.75 rather than 1.5 / 2.5: two
+# keys that truncate to DIFFERENT integers still look correct under a
+# truncating bug, and that is exactly how this stayed invisible.
+def run_1002
+  # Float VALUE.
+  var hv: Hash[String, Float] = Hash.new
+  hv["a"] = 1.25
+  hv["b"] = -2.5
+  hv["c"] = 0.1
+  puts("val=#{hv["a"]} #{hv["b"]} #{hv["c"]}")
+
+  # Float KEY — two keys that truncate to the same integer must stay distinct.
+  var hk: Hash[Float, String] = Hash.new
+  hk[1.25] = "lo"
+  hk[1.75] = "hi"
+  hk[-2.5] = "neg"
+  puts("key=#{hk[1.25]} #{hk[1.75]} #{hk[-2.5]} #{hk.size}")
+
+  # Float key AND Float value together.
+  var hkv: Hash[Float, Float] = Hash.new
+  hkv[0.1] = 1.25
+  hkv[0.2] = 1.75
+  puts("kv=#{hkv[0.1]} #{hkv[0.2]}")
+
+  # Set membership — same collision hazard as a Hash key.
+  var s: Set[Float] = Set.new
+  s.insert(1.25)
+  s.insert(-2.5)
+  puts("set=#{s.include?(1.25)} #{s.include?(1.75)} #{s.include?(-2.5)} #{s.size}")
+end
+
+# ---- from 1003_float_erased_word_boundaries ----
+# B01 — the remaining erased-word boundaries a `Float` can cross.
+#
+# The collection and closure pins (1000-1002) cover the reported symptoms.
+# This one sweeps every OTHER place codegen collapses a declared type to the
+# 64-bit uniform word, because a fix that covered only the reported three
+# would leave the same defect live on each of these:
+#
+#   * `Option[T]` / `Result[T, E]` — the payload slot is a word;
+#   * a generic function's `T` parameter and `T` return;
+#   * `&` / `&var` on a Float local — `Ref(Float)` is a word, and this one
+#     did not merely truncate, it PANICKED the Cranelift frontend with
+#     "declared type of variable varN doesn't match type of value vN";
+#   * a `Float32`, whose 32-bit pattern is zero-extended into the 64-bit
+#     word rather than sharing `Float64`'s layout;
+#   * a class field and a struct field.
+struct Pair
+  x: Float
+  y: Float32
+end
+
+class Holder
+  v: Float
+  def init(@v: Float) end
+  def get -> Float
+    self.v
+  end
+end
+
+def pick[T](a: T, b: T, first: Bool) -> T
+  if first
+    a
+  else
+    b
+  end
+end
+
+def peek(p: &var Float) -> Int
+  0
+end
+
+def run_1003
+  # Option / Result payload words. (The bindings are `present` / `absent`
+  # rather than `some` / `none` because `some` is the existential-type
+  # keyword and cannot be a binding name.)
+  let present: Option[Float] = Some(1.25)
+  let absent: Option[Float] = nil
+  puts("opt=#{present.unwrap_or(0.0)} #{absent.unwrap_or(-2.5)}")
+  let ok: Result[Float, String] = Ok(0.1)
+  puts("res=#{ok.unwrap_or(0.0)}")
+
+  # A generic function erases its parameter AND its return to `T`.
+  puts("gen=#{pick(1.25, 1.75, true)} #{pick(1.25, 1.75, false)}")
+
+  # `&var` on a Float local. Before B01 this did not compile at all.
+  var q: Float = -2.5
+  puts("ref=#{peek(&var q)} #{q}")
+
+  # Float32 in a word: the 32-bit pattern, zero-extended — NOT Float64's.
+  var f32s: Array[Float32] = []
+  f32s.push(1.25 as Float32)
+  f32s.push(-2.5 as Float32)
+  puts("f32=#{f32s[0]} #{f32s[1]}")
+  let f32map: Array[Float32] = f32s.map { |v| v }
+  puts("f32map=#{f32map[0]} #{f32map[1]}")
+
+  # Fields.
+  let p = Pair.new(0.1, 1.25 as Float32)
+  puts("struct=#{p.x} #{p.y}")
+  puts("class=#{Holder.new(-2.5).get}")
+end
+
+# ---- from 1004_float_numeric_conversion_preserved ----
+# B01 — the NEGATIVE pin: bit reinterpretation must not swallow Ruxen's
+# implicit numeric conversions.
+#
+# The B01 fix turns a float/word crossing into a bitcast. The hazard is
+# over-applying it: a declared `Int` parameter and an erased `T` parameter are
+# BOTH `i64` in Cranelift and LLVM, so a rule keyed only on the machine type
+# would bitcast `takes_int(2.5)` and hand the callee `0x4004000000000000`.
+#
+# Codegen therefore consults the DECLARED Ruxen type
+# (`codegen::is_erased_word_ty`) rather than the machine type. This case pins
+# the conversions that must stay numeric. If a future change re-keys the
+# decision on the machine type alone, these lines go wrong immediately.
+def takes_float(x: Float) -> Float
+  x
+end
+
+def takes_int(x: Int) -> Int
+  x
+end
+
+def gives_int -> Int
+  7
+end
+
+def run_1004
+  # Int literal into a declared `Float` param — an implicit promotion, NOT
+  # an erasure. Must be 3, not 3's bit pattern read as a float.
+  puts("promote=#{takes_float(3)}")
+
+  # Float local into a declared `Int` param — implicit narrowing.
+  let f: Float = 2.5
+  puts("narrow=#{takes_int(f)}")
+
+  # Explicit `as` casts in both directions.
+  let n: Int = 7
+  puts("cast=#{n as Float} #{f as Int}")
+
+  # An `Int`-returning call bound to a `Float` — the promotion happens in a
+  # separate `Assign`, which is precisely why the call-result boundary can
+  # bitcast unconditionally.
+  let promoted: Float = gives_int()
+  puts("ret=#{promoted}")
+
+  # Arithmetic against an explicitly converted operand still converts
+  # numerically. (Ruxen rejects bare `0.5 + n` for mismatched numeric types,
+  # so the conversion is spelled out — which is the shape that must keep
+  # working.)
+  puts("mixed=#{0.5 + (n as Float)} #{(f as Int) + 1}")
+
+  # Non-float element types through the same closure boundary the Float ABI
+  # changed, proving it did not disturb the integer register class.
+  let bs: Array[Bool] = [true, false]
+  let inv: Array[Bool] = bs.map { |b| !b }
+  puts("bool=#{inv[0]} #{inv[1]}")
+  let cs: Array[Char] = [?a, ?b]
+  let same: Array[Char] = cs.map { |c| c }
+  puts("char=#{same[0]} #{same[1]}")
+  let is: Array[Int] = [3, 4]
+  let dbl: Array[Int] = is.map { |i| i * 2 }
+  puts("int=#{dbl[0]} #{dbl[1]}")
+end
+
+def main
+  run_1000
+  run_1001
+  run_1002
+  run_1003
+  run_1004
+end

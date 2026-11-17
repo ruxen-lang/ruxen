@@ -10,18 +10,84 @@ impl Parser {
         self.skip_newlines();
         let mut args = Vec::new();
         if !self.at(TokenKind::RParen) {
-            args.push(self.parse_expression());
+            args.push(self.parse_call_arg());
             while self.eat(TokenKind::Comma) {
                 self.skip_newlines();
                 if self.at(TokenKind::RParen) {
                     break;
                 }
-                args.push(self.parse_expression());
+                args.push(self.parse_call_arg());
             }
         }
         self.skip_newlines();
         self.expect(TokenKind::RParen);
         args
+    }
+
+    /// A single call argument. Recognizes the Block Tier-2 `&`-forms in
+    /// argument position — `&:symbol` (to-proc) and `&block` / bare `&`
+    /// (block-forwarding) — producing an `ExprKind::BlockPass` that `resolve`
+    /// later hoists into the call's block slot. Any other argument (including
+    /// an ordinary `&expr` borrow) parses as a normal expression.
+    fn parse_call_arg(&mut self) -> Expr {
+        if let Some(bp) = self.try_parse_block_pass() {
+            return bp;
+        }
+        self.parse_expression()
+    }
+
+    /// If the cursor is at a `&`-form block argument, consume it and return the
+    /// `BlockPass` node; otherwise leave the cursor untouched and return `None`.
+    ///
+    /// Recognized (all unambiguous against Ruxen's `&expr` borrow, except the
+    /// literal identifier `block` which is treated as the received block):
+    ///   - `&:sym`        → `BlockPass(ToProc("sym"))`
+    ///   - `&block`       → `BlockPass(Forward)`
+    ///   - `&` then `)`/`,` (bare) → `BlockPass(Forward)`
+    fn try_parse_block_pass(&mut self) -> Option<Expr> {
+        if !self.at(TokenKind::Amp) {
+            return None;
+        }
+        let start = self.current_span();
+        // `&:sym` — a colon can never follow `&` in a borrow, so this is
+        // unambiguous to-proc sugar.
+        if self.peek_kind() == TokenKind::Colon {
+            if let TokenKind::Identifier(name) = self.peek_at_kind(2) {
+                self.advance(); // &
+                self.advance(); // :
+                self.advance(); // sym
+                let span = self.span_from(&start);
+                return Some(Expr {
+                    kind: ExprKind::BlockPass(BlockPassKind::ToProc(name)),
+                    span,
+                });
+            }
+        }
+        // `&block` — the literal identifier `block` in argument position means
+        // forward the enclosing function's received block.
+        if let TokenKind::Identifier(name) = self.peek_kind() {
+            if name == "block"
+                && matches!(self.peek_at_kind(2), TokenKind::RParen | TokenKind::Comma)
+            {
+                self.advance(); // &
+                self.advance(); // block
+                let span = self.span_from(&start);
+                return Some(Expr {
+                    kind: ExprKind::BlockPass(BlockPassKind::Forward),
+                    span,
+                });
+            }
+        }
+        // Bare `&` immediately followed by `)` or `,` — anonymous forwarding.
+        if matches!(self.peek_kind(), TokenKind::RParen | TokenKind::Comma) {
+            self.advance(); // &
+            let span = self.span_from(&start);
+            return Some(Expr {
+                kind: ExprKind::BlockPass(BlockPassKind::Forward),
+                span,
+            });
+        }
+        None
     }
 
     pub(super) fn parse_postfix(&mut self, lhs: Expr) -> Expr {
@@ -66,6 +132,7 @@ impl Parser {
                         kind: ExprKind::FieldAccess {
                             object: Box::new(lhs),
                             field: name,
+                            ivar: false,
                         },
                         span,
                     };
@@ -83,6 +150,7 @@ impl Parser {
                         kind: ExprKind::FieldAccess {
                             object: Box::new(lhs),
                             field: first,
+                            ivar: false,
                         },
                         span: mid_span.clone(),
                     };
@@ -91,6 +159,7 @@ impl Parser {
                         kind: ExprKind::FieldAccess {
                             object: Box::new(inner),
                             field: second,
+                            ivar: false,
                         },
                         span,
                     };
@@ -109,9 +178,20 @@ impl Parser {
                     vec![]
                 };
 
+                // `Proc.new { |x| ... }` (also with empty parens) is the proc
+                // literal, not a call.
+                let proc_new = field == "new"
+                    && generic_args.is_empty()
+                    && matches!(&lhs.kind, ExprKind::Identifier(n) if n == "Proc");
                 if self.at(TokenKind::LParen) {
                     let args = self.parse_call_args();
-                    let block = self.maybe_parse_block_arg();
+                    let mut block = self.maybe_parse_block_arg();
+                    if proc_new && args.is_empty() {
+                        match self.proc_new_literal(block, &start_span) {
+                            Ok(literal) => return literal,
+                            Err(not_literal) => block = not_literal,
+                        }
+                    }
                     let span = self.span_from(&start_span);
                     Expr {
                         kind: ExprKind::MethodCall {
@@ -120,6 +200,7 @@ impl Parser {
                             generic_args,
                             args,
                             block: block.map(Box::new),
+                            parens: true,
                         },
                         span,
                     }
@@ -141,13 +222,26 @@ impl Parser {
                             generic_args,
                             args: vec![arg],
                             block: block.map(Box::new),
+                            parens: false,
                         },
                         span,
                     }
                 } else {
                     // Check for block arg after field access (method call with no parens but with block)
-                    let block = self.maybe_parse_block_arg();
-                    if block.is_some() || !generic_args.is_empty() {
+                    let mut block = self.maybe_parse_block_arg();
+                    let mut literal = None;
+                    if proc_new {
+                        match self.proc_new_literal(block, &start_span) {
+                            Ok(proc_literal) => {
+                                literal = Some(proc_literal);
+                                block = None;
+                            }
+                            Err(not_literal) => block = not_literal,
+                        }
+                    }
+                    if let Some(literal) = literal {
+                        literal
+                    } else if block.is_some() || !generic_args.is_empty() {
                         let span = self.span_from(&start_span);
                         Expr {
                             kind: ExprKind::MethodCall {
@@ -156,6 +250,7 @@ impl Parser {
                                 generic_args,
                                 args: vec![],
                                 block: block.map(Box::new),
+                                parens: false,
                             },
                             span,
                         }
@@ -165,6 +260,7 @@ impl Parser {
                             kind: ExprKind::FieldAccess {
                                 object: Box::new(lhs),
                                 field,
+                                ivar: false,
                             },
                             span,
                         }
@@ -237,6 +333,7 @@ impl Parser {
                         callee: Box::new(lhs),
                         args,
                         block: block.map(Box::new),
+                        parens: true,
                     },
                     span,
                 }
@@ -246,16 +343,17 @@ impl Parser {
         }
     }
 
-    /// Check if current token starts a bare (paren-less) call argument.
-    /// Only string literals and interpolated strings qualify — this prevents
-    /// `x y` from being misread as a call when `x` is just a variable.
     /// Check if the next token can be a bare (no-parens) call argument.
     ///
     /// String literals are always accepted (any function can be called with
     /// a bare string: `puts "hello"`). Identifiers and other expression
-    /// tokens are only accepted for known IO functions (`puts`, `print`,
-    /// `eputs`) to avoid ambiguity where `foo bar` could be misread as
-    /// `foo(bar)` when they are two separate expressions.
+    /// tokens are only accepted for the known Kernel statement functions,
+    /// to avoid ambiguity where `foo bar` could be misread as `foo(bar)`
+    /// when they are two separate expressions.
+    ///
+    /// `p` and `pp` take value tokens only. `p` is also a common local
+    /// name, and after a local `p & mask` and `p !x`-like spellings are
+    /// operators, so `&`, `&mut` and `!` never start a bare `p` argument.
     pub(super) fn is_bare_call_arg_start(&self, callee_name: &str) -> bool {
         // String literals are always valid bare args for any function.
         if matches!(
@@ -265,16 +363,7 @@ impl Parser {
             return true;
         }
 
-        // For known IO/statement functions, allow broader expression args.
-        let is_bare_call_fn = matches!(
-            callee_name,
-            "puts" | "print" | "eputs" | "require" | "include" | "raise"
-        );
-        if !is_bare_call_fn {
-            return false;
-        }
-
-        matches!(
+        let value_token = matches!(
             self.current_kind(),
             TokenKind::Identifier(_)
                 | TokenKind::TypeIdentifier(_)
@@ -287,10 +376,18 @@ impl Parser {
                 | TokenKind::SomeKw
                 | TokenKind::OkKw
                 | TokenKind::ErrKw
-                | TokenKind::Amp
-                | TokenKind::AmpMut
-                | TokenKind::Bang
-        )
+        );
+        match callee_name {
+            "puts" | "print" | "eputs" | "include" | "raise" => {
+                value_token
+                    || matches!(
+                        self.current_kind(),
+                        TokenKind::Amp | TokenKind::AmpMut | TokenKind::Bang
+                    )
+            }
+            "p" | "pp" => value_token,
+            _ => false,
+        }
     }
 
     /// True when the next tokens look like a trailing block argument
@@ -317,15 +414,44 @@ impl Parser {
         false
     }
 
+    /// `Proc.new { |x| ... }` / `Proc.new() { |x| ... }`: the closure `block`
+    /// becomes the proc literal spanning from `start`. Hands `block` back
+    /// unchanged when it is not a closure.
+    fn proc_new_literal(
+        &mut self,
+        block: Option<Expr>,
+        start: &Span,
+    ) -> Result<Expr, Option<Expr>> {
+        match block {
+            Some(Expr {
+                kind: ExprKind::Closure(mut c),
+                ..
+            }) => {
+                c.kind = ClosureKind::Proc;
+                c.spelling = ClosureSpelling::ProcNew;
+                Ok(Expr {
+                    kind: ExprKind::Closure(c),
+                    span: self.span_from(start),
+                })
+            }
+            other => Err(other),
+        }
+    }
+
     /// Try to parse a trailing block argument after a method call.
     /// Returns Some if { |params| ... } or do |params| ... end follows.
+    /// The closure is marked `ClosureKind::Block`.
     pub(crate) fn maybe_parse_block_arg(&mut self) -> Option<Expr> {
-        if self.at(TokenKind::LBrace) {
-            Some(self.parse_brace_closure(false, false))
+        let mut block = if self.at(TokenKind::LBrace) {
+            self.parse_brace_closure(false, false)
         } else if self.at(TokenKind::Do) {
-            Some(self.parse_do_closure(false, false))
+            self.parse_do_closure(false, false)
         } else {
-            None
+            return None;
+        };
+        if let ExprKind::Closure(c) = &mut block.kind {
+            c.kind = ClosureKind::Block;
         }
+        Some(block)
     }
 }

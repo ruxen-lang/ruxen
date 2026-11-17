@@ -1,7 +1,7 @@
 # ADR: Ruby-style `alias` keyword for Ruxen (`alias new_name old_name`)
 
-Status: Accepted (2026-06-10)
-Branch: `feat/drop-elaboration`
+Status: Accepted (2026-06-10); S4 follow-ups completed (2026-07-14)
+Branch: `feat/drop-elaboration`; follow-ups: `fix/alias`
 Builds on: `docs/decisions/ruby-block-semantics.md` (commit `8a783f9`) — same
 keyword-feature house style; reuses its resolve/typeck/MIR seams.
 
@@ -128,20 +128,23 @@ rejected with **E1121** (see D6).
 All three are registered in `diagnostics::codes::REGISTRY` with
 `docs/errors/E112{0,1,2}.md`.
 
-### D6 — Operator aliases: STAGED with a clean diagnostic (Tier 2)
+### D6 — Operator aliases use the canonical method-name map
 
 `alias << push` / `alias [] get` (operator-symbol new names, or operator targets)
 route through the operator-method machinery (`a << b` → `a.<<(b)`, `a[i]` →
-`a.[](i)`; the desugar is post-typeck in `mir/lower/expr/binops.rs` +
-`typeck/infer/ops.rs`). Wiring an operator NAME as an alias requires the synonym
-map to participate in the operator-desugar symbol selection, which lives in a
-different lowering path than ordinary method-name mangling. Rather than half-wire
-it, Tier 1 **rejects an operator-spelled alias name or target** with a clear,
-actionable diagnostic **E1123** ("operator aliases are not yet supported")
-pointing at the staged follow-up (filed in `docs/TASKS.md`). Plain `?`/`!`
-method names (`alias member? include?`, `alias add! push`) are NOT operators —
-they are ordinary identifiers the lexer absorbs into the name — and ARE supported
-in Tier 1.
+`a.[](i)`). Those post-typeck desugars synthesize an ordinary method call, so
+typeck registers the alias signature and MIR's existing method-call symbol
+selection rewrites the operator name through the per-type canonical-name map.
+No operator-specific body or thunk is emitted.
+
+The supported operator alias names are the operator-method surface that has a
+real expression dispatch path: binary `+ - * / % & | ^ << >>`, unary `!`/`-@`,
+and index `[]`/`[]=`. Unary `+@` remains **E1123** because Ruxen has no unary-plus
+expression to dispatch. Comparison/equality/logical/regex operators are outside
+the operator-method grammar and remain parser errors; accepting aliases for them
+would create names no expression can call. Plain `?`/`!` identifier suffixes
+(`alias member? include?`, `alias add! push`) remain ordinary method names and
+are unrelated to the `!` operator token.
 
 ### D7 — Alias through `include` (mixin methods)
 
@@ -151,13 +154,14 @@ satisfies a mixin requirement (`mixin Shape { def area }`, the class defines
 mixin contract is still satisfied — the alias is a pure synonym, not a new
 method. Implementors see both names. Pinned (REVIEWER pin e).
 
-**Tier-1 boundary (staged):** aliasing a method the type gets ONLY from a mixin
-**default body** (not redefined in the type) is staged for Tier 2. A mixin
-default's signature lives in the mixin's signature table
-(`typeck::trait_method_sigs`), not the type's own method table (`type_methods`),
-so the typeck-side synonym registration cannot yet bind it. Filed in
-`docs/TASKS.md`. (The common case — aliasing a type's OWN method — works; this
-boundary only affects aliasing an inherited default verbatim.)
+An alias may also target a method the type gets only from an included mixin's
+**default body**. Typeck first looks in the type's own `type_methods` (so an
+override or requirement-satisfying own method wins), then in the default-body
+subset of `trait_method_sigs` for mixins the type nominally includes. Required
+signatures without a default body are deliberately excluded: registering one
+would type-check a synonym for which MIR can emit no callable body. MIR already
+monomorphizes included defaults as `<Type>_<method>`, so canonical alias dispatch
+reaches that one emitted body. Pinned by release-e2e 472.
 
 ### D8 — Generic bounds + Q17 monomorphization
 
@@ -184,8 +188,10 @@ Pinned: `format(format(x)) == format(x)` and the literal `alias a b` survives
 
 ## Out of scope
 
-**Staged (Tier 2), filed in `docs/TASKS.md`:**
-- Operator-spelled aliases (`alias << push`, `alias [] get`) — D6, E1123.
+**Staged:**
+- Unary `+@` aliases — D6, E1123; Ruxen has no unary-plus expression.
+- Comparison/equality/logical/regex operator methods and aliases — those names
+  are outside the current operator-method grammar and are parser-rejected.
 - `alias_method`-style runtime-ish reflective form (no such surface in Ruxen).
 
 **Rejected:**

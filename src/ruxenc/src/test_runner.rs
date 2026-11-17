@@ -53,7 +53,7 @@ pub struct TestFileResult {
 }
 
 pub fn run(opts: TestOptions) -> Result<(), String> {
-    let project_dir = find_project_root()?;
+    let project_dir = crate::compile::find_project_root()?;
     let mut files = discover_test_files(&project_dir)?;
 
     // Filter (substring on derived test-path, NOT individual `it` names —
@@ -75,6 +75,23 @@ pub fn run(opts: TestOptions) -> Result<(), String> {
         return Ok(());
     }
 
+    // A std package's source is already compiled in through the stdlib
+    // bootstrap. Point the bootstrap at this checkout so the test sees the
+    // package's current source rather than the copy embedded in the binary.
+    // Its dependencies and C runtime are std packages already in the
+    // bootstrap and `libruxenrt.a`, so they are not merged or linked again.
+    let std_package = is_std_package(&project_dir);
+    if std_package && std::env::var_os("RUXEN_STDLIB_PATH").is_none() {
+        if let Some(std_root) = project_dir.parent() {
+            std::env::set_var("RUXEN_STDLIB_PATH", std_root);
+        }
+    }
+    let dep_dirs: &[PathBuf] = if std_package {
+        &[]
+    } else {
+        &opts.dep_source_dirs
+    };
+
     let out_dir = project_dir.join("target").join("ruxen").join("test-build");
     fs::create_dir_all(&out_dir).map_err(|e| format!("create {}: {}", out_dir.display(), e))?;
 
@@ -88,14 +105,7 @@ pub fn run(opts: TestOptions) -> Result<(), String> {
     let mut built: Vec<(PathBuf, String, PathBuf)> = Vec::new(); // (user_file, test_path, bin_path)
     for f in &files {
         let tp = test_path_for(&project_dir, f);
-        match build_one(
-            &project_dir,
-            &tp,
-            f,
-            &out_dir,
-            opts.release,
-            &opts.dep_source_dirs,
-        ) {
+        match build_one(&project_dir, &tp, f, &out_dir, opts.release, dep_dirs) {
             Ok(bin_path) => built.push((f.clone(), tp, bin_path)),
             Err(e) => {
                 // Surface build errors as failed-file results so the
@@ -238,20 +248,6 @@ fn resolve_test_threads(s: &str) -> usize {
     }
 }
 
-/// Walk upward from CWD until we find a Ruxen.toml.
-fn find_project_root() -> Result<PathBuf, String> {
-    let mut dir = std::env::current_dir().map_err(|e| format!("cannot read cwd: {}", e))?;
-    loop {
-        if dir.join("Ruxen.toml").exists() {
-            return Ok(dir);
-        }
-        match dir.parent() {
-            Some(p) => dir = p.to_path_buf(),
-            None => return Err("no Ruxen.toml found in CWD or any ancestor".into()),
-        }
-    }
-}
-
 /// Collect every `.rx` file under `<project_dir>/tests/` EXCEPT those
 /// under `tests/support/` (helper modules — see spec §4.3).
 fn discover_test_files(project_dir: &Path) -> Result<Vec<PathBuf>, String> {
@@ -304,8 +300,22 @@ fn test_path_for(project_dir: &Path, file: &Path) -> String {
 /// for **library** projects (those with `src/lib.rx`); a `src/main.rx`
 /// binary project would inject its own `def main`, clashing with the
 /// synthesised one, so we skip it and return `None`.
+///
+/// A std package (`library/std/<pkg>`) is skipped too: the stdlib bootstrap
+/// already loads its source, so merging it again defines every item twice
+/// (`DuplicateDefinition`).
 fn gather_project_lib_sources(project_dir: &Path) -> Result<Option<String>, String> {
+    if is_std_package(project_dir) {
+        return Ok(None);
+    }
     gather_package_lib_src(project_dir)
+}
+
+/// True for a stdlib package directory, `library/std/<pkg>`.
+fn is_std_package(project_dir: &Path) -> bool {
+    project_dir
+        .parent()
+        .is_some_and(|p| p.ends_with(Path::new("library").join("std")))
 }
 
 /// Gather one package's library source (`src/lib.rx` entry first, then the
@@ -351,108 +361,68 @@ fn gather_dep_lib_sources(dep_dirs: &[PathBuf]) -> Result<String, String> {
 /// Q18: split a test file into (top-level items to hoist ABOVE the
 /// synthesised `def main`, test statements to keep INSIDE it).
 ///
-/// A column-0 line beginning a top-level item — `use` / `const` / `type`
-/// (single-line), or a block item `def` / `pub def` / `class` / `struct` /
-/// `enum` / `mixin` / `module` / `extension` / `impl` (spanning to its
-/// column-0 `end`) — plus any `##` doc-comment lines immediately preceding
-/// such an item, is hoisted. A `##` doc that is NOT attached to a hoisted
-/// item is neutralised to a plain `#` comment so it doesn't parse as a
-/// statement inside `main`. Everything else stays in the main body.
+/// The parser splits the file (`Parser::parse_script_units`): each
+/// declaration item (`def`, `class`, `use`, `lib`, ...) is hoisted, a block
+/// item with the comments and `##` docs above it; every statement stays in `main`, and a
+/// `##` doc above a statement is neutralised to a plain `#` comment (a doc in
+/// statement position does not parse inside `main`). A body that does not
+/// parse goes into `main` whole, so the compiler reports its errors.
 fn split_test_body(body: &str) -> (String, String) {
-    let lines: Vec<&str> = body.lines().collect();
+    use ruxen_core::lexer::Lexer;
+    use ruxen_core::parser::ast::TopLevelItem;
+    use ruxen_core::parser::Parser;
+
+    let units = Lexer::new(body)
+        .tokenize()
+        .ok()
+        .and_then(|tokens| Parser::new(tokens).parse_script_units().ok());
+    let Some(units) = units else {
+        return (String::new(), body.to_string());
+    };
+
     let mut hoisted = String::new();
     let mut main_body = String::new();
-
-    let is_block_item_start = |t: &str| {
-        let t = t.strip_prefix("pub ").unwrap_or(t);
-        let t = t.strip_prefix("protected ").unwrap_or(t);
-        let t = t.strip_prefix("private ").unwrap_or(t);
-        [
-            "def ",
-            "class ",
-            "struct ",
-            "enum ",
-            "mixin ",
-            "module ",
-            "extension ",
-            "impl ",
-        ]
-        .iter()
-        .any(|kw| t.starts_with(kw))
-            || t == "def"
-    };
-    let is_single_line_item =
-        |t: &str| t.starts_with("use ") || t.starts_with("const ") || t.starts_with("type ");
-
-    let mut i = 0;
-    // Doc-comment lines pending attachment to the NEXT line.
-    let mut pending_docs: Vec<&str> = Vec::new();
-    while i < lines.len() {
-        let line = lines[i];
-        let col0 = !line.starts_with([' ', '\t']);
-        let trimmed = line.trim_start();
-
-        // Accumulate column-0 doc comments; decide where they go once we see
-        // the line they precede.
-        if col0 && trimmed.starts_with("##") {
-            pending_docs.push(line);
-            i += 1;
-            continue;
-        }
-
-        if col0 && is_single_line_item(trimmed) {
-            // `use`/`const`/`type` don't carry the file-level docs that
-            // typically precede them — neutralise those into the main body
-            // so a stray `## …` never lands as a top-level doc.
-            for d in pending_docs.drain(..) {
-                main_body.push_str(&d.replacen("##", "#", 1));
+    let mut gap_start = 0;
+    for unit in units {
+        // The text between units holds only whitespace, comments and docs.
+        let gap = &body[gap_start..unit.span.start];
+        let text = &body[unit.span.start..unit.span.end];
+        match unit.item {
+            // `use`/`const`/`type` take no docs: the ones above them stay in
+            // `main` as plain comments rather than land on the next item.
+            Some(TopLevelItem::Use(_) | TopLevelItem::Const(_) | TopLevelItem::TypeAlias(_)) => {
+                main_body.push_str(&neutralise_docs(gap));
+                hoisted.push_str(text);
+                hoisted.push('\n');
+            }
+            Some(_) => {
+                hoisted.push_str(gap);
+                hoisted.push_str(text);
+                hoisted.push('\n');
+            }
+            None => {
+                main_body.push_str(&neutralise_docs(gap));
+                main_body.push_str(text);
                 main_body.push('\n');
             }
-            hoisted.push_str(line);
-            hoisted.push('\n');
-            i += 1;
-            continue;
         }
-
-        if col0 && is_block_item_start(trimmed) {
-            for d in pending_docs.drain(..) {
-                hoisted.push_str(d);
-                hoisted.push('\n');
-            }
-            // Consume through the matching column-0 `end`.
-            hoisted.push_str(line);
-            hoisted.push('\n');
-            i += 1;
-            while i < lines.len() {
-                let l = lines[i];
-                hoisted.push_str(l);
-                hoisted.push('\n');
-                i += 1;
-                if !l.starts_with([' ', '\t']) && l.trim() == "end" {
-                    break;
-                }
-            }
-            continue;
-        }
-
-        // Not a hoisted item — flush any pending docs as PLAIN comments
-        // (a `##` doc in statement position is a parse error inside `main`).
-        for d in pending_docs.drain(..) {
-            let neutralised = d.replacen("##", "#", 1);
-            main_body.push_str(&neutralised);
-            main_body.push('\n');
-        }
-        main_body.push_str(line);
-        main_body.push('\n');
-        i += 1;
+        gap_start = unit.span.end;
     }
-    // Trailing docs with nothing after them → neutralise into the main body.
-    for d in pending_docs.drain(..) {
-        main_body.push_str(&d.replacen("##", "#", 1));
-        main_body.push('\n');
-    }
-
+    main_body.push_str(&neutralise_docs(&body[gap_start..]));
     (hoisted, main_body)
+}
+
+/// `##` doc lines in comment-only `text` turned into plain `#` comments.
+fn neutralise_docs(text: &str) -> String {
+    text.split_inclusive('\n')
+        .map(|line| {
+            let indent = line.len() - line.trim_start().len();
+            match line.trim_start().strip_prefix("##") {
+                Some(rest) => format!("{}#{rest}", &line[..indent]),
+                None => line.to_string(),
+            }
+        })
+        .collect()
 }
 
 /// Recursively collect every `.rx` under `dir` except `skip` (the entry).
@@ -555,54 +525,26 @@ fn build_one(
     if release {
         compile_args.push("--release".to_string());
     }
-    // The project's own `runtime/*.c` must link into every test binary so
-    // `lib "runtime/foo.c"` declarations in library code resolve — the same
-    // discovery `ruxen build` performs (codegen::find_runtime_sources_in_dir).
-    for c in ruxen_core::codegen::find_runtime_sources_in_dir(project_dir)? {
-        compile_args.push(format!("--runtime-c={}", c.display()));
-    }
-    // Q32: a flat-merged FFI dependency's `.rx` bodies are compiled INTO this
-    // test binary (Q16), so its C runtime symbols (`ruxen_*` from
-    // `runtime/**.c`) and its `[system_libs]` link needs must reach this
-    // executable's link line too — they aren't in any rlib. Mirror exactly
-    // what `compile_project` (the `ruxen build` binary path) gathers for a
-    // dependency: each dep's `runtime/**.c` plus each dep's declared
-    // `[system_libs]` as `-l<lib>` link args. Without this, a consumer whose
-    // `tests/**.rx` calls through an FFI dep fails at link with undefined
-    // `ruxen_*` symbols (the canvas `ruxen_canvas_*` shape).
-    for dep_dir in dep_dirs {
-        for c in ruxen_core::codegen::find_runtime_sources_in_dir(dep_dir)? {
+    // The test binary links exactly what `ruxen build` links for this project
+    // (`LinkInputs::for_project`): the project's own `runtime/*.c`, so
+    // `lib "runtime/foo.c"` declarations resolve, plus each flat-merged (Q16)
+    // dependency's `runtime/**.c` and `[system_libs] libs` (Q32; they are in
+    // no rlib, so without them a test calling through an FFI dep fails with
+    // undefined `ruxen_*` symbols), and on macOS the declared frameworks
+    // (tests build for the host). A std package's runtime is already in
+    // `libruxenrt.a` and `run` passes it no deps.
+    if !is_std_package(project_dir) {
+        let link_inputs = ruxen_core::codegen::LinkInputs::for_project(project_dir, dep_dirs)?;
+        for c in &link_inputs.runtime_sources {
             compile_args.push(format!("--runtime-c={}", c.display()));
         }
-        let dep_toml = dep_dir.join("Ruxen.toml");
-        if let Ok(contents) = fs::read_to_string(&dep_toml) {
-            for lib in ruxen_core::codegen::parse_system_libs(&contents) {
-                compile_args.push(format!("--link-arg=-l{}", lib));
-            }
+        for lib in &link_inputs.system_libs {
+            compile_args.push(format!("--link-arg=-l{}", lib));
         }
-    }
-    // macOS frameworks: a test binary that flat-merges a native FFI dep (e.g.
-    // canvas's AppKit shim) must link the frameworks that dep declares in
-    // `[system_libs] frameworks`, mirroring the `ruxen build` link line. Read the
-    // project's own toml + each dep's; emit `-framework <name>` link args. macOS
-    // only (tests build for the host; non-macOS hosts have no such frameworks).
-    #[cfg(target_os = "macos")]
-    {
-        let mut fw_tomls: Vec<std::path::PathBuf> = vec![project_dir.join("Ruxen.toml")];
-        for dep_dir in dep_dirs {
-            fw_tomls.push(dep_dir.join("Ruxen.toml"));
-        }
-        let mut seen_fw: Vec<String> = Vec::new();
-        for toml_path in &fw_tomls {
-            if let Ok(contents) = fs::read_to_string(toml_path) {
-                for fw in ruxen_core::codegen::parse_system_frameworks(&contents) {
-                    if !seen_fw.contains(&fw) {
-                        seen_fw.push(fw.clone());
-                        compile_args.push("--link-arg=-framework".to_string());
-                        compile_args.push(format!("--link-arg={}", fw));
-                    }
-                }
-            }
+        #[cfg(target_os = "macos")]
+        for fw in &link_inputs.frameworks {
+            compile_args.push("--link-arg=-framework".to_string());
+            compile_args.push(format!("--link-arg={}", fw));
         }
     }
     crate::compile::run(&compile_args).map_err(|e| format!("compile of {test_path}: {e}"))?;
@@ -690,6 +632,10 @@ def make -> Int
   x
 end
 
+async def fetch -> Int
+  1
+end
+
 Tester.describe(\"x\") do
   it(\"works\")
 end
@@ -719,10 +665,41 @@ end
             !main_body.contains("def make"),
             "def must not remain in main: {main_body}"
         );
+        assert!(
+            hoisted.contains("async def fetch") && !main_body.contains("async def"),
+            "async def hoisted: {hoisted}"
+        );
         // The unattached file doc became a plain `#` comment in main.
         assert!(
             main_body.contains("# file doc that breaks") && !main_body.contains("## file doc"),
             "stray doc neutralised: {main_body}"
+        );
+    }
+    /// The old column-0 text scanner did not know `lib` blocks and left
+    /// them inside `main`, where they do not parse.
+    #[test]
+    fn split_test_body_hoists_lib_block() {
+        let body = "\
+lib \"runtime/shim.c\"
+  def self.twice as \"shim_twice\"(x: Int) -> Int
+end
+
+Tester.describe(\"x\") do
+  it(\"works\")
+end
+";
+        let (hoisted, main_body) = split_test_body(body);
+        assert!(
+            hoisted.starts_with("lib \"runtime/shim.c\""),
+            "lib hoisted: {hoisted}"
+        );
+        assert!(
+            !main_body.contains("lib "),
+            "lib must not remain in main: {main_body}"
+        );
+        assert!(
+            main_body.contains("Tester.describe"),
+            "test stmt stays in main: {main_body}"
         );
     }
     use std::fs;
@@ -771,6 +748,26 @@ end
         let class_at = synth.find("class Widget").expect("class merged");
         let main_at = synth.find("def main").expect("has main");
         assert!(class_at < main_at, "class must precede def main: {synth}");
+    }
+
+    // A std package's source already comes in through the stdlib bootstrap;
+    // merging it again caused `DuplicateDefinition("Set_reject")`.
+    #[test]
+    fn synthesise_skips_library_source_of_std_package() {
+        let pkg = std::env::temp_dir().join("test-runner-synth-std/library/std/set");
+        let _ = fs::remove_dir_all(&pkg);
+        fs::create_dir_all(pkg.join("src")).unwrap();
+        fs::write(pkg.join("src/lib.rx"), "class Set[T]\nend\n").unwrap();
+        let user_file = pkg.join("set_test.rx");
+        fs::write(
+            &user_file,
+            "Tester.describe(\"S\") do |t: &var Tester|\nend",
+        )
+        .unwrap();
+        let synth_path =
+            synthesise_wrapper(&pkg, "set_test", &user_file, &pkg.join("out"), &[]).unwrap();
+        let synth = fs::read_to_string(&synth_path).unwrap();
+        assert!(!synth.contains("class Set"), "std source merged: {synth}");
     }
 
     // Q16: dependency library sources are flat-merged into the synthesised

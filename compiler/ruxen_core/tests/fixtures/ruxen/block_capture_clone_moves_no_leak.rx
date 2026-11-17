@@ -1,0 +1,50 @@
+# Blocks, procs and lambdas: a closure body borrows its captures, so every
+# by-value use of one inside the body goes through `.clone` (E1019 otherwise);
+# a lambda nested in a lambda owns a clone made in the outer body. Each
+# clone is owned by whatever receives it and freed once; the captured Strings
+# are freed once by the top level. (A by-value argument to a user function is
+# not freed by the callee anywhere yet, the F-25 gap in TODO.md, so this
+# fixture moves clones only into containers, bindings and closures. A `Proc`
+# stored in an Array or a class field is not freed yet either, so the owning
+# lambda here stays inside the block.)
+
+def run(f: Fn() -> nil) -> nil
+  f.()
+end
+
+def give(f: Fn() -> String) -> String
+  f.()
+end
+
+k = 7
+p = "cap-#{k}"
+arr = Array[String].new
+arr.push(give do
+  p.clone
+end)
+puts arr.size
+run do
+  q = p.clone
+  puts q
+  local = Array[String].new
+  local.push(p.clone)
+  xs = [p.clone]
+  puts local.size + xs.size
+end
+r = "lam-#{k}"
+outer = -> do
+  mine = r.clone
+  inner = -> do
+    ys = Array[String].new
+    ys.push(mine.clone)
+    puts ys.size
+  end
+  inner.()
+end
+outer.()
+run do
+  t = p.clone
+  f = -> { puts t }
+  f.()
+end
+puts p

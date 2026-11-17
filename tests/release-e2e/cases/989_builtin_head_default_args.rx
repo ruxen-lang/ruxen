@@ -1,0 +1,8 @@
+# Pins default-argument filling on a builtin-head (String/Array/Hash/Set) method
+# call: previously the default-arg pass ran only for nominal receivers, so a
+# `.rx` method with a default arg on a builtin head link/verify-failed when the
+# default was omitted. `String#ljust(width, pad = " ")` called as `ljust(w)`.
+def main
+  puts("x".ljust(3))
+  puts("x".rjust(3))
+end

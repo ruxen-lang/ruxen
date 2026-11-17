@@ -230,6 +230,18 @@ impl Manifest {
             .unwrap_or("binary")
     }
 
+    /// The `opt-level` of `[profile.release]` (`release`) or
+    /// `[profile.debug]`, when the manifest sets one.
+    pub fn opt_level(&self, release: bool) -> Option<u8> {
+        let profiles = self.profile.as_ref()?;
+        let profile = if release {
+            profiles.release.as_ref()
+        } else {
+            profiles.debug.as_ref()
+        };
+        profile?.opt_level
+    }
+
     /// Determine the entry point file.
     pub fn entry_point(&self) -> &str {
         self.build
@@ -482,6 +494,11 @@ impl Dependency {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_invalid_toml_is_rejected() {
+        assert!(Manifest::from_str("not valid toml [[[").is_err());
+    }
 
     #[test]
     fn test_minimal_manifest() {

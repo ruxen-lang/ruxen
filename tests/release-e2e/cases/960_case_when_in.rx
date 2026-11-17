@@ -1,0 +1,26 @@
+# Pins `case/when` (===-dispatch, desugars to if/elsif) and `case/in` (pattern
+# matching, an alias of `match`).
+def describe(n: Int) -> String
+  case n
+  when 0 then "zero"
+  when 1, 2, 3 then "small"
+  when 10..99 then "big"
+  else "other"
+  end
+end
+
+def unwrap(o: Int?) -> Int
+  case o
+  in Some(x) then x
+  in nil then -1
+  end
+end
+
+def main
+  puts describe(0)
+  puts describe(2)
+  puts describe(50)
+  puts describe(7)
+  puts unwrap(Some(42))
+  puts unwrap(nil)
+end

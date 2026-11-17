@@ -1,0 +1,48 @@
+# A generic class instance derives only what its substituted fields
+# support: `Box[Mutex[Int]]` and `Box[Holder]` (a class holding a mutex) get
+# no derived `clone`, so they link, while `Box[String]#clone` still works.
+# A class reached only through a generic function's body (`Wrap[T]` inside
+# `wrapped[T]`) is instantiated for each type that function is called with.
+use std.sync.Mutex
+
+class Box[T]
+  v: T
+
+  def init(@v: T)
+  end
+end
+
+class Holder
+  m: Mutex[Int]
+
+  def init(@m: Mutex[Int])
+  end
+end
+
+class Wrap[T]
+  v: T
+
+  def init(@v: T)
+  end
+
+  def dup -> T where T: Clone
+    @v.clone
+  end
+end
+
+def wrapped[T: Clone](v: T) -> T
+  w = Wrap.new(v)
+  w.dup
+end
+
+def run -> nil
+  locked = Box.new(Mutex.new(1))
+  held = Box.new(Holder.new(Mutex.new(2)))
+  named = Box.new("named")
+  copy = named.clone
+  puts(copy.v)
+  puts(wrapped(1) + 1)
+  puts(wrapped("wrapped"))
+end
+
+run

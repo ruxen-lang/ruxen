@@ -1,5 +1,0 @@
-def main
-  let s = String.with_capacity(64)
-  puts "len=#{s.size}"
-  puts "empty=#{s.empty?}"
-end

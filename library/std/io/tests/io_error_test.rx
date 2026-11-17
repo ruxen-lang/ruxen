@@ -1,0 +1,90 @@
+def kind_label(k: IoErrorKind) -> String
+  match k
+    IoErrorKind.NotFound          -> "NotFound"
+    IoErrorKind.PermissionDenied  -> "PermissionDenied"
+    IoErrorKind.AlreadyExists     -> "AlreadyExists"
+    IoErrorKind.Interrupted       -> "Interrupted"
+    IoErrorKind.WouldBlock        -> "WouldBlock"
+    IoErrorKind.InvalidInput      -> "InvalidInput"
+    IoErrorKind.UnexpectedEof     -> "UnexpectedEof"
+    IoErrorKind.BrokenPipe        -> "BrokenPipe"
+    IoErrorKind.Other             -> "Other"
+    IoErrorKind.ConnectionRefused -> "ConnectionRefused"
+    IoErrorKind.ConnectionReset   -> "ConnectionReset"
+    IoErrorKind.ConnectionAborted -> "ConnectionAborted"
+    IoErrorKind.NotConnected      -> "NotConnected"
+    IoErrorKind.AddrInUse         -> "AddrInUse"
+    IoErrorKind.AddrNotAvailable  -> "AddrNotAvailable"
+    IoErrorKind.InvalidData       -> "InvalidData"
+    IoErrorKind.TimedOut          -> "TimedOut"
+    IoErrorKind.WriteZero         -> "WriteZero"
+    IoErrorKind.Unsupported       -> "Unsupported"
+    IoErrorKind.OutOfMemory       -> "OutOfMemory"
+  end
+end
+
+# A match over every IoError variant with no wildcard must be accepted as
+# exhaustive.
+def variant_label(e: IoError) -> String
+  match e
+    IoError.NotFound             -> "nf"
+    IoError.PermissionDenied     -> "pd"
+    IoError.AlreadyExists        -> "ae"
+    IoError.Interrupted          -> "in"
+    IoError.WouldBlock           -> "wb"
+    IoError.InvalidInput         -> "ii"
+    IoError.UnexpectedEof        -> "ue"
+    IoError.BrokenPipe           -> "bp"
+    IoError.Other(_)             -> "ot"
+    IoError.ConnectionRefused(_) -> "cr"
+    IoError.ConnectionReset(_)   -> "cs"
+    IoError.ConnectionAborted(_) -> "ca"
+    IoError.NotConnected(_)      -> "nc"
+    IoError.AddrInUse(_)         -> "au"
+    IoError.AddrNotAvailable(_)  -> "an"
+    IoError.InvalidData(_)       -> "id"
+    IoError.TimedOut(_)          -> "to"
+    IoError.WriteZero(_)         -> "wz"
+    IoError.Unsupported(_)       -> "un"
+    IoError.OutOfMemory(_)       -> "om"
+  end
+end
+
+# Goes through a String-returning helper: `t.expect(e.message())` directly
+# compares the returned pointers instead of the text (see TODO.md).
+def message_of(e: IoError) -> String
+  e.message()
+end
+
+Tester.describe("IoError") do |t: &var Tester|
+  t.it("gives a default message for unit variants and the payload for the rest") do
+    t.expect(message_of(IoError.NotFound)).to_eq("entity not found")
+    t.expect(message_of(IoError.PermissionDenied)).to_eq("permission denied")
+    t.expect(message_of(IoError.Other(message: "boom"))).to_eq("boom")
+    t.expect(message_of(IoError.ConnectionRefused(message: "no listener"))).to_eq("no listener")
+    t.expect(message_of(IoError.ConnectionReset(message: "rst"))).to_eq("rst")
+    t.expect(message_of(IoError.ConnectionAborted(message: "abort"))).to_eq("abort")
+    t.expect(message_of(IoError.NotConnected(message: "no sock"))).to_eq("no sock")
+    t.expect(message_of(IoError.AddrInUse(message: "in use"))).to_eq("in use")
+    t.expect(message_of(IoError.AddrNotAvailable(message: "unavail"))).to_eq("unavail")
+    t.expect(message_of(IoError.InvalidData(message: "bad bytes"))).to_eq("bad bytes")
+    t.expect(message_of(IoError.TimedOut(message: "timeout"))).to_eq("timeout")
+    t.expect(message_of(IoError.WriteZero(message: "wrote 0"))).to_eq("wrote 0")
+    t.expect(message_of(IoError.Unsupported(message: "nope"))).to_eq("nope")
+    t.expect(message_of(IoError.OutOfMemory(message: "no mem"))).to_eq("no mem")
+  end
+
+  t.it("maps each variant to its IoErrorKind and matches exhaustively") do
+    t.expect(kind_label(IoError.NotFound.kind())).to_eq("NotFound")
+    t.expect(kind_label(IoError.PermissionDenied.kind())).to_eq("PermissionDenied")
+    t.expect(kind_label(IoError.ConnectionRefused(message: "x").kind())).to_eq("ConnectionRefused")
+    t.expect(kind_label(IoError.AddrInUse(message: "x").kind())).to_eq("AddrInUse")
+    t.expect(kind_label(IoError.InvalidData(message: "x").kind())).to_eq("InvalidData")
+    t.expect(kind_label(IoError.TimedOut(message: "x").kind())).to_eq("TimedOut")
+    t.expect(kind_label(IoError.OutOfMemory(message: "x").kind())).to_eq("OutOfMemory")
+    t.expect(variant_label(IoError.NotFound)).to_eq("nf")
+    t.expect(variant_label(IoError.Other(message: "x"))).to_eq("ot")
+    t.expect(variant_label(IoError.ConnectionRefused(message: "x"))).to_eq("cr")
+    t.expect(variant_label(IoError.OutOfMemory(message: "x"))).to_eq("om")
+  end
+end

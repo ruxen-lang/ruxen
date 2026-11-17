@@ -1,0 +1,11 @@
+def main
+let mask=~0
+var a=12
+a&=10
+a|=3
+a^=6
+a<<=2
+a>>=1
+puts(a)
+puts(mask)
+end

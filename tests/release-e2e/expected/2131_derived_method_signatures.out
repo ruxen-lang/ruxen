@@ -1,0 +1,7 @@
+parenless_hash=true
+hash_differs=true
+eq=true ne=false
+typed_int=true
+clone=1,2 cmp=-1 pcmp=1
+default=0,0
+generic_clone=6

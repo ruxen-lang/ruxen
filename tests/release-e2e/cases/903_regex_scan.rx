@@ -1,5 +1,0 @@
-def main
-  let text = "a1 b22 c333"
-  let nums = /\d+/.scan(text)
-  puts "#{nums.size}"
-end

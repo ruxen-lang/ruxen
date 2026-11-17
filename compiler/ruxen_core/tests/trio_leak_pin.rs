@@ -5,7 +5,8 @@
 //! during the multithreading + async sub-phases (bootstrap-merge
 //! skipping class bodies, hardcoded Send/Sync match arms, hardcoded
 //! `-l<lib>` flags in `linker_args`). The pin lives or dies on the
-//! `library/std/_pin_zero_rust_stdlib/` fixture (formerly `foobar`; see
+//! test-only `library/test_std/_pin_zero_rust_stdlib/` fixture, which
+//! every test here opts into through `RUXEN_TEST_STDLIB` (formerly `foobar`; see
 //! spec §B5) — that fresh stdlib package exercises every auto-connect
 //! path a future stdlib addition should reach. If adding its `FooBar`
 //! class requires anything in `compiler/ruxen_core/src/` beyond a single
@@ -36,6 +37,7 @@ use ruxen_core::hir::types::Ty;
 use ruxen_core::lexer::Lexer;
 use ruxen_core::parser::ast::Program;
 use ruxen_core::parser::Parser;
+use ruxen_core::resolve::bootstrap::TEST_STDLIB_ENV;
 use ruxen_core::resolve::symbols::DefKind;
 use ruxen_core::typeck;
 use std::path::PathBuf;
@@ -43,6 +45,12 @@ use std::path::PathBuf;
 fn workspace_root() -> PathBuf {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir.parent().unwrap().parent().unwrap().to_path_buf()
+}
+
+/// Opt this test process into the test-only stdlib before the first
+/// bootstrap load (the bootstrap is cached per process).
+fn opt_into_test_stdlib() {
+    std::env::set_var(TEST_STDLIB_ENV, workspace_root().join("library/test_std"));
 }
 
 fn parse_source(src: &str) -> Program {
@@ -61,6 +69,7 @@ fn rx(name: &str) -> String {
 
 #[test]
 fn foobar_class_resolves_and_typechecks() {
+    opt_into_test_stdlib();
     // Tiny user program that exercises every FooBar surface.
     let src = "\
 def main\n  let f = FooBar.new(7)\n  let v = f.get\n  let d = foobar_double_plus_one(3)\n  let _ = v + d\nend\n";
@@ -105,6 +114,7 @@ fn foobar_send_sync_auto_derive_transitive() {
     // pre-B2 because the walker falls through to `manual_send`,
     // post-B2 because the walker explicitly consults include
     // directives.
+    opt_into_test_stdlib();
     let src = "\
 def main\n  let f = FooBar.new(7)\n  let _ = f.get\nend\n";
     let program = parse_source(src);
@@ -141,6 +151,7 @@ def main\n  let f = FooBar.new(7)\n  let _ = f.get\nend\n";
 /// landed.
 #[test]
 fn foobar_resolves_through_std_namespace() {
+    opt_into_test_stdlib();
     let src = rx("foobar_via_std_namespace");
     let program = parse_source(&src);
     let result = typeck::type_check(&program);

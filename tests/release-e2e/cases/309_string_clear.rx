@@ -1,7 +1,0 @@
-def main
-  var s = "hello"
-  puts "before len=#{s.size}"
-  s.clear
-  puts "after len=#{s.size}"
-  puts "empty=#{s.empty?}"
-end

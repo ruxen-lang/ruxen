@@ -34,10 +34,7 @@ impl<'a> Lowerer<'a> {
                 .find(|l| l.id == local)
                 .and_then(|l| match &l.ty {
                     Ty::Class { name, .. } => {
-                        let bare = self.user_drop_classes.contains(name);
-                        let suffix = format!(".{}", name);
-                        let qualified = self.user_drop_classes.iter().any(|q| q.ends_with(&suffix));
-                        if bare || qualified {
+                        if is_drop_class(self.symbols, &self.user_drop_classes, name) {
                             let mangled = format!("{}_drop", name);
                             Some(self.resolve_ffi_alias_callee(mangled))
                         } else {
@@ -61,18 +58,27 @@ impl<'a> Lowerer<'a> {
             // back to `ruxen_dealloc` for any local whose type is not a
             // recognized heap-owning built-in (Class/Struct/Enum and the
             // pre-existing behavior for anything else).
-            let free_callee = self
+            let ty = self
                 .fn_ref()
                 .locals
                 .iter()
                 .find(|l| l.id == local)
-                .and_then(|l| crate::mir::lower::drops::heap_free_callee(&l.ty))
-                .unwrap_or("ruxen_dealloc");
-            self.emit(MirInst::Call {
-                dest: None,
-                callee: free_callee.to_string(),
-                args: vec![MirValue::Use(local)],
-            });
+                .map(|l| l.ty.clone());
+            let symbols = self.symbols;
+            let free_call = ty
+                .and_then(|ty| {
+                    crate::mir::lower::drops::heap_free_call(self.fn_mut(), symbols, &ty, local)
+                })
+                .unwrap_or_else(|| {
+                    vec![MirInst::Call {
+                        dest: None,
+                        callee: "ruxen_dealloc".to_string(),
+                        args: vec![MirValue::Use(local)],
+                    }]
+                });
+            for inst in free_call {
+                self.emit(inst);
+            }
             self.emit(MirInst::Assign {
                 dest: local,
                 value: MirValue::Literal(Literal::Int(0)),
@@ -90,12 +96,13 @@ impl<'a> Lowerer<'a> {
         }
         let block = &mut self.fn_mut().blocks[frame.body_entry_block];
         for (i, &local) in frame.body_locals.iter().enumerate() {
-            block.instructions.insert(
+            block.insert_inst(
                 i,
                 MirInst::Assign {
                     dest: local,
                     value: MirValue::Literal(Literal::Int(0)),
                 },
+                None,
             );
         }
     }
@@ -115,30 +122,28 @@ impl<'a> Lowerer<'a> {
 
     /// Push an instruction onto the current basic block.
     pub(super) fn emit(&mut self, inst: MirInst) {
+        // A value stored into a field (or a cell) now belongs there: neither
+        // a rebind nor a loop edge may free it through its old local.
+        if let MirInst::SetField {
+            value: MirValue::Use(local),
+            ..
+        } = &inst
+        {
+            self.remove_moved_loop_local(*local);
+        }
         if let MirInst::Call { callee, args, .. } = &inst {
             // Single source of truth: runtime_abi::MOVE_BY_FFI (the dead dotted
             // `"Task.spawn_raw"` spelling was dropped — MIR callees are always
             // underscore-mangled, so it was unreachable).
             let moves_args = crate::mir::lower::runtime_abi::is_move_by_ffi(callee.as_str());
             let init_moves_non_self_args = callee.ends_with("_init");
-            // A collection-insert family callee (`ruxen_hash_insert` key+value,
-            // `ruxen_vec_push`/`ruxen_vec_insert`/`ruxen_set_insert` element)
-            // TRANSFERS ownership of its key/value/element slots into the
-            // collection — the SAME single-source mask `compute_dealloc_safe_locals`
-            // taints for scope-exit drop. A loop-body local moved into a
-            // collection this way must therefore ALSO be pulled off the loop's
-            // back-edge free list AND the scope-exit `initialized_heap_locals`
-            // set: the collection now owns the allocation, so freeing the source
-            // local at the loop edge would dangle the stored entry's pointer.
-            // This mirrors the `is_move_by_ffi` / `_init` removals above for the
-            // insert family. (Built-in heap loop-body locals are currently NOT
-            // back-edge-registered — see the soundness note in `statement.rs` —
-            // so today this guards a CLASS local inserted into a collection
-            // inside a loop, AND keeps the loop-free list move-aware so the
-            // built-in registration can be safely re-enabled once the dealloc-
-            // safe analysis runs before the loop edge is emitted.)
-            let transfer_mask =
-                crate::mir::lower::runtime_abi::callee_ownership(callee.as_str()).arg_transfer;
+            // A value passed BY VALUE to a `.rx` FFI declaration
+            // (`Array#push`, `Hash#insert`, `Mutex.new`) moves into C: the
+            // same `FfiByValue` source drop elaboration taints for scope-exit
+            // drop. A loop-body local moved this way must ALSO leave the
+            // loop's back-edge free list and the scope-exit
+            // `initialized_heap_locals` set (handled below), or freeing it at
+            // the loop edge would dangle the stored entry.
             if moves_args || init_moves_non_self_args {
                 for (idx, arg) in args.iter().enumerate() {
                     if init_moves_non_self_args && idx == 0 {
@@ -169,7 +174,7 @@ impl<'a> Lowerer<'a> {
             // Independently of the move-by-FFI / `_init` paths above, a
             // collection-insert transfer slot is moved out — remove it.
             for (idx, arg) in args.iter().enumerate() {
-                if transfer_mask.contains(idx) {
+                if self.ffi_by_value.takes_by_value(callee, idx) {
                     if let MirValue::Use(local) = arg {
                         self.remove_moved_loop_local(*local);
                     }
@@ -177,8 +182,9 @@ impl<'a> Lowerer<'a> {
             }
         }
         let block_id = self.current_block;
+        let span = self.current_span.clone();
         let func = self.current_fn.as_mut().expect("no current function");
-        func.blocks[block_id].instructions.push(inst);
+        func.blocks[block_id].push_inst(inst, span);
     }
 
     /// Emit a value-transfer instruction selected by the source's move
@@ -229,6 +235,23 @@ impl<'a> Lowerer<'a> {
             args: vec![MirValue::Use(raw)],
         });
         owned
+    }
+
+    /// Lower a string literal as the raw `.rodata const char*`
+    /// (`Ty::RawPtr(Char)`) WITHOUT the `ruxen_string_from` heap copy. The
+    /// pointer is immortal (static `.rodata`) and Copy, so the drop elaborator
+    /// never frees it. Used for an IMMUTABLE borrow of a literal (`&"x"`): a
+    /// Ruxen `String` is a bare NUL-terminated `char*` (Q29), so this raw
+    /// pointer IS a valid read-only `&String`, zero-copy and leak-free. The
+    /// owned form above must still be used wherever the value is owned (a
+    /// `let` binding, a by-value `String` param) or mutably borrowed.
+    pub(super) fn emit_raw_string_literal(&mut self, value: &str) -> LocalId {
+        let raw = self.new_temp(Ty::RawPtr(Box::new(Ty::Char)));
+        self.emit(MirInst::StringLiteral {
+            dest: raw,
+            value: value.to_string(),
+        });
+        raw
     }
 
     /// Ruby-block-semantics ADR D5: guard a block-slot indirect call against
@@ -307,6 +330,48 @@ impl<'a> Lowerer<'a> {
             .new_temp(ty)
     }
 
+    /// Closure word-ABI (B01), caller side: pass a float argument as the
+    /// 64-bit uniform word holding its IEEE-754 bit pattern.
+    ///
+    /// A closure is only ever reached through the erased `Fn` box, and the
+    /// generic bodies that invoke it (`Array_map`, `Hash_each`, …) were
+    /// lowered once with the element type abstract, so they can only pass
+    /// words. `lower_closure` therefore compiles a float closure parameter as
+    /// a word and reinterprets on entry; this is the matching conversion on
+    /// the caller's side. Non-float operands are returned untouched: they
+    /// already share the integer register class with the word.
+    pub(super) fn float_arg_to_word(&mut self, arg: MirValue) -> MirValue {
+        let is_float = match &arg {
+            MirValue::Use(id) => self
+                .fn_mut()
+                .locals
+                .get(*id as usize)
+                .map(|l| crate::mir::abi::is_float_ty(&l.ty))
+                .unwrap_or(false),
+            MirValue::Literal(Literal::Float(_)) => true,
+            _ => false,
+        };
+        if !is_float {
+            return arg;
+        }
+        // `FloatToBits` reads a LOCAL, so a float literal is materialised
+        // into a temp first.
+        let src = match arg {
+            MirValue::Use(id) => id,
+            other => {
+                let tmp = self.new_temp(Ty::Float);
+                self.emit(MirInst::Assign {
+                    dest: tmp,
+                    value: other,
+                });
+                tmp
+            }
+        };
+        let word = self.new_temp(Ty::Int);
+        self.emit(MirInst::FloatToBits { dest: word, src });
+        MirValue::Use(word)
+    }
+
     /// Compute the allocation size for a type using the layout system.
     ///
     /// Classes and structs are stored field-by-field using fixed 8-byte
@@ -323,10 +388,19 @@ impl<'a> Lowerer<'a> {
         use crate::resolve::symbols::{DefKind, VariantDefKind};
         let layout = crate::codegen::layout::layout_of(ty, self.symbols);
         let base = layout.size.max(8);
+        // `Option`/`Result` use the same slot addressing: the tag in slot 0,
+        // and the payload word at `GetPayload` = base + 8. The payload is one
+        // word whatever its type (a class is a pointer), but the packed layout
+        // sizes a class payload by its inline fields, so a fieldless class
+        // (`MutexGuard`, `PoisonError`) packed to an 8-byte cell and `Ok(g)`
+        // wrote 8 bytes past it. Always reserve the payload slot.
+        if matches!(ty, Ty::Option(_) | Ty::Result(..)) {
+            return base.max(16);
+        }
         // Enums are stored with the SAME fixed 8-byte-slot addressing as
         // classes/structs: codegen reads the payload at `GetPayload` = base+8
         // (one slot covering tag + padding) and each payload field at
-        // `field_index * 8` (cranelift/emit.rs + llvm/emit/instructions.rs).
+        // `field_index * 8` (`codegen::lower`, every backend).
         // The packed `layout.size` undersizes a variant whose payload fields
         // are narrower than 8 bytes — e.g. `Move(Float32, Float32)` packs to
         // 16, but codegen writes field 1 at offset 8 + 1*8 = 16, a 4-byte
@@ -338,8 +412,8 @@ impl<'a> Lowerer<'a> {
         if let Ty::Enum { name, .. } = ty {
             let enum_def = self
                 .symbols
-                .iter()
-                .find(|d| d.name == *name && matches!(d.kind, DefKind::Enum { .. }));
+                .named(name)
+                .find(|d| matches!(d.kind, DefKind::Enum { .. }));
             let variant_ids: Vec<u32> = match enum_def {
                 Some(d) => match &d.kind {
                     DefKind::Enum { info } => info.variants.clone(),
@@ -368,22 +442,20 @@ impl<'a> Lowerer<'a> {
             let mut total_fields = 0usize;
             let mut cur = Some(name.clone());
             while let Some(n) = cur.take() {
-                for def in self.symbols.iter() {
-                    if def.name == n {
-                        match &def.kind {
-                            DefKind::Class { info } => {
-                                total_fields += info.fields.len();
-                                cur = info
-                                    .parent
-                                    .and_then(|p| self.symbols.get(p).map(|d| d.name.clone()));
-                                break;
-                            }
-                            DefKind::Struct { info } => {
-                                total_fields += info.fields.len();
-                                break;
-                            }
-                            _ => {}
+                for def in self.symbols.named(&n) {
+                    match &def.kind {
+                        DefKind::Class { info } => {
+                            total_fields += info.fields.len();
+                            cur = info
+                                .parent
+                                .and_then(|p| self.symbols.get(p).map(|d| d.name.clone()));
+                            break;
                         }
+                        DefKind::Struct { info } => {
+                            total_fields += info.fields.len();
+                            break;
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -413,7 +485,7 @@ impl<'a> Lowerer<'a> {
         }
         // Materialize the class_info symbol address into a fresh
         // temporary, then store at slot 0 of the alloc.
-        let addr_local = self.new_temp(Ty::Int);
+        let addr_local = self.new_temp(Ty::RawPtrVoid);
         let sym = format!("__rx_classinfo_{}", class_name);
         self.emit(MirInst::DataAddr {
             dest: addr_local,

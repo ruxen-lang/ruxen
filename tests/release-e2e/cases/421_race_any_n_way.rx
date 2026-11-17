@@ -1,0 +1,54 @@
+## Feature #3 Increment 3 (spec §4.3) — N-way `Race.any_of(arr)`. Races a
+## runtime-length `Array[Int]` of future VALUES; the first to complete wins
+## (by index), ALL other arms are cancelled (each loser's `def drop` fires via
+## the §4.1 path). Result is `RaceN.Won(index, payload)`.
+##
+## Three arms: index 0 (Pending, observable drop), index 1 (Ready(33)), index 2
+## (Pending, observable drop). Arm 1 wins → `Won(1, 33)`; arms 0 and 2 are
+## cancelled (their "loser dropped" lines print) before the winner is returned.
+
+class NQuick
+  payload: Int
+  include Future
+  type Output = Int
+  def init(p: Int)
+    self.payload = p
+  end
+  def self.make(p: Int) -> NQuick
+    NQuick.new(p)
+  end
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Ready(self.payload)
+  end
+end
+
+class NLeaker
+  tag: Int
+  include Future
+  type Output = Int
+  def init(t: Int)
+    self.tag = t
+  end
+  def self.make(t: Int) -> NLeaker
+    NLeaker.new(t)
+  end
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Pending
+  end
+  def drop
+    puts "loser dropped tag=#{self.tag}"
+  end
+end
+
+def main
+  puts "race start"
+  var arms: Array[Int] = Array.new
+  arms.push(NLeaker.make(10))
+  arms.push(NQuick.make(33))
+  arms.push(NLeaker.make(20))
+  let r = block_on(Race.any_of(arms))
+  match r
+    RaceN.Won(idx, p) -> puts "won idx=#{idx} p=#{p}"
+  end
+  puts "race done"
+end

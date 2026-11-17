@@ -6,6 +6,7 @@
 //! inline at the bottom of `lib.rs`.
 
 mod cranelift_share_parity;
+mod loan_check;
 mod return_in_block;
 mod single_execution;
 mod split_chunks;

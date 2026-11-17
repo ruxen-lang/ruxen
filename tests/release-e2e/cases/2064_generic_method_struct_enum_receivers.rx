@@ -1,0 +1,34 @@
+# A mixin-bounded generic method monomorphizes on struct and enum receivers,
+# not only on classes.
+mixin Measured
+  def measure -> Int
+end
+
+struct Wide
+  include Measured
+  w: Int
+  def measure -> Int
+    self.w
+  end
+end
+
+struct Scaler
+  scale: Int
+  def apply[T: Measured](item: &var T) -> Int
+    item.measure * self.scale
+  end
+end
+
+enum Multiplier
+  Triple
+  def apply[T: Measured](item: &var T) -> Int
+    item.measure * 3
+  end
+end
+
+def main
+  var wide = Wide.new(7)
+  let scaler = Scaler.new(4)
+  puts "struct=#{scaler.apply(&var wide)}"
+  puts "enum=#{Multiplier.Triple.apply(&var wide)}"
+end

@@ -1,0 +1,46 @@
+## Feature #2 Increment 2 (spec §4.2) — `Scope#drop` cancels a still-pending
+## child. A child that NEVER completes is spawned into a scope and is NOT
+## collected; when the scope block exits, `Scope#drop` must cancel every
+## still-pending child — firing its future's `def drop` via the §4.1 path
+## (`ruxen_executor_cancel_task` → `Drop_dynamic_drop`) and removing its
+## queue entry. So a detached/leaked task is unrepresentable: leaving the
+## block cleans up the child deterministically.
+##
+## The `Leaker` sub-future stays Pending forever and has an OBSERVABLE
+## `def drop`. We spawn it WITHOUT collecting (the block just spawns and
+## returns), so at scope exit `Scope#drop` cancels it → "Leaker dropped"
+## prints. Per-scope cancel: only THIS scope's child is cancelled (the
+## thread queue isn't drained wholesale).
+
+class Leaker
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(p: Int)
+    self.payload = p
+  end
+
+  def self.make(p: Int) -> Leaker
+    Leaker.new(p)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    # Never completes — exists only to be cancelled by Scope#drop.
+    Poll.Pending
+  end
+
+  def drop
+    puts "Leaker dropped payload=#{self.payload}"
+  end
+end
+
+def main
+  puts "scope start"
+  Scope.open do |s|
+    # Spawn a never-completing child and DO NOT collect it. The scope owns
+    # it; falling off the block must cancel it via Scope#drop.
+    s.spawn(Leaker.make(42))
+  end
+  puts "scope done"
+end

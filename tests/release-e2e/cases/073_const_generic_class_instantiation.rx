@@ -22,7 +22,7 @@ class Pair[T, const N: USize]
   def init(@payload: T)
   end
 
-  def get -> T
+  def get -> &T
     self.payload
   end
 end

@@ -1,0 +1,12 @@
+cmp=-1
+explicit_cmp=-1
+eq=true
+ne=true
+lt=true
+le=true
+gt=true
+ge=true
+between=true
+custom_eq=false
+custom_ne=true
+alias_cmp=-1

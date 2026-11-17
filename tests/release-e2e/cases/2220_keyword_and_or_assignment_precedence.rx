@@ -1,0 +1,17 @@
+# Pins Ruby's precedence for an unparenthesized `x = a and b` / `x = a or b`
+# (formerly part of 964): `=` binds tighter than the keyword operators, so
+# the assignment declares `x` with `a`, and the keyword operator still
+# evaluates `b` when `a` does not decide it.
+def flag(tag: String, value: Bool) -> Bool
+  puts "eval #{tag}"
+  value
+end
+
+x = true and flag("x-rhs", false)
+puts "x=#{x}"
+y = false or flag("y-rhs", true)
+puts "y=#{y}"
+z = false and flag("z-rhs", true)
+puts "z=#{z}"
+w = flag("w", true) and flag("w-rhs", true) and flag("w-rhs2", false)
+puts "w=#{w}"

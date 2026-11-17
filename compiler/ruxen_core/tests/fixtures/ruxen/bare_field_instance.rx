@@ -1,0 +1,12 @@
+class Pt
+  x: Int
+
+  def init(@x: Int)
+  end
+
+  def bare_x -> Int
+    x
+  end
+end
+
+puts Pt.new(7).bare_x

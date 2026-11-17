@@ -8,28 +8,26 @@ If you've used Python, `def greet(name, prefix="Hello")` should look familiar. T
 
 ## 1. Your first default argument
 
-Save as `greet.rx`:
+Save as `greet.rx`. Example [implemented]:
 
-```ruxen
+```ruby
 def join_label(name: String, suffix: String = "!") -> String
   "#{name}#{suffix}"
 end
 
-def main
-  puts join_label("ruxen")
-  puts join_label("ruxen", "?")
-end
+puts join_label("ruxen")
+puts join_label("ruxen", "?")
 ```
 
 Run:
 
-```bash
+```sh
 ruxen run greet.rx
 ```
 
 Output:
 
-```
+```text
 ruxen!
 ruxen?
 ```
@@ -40,23 +38,21 @@ Rule: defaults apply only to the **tail** of the parameter list. Once one parame
 
 ## 2. Overloading on argument type
 
-Define the same name multiple times with different parameter types. The compiler picks the matching body based on the static types at the call site:
+Define the same name multiple times with different parameter types. The compiler picks the matching body based on the static types at the call site. Overloading is a Ruxen addition that comes with static types; Ruby has no overloads. Example [implemented]:
 
-```ruxen
-def classify(value: Int)    -> String { "int" }
-def classify(value: String) -> String { "string" }
-def classify(value: Bool)   -> String { "bool" }
+```ruby
+def classify(value: Int) -> String = "int"
+def classify(value: String) -> String = "string"
+def classify(value: Bool) -> String = "bool"
 
-def main
-  puts classify(7)
-  puts classify("seven")
-  puts classify(true)
-end
+puts classify(7)
+puts classify("seven")
+puts classify(true)
 ```
 
 Output:
 
-```
+```text
 int
 string
 bool
@@ -64,40 +60,41 @@ bool
 
 A few rules:
 
-- **No two overloads can have the same parameter shape.** Two `classify(value: Int)` definitions are a conflict.
-- **Arity counts.** `classify(a: Int)` and `classify(a: Int, b: Int)` are different signatures and coexist fine.
-- **No implicit conversion.** A call `classify(1u8)` (a `UInt8`) will not silently fall through to the `Int` overload — it'd be an error if no `UInt8` overload existed.
+- **No two overloads can have the same parameter shape** [implemented]. Two `classify(value: Int)` definitions are a conflict.
+- **Arity counts** [implemented]. `classify(a: Int)` and `classify(a: Int, b: Int)` are different signatures and coexist fine.
+- **No implicit conversion** [implemented]. A call `classify(1u8)` (a `UInt8`) will not silently fall through to the `Int` overload — it'd be an error if no `UInt8` overload existed.
 
-Return types can differ across overloads.
+Return types can differ across overloads [implemented].
+
+The brace-bodied form `def f -> String { "int" }` is [deprecated]; replace it with the endless form `def f -> String = "int"` used above.
 
 ## 3. Methods overload the same way
 
-Method overloads work exactly like top-level overloads, and they mix freely with default arguments:
+Method overloads work exactly like top-level overloads, and they mix freely with default arguments. Example [implemented], with the empty `def init` constructor [deprecated] (replace with `def initialize` [planned](../../TODO.md#t-initialize)):
 
-```ruxen
+```ruby
 class Picker
-  def init end
+  def init
+  end
 
   def mark(value: String, suffix: String = "!") -> String
     "#{value}#{suffix}"
   end
 
-  def pick(value: Int)    -> String { "int" }
-  def pick(value: String) -> String { "string" }
+  def pick(value: Int) -> String = "int"
+  def pick(value: String) -> String = "string"
 end
 
-def main
-  let p = Picker.new
-  puts p.mark("ruxen")
-  puts p.mark("ruxen", "?")
-  puts p.pick(7)
-  puts p.pick("seven")
-end
+picker = Picker.new
+puts picker.mark("ruxen")
+puts picker.mark("ruxen", "?")
+puts picker.pick(7)
+puts picker.pick("seven")
 ```
 
 Output:
 
-```
+```text
 ruxen!
 ruxen?
 int
@@ -106,13 +103,15 @@ string
 
 ## 4. Overloads across inheritance
 
-A subclass can add new overloads of an inherited name without losing the parent's:
+A subclass can add new overloads of an inherited name without losing the parent's. Example [implemented], with the `def init` constructors [deprecated] (replace with `def initialize` [planned](../../TODO.md#t-initialize)); `super()` works inside `init` [implemented]:
 
-```ruxen
+```ruby
 class ParentPicker
-  def init end
-  def pick(value: Int)    -> String { "parent-int" }
-  def pick(value: String) -> String { "parent-string" }
+  def init
+  end
+
+  def pick(value: Int) -> String = "parent-int"
+  def pick(value: String) -> String = "parent-string"
 end
 
 class ChildPicker < ParentPicker
@@ -120,94 +119,91 @@ class ChildPicker < ParentPicker
     super()
   end
 
-  def pick(value: Bool) -> String { "child-bool" }
+  def pick(value: Bool) -> String = "child-bool"
 end
 
-def main
-  let c = ChildPicker.new
-  puts c.pick(7)
-  puts c.pick("seven")
-  puts c.pick(true)
-end
+c = ChildPicker.new
+puts c.pick(7)
+puts c.pick("seven")
+puts c.pick(true)
 ```
 
 Output:
 
-```
+```text
 parent-int
 parent-string
 child-bool
 ```
 
-The dispatcher checks the receiver class first, then walks up the parent chain. A child *can* shadow a parent overload by redefining the exact same shape.
+The dispatcher checks the receiver class first, then walks up the parent chain [implemented]. A child *can* shadow a parent overload by redefining the exact same shape.
 
 ## 5. Overloads inside modules
 
-Module-scoped functions overload by the same rules:
+Module-scoped methods overload by the same rules. Example [implemented]:
 
-```ruxen
+```ruby
 module Tools
-  def pick(value: Int)    -> String { "module-int" }
-  def pick(value: String) -> String { "module-string" }
+  def pick(value: Int) -> String = "module-int"
+  def pick(value: String) -> String = "module-string"
 end
 
-def main
-  puts Tools.pick(7)
-  puts Tools.pick("seven")
-end
+puts Tools.pick(7)
+puts Tools.pick("seven")
 ```
 
-A class nested inside a module has its own overload set:
+A class nested inside a module has its own overload set. Example [implemented], with the empty `def init` [deprecated] (replace with `def initialize` [planned](../../TODO.md#t-initialize)):
 
-```ruxen
+```ruby
 module Tools
   class Picker
-    def init end
-    def pick(value: Int)    -> String { "module-class-int" }
-    def pick(value: String) -> String { "module-class-string" }
+    def init
+    end
+
+    def pick(value: Int) -> String = "module-class-int"
+    def pick(value: String) -> String = "module-class-string"
   end
 end
 ```
 
 ## 6. Mixin contracts can require multiple overloads
 
-A mixin's required method list can name several overloads with the same name. Including types must satisfy *every* listed overload:
+A mixin's required method list can name several overloads with the same name [implemented]. Including types must satisfy *every* listed overload. The Ruby form declares the mixin with `module` [planned](../../TODO.md#t-module-mixins) and bounds the type parameter RBS-style as `[T < Pickable]` [planned](../../TODO.md#t-d7-respell). Works today [deprecated] (`mixin`, the `[T: Pickable]` bound and the empty `def init`, replaced by `module`, `[T < Pickable]` and `def initialize`):
 
-```ruxen
-mixin Picker
-  def pick(value: Int)    -> String
+```ruby
+mixin Pickable
+  def pick(value: Int) -> String
   def pick(value: String) -> String
 end
 
 class Item
-  def init end
+  def init
+  end
 
-  include Picker
+  include Pickable
 
-  def pick(value: Int)    -> String { "mixin-int" }
-  def pick(value: String) -> String { "mixin-string" }
+  def pick(value: Int) -> String = "mixin-int"
+  def pick(value: String) -> String = "mixin-string"
 end
 
-def show[T: Picker](item: &T)
+def show[T: Pickable](item: &T)
   puts item.pick(7)
   puts item.pick("seven")
 end
 
-def main
-  let item = Item.new
-  show(&item)
-end
+item = Item.new
+show(&item)
 ```
 
-A generic constrained by `T: Picker` can call both overloads — the mixin bound provides both signatures.
+A generic bounded by `Pickable` can call both overloads — the mixin bound provides both signatures.
 
 ## 7. How the compiler picks an overload
 
 When you write `f(args)`:
 
-1. **Filter by arity.** A parameter with a default counts as optional.
-2. **Match by exact parameter types.** Among the surviving candidates, pick the one whose parameter types exactly match the argument types.
-3. **If multiple candidates match equally, report an ambiguity error.** Disambiguate by adding a type annotation at the argument site, or by removing one of the overloads.
+1. **Filter by arity** [implemented]. A parameter with a default counts as optional.
+2. **Match by exact parameter types** [implemented]. Among the surviving candidates, pick the one whose parameter types exactly match the argument types.
+3. **If multiple candidates match equally, report an ambiguity error** [implemented]. Disambiguate by adding a type annotation at the argument site, or by removing one of the overloads.
 
 There's no implicit numeric coercion in overload resolution — `Int` and `Int8` are different and don't auto-convert at the call site.
 
@@ -215,19 +211,19 @@ There's no implicit numeric coercion in overload resolution — `Int` and `Int8`
 
 - **Putting a default *before* a non-default parameter.** `def f(a: Int = 0, b: Int)` is rejected — defaults must be trailing. The fix is to reorder so `b` comes first.
 - **Two overloads with the same shape.** `def pick(a: Int)` and another `def pick(a: Int)` is a duplicate-definition error. Different names or different shapes.
-- **Expecting `Int` to auto-fall-through to a `UInt8` overload.** It won't. Either add an `Int` overload or cast at the call site (`1 as UInt8`).
-- **Calling an overloaded method through `any`-style dispatch.** Vtable dispatch (`&any Picker`) picks one specific overload — usually the one whose types are most general. For multi-overload mixins, prefer the static `[T: Picker]` form.
+- **Expecting `Int` to auto-fall-through to a `UInt8` overload.** It won't. Either add an `Int` overload or convert at the call site: `1.to_u8` is [planned](../../TODO.md#t-sized-conv), and the `1 as UInt8` cast that works today is [deprecated].
+- **Calling an overloaded method through `any`-style dispatch.** Vtable dispatch (`&any Picker`) picks one specific overload — usually the one whose types are most general. For multi-overload mixins, prefer a static generic bound (`[T: Pickable]` today, [deprecated]; `[T < Pickable]` [planned](../../TODO.md#t-d7-respell)).
 
-> **Try it:** add `def classify(value: Float) -> String { "float" }` to the example in section 2 and call `classify(1.5)`. Then try `classify(1)` — does it route to the int or the float version?
+> **Try it:** add `def classify(value: Float) -> String = "float"` to the example in section 2 and call `classify(1.5)`. Then try `classify(1)` — does it route to the int or the float version?
 
 ---
 
 ## Recap
 
-- **Defaults** — trailing parameters can have `= value`, callers may skip them.
-- **Overloads** — same name, different parameter shapes; compiler picks at the call site.
+- **Defaults** — trailing parameters can have `= value`, callers may skip them [implemented].
+- **Overloads** — same name, different parameter shapes; compiler picks at the call site [implemented].
 - Methods, module functions, and inherited methods all overload the same way.
 - Mixin contracts can require multiple overloads of one name.
-- No implicit numeric coercion in overload resolution — use explicit casts.
+- No implicit numeric coercion in overload resolution — convert explicitly.
 
 **Next:** [Chapter 26 — JSON](26-json.md).

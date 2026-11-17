@@ -1,0 +1,37 @@
+# Block Tier-2 regression: `next` and an implicit numbered param must COMPOSE.
+#
+# `resolve/implicit_block_params.rs::Scan::expr` handled `Return(x) | Break(x)`
+# but had no `Next(x)` arm, even though `Next` carries the same
+# `Option<Box<Expr>>` payload. The numbered-param scan therefore never descended
+# into a `next` operand, so `xs.map { next _1 * 100 }` failed to resolve with
+# `error: undefined variable '_1'`.
+#
+# Both features shipped in the same batch and each had its own passing pin, but
+# the only test combining them (`compiler/ruxen_core/tests/block_tier2.rs`) used
+# `next` and `_1` in two SEPARATE blocks, so the gap survived. This case pins the
+# combination specifically.
+def main()
+  let xs = [1, 2, 3]
+
+  # `next <expr>` as the block value, with the implicit `_1` parameter.
+  let scaled = xs.map { next _1 * 100 }
+  puts "#{scaled.join(",")}"
+
+  # The same composition with the bare `it` parameter.
+  let doubled = xs.map { next it + it }
+  puts "#{doubled.join(",")}"
+
+  # `next` with a numbered param inside a conditional, so the operand is not
+  # the sole tail expression.
+  let clamped = xs.map do |v|
+    if v > 2
+      next 99
+    end
+    v
+  end
+  puts "#{clamped.join(",")}"
+
+  # A no-parameter `do ... end` block using `_1`.
+  let quintupled = xs.map do _1 * 5 end
+  puts "#{quintupled.join(",")}"
+end

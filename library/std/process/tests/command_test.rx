@@ -1,0 +1,69 @@
+def status_code(cmd: Command) -> Int
+  match cmd.status
+    Ok(s)  -> s.code
+    Err(_) -> -1
+  end
+end
+
+def captured_stdout(cmd: Command) -> String
+  match cmd.output
+    Ok(out) -> out.stdout.clone
+    Err(_)  -> "output_err"
+  end
+end
+
+Tester.describe("Command") do |t: &var Tester|
+  t.it("returns the child's exit code from status") do
+    t.expect(status_code(Command.new("/usr/bin/true"))).to_eq(0)
+    t.expect(status_code(Command.new("/usr/bin/false"))).to_eq(1)
+  end
+
+  t.it("reports success on ExitStatus") do
+    let ok = match Command.new("/usr/bin/true").status
+      Ok(s)  -> s.success
+      Err(_) -> false
+    end
+    t.expect(ok).to_eq(true)
+    let failed = match Command.new("/usr/bin/false").status
+      Ok(s)  -> s.success
+      Err(_) -> true
+    end
+    t.expect(failed).to_eq(false)
+  end
+
+  t.it("returns Err for a binary that does not exist") do
+    let missing = match Command.new("/no/such/binary/anywhere/here").status
+      Ok(_)  -> false
+      Err(_) -> true
+    end
+    t.expect(missing).to_eq(true)
+  end
+
+  t.it("passes arg and args to the child") do
+    t.expect(captured_stdout(Command.new("/bin/echo").arg("xyz"))).to_eq("xyz\n")
+    var bulk: Array[String] = Array.new
+    bulk.push("a")
+    bulk.push("b")
+    bulk.push("c")
+    t.expect(captured_stdout(Command.new("/bin/echo").args(bulk))).to_eq("a b c\n")
+  end
+
+  t.it("captures stderr and the status in output") do
+    let pair = match Command.new("/bin/sh").arg("-c").arg("echo err 1>&2").output
+      Ok(out) -> "#{out.status.code}:#{out.stderr}:#{out.stdout}"
+      Err(_)  -> "output_err"
+    end
+    t.expect(pair).to_eq("0:err\n:")
+  end
+
+  t.it("shows an env var to the child") do
+    let out = captured_stdout(Command.new("/usr/bin/env").env("RUXEN_TEST", "1"))
+    t.expect(out.include?("RUXEN_TEST=1")).to_eq(true)
+  end
+
+  t.it("runs the child in current_dir") do
+    # /tmp on Linux, /private/tmp on macOS.
+    let out = captured_stdout(Command.new("/bin/pwd").current_dir("/tmp"))
+    t.expect(out.include?("/tmp")).to_eq(true)
+  end
+end

@@ -12,8 +12,8 @@ of scope, the value is dropped (destructor runs, memory freed)"
 (`docs/tutorial/04-ownership-and-borrowing.md:11`). Today that promise is
 **not kept at the code-generation level** — locals of heap-allocated types
 are marked with `MirInst::Drop` in MIR, but both backends turn `Drop` into
-a no-op (`crates/ruxen-core/src/codegen/cranelift.rs:692-698`,
-`crates/ruxen-core/src/codegen/llvm/emit.rs:790-792`), so every Ruxen
+a no-op (`compiler/ruxen_core/src/codegen/cranelift.rs:692-698`,
+`compiler/ruxen_core/src/codegen/llvm/emit.rs:790-792`), so every Ruxen
 program leaks memory until `exit(3)` reclaims it.
 
 This document specifies the `Drop`, `Copy` and `Clone` mixins, the
@@ -40,15 +40,15 @@ interdependent:
 
 ### 2.1 Types already know Copy vs. Move
 
-`Ty::is_copy` in `crates/ruxen-core/src/hir/types.rs:189-221` hard-codes
+`Ty::is_copy` in `compiler/ruxen_core/src/hir/types.rs:189-221` hard-codes
 the Copy set: all integer/float primitives, `Bool`, `Char`, `Unit`,
-`Never`, `&T` / `&a T` / `&str`, raw pointers, `Ty::Error`, plus tuples
+`Never`, `&T` / `&a T`, raw pointers, `Ty::Error`, plus tuples
 and fixed arrays whose elements are Copy. Everything else (including
-`String`, `Array[T]`, `Map[K,V]`, `Option[T]`, `Result[T,E]`, any user
+`String`, `Array[T]`, `Hash[K, V]`, `Option[T]`, `Result[T,E]`, any user
 `class`/`struct`/`enum`) reports `is_copy() == false`.
 
 `MoveSemantics { Copy, Move }` is defined at
-`crates/ruxen-core/src/hir/types.rs:178-182` and carried on every
+`compiler/ruxen_core/src/hir/types.rs:178-182` and carried on every
 `HirExprKind::Assign` (`hir/nodes.rs:148`). The type-checker fills it in
 from `Ty::move_semantics()`; the borrow checker uses it in
 `check_assign` (`borrow_check/mod.rs:440-487`).
@@ -64,6 +64,7 @@ semantics** — the implicit-`include Copy` rule per syntax spec §3.6
 `Copy`, `Clone`, and `Drop` are registered as built-in mixins with the
 right method-name lists in `resolve/mod.rs:147-151`:
 
+<!-- compiler-rust -->
 ```rust
 ("Copy",  vec![]),
 ("Clone", vec!["clone"]),
@@ -84,8 +85,8 @@ explicit or implicit `include Copy` (per syntax spec §3.6), but:
 ### 2.3 MIR already inserts Drop (partially) — but codegen ignores it
 
 `MirInst::Drop { local: LocalId }` exists at
-`crates/ruxen-core/src/mir/nodes.rs:282-285`. `insert_drops` in
-`crates/ruxen-core/src/mir/lower.rs:3346-3407` runs once per function
+`compiler/ruxen_core/src/mir/nodes.rs:282-285`. `insert_drops` in
+`compiler/ruxen_core/src/mir/lower.rs:3346-3407` runs once per function
 after lowering and appends Drop instructions **before every
 `Terminator::Return`**, in reverse declaration order, for locals that:
 
@@ -137,7 +138,7 @@ call.
 
 ### 2.5 Runtime has allocation primitives but no typed free
 
-`crates/ruxen-core/runtime/runtime.c:144-163` provides:
+The pre-split `runtime.c:144-163` (now `library/std/<pkg>/runtime/*.c`) provides:
 
 ```c
 void *ruxen_alloc(uint64_t size);         // malloc + zero + panic-on-null
@@ -224,9 +225,20 @@ otherwise a completely ordinary method.
 
 ### 4.1 Declaration (compiler built-in)
 
-```ruxen
-mixin Drop
+The Ruby form; a mixin declared with `module` is [planned](../../TODO.md#t-module-mixins):
+
+```ruby
+module Drop
   def var drop
+end
+```
+
+`library/std/core/src/lib.rx` declares it with `mixin` and a plain `def drop`.
+Works today, [deprecated] (replace with `module Drop`):
+
+```ruby
+mixin Drop
+  def drop
 end
 ```
 
@@ -245,33 +257,72 @@ Ruxen follows the same rule.
 
 ### 4.2 User implementation
 
-In the class body:
+In the class body. The Ruby form, where `*Void` is [planned](../../TODO.md#t-void-ptr)
+and `initialize` is [planned](../../TODO.md#t-initialize):
 
-```ruxen
-class File
+```ruby
+class LogFile
   handle: *var Void
-  def init(@handle: *var Void) end
-
   include Drop
+
+  def initialize(@handle: *var Void)
+  end
 
   def var drop
     unsafe
-      ruxen_fclose(self.handle)
+      ruxen_fclose(@handle)
     end
   end
 end
 ```
 
-Out-of-line via an extension block:
+The handle is shown as an `Int` here, since `*Void` does not resolve yet.
+Works today, [deprecated] (`def init` is replaced by `def initialize`):
 
-```ruxen
-extension File
+```ruby
+class LogFile
+  handle: Int
+
+  def init(@handle: Int)
+  end
+
+  include Drop
+
+  def var drop
+    puts "closing #{@handle}"
+  end
+end
+
+def open_log
+  log = LogFile.new(3)
+  puts "writing"
+end
+
+open_log()
+```
+
+Out-of-line, by reopening the class [planned](../../TODO.md#t-reopen-class):
+
+```ruby
+class LogFile
   include Drop
 
   def var drop
     unsafe
-      ruxen_fclose(self.handle)
+      ruxen_fclose(@handle)
     end
+  end
+end
+```
+
+Works today, [deprecated] (`extension` is replaced by reopening the class):
+
+```ruby
+extension LogFile
+  include Drop
+
+  def var drop
+    puts "closing #{self.handle}"
   end
 end
 ```
@@ -279,7 +330,7 @@ end
 ### 4.3 Semantics
 
 - **D1** — If `include Drop on T` exists, the compiler invokes the
-  `drop(&var self)` provision exactly once when a value of type `T` is
+  `def var drop` provision exactly once when a value of type `T` is
   dropped, before the
   recursive drop of `T`'s fields.
 - **D2** — Recursive field drops happen **after** the user-written
@@ -363,12 +414,25 @@ Drop`, that is rejected with E-COPY-DROP-CONFLICT (see §5).
 
 ### 5.1 Declaration (compiler built-in)
 
-```ruxen
-mixin Copy: Clone end
+The Ruby form [planned](../../TODO.md#t-module-mixins):
+
+```ruby
+module Copy
+  include Clone
+end
+```
+
+`library/std/core/src/lib.rx` declares a marker with no super-mixin; the
+`mixin Copy: Clone` inheritance spelling is [deprecated] too (replace with
+`include Clone` inside the module). Works today, [deprecated] (replace with `module Copy`):
+
+```ruby
+mixin Copy
+end
 ```
 
 A **marker mixin**: no required methods. Having `Clone` as a super-mixin
-makes "`Copy: Clone`" natural (§6.3).
+makes "`Copy` includes `Clone`" natural (§6.3).
 
 Registered in `resolve/mod.rs:147` (already present as a zero-method
 mixin; needs the `super_traits` field populated with `Clone`).
@@ -456,7 +520,18 @@ satisfy C1–C4) is a hard error.
 
 ### 6.1 Declaration (compiler built-in)
 
-```ruxen
+The Ruby form [planned](../../TODO.md#t-module-mixins):
+
+```ruby
+module Clone
+  def clone -> Self
+end
+```
+
+As declared in `library/std/core/src/lib.rx`.
+Works today, [deprecated] (replace with `module Clone`):
+
+```ruby
 mixin Clone
   def clone -> Self
 end
@@ -508,7 +583,7 @@ is a hard error:
 - `&T`: `(&T).clone() = *self` — references are Copy, Clone is
   trivial.
 - `Option[T]`, `Result[T, E]`: Clone iff inner(s) are Clone.
-- `Map[K, V]`, `Set[T]`: Clone iff inner(s) are Clone. Needs runtime
+- `Hash[K, V]`, `Set[T]`: Clone iff inner(s) are Clone. Needs runtime
   helper; not on the critical path for Drop.
 
 ### 6.5 Implicit-include synthesis for user types
@@ -516,14 +591,16 @@ is a hard error:
 For a struct/enum/class whose every field is Clone, the implicit-include
 pass synthesises:
 
-- struct `S { a: A, b: B }` →
+- value type `S` with fields `a: A`, `b: B` → the equivalent of this
+  reopened class (the synthesis is internal, so users never write it;
+  reopening is [planned](../../TODO.md#t-reopen-class)):
 
-```ruxen
-extension S
+```ruby
+class S
   include Clone
 
   def clone -> S
-    S { a: self.a.clone, b: self.b.clone }
+    S.new(@a.clone, @b.clone)
   end
 end
 ```
@@ -644,13 +721,27 @@ does **drop elaboration**, analogous to rustc's `drop_elaboration`.
 `Copy` and `Clone` are structural mixins; the implicit-include rule
 (§3.6) applies them automatically when every field satisfies the mixin.
 Authors who want the loud form for documentation or early-failure write
-the include explicitly in the type body:
+the include explicitly in the type body. In the Ruby form, several modules
+in one `include` are [planned](../../TODO.md#t-include-many) and `Data.define`
+is [planned](../../TODO.md#t-data-define):
 
-```ruxen
+```ruby
+Point = Data.define(x: Float, y: Float) do
+  include Copy, Clone   # loud form; equivalent to implicit
+end
+```
+
+A `struct` without `layout c` fails typeck today
+[known issue](../../TODO.md#t-struct-typeck), so this one carries it.
+Works today, [deprecated] (`struct` is replaced by `Data.define`; one `include` per mixin):
+
+```ruby
 struct Point
+  layout c
   x: Float
   y: Float
-  include Copy, Clone   # loud form; equivalent to implicit
+  include Copy
+  include Clone
 end
 ```
 
@@ -729,7 +820,7 @@ Rust.
 | Change | File(s) |
 |---|---|
 | `TraitInfo { self_mode, is_marker }` | `resolve/symbols.rs:60-66` |
-| Built-in mixin metadata (Drop `&var self`, Copy marker/super=Clone, Clone `&self → Self`) | `resolve/mod.rs:138-151` |
+| Built-in mixin metadata (Drop `def var drop`, Copy marker/super=Clone, Clone `def clone -> Self`) | `resolve/mod.rs:138-151` |
 | Marker-mixin satisfaction rule | `typeck/traits.rs:85-133` |
 | `Ty::is_copy(resolver)` consults nominal Copy provisions | `hir/types.rs:189-221` |
 | Copy/Drop mutual exclusion check | new pass in `typeck/` (call it `mixin_consistency`) |
@@ -839,7 +930,7 @@ Each phase should be independently landable and testable.
 
 ## 11. Test Matrix
 
-Live in `crates/ruxen-core/tests/fixtures/` and unit tests in each
+Live in `compiler/ruxen_core/tests/fixtures/` and unit tests in each
 phase's module. Minimum coverage:
 
 ### 11.1 Drop semantics

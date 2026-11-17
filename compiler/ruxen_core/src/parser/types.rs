@@ -30,6 +30,7 @@ impl Parser {
                 generic_args: Some(vec![base]),
                 span: outer_span,
                 rooted: false,
+                nilable: true,
             });
         }
         base
@@ -75,7 +76,7 @@ impl Parser {
             // `nil` in type position — alias for the unit type `()`.
             // Produces the IDENTICAL AST node as `()` (empty Tuple) so
             // every downstream consumer (resolve, typeck, MIR, codegen,
-            // pretty-printer) sees one canonical form. Users who write
+            // formatter) sees one canonical form. Users who write
             // `nil` still see `()` in error messages — `()` remains the
             // canonical display form.
             TokenKind::Nil => {
@@ -115,13 +116,6 @@ impl Parser {
                 self.parse_named_type()
             }
 
-            // Lifetime in a type position (e.g., in trait bounds)
-            TokenKind::Lifetime(_) => {
-                // This shouldn't happen in normal type position, but handle gracefully
-                self.error("unexpected lifetime in type position");
-                TypeExpr::Inferred { span: start }
-            }
-
             // Lowercase identifiers that can be used as types (e.g., `str`)
             TokenKind::Identifier(ref name) if is_primitive_type_name(name) => {
                 self.parse_named_type_from_identifier()
@@ -158,15 +152,9 @@ impl Parser {
         let mutable;
 
         // ruby-naming.spec.md §3.3: lifetime names in type position are
-        // lowercase bare identifiers (`&a String`). Accept both the
-        // legacy `Lifetime("a")` token and a bare `Identifier` whose
-        // next token starts a type (uppercase TypeIdentifier or `mut`).
+        // lowercase bare identifiers (`&a String`): a bare `Identifier`
+        // whose next token starts a type (uppercase TypeIdentifier or `var`).
         let try_take_lifetime = |this: &mut Self| -> Option<String> {
-            if let TokenKind::Lifetime(ref lt) = this.current_kind().clone() {
-                let n = lt.clone();
-                this.advance();
-                return Some(n);
-            }
             if let TokenKind::Identifier(ref n) = this.current_kind().clone() {
                 if matches!(
                     this.peek_kind(),
@@ -317,25 +305,102 @@ impl Parser {
         TypeExpr::AnyMixin { bounds, span }
     }
 
-    fn parse_fn_type(&mut self) -> TypeExpr {
+    /// A closure type after its `Fn` head: the canonical bracket form
+    /// `Fn[(T…) -> R]` (a borrowed block, spec section 6) or the deprecated
+    /// paren form `Fn(T…) -> R`. The one parser for both, in every type
+    /// position (a `&block:` parameter included).
+    pub(super) fn parse_fn_type(&mut self) -> TypeExpr {
         let start = self.current_span();
         self.advance(); // consume Fn
-        self.expect(TokenKind::LParen);
-        self.skip_newlines();
-
-        let mut params = Vec::new();
-        if !self.at(TokenKind::RParen) {
-            params.push(self.parse_type());
-            while self.eat(TokenKind::Comma) {
-                self.skip_newlines();
-                if self.at(TokenKind::RParen) {
-                    break;
-                }
-                params.push(self.parse_type());
-            }
+        if self.at(TokenKind::LBracket) {
+            self.advance(); // consume `[`
+            self.skip_newlines();
+            let (params, return_type) = self.parse_fn_signature_tail();
+            self.skip_newlines();
+            self.expect(TokenKind::RBracket);
+            return TypeExpr::Function {
+                params,
+                return_type: Box::new(return_type),
+                spelling: FnTypeSpelling::Bracket,
+                span: self.span_from(&start),
+            };
         }
-        self.skip_newlines();
-        self.expect(TokenKind::RParen);
+        if !self.at(TokenKind::LParen) {
+            self.expect(TokenKind::LParen); // reports the missing `(`
+        }
+        let (params, return_type) = self.parse_fn_signature_tail();
+
+        let span = self.span_from(&start);
+        TypeExpr::Function {
+            params,
+            return_type: Box::new(return_type),
+            spelling: FnTypeSpelling::Paren,
+            span,
+        }
+    }
+
+    /// A bare signature `(T…) -> R` as a generic argument of any named type
+    /// (`Proc[(Int) -> nil]`). The `->` after the closing paren tells it
+    /// from a tuple type (`Array[(Int, String)]`).
+    fn parse_signature_arg(&mut self) -> TypeExpr {
+        let start = self.current_span();
+        let (params, return_type) = self.parse_fn_signature_tail();
+        TypeExpr::Function {
+            params,
+            return_type: Box::new(return_type),
+            spelling: FnTypeSpelling::Signature,
+            span: self.span_from(&start),
+        }
+    }
+
+    /// Whether the cursor is at `(` whose matching `)` is followed by `->`.
+    fn at_signature(&self) -> bool {
+        if !self.at(TokenKind::LParen) {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut offset = 0usize;
+        loop {
+            match self.peek_at_kind(offset) {
+                TokenKind::LParen => depth += 1,
+                TokenKind::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return self.peek_at_kind(offset + 1) == TokenKind::Arrow;
+                    }
+                }
+                TokenKind::Eof => return false,
+                _ => {}
+            }
+            offset += 1;
+        }
+    }
+
+    /// The signature every function type spells the same way, after its
+    /// `Fn` / `Fn[` / `Block` / bound-name head: an optional parenthesised
+    /// parameter list (trailing comma allowed), then an optional `-> R`. A
+    /// missing return type is the unit type.
+    pub(super) fn parse_fn_signature_tail(&mut self) -> (Vec<TypeExpr>, TypeExpr) {
+        let params = if self.at(TokenKind::LParen) {
+            self.advance();
+            self.skip_newlines();
+            let mut params = Vec::new();
+            if !self.at(TokenKind::RParen) {
+                params.push(self.parse_type());
+                while self.eat(TokenKind::Comma) {
+                    self.skip_newlines();
+                    if self.at(TokenKind::RParen) {
+                        break;
+                    }
+                    params.push(self.parse_type());
+                }
+            }
+            self.skip_newlines();
+            self.expect(TokenKind::RParen);
+            params
+        } else {
+            vec![]
+        };
 
         let return_type = if self.eat(TokenKind::Arrow) {
             self.skip_newlines();
@@ -347,13 +412,7 @@ impl Parser {
             }
         };
 
-        let span = self.span_from(&start);
-        TypeExpr::Function {
-            params,
-            return_type: Box::new(return_type),
-            bracketed: false, // paren form `Fn(...) -> R`
-            span,
-        }
+        (params, return_type)
     }
 
     pub(crate) fn parse_named_type(&mut self) -> TypeExpr {
@@ -395,6 +454,7 @@ impl Parser {
                     generic_args: None,
                     span: start,
                     rooted,
+                    nilable: false,
                 };
             }
         }
@@ -425,6 +485,7 @@ impl Parser {
             generic_args,
             span,
             rooted,
+            nilable: false,
         }
     }
 
@@ -489,6 +550,9 @@ impl Parser {
             self.advance();
             return TypeExpr::ConstLit { value: v, span };
         }
+        if self.at_signature() {
+            return self.parse_signature_arg();
+        }
         self.parse_type()
     }
 
@@ -542,12 +606,7 @@ impl Parser {
             return GenericParam::Const { name, ty, span };
         }
 
-        if let TokenKind::Lifetime(ref name) = self.current_kind().clone() {
-            let name = name.clone();
-            self.advance();
-            let span = self.span_from(&start);
-            GenericParam::Lifetime { name, span }
-        } else if let TokenKind::TypeIdentifier(ref name) = self.current_kind().clone() {
+        if let TokenKind::TypeIdentifier(ref name) = self.current_kind().clone() {
             let name = name.clone();
             self.advance();
             let bounds = if self.eat(TokenKind::Colon) {
@@ -560,9 +619,7 @@ impl Parser {
         } else if let TokenKind::Identifier(ref name) = self.current_kind().clone() {
             // ruby-naming.spec.md §3.3: a bare lowercase identifier
             // inside the `[...]` slot is a lifetime parameter
-            // (uppercase = type, lowercase = lifetime, no sigil). The
-            // legacy `'a` syntax still produces TokenKind::Lifetime
-            // above; this branch handles the new bare form.
+            // (uppercase = type, lowercase = lifetime, no sigil).
             let name = name.clone();
             self.advance();
             let span = self.span_from(&start);
@@ -604,37 +661,13 @@ impl Parser {
             .unwrap_or(false);
         if is_fn_trait && self.at(TokenKind::LParen) {
             let fn_start = self.current_span();
-            self.advance(); // consume (
-            self.skip_newlines();
-            let mut params = Vec::new();
-            if !self.at(TokenKind::RParen) {
-                params.push(self.parse_type());
-                while self.eat(TokenKind::Comma) {
-                    self.skip_newlines();
-                    if self.at(TokenKind::RParen) {
-                        break;
-                    }
-                    params.push(self.parse_type());
-                }
-            }
-            self.skip_newlines();
-            self.expect(TokenKind::RParen);
-
-            let return_type = if self.eat(TokenKind::Arrow) {
-                self.skip_newlines();
-                self.parse_type()
-            } else {
-                TypeExpr::Tuple {
-                    elements: vec![],
-                    span: self.current_span(),
-                }
-            };
+            let (params, return_type) = self.parse_fn_signature_tail();
 
             let fn_span = self.span_from(&fn_start);
             let fn_ty = TypeExpr::Function {
                 params,
                 return_type: Box::new(return_type),
-                bracketed: false, // `Fn(...)` sugar inside a mixin bound
+                spelling: FnTypeSpelling::Paren, // `Fn(...)` sugar inside a mixin bound
                 span: fn_span,
             };
             path.generic_args = Some(vec![fn_ty]);
@@ -756,6 +789,7 @@ impl Parser {
             generic_args,
             span,
             rooted: false,
+            nilable: false,
         })
     }
 }

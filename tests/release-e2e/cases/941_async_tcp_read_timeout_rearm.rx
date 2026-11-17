@@ -1,0 +1,116 @@
+## Lever D.2 re-arm pin: AsyncTcpStream's idle-timeout timer is now PERSISTENT
+## (owned by the stream, re-armed in place across read_with_timeout cycles)
+## instead of a fresh register+deregister per call. No prior case drives
+## read_with_timeout twice on ONE connection, so the re-arm path (the whole
+## point of D.2) was untested. This pins it:
+##
+##   cycle 1: server has written bytes -> read_with_timeout returns Ok, and
+##            the armed timer must NOT spuriously fire on the data path.
+##   cycle 2: server is now silent -> read_with_timeout RE-ARMS the same
+##            stream timer slot and must observe a fresh TimedOut, proving the
+##            re-arm resets the deadline AND that leftover state from cycle 1
+##            (a stale `fired` bit / deadline) does not corrupt cycle 2.
+##
+## Shape mirrors 727b: a synchronous Thread.spawn_raw hosts the server so the
+## main thread's block_on owns the reads under test.
+
+use std.time.Duration
+
+def server_loop -> Int
+  let addr = "127.0.0.1:31731"
+  let bound = block_on(AsyncTcpListener.bind(addr))
+  match bound
+    Ok(listener) -> server_run(listener)
+    Err(_)       -> 0
+  end
+end
+
+def server_run(listener: AsyncTcpListener) -> Int
+  var l = listener
+  let accepted = block_on(l.accept)
+  match accepted
+    Ok(pair) -> server_write_then_hold(pair)
+    Err(_)   -> 0
+  end
+end
+
+## Write one chunk (feeds the client's FIRST read), then stay silent for
+## 500ms so the client's SECOND read has nothing to consume and times out.
+def server_write_then_hold(pair: (AsyncTcpStream, String)) -> Int
+  let stream = pair.0
+  var s = stream
+  let _w = block_on(s.write("hi"))
+  Thread.sleep(Duration.from_millis(500))
+  1
+end
+
+def client_flow -> Int
+  let addr = "127.0.0.1:31731"
+  let connected = block_on(AsyncTcpStream.connect(addr))
+  match connected
+    Ok(stream) -> client_two_reads(stream)
+    Err(_)     -> 0
+  end
+end
+
+## First read must succeed (server wrote "hi"); second must time out after the
+## re-arm. Both on the same stream, so the timer is re-armed between them.
+def client_two_reads(stream: AsyncTcpStream) -> Int
+  var s = stream
+  let first = block_on(s.read_with_timeout(64, 100000000))
+  match first
+    Ok(_)  -> client_second_read(s)
+    Err(_) -> 0
+  end
+end
+
+def client_second_read(s: AsyncTcpStream) -> Int
+  var stream = s
+  let start = Instant.now()
+  let second = block_on(stream.read_with_timeout(64, 100000000))
+  let elapsed_dur = start.elapsed()
+  let elapsed_ms = elapsed_dur.as_millis()
+  match second
+    Ok(_)    -> 0
+    Err(err) -> check_timeout_err(err, elapsed_ms)
+  end
+end
+
+def check_timeout_err(err: IoError, elapsed_ms: Int) -> Int
+  let kind = err.kind()
+  match kind
+    IoErrorKind.TimedOut -> within_bounds(elapsed_ms)
+    _                    -> 0
+  end
+end
+
+## 50ms lower bound rules out an instant-return / stale-fired bug on the
+## re-armed timer; 500ms upper bound rules out a hang.
+def within_bounds(elapsed_ms: Int) -> Int
+  if elapsed_ms < 50
+    return 0
+  end
+  if elapsed_ms > 500
+    return 0
+  end
+  1
+end
+
+def main
+  let server_closure = { || server_loop() }
+  let handle = Thread.spawn_raw(server_closure)
+  if handle == 0
+    puts "spawn_fail"
+    return
+  end
+  Thread.sleep(Duration.from_millis(50))
+
+  let ok = client_flow()
+  if ok == 1
+    puts "rearm_ok"
+  else
+    puts "rearm_fail"
+  end
+
+  let _ = JoinHandle.join_raw(handle)
+end

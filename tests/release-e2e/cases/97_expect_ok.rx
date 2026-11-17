@@ -1,8 +1,0 @@
-def work(n: Int) -> Result[Int, String]
-  Ok(n + 1)
-end
-
-def main
-  let v = work(5).expect!("must succeed")
-  puts "#{v}"
-end

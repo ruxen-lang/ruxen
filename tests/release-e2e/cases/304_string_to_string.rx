@@ -1,6 +1,0 @@
-def main
-  let s = "ruxen"
-  let copy = s.to_string
-  puts "len=#{copy.size}"
-  puts copy
-end

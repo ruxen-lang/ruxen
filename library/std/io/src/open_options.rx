@@ -11,11 +11,44 @@
 class OpenOptions
   lib "runtime/file.c"
     def self.new as "ruxen_open_options_new" -> OpenOptions
-    def read as "ruxen_open_options_read"(value: Int) -> OpenOptions
-    def write as "ruxen_open_options_write"(value: Int) -> OpenOptions
-    def append as "ruxen_open_options_append"(value: Int) -> OpenOptions
-    def truncate as "ruxen_open_options_truncate"(value: Int) -> OpenOptions
-    def create as "ruxen_open_options_create"(value: Int) -> OpenOptions
-    def create_new as "ruxen_open_options_create_new"(value: Int) -> OpenOptions
+    # Each C setter writes one flag in place and returns its receiver; the
+    # fluent methods below hand the receiver itself back, so ownership of
+    # the options passes along the chain (a builder that returns `self`).
+    def set_read as "ruxen_open_options_read"(value: Int) -> OpenOptions
+    def set_write as "ruxen_open_options_write"(value: Int) -> OpenOptions
+    def set_append as "ruxen_open_options_append"(value: Int) -> OpenOptions
+    def set_truncate as "ruxen_open_options_truncate"(value: Int) -> OpenOptions
+    def set_create as "ruxen_open_options_create"(value: Int) -> OpenOptions
+    def set_create_new as "ruxen_open_options_create_new"(value: Int) -> OpenOptions
+  end
+
+  def read(value: Bool) -> OpenOptions
+    self.set_read(value as Int)
+    self
+  end
+
+  def write(value: Bool) -> OpenOptions
+    self.set_write(value as Int)
+    self
+  end
+
+  def append(value: Bool) -> OpenOptions
+    self.set_append(value as Int)
+    self
+  end
+
+  def truncate(value: Bool) -> OpenOptions
+    self.set_truncate(value as Int)
+    self
+  end
+
+  def create(value: Bool) -> OpenOptions
+    self.set_create(value as Int)
+    self
+  end
+
+  def create_new(value: Bool) -> OpenOptions
+    self.set_create_new(value as Int)
+    self
   end
 end

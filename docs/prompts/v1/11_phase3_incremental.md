@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # 11 — Phase 3: incremental compilation (T3.06)
 
 > **Status: 🟡 Partial** (audited 2026-05-21). ruxenc has working

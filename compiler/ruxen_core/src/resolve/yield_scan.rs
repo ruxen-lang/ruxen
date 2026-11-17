@@ -71,6 +71,7 @@ fn find_first_yield_args_in_expr(expr: &ast::Expr) -> Option<&[ast::Expr]> {
         SafeNavCall { object, args, .. } => find_first_yield_args_in_expr(object)
             .or_else(|| args.iter().find_map(find_first_yield_args_in_expr)),
         Call {
+            parens: _,
             callee,
             args,
             block,

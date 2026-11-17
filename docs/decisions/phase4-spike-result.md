@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Phase 4 Task 0 — `TranslationEnv<M: Module>` de-risking spike result
 
 **Decision: GO — Path A (genericize). Tasks 1–5 use the generic path.**

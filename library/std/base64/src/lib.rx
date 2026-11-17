@@ -1,0 +1,19 @@
+## std::base64 — Base64 encoding/decoding, mirroring Ruby's `Base64` module.
+##
+##   Base64.strict_encode64(&"hello")   # => "aGVsbG8="
+##   Base64.strict_decode64(&"aGVsbG8=") # => "hello"
+##   Base64.urlsafe_encode64(&s)         # +/ -> -_ , no newlines
+##   Base64.encode64(&s)                 # MIME: '\n' every 60 chars
+##
+## Operates on a string's bytes; text and token round-trips are exact. Binary
+## data with embedded NUL bytes is a follow-up (needs an Array[Int] byte API).
+class Base64
+  lib "runtime/base64.c"
+    def self.strict_encode64 as "ruxen_base64_strict_encode"(s: &String) -> String
+    def self.strict_decode64 as "ruxen_base64_strict_decode"(s: &String) -> String
+    def self.urlsafe_encode64 as "ruxen_base64_urlsafe_encode"(s: &String) -> String
+    def self.urlsafe_decode64 as "ruxen_base64_urlsafe_decode"(s: &String) -> String
+    def self.encode64 as "ruxen_base64_encode64"(s: &String) -> String
+    def self.decode64 as "ruxen_base64_decode64"(s: &String) -> String
+  end
+end

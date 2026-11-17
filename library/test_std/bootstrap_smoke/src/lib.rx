@@ -1,0 +1,24 @@
+# Test-only bootstrap fixture (#06.8 Phase 3 proof-of-life).
+#
+# Proves the parse → merge → resolve → MIR → link pipeline end-to-end
+# with a tiny payload. Lives under `library/test_std/`, so production
+# builds never load it: a test opts in through `RUXEN_TEST_STDLIB`
+# (see `TEST_BOOTSTRAP_FILES` in `resolve/bootstrap.rs`). The aliased
+# symbol `ruxen_test_extern_add_one` lives in `runtime/test_extern.c`
+# beside this package.
+lib "runtime/test_extern.c"
+  def bootstrap_smoke_add_one as "ruxen_test_extern_add_one"(x: Int) -> Int
+end
+
+# Wave 1.5 (#06.8 Phase 4) full-surface proof. Bootstrap-loaded
+# classes now register their class-method FFI decls into the prelude
+# scope exactly like user-written classes do. A user program can
+# call `BootstrapSmokeClass.add_one(41)` and the linker will resolve
+# the underlying `ruxen_test_extern_add_one` C symbol from
+# `runtime/test_extern.c`.
+class BootstrapSmokeClass
+  lib "runtime/test_extern.c"
+    def self.add_one as "ruxen_test_extern_add_one"(x: Int) -> Int
+    def self.double as "ruxen_test_extern_double"(x: Int) -> Int
+  end
+end

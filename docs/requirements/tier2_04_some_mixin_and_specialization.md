@@ -5,8 +5,13 @@ Owner: compiler
 Depends on: monomorphization (M2); associated types (doc 01) for
             return-position `some Mixin` that desugars to an associated
             type
-Blocks: the cleanest signature for iterator combinators; return-position
-        `some Fn`, `some Iterator` from stdlib
+Blocks: return-position `some Fn` and other opaque returns from stdlib
+
+> **Note.** The stdlib `Iterator` / `IntoIterator` / `FromIterator` layer
+> that these examples assume was dropped: Ruxen iteration is
+> `Enumerable[T]` over a single `each` method (`library/std/core/src/lib.rx`).
+> `Iterator` below is an illustrative mixin with an associated type,
+> not shipped or planned stdlib API.
 
 ## 1. Summary & Motivation
 
@@ -40,6 +45,7 @@ same feature and can ship independently.
 
 `hir/types.rs:112-113`:
 
+<!-- compiler-rust -->
 ```rust
 /// `some Mixin` — static dispatch, structural satisfaction OK
 ImplTrait(Vec<TraitRef>),
@@ -54,6 +60,7 @@ Resolver: `resolve/mod.rs:2484-2491` builds `Ty::ImplTrait(Vec<TraitRef>)`.
 
 `codegen/layout.rs:337-339`:
 
+<!-- compiler-rust -->
 ```rust
 // ── some Mixin (static dispatch) ────────────────────────────────────
 // The concrete type is erased here; we conservatively return pointer size.
@@ -135,22 +142,42 @@ see §9 risk).
 
 ### 4.1 Argument-position `some Mixin`
 
-```ruxen
-def print_all(items: some Iterator[Item = String])
-  for s in items
-    puts s
-  end
-end
+With a user mixin `Named` that requires `def name -> String`, the
+argument-position form is [implemented]:
 
-# Equivalent:
-def print_all[I: Iterator[Item = String]](items: I) ...
+```ruby
+def greet(x: some Named)
+  puts "hi #{x.name}"
+end
 ```
 
-Multiple bounds:
+It is equivalent to a bounded generic parameter. The RBS-style bound is
+[planned](../../TODO.md#t-d7-respell):
 
-```ruxen
-def log(x: some Display + Serializable)
-  puts x.to_display
+```ruby
+def greet[T < Named](x: T)
+  puts "hi #{x.name}"
+end
+```
+
+Works today, [deprecated] (replace with `[T < Named]`):
+
+```ruby
+def greet[T: Named](x: T)
+  puts "hi #{x.name}"
+end
+```
+
+Over the stdlib `Enumerable[T]` (`some Enumerable[String]`), the argument
+form does not type-check yet: `Array[String]` is reported as not
+satisfying `Enumerable` (E1015) and the element type does not resolve
+to `String` inside the body ([planned](../../TODO.md#t-oq), OQ-11).
+
+Multiple bounds, spelled with `&` as in the RBS-style bound list [planned](../../TODO.md#t-d7-respell):
+
+```ruby
+def log(x: some Inspect & Serializable)
+  puts x.inspect
   save(x.serialize)
 end
 ```
@@ -159,13 +186,15 @@ end
 
 ### 4.2 Return-position `some Mixin`
 
-```ruxen
-def ones -> some Iterator[Item = Int]
-  (1..).map { |_| 1 }
+Return position is rejected today ([planned](../../TODO.md#t-some-return)):
+
+```ruby
+def ones -> some Enumerable[Int]
+  [1, 1, 1]
 end
 
-def make_closure(x: Int) -> some Fn(Int) -> Int
-  { |y| x + y }
+def make_closure(x: Int) -> some Proc[(Int) -> Int]
+  ->(y: Int) { x + y }
 end
 ```
 
@@ -180,11 +209,13 @@ Rules:
 
 ### 4.3 Named opaque types (phase 04c, optional)
 
-```ruxen
-type FizzBuzzIter = some Iterator[Item = String]
+Both the opaque return and the `X = Y` type alias are [planned](../../TODO.md#t-type-alias):
 
-def fizzbuzz -> FizzBuzzIter
-  (1..101).map { |n| ... }
+```ruby
+FizzBuzzSeq = some Enumerable[String]
+
+def fizzbuzz -> FizzBuzzSeq
+  (1..100).map { |n| ... }
 end
 ```
 
@@ -197,6 +228,7 @@ Allows storing the opaque type in struct fields.
 In the resolver, `Ty::ImplTrait(bounds)` in an argument position is
 replaced by a fresh synthetic generic parameter:
 
+<!-- compiler-rust -->
 ```rust
 // In resolve_func_def when walking params:
 let param_ty = self.resolve_type_expr(&param.type_expr);
@@ -224,6 +256,7 @@ normally.
 Return position is fundamentally different. The type must be hidden
 from the caller:
 
+<!-- compiler-rust -->
 ```rust
 pub enum Ty {
     ...
@@ -319,7 +352,7 @@ as "not implemented"; reserving signals intent without shipping.
 1. Resolver lowers `Ty::ImplTrait` in argument position to a
    synthetic generic param.
 2. Coherence pass runs over all registered impls.
-3. Tests: `fn each(items: some Iterator)` works; overlap produces
+3. Tests: `def each(items: some Iterator)` works; overlap produces
    E-IMPL-OVERLAP.
 
 At end of 04a, argument-position `some Mixin` is indistinguishable
@@ -332,7 +365,7 @@ from explicit generics. No codegen change.
 6. Fill `hidden_return_ty` during body check.
 7. Coerce `Ty::Opaque` against declared bounds for method dispatch.
 8. Monomorphization uses the hidden type for layout and codegen.
-9. Tests: `fn ones -> some Iterator[Item = Int]` returns a real
+9. Tests: `def ones -> some Iterator[Item = Int]` returns a real
    iterator, and `ones.map(|x| x + 1)` type-checks.
 
 **Phase 04c — named opaque types (1 week, optional).**
@@ -352,7 +385,7 @@ doc 01. Phase 04a requires doc 01 phase 01a to have landed.
 
 ### 7.2 With GATs (doc 05)
 
-`include LendingIterator[Item['a] = &'a Str]` — the constraint on the
+`include LendingIterator[Item[a] = &a String]` — the constraint on the
 GAT is parsed via the same sugar. No new logic; GATs simply produce
 a projection with a bound lifetime.
 
@@ -395,20 +428,23 @@ See §6.2.
 ### 9.1 The feature
 
 Specialization lets multiple impls of the same mixin overlap, with
-the compiler picking the *most specific* one at each call site:
+the compiler picking the *most specific* one at each call site.
+Specialization is [retired] (never implemented; the language spec removes
+it, section 14 of `docs/specs/syntax/ruby-naming.spec.md`). The shape it
+would have taken, in the [retired] extension spelling:
 
-```ruxen
+```ruby
 # Blanket extension:
 extension[T] T where T: Clone
   include Transform
-  def transform(self) -> T; self.clone; end
+  def consume transform -> T; self.clone; end
 end
 
 # Specific extension overrides for Int — picks this one when the
 # concrete type is Int.
 extension Int
   include Transform
-  def transform(self) -> Int; self * 2; end
+  def consume transform -> Int; self * 2; end
 end
 ```
 
@@ -431,7 +467,7 @@ Specialization is known to be unsound in the presence of:
   `always_applicable` predicates and still has open soundness holes
   (rust-lang/rust#40582, open since 2017).
 - **Associated types.** A blanket `type Item = Array[T]` and a
-  specialised `type Item = &'static [T]` — a user who wrote code
+  specialised `type Item = &static [T]` — a user who wrote code
   against `Self.Item = Array[T]` now sees a different type at a
   call site that picked the specialised extension.
 - **Drop.** A specialised extension with a different Drop behaviour
@@ -454,6 +490,9 @@ problem.
   free function or use a helper mixin with a `where` bound."
 
 ### 9.4 If specialization eventually ships
+
+Specialization is [retired] in the language spec, so this section records
+the analysis only; no tracker item exists for it.
 
 Minimum viable spec (future):
 
@@ -515,26 +554,26 @@ This is ~4-6 weeks of careful design + coherence work. Deferred.
 
 ### 11.2 Positive tests (04b)
 
-- T5: `fn ones -> some Iterator[Item = Int] { (1..).map(|_| 1) }`
-  compiles and `ones.take(3).to_vec` returns `[1, 1, 1]`.
+- T5: `def ones -> some Iterator[Item = Int]; (1..).map { |_| 1 }; end`
+  compiles and `ones.take(3)` returns `[1, 1, 1]`.
 - T6: Opaque identity: `let a = ones; let b = ones; a = b` type-
   checks (same opaque type).
-- T7: Recursive opaque: `fn rec -> some Iterator { if ... rec ...
-  else empty }` — both arms return the same type.
+- T7: Recursive opaque: `def rec -> some Iterator` whose body is
+  `if ... then rec else empty end` — both arms return the same type.
 
 ### 11.3 Negative tests
 
-- N1: Two arms of `if` return different concrete types: `fn bad ->
-  some Iterator { if c then vec!().iter else (1..) }` →
+- N1: Two arms of `if` return different concrete types: `def bad ->
+  some Enumerable[Int]; if c then [1] else Set.new end; end` →
   E-IMPL-RET-MISMATCH.
-- N2: Opaque type leaks across two functions: `fn a -> some Iterator
-  { ... } fn b -> some Iterator { ... } let x = a; x = b` →
+- N2: Opaque type leaks across two functions: `def a -> some Iterator`
+  and `def b -> some Iterator`, then `let x = a; x = b` →
   E-OPAQUE-NEQ.
 - N3: Two `extension Int ... include Foo ... end` blocks in the same package → E-IMPL-DUP.
 - N4: Overlapping blanket: `extension[T] T where T: Clone ... include Foo ... end`
   alongside `extension Int ... include Foo ... end` → E-IMPL-OVERLAP (phase 04a).
-- N5: `some Mixin` used as a field type: `struct S { x: some
-  Iterator }` → E-IMPL-NOT-ALLOWED-HERE. (Use a named opaque type.)
+- N5: `some Mixin` used as a field type: a `struct S` body with the
+  field `x: some Iterator` → E-IMPL-NOT-ALLOWED-HERE. (Use a named opaque type.)
 - N6: Turbofish on `some Mixin` param: `each[String](items)` →
   E-IMPL-ARG-TURBOFISH.
 

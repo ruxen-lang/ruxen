@@ -6,18 +6,130 @@ use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 use crate::resolve::symbols::{ty_has_derive_trait, ty_is_effectively_copy, SymbolTable};
 
-const SUPPORTED_DERIVES: [&str; 10] = [
+/// The hashing mixin, declared in `std/hash`. The one spelling every phase
+/// uses; `Hash` names only the `Hash[K, V]` collection.
+pub(crate) const HASHABLE: &str = "Hashable";
+
+const SUPPORTED_DERIVES: [&str; 9] = [
     "Debug",
     "Clone",
     "Copy",
     "PartialEq",
     "Eq",
-    "Hash",
-    "Hashable",
+    HASHABLE,
     "Default",
     "Ord",
     "PartialOrd",
 ];
+
+/// The derives whose body the compiler synthesises: those whose mixin
+/// declares a method (`SymbolTable::derived_method`), in `SUPPORTED_DERIVES`
+/// order. MIR emits each body as `{Type}_{method}`; typeck registers the
+/// mixin's own `Self`-typed declaration of that method for the type.
+pub(crate) fn synthesized_derives(
+    symbols: &SymbolTable,
+) -> impl Iterator<Item = (&'static str, &str)> {
+    SUPPORTED_DERIVES
+        .iter()
+        .filter_map(|&trait_name| symbols.derived_method(trait_name).map(|m| (trait_name, m)))
+}
+
+/// Peel references, aliases and newtypes down to the nominal (struct,
+/// class or enum) type, or `None` when there is none.
+pub(crate) fn peel_to_nominal(ty: &Ty) -> Option<&Ty> {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(inner)
+            | Ty::RefMut(inner)
+            | Ty::RefLifetime(_, inner)
+            | Ty::RefMutLifetime(_, inner)
+            | Ty::Newtype { inner, .. }
+            | Ty::Alias { target: inner, .. } => cur = inner,
+            Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => return Some(cur),
+            _ => return None,
+        }
+    }
+}
+
+/// Does a `{Type}_{method}` body exist for `trait_name`'s derive on the
+/// nominal type behind `ty`, either synthesised or written by the user?
+///
+/// This is the one rule MIR dispatch, the derive synthesis and typeck's
+/// derived signatures share:
+///
+/// * no type gets a derive whose mixin the program does not declare;
+/// * a **struct** gets every derive it qualifies for
+///   ([`ty_has_derive_trait`], ruby-naming.spec.md §3.6; for a generic
+///   instance such as `Box[Mutex[Int]]`, over its substituted fields);
+/// * an **enum** gets `Debug` and `Clone` only (its bodies switch on the
+///   variant; the other derives have no enum body);
+/// * a **class** gets them only at module root (the bodies mangle from the
+///   bare name, so a dotted name would name no symbol), and, except for
+///   `Clone`, only when it has at least one field, inherited ones included.
+///   `fields.all(supports)` is vacuously true for a fieldless class, and the
+///   fieldless classes are the primitive method-homes and FFI handle shells
+///   (`class Int`, `class Mutex[T]`): a structural body for them is wrong
+///   (`Int {}` for a number, `true` for two different mutexes). `Clone`
+///   keeps the ungated rule it always had, so an existing `.clone` call on a
+///   fieldless class still links.
+pub(crate) fn derive_applies(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
+    let Some(nominal) = peel_to_nominal(ty) else {
+        return false;
+    };
+    // A derive needs its mixin: a `--no-std` program has no `mixin Debug`.
+    if !symbols
+        .named(trait_name)
+        .any(|def| matches!(def.kind, crate::resolve::symbols::DefKind::Trait { .. }))
+    {
+        return false;
+    }
+    if !ty_has_derive_trait(nominal, symbols, trait_name) {
+        return false;
+    }
+    match nominal {
+        Ty::Enum { .. } => matches!(trait_name, "Debug" | "Clone"),
+        Ty::Class { name, .. } => {
+            !name.contains('.') && (trait_name == "Clone" || class_has_fields(name, symbols))
+        }
+        _ => true,
+    }
+}
+
+/// Must the compiler synthesise `trait_name`'s derived body for `ty`? True
+/// when [`derive_applies`] and the type does not define the method itself:
+/// a user `def hash_code` is the body, and a second, synthesised
+/// `{Type}_hash_code` would be a duplicate definition.
+pub(crate) fn derive_is_synthesized(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
+    derive_applies(ty, symbols, trait_name) && !declares_derived_method(ty, symbols, trait_name)
+}
+
+/// Does the nominal type behind `ty` declare `trait_name`'s derived method
+/// (`SymbolTable::declares_derived_method`) itself?
+fn declares_derived_method(ty: &Ty, symbols: &SymbolTable, trait_name: &str) -> bool {
+    let Some(Ty::Struct { name, .. } | Ty::Class { name, .. } | Ty::Enum { name, .. }) =
+        peel_to_nominal(ty)
+    else {
+        return false;
+    };
+    symbols.declares_derived_method(name, trait_name)
+}
+
+/// Does class `name` have a field of its own or an inherited one?
+fn class_has_fields(name: &str, symbols: &SymbolTable) -> bool {
+    use crate::resolve::symbols::DefKind;
+    let mut cur = symbols.nominal(name);
+    while let Some(def) = cur {
+        let DefKind::Class { info } = &def.kind else {
+            return false;
+        };
+        if !info.fields.is_empty() {
+            return true;
+        }
+        cur = info.parent.and_then(|p| symbols.get(p));
+    }
+    false
+}
 
 /// Whether `name` is a compiler-synthesizable derive marker (the closed
 /// `SUPPORTED_DERIVES` set). Used by `MixinResolver::check_satisfaction` to
@@ -50,19 +162,11 @@ fn validate_item(item: &HirItem, symbols: &SymbolTable, diags: &mut Vec<Diagnost
     }
 }
 
-/// Merge the legacy `derive_traits` field with the new in-body
-/// `include` directives. Post ruby-naming.spec.md §10a the loud form
-/// for opting into a structural mixin is `include <Mixin>` (one per
-/// line) inside the type body; the parser routes those into
-/// `impl_blocks`, leaving `derive_traits` empty. The validator must
-/// see both — under transition some types still carry legacy
-/// `derive_traits` entries from the (also retired) attribute-prefix
-/// path.
-fn collected_derives(
-    legacy: &[String],
-    impl_blocks: &[crate::hir::nodes::HirImplBlock],
-) -> Vec<String> {
-    let mut out: Vec<String> = legacy.to_vec();
+/// The structural mixins a type opts into: its in-body `include <Mixin>`
+/// directives (ruby-naming.spec.md §10a), which the parser routes into
+/// `impl_blocks`.
+fn collected_derives(impl_blocks: &[crate::hir::nodes::HirImplBlock]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
     for block in impl_blocks {
         if block.negative_trait {
             continue;
@@ -96,7 +200,7 @@ fn name_resolves_to_type(symbols: &SymbolTable, name: &str) -> bool {
 }
 
 fn validate_class(class: &HirClassDef, symbols: &SymbolTable, diags: &mut Vec<Diagnostic>) {
-    let derives = collected_derives(&class.derive_traits, &class.impl_blocks);
+    let derives = collected_derives(&class.impl_blocks);
     validate_common_traits("class", &class.name, &derives, &class.span, symbols, diags);
 
     if has_derive(&derives, "Copy") {
@@ -136,7 +240,7 @@ fn validate_class(class: &HirClassDef, symbols: &SymbolTable, diags: &mut Vec<Di
 }
 
 fn validate_struct(strukt: &HirStructDef, symbols: &SymbolTable, diags: &mut Vec<Diagnostic>) {
-    let derives = collected_derives(&strukt.derive_traits, &strukt.impl_blocks);
+    let derives = collected_derives(&strukt.impl_blocks);
     validate_common_traits(
         "struct",
         &strukt.name,
@@ -183,7 +287,7 @@ fn validate_struct(strukt: &HirStructDef, symbols: &SymbolTable, diags: &mut Vec
 }
 
 fn validate_enum(enm: &HirEnumDef, symbols: &SymbolTable, diags: &mut Vec<Diagnostic>) {
-    let derives = collected_derives(&enm.derive_traits, &enm.impl_blocks);
+    let derives = collected_derives(&enm.impl_blocks);
     validate_common_traits("enum", &enm.name, &derives, &enm.span, symbols, diags);
 
     if has_derive(&derives, "Default") {
@@ -436,6 +540,9 @@ fn ty_is_effectively_clone(ty: &Ty, symbols: &SymbolTable) -> bool {
         Ty::Map(k, v) | Ty::Result(k, v) => {
             ty_is_effectively_clone(k, symbols) && ty_is_effectively_clone(v, symbols)
         }
+        Ty::Tuple(elems) => elems
+            .iter()
+            .all(|elem| ty_is_effectively_clone(elem, symbols)),
         Ty::Ref(inner)
         | Ty::RefMut(inner)
         | Ty::RefLifetime(_, inner)
@@ -454,7 +561,7 @@ fn ty_is_effectively_clone(ty: &Ty, symbols: &SymbolTable) -> bool {
 /// requires per-field bounds:
 ///
 ///   * `PartialEq`  → E0613 if a field is not PartialEq.
-///   * `Hash` / `Hashable` → E0615 if a field is not Hashable.
+///   * `Hashable` → E0615 if a field is not Hashable.
 ///   * `Ord`        → E0617 if a field is not Ord.
 ///   * `PartialOrd` → E0618 if a field is not PartialOrd.
 ///
@@ -476,7 +583,7 @@ fn validate_per_field_traits<'a>(
     diags: &mut Vec<Diagnostic>,
 ) {
     let want_partial_eq = has_derive(derive_traits, "PartialEq");
-    let want_hash = has_derive(derive_traits, "Hash") || has_derive(derive_traits, "Hashable");
+    let want_hash = has_derive(derive_traits, HASHABLE);
     let want_ord = has_derive(derive_traits, "Ord");
     let want_partial_ord = has_derive(derive_traits, "PartialOrd");
     if !(want_partial_eq || want_hash || want_ord || want_partial_ord) {
@@ -494,7 +601,7 @@ fn validate_per_field_traits<'a>(
                 "E0613",
             ));
         }
-        if want_hash && !ty_satisfies_named_trait(field_ty, "Hash", symbols) {
+        if want_hash && !ty_satisfies_named_trait(field_ty, HASHABLE, symbols) {
             diags.push(Diagnostic::error_with_code(
                 format!(
                     "cannot auto-synthesize Hash on {} `{}` because field `{}` has type `{}` which is not hashable",
@@ -533,14 +640,11 @@ fn validate_per_field_traits<'a>(
 /// themselves carry the matching `derive`. References / aliases /
 /// newtypes are looked through.
 ///
-/// `trait_name` is one of `"PartialEq" | "Eq" | "Hash" | "Hashable" |
-/// "Ord" | "PartialOrd"`. `Eq` collapses to `PartialEq` (Eq is a
-/// marker), and `Hash` is treated identically to `Hashable` to keep
-/// the TEC-13 rename working through the transition release.
+/// `trait_name` is one of `"PartialEq" | "Eq" | "Hashable" | "Ord" |
+/// "PartialOrd"`. `Eq` collapses to `PartialEq` (Eq is a marker).
 pub(crate) fn ty_satisfies_named_trait(ty: &Ty, trait_name: &str, symbols: &SymbolTable) -> bool {
     let canonical = match trait_name {
         "Eq" => "PartialEq",
-        "Hashable" => "Hash",
         other => other,
     };
 
@@ -570,14 +674,7 @@ pub(crate) fn ty_satisfies_named_trait(ty: &Ty, trait_name: &str, symbols: &Symb
         Ty::Alias { target, .. } => ty_satisfies_named_trait(target, canonical, symbols),
         Ty::Newtype { inner, .. } => ty_satisfies_named_trait(inner, canonical, symbols),
         Ty::Struct { .. } | Ty::Class { .. } | Ty::Enum { .. } => {
-            // Hash accepts either the new name or the legacy spelling;
-            // every other trait must match exactly.
-            if canonical == "Hash" {
-                ty_has_derive_trait(ty, symbols, "Hash")
-                    || ty_has_derive_trait(ty, symbols, "Hashable")
-            } else {
-                ty_has_derive_trait(ty, symbols, canonical)
-            }
+            ty_has_derive_trait(ty, symbols, canonical)
         }
         _ => false,
     }

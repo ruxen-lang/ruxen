@@ -2,7 +2,7 @@
 
 ## 1. Summary & Motivation
 
-The tutorial (`docs/tutorial/01..16`) teaches Ruxen feature-by-feature through small snippets; the test fixtures (`crates/ruxen-core/tests/fixtures/*.rx`, 13 files) exercise compiler paths through small programs. **Neither is a complete, runnable project that a newcomer can `git clone && ruxen run`.** There is no `examples/` directory anywhere in the repo.
+The tutorial (`docs/tutorial/01..16`) teaches Ruxen feature-by-feature through small snippets; the test fixtures (`compiler/ruxen_core/tests/fixtures/*.rx`, 13 files) exercise compiler paths through small programs. **Neither is a complete, runnable project that a newcomer can `git clone && ruxen run`.** There is no `examples/` directory anywhere in the repo.
 
 "Show me a real program written in this language" is the single most common request a new user has. It drives adoption, validates the language's stdlib, and — critically — keeps the language honest: every example that stops building under a compiler change generates CI noise that forces the change to either fix the example or document the break. Examples are the acceptance test for tier 1 / 2 / 3 work.
 
@@ -12,7 +12,7 @@ This document specifies a curated set of in-tree examples under `examples/`, wha
 
 ### 2.1 Directory listing
 
-```
+```sh
 $ ls /home/sheraz/Documents/ruxen/
 Cargo.lock  Cargo.toml  CLAUDE.md  crates  docs  editors  install.sh  README.md  target  uninstall.sh
 ```
@@ -21,7 +21,7 @@ No `examples/`.
 
 ### 2.2 What exists that's example-adjacent
 
-- `crates/ruxen-core/tests/fixtures/` (13 `.rx` files, most < 50 lines):
+- `compiler/ruxen_core/tests/fixtures/` (13 `.rx` files, most < 50 lines):
   - `arithmetic.rx`, `classes.rx`, `class_methods.rx`, `control_flow.rx`, `enum_data.rx`, `enums.rx`, `functions.rx`, `hello.rx`, `mini_sample.rx`, `sample_program.rx`, `simple_class.rx`, `string_interp.rx`, `tasklist.rx`.
   - `tasklist.rx` and `sample_program.rx` are the largest — still < 100 lines.
   - These are compiler fixtures (they live in `tests/`). Not user-facing.
@@ -33,7 +33,7 @@ No `examples/`.
 - **Nowhere to point a newcomer** beyond "read the tutorial."
 - **No integration tests across the whole stack.** A stdlib change that breaks `read_line + parse + format` wouldn't be caught by fixture tests.
 - **No forcing function for stdlib completeness.** Tier-1 stdlib doc mentions tutorial files use methods that don't exist. An `examples/` entry would fail loudly.
-- **The package manager is untested against real projects.** `ruxen-cli/tests/installed_pkg_manager.rs` uses synthetic `my-dep` fixtures; no real cross-package integration.
+- **The package manager is untested against real projects.** `ruxen_cli/tests/installed_pkg_manager.rs` uses synthetic `my-dep` fixtures; no real cross-package integration.
 
 ## 3. Goals & Non-Goals
 
@@ -61,7 +61,7 @@ No `examples/`.
 
 ### 4.1 Directory layout
 
-```
+```text
 examples/
 ├── README.md                          # index of examples; when to use each
 ├── 01-cli-utility/
@@ -127,51 +127,50 @@ description = "A Ruxen port of the classic `wc` utility."
 type = "binary"
 ```
 
-`src/main.rx`:
+`src/main.rx`, in the Ruby form. `ARGV` and `File.read` are
+[planned](../../TODO.md#t-stdlib-shapes) and `begin/rescue` is [planned](../../TODO.md#t-exceptions).
+The shipped `examples/01-cli-utility/src/main.rx` is the program that
+builds today; it still uses the [deprecated] `Result` / `use` shapes, so it
+is not copied here. The target program, [planned](../../TODO.md#t-exceptions):
 
-```ruxen
-use std.env
-use std.fs
-use std.io.IoError
-
-def main
-  let args = env.args
-  if args.size < 2
-    eputs "usage: wc <file>"
-    std.process.exit(1)
-  end
-
-  let path = args.get(1).unwrap!
-  match fs.read_to_string(&path)
-    Ok(content)  -> count(&content)
-    Err(IoError.NotFound(p)) -> eputs "no such file: #{p}"
-    Err(err)     -> eputs "error: #{err}"
-  end
-end
-
-def count(text: &str)
-  var lines = 0
-  var words = 0
-  var bytes = text.size
+```ruby
+def count(text: &String)
+  lines = 0
+  words = 0
+  bytes = text.size
 
   for line in text.lines
     lines += 1
-    words += line.split_whitespace.count
+    words += line.split.size
   end
 
   puts "#{lines} #{words} #{bytes}"
+end
+
+if ARGV.size < 1
+  warn "usage: wc <file>"
+  exit(1)
+end
+
+path = ARGV[0]
+begin
+  count(File.read(path))
+rescue Errno::ENOENT
+  warn "no such file: #{path}"
+rescue IOError => e
+  warn "error: #{e.message}"
 end
 ```
 
 What it exercises:
 
-- `std.env.args`
-- `std.fs.read_to_string`
-- `std.io.IoError` pattern matching
-- Mutable locals
-- `for` over an iterator
-- String method chaining (`split_whitespace.count`)
-- `std.process.exit`
+- `ARGV`
+- `File.read`
+- `rescue` of I/O errors
+- Locals that are reassigned
+- `for` over `String#lines`
+- String method chaining (`split.size`)
+- `exit`
 
 Prerequisites:
 
@@ -179,42 +178,38 @@ Prerequisites:
 
 ### 4.4 Example detail — `02-tcp-echo-server`
 
-`src/main.rx`:
+`src/main.rx`, in the Ruby form. `TCPServer` is [planned](../../TODO.md#t-stdlib-shapes),
+`loop do` is [planned](../../TODO.md#t-loop-do) and `rescue` is [planned](../../TODO.md#t-exceptions):
 
-```ruxen
-use std.net.TcpListener
-use std.io
-
-def main
-  let listener = TcpListener.bind("127.0.0.1:7878").unwrap!
-  puts "listening on 127.0.0.1:7878"
-
-  for conn in listener.incoming
-    match conn
-      Ok(stream) -> handle(&var stream)
-      Err(e)     -> eputs "connection error: #{e}"
-    end
+```ruby
+def handle(client: &var TCPSocket)
+  loop do
+    data = client.readpartial(1024)   # raises EOFError when the client closes
+    client.write(data)
   end
+rescue EOFError, IOError
+  # client closed or the connection failed
 end
 
-def handle(stream: &var TcpStream)
-  var buf: Array[UInt8] = Array.with_size(1024)
-  loop
-    match stream.read(&var buf)
-      Ok(0)  -> break                            # client closed
-      Ok(n)  -> stream.write(&buf[0..n]).unwrap!
-      Err(_) -> break
-    end
+server = TCPServer.new("127.0.0.1", 7878)
+puts "listening on 127.0.0.1:7878"
+
+loop do
+  begin
+    client = server.accept
+    handle(&var client)
+  rescue IOError => e
+    warn "connection error: #{e.message}"
   end
 end
 ```
 
 What it exercises:
 
-- `std.net.TcpListener`, `TcpStream`.
-- `Result` pattern matching with error arms.
-- Mutable slices / arrays.
-- `.unwrap!` with the danger-suffix convention.
+- `TCPServer`, `TCPSocket`.
+- `rescue` for connection errors.
+- Byte buffers read from a socket.
+- Errors that propagate as exceptions instead of `Result` values.
 
 Prerequisites:
 
@@ -224,8 +219,8 @@ Prerequisites:
 
 Spawn-per-connection with a `SharedSync[Mutex[HitCounter]]` for request counting. Exercises:
 
-- `std.thread.spawn`
-- `std.sync.{SharedSync, Mutex}`
+- `Thread.new { ... }` ([planned](../../TODO.md#t-thread-api); `Thread.spawn` is the shape that works today)
+- `SharedSync` and `Mutex` (`Mutex#synchronize` is [planned](../../TODO.md#t-thread-api))
 - `Send`/`Sync` auto-mixin inference
 - Simple HTTP/1.1 parsing (hand-written)
 
@@ -233,13 +228,15 @@ Prerequisites: tier 1 phase 2.
 
 ### 4.6 Example detail — `04-wasm-hello`
 
-Ruxen side (`src/main.rx`):
+Ruxen side (`src/main.rx`). Every top-level `def` already exports by its
+source name ([implemented], `examples/05-wasm/`); the `wasm_export`
+rename directive is [planned](../../TODO.md#t-req-wasm):
 
-```ruxen
+```ruby
 def greet(count: Int32) -> Int32
   wasm_export "greet"
-  var total = 0
-  for i in 0..count
+  total = 0
+  for i in 0...count
     total += i
   end
   total
@@ -287,7 +284,7 @@ This is the single example that exercises the package manager's external-dep pat
 
 What it exercises:
 
-- Pattern matching on enums (`Direction.Up | Down | Left | Right`)
+- Pattern matching on direction symbols (`in :up | :down | :left | :right`; symbols are [planned](../../TODO.md#t-symbols))
 - Mutable state across a `loop`
 - Class definitions with methods
 - A cross-package dependency
@@ -310,7 +307,7 @@ Prerequisites: tier 1.03 phases 3a-3c.
 
 An index:
 
-```md
+~~~~md
 # Ruxen Examples
 
 Curated, complete Ruxen projects. Each has its own `README.md` and `Ruxen.toml`; run with `ruxen run` from inside the example's directory.
@@ -321,7 +318,7 @@ Curated, complete Ruxen projects. Each has its own `README.md` and `Ruxen.toml`;
 |---|---------|-----------------|---------------|
 | 01 | [cli-utility](01-cli-utility/) | stdin, env, fs, error handling | stdlib 1b |
 | 02 | [tcp-echo-server](02-tcp-echo-server/) | std.net basics | stdlib 1c |
-| 03 | [threaded-http-server](03-threaded-http-server/) | threads + Arc<Mutex<T>> | concurrency |
+| 03 | [threaded-http-server](03-threaded-http-server/) | threads + SharedSync[Mutex[T]] | concurrency |
 | 04 | [wasm-hello](04-wasm-hello/) | wasm32 target | tier-4 WASM |
 | 05 | [snake-game](05-snake-game/) | Git dependencies, terminal I/O | package-mgr |
 | 06 | [embedded-qemu](06-embedded-qemu/) | no_std, panic_handler | tier-4 no_std |
@@ -335,13 +332,13 @@ ruxen run -- README.md
 ```
 
 Each example's README.md has more detail.
-```
+~~~~
 
 ## 5. Architecture / Design
 
 ### 5.1 How examples are not test fixtures
 
-Fixtures live in `crates/ruxen-core/tests/fixtures/`. They are small, single-file, designed to exercise a specific compiler path, and compiled through an in-process `Lexer`/`Parser`/`typeck`/`mir` pipeline.
+Fixtures live in `compiler/ruxen_core/tests/fixtures/`. They are small, single-file, designed to exercise a specific compiler path, and compiled through an in-process `Lexer`/`Parser`/`typeck`/`mir` pipeline.
 
 Examples live in `examples/`. They are multi-file projects built by the user-facing `ruxen` CLI. They exercise the full install path (find stdlib, find runtime, link against it).
 
@@ -371,7 +368,7 @@ A new `examples` job in `ci.yml` (doc 06 §4.2):
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build compiler
-        run: cargo build -p ruxenc -p ruxen-cli
+        run: cargo build -p ruxenc -p ruxen_cli
       - name: Build example
         working-directory: examples/${{ matrix.example }}
         run: ../../target/debug/ruxen build
@@ -407,12 +404,12 @@ Each example has its own `target/` directory (inside the example's folder, gitig
 
 - `README.md` — add an "Examples" section pointing at `examples/`.
 - `.gitignore` (if one exists at root) — ensure `examples/*/target/` is ignored.
-- `crates/ruxen-cli/src/scaffold.rs:154-159` — nothing to change; examples aren't scaffolded, they're authored.
+- `src/ruxen_cli/src/scaffold.rs:154-159` — nothing to change; examples aren't scaffolded, they're authored.
 
 ### Tests
 
 - CI's `examples` matrix (see §5.2) is the test. Each example's `smoke.sh` is an integration test.
-- Optional: `crates/ruxen-cli/tests/examples_build.rs` — runs `ruxen build` on every `examples/*/` in a temp dir clone. Same as the CI matrix but locally runnable. Recommend: skip, CI is enough.
+- Optional: `src/ruxen_cli/tests/examples_build.rs` — runs `ruxen build` on every `examples/*/` in a temp dir clone. Same as the CI matrix but locally runnable. Recommend: skip, CI is enough.
 
 ## 7. Interactions with Other Tiers
 
@@ -508,7 +505,7 @@ Each example has its own `target/` directory (inside the example's folder, gitig
 - [ ] Every example has a `smoke.sh` that exercises the happy path non-interactively.
 - [ ] CI runs every example's `smoke.sh` and fails the workflow on any failure.
 - [ ] `README.md` at repo root links to `examples/`.
-- [ ] A newcomer clone-and-run flow works: `git clone … && cd ruxen && cargo build -p ruxen-cli && cd examples/01-cli-utility && ../../target/debug/ruxen run -- README.md` prints output matching `<lines> <words> <bytes>`.
+- [ ] A newcomer clone-and-run flow works: `git clone … && cd ruxen && cargo build -p ruxen_cli && cd examples/01-cli-utility && ../../target/debug/ruxen run -- README.md` prints output matching `<lines> <words> <bytes>`.
 - [ ] A stdlib API rename PR that breaks an example also updates that example (enforced by CI gating).
 - [ ] No example exceeds 300 lines of Ruxen code.
 - [ ] Every example's `Ruxen.toml` has `description` + `license = "MIT OR Apache-2.0"` fields.

@@ -1,0 +1,57 @@
+## F-6: the C-side scheduler (task pump, Race 2-arm and N-way steps) frees
+## each 16-byte `Poll` box it gets back from `Future_dynamic_poll`, but never
+## the Ready payload, which moves into the task handle / race winner slot.
+##
+## `Countdown` stays Pending `n` times (self-waking each time) and then
+## resolves Ready with its tag. Thousands of Pending polls go through the
+## pump and both Race steps; the payloads must still read back intact after
+## their Poll boxes are freed.
+
+class Countdown
+  left: Int
+  tag: Int
+  include Future
+  type Output = Int
+
+  def init(n: Int, t: Int)
+    self.left = n
+    self.tag = t
+  end
+
+  def self.make(n: Int, t: Int) -> Countdown
+    Countdown.new(n, t)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.left == 0
+      return Poll.Ready(self.tag)
+    end
+    self.left = self.left - 1
+    let w = cx.waker
+    w.wake_by_ref
+    Poll.Pending
+  end
+end
+
+def main
+  Scope.open do |s|
+    s.spawn(Countdown.make(20000, 1))
+    s.spawn(Countdown.make(30000, 2))
+    puts "scope collect=#{s.collect}"
+  end
+
+  let r = block_on(Race.of(Countdown.make(30000, 7), Countdown.make(40000, 8)))
+  match r
+    Race2.First(p)  -> puts "race2 first p=#{p}"
+    Race2.Second(p) -> puts "race2 second p=#{p}"
+  end
+
+  var arms: Array[Int] = Array.new
+  arms.push(Countdown.make(40000, 10))
+  arms.push(Countdown.make(30000, 11))
+  arms.push(Countdown.make(50000, 12))
+  let n = block_on(Race.any_of(arms))
+  match n
+    RaceN.Won(idx, p) -> puts "raceN won idx=#{idx} p=#{p}"
+  end
+end

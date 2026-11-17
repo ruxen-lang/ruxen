@@ -1,11 +1,72 @@
 use super::super::*;
 
 impl<'a> Lowerer<'a> {
+    /// The builtin I/O functions that take a single piece of TEXT and
+    /// write it out, i.e. the ones whose argument must already be a
+    /// `char*` by the time it reaches the runtime.
+    ///
+    /// Shares ONE list with the universal-`to_s` conversion in
+    /// `typeck/infer/expr.rs` (`hir::IO_TEXT_BUILTINS`). That pass is the
+    /// first line of defence and this is the backstop; two matching
+    /// literals would be free to drift, and drift in either direction is
+    /// a bug. See the doc comment on the const.
+    fn is_io_text_builtin(&self, callee_name: &str, arg_count: usize) -> bool {
+        arg_count == 1 && crate::hir::IO_TEXT_BUILTINS.contains(&callee_name)
+    }
+
+    /// Ensure an already-lowered I/O argument is text, formatting it
+    /// through the Display ladder when it is not.
+    ///
+    /// The type consulted is the MIR local's, NOT `arg.ty`. See the call
+    /// site for why the HIR type cannot be trusted for this decision.
+    /// When the local is already string-like this returns it unchanged,
+    /// so the common `puts "literal"` path is bit-for-bit as before.
+    fn coerce_arg_to_display_text(
+        &mut self,
+        local: Option<LocalId>,
+        arg: &HirExpr,
+    ) -> Result<Option<LocalId>, String> {
+        let Some(lid) = local else {
+            return Ok(local);
+        };
+        let local_ty = self
+            .fn_mut()
+            .locals
+            .get(lid as usize)
+            .map(|l| l.ty.clone())
+            .unwrap_or_else(|| arg.ty.clone());
+        // Already the `char*` the runtime wants — pass it straight through.
+        //
+        // `RawPtr(Char)` is NOT covered by `is_string_like` and must be
+        // tested separately: it is what `emit_raw_string_literal` produces
+        // for the bare-literal zero-copy path (`puts "ok"` lowers to the
+        // `.rodata` pointer, never a `String` — see the note on
+        // `Ty::RawPtr`). Missing it here sent every bare string literal
+        // through the Display ladder, which formatted the POINTER as an
+        // integer and printed an address instead of the text.
+        if crate::mir::lower::is_string_like(&local_ty)
+            || matches!(&local_ty, Ty::RawPtr(inner) if matches!(inner.as_ref(), Ty::Char))
+        {
+            return Ok(local);
+        }
+        // An unresolved or abstract local carries no Display decision we
+        // can make here; leave it to the paths that specialize it rather
+        // than guessing a formatter for a type we cannot name.
+        if local_ty.is_infer() || local_ty.is_error() {
+            return Ok(local);
+        }
+        let spec = crate::lexer::token::FormatSpec::default();
+        let text = self.emit_display_to_string(Some(lid), &local_ty, &spec)?;
+        Ok(Some(text))
+    }
+
     pub(super) fn lower_fn_call(&mut self, expr: &HirExpr) -> Result<Option<LocalId>, String> {
         match &expr.kind {
             // ── Function call ───────────────────────────────────────
             HirExprKind::FnCall {
-                callee_name, args, ..
+                callee: callee_def,
+                callee_name,
+                args,
             } => {
                 // `super(...)` inside an `init` of a subclass: dispatch to the
                 // parent class's init, forwarding the child's `self` as the
@@ -27,25 +88,10 @@ impl<'a> Lowerer<'a> {
                         });
                         return Ok(None);
                     }
+                    // Resolve rejects `super` outside a subclass `init`
+                    // (E1127); reaching here means a shape it missed.
+                    return Err("`super` used outside the `init` of a subclass".to_string());
                 }
-
-                let mut arg_values = Vec::with_capacity(args.len());
-                for arg in args {
-                    // Auto-invoke bare zero-arg function references used as
-                    // arguments.  Ruxen allows calling a function without
-                    // parentheses (`puts greet` ≡ `puts greet()`), so when an
-                    // argument is an identifier that resolves to a zero-arg
-                    // function, synthesize the invocation rather than passing
-                    // the function address as a value.
-                    let local = self.lower_fn_arg(arg)?;
-                    arg_values.push(local_to_value(local));
-                }
-
-                let dest = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
-                    Some(self.new_temp(expr.ty.clone()))
-                } else {
-                    None
-                };
 
                 // #06.8 Phase 2: rewrite the callee to the C symbol when
                 // this call resolves to an FFI fn declared via
@@ -57,38 +103,103 @@ impl<'a> Lowerer<'a> {
                 // §B1 — every FFI-alias lookup routes through the
                 // single entry `lookup_ffi_alias` (see
                 // `mir/lower/mod.rs::lookup_ffi_alias`).
-                // Q17: redirect a call to an eligible generic free function
-                // to its monomorphic copy specialized for this call's
-                // concrete type arguments (`paint_all` → `paint_all__mono__
-                // TallySurface`), so a mixin-bound method inside the body
-                // dispatches on the concrete type instead of emitting the
-                // bound-placeholder callee (`T: Paintable_fill_rect`). Falls
-                // through to the FFI-alias / opaque path when no specialization
-                // was emitted for these type args (the single-implementor
-                // devirtualize case, or a non-generic callee). Checked before
-                // the FFI alias because a monomorphized user fn is never an
-                // FFI symbol.
+                // A function template reaches the instance bound from the
+                // call's argument types (`paint_all` → `paint_all__mono__
+                // TallySurface`). With no instance only an opaque body makes
+                // this call, so the callee is abstract and
+                // `prune_unmonomorphised_bodies` removes that body or reports
+                // it. Checked before the FFI alias: a template is never an FFI
+                // symbol.
                 let arg_tys: Vec<Ty> = args.iter().map(|a| a.ty.clone()).collect();
-                let callee = if let Some(mangled) = self.fn_mono_callee(callee_name, &arg_tys) {
+                let callee = if let Some(mangled) = self.fn_instance_callee(callee_name, &arg_tys) {
                     mangled
-                } else if self.generic_fn_unmonomorphizable(callee_name) {
-                    // An eligible generic fn whose opaque body is suppressed
-                    // (it could only emit bound-placeholder callees) was called
-                    // from a concrete context but its type args did not resolve
-                    // to a fully-concrete vector — so there is no monomorphic
-                    // copy to dispatch to and no opaque body to fall back on.
-                    // Surface a clear error rather than emit a dangling callee.
-                    return Err(format!(
-                        "cannot monomorphize generic function `{callee_name}`: its \
-                         mixin-bound type argument did not resolve to a concrete type at \
-                         this call site (a generic argument cannot itself be a type \
-                         parameter with no concrete leaf — see \
-                         docs/decisions/q17-cross-package-monomorphization.md)."
-                    ));
+                } else if self.is_template_fn(callee_name) {
+                    instances::abstract_callee("generic", callee_name)
                 } else {
                     self.lookup_ffi_alias(callee_name)
                         .unwrap_or_else(|| callee_name.clone())
                 };
+                // A slot-addressed `&var T` parameter takes the ADDRESS of the
+                // argument's storage (`mir::refmut_abi`), decided on the
+                // declared signature of the callee this call names.
+                let refmut_slots = crate::mir::lower::runtime_abi::user_callee_refmut_slot_params(
+                    self.symbols,
+                    &callee,
+                    Some(*callee_def),
+                    args.len(),
+                )?;
+
+                // Bare-literal zero-copy: a string literal passed DIRECTLY to a
+                // `&String` param (`puts "x"`, `f("x")`, no explicit `&`) lowers
+                // to the raw `.rodata` pointer instead of a heap-copied owned
+                // String, mirroring the explicit `&"x"` borrow. Sound because
+                // `user_callee_param_is_ref` reports a slot as a borrow ONLY when
+                // every candidate agrees it is an immutable `&`-param with no
+                // mutable out-channel (its escape gate), so the callee only reads
+                // the immortal `.rodata` and never frees or mutates it.
+                let param_is_ref = crate::mir::lower::runtime_abi::user_callee_param_is_ref(
+                    self.symbols,
+                    callee_name.as_str(),
+                    args.len(),
+                    None,
+                );
+                let mut arg_values = Vec::with_capacity(args.len());
+                for (slot, arg) in args.iter().enumerate() {
+                    if refmut_slots[slot] {
+                        let addr = self.lower_refmut_addr(arg)?;
+                        arg_values.push(local_to_value(addr));
+                        continue;
+                    }
+                    let local = if param_is_ref.get(slot).copied().unwrap_or(false) {
+                        if let HirExprKind::StringLiteral(s) = &arg.kind {
+                            Some(self.emit_raw_string_literal(s))
+                        } else {
+                            self.lower_fn_arg(arg)?
+                        }
+                    } else {
+                        // Auto-invoke bare zero-arg function references used as
+                        // arguments (`puts greet` is `puts greet()`), so an
+                        // identifier resolving to a zero-arg function is invoked
+                        // rather than passed as a function address.
+                        self.lower_fn_arg(arg)?
+                    };
+                    // B02: `puts x` must print `x`, not dereference it.
+                    //
+                    // The IO builtins take a `char*`. Typeck normally
+                    // converts a non-String argument through its universal
+                    // `to_s` before we get here, but that decision is made
+                    // on the HIR type, and the HIR type can be WRONG: an
+                    // unseeded block parameter (`arr.each { |x| puts(x) }`)
+                    // gets `&String` back-propagated onto it from `puts`'s
+                    // own signature while the symbol table says `Int`. The
+                    // conversion then correctly declines to fire on what it
+                    // believes is already a String, and a raw `Int` reaches
+                    // `ruxen_puts`, which reads address 1 as a `char*`.
+                    //
+                    // So re-decide it here against the MIR local's type,
+                    // which is the one codegen will actually use, and route
+                    // through the SAME Display ladder interpolation uses.
+                    // That is what makes `puts x` and `puts "#{x}"` agree by
+                    // construction rather than by two paths happening to
+                    // reach the same answer — they did not.
+                    //
+                    // String-typed arguments are untouched, so the bare
+                    // string-literal zero-copy above still reaches `puts`
+                    // as a `.rodata` pointer.
+                    let local = if self.is_io_text_builtin(callee_name, args.len()) {
+                        self.coerce_arg_to_display_text(local, arg)?
+                    } else {
+                        local
+                    };
+                    arg_values.push(local_to_value(local));
+                }
+
+                let dest = if expr.ty != Ty::Unit && expr.ty != Ty::Never {
+                    Some(self.new_temp(expr.ty.clone()))
+                } else {
+                    None
+                };
+
                 self.emit(MirInst::Call {
                     dest,
                     callee,

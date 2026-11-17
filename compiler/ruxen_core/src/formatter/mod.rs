@@ -13,7 +13,6 @@
 pub mod comments;
 pub mod doc;
 pub mod format_expr;
-pub mod format_imports;
 pub mod format_items;
 pub mod format_pattern;
 pub mod format_type;
@@ -26,7 +25,7 @@ use crate::diagnostics::Diagnostic;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 
-use comments::{CommentAttacher, CommentCollector};
+use comments::CommentAttacher;
 use doc::render;
 use format_items::format_program;
 
@@ -43,22 +42,9 @@ pub struct FormatResult {
     pub errors: Vec<Diagnostic>,
 }
 
-/// A byte range within a source file (for range formatting).
-#[derive(Debug, Clone)]
-pub struct TextRange {
-    pub start_line: u32,
-    pub start_column: u32,
-    pub end_line: u32,
-    pub end_column: u32,
-}
-
 /// Format a complete Ruxen source file.
 pub fn format(source: &str) -> FormatResult {
-    // 1. Collect comments from source text
-    let collector = CommentCollector::new(source);
-    let (raw_comments, fmt_off_ranges) = collector.collect();
-
-    // 2. Parse source to AST
+    // 1. Lex; the lexer also records every comment's span.
     let mut lexer = Lexer::new(source);
     let tokens = match lexer.tokenize() {
         Ok(tokens) => tokens,
@@ -72,6 +58,9 @@ pub fn format(source: &str) -> FormatResult {
         }
     };
 
+    let (raw_comments, fmt_off_ranges) = comments::classify_comments(source, lexer.comment_spans());
+
+    // 2. Parse source to AST
     let mut parser = Parser::new(tokens);
     let program = match parser.parse() {
         Ok(program) => program,
@@ -87,7 +76,8 @@ pub fn format(source: &str) -> FormatResult {
 
     // 3. Attach comments to AST nodes
     let node_spans = comments::collect_node_spans(&program);
-    let comment_map = CommentAttacher::attach(raw_comments, &node_spans, fmt_off_ranges);
+    let mut comment_map = CommentAttacher::attach(raw_comments, &node_spans, fmt_off_ranges);
+    comment_map.lines = comments::source_lines(source);
 
     // 4. Check for fmt: off covering the entire file
     if comment_map.is_fmt_off(0)
@@ -105,6 +95,26 @@ pub fn format(source: &str) -> FormatResult {
 
     // 5. Convert AST + comments to Doc IR
     let doc = format_program(&program, &comment_map);
+
+    // A comment the formatter did not place would vanish from the output.
+    // Leave the file untouched and say where, rather than delete it.
+    let dropped = comment_map.dropped();
+    if !dropped.is_empty() {
+        return FormatResult {
+            output: source.to_string(),
+            changed: false,
+            errors: dropped
+                .into_iter()
+                .map(|span| {
+                    Diagnostic::error(
+                        "ruxen fmt cannot place this comment, so the file was left unchanged \
+                         (formatter bug: please report it)",
+                        span.clone(),
+                    )
+                })
+                .collect(),
+        };
+    }
 
     // 6. Render Doc IR to String
     let mut output = render(&doc);
@@ -127,12 +137,6 @@ pub fn format(source: &str) -> FormatResult {
     }
 }
 
-/// Format a range within a Ruxen source file (for LSP rangeFormatting).
-pub fn format_range(source: &str, _range: TextRange) -> FormatResult {
-    // For now, format the entire file. Range formatting can be refined later.
-    format(source)
-}
-
 /// Receiver mode for [`render_fn_signature`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SigSelf {
@@ -146,18 +150,17 @@ pub enum SigSelf {
     Consuming,
 }
 
-/// Canonical single-line `def` signature, shared by `ruxen fmt` conventions
-/// and IDE display (hover, signature help) so the three never drift.
-///
-/// Mirrors `format_func_def`'s structural rules exactly:
+/// Canonical single-line `def` signature for IDE display (hover, signature
+/// help, completion). Built from the same `signature_doc` parts as
+/// `format_func_def`, so it cannot drift from `ruxen fmt`:
 /// - no parameters → no parens (`def f`, never `def f()`)
 /// - generics rendered as `[A, B]`
 /// - `var` / `consume` self-mode prefixes; class methods get a `self.` marker
 /// - return type appended as ` -> T` when `Some` (callers pass `None` to omit,
 ///   e.g. for a `Unit` return)
 ///
-/// Pure string assembly — callers supply already-rendered type strings, so the
-/// formatter takes no dependency on the resolver's `Ty`.
+/// Callers supply already-rendered type strings, so the formatter takes no
+/// dependency on the resolver's `Ty`.
 pub fn render_fn_signature(
     name: &str,
     self_mode: SigSelf,
@@ -166,37 +169,30 @@ pub fn render_fn_signature(
     params: &[(String, String)],
     return_ty: Option<&str>,
 ) -> String {
-    let mut s = String::from("def ");
-    match self_mode {
-        SigSelf::RefMut => s.push_str("var "),
-        SigSelf::Consuming => s.push_str("consume "),
-        SigSelf::None | SigSelf::Ref => {}
-    }
-    if is_class_method {
-        s.push_str("self.");
-    }
-    s.push_str(name);
-    if !generics.is_empty() {
-        s.push('[');
-        s.push_str(&generics.join(", "));
-        s.push(']');
-    }
-    if !params.is_empty() {
-        s.push('(');
-        s.push_str(
-            &params
-                .iter()
-                .map(|(n, t)| format!("{n}: {t}"))
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
-        s.push(')');
-    }
-    if let Some(rt) = return_ty {
-        s.push_str(" -> ");
-        s.push_str(rt);
-    }
-    s
+    use crate::parser::ast::SelfMode;
+    use doc::{concat, text};
+
+    let self_mode = match self_mode {
+        SigSelf::None => None,
+        SigSelf::Ref => Some(SelfMode::Immutable),
+        SigSelf::RefMut => Some(SelfMode::Mutable),
+        SigSelf::Consuming => Some(SelfMode::Consuming),
+    };
+    let generics = (!generics.is_empty()).then(|| text(format!("[{}]", generics.join(", "))));
+    let params = params
+        .iter()
+        .map(|(n, t)| text(format!("{n}: {t}")))
+        .collect();
+    let parts = format_items::signature_doc(
+        false,
+        self_mode,
+        is_class_method,
+        name,
+        generics,
+        params,
+        return_ty.map(text),
+    );
+    doc::print_doc(&concat(parts), i32::MAX)
 }
 
 // ─── Post-processing ────────────────────────────────────────────────

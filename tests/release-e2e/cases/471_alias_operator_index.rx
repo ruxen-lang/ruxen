@@ -1,0 +1,22 @@
+# Alias follow-up: index read and write aliases dispatch to the canonical get
+# and set bodies on a nominal receiver.
+class Slot
+  value: Int
+  def init
+    self.value = 0
+  end
+  def get(index: Int) -> Int
+    self.value
+  end
+  def set(index: Int, value: Int) -> nil
+    self.value = value
+  end
+  alias [] get
+  alias []= set
+end
+
+def main
+  let slot = Slot.new
+  slot[0] = 47
+  puts "indexed=#{slot[0]}"
+end

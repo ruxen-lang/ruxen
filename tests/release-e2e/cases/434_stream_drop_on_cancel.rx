@@ -1,0 +1,81 @@
+## Feature #5 Increment 3 (spec §4.5) — LEAK-FREE DROP-ON-CANCEL mid-stream: a
+## source stream OWNS a C-side resource (here a `state_ptr`, standing in for a
+## reactor registration / fd) and releases it in `def drop`. When the consumer
+## stops pulling MID-STREAM and the stream goes out of scope, the source's
+## `def drop` fires EXACTLY ONCE — leak-free teardown by ownership, no GC.
+##
+## `ResourceStream` is UNBOUNDED (it yields forever). `pull_some` drives it a
+## FIXED number of times via the reactor-aware poll loop (a free-fn driver
+## taking `&var` so the stream is not consumed/moved), then returns — leaving
+## the stream PARTIALLY consumed (mid-iteration, `n == 2`, never exhausted). At
+## `main` scope exit `src` drops, firing `ruxen_stream_res_free` → `res freed
+## tag=7` prints once. Proves: a partially-drained stream releases its owned
+## resource on drop, no leak, no double-free.
+##
+## v1 DRIVER NOTE: the drive is a free fn taking `&var ResourceStream`, NOT the
+## mixin's `for_each` method. Calling a `&var self` mixin method (`src.for_each`)
+## directly on a local taints it OUT of drop-elaboration (the conservative-
+## dealloc limit Scope/Queue also hit), suppressing the scope-exit drop; passing
+## the stream by explicit `&var` borrow to a driver does NOT taint it. So the
+## leak-free-on-cancel guarantee holds for the borrow-driver path; the
+## `for_each`-then-drop path is the drop-rooting follow-up (a v2 item, same as
+## the other concurrency features).
+
+class ResourceStream
+  state_ptr: Int
+  n: Int
+  include Stream
+  type Item = Int
+
+  def init(tag: Int)
+    self.state_ptr = ruxen_stream_res_new(tag)
+    self.n = 0
+  end
+
+  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
+    self.n = self.n + 1
+    Poll.Ready(Some(self.n))
+  end
+
+  def drop
+    if self.state_ptr != 0
+      ruxen_stream_res_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end
+
+## Pull `count` elements off the stream via the reactor-aware poll loop, printing
+## each. Takes the stream by `&var` borrow (does NOT consume it), so the caller's
+## `src` still drops at scope exit.
+def pull_some(s: &var ResourceStream, count: Int) -> nil
+  var cx = Context.executor
+  var pulled = 0
+  while pulled < count
+    match (&var s).poll_next(&var cx)
+      Poll.Ready(item) ->
+        match item
+          Some(v) -> puts "got #{v}"
+          nil     -> pulled = count
+        end
+      Poll.Pending -> Scope.pump_or_park
+    end
+    pulled = pulled + 1
+  end
+  nil
+end
+
+def main
+  puts "stream start"
+  var src = ResourceStream.new(7)
+  pull_some(&var src, 2)
+  puts "cancelled mid-stream"
+  puts "stream done"
+end
+
+## A tiny C resource so the source's `def drop` has an observable, free-tracked
+## side effect (`res freed tag=N`).
+lib "runtime/stream.c"
+  def ruxen_stream_res_new(tag: Int) -> Int
+  def ruxen_stream_res_free(state_ptr: Int) -> nil
+end

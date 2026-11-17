@@ -24,7 +24,7 @@ impl<'a> Lowerer<'a> {
                 // Let-binding the cast first hid the bug because the `let`'s
                 // declared type forced the widening Assign coercion — do the
                 // same here by binding into a fresh target-typed local. (We
-                // intentionally reuse the existing Assign `coerce_value` path,
+                // intentionally reuse the Assign conversion (`mir::coercion`),
                 // so signedness behaviour matches let-bound casts exactly.)
                 // Types are already resolved by typeck's finalisation pass,
                 // so `target` and the inner's type are concrete here.
@@ -32,34 +32,13 @@ impl<'a> Lowerer<'a> {
                 // Re-materialise for any NUMERIC→NUMERIC cast — int↔int width
                 // changes (Bug B) and, since Q5, int↔float / float↔int /
                 // float↔float conversions too. Binding into a target-typed
-                // local routes the value through the Assign `coerce_value`
-                // path, which now emits the right instruction for each pair:
+                // local routes the value through the Assign conversion
+                // (`mir::coercion`), which emits the right instruction for each pair:
                 // `ireduce`/`extend` (int↔int), `fdemote`/`fpromote`
                 // (float↔float), and `fcvt_from_*`/`fcvt_to_*_sat` (int↔float,
                 // signedness-correct per direction). Non-numeric casts (e.g.
                 // reference reinterpret) stay pass-through.
-                let is_int_like = |ty: &Ty| {
-                    matches!(
-                        ty,
-                        Ty::Int
-                            | Ty::Int8
-                            | Ty::Int16
-                            | Ty::Int32
-                            | Ty::Int64
-                            | Ty::UInt
-                            | Ty::UInt8
-                            | Ty::UInt16
-                            | Ty::UInt32
-                            | Ty::UInt64
-                            | Ty::ISize
-                            | Ty::USize
-                            | Ty::Bool
-                            | Ty::Char
-                    )
-                };
-                let is_float_like = |ty: &Ty| matches!(ty, Ty::Float | Ty::Float32 | Ty::Float64);
-                let is_numeric = |ty: &Ty| is_int_like(ty) || is_float_like(ty);
-                if !is_numeric(&resolved_target) || !is_numeric(&inner.ty) {
+                if !resolved_target.is_scalar_primitive() || !inner.ty.is_scalar_primitive() {
                     return Ok(Some(src));
                 }
                 let dest = self.new_temp(resolved_target);
@@ -113,14 +92,16 @@ impl<'a> Lowerer<'a> {
                         self.current_block = dead;
                         Ok(None)
                     }
-                    // ruby-naming.spec.md §10a: the collection macros
-                    // are retired. Spell `array!` / `vec!` as `[…]`,
-                    // `map!` / `hash!` as `{ k => v, … }`, and `set!`
-                    // as `Set.from_iter([…])`.
-                    "array" | "vec" | "map" | "hash" | "set" => Err(format!(
-                        "macro `{name}!` is retired — use the literal form per ruby-naming.spec §10a"
+                    // B87: this catch-all used to be `Ok(None)`, which lowered
+                    // an unrecognised macro to NOTHING — the call vanished
+                    // from the program with no diagnostic anywhere. Resolve
+                    // now rejects unregistered macro names (E1126), so
+                    // reaching here means a name was added to
+                    // `parser::macros::BUILTIN_MACRO_NAMES` without a lowering
+                    // arm above. Fail loudly rather than miscompile.
+                    _ => Err(format!(
+                        "macro `{name}!` is registered as a built-in but has no MIR lowering"
                     )),
-                    _ => Ok(None),
                 }
             }
 

@@ -39,15 +39,600 @@
 ## The parity guard `tests/runtime_abi_derivation.rs` pins every derived
 ## width against the frozen `runtime_signature` table.
 class Int
+  ## A scalar is copied by value, so its copy is itself (as Ruby's
+  ## `clone` on an immediate value); a `where T: Clone` body reaches it.
+  def clone -> Self
+    self
+  end
+
   # `Add` capability: Int elements can be `sum`med (receiver-element
   # bound on `Array[T].sum where T: Add`). Nominal opt-in — the bound
   # check requires an explicit `include`.
   include Add
 
   lib "../../string/runtime/string.c"
-    def to_string as "ruxen_int_to_string" -> String
     def to_s as "ruxen_int_to_string" -> String
     def to_f as "ruxen_int_to_f" -> Float
+  end
+  alias to_string to_s
+
+  # Ruby `inspect` (`Inspect`, std/core): the display form, what `p` prints.
+  include Inspect
+
+  # Ruby `Integer#hash` (`Hashable`): an Int hashes to itself, the same
+  # contribution an Int field makes to a derived `hash_code`. This is the
+  # body a `[T: Hashable]` generic calls when `T` is `Int`.
+  def hash_code -> Int
+    0 + self
+  end
+
+  # Ruby `Integer#times` — yield 0, 1, …, self - 1 in order. The counter
+  # `i` is a machine `Int` (from the `0` literal), so its arithmetic uses
+  # the primitive floor; only `i < self` touches `self`, and comparison
+  # falls back to a primitive compare. (`upto`/`downto` are a follow-up:
+  # they need `self` itself in arithmetic, but a scalar method-home `self`
+  # is typed nominally as `Class[Int]`, which does not yet flow into the
+  # primitive `+`/`-` floor.)
+  def times(f: Fn(Int) -> nil) -> nil
+    var i = 0
+    while i < self
+      f.(i)
+      i = i + 1
+    end
+  end
+
+  ## ------------------------------------------------------------------
+  ## Ruby `Integer` surface (batches B12 / B13 / B14).
+  ##
+  ## Two rules govern every body below.
+  ##
+  ## 1. **Rebox `self` before arithmetic.** A scalar method-home `self` is
+  ##    typed nominally (`Class[Int]`), so `self + 1` / `self % 2` emit a
+  ##    call to a nonexistent `Int_+` / `Int_%` and link-fail. `self` on the
+  ##    RIGHT of a primitive left operand does reach the machine floor, so
+  ##    `let n = 0 + self` produces a plain machine `Int` that composes
+  ##    freely. Comparisons (`self < 0`) work unreboxed.
+  ## 2. **`Int` is i64, not a Bignum.** Ruby promotes on overflow; Ruxen
+  ##    wraps (verified: `9223372036854775807 + 1` is `-9223372036854775808`).
+  ##    Every method whose Ruby answer can exceed the i64 range is marked
+  ##    PARTIAL in `docs/ruby-parity/core.md` for that reason alone.
+  ##
+  ## Division by zero traps in hardware, exactly as the bare `/` operator
+  ## does; Ruby raises `ZeroDivisionError`. Ruxen has no `raise` yet
+  ## (queued as B30), so the domain errors Ruby raises are documented per
+  ## method as a total-function fallback instead.
+
+  # Ruby `Integer#abs` — the magnitude. `(-2**63).abs` wraps to itself
+  # (i64 has no positive counterpart for its minimum), as everywhere else.
+  def abs -> Int
+    let n = 0 + self
+    if n < 0
+      0 - n
+    else
+      n
+    end
+  end
+
+  # Ruby `Integer#magnitude` — the documented synonym for `abs`.
+  alias magnitude abs
+
+  # Ruby `Integer#even?` / `#odd?`. The machine `%` truncates, so a
+  # negative odd receiver yields `-1`, which is still `!= 0`; both
+  # predicates are therefore sign-correct without a floored remainder.
+  def even? -> Bool
+    let n = 0 + self
+    n % 2 == 0
+  end
+
+  def odd? -> Bool
+    let n = 0 + self
+    n % 2 != 0
+  end
+
+  def zero? -> Bool
+    self == 0
+  end
+
+  def positive? -> Bool
+    self > 0
+  end
+
+  def negative? -> Bool
+    self < 0
+  end
+
+  # Ruby `Integer#integer?` — always true; it exists so numeric code can
+  # branch without a type test.
+  def integer? -> Bool
+    true
+  end
+
+  def succ -> Int
+    let n = 0 + self
+    n + 1
+  end
+
+  # Ruby `Integer#next` — the documented synonym for `succ`.
+  alias next succ
+
+  def pred -> Int
+    let n = 0 + self
+    n - 1
+  end
+
+  # Ruby `Comparable#clamp(min, max)`. Ruby raises `ArgumentError` when
+  # `low > high`; with no `raise` this returns `low` for that inverted
+  # range (the `n < low` arm wins).
+  def clamp(low: Int, high: Int) -> Int
+    let n = 0 + self
+    if n < low
+      low
+    elsif n > high
+      high
+    else
+      n
+    end
+  end
+
+  # Ruby `Comparable#between?(min, max)` — inclusive on both ends.
+  def between?(low: Int, high: Int) -> Bool
+    self >= low && self <= high
+  end
+
+  # Ruby `Integer#truncate(ndigits = 0)` — round toward zero at the
+  # `10 ** -ndigits` place. A non-negative `ndigits` is the identity (an
+  # Integer has no fractional digits to drop).
+  #
+  # `ndigits <= -19` is beyond the i64 range: Ruby answers with a Bignum
+  # (or 0), Ruxen answers 0. Recorded PARTIAL in the matrix.
+  def truncate(ndigits: Int = 0) -> Int
+    let n = 0 + self
+    let m = self.rounding_unit(ndigits)
+    if m == 1
+      n
+    elsif m == 0
+      0
+    else
+      (n / m) * m
+    end
+  end
+
+  # Ruby `Integer#floor(ndigits = 0)` — round toward negative infinity.
+  # `-25.floor(-1)` is `-30`, not `-20`.
+  def floor(ndigits: Int = 0) -> Int
+    let n = 0 + self
+    let m = self.rounding_unit(ndigits)
+    if m == 1
+      n
+    elsif m == 0
+      0
+    else
+      var q = n / m
+      if n < 0 && n % m != 0
+        q = q - 1
+      end
+      q * m
+    end
+  end
+
+  # Ruby `Integer#ceil(ndigits = 0)` — round toward positive infinity.
+  # `25.ceil(-1)` is `30`, `-25.ceil(-1)` is `-20`.
+  def ceil(ndigits: Int = 0) -> Int
+    let n = 0 + self
+    let m = self.rounding_unit(ndigits)
+    if m == 1
+      n
+    elsif m == 0
+      0
+    else
+      var q = n / m
+      if n > 0 && n % m != 0
+        q = q + 1
+      end
+      q * m
+    end
+  end
+
+  # Ruby `Integer#round(ndigits = 0)` — half away from zero, matching
+  # CRuby's default (`25.round(-1) == 30`, `-25.round(-1) == -30`).
+  # The magnitude is rounded and the sign reapplied, so the two halves
+  # stay symmetric.
+  #
+  # The half is detected as `rest * 2 >= m` rather than by rounding
+  # `a + m / 2`: that sum overflows i64 for a receiver near the maximum
+  # (`(2**63 - 1).round(-18)`), whereas `rest < m <= 10 ** 18` keeps
+  # `rest * 2` inside the range.
+  def round(ndigits: Int = 0) -> Int
+    let n = 0 + self
+    let m = self.rounding_unit(ndigits)
+    if m == 1
+      n
+    elsif m == 0
+      0
+    else
+      var a = n
+      if a < 0
+        a = 0 - a
+      end
+      var q = a / m
+      let rest = a % m
+      if rest * 2 >= m
+        q = q + 1
+      end
+      if n < 0
+        0 - (q * m)
+      else
+        q * m
+      end
+    end
+  end
+
+  ## --- B13: arithmetic and number theory -----------------------------
+
+  # Ruby `Integer#div` — FLOORED integer division (toward negative
+  # infinity), which is NOT the machine `/` (that truncates toward zero,
+  # C style). `-7.div(2)` is `-4` where `-7 / 2` is `-3`.
+  def div(n: Int) -> Int
+    let a = 0 + self
+    var q = a / n
+    if a % n != 0 && ((a < 0 && n > 0) || (a > 0 && n < 0))
+      q = q - 1
+    end
+    q
+  end
+
+  # Ruby `Integer#modulo` (the semantics of Ruby's `%` operator) — the
+  # remainder takes the sign of the DIVISOR: `-7.modulo(2) == 1`,
+  # `7.modulo(-2) == -1`. Ruxen's `%` operator keeps the C truncating
+  # remainder, so the two differ for mixed signs on purpose.
+  def modulo(n: Int) -> Int
+    let a = 0 + self
+    var r = a % n
+    if r != 0 && ((r < 0 && n > 0) || (r > 0 && n < 0))
+      r = r + n
+    end
+    r
+  end
+
+  # Ruby `Integer#remainder` — the TRUNCATED remainder, taking the sign of
+  # the DIVIDEND: `-7.remainder(2) == -1`. This is the machine `%`.
+  def remainder(n: Int) -> Int
+    let a = 0 + self
+    a % n
+  end
+
+  # Ruby `Integer#divmod` — `[quotient, modulus]` under the floored
+  # convention, so `q * n + r == self` always holds.
+  def divmod(n: Int) -> Array[Int]
+    [self.div(n), self.modulo(n)]
+  end
+
+  # Ruby `Integer#fdiv` — floating-point division of the two operands.
+  def fdiv(n: Int) -> Float
+    let a = 0 + self
+    a.to_f / n.to_f
+  end
+
+  # Ruby `Integer#gcd` — the greatest common divisor, always
+  # non-negative. `0.gcd(0)` is `0`; `(-4).gcd(6)` is `2`.
+  def gcd(n: Int) -> Int
+    var a = self.abs
+    var b = n.abs
+    while b != 0
+      let t = a % b
+      a = b
+      b = t
+    end
+    a
+  end
+
+  # Ruby `Integer#lcm` — the least common multiple, always non-negative.
+  # `0.lcm(5)` is `0`. Divides before multiplying to hold off overflow.
+  def lcm(n: Int) -> Int
+    let a = self.abs
+    let b = n.abs
+    if a == 0 || b == 0
+      0
+    else
+      (a / self.gcd(n)) * b
+    end
+  end
+
+  # Ruby `Integer#gcdlcm` — `[gcd, lcm]`.
+  def gcdlcm(n: Int) -> Array[Int]
+    [self.gcd(n), self.lcm(n)]
+  end
+
+  # Ruby `Integer#pow(exp)` — binary exponentiation (the `**` value).
+  #
+  # A NEGATIVE exponent is a `Rational` in Ruby (`2.pow(-1) == (1/2)`).
+  # Ruxen has no `Rational`, so the integer truncation of that value is
+  # returned: `0` for `|base| > 1`, `1` for base `1`, `1`/`-1` for base
+  # `-1` by the parity of `exp`, and `0` for base `0` (Ruby raises
+  # `ZeroDivisionError` there). Recorded PARTIAL in the matrix.
+  #
+  # This arity is a REAL second method rather than a `mod = 0` default:
+  # omitting a defaulted parameter on a scalar head only lowers when the
+  # call passes NO arguments at all, so `2.pow(10)` against a
+  # `pow(exp, mod = 0)` signature type-checks and then fails codegen with
+  # "mismatched argument count". See `docs/ruby-parity/QUEUE.md`.
+  def pow(exp: Int) -> Int
+    let base = 0 + self
+    if exp < 0
+      if base == 1
+        1
+      elsif base == -1
+        if exp % 2 == 0
+          1
+        else
+          -1
+        end
+      else
+        0
+      end
+    else
+      var result = 1
+      var b = base
+      var e = exp
+      while e > 0
+        if e % 2 == 1
+          result = result * b
+        end
+        b = b * b
+        e = e / 2
+      end
+      result
+    end
+  end
+
+  # Ruby `Integer#pow(exp, mod)` — modular exponentiation. The result
+  # carries the sign convention of `modulo` (Ruby's `%`), so
+  # `(-2).pow(3, 5)` is `2`, not `-3`.
+  #
+  # Exact only while `mod * mod` fits in i64 (`|mod| < 3037000500`); past
+  # that the intermediate square wraps. A negative `exp` needs a modular
+  # inverse (Ruby 2.5+ supports it); this returns `0` instead and the
+  # matrix row records it. `mod == 0` traps on the division, which is the
+  # same shape as Ruby raising `ZeroDivisionError` there.
+  def pow(exp: Int, mod: Int) -> Int
+    let base = 0 + self
+    if exp < 0
+      0
+    else
+      var result = 1.modulo(mod)
+      var b = base.modulo(mod)
+      var e = exp
+      while e > 0
+        if e % 2 == 1
+          result = (result * b).modulo(mod)
+        end
+        b = (b * b).modulo(mod)
+        e = e / 2
+      end
+      result
+    end
+  end
+
+  # Ruby `Integer#bit_length` — the number of bits in the two's-complement
+  # representation excluding the sign bit: `255.bit_length == 8`,
+  # `256.bit_length == 9`, `0.bit_length == 0`, `(-256).bit_length == 8`.
+  # A negative receiver is complemented first (`~n`), which is exactly the
+  # "number of bits differing from the sign bit" definition.
+  def bit_length -> Int
+    let n = 0 + self
+    var v = n
+    if v < 0
+      v = ~v
+    end
+    var count = 0
+    while v > 0
+      v = v >> 1
+      count = count + 1
+    end
+    count
+  end
+
+  # Ruby `Integer#bit(i)` is spelled `Integer#[]` in Ruby — the bit at
+  # position `i`, with infinite sign extension (`(-1).bit(100) == 1`).
+  # The `[]` SPELLING is not available: index expressions on a scalar head
+  # do not route to an `.rx` `def []` (recorded in the matrix).
+  def bit(i: Int) -> Int
+    let n = 0 + self
+    if i < 0
+      0
+    elsif i > 63
+      if n < 0
+        1
+      else
+        0
+      end
+    else
+      (n >> i) & 1
+    end
+  end
+
+  # Ruby `Integer#digits(base = 10)` — the digits LEAST significant first:
+  # `1234.digits == [4, 3, 2, 1]`. `0.digits` is `[0]`.
+  #
+  # Ruby raises `Math::DomainError` for a negative receiver and
+  # `ArgumentError` for `base < 2`; with no `raise` yet both return an
+  # EMPTY array here, which no valid input can produce.
+  def digits(base: Int = 10) -> Array[Int]
+    var out: Array[Int] = []
+    let n = 0 + self
+    if n < 0 || base < 2
+      out
+    elsif n == 0
+      out.push(0)
+      out
+    else
+      var v = n
+      while v > 0
+        out.push(v % base)
+        v = v / base
+      end
+      out
+    end
+  end
+
+  # Ruby `Integer.sqrt(n)` — the integer square root, i.e. the floor of
+  # the real square root, by Newton's method. Ruby raises
+  # `Math::DomainError` for a negative argument; this returns `0`.
+  # Ruby spells the receiver `Integer`; Ruxen's type is `Int`, so the
+  # call is `Int.sqrt(n)`.
+  #
+  # The seed is `1 << ((bit_length + 1) / 2)`, which is at least the true
+  # root and at most twice it. Seeding with `n` itself (the textbook
+  # version) makes the FIRST Newton step compute `n + n / n`, which
+  # overflows i64 for a receiver near the maximum and sends the iteration
+  # negative; this seed keeps every intermediate near the root.
+  def self.sqrt(n: Int) -> Int
+    if n <= 0
+      0
+    elsif n < 4
+      1
+    else
+      let shift = (n.bit_length + 1) / 2
+      var x = 1 << shift
+      var y = (x + n / x) / 2
+      while y < x
+        x = y
+        y = (x + n / x) / 2
+      end
+      x
+    end
+  end
+
+  ## --- B14: iteration and base conversion ----------------------------
+
+  # Ruby `Integer#upto(limit)` — yield `self, self+1, …, limit`. An empty
+  # range (`limit < self`) yields nothing.
+  def upto(limit: Int, &block: Fn[(Int) -> nil]) -> nil
+    var i = 0 + self
+    while i <= limit
+      yield i
+      i = i + 1
+    end
+  end
+
+  # Ruby `Integer#downto(limit)` — yield `self, self-1, …, limit`. An
+  # empty range (`limit > self`) yields nothing.
+  def downto(limit: Int, &block: Fn[(Int) -> nil]) -> nil
+    var i = 0 + self
+    while i >= limit
+      yield i
+      i = i - 1
+    end
+  end
+
+  # Ruby `Integer#step(limit, step = 1)` — yield `self`, `self + step`, …
+  # while the value has not passed `limit`. A negative step counts down.
+  # Ruby raises `ArgumentError` for `step == 0` (an infinite sequence);
+  # with no `raise` that case yields nothing rather than hanging.
+  def step(limit: Int, by: Int, &block: Fn[(Int) -> nil]) -> nil
+    var i = 0 + self
+    if by > 0
+      while i <= limit
+        yield i
+        i = i + by
+      end
+    elsif by < 0
+      while i >= limit
+        yield i
+        i = i + by
+      end
+    end
+  end
+
+  # Ruby `Integer#step(limit)` — the one-argument form, stepping by 1.
+  # A default argument cannot carry this arity: a defaulted parameter
+  # followed by a `&block` parameter is not filled at the call site
+  # (`1.step(4)` reports "no method `step` on type `Int`"), so the two
+  # arities are two real methods.
+  def step(limit: Int, &block: Fn[(Int) -> nil]) -> nil
+    var i = 0 + self
+    while i <= limit
+      yield i
+      i = i + 1
+    end
+  end
+
+  # Ruby `Integer#to_s(base)` — the digits of `self` in `base`, using
+  # `0-9a-z`, with a leading `-` for a negative receiver. The no-argument
+  # `to_s` stays the C fast path (`ruxen_int_to_string`, declared above);
+  # this arity-1 overload is the base-conversion form.
+  #
+  # The accumulator runs NEGATIVE (`v <= 0`) so that `-2**63` converts
+  # correctly: negating it first would wrap back to itself.
+  #
+  # Ruby raises `ArgumentError` for a base outside 2..36; with no `raise`
+  # an out-of-range base falls back to 10.
+  def to_s(base: Int) -> String
+    let n = 0 + self
+    var b = base
+    if b < 2 || b > 36
+      b = 10
+    end
+    if n == 0
+      "0"
+    else
+      let alphabet = "0123456789abcdefghijklmnopqrstuvwxyz".chars
+      var v = n
+      if v > 0
+        v = 0 - v
+      end
+      var out = ""
+      while v < 0
+        let d = 0 - (v % b)
+        out = "#{alphabet[d]}" + out
+        v = v / b
+      end
+      if n < 0
+        "-" + out
+      else
+        out
+      end
+    end
+  end
+
+  # Ruby `Integer#to_i` / `#to_int` — the identity on an Integer.
+  def to_i -> Int
+    0 + self
+  end
+
+  alias to_int to_i
+
+  # Ruby `Integer#ord` — an Integer is its own codepoint.
+  def ord -> Int
+    0 + self
+  end
+
+  # Ruby `Integer#chr` — the character with this codepoint. Ruby returns a
+  # one-character String and raises `RangeError` outside 0..255; Ruxen has
+  # a real `Char` type, so the codepoint is returned as a `Char` (the
+  # caller interpolates it to get a String).
+  def chr -> Char
+    let n = 0 + self
+    n as Char
+  end
+
+  # Private helper of the rounding family. A method, not a top-level
+  # function, so a user `def rounding_unit` cannot shadow it.
+  private
+
+  # The `10 ** -ndigits` unit `Int`'s rounding family (`truncate` / `floor` /
+  # `ceil` / `round`) works at: 1 for a non-negative `ndigits` (an Integer has
+  # no fractional digits, so they are the identity) and 0 past the i64 range
+  # (`ndigits <= -19`), which each of them answers with 0.
+  def rounding_unit(ndigits: Int) -> Int
+    let k = 0 - ndigits
+    if k <= 0
+      1
+    elsif k > 18
+      0
+    else
+      10.pow(k)
+    end
   end
 end
 
@@ -69,36 +654,212 @@ end
 ## The parity guard `tests/runtime_abi_derivation.rs` pins every derived
 ## width against the frozen `runtime_signature` table.
 class Float
+  ## A scalar is copied by value, so its copy is itself (as Ruby's
+  ## `clone` on an immediate value); a `where T: Clone` body reaches it.
+  def clone -> Self
+    self
+  end
+
   # `Add` capability — see `class Int`.
   include Add
 
   lib "../../string/runtime/string.c"
-    def to_string as "ruxen_float_to_string" -> String
     def to_s as "ruxen_float_to_string" -> String
     def to_i as "ruxen_float_to_i" -> Int
+  end
+  alias to_string to_s
+
+  # Ruby `inspect` (`Inspect`, std/core): the display form, what `p` prints.
+  include Inspect
+
+  # Overrides the `Inspect` default only to rebox `self`: here `self` is
+  # typed `Class[Float]` and travels as an i64 word, so the default's
+  # `self.to_s` would convert the raw bits to a double (`2.5` printed as
+  # `4.61281e+18`). `0.0 + self` yields the machine `Float` first.
+  def inspect -> String
+    let x = 0.0 + self
+    x.to_s
   end
 end
 
 class Bool
+  ## A scalar is copied by value, so its copy is itself (as Ruby's
+  ## `clone` on an immediate value); a `where T: Clone` body reaches it.
+  def clone -> Self
+    self
+  end
+
   lib "../../string/runtime/string.c"
-    def to_string as "ruxen_bool_to_string" -> String
     def to_s as "ruxen_bool_to_string" -> String
+  end
+  alias to_string to_s
+
+  # Ruby `inspect` (`Inspect`, std/core): the display form, what `p` prints.
+  include Inspect
+
+  ## Ruby's `TrueClass` / `FalseClass` operators — `&`, `|`, `^` and `!` —
+  ## are ALREADY the machine operators on a `Bool` operand, and they are
+  ## non-short-circuiting there just as they are in Ruby (`&&` / `||` are
+  ## the short-circuiting pair in both languages). Pin 1171 exercises all
+  ## four; there is nothing to add in `.rx` for them, and adding a `def &`
+  ## here would be dead code because the builtin-head operator route
+  ## covers `String` / `Array` / `Hash` / `Set` receivers only.
+
+  # Ruby has no `true.to_i`, but every Ruxen scalar carries one and the
+  # 1/0 mapping is what a Ruby developer writes by hand
+  # (`flag ? 1 : 0`). The cast is total: `Bool` is a 0/1 byte.
+  def to_i -> Int
+    self as Int
   end
 end
 
 class Char
+  ## A scalar is copied by value, so its copy is itself (as Ruby's
+  ## `clone` on an immediate value); a `where T: Clone` body reaches it.
+  def clone -> Self
+    self
+  end
+
   lib "../../string/runtime/string.c"
     def to_s as "ruxen_char_to_string" -> String
-    def to_string as "ruxen_char_to_string" -> String
   end
+  alias to_string to_s
+
+  # Ruby `inspect` (`Inspect`, std/core): the display form, what `p` prints.
+  include Inspect
+
+  ## Ruby's `Char` surface (batch B18). Ruby has no `Char` class at all —
+  ## a one-character string is a `String` — so each method below is the
+  ## `String` method a Ruby developer would call on `str[0]`, applied to
+  ## Ruxen's real `Char`.
+  ##
+  ## `self` composes fine here: a `Char` receiver compares directly
+  ## against char literals (`self >= ?0`), and `self as Int` gives the
+  ## codepoint, so no reboxing dance is needed (unlike `class Int`).
+  ##
+  ## Every classification below is ASCII-only, which is the range
+  ## `String#chars` bodies in this stdlib work over. A non-ASCII
+  ## codepoint answers `false` to every predicate and is returned
+  ## unchanged by `upcase` / `downcase`.
+
+  # Ruby `String#ord` — the codepoint.
+  def ord -> Int
+    self as Int
+  end
+
+  # Ruby `String#to_i` on a one-character string — the DIGIT value, not
+  # the codepoint: `"7".to_i == 7`, and a non-digit is `0`. Use `ord` for
+  # the codepoint (`"7".ord == 55`).
+  def to_i -> Int
+    let n: Int = self as Int
+    if self >= ?0 && self <= ?9
+      n - 48
+    else
+      0
+    end
+  end
+
+  # Ruby `String#chr` — the first character of the receiver, which for a
+  # single `Char` is the receiver itself. It round-trips through the
+  # codepoint because a bare `self` body is the FFI-shell `Char` type,
+  # which does not satisfy a `-> Char` return (`type mismatch: expected
+  # Char, found Char`) — the same shell-vs-value split `class String`
+  # bodies hit.
+  def chr -> Char
+    let n: Int = self as Int
+    n as Char
+  end
+
+  # Ruby `String#upcase` / `#downcase`, ASCII range only.
+  def upcase -> Char
+    let n: Int = self as Int
+    if self >= ?a && self <= ?z
+      (n - 32) as Char
+    else
+      n as Char
+    end
+  end
+
+  def downcase -> Char
+    let n: Int = self as Int
+    if self >= ?A && self <= ?Z
+      (n + 32) as Char
+    else
+      n as Char
+    end
+  end
+
+  # Ruby's `/[[:digit:]]/` / `/[[:alpha:]]/` / `/[[:alnum:]]/` character
+  # classes, as predicates.
+  def digit? -> Bool
+    self >= ?0 && self <= ?9
+  end
+
+  def alpha? -> Bool
+    (self >= ?a && self <= ?z) || (self >= ?A && self <= ?Z)
+  end
+
+  def alnum? -> Bool
+    self.alpha? || self.digit?
+  end
+
+  # Ruby's `/[[:space:]]/`: space, tab, newline, vertical tab, form feed
+  # and carriage return (codepoints 32 and 9..13).
+  def space? -> Bool
+    let n: Int = self as Int
+    n == 32 || (n >= 9 && n <= 13)
+  end
+
+  alias whitespace? space?
+
+  # Ruby's `/[[:punct:]]/` over ASCII: the four printable non-alphanumeric
+  # runs 33..47, 58..64, 91..96 and 123..126.
+  def punct? -> Bool
+    let n: Int = self as Int
+    (n >= 33 && n <= 47) || (n >= 58 && n <= 64) || (n >= 91 && n <= 96) || (n >= 123 && n <= 126)
+  end
+
+  # Ruby `Comparable#<=>` — `-1` / `0` / `1` by codepoint.
+  #
+  # The OPERATOR spelling `a <=> b` does NOT reach this method: `<=>` is a
+  # comparison operator, which keeps its dedicated typeck route and
+  # rejects `Char` operands with E0707. Call it as `a.<=>(b)`; the matrix
+  # row records the operator gap.
+  def <=>(other: Char) -> Int
+    let a: Int = self as Int
+    let b: Int = other as Int
+    if a < b
+      -1
+    elsif a > b
+      1
+    else
+      0
+    end
+  end
+
+  # Ruby `String#succ` — the next character. Ruby carries on overflow
+  # (`"z".succ == "aa"`), which a single `Char` cannot represent, so this
+  # is the next CODEPOINT (`?z.succ == ?{`). The matrix row records it.
+  def succ -> Char
+    let n: Int = self as Int
+    (n + 1) as Char
+  end
+
+  alias next succ
 end
 
 class USize
+  ## A scalar is copied by value, so its copy is itself (as Ruby's
+  ## `clone` on an immediate value); a `where T: Clone` body reaches it.
+  def clone -> Self
+    self
+  end
+
   # `Add` capability — see `class Int`.
   include Add
 
   lib "../../string/runtime/string.c"
-    def to_string as "ruxen_int_to_string" -> String
     def to_s as "ruxen_int_to_string" -> String
   end
+  alias to_string to_s
 end

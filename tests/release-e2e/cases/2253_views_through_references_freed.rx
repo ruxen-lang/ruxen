@@ -1,0 +1,41 @@
+# F-2: a view of a table reached through a reference (a field, a `&var`
+# parameter, a user function returning `h.keys`) borrows the table by the
+# declared signature, and is still a fresh array whose own buffer is freed.
+class Reg
+  t: Hash[String, Int]
+
+  def init
+    @t = {"alpha".clone => 1, "beta".clone => 2}
+  end
+
+  def var count_then_wipe -> USize
+    ks = @t.keys
+    n = ks.size
+    @t.clear
+    n
+  end
+end
+
+def key_view(h: &Hash[String, Int]) -> Array[&String]
+  h.keys
+end
+
+def first_then_wipe(h: &var Hash[String, Int]) -> USize
+  vs = h.values
+  total = vs.size
+  h.clear
+  total
+end
+
+r = Reg.new
+puts(r.count_then_wipe)
+h = {"gamma".clone => 3}
+ks = key_view(&h)
+puts(ks[0])
+puts(first_then_wipe(&var h))
+puts(h.size)
+s = "kept".clone
+t = {1 => &s}
+got = t.remove(&1)
+t.clear
+puts(got.unwrap)

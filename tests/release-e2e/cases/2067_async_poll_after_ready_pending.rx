@@ -1,0 +1,20 @@
+# An async def's future returns Ready on the first poll and Pending on every
+# poll after that.
+async def make_int() -> Int
+  42
+end
+
+def show(p: Poll[Int])
+  match p
+    Poll.Ready(v) -> puts "ready=#{v}"
+    Poll.Pending -> puts "pending"
+  end
+end
+
+def main
+  var fut = make_int()
+  var ctx = Context.test_dummy
+  show((&var fut).poll(&var ctx))
+  show((&var fut).poll(&var ctx))
+  show((&var fut).poll(&var ctx))
+end

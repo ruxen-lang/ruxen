@@ -1,0 +1,25 @@
+## A user binding whose name starts with `_t` (`_total`, `_tally`) is a user
+## local, not a compiler temporary: it gets the ordinary scope-exit drop.
+## Temporary-ness is a MIR local kind, never a name prefix (F-28).
+
+class Tracker
+  label: String
+
+  def init(label: String)
+    self.label = label
+  end
+
+  def drop
+    puts "drop #{self.label}"
+  end
+end
+
+def run
+  let total = Tracker.new("total")
+  let _total = Tracker.new("_total")
+  let _tally = Tracker.new("_tally")
+  puts "body #{total.label} #{_total.label} #{_tally.label}"
+end
+
+run
+puts "done"

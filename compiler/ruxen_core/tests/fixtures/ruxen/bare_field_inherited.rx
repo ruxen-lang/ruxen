@@ -1,0 +1,18 @@
+class Base
+  x: Int
+
+  def init(@x: Int)
+  end
+end
+
+class Derived < Base
+  def init(n: Int)
+    super(n)
+  end
+
+  def get -> Int
+    x
+  end
+end
+
+puts Derived.new(4).get

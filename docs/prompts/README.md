@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Ruxen implementation prompts
 
 Self-contained briefs for agents (or humans) executing the remaining v1

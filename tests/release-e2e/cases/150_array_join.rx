@@ -1,7 +1,0 @@
-def main
-  var parts: Array[String] = Array.new
-  parts.push("alpha")
-  parts.push("beta")
-  parts.push("gamma")
-  puts parts.join(", ")
-end

@@ -2,7 +2,7 @@
 
 **Source docs:**
 [docs/requirements/tier1_03_async.md](../../requirements/tier1_03_async.md) §4.4,
-[docs/prompts/v1/15_phase4_async.md](../../prompts/v1/15_phase4_async.md),
+`docs/prompts/v1/15_phase4_async.md`,
 [docs/specs/stdlib/async.spec.md](../stdlib/async.spec.md) (sub-phase 1 — surface).
 
 **Status:** sub-phase 2 of the async round. Sub-phase 1 (commit
@@ -10,7 +10,7 @@
 enum, `Context`/`Waker` shells. This sub-phase wires the **lowering**
 so `async def foo` and `expr.await` produce real state machines that
 implement Future. No executor yet (sub-phase 3) — but the lowered
-code can be poll-druxen by hand-written test harnesses to validate
+code can be poll-driven by hand-written test harnesses to validate
 shape.
 
 Two staged milestones inside this sub-phase:
@@ -29,8 +29,10 @@ Land 2A first; commit; then 2B.
 
 ### B1 — `async def foo() -> T` typechecks as returning `some Future[Output = T]`
 
-```rx
-async def make_int() -> Int
+Example [implemented]:
+
+```ruby
+async def make_int -> Int
   42
 end
 ```
@@ -45,15 +47,15 @@ the existential return `some Future[Output = Int]`.
 Calling `make_int()` returns a Future-implementing value. The
 non-async caller can poll it manually:
 
-```rx
-def main
-  let mut fut = make_int()
-  # Hand-written Context for testing — see B6
-  let ctx = Context.test_dummy
-  match (&var fut).poll(&var ctx)
-    Poll.Ready(v) -> puts "#{v}"
-    Poll.Pending  -> puts "pending"
-  end
+Example [implemented]:
+
+```ruby
+fut = make_int()
+# Hand-written Context for testing — see B6
+ctx = Context.test_dummy
+case (&var fut).poll(&var ctx)
+in Poll.Ready(v) then puts "#{v}"
+in Poll.Pending then puts "pending"
 end
 ```
 
@@ -61,9 +63,9 @@ For Milestone 2A this should print `42`.
 
 ### B2 — Each `async def` generates an anonymous state-machine class
 
-The lowering pass synthesizes one class per `async def`:
+The lowering pass synthesizes one class per `async def`. Pseudo-code of what the compiler generates (not user syntax):
 
-```rx
+```text
 # Pseudocode for what the compiler generates for `async def make_int() -> Int  42 end`:
 class __MakeIntFuture
   __state: Int            # 0 = start, 1 = completed
@@ -97,9 +99,9 @@ initial state field set to 0 and arg fields populated from the
 call site.
 
 Function arguments (if any) become fields on the state-machine
-struct:
+struct. Pseudo-code of what the compiler generates (not user syntax):
 
-```rx
+```text
 async def add(a: Int, b: Int) -> Int
   a + b
 end
@@ -128,15 +130,14 @@ undefined-but-bounded behaviour. The spec REQUIRES one of:
 2. **Return `Pending` forever** — non-progressing but safe.
 
 Pick (2) for v1 to keep the lowering simple. Document the choice
-in the milestone 2A commit. (Rust's std picks "panic" but with
-`std::future::Fuse` for safe wrapping; we defer that ergonomics
-to v2.)
+in the milestone 2A commit. A panicking variant with a safe
+wrapper is deferred to v2.
 
-### B6 — Test harness: `Context.test_dummy` (#[cfg(test)] only)
+### B6 — Test harness: `Context.test_dummy` (test-only)
 
 Add a `Context.test_dummy` static method (in `library/std/future/src/lib.rx`)
 returning a `Context` whose `Waker` is a no-op stub. Lives behind a
-`# Test-only — see context.spec.md` comment. The hand-druxen poll
+`# Test-only — see context.spec.md` comment. The hand-driven poll
 loop in B1 uses it; no executor needed.
 
 Implementation: a static method that returns a heap-allocated
@@ -151,8 +152,14 @@ that does nothing. Wired in `library/std/future/runtime/executor.c`
 
 ### B7 — `.await` desugars to a poll loop with a `return Pending` on Pending
 
-```rx
-async def f() -> Int
+A local that holds an `.await` result is declared with `let` today: the
+bare `x = g().await` is not hoisted by the lowering and fails typeck (E0740,
+"no method `poll` on type `Future[Int]`").
+
+Works today, [deprecated] `let` (replacement `x = ...`, blocked by the gap above):
+
+```ruby
+async def f -> Int
   let x = g().await
   x + 1
 end
@@ -162,7 +169,7 @@ The compiler rewrites the body to a state machine with TWO states:
 state 0 = "before awaiting g", state 1 = "after .await, computing x + 1".
 
 Pseudo-MIR for the generated poll:
-```
+```text
 match self.__state
   0 ->
     # Construct g()'s future, store in self.__sub
@@ -189,8 +196,10 @@ one global — each await may produce a different Future type).
 
 ### B8 — Locals live across `.await` are captured as state-machine fields
 
-```rx
-async def add_async() -> Int
+Works today, [deprecated] `let` (see B7):
+
+```ruby
+async def add_async -> Int
   let a = compute().await
   let b = compute_other().await
   a + b
@@ -225,14 +234,14 @@ generated MIR.
 > `let x = call().await` statement in an async fn body). Each
 > per-branch continuation needing its own state-id allocation, and
 > the live-set analysis for locals introduced inside a branch but
-> used after the merge, is its own slice. The test
-> `await_in_if_match_branches_lower` in `tests/async_lowering.rs`
-> is `#[ignore]`d with a reason pointer.
+> used after the merge, is its own slice. No test pins it yet.
 
 
 
-```rx
-async def conditional() -> Int
+Example [implemented] (typechecks today; the deferral note above predates it):
+
+```ruby
+async def conditional -> Int
   if check_condition()
     g().await
   else
@@ -252,14 +261,14 @@ limit clearly.
 
 ### B12 — `.await` outside async context rejected (E1110)
 
-```rx
-def main
-  some_future.await    # E1110
-end
+Example [implemented], rejected on purpose:
+
+```ruby
+some_future().await    # E1110
 ```
 
 **Then** the resolver (or typeck — wherever's natural) emits:
-```
+```text
 [E1110] error: `.await` is only valid inside `async def` or `async { }`
    |   some_future.await
    |               ^^^^^
@@ -277,9 +286,7 @@ closure provides an async context for its body.
 > borrow-invalidating boundaries is its own slice — the obvious
 > wiring (mark every `.await` site as a borrow flush) interacts
 > with the multi-arm `match` shape the lowering emits and needs a
-> bespoke pin-test surface. The test
-> `borrow_across_suspend_rejected_e1010` in `tests/async_lowering.rs`
-> is `#[ignore]`d with a reason pointer.
+> bespoke pin-test surface. No test pins it yet.
 
 
 
@@ -288,9 +295,9 @@ be flagged. The borrowed value sits on the caller's stack but the
 suspended future may be polled later from a different stack frame,
 so the borrow could outlive its referent.
 
-**Given:**
-```rx
-async def bad() -> Int
+**Given** this sketch, [deprecated] `let` (see B7):
+```ruby
+async def bad -> Int
   let v = compute_vec()
   let r = &v[0]                # borrow
   some_other_future().await    # suspend — &v could dangle
@@ -313,8 +320,7 @@ Captures by move that cross suspends are fine (they become fields).
 > optimisation lands when sub-future construction moves from `init`
 > to per-state (which is also a prerequisite for lazy-arg sub-
 > futures, and for hoisting non-primitive locals across suspends).
-> The test `state_machine_drop_only_active_fields` in
-> `tests/async_lowering.rs` is `#[ignore]`d with a reason pointer.
+> No test pins it yet.
 
 
 
@@ -337,27 +343,31 @@ Pin test: a state machine in state 1 holds `__sub_0` Ready and
 | Behaviour | Test fn                                                | File                          |
 |-----------|--------------------------------------------------------|-------------------------------|
 | B1 (2A)   | `async_def_signature_lifts_to_some_future`             | `tests/async_lowering.rs`     |
-| B2 (2A)   | `async_def_generates_state_machine_class`              | `tests/async_lowering.rs`     |
-| B3 (2A)   | `async_def_args_become_state_machine_fields`           | `tests/async_lowering.rs`     |
-| B5 (2A)   | `poll_after_ready_returns_pending`                     | `tests/async_lowering.rs`     |
-| B6 (2A)   | `context_test_dummy_constructs`                        | `tests/async_lowering.rs`     |
+| B2 (2A)   | covered by the B1-B6 e2e row                           | —                             |
+| B3 (2A)   | covered by the B1-B6 e2e row                           | —                             |
+| B5 (2A)   | covered by the B1-B6 e2e row                           | —                             |
+| B6 (2A)   | covered by the B1-B6 e2e row                           | —                             |
 | B1-B6 e2e | `cases/721_async_def_no_await_handpoll.rx`            | release-e2e                   |
-| B7 (2B)   | `await_desugars_to_poll_match_pending_return`          | `tests/async_lowering.rs`     |
-| B8 (2B)   | `local_live_across_await_promoted_to_field`            | `tests/async_lowering.rs`     |
-| B10 (2B)  | `chained_awaits_generate_n_plus_1_states`              | `tests/async_lowering.rs`     |
-| B11 (2B)  | `await_in_if_match_branches_lower`                     | `tests/async_lowering.rs`     |
+| B7 (2B)   | covered by the B7-B14 e2e row                          | —                             |
+| B8 (2B)   | covered by the B7-B14 e2e row                          | —                             |
+| B10 (2B)  | covered by the B7-B14 e2e row                          | —                             |
+| B11 (2B)  | none (deferred, see above)                             | —                             |
 | B12 (2B)  | `await_outside_async_context_rejected_e1110`           | `tests/async_negative.rs`     |
-| B13 (2B)  | `borrow_across_suspend_rejected_e1010`                 | `tests/async_negative.rs`     |
-| B14 (2B)  | `state_machine_drop_only_active_fields`                | `tests/async_lowering.rs`     |
+| B13 (2B)  | none (deferred, see above)                             | —                             |
+| B14 (2B)  | none (deferred, see above)                             | —                             |
 | B7-B14 e2e| `cases/722_async_def_chained_await_handpoll.rx`       | release-e2e                   |
 
 ---
 
 ## Milestone 2B v1 scope reductions (shipped 2026-05-20)
 
-The v1 cut of 2B supports a canonical straight-line `.await` shape:
+The v1 cut of 2B supports a canonical straight-line `.await` shape. It is a
+grammar sketch (`<...>` are placeholders), and it needs the [deprecated] `let`:
+the bare `x = ... .await` is not accepted yet.
 
-```rx
+Shape, [deprecated] `let` (replacement `x_1 = ...`, blocked as above):
+
+```ruby
 async def f(args...) -> R
   let x_1 = g_1(<args from outer / consts>).await
   let x_2 = g_2(<args from outer / consts>).await

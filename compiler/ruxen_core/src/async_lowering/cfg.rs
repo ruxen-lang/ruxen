@@ -453,6 +453,7 @@ fn try_linear_cfg(body: &Block) -> Option<Cfg> {
                         span: span.clone(),
                     }),
                     field: last_binding.clone(),
+                    ivar: false,
                 },
                 span,
             }));
@@ -776,9 +777,9 @@ mod tests {
                 false,
             ), // two awaiting loops
             (
-                "async def f\n  let a = if cond then g().await else h().await end\n  a\nend",
+                "async def f\n  let a = if cond\n    g().await\n  else\n    h().await\n  end\n  a\nend",
                 false,
-            ), // await nested in non-let expr
+            ), // await nested in a non-let (if-expr) branch
         ];
         for (src, expected_accept) in cases {
             let body = parse_fn_body(src);

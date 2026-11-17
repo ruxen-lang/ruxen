@@ -19,11 +19,7 @@ fn main() {
             args,
         } => build::run(release, target.as_deref(), args),
         cli::Command::Check { target } => build::check(target.as_deref()),
-        // `ruxen clean` delegates to the ruxenc library so there is a single
-        // source of truth for cache cleanup. `ruxenc::clean::run(&[])` clears
-        // `target/ruxen/incremental/` for the current project; pass
-        // `--global` for the user-wide cache.
-        cli::Command::Clean => ruxenc::clean::run(&[]),
+        cli::Command::Clean => build::clean(),
         cli::Command::Add {
             piece,
             version,

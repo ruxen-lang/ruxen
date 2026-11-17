@@ -5,7 +5,6 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 struct BindingInfo {
-    ty: Ty,
     declared_span: Span,
     state: MoveState,
 }
@@ -43,11 +42,10 @@ impl MoveChecker {
         }
     }
 
-    pub fn declare(&mut self, def_id: DefId, ty: Ty, span: Span) {
+    pub fn declare(&mut self, def_id: DefId, span: Span) {
         self.bindings.insert(
             def_id,
             BindingInfo {
-                ty,
                 declared_span: span,
                 state: MoveState::Live,
             },
@@ -102,14 +100,6 @@ impl MoveChecker {
         }
     }
 
-    /// Is this def_id currently live (not moved)?
-    pub fn is_live(&self, def_id: DefId) -> bool {
-        self.bindings
-            .get(&def_id)
-            .map(|i| matches!(i.state, MoveState::Live))
-            .unwrap_or(true) // Unknown bindings assumed live
-    }
-
     pub fn snapshot(&self) -> Self {
         self.clone()
     }
@@ -136,11 +126,6 @@ impl MoveChecker {
             }
         }
     }
-
-    /// Get the type of a tracked binding.
-    pub fn binding_ty(&self, def_id: DefId) -> Option<&Ty> {
-        self.bindings.get(&def_id).map(|i| &i.ty)
-    }
 }
 
 #[cfg(test)]
@@ -156,7 +141,7 @@ mod tests {
     #[test]
     fn copy_type_does_not_move() {
         let mut checker = MoveChecker::new();
-        checker.declare(10, Ty::Int, span(1));
+        checker.declare(10, span(1));
         let result = checker.check_use(10, span(3));
         assert!(result.is_ok());
         // "Move" a copy type — should not actually invalidate
@@ -171,7 +156,7 @@ mod tests {
     #[test]
     fn move_type_invalidates_source() {
         let mut checker = MoveChecker::new();
-        checker.declare(10, Ty::String, span(1));
+        checker.declare(10, span(1));
         checker.process_transfer(10, Some(20), &Ty::String, span(2));
         let result = checker.check_use(10, span(3));
         assert!(
@@ -183,7 +168,7 @@ mod tests {
     #[test]
     fn use_after_move_returns_error_info() {
         let mut checker = MoveChecker::new();
-        checker.declare(10, Ty::String, span(1));
+        checker.declare(10, span(1));
         checker.process_transfer(10, None, &Ty::String, span(5));
         let err = checker.check_use(10, span(8)).unwrap_err();
         assert_eq!(err.move_span.line, 5);
@@ -193,7 +178,7 @@ mod tests {
     #[test]
     fn branch_merge_conservative() {
         let mut checker = MoveChecker::new();
-        checker.declare(10, Ty::String, span(1));
+        checker.declare(10, span(1));
         let snap = checker.snapshot();
         // Branch A: move
         checker.process_transfer(10, None, &Ty::String, span(3));
@@ -210,7 +195,7 @@ mod tests {
     #[test]
     fn reinitialize_after_move() {
         let mut checker = MoveChecker::new();
-        checker.declare(10, Ty::String, span(1));
+        checker.declare(10, span(1));
         checker.process_transfer(10, None, &Ty::String, span(2));
         assert!(checker.check_use(10, span(3)).is_err());
         checker.reinitialize(10, span(4));

@@ -1,0 +1,38 @@
+# String locals inside monomorphised copies of generic code. A bounded
+# generic fn rebuilds `out` in a loop (the shape of the stdlib
+# `Array#join`, which runs as `Array__mono__String_join`): each value
+# `out` held before the last is freed when it is reassigned. A receiver
+# passed to a `Box__mono__Int_*` method is freed by its caller: the mono
+# callee name resolves to the generic method's `&self`.
+def joined[T: Hashable](v: &T, n: Int) -> Int
+  var out = ""
+  var i = 0
+  while i < n
+    out = out + "#{v},"
+    i = i + 1
+  end
+  out.size as Int
+end
+
+class Box[T]
+  item: T
+
+  def init(@item: T)
+  end
+
+  def describe -> Int
+    let s = "box"
+    let t = s + "!"
+    t.size as Int
+  end
+end
+
+def main
+  let k = "kk" + "x"
+  puts joined(&k, 3)
+  puts joined(&7, 2)
+  let b = Box.new(3)
+  puts b.describe
+  let words: Array[String] = ["pear", "fig"]
+  puts words.join("|")
+end

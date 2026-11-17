@@ -174,6 +174,27 @@ impl<'a> Lowerer<'a> {
                 Ok(None)
             }
 
+            // ── Next (Block Tier-2 block-value) ─────────────────────
+            // `next expr` is the block's value for this iteration. Every
+            // `next` that reaches MIR is inside a REAL closure body (an
+            // inlined-combinator block containing a top-level `next` is
+            // rejected earlier, in `try_inline_closure_method`, with E1125).
+            // Lowering a closure body sets `Terminator::Return`, which returns
+            // from the closure's own MIR function — exactly the "this
+            // iteration's value" semantics, and never a non-local return.
+            HirExprKind::Next(value) => {
+                let val = if let Some(expr) = value {
+                    let local = self.lower_expr(expr)?;
+                    Some(local_to_value(local))
+                } else {
+                    None
+                };
+                self.set_terminator(Terminator::Return(val));
+                let dead = self.new_block();
+                self.current_block = dead;
+                Ok(None)
+            }
+
             // ── Function call ───────────────────────────────────────
 
             // ── Break / Continue ────────────────────────────────────

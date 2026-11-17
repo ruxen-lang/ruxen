@@ -20,8 +20,9 @@ before the individual docs.
 Tier-1 closes the gap between the advertised language (tutorials, fixture
 programs) and what compiles-and-runs correctly today. Tier-2 closes the
 gap between "correct on concrete types" and "correct on parametric types."
-None of this is optional if Ruxen intends to ship an `Iterator` mixin, a
-stdlib that returns `some Iterator` from `Array.iter`, a vtable-backed
+None of this is optional if Ruxen intends to ship generic stdlib
+mixins (the `Iterator` layer this was first written for was dropped in
+favour of `Enumerable[T]`), a vtable-backed
 plugin / scripting boundary, or safe lifetime subtyping on closures and
 references.
 
@@ -45,7 +46,7 @@ variance and HRTBs. The scaffolding is load-bearing for the design in
 these docs; here is where it lives:
 
 - **Mixin `type` items parse into `TraitItem::AssocType`.**
-  `crates/ruxen-core/src/parser/mod.rs:908-914`. The HIR variant
+  `compiler/ruxen_core/src/parser/mod.rs:908-914`. The HIR variant
   `HirTraitItem::AssocType` exists (`hir/nodes.rs:483-486`) and resolve
   walks the AST into it (`resolve/mod.rs:940-945`). `TraitInfo::
   assoc_types: Vec<String>` is stored (`resolve/symbols.rs:65`). **No
@@ -95,6 +96,14 @@ these docs; here is where it lives:
   non-primitive — to `I64` (`codegen/cranelift.rs:965-984`). **This is
   the defining constraint on Tier-2.** See the dependency section below.
 
+**Bounds on a class's type parameter (decision D7, option b).** A method
+that needs a bound on its class's type parameter uses a method `where`
+bound today (`def sum -> T where T: Add`); that is the form that works, and
+it is [deprecated] in favour of the RBS-style bound in the `[...]` list,
+`[T < Bound]`, which is [planned](../../TODO.md#t-d7-respell). The exact rule for a
+conditional method through a bounded reopen (`class Box[T < Comparable]`) is
+still open as OQ-6 of the language spec.
+
 ## Dependency on int64-slot erasure
 
 Every Tier-2 feature lands in one of three buckets with respect to the
@@ -142,7 +151,7 @@ tier-2 features that can ship are: mixin existentials (doc 06), variance
 
 ## Recommended implementation order
 
-```
+```text
            ┌──────────────────────────────────┐
            │ M0 pre-flight: named lifetimes   │
            │      (region solver rewrite)     │
@@ -188,18 +197,16 @@ tier-2 features that can ship are: mixin existentials (doc 06), variance
 
 Key cross-feature dependencies:
 
-- **Associated types (01) must come before Iterator-based stdlib.**
-  `Array.iter` returns `some Iterator` whose `Item = &T`. Without
-  `type Item` on the mixin, `Iterator.next` cannot be expressed,
-  which cascades into `.map`/`.filter`/`.collect` being untyped
-  (currently noops — tier1 B4). This is the single largest
-  dependency in the graph.
+- **Associated types (01) no longer gate the stdlib.** This was the
+  largest dependency while the stdlib planned an `Iterator` mixin with
+  `type Item`. That layer was dropped: `.map`/`.select` are
+  `Enumerable[T]` methods over `each`, generic in the mixin parameter
+  `T`, so they need no associated type.
 
 - **GATs (05) require assoc types (01).** Obvious — GATs are just
   assoc types with their own generic parameters. Not worth revisiting
   the solver twice; however, (05) can lag (01) by a full release
-  because the GAT-dependent stdlib surface (`LendingIterator`,
-  `StreamingIterator`) is not on the tier-1 path.
+  because no GAT-dependent stdlib surface is on the tier-1 path.
 
 - **HRTBs (03) benefit enormously from lifetime elision.** Ruxen's
   elision rules already cover the 80% case
@@ -314,7 +321,7 @@ walltime drops to ~20-26 weeks.
 
 ## Conventions (same as Tier-1)
 
-- File:line citations in the form `crates/ruxen-core/src/foo.rs:123`.
+- File:line citations in the form `compiler/ruxen_core/src/foo.rs:123`.
 - Per-feature phasing in a `Phasing` section with 2-letter phase codes
   (e.g., `01a`, `01b`).
 - Ruxen code examples inside fenced blocks tagged `ruxen` (the tutorial

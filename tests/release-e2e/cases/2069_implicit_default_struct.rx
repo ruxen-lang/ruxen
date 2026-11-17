@@ -1,0 +1,10 @@
+# A struct without `include Default` still gets the implicit `Type.default`
+# constructor that zero-initialises its fields.
+struct Score
+  v: Int
+end
+
+def main
+  let score = Score.default
+  puts "#{score.v}"
+end

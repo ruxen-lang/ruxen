@@ -1,0 +1,56 @@
+# I-77: an object a function or method builds from a by-reference
+# parameter borrows the caller's value, as `&x` does: `w = wrap(&x)` keeps
+# `x` borrowed while `w` is used, so reassigning `x` before `puts(w.get)`
+# is E1009. Reassigning it after the last use is accepted and reads the
+# old string, not freed memory. A wrapper that only carries what a table
+# stores (`h.remove`) leaves the key free to change.
+class Holder
+  s: &String
+
+  def init(@s: &String)
+  end
+
+  def get -> &String
+    @s
+  end
+end
+
+class Maker
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def make(s: &String) -> Holder
+    Holder.new(s)
+  end
+end
+
+def wrap(s: &String) -> Holder
+  Holder.new(s)
+end
+
+def rm(h: &var Hash[String, &String], k: String) -> Option[&String]
+  h.remove(k)
+end
+
+x = "alpha".clone
+w = wrap(&x)
+puts(w.get)
+x = "beta".clone
+puts(x)
+
+m = Maker.new(1)
+y = "gamma".clone
+v = m.make(&y)
+puts(v.get)
+y = "delta".clone
+puts(y)
+
+value = "payload".clone
+key = "key".clone
+h = {"key".clone => &value}
+r = rm(&var h, key.clone)
+key = "changed".clone
+puts(r.unwrap)
+puts(key)

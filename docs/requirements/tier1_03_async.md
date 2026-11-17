@@ -1,6 +1,15 @@
 # Tier 1 — Feature 03: Async / Await
 
-Status: Proposed (no code in-tree).
+Status: Proposed (no code in-tree) when drafted. Since then `async def`,
+postfix `.await`, the `Future` mixin with `Poll`, `Context` and `Waker`
+(`library/std/future/`) and `block_on(future)` (`library/std/executor/`) are
+[implemented] (pins such as `tests/release-e2e/cases/2100_async_await_int32_char_string.rx`).
+They stay until Ruby's Fiber scheduler replaces them, [planned](../../TODO.md#t-fibers).
+An `.await` is lowered only as a `let` initializer today: `x = f().await`,
+an `.await` in a tail expression or as a statement fails to type-check at the
+`block_on` call (E0740) [known issue](../../TODO.md#t-await-gaps).
+Real argument types for `Race.any_of` and `Task.spawn_raw`, with the raw
+boundary kept internal, are [planned](../../TODO.md#t-d14).
 Target: Ruxen v0.3 — v0.5 (phased).
 Owner: Compiler team.
 
@@ -24,20 +33,18 @@ cleanly with the rest of the language.
 
 This document specifies how async/await integrates into Ruxen's six-phase
 pipeline (lexer → parser → resolve → typeck → borrow_check → mir → codegen)
-and defines a minimum viable executor so that a user can write:
+and defines a minimum viable executor so that a user can write the
+following (the HTTP client is illustrative). The `HttpError` it raises
+instead of returning a [deprecated] `Result` needs exceptions, [planned](../../TODO.md#t-exceptions):
 
-```ruxen
-async def fetch_user(id: UInt64) -> Result[User, HttpError]
-  let response = await http.get("/users/#{id}")
+```ruby
+async def fetch_user(id: Int) -> User
+  response = Http.get("/users/#{id}").await
   response.json[User]
 end
 
-def main
-  runtime.block_on do
-    let user = await fetch_user(42)
-    puts(user.name)
-  end
-end
+user = block_on(fetch_user(42))
+puts user.name
 ```
 
 ---
@@ -47,33 +54,33 @@ end
 ### 2.1 What exists
 
 - **Lexer.** `async` and `await` are already reserved keywords:
-  `crates/ruxen-core/src/lexer/token.rs:84-85` (`TokenKind::Async`,
+  `compiler/ruxen_core/src/lexer/token.rs:84-85` (`TokenKind::Async`,
   `TokenKind::Await`) with lookup at
-  `crates/ruxen-core/src/lexer/token.rs:306-307`. `yield` is also reserved
+  `compiler/ruxen_core/src/lexer/token.rs:306-307`. `yield` is also reserved
   (`:83`, `:305`). Concurrency-adjacent keywords `actor`, `spawn`, `send`,
   `receive` are reserved but unused (`:127-130`, `:349-352`).
 
 - **AST.** A `Yield` expression variant exists:
-  `crates/ruxen-core/src/parser/ast.rs:324-325` (`ExprKind::Yield(Vec<Expr>)`)
-  parsed at `crates/ruxen-core/src/parser/expr.rs:434-450`. **No** `async`
+  `compiler/ruxen_core/src/parser/ast.rs:324-325` (`ExprKind::Yield(Vec<Expr>)`)
+  parsed at `compiler/ruxen_core/src/parser/expr.rs:434-450`. **No** `async`
   marker on `FuncDef` (`ast.rs:544-556`), **no** `Await` expression,
   **no** `Future` type.
 
 - **Resolver.** `Yield` is lowered to a plain unresolved function call named
-  `"yield"`: `crates/ruxen-core/src/resolve/mod.rs:1971-1983`. It does not
+  `"yield"`: `compiler/ruxen_core/src/resolve/mod.rs:1971-1983`. It does not
   participate in control-flow tracking.
 
 - **Runtime shim.** `yield` is currently mapped to a no-op passthrough in
   the codegen runtime table:
-  `crates/ruxen-core/src/codegen/runtime.rs:69-70`. This is a placeholder
+  `compiler/ruxen_core/src/codegen/runtime.rs:69-70`. This is a placeholder
   — the current behaviour is effectively "call the block argument once".
 
 - **Formatter.** `Yield` is pretty-printed:
-  `crates/ruxen-core/src/formatter/format_expr.rs:243-251` and
+  `compiler/ruxen_core/src/formatter/format_expr.rs:243-251` and
   `comments.rs:842`.
 
 - **Semantic tokens.** The LSP recognizes `async`/`await`/`yield` as
-  keywords: `crates/ruxen-ide/src/semantic_tokens.rs:109-111`.
+  keywords: `src/ruxen_ide/src/semantic_tokens.rs:109-111`.
 
 ### 2.2 What is missing
 
@@ -170,18 +177,37 @@ compilation target, not a runtime".
 
 ### 5.1 Async functions
 
-```ruxen
-async def fetch(url: &str) -> Result[String, IoError]
-  let conn = await net.connect(url)
-  let bytes = await conn.read_all()
-  Ok(String.from_utf8(bytes)?)
+In the Ruby form, I/O errors raise instead of returning a [deprecated]
+`Result` (exceptions are [planned](../../TODO.md#t-exceptions)):
+
+```ruby
+async def fetch(url: &String) -> String
+  conn = Net.connect(url).await
+  bytes = conn.read_all.await
+  String.from_utf8(bytes)
 end
+```
+
+Each `.await` is a `let` initializer here [known issue](../../TODO.md#t-await-gaps).
+Works today, [deprecated] (`let` is replaced by a plain local):
+
+```ruby
+async def answer -> Int
+  41
+end
+
+async def plus_one -> Int
+  let x = answer().await
+  x + 1
+end
+
+puts "#{block_on(plus_one())}"
 ```
 
 Grammar addition (parser/mod.rs at the item-level dispatcher around
 `:513` and `:517`):
 
-```
+```text
 FuncDef   ::= "async"? "def" ...
 ```
 
@@ -195,8 +221,13 @@ preserve it.
 
 ### 5.2 Async closures
 
-```ruxen
-let f = async do |x| await process(x) end
+Its body uses the postfix `.await` (prefix `await` is rejected, see §5.4).
+An async closure parses and type-checks [implemented]:
+
+```ruby
+f = async do |x: Int|
+  process(x).await
+end
 ```
 
 `ClosureExpr` gains `pub is_async: bool` (alongside existing `is_move`).
@@ -205,10 +236,13 @@ introducer.
 
 ### 5.3 Async block
 
-```ruxen
-let fut = async do
-  let a = await op_a()
-  let b = await op_b()
+Bind each awaited value with `let` today [known issue](../../TODO.md#t-await-gaps).
+An async block type-checks [implemented]:
+
+```ruby
+fut = async do
+  a = op_a().await
+  b = op_b().await
   a + b
 end
 ```
@@ -222,39 +256,39 @@ has `|params|`.
 
 ### 5.4 Await
 
-Preferred form — postfix, Ruby/Rust-style method-chain feel:
+Preferred form — postfix, method-chain feel, [implemented]:
 
-```ruxen
-let user = fetch_user(id).await
-let bytes = conn.read_all().await?
+```ruby
+user = fetch_user(id).await
+bytes = conn.read_all.await
 ```
 
-Rationale: keeps `?` composable (`.await?`), reads left-to-right, and
+Rationale: keeps `?` composable (`.await?`; `?` is [deprecated], replace
+with exceptions that propagate on their own), reads left-to-right, and
 avoids prefix-operator precedence hazards. Postfix `.await` is implemented
 as a **keyword-method** token sequence: the parser, when it sees a `.`
 followed by the `Await` token, produces an `ExprKind::Await(Box<Expr>)`
 node. This special-case lives in the postfix-chain loop in
 `parser/expr.rs` (alongside `MethodCall` and `FieldAccess`).
 
-Alternative form — prefix `await expr`:
+Alternative form — prefix `await expr`. The parser rejects it with "prefix
+`await` is not supported; use postfix `.await`", so it is [retired]:
 
-```ruxen
-let user = await fetch_user(id)
+```ruby
+user = await fetch_user(id)
 ```
 
-**Decision**: support both. Prefix `await` is parsed in the unary/primary
-dispatcher like `return`/`yield`. Precedence is unary-tight, binding
-tighter than binary operators but looser than method calls. The formatter
-normalizes to postfix `.await` (more Ruby-like chaining).
+History: the draft decided to support both forms (prefix `await` parsed
+like `return`/`yield`, with the formatter normalizing to postfix). That was
+dropped: only postfix `.await` shipped, and prefix `await` is [retired].
 
 ### 5.5 Grammar summary (new productions)
 
-```
+```text
 Item          ::= "async"? "def" ...
 ClosureExpr   ::= "async"? "move"? ("do" ... "end" | "{" ... "}")
 AsyncBlock    ::= "async" "do" Block "end"
-PrimaryExpr   ::= ... | "await" Expr               # prefix form
-PostfixOp     ::= ... | "." "await"                # postfix form
+PostfixOp     ::= ... | "." "await"                # the only await form (prefix "await" Expr is retired)
 ```
 
 ---
@@ -263,7 +297,12 @@ PostfixOp     ::= ... | "." "await"                # postfix form
 
 ### 6.1 Definition (in `core`)
 
-```ruxen
+`library/std/future/src/lib.rx` declares these today ([implemented]). The
+`enum` and `mixin` spellings are [deprecated] (replace with `Data`
+variants or symbols and `module`), and `Future`, `Poll` and `Waker` in user
+code go [deprecated] with `async def` once Fibers land. As drafted, [deprecated]:
+
+```ruby
 enum Poll[T]
   Ready(T)
   Pending
@@ -280,14 +319,14 @@ end
 
 class Waker
   def consume wake
-  def wake_by_ref(&self)
-  def clone(&self) -> Waker
+  def wake_by_ref
+  def clone -> Waker
 end
 ```
 
 ### 6.2 Where it lives
 
-- Source: `crates/ruxen-core/src/corelib/future.rx` (new directory).
+- Source: `compiler/ruxen_core/src/corelib/future.rx` (new directory).
 - Parsed and resolved identically to other built-in types (`Array`, `Option`).
 - `Ty::Future(Box<Ty>)` is **not** a primitive; it is represented as
   `Ty::Class { name: "Future", generic_args: [T] }` with a registered
@@ -341,7 +380,7 @@ function body into a state-machine struct plus a `Future` provision.
 
 ### 7.1 Where in the pipeline
 
-**MIR lowering (`crates/ruxen-core/src/mir/lower.rs`) is the correct
+**MIR lowering (`compiler/ruxen_core/src/mir/lower.rs`) is the correct
 place.** Rationale:
 
 - The borrow checker runs on HIR (`borrow_check/mod.rs:30`) and must see
@@ -359,7 +398,7 @@ place.** Rationale:
 1. **Collect live state**: every local variable, parameter, and temporary
    whose live range crosses any `await` point.
 2. **Generate state enum**:
-   ```
+   ```text
    enum Foo_State
      Init(...params...)
      Suspend0 { <live locals>, inner: F0 }
@@ -370,7 +409,7 @@ place.** Rationale:
    ```
    where `Fi` is the type of the inner future being awaited at point `i`.
 3. **Generate struct**:
-   ```
+   ```text
    struct FooFuture
      state: Foo_State
    end
@@ -382,12 +421,13 @@ place.** Rationale:
    corresponding basic block.
 5. **Rewrite call sites**: a call `foo(args)` in an async context becomes
    `FooFuture { state: Init(args) }`; it does not execute until polled.
-6. **Rewrite `await` expressions** in the original body:
-   ```ruxen
-   let x = expr.await
+6. **Rewrite `await` expressions** in the original body. An awaited
+   binding is [implemented] (only as a `let` initializer today, [known issue](../../TODO.md#t-await-gaps)):
+   ```ruby
+   x = expr.await
    ```
    becomes, inside the MIR CFG:
-   ```
+   ```text
    BB_pre_await:
      tmp_fut = <compute expr>
      state = Suspendi { ..., inner: tmp_fut }
@@ -408,6 +448,7 @@ place.** Rationale:
 
 Add to `mir/nodes.rs`:
 
+<!-- compiler-rust -->
 ```rust
 pub enum Terminator {
     ...existing variants...,
@@ -434,22 +475,23 @@ Run on HIR (`borrow_check::borrow_check`, `borrow_check/mod.rs:30`)
   (new error code in `borrow_check/errors.rs`). The diagnostic must
   point at the borrow, the await, and the subsequent use.
 
-Example rejected:
+Example to be rejected. A borrow held across `.await` is not rejected yet
+(TODO.md "Async spec gaps", B13), [planned](../../TODO.md#t-await-borrow):
 
-```ruxen
+```ruby
 async def bad(v: &var Array[Int])
-  let r = &var v[0]        # &var borrow
-  await yield_now()        # suspension
+  r = &var v[0]            # &var borrow
+  Task.yield_now.await     # suspension
   *r += 1                  # ERROR: &var borrow held across await
 end
 ```
 
-Example accepted (borrow released before await):
+Example the same check accepts (borrow released before await), [planned](../../TODO.md#t-await-borrow):
 
-```ruxen
+```ruby
 async def good(v: &var Array[Int])
   v[0] += 1
-  await yield_now()
+  Task.yield_now.await
   v[0] += 2                # fresh borrow after resume
 end
 ```
@@ -466,24 +508,27 @@ struct: if any field is `!Send`, the whole future is `!Send`.
 Phase 3c ships **one** executor: a single-threaded event-loop reactor
 patterned after smol / tokio's current-thread runtime.
 
-Public surface (in `core.runtime`):
+Public surface as drafted (in `core.runtime`). What shipped instead is the
+free function `block_on(future)` (a compiler intrinsic, `library/std/executor/src/lib.rx`),
+`Task.yield_now` and `Task.spawn_raw` (`library/std/future/src/task.rx`).
+The RBS-style bounds below are [planned](../../TODO.md#t-d7-respell):
 
-```ruxen
+```ruby
 # Drive a future to completion on the calling thread.
 # Blocks the thread until the future resolves.
-def runtime.block_on[F: Future](fut: F) -> F.Output
+def runtime.block_on[F < Future](fut: F) -> F.Output
 
 # Inside an async context, yield to the reactor once.
-async def runtime.yield_now() -> ()
+async def runtime.yield_now -> nil
 
 # Spawn an additional task onto the current-thread executor.
-# Requires F: Future + static (task outlives its creator).
-def runtime.spawn[F: Future + static](fut: F) -> JoinHandle[F.Output]
+# Requires the future to own everything it uses (task outlives its creator).
+def runtime.spawn[F < Future](fut: F) -> TaskHandle
 ```
 
 ### 8.2 Reactor abstraction
 
-Implementation lives in `crates/ruxen-core/runtime/reactor.c` (new file,
+Implementation lives in `library/std/future/runtime/reactor.c` (new file,
 linked into every Ruxen binary that uses async — guarded by
 `--features runtime-async`):
 
@@ -518,26 +563,16 @@ No allocator per `.await` beyond the one boxed root future in
 
 ### 8.4 Startup
 
-**Explicit**, not implicit:
+**Explicit**, not implicit. Top-level statements call `block_on`, [implemented]:
 
-```ruxen
-def main
-  runtime.block_on do
-    app.run()
-  end
-end
+```ruby
+block_on(app.run())
 ```
 
-Rationale: matches Rust's explicit `#[tokio::main]`, matches Ruxen's
+Rationale: matches Ruxen's
 "no hidden runtime" principle, and allows the compiler to avoid linking
 the reactor for programs that never use async (saves ~30 KB in the
 statically-linked binary).
-
-A convenience macro may later be provided:
-
-```ruxen
-async_main! app.run()
-```
 
 ---
 
@@ -605,10 +640,10 @@ Phase 1 (3b-3c): **abort-on-drop only.** Dropping a future causes its
 state machine to drop, which drops all live locals. There is no
 `CancellationToken`, no cooperative cancellation signal, no `select!`.
 
-Timeouts are built on drop:
+Timeouts are built on drop. The combinator is [planned](../../TODO.md#t-req-async):
 
-```ruxen
-let result = runtime.timeout(5.seconds, fetch_user(id)).await
+```ruby
+result = runtime.timeout(5.seconds, fetch_user(id)).await
 ```
 
 `timeout` is a combinator future that wakes on a timer and drops the
@@ -629,23 +664,25 @@ Create a new stdlib module `core.async_io`. Do **not** re-export
 blocking `fs`/`net` with an `async_` prefix — keep the namespaces
 separated to avoid ambiguity about which API a user is using.
 
-Minimum viable surface for Phase 3d:
+Minimum viable surface for Phase 3d, in the Ruby stdlib shapes
+([planned](../../TODO.md#t-stdlib-shapes)); every method raises `IOError` instead of
+returning a [deprecated] `Result` (exceptions are [planned](../../TODO.md#t-exceptions)):
 
-```ruxen
+```ruby
 # async_io.net
-async def TcpStream.connect(addr: &str) -> Result[TcpStream, IoError]
-async def TcpStream.read(&var self, buf: &var [UInt8]) -> Result[USize, IoError]
-async def TcpStream.write(&var self, buf: &[UInt8]) -> Result[USize, IoError]
-async def TcpListener.bind(addr: &str) -> Result[TcpListener, IoError]
-async def TcpListener.accept(&var self) -> Result[(TcpStream, SocketAddr), IoError]
+async def TCPSocket.connect(addr: &String) -> TCPSocket
+async def var TCPSocket.read(buf: &var Array[UInt8]) -> Int
+async def var TCPSocket.write(buf: &Array[UInt8]) -> Int
+async def TCPServer.bind(addr: &String) -> TCPServer
+async def var TCPServer.accept -> [TCPSocket, Addrinfo]
 
 # async_io.time
-async def sleep(duration: Duration) -> ()
-def Instant.now() -> Instant
+async def sleep(seconds: Float) -> nil
+def Time.now -> Time
 
 # async_io.fs (Phase 3d+1)
-async def fs.read_to_string(path: &str) -> Result[String, IoError]
-async def fs.write(path: &str, data: &[UInt8]) -> Result[(), IoError]
+async def File.read(path: &String) -> String
+async def File.write(path: &String, data: &Array[UInt8]) -> Int
 ```
 
 ### 12.2 Under the hood
@@ -665,92 +702,92 @@ files.
 Lexer: **no changes** (tokens already present).
 
 Parser:
-- `crates/ruxen-core/src/parser/ast.rs` — add `is_async: bool` to
+- `compiler/ruxen_core/src/parser/ast.rs` — add `is_async: bool` to
   `FuncDef` (`:544`), `MethodSig` (`:567`), `ClosureExpr` (`:480`);
   add `ExprKind::Await(Box<Expr>)` near `:320`; add
   `ExprKind::AsyncBlock(Block)` if desired for distinct formatting.
-- `crates/ruxen-core/src/parser/mod.rs` — in the item-level
+- `compiler/ruxen_core/src/parser/mod.rs` — in the item-level
   dispatcher around `:513`/`:517`, accept optional `Async` token
   before `Def`; thread through to `parse_func_def` (`:1285`) — add
   `is_async` parameter. Same for mixin / extension method parsing
   (`:1152`, `:1200`, `:1205`).
-- `crates/ruxen-core/src/parser/expr.rs` — in postfix-chain loop,
+- `compiler/ruxen_core/src/parser/expr.rs` — in postfix-chain loop,
   handle `Dot Await` → `ExprKind::Await`; in primary dispatcher,
   handle `TokenKind::Await` → prefix form; extend
   `is_expression_start` around `:1056` to include `Await`.
-- `crates/ruxen-core/src/parser/printer.rs` — print the new nodes.
-- `crates/ruxen-core/src/formatter/format_expr.rs` and
+- `compiler/ruxen_core/src/parser/printer.rs` — print the new nodes.
+- `compiler/ruxen_core/src/formatter/format_expr.rs` and
   `comments.rs` — format `.await` chains, `async def`, `async do`.
 
 Resolver / HIR:
-- `crates/ruxen-core/src/hir/nodes.rs` — add `HirExprKind::Await`
+- `compiler/ruxen_core/src/hir/nodes.rs` — add `HirExprKind::Await`
   (`:51`); add `is_async: bool` to `HirFuncDef` (`:378`) and closure
   (`:168`).
-- `crates/ruxen-core/src/resolve/mod.rs` — lower `ExprKind::Await`
+- `compiler/ruxen_core/src/resolve/mod.rs` — lower `ExprKind::Await`
   into `HirExprKind::Await`; add `ScopeKind::AsyncFunction` /
   `ScopeKind::AsyncClosure` to `scope.rs:16` and check that
   `await` only appears inside one (new error: `E_await_outside_async`).
 
 Typeck:
-- `crates/ruxen-core/src/typeck/infer.rs` — typing rule for
+- `compiler/ruxen_core/src/typeck/infer.rs` — typing rule for
   `Await`: `e: F` where `F: Future[Output = T]` yields expression
   of type `T`. Emit constraint via the mixin solver. For an `async
   def -> T`, the function's exported type is
   `some Future[Output = T]` (desugared at type-check or at MIR
   lowering).
-- `crates/ruxen-core/src/typeck/traits.rs` — register `Future` as
+- `compiler/ruxen_core/src/typeck/traits.rs` — register `Future` as
 
   a known mixin with one associated type `Output`.
 
 Borrow check:
-- `crates/ruxen-core/src/borrow_check/mod.rs` — new pass
+- `compiler/ruxen_core/src/borrow_check/mod.rs` — new pass
   `check_borrows_across_await`. Reuse existing `BorrowSet` and
   region machinery.
-- `crates/ruxen-core/src/borrow_check/errors.rs` — new `ErrorCode`
+- `compiler/ruxen_core/src/borrow_check/errors.rs` — new `ErrorCode`
   entries: `E_await_outside_async`, `E_borrow_across_await`,
   `E_future_not_send`.
 
 MIR:
-- `crates/ruxen-core/src/mir/nodes.rs` — add `Terminator::Suspend`
+- `compiler/ruxen_core/src/mir/nodes.rs` — add `Terminator::Suspend`
   (`:323`).
-- `crates/ruxen-core/src/mir/lower.rs` — new function
+- `compiler/ruxen_core/src/mir/lower.rs` — new function
   `lower_async_function` near `:115`. Detect `is_async`, compute
   liveness across `HirExprKind::Await`, synthesize state enum +
   state struct + `poll` method, rewrite call sites. Factor out
   liveness analysis into `mir/liveness.rs` (new file).
-- `crates/ruxen-core/src/mir/tests.rs` — new suite
+- `compiler/ruxen_core/src/mir/tests.rs` — new suite
   `async_lowering_tests` with fixture programs.
 
 Codegen:
-- `crates/ruxen-core/src/codegen/cranelift.rs` — handle
+- `compiler/ruxen_core/src/codegen/cranelift.rs` — handle
   `Terminator::Suspend` (emit a return-with-Pending path and a
   resume label).
-- `crates/ruxen-core/src/codegen/llvm/mod.rs` — same, for LLVM
+- `compiler/ruxen_core/src/codegen/llvm/mod.rs` — same, for LLVM
   backend.
-- `crates/ruxen-core/src/codegen/runtime.rs` — map
+- `compiler/ruxen_core/src/codegen/runtime.rs` — map
   `core.runtime.block_on`, `core.runtime.yield_now`,
   `core.runtime.spawn` to C runtime entry points.
 
 Runtime (C):
-- `crates/ruxen-core/runtime/reactor.c` — new, epoll/kqueue loop.
-- `crates/ruxen-core/runtime/waker.c` — new, waker primitives.
-- `crates/ruxen-core/runtime/runtime.c` — link in reactor
+- `library/std/future/runtime/reactor.c` — new, epoll/kqueue loop.
+- `library/std/future/runtime/waker.c` — new, waker primitives.
+- the pre-split `runtime.c` (now `library/std/<pkg>/runtime/*.c`) — link in reactor
   conditionally.
 
 Corelib (Ruxen source):
-- `crates/ruxen-core/src/corelib/future.rx` — `Future`, `Poll`,
+- `compiler/ruxen_core/src/corelib/future.rx` — `Future`, `Poll`,
   `Context`, `Waker` definitions.
-- `crates/ruxen-core/src/corelib/runtime.rx` — `block_on`,
+- `compiler/ruxen_core/src/corelib/runtime.rx` — `block_on`,
   `spawn`, `yield_now`.
-- `crates/ruxen-core/src/corelib/async_io/...` — Phase 3d.
+- `compiler/ruxen_core/src/corelib/async_io/...` — Phase 3d.
 
 LSP / tooling:
-- `crates/ruxen-ide/src/semantic_tokens.rs:109-111` — already
+- `src/ruxen_ide/src/semantic_tokens.rs:109-111` — already
   flags `async`/`await` as keywords; add hover text.
-- `crates/ruxen-cli/` — no changes.
+- `src/ruxen_cli/` — no changes.
 
 Tests:
-- New fixture files in `crates/ruxen-core/tests/fixtures/`:
+- New fixture files in `compiler/ruxen_core/tests/fixtures/`:
   `async_basic.rx`, `async_await_chain.rx`, `async_borrow.rx`
   (borrow-across-await failure case), `async_send.rx` (Send
   failure case), `async_timer.rx`, `async_tcp_echo.rx`.
@@ -858,8 +895,8 @@ Out of scope here.
   with Q1 (explicitness). *Decision*: require explicit `async do` —
   no inference.
 
-- **Q7.** Reactor as a library dependency or as part of `ruxen-core`?
-  Proposal: part of `ruxen-core`, behind a Cargo feature
+- **Q7.** Reactor as a library dependency or as part of `ruxen_core`?
+  Proposal: part of `ruxen_core`, behind a Cargo feature
   `runtime-async` (on by default). Allows embedded / no_std Ruxen
   later without dragging in epoll.
 
@@ -875,7 +912,7 @@ Phase 3b is complete when:
 4. Borrow-across-await rejection emits diagnostic
    `E_borrow_across_await` with correct spans.
 5. All Phase 3a hand-written future provisions still work unchanged.
-6. `cargo test -p ruxen-core -- async` passes.
+6. `cargo test -p ruxen_core -- async` passes.
 
 Phase 3c is complete when:
 
@@ -892,20 +929,20 @@ Phase 3c is complete when:
 
 | Concern                | File : Line                                                       |
 |------------------------|-------------------------------------------------------------------|
-| `async`/`await` reserved | `crates/ruxen-core/src/lexer/token.rs:84-85, 306-307`            |
-| `yield` reserved         | `crates/ruxen-core/src/lexer/token.rs:83, 305`                  |
-| `Yield` AST node       | `crates/ruxen-core/src/parser/ast.rs:324-325`                    |
-| `Yield` parsed         | `crates/ruxen-core/src/parser/expr.rs:434-450`                   |
-| `Yield` resolved (stub) | `crates/ruxen-core/src/resolve/mod.rs:1971-1983`                 |
-| `yield` codegen stub    | `crates/ruxen-core/src/codegen/runtime.rs:69-70`                 |
-| `FuncDef` AST           | `crates/ruxen-core/src/parser/ast.rs:544-556`                   |
-| `FuncDef` parser        | `crates/ruxen-core/src/parser/mod.rs:1285-1398`                 |
-| `HirFuncDef`            | `crates/ruxen-core/src/hir/nodes.rs:378-390`                    |
-| `HirExprKind`           | `crates/ruxen-core/src/hir/nodes.rs:51-242`                     |
-| `Ty` enum               | `crates/ruxen-core/src/hir/types.rs:39-166`                     |
-| MIR `Terminator`        | `crates/ruxen-core/src/mir/nodes.rs:319-342`                    |
-| MIR lower entry         | `crates/ruxen-core/src/mir/lower.rs:47, 115`                    |
-| Borrow checker entry    | `crates/ruxen-core/src/borrow_check/mod.rs:30`                  |
-| Runtime C source        | `crates/ruxen-core/runtime/runtime.c` (no async primitives)     |
-| Scope kinds             | `crates/ruxen-core/src/resolve/scope.rs:16-35`                  |
-| Semantic tokens         | `crates/ruxen-ide/src/semantic_tokens.rs:109-111`               |
+| `async`/`await` reserved | `compiler/ruxen_core/src/lexer/token.rs:84-85, 306-307`            |
+| `yield` reserved         | `compiler/ruxen_core/src/lexer/token.rs:83, 305`                  |
+| `Yield` AST node       | `compiler/ruxen_core/src/parser/ast.rs:324-325`                    |
+| `Yield` parsed         | `compiler/ruxen_core/src/parser/expr.rs:434-450`                   |
+| `Yield` resolved (stub) | `compiler/ruxen_core/src/resolve/mod.rs:1971-1983`                 |
+| `yield` codegen stub    | `compiler/ruxen_core/src/codegen/runtime.rs:69-70`                 |
+| `FuncDef` AST           | `compiler/ruxen_core/src/parser/ast.rs:544-556`                   |
+| `FuncDef` parser        | `compiler/ruxen_core/src/parser/mod.rs:1285-1398`                 |
+| `HirFuncDef`            | `compiler/ruxen_core/src/hir/nodes.rs:378-390`                    |
+| `HirExprKind`           | `compiler/ruxen_core/src/hir/nodes.rs:51-242`                     |
+| `Ty` enum               | `compiler/ruxen_core/src/hir/types.rs:39-166`                     |
+| MIR `Terminator`        | `compiler/ruxen_core/src/mir/nodes.rs:319-342`                    |
+| MIR lower entry         | `compiler/ruxen_core/src/mir/lower.rs:47, 115`                    |
+| Borrow checker entry    | `compiler/ruxen_core/src/borrow_check/mod.rs:30`                  |
+| Runtime C source        | the pre-split `runtime.c` (now `library/std/<pkg>/runtime/*.c`) (no async primitives)     |
+| Scope kinds             | `compiler/ruxen_core/src/resolve/scope.rs:16-35`                  |
+| Semantic tokens         | `src/ruxen_ide/src/semantic_tokens.rs:109-111`               |

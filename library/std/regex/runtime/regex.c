@@ -8,15 +8,19 @@
  * package — see commit 12e24ce (Phase 0 of the std.regex plan)
  * for the vendoring rationale.
  *
- * All ruxen_regex_* / ruxen_match_* / ruxen_regex_error_* symbols
- * here are wired through compiler/ruxen_core/src/codegen/cranelift/
- * runtime_sigs.rs in Phase 2; this TU just produces them.
+ * Every symbol here except ruxen_regex_compile_const is declared in a
+ * `lib "runtime/regex.c"` block in ../src/lib.rx, which derives its ABI.
  *
  * Match handle ownership: every successful match() / scan() copies
  * the subject string + ovector + named-table into a fresh RuxenMatch
  * so the Ruxen caller can drop the original subject String and still
- * query the match. Drop is auto-synthesised on the class Match in
- * lib.rx and routes to ruxen_match_drop here.
+ * query the match.
+ *
+ * Drop contract: Regex, Match and RegexError each declare
+ * `def drop as "ruxen_*_drop"` in lib.rx. At scope exit the MIR drop
+ * elaborator calls that hook and THEN `ruxen_dealloc`s the handle
+ * itself, so each hook frees only what the handle points to, never
+ * the handle.
  *
  * Replay-flag interaction: regex helpers are idempotent (pure
  * compile + match + replace) and do NOT check ruxen_repl_is_replaying.
@@ -34,31 +38,6 @@
 /* ruxen_vec_new / _push and ruxen_hash_new / _insert are declared in
  * runtime.h above (cross-package surface). Defined in
  * library/std/array/runtime/vec.c and library/std/hash/runtime/hash.c. */
-
-/* ── Option constructors (inlined) ───────────────────────────────────
- *
- * The runtime has no public _some_value / _none_value factory — codegen
- * normally allocates Option payloads from MIR via Alloc + SetField, and
- * cross-package C call sites that need to fabricate one from C do this
- * inline. See library/std/io/runtime/bufio.c:90 for the canonical
- * pattern this is modelled on.
- *
- * Layout: 16 bytes, {i32 tag; i32 pad; i64 payload}. tag = 0 → None,
- * tag = 1 → Some. Matches the resolver's variant_idx ordering and
- * the Result helpers in runtime.h. */
-static void *ruxen_regex_option_none(void) {
-    int64_t *out = (int64_t *)ruxen_alloc(16);
-    *(int32_t *)out = 0; /* None */
-    out[1] = 0;
-    return out;
-}
-
-static void *ruxen_regex_option_some(int64_t payload) {
-    int64_t *out = (int64_t *)ruxen_alloc(16);
-    *(int32_t *)out = 1; /* Some */
-    out[1] = payload;
-    return out;
-}
 
 /* ── Flag-string → PCRE2 compile options ─────────────────────────── */
 
@@ -90,8 +69,8 @@ static uint32_t flags_to_pcre2(const char *flags) {
  * + named-table so the caller can drop the original subject String
  * and still read groups out of the Match.
  *
- * Allocated via ruxen_alloc; freed in ruxen_match_drop (which Ruxen's
- * implicit_includes synth-Drop calls when a Match goes out of scope).
+ * Allocated via ruxen_alloc. ruxen_match_drop frees the three copies;
+ * the drop elaborator's trailing ruxen_dealloc frees the struct.
  * ovector_count is the *pair* count (PCRE2's `rc` from pcre2_match_8);
  * indexing uses ovector_copy[n*2] / [n*2+1] for start/end of group n. */
 typedef struct RuxenMatch {
@@ -109,7 +88,9 @@ void ruxen_match_drop(RuxenMatch *m) {
     if (m->subject_copy)     ruxen_dealloc(m->subject_copy);
     if (m->ovector_copy)     ruxen_dealloc(m->ovector_copy);
     if (m->named_table_copy) ruxen_dealloc(m->named_table_copy);
-    ruxen_dealloc(m);
+    m->subject_copy = NULL;
+    m->ovector_copy = NULL;
+    m->named_table_copy = NULL;
 }
 
 /* ── Compile-time literal path ───────────────────────────────────── */
@@ -130,14 +111,19 @@ pcre2_code_8 *ruxen_regex_compile_const(const char *pattern, const char *flags) 
     return re;
 }
 
+/* A compiled pattern is a single block from PCRE2's default allocator
+ * (malloc): regex.c never JIT-compiles or deserialises a pattern, the only
+ * cases where pcre2_code_free_8 releases anything beyond that block. The
+ * drop elaborator's trailing ruxen_dealloc (free) releases the block, so
+ * calling pcre2_code_free_8 here would free it twice. */
 void ruxen_regex_drop(pcre2_code_8 *r) {
-    if (r) pcre2_code_free_8(r);
+    (void)r;
 }
 
 /* ── Runtime compile path + RegexError ───────────────────────────── */
 
 /* Wire form of RegexError. Single-shot — created by ruxen_regex_new
- * on the Err path, freed by the auto-synth Drop on RegexError. */
+ * on the Err path, its message freed by ruxen_regex_error_drop. */
 typedef struct RuxenRegexError {
     char    *message;          /* allocated, NUL-terminated */
     int64_t  offset;           /* byte offset into pattern */
@@ -146,7 +132,7 @@ typedef struct RuxenRegexError {
 void ruxen_regex_error_drop(RuxenRegexError *e) {
     if (!e) return;
     if (e->message) ruxen_dealloc(e->message);
-    ruxen_dealloc(e);
+    e->message = NULL;
 }
 
 char *ruxen_regex_error_message(RuxenRegexError *e) {
@@ -237,17 +223,17 @@ static RuxenMatch *build_match_handle(pcre2_code_8 *r, const char *text,
 }
 
 void *ruxen_regex_match(pcre2_code_8 *r, const char *text) {
-    if (!r || !text) return ruxen_regex_option_none();
+    if (!r || !text) return ruxen_option_none();
     pcre2_match_data_8 *md = pcre2_match_data_create_from_pattern_8(r, NULL);
     int rc = pcre2_match_8(r, (PCRE2_SPTR)text, PCRE2_ZERO_TERMINATED,
                            0, 0, md, NULL);
     if (rc < 0) {
         pcre2_match_data_free_8(md);
-        return ruxen_regex_option_none();
+        return ruxen_option_none();
     }
     RuxenMatch *m = build_match_handle(r, text, md, rc);
     pcre2_match_data_free_8(md);
-    return ruxen_regex_option_some((int64_t)(intptr_t)m);
+    return ruxen_option_some((int64_t)(intptr_t)m);
 }
 
 /* ── Match accessors ─────────────────────────────────────────────── */
@@ -274,22 +260,22 @@ int64_t ruxen_match_end(RuxenMatch *m) {
 }
 
 void *ruxen_match_group(RuxenMatch *m, int64_t n) {
-    if (!m || n < 0 || n >= m->ovector_count) return ruxen_regex_option_none();
+    if (!m || n < 0 || n >= m->ovector_count) return ruxen_option_none();
     PCRE2_SIZE start = m->ovector_copy[n * 2];
     PCRE2_SIZE end   = m->ovector_copy[n * 2 + 1];
     /* PCRE2 marks non-participating groups with PCRE2_UNSET. */
     if (start == PCRE2_UNSET || end == PCRE2_UNSET) {
-        return ruxen_regex_option_none();
+        return ruxen_option_none();
     }
     size_t len = end - start;
     char *buf = (char *)ruxen_alloc(len + 1);
     memcpy(buf, m->subject_copy + start, len);
     buf[len] = '\0';
-    return ruxen_regex_option_some((int64_t)(intptr_t)buf);
+    return ruxen_option_some((int64_t)(intptr_t)buf);
 }
 
 void *ruxen_match_named(RuxenMatch *m, const char *name) {
-    if (!m || !m->named_table_copy || !name) return ruxen_regex_option_none();
+    if (!m || !m->named_table_copy || !name) return ruxen_option_none();
     for (int i = 0; i < m->named_count; i++) {
         const char *entry = m->named_table_copy + (size_t)i * m->named_entry_size;
         /* PCRE2 name-table entry layout: 2-byte big-endian group index
@@ -300,7 +286,7 @@ void *ruxen_match_named(RuxenMatch *m, const char *name) {
             return ruxen_match_group(m, (int64_t)group_idx);
         }
     }
-    return ruxen_regex_option_none();
+    return ruxen_option_none();
 }
 
 /* groups → Array[Option[String]], one entry per ovector pair. */
@@ -318,7 +304,11 @@ void *ruxen_match_groups(RuxenMatch *m) {
  * that participated in the match. Non-participating named groups are
  * omitted (matches the Option-elision pattern from .group()). */
 void *ruxen_match_named_groups(RuxenMatch *m) {
-    RuxenHash *map = ruxen_hash_new();
+    /* Every key here is an owned capture-group NAME, a `char*`, so the
+       table's key descriptor is RUXEN_ELEM_CSTR (B73). A table built inside
+       the C runtime states its own: the compiler supplies it only to `.rx`
+       calls. */
+    RuxenHash *map = ruxen_hash_new(RUXEN_ELEM_CSTR);
     if (!m || !m->named_table_copy) return map;
     for (int i = 0; i < m->named_count; i++) {
         const char *entry = m->named_table_copy + (size_t)i * m->named_entry_size;
@@ -340,7 +330,7 @@ void *ruxen_match_named_groups(RuxenMatch *m) {
         memcpy(name_copy, name, name_len + 1);
         ruxen_hash_insert(map,
                           (int64_t)(intptr_t)name_copy,
-                          (int64_t)(intptr_t)buf);
+                          (int64_t)(intptr_t)buf, RUXEN_ELEM_CSTR);
     }
     return map;
 }

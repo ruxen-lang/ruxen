@@ -1,5 +1,0 @@
-def main
-  let s = "   hello   "
-  puts "[#{s.trim}]"
-  puts "#{s.trim.size}"
-end

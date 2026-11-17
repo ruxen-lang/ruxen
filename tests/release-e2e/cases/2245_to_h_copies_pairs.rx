@@ -1,0 +1,24 @@
+# `Array#to_h` copies each pair the way the pairs' own drop frees it (its
+# declared `ElemDesc[T]` parameter), so the source array and the table drop
+# independently; the last pair for a key wins, and a replaced pair is never
+# copied.
+def mk(n: Int) -> String
+  "s-#{n}"
+end
+
+def run -> nil
+  ints = [(1, 10), (2, 20), (1, 30)]
+  let hi: Hash[Int, Int] = ints.to_h
+  puts(hi.size)
+  puts(hi[1])
+  strs = [(mk(1), mk(2)), (mk(3), mk(4)), (mk(1), mk(5))]
+  let hs: Hash[String, String] = strs.to_h
+  puts(hs.size)
+  puts(hs[mk(1)])
+  nested = [(mk(6), [mk(7), mk(8)])]
+  let hn: Hash[String, Array[String]] = nested.to_h
+  puts(hn.size)
+  puts(strs.size)
+end
+
+run

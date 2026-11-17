@@ -1,0 +1,35 @@
+## A scalar `&var` parameter (Int, Float, Bool) is the address of the
+## caller's variable, so a write in the callee reaches the caller, also when
+## the callee passes it on to another `&var` parameter. Scalars used to be
+## passed by value and every write was lost.
+def bump(n: &var Int) -> nil
+  n += 1
+end
+
+def twice(n: &var Int) -> nil
+  bump(n)
+  bump(n)
+  puts "inside #{n}"
+end
+
+def halve(x: &var Float) -> nil
+  x = x / 2.0
+end
+
+def flip(b: &var Bool) -> nil
+  b = !b
+end
+
+n = 1
+bump(n)
+puts n
+bump(&var n)
+puts n
+twice(n)
+puts n
+x = 5.0
+halve(x)
+puts x
+b = false
+flip(b)
+puts b

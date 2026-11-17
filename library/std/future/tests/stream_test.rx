@@ -1,0 +1,167 @@
+use std.future.AsyncSender
+use std.future.AsyncReceiver
+
+class Counter
+  n: Int
+  limit: Int
+  include Stream
+  type Item = Int
+
+  def init(limit: Int)
+    self.n = 0
+    self.limit = limit
+  end
+
+  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
+    if self.n >= self.limit
+      return Poll.Ready(nil)
+    end
+    self.n = self.n + 1
+    Poll.Ready(Some(self.n))
+  end
+end
+
+class QueueStream
+  rx_ptr: Int
+  remaining: Int
+  include Stream
+  type Item = Int
+
+  def init(rx_ptr: Int, want: Int)
+    self.rx_ptr = rx_ptr
+    self.remaining = want
+  end
+
+  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
+    if self.remaining <= 0
+      return Poll.Ready(nil)
+    end
+    let code = ruxen_queue_recv_step(self.rx_ptr, cx)
+    if code == 0
+      return Poll.Pending
+    end
+    if code == 2
+      self.remaining = 0
+      return Poll.Ready(nil)
+    end
+    let v = ruxen_queue_recv_taken_value(self.rx_ptr)
+    self.remaining = self.remaining - 1
+    Poll.Ready(Some(v))
+  end
+end
+
+## Yields 1, then ends, then (wrongly) yields 99 if polled again.
+class Naughty
+  step: Int
+  include Stream
+  type Item = Int
+
+  def init
+    self.step = 0
+  end
+
+  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
+    self.step = self.step + 1
+    if self.step == 1
+      return Poll.Ready(Some(1))
+    end
+    if self.step == 2
+      return Poll.Ready(nil)
+    end
+    Poll.Ready(Some(99))
+  end
+end
+
+async def send_42(tx: AsyncSender) -> Int
+  let _a = tx.send(42).await
+  0
+end
+
+def poll_trace(m: &var MapStream, count: Int) -> String
+  var cx = Context.executor
+  var trace = ""
+  var i = 0
+  while i < count
+    match (&var m).poll_next(&var cx)
+      Poll.Ready(item) ->
+        match item
+          Some(v) -> trace = trace + "some #{v};"
+          nil -> trace = trace + "end;"
+        end
+      Poll.Pending -> trace = trace + "pending;"
+    end
+    i = i + 1
+  end
+  trace
+end
+
+Tester.describe("Stream") do |t: &var Tester|
+  t.it("drains a source with for_each, count and sum") do
+    var got: Array[Int] = Array.new
+    var a = Counter.new(3)
+    a.for_each do |v|
+      got.push(v)
+    end
+    t.expect(got).to_eq([1, 2, 3])
+    var b = Counter.new(3)
+    t.expect(b.count).to_eq(3)
+    var c = Counter.new(3)
+    t.expect(c.sum).to_eq(6)
+  end
+
+  t.it("pumps a queue-backed stream fed by a task") do
+    let qp = ruxen_queue_new(2, Overflow.Suspend)
+    let tx = AsyncSender.new(qp)
+    let _h = Task.spawn_raw(send_42(tx))
+    var got: Array[Int] = Array.new
+    var s = QueueStream.new(qp, 1)
+    s.for_each do |v|
+      got.push(v)
+    end
+    t.expect(got).to_eq([42])
+  end
+
+  t.it("maps each item") do
+    var got: Array[Int] = Array.new
+    var m = MapStream.new(Counter.new(3), { |x| x * 10 })
+    m.for_each do |v|
+      got.push(v)
+    end
+    t.expect(got).to_eq([10, 20, 30])
+    var m2 = MapStream.new(Counter.new(3), { |x| x * 10 })
+    t.expect(m2.sum).to_eq(60)
+  end
+
+  t.it("filters items") do
+    var got: Array[Int] = Array.new
+    var f = FilterStream.new(Counter.new(6), { |x| x % 2 == 0 })
+    f.for_each do |v|
+      got.push(v)
+    end
+    t.expect(got).to_eq([2, 4, 6])
+    var f2 = FilterStream.new(Counter.new(6), { |x| x % 2 == 0 })
+    t.expect(f2.sum).to_eq(12)
+  end
+
+  t.it("takes a prefix, alone and after map and filter") do
+    var t0 = TakeStream.new(Counter.new(10), 3)
+    t.expect(t0.sum).to_eq(6)
+    var got: Array[Int] = Array.new
+    var mapped = MapStream.new(Counter.new(100), { |x| x * x })
+    var evens = FilterStream.new(mapped, { |x| x % 2 == 0 })
+    var first3 = TakeStream.new(evens, 3)
+    first3.for_each do |v|
+      got.push(v)
+    end
+    t.expect(got).to_eq([4, 16, 36])
+    var mapped2 = MapStream.new(Counter.new(100), { |x| x * x })
+    var evens2 = FilterStream.new(mapped2, { |x| x % 2 == 0 })
+    var first3b = TakeStream.new(evens2, 3)
+    t.expect(first3b.sum).to_eq(56)
+  end
+
+  t.it("fuses an adapter after its source ends") do
+    var m = MapStream.new(Naughty.new, { |x| x * 10 })
+    t.expect(poll_trace(&var m, 4)).to_eq("some 10;end;end;end;")
+  end
+end

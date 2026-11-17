@@ -1,0 +1,88 @@
+def matches(pat: &String, text: &String) -> Bool
+  match Regex.new(pat, "")
+    Ok(rx) -> rx.is_match(text)
+    Err(_) -> false
+  end
+end
+
+def find_digits(text: &String) -> Option[Match]
+  match Regex.new("(?<n>\\d+)-(\\w+)", "")
+    Ok(re) -> re.find(text)
+    Err(_) -> nil
+  end
+end
+
+def start_of_digits(text: &String) -> Int
+  match find_digits(text)
+    Some(m) -> m.start_pos
+    nil -> -1
+  end
+end
+
+def error_offset -> Int
+  match Regex.new("(unclosed", "")
+    Ok(_) -> -1
+    Err(e) -> e.offset
+  end
+end
+
+def literal_end(text: &String) -> Int
+  let lit = /b+/
+  match lit.find(text)
+    Some(m) -> m.end_pos
+    nil -> -1
+  end
+end
+
+Tester.describe("Regex") do |t: &var Tester|
+  t.it("matches a literal with ~=") do
+    t.expect("x42y" ~= /\d+/).to_eq(true)
+    let s = "error: 42"
+    t.expect(s ~= /error/).to_eq(true)
+    t.expect("abc" ~= /\d/).to_eq(false)
+  end
+
+  t.it("captures numbered groups") do
+    var groups = ""
+    match /code=(\d+) name=(\w+)/.find("code=42 name=ok")
+      Some(m) -> groups = "#{m.group(1).unwrap_or("")} #{m.group(2).unwrap_or("")}"
+      nil -> groups = "no match"
+    end
+    t.expect(groups).to_eq("42 ok")
+  end
+
+  t.it("scans every match") do
+    t.expect(/\d+/.scan("a1 b22 c333").size).to_eq(3)
+  end
+
+  t.it("replaces every match") do
+    t.expect(/\w+/.replace_all("foo bar baz", "***")).to_eq("*** *** ***")
+  end
+
+  t.it("splits on a pattern") do
+    t.expect(/,/.split("alpha,beta,gamma,delta").size).to_eq(4)
+  end
+
+  t.it("compiles a pattern at runtime") do
+    t.expect(Regex.new("\\d+", "").ok?).to_eq(true)
+    let digits = "^\\d+$"
+    t.expect(matches(&digits, &"42")).to_eq(true)
+    t.expect(matches(&digits, &"4a2")).to_eq(false)
+  end
+
+  t.it("reports positions and error offsets across many scopes") do
+    var starts = 0
+    var offsets = 0
+    var ends = 0
+    var i = 0
+    while i < 2000
+      starts = starts + start_of_digits("id 42-abc here")
+      offsets = offsets + error_offset()
+      ends = ends + literal_end("abbcbbbd")
+      i = i + 1
+    end
+    t.expect(starts).to_eq(6000)
+    t.expect(offsets).to_eq(18000)
+    t.expect(ends).to_eq(6000)
+  end
+end

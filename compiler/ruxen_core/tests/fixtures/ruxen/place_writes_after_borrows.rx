@@ -1,0 +1,49 @@
+class A
+  name: String
+  def init(@name: String)
+  end
+end
+
+class U
+  name: String
+  count: Int
+  a: A
+  items: Array[String]
+  def init(@name: String, @a: A, @items: Array[String])
+    @count = 0
+  end
+end
+
+def mk(k: Int) -> U
+  U.new("old-#{k}", A.new("a-#{k}"), ["e0-#{k}", "e1-#{k}"])
+end
+
+def both(s: &var String, t: &var String) -> nil
+  s = "both-s"
+  t = "both-t"
+end
+
+def run(k: Int) -> nil
+  u = mk(k)
+  x = u.name
+  puts x
+  u.name += "-more"
+  puts u.name
+  m = 0
+  u.name, m = "multi-#{k}", 2
+  puts "#{u.name} #{m}"
+  y = u.name
+  f = -> { puts(y) }
+  f.()
+  u = mk(5)
+  puts u.name
+  for it in u.items
+    u.count += 1
+    puts(it)
+  end
+  puts u.count
+  both(&var u.name, &var u.a.name)
+  puts "#{u.name} #{u.a.name}"
+end
+
+run(3)

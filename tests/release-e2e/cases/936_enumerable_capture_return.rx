@@ -1,0 +1,29 @@
+def main
+  let array = [1, 2, 3, 4]
+  let array_selected = array.select do |x| x % 2 == 0 end
+  let array_rejected = array.reject do |x| x % 2 == 0 end
+  let array_mapped = array.map do |x| x * 10 end
+  let array_partitioned = array.partition do |x| x % 2 == 0 end
+  puts "array=#{array_selected.size}/#{array_rejected.size}/#{array_mapped.size}/#{array_partitioned.0.size}/#{array_partitioned.1.size}"
+
+  var set: Set[Int] = Set.new
+  set.insert(1)
+  set.insert(2)
+  set.insert(3)
+  set.insert(4)
+  let set_selected = set.select do |x| x % 2 == 0 end
+  let set_rejected = set.reject do |x| x % 2 == 0 end
+  let set_mapped = set.map do |x| x * 10 end
+  let set_partitioned = set.partition do |x| x % 2 == 0 end
+  puts "set=#{set_selected.size}/#{set_rejected.size}/#{set_mapped.size}/#{set_partitioned.0.size}/#{set_partitioned.1.size}"
+
+  let hash: Hash[String, Int] = Hash.new
+  hash.insert("a", 1)
+  hash.insert("b", 2)
+  hash.insert("c", 3)
+  let hash_selected = hash.select do |kv| kv.1 >= 2 end
+  let hash_rejected = hash.reject do |kv| kv.1 >= 2 end
+  let hash_mapped = hash.map do |kv| kv.1 * 10 end
+  let hash_partitioned = hash.partition do |kv| kv.1 >= 2 end
+  puts "hash=#{hash_selected.size}/#{hash_rejected.size}/#{hash_mapped.size}/#{hash_partitioned.0.size}/#{hash_partitioned.1.size}"
+end

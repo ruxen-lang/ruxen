@@ -1,0 +1,17 @@
+def run(k: Int) -> nil
+  b = ["x-#{k}"]
+  b[0] += "-more-more-more-more-more-more"
+  puts(b[0])
+  b[0].push_str("!")
+  puts(b[0])
+  c = [1, 2]
+  c[0] += 5
+  c[1] *= 3
+  puts(c[0])
+  puts(c[1])
+  f = [1.5]
+  f[0] += 1.0
+  puts(f[0])
+end
+
+run(3)

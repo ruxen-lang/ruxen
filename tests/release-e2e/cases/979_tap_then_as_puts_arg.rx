@@ -1,0 +1,15 @@
+# Pins tap/then in a `puts`/`print` argument position with a NON-String result.
+# The puts `to_s`-wrap re-infers the argument, so the interception must be
+# idempotent (re-inline the already-marked call rather than leak the reserved
+# marker name).
+def main
+  puts(10.then do |x|
+    x + 5
+  end)
+  puts(true.then do |b|
+    99
+  end)
+  puts(5.tap do |x|
+    puts(x + 100)
+  end)
+end

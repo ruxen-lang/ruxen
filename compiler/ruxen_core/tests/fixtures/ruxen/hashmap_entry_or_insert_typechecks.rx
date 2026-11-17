@@ -1,6 +1,0 @@
-def main
-  var m: Hash[Int, Int] = Hash.new
-  m.entry(1).or_insert(10)
-  m.entry(1).or_insert(99)
-  puts "#{m.size}"
-end

@@ -1,0 +1,53 @@
+# F-19: safe navigation is recorded in the HIR (`&.`), never guessed from the
+# member's name, and a bare `x.m` is a method call with no argument list.
+#
+#   * `&.take` reads the FIELD `take`. MIR used to skip safe navigation for
+#     any member named like an `Option` method (`take`, `map`, `filter`, ...)
+#     and lowered it on the `Option` itself.
+#   * `&.scaled(2)` calls with arguments through safe navigation; typeck used
+#     to type it as a call on the `Option` and MIR to call `Option_scaled`.
+#   * `s.size` picks the zero-argument overload even though
+#     `size(scale: Int)` is declared first; MIR used to call the first one
+#     with too few arguments.
+class Shelf
+  count: Int
+  take: Int
+
+  def init(@count: Int, @take: Int)
+  end
+
+  def scaled(by: Int) -> Int
+    self.count * by
+  end
+
+  def size(scale: Int) -> String
+    "scaled by #{scale}"
+  end
+
+  def size -> Int
+    self.count
+  end
+end
+
+def find(present: Bool) -> Shelf?
+  if present
+    return Shelf.new(3, 7)
+  end
+  nil
+end
+
+def main
+  let found = find(true)
+  let missing = find(false)
+
+  puts "field=#{found&.count.unwrap_or(-1)}"
+  puts "field_absent=#{missing&.count.unwrap_or(-1)}"
+  puts "option_named_field=#{found&.take.unwrap_or(-1)}"
+  puts "call_with_args=#{found&.scaled(2).unwrap_or(-1)}"
+  puts "call_absent=#{missing&.scaled(2).unwrap_or(-1)}"
+  puts "parenless_overload=#{found&.size.unwrap_or(-1)}"
+
+  let s = Shelf.new(5, 0)
+  puts "plain_parenless_overload=#{s.size}"
+  puts "plain_with_args=#{s.size(2)}"
+end

@@ -1,5 +1,0 @@
-def main
-  var h: Hash[Int, Int] = Hash.new
-  h.insert(1, 10)
-  h.clear
-end

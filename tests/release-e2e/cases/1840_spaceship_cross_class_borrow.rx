@@ -1,0 +1,52 @@
+# Borrow-check regression: a method name defined on SEVERAL classes must resolve
+# its parameter modes against the RECEIVER's class, not against whichever def the
+# symbol table happens to list first.
+#
+# `borrow_check::checks::lookup_param_is_ref` scanned by name only. When batch
+# B18 added a by-value `def <=>(other: Char)` to `class Char`, that signature
+# started governing EVERY `x.<=>(y)` call in the program, so an argument passed
+# to some other class's BY-REFERENCE `<=>` looked like a MOVE. Case 965 began
+# reporting a false `value used here after move` on an unrelated receiver.
+#
+# This pins the cross-class case directly: a user class whose `<=>` takes its
+# argument by reference is called in a program that ALSO uses `Char`'s by-value
+# `<=>`. The by-reference argument is a heap-owning `String` field holder and is
+# USED AGAIN afterwards, so a by-value misresolution reports E1001 and fails to
+# compile. A regression cannot pass this case silently.
+
+class Tag
+  name: String
+
+  def init(name: String)
+    self.name = name
+  end
+
+  # By REFERENCE. Under the bug this was governed by Char's by-value signature.
+  def <=>(other: &Tag) -> Int
+    if self.name == other.name
+      0
+    elsif self.name < other.name
+      0 - 1
+    else
+      1
+    end
+  end
+end
+
+def main()
+  # Char's by-value `<=>` (batch B18) is present in the same program.
+  let chars = "ab".chars
+  let ca: Char = chars[0]
+  let cb: Char = chars[1]
+  puts "char_cmp=#{ca.<=>(cb)}"
+
+  let first = Tag.new("apple")
+  let second = Tag.new("banana")
+
+  # The by-reference call. `second` must NOT be considered moved here.
+  puts "tag_cmp=#{first.<=>(second)}"
+
+  # Using `second` again is the actual assertion: under the bug this line was
+  # `value used here after move`.
+  puts "second_still=#{second.name}"
+end

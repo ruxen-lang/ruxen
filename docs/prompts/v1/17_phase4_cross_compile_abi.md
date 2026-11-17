@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # 17 — Phase 4: cross-compile (T4.02) + stable ABI / cbindgen (T4.05)
 
 **Depends on:** prompt 16.

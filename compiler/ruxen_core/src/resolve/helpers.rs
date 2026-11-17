@@ -1,18 +1,13 @@
-#![allow(unused_imports)]
-
-use std::collections::HashMap;
-
 use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
+use crate::hir::types::{MixinRef, Ty};
 use crate::lexer::token::Span;
 use crate::parser::ast::{self, Visibility};
 
 use super::const_helpers;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
+use super::scope::ScopeKind;
 use super::symbols::*;
-use super::{ClosureCaptureContext, ResolveResult, Resolver};
+use super::{PendingFieldHint, Resolver};
 
 impl Resolver {
     /// Tier-2 const generics S5: walk the AST `GenericParams` and
@@ -34,10 +29,7 @@ impl Resolver {
                 ast::GenericParam::Type { name, bounds, .. } => {
                     let trait_refs: Vec<MixinRef> = bounds
                         .iter()
-                        .map(|b| MixinRef {
-                            name: b.path.segments.join("."),
-                            generic_args: vec![],
-                        })
+                        .map(|b| MixinRef::from_bound_name(&b.path))
                         .collect();
                     Some(GenericParamInfo::type_param(name.clone(), trait_refs))
                 }
@@ -48,6 +40,35 @@ impl Resolver {
                 ast::GenericParam::Lifetime { .. } => None,
             })
             .collect()
+    }
+
+    /// The target of `type Name[P…] = T` with the alias's own generic
+    /// parameters in scope (as type parameters), and those parameters' names
+    /// in order: what `DefKind::TypeAlias` stores. Shared by the type
+    /// registration pass and the HIR pass.
+    pub(super) fn resolve_alias_target(&mut self, ta: &ast::TypeAliasDef) -> (Ty, Vec<String>) {
+        if ta.generic_params.is_none() {
+            return (self.resolve_type_expr(&ta.type_expr), Vec::new());
+        }
+        let generic_params = self.resolve_generic_params(&ta.generic_params);
+        self.scopes.push(ScopeKind::Class);
+        for gp in &generic_params {
+            let gp_def = self.symbols.define(
+                gp.name.clone(),
+                DefKind::TypeParam {
+                    bounds: gp.bounds.clone(),
+                },
+                Visibility::Private,
+                gp.span.clone(),
+            );
+            self.scopes.insert_type(gp.name.clone(), gp_def);
+        }
+        let target = self.resolve_type_expr(&ta.type_expr);
+        self.scopes.pop();
+        (
+            target,
+            generic_params.into_iter().map(|gp| gp.name).collect(),
+        )
     }
 
     pub(super) fn resolve_generic_params(
@@ -100,18 +121,8 @@ impl Resolver {
                             ast::GenericParam::Type { name, bounds, span } => {
                                 let trait_refs: Vec<MixinRef> = bounds
                                     .iter()
-                                    .map(|b| MixinRef {
-                                        name: b.path.segments.join("."),
-                                        generic_args: b
-                                            .path
-                                            .generic_args
-                                            .as_ref()
-                                            .map(|args| {
-                                                args.iter()
-                                                    .map(|a| self.resolve_type_expr(a))
-                                                    .collect()
-                                            })
-                                            .unwrap_or_default(),
+                                    .map(|b| {
+                                        MixinRef::from_bound(&b.path, |a| self.resolve_type_expr(a))
                                     })
                                     .collect();
                                 Some(HirGenericParam {
@@ -162,31 +173,14 @@ impl Resolver {
             .collect()
     }
 
+    /// [`Self::resolve_params`], with each param also bound by name in the
+    /// current value scope.
     pub(super) fn resolve_and_register_params(&mut self, params: &[ast::Param]) -> Vec<HirParam> {
-        params
-            .iter()
-            .map(|p| {
-                let ty = self.resolve_type_expr(&p.type_expr);
-                let def_id = self.symbols.define(
-                    p.name.clone(),
-                    DefKind::Param {
-                        ty: ty.clone(),
-                        auto_assign: p.auto_assign,
-                    },
-                    Visibility::Private,
-                    p.span.clone(),
-                );
-                self.scopes.insert(p.name.clone(), def_id);
-                HirParam {
-                    def_id,
-                    name: p.name.clone(),
-                    ty,
-                    auto_assign: p.auto_assign,
-                    default: p.default.as_deref().cloned(),
-                    span: p.span.clone(),
-                }
-            })
-            .collect()
+        let hir_params = self.resolve_params(params);
+        for p in &hir_params {
+            self.scopes.insert(p.name.clone(), p.def_id);
+        }
+        hir_params
     }
 
     pub(super) fn convert_self_mode(&self, mode: ast::SelfMode) -> HirSelfMode {
@@ -242,99 +236,108 @@ impl Resolver {
         }
     }
 
-    pub(super) fn resolve_interpolation_tokens(
-        &mut self,
-        tokens: &[crate::lexer::token::Token],
-        span: &Span,
-    ) -> HirExpr {
-        // The lexer gives us pre-tokenized expression tokens from #{...}
-        // We need to parse them as an expression.
-        // Wrap in a function body so the parser can handle them.
-        if tokens.is_empty() {
-            return HirExpr {
-                kind: HirExprKind::StringLiteral(String::new()),
-                ty: Ty::String,
-                span: span.clone(),
-            };
-        }
-
-        // Build a synthetic token stream: def _interp_ \n <tokens> \n end
-        use crate::lexer::token::{Token, TokenKind};
-        let dummy_span = Span {
-            start: 0,
-            end: 0,
-            line: 0,
-            column: 0,
-        };
-        let mut wrapped_tokens = vec![
-            Token {
-                kind: TokenKind::Def,
-                span: dummy_span.clone(),
-            },
-            Token {
-                kind: TokenKind::Identifier("_interp_".to_string()),
-                span: dummy_span.clone(),
-            },
-            Token {
-                kind: TokenKind::Newline,
-                span: dummy_span.clone(),
-            },
-        ];
-        wrapped_tokens.extend(tokens.iter().cloned());
-        wrapped_tokens.push(Token {
-            kind: TokenKind::Newline,
-            span: dummy_span.clone(),
-        });
-        wrapped_tokens.push(Token {
-            kind: TokenKind::End,
-            span: dummy_span.clone(),
-        });
-        wrapped_tokens.push(Token {
-            kind: TokenKind::Newline,
-            span: dummy_span.clone(),
-        });
-        wrapped_tokens.push(Token {
-            kind: TokenKind::Eof,
-            span: dummy_span.clone(),
-        });
-
-        let mut parser = crate::parser::Parser::new(wrapped_tokens);
-        if let Ok(program) = parser.parse() {
-            if let Some(ast::TopLevelItem::Function(f)) = program.items.first() {
-                if let Some(ast::Statement::Expression(expr)) = f.body.statements.first() {
-                    return self.resolve_expr(expr);
-                }
-            }
-        }
-
-        // Fallback: if we can't parse, try a simple identifier lookup
-        // (handles the common `#{variable}` case)
-        if tokens.len() == 1 {
-            if let TokenKind::Identifier(ref name) = tokens[0].kind {
-                if let Some(def_id) = self.scopes.lookup(name) {
-                    let ty = self
-                        .symbols
-                        .def_ty(def_id)
-                        .unwrap_or_else(|| self.type_context.fresh_type_var());
-                    return HirExpr {
-                        kind: HirExprKind::VarRef(def_id),
-                        ty,
-                        span: span.clone(),
-                    };
-                }
-            }
-        }
-
-        HirExpr {
-            kind: HirExprKind::Error,
-            ty: Ty::String,
-            span: span.clone(),
-        }
-    }
-
     pub(super) fn error(&mut self, message: String, span: &Span) {
         self.diagnostics
             .push(Diagnostic::error(message, span.clone()));
+    }
+
+    /// E1127: `super` only dispatches to the parent's `init`, so it is
+    /// valid only inside the instance `init` of a class with a parent.
+    /// Anywhere else it used to lower to a silent no-op.
+    pub(super) fn check_super_context(&mut self, span: &Span) {
+        if !self.in_subclass_init {
+            self.error_with_code(
+                "`super` is only allowed inside `init` of a class that has a parent class"
+                    .to_string(),
+                span,
+                "E1127",
+            );
+        }
+    }
+
+    /// Same as [`Self::error`] but carries a registry code so
+    /// `ruxen explain E####` has something to say. `code` must appear in
+    /// `diagnostics::codes::REGISTRY` (a test enforces it).
+    pub(super) fn error_with_code(&mut self, message: String, span: &Span, code: &'static str) {
+        self.diagnostics
+            .push(Diagnostic::error_with_code(message, span.clone(), code));
+    }
+
+    /// E0734 for a bare name that is no local, parameter or function. A bare
+    /// name is never a field (Ruby's rule). Inside a class or struct method
+    /// the E0734 is queued for [`Self::attach_field_hints`], which runs
+    /// after pass 2, when a parent class declared later in the file has its
+    /// fields too.
+    pub(super) fn error_undefined_variable(&mut self, name: &str, span: &Span) {
+        let type_def = match self.current_self_ty.as_ref() {
+            Some(Ty::Class { name, .. } | Ty::Struct { name, .. }) => {
+                self.type_registry.get(name).copied()
+            }
+            _ => None,
+        };
+        if let Some(type_def) = type_def {
+            self.pending_field_hints.push(PendingFieldHint {
+                diagnostic: self.diagnostics.len(),
+                type_def,
+                name: name.to_string(),
+                has_self: self.scopes.lookup("self").is_some(),
+            });
+        }
+        self.diagnostics.push(Diagnostic::error_with_code(
+            format!("undefined variable `{name}`"),
+            span.clone(),
+            "E0734",
+        ));
+    }
+
+    /// Give each queued E0734 whose name is a field of its type, or of an
+    /// ancestor class, a help line saying how to read it: `@name` in an
+    /// instance method, through an instance in a class method (no `self`).
+    pub(super) fn attach_field_hints(&mut self) {
+        for hint in std::mem::take(&mut self.pending_field_hints) {
+            let Some(owner) = self.field_owner(hint.type_def, &hint.name) else {
+                continue;
+            };
+            let name = &hint.name;
+            let help = if hint.has_self {
+                format!(
+                    "`{name}` is a field of `{owner}`; read it as `@{name}`. \
+                     A bare name is a local variable or a method call."
+                )
+            } else {
+                format!(
+                    "`{name}` is a field of `{owner}`, but a class method has no instance; \
+                     read it from an instance, such as `{}.{name}`.",
+                    instance_name(&owner)
+                )
+            };
+            if let Some(diag) = self.diagnostics.get_mut(hint.diagnostic) {
+                diag.help.push(help);
+            }
+        }
+    }
+
+    /// The name of the type that declares the field `name`: `type_def`
+    /// itself, else its nearest ancestor class. A visited set stops a
+    /// malformed parent cycle.
+    fn field_owner(&self, type_def: DefId, name: &str) -> Option<String> {
+        let mut current = Some(type_def);
+        let mut visited = std::collections::HashSet::new();
+        while let Some(def_id) = current.filter(|&id| visited.insert(id)) {
+            let def = self.symbols.get(def_id)?;
+            if self
+                .symbols
+                .children_of(def_id)
+                .any(|c| c.name == name && matches!(c.kind, DefKind::Field { .. }))
+            {
+                return Some(def.name.clone());
+            }
+            current = match &def.kind {
+                DefKind::Class { info } => info.parent,
+                _ => None,
+            };
+        }
+        None
     }
 
     /// T2.02 S8.S4 follow-up: surface pure-literal overflow /
@@ -406,4 +409,18 @@ impl Resolver {
             ));
         }
     }
+}
+
+/// A variable name for an instance of the type `type_name` in a hint:
+/// the last path segment in snake case (`Geo.PointPair` -> `point_pair`).
+fn instance_name(type_name: &str) -> String {
+    let short = type_name.rsplit('.').next().unwrap_or(type_name);
+    let mut out = String::with_capacity(short.len() + 2);
+    for (i, ch) in short.chars().enumerate() {
+        if ch.is_uppercase() && i > 0 {
+            out.push('_');
+        }
+        out.extend(ch.to_lowercase());
+    }
+    out
 }

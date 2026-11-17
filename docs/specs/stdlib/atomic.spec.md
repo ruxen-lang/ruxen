@@ -2,7 +2,7 @@
 
 **Source docs:**
 [docs/requirements/tier1_02_concurrency.md](../../requirements/tier1_02_concurrency.md),
-[docs/prompts/v1/14_phase4_concurrency.md](../../prompts/v1/14_phase4_concurrency.md).
+`docs/prompts/v1/14_phase4_concurrency.md`.
 
 **Status:** new in the multithreading round. Provides lock-free
 primitives for the cases where `Mutex[Int]` is overkill (counters,
@@ -39,7 +39,7 @@ i64-payload ABI.
 | Call                          | Returns  |
 |-------------------------------|----------|
 | `a.load()`                    | inner T  |
-| `a.store(v: T)`               | `()`     |
+| `a.store(v: T)`               | `nil`    |
 
 Load is `__atomic_load_n(..., __ATOMIC_SEQ_CST)`. Store is the
 matching `__atomic_store_n`.

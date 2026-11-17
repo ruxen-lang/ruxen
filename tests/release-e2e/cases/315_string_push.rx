@@ -1,6 +1,0 @@
-def main
-  var s = "hi"
-  s.push(?\u{21})
-  puts "len=#{s.size}"
-  puts s
-end

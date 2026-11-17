@@ -6,6 +6,7 @@ impl<'a> Lowerer<'a> {
         vec_id: LocalId,
         closure_params: &[HirClosureParam],
         closure_body: &HirExpr,
+        concrete_item_ty: Option<&Ty>,
     ) -> Result<(), String> {
         // idx = 0
         let idx = self.new_temp(Ty::Int);
@@ -48,7 +49,10 @@ impl<'a> Lowerer<'a> {
 
         // Bind the closure parameter: item = vec_get(vec, idx)
         if let Some(param) = closure_params.first() {
-            let item_local = self.new_local_named(&param.name, param.ty.clone(), false);
+            let item_ty = concrete_item_ty
+                .cloned()
+                .unwrap_or_else(|| param.ty.clone());
+            let item_local = self.new_local_named(&param.name, item_ty, false);
             self.def_to_local.insert(param.def_id, item_local);
             self.emit(MirInst::Call {
                 dest: Some(item_local),

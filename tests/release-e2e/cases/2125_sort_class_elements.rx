@@ -1,0 +1,54 @@
+# `Array#sort` / `sort!` over class elements, by a user `<=>` (with
+# `include Comparable`) and by the derived ordering.
+#
+# Both aborted with "free(): double free": the stdlib bodies read an
+# element with `var a: T = self[j - 1]`, and a class-typed `let` in a loop
+# body was freed on the loop's back edge even though it only aliased the
+# array's element. The same read in user code freed the element and left
+# the array pointing at freed memory.
+class Rec
+  a: Int
+
+  include Comparable
+
+  def init(@a: Int)
+  end
+
+  def <=>(other: &Rec) -> Int
+    self.a <=> other.a
+  end
+end
+
+class Name
+  first: String
+  last: String
+
+  def init(@first: String, @last: String)
+  end
+end
+
+def recs(v: &Array[Rec]) -> String
+  var out = ""
+  var i = 0
+  while i < v.size as Int
+    let r = v[i]
+    out = out + "#{r.a}"
+    i = i + 1
+  end
+  out
+end
+
+def main
+  var v = [Rec.new(3), Rec.new(1), Rec.new(2), Rec.new(1)]
+  v.sort!
+  puts "sort! #{recs(&v)}"
+  puts "again #{recs(&v)}"
+
+  var w = [Rec.new(9), Rec.new(7), Rec.new(8)]
+  let s = w.sort
+  puts "sort #{recs(&s)} receiver #{recs(&w)}"
+
+  var n = [Name.new("b", "a"), Name.new("a", "z"), Name.new("a", "b")]
+  n.sort!
+  puts "derived #{n[0].first}#{n[0].last} #{n[1].first}#{n[1].last} #{n[2].first}#{n[2].last}"
+end

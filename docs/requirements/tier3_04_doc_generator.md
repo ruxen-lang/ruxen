@@ -39,8 +39,9 @@ This doc specifies:
 ### 2.1 Doc-comment syntax already decided
 
 The lexer recognizes **`##`** as the doc-comment syntax
-(`crates/ruxen-core/src/lexer/mod.rs:170-172`, `:211-226`):
+(`compiler/ruxen_core/src/lexer/mod.rs:170-172`, `:211-226`):
 
+<!-- compiler-rust -->
 ```rust
 } else if self.peek_at(1) == Some('#') {
     // Doc comment ##
@@ -68,6 +69,7 @@ comments.
 
 Every site that expects a new item skips any leading `DocComment`s:
 
+<!-- compiler-rust -->
 ```rust
 // parser/mod.rs:455-458
 while let TokenKind::DocComment(_) = self.current_kind() {
@@ -91,7 +93,7 @@ token-based path and accept some duplication.
 
 ### 2.4 No `ruxendoc` binary, no HTML output, no search
 
-A grep for `ruxendoc` in `crates/` returns zero matches. No templating
+A grep for `ruxendoc` in `compiler/` and `src/` returns zero matches. No templating
 engine, no Markdown parser, no search-index builder.
 
 ### 2.5 Existing public surface to document
@@ -143,16 +145,18 @@ Private}`) and are tracked on `Definition.visibility`
 
 ### 4.1 Syntax for authors
 
-```
+`##` doc comments are [implemented]; the generator that renders them is [planned](../../TODO.md#t-req-docgen):
+
+```ruby
 ## Adds two integers.
 ##
-## Panics if the addition overflows.
+## Aborts if the addition overflows.
 ##
 ## # Examples
 ##
-## ```rx
-## let result = add(2, 3)
-## assert_eq(result, 5)
+## ```ruby
+## result = add(2, 3)
+## puts result   # => 5
 ## ```
 ##
 ## See also: [sub], [Array.push]
@@ -172,7 +176,7 @@ Rules:
 
 ### 4.2 CLI
 
-```
+```sh
 ruxendoc                             # docs for project at cwd
 ruxendoc src/main.rx                # docs for a single file
 ruxendoc --output docs/              # output directory (default: target/doc/)
@@ -186,8 +190,9 @@ ruxen doc --open
 
 ### 4.3 `ruxen doc` subcommand
 
-Add to `crates/ruxen-cli/src/cli.rs::Command`:
+Add to `src/ruxen_cli/src/cli.rs::Command`:
 
+<!-- compiler-rust -->
 ```rust
 Doc {
     #[arg(long)] open: bool,
@@ -198,11 +203,11 @@ Doc {
 ```
 
 Implementation: shell out to `ruxendoc` binary (parallel to
-`ruxenc`/`ruxen-lsp`/`ruxen-dap`).
+`ruxenc`/`ruxen_lsp`/`ruxen_dap`).
 
 ### 4.4 Output layout
 
-```
+```text
 target/doc/
 ├── index.html                # project overview + module list
 ├── search-index.json         # fuzzy search data
@@ -258,6 +263,7 @@ New field `doc_comments: Vec<String>` on every documentable AST node:
 
 Then update the four parser sites that currently discard:
 
+<!-- compiler-rust -->
 ```rust
 // parser/mod.rs:455-458 — was:
 while let TokenKind::DocComment(_) = self.current_kind() {
@@ -284,6 +290,7 @@ HIR node (`HirFuncDef`, `HirStructDef`, etc. in `hir/nodes.rs`).
 
 And into `Definition`:
 
+<!-- compiler-rust -->
 ```rust
 // resolve/symbols.rs:140-146
 pub struct Definition {
@@ -301,10 +308,10 @@ doc rendering (doc 01 §7).
 
 ### 5.2 `ruxendoc` binary
 
-New crate `crates/ruxendoc/`:
+New crate `src/ruxendoc/`:
 
-```
-crates/ruxendoc/
+```text
+src/ruxendoc/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs
@@ -337,6 +344,7 @@ Reuse `ruxen_core::{lexer, parser, resolve, typeck}`. After `typeck`,
 `TypeCheckResult.symbols` has every definition with its span and
 (after §5.1) doc comments. Walk `symbols.iter()` and produce:
 
+<!-- compiler-rust -->
 ```rust
 struct CollectedItem {
     path: String,         // "my_app.math.add"
@@ -390,6 +398,7 @@ Disable: raw HTML, autolinks, footnotes (can be re-enabled later).
 Reuse `ruxen_core::lexer::Lexer` to tokenize the code, then emit HTML
 spans:
 
+<!-- compiler-rust -->
 ```rust
 fn highlight(code: &str) -> String {
     let mut out = String::new();
@@ -403,12 +412,12 @@ fn highlight(code: &str) -> String {
 }
 ```
 
-The same token-to-class mapping can reuse `ruxen-ide/src/semantic_tokens.rs:87-161`
+The same token-to-class mapping can reuse `ruxen_ide/src/semantic_tokens.rs:87-161`
 logic.
 
 ### 5.8 Module/item URL scheme
 
-```
+```text
 crate-path/module/module/item.html
 ```
 
@@ -432,18 +441,18 @@ v2: hash-based invalidation.
 
 | Phase | File | Change |
 |---|---|---|
-| 1 | `crates/ruxen-core/src/lexer/token.rs` | (no change — `DocComment` already exists) |
-| 1 | `crates/ruxen-core/src/parser/ast.rs` | Add `doc_comments: Vec<String>` to every documentable node |
-| 1 | `crates/ruxen-core/src/parser/mod.rs:455-458`, `:884-887`, `:1112-1115`, `:1187-1190` | Capture instead of discard; attach to next item |
-| 1 | `crates/ruxen-core/src/hir/nodes.rs` | Add `doc_comments` to HIR variants |
-| 1 | `crates/ruxen-core/src/resolve/mod.rs:375`, `:811`, `:821` | Copy doc comments ast → hir |
-| 1 | `crates/ruxen-core/src/resolve/symbols.rs:140-146` | Add `doc_comments` to `Definition` |
-| 1 | `crates/ruxen-core/src/formatter/format_items.rs` | Emit doc comments before items (from AST, not tokens) |
-| 2 | `crates/ruxendoc/` *new crate* | See §5.2 |
-| 2 | `crates/ruxendoc/Cargo.toml` | Deps: `pulldown-cmark`, `serde_json`, `ruxen-core` |
-| 3 | `crates/ruxen-cli/src/cli.rs:25-114` | Add `Doc` subcommand |
-| 3 | `crates/ruxen-cli/src/main.rs` | Wire `Command::Doc` to shell out to `ruxendoc` |
-| 4 | `crates/ruxen-ide/src/hover.rs:75` | Render `def.doc_comments` after signature |
+| 1 | `compiler/ruxen_core/src/lexer/token.rs` | (no change — `DocComment` already exists) |
+| 1 | `compiler/ruxen_core/src/parser/ast.rs` | Add `doc_comments: Vec<String>` to every documentable node |
+| 1 | `compiler/ruxen_core/src/parser/mod.rs:455-458`, `:884-887`, `:1112-1115`, `:1187-1190` | Capture instead of discard; attach to next item |
+| 1 | `compiler/ruxen_core/src/hir/nodes.rs` | Add `doc_comments` to HIR variants |
+| 1 | `compiler/ruxen_core/src/resolve/mod.rs:375`, `:811`, `:821` | Copy doc comments ast → hir |
+| 1 | `compiler/ruxen_core/src/resolve/symbols.rs:140-146` | Add `doc_comments` to `Definition` |
+| 1 | `compiler/ruxen_core/src/formatter/format_items.rs` | Emit doc comments before items (from AST, not tokens) |
+| 2 | `src/ruxendoc/` *new crate* | See §5.2 |
+| 2 | `src/ruxendoc/Cargo.toml` | Deps: `pulldown-cmark`, `serde_json`, `ruxen_core` |
+| 3 | `src/ruxen_cli/src/cli.rs:25-114` | Add `Doc` subcommand |
+| 3 | `src/ruxen_cli/src/main.rs` | Wire `Command::Doc` to shell out to `ruxendoc` |
+| 4 | `src/ruxen_ide/src/hover.rs:75` | Render `def.doc_comments` after signature |
 | 5 | `install.sh` | Copy `ruxendoc` binary; ship assets |
 | 5 | `.github/workflows/release.yml:79-103` | Stage `ruxendoc` into release tarball |
 

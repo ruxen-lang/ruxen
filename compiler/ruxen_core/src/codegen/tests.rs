@@ -332,8 +332,9 @@ mod tests {
     // ─── Cranelift codegen tests ────────────────────────────────────────────────
 
     /// Helper: build a minimal MIR program with a single `main` function.
+    /// The last lowering step runs on it, as on every lowered program.
     fn make_main_program(locals: Vec<MirLocal>, blocks: Vec<BasicBlock>) -> MirProgram {
-        MirProgram {
+        let mut program = MirProgram {
             functions: vec![MirFunction::with_parts(
                 "main".to_string(),
                 vec![],
@@ -343,12 +344,10 @@ mod tests {
                 0,
             )],
             entry: Some("main".to_string()),
-            ffi_libs: vec![],
-            vtables: Vec::new(),
-            class_infos: Vec::new(),
-            wasm_exports: Vec::new(),
-            no_std: false,
-        }
+            ..MirProgram::new()
+        };
+        crate::mir::coercion::make_coercions_explicit(&mut program);
+        program
     }
 
     #[test]
@@ -357,6 +356,7 @@ mod tests {
         let blocks = vec![BasicBlock {
             id: 0,
             instructions: vec![],
+            inst_spans: vec![],
             terminator: Terminator::Return(None),
         }];
 
@@ -382,12 +382,14 @@ mod tests {
                 name: "a".to_string(),
                 ty: Ty::Int,
                 mutable: false,
+                kind: LocalKind::User,
             },
             MirLocal {
                 id: 1,
                 name: "b".to_string(),
                 ty: Ty::Int,
                 mutable: false,
+                kind: LocalKind::User,
             },
         ];
 
@@ -405,6 +407,7 @@ mod tests {
                     rhs: MirValue::Literal(Literal::Int(32)),
                 },
             ],
+            inst_spans: vec![None, None],
             terminator: Terminator::Return(None),
         }];
 
@@ -429,6 +432,7 @@ mod tests {
             name: "cond".to_string(),
             ty: Ty::Bool,
             mutable: false,
+            kind: LocalKind::User,
         }];
 
         let blocks = vec![
@@ -438,6 +442,7 @@ mod tests {
                     dest: 0,
                     value: MirValue::Literal(Literal::Bool(true)),
                 }],
+                inst_spans: vec![None],
                 terminator: Terminator::Branch {
                     cond: MirValue::Use(0),
                     then_block: 1,
@@ -447,11 +452,13 @@ mod tests {
             BasicBlock {
                 id: 1,
                 instructions: vec![],
+                inst_spans: vec![],
                 terminator: Terminator::Return(None),
             },
             BasicBlock {
                 id: 2,
                 instructions: vec![],
+                inst_spans: vec![],
                 terminator: Terminator::Return(None),
             },
         ];

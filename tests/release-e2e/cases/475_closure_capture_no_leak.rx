@@ -1,0 +1,17 @@
+struct Buffer
+  value: Int
+end
+
+def run(&block: Fn[() -> Int]) -> Int
+  yield
+end
+
+def main
+  let brace = Buffer.new(40)
+  let first = run({ || brace.value + 1 })
+  let block = Buffer.new(41)
+  let second = run do
+    block.value + 1
+  end
+  puts "brace=#{first} block=#{second}"
+end

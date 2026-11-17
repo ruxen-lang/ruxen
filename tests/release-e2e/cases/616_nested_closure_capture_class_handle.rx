@@ -1,16 +1,18 @@
 # Q26 variant: the re-captured value is a CLASS HANDLE (was a SIGSEGV).
-# `{ || h.get + 1 }` is stored through the `&var *self` reborrow and reads a
-# field through the captured `Cell` on invocation. Expected: 43, no segfault.
+# `-> { mine.get + 1 }` is stored through the `&var *self` reborrow and reads a
+# field through the captured `Cell` on invocation. The stored lambda owns a
+# clone made in the block: capturing the block's own capture `h` would move
+# it out (E1019). Expected: 43, no segfault.
 class Cell
   v: Int
   def init(x: Int); self.v = x; end
   def get -> Int; self.v; end
 end
 class Box
-  fns: Array[any Fn[Fn() -> Int]]
+  fns: Array[Proc[() -> Int]]
   def init; self.fns = Array.new; end
-  def var add(f: any Fn[Fn() -> Int]) -> nil; self.fns.push(f); end
-  def var build(b: any Fn[Fn(&var Box) -> nil]) -> nil; b.(&var *self); end
+  def var add(f: Proc[() -> Int]) -> nil; self.fns.push(f); end
+  def var build(b: Fn[(&var Self) -> nil]) -> nil; b.(&var *self); end
   def call0 -> Int
     match self.fns.get(0)
       Some(f) -> f.()
@@ -21,6 +23,9 @@ end
 def main
   let h = Cell.new(42)
   var box = Box.new
-  box.build({ |c: &var Box| c.add({ || h.get + 1 }) })
+  box.build({ |c: &var Box|
+    mine = h.clone
+    c.add(-> { mine.get + 1 })
+  })
   puts "#{box.call0}"
 end

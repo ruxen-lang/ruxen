@@ -8,78 +8,151 @@ use crate::diagnostics::Diagnostic;
 use crate::hir::nodes::*;
 use crate::hir::types::Ty;
 use crate::lexer::token::Span;
+use crate::parser::ast::BinOp;
 use crate::resolve::symbols::DefKind;
 
 use super::super::coerce::auto_deref;
 use super::super::unify::unify;
-use super::helpers::{
-    collect_break_types, container_elem_ty, infer_user_enum_generic_args, map_kv_tys,
-};
+use super::helpers::{collect_break_types, infer_user_enum_generic_args};
 use super::InferenceEngine;
 
 impl<'a> InferenceEngine<'a> {
-    /// Extract `(params, ret)` from a callable parameter type — a bare
-    /// `Ty::Fn`/`FnMut`/`FnOnce` or the surface `any Fn[Fn(T) -> U]` /
-    /// `some Fn[…]` mixin spelling the `.rx` combinators use (the inner
-    /// `Ty::Fn` rides in the `Fn` bound's first generic arg). Peels one
-    /// reference layer. Returns `None` for non-callable params.
-    fn param_fn_signature(ty: &Ty) -> Option<(&[Ty], &Ty)> {
-        let peeled = match ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => inner.as_ref(),
-            other => other,
-        };
-        match peeled {
-            Ty::Fn { params, ret } | Ty::FnMut { params, ret } | Ty::FnOnce { params, ret } => {
-                Some((params.as_slice(), ret.as_ref()))
-            }
-            Ty::AnyMixin(bounds) | Ty::SomeMixin(bounds) => {
-                for bound in bounds {
-                    if matches!(bound.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
-                        if let Some(
-                            Ty::Fn { params, ret }
-                            | Ty::FnMut { params, ret }
-                            | Ty::FnOnce { params, ret },
-                        ) = bound.generic_args.first()
-                        {
-                            return Some((params.as_slice(), ret.as_ref()));
-                        }
-                    }
-                }
-                None
-            }
-            _ => None,
-        }
-    }
-
-    fn seed_closure_param_types(arg: &mut HirExpr, expected_ty: &Ty) {
+    /// Before a closure literal's body is inferred, give each unannotated
+    /// parameter the type the callee's closure parameter declares for it
+    /// (`def outer(&block: Fn[(Int) -> nil])` makes `outer { |n| puts(n) }`
+    /// type `n: Int`). The parameter's inference variable is unified, not
+    /// replaced, so every use of `n` in the body sees the type: otherwise
+    /// `puts(n)` pins `n` to `String` first and the call passes an Int as a
+    /// string pointer. An expected type still naming a type parameter or an
+    /// inference variable is left for inference to settle.
+    fn seed_closure_param_types(&mut self, arg: &mut HirExpr, expected_ty: &Ty) {
         let HirExprKind::Closure { params, .. } = &mut arg.kind else {
             return;
         };
-        let expected_params = match expected_ty {
-            Ty::Fn { params, .. } | Ty::FnMut { params, .. } | Ty::FnOnce { params, .. } => params,
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => match inner.as_ref() {
-                Ty::Fn { params, .. } | Ty::FnMut { params, .. } | Ty::FnOnce { params, .. } => {
-                    params
-                }
-                _ => return,
-            },
-            _ => return,
+        let expected_ty = self.ctx.resolve(expected_ty);
+        let Some((expected_params, _)) = expected_ty.peel_refs().callable_signature() else {
+            return;
         };
         for (param, expected) in params.iter_mut().zip(expected_params.iter()) {
-            if param.ty.is_infer() {
-                param.ty = expected.clone();
+            let open = expected.any(&mut |t| matches!(t, Ty::Infer(_) | Ty::TypeParam { .. }));
+            if open || !self.ctx.resolve(&param.ty).is_infer() {
+                continue;
             }
+            if unify(&param.ty, expected, self.ctx, &arg.span).is_ok() {
+                param.ty = expected.clone();
+                self.symbols.update_ty(param.def_id, expected.clone());
+            }
+        }
+    }
+
+    /// The receiver of a member access or method call.
+    fn receiver_mut(expr: &mut HirExpr) -> &mut Box<HirExpr> {
+        match &mut expr.kind {
+            HirExprKind::FieldAccess { object, .. } | HirExprKind::MethodCall { object, .. } => {
+                object
+            }
+            other => unreachable!("receiver_mut: not a member access: {other:?}"),
+        }
+    }
+
+    fn set_safe_nav(expr: &mut HirExpr, on: bool) {
+        match &mut expr.kind {
+            HirExprKind::FieldAccess { safe_nav, .. }
+            | HirExprKind::MethodCall { safe_nav, .. } => *safe_nav = on,
+            other => unreachable!("set_safe_nav: not a member access: {other:?}"),
+        }
+    }
+
+    /// Infers a member access or method call whose receiver is already
+    /// inferred, as if the receiver had type `receiver_ty`. The receiver is
+    /// swapped for a typed placeholder meanwhile so it is not inferred a
+    /// second time: a second pass would append its default arguments again
+    /// and repeat its diagnostics.
+    fn infer_on_inferred_receiver(&mut self, expr: &mut HirExpr, receiver_ty: Ty) {
+        let slot = Self::receiver_mut(expr);
+        let placeholder = HirExpr {
+            kind: HirExprKind::Error,
+            ty: receiver_ty,
+            span: slot.span.clone(),
+        };
+        let receiver = std::mem::replace(slot, Box::new(placeholder));
+        self.infer_expr(expr);
+        *Self::receiver_mut(expr) = receiver;
+    }
+
+    /// `x&.name` and `x&.m(args)`. On a `T?` receiver the member is typed
+    /// against the present `T` and the result is wrapped back into `T?`. On a
+    /// receiver known not to be optional it is a plain member access, and the
+    /// flag is cleared so MIR lowers it as one.
+    fn infer_safe_nav(&mut self, expr: &mut HirExpr) {
+        let receiver = Self::receiver_mut(expr);
+        self.infer_expr(receiver);
+        let receiver_ty = self.ctx.resolve(&receiver.ty);
+        let (_, derefed) = auto_deref(&receiver_ty, self.ctx);
+        let present = match &derefed {
+            Ty::Option(inner) => Some(self.ctx.resolve(inner)),
+            _ => None,
+        };
+        Self::set_safe_nav(expr, false);
+        let optional = present.is_some();
+        self.infer_on_inferred_receiver(expr, present.unwrap_or(receiver_ty));
+        Self::set_safe_nav(expr, optional || derefed.is_infer());
+        if optional {
+            let ty = self.ctx.resolve(&expr.ty);
+            if !ty.is_error() {
+                expr.ty = Ty::Option(Box::new(ty));
+            }
+        }
+    }
+
+    /// `x.name` where `name` is no field of the receiver: a call of `name`
+    /// with no argument list. A call written with arguments may name a method
+    /// typeck cannot see yet and is left to later phases; a bare member that
+    /// resolves to nothing is reported here.
+    fn infer_member_call(&mut self, expr: &mut HirExpr, derefed_receiver: Ty) {
+        let HirExprKind::FieldAccess {
+            object,
+            field_name,
+            safe_nav,
+            ..
+        } = std::mem::replace(&mut expr.kind, HirExprKind::Error)
+        else {
+            unreachable!("infer_member_call: not a field access");
+        };
+        let receiver_ty = self.ctx.resolve(&object.ty);
+        let hint = Self::predicate_suffix_hint(&field_name);
+        let message =
+            format!("no field or method `{field_name}` on type `{derefed_receiver}`{hint}");
+        expr.kind = HirExprKind::MethodCall {
+            object,
+            method: UNRESOLVED_DEF,
+            resolved: UNRESOLVED_DEF,
+            requirement_params: None,
+            method_name: field_name,
+            generic_args: Vec::new(),
+            args: Vec::new(),
+            block: None,
+            safe_nav,
+            parens: false,
+        };
+        let first_fresh = self.ctx.type_var_count();
+        self.infer_on_inferred_receiver(expr, receiver_ty);
+        if matches!(self.ctx.resolve(&expr.ty), Ty::Infer(id) if id >= first_fresh) {
+            self.error(message, &expr.span);
+            expr.ty = Ty::Error;
         }
     }
 
     /// Infer and resolve the type of an expression (synthesis mode).
     pub fn infer_expr(&mut self, expr: &mut HirExpr) {
+        if matches!(
+            &expr.kind,
+            HirExprKind::FieldAccess { safe_nav: true, .. }
+                | HirExprKind::MethodCall { safe_nav: true, .. }
+        ) {
+            self.infer_safe_nav(expr);
+            return;
+        }
         match &mut expr.kind {
             // Literals — already typed during resolution
             HirExprKind::IntLiteral(_)
@@ -124,7 +197,9 @@ impl<'a> InferenceEngine<'a> {
             HirExprKind::VarRef(def_id) => {
                 if let Some(ty) = self.symbols.def_ty(*def_id) {
                     let resolved = self.ctx.resolve(&ty);
-                    expr.ty = resolved;
+                    expr.ty = self
+                        .instantiate_builtin_head(*def_id, &resolved)
+                        .unwrap_or(resolved);
                 }
             }
 
@@ -132,6 +207,7 @@ impl<'a> InferenceEngine<'a> {
                 object,
                 field_name,
                 field_idx,
+                ..
             } => {
                 self.infer_expr(object);
                 let obj_ty = self.ctx.resolve(&object.ty);
@@ -163,43 +239,21 @@ impl<'a> InferenceEngine<'a> {
                         if let Some((field_ty, idx)) =
                             self.lookup_field_with_parents(name, field_name)
                         {
-                            expr.ty = self.substitute_generics_in_return(&derefed, &field_ty);
+                            let owned = self.substitute_generics_in_return(&derefed, &field_ty);
+                            expr.ty = self.field_read_ty(name, owned);
                             *field_idx = idx;
-                        } else if let Some(ret) =
-                            self.builtin_method_type(&derefed, field_name, &[], &expr.span)
-                        {
-                            // Try method resolution as fallback — parser sometimes
-                            // produces FieldAccess for no-arg method calls
-                            expr.ty = self.substitute_generics_in_return(&derefed, &ret);
-                        } else if let Some(sig) =
-                            self.traits
-                                .lookup_method(&derefed, field_name, self.symbols)
-                        {
-                            let raw = self.ctx.resolve(&sig.return_ty);
-                            expr.ty = self.substitute_generics_in_return(&derefed, &raw);
-                        } else {
-                            // Last resort: try looking up as a user-defined method on this class
-                            if let Some(ret) = self.lookup_class_method_return(name, field_name) {
-                                expr.ty = self.substitute_generics_in_return(&derefed, &ret);
-                            } else {
-                                self.error(
-                                    format!(
-                                        "no field `{}` on type `{}`{}",
-                                        field_name,
-                                        name,
-                                        Self::predicate_suffix_hint(field_name)
-                                    ),
-                                    &expr.span,
-                                );
-                                expr.ty = Ty::Error;
-                            }
+                            return;
                         }
                     }
+                    // Tuple field access by index: tuple.0, tuple.1
                     Ty::Tuple(elems) => {
-                        // Tuple field access by index: tuple.0, tuple.1
                         if let Ok(idx) = field_name.parse::<usize>() {
                             if idx < elems.len() {
-                                expr.ty = elems[idx].clone();
+                                // A tuple keeps owning its elements.
+                                expr.ty = super::helpers::slot_read_ty(
+                                    self.ctx.resolve(&elems[idx]),
+                                    self.symbols,
+                                );
                                 *field_idx = idx;
                             } else {
                                 self.error(
@@ -212,140 +266,47 @@ impl<'a> InferenceEngine<'a> {
                                 );
                                 expr.ty = Ty::Error;
                             }
-                        } else {
-                            self.error(
-                                format!("no field `{}` on tuple type", field_name),
-                                &expr.span,
-                            );
-                            expr.ty = Ty::Error;
+                            return;
                         }
                     }
-                    Ty::Newtype { name, inner } => {
-                        // Newtype wrappers expose the inner value via `.0`.
-                        if field_name == "0" {
-                            expr.ty = (**inner).clone();
-                            *field_idx = 0;
-                        } else {
-                            self.error(
-                                format!("no field `{}` on newtype `{}`", field_name, name),
-                                &expr.span,
-                            );
-                            expr.ty = Ty::Error;
-                        }
+                    // Newtype wrappers expose the inner value via `.0`.
+                    Ty::Newtype { inner, .. } if field_name == "0" => {
+                        expr.ty = (**inner).clone();
+                        *field_idx = 0;
+                        return;
                     }
-                    Ty::Enum { name, .. } => {
-                        // Try method resolution as fallback (e.g. .to_display, .weight)
-                        if let Some(ret) =
-                            self.builtin_method_type(&derefed, field_name, &[], &expr.span)
-                        {
-                            expr.ty = ret;
-                        } else if let Some(sig) =
-                            self.traits
-                                .lookup_method(&derefed, field_name, self.symbols)
-                        {
-                            expr.ty = self.ctx.resolve(&sig.return_ty);
-                        } else if let Some(ret) =
-                            // ruby-naming.spec.md §3.4a: inline methods in
-                            // the enum body lower with the same mangling
-                            // class methods do, and the resolver registers
-                            // them as `DefKind::Method` with the enum as
-                            // parent — so the class-method lookup also
-                            // finds them.
-                            self.lookup_class_method_return(name, field_name)
-                        {
-                            expr.ty = ret;
-                        } else {
-                            self.error(
-                                format!(
-                                    "cannot access field `{}` on enum `{}`",
-                                    field_name, derefed
-                                ),
-                                &expr.span,
-                            );
-                            expr.ty = Ty::Error;
-                        }
-                    }
-                    // Option[T]: safe navigation — unwrap the Option and access
-                    // the field on the inner type. The result is Option[FieldType].
-                    Ty::Option(inner) => {
-                        let inner_ty = self.ctx.resolve(inner);
-                        let (_, inner_derefed) = auto_deref(&inner_ty, self.ctx);
-                        // Try to resolve the field on the inner type
-                        let field_ty = match &inner_derefed {
-                            Ty::Class { name, .. } | Ty::Struct { name, .. } => {
-                                if let Some((ft, idx)) =
-                                    self.lookup_field_with_parents(name, field_name)
-                                {
-                                    *field_idx = idx;
-                                    Some(ft)
-                                } else if let Some(ret) = self.builtin_method_type(
-                                    &inner_derefed,
-                                    field_name,
-                                    &[],
-                                    &expr.span,
-                                ) {
-                                    Some(ret)
-                                } else {
-                                    self.lookup_class_method_return(name, field_name)
-                                }
-                            }
-                            _ => self.builtin_method_type(
-                                &inner_derefed,
-                                field_name,
-                                &[],
-                                &expr.span,
-                            ),
-                        };
-                        if let Some(ft) = field_ty {
-                            // Wrap the field type in Option for safe navigation
-                            expr.ty = Ty::Option(Box::new(ft));
-                        } else {
-                            self.error(
-                                format!("no field `{}` on type `{}`", field_name, inner_derefed),
-                                &expr.span,
-                            );
-                            expr.ty = Ty::Error;
-                        }
-                    }
-                    _ if derefed.is_error() || derefed.is_infer() => {
-                        // Can't resolve yet — leave as infer
-                    }
-                    _ => {
-                        // Try method resolution as fallback for FieldAccess on types
-                        // like Vec, String, &str, Option, Result, Class, etc.
-                        // The parser sometimes produces FieldAccess for no-arg method calls.
-                        if let Some(ret) =
-                            self.builtin_method_type(&derefed, field_name, &[], &expr.span)
-                        {
-                            expr.ty = ret;
-                        } else if let Some(sig) =
-                            self.traits
-                                .lookup_method(&derefed, field_name, self.symbols)
-                        {
-                            expr.ty = self.ctx.resolve(&sig.return_ty);
-                        } else if let Some(ret) =
-                            self.lookup_on_type_param_bounds(&derefed, field_name, &[], &expr.span)
-                        {
-                            expr.ty = ret;
-                        } else {
-                            self.error(
-                                format!("no field `{}` on type `{}`", field_name, derefed),
-                                &expr.span,
-                            );
-                            expr.ty = Ty::Error;
-                        }
-                    }
+                    // Can't resolve yet — leave as infer; MIR decides field
+                    // or method once the receiver type is known.
+                    _ if derefed.is_error() || derefed.is_infer() => return,
+                    _ => {}
                 }
+
+                // `x.name` that names no field calls `name` with no arguments.
+                self.infer_member_call(expr, derefed);
             }
 
             HirExprKind::MethodCall {
                 object,
                 method,
+                resolved,
+                requirement_params,
                 method_name,
                 generic_args,
                 args,
                 block,
+                ..
             } => {
+                // `tap` / `then` / `yield_self` are NO LONGER a compiler
+                // special-case: they are ordinary `.rx` mixin defaults on
+                // `mixin Kernel` (library/std/core/src/lib.rx), implicitly
+                // included on every type via the universal-`Kernel` fallback in
+                // `MixinResolver::lookup_method_*`. They resolve and lower
+                // through the normal method-call path below, and their bodies
+                // are synthesized per concrete receiver by
+                // `mir::lower::emit_universal_kernel_bodies`. A user-defined
+                // `tap`/`then` still wins (own/explicit methods are consulted
+                // before the Kernel fallback).
+
                 // ── Phase 2 stdlib (#04): HashMap.entry(K).or_insert(V) /
                 //    .or_insert_with(closure) chain.
                 //
@@ -446,34 +407,18 @@ impl<'a> InferenceEngine<'a> {
                 for arg in args.iter_mut() {
                     self.infer_expr(arg);
                 }
+                if self.reject_module_receiver(object, method_name, &expr.span) {
+                    expr.ty = Ty::Error;
+                    return;
+                }
                 for targ in generic_args.iter_mut() {
                     *targ = self.ctx.resolve(targ);
                 }
 
-                if method_name == "collect" {
-                    let obj_ty = self.ctx.resolve(&object.ty);
-                    let (_, derefed) = auto_deref(&obj_ty, self.ctx);
-                    expr.ty =
-                        self.infer_iter_collect_type(&derefed, generic_args.as_slice(), &expr.span);
-                    return;
-                }
-
-                // Seed the block's closure parameter type from the object's
-                // element type before inferring the block body. E.g.
-                // `opt.map { |n| n * 2 }` on `Option[Int]` unifies `n`'s
-                // fresh type variable with `Int` so the body's return type
-                // can be inferred concretely. Without this, the closure
-                // parameter is an unresolved `Infer` and the enclosing
-                // function's return type (`Option[α]`) keeps its free var,
-                // which later fails `is_fully_resolved`.
-                //
-                // Limited to `map` for now. A broader seeding (e.g. `each`,
-                // `filter`) would force concrete types where current codegen
-                // relies on the closure param staying as an `Infer` that the
-                // mangled-symbol suffix-matcher resolves at link time — and
-                // generic trait-bound element types (`Vec[T: Displayable]`)
-                // would start emitting literal "T: Displayable_method"
-                // symbols the linker cannot resolve.
+                // Seed the block's closure parameter types from the called
+                // method's declared closure parameter before inferring the
+                // block body (`opt.map { |n| n * 2 }` on `Option[Int]` pins
+                // `n: Int`), so the body's return type is concrete.
                 if let Some(ref mut blk) = block {
                     // Signature-based closure-param seeding for builtin-head
                     // receivers (`Array`/`Option`/`Result`/…). The migrated
@@ -488,21 +433,21 @@ impl<'a> InferenceEngine<'a> {
                     // it BEFORE inferring the body. Runs for ANY block method
                     // (not a hardcoded name list) so every migrated combinator
                     // is covered; falls through harmlessly when no closure
-                    // param is found (the hardcoded element-seed below still
-                    // handles the residual MIR-inlined combinators).
+                    // param is found.
                     if let HirExprKind::Closure {
                         params: blk_params, ..
                     } = &blk.kind
                     {
                         let obj_ty_sig = self.ctx.resolve(&object.ty);
                         let (_, derefed_sig) = auto_deref(&obj_ty_sig, self.ctx);
-                        if let Some(sig) =
-                            self.traits.lookup_method_by_name(&derefed_sig, method_name)
+                        if let Some((sig, _)) = self
+                            .traits
+                            .lookup_block_method_by_name(&derefed_sig, method_name)
                         {
                             if let Some(closure_param) = sig
                                 .params
                                 .iter()
-                                .find(|p| Self::param_fn_signature(&p.ty).is_some())
+                                .find(|p| p.ty.peel_refs().callable_signature().is_some())
                             {
                                 // Apply the receiver's `include Mixin[Args]`
                                 // element binding first (`Enumerable.T → (K,
@@ -515,59 +460,62 @@ impl<'a> InferenceEngine<'a> {
                                 let pre = if mixin_subst.is_empty() {
                                     closure_param.ty.clone()
                                 } else {
-                                    Self::subst_ty(&closure_param.ty, &mixin_subst)
+                                    closure_param.ty.subst_params(&mixin_subst)
                                 };
                                 let subst_param_ty =
                                     self.substitute_generics_in_return(&derefed_sig, &pre);
                                 if let Some((fn_params, _)) =
-                                    Self::param_fn_signature(&subst_param_ty)
+                                    subst_param_ty.peel_refs().callable_signature()
                                 {
+                                    // A block with MORE parameters than the
+                                    // method's closure parameter declares is an
+                                    // arity error: the extra params would never
+                                    // be seeded and would read an uninitialized
+                                    // local at runtime. (Fewer is tolerated —
+                                    // Ruby-lenient: a block may ignore trailing
+                                    // values.) This is the generic replacement
+                                    // for the removed `tap`/`then` special-case's
+                                    // "at most one parameter" check — it now
+                                    // covers every mixin-default block method,
+                                    // `Kernel#tap` (`Fn(&Self)`, 1 param)
+                                    // included.
+                                    if blk_params.len() > fn_params.len() {
+                                        self.error(
+                                            format!(
+                                                "this block takes at most {} parameter{}, but \
+                                                 declares {}: `{}` calls it with {} argument{}",
+                                                fn_params.len(),
+                                                if fn_params.len() == 1 { "" } else { "s" },
+                                                blk_params.len(),
+                                                method_name,
+                                                fn_params.len(),
+                                                if fn_params.len() == 1 { "" } else { "s" },
+                                            ),
+                                            &expr.span,
+                                        );
+                                    }
                                     for (blk_p, expected) in blk_params.iter().zip(fn_params.iter())
                                     {
                                         if !expected.is_infer() {
+                                            let def_id = blk_p.def_id;
                                             let _ =
                                                 unify(&blk_p.ty, expected, self.ctx, &expr.span);
+                                            // Also pin the block param's type in
+                                            // the symbol table so references to it
+                                            // inside the body (`x.field`) resolve
+                                            // to the concrete (Self-substituted)
+                                            // type, not `Infer` → `?T::field`.
+                                            // Without this a mixin-default block
+                                            // method (e.g. a `.rx` `tap` whose
+                                            // param is `Fn(&Self)`) leaves the
+                                            // param abstract at codegen.
+                                            let resolved = self.ctx.resolve(&blk_p.ty);
+                                            if !resolved.is_infer() {
+                                                self.symbols.update_ty(def_id, resolved);
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        }
-                    }
-                    if matches!(
-                        method_name.as_str(),
-                        "map" | "filter" | "find" | "all" | "any"
-                    ) {
-                        let obj_ty_pre = self.ctx.resolve(&object.ty);
-                        let (_, derefed_pre) = auto_deref(&obj_ty_pre, self.ctx);
-                        let elem_ty: Option<Ty> = match &derefed_pre {
-                            Ty::Option(inner) => Some((**inner).clone()),
-                            Ty::Array(inner) => Some((**inner).clone()),
-                            Ty::Result(ok, _) => Some((**ok).clone()),
-                            Ty::Class { name, generic_args } if name.ends_with("Iter") => {
-                                generic_args.first().cloned()
-                            }
-                            _ => None,
-                        };
-                        if let (Some(elem_ty), HirExprKind::Closure { params, .. }) =
-                            (elem_ty, &blk.kind)
-                        {
-                            if let Some(param) = params.first() {
-                                let expected = if method_name == "find" {
-                                    Ty::Ref(Box::new(elem_ty))
-                                } else {
-                                    elem_ty
-                                };
-                                let _ = unify(&param.ty, &expected, self.ctx, &expr.span);
-                            }
-                        }
-                    }
-                    // `each_with_index { |element, index| }` — the SECOND
-                    // closure param is the 0-based index, always an `Int`.
-                    // (The element param stays `Infer`, resolved like `each`.)
-                    if method_name == "each_with_index" {
-                        if let HirExprKind::Closure { params, .. } = &blk.kind {
-                            if let Some(index_param) = params.get(1) {
-                                let _ = unify(&index_param.ty, &Ty::Int, self.ctx, &expr.span);
                             }
                         }
                     }
@@ -584,15 +532,48 @@ impl<'a> InferenceEngine<'a> {
                 // static call (`C4.white()`) fell through to the lenient
                 // `resolve_method_call` fresh-var path and the result type
                 // stayed `?T`, breaking any chained `.field` / `.method`.
-                let selected_method = match &derefed {
-                    Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => {
-                        self.select_class_method(name, method_name, args, block.is_some())
-                            .inspect(|selected| {
+                // Builtin heads (`String`/`Array`/`Hash`/`Set`/`Option`/`Result`)
+                // and the scalar primitives (`Int#ceil(ndigits = 0)`)
+                // home their `.rx` methods under the bare class name
+                // (`Ty::method_home`), so resolve the selected
+                // method for them too — this is what runs `append_method_default_args`
+                // (default-arg fill) and the signature-based arg seeding for a
+                // `.rx` method on a builtin head (e.g. `s.ljust(w)` filling a
+                // `pad = " "` default). The selection is recorded in
+                // `*resolved` for every head. `*method` is set only for a
+                // nominal head: a builtin head dispatches/mangles through the
+                // bridge + FFI alias map (`String_ljust`), and pinning
+                // `*method` would divert it into the generic-method-mono path.
+                let is_nominal_head = matches!(
+                    &derefed,
+                    Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+                );
+                let head_class_name = (matches!(
+                    &derefed,
+                    Ty::Class { .. }
+                        | Ty::Struct { .. }
+                        | Ty::Enum { .. }
+                        | Ty::String
+                        | Ty::Array(_)
+                        | Ty::Map(_, _)
+                        | Ty::Set(_)
+                        | Ty::Option(_)
+                        | Ty::Result(_, _)
+                ) || derefed.is_scalar_primitive()
+                    || derefed.is_proc())
+                .then(|| derefed.method_home(self.symbols.closure_shell_name()));
+                let selected_method = head_class_name.and_then(|name| {
+                    // Ruby `alias new old` selects the aliased method, so its
+                    // default arguments fill like a call by the old name.
+                    let canonical = self.symbols.canonical_method_name(&name, method_name);
+                    self.select_class_method(&name, canonical, args, block.is_some())
+                        .inspect(|selected| {
+                            *resolved = *selected;
+                            if is_nominal_head {
                                 *method = *selected;
-                            })
-                    }
-                    _ => None,
-                };
+                            }
+                        })
+                });
                 if let Some(selected) = selected_method {
                     // A trailing `do…end` / `{ }` block fills the method's final
                     // (block) parameter slot separately (appended below as
@@ -609,8 +590,10 @@ impl<'a> InferenceEngine<'a> {
                     if let Some(signature) = &signature {
                         for (arg, param) in args.iter_mut().zip(&signature.params) {
                             let param_ty = self.substitute_generics_in_return(&derefed, &param.ty);
-                            Self::seed_closure_param_types(arg, &param_ty);
+                            self.seed_closure_param_types(arg, &param_ty);
                             self.infer_expr(arg);
+                            self.check_closure_arg(&param_ty, arg, method_name);
+                            self.reject_borrowed_arg(&param_ty, &arg.ty, &arg.span);
                         }
                     } else {
                         for arg in args.iter_mut() {
@@ -649,6 +632,22 @@ impl<'a> InferenceEngine<'a> {
                 } else {
                     args
                 };
+                // A call no class method was selected for may resolve to a
+                // mixin default (an included mixin, `Kernel`, or a bound of a
+                // type-parameter receiver): record that default, so the
+                // block-kind pass, the borrow checker and MIR read the
+                // signature inference typed the call with. A bodiless
+                // requirement of a bound has no def: record its parameter
+                // types instead (`requirement_params`).
+                if selected_method.is_none() && method_name != "new" {
+                    if let Some(default_def) =
+                        self.selected_default_method(&derefed, method_name, effective_args)
+                    {
+                        *resolved = default_def;
+                    }
+                    *requirement_params =
+                        self.selected_bound_requirement(&derefed, method_name, effective_args);
+                }
                 let builtin_ret = if method_name == "new" {
                     None
                 } else {
@@ -659,11 +658,23 @@ impl<'a> InferenceEngine<'a> {
                 } else if method_name == "new" {
                     self.infer_constructor_call(&derefed, method_name, args, &expr.span)
                 } else if let Some(selected) = selected_method {
-                    self.infer_selected_method(selected, &derefed, args, &expr.span)
+                    self.infer_selected_method(selected, &derefed, effective_args, &expr.span)
                 } else {
                     // Regular method call — substitute TypeParam in the
-                    // return type using the object's generic args.
-                    let raw = self.resolve_method_call(&derefed, method_name, args, &expr.span);
+                    // return type using the object's generic args. Pass
+                    // `effective_args` (the trailing `do…end` block appended as
+                    // the final argument, exactly as `builtin_method_type`
+                    // above receives it) so a block-taking method resolves at
+                    // the right arity. A mixin-DEFAULT method on a user class
+                    // (`class Box include Tappable2` inheriting `def my_tap(f:
+                    // Fn(&Self)) -> Self`) is NOT an own method of the class,
+                    // so `select_class_method` never selects it and it lands
+                    // here; with plain `args` the block-filled `f` slot is
+                    // missing, `lookup_method_with_args` fails arity, and the
+                    // call degrades to a fresh `Infer` — the receiver of any
+                    // later `.field` on the result then mangles to `?T::field`.
+                    let raw =
+                        self.resolve_method_call(&derefed, method_name, effective_args, &expr.span);
                     self.substitute_generics_in_return(&derefed, &raw)
                 };
 
@@ -675,7 +686,25 @@ impl<'a> InferenceEngine<'a> {
                 callee_name,
                 args,
             } => {
-                for arg in args.iter_mut() {
+                // A closure argument (a trailing block included) takes its
+                // parameter types from the callee's declared closure
+                // parameter before its body is inferred. Only a single
+                // function's signature seeds: an overload set has no one
+                // parameter type until the resolver picks a candidate.
+                let seed_params: Vec<Ty> = self
+                    .symbols
+                    .get(*callee)
+                    .and_then(|def| match &def.kind {
+                        DefKind::Function { signature } | DefKind::Method { signature, .. } => {
+                            Some(signature.params.iter().map(|p| p.ty.clone()).collect())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                for (i, arg) in args.iter_mut().enumerate() {
+                    if let Some(param_ty) = seed_params.get(i) {
+                        self.seed_closure_param_types(arg, param_ty);
+                    }
                     self.infer_expr(arg);
                 }
 
@@ -685,20 +714,50 @@ impl<'a> InferenceEngine<'a> {
                 // silently passed through unify (which allows arbitrary
                 // integers or function references to reach the runtime),
                 // and the resulting binary crashes or prints `(nil)`.
-                if matches!(
-                    callee_name.as_str(),
-                    "puts" | "eputs" | "print" | "println" | "eprintln"
-                ) && args.len() == 1
-                {
+                if crate::hir::IO_TEXT_BUILTINS.contains(&callee_name.as_str()) && args.len() == 1 {
                     let arg_ty = self.ctx.resolve(&args[0].ty);
                     if !Self::is_puts_compatible(&arg_ty) {
-                        self.error(
-                            format!(
-                                "`{}` expects String or &str, found `{}`; use string interpolation: {} \"#{{expr}}\"",
-                                callee_name, arg_ty, callee_name,
-                            ),
-                            &expr.span,
-                        );
+                        // Ruby-parity: `puts x` accepts any value by converting it
+                        // through its universal `to_s` (`puts 42` becomes
+                        // `puts 42.to_s`), removing the `"#{}"` tax on every
+                        // print. The conversion is inserted into the HIR only, so
+                        // the AST stays `puts x` and `ruxen fmt` is unaffected.
+                        let object = args[0].clone();
+                        let mut wrapped = HirExpr {
+                            kind: HirExprKind::MethodCall {
+                                object: Box::new(object),
+                                method: UNRESOLVED_DEF,
+                                resolved: UNRESOLVED_DEF,
+                                requirement_params: None,
+                                method_name: "to_s".to_string(),
+                                generic_args: Vec::new(),
+                                args: Vec::new(),
+                                block: None,
+                                safe_nav: false,
+                                parens: false,
+                            },
+                            ty: Ty::String,
+                            span: expr.span.clone(),
+                        };
+                        self.infer_expr(&mut wrapped);
+                        // Only adopt the conversion when `to_s` actually resolved
+                        // to a `String`. A value with NO `to_s` (Array, Option, a
+                        // tuple, a struct without a Debug/Display derive) leaves
+                        // the wrapped call's type unresolved; in that case keep the
+                        // clean compile-time diagnostic instead of letting an
+                        // unresolved `<Type>_to_s` symbol leak to the linker.
+                        if matches!(self.ctx.resolve(&wrapped.ty), Ty::String) {
+                            args[0] = wrapped;
+                        } else {
+                            self.error(
+                                format!(
+                                    "`{callee_name}` expects a String or a value with `to_s`, \
+                                     found `{arg_ty}`, which has no `to_s`; build the String \
+                                     yourself (for a collection, format its elements)",
+                                ),
+                                &expr.span,
+                            );
+                        }
                     }
                 }
 
@@ -733,9 +792,37 @@ impl<'a> InferenceEngine<'a> {
                                 &expr.span,
                             );
                         } else {
+                            let overloaded = self.is_overloaded_free_fn(callee_name);
                             for (arg, param) in args.iter().zip(&signature.params) {
-                                let _ = unify(&arg.ty, &param.ty, self.ctx, &expr.span);
+                                let unified = unify(&arg.ty, &param.ty, self.ctx, &expr.span);
+                                if overloaded
+                                    && unified.is_err()
+                                    && !self.arg_fits_param(&arg.ty, &param.ty, &arg.span)
+                                {
+                                    // The resolver falls back to an overload
+                                    // by arity alone when no candidate's
+                                    // parameter types match; passing the
+                                    // argument anyway hands e.g. a Float to
+                                    // a `&String` parameter (a segfault).
+                                    let arg_ty = self.ctx.resolve(&arg.ty);
+                                    let base = callee_name
+                                        .split("__overload")
+                                        .next()
+                                        .unwrap_or(callee_name);
+                                    self.diagnostics.push(Diagnostic::error_with_code(
+                                        format!(
+                                            "no overload of `{base}` takes a `{arg_ty}` argument"
+                                        ),
+                                        arg.span.clone(),
+                                        "E0742",
+                                    ));
+                                }
+                                if !overloaded {
+                                    self.check_closure_arg(&param.ty, arg, callee_name);
+                                    self.reject_borrowed_arg(&param.ty, &arg.ty, &arg.span);
+                                }
                                 self.check_declared_bounds(&param.ty, &arg.ty, &arg.span);
+                                self.check_send_required_closure(&param.ty, arg, None);
                             }
                         }
                         // Generic free-function call inference: when the
@@ -774,23 +861,61 @@ impl<'a> InferenceEngine<'a> {
             HirExprKind::BinaryOp { op, left, right } => {
                 self.infer_expr(left);
                 self.infer_expr(right);
+
+                // Assignment is normally Unit in statement/tail position, but
+                // Ruby's logical operators can consume a Copy assignment value:
+                // `a = true and false` means `(a = true) and false`, and the
+                // `||=` / `&&=` parser desugar puts an assignment on the RHS.
+                // Mark only those nested assignments as value-producing. Owned
+                // assignment results remain Unit to avoid creating two owners.
+                if matches!(
+                    op,
+                    BinOp::And | BinOp::Or | BinOp::KeywordAnd | BinOp::KeywordOr
+                ) {
+                    if let HirExprKind::Assign { value, .. } = &left.kind {
+                        let assigned_ty = self.ctx.resolve(&value.ty);
+                        if assigned_ty.is_copy() {
+                            left.ty = assigned_ty;
+                        }
+                    }
+                    if let HirExprKind::Assign { value, .. } = &right.kind {
+                        let assigned_ty = self.ctx.resolve(&value.ty);
+                        if assigned_ty.is_copy() {
+                            right.ty = assigned_ty;
+                        }
+                    }
+                }
+
                 let left_ty = self.ctx.resolve(&left.ty);
                 let right_ty = self.ctx.resolve(&right.ty);
-                // Operator → method desugar (Task OP, Step 3): a NOMINAL
-                // receiver (Duration, a user operator class) with a MIGRATED
-                // op (`+ - * / %`, `& | ^ << >>`) resolves to its `.rx`
-                // `def OP` — `a + b` is `a.+(b)`. Machine primitives, String,
-                // and the collection heads keep their `infer_binop` arms (the
-                // machine floor / special cases). The MIR side mirrors this
-                // (`lower_binops`): primitive head → instruction, nominal
-                // head → method call.
-                let routed = op
-                    .method_name()
-                    .filter(|_| Self::is_nominal_operator_receiver(&left_ty))
-                    .map(|m| {
-                        let args = std::slice::from_ref(right.as_ref());
-                        self.resolve_method_call(&left_ty, m, args, &expr.span)
-                    });
+                // Operator → method desugar: arithmetic/bitwise retain their
+                // nominal-method route. Comparisons use a method only when the
+                // receiver exposes one, extending the wave to Comparable
+                // without stealing auto-derived Ord/PartialEq or primitives.
+                let args = std::slice::from_ref(right.as_ref());
+                let routed = op.method_name().and_then(|method| {
+                    let comparison = matches!(
+                        op,
+                        BinOp::Eq
+                            | BinOp::NotEq
+                            | BinOp::Lt
+                            | BinOp::Gt
+                            | BinOp::LtEq
+                            | BinOp::GtEq
+                            | BinOp::Cmp
+                    );
+                    let dispatches = if comparison {
+                        self.comparison_method_available(&left_ty, method, args)
+                    } else {
+                        Self::is_nominal_operator_receiver(&left_ty)
+                            || self.builtin_head_operator_method_available(&left_ty, method, args)
+                    };
+                    dispatches.then(|| {
+                        let return_ty =
+                            self.resolve_method_call(&left_ty, method, args, &expr.span);
+                        self.validate_comparison_method_return(*op, return_ty, method, &expr.span)
+                    })
+                });
                 expr.ty = match routed {
                     Some(ty) => ty,
                     None => self.infer_binop(*op, &left_ty, &right_ty, &expr.span),
@@ -808,6 +933,9 @@ impl<'a> InferenceEngine<'a> {
                 let unary_method = match op {
                     UnaryOp::Neg => Some("-@"),
                     UnaryOp::Not => Some("!"),
+                    UnaryOp::KeywordNot => None,
+                    // `~` is primitive-only for now (no `def ~` method route).
+                    UnaryOp::BitNot => None,
                     UnaryOp::Deref => None,
                 };
                 let routed = unary_method
@@ -824,6 +952,7 @@ impl<'a> InferenceEngine<'a> {
                 expr: inner,
             } => {
                 self.infer_expr(inner);
+                self.retype_field_place(inner);
                 let inner_ty = self.ctx.resolve(&inner.ty);
                 expr.ty = if *mutable {
                     Ty::RefMut(Box::new(inner_ty))
@@ -966,7 +1095,9 @@ impl<'a> InferenceEngine<'a> {
                 let (_, iter_derefed) = auto_deref(&iter_ty, self.ctx);
                 let elem_ty: Option<Ty> = match &iter_derefed {
                     Ty::Array(e) | Ty::Set(e) => Some((**e).clone()),
-                    Ty::Map(k, v) => Some(Ty::Tuple(vec![(**k).clone(), (**v).clone()])),
+                    // An entry borrows the key and value the table owns
+                    // (`Hash#to_a`).
+                    Ty::Map(k, v) => Some(Ty::Tuple(vec![Ty::Ref(k.clone()), Ty::Ref(v.clone())])),
                     _ => None,
                 };
                 if let Some(elem_ty) = elem_ty {
@@ -987,7 +1118,12 @@ impl<'a> InferenceEngine<'a> {
                                 tuple_bindings.iter().zip(components.iter())
                             {
                                 if let Some(sub_ty) = self.symbols.def_ty(*sub_id) {
-                                    let _ = unify(&sub_ty, comp_ty, self.ctx, &expr.span);
+                                    // The element tuple keeps owning its components.
+                                    let read = super::helpers::slot_read_ty(
+                                        self.ctx.resolve(comp_ty),
+                                        self.symbols,
+                                    );
+                                    let _ = unify(&sub_ty, &read, self.ctx, &expr.span);
                                 }
                             }
                         }
@@ -1005,9 +1141,10 @@ impl<'a> InferenceEngine<'a> {
                 // Operator → method desugar (Task OP, Step 3): `a[i] = v`
                 // on a NOMINAL receiver resolves the `def []=` method
                 // (NOT the `[]` read). We infer the object + index + value,
-                // then type-check the call against `[]=`; the assignment
-                // itself is Unit. Builtin collections fall through to the
-                // normal target/value unify below.
+                // then type-check the call against `[]=`; a nominal index
+                // assignment stays Unit because the method can own or transform
+                // its argument. Builtin collections fall through to the normal
+                // target/value unify below.
                 let nominal_index_assign =
                     if let HirExprKind::Index { object, index } = &mut target.kind {
                         self.infer_expr(object);
@@ -1030,10 +1167,38 @@ impl<'a> InferenceEngine<'a> {
                     expr.ty = Ty::Unit;
                 } else {
                     self.infer_expr(target);
+                    self.retype_field_place(target);
                     self.infer_expr(value);
                     let target_ty = self.ctx.resolve(&target.ty);
+                    // `p = make_point` assigns the RESULT of a bare nullary
+                    // function reference, as `let p = make_point` binds it,
+                    // unless the target is itself a `Fn` slot.
+                    self.auto_call_fn_reference(&target_ty, value);
                     let value_ty = self.ctx.resolve(&value.ty);
-                    let _ = unify(&target_ty, &value_ty, self.ctx, &expr.span);
+                    if !self.reject_borrow_into_owned(&target_ty, &value_ty, &value.span) {
+                        // Assigning to a `&var T` binding stores a `T` through
+                        // it (`s = "new"` on a `&var String` parameter).
+                        let stored_ty = match &target_ty {
+                            Ty::RefMut(pointee) | Ty::RefMutLifetime(_, pointee)
+                                if !value_ty.is_ref() =>
+                            {
+                                (**pointee).clone()
+                            }
+                            _ => target_ty.clone(),
+                        };
+                        // An integer literal takes the integer type it is
+                        // stored as (`@next_id = 1` into a `USize` field), as
+                        // it does in a typed binding.
+                        if matches!(value.kind, HirExprKind::IntLiteral(_))
+                            && stored_ty.is_integer()
+                        {
+                            value.ty = stored_ty.clone();
+                        } else if let Err(error) =
+                            self.unify_or_coerce(&stored_ty, &value_ty, &expr.span)
+                        {
+                            self.type_error(error);
+                        }
+                    }
 
                     // Determine copy/move semantics
                     let resolved = self.ctx.resolve(&value_ty);
@@ -1042,12 +1207,195 @@ impl<'a> InferenceEngine<'a> {
                 }
             }
 
+            HirExprKind::MultiAssign {
+                targets,
+                values,
+                splat_target,
+            } => {
+                // Parallel assignment `a, b = e1, e2` and trailing assignment
+                // splat `a, *rest = xs`. Infer every RHS before every target;
+                // MIR preserves that evaluation order when it snapshots the
+                // values.
+                for value in values.iter_mut() {
+                    self.infer_expr(value);
+                }
+                // A field target is a place of the field's own type, as for
+                // `=` (`u.name, n = "x", 1`).
+                for target in targets.iter_mut() {
+                    self.infer_expr(target);
+                    self.retype_field_place(target);
+                }
+
+                if let Some(rest_index) = *splat_target {
+                    let Some(rest_target) = targets.get(rest_index) else {
+                        self.error("invalid assignment splat target".to_string(), &expr.span);
+                        expr.ty = Ty::Unit;
+                        return;
+                    };
+                    if !matches!(rest_target.kind, HirExprKind::VarRef(_)) {
+                        self.error(
+                            "assignment splat target must be a pre-declared `var`".to_string(),
+                            &rest_target.span,
+                        );
+                    }
+
+                    let array_rhs_elem = if values.len() == 1 {
+                        let value_ty = self.ctx.resolve(&values[0].ty);
+                        match value_ty.peel_refs() {
+                            Ty::Array(elem) => Some((**elem).clone()),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(elem_ty) = array_rhs_elem {
+                        for target in targets.iter().take(rest_index) {
+                            let target_ty = self.ctx.resolve(&target.ty);
+                            if let Err(error) = unify(&target_ty, &elem_ty, self.ctx, &expr.span) {
+                                self.type_error(error);
+                            }
+                        }
+                        let rest_ty = self.ctx.resolve(&rest_target.ty);
+                        if matches!(rest_ty, Ty::Array(_)) {
+                            let expected = Ty::Array(Box::new(elem_ty.clone()));
+                            if let Err(error) = unify(&rest_ty, &expected, self.ctx, &expr.span) {
+                                self.type_error(error);
+                            }
+                        } else {
+                            self.error(
+                                format!(
+                                    "assignment splat target must be an owned Array, \
+                                     found `{rest_ty}`"
+                                ),
+                                &rest_target.span,
+                            );
+                        }
+                        if !elem_ty.is_copy_with(self.symbols) {
+                            self.error(
+                                format!(
+                                    "assignment splat currently requires Copy array elements, \
+                                     found `{elem_ty}`; destructuring owned elements needs \
+                                     clone-aware lowering"
+                                ),
+                                &expr.span,
+                            );
+                        }
+                    } else {
+                        if values.len() < rest_index {
+                            self.error(
+                                format!(
+                                    "assignment splat needs at least {rest_index} value(s) \
+                                     before `*rest`, found {}",
+                                    values.len()
+                                ),
+                                &expr.span,
+                            );
+                        }
+                        for (target, value) in targets
+                            .iter()
+                            .take(rest_index)
+                            .zip(values.iter().take(rest_index))
+                        {
+                            let target_ty = self.ctx.resolve(&target.ty);
+                            let value_ty = self.ctx.resolve(&value.ty);
+                            if let Err(error) = unify(&target_ty, &value_ty, self.ctx, &expr.span) {
+                                self.type_error(error);
+                            }
+                        }
+
+                        let rest_ty = self.ctx.resolve(&rest_target.ty);
+                        if let Ty::Array(elem) = rest_ty {
+                            let elem_ty = (*elem).clone();
+                            for value in values.iter().skip(rest_index) {
+                                let value_ty = self.ctx.resolve(&value.ty);
+                                if let Err(error) = unify(&elem_ty, &value_ty, self.ctx, &expr.span)
+                                {
+                                    self.type_error(error);
+                                }
+                            }
+                            if values.len() > rest_index && !elem_ty.is_copy_with(self.symbols) {
+                                self.error(
+                                    format!(
+                                        "assignment splat currently requires Copy rest values, \
+                                         found `{elem_ty}`; collecting owned values needs \
+                                         clone-aware lowering"
+                                    ),
+                                    &expr.span,
+                                );
+                            }
+                        } else {
+                            self.error(
+                                format!(
+                                    "assignment splat target must be an owned Array, \
+                                     found `{rest_ty}`"
+                                ),
+                                &rest_target.span,
+                            );
+                        }
+                    }
+                } else {
+                    for (target, value) in targets.iter().zip(values.iter()) {
+                        let target_ty = self.ctx.resolve(&target.ty);
+                        let value_ty = self.ctx.resolve(&value.ty);
+                        if let Err(error) = unify(&target_ty, &value_ty, self.ctx, &expr.span) {
+                            self.type_error(error);
+                        }
+                    }
+                }
+                // Memory-safety guard (v1): a value that is an owned heap
+                // aggregate (Class/Struct/Enum) READ FROM A PLACE (variable,
+                // field, or index) would be aliased, not moved/cloned, by the
+                // MIR lowering. That silently double-frees on a swap
+                // (`a, b = b, a`) or an alias-then-reassign. Reject it with a
+                // clear error until proper move/clone lowering lands. Copy types,
+                // `String`, and fresh allocations (a call/constructor value) are
+                // unaffected.
+                // Report at most once per statement: a swap `a, b = b, a` has
+                // two offending values, but they share one span, so emitting per
+                // value would print the identical error twice.
+                if let Some(vty) = values.iter().find_map(|value| {
+                    let vty = self.ctx.resolve(&value.ty);
+                    if !matches!(vty, Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }) {
+                        return None;
+                    }
+                    // Only a FRESHLY-produced owned value is safe: it cannot
+                    // alias one of the targets. A value read from a place (a
+                    // variable / field / index) would be aliased, not moved or
+                    // cloned, by the current MIR lowering, which then
+                    // double-frees on a swap (`a, b = b, a`) or an
+                    // alias-then-reassign. `multiassign_value_is_fresh` peels
+                    // the `if` / `match` / `cast` / block wrappers and requires
+                    // every producible value to be fresh, so a nested aliasing
+                    // expression cannot slip past while a wrapper of fresh
+                    // values (a ternary of two constructors) is still allowed.
+                    if super::helpers::multiassign_value_is_fresh(value) {
+                        None
+                    } else {
+                        Some(vty)
+                    }
+                }) {
+                    self.error(
+                        format!(
+                            "parallel assignment of an owned `{vty}` value is only \
+                             supported for a freshly-constructed value (a call or a \
+                             constructor) for now; any other form (e.g. a swap \
+                             `a, b = b, a`, or a variable/field/index read) would alias \
+                             and is not yet allowed. Assign it on its own line instead",
+                        ),
+                        &expr.span,
+                    );
+                }
+                expr.ty = Ty::Unit;
+            }
+
             HirExprKind::CompoundAssign {
                 target,
                 op: _,
                 value,
             } => {
                 self.infer_expr(target);
+                self.retype_field_place(target);
                 self.infer_expr(value);
                 expr.ty = Ty::Unit;
             }
@@ -1055,8 +1403,18 @@ impl<'a> InferenceEngine<'a> {
             HirExprKind::Return(value) => {
                 if let Some(ref mut val) = value {
                     self.infer_expr(val);
-                    if let Some(ref ret_ty) = self.current_return_ty {
-                        let _ = unify(ret_ty, &val.ty, self.ctx, &expr.span);
+                    // B84: `return <value>` targets the SAME slot as the
+                    // function body's tail expression, so it runs the SAME
+                    // pipeline — the contextual rewrites (notably the "drop
+                    // `Some`" wrap for a `-> T?` function) followed by a
+                    // REPORTED type check. This arm previously called bare
+                    // `unify` and threw the result away, which let a bare
+                    // `T` escape into an `Option[T]`/`Result[T, E]` return
+                    // slot unboxed and segfault the caller.
+                    if let Some(ret_ty) = self.current_return_ty.clone() {
+                        let span = expr.span.clone();
+                        let val_ty = self.coerce_and_check_return_value(&ret_ty, val, &span);
+                        self.check_declared_bounds(&ret_ty, &val_ty, &span);
                     }
                 }
                 expr.ty = Ty::Never;
@@ -1073,13 +1431,37 @@ impl<'a> InferenceEngine<'a> {
                 expr.ty = Ty::Never;
             }
 
+            HirExprKind::Next(value) => {
+                // Block Tier-2: `next expr` is a Never-typed jump; its value is
+                // unified with the enclosing closure's result type in the
+                // `Closure` arm below (via `collect_next_types`).
+                if let Some(ref mut val) = value {
+                    self.infer_expr(val);
+                }
+                expr.ty = Ty::Never;
+            }
+
             HirExprKind::Closure { params, body, .. } => {
                 self.infer_expr(body);
+                // Block Tier-2: fold every `next expr` value into the closure's
+                // result type. When the body falls through only via `next`
+                // (tail is `Never`/uninferred), the block's type IS the `next`
+                // value type; otherwise all `next` values must match the tail.
+                let mut ret_ty = self.ctx.resolve(&body.ty);
+                let mut next_acc: Option<Ty> = None;
+                super::helpers::collect_next_types(body, self.ctx, &mut next_acc, &expr.span);
+                if let Some(next_ty) = next_acc {
+                    if matches!(ret_ty, Ty::Never) || ret_ty.is_infer() {
+                        let _ = unify(&body.ty, &next_ty, self.ctx, &expr.span);
+                        ret_ty = self.ctx.resolve(&next_ty);
+                    } else {
+                        let _ = unify(&ret_ty, &next_ty, self.ctx, &expr.span);
+                    }
+                }
                 let param_tys: Vec<Ty> = params.iter().map(|p| self.ctx.resolve(&p.ty)).collect();
-                let ret_ty = self.ctx.resolve(&body.ty);
                 expr.ty = Ty::Fn {
                     params: param_tys,
-                    ret: Box::new(ret_ty),
+                    ret: Box::new(self.ctx.resolve(&ret_ty)),
                 };
             }
 
@@ -1217,13 +1599,30 @@ impl<'a> InferenceEngine<'a> {
                 let obj_ty = self.ctx.resolve(&object.ty);
                 // Operator → method desugar (Task OP, Step 3): `a[i]` →
                 // `a.[](i)` on a NOMINAL receiver (user/stdlib class with
-                // `def []`). Builtin collection heads (Array/Map/String/
-                // tuple) keep `infer_index_ty` (the machine floor).
-                expr.ty = if Self::is_nominal_operator_receiver(&obj_ty) {
+                // `def []`) and on `String` (`def []` in string.rx).
+                // Builtin collection heads (Array/Map/fixed array) keep
+                // `infer_index_ty` (the machine floor).
+                expr.ty = if Self::is_nominal_operator_receiver(&obj_ty)
+                    || matches!(obj_ty.peel_refs(), Ty::String)
+                {
                     let args = std::slice::from_ref(index.as_ref());
                     self.resolve_method_call(&obj_ty, "[]", args, &expr.span)
                 } else {
-                    self.infer_index_ty(&obj_ty)
+                    let ty = self.infer_index_ty(&obj_ty);
+                    // E1128: MIR lowers a fixed array only at a literal
+                    // index; every other receiver without an element type
+                    // has no index lowering at all.
+                    let dynamic_fixed = matches!(obj_ty.peel_refs(), Ty::FixedArray(..))
+                        && !matches!(index.kind, HirExprKind::IntLiteral(_));
+                    let unknown = matches!(obj_ty.peel_refs(), Ty::Error | Ty::Infer(_));
+                    if dynamic_fixed || (ty == Ty::Error && !unknown) {
+                        self.diagnostics.push(Diagnostic::error_with_code(
+                            format!("a value of type `{obj_ty}` cannot be indexed"),
+                            expr.span.clone(),
+                            "E1128",
+                        ));
+                    }
+                    ty
                 };
             }
 
@@ -1288,16 +1687,15 @@ impl<'a> InferenceEngine<'a> {
                     } = part
                     {
                         self.infer_expr(e);
-                        // E0729: a closure / `Fn` value has no Display. Without
-                        // this check it falls through MIR interpolation's
-                        // "unknown type → Int_fmt (pointer-as-int)" fallback and
-                        // SILENTLY prints a raw pointer — the exact garbage a
-                        // bare `do…end` (which parses as a closure literal, never
-                        // an expression block) bound to a local produces when
-                        // interpolated (`let v = do … end; puts "#{v}"`). Catch
-                        // it at typeck so the user gets a clear error instead of
-                        // a pointer. Stored/invoked closures are unaffected —
-                        // only formatting one is rejected.
+                        // E0729: a closure / `Fn` value has no Display. MIR
+                        // interpolation rejects any type without a formatter,
+                        // but this is the common mistake behind it: a bare
+                        // `do…end` (which parses as a closure literal, never an
+                        // expression block) bound to a local and interpolated
+                        // (`let v = do … end; puts "#{v}"`). Catch it at typeck
+                        // so the user gets the explanation. Stored/invoked
+                        // closures are unaffected — only formatting one is
+                        // rejected.
                         let part_ty = self.ctx.resolve(&e.ty);
                         if matches!(
                             part_ty,
@@ -1320,42 +1718,9 @@ impl<'a> InferenceEngine<'a> {
                 expr.ty = Ty::String;
             }
 
-            HirExprKind::MacroCall { name, args } => {
+            HirExprKind::MacroCall { args, .. } => {
                 for arg in args.iter_mut() {
                     self.infer_expr(arg);
-                }
-                // ruby-naming.spec.md §10a macros (`array!` / `vec!`,
-                // `map!` / `hash!`, `set!`) compute their result type
-                // at resolve time from `args_hir[0].ty`. That field is
-                // a fresh inference variable at resolve time (the
-                // resolver assigns `Ty::Infer(N)` to method calls,
-                // function calls, etc.), and the typeck reassigns the
-                // CALL expression's `.ty` to the resolved return type
-                // without unifying with the original Infer var. So the
-                // macro's stored element type stays unbound. Re-unify
-                // here against each arg's freshly-inferred type so the
-                // container's element / key / value types resolve.
-                match name.as_str() {
-                    "vec" | "array" | "set" => {
-                        if let Some(elem_ty) = container_elem_ty(&expr.ty) {
-                            for arg in args.iter() {
-                                let arg_ty = self.ctx.resolve(&arg.ty);
-                                let _ = unify(&elem_ty, &arg_ty, self.ctx, &expr.span);
-                            }
-                        }
-                    }
-                    "hash" | "map" => {
-                        if let Some((k_ty, v_ty)) = map_kv_tys(&expr.ty) {
-                            let mut it = args.iter();
-                            while let (Some(k), Some(v)) = (it.next(), it.next()) {
-                                let k_arg = self.ctx.resolve(&k.ty);
-                                let v_arg = self.ctx.resolve(&v.ty);
-                                let _ = unify(&k_ty, &k_arg, self.ctx, &expr.span);
-                                let _ = unify(&v_ty, &v_arg, self.ctx, &expr.span);
-                            }
-                        }
-                    }
-                    _ => {}
                 }
                 expr.ty = self.ctx.resolve(&expr.ty);
             }
@@ -1430,8 +1795,20 @@ impl<'a> InferenceEngine<'a> {
                 }
             }
         }
+        if let Ty::Class { name, .. } | Ty::Struct { name, .. } = derefed {
+            let params = self.constructor_param_types(name);
+            for (arg, param) in args.iter().zip(&params) {
+                let param = self.substitute_generics_in_return(derefed, param);
+                self.reject_borrow_into_owned(&param, &arg.ty, &arg.span);
+            }
+        }
         if let Ty::Class { name, generic_args } | Ty::Struct { name, generic_args } = derefed {
-            if generic_args.is_empty() {
+            // A bare stdlib head (`Mutex.new(x)`) arrives carrying its own
+            // unapplied params (`Mutex[T]`); infer those from the args too.
+            let unapplied = generic_args
+                .iter()
+                .all(|arg| matches!(arg, Ty::TypeParam { .. }));
+            if unapplied {
                 if let Some(inferred) = self.infer_class_generics(name, args) {
                     let result = if matches!(derefed, Ty::Struct { .. }) {
                         Ty::Struct {
@@ -1454,6 +1831,75 @@ impl<'a> InferenceEngine<'a> {
         result
     }
 
+    /// A builtin head named as a value (`Array.new`, `Set.with_capacity(n)`) is a
+    /// value-scope binding of the head applied to its own type params
+    /// (`Array[T]`, see `resolve/stdlib/type_constructors.rs`). Each use gets
+    /// fresh inference variables for them, so `T` binds from the call's
+    /// arguments or expected type instead of staying the declaration's `T`.
+    fn instantiate_builtin_head(&mut self, def_id: DefId, ty: &Ty) -> Option<Ty> {
+        let (home, head_args) = ty.builtin_head()?;
+        let def = self.symbols.get(def_id)?;
+        if def.name != home || !matches!(def.kind, DefKind::Variable { .. }) {
+            return None;
+        }
+        let mut fresh = std::collections::HashMap::new();
+        for arg in head_args {
+            if let Ty::TypeParam { name, .. } = arg {
+                let var = self.ctx.fresh_type_var();
+                fresh.entry(name).or_insert(var);
+            }
+        }
+        (!fresh.is_empty()).then(|| ty.subst_params(&fresh))
+    }
+
+    /// E0714: `M.method(...)` where `M` names a `module` is an error — a
+    /// module is a namespace, not a value with methods. The message lists
+    /// the module's classes (`BufReader.new` points to `BufReader.File` /
+    /// `BufReader.Tcp`). Returns true when it reported the error.
+    fn reject_module_receiver(&mut self, object: &HirExpr, method_name: &str, span: &Span) -> bool {
+        let HirExprKind::VarRef(def_id) = object.kind else {
+            return false;
+        };
+        let Some(module) = self.symbols.get(def_id) else {
+            return false;
+        };
+        if !matches!(module.kind, DefKind::Module { .. }) {
+            return false;
+        }
+        let module_name = module.name.clone();
+        let prefix = format!("{module_name}.");
+        let mut classes: Vec<String> = self
+            .symbols
+            .iter()
+            .filter(|d| {
+                matches!(
+                    d.kind,
+                    DefKind::Class { .. } | DefKind::Struct { .. } | DefKind::Enum { .. }
+                ) && d
+                    .name
+                    .strip_prefix(&prefix)
+                    .is_some_and(|rest| !rest.contains('.'))
+            })
+            .map(|d| format!("`{}.{method_name}`", d.name))
+            .collect();
+        classes.sort();
+        classes.dedup();
+        let hint = if classes.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; call it on a class inside the module: {}",
+                classes.join(", ")
+            )
+        };
+        self.diagnostics.push(Diagnostic::error_with_code(
+            format!("`{module_name}` is a module, not a class, so it has no method `{method_name}`{hint}"),
+            span.clone(),
+            "E0714",
+        ));
+        true
+    }
+
     /// Q19: true when `class_name` is a class that has NO constructor at all
     /// — no declared `init` method, no fields, and no parent class — so
     /// `<class_name>.new` would emit a call to a non-existent `_init` symbol
@@ -1462,8 +1908,8 @@ impl<'a> InferenceEngine<'a> {
     fn class_has_no_constructor(&self, class_name: &str) -> bool {
         let Some(def) = self
             .symbols
-            .iter()
-            .find(|d| d.name == class_name && matches!(d.kind, DefKind::Class { .. }))
+            .named(class_name)
+            .find(|d| matches!(d.kind, DefKind::Class { .. }))
         else {
             return false;
         };
@@ -1475,10 +1921,10 @@ impl<'a> InferenceEngine<'a> {
         }
         // A declared `init` OR a static `new` (e.g. an FFI alias
         // `def self.new as "ruxen_open_options_new"`) IS a constructor.
-        let has_ctor_method = self.symbols.iter().any(|d| {
-            (d.name == "init" || d.name == "new")
-                && matches!(&d.kind, DefKind::Method { parent, .. }
-                    if self.symbols.get(*parent).map(|p| p.name == class_name).unwrap_or(false))
+        let has_ctor_method = self.symbols.named(class_name).any(|owner| {
+            self.symbols.children_of(owner.id).any(|d| {
+                (d.name == "init" || d.name == "new") && matches!(d.kind, DefKind::Method { .. })
+            })
         });
         !has_ctor_method
     }
@@ -1487,7 +1933,7 @@ impl<'a> InferenceEngine<'a> {
     /// C[T: Bound]` is instantiated as `C[Concrete]`, check each declared
     /// generic-param bound against the corresponding concrete arg. The
     /// owner is the class itself, so `class Mutex[T: Send]` reports E1101
-    /// and `Arc`/`SharedSync` report E1102 via the preserved-code bridge.
+    /// and `SharedSync` reports E1102 via the preserved-code bridge.
     /// Reads the bounds from the class definition — no hardcoded type
     /// names. Only bounded params fire (zero-regression).
     fn check_constructor_generic_bounds(&mut self, result: &Ty, span: &Span) {
@@ -1516,14 +1962,55 @@ impl<'a> InferenceEngine<'a> {
         &self,
         class_name: &str,
     ) -> Option<Vec<crate::resolve::symbols::GenericParamInfo>> {
-        for def in self.symbols.iter() {
-            if def.name == class_name {
-                if let DefKind::Class { info } = &def.kind {
-                    return Some(info.generic_params.clone());
-                }
+        for def in self.symbols.named(class_name) {
+            if let DefKind::Class { info } = &def.kind {
+                return Some(info.generic_params.clone());
             }
         }
         None
+    }
+
+    /// The type of reading a field whose declared (receiver-substituted)
+    /// type is `owned`: a non-Copy field is read as the borrow `&T`, since
+    /// the object keeps owning the value (TODO.md Decisions, "Fields"). A
+    /// closure field too: the object frees its pair, so a second owner
+    /// takes `.clone` (a shared Proc). Copy fields, types not yet known, and
+    /// every field of a class that does not own its fields (an async state
+    /// machine, whose `poll` moves its locals out) read as themselves.
+    fn field_read_ty(&self, class: &str, owned: Ty) -> Ty {
+        let owned = self.ctx.resolve(&owned);
+        if self.symbols.class_owns_fields(class) {
+            super::helpers::slot_read_ty(owned, self.symbols)
+        } else {
+            owned
+        }
+    }
+
+    /// A field written by `=` / `op=` or borrowed by `&` / `&var` is a
+    /// place of the field's own type `T`, not the `&T` its read has:
+    /// re-type an inferred `FieldAccess` to the owned field type, so a store
+    /// checks against `T` and `&u.name` is `&T` rather than `&&T`.
+    fn retype_field_place(&mut self, target: &mut HirExpr) {
+        let HirExprKind::FieldAccess {
+            object, field_name, ..
+        } = &target.kind
+        else {
+            return;
+        };
+        let obj_ty = self.ctx.resolve(&object.ty);
+        let (_, derefed) = auto_deref(&obj_ty, self.ctx);
+        if let Ty::Tuple(elems) = &derefed {
+            if let Some(elem) = field_name.parse::<usize>().ok().and_then(|i| elems.get(i)) {
+                target.ty = elem.clone();
+            }
+            return;
+        }
+        let (Ty::Class { name, .. } | Ty::Struct { name, .. }) = &derefed else {
+            return;
+        };
+        if let Some((field_ty, _)) = self.lookup_field_with_parents(name, field_name) {
+            target.ty = self.substitute_generics_in_return(&derefed, &field_ty);
+        }
     }
 
     /// Return-typing for a declared (class-selected) method: unify each
@@ -1548,10 +2035,23 @@ impl<'a> InferenceEngine<'a> {
         let Some(signature) = sig_opt else {
             return self.ctx.fresh_type_var();
         };
+        let owner = Self::bound_owner_name(derefed);
         for (arg, param) in args.iter().zip(&signature.params) {
             let param_ty = self.substitute_generics_in_return(derefed, &param.ty);
             let _ = unify(&arg.ty, &param_ty, self.ctx, span);
             self.check_declared_bounds(&param_ty, &arg.ty, &arg.span);
+            self.check_send_required_closure(&param_ty, arg, owner.as_deref());
+        }
+        // Builtin heads only: user and stdlib classes still pass objects
+        // through `Int` slots (`Race.of(a, b)`, `spawn_raw(future)`).
+        let builtin_receiver = !matches!(
+            derefed.peel_refs(),
+            Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
+        ) || derefed.builtin_head().is_some();
+        if signature.is_class_method && builtin_receiver {
+            let name = self.symbols.get(selected).map(|def| def.name.clone());
+            let name = name.unwrap_or_default();
+            self.check_class_method_args(derefed, &name, &signature, args);
         }
         let ret = self.wrap_async_return(&signature);
         // First substitute the receiver's generic args (handles
@@ -1562,7 +2062,6 @@ impl<'a> InferenceEngine<'a> {
         // generic bounds against the harvested bindings. The owner is the
         // receiver class (so `class Mutex[T: Send]` reports E1101, etc. via
         // the preserved-code bridge). Only bounded params fire.
-        let owner = Self::bound_owner_name(derefed);
         let (subst_ty, bindings) = self.harvest_and_subst_generics_bindings(&signature, args, &ret);
         self.check_generic_param_bounds(
             &signature.generic_params,
@@ -1570,6 +2069,7 @@ impl<'a> InferenceEngine<'a> {
             owner.as_deref(),
             span,
         );
+        self.check_owner_where_bounds(&signature.generic_params, derefed, owner.as_deref(), span);
         subst_ty
     }
 
@@ -1578,11 +2078,7 @@ impl<'a> InferenceEngine<'a> {
     /// diagnostic code). References are peeled. Builtin heads and bare
     /// type params have no owning declaration → `None`.
     pub(super) fn bound_owner_name(ty: &Ty) -> Option<String> {
-        match ty {
-            Ty::Ref(inner)
-            | Ty::RefMut(inner)
-            | Ty::RefLifetime(_, inner)
-            | Ty::RefMutLifetime(_, inner) => Self::bound_owner_name(inner),
+        match ty.peel_refs() {
             Ty::Class { name, .. } | Ty::Struct { name, .. } | Ty::Enum { name, .. } => {
                 Some(name.clone())
             }

@@ -1,0 +1,17 @@
+each 3 c
+each 1 a
+each 2 b
+do 3
+do 1
+do 2
+map c,a,b
+select 2
+reject 1
+0:3
+1:1
+2:2
+any true all false
+find true false
+partition 2 1
+reduce 6
+sort_by abc

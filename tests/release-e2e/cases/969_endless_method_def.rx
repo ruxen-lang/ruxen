@@ -1,0 +1,23 @@
+# Pins endless method definitions `def f(...) = expr` (no `end`), for a
+# top-level function with params and a return type, a paramless function, and
+# a class method that reads `self` fields.
+def double(x: Int) -> Int = x * 2
+
+def greeting -> String = "hello"
+
+class Rect
+  w: Int
+  h: Int
+
+  def init(@w: Int, @h: Int)
+  end
+
+  def area -> Int = self.w * self.h
+end
+
+def main
+  puts(double(21))
+  puts(greeting)
+  let r = Rect.new(3, 4)
+  puts(r.area)
+end

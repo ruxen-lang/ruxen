@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Ruxen GUI — Cross-Platform UI as a First-Class Use Case (Design)
 
 **Status:** Design approved (brainstorming complete). Top-level architecture for a multi-subsystem program; only the **first vertical slice** proceeds to an implementation plan next.

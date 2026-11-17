@@ -5,37 +5,31 @@ use std::fmt;
 pub enum ErrorCode {
     E1001, // use after move
     E1002, // can't borrow writably while borrowed read-only
-    E1003, // can't borrow read-only while borrowed writably
-    E1004, // can't move out of borrowed reference
-    E1005, // borrow outlives owner
     E1006, // assign to `let` binding
     E1007, // can't borrow `let` binding writably
-    E1008, // value moved into closure
     E1009, // can't move while borrowed
     E1010, // returned reference outlives local
     E1011, // value is not Send
     E1012, // value is not Sync
     E1013, // non-`static` capture in send-required closure
     E1014, // invalid manual Send/Sync include form
+    E1018, // block parameter stored
+    E1019, // borrowed capture moved out of a closure body
+    E1020, // rebinding a handle `&var` parameter
+    E1021, // a `&var` argument with no address (a Hash value)
 }
 
 impl ErrorCode {
+    /// The code's title from the central `diagnostics::codes::REGISTRY`,
+    /// so the borrow checker and `ruxen explain` never disagree.
     pub fn title(&self) -> &'static str {
-        match self {
-            ErrorCode::E1001 => "value used after move",
-            ErrorCode::E1002 => "cannot borrow writably — already borrowed read-only",
-            ErrorCode::E1003 => "cannot borrow read-only — already borrowed writably",
-            ErrorCode::E1004 => "cannot move out of borrowed reference",
-            ErrorCode::E1005 => "borrow outlives owner",
-            ErrorCode::E1006 => "cannot assign to `let` binding",
-            ErrorCode::E1007 => "cannot borrow `let` binding writably",
-            ErrorCode::E1008 => "value moved into closure, cannot be used outside",
-            ErrorCode::E1009 => "cannot move value — currently borrowed",
-            ErrorCode::E1010 => "returned reference outlives local value",
-            ErrorCode::E1011 => "value is not `Send`",
-            ErrorCode::E1012 => "value is not `Sync`",
-            ErrorCode::E1013 => "non-`static` value captured by send-required closure",
-            ErrorCode::E1014 => "invalid manual `Send` / `Sync` inclusion",
+        match crate::diagnostics::codes::lookup(self.code_str()) {
+            Some(info) => info.title,
+            // Pinned by `borrow_check_codes_appear_in_central_registry`.
+            None => unreachable!(
+                "{} missing from diagnostics::codes::REGISTRY",
+                self.code_str()
+            ),
         }
     }
 
@@ -43,18 +37,18 @@ impl ErrorCode {
         match self {
             ErrorCode::E1001 => "E1001",
             ErrorCode::E1002 => "E1002",
-            ErrorCode::E1003 => "E1003",
-            ErrorCode::E1004 => "E1004",
-            ErrorCode::E1005 => "E1005",
             ErrorCode::E1006 => "E1006",
             ErrorCode::E1007 => "E1007",
-            ErrorCode::E1008 => "E1008",
             ErrorCode::E1009 => "E1009",
             ErrorCode::E1010 => "E1010",
             ErrorCode::E1011 => "E1011",
             ErrorCode::E1012 => "E1012",
             ErrorCode::E1013 => "E1013",
             ErrorCode::E1014 => "E1014",
+            ErrorCode::E1018 => "E1018",
+            ErrorCode::E1019 => "E1019",
+            ErrorCode::E1020 => "E1020",
+            ErrorCode::E1021 => "E1021",
         }
     }
 }
@@ -138,18 +132,18 @@ mod tests {
     const ALL_ERROR_CODES: &[ErrorCode] = &[
         ErrorCode::E1001,
         ErrorCode::E1002,
-        ErrorCode::E1003,
-        ErrorCode::E1004,
-        ErrorCode::E1005,
         ErrorCode::E1006,
         ErrorCode::E1007,
-        ErrorCode::E1008,
         ErrorCode::E1009,
         ErrorCode::E1010,
         ErrorCode::E1011,
         ErrorCode::E1012,
         ErrorCode::E1013,
         ErrorCode::E1014,
+        ErrorCode::E1018,
+        ErrorCode::E1019,
+        ErrorCode::E1020,
+        ErrorCode::E1021,
     ];
 
     #[test]

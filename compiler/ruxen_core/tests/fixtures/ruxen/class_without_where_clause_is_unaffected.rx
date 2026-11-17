@@ -1,7 +1,0 @@
-
-class Buf[const N: USize]
-  data: Int
-end
-
-def take_any(_b: Buf[0])
-end

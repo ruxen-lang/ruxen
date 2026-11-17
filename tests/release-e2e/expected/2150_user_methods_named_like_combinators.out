@@ -1,0 +1,9 @@
+each 3
+each 4
+each 5
+each 6
+map 180
+find 5
+filter 2
+position 2
+partition 2

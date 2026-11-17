@@ -1,8 +1,0 @@
-def main
-  let v = [1, 2, 3, 4, 5]
-  let s = v.sum
-  puts "s=#{s}"
-  let empty: Array[Int] = Array.new
-  let z = empty.sum
-  puts "z=#{z}"
-end

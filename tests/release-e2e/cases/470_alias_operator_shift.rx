@@ -1,0 +1,20 @@
+# Alias follow-up: a binary operator alias dispatches to the canonical method
+# body. The observed array contents prove `values << 42` called `push`.
+class Values
+  items: Array[Int]
+  def init
+    self.items = Array.new
+  end
+  def push(value: Int) -> nil
+    self.items.push(value)
+  end
+  alias << push
+end
+
+def main
+  let values = Values.new
+  values << 42
+  if let Some(value) = values.items.get(0)
+    puts "appended=#{value}"
+  end
+end

@@ -3,6 +3,7 @@
 //! literals, and closures (`do…end` and `{…}`).
 
 use super::*;
+use crate::parser::macros;
 
 impl Parser {
     pub(super) fn parse_primary(&mut self) -> Expr {
@@ -37,6 +38,10 @@ impl Parser {
             TokenKind::InterpolatedString(ref parts) => {
                 let parts = parts.clone();
                 self.advance();
+                let parts = parts
+                    .into_iter()
+                    .map(|part| self.parse_string_part(part, &start))
+                    .collect();
                 Expr {
                     kind: ExprKind::InterpolatedString(parts),
                     span: start,
@@ -94,6 +99,25 @@ impl Parser {
                 }
             }
 
+            // `@name` — instance-variable access, sugar for `self.name`
+            // (read and, via a following `=`, write). The `@name` param form
+            // in `def init(@w: Int)` is handled separately in `parse_param`.
+            TokenKind::At => {
+                self.advance(); // consume @
+                let field = self.expect_identifier();
+                Expr {
+                    kind: ExprKind::FieldAccess {
+                        object: Box::new(Expr {
+                            kind: ExprKind::SelfRef,
+                            span: start.clone(),
+                        }),
+                        field,
+                        ivar: true,
+                    },
+                    span: self.span_from(&start),
+                }
+            }
+
             // Some, Ok, Err — used as enum constructors. `None` is spelled
             // `nil` after ruby-naming.spec.md §3.10, lexed as `TokenKind::Nil`
             // and handled in the nil-literal arm below.
@@ -117,17 +141,56 @@ impl Parser {
                 self.parse_type_expr_primary(name, start)
             }
 
+            // Block Tier-2: `next [expr]` inside a block. Only a bare `next` at
+            // expression-start position inside a closure body is the block-value
+            // keyword; `.next` field access (postfix) and a `next` outside any
+            // closure are unaffected.
+            TokenKind::Identifier(ref name) if name == "next" && self.closure_depth > 0 => {
+                self.advance();
+                let value = if self.is_expression_start() {
+                    Some(Box::new(self.parse_expression()))
+                } else {
+                    None
+                };
+                let span = self.span_from(&start);
+                Expr {
+                    kind: ExprKind::Next(value),
+                    span,
+                }
+            }
+
             // Plain identifier
             TokenKind::Identifier(ref name) => {
                 let name = name.clone();
                 self.advance();
-                // Check for macro call: name!(...) — also handle ident ending with !
-                if name.ends_with('!') {
-                    // Already has !, parse macro args
-                    let trimmed = name.trim_end_matches('!').to_string();
-                    self.parse_macro_call_args(trimmed, start)
-                } else if self.at(TokenKind::Bang) {
-                    // name followed by !
+                // Macro call: `name!(...)` where `name` is one of the
+                // compiler's OWN macros (`parser::macros`). B87: every other
+                // trailing `!` belongs to a Ruby bang name (`save!`, `exit!`,
+                // `shout!`) — the lexer glued it onto the identifier, and we
+                // keep it there so the call resolves like any other call.
+                // Treating an arbitrary `name!` as a macro produced an
+                // unrecognised `MacroCall` that MIR then dropped on the floor,
+                // so the call compiled clean and did nothing.
+                let macro_head = name
+                    .strip_suffix('!')
+                    .filter(|base| macros::is_builtin_macro(base))
+                    .map(str::to_string);
+                // `lambda { |x| ... }` / `proc { |x| ... }` (also `do ... end`).
+                let closure_head = match name.as_str() {
+                    "lambda" => Some(ClosureSpelling::Lambda),
+                    "proc" => Some(ClosureSpelling::Proc),
+                    _ => None,
+                }
+                .filter(|_| self.at(TokenKind::LBrace) || self.at(TokenKind::Do));
+                if let Some(spelling) = closure_head {
+                    self.parse_headed_closure(spelling, start)
+                } else if let Some(base) = macro_head {
+                    self.parse_macro_call_args(base, start)
+                } else if self.at(TokenKind::Bang) && macros::is_builtin_macro(&name) {
+                    // `panic !(...)` — a space split the `!` off the name, so
+                    // the lexer emitted two tokens. Only the built-in macros
+                    // take this path; for anything else the `!` starts a
+                    // negated bare argument (`f !flag`).
                     self.advance(); // consume !
                     self.parse_macro_call_args(name, start)
                 } else if self.at(TokenKind::LParen) {
@@ -143,6 +206,7 @@ impl Parser {
                             }),
                             args,
                             block: block.map(Box::new),
+                            parens: true,
                         },
                         span,
                     }
@@ -158,6 +222,7 @@ impl Parser {
                             }),
                             args: vec![arg],
                             block: None,
+                            parens: false,
                         },
                         span,
                     }
@@ -175,6 +240,7 @@ impl Parser {
                             }),
                             args: vec![],
                             block: block.map(Box::new),
+                            parens: false,
                         },
                         span,
                     }
@@ -200,6 +266,9 @@ impl Parser {
             // `parse_do_closure` handles the missing-pipe case.
             TokenKind::Do => self.parse_do_closure(false, false),
 
+            // `->(x) { ... }` / `->(x) do ... end` lambda.
+            TokenKind::Arrow => self.parse_stabby_closure(false, false),
+
             // move closure
             TokenKind::Move => {
                 self.advance();
@@ -207,8 +276,10 @@ impl Parser {
                     self.parse_brace_closure(false, true)
                 } else if self.at(TokenKind::Do) {
                     self.parse_do_closure(false, true)
+                } else if self.at(TokenKind::Arrow) {
+                    self.parse_stabby_closure(false, true)
                 } else {
-                    self.error("expected `{` or `do` after `move`");
+                    self.error("expected `{`, `do` or `->` after `move`");
                     Expr {
                         kind: ExprKind::Identifier("_error".to_string()),
                         span: start,
@@ -223,8 +294,10 @@ impl Parser {
                     self.parse_brace_closure(true, is_move)
                 } else if self.at(TokenKind::Do) {
                     self.parse_do_closure(true, is_move)
+                } else if self.at(TokenKind::Arrow) {
+                    self.parse_stabby_closure(true, is_move)
                 } else {
-                    self.error("expected `def`, `do`, or `{` after `async`");
+                    self.error("expected `def`, `do`, `{` or `->` after `async`");
                     Expr {
                         kind: ExprKind::Identifier("_error".to_string()),
                         span: start,
@@ -269,15 +342,18 @@ impl Parser {
 
             // Control flow expressions
             TokenKind::If => self.parse_if_expr(),
+            TokenKind::Unless => self.parse_unless_expr(),
             TokenKind::Match => self.parse_match_expr(),
+            TokenKind::Case => self.parse_case_expr(),
             TokenKind::While => self.parse_while_expr(),
+            TokenKind::Until => self.parse_until_expr(),
             TokenKind::For => self.parse_for_expr(),
             TokenKind::Loop => self.parse_loop_expr(),
 
             // Return, break, continue
             TokenKind::Return => {
                 self.advance();
-                let value = if self.is_expression_start() {
+                let value = if self.is_expression_start() && !self.at_statement_modifier() {
                     Some(Box::new(self.parse_expression()))
                 } else {
                     None
@@ -290,7 +366,7 @@ impl Parser {
             }
             TokenKind::Break => {
                 self.advance();
-                let value = if self.is_expression_start() {
+                let value = if self.is_expression_start() && !self.at_statement_modifier() {
                     Some(Box::new(self.parse_expression()))
                 } else {
                     None
@@ -312,14 +388,19 @@ impl Parser {
             // Yield
             TokenKind::Yield => {
                 self.advance();
-                let mut args = Vec::new();
-                if self.is_expression_start() {
-                    args.push(self.parse_expression());
-                    while self.eat(TokenKind::Comma) {
-                        self.skip_newlines();
+                let args = if self.at(TokenKind::LParen) {
+                    self.parse_call_args()
+                } else {
+                    let mut args = Vec::new();
+                    if self.is_expression_start() && !self.at_statement_modifier() {
                         args.push(self.parse_expression());
+                        while self.eat(TokenKind::Comma) {
+                            self.skip_newlines();
+                            args.push(self.parse_expression());
+                        }
                     }
-                }
+                    args
+                };
                 let span = self.span_from(&start);
                 Expr {
                     kind: ExprKind::Yield(args),
@@ -341,6 +422,7 @@ impl Parser {
                             }),
                             args,
                             block: None,
+                            parens: true,
                         },
                         span,
                     }
@@ -363,6 +445,55 @@ impl Parser {
                     span: start,
                 }
             }
+        }
+    }
+
+    /// Parse one lexed string part. A `#{...}` part's tokens are parsed as a
+    /// single expression statement by a sub-parser whose diagnostics are
+    /// forwarded; an empty `#{}` is the empty string.
+    fn parse_string_part(
+        &mut self,
+        part: crate::lexer::token::StringPart,
+        string_span: &Span,
+    ) -> StringPart {
+        let (tokens, spec) = match part {
+            crate::lexer::token::StringPart::Literal(s) => return StringPart::Literal(s),
+            crate::lexer::token::StringPart::Expr { tokens, spec } => (tokens, spec),
+        };
+        let expr = match tokens.first() {
+            None => Expr {
+                kind: ExprKind::StringLiteral(String::new()),
+                span: string_span.clone(),
+            },
+            Some(first) => {
+                let first_span = first.span.clone();
+                let mut tokens = tokens;
+                let end_span = tokens.last().map_or(first_span.clone(), |t| t.span.clone());
+                tokens.push(crate::lexer::token::Token::new(TokenKind::Eof, end_span));
+                let mut sub = Parser::new(tokens);
+                sub.closure_depth = self.closure_depth;
+                let expr = match sub.parse_statement() {
+                    Statement::Expression(expr) => expr,
+                    _ => {
+                        sub.error_at("expected an expression in `#{...}`", first_span.clone());
+                        Expr {
+                            kind: ExprKind::Identifier("_error".to_string()),
+                            span: first_span,
+                        }
+                    }
+                };
+                sub.skip_newlines();
+                if !sub.at_eof() {
+                    let found = format!("{:?}", sub.current_kind());
+                    sub.error(&format!("unexpected {found} in `#{{...}}` interpolation"));
+                }
+                self.diagnostics.append(&mut sub.diagnostics);
+                expr
+            }
+        };
+        StringPart::Expr {
+            expr: Box::new(expr),
+            spec,
         }
     }
 
@@ -391,7 +522,6 @@ impl Parser {
             first,
             TokenKind::TypeIdentifier(_)
                 | TokenKind::SelfType
-                | TokenKind::Lifetime(_)
                 | TokenKind::Amp
                 | TokenKind::AmpMut
                 | TokenKind::IntLiteral(_, _)
@@ -423,16 +553,40 @@ impl Parser {
     fn parse_type_expr_primary(&mut self, name: String, start: Span) -> Expr {
         // Check for generic type arguments: Name[T, U].method(...)
         // Distinguish type-application from indexing: a type-application has
-        // one or more type-like tokens (TypeIdentifier/Self) inside. Generic
-        // args are erased — they're inferred from constructor/method args.
-        if self.at(TokenKind::LBracket) && self.looks_like_type_args() {
-            let _generic_args = self.parse_generic_args();
-            // Fall through to normal handling as if we had just the TypeIdentifier.
-        }
+        // one or more type-like tokens (TypeIdentifier/Self) inside.
+        //
+        // These used to be parsed and DROPPED, on the reasoning that generic
+        // args are inferred from the constructor/method arguments anyway.
+        // That holds for `Point[Int].new(3)` and fails for a constructor with
+        // no arguments to infer from: `Hash[String, Int].new` produced a
+        // receiver typed with the declared rigid `K`/`V`, so the call's
+        // return stayed `Hash[K, V]` and no later stage could recover what
+        // the author had literally written. Keep them and hand them to the
+        // static-receiver arm below.
+        let type_args = if self.at(TokenKind::LBracket) && self.looks_like_type_args() {
+            Some(self.parse_generic_args())
+        } else {
+            None
+        };
+        // The written path (`Hash[String, Int]`) as a type expression, so the
+        // resolver can run it through ordinary type resolution instead of
+        // this module learning what a `Hash` is.
+        let type_ref = |parser: &Self| {
+            type_args.as_ref().map(|args| {
+                TypeExpr::Named(TypePath {
+                    segments: vec![name.clone()],
+                    generic_args: Some(args.clone()),
+                    span: parser.span_from(&start),
+                    rooted: false,
+                    nilable: false,
+                })
+            })
+        };
 
-        // Check if followed by . — could be enum variant construction or static method
-        if self.at(TokenKind::Dot) {
-            // Peek what follows the dot
+        // Check if followed by `.` or Ruby's `::` namespace separator —
+        // could be enum variant construction or a static method receiver.
+        if self.at(TokenKind::Dot) || self.at(TokenKind::ColonColon) {
+            // Peek what follows the separator.
             let after_dot = self.peek_at_kind(1);
             // The stdlib variant keywords (Some/None/Ok/Err) also serve as
             // variant names for user-defined generic enums that re-use
@@ -496,10 +650,10 @@ impl Parser {
                             {
                                 let vname = vname.clone();
                                 self.advance();
-                                if self.at(TokenKind::Dot) {
+                                if self.at(TokenKind::Dot) || self.at(TokenKind::ColonColon) {
                                     if let TokenKind::TypeIdentifier(_) = self.peek_kind() {
                                         path.push(vname);
-                                        self.advance(); // consume .
+                                        self.advance(); // consume namespace separator
                                         continue;
                                     }
                                 }
@@ -559,10 +713,23 @@ impl Parser {
                     }
                     _ => {
                         // TypeName.method(...) or TypeName.field
-                        // Return the type as an identifier, postfix will handle .method
-                        Expr {
-                            kind: ExprKind::Identifier(name),
-                            span: start,
+                        // Return the type as a receiver, postfix will handle
+                        // .method. When the author wrote explicit generic
+                        // arguments, carry them: this is the one shape where
+                        // there may be no call arguments to infer them from
+                        // (`Hash[String, Int].new`).
+                        match type_ref(self) {
+                            Some(ty) => Expr {
+                                kind: ExprKind::GenericTypeRef {
+                                    name,
+                                    ty: Box::new(ty),
+                                },
+                                span: start,
+                            },
+                            None => Expr {
+                                kind: ExprKind::Identifier(name),
+                                span: start,
+                            },
                         }
                     }
                 }
@@ -580,6 +747,7 @@ impl Parser {
                     }),
                     args,
                     block: block.map(Box::new),
+                    parens: true,
                 },
                 span,
             }
@@ -802,9 +970,17 @@ impl Parser {
                 span,
             }
         } else {
-            // Parenthesized expression
+            // Parenthesized expression: the grouping node is discarded (Ruxen
+            // keeps no `Paren` AST node), but the returned expr's span is
+            // extended to cover the parens. Without this, `first.span.end` sits
+            // BEFORE the closing `)`, so a following attached postfix `?`
+            // (`(foo())?`) looks whitespace-separated to the try-vs-ternary
+            // adjacency check and gets misparsed as a ternary.
             self.expect(TokenKind::RParen);
-            first
+            Expr {
+                span: self.span_from(&start),
+                ..first
+            }
         }
     }
 
@@ -973,6 +1149,7 @@ impl Parser {
         self.skip_newlines();
 
         // Check for closure params: { |x, y| ... } or empty `||`
+        let pipes = self.at(TokenKind::Pipe) || self.at(TokenKind::PipePipe);
         let params = if self.at(TokenKind::Pipe) {
             self.parse_closure_params()
         } else if self.at(TokenKind::PipePipe) {
@@ -997,6 +1174,10 @@ impl Parser {
         // For non-keyword starts (expression-start), we still try
         // single-expression first and fall through to block mode if
         // additional statements follow before `}`.
+        //
+        // Track closure nesting so a bare `next` inside the body parses as the
+        // Block Tier-2 block-value keyword (see `closure_depth`).
+        self.closure_depth += 1;
         let body = if self.at(TokenKind::RBrace) {
             // Empty closure
             ClosureBody::Expr(Box::new(Expr {
@@ -1048,6 +1229,7 @@ impl Parser {
             }
         };
 
+        self.closure_depth -= 1;
         self.expect(TokenKind::RBrace);
         let span = self.span_from(&start);
         Expr {
@@ -1057,6 +1239,10 @@ impl Parser {
                 params,
                 body,
                 span: span.clone(),
+                pipes,
+                do_end: false,
+                kind: ClosureKind::Lambda,
+                spelling: ClosureSpelling::Bare,
             }),
             span,
         }
@@ -1067,6 +1253,7 @@ impl Parser {
         self.advance(); // consume do
         self.skip_newlines();
 
+        let pipes = self.at(TokenKind::Pipe) || self.at(TokenKind::PipePipe);
         let params = if self.at(TokenKind::Pipe) {
             self.parse_closure_params()
         } else if self.at(TokenKind::PipePipe) {
@@ -1078,7 +1265,11 @@ impl Parser {
         };
         self.skip_newlines();
 
+        // Track closure nesting so a bare `next` in the body is the block-value
+        // keyword (Block Tier-2, see `closure_depth`).
+        self.closure_depth += 1;
         let block = self.parse_body();
+        self.closure_depth -= 1;
         self.expect(TokenKind::End);
         let span = self.span_from(&start);
         Expr {
@@ -1088,9 +1279,82 @@ impl Parser {
                 params,
                 body: ClosureBody::Block(block),
                 span: span.clone(),
+                pipes,
+                do_end: true,
+                kind: ClosureKind::Lambda,
+                spelling: ClosureSpelling::Bare,
             }),
             span,
         }
+    }
+
+    /// `->(x, y) { ... }` / `-> { ... }` / `->(x) do ... end`: a lambda whose
+    /// parameters come in an optional `(...)` list before the body.
+    fn parse_stabby_closure(&mut self, is_async: bool, is_move: bool) -> Expr {
+        let start = self.current_span();
+        self.advance(); // consume ->
+        let header = self.at(TokenKind::LParen);
+        let mut params = Vec::new();
+        if header {
+            self.advance(); // consume (
+            self.skip_newlines();
+            while !self.at(TokenKind::RParen) && !self.at(TokenKind::Eof) {
+                let progress = self.pos;
+                params.push(self.parse_closure_param());
+                self.skip_newlines();
+                if !self.eat(TokenKind::Comma) {
+                    break;
+                }
+                self.skip_newlines();
+                self.ensure_loop_progress(progress);
+            }
+            self.expect(TokenKind::RParen);
+        }
+        let mut expr = if self.at(TokenKind::LBrace) {
+            self.parse_brace_closure(is_async, is_move)
+        } else if self.at(TokenKind::Do) {
+            self.parse_do_closure(is_async, is_move)
+        } else {
+            self.error("expected `{` or `do` after `->`");
+            return Expr {
+                kind: ExprKind::Identifier("_error".to_string()),
+                span: start,
+            };
+        };
+        let span = self.span_from(&start);
+        if let ExprKind::Closure(c) = &mut expr.kind {
+            if c.pipes {
+                self.error("a `->` lambda takes its parameters in `(...)`, not `|...|`");
+            }
+            c.params = params;
+            c.pipes = header;
+            c.spelling = ClosureSpelling::Stabby;
+            c.span = span.clone();
+        }
+        expr.span = span;
+        expr
+    }
+
+    /// `lambda { ... }` / `proc { ... }` and their `do ... end` forms; the
+    /// head identifier is already consumed and starts at `start`.
+    fn parse_headed_closure(&mut self, spelling: ClosureSpelling, start: Span) -> Expr {
+        let mut expr = if self.at(TokenKind::LBrace) {
+            self.parse_brace_closure(false, false)
+        } else {
+            self.parse_do_closure(false, false)
+        };
+        let span = self.span_from(&start);
+        if let ExprKind::Closure(c) = &mut expr.kind {
+            c.kind = if spelling == ClosureSpelling::Proc {
+                ClosureKind::Proc
+            } else {
+                ClosureKind::Lambda
+            };
+            c.spelling = spelling;
+            c.span = span.clone();
+        }
+        expr.span = span;
+        expr
     }
 
     fn parse_closure_params(&mut self) -> Vec<ClosureParam> {

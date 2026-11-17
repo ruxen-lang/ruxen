@@ -159,7 +159,7 @@ fn main() {
         // on the cc invocation for every artifact this crate produces
         // (lib, bins, AND integration test binaries). The `link-lib=
         // framework=...` form alone was not propagating to the
-        // tests/repl_tests binary's link command on this toolchain.
+        // integration test binary's link command on this toolchain.
         println!("cargo:rustc-link-arg=-framework");
         println!("cargo:rustc-link-arg=Security");
         println!("cargo:rustc-link-lib=framework=Security");
@@ -174,8 +174,38 @@ fn main() {
         }
     }
 
-    for src in &runtime_sources {
-        println!("cargo:rerun-if-changed={}", src.display());
+    // Watch each package's `runtime/` directory, not all of `library/std`.
+    // Cargo scans a watched directory recursively, so this still catches an
+    // edited or newly added `.c`/`.h` (including the vendored PCRE2 subdir and
+    // the shared `core/runtime/runtime.h`), while `.rx` sources and new
+    // `tests/*.rx` files no longer rebuild the archive. Gotcha: a package that
+    // gains its FIRST `runtime/` dir is not seen until this script reruns for
+    // another reason (touch this file or `cargo clean -p ruxen_repl`); a
+    // nonexistent path cannot be watched because Cargo treats it as always
+    // stale.
+    let mut runtime_dirs: Vec<PathBuf> = std::fs::read_dir(&std_root)
+        .expect("read library/std")
+        .flatten()
+        .map(|pkg| pkg.path().join("runtime"))
+        .filter(|dir| dir.is_dir())
+        .collect();
+    runtime_dirs.sort();
+    for dir in &runtime_dirs {
+        println!("cargo:rerun-if-changed={}", dir.display());
     }
-    println!("cargo:rerun-if-changed={}", std_root.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        std_root
+            .join("core")
+            .join("runtime")
+            .join("runtime.h")
+            .display()
+    );
+    // The weak-stub TU is compiled into libruxenrt.a too — without this an
+    // edit to it (e.g. adding a new synthesized-symbol stub) is silently
+    // ignored and the archive goes stale.
+    println!(
+        "cargo:rerun-if-changed={}",
+        PathBuf::from(&crate_dir).join("runtime_stubs.c").display()
+    );
 }

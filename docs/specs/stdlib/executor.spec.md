@@ -2,7 +2,7 @@
 
 **Source docs:**
 [docs/requirements/tier1_03_async.md](../../requirements/tier1_03_async.md) §6,
-[docs/prompts/v1/15_phase4_async.md](../../prompts/v1/15_phase4_async.md),
+`docs/prompts/v1/15_phase4_async.md`,
 [docs/specs/stdlib/async.spec.md](async.spec.md) (sub-phase 1 surface),
 [docs/specs/syntax/async_lowering.spec.md](../syntax/async_lowering.spec.md) (sub-phase 2 lowering).
 
@@ -11,25 +11,32 @@
 lowering. This sub-phase wires the single-threaded **block_on
 executor** so `block_on(future)` runs a future to completion.
 
-V1 scope is intentionally minimal — no real wake-druxen scheduling
+V1 scope is intentionally minimal — no real wake-driven scheduling
 yet. The wake mechanism only matters once there are concurrent
 tasks (sub-phase 5) or I/O events (sub-phase 4). With just `block_on`
 + user-written CPU-bound futures, a poll loop suffices.
+
+**Today:** [implemented], with the reactor from `async_io.spec.md` behind
+the park point. `block_on` is in the prelude and needs no `use` line. It is
+the working model until the Fiber scheduler replaces it
+[planned](../../../TODO.md#t-fibers).
 
 ---
 
 ## B1 — `std.executor.block_on(future)` runs a future to completion
 
-```rx
-use std.executor.block_on
+Example [implemented]:
 
-def main
-  let result = block_on(make_int())
-  puts "#{result}"
+```ruby
+async def make_int -> Int
+  42
 end
+
+result = block_on(make_int())
+puts "#{result}"
 ```
 
-**Given** an `async def make_int() -> Int  42 end` (lowered to a
+**Given** the `async def make_int -> Int` above (lowered to a
 `__MakeIntFuture` state machine in sub-phase 2A)
 **When** the caller invokes `block_on(make_int())`
 **Then** `block_on` returns `42`.
@@ -39,8 +46,8 @@ type that includes `Future` and returning the future's `Output`
 type.
 
 Lib decl (in `library/std/future/src/lib.rx` or a new
-`library/std/executor/src/lib.rx` package):
-```rx
+`library/std/executor/src/lib.rx` package), stdlib source [implemented]:
+```ruby
 def block_on as "ruxen_executor_block_on"(future: Int) -> Int
 ```
 
@@ -90,7 +97,7 @@ The lib decls in `library/std/future/src/lib.rx` are updated so
 longer `ruxen_panic`). The "wake" channel is conceptually wired but
 mechanically inert until sub-phase 4.
 
-## B4 — `Context.waker(&self) -> &Waker` returns the executor's waker
+## B4 — `Context#waker -> &Waker` returns the executor's waker
 
 After this sub-phase, `Context.waker` returns a real waker (not the
 panic-stub from sub-phase 1). The waker is the executor's "wake-me"
@@ -106,10 +113,10 @@ hand-written state machines in isolation.
 
 ## B6 — `block_on` rejects nested invocation (E1112)
 
-**Given** an async context (e.g. inside `async def main` or
+**Given** an async context (e.g. inside an `async def` or
 `async { ... }`) that calls `block_on(other_future)`
 **Then** typeck (or borrow check) rejects with E1112:
-```
+```text
 [E1112] error: cannot call `block_on` inside an async context — this would deadlock
    |  block_on(other_future)
    |  ^^^^^^^^
@@ -122,16 +129,14 @@ E1110 (`.await` outside async) but inverted.
 
 ## B7 — block_on round-trip for sub-phase-2A futures
 
-```rx
-use std.executor.block_on
+Example [implemented]:
 
-async def make_int() -> Int
+```ruby
+async def make_int -> Int
   42
 end
 
-def main
-  puts "#{block_on(make_int())}"
-end
+puts "#{block_on(make_int())}"
 ```
 
 Prints `42`. The single-state future returns Ready on the first
@@ -139,26 +144,29 @@ poll, so block_on returns immediately. E2E fixture.
 
 ## B8 — block_on round-trip for sub-phase-2B chained-await futures
 
-```rx
-use std.executor.block_on
+Inside an `async def`, a local that holds an `.await` result must still be
+declared with `let` today: the bare `a = inner_a().await` is not hoisted by
+the async lowering and fails typeck (E0740, "no method `poll` on type
+`Future[Int]`").
 
-async def inner_a() -> Int
+Works today, [deprecated] `let` (replacement `a = ...`, blocked by the gap above):
+
+```ruby
+async def inner_a -> Int
   10
 end
 
-async def inner_b() -> Int
+async def inner_b -> Int
   20
 end
 
-async def outer() -> Int
+async def outer -> Int
   let a = inner_a().await
   let b = inner_b().await
   a + b
 end
 
-def main
-  puts "#{block_on(outer())}"
-end
+puts "#{block_on(outer())}"
 ```
 
 Prints `30`. The outer future suspends across two `.await`s; the
@@ -176,17 +184,17 @@ that exactly one drop fires after `block_on` returns.
 
 ## B10 — No leak under repeated `block_on`
 
-```rx
-def main
-  let mut i = 0
-  while i < 1000
-    let _ = block_on(make_int())
-    i = i + 1
-  end
+Example [implemented]:
+
+```ruby
+i = 0
+while i < 1000
+  block_on(make_int())
+  i += 1
 end
 ```
 
-(Where `_` discards.) Memory-bench-style pin test: this loop's RSS
+(The result is discarded.) Memory-bench-style pin test: this loop's RSS
 should be flat (within tolerance). Sub-phase 3's executor must not
 leak per-iteration heap allocations beyond what the future itself
 holds.
@@ -197,16 +205,16 @@ holds.
 
 | Behaviour | Test fn                                              | File                          |
 |-----------|------------------------------------------------------|-------------------------------|
-| B1        | `block_on_runs_subphase2a_future_to_ready`           | `tests/async_executor.rs`     |
+| B1        | `polls a hand-written future until it is ready`      | `std/executor` `block_on_test.rx` |
 | B2        | (covered by B1, B7, B8 end-to-end runs)              | —                             |
-| B3        | `waker_wake_is_noop_in_subphase3`                    | `tests/async_executor.rs`     |
-| B4        | `context_waker_returns_real_waker_after_subphase3`   | `tests/async_executor.rs`     |
-| B5        | `context_test_dummy_still_works`                     | `tests/async_executor.rs`     |
+| B3        | e2e `cases/2066_block_on_typed_output_and_waker.rx`  | release-e2e                   |
+| B4        | e2e `cases/2066_block_on_typed_output_and_waker.rx`  | release-e2e                   |
+| B5        | e2e `cases/721_async_def_no_await_handpoll.rx`       | release-e2e                   |
 | B6        | `block_on_inside_async_rejected_e1112`               | `tests/async_negative.rs`     |
 | B7        | e2e `cases/723_block_on_subphase2a_future.rx`       | release-e2e                   |
 | B8        | e2e `cases/724_block_on_subphase2b_chained.rx`      | release-e2e                   |
-| B9        | `block_on_drops_future_after_return`                 | `tests/async_executor.rs`     |
-| B10       | `block_on_loop_does_not_leak`                        | `tests/async_executor.rs`     |
+| B9        | none (deferred: needs runtime drop tracking)         | —                             |
+| B10       | none (deferred: needs runtime drop tracking)         | —                             |
 
 ---
 

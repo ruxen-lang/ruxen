@@ -1,0 +1,30 @@
+use std.rand.{random_bytes, random_u64, random_fill}
+
+Tester.describe("rand") do |t: &var Tester|
+  t.it("returns the requested number of varied bytes") do
+    let buf = random_bytes(32).unwrap
+    t.expect(buf.size).to_eq(32)
+    let first = buf[0]
+    t.expect(buf.any? { |b| b != first }).to_eq(true)
+  end
+
+  t.it("returns an empty array for zero bytes") do
+    t.expect(random_bytes(0).unwrap.size).to_eq(0)
+  end
+
+  t.it("returns an error for a negative length") do
+    t.expect(random_bytes(-1).err?).to_eq(true)
+  end
+
+  t.it("draws a different u64 each call") do
+    t.expect(random_u64()).not_to_eq(random_u64())
+  end
+
+  t.it("overwrites every buffer it fills") do
+    var buf: Array[Int] = Array.new
+    16.times { buf.push(170) }
+    t.expect(random_fill(&var buf).ok?).to_eq(true)
+    t.expect(buf.size).to_eq(16)
+    t.expect(buf.any? { |b| b != 170 }).to_eq(true)
+  end
+end

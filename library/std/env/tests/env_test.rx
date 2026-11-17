@@ -1,0 +1,41 @@
+Tester.describe("Env") do |t: &var Tester|
+  t.it("snapshots the process environment in vars") do
+    let m = Env.vars
+    t.expect(m.key?("PATH")).to_eq(true)
+    t.expect(m.size > 0).to_eq(true)
+  end
+
+  t.it("returns Ok with the value of a set variable from get") do
+    let from_get = match Env.get("PATH")
+      Ok(v)  -> v
+      Err(_) -> "missing"
+    end
+    let m = Env.vars
+    t.expect(from_get).to_eq(m["PATH"].clone)
+  end
+
+  t.it("returns Err from get for an unset variable") do
+    let missing = match Env.get("RUXEN_DEFINITELY_NOT_SET_12345")
+      Ok(_)  -> false
+      Err(_) -> true
+    end
+    t.expect(missing).to_eq(true)
+  end
+
+  t.it("returns a non-empty current_dir") do
+    let cwd = match Env.current_dir
+      Ok(path) -> path
+      Err(_)   -> ""
+    end
+    t.expect(cwd.empty?).to_eq(false)
+  end
+
+  t.it("includes the program name in args") do
+    t.expect(Env.args.size > 0).to_eq(true)
+  end
+
+  t.it("counts at least one CPU and one performance CPU") do
+    t.expect(Env.cpu_count >= 1).to_eq(true)
+    t.expect(Env.performance_cpu_count >= 1).to_eq(true)
+  end
+end

@@ -1,0 +1,21 @@
+# Pins the ternary conditional `cond ? a : b` (right-associative when chained),
+# desugared to `if`/`else`. The `?` try operator (attached, no space) is
+# unaffected.
+def classify(n: Int) -> String
+  n > 0 ? "positive" : "non-positive"
+end
+
+def grade(n: Int) -> String
+  n >= 90 ? "A" : n >= 80 ? "B" : "C"
+end
+
+def main
+  puts classify(5)
+  puts classify(-3)
+  let x = 10
+  let label = x > 5 ? "big" : "small"
+  puts label
+  puts grade(95)
+  puts grade(85)
+  puts grade(70)
+end

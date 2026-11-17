@@ -1,0 +1,9 @@
+# An `unsafe` block resolves its body like any other block, so a bare
+# first assignment binds a new local inside it.
+def main
+  total = unsafe
+    x = 40
+    x + 2
+  end
+  puts(total)
+end

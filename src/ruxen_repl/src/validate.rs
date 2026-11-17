@@ -1,12 +1,13 @@
 //! Multi-line input detection via rustyline Validator.
 //!
-//! Checks delimiter balance to determine if input is incomplete
+//! Checks delimiter balance (the parser's `has_unclosed_delimiters`, the
+//! same check `parse_repl_input` uses) to determine if input is incomplete
 //! and needs continuation lines.
 
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 
-use ruxen_core::lexer::token::TokenKind;
 use ruxen_core::lexer::Lexer;
+use ruxen_core::parser::Parser;
 
 /// Validates REPL input for completeness (delimiter balance).
 pub struct RuxenValidator;
@@ -37,41 +38,7 @@ impl Validator for RuxenValidator {
             }
         };
 
-        let mut block_depth: i32 = 0;
-        let mut paren_depth: i32 = 0;
-        let mut bracket_depth: i32 = 0;
-        let mut brace_depth: i32 = 0;
-
-        for tok in &tokens {
-            match &tok.kind {
-                // Block openers (matched by `end`)
-                TokenKind::Def
-                | TokenKind::Class
-                | TokenKind::Struct
-                | TokenKind::Enum
-                // ruby-naming.spec.md §3.4 / §3.4a:
-                | TokenKind::Mixin
-                | TokenKind::Extension
-                | TokenKind::Module
-                | TokenKind::If
-                | TokenKind::While
-                | TokenKind::For
-                | TokenKind::Loop
-                | TokenKind::Match => block_depth += 1,
-                TokenKind::Do => block_depth += 1,
-                TokenKind::End => block_depth -= 1,
-                TokenKind::LParen => paren_depth += 1,
-                TokenKind::RParen => paren_depth -= 1,
-                TokenKind::LBracket => bracket_depth += 1,
-                TokenKind::RBracket => bracket_depth -= 1,
-                TokenKind::LBrace => brace_depth += 1,
-                TokenKind::RBrace => brace_depth -= 1,
-                TokenKind::Eof => break,
-                _ => {}
-            }
-        }
-
-        if block_depth > 0 || paren_depth > 0 || bracket_depth > 0 || brace_depth > 0 {
+        if Parser::has_unclosed_delimiters(&tokens) {
             Ok(ValidationResult::Incomplete)
         } else {
             Ok(ValidationResult::Valid(None))

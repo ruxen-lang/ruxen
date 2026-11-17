@@ -61,7 +61,7 @@ def read_result_to_int(r: Result[String, IoError], expected_empty: &String) -> I
   end
 end
 
-def compare_strings(a: String, b: String) -> Int
+def compare_strings(a: String, b: &String) -> Int
   ruxen_async_str_equals(a, b)
 end
 

@@ -1,0 +1,249 @@
+# The derive check walks a type's fields with a recursion stack and a
+# memo: a recursive type (`Node` holding `Array[Node]`) is assumed to
+# support a derive while it is being checked, a type reached along many
+# paths is checked once, and a class with more than 32 distinct field
+# types is checked in full. All three clone through their derived bodies.
+class Node
+  name: String
+  children: Array[Node]
+
+  def init(@name: String, @children: Array[Node])
+  end
+
+  def first_child -> String
+    @children[0].name.clone
+  end
+end
+
+struct S1
+  v: Int
+end
+
+struct S2
+  v: Int
+end
+
+struct S3
+  v: Int
+end
+
+struct S4
+  v: Int
+end
+
+struct S5
+  v: Int
+end
+
+struct S6
+  v: Int
+end
+
+struct S7
+  v: Int
+end
+
+struct S8
+  v: Int
+end
+
+struct S9
+  v: Int
+end
+
+struct S10
+  v: Int
+end
+
+struct S11
+  v: Int
+end
+
+struct S12
+  v: Int
+end
+
+struct S13
+  v: Int
+end
+
+struct S14
+  v: Int
+end
+
+struct S15
+  v: Int
+end
+
+struct S16
+  v: Int
+end
+
+struct S17
+  v: Int
+end
+
+struct S18
+  v: Int
+end
+
+struct S19
+  v: Int
+end
+
+struct S20
+  v: Int
+end
+
+struct S21
+  v: Int
+end
+
+struct S22
+  v: Int
+end
+
+struct S23
+  v: Int
+end
+
+struct S24
+  v: Int
+end
+
+struct S25
+  v: Int
+end
+
+struct S26
+  v: Int
+end
+
+struct S27
+  v: Int
+end
+
+struct S28
+  v: Int
+end
+
+struct S29
+  v: Int
+end
+
+struct S30
+  v: Int
+end
+
+struct S31
+  v: Int
+end
+
+struct S32
+  v: Int
+end
+
+struct S33
+  v: Int
+end
+
+struct S34
+  v: Int
+end
+
+class Wide
+  f1: S1
+  f2: S2
+  f3: S3
+  f4: S4
+  f5: S5
+  f6: S6
+  f7: S7
+  f8: S8
+  f9: S9
+  f10: S10
+  f11: S11
+  f12: S12
+  f13: S13
+  f14: S14
+  f15: S15
+  f16: S16
+  f17: S17
+  f18: S18
+  f19: S19
+  f20: S20
+  f21: S21
+  f22: S22
+  f23: S23
+  f24: S24
+  f25: S25
+  f26: S26
+  f27: S27
+  f28: S28
+  f29: S29
+  f30: S30
+  f31: S31
+  f32: S32
+  f33: S33
+  f34: S34
+
+  def init
+    @f1 = S1.new(1)
+    @f2 = S2.new(2)
+    @f3 = S3.new(3)
+    @f4 = S4.new(4)
+    @f5 = S5.new(5)
+    @f6 = S6.new(6)
+    @f7 = S7.new(7)
+    @f8 = S8.new(8)
+    @f9 = S9.new(9)
+    @f10 = S10.new(10)
+    @f11 = S11.new(11)
+    @f12 = S12.new(12)
+    @f13 = S13.new(13)
+    @f14 = S14.new(14)
+    @f15 = S15.new(15)
+    @f16 = S16.new(16)
+    @f17 = S17.new(17)
+    @f18 = S18.new(18)
+    @f19 = S19.new(19)
+    @f20 = S20.new(20)
+    @f21 = S21.new(21)
+    @f22 = S22.new(22)
+    @f23 = S23.new(23)
+    @f24 = S24.new(24)
+    @f25 = S25.new(25)
+    @f26 = S26.new(26)
+    @f27 = S27.new(27)
+    @f28 = S28.new(28)
+    @f29 = S29.new(29)
+    @f30 = S30.new(30)
+    @f31 = S31.new(31)
+    @f32 = S32.new(32)
+    @f33 = S33.new(33)
+    @f34 = S34.new(34)
+  end
+end
+
+struct Leaf
+  s: String
+end
+
+struct Twice
+  a: Leaf
+  b: Leaf
+end
+
+struct Diamond
+  l: Twice
+  r: Twice
+end
+
+tree = Node.new("root".clone, [Node.new("kid".clone, [])])
+copy = tree.clone
+puts(copy.first_child)
+w = Wide.new
+puts(w.clone.f34.v)
+leaf = Leaf.new("x".clone)
+d = Diamond.new(Twice.new(leaf.clone, leaf.clone), Twice.new(leaf.clone, leaf))
+puts(d.clone.r.b.s)

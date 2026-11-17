@@ -1,0 +1,15 @@
+class U
+  name: String
+
+  def init(@name: String)
+  end
+end
+
+def main
+  k = 3
+  u = U.new("old-#{k}")
+  (&var u.name).push_str("-a-sufficiently-long-suffix-to-force-realloc-of-the-buffer")
+  puts(u.name)
+  (&var u.name).push_str("!")
+  puts(u.name.size)
+end

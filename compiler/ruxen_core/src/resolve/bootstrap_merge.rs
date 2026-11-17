@@ -1,18 +1,11 @@
-#![allow(unused_imports)]
-
 use std::collections::HashMap;
 
-use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
-use crate::lexer::token::Span;
-use crate::parser::ast::{self, Visibility};
+use crate::parser::ast::{self};
 
-use super::const_helpers;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
+use super::scope::ScopeKind;
 use super::symbols::*;
-use super::{ClosureCaptureContext, ResolveResult, Resolver};
+use super::{ResolveResult, Resolver};
 
 impl Resolver {
     pub fn resolve(self, program: &ast::Program) -> ResolveResult {
@@ -102,10 +95,13 @@ impl Resolver {
         program: &ast::Program,
         bootstrap_programs: &[ast::Program],
     ) -> ResolveResult {
+        // Read before the post-merge fixup consumes the package list.
+        let package_aware = !self.bootstrap_auto_packages.is_empty();
+        let packages = self.bootstrap_auto_packages.clone();
         self.register_builtins();
 
         // Collected FFI library declarations (filled by the
-        // `Lib`/`Extern` arms in `register_top_level_type`). Surfaced
+        // `Lib` arms in `register_top_level_type`). Surfaced
         // on `HirProgram::ffi_libs` so MIR lowering can populate
         // `MirProgram::ffi_libs` and rewrite call-site callees to the
         // declared C symbol. The bootstrap merge below contributes to
@@ -208,15 +204,32 @@ impl Resolver {
         // stdlib class drop methods, and codegen lowers any user-body
         // method (e.g. `def var poll` on a hand-written future).
         let mut bootstrap_items: Vec<HirItem> = Vec::new();
-        for bs_program in bootstrap_programs {
+        for (idx, bs_program) in bootstrap_programs.iter().enumerate() {
+            let from = self.symbols.len();
             for item in &bs_program.items {
                 if !Self::is_bootstrap_supported_item(item) {
+                    continue;
+                }
+                if let ast::TopLevelItem::Use(use_decl) = item {
+                    // Every bootstrap item already shares the one prelude
+                    // scope, so a stdlib `use` imports nothing new. Check
+                    // the path in a throwaway scope: a bad path still
+                    // reports, but the binding cannot shadow a user
+                    // definition registered in pass 1. The legacy
+                    // package-less path never fills the `std.<pkg>` item
+                    // lists, so there is nothing to check the path against.
+                    if package_aware {
+                        self.scopes.push(ScopeKind::Block);
+                        self.resolve_use_decl(use_decl);
+                        self.scopes.pop();
+                    }
                     continue;
                 }
                 if let Some(hir_item) = self.resolve_item(item) {
                     bootstrap_items.push(hir_item);
                 }
             }
+            self.record_origins(packages.get(idx).map(|(name, _)| name.as_str()), from);
         }
 
         // Pass 2: Fully resolve all items. Bootstrap (prelude) items are the
@@ -229,6 +242,9 @@ impl Resolver {
                 items.push(hir_item);
             }
         }
+        self.attach_field_hints();
+
+        self.check_result_sources();
 
         let hir_program = HirProgram {
             items,
@@ -248,9 +264,77 @@ impl Resolver {
             symbols,
             type_context: self.type_context,
             diagnostics: self.diagnostics,
+            unresolved_names: self.unresolved_names,
             type_registry: self.type_registry,
             method_aliases: self.method_aliases,
         }
+    }
+
+    /// Record that every definition made since `from` (a `SymbolTable::len`
+    /// taken before a bootstrap program's step) comes from that program's
+    /// standard library `package` (`SymbolTable::origin`): its top-level
+    /// items, their methods and fields alike. Nothing for the legacy
+    /// package-less path.
+    fn record_origins(&mut self, package: Option<&str>, from: usize) {
+        let Some(package) = package else {
+            return;
+        };
+        for id in from..self.symbols.len() {
+            self.symbols.set_origin(id as DefId, package);
+        }
+    }
+
+    /// E0748: a function whose declared result holds a reference, with no
+    /// receiver and several reference parameters, leaves what the result
+    /// borrows ambiguous (`hir::types::result_source`, the one elision
+    /// rule the loan check reads at every call; Rust's E0106).
+    fn check_result_sources(&mut self) {
+        let mut errors = Vec::new();
+        // A function is defined once per resolve pass that registers its
+        // signature (pass 1b, then its body): one error per declaration.
+        let mut reported = std::collections::HashSet::new();
+        for def in self.symbols.iter() {
+            let (DefKind::Function { signature } | DefKind::Method { signature, .. }) = &def.kind
+            else {
+                continue;
+            };
+            let has_receiver = !signature.is_class_method
+                && (signature.self_mode.is_some() || matches!(def.kind, DefKind::Method { .. }));
+            let params: Vec<crate::hir::types::Ty> =
+                signature.params.iter().map(|p| p.ty.clone()).collect();
+            let crate::hir::types::ResultSource::Ambiguous(slots) =
+                crate::hir::types::result_source(has_receiver, &params, &signature.return_ty)
+            else {
+                continue;
+            };
+            if !reported.insert((def.span.start, def.span.end)) {
+                continue;
+            }
+            let names: Vec<String> = slots
+                .iter()
+                .map(|&slot| format!("`{}`", signature.params[slot].name))
+                .collect();
+            let mut diagnostic = crate::diagnostics::Diagnostic::error_with_code(
+                format!(
+                    "`{}` returns `{}`, which holds a reference, but it has no receiver and \
+                     {} reference parameters ({}), so which one the result borrows from is \
+                     ambiguous",
+                    def.name,
+                    signature.return_ty,
+                    slots.len(),
+                    names.join(", ")
+                ),
+                def.span.clone(),
+                "E0748",
+            );
+            diagnostic.help.push(format!(
+                "make `{}` a method of the value it borrows from, return an owned value, or \
+                 name the lifetime: `def f[a](x: &a T, y: &a T) -> &a T`",
+                def.name
+            ));
+            errors.push(diagnostic);
+        }
+        self.diagnostics.extend(errors);
     }
 
     /// Merge parsed stdlib `Program`s into the resolver scope.
@@ -262,13 +346,10 @@ impl Resolver {
     /// (`register_top_level_type_with_ffi`) — there is no separate
     /// stdlib grammar, no separate resolver path, no special-casing.
     ///
-    /// Wave 1.5 only supports the variants needed by today's bootstrap
-    /// content (`Lib`, `Extern`, `Function`, `Class`, `Struct`, `Enum`,
-    /// `Const`). `Mixin`/`Impl`/`Module`/`Use`/`TypeAlias`/`Newtype`
-    /// inside a stdlib file are silently skipped for now — they will
-    /// land in Wave 2 when the first stdlib module that uses them
-    /// migrates. The conservative skip keeps the Phase 3 surface
-    /// minimal; adding them later is purely additive.
+    /// Supported item kinds are listed in
+    /// [`is_bootstrap_supported_item`](Self::is_bootstrap_supported_item);
+    /// any other top-level item in a stdlib file is an E0725 error, never
+    /// a silent skip.
     /// # Double-registration policy
     ///
     /// `register_builtins` (the Rust-side `resolve/stdlib/mod.rs`)
@@ -299,12 +380,41 @@ impl Resolver {
         // lib-decl processing on the first walk lets the second walk
         // resolve those once every class name is registered.
         let first_walk_ctx = super::ffi_registration::RegistrationCtx::bootstrap_first_walk();
+        let packages: Vec<Option<String>> = (0..programs.len())
+            .map(|idx| {
+                self.bootstrap_auto_packages
+                    .get(idx)
+                    .map(|(name, _)| name.clone())
+            })
+            .collect();
         for (idx, program) in programs.iter().enumerate() {
+            let from = self.symbols.len();
             for item in &program.items {
                 if Self::is_bootstrap_supported_item(item) {
                     self.register_top_level_type_with_ffi(item, ffi_libs, first_walk_ctx);
+                } else {
+                    let span = match item {
+                        ast::TopLevelItem::Impl(i) => i.span.clone(),
+                        ast::TopLevelItem::Alias(a) => a.span.clone(),
+                        ast::TopLevelItem::Expr(e) => e.span.clone(),
+                        _ => program.span.clone(),
+                    };
+                    let package = self
+                        .bootstrap_auto_packages
+                        .get(idx)
+                        .map_or("<unnamed>", |(name, _)| name.as_str());
+                    self.error_with_code(
+                        format!(
+                            "stdlib bootstrap failed in package `{package}`: a top-level \
+                             `impl`, `alias` or expression statement is not supported in a \
+                             stdlib file"
+                        ),
+                        &span,
+                        "E0725",
+                    );
                 }
             }
+            self.record_origins(packages[idx].as_deref(), from);
             // (Q37: stdlib `yield` helpers get their `__block` from their own
             // body in `funcs.rs::resolve_function`, the same as user code —
             // no name-keyed pre-scan, so no cross-function collision.)
@@ -354,12 +464,14 @@ impl Resolver {
         // Second walk: every class name in every bootstrap program is
         // now forward-declared in `type_registry`, so the deferred
         // class-body lib decls can resolve cross-class return types.
-        for program in programs {
+        for (idx, program) in programs.iter().enumerate() {
+            let from = self.symbols.len();
             for item in &program.items {
                 if Self::is_bootstrap_supported_item(item) {
                     self.process_deferred_class_lib_decls(item, ffi_libs, &[]);
                 }
             }
+            self.record_origins(packages[idx].as_deref(), from);
         }
     }
 
@@ -455,46 +567,9 @@ impl Resolver {
     }
 
     pub(super) fn fixup_bootstrapped_stdlib_modules(&mut self) {
-        // Generic per-package auto-population first; cross-package
-        // FIXUPS (below) only handle re-exports that span packages.
+        // Phase D of #06.95: each `std.<pkg>` submodule's `items` are
+        // derived from the matching `library/std/<pkg>/src/lib.rx`.
         self.auto_populate_std_submodules_from_packages();
-
-        // (stdlib-module-name, &[item-names-the-.rx-defines])
-        //
-        // `register_builtins` inserts the outer `std` module into the
-        // type scope (so `std.X` resolution works) but does NOT
-        // insert submodules (`std.rand`, `std.io`, …) into any scope —
-        // they are only reachable by walking `std`'s `items` list.
-        // The fixup therefore looks each `module_name` up by walking
-        // `std`'s items rather than calling `scopes.lookup_type`
-        // directly.
-        //
-        // Phase D of #06.95: the bulk per-package FIXUPS table is
-        // gone. `auto_populate_std_submodules_from_packages` above
-        // derives each `std.<pkg>` submodule's `items` from the
-        // matching `library/std/<pkg>/src/lib.rx`. The only
-        // remaining responsibility here is the small TYPE_ALIASES
-        // table below.
-
-        // Wave 2 (#06.8): re-establish stdlib type aliases whose target
-        // moved from a Rust registration to a bootstrap-loaded `.rx`
-        // file. Today this is just `Hash → Hashable` (the TEC-13
-        // deprecation alias).
-        //
-        // The `Hash[K, V]` collection type has its OWN type-position
-        // resolver path (see `resolve_type_path`'s explicit `Hash` /
-        // `Vec` / `Set` arms) and is unaffected by this alias.
-        const TYPE_ALIASES: &[(&str, &str)] = &[("Hash", "Hashable")];
-        for (alias, target) in TYPE_ALIASES {
-            if let Some(target_id) = self.scopes.lookup_type(target) {
-                // Only insert when missing — never overwrite a real
-                // scope entry.
-                if self.scopes.lookup_type(alias).is_none() {
-                    self.scopes.insert_type(alias.to_string(), target_id);
-                    self.type_registry.insert(alias.to_string(), target_id);
-                }
-            }
-        }
     }
 
     /// Whitelist of `TopLevelItem` variants the bootstrap merge path
@@ -517,7 +592,6 @@ impl Resolver {
         matches!(
             item,
             ast::TopLevelItem::Lib(_)
-                | ast::TopLevelItem::Extern(_)
                 | ast::TopLevelItem::Function(_)
                 | ast::TopLevelItem::Class(_)
                 | ast::TopLevelItem::Struct(_)
@@ -532,8 +606,88 @@ impl Resolver {
                 // this gate, the merger would silently skip every
                 // module item in the stdlib.
                 | ast::TopLevelItem::Module(_)
+                // A stdlib `use` is checked but binds nothing (every
+                // bootstrap item already shares the prelude scope).
+                | ast::TopLevelItem::Use(_)
+                | ast::TopLevelItem::TypeAlias(_)
+                | ast::TopLevelItem::Newtype(_)
         )
     }
 
     // ─── Builtin Registration ───────────────────────────────────────
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::hir::nodes::{HirExprKind, HirItem};
+    use crate::lexer::Lexer;
+    use crate::parser::ast::Program;
+    use crate::parser::Parser;
+    use crate::resolve::{ResolveResult, Resolver};
+
+    fn parse(source: &str) -> Program {
+        let tokens = Lexer::new(source).tokenize().expect("lexer failed");
+        Parser::new(tokens).parse().expect("parser failed")
+    }
+
+    fn resolve_with_stdlib(stdlib: &str, user: &str) -> ResolveResult {
+        Resolver::new()
+            .resolve_with_bootstrap_packages(&parse(user), &[("tools".into(), parse(stdlib))])
+    }
+
+    fn codes(result: &ResolveResult) -> Vec<&str> {
+        result
+            .diagnostics
+            .iter()
+            .filter_map(|d| d.code.as_deref())
+            .collect()
+    }
+
+    #[test]
+    fn stdlib_type_alias_and_newtype_are_loaded() {
+        let result = resolve_with_stdlib(
+            "type Meters = Int\nnewtype UserId(Int)\n",
+            "def main\n  let m: Meters = 3\n  let id: UserId = UserId(7)\nend\n",
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn stdlib_use_is_checked_and_does_not_shadow_user_definitions() {
+        let result = resolve_with_stdlib(
+            "def helper -> Int\n  1\nend\nmodule Tools\n  def helper -> Int\n    2\n  end\nend\nuse Tools.helper\nuse Tools.missing\n",
+            "\n\n\n\n\n\n\ndef helper -> Int\n  3\nend\ndef main\n  helper()\nend\n",
+        );
+        let messages: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(messages[0].contains("missing"), "{messages:?}");
+        let Some(HirItem::Function(main)) = result.program.items.last() else {
+            panic!("expected `main` last");
+        };
+        // `main`'s value is discarded, so its last expression is a statement.
+        let HirExprKind::Block(stmts, None) = &main.body.kind else {
+            panic!("expected a block body: {:?}", main.body.kind);
+        };
+        let Some(crate::hir::nodes::HirStatement::Expr(call)) = stmts.last() else {
+            panic!("expected an expression statement: {stmts:?}");
+        };
+        let HirExprKind::FnCall { callee, .. } = &call.kind else {
+            panic!("expected a call: {:?}", call.kind);
+        };
+        let callee_line = result.symbols.get(*callee).expect("callee def").span.line;
+        assert_eq!(callee_line, 8, "`helper()` bound to the stdlib def");
+    }
+
+    #[test]
+    fn unsupported_stdlib_item_is_e0725() {
+        let result = resolve_with_stdlib(
+            "def old_name -> Int\n  1\nend\nalias new_name old_name\n",
+            "def main\nend\n",
+        );
+        assert_eq!(codes(&result), vec!["E0725"], "{:?}", result.diagnostics);
+    }
 }

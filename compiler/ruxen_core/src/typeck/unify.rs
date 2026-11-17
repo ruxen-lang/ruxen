@@ -242,12 +242,17 @@ pub fn unify(a: &Ty, b: &Ty, ctx: &mut TypeContext, span: &Span) -> Result<Ty, T
             })
         }
 
-        // TypeParam: unify if same name
+        // TypeParam: unify if same name. Two different params (`T` and `U`)
+        // are distinct types, and stay so whatever they are later
+        // instantiated with.
         (Ty::TypeParam { name: an, .. }, Ty::TypeParam { name: bn, .. }) if an == bn => Ok(a),
+        (Ty::TypeParam { .. }, Ty::TypeParam { .. }) => Err(TypeError::mismatch(&a, &b, span)),
 
-        // TypeParam unifies with any concrete type (the concrete type wins).
-        // In a generic context, T can be instantiated to any type that satisfies bounds.
-        // Bound checking is done elsewhere; here we just allow structural unification.
+        // A TypeParam still unifies with a concrete type (the concrete type
+        // wins): a generic class's own params are not yet instantiated per
+        // call for user classes (`Box.make(3)` against `Box[Int]`), and a
+        // dyn `Future`'s `Self::Output` projection is spelled as a param.
+        // Bound checking is done elsewhere.
         (Ty::TypeParam { .. }, _) => Ok(b),
         (_, Ty::TypeParam { .. }) => Ok(a),
 
@@ -264,8 +269,8 @@ pub fn unify(a: &Ty, b: &Ty, ctx: &mut TypeContext, span: &Span) -> Result<Ty, T
         //   hs.push({ |n: Int| n + 10 })
         //   def make_adder(n: Int) -> any Fn(Int) -> Int = …
         //
-        // typecheck. The layout invariant is documented in
-        // `compiler/ruxen_core/tests/closures_dyn_dispatch.rs`: both
+        // typecheck. The layout invariant (pinned by e2e
+        // `2050_any_fn_dyn_dispatch`): both
         // sides are physically a 16-byte `(fn_ptr, captures_ptr)`
         // pair, so the runtime representation is identical and the
         // method-call lowerer can emit the same indirect call against
@@ -287,37 +292,6 @@ pub fn unify(a: &Ty, b: &Ty, ctx: &mut TypeContext, span: &Span) -> Result<Ty, T
                 Err(TypeError::mismatch(&a, &b, span))
             }
         }
-
-        // TODO (quality review §1.3 — soundness gap):
-        //
-        // The two arms below let `&T` unify with `T` at the TOP level,
-        // which is unsound: `&Int` should NOT silently unify with `Int`.
-        // The comment claims they exist to handle `Vec[&T]` vs `Vec[T]`
-        // element auto-deref — but that case is already handled by the
-        // structural Ty::Array(elem) arm above, which recurses
-        // correctly.
-        //
-        // Attempted removal of these arms (this session) surfaces real
-        // iter-dispatch bugs in `sample_program.rx`:
-        //   - `data.split("|").to_vec` resolves to `Array[&str]` but
-        //     callers expected `Array[&&str]`
-        //   - `tasks.iter.partition` returns one ref-level less than
-        //     declared
-        //   - `list.repo.all.iter.to_vec` resolves to `Array[Todo]` not
-        //     `Array[&Todo]`
-        //
-        // i.e. the auto-deref is masking an iter return-type bug. Fix
-        // requires landing the iter ref-level correction in lockstep,
-        // which is beyond the scope of this commit. Leaving the
-        // unsound auto-deref in place but documented as a tracked gap.
-        (Ty::Ref(inner_a), _) => match unify(inner_a, &b, ctx, span) {
-            Ok(_) => Ok(a),
-            Err(_) => Err(TypeError::mismatch(&a, &b, span)),
-        },
-        (_, Ty::Ref(inner_b)) => match unify(&a, inner_b, ctx, span) {
-            Ok(_) => Ok(b),
-            Err(_) => Err(TypeError::mismatch(&a, &b, span)),
-        },
 
         // No match
         _ => Err(TypeError::mismatch(&a, &b, span)),
@@ -341,15 +315,7 @@ fn fn_bound_signature(bounds: &[crate::hir::types::MixinRef]) -> Option<Ty> {
     if bounds.len() != 1 {
         return None;
     }
-    let b = &bounds[0];
-    if !matches!(b.name.as_str(), "Fn" | "FnMut" | "FnOnce") {
-        return None;
-    }
-    let inner = b.generic_args.first()?;
-    match inner {
-        Ty::Fn { .. } | Ty::FnMut { .. } | Ty::FnOnce { .. } => Some(inner.clone()),
-        _ => None,
-    }
+    bounds[0].callable_ty().cloned()
 }
 
 /// Check if type `a` can be coerced to type `b` (weaker than unification).
@@ -375,6 +341,14 @@ pub fn can_coerce(from: &Ty, to: &Ty, ctx: &TypeContext) -> bool {
 
         // &mut T → &T (always allowed)
         (Ty::RefMut(inner_from), Ty::Ref(inner_to)) => can_coerce(inner_from, inner_to, ctx),
+
+        // A scalar is read out of its borrow by value (`Some(v) -> v` on the
+        // `Option[&Int]` that `Hash#get` returns, in an `-> Int` method). MIR
+        // loads the pointee (`deref_borrowed_scalar`). Only this direction,
+        // and only for scalars: `&T` and `T` do not unify.
+        (Ty::Ref(inner_from) | Ty::RefMut(inner_from), to_ty) if to_ty.is_scalar_primitive() => {
+            **inner_from == *to_ty
+        }
 
         // (The `&String → &str` deref-coercion arm was removed with the `&str`
         // type — there is one string borrow type now, `&String`.)

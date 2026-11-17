@@ -1,0 +1,66 @@
+## Increment 2 partial-init guard (§4.1 risk 2). An `async def` awaits a
+## sub-future whose Output is a DROPPABLE class. The await binding becomes a
+## `self.<binding>` field with NO synthesisable default, so it holds
+## UNINITIALISED memory until the await resolves. When the state-machine
+## future is drained while parked at suspend #0 (binding NOT yet assigned),
+## the synthesised `<Future>_drop` must NOT drop that binding field — doing
+## so would call `Resource_drop` on garbage (UB / crash / spurious output).
+##
+## The fix drops ONLY the eagerly-constructed `__sub_0` sub-future, never the
+## bare-named binding field. So on drain:
+##   * `Producer dropped` fires once (the __sub_0 sub-future IS live), and
+##   * `Resource dropped` NEVER fires (the binding `r` was never constructed),
+##   * the program exits cleanly (no UB on uninitialised memory).
+##
+## Pre-fix (the unsound bare-name filter) this would call Resource_drop on
+## uninitialised memory — a crash or a spurious "Resource dropped" line.
+
+class Resource
+  id: Int
+  def init(i: Int)
+    self.id = i
+  end
+  def drop
+    puts "Resource dropped id=#{self.id}"
+  end
+end
+
+## A sub-future whose Output is the droppable `Resource`. Never completes, so
+## the await binding is never assigned. The Producer itself is droppable so we
+## can observe the __sub_0 drop firing.
+class Producer
+  tag: Int
+  include Future
+  type Output = Resource
+
+  def init(t: Int)
+    self.tag = t
+  end
+
+  def self.make(t: Int) -> Producer
+    Producer.new(t)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Resource]
+    Poll.Pending
+  end
+
+  def drop
+    puts "Producer dropped tag=#{self.tag}"
+  end
+end
+
+## State machine: __sub_0 = Producer (eager), binding `r: Resource` (NO default,
+## uninitialised until the await resolves — which it never does).
+async def take_resource() -> Int
+  let r = Producer.make(5).await
+  r.id
+end
+
+def main
+  let h = Task.spawn_raw(take_resource())
+  let _pumped = ruxen_executor_pump_tasks()
+  puts "parked"
+  ruxen_executor_drain_remaining()
+  puts "drained"
+end

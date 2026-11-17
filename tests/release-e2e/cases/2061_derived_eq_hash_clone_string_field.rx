@@ -1,0 +1,23 @@
+# Derived ==, hash_code and clone on a struct mixing Int and String fields
+# agree across structurally equal instances and a clone.
+struct Rec
+  a: Int
+  b: Int
+  s: String
+  include Hashable
+end
+
+def hash_it[T: Hashable](x: &T) -> Int
+  x.hash_code
+end
+
+def main
+  let p = Rec.new(1, 2, "hi")
+  let q = Rec.new(1, 2, "hi")
+  let r = Rec.new(1, 9, "hi")
+  puts "eq=#{p == q}"
+  puts "neq=#{p == r}"
+  let c = p.clone
+  puts "clone_eq=#{p == c}"
+  puts "hash_match=#{hash_it(&p) == hash_it(&q)}"
+end

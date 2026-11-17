@@ -1,0 +1,25 @@
+## Q35 symmetry pin: enum in-body includes populate the same nominal mixin
+## registry used by generic-bound satisfaction.
+
+mixin Labelled
+  def label -> String
+end
+
+enum Choice
+  include Labelled
+  First
+  Second
+
+  def label -> String
+    "choice"
+  end
+end
+
+def label_of[T: Labelled](x: &T) -> String
+  x.label
+end
+
+def main
+  let choice = Choice.First
+  let _label = label_of(&choice)
+end

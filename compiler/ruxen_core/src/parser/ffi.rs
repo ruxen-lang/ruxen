@@ -6,7 +6,7 @@ use crate::parser::Parser;
 
 impl Parser {
     /// Parse `lib Name ... end`
-    pub(super) fn parse_lib_decl(&mut self, link_attrs: Vec<LinkAttr>) -> LibDecl {
+    pub(super) fn parse_lib_decl(&mut self) -> LibDecl {
         let start = self.current_span();
         self.advance(); // consume `lib`
         self.skip_newlines();
@@ -90,7 +90,6 @@ impl Parser {
         LibDecl {
             name,
             functions,
-            link_attrs,
             span,
         }
     }
@@ -109,6 +108,23 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // consume `def`
         self.skip_newlines();
+
+        // `def var NAME`: a receiver-mutating instance method, the same
+        // spelling as a mutable-self `def` (see `parse_method_signature`).
+        let mutates_self = self.at(TokenKind::Var)
+            && (matches!(self.peek_kind(), TokenKind::Identifier(_))
+                || Self::is_operator_name_start(&self.peek_kind()));
+        if mutates_self {
+            self.advance(); // consume `var`
+        }
+        // `def consume NAME`: a receiver-consuming instance method, the same
+        // spelling as a consuming-self `def`.
+        let consumes_self = !mutates_self
+            && self.at(TokenKind::Consume)
+            && matches!(self.peek_kind(), TokenKind::Identifier(_));
+        if consumes_self {
+            self.advance(); // consume `consume`
+        }
 
         // Ruxen convention (ruby-naming.spec.md §3.4a): `def NAME(...)` is
         // an instance method, `def self.NAME(...)` is a class method. The
@@ -133,6 +149,10 @@ impl Parser {
         let name = self
             .try_parse_operator_name()
             .unwrap_or_else(|| self.expect_any_identifier());
+        // Generic parameters of the declaration's own (`def to_h[K, V]`).
+        let generic_params = self
+            .at(TokenKind::LBracket)
+            .then(|| self.parse_generic_params());
 
         // Optional `as "<c-symbol>"` rename clause. The C symbol is taken
         // verbatim — no mangling, no namespacing — same contract as
@@ -217,8 +237,16 @@ impl Parser {
             self.expect(TokenKind::RParen);
         }
 
+        // `-> owned T`: the C function hands the caller a fresh value it
+        // owns outright. `owned` is contextual: a lowercase word before a
+        // type is never itself a type.
+        let mut returns_owned = false;
         let return_type = if self.eat(TokenKind::Arrow) {
             self.skip_newlines();
+            if matches!(self.current_kind(), TokenKind::Identifier(word) if word == "owned") {
+                self.advance(); // consume `owned`
+                returns_owned = true;
+            }
             Some(self.parse_type())
         } else {
             None
@@ -238,10 +266,14 @@ impl Parser {
         FfiFunction {
             name,
             is_class_method,
+            mutates_self,
+            consumes_self,
+            returns_owned,
             c_symbol,
             params,
             return_type,
             where_clause,
+            generic_params,
             is_variadic,
             span,
         }

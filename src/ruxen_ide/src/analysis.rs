@@ -1,12 +1,9 @@
-use ruxen_core::borrow_check;
 use ruxen_core::borrow_check::errors::BorrowError;
-use ruxen_core::diagnostics::{Diagnostic, DiagnosticLevel};
+use ruxen_core::diagnostics::Diagnostic;
+use ruxen_core::driver::{self, Options};
 use ruxen_core::hir::context::TypeContext;
 use ruxen_core::hir::nodes::HirProgram;
-use ruxen_core::lexer::Lexer;
-use ruxen_core::parser::Parser;
 use ruxen_core::resolve::symbols::SymbolTable;
-use ruxen_core::typeck;
 
 use crate::line_index::LineIndex;
 use crate::use_index::{build_use_index, UseIndex};
@@ -41,59 +38,33 @@ impl AnalysisResult {
     }
 }
 
-/// Run the full analysis pipeline on a source string.
+/// Run the full analysis pipeline on a source string: [`driver::parse`],
+/// then [`driver::check`] through the MIR loan check, so the IDE reports
+/// what `ruxen build` reports.
 ///
-/// The pipeline is error-resilient: each phase gates the next.
-/// - Lexer errors stop the pipeline (no tokens to parse)
-/// - Parser errors stop the pipeline (no AST to type-check)
-/// - Type errors gate the borrow checker
+/// A lex or parse error stops the pipeline (no AST to type-check). Type
+/// errors gate the borrow checkers, but the typed HIR is kept either way.
 pub fn analyze(source: &str) -> AnalysisResult {
-    let mut all_diagnostics = Vec::new();
-
-    // Phase 1: Lex
-    let mut lexer = Lexer::new(source);
-    let tokens = match lexer.tokenize() {
-        Ok(tokens) => tokens,
-        Err(lex_errors) => {
-            return AnalysisResult::error_only(source, lex_errors);
-        }
-    };
-
-    // Phase 2: Parse
-    let mut parser = Parser::new(tokens);
-    let ast = match parser.parse() {
+    let ast = match driver::parse(source) {
         Ok(ast) => ast,
-        Err(parse_errors) => {
-            return AnalysisResult::error_only(source, parse_errors);
-        }
+        Err(errors) => return AnalysisResult::error_only(source, errors),
     };
 
-    // Phase 3: Type check (always produces a result, even with errors)
-    let type_result = typeck::type_check(&ast);
-    let has_type_errors = type_result
-        .diagnostics
-        .iter()
-        .any(|d| d.level == DiagnosticLevel::Error);
-    all_diagnostics.extend(type_result.diagnostics);
+    let mut frontend = driver::check(&ast, &Options::default());
+    let borrow_errors = std::mem::take(&mut frontend.borrow_errors);
+    let type_result = frontend.into_type_check_result();
 
-    // Phase 4: Borrow check (only if no type errors)
-    let borrow_errors = if has_type_errors {
-        Vec::new()
-    } else {
-        borrow_check::borrow_check(&type_result.program, &type_result.symbols)
-    };
-
-    // Phase 5: Build the LSP reverse use-index. Runs whenever typeck
-    // produced a HIR + symbols pair, regardless of type errors — Wave
-    // 2 features (references / highlight / rename) are still useful
-    // in a file with a downstream error, and the walker is read-only.
+    // The LSP reverse use-index runs whenever typeck produced a HIR +
+    // symbols pair, regardless of type errors — Wave 2 features
+    // (references / highlight / rename) are still useful in a file with a
+    // downstream error, and the walker is read-only.
     let use_index = Some(build_use_index(&type_result.program, &type_result.symbols));
 
     AnalysisResult {
         program: Some(type_result.program),
         symbols: Some(type_result.symbols),
         type_context: Some(type_result.type_context),
-        diagnostics: all_diagnostics,
+        diagnostics: type_result.diagnostics,
         borrow_errors,
         source: source.to_string(),
         line_index: LineIndex::new(source),
@@ -104,6 +75,7 @@ pub fn analyze(source: &str) -> AnalysisResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ruxen_core::diagnostics::DiagnosticLevel;
 
     #[test]
     fn analyze_valid_program_has_no_errors() {
@@ -190,6 +162,39 @@ mod tests {
             result.borrow_errors.is_empty(),
             "Borrow check must not run when type errors exist"
         );
+    }
+
+    /// The IDE runs the MIR loan check: I-30, where the index operand
+    /// `reset(u)` mutates `u.name` while the array literal borrows it, is
+    /// E1002.
+    #[test]
+    fn analyze_reports_mir_loan_errors() {
+        let src = "class U\n  name: String\n  def init(@name: String)\n  end\nend\n\n\
+                   def reset(u: &var U) -> Int\n  u.name = \"reset\"\n  1\nend\n\n\
+                   u = U.new(\"old\")\nputs([u.name][reset(u)])\n";
+        let result = analyze(src);
+        let codes: Vec<&str> = result
+            .borrow_errors
+            .iter()
+            .map(|e| e.code.code_str())
+            .collect();
+        assert_eq!(codes, ["E1002"], "{:?}", result.diagnostics);
+    }
+
+    /// A program `ruxen build` rejects at MIR lowering (returning a
+    /// slot-addressed `&var`) is an error in the IDE too (I-43).
+    #[test]
+    fn analyze_reports_lowering_errors() {
+        let src = "def id(n: &var Int) -> &var Int\n  n\nend\n\nx = 1\nputs id(&var x)\n";
+        let result = analyze(src);
+        let lowering: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == DiagnosticLevel::Error)
+            .map(|d| d.message.as_str())
+            .filter(|message| message.starts_with("MIR lowering error"))
+            .collect();
+        assert_eq!(lowering.len(), 1, "{:?}", result.diagnostics);
     }
 
     #[test]

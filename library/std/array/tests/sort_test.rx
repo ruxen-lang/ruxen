@@ -1,0 +1,16 @@
+Tester.describe("Array sorting") do |t: &var Tester|
+  t.it("sort returns a new array and sort! sorts in place") do
+    var v = [3, 1, 4, 1, 5]
+    let s = v.sort
+    t.expect(s.join(",")).to_eq("1,1,3,4,5")
+    t.expect(v.join(",")).to_eq("3,1,4,1,5")
+    v.sort!
+    t.expect(v.join(",")).to_eq("1,1,3,4,5")
+  end
+
+  t.it("sort_by takes a comparator") do
+    var v = [3, 1, 4, 1, 5, 9, 2, 6]
+    v.sort_by { |a, b| a - b }
+    t.expect(v.join(",")).to_eq("1,1,2,3,4,5,6,9")
+  end
+end

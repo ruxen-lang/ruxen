@@ -1,0 +1,46 @@
+Tester.describe("Array access") do |t: &var Tester|
+  t.it("indexes by position") do
+    let v = [10, 20, 30]
+    t.expect(v[0]).to_eq(10)
+    t.expect(v[1]).to_eq(20)
+    t.expect(v[2]).to_eq(30)
+  end
+
+  t.it("first and last are nil on an empty array") do
+    let v = [10, 20, 30]
+    t.expect(v.first.unwrap_or(-1)).to_eq(10)
+    t.expect(v.last.unwrap_or(-1)).to_eq(30)
+    let empty: Array[Int] = Array.new
+    t.expect(empty.first.unwrap_or(-1)).to_eq(-1)
+    t.expect(empty.last.unwrap_or(-1)).to_eq(-1)
+  end
+
+  t.it("include? finds an element") do
+    let v = [10, 20, 30]
+    t.expect(v.include?(20)).to_eq(true)
+    t.expect(v.include?(99)).to_eq(false)
+  end
+
+  t.it("sum and count") do
+    let v = [1, 2, 3, 4]
+    t.expect(v.sum).to_eq(10)
+    t.expect(v.count).to_eq(4)
+  end
+
+  t.it("== compares element-wise") do
+    let a = [1, 2, 3]
+    let b = [1, 2, 3]
+    let c = [1, 2]
+    t.expect(a == b).to_eq(true)
+    t.expect(a == c).to_eq(false)
+    t.expect(a != c).to_eq(true)
+  end
+
+  t.it("join") do
+    var parts: Array[String] = Array.new
+    parts.push("alpha")
+    parts.push("beta")
+    parts.push("gamma")
+    t.expect(parts.join(", ")).to_eq("alpha, beta, gamma")
+  end
+end

@@ -1,0 +1,30 @@
+## F-11: an enum nested in a `module` resolves to its own definition. Pass 1
+## registers it under the qualified key (`Geo.Shape`), so pass 2 must look it
+## up the same way; before the fix its variants and methods landed on an
+## unresolved definition, `Shape.Dot` inside its own methods was undefined,
+## and `Geo.Shape.Square(5)` from outside the module was undefined.
+
+module Geo
+  enum Shape
+    Dot
+    Square(Int)
+
+    def area -> Int
+      match self
+        Shape.Dot -> 0
+        Shape.Square(s) -> s * s
+      end
+    end
+  end
+
+  def scaled(n: Int) -> Geo.Shape
+    Shape.Square(n * 2)
+  end
+end
+
+def main
+  let sq = Geo.Shape.Square(5)
+  puts "area=#{sq.area}"
+  puts "dot=#{Geo.Shape.Dot.area}"
+  puts "scaled=#{Geo.scaled(3).area}"
+end

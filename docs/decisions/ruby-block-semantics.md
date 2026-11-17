@@ -144,6 +144,16 @@ as block-value, `&:symbol` to-proc sugar, numbered params / `it`.
 - Lenient arity — Ruxen is typed; exact arity with a clear diagnostic.
 - `instance_eval` self-rebinding.
 
+## Owner decisions (2026-10-25)
+
+- D4 a: resolve lowers every callable-value call (`f.(x)`, `f.call(x)`,
+  `yield`) to a `MethodCall` named `call`, which the borrow checker, typeck
+  and MIR read. That name protocol is to be replaced by a distinct HIR node for
+  calling a callable value; a user method named `call` stays an ordinary
+  method [planned](../../TODO.md#t-d4).
+- X2 a: a block's result is discarded only at a declared nil-result block
+  boundary [planned](../../TODO.md#t-x2).
+
 ## Consequences
 
 - Q3 landmine ("do…end to free fn segfaults") was already fixed; the quiver

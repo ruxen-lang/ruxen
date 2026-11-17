@@ -1,0 +1,18 @@
+# F-5: `#{...}` is parsed into an expression by the parser, so every
+# expression form works inside it and `ruxen fmt` re-emits it from the AST.
+def label(name: String, suffix: String = "!") -> String
+  "#{name}#{suffix}"
+end
+
+def main
+  let w = 10
+  let fruit = "apple"
+  let p = "p"
+  puts "cmp=#{1 <=> 2} half=#{w / 2} rem=#{w % 3}"
+  puts "nested=#{fruit.include?("a#{p}ple")}"
+  puts "call=#{label("hi")} literal=\#{w}"
+  puts "spec=[#{w:>4}]"
+  [1, 2].each do |x|
+    puts "x=#{x + w}"
+  end
+end

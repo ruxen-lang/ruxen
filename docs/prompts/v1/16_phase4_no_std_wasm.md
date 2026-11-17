@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # 16 — Phase 4: `no_std` (T4.04) + WASM target (T4.03)
 
 **Depends on:** prompt 14 (Phase 4 platform splits begin here).

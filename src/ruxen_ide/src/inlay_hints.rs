@@ -17,11 +17,10 @@
 use lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Position, Range};
 
 use ruxen_core::hir::nodes::{
-    HirClassDef, HirEnumDef, HirExpr, HirExprKind, HirFuncDef, HirImplBlock, HirImplItem,
-    HirInterpolationPart, HirItem, HirMixinDef, HirMixinItem, HirModule, HirPattern, HirProgram,
-    HirStatement, HirStructDef,
+    HirExpr, HirExprKind, HirFuncDef, HirPattern, HirProgram, HirStatement,
 };
 use ruxen_core::hir::types::Ty;
+use ruxen_core::hir::visit::{walk_expr, walk_func, walk_stmt, Visit};
 use ruxen_core::lexer::token::Span;
 use ruxen_core::resolve::symbols::{DefKind, FnSignature, SymbolTable};
 
@@ -78,49 +77,82 @@ fn within(pos: Position, range: Range) -> bool {
     after_start && before_end
 }
 
-// ─── Top-level walk ────────────────────────────────────────────────
+// ─── Walk ──────────────────────────────────────────────────────────
 
 fn walk_program(ctx: &Ctx<'_>, program: &HirProgram, out: &mut Vec<InlayHint>) {
+    let mut collector = HintCollector { ctx, out };
     for item in &program.items {
-        walk_item(ctx, item, out);
+        collector.visit_item(item);
     }
 }
 
-fn walk_item(ctx: &Ctx<'_>, item: &HirItem, out: &mut Vec<InlayHint>) {
-    match item {
-        HirItem::Function(f) => walk_func(ctx, f, out),
-        HirItem::Class(c) => walk_class(ctx, c, out),
-        HirItem::Struct(s) => walk_struct(ctx, s, out),
-        HirItem::Enum(e) => walk_enum(ctx, e, out),
-        HirItem::Mixin(m) => walk_mixin(ctx, m, out),
-        HirItem::Impl(b) => walk_impl_block(ctx, b, out),
-        HirItem::Module(m) => walk_module(ctx, m, out),
-        HirItem::Const(c) => walk_expr(ctx, &c.value, out),
-        // Type aliases / newtypes carry no executable bodies.
-        HirItem::TypeAlias(_) | HirItem::Newtype(_) => {}
-    }
+struct HintCollector<'c, 'a> {
+    ctx: &'c Ctx<'a>,
+    out: &'c mut Vec<InlayHint>,
 }
 
-fn walk_module(ctx: &Ctx<'_>, m: &HirModule, out: &mut Vec<InlayHint>) {
-    for item in &m.items {
-        walk_item(ctx, item, out);
+impl Visit for HintCollector<'_, '_> {
+    fn visit_func(&mut self, f: &HirFuncDef) {
+        // The `analyze()` pipeline merges bootstrap-loaded stdlib programs
+        // (sync.rx, async runtime, etc.) into the same `HirProgram` as the
+        // user's source. Their spans index into different `.rx` files but
+        // share the same `usize` namespace, so a stdlib `let fd = …` would
+        // happily produce a hint indexed at byte N of the user's source.
+        //
+        // Guard by checking whether the function's span actually resolves
+        // to its declaration in `ctx.source`. If not, this function was
+        // bootstrap-loaded and we skip it wholesale.
+        if !span_belongs_to_user_source(self.ctx.source, &f.span, &f.name) {
+            return;
+        }
+        walk_func(self, f);
     }
-}
 
-fn walk_func(ctx: &Ctx<'_>, f: &HirFuncDef, out: &mut Vec<InlayHint>) {
-    // The `analyze()` pipeline merges bootstrap-loaded stdlib programs
-    // (sync.rx, async runtime, etc.) into the same `HirProgram` as the
-    // user's source. Their spans index into different `.rx` files but
-    // share the same `usize` namespace, so a stdlib `let fd = …` would
-    // happily produce a hint indexed at byte N of the user's source.
-    //
-    // Guard by checking whether the function's span actually resolves
-    // to its declaration in `ctx.source`. If not, this function was
-    // bootstrap-loaded and we skip it wholesale.
-    if !span_belongs_to_user_source(ctx.source, &f.span, &f.name) {
-        return;
+    fn visit_stmt(&mut self, stmt: &HirStatement) {
+        if let HirStatement::Let {
+            pattern, ty, span, ..
+        } = stmt
+        {
+            if self.ctx.cfg.show_type_hints {
+                emit_type_hint(self.ctx, pattern, ty, span, self.out);
+            }
+        }
+        walk_stmt(self, stmt);
     }
-    walk_expr(ctx, &f.body, out);
+
+    fn visit_expr(&mut self, expr: &HirExpr) {
+        if self.ctx.cfg.show_param_hints {
+            let symbols = self.ctx.symbols;
+            match &expr.kind {
+                HirExprKind::FnCall { callee, args, .. } => {
+                    if let Some(sig) = sig_of(symbols, *callee) {
+                        emit_param_hints(self.ctx, sig, args, self.out);
+                    }
+                }
+                HirExprKind::MethodCall {
+                    object,
+                    method,
+                    method_name,
+                    args,
+                    ..
+                } => {
+                    // The resolver leaves `method` as `UNRESOLVED_DEF` for
+                    // user-class method calls (typeck stores the binding in
+                    // `TypeContext`, not back on the HIR field). Fall back
+                    // to resolving by `(object.ty, method_name)` against the
+                    // symbol table when the direct lookup fails.
+                    let sig = sig_of(symbols, *method)
+                        .or_else(|| resolve_method_via_receiver(symbols, &object.ty, method_name));
+                    if let Some(sig) = sig {
+                        emit_param_hints(self.ctx, sig, args, self.out);
+                    }
+                }
+                // Only calls take parameter hints.
+                _ => {}
+            }
+        }
+        walk_expr(self, expr);
+    }
 }
 
 /// A function span belongs to the user source if (a) it fits inside
@@ -132,243 +164,6 @@ fn span_belongs_to_user_source(source: &str, span: &Span, name: &str) -> bool {
         return false;
     }
     source[span.start..span.end].contains(name)
-}
-
-fn walk_class(ctx: &Ctx<'_>, c: &HirClassDef, out: &mut Vec<InlayHint>) {
-    for m in &c.methods {
-        walk_func(ctx, m, out);
-    }
-    for b in &c.impl_blocks {
-        walk_impl_block(ctx, b, out);
-    }
-}
-
-fn walk_struct(ctx: &Ctx<'_>, s: &HirStructDef, out: &mut Vec<InlayHint>) {
-    for m in &s.methods {
-        walk_func(ctx, m, out);
-    }
-    for b in &s.impl_blocks {
-        walk_impl_block(ctx, b, out);
-    }
-}
-
-fn walk_enum(ctx: &Ctx<'_>, e: &HirEnumDef, out: &mut Vec<InlayHint>) {
-    for m in &e.methods {
-        walk_func(ctx, m, out);
-    }
-    for b in &e.impl_blocks {
-        walk_impl_block(ctx, b, out);
-    }
-}
-
-fn walk_mixin(ctx: &Ctx<'_>, m: &HirMixinDef, out: &mut Vec<InlayHint>) {
-    for item in &m.items {
-        if let HirMixinItem::DefaultMethod(f) = item {
-            walk_func(ctx, f, out);
-        }
-    }
-}
-
-fn walk_impl_block(ctx: &Ctx<'_>, b: &HirImplBlock, out: &mut Vec<InlayHint>) {
-    for item in &b.items {
-        if let HirImplItem::Method(f) = item {
-            walk_func(ctx, f, out);
-        }
-    }
-}
-
-// ─── Expression / statement walk ──────────────────────────────────
-
-fn walk_block_body(
-    ctx: &Ctx<'_>,
-    stmts: &[HirStatement],
-    tail: Option<&HirExpr>,
-    out: &mut Vec<InlayHint>,
-) {
-    for stmt in stmts {
-        walk_stmt(ctx, stmt, out);
-    }
-    if let Some(t) = tail {
-        walk_expr(ctx, t, out);
-    }
-}
-
-fn walk_stmt(ctx: &Ctx<'_>, stmt: &HirStatement, out: &mut Vec<InlayHint>) {
-    match stmt {
-        HirStatement::Let {
-            pattern,
-            ty,
-            value,
-            span,
-            ..
-        } => {
-            if ctx.cfg.show_type_hints {
-                emit_type_hint(ctx, pattern, ty, span, out);
-            }
-            if let Some(v) = value {
-                walk_expr(ctx, v, out);
-            }
-        }
-        HirStatement::Expr(e) => walk_expr(ctx, e, out),
-    }
-}
-
-fn walk_expr(ctx: &Ctx<'_>, expr: &HirExpr, out: &mut Vec<InlayHint>) {
-    match &expr.kind {
-        HirExprKind::FnCall { callee, args, .. } => {
-            if ctx.cfg.show_param_hints {
-                if let Some(sig) = sig_of(ctx.symbols, *callee) {
-                    emit_param_hints(ctx, sig, args, out);
-                }
-            }
-            for a in args {
-                walk_expr(ctx, a, out);
-            }
-        }
-        HirExprKind::MethodCall {
-            object,
-            method,
-            method_name,
-            args,
-            block,
-            ..
-        } => {
-            walk_expr(ctx, object, out);
-            if ctx.cfg.show_param_hints {
-                // The resolver leaves `method` as `UNRESOLVED_DEF` for
-                // user-class method calls (typeck stores the binding in
-                // `TypeContext`, not back on the HIR field). Fall back
-                // to resolving by `(object.ty, method_name)` against the
-                // symbol table when the direct lookup fails.
-                let sig = sig_of(ctx.symbols, *method)
-                    .or_else(|| resolve_method_via_receiver(ctx.symbols, &object.ty, method_name));
-                if let Some(sig) = sig {
-                    emit_param_hints(ctx, sig, args, out);
-                }
-            }
-            for a in args {
-                walk_expr(ctx, a, out);
-            }
-            if let Some(b) = block {
-                walk_expr(ctx, b, out);
-            }
-        }
-        HirExprKind::Block(stmts, tail) => {
-            walk_block_body(ctx, stmts, tail.as_deref(), out);
-        }
-        HirExprKind::UnsafeBlock(stmts, tail) => {
-            walk_block_body(ctx, stmts, tail.as_deref(), out);
-        }
-        HirExprKind::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => {
-            walk_expr(ctx, cond, out);
-            walk_expr(ctx, then_branch, out);
-            if let Some(e) = else_branch {
-                walk_expr(ctx, e, out);
-            }
-        }
-        HirExprKind::Match { scrutinee, arms } => {
-            walk_expr(ctx, scrutinee, out);
-            for arm in arms {
-                if let Some(g) = &arm.guard {
-                    walk_expr(ctx, g, out);
-                }
-                walk_expr(ctx, &arm.body, out);
-            }
-        }
-        HirExprKind::Loop { body } => walk_expr(ctx, body, out),
-        HirExprKind::While { condition, body } => {
-            walk_expr(ctx, condition, out);
-            walk_expr(ctx, body, out);
-        }
-        HirExprKind::For { iterable, body, .. } => {
-            walk_expr(ctx, iterable, out);
-            walk_expr(ctx, body, out);
-        }
-        HirExprKind::BinaryOp { left, right, .. } => {
-            walk_expr(ctx, left, out);
-            walk_expr(ctx, right, out);
-        }
-        HirExprKind::UnaryOp { operand, .. } => walk_expr(ctx, operand, out),
-        HirExprKind::Borrow { expr, .. } => walk_expr(ctx, expr, out),
-        HirExprKind::Assign { target, value, .. } => {
-            walk_expr(ctx, target, out);
-            walk_expr(ctx, value, out);
-        }
-        HirExprKind::CompoundAssign { target, value, .. } => {
-            walk_expr(ctx, target, out);
-            walk_expr(ctx, value, out);
-        }
-        HirExprKind::Return(e) | HirExprKind::Break(e) => {
-            if let Some(e) = e {
-                walk_expr(ctx, e, out);
-            }
-        }
-        HirExprKind::Closure { body, .. } => walk_expr(ctx, body, out),
-        HirExprKind::Construct { fields, .. } => {
-            for (_, v) in fields {
-                walk_expr(ctx, v, out);
-            }
-        }
-        HirExprKind::EnumVariant { fields, .. } => {
-            for (_, v) in fields {
-                walk_expr(ctx, v, out);
-            }
-        }
-        HirExprKind::Tuple(xs) | HirExprKind::ArrayLiteral(xs) => {
-            for x in xs {
-                walk_expr(ctx, x, out);
-            }
-        }
-        HirExprKind::MapLiteral(pairs) => {
-            for (k, v) in pairs {
-                walk_expr(ctx, k, out);
-                walk_expr(ctx, v, out);
-            }
-        }
-        HirExprKind::Index { object, index } => {
-            walk_expr(ctx, object, out);
-            walk_expr(ctx, index, out);
-        }
-        HirExprKind::FieldAccess { object, .. } => walk_expr(ctx, object, out),
-        HirExprKind::Cast { expr, .. } => walk_expr(ctx, expr, out),
-        HirExprKind::Range { start, end, .. } => {
-            if let Some(s) = start {
-                walk_expr(ctx, s, out);
-            }
-            if let Some(e) = end {
-                walk_expr(ctx, e, out);
-            }
-        }
-        HirExprKind::Interpolation { parts } => {
-            for p in parts {
-                if let HirInterpolationPart::Expr { expr, .. } = p {
-                    walk_expr(ctx, expr, out);
-                }
-            }
-        }
-        HirExprKind::ArrayFill { value, .. } => walk_expr(ctx, value, out),
-        HirExprKind::MacroCall { args, .. } => {
-            for a in args {
-                walk_expr(ctx, a, out);
-            }
-        }
-        // Leaves
-        HirExprKind::IntLiteral(_)
-        | HirExprKind::FloatLiteral(_)
-        | HirExprKind::StringLiteral(_)
-        | HirExprKind::BoolLiteral(_)
-        | HirExprKind::CharLiteral(_)
-        | HirExprKind::UnitLiteral
-        | HirExprKind::NullLiteral
-        | HirExprKind::RegexLiteral { .. }
-        | HirExprKind::VarRef(_)
-        | HirExprKind::Continue
-        | HirExprKind::Error => {}
-    }
 }
 
 // ─── Hint emitters ────────────────────────────────────────────────

@@ -1,0 +1,8 @@
+def invalid_left -> Int
+  1 ?? 2
+end
+
+def invalid_fallback -> Int
+  let value: Option[Int] = nil
+  value ?? "wrong"
+end

@@ -2,6 +2,7 @@
 crates/*/target/
 src/*/target/
 **/target/ruxen/
+library/std/*/target/
 
 CLAUDE.md
 .claude-flow/

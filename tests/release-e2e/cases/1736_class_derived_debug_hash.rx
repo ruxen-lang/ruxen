@@ -1,0 +1,274 @@
+# ---- from 1736_class_debug_format ----
+# B74 adjacent derive: `Debug` on a `class`.
+#
+# The same missing-synthesis hole that broke class equality broke class
+# formatting: `mir/lower/mod.rs` never emitted `{Class}_to_debug`, and
+# `struct_with_derive_debug` matched `Ty::Struct` only, so `"#{obj}"`
+# fell past every interpolation arm and printed the receiver's HEAP
+# ADDRESS. That is a silently wrong answer whose value changes run to
+# run, which is why pin 139 (a struct) never noticed.
+#
+# Pinned: a plain class, a class with a String field, and a class with
+# an INHERITED field (which must be labelled and ordered ancestor-first,
+# matching the storage layout).
+class Point
+  x: Int
+  y: Int
+
+  def init(@x: Int, @y: Int)
+  end
+end
+
+class Tagged
+  label: String
+  count: Int
+
+  def init(@label: String, @count: Int)
+  end
+end
+
+class Base
+  id: Int
+
+  def init(@id: Int)
+  end
+end
+
+class Mid < Base
+  tag: Int
+
+  def init(id: Int, tag: Int)
+    super(id)
+    @tag = tag
+  end
+end
+
+# A user `impl Display` must still WIN over the derived Debug — the
+# interpolation dispatch checks it first (case 070 pins that for a
+# class today, and adding class Debug must not displace it).
+class Money
+  cents: Int
+
+  def init(@cents: Int)
+  end
+
+  include Display
+
+  def fmt(f: &var Formatter) -> Result[nil, FmtError]
+    let _ = f.write_str("$")
+    f.write_str("#{self.cents}")
+  end
+end
+
+def run_1736
+  puts "#{Point.new(1, 2)}"
+  puts "#{Tagged.new("hi", 7)}"
+  puts "#{Mid.new(7, 42)}"
+  puts "#{Money.new(4250)}"
+end
+
+# ---- from 1737_class_hashable ----
+# B74 adjacent derive: `Hashable` on a `class`.
+#
+# This half failed LOUDER than equality and was still invisible.
+# `mir/lower/mod.rs` never emitted `{Class}_hash_code`, but typeck
+# resolved `.hash_code` happily, so MIR emitted a call to a symbol
+# nothing defined and the program failed at LINK:
+#
+#     Undefined symbols for architecture arm64:
+#       "_K_hash_code", referenced from: ...
+#
+# Note the trap this pin exists to avoid: a probe that computes two
+# hashes and only compares them can have BOTH calls folded away as
+# dead, print `true`, and prove nothing. Every hash below is PRINTED
+# through a decision that depends on its value.
+class K
+  ns: Int
+  id: Int
+
+  def init(@ns: Int, @id: Int)
+  end
+end
+
+class WithString
+  name: String
+  n: Int
+
+  def init(@name: String, @n: Int)
+  end
+end
+
+class Base1737
+  id: Int
+
+  def init(@id: Int)
+  end
+end
+
+class Mid1737 < Base1737
+  tag: Int
+
+  def init(id: Int, tag: Int)
+    super(id)
+    @tag = tag
+  end
+end
+
+def run_1737
+  # Hashable's contract: equal values hash equal.
+  let a = K.new(7, 42)
+  let b = K.new(7, 42)
+  let c = K.new(7, 43)
+  puts "equal_values_equal_hash=#{a.hash_code() == b.hash_code()}"
+  puts "differing_values_differ=#{a.hash_code() != c.hash_code()}"
+  # Differing in the FIRST field must move the hash too, or a
+  # fold that only mixes the last field would pass the line above.
+  let d = K.new(8, 42)
+  puts "first_field_moves_hash=#{a.hash_code() != d.hash_code()}"
+
+  # A String field hashes by VALUE — distinct buffers, same characters.
+  let s1 = WithString.new("ada", 1)
+  let s2 = WithString.new("a" + "da", 1)
+  let s3 = WithString.new("ada", 2)
+  puts "string_field_equal=#{s1.hash_code() == s2.hash_code()}"
+  puts "string_field_differs=#{s1.hash_code() != s3.hash_code()}"
+
+  # An inherited field participates in the hash.
+  let m1 = Mid1737.new(1, 2)
+  let m2 = Mid1737.new(1, 2)
+  let m3 = Mid1737.new(9, 2)
+  puts "inherited_equal=#{m1.hash_code() == m2.hash_code()}"
+  puts "inherited_differs=#{m1.hash_code() != m3.hash_code()}"
+end
+
+# ---- from 1738_class_hash_and_set_key ----
+# B74 downstream unlock: a `class` can BE a `Hash` / `Set` key.
+#
+# B73 landed the key-kind protocol and pinned it with a `struct`
+# (1722). A class could not use it for two compounding reasons: it had
+# no `{Class}_hash_code` / `{Class}_eq` to hand the runtime, and
+# `key_desc.rs` matched `Ty::Struct` only — so a class key fell through
+# to identity and two equal-by-value keys were two separate entries.
+#
+# This is the same battery 1722 runs, respelled with a class, plus an
+# inherited-field key. Pinned: dedup on re-insert, a hit through a
+# DISTINCT instance, and two kinds of miss (one field differs; nothing
+# alike) so a "hash everything into one bucket and answer true"
+# regression fails.
+class K1738
+  ns: Int
+  name: String
+
+  def init(@ns: Int, @name: String)
+  end
+end
+
+class Base1738
+  id: Int
+
+  def init(@id: Int)
+  end
+end
+
+class Mid1738 < Base1738
+  tag: Int
+
+  def init(id: Int, tag: Int)
+    super(id)
+    @tag = tag
+  end
+end
+
+def run_1738
+  var h: Hash[K1738, Int] = Hash.new
+  h.insert(K1738.new(1, "a"), 10)
+  h.insert(K1738.new(2, "b"), 20)
+  h.insert(K1738.new(1, "a"), 11)
+  puts "size=#{h.size}"
+  puts "hit=#{h.key?(K1738.new(1, "a"))}"
+  puts "hit2=#{h.key?(K1738.new(2, "b"))}"
+  puts "miss_second_field=#{h.key?(K1738.new(1, "z"))}"
+  puts "miss_nothing_alike=#{h.key?(K1738.new(9, "q"))}"
+  match h.get(K1738.new(1, "a"))
+    Some(v) -> puts "got #{v}"
+    nil -> puts "missing"
+  end
+
+  # A `Set` keys on its ELEMENT, so the same descriptor drives dedup.
+  var s: Set[K1738] = Set.new
+  s.insert(K1738.new(3, "c"))
+  s.insert(K1738.new(3, "c"))
+  s.insert(K1738.new(4, "d"))
+  puts "set_size=#{s.size}"
+  puts "set_hit=#{s.include?(K1738.new(3, "c"))}"
+  puts "set_miss=#{s.include?(K1738.new(5, "e"))}"
+
+  # An inherited field is part of the key, not ignored.
+  var hm: Hash[Mid1738, Int] = Hash.new
+  hm.insert(Mid1738.new(1, 2), 100)
+  hm.insert(Mid1738.new(9, 2), 200)
+  puts "inherited_size=#{hm.size}"
+  puts "inherited_hit=#{hm.key?(Mid1738.new(9, 2))}"
+  puts "inherited_miss=#{hm.key?(Mid1738.new(5, 2))}"
+end
+
+# ---- from 1739_class_nested_nominal_fields ----
+# B74: the derived bodies recurse through NOMINAL fields in both
+# directions — a class field inside a class, a struct field inside a
+# class, and a class field inside a struct.
+#
+# The per-field walk asks "does this field's type have PartialEq /
+# Hashable / Debug of its own?" and, if so, calls that type's derived
+# function rather than comparing the field's raw word. That predicate
+# was struct-only, so a nested CLASS field compared by address even
+# inside a struct whose own equality worked — the struct-shaped pins
+# could not see it because none of them nests a class.
+class Inner
+  v: Int
+
+  def init(@v: Int)
+  end
+end
+
+struct SInner
+  v: Int
+end
+
+class OuterClass
+  a: Inner
+  b: SInner
+
+  def init(@a: Inner, @b: SInner)
+  end
+end
+
+struct OuterStruct
+  a: Inner
+end
+
+def run_1739
+  let c1 = OuterClass.new(Inner.new(1), SInner.new(2))
+  let c2 = OuterClass.new(Inner.new(1), SInner.new(2))
+  let c3 = OuterClass.new(Inner.new(9), SInner.new(2))
+  let c4 = OuterClass.new(Inner.new(1), SInner.new(9))
+  puts "class_in_class_eq=#{c1 == c2}"
+  puts "class_in_class_ne=#{c1 == c3}"
+  puts "struct_in_class_ne=#{c1 == c4}"
+  puts "nested_hash_eq=#{c1.hash_code() == c2.hash_code()}"
+  puts "nested_hash_ne=#{c1.hash_code() != c3.hash_code()}"
+  puts "nested_debug=#{c1}"
+
+  let s1 = OuterStruct.new(Inner.new(5))
+  let s2 = OuterStruct.new(Inner.new(5))
+  let s3 = OuterStruct.new(Inner.new(6))
+  puts "class_in_struct_eq=#{s1 == s2}"
+  puts "class_in_struct_ne=#{s1 == s3}"
+  puts "class_in_struct_debug=#{s1}"
+end
+
+def main
+  run_1736
+  run_1737
+  run_1738
+  run_1739
+end

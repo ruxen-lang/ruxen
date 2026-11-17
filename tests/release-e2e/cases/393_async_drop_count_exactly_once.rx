@@ -1,0 +1,53 @@
+## Increment 2 double-drop guard (§4.1 risk 1). The state machine's
+## synthesised `def drop` must drop each live field EXACTLY ONCE — never
+## twice (double-free) and never zero (leak). Two independent guards:
+##
+##   (1) A SINGLE drain of a parked state-machine future fires the
+##       sub-future's `def drop` exactly once — exact-match stdout shows
+##       one "dropped" line (two would be a double-drop within one
+##       __HandlerFuture_drop call).
+##   (2) A SECOND drain after the first is a no-op: the first drain emptied
+##       the queue (t_queue_head = NULL), so no future is re-dropped. This
+##       proves the cancel path does not re-enter the same future's drop.
+##
+## Because Ruxen has no automatic per-field drop and the pump-completion
+## path never drops completed futures, __HandlerFuture_drop is the SOLE
+## dropper of __sub_0 — so __state alone is a sound double-drop discriminant.
+
+class Once
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(p: Int)
+    self.payload = p
+  end
+
+  def self.make(p: Int) -> Once
+    Once.new(p)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Pending
+  end
+
+  def drop
+    puts "drop payload=#{self.payload}"
+  end
+end
+
+async def holder() -> Int
+  let v = Once.make(7).await
+  v
+end
+
+def main
+  let h = Task.spawn_raw(holder())
+  let _pumped = ruxen_executor_pump_tasks()
+  puts "before-drain"
+  ruxen_executor_drain_remaining()
+  puts "after-first-drain"
+  # Second drain: queue is already empty → MUST NOT re-fire any drop.
+  ruxen_executor_drain_remaining()
+  puts "after-second-drain"
+end

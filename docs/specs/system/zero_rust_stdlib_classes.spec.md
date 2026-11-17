@@ -34,8 +34,13 @@ order, against the cumulative bootstrap symbol table (so a later
 package can reference an earlier one). Then run it over the user
 program last.
 
-**Given** `library/std/time/src/lib.rx` containing:
-```rx
+**Given** `library/std/time/src/lib.rx` containing the class below. `Future`
+and `Poll` are [implemented] and stay until the Fiber scheduler
+[planned](../../../TODO.md#t-fibers); the constructor is spelled `def init` until
+`initialize` lands [planned](../../../TODO.md#t-initialize).
+
+Stdlib source, with the [deprecated] `def init` (replacement `def initialize`):
+```ruby
 class TimeSleepFuture
   remaining_nanos: Int
   handle: Int
@@ -43,8 +48,8 @@ class TimeSleepFuture
   type Output = nil
 
   def init(d: &Duration)
-    self.remaining_nanos = d.as_nanos
-    self.handle = 0
+    @remaining_nanos = d.as_nanos
+    @handle = 0
   end
 
   def var poll(cx: &var Context) -> Poll[nil]
@@ -53,8 +58,8 @@ class TimeSleepFuture
   end
 
   def drop
-    if self.handle != 0
-      reactor_deregister(self.handle)
+    if @handle != 0
+      reactor_deregister(@handle)
     end
   end
 end
@@ -70,6 +75,7 @@ calls type-check but never execute the user-written code.
 
 `compiler/ruxen_core/src/hir/types.rs::is_send_strict_with` currently
 has hardcoded match arms:
+<!-- compiler-rust -->
 ```rust
 match class_name {
     "Array" | "Option" | "Result" | "Box" | "HashMap" | "HashSet" => /* iff all generic params are Send */,
@@ -85,7 +91,7 @@ Every new generic container requires editing this match.
 
 **Fix:** replace the match with a generic walker.
 1. If the class body has `include !Send` → not Send. (Escape hatch.)
-2. If the class body has `include unsafe Send` → unconditionally Send. (Manual override.)
+2. If the class body has `unsafe include Send` → unconditionally Send. (Manual override.)
 3. If the class body has `include Send` →
    - **Send iff** every generic type parameter `T` of the class
      satisfies `T: Send` AND every field type satisfies `Send`.
@@ -105,6 +111,7 @@ all fields satisfy both); `Foo[BadType]: !Send` if `BadType: !Send`.
 
 `compiler/ruxen_core/src/codegen/object.rs::linker_args` currently
 hardcodes:
+<!-- compiler-rust -->
 ```rust
 "-lc", "-lm", "-lpthread"
 ```
@@ -158,23 +165,23 @@ The trio-leak detector. Add a fresh dummy package
 `library/std/foobar/` containing:
 
 - `Ruxen.toml` with deps + `[system_libs] libs = []`.
-- `src/lib.rx`:
-  ```rx
+- `src/lib.rx`, with the [deprecated] `def init` (replacement `def initialize`):
+  ```ruby
   class FooBar[T]
     payload: T
     include Send
     include Sync
 
     def init(value: T)
-      self.payload = value
+      @payload = value
     end
 
-    def get(self) -> T
-      self.payload
+    def get -> T
+      @payload
     end
 
     lib "runtime/foobar.c"
-      def drop as "ruxen_foobar_drop"(self) -> nil
+      def drop as "ruxen_foobar_drop" -> nil
     end
   end
   ```
@@ -199,8 +206,7 @@ The last assertion is the test that closes the trio-leak structurally.
 
 | Behaviour | Test fn                                              | File                               |
 |-----------|------------------------------------------------------|------------------------------------|
-| B1        | `bootstrap_class_body_def_init_resolves`             | `tests/bootstrap_class_bodies.rs`  |
-| B1        | `bootstrap_class_body_def_var_poll_resolves`         | `tests/bootstrap_class_bodies.rs`  |
+| B1        | e2e `518_file_drop_closes.rx` and the async e2e `721`-`731` | release-e2e      |
 | B2        | `transitive_send_iff_all_generic_params_send`        | `tests/auto_derive_send_sync.rs`   |
 | B2        | `transitive_sync_iff_all_generic_params_sync`        | `tests/auto_derive_send_sync.rs`   |
 | B2        | `include_negative_send_overrides_transitive`         | `tests/auto_derive_send_sync.rs`   |

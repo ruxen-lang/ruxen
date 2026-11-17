@@ -1,5 +1,0 @@
-def main
-  let text = "foo bar baz"
-  let out = /\w+/.replace_all(text, "***")
-  puts out
-end

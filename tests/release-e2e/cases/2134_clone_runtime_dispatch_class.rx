@@ -1,0 +1,33 @@
+# A derived `clone` of a runtime-dispatch class is still dispatchable.
+#
+# Such a class carries its `class_info` pointer in slot 0, which `.new`
+# writes. The derived `clone` allocated the copy without it, so a dynamic
+# call through the copy read a garbage pointer and crashed. Derived
+# constructors (`clone`, `default`) now write the header like `.new`.
+mixin Readable dispatch runtime
+  def read -> Int
+end
+
+class Source
+  value: Int
+  include Readable
+
+  def init(@value: Int)
+  end
+
+  def read -> Int
+    self.value
+  end
+end
+
+def show(r: any Readable) -> Int
+  (&r).read
+end
+
+def main
+  let a = Source.new(7)
+  let b = a.clone
+  puts "clone_dispatch=#{show(b)}"
+  let d = Source.default
+  puts "default_dispatch=#{show(d)}"
+end

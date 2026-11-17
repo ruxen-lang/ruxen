@@ -1,4 +1,0 @@
-def main
-  let v: Array[Int] = [1, 2, 3]
-  let _ = v.sum
-end

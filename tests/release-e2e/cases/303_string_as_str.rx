@@ -1,6 +1,0 @@
-def main
-  let s = "hello"
-  let view = s.as_str
-  puts "len=#{view.size}"
-  puts view
-end

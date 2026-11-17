@@ -89,6 +89,9 @@ fn test_all_keywords() {
         ("const", TokenKind::Const),
         ("when", TokenKind::When),
         ("unless", TokenKind::Unless),
+        ("and", TokenKind::And),
+        ("or", TokenKind::Or),
+        ("not", TokenKind::Not),
     ];
 
     for (input, expected) in pairs {
@@ -240,6 +243,7 @@ fn test_multi_char_operators() {
         (">=", TokenKind::GtEq),
         ("&&", TokenKind::AmpAmp),
         ("||", TokenKind::PipePipe),
+        ("??", TokenKind::QuestionQuestion),
         ("<<", TokenKind::Shl),
         (">>", TokenKind::Shr),
         ("+=", TokenKind::PlusEq),
@@ -694,8 +698,7 @@ fn test_interpolation_precision_spec() {
 /// Pre-fix bug: lexer truncated `area(Shape.Circle(radius: 2.0))` at
 /// the `:` after `radius`, dropping the rest of the expression and
 /// emitting an empty interpolation. Result: `puts "#{...}"` produced
-/// no output (assertion fail in
-/// ruxenc/tests/installed_binary.rs::enum_with_match).
+/// no output (e2e `2079_basic_features_smoke` runs the same call).
 #[test]
 fn test_interpolation_named_arg_colon_is_not_spec() {
     let kinds = lex_kinds("\"#{Shape.Circle(radius: 2.0)}\"");
@@ -998,6 +1001,20 @@ fn test_identifier_with_question_suffix() {
 }
 
 #[test]
+fn test_nil_coalesce_after_identifier_is_not_a_predicate_suffix() {
+    let kinds = lex_kinds("value??fallback");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::Identifier("value".into()),
+            TokenKind::QuestionQuestion,
+            TokenKind::Identifier("fallback".into()),
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
 fn test_identifier_with_bang_suffix() {
     let kinds = lex_kinds("unwrap!");
     assert_eq!(
@@ -1214,7 +1231,7 @@ fn test_invalid_hex_literal() {
 
 #[test]
 fn test_unexpected_character() {
-    let (_, diags) = lex_with_errors("~");
+    let (_, diags) = lex_with_errors("`");
     assert!(!diags.is_empty());
     assert!(diags[0].message.contains("unexpected character"));
 }
@@ -1559,13 +1576,35 @@ fn lex_regex_tilde_eq_operator() {
 /// A lone `~` is still rejected with E0006 — there's no bitwise-not
 /// in Ruxen, and the regex op is only the two-char form.
 #[test]
-fn lex_regex_tilde_alone_is_rejected() {
-    let (_, diags) = lex_with_errors("~");
-    assert!(
-        diags.iter().any(|d| d.code.as_deref() == Some("E0006")),
-        "expected E0006 for bare `~`, got {:?}",
-        diags
+fn lex_tilde_alone_is_bitwise_complement() {
+    // A bare `~` is the bitwise-complement prefix operator (`Tilde`); only
+    // `~=` is the regex-match operator.
+    let toks = lex("~");
+    assert_eq!(toks.first().map(|t| &t.kind), Some(&TokenKind::Tilde));
+}
+
+#[test]
+fn lex_percent_w_word_array() {
+    // `%w[a b]` desugars in the lexer to `[ "a" , "b" ]`.
+    let kinds = lex_kinds("%w[a b]");
+    assert_eq!(
+        kinds,
+        vec![
+            TokenKind::LBracket,
+            TokenKind::StringLiteral("a".into()),
+            TokenKind::Comma,
+            TokenKind::StringLiteral("b".into()),
+            TokenKind::RBracket,
+            TokenKind::Eof,
+        ]
     );
+}
+
+#[test]
+fn lex_percent_is_still_modulo_after_a_value() {
+    // `a % w` (after a value) stays the modulo operator, not a word array.
+    let kinds = lex_kinds("a % w");
+    assert_eq!(kinds.get(1), Some(&TokenKind::Percent));
 }
 
 /// `/foo/i` after `=` lexes as a RegexLiteral.

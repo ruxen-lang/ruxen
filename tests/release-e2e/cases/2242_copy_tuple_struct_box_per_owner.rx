@@ -1,0 +1,37 @@
+# Copy tuples and Copy structs get their own box per owner: one tuple
+# pushed into two Arrays, a tuple copied by assignment, a struct of Ints
+# kept after the Array holding its copy is dropped, and a tuple read out of
+# an Array element and returned.
+struct Point
+  x: Int
+  y: Int
+end
+
+def first_of(rows: &Array[(Int, Int)]) -> (Int, Int)
+  rows[0]
+end
+
+def keep_point -> Point
+  p = Point.new(7, 8)
+  points = [p]
+  points.push(Point.new(9, 10))
+  puts(points[0].x + points[1].y)
+  p
+end
+
+def run -> nil
+  t = (1, 2)
+  left = [t]
+  right = [t]
+  puts("#{left[0].0} #{right[0].1}")
+  a = (3, 4)
+  b = a
+  puts("#{a.0} #{a.1} #{b.0} #{b.1}")
+  p = keep_point
+  puts("#{p.x} #{p.y}")
+  rows = [(5, 6)]
+  r = first_of(rows)
+  puts("#{r.0} #{r.1} #{rows[0].0}")
+end
+
+run

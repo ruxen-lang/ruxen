@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Ruxen → Ruby Surface Migration — Plan & Handoff
 
 **Goal:** Remove every Rust-flavored surface spelling from Ruxen and replace it
@@ -54,7 +56,7 @@ Before continuing:
   lowercase names in the `[…]` param slot (`def f[a](x: &a String)`).
 - **The `Regex.new -> Result` codegen fix** (FFI `.new` return type was shadowed
   by the builtin "constructor returns Self" rule) + regression spec
-  `tests/release-e2e/cases/907_regex_match_dispatch.rx`.
+  `library/std/regex/tests/regex_test.rx` ("compiles a pattern at runtime").
 
 ## 2. Done & UNCOMMITTED (this session — commit per §0)
 

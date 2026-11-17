@@ -1,0 +1,7 @@
+chain start
+got 101
+got 102
+res freed tag=7
+cancelled mid-stream
+live=0
+chain done

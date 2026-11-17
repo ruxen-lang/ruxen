@@ -1,0 +1,89 @@
+Tester.describe("String search") do |t: &var Tester|
+  t.it("index reports a character index, honouring the offset") do
+    t.expect("hello".index("l").unwrap_or(-1)).to_eq(2)
+    t.expect("hello".index("l", 3).unwrap_or(-1)).to_eq(3)
+    t.expect("hello".index("z").unwrap_or(-1)).to_eq(-1)
+    t.expect("hello".index("").unwrap_or(-1)).to_eq(0)
+    t.expect("hello".index("l", -2).unwrap_or(-1)).to_eq(3)
+    t.expect("".index("a").unwrap_or(-1)).to_eq(-1)
+  end
+
+  t.it("rindex finds the last match at or before the offset") do
+    t.expect("hello".rindex("l").unwrap_or(-1)).to_eq(3)
+    t.expect("hello".rindex("l", 2).unwrap_or(-1)).to_eq(2)
+    t.expect("hello".rindex("z").unwrap_or(-1)).to_eq(-1)
+    t.expect("hello hello".rindex("hello").unwrap_or(-1)).to_eq(6)
+  end
+
+  t.it("count reads tr-style sets") do
+    t.expect("hello".count("lo")).to_eq(3)
+    t.expect("hello world".count("a-z")).to_eq(10)
+    t.expect("hello".count("^l")).to_eq(3)
+    t.expect("hello".count("")).to_eq(0)
+    t.expect("a^b".count("^")).to_eq(1)
+    t.expect("a1b22c".count("0-9")).to_eq(3)
+    t.expect("".count("a")).to_eq(0)
+  end
+
+  t.it("codepoints and bytesize") do
+    let cps = "AB".codepoints
+    t.expect(cps.size).to_eq(2)
+    t.expect(cps[0]).to_eq(65)
+    t.expect(cps[1]).to_eq(66)
+    t.expect("hello".bytesize).to_eq(5)
+    t.expect("héllo".bytesize).to_eq(6)
+  end
+
+  t.it("casecmp and eql?") do
+    t.expect("Abc".casecmp("abc")).to_eq(0)
+    t.expect("a".casecmp("b")).to_eq(-1)
+    t.expect("B".casecmp("a")).to_eq(1)
+    t.expect("HELLO".casecmp?("hello")).to_eq(true)
+    t.expect("hello".casecmp?("world")).to_eq(false)
+    t.expect("abc".eql?("abc")).to_eq(true)
+    t.expect("abc".eql?("abd")).to_eq(false)
+  end
+
+  t.it("start_with? and end_with? take one prefix or an array of them") do
+    t.expect("hello".start_with?(["x", "he"])).to_eq(true)
+    t.expect("hello".start_with?(["x", "y"])).to_eq(false)
+    let none: Array[String] = []
+    t.expect("hello".start_with?(none)).to_eq(false)
+    t.expect("hello".end_with?(["lo", "zz"])).to_eq(true)
+    t.expect("hello".end_with?(["zz"])).to_eq(false)
+    t.expect("hello".start_with?("he")).to_eq(true)
+    t.expect("hello world".start_with?("bye")).to_eq(false)
+    t.expect("hello world".starts_with("hell")).to_eq(true)
+    t.expect("hello".end_with?("lo")).to_eq(true)
+  end
+
+  t.it("include?, starts_with and ends_with") do
+    let s = "hello world"
+    t.expect(s.include?("world")).to_eq(true)
+    t.expect(s.starts_with("hello")).to_eq(true)
+    t.expect(s.ends_with("world")).to_eq(true)
+  end
+
+  t.it("indexing yields one character") do
+    let word = "ruxen"
+    t.expect("#{word[0]}").to_eq("r")
+    t.expect("#{word[4]}").to_eq("n")
+    let i = 2
+    t.expect("#{word[i]}").to_eq("x")
+    let s = "hello"
+    let n: Int = s.size as Int
+    t.expect("#{s[0]}#{s[n - 1]}").to_eq("ho")
+  end
+
+  t.it("find reports a byte offset") do
+    let s = "hello world"
+    t.expect(s.find("world").unwrap_or(-1)).to_eq(6)
+    t.expect(s.find("zzz").unwrap_or(-1)).to_eq(-1)
+  end
+
+  t.it("size and length agree") do
+    t.expect("hello".size).to_eq(5)
+    t.expect("Hello World".length).to_eq(11)
+    t.expect("Hello World".size).to_eq(11)
+  end
+end

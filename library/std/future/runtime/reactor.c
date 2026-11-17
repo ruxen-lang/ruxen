@@ -57,6 +57,15 @@
 
 void ruxen_executor_wake_task(void *task_entry);
 
+/* §4.7 TestClock seam (library/std/future/runtime/test_clock.c). When a virtual
+ * clock is installed on this thread, `register_timer` records the timer in its
+ * slot WITHOUT arming a real timerfd/kevent, `park_current` returns immediately
+ * (no `epoll_wait(-1)` block on a clock that only `advance()` moves), and
+ * `ruxen_reactor_fire_due_timers` (defined here, called from test_clock.c's
+ * advance/set) marks + wakes every virtual timer whose deadline is reached. */
+int8_t ruxen_test_clock_is_virtual(void);
+int64_t ruxen_test_clock_virtual_now(void);
+
 #if defined(__APPLE__)
 #  include <sys/event.h>
 #  include <sys/types.h>
@@ -96,7 +105,8 @@ void ruxen_executor_wake_task(void *task_entry);
  * handles which are either positive timerfds (Linux) or positive
  * ident counters (macOS). `check_fired` / `deregister` route on sign. */
 typedef struct RuxenReactorFdSlot {
-    int fd;        /* 0 = free slot; -1 also free (we use >0 to mean live) */
+    int fd;        /* the user's fd; 0 is a real fd (stdin), so liveness is `live` */
+    int live;      /* 1 while registered with the OS queue, 0 = free slot */
     int mode;      /* 0 = read, 1 = write */
     int fired;     /* set by park_current when the OS reports readiness */
     void *task;    /* scheduler task to mark ready when this fd fires */
@@ -106,6 +116,13 @@ typedef struct RuxenReactorTimerSlot {
     int64_t ident; /* macOS: synthetic ident; Linux: timerfd; 0 = free */
     int fired;
     void *task;
+    /* §4.7 TestClock: when this timer was registered under a virtual clock, its
+     * ABSOLUTE virtual deadline (ns). `virtual` marks the slot as virtual (no
+     * real timerfd/kevent armed); `ruxen_reactor_fire_due_timers` fires it when
+     * virtual-now reaches `virtual_deadline_ns`. 0/`virtual==0` for a normal OS
+     * timer. */
+    int virtual;
+    int64_t virtual_deadline_ns;
 } RuxenReactorTimerSlot;
 
 #ifndef RUXEN_WAKER_CELL_DEFINED
@@ -148,11 +165,7 @@ typedef struct RuxenReactor {
 static _Thread_local RuxenReactor *t_current_reactor = (RuxenReactor *)0;
 
 static RuxenReactor *ruxen_reactor_alloc_struct(void) {
-    RuxenReactor *r = (RuxenReactor *)malloc(sizeof(RuxenReactor));
-    if (!r) {
-        ruxen_panic("ruxen_reactor: malloc(RuxenReactor) failed");
-        return NULL;
-    }
+    RuxenReactor *r = (RuxenReactor *)ruxen_xmalloc(sizeof(RuxenReactor));
     memset(r, 0, sizeof(*r));
     r->wake_fd = -1;
 
@@ -323,7 +336,7 @@ static int ruxen_reactor_find_slot(RuxenReactor *r, int64_t ident) {
  * as the macOS timer slots array. */
 static int ruxen_reactor_alloc_fd_slot(RuxenReactor *r) {
     for (int i = 0; i < r->fd_slots_len; i++) {
-        if (!r->fd_slots[i] || r->fd_slots[i]->fd == 0) {
+        if (!r->fd_slots[i] || !r->fd_slots[i]->live) {
             if (!r->fd_slots[i]) {
                 r->fd_slots[i] = (RuxenReactorFdSlot *)calloc(1, sizeof(*r->fd_slots[i]));
                 if (!r->fd_slots[i]) {
@@ -381,7 +394,7 @@ static RuxenReactorFdSlot *ruxen_reactor_find_fd_slot(RuxenReactor *r,
     if (idx < 0 || idx >= r->fd_slots_len) {
         return NULL;
     }
-    if (!r->fd_slots[idx] || r->fd_slots[idx]->fd <= 0) {
+    if (!r->fd_slots[idx] || !r->fd_slots[idx]->live) {
         return NULL;
     }
     return r->fd_slots[idx];
@@ -474,6 +487,7 @@ static int64_t ruxen_reactor_register_fd_internal(int64_t reactor_handle,
     }
 #endif
 
+    fd_slot->live = 1;
     r->registered_count++;
     return (int64_t)(-(slot + 1));
 }
@@ -488,75 +502,28 @@ int64_t ruxen_reactor_register_fd_write(int64_t reactor_handle, int64_t fd) {
 
 /* ── Persistent fd registration ────────────────────────────────────────
  *
- * Variant of register_fd_{read,write} that keeps the OS registration
- * live for the fd's lifetime. The intended caller registers ONCE at fd
- * construction (AsyncTcpStream / AsyncTcpListener `_from_fd` / `_bind`)
- * and keeps the handle alive until the owning stream drops, so the
- * per-poll register + deregister pair the futures used to emit becomes
- * zero syscalls on the hot path (-6 syscalls per HTTP request on the
- * rondo bench).
+ * Registers exactly as `register_fd_{read,write}` above: the OS
+ * registration already stays live until `deregister`, so "persistent" is
+ * a property of how the caller uses the handle, not of the registration.
+ * AsyncTcpStream / AsyncTcpListener (`_from_fd` / `_bind`) register ONCE
+ * at construction and keep the handle until the owning stream drops, so
+ * the per-poll register + deregister pair the futures used to emit
+ * becomes zero syscalls on the hot path (-6 syscalls per HTTP request on
+ * the rondo bench). The separate entry points keep that intent visible at
+ * the call site.
  *
- * Level-triggering is intentional here. Per-task waker routing means a
- * future attaches its task only after it actually returns Pending; if an
- * edge arrives before that attachment, edge-triggering can consume the
- * event and strand the task. Level-triggering lets the reactor observe
+ * Level-triggering is intentional. Per-task waker routing means a future
+ * attaches its task only after it actually returns Pending; if an edge
+ * arrives before that attachment, edge-triggering can consume the event
+ * and strand the task. Level-triggering lets the reactor observe
  * still-readable/still-writable fds after the task has registered its
  * waker. */
-static int64_t ruxen_reactor_register_fd_persistent_internal(int64_t reactor_handle,
-                                                             int64_t fd_in,
-                                                             int mode) {
-    RuxenReactor *r;
-    if (reactor_handle == 0) {
-        r = ruxen_reactor_acquire();
-    } else {
-        r = (RuxenReactor *)(uintptr_t)reactor_handle;
-    }
-    int user_fd = (int)fd_in;
-    if (user_fd < 0) {
-        return 0;
-    }
-
-    int slot = ruxen_reactor_alloc_fd_slot(r);
-    if (slot < 0) {
-        return 0;
-    }
-    RuxenReactorFdSlot *fd_slot = r->fd_slots[slot];
-    fd_slot->fd = user_fd;
-    fd_slot->mode = mode;
-    fd_slot->fired = 0;
-    fd_slot->task = NULL;
-
-#if defined(__APPLE__)
-    struct kevent ev;
-    short filter = mode == 1 ? EVFILT_WRITE : EVFILT_READ;
-    EV_SET(&ev, (uintptr_t)user_fd, filter,
-           EV_ADD | EV_ENABLE,
-           0, 0, fd_slot);
-    if (kevent(r->fd, &ev, 1, NULL, 0, NULL) < 0) {
-        fd_slot->fd = 0;
-        return 0;
-    }
-#elif defined(__linux__)
-    struct epoll_event ev;
-    memset(&ev, 0, sizeof(ev));
-    ev.events = mode == 1 ? EPOLLOUT : EPOLLIN;
-    ev.data.ptr = fd_slot;
-    if (epoll_ctl(r->fd, EPOLL_CTL_ADD, user_fd, &ev) < 0) {
-        fd_slot->fd = 0;
-        return 0;
-    }
-#endif
-
-    r->registered_count++;
-    return (int64_t)(-(slot + 1));
-}
-
 int64_t ruxen_reactor_register_fd_read_persistent(int64_t reactor_handle, int64_t fd) {
-    return ruxen_reactor_register_fd_persistent_internal(reactor_handle, fd, 0);
+    return ruxen_reactor_register_fd_internal(reactor_handle, fd, 0);
 }
 
 int64_t ruxen_reactor_register_fd_write_persistent(int64_t reactor_handle, int64_t fd) {
-    return ruxen_reactor_register_fd_persistent_internal(reactor_handle, fd, 1);
+    return ruxen_reactor_register_fd_internal(reactor_handle, fd, 1);
 }
 
 /* Register a one-shot timer. Returns an opaque i64 handle that
@@ -575,6 +542,35 @@ int64_t ruxen_reactor_register_timer(int64_t reactor_handle, int64_t nanos) {
     }
     if (nanos < 0) {
         nanos = 0;
+    }
+
+    /* §4.7 VIRTUAL CLOCK: record the timer in a slot with its ABSOLUTE virtual
+     * deadline; do NOT arm a real timerfd/kevent. The slot uses the same
+     * ident-counter handle scheme macOS uses, so the handle ABI is identical
+     * across real/virtual and platform — `check_fired`/`deregister` route the
+     * same way. `advance()` (via ruxen_reactor_fire_due_timers) flips `fired`
+     * and wakes the task. registered_count is bumped so `park_current` knows a
+     * registration is live (its virtual branch returns immediately anyway). */
+    if (ruxen_test_clock_is_virtual()) {
+        int slot = ruxen_reactor_alloc_slot(r);
+        if (slot < 0) {
+            return 0;
+        }
+        /* `next_ident` is seeded to 1 on macOS but starts at 0 on Linux (only
+         * the macOS real path uses the counter). The virtual path needs a
+         * POSITIVE handle (0 is the error/free sentinel) on both, so bump a
+         * zero seed to 1 before use. */
+        if (r->next_ident == 0) {
+            r->next_ident = 1;
+        }
+        int64_t ident = r->next_ident++;
+        r->slots[slot].ident = ident;
+        r->slots[slot].fired = 0;
+        r->slots[slot].task = NULL;
+        r->slots[slot].virtual = 1;
+        r->slots[slot].virtual_deadline_ns = ruxen_test_clock_virtual_now() + nanos;
+        r->registered_count++;
+        return ident;
     }
 
 #if defined(__APPLE__)
@@ -638,6 +634,156 @@ int64_t ruxen_reactor_register_timer(int64_t reactor_handle, int64_t nanos) {
 #endif
 }
 
+/* Re-arm an EXISTING timer slot's deadline to now+nanos, reusing the SAME
+ * slot — no allocation, no new registration. Backs AsyncTcpStream's
+ * persistent idle timer (Lever D.2, async_net.c::ruxen_async_tcp_stream_ensure_timer):
+ * a busy keep-alive connection re-arms the same kevent/timerfd registration
+ * every read cycle instead of paying a register+deregister pair, turning 2
+ * syscalls/request into 1 on macOS with IDENTICAL timeout semantics.
+ *
+ * Looks the slot up the SAME way `check_fired`/`deregister` do (route by
+ * handle sign / ident) — NOT `register_timer`'s lazy-acquire-on-0 semantics.
+ * `reactor_handle`/`timer_handle` of 0, or a timer_handle that doesn't match
+ * a live slot, is a bad-input no-op returning 0 (mirrors check_fired /
+ * deregister's early-return contract, not register_timer's). Fd-readiness
+ * handles (negative) are never valid here — only positive timer idents.
+ *
+ * `registered_count` is left UNCHANGED: the slot was already counted at the
+ * original `register_timer` call, and a re-arm is neither a fresh
+ * registration nor a teardown — double-counting here would desync the
+ * park_current fast-path just as surely as the double-decrement bug the
+ * deregister virtual-branch guards against above. */
+int64_t ruxen_reactor_rearm_timer(int64_t reactor_handle, int64_t timer_handle, int64_t nanos) {
+    if (reactor_handle == 0 || timer_handle == 0 || timer_handle < 0) {
+        return 0;
+    }
+    RuxenReactor *r = (RuxenReactor *)(uintptr_t)reactor_handle;
+    if (nanos < 0) {
+        nanos = 0;
+    }
+
+    int slot = ruxen_reactor_find_slot(r, timer_handle);
+    if (slot < 0) {
+        return 0;
+    }
+
+    /* If this timer had ALREADY FIRED, its fire path decremented
+     * registered_count (park_current for a real EV_ONESHOT timer, which the
+     * kernel also auto-removed; ruxen_reactor_fire_due_timers for a virtual
+     * one); see both above and below. Re-arming makes it a live registration
+     * again, so restore the count in lockstep; otherwise a fire-then-rearm
+     * sequence drifts registered_count DOWN and can wrongly trip
+     * park_current's `registered_count <= 0` sched_yield fast path. A timer
+     * that is still LIVE (not yet fired) keeps its existing count; re-arm
+     * only resets its deadline. Applies to virtual + both OS branches below,
+     * so it lives here before the fired bit is cleared. */
+    if (r->slots[slot].fired && r->registered_count >= 0) {
+        r->registered_count++;
+    }
+
+    /* §4.7 VIRTUAL CLOCK: mirror register_timer's virtual path — update the
+     * slot's ABSOLUTE virtual deadline with NO real OS syscall, and clear
+     * `fired` so a timer that already fired once can fire again after
+     * re-arm. `registered_count` untouched — see function header. */
+    if (r->slots[slot].virtual) {
+        r->slots[slot].virtual_deadline_ns = ruxen_test_clock_virtual_now() + nanos;
+        r->slots[slot].fired = 0;
+        return timer_handle;
+    }
+
+#if defined(__APPLE__)
+    /* EV_ADD on the SAME ident re-arms/resets an existing EVFILT_TIMER
+     * rather than creating a duplicate registration (man kqueue: "Re-adding
+     * an existing event will modify the parameters of the original event,
+     * and not result in a duplicate entry"). */
+    struct kevent ev;
+    EV_SET(&ev, (uintptr_t)timer_handle, EVFILT_TIMER,
+           EV_ADD | EV_ENABLE | EV_ONESHOT,
+           NOTE_NSECONDS, (intptr_t)nanos, NULL);
+    if (kevent(r->fd, &ev, 1, NULL, 0, NULL) < 0) {
+        ruxen_panic("ruxen_reactor_rearm_timer: kevent EV_ADD failed");
+        return 0;
+    }
+    r->slots[slot].fired = 0;
+    return timer_handle;
+#elif defined(__linux__)
+    /* timerfd_settime on the SAME fd re-arms it in place. */
+    int tfd = (int)timer_handle;
+    struct itimerspec spec;
+    memset(&spec, 0, sizeof(spec));
+    spec.it_value.tv_sec = (time_t)(nanos / 1000000000LL);
+    spec.it_value.tv_nsec = (long)(nanos % 1000000000LL);
+    if (spec.it_value.tv_sec == 0 && spec.it_value.tv_nsec == 0) {
+        spec.it_value.tv_nsec = 1;
+    }
+    if (timerfd_settime(tfd, 0, &spec, NULL) < 0) {
+        ruxen_panic("ruxen_reactor_rearm_timer: timerfd_settime failed");
+        return 0;
+    }
+    r->slots[slot].fired = 0;
+    return timer_handle;
+#endif
+}
+
+/* §4.7 TestClock: fire every VIRTUAL timer whose absolute deadline is <=
+ * `now_ns`. Called from test_clock.c's advance/advance_to_next/set after
+ * bumping virtual-now. Marks the slot `fired` and wakes its parked task (so the
+ * block_on / for_each pump re-polls and the future sees `check_fired` true).
+ * Operates on the per-thread current reactor (the one a `block_on` installed) —
+ * matching where the timers were registered. */
+void ruxen_reactor_fire_due_timers(int64_t now_ns) {
+    RuxenReactor *r = t_current_reactor;
+    if (!r) {
+        return;
+    }
+    for (int i = 0; i < r->slots_len; i++) {
+        RuxenReactorTimerSlot *s = &r->slots[i];
+        if (s->ident == 0 || !s->virtual || s->fired) {
+            continue;
+        }
+        if (s->virtual_deadline_ns <= now_ns) {
+            s->fired = 1;
+            if (s->task) {
+                ruxen_executor_wake_task(s->task);
+                s->task = NULL;
+            }
+            if (r->registered_count > 0) {
+                r->registered_count--;
+            }
+        }
+    }
+}
+
+/* §4.7 TestClock test-observability: the current `registered_count` (live timer
+ * + fd registrations, excluding the background wake fd). A pin reads this to
+ * assert the deregister-of-a-fired-virtual-timer path does NOT double-decrement
+ * (which would strand `park_current`'s `registered_count <= 0` fast-path).
+ * Reads the per-thread current reactor. */
+int64_t ruxen_reactor_registered_count(void) {
+    RuxenReactor *r = t_current_reactor;
+    return r ? (int64_t)r->registered_count : 0;
+}
+
+/* §4.7 TestClock: the EARLIEST not-yet-fired virtual-timer deadline (absolute
+ * ns), or -1 if none pending. Backs `TestClock.advance_to_next`. */
+int64_t ruxen_reactor_next_virtual_deadline(void) {
+    RuxenReactor *r = t_current_reactor;
+    if (!r) {
+        return -1;
+    }
+    int64_t best = -1;
+    for (int i = 0; i < r->slots_len; i++) {
+        RuxenReactorTimerSlot *s = &r->slots[i];
+        if (s->ident == 0 || !s->virtual || s->fired) {
+            continue;
+        }
+        if (best < 0 || s->virtual_deadline_ns < best) {
+            best = s->virtual_deadline_ns;
+        }
+    }
+    return best;
+}
+
 int64_t ruxen_reactor_check_fired(int64_t reactor_handle, int64_t handle) {
     if (reactor_handle == 0 || handle == 0) {
         return 0;
@@ -660,6 +806,18 @@ int64_t ruxen_reactor_check_fired(int64_t reactor_handle, int64_t handle) {
             return 1;
         }
         return 0;
+    }
+
+    /* §4.7 VIRTUAL timer (positive ident handle): a virtual slot has no real
+     * timerfd/kevent, so read its `fired` bit directly (set by
+     * `ruxen_reactor_fire_due_timers` on advance). This branch is uniform
+     * across platforms — the Linux real path below `read()`s a timerfd, which a
+     * virtual handle is NOT, so virtual must be handled before that split. */
+    {
+        int vslot = ruxen_reactor_find_slot(r, handle);
+        if (vslot >= 0 && r->slots[vslot].virtual) {
+            return r->slots[vslot].fired ? 1 : 0;
+        }
     }
 
 #if defined(__APPLE__)
@@ -703,6 +861,7 @@ void ruxen_reactor_deregister(int64_t reactor_handle, int64_t handle) {
         (void)epoll_ctl(r->fd, EPOLL_CTL_DEL, user_fd, NULL);
 #endif
         slot->fd = 0;
+        slot->live = 0;
         slot->mode = 0;
         slot->fired = 0;
         slot->task = NULL;
@@ -710,6 +869,32 @@ void ruxen_reactor_deregister(int64_t reactor_handle, int64_t handle) {
             r->registered_count--;
         }
         return;
+    }
+
+    /* §4.7 VIRTUAL timer (positive ident handle): NO real timerfd/kevent was
+     * armed, so deregister must NOT touch the OS (a Linux `close((int)ident)`
+     * would close an arbitrary fd — e.g. ident 1 = stdout — and an
+     * `EV_DELETE`/`epoll_ctl` on a synthetic ident is at best a no-op). Just
+     * clear the slot. registered_count: decrement ONLY if the timer had NOT
+     * already fired — `ruxen_reactor_fire_due_timers` already decremented it on
+     * fire, so decrementing again here (the drop-after-Ready path) would
+     * DOUBLE-decrement and strand `park_current`'s `registered_count <= 0`
+     * fast-path while other timers are still pending (Codex blocker). Must run
+     * BEFORE the platform split below (which assumes a real timerfd/kevent). */
+    {
+        int vslot = ruxen_reactor_find_slot(r, handle);
+        if (vslot >= 0 && r->slots[vslot].virtual) {
+            int was_fired = r->slots[vslot].fired;
+            r->slots[vslot].ident = 0;
+            r->slots[vslot].fired = 0;
+            r->slots[vslot].task = NULL;
+            r->slots[vslot].virtual = 0;
+            r->slots[vslot].virtual_deadline_ns = 0;
+            if (!was_fired && r->registered_count > 0) {
+                r->registered_count--;
+            }
+            return;
+        }
     }
 
 #if defined(__APPLE__)
@@ -816,6 +1001,54 @@ void ruxen_reactor_park_current(void) {
     }
     RuxenReactor *r = t_current_reactor;
 
+    /* §4.7 VIRTUAL CLOCK: virtual timers only fire when `TestClock.advance` is
+     * called — NOT from the OS. Blocking on `kevent`/`epoll_wait(-1)` here would
+     * hang forever (no real timer is armed, and only `advance` moves the clock).
+     * So in virtual mode we DON'T block on the timer: instead we do a
+     * NON-BLOCKING poll of the OS queue (0 timeout) so REAL fd readiness still
+     * surfaces (the hybrid real-socket + virtual-timer case — only the timer
+     * seam is virtual), then return so the block_on loop re-polls (where it sees
+     * any fired virtual timers via check_fired). A bare `sched_yield` would also
+     * work for a pure-timer test, but the non-blocking OS drain keeps real I/O
+     * wakeups live. */
+    if (ruxen_test_clock_is_virtual()) {
+#if defined(__APPLE__)
+        struct kevent vevents[16];
+        struct timespec zero = {0, 0};
+        int vn = kevent(r->fd, NULL, 0, vevents, 16, &zero);
+        for (int i = 0; i < vn; i++) {
+            if (vevents[i].udata == (void *)&r->wake_fd_sentinel) {
+                continue;
+            }
+            if (vevents[i].udata != NULL) {
+                RuxenReactorFdSlot *fd_slot = (RuxenReactorFdSlot *)vevents[i].udata;
+                fd_slot->fired = 1;
+                if (fd_slot->task) {
+                    ruxen_executor_wake_task(fd_slot->task);
+                    fd_slot->task = NULL;
+                }
+            }
+        }
+#elif defined(__linux__)
+        struct epoll_event vevents[16];
+        int vn = epoll_wait(r->fd, vevents, 16, 0);
+        for (int i = 0; i < vn; i++) {
+            void *p = vevents[i].data.ptr;
+            if (!p || p == (void *)&r->wake_fd_sentinel) {
+                continue;
+            }
+            /* fd-readiness slot (real socket); timer events are virtual now. */
+            RuxenReactorFdSlot *fd_slot = (RuxenReactorFdSlot *)p;
+            fd_slot->fired = 1;
+            if (fd_slot->task) {
+                ruxen_executor_wake_task(fd_slot->task);
+                fd_slot->task = NULL;
+            }
+        }
+#endif
+        return;
+    }
+
 #if defined(__APPLE__)
     struct kevent events[16];
     int n = kevent(r->fd, NULL, 0, events, 16, NULL);
@@ -887,9 +1120,11 @@ void ruxen_reactor_park_current(void) {
             (void)drain_rd;
             continue;
         }
-        if (!r->fd_slots) {
-            continue;
-        }
+        /* No `fd_slots` early-continue here: a timer-only reactor never
+         * allocates fd slots, and skipping would leave the timer slot
+         * un-fired and its task un-woken while the level-triggered
+         * timerfd keeps epoll_wait returning → a busy spin (fixture 416).
+         * `owns_fd_slot` already handles a NULL `fd_slots`. */
         if (ruxen_reactor_owns_fd_slot(r, p)) {
             RuxenReactorFdSlot *fd_slot = (RuxenReactorFdSlot *)p;
             fd_slot->fired = 1;

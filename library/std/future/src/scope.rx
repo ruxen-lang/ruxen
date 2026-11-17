@@ -1,0 +1,206 @@
+## Scope — structured task scope (spec §4.2). The keystone of the
+## concurrency feature: a Scope value OWNS its spawned children and its
+## `def drop` cancels every still-pending child before control leaves the
+## block, so a detached/leaked async task is unrepresentable.
+##
+## v1 surface (what the current lowering supports — see
+## docs/dev/concurrency-impl-plan.md Feature #2):
+##   * `Scope.open do |s| ... end` — constructs a Scope, yields it to the
+##     block (immediately-invoked do…end), then `def drop` cancels any
+##     still-pending child at scope exit.
+##   * `s.spawn(fut)` — `fut` is a FUTURE VALUE (the result of calling a
+##     top-level `async def`, NOT an async closure — async closures are not
+##     lowered into futures yet). Enqueues it on the thread-local scheduler
+##     via `Task.spawn_raw` and records the raw `Int` handle in the scope's
+##     PRIVATE child list. Returns nil — the handle is WALLED OFF inside the
+##     Scope (spec §4.2 risk 4) so a child cannot escape ownership.
+##   * `s.collect` — SYNCHRONOUS pump: drives the thread-local scheduler
+##     (`ruxen_executor_pump_tasks`) until every child reports done. Not an
+##     `async def` method (those are unlowered); a sync pump is the v1
+##     surface, matching the 728 spawn-join hand-pump precedent. So
+##     `Scope.open` is callable from SYNC code (it drives async internally).
+##
+## v1 scope: single-reactor, "structured concurrency within a worker"
+## (matches rondo's thread-per-core model) — no cross-thread/work-stealing.
+##
+## Cancellation uses the §4.1 machinery: `ruxen_executor_cancel_task(h)`
+## fires the child future's `def drop` via `Drop_dynamic_drop` then removes
+## its queue entry — scoped to THIS scope's children (not the whole thread
+## queue, which `drain_remaining` would hit).
+class Scope
+  children: Array[Int]
+
+  def init
+    self.children = Array.new
+  end
+
+  ## One scheduler advance step, mirroring the block_on inline loop's
+  ## progress rule: pump the thread-local queue once; if that made NO
+  ## progress (no completion) AND no task is ready, PARK on the reactor
+  ## via `Thread.yield_now` (which delegates to `ruxen_reactor_park_current`
+  ## when a timer/fd is pending) instead of busy-spinning. Without this, a
+  ## child that registers a reactor timer/fd and returns Pending (clearing
+  ## its ready bit) would make every subsequent pump return 0 and `collect`
+  ## would spin forever. Used by both `collect` and `collect_supervised`.
+  def self.pump_or_park -> nil
+    let pumped = ruxen_executor_pump_tasks()
+    let ready = ruxen_executor_ready_nonempty()
+    if pumped == 0 && ready == 0
+      Thread.yield_now
+    end
+  end
+
+  ## Open a structured scope, yield it (by `&var` borrow) to the block,
+  ## then JOIN-then-CANCEL: after the block returns, explicitly cancel any
+  ## still-pending child (`s.cancel_remaining`) so a detached/leaked task is
+  ## unrepresentable — falling off the block is the drop-fence. The block
+  ## param is typed `&var Scope` explicitly (ADR D2 explicit-`&block`) so
+  ## `s.spawn` / `s.collect` resolve against the concrete `Scope`.
+  ##
+  ## Why an EXPLICIT `cancel_remaining` call rather than relying on `s`'s
+  ## scope-exit `def drop`: the yield passes `s` to the block by value at
+  ## the closure-call ABI, which the drop analysis treats as a consume —
+  ## so `s` is NOT auto-drop-elaborated here. Calling cleanup explicitly
+  ## after the yield is the deterministic join-fence (and matches the
+  ## block_on rewriter's explicit-teardown shape). `def drop` stays as a
+  ## belt-and-braces safety net for any path that DOES drop a Scope value.
+  def self.open(&block: Fn[(&var Scope) -> nil]) -> nil
+    var s = Scope.new
+    yield(s)
+    s.cancel_remaining
+  end
+
+  ## Spawn a future as a child of this scope. `fut` is a future value
+  ## (an i64 heap pointer at the ABI, same laxness as `Task.spawn_raw`).
+  ## The raw handle is recorded privately and NOT returned.
+  def var spawn(fut: Int) -> nil
+    let h = Task.spawn_raw(fut)
+    self.children.push(h)
+  end
+
+  ## FAIL-FAST collect (the `Scope.open` default, per P3). Drive children
+  ## to completion; on the FIRST child that completes with an error, CANCEL
+  ## every still-pending sibling (firing each one's `def drop` via the §4.1
+  ## cancel path) and return that error sentinel. Returns 0 when all
+  ## children completed OK.
+  ##
+  ## v1 error channel (documented limitation): a child returns an `Int`
+  ## status — the `Poll.Ready` payload the scheduler stores
+  ## (`TaskHandle.result`). The convention is `>= 0` OK / `< 0` error. A
+  ## typed `Result[T, E]` channel needs typed `TaskJoinFuture.Output`
+  ## (pinned to `Int` today) — deferred with the multi-threaded scheduler
+  ## round. So fail-fast keys on the negative-Int sentinel.
+  ##
+  ## Single-reactor sync pump: each pass drives the whole thread-local
+  ## queue once; after each pass we scan for a newly-completed errored
+  ## child. Round-robin means children complete concurrently, so "first
+  ## error" = the first errored child observed across the pump, not source
+  ## order.
+  def var collect -> Int
+    var remaining = self.children.size as Int
+    while remaining > 0
+      var done_now = 0
+      var first_error = 0
+      var saw_error = false
+      self.children.each do |h|
+        if TaskHandle.is_done(h) == 1
+          done_now = done_now + 1
+          let r = TaskHandle.result(h)
+          if r < 0 && !saw_error
+            saw_error = true
+            first_error = r
+          end
+        end
+      end
+      if saw_error
+        self.cancel_pending
+        return first_error
+      end
+      if done_now == (self.children.size as Int)
+        return 0
+      end
+      Scope.pump_or_park
+    end
+    0
+  end
+
+  ## SUPERVISED collect (`Scope.supervised`, the named exception): children
+  ## fail INDEPENDENTLY — drive ALL to completion regardless of errors, then
+  ## return the COUNT of children that errored (0 = all OK). No sibling
+  ## cancellation. Mirrors Kotlin's `supervisorScope` / Java's `Joiner`.
+  def var collect_supervised -> Int
+    self.children.each do |h|
+      while TaskHandle.is_done(h) == 0
+        Scope.pump_or_park
+      end
+    end
+    var errors = 0
+    self.children.each do |h|
+      if TaskHandle.result(h) < 0
+        errors = errors + 1
+      end
+    end
+    errors
+  end
+
+  ## Cancel only the still-PENDING children (fire each one's `def drop`),
+  ## leaving completed children's handles for the caller-ref release in
+  ## `cancel_remaining`. Used by fail-fast `collect` to cancel siblings on
+  ## the first error WITHOUT releasing handle refs twice.
+  def var cancel_pending -> nil
+    self.children.each do |h|
+      if TaskHandle.is_done(h) == 0
+        ruxen_executor_cancel_task(h)
+      end
+    end
+  end
+
+  ## Cancel every still-pending child + release the scope's caller-side
+  ## handle refs. A child already done (collected) skips the cancel (its
+  ## queue entry is gone); a still-queued child has its future's `def drop`
+  ## fired via the §4.1 cancel path (`ruxen_executor_cancel_task` →
+  ## `Drop_dynamic_drop`), then its queue entry removed. Idempotent — safe
+  ## to call once from `open` after the block (the join-fence) AND from
+  ## `def drop`; the second pass finds every child already done → no-ops.
+  ## After cancelling, the child list is cleared so a re-entrant call is a
+  ## pure no-op (no double caller-ref drop).
+  def var cancel_remaining -> nil
+    self.children.each do |h|
+      if TaskHandle.is_done(h) == 0
+        ruxen_executor_cancel_task(h)
+      end
+      ruxen_task_handle_drop_caller(h)
+    end
+    self.children = Array.new
+  end
+
+  ## Scope#drop safety net: same cancel-remaining cleanup for any path that
+  ## drops a Scope VALUE (e.g. a future shape that scope-exit-drops it).
+  ## After `open`'s explicit `cancel_remaining` the child list is empty, so
+  ## this is a no-op in the common path. The teardown loop is inlined here
+  ## (not shared through a public helper) so no caller can release the
+  ## handle refs without also clearing the child list.
+  def drop
+    self.children.each do |h|
+      if TaskHandle.is_done(h) == 0
+        ruxen_executor_cancel_task(h)
+      end
+      ruxen_task_handle_drop_caller(h)
+    end
+  end
+end
+
+## §4.2 scheduler primitive: cancel a single still-queued task by its
+## handle — fire the child future's `def drop` (the §4.1
+## `Drop_dynamic_drop` path) and remove its queue entry, marking the
+## handle done so a dangling join resolves. Scoped to ONE child, unlike
+## `drain_remaining` (whole thread queue). Module-level lib decl so Scope
+## can call it by bare identifier.
+##
+## `ruxen_task_handle_drop_caller` is the caller-side refcount drop
+## (alias of `ruxen_task_handle_drop`) so the Scope releases its handle
+## ref for every child (collected or cancelled) at scope exit.
+lib "runtime/scheduler.c"
+  def ruxen_executor_cancel_task(handle: Int) -> nil
+  def ruxen_task_handle_drop_caller as "ruxen_task_handle_drop"(handle: Int) -> nil
+end

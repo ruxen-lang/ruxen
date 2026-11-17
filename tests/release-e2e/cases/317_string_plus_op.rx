@@ -1,7 +1,0 @@
-def main
-  let a = "foo"
-  let b = "bar"
-  let c = a + b
-  puts "len=#{c.size}"
-  puts c
-end

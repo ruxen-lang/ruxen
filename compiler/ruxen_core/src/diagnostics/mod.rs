@@ -26,6 +26,9 @@ pub struct Diagnostic {
     pub message: String,
     pub span: Span,
     pub code: Option<String>,
+    /// Suggestions rendered after the message as `= help: …` lines, the
+    /// same shape the borrow checker's `BorrowError` uses.
+    pub help: Vec<String>,
 }
 
 impl Diagnostic {
@@ -35,6 +38,7 @@ impl Diagnostic {
             message: message.into(),
             span,
             code: None,
+            help: Vec::new(),
         }
     }
 
@@ -48,7 +52,14 @@ impl Diagnostic {
             message: message.into(),
             span,
             code: Some(code.into()),
+            help: Vec::new(),
         }
+    }
+
+    /// Append one `= help: …` suggestion.
+    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+        self.help.push(help.into());
+        self
     }
 
     pub fn warning(message: impl Into<String>, span: Span) -> Self {
@@ -57,19 +68,7 @@ impl Diagnostic {
             message: message.into(),
             span,
             code: None,
-        }
-    }
-
-    pub fn warning_with_code(
-        message: impl Into<String>,
-        span: Span,
-        code: impl Into<String>,
-    ) -> Self {
-        Self {
-            level: DiagnosticLevel::Warning,
-            message: message.into(),
-            span,
-            code: Some(code.into()),
+            help: Vec::new(),
         }
     }
 }
@@ -84,7 +83,11 @@ impl fmt::Display for Diagnostic {
             f,
             "{}{}: {} (at {}:{})",
             code_str, self.level, self.message, self.span.line, self.span.column
-        )
+        )?;
+        for h in &self.help {
+            write!(f, "\n  = help: {}", h)?;
+        }
+        Ok(())
     }
 }
 
@@ -113,16 +116,6 @@ mod tests {
         assert!(diag.code.is_none());
     }
 
-    // NOTE: `Diagnostic::info` was listed in the test spec but does not exist
-    // on the current `Diagnostic` struct; the module only supports Error,
-    // Warning, and a Help variant (no corresponding constructor). See the
-    // `DiagnosticLevel` enum in this module.
-    #[test]
-    #[ignore = "Diagnostic::info does not exist in the current API"]
-    fn info_constructor_missing() {
-        // Intentionally left ignored — no `Diagnostic::info` constructor.
-    }
-
     #[test]
     fn error_with_code_sets_code_field() {
         let diag = Diagnostic::error_with_code("bad thing", sample_span(), "E0042");
@@ -130,17 +123,6 @@ mod tests {
         assert_eq!(diag.message, "bad thing");
         assert_eq!(diag.code.as_deref(), Some("E0042"));
     }
-
-    // NOTE: The spec asked for `error_with_note` / `error_with_help` but these
-    // constructors do not exist, and the struct has no `note`/`help` fields.
-    // Only `level`, `message`, `span`, and `code` are present today.
-    #[test]
-    #[ignore = "Diagnostic has no `note` field or `error_with_note` constructor"]
-    fn error_with_note_missing() {}
-
-    #[test]
-    #[ignore = "Diagnostic has no `help` field or `error_with_help` constructor"]
-    fn error_with_help_missing() {}
 
     #[test]
     fn code_field_defaults_to_none() {
@@ -199,6 +181,16 @@ mod tests {
         let diag = Diagnostic::error_with_code("oops", Span::new(0, 1, 3, 9), "E1");
         let rendered = format!("{}", diag);
         assert_eq!(rendered, "[E1] error: oops (at 3:9)");
+    }
+
+    #[test]
+    fn diagnostic_display_renders_help_lines() {
+        let diag = Diagnostic::error_with_code("oops", Span::new(0, 1, 3, 9), "E1")
+            .with_help("try `var x`");
+        assert_eq!(
+            format!("{}", diag),
+            "[E1] error: oops (at 3:9)\n  = help: try `var x`"
+        );
     }
 
     #[test]

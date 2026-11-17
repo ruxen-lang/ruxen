@@ -1,0 +1,14 @@
+class Wrong
+  def init
+  end
+
+  def <=>(other: &Wrong) -> Bool
+    false
+  end
+end
+
+def main
+  let left = Wrong.new
+  let right = Wrong.new
+  let result = left <=> right
+end

@@ -11,6 +11,15 @@ Ruxen primitives (`Int`, sized `Int8..64` / `UInt8..64`, `ISize`,
 type-stable method surfaces.  This spec lists the methods that the
 typechecker resolves and the runtime helpers that back them.
 
+**Owner decisions (2026-10-25).** D6 a, X1 a: scalars and `String` include
+`Comparable`, `Hashable` and `Clone` (plus `Default` where Ruby has a zero),
+with `==`, `<=>`, `to_s` and `inspect` in `.rx`; the Rust-named mixins become
+[deprecated] `.rx` adapters, and a bound that needs only equality checks that
+the type has a `.rx` `==`, with no marker mixin [planned](../../../TODO.md#t-d6)
+[planned](../../../TODO.md#t-x1). D18 a: the scalar name-to-type tables in the resolver
+stay as a floor for machine primitives; the collection heads and `String`
+move to `.rx` later, in the de-primitivize phase [planned](../../../TODO.md#t-d18).
+
 ---
 
 ## B1 — `Int.to_string() -> String`
@@ -105,7 +114,7 @@ fine (literal narrows on assignment).
 | Behaviour | Test fixture / fn                                          | File                                           |
 |-----------|------------------------------------------------------------|------------------------------------------------|
 | B1        | `e2e_02_int_arith.rx` + many interpolation fixtures       | `tests/release-e2e/cases/`                     |
-| B2        | `e2e_03_float_arith.rx` + `interpolation_float_precision` | `stdlib_fmt_runtime.rs`                        |
+| B2        | `e2e_03_float_arith.rx` + `applies width, fill and precision` | `tests/release-e2e/cases/`, `std/fmt` `fmt_test.rx` |
 | B3        | `e2e_04_bool_logic.rx`                                    | `tests/release-e2e/cases/`                     |
 | B4        | `prim_char_unicode_escapes_round_trip`                     | `stdlib_primitives.rs`                         |
 | B5        | `prim_numeric_suffix_int_widths_round_trip`                | `stdlib_primitives.rs`                         |
@@ -126,8 +135,8 @@ fine (literal narrows on assignment).
 
 ## Out of scope (v2)
 
-- Mixin-bound numeric primitives — Rust's `Num`, `One`, `Zero` mixins
-  don't exist in v1; arithmetic is hardwired.
+- Mixin-bound numeric primitives — numeric mixins (`Num`, `One`,
+  `Zero`) don't exist in v1; arithmetic is hardwired.
 - 128-bit integers (`Int128`, `UInt128`) and arbitrary-precision
   big-int.
 - Float NaN / Infinity literal syntax (`Float.NAN`, `Float.INFINITY`).

@@ -1,0 +1,31 @@
+## A temporary with a `def drop` is dropped at the end of the statement that
+## created it, whether it came from a constructor or from a function that
+## returns a fresh value. A value bound to a local lives to the end of its
+## scope. Temporaries used to live to the end of the function, and a
+## temporary returned by a function was never dropped at all.
+class Noisy
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def drop
+    puts "drop #{@n}"
+  end
+
+  def value -> Int
+    @n
+  end
+end
+
+def make(n: Int) -> Noisy
+  Noisy.new(n)
+end
+
+puts make(1).value
+puts "after 1"
+puts Noisy.new(2).value
+puts "after 2"
+kept = make(3)
+puts "kept #{kept.value}"
+puts "end"

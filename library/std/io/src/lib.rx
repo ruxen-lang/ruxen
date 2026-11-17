@@ -92,15 +92,13 @@ enum IoErrorKind
   OutOfMemory
 end
 
-## Phase E-rest 4 of #06.95: instance methods on the IoError enum
-## (`e.message()` / `e.kind()`) dispatched through runtime_table
-## arms historically because Ruxen's enum bodies don't yet carry
-## `lib` declarations. The workaround declares them here as bare
-## top-level free fns whose names are LITERALLY the MIR-mangled
-## callee shape — `IoError_message` / `IoError_kind`. The alias map
-## populated from these `as "ruxen_io_error_*"` clauses rewrites
-## the MIR callee before codegen consults runtime_table.
-lib "runtime/io_error.c"
-  def IoError_message as "ruxen_io_error_get_message"(err: IoError) -> String
-  def IoError_kind as "ruxen_io_error_kind"(err: IoError) -> IoErrorKind
+## Instance methods on the IoError enum. The `class IoError` body
+## anchors onto the enum declared above (bootstrap namespace-anchor
+## mode), so `e.message` / `e.kind` resolve and dispatch like any
+## other declared method, with or without parentheses.
+class IoError
+  lib "runtime/io_error.c"
+    def message as "ruxen_io_error_get_message" -> String
+    def kind as "ruxen_io_error_kind" -> IoErrorKind
+  end
 end

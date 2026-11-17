@@ -1,0 +1,10 @@
+float=2.5 to_s=2.5
+2.5
+doubled=5
+var_float=-0.125
+bool=false
+var_bool=true to_s=true
+char=z
+var_int=42
+local=2.5
+tuple=1.5 true

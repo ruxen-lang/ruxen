@@ -1,0 +1,57 @@
+## Feature #3 Increment 2 (spec §4.3) — `RaceFuture#drop` cancels BOTH arms.
+## A race that is cancelled before either arm resolves must cancel BOTH still-
+## live arms — firing each one's `def drop` via the §4.1 path — so neither arm
+## leaks. This composes §4.3 with §4.2: we spawn the RaceFuture into a `Scope`
+## and let the scope cancel it (the realistic structured-cancel path:
+## `Scope#drop` → `ruxen_executor_cancel_task` → `Drop_dynamic_drop(race)` →
+## `RaceFuture#drop` → `ruxen_race_state_free` cancels both arms).
+##
+## The race is spawned (never collected/driven to a win), so when the scope
+## block exits, the scope cancels the race future, whose drop cancels both
+## never-completing arms → both "arm dropped" lines print.
+
+class LeakerA
+  tag: Int
+  include Future
+  type Output = Int
+  def init(t: Int)
+    self.tag = t
+  end
+  def self.make(t: Int) -> LeakerA
+    LeakerA.new(t)
+  end
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Pending
+  end
+  def drop
+    puts "arm A dropped tag=#{self.tag}"
+  end
+end
+
+class LeakerB
+  tag: Int
+  include Future
+  type Output = Int
+  def init(t: Int)
+    self.tag = t
+  end
+  def self.make(t: Int) -> LeakerB
+    LeakerB.new(t)
+  end
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Pending
+  end
+  def drop
+    puts "arm B dropped tag=#{self.tag}"
+  end
+end
+
+def main
+  puts "scope start"
+  Scope.open do |s|
+    # Spawn a never-resolving race; do NOT collect it. Scope#drop cancels the
+    # race future at block exit, whose RaceFuture#drop cancels both arms.
+    s.spawn(Race.of(LeakerA.make(1), LeakerB.make(2)))
+  end
+  puts "scope done"
+end

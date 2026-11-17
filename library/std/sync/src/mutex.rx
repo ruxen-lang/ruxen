@@ -20,7 +20,7 @@ class Mutex[T: Send]
     def is_poisoned as "ruxen_mutex_is_poisoned" -> Int
     def clear_poison as "ruxen_mutex_clear_poison" -> nil
     def into_inner_raw as "ruxen_mutex_into_inner" -> T
-    def drop as "ruxen_mutex_drop" -> nil
+    def consume drop as "ruxen_mutex_drop" -> nil
   end
 
   ## Ergonomic poison-surfacing wrappers layered on the `_raw` FFI.
@@ -46,6 +46,17 @@ class Mutex[T: Send]
   ## Acquire the lock, panicking on poison (the `!` ergonomic form).
   def lock! -> MutexGuard[T]
     self.lock_raw
+  end
+
+  ## Acquire the lock only if it is free right now; `nil` when another
+  ## guard holds it.
+  def try_lock -> Option[MutexGuard[T]]
+    let g = self.try_lock_raw
+    if g.held?
+      Option.Some(g)
+    else
+      nil
+    end
   end
 
   ## Consume the mutex, returning the inner value (poison surfaced).

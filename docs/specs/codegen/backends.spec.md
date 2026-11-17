@@ -9,6 +9,12 @@ behind `--features llvm` since Phase 4.
 Ruxen compiles MIR through one of two backends.  Both must accept the
 same MIR and produce binaries that pass the same E2E suite.
 
+
+**Owner decision D2 b (2026-10-25).** Calls the compiler emits itself name a
+`.rx` declaration by a declared role marker instead of a C or method name
+string, so both backends stop re-parsing callee strings
+[planned](../../../TODO.md#t-d2).
+
 ---
 
 ## B1 — Default backend is Cranelift
@@ -75,7 +81,7 @@ helpers (`ruxen_string_len`, `ruxen_array_push`, `ruxen_string_clone`,
 | B3 + B4   | `all_opt_levels_correct`                               | `llvm_backend.rs`                 |
 | B5        | `compile_fails_when_calling_unimplemented_iter_flat_map` + `runtime_name_rejects_unknown_inferred_method` | `codegen_unknown_method_rejected.rs` |
 | B6        | `string_literal_lowers_through_string_from_wrapper`    | `string_literal_wrap.rs`          |
-| B7        | `e2e_135_unreserved_idents`                            | `unreserved_idents_runtime.rs`    |
+| B7        | e2e `135_unreserved_idents.rx`                         | release-e2e                       |
 
 The cross-backend equality assertion (`assert_backends_identical`) is
 the load-bearing pin: any optimisation or codegen change that makes

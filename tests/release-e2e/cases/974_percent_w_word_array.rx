@@ -1,0 +1,16 @@
+# Pins the `%w[...]` word-array literal (desugars to an array of strings).
+# Supports [], (), {}, <> delimiters and an empty literal; plain `%` modulo
+# after a value is unaffected.
+def main
+  let a = %w[foo bar baz]
+  puts(a.size)
+  puts(a[0])
+  puts(a[2])
+  let b = %w(one two)
+  puts(b[1])
+  let c = %w{alpha beta}
+  puts(c[0])
+  let d = %w[]
+  puts(d.size)
+  puts(17 % 5)
+end

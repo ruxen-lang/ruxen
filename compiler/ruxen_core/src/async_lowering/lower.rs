@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::lexer::token::Span;
+use crate::lexer::token::{NumericSuffix, Span};
 use crate::parser::ast::*;
 use crate::parser::visit::{walk_expr, walk_expr_mut, Visit, VisitMut};
 
@@ -507,25 +507,7 @@ fn lower_async_fn_via_cfg(
         });
     }
 
-    // ── Init params + body.
-    let mut init_params: Vec<Param> = Vec::new();
-    init_params.push(Param {
-        auto_assign: true,
-        name: "__state".to_string(),
-        type_expr: int_type(&span),
-        default: None,
-        span: span.clone(),
-    });
-    for p in &func.params {
-        init_params.push(Param {
-            auto_assign: true,
-            name: p.name.clone(),
-            type_expr: p.type_expr.clone(),
-            default: None,
-            span: p.span.clone(),
-        });
-    }
-
+    // ── Init body.
     let mut init_body_stmts: Vec<Statement> = Vec::new();
     // (1) Pre-await statements (with outer-arg refs → self.<arg>).
     for s in &pre_await_stmts {
@@ -578,6 +560,58 @@ fn lower_async_fn_via_cfg(
         }
     }
 
+    // ── Poll body — unified `self.__state` skeleton.
+    let poll_body =
+        build_poll_body_cfg(&subs, &tail_stmts, &outer_field_names, &func.params, &span);
+
+    Some(synthesize_future_class(
+        func,
+        class_name,
+        &return_type,
+        fields,
+        init_body_stmts,
+        poll_body,
+        format!(
+            " Compiler-synthesised Future state machine for `{}`. Spec: docs/specs/syntax/async_lowering.spec.md (Path A unified Cfg lowering).",
+            func.name
+        ),
+    ))
+}
+
+/// Assemble the state-machine class and its wrapper fn, shared by the
+/// linear ([`lower_async_fn_via_cfg`]) and loop ([`lower_loop_via_cfg`])
+/// lowerings. The class gets `fields`, an `init(__state, <params>)` running
+/// `init_body_stmts`, `def var poll(cx) -> Poll[<return_type>]` with
+/// `poll_body`, and `include Future`; the wrapper keeps `func`'s signature
+/// and returns `<class_name>.new(0, <params>)`.
+fn synthesize_future_class(
+    func: &FuncDef,
+    class_name: String,
+    return_type: &TypeExpr,
+    fields: Vec<FieldDecl>,
+    init_body_stmts: Vec<Statement>,
+    poll_body: Block,
+    doc_comment: String,
+) -> (FuncDef, ClassDef) {
+    let span = func.span.clone();
+    let mut init_params: Vec<Param> = Vec::new();
+    init_params.push(Param {
+        auto_assign: true,
+        name: "__state".to_string(),
+        type_expr: int_type(&span),
+        default: None,
+        span: span.clone(),
+    });
+    for p in &func.params {
+        init_params.push(Param {
+            auto_assign: true,
+            name: p.name.clone(),
+            type_expr: p.type_expr.clone(),
+            default: None,
+            span: p.span.clone(),
+        });
+    }
+
     let init_method = FuncDef {
         visibility: Visibility::Public,
         is_async: false,
@@ -595,10 +629,6 @@ fn lower_async_fn_via_cfg(
         doc_comments: Vec::new(),
         span: span.clone(),
     };
-
-    // ── Poll body — unified `self.__state` skeleton.
-    let poll_body =
-        build_poll_body_cfg(&subs, &tail_stmts, &outer_field_names, &func.params, &span);
 
     let cx_param = Param {
         auto_assign: false,
@@ -620,7 +650,7 @@ fn lower_async_fn_via_cfg(
         name: "poll".to_string(),
         generic_params: None,
         params: vec![cx_param],
-        return_type: Some(poll_return_type(&return_type, &span)),
+        return_type: Some(poll_return_type(return_type, &span)),
         where_clause: None,
         body: poll_body,
         doc_comments: Vec::new(),
@@ -635,6 +665,7 @@ fn lower_async_fn_via_cfg(
             generic_args: None,
             span: span.clone(),
             rooted: false,
+            nilable: false,
         },
         items: Vec::new(),
         span: span.clone(),
@@ -647,15 +678,12 @@ fn lower_async_fn_via_cfg(
         fields,
         methods: vec![init_method, poll_method],
         inner_impls: vec![include_future],
-        derive_traits: Vec::new(),
         layout: Vec::new(),
         lib_decls: Vec::new(),
-        doc_comments: vec![format!(
-            " Compiler-synthesised Future state machine for `{}`. Spec: docs/specs/syntax/async_lowering.spec.md (Path A unified Cfg lowering).",
-            func.name
-        )],
+        doc_comments: vec![doc_comment],
         where_clause: None,
         aliases: Vec::new(),
+        assoc_types: Vec::new(),
         span: span.clone(),
     };
 
@@ -673,6 +701,7 @@ fn lower_async_fn_via_cfg(
     }
     let ctor_call = Expr {
         kind: ExprKind::MethodCall {
+            parens: true,
             object: Box::new(Expr {
                 kind: ExprKind::Identifier(class_name.clone()),
                 span: span.clone(),
@@ -702,7 +731,7 @@ fn lower_async_fn_via_cfg(
         span: span.clone(),
     };
 
-    Some((wrapper, sm_class))
+    (wrapper, sm_class)
 }
 
 /// Unified poll-body builder for the non-loop shapes. With `subs`
@@ -731,26 +760,6 @@ fn build_poll_body_cfg(
             kind: ExprKind::Block(tail_block),
             span: span.clone(),
         };
-        let poll_ready = Expr {
-            kind: ExprKind::EnumVariant {
-                type_path: vec!["Poll".to_string()],
-                variant: "Ready".to_string(),
-                args: vec![FieldArg {
-                    name: None,
-                    value: body_value_expr,
-                    span: span.clone(),
-                }],
-            },
-            span: span.clone(),
-        };
-        let poll_pending = Expr {
-            kind: ExprKind::EnumVariant {
-                type_path: vec!["Poll".to_string()],
-                variant: "Pending".to_string(),
-                args: Vec::new(),
-            },
-            span: span.clone(),
-        };
         let state_eq_zero = Expr {
             kind: ExprKind::BinaryOp {
                 left: Box::new(self_field("__state", span)),
@@ -775,12 +784,12 @@ fn build_poll_body_cfg(
         let then_block = Block {
             statements: vec![
                 Statement::Expression(set_state_one),
-                Statement::Expression(poll_ready),
+                Statement::Expression(poll_ready(body_value_expr, span)),
             ],
             span: span.clone(),
         };
         let else_block = Block {
-            statements: vec![Statement::Expression(poll_pending)],
+            statements: vec![Statement::Expression(poll_pending(span))],
             span: span.clone(),
         };
         let if_expr = Expr {
@@ -980,24 +989,6 @@ fn lower_loop_via_cfg(
     }
 
     // ── Phase 4 — init ───────────────────────────────────────────
-    let mut init_params: Vec<Param> = Vec::new();
-    init_params.push(Param {
-        auto_assign: true,
-        name: "__state".to_string(),
-        type_expr: int_type(&span),
-        default: None,
-        span: span.clone(),
-    });
-    for p in &func.params {
-        init_params.push(Param {
-            auto_assign: true,
-            name: p.name.clone(),
-            type_expr: p.type_expr.clone(),
-            default: None,
-            span: p.span.clone(),
-        });
-    }
-
     let mut init_body_stmts: Vec<Statement> = Vec::new();
     // __phase = 0
     init_body_stmts.push(Statement::Expression(Expr {
@@ -1075,24 +1066,6 @@ fn lower_loop_via_cfg(
         }
     }
 
-    let init_method = FuncDef {
-        visibility: Visibility::Public,
-        is_async: false,
-        self_mode: None,
-        is_class_method: false,
-        name: "init".to_string(),
-        generic_params: None,
-        params: init_params,
-        return_type: None,
-        where_clause: None,
-        body: Block {
-            statements: init_body_stmts,
-            span: span.clone(),
-        },
-        doc_comments: Vec::new(),
-        span: span.clone(),
-    };
-
     // ── Phase 5 — poll body (unified N>=1 loop machine) ───────────
     let poll_body = build_loop_poll_body_cfg(
         &subs,
@@ -1105,110 +1078,19 @@ fn lower_loop_via_cfg(
         &return_type,
         &span,
     );
-    let cx_param = Param {
-        auto_assign: false,
-        name: "cx".to_string(),
-        type_expr: TypeExpr::Reference {
-            lifetime: None,
-            mutable: true,
-            inner: Box::new(named_type("Context", &span)),
-            span: span.clone(),
-        },
-        default: None,
-        span: span.clone(),
-    };
-    let poll_method = FuncDef {
-        visibility: Visibility::Public,
-        is_async: false,
-        self_mode: Some(SelfMode::Mutable),
-        is_class_method: false,
-        name: "poll".to_string(),
-        generic_params: None,
-        params: vec![cx_param],
-        return_type: Some(poll_return_type(&return_type, &span)),
-        where_clause: None,
-        body: poll_body,
-        doc_comments: Vec::new(),
-        span: span.clone(),
-    };
-
-    let include_future = InnerImpl {
-        is_unsafe: false,
-        negative_trait: false,
-        trait_name: TypePath {
-            segments: vec!["Future".to_string()],
-            generic_args: None,
-            span: span.clone(),
-            rooted: false,
-        },
-        items: Vec::new(),
-        span: span.clone(),
-    };
-
-    let sm_class = ClassDef {
-        name: class_name.clone(),
-        generic_params: None,
-        parent: None,
+    Some(synthesize_future_class(
+        func,
+        class_name,
+        &return_type,
         fields,
-        methods: vec![init_method, poll_method],
-        inner_impls: vec![include_future],
-        derive_traits: Vec::new(),
-        layout: Vec::new(),
-        lib_decls: Vec::new(),
-        doc_comments: vec![format!(
+        init_body_stmts,
+        poll_body,
+        format!(
             " Compiler-synthesised Future state machine for `{}` (loop shape, {} phase(s)). Spec: docs/specs/syntax/async_lowering_loop_await.spec.md (Phase 3B unified Cfg lowering).",
             func.name,
             subs.len(),
-        )],
-        where_clause: None,
-        aliases: Vec::new(),
-        span: span.clone(),
-    };
-
-    // ── Phase 6 — wrapper fn ─────────────────────────────────────
-    let mut ctor_args: Vec<Expr> = Vec::new();
-    ctor_args.push(Expr {
-        kind: ExprKind::IntLiteral(0, None),
-        span: span.clone(),
-    });
-    for p in &func.params {
-        ctor_args.push(Expr {
-            kind: ExprKind::Identifier(p.name.clone()),
-            span: p.span.clone(),
-        });
-    }
-    let ctor_call = Expr {
-        kind: ExprKind::MethodCall {
-            object: Box::new(Expr {
-                kind: ExprKind::Identifier(class_name.clone()),
-                span: span.clone(),
-            }),
-            method: "new".to_string(),
-            generic_args: Vec::new(),
-            args: ctor_args,
-            block: None,
-        },
-        span: span.clone(),
-    };
-    let wrapper = FuncDef {
-        visibility: func.visibility,
-        is_async: false,
-        self_mode: func.self_mode,
-        is_class_method: func.is_class_method,
-        name: func.name.clone(),
-        generic_params: func.generic_params.clone(),
-        params: func.params.clone(),
-        return_type: Some(named_type(&class_name, &span)),
-        where_clause: func.where_clause.clone(),
-        body: Block {
-            statements: vec![Statement::Expression(ctor_call)],
-            span: span.clone(),
-        },
-        doc_comments: func.doc_comments.clone(),
-        span: span.clone(),
-    };
-
-    Some((wrapper, sm_class))
+        ),
+    ))
 }
 
 /// Unified loop poll-body builder for N>=1 `.await`s per iteration,
@@ -1256,15 +1138,6 @@ fn build_loop_poll_body_cfg(
     };
     let post_last_rewritten = rewrite_stmts(post_last_await_stmts);
     let post_loop_rewritten = rewrite_stmts(post_loop_stmts);
-
-    let poll_pending = |span: &Span| Expr {
-        kind: ExprKind::EnumVariant {
-            type_path: vec!["Poll".to_string()],
-            variant: "Pending".to_string(),
-            args: Vec::new(),
-        },
-        span: span.clone(),
-    };
 
     // Outer guard: if __state != 0 return Pending
     let outer_guard = Expr {
@@ -1433,6 +1306,19 @@ fn build_loop_poll_body_cfg(
 
         // Ready arm: self.<binding> = v; __sub_ready_i = 0; then either
         // (last phase) post-last-await + __phase = 0, or (else) __phase = i+1.
+        //
+        // NOTE — `__sub_i` (the just-completed sub-future) is deliberately NOT
+        // dropped/freed here. A future that returned Ready has had its Output
+        // moved out (into `v`), so running its `def drop` would free a moved-out
+        // payload — the completed-future-leak discipline shared with the scheduler
+        // pump, the Race winner, and Stream's source. Its heap block leaks until
+        // the next iteration overwrites `__sub_i` (the `__sub_ready_i == 0`
+        // re-init guard). Reclaiming it safely needs a per-future "completed →
+        // free-resources-but-not-payload" distinction the compiler can't make in
+        // general (some futures' Output IS a heap pointer their def drop would
+        // free → UAF, exactly the Race-winner case). So a drop-before-overwrite
+        // "fix" would escalate this BOUNDED leak into a UAF — it is a v2 design
+        // item (typed completion-drop), not a quick fix.
         let mut ready_arm_stmts: Vec<Statement> = Vec::new();
         ready_arm_stmts.push(Statement::Let(LetBinding {
             mutable: false,
@@ -1674,18 +1560,7 @@ fn build_loop_poll_body_cfg(
         kind: ExprKind::IntLiteral(0, None),
         span: span.clone(),
     });
-    let poll_ready_with_tail = Expr {
-        kind: ExprKind::EnumVariant {
-            type_path: vec!["Poll".to_string()],
-            variant: "Ready".to_string(),
-            args: vec![FieldArg {
-                name: None,
-                value: tail_expr,
-                span: span.clone(),
-            }],
-        },
-        span: span.clone(),
-    };
+    let poll_ready_with_tail = poll_ready(tail_expr, span);
     let mut ready_branch_stmts: Vec<Statement> = tail_post_stmts;
     ready_branch_stmts.push(Statement::Expression(poll_ready_with_tail));
 
@@ -1876,6 +1751,7 @@ fn describe_awaitee(
                 }
                 let awaitee_ctor = Expr {
                     kind: ExprKind::MethodCall {
+                        parens: true,
                         object: Box::new(Expr {
                             kind: ExprKind::Identifier(sub_class_name.clone()),
                             span: span.clone(),
@@ -1913,6 +1789,7 @@ fn describe_awaitee(
     // Generic args on the receiver or on the method are not supported
     // in this milestone — the awaitee resolution is name-based.
     if let ExprKind::MethodCall {
+        parens: _,
         object,
         method,
         generic_args,
@@ -1974,6 +1851,7 @@ fn describe_awaitee(
         }
         let awaitee_ctor = Expr {
             kind: ExprKind::MethodCall {
+                parens: true,
                 object: Box::new(rewritten_receiver),
                 method: method.clone(),
                 generic_args: Vec::new(),
@@ -2032,18 +1910,7 @@ fn build_linear_state_dispatch(
     };
 
     // Final terminal arm: Poll.Ready(tail).
-    let terminal_ready = Expr {
-        kind: ExprKind::EnumVariant {
-            type_path: vec!["Poll".to_string()],
-            variant: "Ready".to_string(),
-            args: vec![FieldArg {
-                name: None,
-                value: tail_expr,
-                span: span.clone(),
-            }],
-        },
-        span: span.clone(),
-    };
+    let terminal_ready = poll_ready(tail_expr, span);
 
     // For each state i (last → first), build the arm body.
     //
@@ -2093,14 +1960,7 @@ fn build_linear_state_dispatch(
             terminal_ready.clone()
         } else {
             // Poll.Pending (re-poll on next call)
-            Expr {
-                kind: ExprKind::EnumVariant {
-                    type_path: vec!["Poll".to_string()],
-                    variant: "Pending".to_string(),
-                    args: Vec::new(),
-                },
-                span: span.clone(),
-            }
+            poll_pending(span)
         };
         let ready_block = Block {
             statements: vec![
@@ -2141,14 +2001,7 @@ fn build_linear_state_dispatch(
                             span: span.clone(),
                         },
                         guard: None,
-                        body: MatchArmBody::Expr(Expr {
-                            kind: ExprKind::EnumVariant {
-                                type_path: vec!["Poll".to_string()],
-                                variant: "Pending".to_string(),
-                                args: Vec::new(),
-                            },
-                            span: span.clone(),
-                        }),
+                        body: MatchArmBody::Expr(poll_pending(span)),
                         span: span.clone(),
                     },
                 ],
@@ -2170,14 +2023,7 @@ fn build_linear_state_dispatch(
     //   else
     //     Poll.Pending
     //   end
-    let else_pending = Expr {
-        kind: ExprKind::EnumVariant {
-            type_path: vec!["Poll".to_string()],
-            variant: "Pending".to_string(),
-            args: Vec::new(),
-        },
-        span: span.clone(),
-    };
+    let else_pending = poll_pending(span);
 
     let make_eq = |i: i64| Expr {
         kind: ExprKind::BinaryOp {
@@ -2227,10 +2073,12 @@ fn build_linear_state_dispatch(
 }
 
 /// Return a default-value Expr for a type expression, suitable for
-/// placeholder-initialising a hoisted local in `init`. v1 supports
-/// numeric and Bool defaults only; other types cause the lowering to
-/// bail (the user's await-result type must support a placeholder
-/// today — the proper fix is `Option[T]`-wrapping in v2).
+/// placeholder-initialising a hoisted local in `init`. Every primitive
+/// registered in `resolve/stdlib/primitives.rs` has one (sized numerics
+/// carry their literal suffix, since an unsuffixed literal types as
+/// `Int`/`Float`), plus `Unit`, `Option[T]` and `Result[T, E]`. Other
+/// types get no placeholder (the user's await-result type must support
+/// one today; the general fix is `Option[T]`-wrapping).
 fn default_value_for_type(ty: &TypeExpr, span: &Span) -> Option<Expr> {
     // Unit type — `()` written as a tuple of zero elements, OR as the
     // bare named type `Unit`. Task #21: enables awaitees whose Future
@@ -2246,28 +2094,36 @@ fn default_value_for_type(ty: &TypeExpr, span: &Span) -> Option<Expr> {
     }
     if let TypeExpr::Named(path) = ty {
         if path.segments.len() == 1 {
+            // Mirrors the closed primitive set in `resolve/stdlib/primitives.rs`.
+            let int = |suffix| Some(ExprKind::IntLiteral(0, suffix));
+            let float = |suffix| Some(ExprKind::FloatLiteral(0.0, suffix));
             let scalar = match path.segments[0].as_str() {
-                "Int" | "I8" | "I16" | "I32" | "I64" | "U8" | "U16" | "U32" | "U64" | "USize"
-                | "ISize" => Some(Expr {
-                    kind: ExprKind::IntLiteral(0, None),
-                    span: span.clone(),
-                }),
-                "Bool" => Some(Expr {
-                    kind: ExprKind::BoolLiteral(false),
-                    span: span.clone(),
-                }),
-                "Float" | "F32" | "F64" => Some(Expr {
-                    kind: ExprKind::FloatLiteral(0.0, None),
-                    span: span.clone(),
-                }),
-                "Unit" => Some(Expr {
-                    kind: ExprKind::UnitLiteral,
-                    span: span.clone(),
-                }),
+                "Int" => int(None),
+                "Int8" => int(Some(NumericSuffix::I8)),
+                "Int16" => int(Some(NumericSuffix::I16)),
+                "Int32" => int(Some(NumericSuffix::I32)),
+                "Int64" => int(Some(NumericSuffix::I64)),
+                "UInt" => int(Some(NumericSuffix::U)),
+                "UInt8" => int(Some(NumericSuffix::U8)),
+                "UInt16" => int(Some(NumericSuffix::U16)),
+                "UInt32" => int(Some(NumericSuffix::U32)),
+                "UInt64" => int(Some(NumericSuffix::U64)),
+                "ISize" => int(Some(NumericSuffix::ISize)),
+                "USize" => int(Some(NumericSuffix::USize)),
+                "Float" => float(None),
+                "Float32" => float(Some(NumericSuffix::F32)),
+                "Float64" => float(Some(NumericSuffix::F64)),
+                "Bool" => Some(ExprKind::BoolLiteral(false)),
+                "Char" => Some(ExprKind::CharLiteral('\0')),
+                "String" => Some(ExprKind::StringLiteral(String::new())),
+                "Unit" => Some(ExprKind::UnitLiteral),
                 _ => None,
             };
-            if scalar.is_some() {
-                return scalar;
+            if let Some(kind) = scalar {
+                return Some(Expr {
+                    kind,
+                    span: span.clone(),
+                });
             }
             // Generic-wrapped defaults for the canonical Future Output
             // shapes — Option[T] and Result[T, E]. Without these, B2b
@@ -2344,6 +2200,7 @@ fn self_field(name: &str, span: &Span) -> Expr {
                 span: span.clone(),
             }),
             field: name.to_string(),
+            ivar: false,
         },
         span: span.clone(),
     }
@@ -2361,6 +2218,7 @@ fn self_field(name: &str, span: &Span) -> Expr {
 fn build_sub_poll_call(i: usize, span: &Span) -> Expr {
     Expr {
         kind: ExprKind::MethodCall {
+            parens: true,
             object: Box::new(Expr {
                 kind: ExprKind::BorrowMut(Box::new(self_field(&format!("__sub_{i}"), span))),
                 span: span.clone(),
@@ -2410,6 +2268,7 @@ impl VisitMut for ArgRefRewriter<'_> {
                         span: expr.span.clone(),
                     }),
                     field: name.clone(),
+                    ivar: false,
                 };
                 return;
             }
@@ -2441,7 +2300,36 @@ fn named_type(name: &str, span: &Span) -> TypeExpr {
         generic_args: None,
         span: span.clone(),
         rooted: false,
+        nilable: false,
     })
+}
+
+/// `Poll.Ready(<value>)`.
+fn poll_ready(value: Expr, span: &Span) -> Expr {
+    Expr {
+        kind: ExprKind::EnumVariant {
+            type_path: vec!["Poll".to_string()],
+            variant: "Ready".to_string(),
+            args: vec![FieldArg {
+                name: None,
+                value,
+                span: span.clone(),
+            }],
+        },
+        span: span.clone(),
+    }
+}
+
+/// `Poll.Pending`.
+fn poll_pending(span: &Span) -> Expr {
+    Expr {
+        kind: ExprKind::EnumVariant {
+            type_path: vec!["Poll".to_string()],
+            variant: "Pending".to_string(),
+            args: Vec::new(),
+        },
+        span: span.clone(),
+    }
 }
 
 /// `Poll[<inner>]` type expression for the poll method's return.
@@ -2451,6 +2339,7 @@ fn poll_return_type(inner: &TypeExpr, span: &Span) -> TypeExpr {
         generic_args: Some(vec![inner.clone()]),
         span: span.clone(),
         rooted: false,
+        nilable: false,
     })
 }
 
@@ -2682,7 +2571,7 @@ impl VisitMut for BlockOnRewriter {
 fn take_block_on_argument(expr: &mut Expr) -> Option<Expr> {
     let is_target = matches!(
         &expr.kind,
-        ExprKind::Call { callee, args, block: None }
+        ExprKind::Call { callee, args, block: None, .. }
             if matches!(&callee.kind, ExprKind::Identifier(name) if name == "block_on")
                 && args.len() == 1
     );
@@ -2762,6 +2651,7 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
                 span: span.clone(),
             }),
             field: "executor".to_string(),
+            ivar: false,
         },
         span: span.clone(),
     };
@@ -2780,6 +2670,7 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
     // (&var __block_on_fut_N).poll(&var __block_on_ctx_N)
     let poll_call = Expr {
         kind: ExprKind::MethodCall {
+            parens: true,
             object: Box::new(Expr {
                 kind: ExprKind::BorrowMut(Box::new(Expr {
                     kind: ExprKind::Identifier(fut_name.clone()),
@@ -2863,6 +2754,7 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
                 span: span.clone(),
             }),
             field: "yield_now".to_string(),
+            ivar: false,
         },
         span: span.clone(),
     };
@@ -2880,6 +2772,7 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
     // synthesis with no implicit self.
     let make_pump_call = || Expr {
         kind: ExprKind::Call {
+            parens: true,
             callee: Box::new(Expr {
                 kind: ExprKind::Identifier("ruxen_executor_pump_tasks".to_string()),
                 span: span.clone(),
@@ -2892,6 +2785,7 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
 
     let make_ready_nonempty_call = || Expr {
         kind: ExprKind::Call {
+            parens: true,
             callee: Box::new(Expr {
                 kind: ExprKind::Identifier("ruxen_executor_ready_nonempty".to_string()),
                 span: span.clone(),
@@ -3026,6 +2920,19 @@ fn build_block_on_loop(future_expr: Expr, n: u32, span: &Span) -> Expr {
     // The loop is the block's trailing expression — typeck infers its
     // type from break-with-value, so the block evaluates to the
     // future's Output type.
+    //
+    // §4.1 NARROW (Increment 1) note: we deliberately do NOT auto-emit
+    // `ruxen_executor_drain_remaining()` at block_on exit here. The
+    // v1 surface supports the legitimate "spawn in async, then hand-pump
+    // the queue from sync code AFTER block_on returns" pattern (fixture
+    // `task_spawn_move_by_ffi` / 728-style); an eager block_on-exit drain
+    // would free those still-queued tasks out from under the post-block_on
+    // pump loop. Increment 1 lands the DROP MECHANISM (the C drain calls
+    // `Drop_dynamic_drop` per still-queued future) and exposes
+    // `ruxen_executor_drain_remaining` as an explicit teardown call; the
+    // automatic block_on-exit/Scope-drop drain is a follow-up tied to the
+    // §4.2 Scope ownership model (which decides who OWNS spawned tasks).
+    // See docs/dev/concurrency-impl-plan.md Increment 1.
     let outer_block = Block {
         statements: vec![let_fut, let_ctx, Statement::Expression(loop_expr)],
         span: span.clone(),
@@ -3053,6 +2960,91 @@ mod tests {
         let toks = lx.tokenize().expect("lex");
         let mut p = crate::parser::Parser::new(toks);
         p.parse().expect("parse")
+    }
+
+    /// The `init` value assigned to `self.<binding>` in the synthesised
+    /// state machine `class_name`, if any.
+    fn binding_placeholder(program: &Program, class_name: &str, binding: &str) -> Option<ExprKind> {
+        let class = program.items.iter().find_map(|item| match item {
+            TopLevelItem::Class(c) if c.name == class_name => Some(c),
+            _ => None,
+        })?;
+        let init = class.methods.iter().find(|m| m.name == "init")?;
+        init.body.statements.iter().find_map(|stmt| match stmt {
+            Statement::Expression(Expr {
+                kind: ExprKind::Assign { target, value },
+                ..
+            }) if matches!(&target.kind, ExprKind::FieldAccess { field, .. } if field == binding) => {
+                Some(value.kind.clone())
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn await_bindings_of_sized_char_and_string_outputs_get_placeholders() {
+        // F-42: the placeholder table spelled the numeric types as literal
+        // suffixes (`I32`, `F64`), so an `Int32`, `Char` or `String` await
+        // binding field was left without an `init` value.
+        let mut program = parse_program(
+            r#"
+            class IntF
+              include Future
+              type Output = Int32
+              def self.make -> IntF
+                IntF.new
+              end
+              def var poll(cx: &var Context) -> Poll[Int32]
+                Poll.Ready(1i32)
+              end
+            end
+            class CharF
+              include Future
+              type Output = Char
+              def self.make -> CharF
+                CharF.new
+              end
+              def var poll(cx: &var Context) -> Poll[Char]
+                Poll.Ready(?z)
+              end
+            end
+            class StrF
+              include Future
+              type Output = String
+              def self.make -> StrF
+                StrF.new
+              end
+              def var poll(cx: &var Context) -> Poll[String]
+                Poll.Ready("s")
+              end
+            end
+            async def get_int -> Int32
+              let v = IntF.make().await
+              v
+            end
+            async def get_char -> Char
+              let c = CharF.make().await
+              c
+            end
+            async def get_str -> String
+              let s = StrF.make().await
+              s
+            end
+        "#,
+        );
+        lower_async_defs(&mut program);
+        assert!(matches!(
+            binding_placeholder(&program, "__GetIntFuture", "v"),
+            Some(ExprKind::IntLiteral(0, Some(NumericSuffix::I32)))
+        ));
+        assert!(matches!(
+            binding_placeholder(&program, "__GetCharFuture", "c"),
+            Some(ExprKind::CharLiteral('\0'))
+        ));
+        assert!(matches!(
+            binding_placeholder(&program, "__GetStrFuture", "s"),
+            Some(ExprKind::StringLiteral(text)) if text.is_empty()
+        ));
     }
 
     /// Counts residual `block_on(..)` calls anywhere in a program via

@@ -13,6 +13,8 @@ class RegexError
     def message as "ruxen_regex_error_message" -> String
     ## Byte offset into the pattern where compilation failed.
     def offset as "ruxen_regex_error_offset" -> Int
+    ## Frees the C-side error message when the RegexError goes out of scope.
+    def drop as "ruxen_regex_error_drop" -> nil
   end
 end
 
@@ -48,6 +50,10 @@ class Match
 
     ## All successful named captures.
     def named_groups as "ruxen_match_named_groups" -> Hash[String, String]
+
+    ## Frees the C-side subject, ovector and name-table copies when the
+    ## Match goes out of scope.
+    def drop as "ruxen_match_drop" -> nil
   end
 end
 
@@ -80,5 +86,8 @@ class Regex
     ## Split `text` at every match. Empty trailing-match segments
     ## are dropped (matches Ruby / JS behaviour).
     def split as "ruxen_regex_split"(text: &String) -> Array[String]
+
+    ## Frees the compiled PCRE2 pattern when the Regex goes out of scope.
+    def drop as "ruxen_regex_drop" -> nil
   end
 end

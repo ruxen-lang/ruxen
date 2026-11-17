@@ -1,0 +1,65 @@
+## Increment 2 partial-init guard for the LOOP shape (§4.1 risk 2). A
+## LOOP-shaped `async def` lowers to a state machine whose `__sub_i` fields
+## are constructed LAZILY inside poll (init only zeroes `__sub_ready_i`),
+## unlike the linear shape which builds them eagerly in init. So a
+## loop-shaped future drained BEFORE its first pump has a ZERO `__sub_0`.
+##
+## The synthesised `<Future>_drop` must NULL-GUARD each sub-future
+## (`if self.__sub_i != 0`) before calling Drop_dynamic_drop — otherwise it
+## would dispatch through a NULL class_info pointer and CRASH. Here we spawn
+## a loop future and drain it WITHOUT ever pumping, so __sub_0 is still zero:
+## the program must exit cleanly and print NOTHING from the sub-future's drop
+## (it was never constructed — nothing to clean up).
+##
+## Pre-fix (unconditional Drop_dynamic_drop(self.__sub_0)) this null-derefs.
+
+class Tick
+  ticks: Int
+  payload: Int
+  include Future
+  type Output = Int
+
+  def init(t: Int, p: Int)
+    self.ticks = t
+    self.payload = p
+  end
+
+  def self.make(t: Int, p: Int) -> Tick
+    Tick.new(t, p)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    if self.ticks == 0
+      Poll.Ready(self.payload)
+    else
+      self.ticks = self.ticks - 1
+      Poll.Pending
+    end
+  end
+
+  def drop
+    # Would print if a constructed Tick were dropped. Must NOT fire here:
+    # the loop future is drained before its first pump, so __sub_0 is zero.
+    puts "Tick dropped payload=#{self.payload}"
+  end
+end
+
+## Loop-shaped state machine: __sub_0 constructed lazily on first poll.
+async def loop_worker() -> Int
+  var i: Int = 0
+  var sum: Int = 0
+  while i < 2
+    let a = Tick.make(1, 10).await
+    sum = sum + a
+    i = i + 1
+  end
+  sum
+end
+
+def main
+  let h = Task.spawn_raw(loop_worker())
+  # Drain WITHOUT pumping: __sub_0 is still zero (never constructed).
+  puts "spawned"
+  ruxen_executor_drain_remaining()
+  puts "drained"
+end

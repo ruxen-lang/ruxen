@@ -9,27 +9,14 @@
 //! bootstrap merge. Adding a new stdlib package = one line in
 //! BOOTSTRAP_FILES; `use std.<new>.X` resolves automatically.
 //!
-//! SYNTHETIC_STD_SUBMODULES carries the namespaces that do NOT have
-//! a same-named bootstrap package — `thread` and `signal` re-export
-//! sync.rx's bare-fn shims (`sleep`, `signal_install_sigint`,
-//! `signal_received_sigint`) under the legacy import paths
-//! `use std.thread.sleep` / `use std.signal.*`. The resolver's
-//! auto-population skips them silently (no matching package in
-//! `bootstrap_auto_packages`) and they stay empty modules — fine
-//! for namespace tokenisation; callers go through the global-prelude
-//! entries for the actual fn resolution.
-//!
-//! Ordering: bootstrap-package basenames first (in BOOTSTRAP_FILES
-//! order), then synthetic. Duplicates between the two sets are
-//! dropped (the synthetic list wins only if the name is unique).
+//! Every `std.<pkg>` submodule comes from a bootstrap package; there
+//! are no synthetic namespaces.
 
 use crate::lexer::token::Span;
 use crate::parser::ast::Visibility;
 
 use super::super::symbols::*;
 use super::super::Resolver;
-
-const SYNTHETIC_STD_SUBMODULES: &[&str] = &["thread", "signal"];
 
 pub(super) fn register_modules(r: &mut Resolver) {
     let span = Span {
@@ -39,17 +26,10 @@ pub(super) fn register_modules(r: &mut Resolver) {
         column: 0,
     };
 
-    let bootstrap_pkg_names = crate::resolve::bootstrap::bootstrap_package_names();
-    let mut submodule_names: Vec<&str> =
-        Vec::with_capacity(bootstrap_pkg_names.len() + SYNTHETIC_STD_SUBMODULES.len());
-    for name in &bootstrap_pkg_names {
-        if !submodule_names.contains(name) {
-            submodule_names.push(*name);
-        }
-    }
-    for name in SYNTHETIC_STD_SUBMODULES {
-        if !submodule_names.contains(name) {
-            submodule_names.push(*name);
+    let mut submodule_names: Vec<&str> = Vec::new();
+    for name in crate::resolve::bootstrap::bootstrap_package_names() {
+        if !submodule_names.contains(&name) {
+            submodule_names.push(name);
         }
     }
     let std_items: Vec<_> = submodule_names

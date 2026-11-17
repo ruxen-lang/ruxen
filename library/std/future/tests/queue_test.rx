@@ -1,0 +1,112 @@
+async def producer_one(tx: AsyncSender, value: Int) -> Int
+  let _a = tx.send(value).await
+  0
+end
+
+async def sum_three(rx: AsyncReceiver) -> Int
+  let r1 = rx.recv().await
+  let r2 = rx.recv().await
+  let r3 = rx.recv().await
+  unwrap_or_neg(r1) + unwrap_or_neg(r2) + unwrap_or_neg(r3)
+end
+
+async def consumer_one(rx: AsyncReceiver) -> Int
+  let _r = rx.recv().await
+  0
+end
+
+async def producer_two(tx: AsyncSender) -> Int
+  let a = tx.send(100).await
+  let b = tx.send(200).await
+  acked(a) + acked(b)
+end
+
+async def send_four_recv_two(tx: AsyncSender, rx: AsyncReceiver) -> Int
+  let _1 = tx.send(1).await
+  let _2 = tx.send(2).await
+  let _3 = tx.send(3).await
+  let _4 = tx.send(4).await
+  let a = rx.recv().await
+  let b = rx.recv().await
+  unwrap_or_neg(a) + unwrap_or_neg(b)
+end
+
+async def recv_closed(rx: AsyncReceiver) -> Int
+  let r = rx.recv().await
+  match r
+    Ok(v) -> v
+    Err(_) -> 1
+  end
+end
+
+async def send_closed(tx: AsyncSender) -> Int
+  let r = tx.send(99).await
+  match r
+    Ok(_) -> 0
+    Err(_) -> 1
+  end
+end
+
+def unwrap_or_neg(r: Result[Int, QueueError]) -> Int
+  match r
+    Ok(v) -> v
+    Err(_) -> -1
+  end
+end
+
+def acked(r: Result[Int, QueueError]) -> Int
+  match r
+    Ok(_) -> 1
+    Err(_) -> 0
+  end
+end
+
+Tester.describe("Queue") do |t: &var Tester|
+  t.it("parks the receiver until producers send") do
+    var ends = Queue.bounded(4, Overflow.Suspend)
+    let rx = ends.receiver
+    let tx1 = ends.sender
+    let tx2 = tx1.share
+    let tx3 = tx1.share
+    let _h1 = Task.spawn_raw(producer_one(tx1, 10))
+    let _h2 = Task.spawn_raw(producer_one(tx2, 20))
+    let _h3 = Task.spawn_raw(producer_one(tx3, 30))
+    t.expect(block_on(sum_three(rx))).to_eq(60)
+  end
+
+  t.it("parks a sender on a full queue until the receiver drains it") do
+    var ends = Queue.bounded(1, Overflow.Suspend)
+    let tx = ends.sender
+    let rx = ends.receiver
+    let _h = Task.spawn_raw(consumer_one(rx))
+    t.expect(block_on(producer_two(tx))).to_eq(2)
+  end
+
+  t.it("drops the oldest item on overflow with DropOldest") do
+    var ends = Queue.bounded(2, Overflow.DropOldest)
+    let tx = ends.sender
+    let rx = ends.receiver
+    t.expect(block_on(send_four_recv_two(tx, rx))).to_eq(7)
+  end
+
+  t.it("drops the newest item on overflow with DropNewest") do
+    var ends = Queue.bounded(2, Overflow.DropNewest)
+    let tx = ends.sender
+    let rx = ends.receiver
+    t.expect(block_on(send_four_recv_two(tx, rx))).to_eq(3)
+  end
+
+  t.it("fails recv once the sender side is closed") do
+    let qp = ruxen_queue_new(2, Overflow.Suspend)
+    let rx = AsyncReceiver.new(qp)
+    let _close = ruxen_queue_sender_drop(qp)
+    t.expect(block_on(recv_closed(rx))).to_eq(1)
+  end
+
+  t.it("fails send once the receiver side is closed") do
+    let qp = ruxen_queue_new(1, Overflow.Suspend)
+    let tx = AsyncSender.new(qp)
+    let _close = ruxen_queue_receiver_drop(qp)
+    t.expect(block_on(send_closed(tx))).to_eq(1)
+  end
+end

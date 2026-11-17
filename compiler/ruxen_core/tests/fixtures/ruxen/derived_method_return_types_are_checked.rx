@@ -1,0 +1,19 @@
+struct P
+  a: Int
+end
+
+class K
+  a: Int
+
+  def init(@a: Int)
+  end
+end
+
+def main
+  let p = P.new(1)
+  let k = K.new(1)
+  let h: String = p.hash_code
+  let e: Int = k.eq(K.new(1))
+  let o: String = k.cmp(K.new(2))
+  puts h
+end

@@ -2,7 +2,7 @@
 
 Status: Accepted (2026-06-11)
 Branch: `feat/drop-elaboration`
-Scope: `compiler/ruxen_core/src/{hir/types.rs, resolve/{exprs.rs,types.rs}, typeck/{unify.rs,coerce.rs,mixins.rs,infer/*}, mir/lower/{emit.rs,expr/*,drops.rs,mod.rs,type_helpers.rs}, codegen/{layout.rs,cranelift/helpers.rs,llvm/types.rs}, borrow_check/lifetimes.rs}`, `src/ruxen_repl/src/display.rs`, `library/std/string/src/string.rx`, `docs/errors/E0726.md`, `docs/tutorial/29_*`, `docs/specs/stdlib/string.spec.md`
+Scope: `compiler/ruxen_core/src/{hir/types.rs, resolve/{exprs.rs,types.rs}, typeck/{unify.rs,coerce.rs,mixins.rs,infer/*}, mir/lower/{emit.rs,expr/*,drops.rs,mod.rs,type_helpers.rs}, codegen/{layout.rs,cranelift/helpers.rs,llvm/types.rs}, borrow_check/lifetimes.rs}`, `src/ruxen_repl/src/display.rs`, `library/std/string/src/string.rx`, `docs/errors/E0730.md`, `docs/tutorial/29_*`, `docs/specs/stdlib/string.spec.md`
 
 ## TL;DR
 
@@ -106,14 +106,14 @@ or fmt surface can print `str` after this change (the `mixins.rs:1129` and
 
 ### 3. Surface spelling `str` / `&str` — HARD REMOVAL (option a)
 
-`str` as a type spelling **errors** with new code **E0726** and the hint:
+`str` as a type spelling **errors** with new code **E0730** and the hint:
 "`str` is not a type in Ruxen — use `String` for an owned string or `&String`
 for a borrowed reference." Rationale: app impact is 4 real sites (all in
 `canvas`, swept post-install) + 0 in rondo + 1 comment in quiver; stdlib has 0
 real sites. A deprecation alias would add a warning path and a second removal
 task for no benefit at this blast radius. The USER said remove; the audit says
 removal is cheap. `resolve/types.rs:669` changes from `return Ty::Str` to
-emitting E0726 and recovering with `Ty::Error`.
+emitting E0730 and recovering with `Ty::Error`.
 
 `&"literal"` (previously `&&str`): with one string ref type, `&"x"` is a borrow
 of an owned-`String` literal → a clean **`&String`**. The bare-literal idiom
@@ -147,12 +147,12 @@ unchanged — both were already `const char*`.
 2. **Eliminate `Ty::Str`** — fold all arms to `String`/`Ref(String)`/`RawPtr(Char)`;
    delete the variant, the unify bridge, the coerce arm, the Display/home arms.
 3. **Stdlib `&str` comment sweep** + embedded lockstep.
-4. **Surface `str` → E0726** + `docs/errors/E0726.md` + registry entry.
+4. **Surface `str` → E0730** + `docs/errors/E0730.md` + registry entry.
 5. **Diagnostics/REPL/LSP/fmt never say `str`** + tutorial 29 + string.spec.md.
 
 The staged spine that may NOT slip (honest-scope clause): (1) literals born
 `String` with leak/double-free-free pins, (2) stdlib swept, (3) no user-visible
-surface prints `str`. Surface-spelling E0726 and full variant elimination ship
+surface prints `str`. Surface-spelling E0730 and full variant elimination ship
 together here unless the gate reveals a blast radius requiring a precise
 TASKS.md filing — never half-wired, never a silent behavior change.
 

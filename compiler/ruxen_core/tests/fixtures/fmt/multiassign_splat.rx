@@ -1,0 +1,5 @@
+def main
+var first=0
+var rest:Array[Int]=[]
+first,*rest=[1,2,3]
+end

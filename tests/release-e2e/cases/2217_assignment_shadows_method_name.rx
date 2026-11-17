@@ -1,0 +1,14 @@
+# Ruby: assigning to a name declares a local even when a method of that name
+# exists. `p = "x"` shadows `Kernel#p` at the top level and inside a method;
+# later reads of `p` see the String, not the method.
+
+def f -> nil
+  p = "in-method"
+  puts p
+end
+
+p = "top-level"
+puts p
+p = "reassigned"
+puts p
+f

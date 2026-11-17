@@ -1,0 +1,114 @@
+# ---- from 1720_hash_int_key_above_page ----
+# B73: `Hash[Int, V]` must work for EVERY integer key, not just small ones.
+#
+# The pre-B73 runtime decided a table's key kind on the first insert by
+# calling `ruxen_hash_looks_like_string`, which dereferenced the key value
+# as a `char*` and scanned up to 256 bytes for a NUL. It short-circuited
+# below 0x1000, so `insert(7, …)` and `insert(4095, …)` worked while
+# `insert(5000, …)` and `insert(100000, …)` died with SIGSEGV (exit 139).
+# Integer keys are ordinary — ids, ports, status codes, years — so that
+# was a crash on plausible input.
+#
+# The key kind now comes from the static key type, so 5000 is just a
+# number. Both sides of the old 4096 boundary are pinned here so a
+# regression that merely WIDENS the short-circuit range still fails.
+def run_1720
+  var h: Hash[Int, Int] = Hash.new
+  h.insert(7, 1)
+  h.insert(4095, 2)
+  h.insert(4096, 3)
+  h.insert(5000, 4)
+  h.insert(100000, 5)
+  h.insert(9007199254740993, 6)
+  puts "#{h.size}"
+  puts "#{h.key?(7)}"
+  puts "#{h.key?(4095)}"
+  puts "#{h.key?(5000)}"
+  puts "#{h.key?(100000)}"
+  puts "#{h.key?(9007199254740993)}"
+  puts "#{h.key?(4097)}"
+  match h.get(100000)
+    Some(v) -> puts "got #{v}"
+    nil -> puts "missing"
+  end
+end
+
+# ---- from 1721_hash_string_key_contract ----
+# B73: `Hash[String, V]` keeps comparing keys by CONTENT, not by pointer.
+#
+# This is the contract the key-kind protocol had to preserve while it
+# replaced the memory-probing heuristic. A string key must still be found
+# through a DIFFERENT `String` value with the same bytes (interpolation
+# builds a fresh buffer, so `"al" + "pha"` is not the literal's pointer),
+# and a non-matching lookup must still miss.
+def run_1721
+  var h: Hash[String, Int] = Hash.new
+  h.insert("alpha", 1)
+  h.insert("beta", 2)
+  h.insert("alpha", 3)
+  puts "#{h.size}"
+  puts "#{h.key?("alpha")}"
+  puts "#{h.key?("gamma")}"
+
+  # (`key?`/`get` take `K` by value, so each lookup gets its own copy.)
+  puts "#{h.key?("al" + "pha")}"
+  match h.get("al" + "pha")
+    Some(v) -> puts "got #{v}"
+    nil -> puts "missing"
+  end
+
+  # A map literal builds its table through a different lowering path than
+  # `Hash.new`; both must install the same descriptor.
+  let lit = { "x" => 10, "y" => 20 }
+  puts "#{lit.key?("x")}"
+  puts "#{lit.key?("z")}"
+end
+
+# ---- from 1722_hash_user_type_key ----
+# B73: a user type can BE a `Hash` key.
+#
+# Before the key-kind protocol the C table compared every key by object
+# identity, so `h.insert(Point.new(1, "a"), …)` followed by
+# `h.key?(Point.new(1, "a"))` was `false` — the `Hashable` mixin's
+# `hash_code` and the structural `==` derive were never consulted. The
+# compiler now hands the runtime `Point_hash_code` and `Point_eq`, so
+# equal-by-value keys land in the same bucket and compare equal.
+#
+# Pinned here: dedup on re-insert, a hit through a distinct instance, and
+# TWO kinds of miss (same first field, different second; nothing alike) so
+# a "hash everything to one bucket and return true" regression fails.
+struct Point
+  x: Int
+  y: String
+end
+
+def run_1722
+  var h: Hash[Point, Int] = Hash.new
+  h.insert(Point.new(1, "a"), 10)
+  h.insert(Point.new(2, "b"), 20)
+  h.insert(Point.new(1, "a"), 11)
+  puts "#{h.size}"
+  puts "#{h.key?(Point.new(1, "a"))}"
+  puts "#{h.key?(Point.new(2, "b"))}"
+  puts "#{h.key?(Point.new(1, "z"))}"
+  puts "#{h.key?(Point.new(9, "q"))}"
+  match h.get(Point.new(1, "a"))
+    Some(v) -> puts "got #{v}"
+    nil -> puts "missing"
+  end
+
+  # A `Set` keys on its ELEMENT, so the same descriptor drives dedup.
+  var s: Set[Point] = Set.new
+  s.insert(Point.new(3, "c"))
+  s.insert(Point.new(3, "c"))
+  s.insert(Point.new(4, "d"))
+  puts "#{s.size}"
+  puts "#{s.include?(Point.new(3, "c"))}"
+  puts "#{s.include?(Point.new(5, "e"))}"
+end
+
+def main
+  run_1720
+  run_1721
+  run_1722
+end

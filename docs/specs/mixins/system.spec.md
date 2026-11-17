@@ -6,7 +6,15 @@
 [docs/requirements/tier2_06_any_mixin.md](../../requirements/tier2_06_any_mixin.md).
 
 **Status:** shipped through Phase 2 #02-#04 plus Tier-2 surface
-(assoc types, multi-bound, `any Mixin` existentials).
+(assoc types, multi-bound, `any Mixin` existentials) [implemented].
+
+Spelling today: a mixin is declared with `mixin Name ... end`, which is
+[deprecated]; the Ruby form is `module Name ... end` with `include Name`
+[planned](../../../TODO.md#t-module-mixins). Generic bounds are written `[T: Bound]`
+today, also [deprecated]; the RBS form `[T < Bound]` is
+[planned](../../../TODO.md#t-d7-respell). The examples below are the working spellings.
+Owner decision D5 a: an `include` keeps its generic arguments in HIR
+(`include Into[X]` loses `X` today) [planned](../../../TODO.md#t-d5).
 
 This spec covers Ruxen's user-facing mixin surface: declaring mixins,
 adopting them with `include`, default methods, mixin inheritance,
@@ -18,7 +26,9 @@ Implicit includes are spec'd separately in
 
 ## B1 — Mixin declaration with required method signature
 
-```ruxen
+Works today, [deprecated] `mixin` (replacement `module`, [planned](../../../TODO.md#t-module-mixins)):
+
+```ruby
 mixin Greeter
   def greet -> String
 end
@@ -29,15 +39,18 @@ a body.  No body required at the declaration site.
 
 ## B2 — `include Mixin` adopts the mixin in a class body
 
-```ruxen
+Works today, with the [deprecated] `def init` (replacement `def initialize`, [planned](../../../TODO.md#t-initialize)):
+
+```ruby
 class Person
   name: String
-  def init(@name: String) end
+  def init(@name: String)
+  end
 
   include Greeter
 
   def greet -> String
-    "hi, #{self.name}"
+    "hi, #{@name}"
   end
 end
 ```
@@ -49,7 +62,12 @@ mixin call site to it.
 
 ## B3 — Default methods in mixin body
 
-```ruxen
+A default calls another method of the mixin as `self.name` [implemented]; a
+bare `name` call there does not compile yet [planned](../../../TODO.md#t-implicit-self).
+
+Works today, [deprecated] `mixin` (replacement `module`, [planned](../../../TODO.md#t-module-mixins)):
+
+```ruby
 mixin Greeter
   def name -> String
   def greet -> String
@@ -66,16 +84,20 @@ The including class may redefine a defaulted method by writing its
 own `def greet`.  The class's definition takes precedence over the
 mixin's default body.
 
-Stacked-mixin ambiguity: if two included mixins each provide a
-default body for the same method name and the class itself defines
-no override, the compiler rejects with `E-MIX-AMBIGUOUS-DEFAULT` and
-requires the class to define its own implementation to disambiguate.
-(`super` inside the override calls the mixin's default body; see
-§3.4 of the canonical syntax spec.)
+Stacked-mixin ambiguity: the target is Ruby's rule, the module included
+last wins and the class's own method beats both [planned](../../../TODO.md#t-oq) (OQ-7).
+The old draft rejected the program with `E-MIX-AMBIGUOUS-DEFAULT`; that name
+was never registered. `super` inside an override, reaching the mixin's
+default body, is [planned](../../../TODO.md#t-super) (E1127 outside `init` today).
 
 ## B5 — Mixin inheritance: `mixin B: A`
 
-```ruxen
+`mixin B: A` is [deprecated]; the Ruby form is `include A` inside `module B`
+[planned](../../../TODO.md#t-module-mixins).
+
+Works today, [deprecated] `mixin` and `mixin B: A` (replacements above):
+
+```ruby
 mixin A
   def a -> Int
 end
@@ -91,10 +113,15 @@ both mixins are dispatchable on the including type.
 
 ## B6 — Associated types
 
-```ruxen
+`type Item` in a mixin and `type Item = Int` in the class are [implemented]
+(OQ-11 asks whether they stay).
+
+Works today, [deprecated] `mixin` (replacement `module`, [planned](../../../TODO.md#t-module-mixins)):
+
+```ruby
 mixin Container
   type Item
-  def first(self) -> Self.Item
+  def first -> Self.Item
 end
 ```
 
@@ -103,7 +130,9 @@ type flows through.
 
 ## B7 — `some Mixin` parameter position
 
-```ruxen
+Example [implemented] (OQ-11; `some Mixin` as a return type is not accepted yet):
+
+```ruby
 def print_it(x: &some Greeter)
   puts x.greet
 end
@@ -116,7 +145,9 @@ Structural satisfaction is accepted for `some Mixin`.
 
 ## B8 — `any Mixin` parameter position
 
-```ruxen
+Example [implemented] (OQ-11):
+
+```ruby
 def print_it(x: &any Greeter)
   puts x.greet
 end
@@ -129,12 +160,19 @@ conforming types — required for heterogeneous collections.
 `any Mixin` requires an explicit `include Greeter` directive in the
 implementing class (structural match alone is not enough).  There
 is no `&var some Mixin` or `&var any Mixin` form — to mutate
-through an existential, take ownership (`Box[any Greeter]`,
-`Shared[any Greeter]`, `SharedSync[any Greeter]`).
+through an existential, take ownership (`Box[any Greeter]` or
+`SharedSync[any Greeter]` [implemented]; `Shared[any Greeter]` once `Shared`
+exists [planned](../../../TODO.md#t-shared)).
 
 ## B9 — Multi-bound generics
 
-```ruxen
+The Ruby form is `[T < A & B]` [planned](../../../TODO.md#t-d7-respell), and the
+Rust-named `Display` and `Debug` give way to `to_s` and `inspect`
+[planned](../../../TODO.md#t-d6).
+
+Works today, [deprecated] `[T: A + B]` (replacement above):
+
+```ruby
 def show[T: Display + Debug](x: T) ...
 ```
 
@@ -142,19 +180,26 @@ The function may call methods from any of the bounded mixins on `x`.
 
 ## B10 — `where` clause syntax
 
-```ruxen
+Works today, [deprecated] `where` (replacement: bounds in the `[...]` list, [planned](../../../TODO.md#t-d7-respell)):
+
+```ruby
 def f[T](x: T) where T: Display + Hashable ...
 ```
 
 Equivalent to inline `T: Display + Hashable` but allows more
 elaborate bounds.  Per-method `where` clauses are written on the
-`def` header; conditional methods on a generic type body live in
-an `extension C[T] where T: B ... end` block (see §3.4a of the
-canonical syntax spec).
+`def` header; a method `where` bound on a class's type parameter
+(`def sum -> T where T: Add`) is the form that works today for that case
+(owner decision D7 b). Conditional methods on a generic type used to live in
+an `extension C[T] where T: B ... end` block, which is [deprecated]; the
+Ruby form is a bounded reopen, `class Box[T < Comparable] ... end`
+[planned](../../../TODO.md#t-oq) (OQ-6).
 
 ## B11 — Mixin with a class-level method
 
-```ruxen
+Works today, [deprecated] `mixin` (replacement `module`, [planned](../../../TODO.md#t-module-mixins)):
+
+```ruby
 mixin Empty
   def self.empty -> Self
 end

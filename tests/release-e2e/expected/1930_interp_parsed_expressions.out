@@ -1,0 +1,6 @@
+cmp=-1 half=5 rem=1
+nested=true
+call=hi! literal=#{w}
+spec=[  10]
+x=11
+x=12

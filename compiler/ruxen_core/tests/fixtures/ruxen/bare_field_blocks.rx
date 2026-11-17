@@ -1,0 +1,28 @@
+class Acc
+  x: Int
+
+  def init(@x: Int)
+  end
+
+  def in_do_block -> Int
+    total = 0
+    [1, 2].each do |i|
+      total = total + x
+    end
+    total
+  end
+
+  def in_brace_block -> Int
+    [1, 2].map { |i| i + x }.sum
+  end
+
+  def in_lambda -> Int
+    f = ->(i: Int) { i + x }
+    f.call(1)
+  end
+end
+
+acc = Acc.new(10)
+puts acc.in_do_block
+puts acc.in_brace_block
+puts acc.in_lambda

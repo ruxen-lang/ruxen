@@ -137,9 +137,10 @@ env-gated verification lane.
   or manifest key (both filed). Lowest-churn for the single-file `compile` path
   and directly testable; the directive parser is the staged remainder.
 - (Stage A) **Two hosted-only injections had to be suppressed for no_std to
-  link+run:** (1) the cranelift `ruxen_env_init(argc,argv)` call injected into
-  `main` (gated on `!program.no_std` via a `CodeGen.no_std` field set from
-  `MirProgram::no_std`), and (2) `synthesize_primitive_fmt_displays`
+  link+run:** (1) the `ruxen_env_init(argc,argv)` call at the top of `main`
+  (now emitted once by MIR lowering in `mir/lower/function.rs`, gated on
+  `!self.no_std`, so both backends inherit it; it was a Cranelift-only
+  injection, which left LLVM no_std builds calling it), and (2) `synthesize_primitive_fmt_displays`
   (`Int_fmt`/`Char_fmt`/… reference `ruxen_int_to_string`/`Formatter_write_str`)
   — gated on `!self.no_std` via `Lowerer::new_no_std`. Both default false, so
   every hosted build is byte-unchanged.

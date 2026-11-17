@@ -1,0 +1,33 @@
+# Hash views over String keys and values: `to_a`, `for (k, v) in h` and
+# `each { |kv| }` borrow the hash's entries, and an owned Array of String
+# pairs turned into a Hash by `to_h` owns its own copies. Every owner is
+# dropped once. Hash order is unspecified, so the views print sums.
+def key(i: Int) -> String
+  "k-#{i}"
+end
+
+def value(i: Int) -> String
+  "v-#{i}"
+end
+
+def run -> nil
+  h = {key(1) => value(1)}
+  h[key(22)] = value(22)
+  pairs = h.to_a
+  puts(pairs[0].0.size + pairs[1].1.size)
+  total = 0
+  for (k, v) in h
+    total += k.size + v.size
+  end
+  puts(total)
+  seen = 0
+  h.each { |kv| seen += kv.0.size + kv.1.size }
+  puts(seen)
+  owned = [(key(3), value(3)), (key(4), value(4))]
+  back = owned.to_h
+  puts(back[key(3)])
+  puts(back[key(4)])
+  puts(owned[0].0)
+end
+
+run

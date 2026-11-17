@@ -1,0 +1,43 @@
+# A borrow of a temporary's field or result keeps the temporary alive while
+# the borrowing binding is used, then frees it once (TODO.md Decisions,
+# "Borrow of a temporary"; drop.spec B16; I-15 probes g1, g2, g3, g8).
+class U
+  name: String
+
+  def init(@name: String)
+  end
+
+  def label -> &String
+    @name
+  end
+end
+
+def mk(k: Int) -> U
+  U.new("made-#{k}")
+end
+
+def pick(u: &U) -> &String
+  u.name
+end
+
+def show(k: Int) -> nil
+  n = U.new("in-fn-#{k}").name
+  puts n
+end
+
+k = 3
+n = U.new("tmp-#{k}").name
+puts n
+m = mk(4).name
+puts m
+l = U.new("lbl-#{k}").label
+puts l
+show(5)
+x = pick(U.new("p-#{k}"))
+puts x
+i = 0
+while i < 3
+  w = U.new("loop-#{i}").name
+  puts w
+  i += 1
+end

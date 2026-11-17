@@ -1,0 +1,106 @@
+# §4.1 NARROW cancellation path layout pin
+# (docs/dev/concurrency-impl-plan.md Increment 1).
+#
+# A FUTURE class (runtime-dispatch via the `Future` async-protocol mixin)
+# that defines `def drop` gets a second `Drop` vtable appended INSIDE its
+# existing class_info struct (slot 1, after Future@slot0). This routes a
+# drained/cancelled future's drop through the class_info it already carries
+# — WITHOUT making `mixin Drop` global-dispatch and WITHOUT adding a header
+# to any non-future class.
+#
+# `mixin Future dispatch runtime` is declared inline so the fixture is
+# self-contained under the no-bootstrap `type_check` path the pin uses
+# (the gate keys on the mixin being NAMED `Future`).
+
+mixin Future dispatch runtime
+  def poll -> Int
+end
+
+# Future-shaped: runtime-dispatch Future + def drop → Future@slot0,
+# Drop@slot1 (the concrete Sentinel_drop).
+class Sentinel
+  payload: Int
+
+  def init(@payload: Int)
+  end
+
+  include Future
+
+  def poll -> Int
+    self.payload
+  end
+
+  def drop
+    nil
+  end
+end
+
+# Future WITHOUT a user def drop → still gets a Drop slot, but it points
+# at a synthesised no-op (NoDropFuture_drop_noop) so the uniform-slot
+# drain dispatch stays valid for futures that define no drop.
+class NoDropFuture
+  payload: Int
+
+  def init(@payload: Int)
+  end
+
+  include Future
+
+  def poll -> Int
+    self.payload
+  end
+end
+
+# Plain droppable class: def drop but NO runtime-dispatch mixin → it must
+# stay flat (no class_info header, no Drop vtable). Proves the narrow
+# path does NOT touch non-future class layout.
+class PlainResource
+  fd: Int
+
+  def init(@fd: Int)
+  end
+
+  def drop
+    nil
+  end
+end
+
+# §4.5 Increment 4: the Drop-vtable gate is widened to the `Stream`
+# async-protocol mixin too, so a stream ADAPTER can run its owned inner's
+# `def drop` via `Drop_dynamic_drop` (chain teardown). A STREAM class with
+# `def drop` gets [Stream@slot0, Drop@slot1] — the SAME uniform slot a
+# future uses (each has exactly one real runtime-dispatch mixin), so the
+# single Drop_dynamic_drop helper still reads slot 1 and the
+# singleton-slot assert stays satisfied. Declared inline (the gate keys on
+# the mixin being NAMED `Stream`).
+
+mixin Stream dispatch runtime
+  def poll_next -> Int
+end
+
+# Stream-shaped: runtime-dispatch Stream + def drop → Stream@slot0,
+# Drop@slot1 (the concrete StreamSentinel_drop).
+class StreamSentinel
+  payload: Int
+
+  def init(@payload: Int)
+  end
+
+  include Stream
+
+  def poll_next -> Int
+    self.payload
+  end
+
+  def drop
+    nil
+  end
+end
+
+def main
+  let s = Sentinel.new(7)
+  let n = NoDropFuture.new(9)
+  let p = PlainResource.new(3)
+  let st = StreamSentinel.new(5)
+  nil
+end

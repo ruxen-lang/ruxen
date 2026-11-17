@@ -1,0 +1,32 @@
+Tester.describe("String iteration") do |t: &var Tester|
+  t.it("chars yields one element per character") do
+    var count = 0
+    for _ch in "abc".chars
+      count += 1
+    end
+    t.expect(count).to_eq(3)
+  end
+
+  t.it("each_char, each_byte and each_line yield in order") do
+    var chars = ""
+    "abc".each_char do |c|
+      chars = chars + c + ","
+    end
+    t.expect(chars).to_eq("a,b,c,")
+    var bytes = ""
+    "hi".each_byte do |b|
+      bytes = bytes + "#{b},"
+    end
+    t.expect(bytes).to_eq("104,105,")
+    var lines = ""
+    "one\ntwo".each_line do |l|
+      lines = lines + l + "|"
+    end
+    t.expect(lines).to_eq("one|two|")
+    var empty = 0
+    "".each_char do |_c|
+      empty += 1
+    end
+    t.expect(empty).to_eq(0)
+  end
+end

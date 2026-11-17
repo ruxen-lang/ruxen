@@ -1,0 +1,30 @@
+# Pins Comparable's `clamp` default and Self-return substitution through a
+# mixin default: `clamp(min, max) -> &Self` returns a borrow of whichever of
+# `self`/`min`/`max` is in range, and the concrete receiver's fields are
+# reachable on the result (the abstract `Self: Comparable` is substituted to
+# the concrete class at the call site).
+class Rank
+  value: Int
+
+  include Comparable
+
+  def init(@value: Int)
+  end
+
+  def <=>(other: &Rank) -> Int
+    self.value <=> other.value
+  end
+end
+
+def main
+  let lo = Rank.new(10)
+  let hi = Rank.new(30)
+  let mid = Rank.new(20)
+  let below = Rank.new(5)
+  let above = Rank.new(50)
+  puts mid.clamp(lo, hi).value
+  puts below.clamp(lo, hi).value
+  puts above.clamp(lo, hi).value
+  puts lo.clamp(lo, hi).value
+  puts hi.clamp(lo, hi).value
+end

@@ -16,11 +16,21 @@ random seed.  Custom hashers and incremental builders are explicit
 v2 work; v1 ships exactly enough for `Hash[K, V]` and
 `Set[T]` to key on user types via implicit `include Hashable`.
 
+**Direction (owner decision D8 a).** The Ruby hash-key protocol replaces this
+mixin: value types get a structural `==`, hash keys use `hash` and `eql?`,
+`eql?` defaults to `==`, and `hash_code` becomes a [deprecated] alias of
+`hash`, [planned](../../../TODO.md#t-d8). Until then `Hashable` and `hash_code` below are
+the working surface [implemented]. Owner decision D1 a: `Hash#[]` and
+`#[]=` become ordinary `.rx` lib declarations, `[]=` through a declared
+mutable place accessor [planned](../../../TODO.md#t-d1).
+
 ---
 
 ## B1 — The `Hashable` mixin
 
-```ruxen
+Stdlib source, [deprecated] `mixin` (replacement `module`, [planned](../../../TODO.md#t-module-mixins)) and `hash_code` (replacement `hash`, above):
+
+```ruby
 mixin Hashable
   def hash_code -> Int
 end
@@ -31,17 +41,17 @@ end
 **Then** the result is a deterministic `Int` that depends only on
 the bytes of `x` reachable through `&T`.
 
-The mixin is registered as a built-in by `Resolver::register_builtins`
-(see `crates/ruxen-core/src/resolve/mod.rs:179-186`); user code
+The mixin is declared in `library/std/hash/src/lib.rx` and merged
+into every program by the stdlib bootstrap; user code
 needs no `import` to refer to it.
 
 ## B2 — Primitive keys hash via the runtime, not a user-callable method
 
 `Int`, `Int8`/`Int16`/`Int32`/`Int64`, `UInt8`/`UInt16`/`UInt32`/
-`UInt64`, `USize`/`ISize`, `Bool`, `Char`, `String`, and `&str` are
+`UInt64`, `USize`/`ISize`, `Bool`, `Char`, `String`, and `&String` are
 all valid `Hash` keys / `Set` elements: the runtime hashes
 them with a stable 64-bit FNV-style mix
-(`runtime/runtime.c::ruxen_hash_bits` for ints, `ruxen_hash_str` for
+(`library/std/hash/runtime/hash.c::ruxen_hash_bits` for ints, `ruxen_hash_str` for
 strings; bool / char widen into `ruxen_hash_bits`).
 
 In the v1 surface this is a runtime-internal capability — there is
@@ -67,19 +77,24 @@ Implicit `include Hashable` on a `struct` / `class` / `enum` synthesises
 `hash_code` by hashing each field in declaration order and folding
 the partial hashes through a `combine` mix.  Every field's type
 must itself be `Hashable`; the per-field validator at
-`crates/ruxen-core/src/implicit_includes/mod.rs::validate_per_field_traits`
+`compiler/ruxen_core/src/implicit_includes/mod.rs::validate_per_field_traits`
 emits **E0615** when any field violates the bound (e.g. a struct
 field of type `Array[Int]` rejects implicit `Hashable` because `Array`
 isn't `Hashable`).
 
-```ruxen
-struct Score
+Works today, with the [deprecated] `def init` (replacement `def initialize`, [planned](../../../TODO.md#t-initialize)):
+
+```ruby
+class Score
   player: String
   v: Int
   include Hashable
+
+  def init(@player: String, @v: Int)
+  end
 end
 
-let s = Score.new("alice", 42)
+s = Score.new("alice", 42)
 puts "#{s.hash_code}"   # prints a stable Int
 ```
 
@@ -100,17 +115,18 @@ mirroring the mixin dispatch the front-end performs.
 
 Any generic function with the bound resolves `.hash_code` against
 the mixin method, even when the receiver type is a user struct
-that gained the include implicitly:
+that gained the include implicitly.
 
-```ruxen
+Works today, [deprecated] bound `[T: Hashable]` (replacement `[T < Hashable]`, [planned](../../../TODO.md#t-d7-respell)):
+
+```ruby
 def hash_it[T: Hashable](a: &T) -> Int
   a.hash_code
 end
 ```
 
-This is the exact pattern pin-tested by
-`derive_hashable_dispatches_through_trait_bounds` in
-`tests/implicit_mixin_dispatch.rs`.
+This is the exact pattern pinned by e2e
+`2051_derived_ord_hashable_generic_bound.rx`.
 
 ## B6 — Hash code semantics
 
@@ -132,10 +148,10 @@ This is the exact pattern pin-tested by
 
 | Behaviour                                           | Test fn                                               | File                                         |
 |-----------------------------------------------------|-------------------------------------------------------|----------------------------------------------|
-| B1 / B5 — bound dispatches `hash_code` on user types with implicit include | `derive_hashable_dispatches_through_trait_bounds`     | `tests/implicit_mixin_dispatch.rs`             |
+| B1 / B5 — bound dispatches `hash_code` on user types with implicit include | e2e `2051_derived_ord_hashable_generic_bound.rx`      | `tests/release-e2e/cases/`                     |
 | B3 — implicit include rejects non-Hashable field (E0615) | `derive_hash_on_struct_with_non_hash_field_emits_e0615` | `tests/implicit_negatives.rs` (`NotHashable` fixture) |
 | B2 — primitive `String` / `Int` hash via runtime    | covered indirectly via `Hash[String, V]` / `Hash[Int, V]` insert + lookup pin tests | `tests/hashmap_*.rs`                         |
-| B2 v2 follow-up — `T: Hashable` dispatch for primitive `T` | `primitive_int_and_string_dispatch_through_hashable_bound` (`#[ignore]` pending v2) | `tests/implicit_mixin_dispatch.rs`             |
+| B2 v2 follow-up — `T: Hashable` dispatch for primitive `T` | none (link gap tracked in TODO.md Known issues)       | —                                              |
 | B4 — `Hash[K, V]` rejects non-Hashable K             | covered by `ty_is_valid_hash_key` rejection diags     | `tests/hashmap_*.rs`                         |
 
 The B6 stability claims are attested by the v1 release checklist

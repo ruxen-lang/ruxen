@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # 08 — Phase 3: HRTBs (T2.03) + `some Mixin` (T2.04, no specialization)
 
 > **Status: 🟡 Partial / deferred** (audited 2026-05-21). `some Mixin`

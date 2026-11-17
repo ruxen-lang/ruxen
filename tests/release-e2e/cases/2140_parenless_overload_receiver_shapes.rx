@@ -1,0 +1,66 @@
+# F-20: a call written without an argument list (`x.size`) of an overloaded
+# method calls the zero-argument overload even when an overload that takes
+# arguments is declared first, on every user receiver shape: an inherited
+# method, a struct, a generic class and a reference. MIR used to call the
+# first overload with too few arguments (a Cranelift verifier error).
+class Base
+  count: Int
+
+  def init(@count: Int)
+  end
+
+  def size(scale: Int) -> String
+    "scaled by #{scale}"
+  end
+
+  def size -> Int
+    self.count
+  end
+end
+
+class Child < Base
+  def init(@count: Int)
+  end
+end
+
+struct Pt
+  x: Int
+
+  def size(scale: Int) -> String
+    "pt scaled #{scale}"
+  end
+
+  def size -> Int
+    self.x
+  end
+end
+
+class Box[T]
+  item: T
+  n: Int
+
+  def init(@item: T, @n: Int)
+  end
+
+  def size(scale: Int) -> String
+    "box scaled #{scale}"
+  end
+
+  def size -> Int
+    self.n
+  end
+end
+
+def main
+  let c = Child.new(4)
+  puts "inherited=#{c.size}"
+  puts "inherited_args=#{c.size(2)}"
+  let p = Pt.new(6)
+  puts "struct=#{p.size}"
+  puts "struct_args=#{p.size(3)}"
+  let b = Box.new("a", 8)
+  puts "generic=#{b.size}"
+  puts "generic_args=#{b.size(4)}"
+  let r = &b
+  puts "ref=#{r.size}"
+end

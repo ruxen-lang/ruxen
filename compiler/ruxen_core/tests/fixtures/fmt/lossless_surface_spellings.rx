@@ -1,0 +1,51 @@
+mixin Greeter
+  def greet -> String
+end
+
+class Bag
+  items: Int
+
+  def init
+    @items = 0
+  end
+
+  def var add(n: Int)
+    @items += n
+    puts "added #{@items.to_s}"
+  end
+end
+
+def use_greeter[T](x: T) -> String
+  where T: Greeter
+  x.greet
+end
+
+def same_line[T](x: T) -> String where T: Greeter
+  x.greet
+end
+
+def find(present: Bool) -> Int?
+  if present
+    3
+  else
+    nil
+  end
+end
+
+def main
+  var v = [3, 1, 2]
+  v.sort_by { |a, b| a - b }
+  puts v.map { |x| x * 2 }.size
+  puts "x"
+  print "y"
+  puts(v.size)
+  v.each do |x|
+    puts x
+  end
+  let n = 5.then do |x| x * 2 end
+  let k = 7.then do
+    1
+  end
+  let m = 4.then { 1 }
+  let z = 4.then { || 2 }
+end

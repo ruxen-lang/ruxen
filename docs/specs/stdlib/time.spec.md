@@ -2,7 +2,7 @@
 
 **Source docs:**
 [docs/requirements/tier1_01_stdlib.md §4.5](../../requirements/tier1_01_stdlib.md),
-[docs/prompts/v1/06_5_phase2_sync_io_completeness.md](../../prompts/v1/06_5_phase2_sync_io_completeness.md).
+`docs/prompts/v1/06_5_phase2_sync_io_completeness.md`.
 
 **Status:** shipped Phase 3 (`unix_ns`) and Phase 2 #06.5 T4
 (`Duration` / `Instant` typed surface).  The flat `now_ns` free-fn
@@ -35,17 +35,22 @@ as a bare `Int`-returning free-fn.
 ## Instant / Duration
 
 The monotonic-clock surface is now class-based and lives in the same
-`std.time` module:
+`std.time` module. The Ruby shapes, `Time.now` and numeric seconds
+(`sleep 0.5`), are [planned](../../../TODO.md#t-stdlib-shapes); `Instant` and `Duration`
+are the working surface, and they need no `use` line (the prelude has them).
 
-```ruxen
-use std.time.{Instant, Duration}
-use std.thread.sleep
+Works today, [deprecated] Rust-shaped `Instant.now` and `Duration.from_millis` (replacement `Time.now` and numeric seconds, above):
 
-let start = Instant.now
+```ruby
+start = Instant.now
 sleep(Duration.from_millis(50))
-let elapsed = start.elapsed   # Duration
+elapsed = start.elapsed   # Duration
 puts "took #{elapsed.as_millis} ms"
 ```
+
+Owner decision D24 a: `TcpStream#set_read_timeout` is to take a `&Duration`
+[planned](../../../TODO.md#t-d24). Its `.rx` declaration takes an `Int` today while the C
+takes a `Duration`, so no doc shows that call as working; the `_ns` forms stay.
 
 Full behavioural spec: see `Instant` / `Duration` sections in this
 same file (added by #06.5 T4).  This block exists so callers
@@ -55,19 +60,21 @@ searching for "monotonic" / "now_ns" land at the right import.
 
 ## Pin tests
 
-| Behaviour | Test fn                                | File             |
-|-----------|----------------------------------------|------------------|
-| B2        | `time_unix_ns_is_post_2020`            | `stdlib_time.rs` |
-| Instant   | `instant_monotonic_after_sleep`        | `stdlib_time.rs` |
-| Instant   | `instant_elapsed_non_negative`         | `stdlib_time.rs` |
-| Instant   | `instant_duration_since_returns_delta` | `stdlib_time.rs` |
-| Instant   | `instant_duration_since_future_panics` | `stdlib_time.rs` |
-| Duration  | `duration_from_secs_as_millis`         | `stdlib_time.rs` |
-| Duration  | `duration_from_millis_as_secs_floors`  | `stdlib_time.rs` |
-| Duration  | `duration_from_as_round_trip_matrix`   | `stdlib_time.rs` |
-| Duration  | `duration_add_via_binop_and_named`     | `stdlib_time.rs` |
-| Duration  | `duration_sub_saturates_to_zero`       | `stdlib_time.rs` |
-| sleep     | `sleep_duration_elapses_in_tolerance_band` | `stdlib_time.rs` |
+All in `library/std/time/tests/time_test.rx` (run `scripts/test-stdlib.sh time`).
+
+| Behaviour | Test case                                             |
+|-----------|-------------------------------------------------------|
+| B2        | `reads unix_ns after 2020`                            |
+| Instant   | `never goes backwards across a sleep`                 |
+| Instant   | `reports a non-negative elapsed`                      |
+| Instant   | `panics when duration_since gets a later instant`     |
+| Duration  | `converts from_secs to every unit`                    |
+| Duration  | `floors as_secs`                                      |
+| Duration  | `round-trips every from_* and as_* pair`              |
+| Duration  | `reads a sub-second value through every accessor`     |
+| Duration  | `adds through the operator and add`                   |
+| Duration  | `saturates subtraction at zero`                       |
+| sleep     | `sleeps for about the requested time`                 |
 
 ---
 

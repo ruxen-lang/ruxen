@@ -17,17 +17,17 @@ runnable examples at each step.
 
 ### Step 1. Call `sqrt` from libm
 
-Save this as `hello_ffi.rx`:
+Save this as `hello_ffi.rx` [implemented]:
 
-```ruxen
+```ruby
 lib "m"
   def sqrt(x: Float) -> Float
 end
 
-def main
-  let r = unsafe { sqrt(16.0) }
-  puts "sqrt(16) = #{r}"
+r = unsafe
+  sqrt(16.0)
 end
+puts "sqrt(16) = #{r}"
 ```
 
 Run it:
@@ -39,53 +39,75 @@ ruxen compile hello_ffi.rx
 
 Output:
 
-```
+```text
 sqrt(16) = 4
 ```
+
+(A whole `Float` prints without its `.0` today, a [known issue](../../TODO.md#t-float-to-s).)
 
 What happened, line by line:
 
 - `lib "m"` says "open the system library named `m`" (that's
   `libm.so` on Linux, `libm.dylib` on macOS — Ruxen adds the
-  prefix and extension).
+  prefix and extension). It reads like Ruby FFI's `attach_function`.
 - `def sqrt(x: Float) -> Float` declares that the library exports
   a function called `sqrt` with that signature. Ruxen doesn't read
   the C header — *you* tell Ruxen the signature.
-- `unsafe { sqrt(16.0) }` calls it. Every FFI call must be inside
-  an `unsafe` block because Ruxen can't verify the C function
-  won't, for example, crash if you pass it a bad pointer.
+- `unsafe ... end` marks the call as one Ruxen can't verify: the C
+  function might, for example, crash if you pass it a bad pointer.
+  The compiler does not insist on the block today, but keep C calls
+  inside one so readers can find them. Whether `unsafe` stays, or
+  raw pointers are limited to `lib` blocks, is an open question
+  [planned](../../TODO.md#t-oq). The brace form `unsafe { ... }` does
+  not parse.
 
-### Step 2. Wrap it in a safe function
+### Step 2. Wrap it in a safe method
 
 Letting `unsafe` leak into every caller is unfriendly. The standard
-pattern is to wrap the raw call in a regular Ruxen function:
+pattern is to wrap the raw call in a regular Ruxen method that checks
+its input. The Ruby form raises on bad input [planned](../../TODO.md#t-exceptions):
 
-```ruxen
+```ruby
 lib "m"
   def sqrt(x: Float) -> Float
 end
 
-# Safe wrapper — shadow the raw FFI name.
-def sqrt(x: Float) -> Result[Float, String]
+def checked_sqrt(x: Float) -> Float
+  raise ArgumentError, "sqrt of negative number" if x < 0.0
+  unsafe
+    sqrt(x)
+  end
+end
+
+puts "sqrt(16) = #{checked_sqrt(16.0)}"
+```
+
+Works today: return a `Result` [deprecated] (replace with `raise`):
+
+```ruby
+lib "m"
+  def sqrt(x: Float) -> Float
+end
+
+def checked_sqrt(x: Float) -> Result[Float, String]
   if x < 0.0
     Err("sqrt of negative number")
   else
-    Ok(unsafe { sqrt(x) })
+    Ok(unsafe
+      sqrt(x)
+    end)
   end
 end
 
-def main
-  match sqrt(16.0)
-    Ok(r)  -> puts "sqrt(16) = #{r}"
-    Err(e) -> puts "error: #{e}"
-  end
+case checked_sqrt(16.0)
+in Ok(r) then puts "sqrt(16) = #{r}"
+in Err(e) then puts "error: #{e}"
 end
 ```
 
-The `def sqrt` defined inside the `lib` block is just the raw FFI
-binding. The top-level `def sqrt(x) -> Result[...]` shadows it
-with a checked version. Now callers see a `Result` and never
-write `unsafe`.
+The `def sqrt` inside the `lib` block is just the raw FFI binding.
+The top-level `checked_sqrt` is the checked version, so callers
+never write `unsafe`.
 
 ---
 
@@ -106,7 +128,7 @@ We're going to build a `Counter` class whose state lives in C.
 
 **Project layout:**
 
-```
+```text
 counter-demo/
   Ruxen.toml
   src/
@@ -121,27 +143,24 @@ counter-demo/
 [package]
 name    = "counter-demo"
 version = "0.1.0"
-edition = "2026"
 ```
 
-**`src/main.rx`:**
+**`src/main.rx`** [implemented]:
 
-```ruxen
+```ruby
 class Counter
   lib "runtime/counter.c"
     def self.new as "rx_counter_new"(initial: Int) -> Counter
-    def bump    as "rx_counter_bump"(self) -> Int
-    def value   as "rx_counter_value"(self) -> Int
-    def drop    as "rx_counter_drop"(self) -> nil
+    def var bump as "rx_counter_bump" -> Int
+    def value as "rx_counter_value" -> Int
+    def consume drop as "rx_counter_drop"
   end
 end
 
-def main
-  let c = Counter.new(10)
-  let _ = c.bump
-  let _ = c.bump
-  puts "count = #{c.value}"   # count = 12
-end
+c = Counter.new(10)
+c.bump
+c.bump
+puts "count = #{c.value}"   # count = 12
 ```
 
 **`runtime/counter.c`:**
@@ -194,7 +213,7 @@ ruxen run
 
 Output:
 
-```
+```text
 count = 12
 ```
 
@@ -207,21 +226,36 @@ Every class with a C-backed runtime follows the same shape:
 | Ruxen side                             | C side                                          | What it does |
 |----------------------------------------|-------------------------------------------------|--------------|
 | `def self.new as "rx_x_new"(...)`      | `int64_t rx_x_new(...)`                         | malloc the struct, return its pointer as `int64_t` |
-| `def method as "rx_x_method"(self)`    | `int64_t rx_x_method(int64_t self)`             | cast `self` back to your struct, do work, return result |
-| `def method2 as "rx_x_method2"(self, v: Int)` | `int64_t rx_x_method2(int64_t self, int64_t v)` | same, plus arguments |
-| `def drop as "rx_x_drop"(self) -> nil` | `void rx_x_drop(int64_t self)`                  | free the struct (called automatically when the Ruxen value dies) |
+| `def method as "rx_x_method" -> Int`   | `int64_t rx_x_method(int64_t self)`             | cast `self` back to your struct, do work, return result |
+| `def var method2 as "rx_x_method2"(v: Int)` | `int64_t rx_x_method2(int64_t self, int64_t v)` | same, plus arguments, and may change the object |
+| `def consume drop as "rx_x_drop"`      | `void rx_x_drop(int64_t self)`                  | free the struct (called automatically when the Ruxen value dies) |
 
 Three rules to remember:
 
 1. **`self` is always the first parameter** on the C side, typed
-   `int64_t`. On the Ruxen side it's spelled `self` (no type — the
-   compiler knows it's the receiver).
+   `int64_t`. On the Ruxen side the receiver is implicit, and its
+   mode is written as for any Ruby-side method: `def value` reads,
+   `def var bump` may change the object, `def consume drop` takes
+   ownership (a `def consume drop` frees the handle's storage
+   itself). The older spelling with an explicit `(self)` parameter
+   is [deprecated] (replace it with the receiver mode). The `as
+   "rx_counter_bump"` part names the C symbol; it is not a cast.
 2. **Every parameter and return on the C side is `int64_t`** for
    integers, pointers, and Ruxen objects. The Ruxen side declares
    the *real* type (`Int`, `Counter`, `Float`, …) and the
    compiler handles the mapping.
 3. **Always implement `drop`** — without it, the malloc'd struct
    leaks every time a Ruxen `Counter` goes out of scope.
+
+A C result is not assumed to be owned by the caller. When a C
+function hands back storage the caller must free, say so with
+`-> owned Self` (for example `def clone as "rx_x_clone" -> owned
+Self`) [implemented].
+
+A free function in a `lib` block (outside a class) has no receiver,
+so `def var` there means nothing and is silently ignored today; it
+will become an error, and mutation needs an explicit `&var`
+parameter [planned](../../TODO.md#t-x5).
 
 ### Step 5. Where the C file lives
 
@@ -243,7 +277,7 @@ Some C-backed methods need to return other Ruxen types:
 | `Int` / `Int64`   | `int64_t`       | return the integer directly |
 | `Bool`            | `int64_t`       | return `0` (false) or `1` (true) |
 | `Float`           | `double`        | declare and return `double` (not `int64_t`) |
-| `nil` (unit)      | `void`          | C function returns `void`; Ruxen sees `nil` |
+| `nil`             | `void`          | C function returns `void`; Ruxen sees `nil` |
 | Another class     | `int64_t`       | allocate / return a pointer the same way `new` does |
 
 `Float` is the one special case — C `double` and Ruxen `Float` are
@@ -253,18 +287,21 @@ the C return as `double` (not `int64_t`).
 
 ### Step 7. Sharing strings between Ruxen and C
 
-Strings are passed as their C buffer pointer. Ruxen's `String` has
-an `as_cstr` method that gives you a `*UInt8` valid for the
-duration of the call:
+Strings are passed as their C buffer pointer: a `&String`
+parameter in a `lib` declaration reaches C as a pointer to the
+string's bytes, valid for the duration of the call [implemented]:
 
-```ruxen
+```ruby
 class Greeter
   lib "runtime/greeter.c"
     def self.new as "rx_greeter_new"(name: &String) -> Greeter
-    def greet    as "rx_greeter_greet"(self) -> nil
-    def drop     as "rx_greeter_drop"(self) -> nil
+    def greet as "rx_greeter_greet" -> nil
+    def consume drop as "rx_greeter_drop"
   end
 end
+
+g = Greeter.new("Ada")
+g.greet
 ```
 
 C side:
@@ -310,24 +347,28 @@ runs, free your copy.
 For lower-level work — calling `malloc` or interacting with a C
 API that exposes raw pointers — Ruxen has `*T` (read-only pointer)
 and `*var T` (writable pointer). Pointer operations are `unsafe`
-([Chapter 15](15-unsafe.md)).
+([Chapter 15](15-unsafe.md)). Give the pointer a concrete element
+type: `*Void` is rejected as an undefined type today
+[planned](../../TODO.md#t-void-ptr). [implemented]:
 
-```ruxen
+```ruby
 lib "c"
-  def malloc(n: USize) -> *var Void
-  def free(p: *var Void) -> nil
+  def malloc(n: USize) -> *var UInt8
+  def free(p: *var UInt8) -> nil
 end
 
-def main
+def scratch_buffer
   unsafe
-    let ptr = malloc(1024) as *var UInt8
+    ptr = malloc(1024)
     if ptr == nil
       puts "out of memory"
       return
     end
-    free(ptr as *var Void)
+    free(ptr)
   end
 end
+
+scratch_buffer()
 ```
 
 `nil` is the null-pointer literal — valid only at `*T` / `*var T`
@@ -337,7 +378,9 @@ construction.
 
 ## Variadic C functions
 
-```ruxen
+[implemented]:
+
+```ruby
 lib "c"
   def printf(fmt: *UInt8, ...) -> Int32
 end
@@ -350,28 +393,33 @@ them first.
 ## Library options
 
 `lib` accepts keyword options for system libraries you don't
-ship yourself:
+ship yourself. They parse today but are ignored [implemented]:
 
-```ruxen
+```ruby
 lib "sqlite3", version: "3"
-  def sqlite3_open(filename: *UInt8, db: *var *Void) -> Int32
+  def sqlite3_open(filename: *UInt8, db: *var *UInt8) -> Int32
 end
 
 lib "c", path: "/usr/lib"
-  def malloc(n: USize) -> *var Void
+  def malloc(n: USize) -> *var UInt8
 end
 ```
+
+The Rust spellings `extern "C"`, `@[link(...)]` and `@[repr(C)]` are
+[retired] (E0607 for `@[...]`): use `lib` blocks, and `layout c` as
+the first line of a class body for a C-compatible layout.
 
 ---
 
 ## Quick recap
 
 - **Calling C**: `lib "<system-lib>" ... end` declares the
-  signatures. Calls go inside `unsafe`. Wrap with a regular `def`
+  signatures. Keep calls inside `unsafe ... end`. Wrap with a regular `def`
   to keep `unsafe` out of caller code.
 - **Constructing Ruxen objects from C**: put `lib "runtime/X.c"`
   inside the class body. Implement `rx_<class>_new` (returns a
-  malloc'd pointer cast to `int64_t`), one C function per method,
+  malloc'd pointer cast to `int64_t`), one C function per method
+  (declared with `def`, `def var` or `def consume` like any method),
   and `rx_<class>_drop` to free the allocation. The compiler
   finds `runtime/*.c` automatically.
 - **All Ruxen objects at the C ABI are pointers**, passed and

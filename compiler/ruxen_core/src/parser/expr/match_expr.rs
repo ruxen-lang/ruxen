@@ -93,8 +93,8 @@ impl Parser {
         let block = self.parse_match_arm_body();
         let body = if block.statements.len() == 1 {
             // Single-statement arms keep the historical
-            // `MatchArmBody::Expr` shape so the formatter / pretty-
-            // printer don't switch to block-style indentation on
+            // `MatchArmBody::Expr` shape so the formatter does not
+            // switch to block-style indentation on
             // every `Some(x) -> x` arm in existing fixtures.
             let mut stmts = block.statements;
             match stmts.pop().unwrap() {

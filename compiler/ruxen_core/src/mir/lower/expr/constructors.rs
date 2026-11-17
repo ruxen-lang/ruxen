@@ -8,8 +8,8 @@ impl<'a> Lowerer<'a> {
     /// at the field-binding's declared width; if a value's width and the
     /// slot's width disagree the slot reads garbage (an f64 store into a 4-byte
     /// f32 slot reads 0). Routing the value through a target-typed `Assign`
-    /// invokes codegen's `coerce_value` (the `fdemote`/`fpromote`/`fcvt_*`
-    /// path — the same one a `let`-bound `as Float32` cast and a `Float32`
+    /// gets it the `Assign` conversion (`mir::coercion`: the
+    /// `fdemote`/`fpromote`/`fcvt_*` path — the same one a `let`-bound `as Float32` cast and a `Float32`
     /// fn-param boundary already use), so the SSA value is the field's width
     /// BEFORE the store. A no-op when the types already match (the inline
     /// `120.5f32` literal path, which `Assign`-coerces to the temp upstream).
@@ -20,26 +20,6 @@ impl<'a> Lowerer<'a> {
         field_ty: &Ty,
     ) -> Option<LocalId> {
         let val_local = val_local?;
-        let is_numeric = |ty: &Ty| {
-            matches!(
-                ty,
-                Ty::Int
-                    | Ty::Int8
-                    | Ty::Int16
-                    | Ty::Int32
-                    | Ty::Int64
-                    | Ty::UInt
-                    | Ty::UInt8
-                    | Ty::UInt16
-                    | Ty::UInt32
-                    | Ty::UInt64
-                    | Ty::ISize
-                    | Ty::USize
-                    | Ty::Float
-                    | Ty::Float32
-                    | Ty::Float64
-            )
-        };
         let Some(val_ty) = self
             .fn_ref()
             .locals
@@ -51,7 +31,7 @@ impl<'a> Lowerer<'a> {
         // Only re-materialise when both ends are numeric and the widths/kinds
         // actually differ. Non-numeric fields (heap pointers, nested structs)
         // are stored/loaded as raw 8-byte slots and must pass through unchanged.
-        if val_ty == *field_ty || !is_numeric(&val_ty) || !is_numeric(field_ty) {
+        if val_ty == *field_ty || !val_ty.is_numeric() || !field_ty.is_numeric() {
             return Some(val_local);
         }
         let dest = self.new_temp(field_ty.clone());
@@ -261,6 +241,8 @@ impl<'a> Lowerer<'a> {
                 // bootstrap `class Map` shell.
                 let new_name =
                     self.resolve_ffi_alias_callee(format!("{}_new", type_name_from_ty(&map_ty)));
+                // B73: `dest` is typed `Map(K, V)`, which binds the `K` of
+                // the declaration's `KeyDesc[K]` (`key_desc.rs`).
                 self.emit(MirInst::Call {
                     dest: Some(dest),
                     callee: new_name,

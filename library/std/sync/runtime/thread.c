@@ -54,10 +54,11 @@ static size_t ruxen_thread_stack_size(void) {
  * `compiler/ruxen_core/src/codegen/object.rs` (always passes
  * -lpthread).
  *
- * Closure ABI (per `mir/lower/expr/closure.rs`):
- *   16-byte heap struct { int64_t fn_ptr; int64_t captures_ptr; }
- * passed as a single i64 pointer. The synthesized function takes
- * captures_ptr as its first argument and returns i64.
+ * Closure ABI: a closure value is a pointer to a `RuxenClosurePair`
+ *   (runtime.h, checked against the compiler's `CLOSURE_PAIR_*`), passed as
+ *   a single i64. Only `fn_ptr` and `captures_ptr` are read here. The
+ *   synthesized function takes captures_ptr as its first argument and
+ *   returns i64.
  *
  * Thread.spawn trampoline: extract (fn_ptr, captures_ptr), package
  * them with a result slot into a heap arg, call pthread_create on a
@@ -66,11 +67,6 @@ static size_t ruxen_thread_stack_size(void) {
  */
 
 typedef int64_t (*ruxen_closure_fn0)(int64_t captures);
-
-typedef struct {
-    int64_t fn_ptr;
-    int64_t captures_ptr;
-} RuxenClosure;
 
 /* W15 fix: the spawned thread reads from a SEPARATE allocation
  * (`RuxenSpawnCtx`) that lives independently of the caller's
@@ -125,7 +121,7 @@ int64_t ruxen_thread_spawn(int64_t closure_ptr) {
     if (!closure_ptr) {
         ruxen_panic("Thread.spawn: null closure");
     }
-    RuxenClosure *src = (RuxenClosure *)(uintptr_t)closure_ptr;
+    RuxenClosurePair *src = (RuxenClosurePair *)(uintptr_t)closure_ptr;
     /* Independent spawn ctx (survives caller's JoinHandle drop). */
     RuxenSpawnCtx *ctx = (RuxenSpawnCtx *)malloc(sizeof(RuxenSpawnCtx));
     if (!ctx) ruxen_panic("Thread.spawn: out of memory (ctx)");
@@ -217,4 +213,13 @@ void ruxen_thread_join_handle_drop(int64_t handle_ptr) {
 int64_t ruxen_thread_current_id(void) {
     pthread_t t = pthread_self();
     return (int64_t)(uintptr_t)t;
+}
+
+/* JoinHandle.thread_id_raw -> i64 (opaque ThreadId of the spawned
+ * thread). Same encoding as `ruxen_thread_current_id`, so the id a
+ * thread reads for itself equals the one its handle reports. */
+int64_t ruxen_thread_join_handle_id(int64_t handle_ptr) {
+    RuxenJoinHandle *jh = (RuxenJoinHandle *)(uintptr_t)handle_ptr;
+    if (!jh) ruxen_panic("JoinHandle.thread_id: null handle");
+    return (int64_t)(uintptr_t)jh->tid;
 }

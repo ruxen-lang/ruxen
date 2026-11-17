@@ -2,7 +2,7 @@
 
 **Source docs:**
 [docs/requirements/tier1_03_async.md](../../requirements/tier1_03_async.md) §7,
-[docs/prompts/v1/15_phase4_async.md](../../prompts/v1/15_phase4_async.md),
+`docs/prompts/v1/15_phase4_async.md`,
 [docs/specs/stdlib/async.spec.md](async.spec.md) (sub-phase 1 surface),
 [docs/specs/syntax/async_lowering.spec.md](../syntax/async_lowering.spec.md) (sub-phase 2 lowering),
 [docs/specs/stdlib/executor.spec.md](executor.spec.md) (sub-phase 3 block_on).
@@ -28,17 +28,19 @@ Land 4A first; commit; then 4B; then 4C.
 
 ## Milestone 4A — reactor + time.sleep
 
-### B1 — `time.sleep(d: &Duration) -> some Future[Output = nil]`
+### B1 — `Async.sleep(d: &Duration) -> TimeSleepFuture`
 
-```rx
-use std.time.Duration
-use std.time.sleep   # ← new async surface
-use std.executor.block_on
+The async surface (`async def`, `.await`, `block_on`, futures) is
+[implemented] and is the working model until the Fiber scheduler
+(`Async do ... end`, `task.wait`) replaces it [planned](../../../TODO.md#t-fibers). The
+sleep shipped as a class method, `Async.sleep`, not a free `sleep`; no `use`
+line is needed.
 
-def main
-  block_on(sleep(Duration.from_millis(50)))
-  puts "done"
-end
+Works today, [deprecated] Rust-shaped `Duration.from_millis` (replacement: numeric seconds, [planned](../../../TODO.md#t-stdlib-shapes)):
+
+```ruby
+block_on(Async.sleep(Duration.from_millis(50)))
+puts "done"
 ```
 
 **Given** the source above
@@ -46,8 +48,8 @@ end
 async path (epoll_pwait timeout / kevent EVFILT_TIMER), NOT the
 synchronous `nanosleep` path.
 
-`time.sleep` is a free fn in `library/std/time/src/lib.rx`. Its
-return type lifts to a `__TimeSleepFuture` (same AST-synthesis
+`Async.sleep` is a class method in `library/std/future/src/async.rx`. Its
+return type is a `TimeSleepFuture` (same AST-synthesis
 pattern as `async def` — though here the function isn't `async def`,
 it's a hand-written future. The lib decl declares the typed return,
 the rest follows.)
@@ -95,14 +97,20 @@ The fd is the epoll/kqueue file descriptor.
 
 ## Milestone 4B — AsyncFile
 
-### B4 — `AsyncFile.open(path: &Path) -> some Future[Output = Result[AsyncFile, IoError]]`
+### B4 — `AsyncFile.open(path: &String) -> AsyncOpenFuture`
 
-```rx
-use std.fs.AsyncFile
+`.await` works only on a direct free-function call today, so a future
+returned by a class method (`AsyncFile.open(...)`) is driven with `block_on`
+(`tests/release-e2e/cases/726_async_file_round_trip.rx`). The result is a
+`Result`; a raising `IOError` is [planned](../../../TODO.md#t-exceptions).
 
-async def read_config() -> Result[String, IoError]
-  let f = AsyncFile.open("/etc/hosts").await?
-  f.read_to_string.await
+Works today, [deprecated] `Ok`/`Err` patterns (replacement `rescue`, above):
+
+```ruby
+opened = block_on(AsyncFile.open("/etc/hosts"))
+case opened
+in Ok(f) then puts "opened"
+in Err(_) then puts "open failed"
 end
 ```
 
@@ -119,7 +127,7 @@ the reactor's wake-on-readable fires when more data is available.
 For v1 the read loop accumulates into a heap buffer and finally
 returns the String. v2 could stream chunks.
 
-### B6 — `AsyncFile.write_all(content: &str) -> some Future[Output = Result[nil, IoError]]`
+### B6 — `def var AsyncFile.write_all(content: &String) -> some Future[Output = Result[nil, IoError]]`
 
 Writes until either EOF on the writer or all of `content` is
 flushed. Yields `Pending` when `write()` returns `EAGAIN`.
@@ -132,20 +140,20 @@ Server work needs both sides. `AsyncTcpListener` ships in the same
 milestone as `AsyncTcpStream`; they share the reactor registration
 pattern (fd + EPOLLIN/EVFILT_READ) and read/write Drop discipline.
 
-### B6.5 — `AsyncTcpListener.bind(addr: &str) -> some Future[Output = Result[AsyncTcpListener, IoError]]`
+### B6.5 — `AsyncTcpListener.bind(addr: &String) -> some Future[Output = Result[AsyncTcpListener, IoError]]`
 
 Wraps `socket(2)` + `bind(2)` + `listen(2)` with `O_NONBLOCK`. The
 future resolves Ready immediately on success (bind doesn't block);
 the async return is for surface symmetry with `AsyncTcpStream.connect`.
 
-### B6.6 — `AsyncTcpListener.accept(&var self) -> some Future[Output = Result[(AsyncTcpStream, String), IoError]]`
+### B6.6 — `def var AsyncTcpListener.accept -> some Future[Output = Result[(AsyncTcpStream, String), IoError]]`
 
 Returns `(stream, peer_addr)` on success. Yields Pending when
 `accept(2)` returns EAGAIN; reactor wakes on EPOLLIN. The accepted
 stream is already non-blocking (inherits via `accept4(2)` on Linux,
 explicit `fcntl(F_SETFL, O_NONBLOCK)` on macOS).
 
-### B7 — `AsyncTcpStream.connect(addr: &str) -> some Future[Output = Result[AsyncTcpStream, IoError]]`
+### B7 — `AsyncTcpStream.connect(addr: &String) -> some Future[Output = Result[AsyncTcpStream, IoError]]`
 
 Non-blocking `connect(2)`. The future:
 - First poll: `socket(2)` + `fcntl(F_SETFL, O_NONBLOCK)` + `connect(2)`.
@@ -155,20 +163,20 @@ Non-blocking `connect(2)`. The future:
 - Subsequent poll: checks `getsockopt(SO_ERROR)` for connect
   completion. If 0, `Ready(Ok(stream))`. If non-zero, `Ready(Err)`.
 
-### B8 — `AsyncTcpStream.read(&var self, buf: &var Array[Int]) -> some Future[Output = Result[Int, IoError]]`
+### B8 — `def var AsyncTcpStream.read(buf: &var Array[Int]) -> some Future[Output = Result[Int, IoError]]`
 
 Reads up to buf.size bytes. Returns the count read, or `Err(IoError)`
 on failure. Yields Pending when read returns EAGAIN; reactor wakes
 on EPOLLIN.
 
-### B9 — `AsyncTcpStream.write(&var self, content: &str) -> some Future[Output = Result[Int, IoError]]`
+### B9 — `def var AsyncTcpStream.write(content: &String) -> some Future[Output = Result[Int, IoError]]`
 
 Writes up to content.size bytes. Returns count written.
 
-### B10 — `AsyncTcpStream.close(self) -> some Future[Output = nil]`
+### B10 — `def consume AsyncTcpStream.close -> some Future[Output = nil]`
 
 Shuts down the fd cleanly (`shutdown(SHUT_RDWR)` + `close`). The
-`self` is consumed by-move.
+receiver is consumed by-move.
 
 ### B11 — TCP echo e2e (full server + client round-trip)
 

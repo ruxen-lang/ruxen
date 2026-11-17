@@ -8,7 +8,26 @@ class JoinHandle[T: Send]
   include Sync
 
   lib "runtime/thread.c"
+    def self.spawn_closure as "ruxen_thread_spawn"(closure: Proc[() -> T]) -> JoinHandle[T]
     def join_raw as "ruxen_thread_join" -> T
+    def thread_id_raw as "ruxen_thread_join_handle_id" -> Int
     def drop as "ruxen_thread_join_handle_drop" -> nil
+  end
+
+  ## Wait for the thread and return its value. A panic inside the thread
+  ## aborts the whole process (there is no unwinding yet), so a join that
+  ## returns always carries `Ok`.
+  def join -> Result[T, ThreadPanic]
+    Ok(self.join_raw)
+  end
+
+  ## Wait for the thread and return its value (the `!` form of `join`).
+  def join! -> T
+    self.join_raw
+  end
+
+  ## The id of the spawned thread.
+  def thread_id -> ThreadId
+    ThreadId.new(self.thread_id_raw)
   end
 end

@@ -1,18 +1,12 @@
-#![allow(unused_imports)]
-
-use std::collections::HashMap;
-
 use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
+use crate::hir::types::Ty;
 use crate::lexer::token::Span;
 use crate::parser::ast::{self, Visibility};
 
-use super::const_helpers;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
+use super::scope::{ScopeId, ScopeKind};
 use super::symbols::*;
-use super::{ClosureCaptureContext, ResolveResult, Resolver};
+use super::{ClosureCaptureContext, Resolver};
 
 impl Resolver {
     pub(super) fn resolve_block_as_expr(&mut self, block: &ast::Block) -> HirExpr {
@@ -28,7 +22,25 @@ impl Resolver {
                     stmts.push(self.resolve_let(binding));
                 }
                 ast::Statement::Expression(expr) => {
-                    let hir_expr = self.resolve_expr(expr);
+                    if let Some(binding) = self.resolve_bare_assignment_binding(expr) {
+                        stmts.push(binding);
+                        continue;
+                    }
+                    // `x = a and b`: Ruby binds `=` tighter than the keyword
+                    // operators, so the leading assignment declares `x` like
+                    // a statement of its own, and the rest reads `x`.
+                    let split = split_leading_assignment(expr);
+                    let binding = split
+                        .as_ref()
+                        .and_then(|(assign, _)| self.resolve_bare_assignment_binding(assign));
+                    let expr = match (binding, split) {
+                        (Some(binding), Some((_, rest))) => {
+                            stmts.push(binding);
+                            std::borrow::Cow::Owned(rest)
+                        }
+                        _ => std::borrow::Cow::Borrowed(expr),
+                    };
+                    let hir_expr = self.resolve_expr(&expr);
                     if is_last {
                         // Last expression in block is the tail (implicit return)
                         tail_expr = Some(Box::new(hir_expr));
@@ -50,6 +62,42 @@ impl Resolver {
         }
     }
 
+    fn resolve_bare_assignment_binding(&mut self, expression: &ast::Expr) -> Option<HirStatement> {
+        let ast::ExprKind::Assign { target, value } = &expression.kind else {
+            return None;
+        };
+        let ast::ExprKind::Identifier(name) = &target.kind else {
+            return None;
+        };
+        // Ruby: an assignment names an existing local (or parameter) when
+        // one is in scope; otherwise it declares a new local, even when a
+        // method of that name exists (`p = "x"` shadows `Kernel#p`).
+        if let Some(existing) = self.scopes.lookup(name) {
+            let names_method = self.symbols.get(existing).is_some_and(|def| {
+                matches!(
+                    def.kind,
+                    DefKind::Function { .. } | DefKind::OverloadSet { .. } | DefKind::Method { .. }
+                )
+            });
+            if !names_method {
+                return None;
+            }
+        }
+
+        let binding = ast::LetBinding {
+            mutable: true,
+            pattern: ast::Pattern::Identifier {
+                name: name.clone(),
+                mutable: true,
+                span: target.span.clone(),
+            },
+            type_annotation: None,
+            value: Some(value.clone()),
+            span: expression.span.clone(),
+        };
+        Some(self.resolve_let(&binding))
+    }
+
     pub(super) fn resolve_let(&mut self, binding: &ast::LetBinding) -> HirStatement {
         let ty = binding
             .type_annotation
@@ -59,29 +107,22 @@ impl Resolver {
 
         let value = binding.value.as_ref().map(|v| self.resolve_expr(v));
 
-        let pattern = self.resolve_pattern_with_type(&binding.pattern, &ty);
+        let pattern = self.resolve_let_pattern(&binding.pattern, &ty, binding.mutable);
 
-        // Register the binding
-        let name = self.pattern_binding_name(&binding.pattern);
-        let def_id = self.symbols.define(
-            name,
-            DefKind::Variable {
-                mutable: binding.mutable,
-                ty: ty.clone(),
-            },
-            Visibility::Private,
-            binding.span.clone(),
-        );
-
-        // Insert into current scope
-        if let ast::Pattern::Identifier { name, .. } = &binding.pattern {
-            self.scopes.insert(name.clone(), def_id);
-        } else if let ast::Pattern::Tuple { .. } = &binding.pattern {
-            // For tuple destructuring, register each element
-            self.register_pattern_bindings(&binding.pattern, binding.mutable, &binding.span);
-        } else {
-            self.register_pattern_bindings(&binding.pattern, binding.mutable, &binding.span);
-        }
+        // A simple binding's def is the let's def. Any other pattern binds
+        // its names above and gets an unscoped def for the whole value.
+        let def_id = match &pattern {
+            HirPattern::Binding { def_id, .. } | HirPattern::Ref { def_id, .. } => *def_id,
+            _ => self.symbols.define(
+                self.pattern_binding_name(&binding.pattern),
+                DefKind::Variable {
+                    mutable: binding.mutable,
+                    ty: ty.clone(),
+                },
+                Visibility::Private,
+                binding.span.clone(),
+            ),
+        };
 
         HirStatement::Let {
             def_id,
@@ -146,7 +187,6 @@ impl Resolver {
 
         self.scopes.push(ScopeKind::Block);
         let pattern = self.resolve_pattern(&if_let.pattern);
-        self.register_pattern_bindings(&if_let.pattern, false, &if_let.span);
         let then_body = self.resolve_block_as_expr(&if_let.then_body);
         self.scopes.pop();
 
@@ -197,7 +237,6 @@ impl Resolver {
         for arm in &match_expr.arms {
             self.scopes.push(ScopeKind::Match);
             let pattern = self.resolve_pattern(&arm.pattern);
-            self.register_pattern_bindings(&arm.pattern, false, &arm.span);
             let guard = arm.guard.as_ref().map(|g| Box::new(self.resolve_expr(g)));
             let body = match &arm.body {
                 ast::MatchArmBody::Expr(e) => self.resolve_expr(e),
@@ -233,8 +272,27 @@ impl Resolver {
             captures: Vec::new(),
         });
 
+        // Block Tier-2: a paramless closure that references `_1`..`_9` or the
+        // bare `it` gets those implicit parameters synthesized here (surface
+        // preserved for `ruxen fmt`; see `implicit_block_params`). An explicit
+        // `|params|` header takes precedence and suppresses the scan.
+        let implicit_names = if closure.params.is_empty() {
+            super::implicit_block_params::implicit_param_names(&closure.body)
+        } else {
+            Vec::new()
+        };
+
         let mut params = Vec::new();
-        for p in &closure.params {
+        let synth_params: Vec<ast::ClosureParam> = implicit_names
+            .into_iter()
+            .map(|name| ast::ClosureParam {
+                name,
+                type_expr: None,
+                span: span.clone(),
+            })
+            .collect();
+        let param_iter = closure.params.iter().chain(synth_params.iter());
+        for p in param_iter {
             let ty = p
                 .type_expr
                 .as_ref()
@@ -264,7 +322,16 @@ impl Resolver {
         }
 
         let body = match &closure.body {
-            ast::ClosureBody::Expr(e) => self.resolve_expr(e),
+            // A one-expression body that assigns a new name declares a
+            // local, as the same statement in a `do ... end` body does.
+            ast::ClosureBody::Expr(e) => match self.resolve_bare_assignment_binding(e) {
+                Some(binding) => HirExpr {
+                    kind: HirExprKind::Block(vec![binding], None),
+                    ty: Ty::Unit,
+                    span: e.span.clone(),
+                },
+                None => self.resolve_expr(e),
+            },
             ast::ClosureBody::Block(b) => self.resolve_block_as_expr(b),
         };
 
@@ -297,19 +364,98 @@ impl Resolver {
                 captures,
                 is_async: closure.is_async,
                 is_move: closure.is_move,
+                kind: closure.kind,
             },
             ty: fn_ty,
             span: span.clone(),
         }
     }
 
-    pub(super) fn record_capture_if_needed(&mut self, def_id: DefId, def_scope_id: ScopeId) {
-        let Some(closure) = self.closure_stack.last_mut() else {
-            return;
-        };
-        if self.scopes.is_within_scope(def_scope_id, closure.scope_id) {
-            return;
+    /// Desugar a `&`-form block argument (Block Tier-2) into the HIR that fills
+    /// the call's block slot.
+    ///   - `&:sym`  → the closure `{ |__proc_arg| __proc_arg.sym }`.
+    ///   - `&block` / `&` → a reference to the enclosing function's block slot.
+    pub(super) fn resolve_block_pass(&mut self, bp: &ast::BlockPassKind, span: &Span) -> HirExpr {
+        match bp {
+            ast::BlockPassKind::ToProc(method_name) => {
+                // Build `{ |__proc_arg| __proc_arg.<method_name> }` and resolve
+                // it through the normal closure path so capture / typing behave
+                // identically to a hand-written block.
+                let arg_name = "__proc_arg".to_string();
+                let receiver = ast::Expr {
+                    kind: ast::ExprKind::Identifier(arg_name.clone()),
+                    span: span.clone(),
+                };
+                let call = ast::Expr {
+                    kind: ast::ExprKind::MethodCall {
+                        parens: true,
+                        object: Box::new(receiver),
+                        method: method_name.clone(),
+                        generic_args: Vec::new(),
+                        args: Vec::new(),
+                        block: None,
+                    },
+                    span: span.clone(),
+                };
+                let closure = ast::ClosureExpr {
+                    is_async: false,
+                    is_move: false,
+                    params: vec![ast::ClosureParam {
+                        name: arg_name,
+                        type_expr: None,
+                        span: span.clone(),
+                    }],
+                    body: ast::ClosureBody::Expr(Box::new(call)),
+                    span: span.clone(),
+                    pipes: true,
+                    do_end: false,
+                    kind: ast::ClosureKind::Block,
+                    spelling: ast::ClosureSpelling::Bare,
+                };
+                self.resolve_closure(&closure, span)
+            }
+            ast::BlockPassKind::Forward => self.resolve_block_forward(span),
         }
+    }
+
+    /// `&block` / bare `&` — forward the enclosing function's received block.
+    /// The block slot is bound under `__block` (implicit-yield fns) and
+    /// `&block` (explicit `&block:` params); a reference to it is a plain
+    /// `VarRef` carrying the block's `Ty::Fn`, which the call site then passes
+    /// as its own trailing block argument. No enclosing block → E1120.
+    fn resolve_block_forward(&mut self, span: &Span) -> HirExpr {
+        let block_def = self
+            .scopes
+            .lookup("__block")
+            .or_else(|| self.scopes.lookup("&block"));
+        if let Some(def) = block_def {
+            let ty = self.symbols.def_ty(def).unwrap_or(Ty::Error);
+            HirExpr {
+                kind: HirExprKind::VarRef(def),
+                ty,
+                span: span.clone(),
+            }
+        } else {
+            self.diagnostics.push(Diagnostic::error_with_code(
+                "`&block` / `&` forwards the enclosing function's block, but this \
+                 function has no block parameter to forward",
+                span.clone(),
+                "E1124",
+            ));
+            HirExpr {
+                kind: HirExprKind::Error,
+                ty: Ty::Error,
+                span: span.clone(),
+            }
+        }
+    }
+
+    /// Record `def_id` as a capture of every enclosing closure it is defined
+    /// outside of, innermost first. A closure nested in another reads the
+    /// outer local through the enclosing closure's captures, so the enclosing
+    /// closure captures it too: an owning lambda around a block that reads `s`
+    /// owns (moves) `s`, and the borrow checker sees that move.
+    pub(super) fn record_capture_if_needed(&mut self, def_id: DefId, def_scope_id: ScopeId) {
         let Some(def) = self.symbols.get(def_id) else {
             return;
         };
@@ -317,16 +463,59 @@ impl Resolver {
             def.kind,
             DefKind::Variable { .. } | DefKind::Param { .. } | DefKind::SelfValue { .. }
         );
-        if !should_capture || closure.captures.iter().any(|cap| cap.def_id == def_id) {
+        // A global is no closure's capture: the builtin type constructors
+        // (`Array`, `Hash`, ...) are value-scope `Variable`s of the global
+        // scope, and `Array.new` in a lambda must not capture (or move) them.
+        if !should_capture || self.scopes.is_global(def_scope_id) {
             return;
         }
-        closure.captures.push(Capture {
-            def_id,
-            name: def.name.clone(),
-            by_move: closure.is_move,
-            ty: self.symbols.def_ty(def_id).unwrap_or(Ty::Error),
-        });
+        let name = def.name.clone();
+        let ty = self.symbols.def_ty(def_id).unwrap_or(Ty::Error);
+        for closure in self.closure_stack.iter_mut().rev() {
+            if self.scopes.is_within_scope(def_scope_id, closure.scope_id) {
+                // Defined inside this closure, so inside every enclosing one.
+                return;
+            }
+            if !closure.captures.iter().any(|cap| cap.def_id == def_id) {
+                closure.captures.push(Capture {
+                    def_id,
+                    name: name.clone(),
+                    by_move: closure.is_move,
+                    ty: ty.clone(),
+                });
+            }
+        }
     }
 
     // ─── Pattern Resolution ─────────────────────────────────────────
+}
+
+/// For a statement `x = a and b` / `x = a or b` (the assignment is the
+/// leftmost operand of a chain of keyword `and` / `or`, which bind looser
+/// than `=`), the assignment `x = a` and the rest of the statement with
+/// the assignment replaced by a read of `x`: `x and b`.
+fn split_leading_assignment(expr: &ast::Expr) -> Option<(ast::Expr, ast::Expr)> {
+    let ast::ExprKind::BinaryOp { left, op, right } = &expr.kind else {
+        return None;
+    };
+    if !matches!(op, ast::BinOp::KeywordAnd | ast::BinOp::KeywordOr) {
+        return None;
+    }
+    let (assign, rest_left) = match &left.kind {
+        ast::ExprKind::Assign { target, .. }
+            if matches!(target.kind, ast::ExprKind::Identifier(_)) =>
+        {
+            (left.as_ref().clone(), target.as_ref().clone())
+        }
+        _ => split_leading_assignment(left)?,
+    };
+    let rest = ast::Expr {
+        kind: ast::ExprKind::BinaryOp {
+            left: Box::new(rest_left),
+            op: *op,
+            right: right.clone(),
+        },
+        span: expr.span.clone(),
+    };
+    Some((assign, rest))
 }

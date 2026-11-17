@@ -2,10 +2,13 @@
 
 **Source docs:**
 [docs/requirements/tier1_02_concurrency.md](../../requirements/tier1_02_concurrency.md),
-[docs/prompts/v1/14_phase4_concurrency.md](../../prompts/v1/14_phase4_concurrency.md).
+`docs/prompts/v1/14_phase4_concurrency.md`.
 
-**Status:** new in the multithreading round. One-shot
-synchronisation primitive for lazy initialisation.
+**Status:** designed in the multithreading round, but **not in the stdlib
+today**: `library/std` defines neither `Once` nor `OnceLock` (a program that
+names `OnceLock` gets E0734, undefined variable). Everything below is
+[planned](../../../TODO.md#t-once). One-shot synchronisation primitive for lazy
+initialisation.
 
 Backed by `pthread_once_t` for `Once`, with an extra payload slot
 for `OnceLock[T]`. Avoids the boilerplate of "static AtomicBool
@@ -25,15 +28,15 @@ guard + Mutex initialiser" by hiding the state machine.
 | Call                              | Returns       |
 |-----------------------------------|---------------|
 | `Once.new()`                      | `Once`        |
-| `o.call_once(closure)`            | `()`          |
+| `o.call_once(closure)`            | `nil`         |
 | `o.is_completed()`                | `Bool`        |
 
 **Given** an `Once` and N threads concurrently calling
-`o.call_once(do || side_effect end)`
+`o.call_once do side_effect end`
 **Then** the closure executes exactly once; every other caller
 blocks until the first call completes, then returns immediately.
 - Closure panic does NOT mark the Once as completed (subsequent
-  callers retry; same as `std::sync::Once` in Rust).
+  callers retry).
 
 ## B3 — `OnceLock[T]` API
 
@@ -46,7 +49,7 @@ blocks until the first call completes, then returns immediately.
 
 - `set` returns `Err(value)` if the cell was already populated,
   giving the caller their value back instead of dropping it.
-- `get` is non-blocking; returns `None` if uninitialised.
+- `get` is non-blocking; returns `nil` if uninitialised.
 - `get_or_init` blocks until initialisation completes (closure runs
   exactly once across all threads, same discipline as `Once`).
 
@@ -54,17 +57,19 @@ blocks until the first call completes, then returns immediately.
 
 ## B4 — Single-thread round-trip
 
-```rx
-ol = OnceLock[Int].new()
-assert_eq(ol.get, None)
-ol.set(42).ok!
-assert_eq(ol.get, Some(42))
-assert(ol.set(99).err?)   # already populated
+The Ruby form, [planned](../../../TODO.md#t-once):
+
+```ruby
+ol = OnceLock[Int].new
+ol.get        # => nil
+ol.set(42)
+ol.get        # => 42
+ol.set(99)    # already populated: the caller gets 99 back
 ```
 
 ## B5 — Multi-thread `get_or_init` runs closure once
 
-**Given** 16 threads each calling `ol.get_or_init(do || expensive end)`
+**Given** 16 threads each calling `ol.get_or_init do expensive end`
 where `expensive` increments a shared atomic counter and returns 7
 **Then**
 - The counter is exactly 1 (the closure ran once).

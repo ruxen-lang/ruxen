@@ -1,0 +1,16 @@
+# A brace closure owns its by-value Buffer capture. Scope-exit drop must free
+# the capture, captures block, and closure pair after the borrowing call.
+
+struct Buffer
+  value: Int
+end
+
+def run(&block: Fn[() -> Int]) -> Int
+  yield
+end
+
+def main
+  let b = Buffer.new(41)
+  let r = run({ || b.value + 1 })
+  print("#{r}")
+end

@@ -29,6 +29,12 @@ impl<'a> Lowerer<'a> {
                                 base: cap_ptr,
                                 field_index: slot.slot_index,
                             });
+                            if self.refmut_slots.contains(def_id) {
+                                let pointee = expr.ty.peel_refs().clone();
+                                return Ok(Some(
+                                    self.load_through_refmut(cell_ptr, &pointee, &expr.ty),
+                                ));
+                            }
                             let dest = self.new_temp(expr.ty.clone());
                             self.emit(MirInst::GetField {
                                 dest,
@@ -43,6 +49,13 @@ impl<'a> Lowerer<'a> {
                     // Cell-promoted locals (mutably captured by a closure
                     // in this frame) hold a pointer to an 8-byte cell;
                     // reads go through the cell.
+                    // A slot-addressed `&var T` (`mir::refmut_abi`) holds the
+                    // caller's address; the read loads a `T` through it.
+                    if self.refmut_slots.contains(def_id) {
+                        let local_ty = self.fn_ref().locals[local as usize].ty.clone();
+                        let pointee = local_ty.peel_refs().clone();
+                        return Ok(Some(self.load_through_refmut(local, &pointee, &local_ty)));
+                    }
                     if self.cell_promoted.contains(def_id) {
                         let dest = self.new_temp(expr.ty.clone());
                         self.emit(MirInst::GetField {
@@ -57,6 +70,18 @@ impl<'a> Lowerer<'a> {
                     // Reference to a top-level `const` — substitute the
                     // initializer expression inline at this use site.
                     self.lower_expr(&const_expr)
+                } else if let Some(field) = self
+                    .symbols
+                    .get(*def_id)
+                    .filter(|d| matches!(d.kind, crate::resolve::symbols::DefKind::Field { .. }))
+                {
+                    // The resolver never makes a field a `VarRef` (a bare
+                    // field name is E0734); one reaching here would read
+                    // "no value", a silent 0, false or null.
+                    Err(format!(
+                        "internal: a field read without a receiver reached MIR (`{}`)",
+                        field.name
+                    ))
                 } else {
                     // Might be a top-level function reference — just return None
                     // for now; calls use the callee_name directly.

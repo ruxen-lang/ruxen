@@ -1,8 +1,0 @@
-def main
-  let v = [10, 20, 30, 40]
-  let n = v.count
-  puts "n=#{n}"
-  let empty: Array[Int] = Array.new
-  let z = empty.count
-  puts "z=#{z}"
-end

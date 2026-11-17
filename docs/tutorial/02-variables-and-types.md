@@ -4,15 +4,15 @@ This chapter shows how to give names to values and what kinds of values Ruxen kn
 
 ## A first runnable example
 
-```ruxen
-def main
-  let name = "Ruxen"
-  let year = 2026
-  puts "Hello from #{name} in #{year}!"
-end
+Save this as `intro.rx` [implemented]:
+
+```ruby
+name = "Ruxen"
+year = 2026
+puts "Hello from #{name} in #{year}!"
 ```
 
-Save as `intro.rx` and run:
+Compile and run:
 
 ```bash
 ruxen compile intro.rx
@@ -21,55 +21,67 @@ ruxen compile intro.rx
 
 Output:
 
-```
+```text
 Hello from Ruxen in 2026!
 ```
 
-You just used two bindings (`name`, `year`), two different types (text and integer), and **string interpolation** — the `#{...}` syntax that drops a value into a string.
+You just used two local variables (`name`, `year`), two different types (text and integer), and **string interpolation** — the `#{...}` syntax that drops a value into a string.
 
-## `let` vs `var`
+## Local variables
 
-Ruxen has two ways to name a value:
+As in Ruby, assigning to a new name creates a local variable, and you can
+reassign it later [implemented]:
 
-- `let` makes an **immutable** binding — once assigned, it cannot be changed.
-- `var` makes a **mutable** binding — you can reassign it later.
+```ruby
+name = "Alaric"
+counter = 0
 
-```ruxen
-def main
-  let name = "Alaric"
-  var counter = 0
+counter = counter + 1     # reassign
+counter += 1              # same thing, shorter
 
-  counter = counter + 1     # OK — counter is var
-  counter += 1              # same thing, shorter
-
-  puts "#{name} has counter #{counter}"
-  # name = "Voss"           # would not compile — name is immutable
-end
+puts "#{name} has counter #{counter}"
 ```
 
-Prefer `let` whenever you can. Immutable bindings are easier to reason about because the value can't change underneath you.
+A local's type is fixed by its first assignment. Assigning a value of
+another type later is a type error, not a new variable (see "Common
+mistakes" below).
+
+Older code declares locals with `let` (immutable) or `var` (mutable). Both
+keywords are [deprecated]: replace them with plain `x = 1`. They still
+compile inside a `def`, but a top-level `let` no longer parses.
 
 ## Type inference
 
-Ruxen looks at the right-hand side and figures out the type for you. You rarely need to write the type yourself:
+Ruxen looks at the right-hand side and figures out the type for you. You rarely need to write the type yourself [implemented]:
 
-```ruxen
-def main
-  let x = 42                 # Int
-  let y = 3.14               # Float
-  let name = "Ruxen"         # &str (a borrowed piece of text)
-  let flag = true            # Bool
-  let ch = ?R                # Char (a single Unicode character)
+```ruby
+x = 42                 # Int
+y = 3.14               # Float
+name = "Ruxen"         # String (owned text)
+flag = true            # Bool
+ch = ?R                # Char (a single Unicode character)
 
-  puts "#{x} #{y} #{name} #{flag} #{ch}"
-end
+puts "#{x} #{y} #{name} #{flag} #{ch}"
 ```
 
-You can spell out the type when you want to be explicit or when the default would be wrong:
+When you want to be explicit, or the default would be wrong, the Ruby form
+puts a type annotation on the local [planned](../../TODO.md#t-typed-local):
 
-```ruxen
-let temperature: Float = 42         # 42 is interpreted as 42.0
-let bytes: Array[UInt8] = Array.new # empty array of unsigned bytes
+```ruby
+temperature: Float = 42      # 42 is interpreted as 42.0
+bytes: Array[UInt8] = []     # empty array of unsigned bytes
+```
+
+Works today, until the typed local lands: a typed `let` inside a `def` [deprecated]:
+
+```ruby
+def setup
+  let temperature: Float = 42      # 42 is interpreted as 42.0
+  let bytes: Array[UInt8] = []     # empty array of unsigned bytes
+  puts temperature
+end
+
+setup()
 ```
 
 ## Primitive types
@@ -89,62 +101,68 @@ These are the built-in scalar types — values that fit in a register and copy c
 | `Char` | 4 bytes | A single Unicode scalar value |
 | `nil` | 0 bytes | The empty value — used for "nothing to return" |
 
-`nil` is unusual: it's both the type name (`def f -> nil` — "this function returns nothing") and the value (`Ok(nil)` — "the Ok case carries no payload"). You'll see it a lot.
+Use `Int` and `Float` in everyday code. The sized types exist for FFI and
+compact storage.
+
+`nil` is unusual: it's both the type name (`def f -> nil` — "this method returns nothing") and the value (`nil` — "nothing here"). You'll see it a lot.
 
 ## Numeric literals
 
-```ruxen
-42              # Int
-42u             # UInt
-42i32           # Int32
-42u8            # UInt8
+[implemented]:
 
-1_000_000       # underscores are ignored, used for readability
-0xFF            # hexadecimal (255)
-0b1010          # binary (10)
-0o777           # octal (511)
+```ruby
+a = 42              # Int
+b = 42u             # UInt
+c = 42i32           # Int32
+d = 42u8            # UInt8
 
-3.14            # Float
-3.14f32         # Float32
-1.0e10          # scientific notation
+e = 1_000_000       # underscores are ignored, used for readability
+f = 0xFF            # hexadecimal (255)
+g = 0b1010          # binary (10)
+h = 0o777           # octal (511)
+
+i = 3.14            # Float
+j = 3.14f32         # Float32
+k = 1.0e10          # scientific notation
 ```
+
+The suffixes (`u8`, `f32`) are an open question: they may be replaced by
+conversion methods such as `200.to_u8` [planned](../../TODO.md#t-oq).
 
 ## Strings
 
-Ruxen has two string flavours:
+Ruxen has one string type and one way to borrow it:
 
 | Type | Owned? | Growable? | Use it when |
 |------|--------|-----------|-------------|
 | `String` | Yes — owns its memory | Yes | You need to keep the text around or change it |
-| `&str` | No — borrows from someone else | No | You just need to read existing text |
+| `&String` | No — borrows from someone else | No | You just need to read existing text |
 
-The `&` in `&str` means **borrow** — you're reading data that someone else owns. Borrowing is covered in detail in [Chapter 4](04-ownership-and-borrowing.md); for now, just know that a bare string literal like `"hello"` is an owned `String`, and it coerces to a `&str` (or `&String`) borrow wherever a function only needs to read it. (The full string-literal model — `""` owned vs `&""` borrowed, and when you'd reach for `.clone` to copy a borrow — is in [Chapter 29](29-strings-bytes-numbers.md).)
+The `&` in `&String` means **borrow** — you're reading data that someone else owns. Borrowing is covered in detail in [Chapter 4](04-ownership-and-borrowing.md); for now, just know that a bare string literal like `"hello"` is an owned `String`, and it satisfies a `&String` parameter wherever a method only needs to read it. There is no separate `str` / `&str` type. (The full string-literal model — `""` owned vs `&""` borrowed, and when you'd reach for `.clone` to copy a borrow — is in [Chapter 29](29-strings-bytes-numbers.md).)
 
-```ruxen
-def main
-  let greeting = "hello"                  # &str — a string literal
-  let owned = "hello"        # String — heap-allocated, owned
+[implemented]:
 
-  puts greeting
-  puts owned
-end
+```ruby
+greeting = "hello"                  # String — heap-allocated, owned
+view = &greeting                    # &String — a read-only borrow
+
+puts greeting
+puts view
 ```
 
 ### String interpolation
 
-Put any expression inside `#{...}` to drop its value into a string:
+Put any expression inside `#{...}` to drop its value into a string [implemented]:
 
-```ruxen
-def main
-  let name = "Ruxen"
-  let age = 1
-  puts "#{name} is #{age} year old"
-end
+```ruby
+name = "Ruxen"
+age = 1
+puts "#{name} is #{age} year old"
 ```
 
 Output:
 
-```
+```text
 Ruxen is 1 year old
 ```
 
@@ -154,119 +172,172 @@ Chapter 17 goes deeper on formatting; this much is enough for now.
 
 Single quotes make a **raw** string — backslashes stay literal and there's
 no `#{}` interpolation. Double quotes interpolate and process escapes. (A
-raw string can hold `"` freely, but not a `'`.)
+raw string can hold `"` freely, but not a `'`.) Triple quotes make a
+multi-line string [implemented]:
 
-```ruxen
-let raw = 'no\escape\here'            # backslashes stay literal, no interpolation
-let raw2 = 'can have "quotes" inside' # double quotes are fine in a raw string
+```ruby
+raw = 'no\escape\here'            # backslashes stay literal, no interpolation
+raw2 = 'can have "quotes" inside' # double quotes are fine in a raw string
 
-let multi = """
+multi = """
   This is a
   multiline string
 """
+puts multi
 ```
 
-## Tuples
+Ruby's heredoc `<<~EOS ... EOS` is the multi-line form to come
+[planned](../../TODO.md#t-heredoc); until then, use `"""`.
 
-A **tuple** is a fixed-size grouping of values, possibly of different types. Use one when you want to return two things from a function or pass a few related values together without defining a whole class:
+## Returning two values
 
-```ruxen
-def divmod(a: Int, b: Int) -> (Int, Int)
-  (a / b, a % b)
+To return two things from a method, return an array. The Ruby form
+destructures the result straight into two locals, with the RBS tuple type
+`[Int, Int]` as the return type [planned](../../TODO.md#t-parallel-assign)
+(the tuple type is [planned](../../TODO.md#t-tuple-type) too):
+
+```ruby
+def divmod(a: Int, b: Int) -> [Int, Int]
+  [a / b, a % b]
 end
 
-def main
-  let (q, r) = divmod(17, 5)
-  puts "q=#{q}"
-  puts "r=#{r}"
+q, r = divmod(17, 5)
+puts "q=#{q}"
+puts "r=#{r}"
+```
+
+Works today: return an `Array[Int]` and index it [implemented]:
+
+```ruby
+def divmod(a: Int, b: Int) -> Array[Int]
+  [a / b, a % b]
 end
+
+qr = divmod(17, 5)
+puts "q=#{qr[0]}"
+puts "r=#{qr[1]}"
 ```
 
 Output:
 
-```
+```text
 q=3
 r=2
 ```
 
-The `let (q, r) = ...` line is **destructuring** — unpacking a tuple into named pieces.
+Older code uses Rust-style tuples, `(Int, Int)` with `let (q, r) = ...`
+inside a `def`. Tuples are [deprecated]: replace them with arrays, the
+`[Int, Int]` tuple type and `q, r = pair`.
 
 ## Arrays
 
-A growable, heap-allocated sequence. The literal `[1, 2, 3]` builds an `Array[Int]`:
+A growable, heap-allocated sequence. The literal `[1, 2, 3]` builds an `Array[Int]` [implemented]:
 
-```ruxen
-def main
-  var v: Array[Int] = Array.new
-  v.push(1)
-  v.push(2)
-  v.push(3)
-  puts "#{v.size}"     # 3
-end
+```ruby
+v = [1, 2]
+v.push(3)
+puts v.size     # 3
 ```
 
-The fixed-size form `[Int; 3]` exists for stack-allocated arrays with a known length — most code uses the growable `Array[T]` instead.
+An empty array needs its element type. The Ruby form is the typed local
+`v: Array[Int] = []` [planned](../../TODO.md#t-typed-local); today write
+`let v: Array[Int] = []` inside a `def` ([deprecated], as above).
+
+The fixed-size form `[Int; 3]` exists for stack-allocated arrays with a known length — most code uses the growable `Array[T]` instead. Whether it stays (perhaps as `StaticArray[T, N]`) is an open question [planned](../../TODO.md#t-oq).
 
 ## Type aliases
 
-Give a long type a short name:
+Give a long type a short name. The Ruby form is a constant-style assignment
+[planned](../../TODO.md#t-type-alias):
 
-```ruxen
-type UserId = Int
-type Callback = Fn(Int) -> Bool
+```ruby
+UserId = Int
+Callback = Fn[(Int) -> Bool]
 ```
 
-A type alias is purely a naming convenience — `UserId` and `Int` are the same type to the compiler. For a *distinct* type that wraps `Int`, use a newtype (see [Chapter 6](06-classes-and-structs.md)).
+Works today: the `type` keyword, [deprecated] until `UserId = Int` lands:
+
+```ruby
+type UserId = Int
+type Callback = Fn[(Int) -> Bool]
+
+def same(id: UserId) -> UserId = id
+puts same(3)
+```
+
+A type alias is purely a naming convenience — `UserId` and `Int` are the same type to the compiler. For a *distinct* type that wraps `Int`, use a one-field value type (see [Chapter 6](06-classes-and-structs.md)).
 
 ## Constants
 
-Module-level `let` bindings serve as program-wide constants. By convention, name them in `SCREAMING_SNAKE_CASE`:
+Name program-wide constants in `SCREAMING_SNAKE_CASE`. The Ruby form is a
+plain assignment at the top level or in a class or module body
+[planned](../../TODO.md#t-constants):
 
-```ruxen
-let MAX_RETRIES = 3
-let DEFAULT_PORT: UInt16 = 8080
+```ruby
+MAX_RETRIES = 3
+DEFAULT_PORT = 8080
 
-def main
-  puts "retries=#{MAX_RETRIES} port=#{DEFAULT_PORT}"
-end
+puts "retries=#{MAX_RETRIES} port=#{DEFAULT_PORT}"
 ```
 
-There is no separate `const` keyword for value bindings — a top-level `let` *is* the constant form. A constant whose initializer is a simple compile-time expression can also be used in type positions like array sizes.
+Works today, until `MAX_RETRIES = 3` lands: the `const` keyword [deprecated]:
+
+```ruby
+const MAX_RETRIES = 3
+const DEFAULT_PORT: UInt16 = 8080u16
+
+def report
+  puts "retries=#{MAX_RETRIES} port=#{DEFAULT_PORT}"
+end
+
+report()
+```
+
+A top-level `let` is not a constant: it does not parse. A constant whose initializer is a simple compile-time expression can also be used in type positions like array sizes.
 
 ## Common mistakes
 
-**Trying to reassign a `let`.**
+**Changing a local's type.** Rejected today [implemented]:
 
-```ruxen
-let count = 0
-count = count + 1     # ERROR: cannot assign to immutable `count`
+```ruby
+count = 0
+count = "zero"     # ERROR: type mismatch: expected `Int`, found `String`
 ```
 
-Change `let` to `var`.
+Use a new name for the new value.
 
-**Mismatched numeric types.**
+**Mismatched numeric types.** Rejected today with E0707 [implemented]:
 
-```ruxen
-let x: Int = 1
-let y: Float = 2.0
-let z = x + y         # ERROR: Int and Float don't auto-convert
+```ruby
+x = 1
+y = 2.0
+z = x + y         # ERROR: Int and Float don't auto-convert
 ```
 
-Convert explicitly: `let z = (x as Float) + y`.
+Convert explicitly [implemented]:
 
-**Treating `&str` and `String` as interchangeable.** They aren't, but Ruxen will often convert for you at call boundaries. When the compiler complains, `&owned` borrows a `String` as `&String`, and `owned.as_str` gets you an `&str`. We'll come back to this once you've met borrowing properly in Chapter 4.
+```ruby
+x = 1
+y = 2.0
+z = x.to_f + y
+puts z
+```
+
+The Rust cast `x as Float` is [deprecated]: use `to_f` and `to_i`.
+
+**Treating `&String` and `String` as interchangeable.** They aren't, but Ruxen will often convert for you at call boundaries. When the compiler complains, `&owned` borrows a `String` as `&String`, and `borrowed.clone` copies a borrow into a fresh owned `String`. We'll come back to this once you've met borrowing properly in Chapter 4.
 
 ## Try it
 
-Change `intro.rx` so that `year` is a `Float` (`let year: Float = 2026`). Recompile. The interpolation still works — Ruxen knows how to render any printable value. Now try printing a tuple: `puts "#{(1, 2)}"` — what does it look like?
+Change `intro.rx` so that `year` is a `Float` (`year = 2026.0`). Recompile. The interpolation still works — Ruxen knows how to render any printable value (a whole `Float` prints without its `.0` today, a [known issue](../../TODO.md#t-float-to-s)). Now try printing an array: `puts "#{[1, 2]}"` — what does it look like?
 
 ## Recap
 
-- `let` is immutable, `var` is mutable. Prefer `let`.
-- Types are usually inferred. Add `: Type` when you need to be specific.
-- Primitives include `Int`, `Float`, `Bool`, `Char`, and the unit type `nil`.
-- `String` is owned and growable; `&str` is borrowed and read-only.
+- `x = 1` creates a local; reassign it freely, but keep its type. `let` and `var` are deprecated.
+- Types are usually inferred. A typed local `x: Type = ...` is planned; today use `let x: Type = ...` inside a `def`.
+- Primitives include `Int`, `Float`, `Bool`, `Char`, and `nil`.
+- `String` is owned and growable; `&String` is borrowed and read-only.
 - `#{expr}` interpolates a value into a string.
-- Tuples group a few values without ceremony; arrays grow.
+- Return two values as an array; tuples are deprecated.
 
-**Next:** [Functions](03-functions.md) — defining your own building blocks.
+**Next:** [Methods](03-functions.md) — defining your own building blocks.

@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Prompt: Bring the Ruxen REPL to full ruxenc parity
 
 You are working in `/Users/hassan/.projects/ruxen/`. Ruxenc (the batch compiler) handles every tutorial feature correctly; the REPL (`crates/ruxen-repl/`) handles a subset. The goal of this task is to close the gap so every `.rx` fixture under `tests/release-e2e/cases/` that ruxenc compiles also runs correctly through `ruxen-repl` via piped stdin.

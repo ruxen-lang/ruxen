@@ -1,0 +1,35 @@
+# Block methods over an Array of a user class type the block parameter as
+# the element class, so `r.a` inside the block is a field read.
+#
+# Array's own `each` is an FFI alias of the inlined iteration primitive and
+# declares no block parameter. Block-parameter seeding stopped at that
+# declaration, `r` stayed untyped, and `v.each { |r| puts "#{r.a}" }` lost
+# `main` altogether (a link error, `undefined reference to main`). The
+# seed now comes from the first declaration that takes a block, here
+# `Enumerable#each(f: Fn(T))`.
+class Rec
+  a: Int
+  name: String
+
+  def init(@a: Int, @name: String)
+  end
+end
+
+def main
+  var v = [Rec.new(3, "c"), Rec.new(1, "a"), Rec.new(2, "b")]
+  v.each { |r| puts "each #{r.a} #{r.name}" }
+  v.each do |r|
+    puts "do #{r.a}"
+  end
+  puts "map #{v.map { |r| r.name }.join(",")}"
+  puts "select #{v.select { |r| r.a > 1 }.size}"
+  puts "reject #{v.reject { |r| r.a > 1 }.size}"
+  v.each_with_index { |r, i| puts "#{i}:#{r.a}" }
+  puts "any #{v.any? { |r| r.a == 2 }} all #{v.all? { |r| r.a > 1 }}"
+  puts "find #{v.find { |r| r.a == 1 }.present?} #{v.find { |r| r.a == 9 }.present?}"
+  let parts = v.partition { |r| r.a > 1 }
+  puts "partition #{parts.0.size} #{parts.1.size}"
+  puts "reduce #{v.reduce(0) { |acc, r| acc + r.a }}"
+  v.sort_by { |x, y| x.a <=> y.a }
+  puts "sort_by #{v.map { |r| r.name }.join("")}"
+end

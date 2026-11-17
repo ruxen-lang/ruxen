@@ -1,0 +1,20 @@
+# F-29: a Float converted to an integer saturates on every backend: an
+# out-of-range value clamps to the target's bounds and NaN becomes 0
+# (aarch64 hardware already does; x86_64 `cvttsd2si` would not).
+def to_int(x: Int) -> Int
+  x
+end
+
+big = 1.0e30
+small = -1.0e30
+nan = 0.0 / 0.0
+neg = -2.5
+puts big as Int
+puts small as Int
+puts nan as Int
+puts to_int(big as Int32)
+puts to_int(small as Int32)
+puts neg as Int
+puts to_int(big)
+puts to_int(nan)
+puts to_int(neg)

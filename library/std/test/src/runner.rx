@@ -23,6 +23,7 @@ class Runner
   name: String
   report_mode: Int
   report: String
+  failures: String
 
   def init(test_path: &String)
     self.passed = 0
@@ -30,6 +31,7 @@ class Runner
     self.pending = 0
     self.name = test_path.clone
     self.report = ""
+    self.failures = ""
     let fmt = match get("RUXEN_TEST_FORMAT")
       Ok(v)  -> v
       Err(_) -> "progress"
@@ -59,7 +61,18 @@ class Runner
     end
   end
 
-  def var note_fail(name: &String)
+  ## Records a failed case. `packed` is the `Runner.wait` status: a case
+  ## killed by a signal (a crash) prints no matcher message, so the signal
+  ## or exit code is the only clue a CI log gets.
+  def var note_fail(name: &String, packed: Int)
+    let signal = (packed >> 9) & 255
+    let code = (packed >> 1) & 255
+    let cause = if signal != 0
+        "killed by signal #{signal}"
+      else
+        "exit code #{code}"
+      end
+    self.failures = self.failures + "  ✗ " + name.clone + " (" + cause + ")\n"
     if self.report_mode == 1
       self.report = self.report + "F"
     else
@@ -83,13 +96,16 @@ class Runner
     if self.report.size() > 0
       eputs "#{self.report}"
     end
+    if self.report_mode != 0 && self.failures.size() > 0
+      eputs "Failures (matcher messages are on stdout):\n#{self.failures}"
+    end
     puts("#{self.passed} passed, #{self.failed} failed, #{self.pending} pending")
   end
 
   lib "runtime/test.c"
     def self.set_current as "ruxen_test_current_set"(handle: Int) -> Int
     def self.get_current as "ruxen_test_current_get" -> Int
-    def self.self_addr as "ruxen_test_runner_addr"(r: Runner) -> Int
+    def self.self_addr as "ruxen_test_runner_addr"(r: &Runner) -> Int
     def self.from_handle as "ruxen_test_runner_from_addr"(addr: Int) -> &var Runner
     def self.case_reset as "ruxen_test_case_reset" -> Int
     def self.case_mark_failed as "ruxen_test_case_mark_failed" -> Int

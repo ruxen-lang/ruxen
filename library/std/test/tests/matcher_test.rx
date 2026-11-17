@@ -1,0 +1,50 @@
+use std.test.TestCase
+use std.test.BoolMatcher
+use std.test.OptionMatcher
+use std.test.ArrayMatcher
+use std.test.StringMatcher
+
+Tester.describe("Matcher") do |t: &var Tester|
+  t.it("to_eq passes on equal values") do
+    t.expect(1 + 2).to_eq(3)
+  end
+
+  t.it("not_to_eq passes on unequal values") do
+    t.expect(1 + 2).not_to_eq(4)
+  end
+
+  t.it("BoolMatcher answers truthy and falsy") do
+    t.expect(BoolMatcher.new(true).to_be_truthy).to_eq(true)
+    t.expect(BoolMatcher.new(false).to_be_falsy).to_eq(true)
+  end
+
+  t.it("OptionMatcher answers nil and not nil") do
+    t.expect(OptionMatcher.new(true).not_to_be_nil).to_eq(true)
+    t.expect(OptionMatcher.new(false).to_be_nil).to_eq(true)
+  end
+
+  t.it("ArrayMatcher and StringMatcher find an included value") do
+    let xs = [1, 2, 3]
+    t.expect(ArrayMatcher.new(&xs).to_include(2)).to_eq(true)
+    let s = "hello world"
+    t.expect(StringMatcher.new(&s).to_include("world")).to_eq(true)
+  end
+end
+
+Tester.describe("TestCase") do |t: &var Tester|
+  t.it("keeps its name and is not pending by default") do
+    let tc = TestCase.new("adds two numbers", { || puts "ran" })
+    t.expect(tc.name).to_eq("adds two numbers")
+    t.expect(tc.pending).to_eq(false)
+  end
+end
+
+Tester.describe("Runner") do |t: &var Tester|
+  t.it("round-trips the current-runner slot") do
+    let saved = Runner.get_current
+    Runner.set_current(42)
+    let h = Runner.get_current
+    Runner.set_current(saved)
+    t.expect(h).to_eq(42)
+  end
+end

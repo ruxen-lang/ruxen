@@ -1,7 +1,0 @@
-[package]
-name = "with-path-dep"
-version = "0.1.0"
-edition = "2026"
-
-[dependencies]
-simple-lib = { path = "../simple-lib" }

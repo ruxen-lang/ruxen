@@ -3,7 +3,7 @@
 **Status:** shipped Phase 2 #06.5 T8 — kernel CSPRNG-backed surface.
 
 CSPRNG-only. No userspace PRNG, no seeding — each call delegates to
-the OS kernel. Pin tests in `compiler/ruxen_core/tests/stdlib_rand.rs`
+the OS kernel. The tests in `library/std/rand/tests/rand_test.rx`
 are the canonical docs for behaviour.
 
 - `random_bytes(n: Int) -> Result[Array[U8], IoError]` — returns

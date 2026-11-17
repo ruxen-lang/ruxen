@@ -1,0 +1,39 @@
+# Blocks, procs and lambdas: two trailing blocks to a user `each` borrow the
+# same String capture (freed once by the top level, never by a block), a lambda is
+# borrowed by an ordinary `Fn(...)` parameter for two calls, and a proc owns
+# the String it captures.
+
+class Bag
+  size: Int
+  def init
+    @size = 2
+  end
+  def each(&block: Fn[(Int) -> nil]) -> nil
+    i = 0
+    while i < @size
+      block.(i)
+      i += 1
+    end
+  end
+end
+
+def apply(f: Fn(Int) -> Int, x: Int) -> Int
+  f.(x)
+end
+
+prefix = "p-"
+bag = Bag.new
+bag.each { |n| puts "#{prefix}#{n}" }
+bag.each do |n|
+  puts "#{prefix}#{n}"
+end
+puts prefix
+
+base = "abc"
+f = ->(x: Int) { x + (base.size as Int) }
+puts apply(f, 1)
+puts apply(f, 2)
+
+word = "proc-"
+p = proc { |x: Int| (word.size as Int) + x }
+puts p.(1)

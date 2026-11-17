@@ -1,5 +1,0 @@
-def main
-  let v = ["a", "b", "c"]
-  let s = v.join("")
-  puts s
-end

@@ -1,0 +1,6 @@
+stream start
+got 1
+got 2
+cancelled mid-stream
+stream done
+res freed tag=7

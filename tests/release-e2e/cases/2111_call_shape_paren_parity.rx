@@ -1,0 +1,90 @@
+# F-19: `x.m` and `x.m()` lower through the one method-call path, so the
+# fixes the paren-less path had now hold for both spellings, and the other way
+# round.
+#
+#   * An alias of a method the class only inherits from a mixin default,
+#     called with parentheses (`greeter.salute()`), used to mangle the alias
+#     name and fail to link.
+#   * An alias whose target has default arguments, called with parentheses
+#     (`b.tick()`), used to pass too few arguments.
+#   * A scalar method with a default argument (`Int#round(ndigits = 0)`),
+#     called with parentheses, used to pass too few arguments.
+#   * `collect` on a user class is that class's method; typeck used to demand
+#     the iterator form `collect[Target]` whenever it was written with
+#     parentheses.
+#   * `&String + &String` dispatches to the `.rx` `String#+`; it used to add
+#     the two pointers. `String <=> String` dispatches to `String#<=>`.
+#   * `Set#==` is a declared `.rx` method now; `==` / `!=` keep their answers.
+mixin Greeting
+  def greeting -> Int
+    48
+  end
+end
+
+class Greeter
+  include Greeting
+  def init
+  end
+  alias salute greeting
+end
+
+class Box[T]
+  value: T
+
+  def init(@value: T)
+  end
+
+  def bump(step: Int = 7) -> Int
+    step
+  end
+
+  alias tick bump
+end
+
+class Bag
+  items: Int
+
+  def init(@items: Int)
+  end
+
+  def collect -> Int
+    self.items * 10
+  end
+end
+
+def join(a: &String, b: &String) -> String
+  a + b
+end
+
+def main
+  let greeter = Greeter.new
+  puts "alias_mixin_default=#{greeter.salute()}"
+
+  let b = Box[Int].new(5)
+  puts "alias_default_parens=#{b.tick()}"
+  puts "alias_default_bare=#{b.tick}"
+
+  puts "scalar_default_parens=#{1234.round()}"
+  puts "scalar_default_bare=#{1234.round}"
+
+  let bag = Bag.new(4)
+  puts "collect_parens=#{bag.collect()}"
+  puts "collect_bare=#{bag.collect}"
+
+  let x = "ab"
+  let y = "cd"
+  puts "ref_concat=#{join(x, y)}"
+  let ordered = x <=> y
+  puts "spaceship=#{ordered}"
+
+  var s1: Set[Int] = Set.new
+  s1.insert(1)
+  s1.insert(2)
+  var s2: Set[Int] = Set.new
+  s2.insert(2)
+  s2.insert(1)
+  puts "set_eq=#{s1 == s2}"
+  puts "set_ne=#{s1 != s2}"
+  s2.insert(3)
+  puts "set_eq_after_insert=#{s1 == s2}"
+end

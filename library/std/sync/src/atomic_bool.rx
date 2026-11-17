@@ -14,6 +14,6 @@ class AtomicBool
     def fetch_and as "ruxen_atomic_bool_fetch_and"(value: Int) -> Int
     def fetch_or as "ruxen_atomic_bool_fetch_or"(value: Int) -> Int
     def compare_and_swap as "ruxen_atomic_bool_compare_and_swap"(current: Int, new_val: Int) -> Int
-    def drop as "ruxen_atomic_bool_drop" -> nil
+    def consume drop as "ruxen_atomic_bool_drop" -> nil
   end
 end

@@ -1,0 +1,22 @@
+# Pins Ruby parallel assignment `a, b = e1, e2` and simultaneous swap.
+def main
+  var a = 1
+  var b = 2
+  a, b = b, a
+  puts a
+  puts b
+
+  var x = 0
+  var y = 0
+  var z = 0
+  x, y, z = 10, 20, 30
+  puts x
+  puts y
+  puts z
+
+  var p = 5
+  var q = 6
+  p, q = q + 1, p + 1
+  puts p
+  puts q
+end

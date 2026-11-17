@@ -22,6 +22,11 @@ only_used_in_recursion = "allow"
 # (Set debug = 1 if you need line-table backtraces.)
 [profile.dev]
 debug = false
+# The tests compile and run hundreds of programs through the compiler;
+# opt-level 1 more than halves that time for a few seconds more build.
+# Set here, not in [profile.test], so `cargo build` and `cargo test`
+# share one set of artifacts.
+opt-level = 1
 
 [profile.test]
 debug = false

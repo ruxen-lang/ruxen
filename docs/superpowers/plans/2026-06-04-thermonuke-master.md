@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # Thermo-Nuclear Structural Refactor — Master Plan
 
 > **For agentic workers:** This is the MASTER plan. Each phase below has (or will have) its own

@@ -8,7 +8,7 @@
 
 use crate::hir::types::{MixinRef, MoveSemantics, Ty};
 use crate::lexer::token::Span;
-use crate::parser::ast::{BinOp, UnaryOp, Visibility};
+use crate::parser::ast::{BinOp, ClosureKind, UnaryOp, Visibility};
 
 /// Unique identifier for every definition in the program.
 pub type DefId = u32;
@@ -28,7 +28,7 @@ pub struct HirProgram {
     /// Ruxen-side name AND optional `c_symbol` alias. MIR lowering uses
     /// this to populate `MirProgram::ffi_libs`, and call-site lowering
     /// uses it to rewrite a Ruxen name → its C symbol when an alias is
-    /// present. Top-level `Lib`/`Extern` items themselves do not become
+    /// present. Top-level `Lib` items themselves do not become
     /// `HirItem`s (they emit no executable code), so we surface them
     /// here as a side-channel on the program.
     pub ffi_libs: Vec<HirFfiLib>,
@@ -46,11 +46,8 @@ pub struct HirProgram {
 /// #06.8 Phase 2: a single FFI library declaration carried on `HirProgram`.
 #[derive(Debug, Clone)]
 pub struct HirFfiLib {
-    /// Link name (e.g. `"m"` for `lib "m" ... end`). Empty for anonymous
-    /// `extern "C"` blocks.
+    /// Link name (e.g. `"m"` for `lib "m" ... end`).
     pub name: String,
-    /// Linker flags collected from `@[link]` attributes on this block.
-    pub link_flags: Vec<String>,
     pub functions: Vec<HirFfiFunc>,
 }
 
@@ -73,6 +70,16 @@ pub struct HirFfiFunc {
     pub param_types: Vec<crate::hir::types::Ty>,
     pub return_type: Option<crate::hir::types::Ty>,
     pub is_variadic: bool,
+    /// Whether `param_types[0]` is the receiver the MIR method call
+    /// prepends (an instance method of a class- or mixin-body `lib`
+    /// block), rather than a declared parameter.
+    pub has_receiver: bool,
+    /// The declaration spelled its result `-> owned T`
+    /// (`ast::FfiFunction::returns_owned`).
+    pub returns_owned: bool,
+    /// How the receiver is passed (`def var` / `def consume`); `None` when
+    /// `has_receiver` is false.
+    pub self_mode: Option<HirSelfMode>,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +107,33 @@ pub struct HirExpr {
     pub span: Span,
 }
 
+impl HirExpr {
+    /// Whether this expression, passed for a slot-addressed `&var T`
+    /// parameter (a String or a scalar, `Ty::refmut_is_slot_address`), is a
+    /// projection whose storage has no address to pass: an element of
+    /// anything but an Array (a Hash value), or a field read through safe
+    /// navigation or of a value that is not an object. MIR passes every
+    /// other shape (`lower_refmut_addr`); borrow_check reports these
+    /// (E1021). The one rule both stages read.
+    pub fn is_unaddressable_var_place(&self) -> bool {
+        match &self.kind {
+            HirExprKind::Borrow {
+                mutable: true,
+                expr: inner,
+            } => inner.is_unaddressable_var_place(),
+            HirExprKind::Index { object, .. } => {
+                !matches!(object.ty.builtin_head(), Some(("Array", _)))
+            }
+            HirExprKind::FieldAccess {
+                object, safe_nav, ..
+            } => {
+                *safe_nav || !matches!(object.ty.peel_refs(), Ty::Class { .. } | Ty::Struct { .. })
+            }
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum HirExprKind {
     // Literals
@@ -120,22 +154,57 @@ pub enum HirExprKind {
     /// Resolved variable reference
     VarRef(DefId),
 
-    /// Field access with resolved field index
+    /// Field access with resolved field index. Resolve builds one for every
+    /// `x.name` written without arguments; typeck keeps it only when `name`
+    /// is a real field (or a tuple / newtype index) and rewrites every other
+    /// one into a `MethodCall` with `parens: false`. One that survives typeck
+    /// with an unresolved receiver is decided by MIR the same way.
     FieldAccess {
         object: Box<HirExpr>,
         field_name: String,
         field_idx: usize,
+        /// `x&.name`: when `object` is a `T?`, the access runs only on a
+        /// present value and the result is wrapped back into `T?`.
+        safe_nav: bool,
     },
 
     /// Method call with resolved method DefId
     MethodCall {
         object: Box<HirExpr>,
+        /// The method MIR dispatches to by DefId: set by typeck only on a
+        /// user class, struct or enum receiver, else `UNRESOLVED_DEF`.
         method: DefId,
+        /// The method typeck selected on ANY receiver head, builtin heads
+        /// (`String`, `Array`, ...) and scalar primitives included: an own
+        /// or inherited method, or the mixin default (`Kernel` and the
+        /// bounds of a type-parameter receiver included) inference typed
+        /// the call with. `UNRESOLVED_DEF` when it selected none (an
+        /// unknown receiver, a bodiless bound requirement). Read it for the
+        /// callee's declared signature instead of looking the method up
+        /// again. MIR never dispatches on it: a builtin-head
+        /// call mangles through the FFI alias map, and its def's span lies
+        /// in a stdlib file, so it is no IDE jump target either.
+        resolved: DefId,
+        /// The parameter types of the bodiless mixin requirement typeck
+        /// selected (by argument types, among same-named overloads) for a
+        /// call on a mixin-bound receiver, where `resolved` has no def to
+        /// record. `None` for every other call. The borrow checker reads it
+        /// instead of choosing an overload again.
+        requirement_params: Option<Vec<Ty>>,
         method_name: String,
         generic_args: Vec<Ty>,
         args: Vec<HirExpr>,
         /// Trailing block argument (desugared closure)
         block: Option<Box<HirExpr>>,
+        /// `x&.m(...)`: when `object` is a `T?`, the call runs only on a
+        /// present value and the result is wrapped back into `T?`.
+        safe_nav: bool,
+        /// True when the source wrote an argument list `(...)`, copied from
+        /// the AST call's `parens`. False for the command form `x.m "a"`, a
+        /// block-only call `x.m { }`, a bare member access `x.m` (which
+        /// typeck rewrites from a `FieldAccess`), and the calls the compiler
+        /// synthesizes (`.await`, `?`, `puts x` calling `x.to_s`).
+        parens: bool,
     },
 
     /// Resolved function call
@@ -216,6 +285,16 @@ pub enum HirExprKind {
         value: Box<HirExpr>,
     },
 
+    /// Parallel assignment `a, b = 1, 2`. Without a splat, targets and values
+    /// have equal length. `splat_target` identifies a trailing `*rest` target
+    /// that receives the remaining values as an Array. All values are
+    /// evaluated before any target is written. Lowered in MIR.
+    MultiAssign {
+        targets: Vec<HirExpr>,
+        values: Vec<HirExpr>,
+        splat_target: Option<usize>,
+    },
+
     /// Return from function
     Return(Option<Box<HirExpr>>),
 
@@ -225,6 +304,12 @@ pub enum HirExprKind {
     /// Continue to next loop iteration
     Continue,
 
+    /// Block Tier-2: `next [expr]` — the block's value for this iteration.
+    /// Only ever appears inside a closure body; lowers to an early return
+    /// from the block's closure. (An inlined-combinator block containing a
+    /// top-level `next` is rejected at MIR with E1125.)
+    Next(Option<Box<HirExpr>>),
+
     /// Closure expression
     Closure {
         params: Vec<HirClosureParam>,
@@ -232,6 +317,8 @@ pub enum HirExprKind {
         captures: Vec<Capture>,
         is_async: bool,
         is_move: bool,
+        /// Block, proc or lambda, as the parser marked it.
+        kind: ClosureKind,
     },
 
     /// Struct/class construction
@@ -501,7 +588,6 @@ pub struct HirClassDef {
     pub fields: Vec<HirFieldDef>,
     pub methods: Vec<HirFuncDef>,
     pub impl_blocks: Vec<HirImplBlock>,
-    pub derive_traits: Vec<String>,
     pub doc_comments: Vec<String>,
     pub span: Span,
 }
@@ -530,7 +616,6 @@ pub struct HirStructDef {
     /// Inline `include Mixin` directives in the struct body
     /// (ruby-naming.spec.md §3.4a).
     pub impl_blocks: Vec<HirImplBlock>,
-    pub derive_traits: Vec<String>,
     /// In-body `layout <kind>` directive args (ruby-naming.spec.md §3.5),
     /// e.g. `["c"]`, `["packed"]`, `["transparent"]`.
     pub layout: Vec<String>,
@@ -552,7 +637,6 @@ pub struct HirEnumDef {
     /// Inline `include Mixin` directives in the enum body
     /// (ruby-naming.spec.md §3.4a).
     pub impl_blocks: Vec<HirImplBlock>,
-    pub derive_traits: Vec<String>,
     pub doc_comments: Vec<String>,
     pub span: Span,
 }

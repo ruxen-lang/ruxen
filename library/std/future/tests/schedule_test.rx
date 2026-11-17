@@ -1,0 +1,192 @@
+use std.time.Duration
+
+## Err(attempt number) for the first `fail_until` calls, then Ok(ok_val).
+class Flaky
+  n: Int
+  fail_until: Int
+  ok_val: Int
+
+  def init(fail_until: Int, ok_val: Int)
+    self.n = 0
+    self.fail_until = fail_until
+    self.ok_val = ok_val
+  end
+
+  def var attempt -> Result[Int, Int]
+    self.n = self.n + 1
+    if self.n <= self.fail_until
+      Result.Err(self.n)
+    else
+      Result.Ok(self.ok_val)
+    end
+  end
+end
+
+## Attempt i is Err(i) while i < ok_from, then Ok(ok_val).
+class Attempt
+  i: Int
+  ok_from: Int
+  ok_val: Int
+  include Future
+  type Output = Result[Int, Int]
+
+  def init(i: Int, ok_from: Int, ok_val: Int)
+    self.i = i
+    self.ok_from = ok_from
+    self.ok_val = ok_val
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[Int, Int]]
+    if self.i < self.ok_from
+      Poll.Ready(Result.Err(self.i))
+    else
+      Poll.Ready(Result.Ok(self.ok_val))
+    end
+  end
+end
+
+class Attempts
+  n: Int
+  ok_from: Int
+  ok_val: Int
+
+  def init(ok_from: Int, ok_val: Int)
+    self.n = 0
+    self.ok_from = ok_from
+    self.ok_val = ok_val
+  end
+
+  def var make_next -> Attempt
+    let f = Attempt.new(self.n, self.ok_from, self.ok_val)
+    self.n = self.n + 1
+    f
+  end
+end
+
+## Attempt 0 fails with Err(2), every later one with Err(9).
+class Seq
+  i: Int
+  include Future
+  type Output = Result[Int, Int]
+
+  def init(i: Int)
+    self.i = i
+  end
+
+  def var poll(cx: &var Context) -> Poll[Result[Int, Int]]
+    if self.i == 0
+      Poll.Ready(Result.Err(2))
+    else
+      Poll.Ready(Result.Err(9))
+    end
+  end
+end
+
+class SeqSource
+  n: Int
+
+  def init
+    self.n = 0
+  end
+
+  def var make_next -> Seq
+    let f = Seq.new(self.n)
+    self.n = self.n + 1
+    f
+  end
+end
+
+def poll_phase(rf: &var RetryFuture, cx: &var Context) -> Int
+  match (&var rf).poll(&var cx)
+    Poll.Ready(r) ->
+      match r
+        Ok(v) -> v
+        Err(e) -> -100 - e
+      end
+    Poll.Pending -> -2
+  end
+end
+
+def park_then_drop(src: &var Attempts, cx: &var Context) -> Int
+  let first = src.make_next
+  var rf = RetryFuture.new(first, Schedule.exponential(Duration.from_millis(50)).max_attempts(5), { || src.make_next })
+  let _p = (&var rf).poll(&var cx)
+  ruxen_reactor_registered_count()
+end
+
+Tester.describe("Schedule") do |t: &var Tester|
+  t.it("run retries until the block succeeds") do
+    var a = Flaky.new(2, 99)
+    var sa = Schedule.recurs(5)
+    let ra = sa.run do
+      a.attempt
+    end
+    t.expect(ra.unwrap_or(-1)).to_eq(99)
+  end
+
+  t.it("run returns the last error when the budget runs out") do
+    var b = Flaky.new(9, 0)
+    var sb = Schedule.recurs(1)
+    let rb = sb.run do
+      b.attempt
+    end
+    var err = 0
+    match rb
+      Ok(_) -> err = -1
+      Err(e) -> err = e
+    end
+    t.expect(err).to_eq(2)
+  end
+end
+
+Tester.describe("AsyncRetry") do |t: &var Tester|
+  t.it("backs off exponentially on the test clock and frees its timers") do
+    clock = TestClock.install
+    var cx = Context.executor
+    var src = Attempts.new(3, 7)
+    var rf = AsyncRetry.retry(Schedule.exponential(Duration.from_millis(50)).max_attempts(5), { || src.make_next })
+    t.expect(poll_phase(&var rf, &var cx)).to_eq(-2)
+    TestClock.advance(Duration.from_millis(50))
+    t.expect(poll_phase(&var rf, &var cx)).to_eq(-2)
+    TestClock.advance(Duration.from_millis(100))
+    t.expect(poll_phase(&var rf, &var cx)).to_eq(-2)
+    TestClock.advance(Duration.from_millis(200))
+    t.expect(poll_phase(&var rf, &var cx)).to_eq(7)
+    t.expect(ruxen_reactor_registered_count()).to_eq(0)
+  end
+
+  t.it("dropping a retry mid-backoff frees its timer") do
+    clock = TestClock.install
+    var cx = Context.executor
+    var src = Attempts.new(99, 0)
+    t.expect(park_then_drop(&var src, &var cx)).to_eq(1)
+    t.expect(ruxen_reactor_registered_count()).to_eq(0)
+  end
+
+  t.it("while_input stops at the first error it rejects") do
+    var cx = Context.executor
+    var src = SeqSource.new
+    var rf = AsyncRetry.retry(Schedule.recurs(5).while_input { |e| e < 5 }, { || src.make_next })
+    t.expect(poll_phase(&var rf, &var cx)).to_eq(-109)
+    Context.drop(cx)
+  end
+
+  t.it("and_then adds the budgets of both schedules") do
+    var cx = Context.executor
+    var src = Attempts.new(4, 42)
+    var rf = AsyncRetry.retry(Schedule.recurs(1).and_then(Schedule.recurs(2)), { || src.make_next })
+    t.expect(poll_phase(&var rf, &var cx)).to_eq(42)
+    Context.drop(cx)
+  end
+
+  t.it("a jittered backoff never exceeds the base delay") do
+    clock = TestClock.install
+    var cx = Context.executor
+    var src = Attempts.new(1, 8)
+    var rf = AsyncRetry.retry(Schedule.exponential(Duration.from_millis(50)).max_attempts(2).jittered, { || src.make_next })
+    t.expect(poll_phase(&var rf, &var cx)).to_eq(-2)
+    TestClock.advance(Duration.from_millis(50))
+    t.expect(poll_phase(&var rf, &var cx)).to_eq(8)
+    t.expect(ruxen_reactor_registered_count()).to_eq(0)
+  end
+end

@@ -15,12 +15,14 @@
 //!
 //! # Single source of precedence truth
 //!
-//! The numeric tiers below are the LEFT binding power of each operator as
-//! defined by `parser::expr::infix_binding_power` (assignment 1, `||` 3,
-//! `&&` 5, comparison/`~=` 7, range 9, `|` 11, `^` 13, `&` 15, shift 17,
-//! `+`/`-` 19, `*`/`/`/`%` 21, cast 23, prefix/unary 25, postfix 27). When
-//! that table changes, change these tiers in lock-step. The reparse-identity
-//! pin in `tests/syntax_parity.rs` fails if they drift.
+//! The numeric tiers are the LEFT binding power of each operator: binary
+//! operators read theirs from the parser's table (`BinOp::binding_power`);
+//! the rest mirror `parser::expr::infix_binding_power` (keyword `and`/`or` 0,
+//! assignment and keyword `not` 1, `??` 2, `||` 3, `&&` 5,
+//! comparison/`~=` 7, range 9, `|` 11, `^` 13, `&` 15, shift 17, `+`/`-` 19,
+//! `*`/`/`/`%` 21, cast 23, prefix/unary 25, postfix 27). When that table
+//! changes, change these tiers in lock-step. The reparse-identity pin in
+//! `tests/syntax_parity.rs` fails if they drift.
 //!
 //! All Ruxen binary operators are LEFT-associative (verified against the
 //! parser: `a - b - c` parses as `((a - b) - c)`), and `as`/range are
@@ -45,10 +47,29 @@ pub fn expr_prec(expr: &Expr) -> Option<u8> {
         ExprKind::Range { .. } => Some(9),
         // `as` cast — tier 23.
         ExprKind::Cast { .. } => Some(23),
-        // Prefix unary (`-`/`!`/`*`-deref) and reference operators — tier 25.
+        // Keyword `not` is deliberately loose: it consumes assignment and
+        // tighter operators, but stops before keyword `and` / `or`.
+        ExprKind::UnaryOp {
+            op: crate::parser::ast::UnaryOp::KeywordNot,
+            ..
+        } => Some(1),
+        // Symbolic prefix unary (`-`/`!`/`*`-deref) and references: tier 25.
         ExprKind::UnaryOp { .. } | ExprKind::Borrow(_) | ExprKind::BorrowMut(_) => Some(25),
         // Assignment / compound-assignment — tier 1 (loosest binding).
         ExprKind::Assign { .. } | ExprKind::CompoundAssign { .. } => Some(1),
+        // A command-form call (`puts x`, `w.text "a"`) takes the rest of the
+        // expression as its argument, so as an operand or receiver it needs
+        // grouping like assignment does.
+        ExprKind::Call {
+            parens: false,
+            args,
+            ..
+        }
+        | ExprKind::MethodCall {
+            parens: false,
+            args,
+            ..
+        } if !args.is_empty() => Some(1),
         // Everything else is an atom/primary or a postfix chain (call,
         // index, field, method, try, await, closure, control-flow): binds
         // at least as tight as a unary prefix and never needs grouping when
@@ -57,22 +78,10 @@ pub fn expr_prec(expr: &Expr) -> Option<u8> {
     }
 }
 
-/// Left binding power of a binary operator — mirrors
-/// `parser::expr::infix_binding_power` (the LEFT element of its `(l, r)`).
+/// Left binding power of a binary operator, from the parser's operator
+/// table ([`BinOp::binding_power`]).
 pub fn binop_prec(op: BinOp) -> u8 {
-    match op {
-        BinOp::Or => 3,
-        BinOp::And => 5,
-        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => 7,
-        // `~=` shares the comparison tier (std.regex spec).
-        BinOp::MatchOp => 7,
-        BinOp::BitOr => 11,
-        BinOp::BitXor => 13,
-        BinOp::BitAnd => 15,
-        BinOp::Shl | BinOp::Shr => 17,
-        BinOp::Add | BinOp::Sub => 19,
-        BinOp::Mul | BinOp::Div | BinOp::Mod => 21,
-    }
+    op.binding_power().0
 }
 
 /// Side of a binary/range/cast operator an operand sits on. Right operands
@@ -86,12 +95,19 @@ pub enum Side {
 
 /// Does `child`, sitting on `side` of a parent operator whose precedence is
 /// `parent_prec`, need grouping parentheses to re-parse identically?
-pub fn needs_parens(child: &Expr, parent_prec: u8, side: Side) -> bool {
+///
+/// `right_assoc` inverts the equal-precedence rule: a left-associative parent
+/// (`+ - * /`, the default) wraps its RIGHT child at equal precedence; a
+/// right-associative parent (`**`) wraps its LEFT child instead, so
+/// `(a ** b) ** c` keeps its parens while `a ** b ** c` does not.
+pub fn needs_parens(child: &Expr, parent_prec: u8, side: Side, right_assoc: bool) -> bool {
     match expr_prec(child) {
         None => false,
-        Some(cp) => match side {
-            Side::Left => cp < parent_prec,
-            Side::Right => cp <= parent_prec,
+        Some(cp) => match (side, right_assoc) {
+            (Side::Left, false) => cp < parent_prec,
+            (Side::Right, false) => cp <= parent_prec,
+            (Side::Left, true) => cp <= parent_prec,
+            (Side::Right, true) => cp < parent_prec,
         },
     }
 }

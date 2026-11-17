@@ -1,0 +1,61 @@
+class Box
+  n: Int
+  def init(@n: Int)
+  end
+end
+
+class Point
+  x: Int
+  y: Int
+  def init(@x: Int, @y: Int)
+  end
+end
+
+Tester.describe("Kernel tap, then and yield_self") do |t: &var Tester|
+  t.it("tap runs the block and returns the receiver") do
+    var seen = 0
+    let b = Box.new(5).tap do |x|
+      seen += x.n
+    end
+    t.expect(seen).to_eq(5)
+    t.expect(b.n).to_eq(5)
+    var plus_one = 0
+    let kept = 42.tap do |x|
+      plus_one += x + 1
+    end
+    t.expect(plus_one).to_eq(43)
+    t.expect(kept).to_eq(42)
+    var calls = 0
+    let noparam = 100.tap do
+      calls += 1
+    end
+    t.expect(calls).to_eq(1)
+    t.expect(noparam).to_eq(100)
+  end
+
+  t.it("then and yield_self return the block result") do
+    t.expect(10.then do |x| x * 2 end).to_eq(20)
+    t.expect("hi".then do |s| s.upcase end).to_eq("HI")
+    t.expect(4.yield_self do |x| x * 3 end).to_eq(12)
+    let picked = 7.then do
+      "done"
+    end
+    t.expect(picked).to_eq("done")
+  end
+
+  t.it("tap and then on generic heads and a user class without include Kernel") do
+    var size = 0
+    let arr = [10, 20, 30].tap do |a|
+      size += a.size
+    end
+    t.expect(size).to_eq(3)
+    t.expect(arr[1]).to_eq(20)
+    t.expect([1, 2, 3].then do |a| a.size end).to_eq(3)
+    var x = 0
+    let p = Point.new(3, 4).tap do |pt|
+      x += pt.x
+    end
+    t.expect(x).to_eq(3)
+    t.expect(p.y).to_eq(4)
+  end
+end

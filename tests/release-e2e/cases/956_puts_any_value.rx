@@ -1,0 +1,11 @@
+# Pins `puts` accepting any value: a non-String argument is converted through
+# its universal `to_s`, so `puts 42` works without the `"#{}"` interpolation.
+def main
+  puts 42
+  puts 3.14
+  puts true
+  let n = 100
+  puts n
+  puts n * 2
+  puts 2 ** 8
+end

@@ -1,0 +1,85 @@
+## Feature #5 Increment 4 (spec §4.5) — LEAK-FREE ADAPTER CHAINS: dropping an
+## adapter chain drops EVERY stage, each running its own `def drop`. The spec's
+## headline guarantee: "an adapter owns its inner stream by value, so dropping
+## the chain drops every stage." Before Inc4 a `Stream` class had NO Drop vtable
+## slot (the §4.1 narrow Drop path was gated on `Future` only), so an adapter's
+## `any Stream` inner leaked its source's reactor resource on drop. Inc4 widens
+## the gate to `Stream` and gives each adapter a `def drop` that runs its inner's
+## `def drop` via `Drop_dynamic_drop` (the §4.1 path), so a dropped
+## `TakeStream(MapStream(ResourceSource))` frees the source's resource.
+##
+## `ResourceStream` owns a C `state_ptr` (a reactor-registration stand-in) freed
+## in `def drop` (prints `res freed tag=N` + decrements a process-wide LIVE
+## count). The chain `TakeStream(MapStream(ResourceStream))` is built + driven +
+## dropped inside `run_chain` (so it drops at that fn's scope exit, observable
+## from `main`). The source's `def drop` must fire EXACTLY ONCE — `live=0` after
+## proves no leak (would be > 0) AND no double-drop (would be < 0); `res freed
+## tag=7` printing once proves the whole chain tore down.
+
+class ResourceStream
+  state_ptr: Int
+  n: Int
+  include Stream
+  type Item = Int
+
+  def init(tag: Int)
+    self.state_ptr = ruxen_stream_res_new(tag)
+    self.n = 0
+  end
+
+  def var poll_next(cx: &var Context) -> Poll[Option[Int]]
+    self.n = self.n + 1
+    Poll.Ready(Some(self.n))
+  end
+
+  def drop
+    if self.state_ptr != 0
+      ruxen_stream_res_free(self.state_ptr)
+      self.state_ptr = 0
+    end
+  end
+end
+
+## Drive a TakeStream `count` times via the reactor-aware poll loop. Borrows the
+## chain (`&var`), so `run_chain`'s `chain` local still drops at its scope exit.
+def pull_some(s: &var TakeStream, count: Int) -> nil
+  var cx = Context.executor
+  var i = 0
+  while i < count
+    match (&var s).poll_next(&var cx)
+      Poll.Ready(item) ->
+        match item
+          Some(v) -> puts "got #{v}"
+          nil     -> i = count
+        end
+      Poll.Pending -> Scope.pump_or_park
+    end
+    i = i + 1
+  end
+  nil
+end
+
+## Build the chain, drive it (partial), and let it DROP at this fn's scope exit
+## — so `main` can observe the live count AFTER the chain is gone.
+def run_chain -> nil
+  var src = ResourceStream.new(7)
+  var mapped = MapStream.new(src, { |x| x + 100 })
+  var chain = TakeStream.new(mapped, 2)
+  pull_some(&var chain, 2)
+  nil
+end
+
+def main
+  puts "chain start"
+  run_chain
+  puts "cancelled mid-stream"
+  puts "live=#{ruxen_stream_live_count()}"
+  puts "chain done"
+end
+
+## The resource helper (observable free sentinel + live-count double-drop guard).
+lib "runtime/stream.c"
+  def ruxen_stream_res_new(tag: Int) -> Int
+  def ruxen_stream_res_free(state_ptr: Int) -> nil
+  def ruxen_stream_live_count -> Int
+end

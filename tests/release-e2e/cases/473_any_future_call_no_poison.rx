@@ -1,0 +1,45 @@
+## Q47: typechecking a bootstrap-shaped closure call whose result is
+## `any Future` must not invalidate the Future guarantee carried by an
+## unrelated stored `any Future` value later in the same compilation.
+
+class BootstrapFutureFactory
+  def self.call(make: Fn() -> any Future) -> any Future
+    make.()
+  end
+end
+
+class ReadyFuture
+  include Future
+  type Output = Int
+
+  def init
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Ready(47)
+  end
+end
+
+class StoredFuture
+  inner: any Future
+
+  def init(inner: any Future)
+    self.inner = inner
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    match (&var self.inner).poll(cx)
+      Poll.Ready(value) -> Poll.Ready(value)
+      Poll.Pending -> Poll.Pending
+    end
+  end
+end
+
+def main
+  var stored = StoredFuture.new(ReadyFuture.new)
+  var cx = Context.test_dummy()
+  match (&var stored).poll(&var cx)
+    Poll.Ready(value) -> puts "ready=#{value}"
+    Poll.Pending -> puts "pending"
+  end
+end

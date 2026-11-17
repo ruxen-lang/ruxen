@@ -1,0 +1,56 @@
+# B02 — `puts x` inside a block used to segfault while `puts "#{x}"` worked.
+#
+# The two spellings lower through different paths, and only the interpolation
+# one consulted the MIR local's type. An unseeded block parameter has
+# `&String` back-propagated onto it from `puts`'s own signature while the
+# symbol table says `Int`, so the bare form handed a raw `Int` to
+# `ruxen_puts`, which read address 1 as a `char*`.
+#
+# EVERY line below is pinned in BOTH spellings, side by side, because that is
+# exactly the pair that disagreed. A pin that used only interpolation would
+# have been green through the entire bug — which is how this survived.
+#
+# Element types are varied too: `Int` is the kind that crashed (its word is
+# not a pointer), `String` is the kind that accidentally worked (the
+# back-propagated `&String` happened to be true), and `Bool` exercises another
+# formatter through the same shared ladder.
+#
+# `Float` is deliberately ABSENT. A `Float` block parameter arrives truncated
+# to an integer (`[1.5, 2.5].each { |x| puts(x) }` prints `1` and `2`), which
+# is B01, the open Float closure-argument ABI bug, not this one. Both
+# spellings agree on the wrong value, so B02's invariant does hold for Float —
+# but pinning `1` here would cement B01's behaviour into an expected file and
+# break this case when B01 lands. It belongs in B01's pins, not this one.
+
+def main
+  let ints = [1, 2, 3]
+  let strs = ["a", "b"]
+  let bools = [true, false]
+
+  # ── each: bare vs interpolated ─────────────────────────────────────
+  ints.each { |x| puts(x) }
+  ints.each { |x| puts "#{x}" }
+
+  strs.each { |x| puts(x) }
+  strs.each { |x| puts "#{x}" }
+
+  bools.each { |x| puts(x) }
+  bools.each { |x| puts "#{x}" }
+
+  # Paren-less bare spelling is a third surface and takes the same path.
+  ints.each { |x| puts x }
+
+  # ── map: the block param is seeded here, so this is the control ────
+  let doubled = ints.map { |x| x * 2 }
+  doubled.each { |x| puts(x) }
+  doubled.each { |x| puts "#{x}" }
+
+  # ── nested blocks: the inner param is the one that stays unseeded ──
+  ints.each { |a| strs.each { |b| puts(b) } }
+  ints.each { |a| strs.each { |b| puts "#{b}" } }
+  ints.each { |a| ints.each { |b| puts(b) } }
+
+  # A bare string literal still reaches `puts` as a `.rodata` pointer and
+  # must NOT be routed through the Display ladder (that printed an address).
+  puts "ok"
+end

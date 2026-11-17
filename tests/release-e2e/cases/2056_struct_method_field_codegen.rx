@@ -1,0 +1,75 @@
+# Struct method field reads: non-first fields, UInt8/Float32/Float64 fields,
+# float-field hashing, struct statics chained with and without parens, and an
+# un-annotated struct let inside a closure.
+struct Wide
+  x: Int
+  y: Int
+
+  def gety -> Int
+    self.y
+  end
+end
+
+struct Pixel
+  r: UInt8
+  g: UInt8
+  b: UInt8
+  a: UInt8
+
+  def describe -> String
+    "method: r=#{self.r} g=#{self.g} b=#{self.b} a=#{self.a}"
+  end
+
+  def self.rgb(r: UInt8, g: UInt8, b: UInt8) -> Pixel
+    Pixel.new(r, g, b, 255u8)
+  end
+
+  def self.white -> Pixel
+    Pixel.new(255u8, 255u8, 255u8, 255u8)
+  end
+
+  def self.black() -> Pixel
+    Pixel.new(0u8, 0u8, 0u8, 255u8)
+  end
+
+  def val -> Int
+    self.r as Int
+  end
+end
+
+struct P32
+  x: Float32
+  y: Float32
+
+  def sum -> Float32
+    self.x + self.y
+  end
+end
+
+struct P64
+  x: Float
+  y: Float
+
+  def sum -> Float
+    self.x + self.y
+  end
+end
+
+def main
+  puts "wide y=#{Wide.new(10, 20).gety}"
+  puts Pixel.new(1u8, 2u8, 3u8, 255u8).describe
+  puts "sum32=#{P32.new(1.5f32, 2.5f32).sum}"
+  puts "sum64=#{P64.new(1.5, 2.5).sum}"
+  let p = P64.new(1.0, 2.0)
+  puts "#{p.x + p.y}"
+  puts "direct=#{Pixel.white.val}"
+  puts "parens=#{Pixel.black().val}"
+
+  let nums = [1]
+  nums.each do |_n|
+    let c = Pixel.new(10u8, 20u8, 30u8, 255u8)
+    puts "a=#{c.a} r=#{c.r}"
+    let d = Pixel.rgb(1u8, 2u8, 3u8)
+    puts "da=#{d.a} dr=#{d.r}"
+  end
+end

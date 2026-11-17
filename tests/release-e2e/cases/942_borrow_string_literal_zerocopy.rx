@@ -1,0 +1,25 @@
+# Zero-copy `&String` borrow of a string literal (TASKS.md). `&"x"` in an
+# immutable `&String` borrow position lowers to the raw `.rodata` pointer
+# instead of a heap-copied owned String. Pins that the borrow is ABI-correct in
+# both an ARG position (passed to a `&String` param) and a LOCAL BINDING
+# position (`let r = &"x"`): the callee/holder reads the literal's exact bytes
+# AND length through the `.rodata` `char*`. Owned literals in non-borrow
+# positions (`let owned = "kept"`) are unaffected.
+def show(s: &String) -> Int
+  puts s.clone
+  s.size() as Int
+end
+
+def main
+  # binding position: a literal borrow bound to a local, then read.
+  let r = &"bound"
+  puts r.clone
+  # arg position: literal borrows passed to a `&String` param.
+  let a = show(&"transient")
+  let b = show(&"hi")
+  if a + b == 11
+    puts "sum_ok"
+  else
+    puts "sum_bad"
+  end
+end

@@ -1,0 +1,33 @@
+class Ticket
+  id: Int
+  seat: String
+
+  def init(@id: Int, @seat: String)
+  end
+end
+
+Tester.describe("Hashable") do |t: &var Tester|
+  t.it("equal field values give equal hash codes") do
+    let a = Ticket.new(1, "a")
+    let b = Ticket.new(1, "a")
+    let c = Ticket.new(1, "b")
+    t.expect(a.hash_code() == b.hash_code()).to_eq(true)
+    t.expect(a.hash_code() != c.hash_code()).to_eq(true)
+  end
+
+  t.it("a derived Hashable class keys a Hash and a Set by value") do
+    var h: Hash[Ticket, Int] = Hash.new
+    h.insert(Ticket.new(1, "a"), 100)
+    h.insert(Ticket.new(2, "b"), 200)
+    h.insert(Ticket.new(1, "a"), 101)
+    t.expect(h.size).to_eq(2)
+    t.expect(h.get(Ticket.new(1, "a")).unwrap_or(-1)).to_eq(101)
+    t.expect(h.key?(Ticket.new(1, "z"))).to_eq(false)
+    var s: Set[Ticket] = Set.new
+    s.insert(Ticket.new(5, "e"))
+    s.insert(Ticket.new(5, "e"))
+    t.expect(s.size).to_eq(1)
+    t.expect(s.include?(Ticket.new(5, "e"))).to_eq(true)
+    t.expect(s.include?(Ticket.new(6, "e"))).to_eq(false)
+  end
+end

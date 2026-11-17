@@ -4,6 +4,11 @@
 single-await `while` shape. v2+ extends to multi-await bodies, `for`,
 and `while let`.
 
+**Today:** [implemented] for `.await` as the right side of a `let` directly
+in a `while` body (`tests/release-e2e/cases/728d_async_loop_minimal.rx`,
+`728f_async_loop_multi_await.rx`). An `.await` nested in an `if` inside the
+loop body, or used as a bare statement, still gets E1115.
+
 **Source docs:**
 - `docs/errors/E1115.md` (current rejection diagnostic)
 - `docs/specs/syntax/async_lowering.spec.md` (Milestone 2A + 2B)
@@ -18,7 +23,7 @@ expression is a `while` / `for` / `loop` body — see the dedicated
 `collect_await_in_loop_diagnostics` pre-pass. The current segmenter
 (`segment_body`) accepts only a strictly linear shape:
 
-```
+```text
 pre_await | [let x = expr.await]* | tail
 ```
 
@@ -31,7 +36,9 @@ Rondo cannot use the recently-shipped `Task.spawn_raw` runtime
 surface (ruxen `59b8de6`) because the natural accept-spawn pattern
 requires `.await` inside a `while`:
 
-```ruxen
+The shape the v1 lowering matches, [deprecated] `let`, typed `var`, `match`, `Ok`/`Err` and `.0` (replacements: `x = ...`, `case/in`, `rescue` [planned](../../../TODO.md#t-exceptions), `a, b = pair`); the lowering recognises only this spelling today:
+
+```ruby
 async def serve(app: &Rondo, l: AsyncTcpListener) -> Int
   var keep_going: Bool = true
   while keep_going
@@ -66,6 +73,7 @@ or hitting `Poll.Pending`.
 
 A new `BodyShape` variant in addition to the existing linear shape:
 
+<!-- compiler-rust -->
 ```rust
 enum BodyShape {
     Linear(Segments),                  // pre_await | await_lets | tail (existing)
@@ -105,7 +113,7 @@ E1115 path fires.
 
 For a `WhileLoopWithSingleAwait` shape:
 
-```
+```text
 class __FFuture
   __state: Int              # 0 = looping, 1 = done
   __sub_ready: Int          # 0 = sub-future not yet constructed this iteration, 1 = in-flight
@@ -133,7 +141,9 @@ The existing eager-init shape is preserved but adjusted:
 
 ### 2.5 `poll` body
 
-```ruxen
+Pseudo-code of what the compiler generates (not user syntax):
+
+```text
 def var poll(cx: &var Context) -> Poll[<ReturnTy>]
   if self.__state != 0
     return Poll.Pending
@@ -232,7 +242,7 @@ expression (e.g. `0`), the lowering emits that as
 `Poll.Ready(<tail>)` after the loop exits cond-false.
 
 If the async fn body ends with the `while` itself and no tail, the
-return type must be `()` (or default-initialisable). Same as the
+return type must be `nil` (or default-initialisable). Same as the
 existing single-await terminal rule.
 
 ## 3. Implementation plan
@@ -293,7 +303,9 @@ RUXEN_E2E_CASES=723_async_block_on,724_async_block_on_chain,725_time_sleep_block
 After the runtime fix, optionally wire Rondo's `async_serve_loop`
 to use the new pattern:
 
-```ruxen
+The shape the v1 lowering matches, [deprecated] `let`, typed `var`, `match`, `Ok`/`Err` and `.0` (replacements: `x = ...`, `case/in`, `rescue` [planned](../../../TODO.md#t-exceptions), `a, b = pair`); the lowering recognises only this spelling today:
+
+```ruby
 async def accept_and_spawn(app: &Rondo, l: AsyncTcpListener) -> Int
   var keep_going: Bool = true
   while keep_going
@@ -319,7 +331,9 @@ accept loop and document the limitation.
 
 For the canonical Rondo accept loop:
 
-```ruxen
+The shape the v1 lowering matches, [deprecated] `let`, typed `var`, `match`, `Ok`/`Err` and `.0` (replacements: `x = ...`, `case/in`, `rescue` [planned](../../../TODO.md#t-exceptions), `a, b = pair`); the lowering recognises only this spelling today:
+
+```ruby
 async def serve(app: &Rondo, l: AsyncTcpListener) -> Int
   var keep_going: Bool = true
   while keep_going
@@ -335,7 +349,9 @@ end
 
 Lowers to:
 
-```ruxen
+Pseudo-code of what the compiler generates (not user syntax):
+
+```text
 class __ServeFuture
   __state: Int
   __sub_ready: Int

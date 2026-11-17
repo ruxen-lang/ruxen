@@ -1,5 +1,0 @@
-def main
-  var s = "hello world"
-  s.insert_str(5, ",")
-  puts s
-end

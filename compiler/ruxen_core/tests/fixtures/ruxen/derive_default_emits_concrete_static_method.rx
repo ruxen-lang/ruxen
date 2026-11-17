@@ -1,8 +1,0 @@
-struct Score
-  v: Int
-end
-
-def main
-  let score = Score.default
-  puts "#{score.v}"
-end

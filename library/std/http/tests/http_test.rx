@@ -1,0 +1,14 @@
+Tester.describe("http response parsing") do |t: &var Tester|
+  t.it("reads the status and body") do
+    let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"count\":7}"
+    t.expect(http_response_status(&resp)).to_eq(200)
+    t.expect(http_response_body(&resp)).to_eq("{\"count\":7}")
+    let r404 = "HTTP/1.1 404 Not Found\r\n\r\nnope"
+    t.expect(http_response_status(&r404)).to_eq(404)
+  end
+
+  t.it("treats only 2xx as ok?") do
+    t.expect(HttpResponse.new(200, "hi").ok?).to_eq(true)
+    t.expect(HttpResponse.new(500, "err").ok?).to_eq(false)
+  end
+end

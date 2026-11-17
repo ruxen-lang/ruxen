@@ -1,0 +1,60 @@
+Tester.describe("Array element types") do |t: &var Tester|
+  t.it("String elements compare by value") do
+    let p = "p"
+    let f = "f"
+    var a: Array[String] = Array.new
+    a.push("#{p}ear")
+    a.push("a#{p}ple")
+    a.push("a#{p}ple")
+    a.push("#{f}ig")
+    a.push("#{f}ig")
+    a.push("a#{p}ple")
+    t.expect(a.include?("a#{p}ple")).to_eq(true)
+    t.expect(a.include?("kiwi")).to_eq(false)
+    var b: Array[String] = Array.new
+    b.push("#{p}ear")
+    b.push("a#{p}ple")
+    b.push("a#{p}ple")
+    b.push("#{f}ig")
+    b.push("#{f}ig")
+    b.push("a#{p}ple")
+    t.expect(a == b).to_eq(true)
+    t.expect(a != b).to_eq(false)
+    a.dedup
+    t.expect(a.join(",")).to_eq("pear,apple,fig,apple")
+    t.expect(a == b).to_eq(false)
+    let sorted = a.sort
+    t.expect(sorted.join(",")).to_eq("apple,apple,fig,pear")
+    t.expect(a.join(",")).to_eq("pear,apple,fig,apple")
+    a.sort!
+    t.expect(a.join(",")).to_eq("apple,apple,fig,pear")
+  end
+
+  t.it("Float elements keep their value through sum, sort and dedup") do
+    var a: Array[Float] = Array.new
+    a.push(-1.5)
+    a.push(2.25)
+    a.push(-3.5)
+    a.push(0.0)
+    t.expect(a.sum).to_eq(-2.75)
+    t.expect(a.include?(-0.0)).to_eq(true)
+    t.expect(a.sort.join(",")).to_eq("-3.5,-1.5,0,2.25")
+    t.expect(a.join(",")).to_eq("-1.5,2.25,-3.5,0")
+    a.sort!
+    t.expect(a.join(",")).to_eq("-3.5,-1.5,0,2.25")
+    var b: Array[Float] = Array.new
+    b.push(-3.5)
+    b.push(-1.5)
+    b.push(-0.0)
+    b.push(2.25)
+    t.expect(a == b).to_eq(true)
+    var c: Array[Float] = Array.new
+    c.push(0.0)
+    c.push(-0.0)
+    c.push(1.5)
+    c.dedup
+    t.expect(c.size).to_eq(2)
+    let empty: Array[Float] = Array.new
+    t.expect(empty.sum).to_eq(0.0)
+  end
+end

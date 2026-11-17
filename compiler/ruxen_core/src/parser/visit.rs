@@ -8,11 +8,21 @@
 //! async await-scan). There is no `_ =>` arm anywhere: adding an `ExprKind`
 //! variant is a compile error until every `walk_*` handles it. That
 //! exhaustiveness is the entire point — it ends the variant-drift bug class.
+//!
+//! `walk_item` / `walk_func` extend the same walk to top-level items, so a
+//! consumer can start from a `Program`'s items instead of re-matching
+//! `TopLevelItem` itself.
 
 use crate::parser::ast::*;
 
 #[allow(unused_variables)]
 pub trait Visit: Sized {
+    fn visit_item(&mut self, i: &TopLevelItem) {
+        walk_item(self, i);
+    }
+    fn visit_func(&mut self, f: &FuncDef) {
+        walk_func(self, f);
+    }
     fn visit_expr(&mut self, e: &Expr) {
         walk_expr(self, e);
     }
@@ -27,6 +37,140 @@ pub trait Visit: Sized {
     }
     fn visit_type_expr(&mut self, t: &TypeExpr) {
         walk_type_expr(self, t);
+    }
+}
+
+/// Exhaustive over `TopLevelItem` (no `_` arm). Visits every function (free
+/// functions, methods of classes / structs / enums and their inline
+/// `include` blocks, `extension` methods, mixin default methods), every type
+/// annotation an item declares (fields, variant fields, aliases, newtypes,
+/// consts, FFI signatures, `extension` targets and associated types) and every
+/// const initializer and top-level expression. Generic parameters and
+/// `where` clauses are not visited.
+pub fn walk_item<V: Visit>(v: &mut V, i: &TopLevelItem) {
+    match i {
+        TopLevelItem::Module(m) => {
+            for sub in &m.items {
+                v.visit_item(sub);
+            }
+        }
+        TopLevelItem::Class(c) => {
+            for f in &c.fields {
+                v.visit_type_expr(&f.type_expr);
+            }
+            for m in &c.methods {
+                v.visit_func(m);
+            }
+            for imp in &c.inner_impls {
+                walk_impl_items(v, &imp.items);
+            }
+            for lib in &c.lib_decls {
+                walk_lib_decl(v, lib);
+            }
+            for a in &c.assoc_types {
+                v.visit_type_expr(&a.type_expr);
+            }
+        }
+        TopLevelItem::Struct(s) => {
+            for f in &s.fields {
+                v.visit_type_expr(&f.type_expr);
+            }
+            for m in &s.methods {
+                v.visit_func(m);
+            }
+            for imp in &s.inner_impls {
+                walk_impl_items(v, &imp.items);
+            }
+        }
+        TopLevelItem::Enum(e) => {
+            for var in &e.variants {
+                match &var.fields {
+                    VariantKind::Unit => {}
+                    VariantKind::Tuple(fields) | VariantKind::Struct(fields) => {
+                        for f in fields {
+                            v.visit_type_expr(&f.type_expr);
+                        }
+                    }
+                }
+            }
+            for m in &e.methods {
+                v.visit_func(m);
+            }
+            for imp in &e.inner_impls {
+                walk_impl_items(v, &imp.items);
+            }
+        }
+        TopLevelItem::Mixin(m) => {
+            for it in &m.items {
+                match it {
+                    MixinItem::DefaultMethod(f) => v.visit_func(f),
+                    MixinItem::MethodSig(sig) => {
+                        walk_params(v, &sig.params);
+                        if let Some(t) = &sig.return_type {
+                            v.visit_type_expr(t);
+                        }
+                    }
+                    MixinItem::AssocType { .. } | MixinItem::Alias(_) => {}
+                }
+            }
+            for lib in &m.lib_decls {
+                walk_lib_decl(v, lib);
+            }
+        }
+        TopLevelItem::Impl(imp) => {
+            v.visit_type_expr(&imp.target_type);
+            walk_impl_items(v, &imp.items);
+        }
+        TopLevelItem::Function(f) => v.visit_func(f),
+        TopLevelItem::TypeAlias(a) => v.visit_type_expr(&a.type_expr),
+        TopLevelItem::Newtype(n) => v.visit_type_expr(&n.inner_type),
+        TopLevelItem::Const(c) => {
+            v.visit_type_expr(&c.type_expr);
+            v.visit_expr(&c.value);
+        }
+        TopLevelItem::Lib(lib) => walk_lib_decl(v, lib),
+        TopLevelItem::Expr(e) => v.visit_expr(e),
+        TopLevelItem::Use(_) | TopLevelItem::Alias(_) => {}
+    }
+}
+
+/// Visits a function's parameter types and defaults, its return type and its
+/// body.
+pub fn walk_func<V: Visit>(v: &mut V, f: &FuncDef) {
+    walk_params(v, &f.params);
+    if let Some(t) = &f.return_type {
+        v.visit_type_expr(t);
+    }
+    v.visit_block(&f.body);
+}
+
+fn walk_params<V: Visit>(v: &mut V, params: &[Param]) {
+    for p in params {
+        v.visit_type_expr(&p.type_expr);
+        if let Some(d) = &p.default {
+            v.visit_expr(d);
+        }
+    }
+}
+
+fn walk_impl_items<V: Visit>(v: &mut V, items: &[ImplItem]) {
+    for it in items {
+        match it {
+            ImplItem::Method(f) => v.visit_func(f),
+            ImplItem::AssocType { type_expr, .. } => v.visit_type_expr(type_expr),
+            ImplItem::Include { .. } | ImplItem::Alias(_) => {}
+        }
+    }
+}
+
+fn walk_lib_decl<V: Visit>(v: &mut V, lib: &LibDecl) {
+    for f in &lib.functions {
+        for p in &f.params {
+            v.visit_type_expr(&p.type_expr);
+        }
+        if let Some(t) = &f.return_type {
+            v.visit_type_expr(t);
+        }
     }
 }
 
@@ -53,21 +197,30 @@ pub fn walk_stmt<V: Visit>(v: &mut V, s: &Statement) {
 
 pub fn walk_expr<V: Visit>(v: &mut V, e: &Expr) {
     match &e.kind {
-        // Leaves — no nested AST node to visit. `InterpolatedString` holds
-        // `StringPart`s whose `Expr` variant carries raw lexer tokens, not a
-        // parsed `Expr`, so there is nothing to recurse into here.
+        ExprKind::InterpolatedString(parts) => {
+            for part in parts {
+                match part {
+                    StringPart::Literal(_) => {}
+                    StringPart::Expr { expr, spec: _ } => v.visit_expr(expr),
+                }
+            }
+        }
+        // Leaves — no nested AST node to visit.
         ExprKind::IntLiteral(..)
         | ExprKind::FloatLiteral(..)
         | ExprKind::StringLiteral(_)
-        | ExprKind::InterpolatedString(_)
         | ExprKind::CharLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::UnitLiteral
         | ExprKind::Identifier(_)
+        // Holds a TypeExpr, not an Expr; this walker does not descend into
+        // type expressions (see the doc comment above).
+        | ExprKind::GenericTypeRef { .. }
         | ExprKind::SelfRef
         | ExprKind::SelfType
         | ExprKind::Continue
         | ExprKind::NullLiteral
+        | ExprKind::BlockPass(_)
         | ExprKind::RegexLiteral { .. } => {}
 
         ExprKind::BinaryOp { left, right, .. } => {
@@ -105,8 +258,7 @@ pub fn walk_expr<V: Visit>(v: &mut V, e: &Expr) {
         ExprKind::Call {
             callee,
             args,
-            block,
-        } => {
+            block, .. } => {
             v.visit_expr(callee);
             for a in args {
                 v.visit_expr(a);
@@ -130,6 +282,16 @@ pub fn walk_expr<V: Visit>(v: &mut V, e: &Expr) {
         ExprKind::Assign { target, value } => {
             v.visit_expr(target);
             v.visit_expr(value);
+        }
+        ExprKind::MultiAssign {
+            targets, values, ..
+        } => {
+            for t in targets {
+                v.visit_expr(t);
+            }
+            for val in values {
+                v.visit_expr(val);
+            }
         }
         ExprKind::CompoundAssign { target, value, .. } => {
             v.visit_expr(target);
@@ -235,7 +397,7 @@ pub fn walk_expr<V: Visit>(v: &mut V, e: &Expr) {
                 v.visit_expr(val);
             }
         }
-        ExprKind::Return(opt) | ExprKind::Break(opt) => {
+        ExprKind::Return(opt) | ExprKind::Break(opt) | ExprKind::Next(opt) => {
             if let Some(x) = opt {
                 v.visit_expr(x);
             }
@@ -374,18 +536,29 @@ pub fn walk_stmt_mut<V: VisitMut>(v: &mut V, s: &mut Statement) {
 /// expressions (`VisitMut` has no method for those).
 pub fn walk_expr_mut<V: VisitMut>(v: &mut V, e: &mut Expr) {
     match &mut e.kind {
+        ExprKind::InterpolatedString(parts) => {
+            for part in parts {
+                match part {
+                    StringPart::Literal(_) => {}
+                    StringPart::Expr { expr, spec: _ } => v.visit_expr_mut(expr),
+                }
+            }
+        }
         ExprKind::IntLiteral(..)
         | ExprKind::FloatLiteral(..)
         | ExprKind::StringLiteral(_)
-        | ExprKind::InterpolatedString(_)
         | ExprKind::CharLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::UnitLiteral
         | ExprKind::Identifier(_)
+        // Holds a TypeExpr, not an Expr; this walker does not descend into
+        // type expressions (see the doc comment above).
+        | ExprKind::GenericTypeRef { .. }
         | ExprKind::SelfRef
         | ExprKind::SelfType
         | ExprKind::Continue
         | ExprKind::NullLiteral
+        | ExprKind::BlockPass(_)
         | ExprKind::RegexLiteral { .. } => {}
 
         ExprKind::BinaryOp { left, right, .. } => {
@@ -422,8 +595,7 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, e: &mut Expr) {
         ExprKind::Call {
             callee,
             args,
-            block,
-        } => {
+            block, .. } => {
             v.visit_expr_mut(callee);
             for a in args {
                 v.visit_expr_mut(a);
@@ -447,6 +619,16 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, e: &mut Expr) {
         ExprKind::Assign { target, value } => {
             v.visit_expr_mut(target);
             v.visit_expr_mut(value);
+        }
+        ExprKind::MultiAssign {
+            targets, values, ..
+        } => {
+            for t in targets {
+                v.visit_expr_mut(t);
+            }
+            for val in values {
+                v.visit_expr_mut(val);
+            }
         }
         ExprKind::CompoundAssign { target, value, .. } => {
             v.visit_expr_mut(target);
@@ -537,7 +719,7 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, e: &mut Expr) {
                 v.visit_expr_mut(val);
             }
         }
-        ExprKind::Return(opt) | ExprKind::Break(opt) => {
+        ExprKind::Return(opt) | ExprKind::Break(opt) | ExprKind::Next(opt) => {
             if let Some(x) = opt {
                 v.visit_expr_mut(x);
             }
@@ -600,6 +782,32 @@ mod tests {
         let mut c = AwaitCounter { n: 0 };
         c.visit_expr(e);
         c.n
+    }
+
+    #[test]
+    fn walk_item_reaches_struct_methods_param_defaults_and_consts() {
+        // Each `IntLiteral` sits in a different item position: a struct
+        // method's parameter default, that method's body, a const value.
+        struct IntCounter {
+            n: usize,
+        }
+        impl Visit for IntCounter {
+            fn visit_expr(&mut self, e: &Expr) {
+                if matches!(e.kind, ExprKind::IntLiteral(..)) {
+                    self.n += 1;
+                }
+                walk_expr(self, e);
+            }
+        }
+        let src = "struct P\n  x: Int\n  def f(a: Int = 1) -> Int\n    2\n  end\nend\n\
+                   const C: Int = 3\n";
+        let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex");
+        let program = crate::parser::Parser::new(tokens).parse().expect("parse");
+        let mut c = IntCounter { n: 0 };
+        for item in &program.items {
+            c.visit_item(item);
+        }
+        assert_eq!(c.n, 3);
     }
 
     #[test]

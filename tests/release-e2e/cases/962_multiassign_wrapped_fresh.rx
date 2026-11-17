@@ -1,0 +1,26 @@
+# Pins the second-review-pass fix: the owned-heap parallel-assignment guard
+# peels `if`/ternary and `match` wrappers, so a wrapper whose branches are all
+# FRESH constructors is allowed (it cannot alias a target) while a wrapper of
+# place reads is still rejected. Prints the results to prove the fresh objects
+# land in the right targets.
+class Box
+  n: Int
+  def init(@n: Int)
+  end
+end
+
+def main
+  var a = Box.new(0)
+  var b = Box.new(0)
+  var flag = true
+  a, b = (flag ? Box.new(1) : Box.new(2)), Box.new(3)
+  puts a.n
+  puts b.n
+  let k = 2
+  a, b = (match k
+    1 -> Box.new(10)
+    _ -> Box.new(20)
+  end), Box.new(30)
+  puts a.n
+  puts b.n
+end

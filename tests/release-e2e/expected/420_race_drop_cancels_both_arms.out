@@ -1,0 +1,4 @@
+scope start
+arm A dropped tag=1
+arm B dropped tag=2
+scope done

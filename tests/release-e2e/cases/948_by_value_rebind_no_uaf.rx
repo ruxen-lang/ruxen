@@ -1,0 +1,32 @@
+# Q55 pin: `x = f(x)` where `f` takes `x` BY VALUE and returns it (here via an
+# intermediate `var r = p; r`) must NOT corrupt `x` on the native backend. The
+# pre-reassign `ruxen_dealloc(x)` the lowerer emits before `x = <call result>`
+# would free the very object the call hands back, so the re-read is a
+# use-after-free (previously printed `FAIL n=3`). `elide_returns_self_realloc`
+# now traces the returned local back to its parameter index and elides that
+# dealloc when the callee returns the argument at the reassigned position.
+# Distinct from the receiver-builder `r = r.with_status(201)` form, which stays
+# covered by the `k == 0` returned-self case.
+class Payload
+  n: Int
+  tag: String
+  def init(v: Int)
+    self.n = v
+    self.tag = "p"
+  end
+end
+
+def wrap(p: Payload) -> Payload
+  var r = p
+  r
+end
+
+def main
+  var x = wrap(Payload.new(222))
+  x = wrap(x)
+  if x.n == 222
+    puts "PASS n=#{x.n}"
+  else
+    puts "FAIL n=#{x.n}"
+  end
+end

@@ -1,5 +1,0 @@
-def main
-  var count = 0
-  "a,b,c".split(",").each { |_| count += 1 }
-  puts "#{count}"
-end

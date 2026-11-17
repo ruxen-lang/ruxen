@@ -2,11 +2,10 @@
 ## package. Phase D-3 of #06.95 moved these from Rust registrations
 ## in resolve/stdlib/mod.rs into self-hosted .rx.
 ##
-## Each declaration preserves the EXACT required-method list the
-## Rust registration carried; aspirational broader surfaces are
-## intentionally left out — adding required methods today would
-## break every user impl that doesn't provide them. They'll
-## expand once default-method lowering for mixins ships.
+## Most declarations preserve the minimal required-method list from
+## the old Rust registrations. Comparable and Enumerable use shipped
+## mixin-default lowering to define shared behavior over one required
+## primitive each.
 mixin Displayable
   def to_display
 end
@@ -16,7 +15,108 @@ mixin Error
 end
 
 mixin Comparable
-  def compare
+  # The one required primitive. Including types define this; all ordinary
+  # comparison operators below are shared default bodies over its -1/0/1
+  # result.
+  def <=>(other: &Self) -> Int
+
+  def ==(other: &Self) -> Bool
+    (self <=> other) == 0
+  end
+
+  def <(other: &Self) -> Bool
+    (self <=> other) < 0
+  end
+
+  def <=(other: &Self) -> Bool
+    (self <=> other) <= 0
+  end
+
+  def >(other: &Self) -> Bool
+    (self <=> other) > 0
+  end
+
+  def >=(other: &Self) -> Bool
+    (self <=> other) >= 0
+  end
+
+  def between?(min: &Self, max: &Self) -> Bool
+    self >= min && self <= max
+  end
+
+  # Return the receiver clamped to the `[min, max]` range. Borrows all
+  # three operands and returns a borrow of whichever one is in range, so no
+  # value is moved or copied (ownership-safe for owned Comparable types).
+  def clamp(min: &Self, max: &Self) -> &Self
+    if self < min
+      min
+    elsif self > max
+      max
+    else
+      self
+    end
+  end
+end
+
+## `Proc[(A) -> R]`: a closure value that owns its captures, so it can be
+## stored, returned and shared with `clone`. A block parameter (`Fn[...]`)
+## only borrows its closure.
+type Proc[F] = any Fn[F]
+
+## `ElemDesc[T]`: the element descriptor (`RUXEN_ELEM_*`) of `T`, which
+## `layout elem_desc` declares. A `lib` parameter of this type is filled in by
+## the compiler from `T` at every call, so C can copy or free a `T` the way
+## the compiler's own drops do; a caller never passes it.
+class ElemDesc[T]
+  layout elem_desc
+end
+
+## `KeyDesc[K]`: the key descriptor of `K`, which `layout key_desc` declares:
+## its element descriptor, borrows included, which also says how a `K` hashes
+## and compares as a table key. Filled in by the compiler like `ElemDesc[T]`.
+class KeyDesc[K]
+  layout key_desc
+end
+
+## `Closure`: the method home of every stored closure value (`Proc[...]`,
+## `any Fn[...]`), which `layout closure` declares: its values are closure
+## pairs. Calling one (`p.(x)`, `p.call(x)`) is the closure's own body; the
+## methods below are ordinary ones.
+class Closure
+  layout closure
+  lib "runtime/alloc.c"
+    ## `p.clone`: one more owner of the same closure (shared, not copied).
+    ## Each owner is dropped on its own; the captures are freed by the last.
+    def clone as "ruxen_closure_share" -> owned Self
+  end
+end
+
+# `Kernel` — the universal object surface every Ruxen value carries, the
+# analogue of Ruby's `Kernel`/`Object`. It has NO required methods; its
+# defaults are expressed purely in terms of `self` and a block, so they are
+# sound for ANY receiver (primitive, string, collection, or user type). The
+# compiler includes `Kernel` implicitly on every type — these are not opt-in.
+mixin Kernel
+  # `tap` — run the block with `self`, then return `self`. Lets you thread a
+  # side effect (logging, mutation, assertion) into a call chain without
+  # breaking it: `x.tap { |v| puts v }` evaluates to `x`.
+  def tap(f: Fn(&Self) -> nil) -> Self
+    f.(self)
+    self
+  end
+
+  # `then` / `yield_self` — run the block with `self` and return the block's
+  # result, so a value can be transformed inline: `x.then { |v| v + 1 }`.
+  # `yield_self` is Ruby's older spelling of the same method; it is a real
+  # method here (not an `alias`) so it resolves through the universal-`Kernel`
+  # fallback on every receiver, which a type-keyed `alias` would not.
+  def then[U](f: Fn(&Self) -> U) -> U
+    f.(self)
+  end
+
+  def yield_self[U](f: Fn(&Self) -> U) -> U
+    f.(self)
+  end
 end
 
 # Marker mixins (no required methods).
@@ -53,17 +153,17 @@ mixin Enumerable[T]
   # The single required primitive: yield every element to `f`, in
   # order. Each including collection provides this (Array over its
   # backing vec, Set/Hash over their iterators).
-  def each(f: any Fn[Fn(T) -> nil]) -> nil
+  def each(f: Fn(T) -> nil) -> nil
 
   # Ruby `map` — apply `f` to each element, collect the results.
-  def map[U](f: any Fn[Fn(T) -> U]) -> Array[U]
+  def map[U](f: Fn(T) -> U) -> Array[U]
     var out: Array[U] = Array.new
     self.each do |x| out.push(f.(x)) end
     out
   end
 
   # Ruby `select` / `filter` — keep elements where the predicate holds.
-  def select(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
+  def select(pred: Fn(T) -> Bool) -> Array[T]
     var out: Array[T] = Array.new
     self.each do |x|
       if pred.(x)
@@ -74,7 +174,7 @@ mixin Enumerable[T]
   end
 
   # Ruby `reject` — the inverse of `select`.
-  def reject(pred: any Fn[Fn(T) -> Bool]) -> Array[T]
+  def reject(pred: Fn(T) -> Bool) -> Array[T]
     var out: Array[T] = Array.new
     self.each do |x|
       if pred.(x)
@@ -86,7 +186,7 @@ mixin Enumerable[T]
   end
 
   # Ruby `all?` — true iff the predicate holds for every element.
-  def all?(pred: any Fn[Fn(T) -> Bool]) -> Bool
+  def all?(pred: Fn(T) -> Bool) -> Bool
     var ok: Bool = true
     self.each do |x|
       if pred.(x)
@@ -98,7 +198,7 @@ mixin Enumerable[T]
   end
 
   # Ruby `any?` — true iff the predicate holds for at least one element.
-  def any?(pred: any Fn[Fn(T) -> Bool]) -> Bool
+  def any?(pred: Fn(T) -> Bool) -> Bool
     var found: Bool = false
     self.each do |x|
       if pred.(x)
@@ -109,7 +209,7 @@ mixin Enumerable[T]
   end
 
   # Ruby `partition` — split into (matching, non-matching) by predicate.
-  def partition(pred: any Fn[Fn(T) -> Bool]) -> (Array[T], Array[T])
+  def partition(pred: Fn(T) -> Bool) -> (Array[T], Array[T])
     var yes: Array[T] = Array.new
     var no: Array[T] = Array.new
     self.each do |x|
@@ -124,7 +224,7 @@ mixin Enumerable[T]
 
   # Ruby `each_with_index` — yield each element together with its
   # 0-based position. An external counter is bumped per iteration.
-  def each_with_index(f: any Fn[Fn(T, Int) -> nil]) -> nil
+  def each_with_index(f: Fn(T, Int) -> nil) -> nil
     var i: Int = 0
     self.each do |x|
       f.(x, i)
@@ -138,7 +238,7 @@ mixin Enumerable[T]
   # hit wraps explicitly via `Option.Some(x)` (the bare-value "drop
   # Some" sugar only fires at let / function-tail positions, not at an
   # in-loop assignment).
-  def find(pred: any Fn[Fn(T) -> Bool]) -> Option[T]
+  def find(pred: Fn(T) -> Bool) -> Option[T]
     var out: Option[T] = nil
     var found: Bool = false
     self.each do |x|
@@ -155,7 +255,7 @@ mixin Enumerable[T]
 
   # Ruby `index` — the 0-based position of the first matching element,
   # or `nil`. Walks with an external counter, freezing on the first hit.
-  def index(pred: any Fn[Fn(T) -> Bool]) -> Option[Int]
+  def index(pred: Fn(T) -> Bool) -> Option[Int]
     var out: Option[Int] = nil
     var found: Bool = false
     var i: Int = 0
@@ -176,12 +276,309 @@ mixin Enumerable[T]
   # accumulator seeded by `seed`. The closure receives the running
   # accumulator and the current element and returns the next
   # accumulator. The result type `U` is the accumulator type.
-  def reduce[U](seed: U, f: any Fn[Fn(U, T) -> U]) -> U
+  def reduce[U](seed: U, f: Fn(U, T) -> U) -> U
     var acc: U = seed
     self.each do |x|
       acc = f.(acc, x)
     end
     acc
+  end
+
+  # Ruby method-name synonyms for the combinators above, as thin delegating
+  # default methods. (`alias` does not compose with the per-implementor
+  # monomorphization of a mixin default, and `collect` is NOT aliased to `map`
+  # — it is already the iterator `collect[Target]` method.)
+  def filter(pred: Fn(T) -> Bool) -> Array[T]
+    self.select(pred)
+  end
+
+  def detect(pred: Fn(T) -> Bool) -> Option[T]
+    self.find(pred)
+  end
+
+  def inject[U](seed: U, f: Fn(U, T) -> U) -> U
+    self.reduce(seed, f)
+  end
+
+  # Ruby `find_all` — a synonym of `select` (keep elements where the
+  # predicate holds).
+  def find_all(pred: Fn(T) -> Bool) -> Array[T]
+    self.select(pred)
+  end
+
+  # Ruby `none?` — true when NO element satisfies the predicate.
+  def none?(pred: Fn(T) -> Bool) -> Bool
+    !self.any?(pred)
+  end
+
+  # Ruby `one?` — true when EXACTLY one element satisfies the predicate.
+  # An external counter is bumped per matching element (same pattern as
+  # `each_with_index`).
+  def one?(pred: Fn(T) -> Bool) -> Bool
+    var n: Int = 0
+    self.each do |x|
+      if pred.(x)
+        n = n + 1
+      end
+    end
+    n == 1
+  end
+
+  # Ruby `entries` — materialise the elements into a fresh `Array[T]`, in
+  # iteration order. Ruby's `to_a` is the same operation, but every
+  # including head (`Array` / `Set` / `Hash`) already homes its own `to_a`
+  # with a head-specific element type, so `to_a` is deliberately NOT
+  # defined here: a mixin default would be shadowed on all three and would
+  # only add an ambiguous second definition.
+  def entries -> Array[T]
+    var out: Array[T] = Array.new
+    self.each do |x|
+      out.push(x)
+    end
+    out
+  end
+
+  # Ruby `count` (no-arg) — the number of elements. Walks `each`, so it is
+  # O(n) even where the including head knows its length in O(1); `Array`
+  # and `Set` shadow this with their own `size`/`count` primitives.
+  def count -> Int
+    var n: Int = 0
+    self.each do |x|
+      n = n + 1
+    end
+    n
+  end
+
+  # Ruby `take_while` — the longest leading run of elements for which the
+  # predicate holds. Once the predicate first fails, every later element is
+  # skipped (a `taking` latch), which is what distinguishes this from
+  # `select`.
+  def take_while(pred: Fn(T) -> Bool) -> Array[T]
+    var out: Array[T] = Array.new
+    var taking: Bool = true
+    self.each do |x|
+      if taking
+        if pred.(x)
+          out.push(x)
+        else
+          taking = false
+        end
+      end
+    end
+    out
+  end
+
+  # Ruby `drop_while` — everything from the FIRST element that fails the
+  # predicate onward, including that element. The complement of
+  # `take_while`; the latch flips once and never flips back.
+  def drop_while(pred: Fn(T) -> Bool) -> Array[T]
+    var out: Array[T] = Array.new
+    var dropping: Bool = true
+    self.each do |x|
+      if dropping
+        if pred.(x)
+        else
+          dropping = false
+          out.push(x)
+        end
+      else
+        out.push(x)
+      end
+    end
+    out
+  end
+
+  # Ruby `first` (no-arg) — the first element yielded by `each`, or `nil`
+  # for an empty collection. A `found` latch freezes the result at the
+  # first element (`each` has no early exit), same shape as `find`.
+  def first -> Option[T]
+    var out: Option[T] = nil
+    var found: Bool = false
+    self.each do |x|
+      if found
+      else
+        out = Option.Some(x)
+        found = true
+      end
+    end
+    out
+  end
+
+  # Ruby `take(n)` — the first `n` elements as a fresh array. `n <= 0`
+  # yields an empty array and `n` larger than the collection yields every
+  # element, both matching Ruby.
+  def take(n: Int) -> Array[T]
+    var out: Array[T] = Array.new
+    var i: Int = 0
+    self.each do |x|
+      if i < n
+        out.push(x)
+      end
+      i = i + 1
+    end
+    out
+  end
+
+  # Ruby `drop(n)` — every element AFTER the first `n`. The complement of
+  # `take(n)` over the same counter.
+  def drop(n: Int) -> Array[T]
+    var out: Array[T] = Array.new
+    var i: Int = 0
+    self.each do |x|
+      if i < n
+      else
+        out.push(x)
+      end
+      i = i + 1
+    end
+    out
+  end
+
+  # Ruby's `first(n)` is deliberately NOT defined. Arity overloading does
+  # not reach a builtin head: with both `first` and `first(n)` present,
+  # `a.first(2)` still binds to the ZERO-arg body and dies in the
+  # Cranelift verifier with "mismatched argument count ... got 2,
+  # expected 1" (verified 2026-07-29 on `Array` and on `Set`, which has no
+  # `first` of its own, so it is the overload that fails and not the
+  # `Array` FFI decl shadowing). Shipping it would be a body that binds to
+  # the wrong method, so `take(n)`, which is what Ruby's `first(n)`
+  # returns, carries the behavior until arity overloading works here.
+
+  # Ruby `filter_map` — map, then drop the results that came back `nil`.
+  # Ruby tests the block result for truthiness; the typed equivalent is a
+  # block returning `Option[U]`, so `nil` is the skip signal and `Some(v)`
+  # (or a bare `v` at the block's tail) is a keep.
+  def filter_map[U](f: Fn(T) -> Option[U]) -> Array[U]
+    var out: Array[U] = Array.new
+    self.each do |x|
+      let r: Option[U] = f.(x)
+      match r
+        Some(v) -> out.push(v)
+        nil     -> nil
+      end
+    end
+    out
+  end
+
+  # Ruby `find_index` with a predicate block — a synonym of `index`,
+  # returning the 0-based position of the first match or `nil`. (Ruby's
+  # value form `find_index(obj)` needs `T` equality and is therefore
+  # deferred to the element-typed batch.)
+  def find_index(pred: Fn(T) -> Bool) -> Option[Int]
+    self.index(pred)
+  end
+
+  # Ruby `flat_map` — map each element to a collection, then concatenate
+  # the results one level deep. `extend` does the concatenation; nothing
+  # here inspects `T` or `U`, so it stays a single opaque body.
+  def flat_map[U](f: Fn(T) -> Array[U]) -> Array[U]
+    var out: Array[U] = Array.new
+    self.each do |x|
+      let inner: Array[U] = f.(x)
+      out.extend(inner)
+    end
+    out
+  end
+
+  # Ruby `collect_concat` — the older spelling of `flat_map`. A real
+  # delegating method rather than an `alias`, for the same reason `filter`
+  # and `detect` are (an alias does not compose with the per-implementor
+  # monomorphization of a mixin default).
+  def collect_concat[U](f: Fn(T) -> Array[U]) -> Array[U]
+    self.flat_map(f)
+  end
+
+  # Ruby `each_with_object(memo)` — yield `(element, memo)` for every
+  # element and return `memo`. Ruby relies on the block MUTATING a shared
+  # memo and ignores its return value; Ruxen closures take their arguments
+  # by value, so the memo is threaded THROUGH the closure instead and the
+  # block must return it. The argument ORDER still matches Ruby (element
+  # first), which is what distinguishes this from `reduce`.
+  def each_with_object[U](memo: U, f: Fn(T, U) -> U) -> U
+    var acc: U = memo
+    self.each do |x|
+      acc = f.(x, acc)
+    end
+    acc
+  end
+
+  # Ruby `each_slice(n)` — yield consecutive, non-overlapping runs of `n`
+  # elements. A trailing run shorter than `n` is still yielded, matching
+  # Ruby. `n <= 0` yields nothing rather than looping forever, guarded by
+  # a positive `if` wrapper rather than an early `return nil`: an early
+  # `return` from a `-> nil` body fails the Cranelift verifier with
+  # "arguments of return must match function signature".
+  def each_slice(n: Int, f: Fn(Array[T]) -> nil) -> nil
+    if n > 0
+      let buf: Array[T] = self.entries
+      let len: Int = buf.size as Int
+      var i: Int = 0
+      while i < len
+        var chunk: Array[T] = Array.new
+        var j: Int = 0
+        while j < n
+          if i + j < len
+            chunk.push(buf[i + j])
+          end
+          j = j + 1
+        end
+        f.(chunk)
+        i = i + n
+      end
+    end
+    nil
+  end
+
+  # Ruby `each_cons(n)` — yield every OVERLAPPING window of `n`
+  # consecutive elements, sliding one position at a time. A collection
+  # shorter than `n` yields nothing. Each window is built fresh by indexed
+  # reads off a materialised buffer rather than cloned off a mutated
+  # cursor, so no window aliases another.
+  def each_cons(n: Int, f: Fn(Array[T]) -> nil) -> nil
+    if n > 0
+      let buf: Array[T] = self.entries
+      let len: Int = buf.size as Int
+      var i: Int = 0
+      while i + n <= len
+        var win: Array[T] = Array.new
+        var j: Int = 0
+        while j < n
+          win.push(buf[i + j])
+          j = j + 1
+        end
+        f.(win)
+        i = i + 1
+      end
+    end
+    nil
+  end
+
+  # Ruby `cycle(n)` — run the block over every element, `n` times over.
+  # `n <= 0` runs it zero times. (Ruby's arg-less form loops forever and
+  # its block-less form returns a lazy enumerator; neither is expressible
+  # here, so only the counted form ships.)
+  def cycle(n: Int, f: Fn(T) -> nil) -> nil
+    var i: Int = 0
+    while i < n
+      self.each do |x|
+        f.(x)
+      end
+      i = i + 1
+    end
+    nil
+  end
+
+  # Ruby `reverse_each` — yield the elements in reverse iteration order.
+  # Buffers through `entries` first, because the one required primitive
+  # (`each`) only runs forwards.
+  def reverse_each(f: Fn(T) -> nil) -> nil
+    let buf: Array[T] = self.entries
+    var i: Int = buf.size as Int
+    while i > 0
+      i = i - 1
+      f.(buf[i])
+    end
+    nil
   end
 end
 
@@ -197,28 +594,24 @@ mixin Sync
 
 end
 
+# The derive mixins. A struct, class or enum whose fields support one
+# includes it implicitly, and the compiler writes the method body
+# (ruby-naming.spec.md §3.6). These declarations are the signatures the
+# derived methods are typed by, with `Self` the deriving type.
 mixin Clone
-  def clone
+  def clone -> Self
 end
 
 mixin PartialEq
-  def eq
+  def eq(other: &Self) -> Bool
 end
 
 mixin Eq
 
 end
 
-# `Hash` here is the historic trait NAME (one method `hash`). The
-# Ruby-naming canonical name is `Hashable` (in library/std/hash/);
-# the `Hash → Hashable` alias is re-established by the resolver's
-# TYPE_ALIASES table after bootstrap merge.
-mixin Hash
-  def hash
-end
-
 mixin Default
-  def default
+  def self.default -> Self
 end
 
 mixin Ord
@@ -247,4 +640,130 @@ end
 # `{Src}_into`. See docs/tutorial/11-error-handling.md.
 mixin Into[T]
   def into
+end
+
+# ── Kernel free functions ───────────────────────────────────────────────
+#
+# Ruby's `Kernel` module is included in `Object`, so its instance methods
+# are callable bare from anywhere (`warn "x"`, `abort "boom"`, `rand 6`).
+# The Ruxen analogue is a stdlib FREE FUNCTION, not a `mixin Kernel`
+# default: these take no receiver, and a `mixin Kernel` body would be
+# emitted once per including head for no benefit. `mixin Kernel` above
+# stays reserved for the genuinely receiver-shaped universals (`tap`,
+# `then`, `yield_self`).
+
+# Ruby `warn(msg)` — write `msg` and a newline to STDERR, leaving STDOUT
+# untouched. (Ruby's `uplevel:` / `category:` keywords need kwargs and are
+# not modelled.)
+def warn(msg: &String) -> nil
+  eputs(msg)
+  nil
+end
+
+# Ruby `abort(msg)` — write `msg` to STDERR, then terminate with exit
+# status 1. Returns `Never`, so the compiler knows nothing after it runs.
+def abort(msg: &String) -> Never
+  eputs(msg)
+  Process.exit(1)
+end
+
+# Ruby `exit(code)` is NOT defined here. It already exists as a bare
+# Kernel-level FFI decl in `library/std/process/src/lib.rx`
+# (`def exit as "ruxen_process_exit"`), so a body here would be a second
+# definition of the same name and signature.
+
+# Ruby `exit!(code)` — terminate the process immediately. In Ruby this is
+# the form that skips `at_exit` handlers and `ensure` blocks; Ruxen has no
+# at-exit registry, so it behaves identically to `exit(code)` and exists
+# for source parity with Ruby programs that spell the abrupt form.
+#
+# This could not ship before B87: a free function whose name ended in `!`
+# was parsed as a MACRO call, and the unrecognised macro was dropped
+# whole at MIR, so `exit!(1)` compiled clean and did nothing. `!` names
+# now resolve as ordinary calls, and an unlowerable one is a hard error
+# rather than a no-op.
+def exit!(code: Int) -> Never
+  Process.exit(code)
+end
+
+# Ruby `sleep(secs)` — block the calling thread for `secs` SECONDS.
+# Integer seconds only: Ruby's fractional form needs a `Float` argument,
+# and `Float` arguments do not survive the current ABI (see B01), so a
+# fractional overload would silently sleep zero. Use
+# `Thread.sleep(Duration.from_millis(n))` for sub-second waits. A
+# non-positive `secs` returns immediately, where Ruby raises on a negative
+# one; there is no exception model here to raise into.
+def sleep(secs: Int) -> nil
+  if secs > 0
+    Thread.sleep(Duration.from_secs(secs))
+  end
+  nil
+end
+
+# Ruby `rand(n)` — a random integer in `[0, n)`. `n <= 0` yields 0 rather
+# than Ruby's `[0.0, 1.0)` float, because that form needs a `Float` return
+# (B01). The OS entropy source hands back a full 64-bit pattern read as a
+# SIGNED `Int`, so it is folded non-negative before the modulo; the
+# two-step fold also covers the one value whose negation overflows back to
+# itself (`Int::MIN`), which would otherwise leak a negative result.
+def rand(n: Int) -> Int
+  var r: Int = Rand.random_u64
+  if r < 0
+    r = 0 - r
+  end
+  if r < 0
+    r = 0
+  end
+  var out: Int = 0
+  if n > 0
+    out = r % n
+  end
+  out
+end
+
+# Ruby's capitalized conversion functions — `Integer(str)`, `Float(str)`,
+# `String(x)`, `Array(x)` — are NOT defined. A capitalized identifier
+# lexes as a `TypeIdentifier`, so `def Integer(s)` is a parse error
+# ("expected identifier, found TypeIdentifier(\"Integer\")", verified
+# 2026-07-29). The method spellings already cover the conversions:
+# `"42".to_i`, `"1.5".to_f`, `x.to_s`. `Float()` additionally waits on the
+# `Float` ABI (B01) and `String()` / `Array()` on a universal `to_s`.
+#
+# `srand(seed)` is likewise NOT defined: `library/std/rand` exposes only
+# the OS entropy source (`ruxen_rand_random_u64`) with no seedable
+# generator behind it, so `srand` could not do anything except lie about
+# reproducibility.
+
+# Ruby `inspect` — the developer-facing form of a value, the one `p`
+# prints. The default is the display form `to_s`, which `Int`, `Float`,
+# `Bool` and `Char` (std/scalar) take; `String` (std/string) overrides it
+# with the QUOTED form, which is
+# the whole reason `p "a"` and `puts "a"` differ in Ruby. Escaping of
+# embedded quotes / newlines is NOT applied, so `inspect` is a debugging
+# aid and not a round-trippable serializer. (A stdlib file cannot hold an
+# `extension` block, E0725, so each type's own class body includes it.)
+mixin Inspect
+  # The display form; the one required method.
+  def to_s -> String
+
+  def inspect -> String
+    self.to_s
+  end
+end
+
+# Ruby `p(x)` — write `x.inspect` to STDOUT and return `x`, which is what
+# makes `p` droppable into an expression without changing it. Any type
+# that includes `Inspect` works. `x` is taken by value and handed back:
+# for an owning value such as a `String`, rebind the result
+# (`s = p(s)`) to keep using it, where Ruby hands back the same object.
+def p[T: Inspect](x: T) -> T
+  puts x.inspect
+  x
+end
+
+# Ruby `pp(x)` — pretty-print. Ruxen's values have no nested structure to
+# lay out at this level, so `pp` is `p`'s output exactly, shipped under
+# its own name so scripts that reach for it work.
+def pp[T: Inspect](x: T) -> T
+  p(x)
 end

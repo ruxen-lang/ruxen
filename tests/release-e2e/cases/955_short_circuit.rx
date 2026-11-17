@@ -1,0 +1,19 @@
+# Pins short-circuit evaluation of `&&` / `||`: the RHS is evaluated ONLY when
+# the LHS does not already decide the result. `flag` prints when evaluated, so
+# a missing line proves the operand was skipped.
+def flag(tag: String, val: Bool) -> Bool
+  puts "eval #{tag}"
+  val
+end
+
+# `||` with a true LHS skips the RHS.
+a = flag("A", true) || flag("B", true)
+puts "a=#{a}"
+
+# `&&` with a false LHS skips the RHS.
+b = flag("C", false) && flag("D", true)
+puts "b=#{b}"
+
+# The non-deciding path still evaluates the RHS.
+c = flag("E", false) || flag("F", true)
+puts "c=#{c}"

@@ -1,0 +1,16 @@
+class Box
+  n: Int
+  def init(@n: Int)
+  end
+end
+
+def main
+  var a = Box.new(0)
+  var b = Box.new(0)
+  var flag = true
+  # A ternary whose branches are both fresh constructors cannot alias a
+  # target, so it is safe and must be allowed.
+  a, b = (flag ? Box.new(1) : Box.new(2)), Box.new(3)
+  puts a.n
+  puts b.n
+end

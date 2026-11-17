@@ -2,7 +2,7 @@
 //!
 //! An `.rlib` file is an `ar` archive containing:
 //! - `<name>.o` — compiled object code (Cranelift or LLVM output)
-//! - `metadata.json` — exported types, function signatures, traits
+//! - `metadata.json` — compiler version, piece name and version
 //! - `hash` — SHA-256 of the source files
 
 use serde::{Deserialize, Serialize};
@@ -19,66 +19,6 @@ pub struct TypeMetadata {
     pub compiler_version: String,
     pub name: String,
     pub version: String,
-    pub exports: Exports,
-}
-
-/// Exported public API of a piece.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Exports {
-    #[serde(default)]
-    pub types: Vec<ExportedType>,
-    #[serde(default)]
-    pub functions: Vec<ExportedFunction>,
-    #[serde(default)]
-    pub traits: Vec<ExportedTrait>,
-    #[serde(default)]
-    pub modules: std::collections::BTreeMap<String, Exports>,
-}
-
-/// An exported type (class or struct).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExportedType {
-    pub name: String,
-    pub kind: String,
-    #[serde(default)]
-    pub fields: Vec<ExportedField>,
-    #[serde(default)]
-    pub methods: Vec<ExportedFunction>,
-}
-
-/// An exported field.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExportedField {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub ty: String,
-    pub visibility: String,
-}
-
-/// An exported function or method.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExportedFunction {
-    pub name: String,
-    #[serde(default)]
-    pub params: Vec<ExportedParam>,
-    pub return_type: String,
-    pub visibility: String,
-}
-
-/// An exported function parameter.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExportedParam {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub ty: String,
-}
-
-/// An exported trait.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExportedTrait {
-    pub name: String,
-    #[serde(default)]
-    pub methods: Vec<ExportedFunction>,
 }
 
 /// Create an .rlib archive from object code and type metadata.
@@ -286,44 +226,6 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn test_metadata_serialization() {
-        let metadata = TypeMetadata {
-            compiler_version: COMPILER_VERSION.to_string(),
-            name: "http".to_string(),
-            version: "1.0.0".to_string(),
-            exports: Exports {
-                types: vec![ExportedType {
-                    name: "Request".to_string(),
-                    kind: "class".to_string(),
-                    fields: vec![ExportedField {
-                        name: "url".to_string(),
-                        ty: "String".to_string(),
-                        visibility: "public".to_string(),
-                    }],
-                    methods: vec![],
-                }],
-                functions: vec![ExportedFunction {
-                    name: "get".to_string(),
-                    params: vec![ExportedParam {
-                        name: "url".to_string(),
-                        ty: "String".to_string(),
-                    }],
-                    return_type: "Response".to_string(),
-                    visibility: "public".to_string(),
-                }],
-                traits: vec![],
-                modules: Default::default(),
-            },
-        };
-
-        let json = serde_json::to_string_pretty(&metadata).unwrap();
-        let reparsed: TypeMetadata = serde_json::from_str(&json).unwrap();
-        assert_eq!(reparsed.name, "http");
-        assert_eq!(reparsed.exports.types.len(), 1);
-        assert_eq!(reparsed.exports.functions.len(), 1);
-    }
-
-    #[test]
     fn test_rlib_roundtrip() {
         let tmp = std::env::temp_dir().join(format!("ruxen_rlib_test_{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
@@ -335,7 +237,6 @@ mod tests {
             compiler_version: COMPILER_VERSION.to_string(),
             name: "test".to_string(),
             version: "0.1.0".to_string(),
-            exports: Exports::default(),
         };
         let source_hash = "sha256:abc123";
 
@@ -369,7 +270,6 @@ mod tests {
             compiler_version: COMPILER_VERSION.to_string(),
             name: "test".to_string(),
             version: "0.1.0".to_string(),
-            exports: Exports::default(),
         };
 
         create_rmeta(&rmeta_path, &metadata).unwrap();

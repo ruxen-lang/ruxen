@@ -6,13 +6,17 @@
  * Every type is a heap-allocated wrapper so the handle on the FFI
  * boundary is a pointer (i64). No memory-ordering surface in this
  * round — every op is SEQ_CST.
+ *
+ * AtomicUsize has no C of its own: its `lib` block aliases the AtomicI64
+ * symbols. Both are one 64-bit word, and C11 atomic arithmetic on a
+ * signed type wraps in two's complement (7.17.7.5), so the bit patterns
+ * an unsigned implementation would produce are identical.
  */
 
 typedef struct { atomic_int_fast64_t v; } RuxenAtomicI64;
 typedef struct { atomic_bool        v; } RuxenAtomicBool;
-typedef struct { atomic_uint_fast64_t v; } RuxenAtomicUsize;
 
-/* ─── AtomicI64 ───────────────────────────────────────────────── */
+/* ─── AtomicI64 (also AtomicUsize) ────────────────────────────── */
 
 int64_t ruxen_atomic_i64_new(int64_t initial) {
     RuxenAtomicI64 *a = (RuxenAtomicI64 *)malloc(sizeof(RuxenAtomicI64));
@@ -114,46 +118,5 @@ int64_t ruxen_atomic_bool_compare_and_swap(int64_t ptr, int64_t current, int64_t
 
 void ruxen_atomic_bool_drop(int64_t ptr) {
     RuxenAtomicBool *a = (RuxenAtomicBool *)ptr;
-    if (a) free(a);
-}
-
-/* ─── AtomicUsize ─────────────────────────────────────────────── */
-
-int64_t ruxen_atomic_usize_new(int64_t initial) {
-    RuxenAtomicUsize *a = (RuxenAtomicUsize *)malloc(sizeof(RuxenAtomicUsize));
-    if (!a) ruxen_panic("AtomicUsize.new: out of memory");
-    atomic_store(&a->v, (uint_fast64_t)initial);
-    return (int64_t)a;
-}
-
-int64_t ruxen_atomic_usize_load(int64_t ptr) {
-    RuxenAtomicUsize *a = (RuxenAtomicUsize *)ptr;
-    return (int64_t)atomic_load(&a->v);
-}
-
-void ruxen_atomic_usize_store(int64_t ptr, int64_t v) {
-    RuxenAtomicUsize *a = (RuxenAtomicUsize *)ptr;
-    atomic_store(&a->v, (uint_fast64_t)v);
-}
-
-int64_t ruxen_atomic_usize_fetch_add(int64_t ptr, int64_t delta) {
-    RuxenAtomicUsize *a = (RuxenAtomicUsize *)ptr;
-    return (int64_t)atomic_fetch_add(&a->v, (uint_fast64_t)delta);
-}
-
-int64_t ruxen_atomic_usize_fetch_sub(int64_t ptr, int64_t delta) {
-    RuxenAtomicUsize *a = (RuxenAtomicUsize *)ptr;
-    return (int64_t)atomic_fetch_sub(&a->v, (uint_fast64_t)delta);
-}
-
-int64_t ruxen_atomic_usize_compare_and_swap(int64_t ptr, int64_t current, int64_t new_val) {
-    RuxenAtomicUsize *a = (RuxenAtomicUsize *)ptr;
-    uint_fast64_t expected = (uint_fast64_t)current;
-    atomic_compare_exchange_strong(&a->v, &expected, (uint_fast64_t)new_val);
-    return (int64_t)expected;
-}
-
-void ruxen_atomic_usize_drop(int64_t ptr) {
-    RuxenAtomicUsize *a = (RuxenAtomicUsize *)ptr;
     if (a) free(a);
 }

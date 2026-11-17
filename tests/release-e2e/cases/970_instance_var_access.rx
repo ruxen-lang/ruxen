@@ -1,0 +1,28 @@
+# Pins general `@ivar` read/write in method bodies (sugar for `self.ivar`):
+# a read (`@n`), a plain write (`@n = ...`), and a compound-assign (`@n += k`).
+# The `@n` init-param auto-assign form keeps working alongside it.
+class Counter
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  def value -> Int = @n
+
+  def bump -> nil
+    @n = @n + 1
+  end
+
+  def add(k: Int) -> nil
+    @n += k
+  end
+end
+
+def main
+  var c = Counter.new(10)
+  puts(c.value)
+  c.bump
+  puts(c.value)
+  c.add(5)
+  puts(c.value)
+end

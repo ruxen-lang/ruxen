@@ -1,0 +1,13 @@
+def show(x: Int) -> Int
+  x
+end
+
+def show(x: Bool) -> Bool
+  x
+end
+
+def main
+  show(2.5)
+  show(1)
+  show(true)
+end

@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # 09 — Phase 3: GATs (T2.05) + `any Mixin` (T2.06)
 
 > **Status: 🟡 Partial / deferred** (audited 2026-05-21). `any Mixin`

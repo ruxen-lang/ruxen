@@ -11,22 +11,15 @@ impl<'a> Lowerer<'a> {
                 // (`Int`/`Float`/`Bool`) fall through to the direct
                 // `Negate`/`Not` instructions below — the machine floor.
                 // `Deref` is never a method. (`+@` has no surface operator.)
-                fn peel(t: &Ty) -> &Ty {
-                    match t {
-                        Ty::Ref(i)
-                        | Ty::RefMut(i)
-                        | Ty::RefLifetime(_, i)
-                        | Ty::RefMutLifetime(_, i) => peel(i),
-                        _ => t,
-                    }
-                }
                 let nominal = matches!(
-                    peel(&operand.ty),
+                    operand.ty.peel_refs(),
                     Ty::Class { .. } | Ty::Struct { .. } | Ty::Enum { .. }
                 );
                 let unary_method = match op {
                     UnaryOp::Neg => Some("-@"),
                     UnaryOp::Not => Some("!"),
+                    UnaryOp::KeywordNot => None,
+                    UnaryOp::BitNot => None,
                     UnaryOp::Deref => None,
                 };
                 if nominal {
@@ -35,10 +28,14 @@ impl<'a> Lowerer<'a> {
                             kind: HirExprKind::MethodCall {
                                 object: Box::new((**operand).clone()),
                                 method: UNRESOLVED_DEF,
+                                resolved: UNRESOLVED_DEF,
+                                requirement_params: None,
                                 method_name: method.to_string(),
                                 generic_args: vec![],
                                 args: vec![],
                                 block: None,
+                                safe_nav: false,
+                                parens: true,
                             },
                             ty: expr.ty.clone(),
                             span: expr.span.clone(),
@@ -52,7 +49,21 @@ impl<'a> Lowerer<'a> {
                 let dest = self.new_temp(expr.ty.clone());
                 match op {
                     UnaryOp::Neg => self.emit(MirInst::Negate { dest, operand: val }),
-                    UnaryOp::Not => self.emit(MirInst::Not { dest, operand: val }),
+                    UnaryOp::Not | UnaryOp::KeywordNot => {
+                        self.emit(MirInst::Not { dest, operand: val })
+                    }
+                    UnaryOp::BitNot => {
+                        // Bitwise complement: `~x` == `x ^ -1` (every bit
+                        // flipped). Reuse the BitXor path rather than
+                        // `MirInst::Not`, which XORs with 1 (logical negation,
+                        // correct only for Bool).
+                        self.emit(MirInst::BinOp {
+                            dest,
+                            op: crate::parser::ast::BinOp::BitXor,
+                            lhs: val,
+                            rhs: MirValue::Literal(Literal::Int(-1)),
+                        })
+                    }
                     UnaryOp::Deref => {
                         // `*x` — strip one reference level. In Ruxen's value
                         // model a reference is represented the same as its
@@ -71,14 +82,27 @@ impl<'a> Lowerer<'a> {
                 mutable,
                 expr: inner,
             } => {
+                // Zero-copy immortal borrow of a string literal (`&"x"`): emit the
+                // raw `.rodata` pointer directly instead of heap-copying via
+                // `ruxen_string_from` and then `Ref`-ing it (TASKS.md, "zero-copy
+                // `&String` borrow of a literal"). That owned copy is a needless
+                // heap allocation: drop elaboration frees it at scope exit, so it
+                // is leak-free but wasteful. `.rodata` is read-only, so this fires
+                // ONLY for the immutable borrow; a `&var` of a literal must still
+                // heap-copy into writable memory.
+                if !*mutable {
+                    if let HirExprKind::StringLiteral(s) = &inner.kind {
+                        return Ok(Some(self.emit_raw_string_literal(s)));
+                    }
+                }
+                // A `&var x` is an address only where a `&var` parameter or
+                // binding takes one, and `lower_refmut_addr` lowers those
+                // (`mir::refmut_abi`). Read as a value (`(&var fut).poll(cx)`,
+                // a handle `&var`), it is `x`'s word, like `&x`.
                 let src_local = self.lower_expr(inner)?;
                 if let Some(src) = src_local {
                     let dest = self.new_temp(expr.ty.clone());
-                    if *mutable {
-                        self.emit(MirInst::RefMut { dest, src });
-                    } else {
-                        self.emit(MirInst::Ref { dest, src });
-                    }
+                    self.emit(MirInst::Ref { dest, src });
                     Ok(Some(dest))
                 } else {
                     Ok(None)

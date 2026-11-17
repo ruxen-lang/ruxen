@@ -13,9 +13,11 @@ what the layout rules guarantee.
 
 ---
 
-## B1 — `unsafe { ... }` block parses
+## B1 — `unsafe ... end` block parses
 
-```ruxen
+Example [implemented] (whether `unsafe` stays is OQ-9 in the naming spec):
+
+```ruby
 unsafe
   ptr.deref
 end
@@ -30,14 +32,18 @@ resolves to a raw-pointer absence value per §3.10 of the canonical
 syntax spec.  Raw pointer types are spelled `*T` (read-only) and `*var T`
 (writable).
 
-A pointer-typed `nil` reaching outside an `unsafe` block emits
-`E-NIL-RAW-OUTSIDE-UNSAFE`.
+The old draft named a diagnostic `E-NIL-RAW-OUTSIDE-UNSAFE` for a
+pointer-typed `nil` reaching outside an `unsafe` block; that name was never
+registered (naming spec section 22).
 
 ## B3 — `lib "name"` declaration parses
 
-```ruxen
+Example [implemented]. C's `void *` is spelled `*var UInt8` today; `*Void`
+is rejected as an undefined type, [planned](../../../TODO.md#t-void-ptr):
+
+```ruby
 lib "c"
-  def malloc(n: USize) -> *var Void
+  def malloc(n: USize) -> *var UInt8
 end
 ```
 
@@ -54,7 +60,7 @@ the canonical spelling for the C standard library.
 
 ## B5 — `Void` return type
 
-FFI defs may return `Void` (mapped to Ruxen's `Unit`).
+FFI defs may return `Void` (mapped to `nil`).
 
 ## B6 — Multi-parameter FFI
 
@@ -63,9 +69,9 @@ Accepts arbitrarily many parameters, mixing scalars and pointers.
 ## B7 — Variadic C functions
 
 The parser accepts a trailing `...` inside `lib` block `def`
-signatures:
+signatures. Example [implemented]:
 
-```ruxen
+```ruby
 lib "c"
   def printf(fmt: *UInt8, ...) -> Int32
 end
@@ -79,19 +85,23 @@ typeck error.
 
 `layout c` at the top of a struct body guarantees C-compatible
 layout (fields in declaration order, native alignment, no
-reordering).
+reordering). [implemented]. `struct` itself is [deprecated] (replacement
+`Data.define`, [planned](../../../TODO.md#t-data-define)); `layout c` moves to `Data.define`
+bodies with it (OQ-9).
 
 ## B9 — Implicit structural mixin inclusion on struct / class / enum
 
 Structural mixins (`Debug`, `Clone`, `Eq`, `Hashable`, …) are
-implicitly included when the fields support them; an explicit
-`include D1, D2` inside the body is the loud form and lowers to
-the same AST node.  See [implicit_includes.spec.md](../mixins/implicit_includes.spec.md).
+implicitly included when the fields support them [implemented]; an explicit
+`include` inside the body is the loud form and lowers to the same AST node.
+The Rust-named mixins (`Debug`, `Eq`) are to become [deprecated] `.rx`
+adapters over `inspect`, `==`, `hash` and `eql?`, [planned](../../../TODO.md#t-d6).  See [implicit_includes.spec.md](../mixins/implicit_includes.spec.md).
 
 ## B10 — In-body `include` clause syntax
 
-An `include Foo, Bar` clause inside a struct/class/enum body parses
-the loud form of the implicit-include rule.
+An `include Foo` clause inside a struct/class/enum body parses as the
+loud form of the implicit-include rule [implemented], one `include` per
+module. `include Foo, Bar` on one line is [planned](../../../TODO.md#t-include-many).
 
 ## B11 — Layout invariants
 
@@ -113,6 +123,21 @@ out — e.g. `String.from_raw(ptr, len)` to take ownership of a
 returned C buffer, or `Box.from_raw(ptr)` for a single allocation.
 Ruxen does not insert any implicit drop for raw pointers.
 
+## B13 — Ownership markers on `lib` declarations
+
+**Given** a `lib` declaration whose result is spelled `-> owned T`
+(`def clone as "ruxen_closure_share" -> owned Self`)
+**Then** the caller owns the returned value outright and drop elaboration frees
+it at the caller's scope exit (`mir::lower::runtime_abi::result_ownership`
+reads the marker before its hand-listed table). `def var NAME` passes the
+receiver as `&var Self`, and `def consume NAME` takes it over (`def consume
+drop` frees the handle's storage). A by-value parameter moves into C; a
+read-only parameter is declared `&T`. [implemented]
+
+`def var` on a free `lib` function (one outside a class) is silently ignored
+today; it is to become an error, since mutation needs an explicit `&var`
+parameter [planned](../../../TODO.md#t-x5).
+
 ---
 
 ## Pin tests
@@ -120,20 +145,21 @@ Ruxen does not insert any implicit drop for raw pointers.
 | Behaviour | Test fn                                       | File             |
 |-----------|-----------------------------------------------|------------------|
 | B1        | `parse_unsafe_block` + `parse_unsafe_block_with_statements` | `phase7_ffi.rs` |
-| B2        | `parse_null_literal` + `parse_raw_pointer_type` + `parse_raw_mut_pointer_type` | `phase7_ffi.rs` |
-| B3        | `parse_lib_block` + `parse_lib_block_with_link_attr` | `phase7_ffi.rs` |
-| B4        | `parse_extern_block`                          | `phase7_ffi.rs`  |
+| B2        | `parse_null_literal` + `parse_raw_pointer_type` + `parse_raw_var_pointer_type` | `phase7_ffi.rs` |
+| B3        | `parse_lib_block` + `parse_lib_block_with_link_name` | `phase7_ffi.rs` |
+| B4        | `parse_lib_block_replaces_extern`             | `phase7_ffi.rs`  |
 | B5        | `parse_ffi_void_return`                       | `phase7_ffi.rs`  |
 | B6        | `parse_ffi_multiple_params`                   | `phase7_ffi.rs`  |
 | B7        | (variadic FFI parser pin — to land alongside B7 implementation) | `phase7_ffi.rs` |
-| B8        | `parse_repr_c_struct` + `c_struct_layout_matches_regular` | `phase7_ffi.rs` |
-| B9        | `parse_derive_attr_on_struct` + `parse_derive_attr_on_class` + `parse_derive_attr_on_enum` | `phase7_ffi.rs` |
-| B10       | `parse_inbody_derive_on_class` + `parse_inbody_derive_on_enum` | `phase7_ffi.rs` |
+| B8        | `parse_layout_c_struct` + `c_struct_layout_matches_regular` | `phase7_ffi.rs` |
+| B9        | `parse_include_on_struct` + `parse_include_on_class` + `parse_include_on_enum` | `phase7_ffi.rs` |
+| B10       | `parse_inbody_include_on_class` | `phase7_ffi.rs` |
 | B11 ptr   | `raw_pointer_layout`                          | `phase7_ffi.rs`  |
 | B11 packed| `packed_struct_layout`                        | `phase7_ffi.rs`  |
 | B11 trans | `transparent_struct_layout` + `transparent_struct_rejects_multiple_fields` | `phase7_ffi.rs` |
+| B13       | `owned_result_marker_parses_round_trips_and_classifies_fresh` + `def_consume_drop_marks_a_drop_that_releases_its_storage` | `lib_c_symbol_alias.rs` |
 
-<!-- TODO(migration): pin-test fn names still mention `null` / `mut` / `extern` / `derive` / `repr_c`. Internal Rust identifiers — rename when in scope. -->
+<!-- TODO(migration): pin-test fn `parse_null_literal` still says `null` (the literal is `nil`); rename when in scope. -->
 
 ---
 

@@ -1,0 +1,61 @@
+# Pins user-defined comparison operators and Comparable's shared defaults.
+class Rank
+  value: Int
+
+  include Comparable
+
+  def init(@value: Int)
+  end
+
+  def <=>(other: &Rank) -> Int
+    self.value <=> other.value
+  end
+end
+
+class NeverEqual
+  def init
+  end
+
+  def ==(other: &NeverEqual) -> Bool
+    false
+  end
+end
+
+class AliasedRank
+  value: Int
+
+  def init(@value: Int)
+  end
+
+  def compare(other: &AliasedRank) -> Int
+    self.value <=> other.value
+  end
+
+  alias <=> compare
+end
+
+def main
+  let low = Rank.new(10)
+  let same = Rank.new(10)
+  let mid = Rank.new(20)
+  let high = Rank.new(30)
+
+  puts "cmp=#{low <=> mid}"
+  puts "explicit_cmp=#{low.<=>(mid)}"
+  puts "eq=#{low == same}"
+  puts "ne=#{low != mid}"
+  puts "lt=#{low < mid}"
+  puts "le=#{low <= same}"
+  puts "gt=#{high > mid}"
+  puts "ge=#{high >= high}"
+  puts "between=#{mid.between?(low, high)}"
+
+  let a = NeverEqual.new
+  let b = NeverEqual.new
+  puts "custom_eq=#{a == b}"
+  puts "custom_ne=#{a != b}"
+
+  let alias_low = AliasedRank.new(1)
+  let alias_high = AliasedRank.new(2)
+  puts "alias_cmp=#{alias_low <=> alias_high}"
+end

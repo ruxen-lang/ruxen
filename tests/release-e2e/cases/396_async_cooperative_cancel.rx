@@ -1,0 +1,65 @@
+## Increment 3 of the concurrency adoption (§4.1 piece 3 — cooperative
+## cancellation). A leaf future observes a cooperative `cx.cancelled?` bit at
+## its poll (await) boundary and EARLY-RETURNS instead of parking forever.
+## That early return lets the awaiting `async def` state machine COMPLETE,
+## and its scope-exit drop then fires the Increment-2 state-indexed drop glue
+## so the leaf sub-future's `def drop` (its reactor slot / fd analogue) is
+## cleaned up.
+##
+## Surface (honest, current-lowering): the cancel bit is a THREAD-LOCAL flag,
+## like the reactor handle (`ruxen_reactor_current_handle`) futures already
+## read from inside poll — because the user async body does NOT see `cx`
+## (only the synthesised `poll(cx)` does). `ruxen_request_cancel()` sets it,
+## `cx.cancelled?` (and the free fn `ruxen_cancel_requested()`) read it,
+## `ruxen_clear_cancel()` resets it. The flag is thread-scoped and PERSISTS
+## (it is NOT auto-cleared at block_on entry) — that is why a cancel requested
+## BEFORE block_on (as `main` does here) is observed by the first poll.
+## COOPERATIVE: a future only stops at a point where it CHECKS the bit; it does
+## NOT preempt an await-free compute loop.
+##
+## Shape: main requests cancel, then block_on's a `worker` async fn that
+## awaits a `CancelAware` leaf. The leaf's first poll sees `cx.cancelled?` and
+## returns Ready(-1) immediately (instead of Pending forever). worker
+## completes returning -1; `puts` prints it; then at main's scope exit the
+## block_on root future is dropped (the §4.1 block_on-exit drop), firing
+## CancelAware's `def drop` via the Increment-2 state-indexed glue. Hence the
+## drop line prints AFTER "worker returned -1".
+
+class CancelAware
+  tag: Int
+  include Future
+  type Output = Int
+
+  def init(t: Int)
+    self.tag = t
+  end
+
+  def self.make(t: Int) -> CancelAware
+    CancelAware.new(t)
+  end
+
+  def var poll(cx: &var Context) -> Poll[Int]
+    # Cooperative cancel check at the await boundary.
+    if cx.cancelled?
+      Poll.Ready(-1)
+    else
+      Poll.Pending
+    end
+  end
+
+  def drop
+    puts "CancelAware dropped tag=#{self.tag}"
+  end
+end
+
+async def worker() -> Int
+  let v = CancelAware.make(7).await
+  v
+end
+
+def main
+  # An external cancel signal arrives before we start driving the worker.
+  ruxen_request_cancel()
+  let r = block_on(worker())
+  puts "worker returned #{r}"
+end

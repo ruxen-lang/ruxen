@@ -1,9 +1,0 @@
-def main
-  let v = [1, 2, 3]
-  let has = v.any? { |n| n > 2 }
-  if has
-    puts "yes"
-  else
-    puts "no"
-  end
-end

@@ -36,22 +36,25 @@
 ## `tests/runtime_abi_derivation.rs` pins that the derived widths equal
 ## the hand-rolled `runtime_signature` table.
 ##
+## ## Iteration — `each` is a real `.rx` body, not a laundered decl
+##
+##   * `each(f: Fn(T) -> nil)`: called with a closure value
+##     (`arr.each(f)` / `arr.each(&block)`) it runs the `.rx` body below;
+##     a literal trailing block is MIR-inlined (closure_inline) and never
+##     reaches it. `select!` has no decl: its literal block is MIR-inlined
+##     the same way and the collections.rs arm types it. The other closure
+##     combinators are `Enumerable` defaults over `each`.
+##
 ## ## Residual — typed by the collections.rs resolver arms that run
 ## ## AHEAD of the bridge (these decls below stay laundered to `Int`
 ## ## purely for the FFI alias / codegen call rewrite; the resolver arm
 ## ## supplies the user-visible type)
 ##
-##   * closure combinators — `map` / `select` / `reject` / `reduce` /
-##     `find` / `index` / `each` / `each_with_index` / `all?` / `any?` /
-##     `partition` / `sort_by` / `select!`: MIR-inlined (closure_inline);
-##     `each` keeps its (vestigial) alias decl, the rest never reach
-##     codegen as a call. Return types are closure-inferred.
 ##   * `zip` / `to_h`: the result element type is computed from the ARG
 ##     (`zip`) or the receiver's tuple element (`to_h`) — not expressible
 ##     as a static declared return — so the resolver arm computes it.
 ##     Their decls stay for the FFI alias (`ruxen_vec_zip` /
 ##     `ruxen_hash_from_iter` emit real calls).
-##   * `sum`: carries the E0700 non-numeric-element typeck check.
 ##   * `get_mut` / `get_var`: alias `ruxen_vec_get_opt` with a `&var T`
 ##     return that differs from `get`'s `&T`; a second `.rx` alias for
 ##     the same C symbol with a different wire shape trips E0722. Kept as
@@ -75,13 +78,12 @@ class Array[T]
     # `resolve/ffi_registration.rs`) admits these second/third aliases.
     def get_mut as "ruxen_vec_get_opt"(i: Int) -> Option[&var T]
     def get_var as "ruxen_vec_get_opt"(i: Int) -> Option[&var T]
-    def first as "ruxen_vec_first" -> Option[T]
-    def last as "ruxen_vec_last" -> Option[T]
-    def include? as "ruxen_vec_contains_int"(x: T) -> Bool
+    # `first` / `last` hand back the element itself (the C side does not
+    # copy it), so the payload is a borrow, like `get`'s: `.clone` it to keep.
+    def first as "ruxen_vec_first" -> Option[&T]
+    def last as "ruxen_vec_last" -> Option[&T]
     def clone as "ruxen_vec_clone" -> Array[T]
     def reverse as "ruxen_vec_reverse" -> Array[T]
-    def sort as "ruxen_vec_sort" -> Array[T]
-    def join as "ruxen_vec_join"(sep: &String) -> String
     def push as "ruxen_vec_push"(x: T)
     def pop as "ruxen_vec_pop" -> Option[T]
     def clear as "ruxen_vec_clear"
@@ -89,21 +91,34 @@ class Array[T]
     def swap as "ruxen_vec_swap"(i: Int, j: Int)
     def insert as "ruxen_vec_insert"(i: Int, x: T)
     def remove as "ruxen_vec_remove"(i: Int) -> T
-    def extend as "ruxen_vec_extend"(other: Array[T])
-    def dedup as "ruxen_vec_dedup"
+    def extend as "ruxen_vec_extend"(other: &Array[T])
     # Ruby `take(n)` / `drop(n)` eager-materialise a fresh Array.
     def take as "ruxen_vec_take"(n: Int) -> Array[T]
-    def drop as "ruxen_vec_skip"(n: Int) -> Array[T]
+    def drop as "ruxen_vec_skip"(n: Int, elems: ElemDesc[T]) -> Array[T]
     # `a.chain(b)` concatenates two arrays directly.
-    def chain as "ruxen_vec_chain"(other: Array[T]) -> Array[T]
+    def chain as "ruxen_vec_chain"(other: &Array[T], elems: ElemDesc[T]) -> Array[T]
     # `arr.to_set` → Set[T].
-    def to_set as "ruxen_set_from_iter" -> Set[T]
-    # ── residual: laundered `Int` decls kept ONLY for the FFI alias;
+    def to_set as "ruxen_set_from_iter"(keys: KeyDesc[T]) -> Set[T]
+    # ── residual: laundered `Int` decl kept ONLY for the FFI alias;
     #    the collections.rs resolver (ahead of the bridge) supplies the
     #    user-visible return type. See header.
-    def sum as "ruxen_vec_sum" -> Int where T: Add
-    def each as "ruxen_vec_each" -> Int
-    def to_h as "ruxen_hash_from_iter" -> Int
+    #    The pairs' descriptor lets C copy each pair the way its drop frees it;
+    #    the table's key descriptor is bound from the result.
+    def to_h[K, V] as "ruxen_hash_from_iter"(pairs: ElemDesc[T], keys: KeyDesc[K]) -> Hash[K, V]
+  end
+
+  # Ruby `each` with a closure VALUE: `arr.each(f)` / `arr.each(&block)`.
+  # A literal trailing block (`arr.each { |x| ... }`) never reaches this
+  # body: MIR inlines it (closure_inline). The param is `Fn(T) -> nil`, so
+  # a trailing block bound here settles as a borrowing Block.
+  def each(f: Fn(T) -> nil) -> nil
+    var n: Int = self.size as Int
+    var i: Int = 0
+    while i < n
+      f.(self[i])
+      i = i + 1
+    end
+    nil
   end
 
   # ── Enumerable combinators ─────────────────────────────────────────
@@ -120,9 +135,16 @@ class Array[T]
   # combinator (type params abstract — sound because the bodies only
   # push / closure-call / iterate, never dispatch on `T`); the call site
   # routes the generic-suffixed `Array[Int]_map` callee to it via
-  # `lib_body_methods` + `strip_generic_suffix`. `each` is the sole
-  # iteration primitive kept hardcoded (MIR-inlined, closure_inline/
-  # each.rs) — every combinator is expressed over it.
+  # `lib_body_methods` + `strip_generic_suffix`. Every combinator is
+  # expressed over `each`: a literal block passed to `each` is MIR-inlined
+  # (closure_inline/each.rs), and a closure value calls the `.rx` `each`
+  # body below.
+  #
+  # A mixin default that DID need to dispatch on `T` would NOT be covered
+  # by the per-`T` monomorphization below: that pass specializes a class's
+  # OWN body methods, while an included default is emitted through
+  # `lower_impl_block_with_outer_methods`. Extending it to included
+  # defaults is what `Enumerable#sum` / `min_by` still wait on.
   include Enumerable[T]
 
   # Ruby `sort_by` — in-place comparator sort. The closure returns a
@@ -130,7 +152,7 @@ class Array[T]
   # positive result means the pair is out of order, so they are
   # swapped. Selection-sort shape over the migrated `swap` primitive
   # and indexed reads (`self[i]`); mutates the receiver, yields `nil`.
-  def sort_by(cmp: any Fn[Fn(T, T) -> Int]) -> nil
+  def sort_by(cmp: Fn(T, T) -> Int) -> nil
     var n: Int = self.size as Int
     var i: Int = 0
     while i < n
@@ -168,9 +190,212 @@ class Array[T]
     out
   end
 
+  # ── per-`T` monomorphized combinators ──────────────────────────────
+  # These bodies DISPATCH on the element type — they interpolate an
+  # element, order two elements, or compare two elements — so MIR
+  # specializes one copy per concrete element type actually called
+  # (`Array__mono__String_join`). See `mir/lower/monomorphize.rs`
+  # "per-`T` monomorphization for BUILTIN-HEAD generic classes".
+  #
+  # The element must be read into a `var x: T` binding first: `self[i]`
+  # itself types as an inference variable inside the shell body, and only
+  # the annotated `let` carries the `T` that substitution rewrites to the
+  # concrete element type.
+
+  # Ruby `join` — concatenate every element's display form, separated by
+  # `sep`. `[].join == ""`, and the separator defaults to `", "`.
+  def join(sep: &String = ", ") -> String
+    var out: String = ""
+    var i: Int = 0
+    var n: Int = self.size as Int
+    while i < n
+      if i > 0
+        out = out + "#{sep}"
+      end
+      var x: T = self[i]
+      out = out + "#{x}"
+      i = i + 1
+    end
+    out
+  end
+
+  # Ruby `min` / `max` — the smallest / largest element by the element
+  # type's own ordering, or `nil` for an empty array.
+  def min -> Option[T]
+    var n: Int = self.size as Int
+    if n == 0
+      return nil
+    end
+    var best: T = self[0]
+    var i: Int = 1
+    while i < n
+      var x: T = self[i]
+      if x < best
+        best = x
+      end
+      i = i + 1
+    end
+    Option.Some(best)
+  end
+
+  def max -> Option[T]
+    var n: Int = self.size as Int
+    if n == 0
+      return nil
+    end
+    var best: T = self[0]
+    var i: Int = 1
+    while i < n
+      var x: T = self[i]
+      if x > best
+        best = x
+      end
+      i = i + 1
+    end
+    Option.Some(best)
+  end
+
+  # Ruby `uniq` — a fresh array keeping the FIRST occurrence of each
+  # distinct element, in original order. Membership is decided by the
+  # element type's own `==` (the specialization is what makes that
+  # compare contents rather than raw words).
+  def uniq -> Array[T]
+    var out: Array[T] = Array.new
+    var n: Int = self.size as Int
+    var i: Int = 0
+    while i < n
+      var x: T = self[i]
+      var seen: Bool = false
+      var j: Int = 0
+      var m: Int = out.size as Int
+      while j < m
+        var y: T = out[j]
+        if x == y
+          seen = true
+        end
+        j = j + 1
+      end
+      if seen == false
+        out.push(x)
+      end
+      i = i + 1
+    end
+    out
+  end
+
+  # Ruby `include?` — true when some element is `==` to `x`, by the
+  # element type's own equality (String by content, Float by value).
+  def include?(x: T) -> Bool
+    var n: Int = self.size as Int
+    var i: Int = 0
+    while i < n
+      var y: T = self[i]
+      if y == x
+        return true
+      end
+      i = i + 1
+    end
+    false
+  end
+
+  # Ruby `==` — same length and pairwise `==` elements, by the element
+  # type's own equality.
+  def ==(other: Array[T]) -> Bool
+    var n: Int = self.size as Int
+    if n != other.size as Int
+      return false
+    end
+    var i: Int = 0
+    while i < n
+      var x: T = self[i]
+      var y: T = other[i]
+      if x != y
+        return false
+      end
+      i = i + 1
+    end
+    true
+  end
+
+  # Ruby `sort` — a NEW array of the elements in ascending order by the
+  # element type's own `<` (stable); the receiver is left unchanged.
+  def sort -> Array[T]
+    var out: Array[T] = Array.new
+    var n: Int = self.size as Int
+    var i: Int = 0
+    while i < n
+      var x: T = self[i]
+      out.push(x)
+      i = i + 1
+    end
+    out.sort!
+    out
+  end
+
+  # Ruby `sort!` — sort the receiver in place, ascending by the element
+  # type's own `<` (insertion sort over `swap`, so it is stable).
+  def sort! -> nil
+    var n: Int = self.size as Int
+    var i: Int = 1
+    while i < n
+      var j: Int = i
+      while j > 0
+        var a: T = self[j - 1]
+        var b: T = self[j]
+        if b < a
+          self.swap(j - 1, j)
+          j = j - 1
+        else
+          j = 0
+        end
+      end
+      i = i + 1
+    end
+    nil
+  end
+
+  # Rust-style `dedup` — remove consecutive `==` duplicates in place,
+  # keeping the first of each run.
+  def dedup -> nil
+    var i: Int = 1
+    while i < self.size as Int
+      var a: T = self[i - 1]
+      var b: T = self[i]
+      if a == b
+        self.remove(i)
+      else
+        i = i + 1
+      end
+    end
+    nil
+  end
+
+  # Ruby `sum` — the elements added with the element type's own `+`,
+  # starting from zero (`[].sum == 0`).
+  def sum -> T where T: Add
+    var total: T = 0
+    var n: Int = self.size as Int
+    var i: Int = 0
+    while i < n
+      var x: T = self[i]
+      total = total + x
+      i = i + 1
+    end
+    total
+  end
+
   # Ruby `to_a` is a synonym of `clone` (both shallow-copy via
   # `ruxen_vec_clone`). Declared as a pure `alias` instead of a second
   # FFI decl — both names resolve to the ONE `Array_clone` body, no
   # duplicated codegen (docs/decisions/alias-keyword.md).
   alias to_a clone
+
+  # Ruby `Array#+` — a fresh array with both operands' elements in order
+  # (`[1, 2] + [3, 4] == [1, 2, 3, 4]`). A `.rx` operator method delegating to
+  # `chain`; the binop lowering routes `a + b` here (builtin-head operator
+  # route) instead of the machine floor, which would integer-add the two heap
+  # pointers and miscompile.
+  def +(other: Array[T]) -> Array[T]
+    self.chain(other)
+  end
 end

@@ -1,0 +1,90 @@
+class Money
+  cents: Int
+
+  def init(@cents: Int)
+  end
+
+  include Display
+
+  def fmt(f: &var Formatter) -> Result[nil, FmtError]
+    let _ = f.write_str("$")
+    f.write_str("#{self.cents}")
+  end
+end
+
+class Tag
+  name: String
+
+  def init(@name: String)
+  end
+
+  include Debug
+
+  def fmt(f: &var Formatter) -> Result[nil, FmtError]
+    f.write_str("Tag<#{self.name}>")
+  end
+end
+
+# Explicit init: a class whose implicit init is only called inside a block
+# fails to link (`Point_init` undefined); see TODO.md Known issues.
+class Point
+  x: Int
+  y: Int
+
+  def init(@x: Int, @y: Int)
+  end
+end
+
+Tester.describe("Formatter") do |t: &var Tester|
+  t.it("returns what write_str appended") do
+    var f = Formatter.new
+    let _ = f.write_str("hello ")
+    let _ = f.write_str("world")
+    t.expect(f.buffer).to_eq("hello world")
+  end
+
+  t.it("appends an ASCII char with write_char") do
+    var f = Formatter.new
+    let _ = f.write_char(?A)
+    t.expect(f.buffer).to_eq("A")
+  end
+
+  t.it("UTF-8 encodes a non-ASCII char with write_char") do
+    var f = Formatter.new
+    let _ = f.write_char(233)
+    let _ = f.write_char(128512)
+    t.expect(f.size).to_eq(6)
+    t.expect(f.buffer).to_eq("é😀")
+  end
+
+  t.it("counts the bytes written") do
+    var f = Formatter.new
+    let _ = f.write_str("hi")
+    t.expect(f.size).to_eq(2)
+  end
+end
+
+Tester.describe("interpolation") do |t: &var Tester|
+  t.it("routes a Display class through its fmt") do
+    let m = Money.new(4250)
+    t.expect("price: #{m}").to_eq("price: $4250")
+  end
+
+  t.it("calls fmt on a Debug class") do
+    let tag = Tag.new("x")
+    var f = Formatter.new
+    let _ = tag.fmt(&var f)
+    t.expect(f.buffer).to_eq("Tag<x>")
+  end
+
+  t.it("formats a plain class with :?") do
+    let p = Point.new(1, 2)
+    t.expect("#{p:?}").to_eq("Point { x: 1, y: 2 }")
+  end
+
+  t.it("applies width, fill and precision") do
+    let n: Int = 42
+    let pi: Float = 3.14159
+    t.expect("[#{n:>5}] [#{n:*<5}] pi=#{pi:.2}").to_eq("[   42] [42***] pi=3.14")
+  end
+end

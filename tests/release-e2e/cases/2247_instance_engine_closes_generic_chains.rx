@@ -1,0 +1,123 @@
+# The instance engine reaches every instance a concrete body needs, through
+# any chain of generic bodies: a generic method calling another generic
+# method, an unbounded generic fn building a bounded generic class, a class
+# holding another generic class, `to_h` inside unbounded generic bodies, and
+# a generic fn forwarding to an element-dispatching `Array#join`.
+mixin Measured
+  def measure -> Int
+end
+
+class Frame
+  def init
+  end
+
+  def inner[T: Measured](item: &var T) -> Int
+    item.measure
+  end
+
+  def outer[U: Measured](item: &var U) -> Int
+    self.inner(item)
+  end
+end
+
+class Wide
+  def init
+  end
+
+  include Measured
+
+  def measure -> Int
+    7
+  end
+end
+
+class Tall
+  def init
+  end
+
+  include Measured
+
+  def measure -> Int
+    9
+  end
+end
+
+mixin Showable
+  def to_display -> String
+end
+
+class Apple
+  n: Int
+
+  def init(@n: Int)
+  end
+
+  include Showable
+
+  def to_display -> String
+    "apple"
+  end
+end
+
+class Holder[T: Showable]
+  item: T
+
+  def init(@item: T)
+  end
+
+  def show -> String
+    self.item.to_display
+  end
+end
+
+class Outer[T: Showable]
+  h: Holder[T]
+
+  def init(@h: Holder[T])
+  end
+
+  def run -> String
+    self.h.show
+  end
+end
+
+def describe[T](item: T) -> String
+  Holder.new(item).show
+end
+
+def build[V](ps: Array[(String, V)]) -> Hash[String, V]
+  ps.to_h
+end
+
+class Table[V]
+  pairs: Array[(String, V)]
+
+  def init(@pairs: Array[(String, V)])
+  end
+
+  def build -> Hash[String, V]
+    @pairs.clone.to_h
+  end
+end
+
+def joined[T](xs: Array[T]) -> String
+  xs.join(",")
+end
+
+def mk(n: Int) -> String
+  "k-#{n}"
+end
+
+frame = Frame.new
+wide = Wide.new
+tall = Tall.new
+puts(frame.outer(&var wide))
+puts(frame.outer(&var tall))
+puts(describe(Apple.new(1)))
+puts(Outer.new(Holder.new(Apple.new(2))).run)
+ps = [(mk(1), 2), (mk(3), 4)]
+puts(build(ps).size)
+qs = [(mk(5), mk(6))]
+puts(Table.new(qs).build.size)
+puts(joined(["a", "b"]))
+puts(joined([1, 2, 3]))

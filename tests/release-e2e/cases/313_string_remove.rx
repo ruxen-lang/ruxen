@@ -1,6 +1,0 @@
-def main
-  var s = "hello"
-  let _c = s.remove(0)
-  puts "len=#{s.size}"
-  puts s
-end

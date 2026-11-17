@@ -1,0 +1,25 @@
+# Pins a mixin-DEFAULT method with a METHOD-LEVEL generic return harvested from
+# the closure body: `def transform[U](f: Fn(&Self) -> U) -> U`. On a user class
+# that includes the mixin, `U` must bind from the block's inferred return type
+# (`x.n + 100` → Int) so the call yields a concrete `Int`, not an abstract `U`.
+mixin Thenable
+  def transform[U](f: Fn(&Self) -> U) -> U
+    f.(self)
+  end
+end
+
+class Box
+  n: Int
+
+  include Thenable
+
+  def init(@n: Int)
+  end
+end
+
+def main
+  let r = Box.new(5).transform do |x|
+    x.n + 100
+  end
+  puts(r)
+end

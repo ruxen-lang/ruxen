@@ -1,0 +1,36 @@
+# A method reads its fields as `@x`, never by a bare name (Ruby's rule:
+# a bare name is a local variable or a method call). A bare `x = 99`
+# declares a local and leaves the field alone. Before the fix a bare field
+# name compiled and read 0, false or a null string.
+class Pt
+  x: Int
+  ok: Bool
+  s: String
+
+  def init(@x: Int, @ok: Bool, @s: String)
+  end
+
+  def get_x -> Int
+    @x
+  end
+
+  def get_ok -> Bool
+    @ok
+  end
+
+  def get_s -> String
+    @s.clone
+  end
+
+  def shadow_x -> Int
+    x = 99
+    puts x
+    @x
+  end
+end
+
+pt = Pt.new(7, true, "hello")
+puts pt.get_x
+puts pt.get_ok
+puts pt.get_s
+puts pt.shadow_x

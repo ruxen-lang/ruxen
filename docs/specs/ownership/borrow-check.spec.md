@@ -4,7 +4,7 @@
 [docs/requirements/tier1_04_drop_copy_clone.md](../../requirements/tier1_04_drop_copy_clone.md),
 [docs/dev/](../../dev/) (borrow-check notes).
 
-**Status:** shipped Phase 2 #02 (Rust-style borrow check on MIR).
+**Status:** shipped Phase 2 #02 (ownership and borrow check on MIR).
 
 Ruxen's borrow checker runs after typeck on the MIR.  It rejects
 use-after-move, mutable aliasing, and dangling borrows.  This spec
@@ -15,7 +15,8 @@ captures the **observable** rejection envelope; cross-reference
 
 ## B1 — Sample-program acceptance baseline
 
-The `borrow_check_sample.rx` fixture is a canonical mid-size program
+The promoted sample program (e2e `2057_todo_manager_sample_program.rx`)
+is a canonical mid-size program
 that exercises move semantics, immutable borrowing, and mutable
 borrowing across function boundaries.  Borrow check accepts it
 without diagnostics.
@@ -30,12 +31,12 @@ a caller `let x = "hi"; f(x); f(x);`
 **Then** the second `f(x)` is rejected as use-after-move.
 
 (Same behaviour applies to any non-`Copy` owned type — `Array`,
-`Map`, etc.)
+`Hash`, etc.)
 
 ## B3 — `into_*` (consuming) methods consume the receiver
 
-`String.into_bytes`, `Array.into_iter`, and any other method whose
-receiver is `consume self` (not a reading or writing method)
+`String.into_bytes` and any other method declared `def consume`
+(not a reading or `def var` writing method)
 consumes the receiver.  Subsequent use of the original binding is
 rejected.
 
@@ -52,7 +53,7 @@ sites.  Both must agree.
 
 | Behaviour | Test fn                                       | File                            |
 |-----------|-----------------------------------------------|---------------------------------|
-| B1        | `sample_program_borrow_checks`                | `borrow_check_sample.rs`        |
+| B1        | e2e `2057_todo_manager_sample_program.rx`     | release-e2e                     |
 | B2        | `use_after_move_on_string_argument_is_rejected` | `stdlib_string_negatives.rs`  |
 | B3        | `use_after_into_bytes_is_rejected`            | `stdlib_string_negatives.rs`    |
 
@@ -62,10 +63,10 @@ sites.  Both must agree.
 
 - The borrow checker has many internal rules (NLL-style two-phase
   borrows, conditional moves, partial moves through struct fields)
-  that today are pinned by unit tests inside `crates/ruxen-core/src/`
+  that today are pinned by unit tests inside `compiler/ruxen_core/src/`
   rather than at the integration boundary.  Listing them here would
   duplicate the unit suite — point readers to
-  `crates/ruxen-core/src/borrow_check/tests.rs` and only surface
+  `compiler/ruxen_core/src/borrow_check/tests.rs` and only surface
   observable rejection-envelope behaviours at the integration layer.
 
 ## Out of scope (v2)

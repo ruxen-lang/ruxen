@@ -1,0 +1,5 @@
+def main
+  let p = "p"
+  let a = ["apple"]
+  puts("has=#{a.include?("a#{p}ple")}")
+end

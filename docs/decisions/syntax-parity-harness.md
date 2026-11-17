@@ -79,16 +79,17 @@ via `parser/visit.rs`'s exhaustive `walk_*`, which the formatter's
 
 **(b) Intentional-divergence allowlist.** Constructs the *shared parser*
 accepts (so fmt/lsp/ide round-trip them) but the *direct-compile path* rejects
-with a specific diagnostic are an EXPLICIT table (`INTENTIONAL_DIVERGENCES`),
-not an accident:
+with a specific diagnostic belong in an EXPLICIT table
+(`INTENTIONAL_DIVERGENCES`), not as accidents. The table is currently empty:
 
 | Construct | Code | Why accepted-but-rejected |
 |---|---|---|
-| top-level bare expression (`Tester.describe(...) do … end`) | E0728 | parser accepts so `ruxen fmt` round-trips test files; direct compile rejects (`ruxen test` hoists into a synthesised `def main` first). |
-| `@[repr(...)]` / `@[...]` prefix attribute | E0607 | retired surface; the parser rejects at parse time (documented in `parser/CLAUDE.md`), so it never reaches the corpus — listed here for the record, enforced by the parser. |
+| top-level bare expression (`puts "hi"`) | — | accepted everywhere; compile moves it into implicit `main`. |
+| explicit `def main` plus a loose expression | E0728 | compile rejects the ambiguous program shape; this is a semantic combination check, not a parser/compiler syntax divergence. |
+| `@[repr(...)]` / `@[...]` prefix attribute | E0607 | retired surface rejected by the parser, so it is not an accepted-but-rejected divergence. |
 
-The test asserts the **acceptance** half (each still parses); the rejection
-half is owned by the resolve-phase tests that emit the code.
+The test keeps the table explicit if a future accepted-but-rejected surface is
+introduced. E0728's explicit-main ambiguity remains pinned in resolver tests.
 
 ### Structural oracle (span-blind, import-order-tolerant)
 

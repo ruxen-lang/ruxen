@@ -5,7 +5,7 @@
 ADR: [docs/decisions/one-string-type.md](../../decisions/one-string-type.md).
 
 **Status:** shipped Phase 2 #03-#04; ownership negatives Phase 2 #02;
-method surface self-hosted in `library/std/src/string.rx` since
+method surface self-hosted in `library/std/string/src/string.rx` since
 #06.8 T#13. `&str` removed 2026-06-11 (one-string-type ADR).
 
 Ruxen has exactly **one** string type pair: `String` (heap-owned UTF-8 buffer)
@@ -14,6 +14,16 @@ type — it was a parallel spelling of the same wire value (both are a bare
 `char*` at the FFI layer) and was removed. A type annotation that spells `str`
 is rejected with **E0730** (hint: use `String` or `&String`). Ownership and
 use-after-move are enforced statically by the borrow checker.
+
+
+**Owner decisions (2026-10-25).** D6 a, X1 a: scalars and `String` include
+`Comparable`, `Hashable` and `Clone` (plus `Default` where Ruby has a zero),
+with `==`, `<=>`, `to_s` and `inspect` in `.rx`; the Rust-named mixins become
+[deprecated] `.rx` adapters, and a bound that needs only equality checks that
+the type has a `.rx` `==`, with no marker mixin [planned](../../../TODO.md#t-d6)
+[planned](../../../TODO.md#t-x1). D18 a: the scalar name-to-type tables in the resolver
+stay as a floor for machine primitives; the collection heads and `String`
+move to `.rx` later, in the de-primitivize phase [planned](../../../TODO.md#t-d18).
 
 ---
 
@@ -60,10 +70,9 @@ The string surface includes:
 - `parse[T]() -> Result[T, ParseError]` for primitive `T`
 - `truncate(n)` (in-place; byte-count)
 
-Pin tests for these live in the E2E fixture set
-(`106_string_chars.rx`, `108_string_split.rx`,
-`112_string_trim.rx`, `113_string_methods_chain.rx`,
-`05_string_interp.rx`, `114_string_interp_mixed.rx`).
+Tests for these live in `library/std/string/tests/*.rx` (run with
+`scripts/test-stdlib.sh string`); interpolation stays in the E2E fixtures
+`05_string_interp.rx` and `114_string_interp_mixed.rx`.
 
 ---
 
@@ -85,6 +94,5 @@ Pin tests for these live in the E2E fixture set
   the one-string-type ADR follow-up).
 - Grapheme clusters (`chars()` returns Unicode scalar values, not
   grapheme clusters).
-- Regex (separate `std.regex` module, deferred).
 - Copy-on-write strings — v1 chooses between an owned `String` and a `&String`
   borrow at the source level; no copy-on-write wrapper.

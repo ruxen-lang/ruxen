@@ -1,0 +1,60 @@
+# A class derives Ord, PartialOrd and Default like a struct.
+#
+# Classes got Clone, Debug, PartialEq and Hashable bodies (B74) but no
+# `{Class}_cmp` or `{Class}_default`: `a < b` compared heap addresses (an
+# answer that changes run to run), `a.cmp(b)` printed `0`, and
+# `Class.default` failed to link. Every derive is now written once over a
+# slot list, so a class takes its full parent-first chain through each.
+class Name
+  first: String
+  last: String
+
+  def init(@first: String, @last: String)
+  end
+end
+
+class Base
+  id: Int
+
+  def init(@id: Int)
+  end
+end
+
+class Mid < Base
+  tag: String
+
+  def init(id: Int, tag: String)
+    super(id)
+    @tag = tag
+  end
+end
+
+class Holder
+  label: String
+  base: Base
+  count: Int
+
+  def init(@label: String, @base: Base, @count: Int)
+  end
+end
+
+def main
+  # Allocate in reverse order so address order disagrees with field order.
+  let z = Name.new("b", "a")
+  let y = Name.new("a", "b")
+  let x = Name.new("a", "a")
+  puts "lt=#{x < y} gt=#{z > y} le=#{x <= x} ge=#{x >= z}"
+  puts "cmp=#{Name.new("a", "a").cmp(Name.new("a", "b"))} #{Name.new("b", "a").cmp(Name.new("a", "z"))} #{Name.new("q", "q").cmp(Name.new("q", "q"))}"
+  puts "partial_cmp=#{Name.new("a", "b").partial_cmp(Name.new("a", "a"))}"
+
+  # The inherited field orders first.
+  let m2 = Mid.new(2, "a")
+  let m1 = Mid.new(1, "z")
+  puts "inherited_lt=#{m1 < m2} inherited_gt=#{m2 > m1}"
+
+  # Default fills every slot, inherited and nested-class ones included.
+  let md = Mid.default
+  puts "mid_default=#{md.id} '#{md.tag}'"
+  let h = Holder.default
+  puts "holder_default='#{h.label}' #{h.base.id} #{h.count}"
+end

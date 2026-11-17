@@ -118,7 +118,7 @@ fn format_definition_hover(def: &Definition) -> String {
         DefKind::EnumVariant { .. } => {
             format!("```ruxen\n(variant) {}\n```", def.name)
         }
-        DefKind::TypeAlias { target } => {
+        DefKind::TypeAlias { target, .. } => {
             format!("```ruxen\ntype {} = {}\n```", def.name, target)
         }
         DefKind::Newtype { inner } => {

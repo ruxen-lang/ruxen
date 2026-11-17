@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # 24 — Phase 5: edition mechanism (T5.02)
 
 **Depends on:** prompts 01-15 (need real changes to gate on

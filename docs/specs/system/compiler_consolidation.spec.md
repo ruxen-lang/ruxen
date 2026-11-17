@@ -15,6 +15,13 @@ paths, each new feature has to touch (and risk breaking) all of
 them. Consolidating them locally is more important than abstract
 "cleanup" — the diagnosis already exists from this session.
 
+
+**Owner decisions (2026-10-25).** D2 b: compiler-emitted calls name a `.rx`
+declaration by a declared role marker, and generated functions get ids
+[planned](../../../TODO.md#t-d2). D19 a: the REPL slot redesign (slots hold more than
+`Int`) deletes the C replay guards [planned](../../../TODO.md#t-d19). D23 a: the F-31,
+F-39 and F-40 leftovers are re-verified first [planned](../../../TODO.md#t-d23).
+
 ---
 
 ## B1 — Method dispatch in `mir/lower/expr/method_call.rs`: one path
@@ -23,7 +30,7 @@ Today three branches handle `expr.method(args)` lowering:
 
 1. `is_collection_ctor` fast path (for `.new`, `.with_capacity`, etc.) — keyed on a hardcoded class-name allowlist.
 2. `is_user_static_method` branch (for `def self.X` lib decls).
-3. Instance-method branch (for `def X(self, ...)` lib decls).
+3. Instance-method branch (for instance-method `def X` lib decls).
 
 Commit `8d5f10a` had to patch TWO of them to consult the FFI alias map; future contributors will face the same fan-out.
 
@@ -41,7 +48,7 @@ The three pre-existing branches become callers of this function, OR (preferred) 
 
 Task #14 commit `793751c` rewrote `is_send_strict_with` as a generic walker. But `is_send_with` (the looser variant for user-class auto-derive) still exists alongside it.
 
-**Fix:** one entry point `is_send(ty, symbols) -> bool` with the rules druxen by mixin-membership data in the resolver:
+**Fix:** one entry point `is_send(ty, symbols) -> bool` with the rules driven by mixin-membership data in the resolver:
 - `include !Send` → false.
 - `include unsafe Send` → true (escape hatch).
 - `include Send` → recursive walker (generic args + fields, with `subst_type_params` for substituting at call sites).
@@ -57,7 +64,7 @@ Task #14 commit `b74546d` ran `resolve_item` over bootstrap programs in pass 2. 
 
 **Fix:** make registration genuinely path-agnostic. The function should take the symbol-table state as input, not assume "user-program mode" vs "bootstrap mode". Eliminate any branches inside that check which caller invoked it. The work in `bootstrap_merge.rs` should be reduced to "set up the cumulative symbol table, then route through the same registration path the user program uses."
 
-**Acceptance:** `register_top_level_type_with_ffi_in` has no conditional logic on caller identity. The full type-registration flow can be exercised by a fresh `.rx` package without any bootstrap-specific glue. The bootstrap_class_bodies pin test (added in #14) still passes.
+**Acceptance:** `register_top_level_type_with_ffi_in` has no conditional logic on caller identity. The full type-registration flow can be exercised by a fresh `.rx` package without any bootstrap-specific glue. The e2e suite (518 and the async 721-731 cases) still passes.
 
 ## B4 — Drop registration: `def drop` and `include Drop` agree
 

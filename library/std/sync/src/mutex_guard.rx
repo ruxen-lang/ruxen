@@ -1,9 +1,25 @@
+## The lock held on a `Mutex[T]`; dropping it releases the lock. `deref`
+## borrows the guarded value (a shared `&T` has the same i64 representation
+## as the value itself, as for every `&T` that crosses the C ABI); `get`
+## returns an owned copy of it, since the mutex keeps owning the value.
+## `deref_mut` and `deref_var` bind `ruxen_mutex_guard_payload_ptr`, the
+## address of the guarded slot: a generic `-> &var T` FFI return is a slot
+## address, and the compiler loads the value through it when `T` is not a
+## String (`mir::refmut_abi`), so String writes land in the mutex and every
+## other `T` gets the same `&var T` a local would.
 class MutexGuard[T]
   include !Send
 
   lib "runtime/mutex.c"
-    def get as "ruxen_mutex_guard_get" -> T
     def set as "ruxen_mutex_guard_set"(value: T) -> nil
+    def held? as "ruxen_mutex_guard_held" -> Bool
+    def deref as "ruxen_mutex_guard_get" -> &T
+    def deref_mut as "ruxen_mutex_guard_payload_ptr" -> &var T
+    def deref_var as "ruxen_mutex_guard_payload_ptr" -> &var T
     def drop as "ruxen_mutex_guard_drop" -> nil
+  end
+
+  def get -> T where T: Clone
+    self.deref.clone
   end
 end

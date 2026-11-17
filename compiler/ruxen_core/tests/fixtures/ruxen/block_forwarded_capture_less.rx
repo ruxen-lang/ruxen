@@ -1,0 +1,22 @@
+# Blocks, procs and lambdas: a capture-less trailing block forwarded through
+# `&block` to a second function. The block's `n` takes `Int` from the
+# `Fn[(Int) -> nil]` signature, so `puts n` prints the Int (it used to infer
+# `n: String` from `puts` and segfault on the Int 1). A capturing block
+# forwarded the same way borrows its String; the top level frees it once.
+
+def inner(&block: Fn[(Int) -> nil])
+  yield 1
+  yield 2
+end
+
+def outer(&block: Fn[(Int) -> nil])
+  inner(&block)
+end
+
+outer { |n| puts n }
+s = "s"
+outer do |n|
+  puts n
+  puts s
+end
+puts s

@@ -1,0 +1,7 @@
+int_stable=true
+int_differs=true
+int_direct=7
+string_by_value=true
+string_differs=true
+string_direct=true
+struct=true

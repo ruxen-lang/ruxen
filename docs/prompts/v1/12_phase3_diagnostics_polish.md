@@ -1,3 +1,5 @@
+> Historical document. It predates the Ruby-only direction and may show Rust syntax that Ruxen no longer uses.
+
 # 12 — Phase 3: diagnostic polish (T5.03 deprecation + T5.05 suggestions)
 
 **Depends on:** prompt 11.

@@ -1,0 +1,64 @@
+## --- Step futures: the shared park / release protocol ----------------
+##
+## The async I/O futures (async_net, async_fs, async_io) each drive a C
+## step machine whose `step` returns 1 on EAGAIN, 2 when done and 3 on
+## error. Every one of them polls the same way:
+##
+##   def var poll(cx: &var Context) -> Poll[<Output>]
+##     if self.done == 0
+##       if <step>(self.state_ptr) == 1
+##         <park: StepFuture.park or StepFuture.park_fd>
+##         return Poll.Pending
+##       end
+##       self.handle = StepFuture.release(self.handle)  # if it owns one
+##       self.done = 1
+##     end
+##     Poll.Ready(<take_result>(self.state_ptr))
+##   end
+##
+## and drops with `self.handle = StepFuture.release(self.handle)` (when
+## it owns the registration) before freeing its C state.
+##
+## Post-Ready contract, the same for every step future: the C taker
+## answers `Err(IoError.InvalidInput)` once the result has been taken,
+## so a poll after Ready returns `Ready(Err(InvalidInput))`.
+##
+## A future whose stream holds a persistent reactor registration parks
+## on that handle with `StepFuture.park` and never releases it; one
+## that registers its fd on demand uses `StepFuture.park_fd` and
+## `StepFuture.release`.
+
+## Class methods rather than top-level functions, so a user `def` of the
+## same name cannot shadow them.
+class StepFuture
+  ## Park the current task on reactor `handle` until it reports readiness.
+  def self.park(cx: &var Context, handle: Int) -> nil
+    let w = cx.waker
+    ruxen_reactor_set_waker(ruxen_reactor_current_handle(), handle, w)
+  end
+
+  ## Register `fd` for read readiness (write readiness when `write`)
+  ## unless `handle` already holds a registration, park the current task
+  ## on it and return the handle for the future to store.
+  def self.park_fd(cx: &var Context, handle: Int, fd: Int, write: Bool) -> Int
+    var h = handle
+    if h == 0
+      if write
+        h = ruxen_reactor_register_fd_write(ruxen_reactor_current_handle(), fd)
+      else
+        h = ruxen_reactor_register_fd_read(ruxen_reactor_current_handle(), fd)
+      end
+    end
+    StepFuture.park(cx, h)
+    h
+  end
+
+  ## Drop the reactor registration `handle` holds, if any, and return 0
+  ## (the "not registered" handle) for the future to store.
+  def self.release(handle: Int) -> Int
+    if handle != 0
+      ruxen_reactor_deregister(ruxen_reactor_current_handle(), handle)
+    end
+    0
+  end
+end

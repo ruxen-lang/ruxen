@@ -40,6 +40,54 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+/* §4.1 Increment 3 — cooperative cancellation.
+ *
+ * A COOPERATIVE cancel signal: a thread-local flag a leaf future may observe
+ * at its await (poll) boundary via `cx.cancelled?` (or the bare free fn
+ * `ruxen_cancel_requested()`), then early-return instead of parking forever.
+ * The early return lets the awaiting `async def` state machine complete; its
+ * scope-exit drop then fires the Increment-2 state-indexed drop glue, so the
+ * future's live sub-futures/resources are cleaned up.
+ *
+ * THREAD-LOCAL, not per-Context, by design: the user async-fn body does NOT
+ * see `cx` (only the synthesised `poll(cx)` does), so — exactly like the
+ * reactor handle (`ruxen_reactor_current_handle`) — the cancel bit is read
+ * from a thread-local. `cx.cancelled?` and `ruxen_cancel_requested()` read the
+ * SAME flag; the `cx` parameter is accepted for API shape (and v2 per-task
+ * cancel) but the v1 backing is thread-scoped.
+ *
+ * COOPERATIVE LIMIT (spec §4.1 risk 5): this only takes effect where a future
+ * CHECKS the flag. It does NOT preempt an await-free compute loop — same honest
+ * limit as Swift/Kotlin/Go cancellation. Setting the flag mid-compute does
+ * nothing until the next checked await boundary.
+ *
+ * Lifecycle: the flag is thread-scoped and persists (like the reactor); it is
+ * NOT auto-cleared at block_on entry, so a cancel requested before block_on is
+ * observed by the first poll. `ruxen_clear_cancel()` resets it explicitly. */
+static _Thread_local int8_t t_cancel_requested = 0;
+
+void ruxen_request_cancel(void) {
+    t_cancel_requested = 1;
+}
+
+void ruxen_clear_cancel(void) {
+    t_cancel_requested = 0;
+}
+
+/* Bool-returning FFI uses the int8_t 0/1 convention (matches
+ * `ruxen_vec_is_empty` etc.), NOT int64_t. */
+int8_t ruxen_cancel_requested(void) {
+    return t_cancel_requested;
+}
+
+/* `cx.cancelled?` accessor (lib decl on `class Context`). The `cx` pointer is
+ * accepted for API shape but the v1 backing is the thread-local flag above —
+ * see the THREAD-LOCAL rationale. Returns 1 if cancel was requested, else 0. */
+int8_t ruxen_context_cancelled(void *cx) {
+    (void)cx;
+    return t_cancel_requested;
+}
+
 /* RuxenContext layout, v1 (real-waker round):
  *
  *   offset 0:  waker_ptr  — points to `inline_waker` inside
@@ -95,11 +143,7 @@ void *ruxen_executor_make_context(void) {
 }
 
 void *ruxen_executor_make_task_context(void *task_entry) {
-    RuxenContext *cx = (RuxenContext *)malloc(sizeof(RuxenContext));
-    if (!cx) {
-        ruxen_panic("ruxen_executor: failed to allocate Context");
-        return (void *)0;
-    }
+    RuxenContext *cx = (RuxenContext *)ruxen_xmalloc(sizeof(RuxenContext));
     /* Acquire (lazy-create) the per-thread reactor so the waker has a
      * stable reactor pointer to signal. The reactor lives for the
      * thread's lifetime; the Context only borrows it. */
@@ -125,11 +169,7 @@ void *ruxen_context_clone(void *cx_opaque) {
     }
 
     RuxenContext *src = (RuxenContext *)cx_opaque;
-    RuxenContext *dst = (RuxenContext *)malloc(sizeof(RuxenContext));
-    if (!dst) {
-        ruxen_panic("ruxen_context_clone: failed to allocate Context");
-        return (void *)0;
-    }
+    RuxenContext *dst = (RuxenContext *)ruxen_xmalloc(sizeof(RuxenContext));
 
     dst->inline_waker.reactor = src->inline_waker.reactor;
     dst->inline_waker.task = src->inline_waker.task;
@@ -151,10 +191,6 @@ void *ruxen_context_test_dummy(void) {
     cx->inline_waker.task = NULL;
     cx->waker = &cx->inline_waker;
     return cx;
-}
-
-void ruxen_waker_test_noop(void *waker) {
-    (void)waker;
 }
 
 /* Waker.wake / wake_by_ref — real implementation.

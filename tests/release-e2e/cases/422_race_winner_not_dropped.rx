@@ -1,0 +1,57 @@
+## Feature #3 Increment 2 (spec §4.3) — Codex blocker guard: the WINNER future
+## is NOT dropped/freed on a win (it is leaked), so a winner whose Output moved
+## a heap value out cannot have that result freed from under the caller. The
+## race must run ONLY the LOSER's `def drop`, never the winner's.
+##
+## Both arms carry an observable `def drop`. `Winner` resolves Ready (wins);
+## `Loser` stays Pending. After the race we must see EXACTLY the loser's drop —
+## the winner's drop must NOT fire (proving the winner block is leaked, not
+## dropped → its moved-out payload stays valid; dropping it would be a UAF of
+## the result). This is the deterministic form of "heap-payload winner stays
+## valid".
+
+class Winner
+  payload: Int
+  include Future
+  type Output = Int
+  def init(p: Int)
+    self.payload = p
+  end
+  def self.make(p: Int) -> Winner
+    Winner.new(p)
+  end
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Ready(self.payload)
+  end
+  def drop
+    puts "WINNER dropped (BUG: winner must be leaked, not dropped)"
+  end
+end
+
+class Loser
+  tag: Int
+  include Future
+  type Output = Int
+  def init(t: Int)
+    self.tag = t
+  end
+  def self.make(t: Int) -> Loser
+    Loser.new(t)
+  end
+  def var poll(cx: &var Context) -> Poll[Int]
+    Poll.Pending
+  end
+  def drop
+    puts "loser dropped tag=#{self.tag}"
+  end
+end
+
+def main
+  puts "race start"
+  let r = block_on(Race.of(Winner.make(11), Loser.make(7)))
+  match r
+    Race2.First(p)  -> puts "first won p=#{p}"
+    Race2.Second(p) -> puts "second won p=#{p}"
+  end
+  puts "race done"
+end

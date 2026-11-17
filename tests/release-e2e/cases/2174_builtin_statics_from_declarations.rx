@@ -1,0 +1,19 @@
+# F-22. A builtin static call is static because its class declares
+# `def self.NAME as "c_symbol"`, and it dispatches to that symbol. No Rust
+# table of (type, method) pairs is consulted any more.
+use std.io.File
+
+def main
+  puts Duration.from_millis(1500).as_millis
+  puts Duration.from_nanos(2000).as_micros
+  let h = Thread.spawn { 40 + 2 }
+  puts h.join.unwrap
+  puts String.with_capacity(16).size
+  var xs = Array.with_capacity(4)
+  xs.push(7)
+  puts xs.size
+  puts TcpListener.bind("256.0.0.1:1").err?
+  puts File.open("/nonexistent/ruxen_e2e_2174").err?
+  var r = BufReader.File.new(File.open("/dev/null").unwrap)
+  puts r.read_line.unwrap.nil?
+end

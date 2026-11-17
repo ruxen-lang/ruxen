@@ -1,28 +1,34 @@
-#![allow(unused_imports)]
-
-use std::collections::HashMap;
-
-use crate::diagnostics::Diagnostic;
-use crate::hir::context::TypeContext;
 use crate::hir::nodes::*;
-use crate::hir::types::{MixinRef, MoveSemantics, Ty};
-use crate::lexer::token::Span;
+use crate::hir::types::Ty;
 use crate::parser::ast::{self, Visibility};
 
-use super::const_helpers;
-use super::scope::{ScopeId, ScopeKind, ScopeStack};
 use super::symbols::*;
-use super::{ClosureCaptureContext, ResolveResult, Resolver};
+use super::Resolver;
 
 impl Resolver {
+    /// Resolves `pattern`, defining every name it binds in the current
+    /// scope. This is the only place pattern names are bound, so an inner
+    /// binding always shadows an outer one of the same name.
     pub(super) fn resolve_pattern(&mut self, pattern: &ast::Pattern) -> HirPattern {
-        self.resolve_pattern_with_type(pattern, &Ty::Error)
+        self.bind_pattern(pattern, None, false)
     }
 
-    pub(super) fn resolve_pattern_with_type(
+    /// Resolves a `let`/`var` pattern: a top-level name takes the declared
+    /// `ty`, and `var` (`mutable`) makes every name it binds mutable.
+    pub(super) fn resolve_let_pattern(
         &mut self,
         pattern: &ast::Pattern,
-        _expected_ty: &Ty,
+        ty: &Ty,
+        mutable: bool,
+    ) -> HirPattern {
+        self.bind_pattern(pattern, Some(ty), mutable)
+    }
+
+    fn bind_pattern(
+        &mut self,
+        pattern: &ast::Pattern,
+        ty: Option<&Ty>,
+        var_mutable: bool,
     ) -> HirPattern {
         match pattern {
             ast::Pattern::Wildcard { span } => HirPattern::Wildcard { span: span.clone() },
@@ -31,25 +37,23 @@ impl Resolver {
                 name,
                 span,
             } => {
-                let ty = self.type_context.fresh_type_var();
+                let mutable = *mutable || var_mutable;
+                let ty = ty
+                    .cloned()
+                    .unwrap_or_else(|| self.type_context.fresh_type_var());
                 let def_id = self.symbols.define(
                     name.clone(),
-                    DefKind::Variable {
-                        mutable: *mutable,
-                        ty,
-                    },
+                    DefKind::Variable { mutable, ty },
                     Visibility::Private,
                     span.clone(),
                 );
                 // Register the binding in the current scope so that body
-                // expressions (e.g. match arm bodies) resolve to the same
-                // def_id.  `register_pattern_bindings` guards against
-                // duplicates with an `is_none()` check.
+                // expressions (e.g. match arm bodies) resolve to this def_id.
                 self.scopes.insert(name.clone(), def_id);
                 HirPattern::Binding {
                     def_id,
                     name: name.clone(),
-                    mutable: *mutable,
+                    mutable,
                     span: span.clone(),
                 }
             }
@@ -61,8 +65,10 @@ impl Resolver {
                 }
             }
             ast::Pattern::Tuple { elements, span } => {
-                let elems: Vec<HirPattern> =
-                    elements.iter().map(|e| self.resolve_pattern(e)).collect();
+                let elems: Vec<HirPattern> = elements
+                    .iter()
+                    .map(|e| self.bind_pattern(e, None, var_mutable))
+                    .collect();
                 HirPattern::Tuple {
                     elements: elems,
                     span: span.clone(),
@@ -78,6 +84,7 @@ impl Resolver {
                 let composite = format!("{}.{}", type_name, variant);
                 let variant_def = self.scopes.lookup(&composite).unwrap_or_else(|| {
                     self.error(format!("undefined enum variant `{}`", composite), span);
+                    self.unresolved_names.push(composite.clone());
                     UNRESOLVED_DEF
                 });
 
@@ -100,8 +107,10 @@ impl Resolver {
                     .get(&type_name)
                     .copied()
                     .unwrap_or(UNRESOLVED_DEF);
-                let fields_hir: Vec<HirPattern> =
-                    fields.iter().map(|f| self.resolve_pattern(f)).collect();
+                let fields_hir: Vec<HirPattern> = fields
+                    .iter()
+                    .map(|f| self.bind_pattern(f, None, var_mutable))
+                    .collect();
 
                 HirPattern::Enum {
                     type_def,
@@ -127,7 +136,7 @@ impl Resolver {
                     .iter()
                     .map(|f| {
                         let name = f.name.clone().unwrap_or_default();
-                        let pat = self.resolve_pattern(&f.pattern);
+                        let pat = self.bind_pattern(&f.pattern, None, var_mutable);
                         (name, pat)
                     })
                     .collect();
@@ -139,8 +148,10 @@ impl Resolver {
                 }
             }
             ast::Pattern::Or { patterns, span } => {
-                let pats: Vec<HirPattern> =
-                    patterns.iter().map(|p| self.resolve_pattern(p)).collect();
+                let pats: Vec<HirPattern> = patterns
+                    .iter()
+                    .map(|p| self.bind_pattern(p, None, var_mutable))
+                    .collect();
                 HirPattern::Or {
                     patterns: pats,
                     span: span.clone(),
@@ -151,11 +162,13 @@ impl Resolver {
                 name,
                 span,
             } => {
-                let ty = self.type_context.fresh_type_var();
+                let ty = ty
+                    .cloned()
+                    .unwrap_or_else(|| self.type_context.fresh_type_var());
                 let def_id = self.symbols.define(
                     name.clone(),
                     DefKind::Variable {
-                        mutable: *mutable,
+                        mutable: *mutable || var_mutable,
                         ty,
                     },
                     Visibility::Private,
@@ -172,66 +185,6 @@ impl Resolver {
                 }
             }
             ast::Pattern::Rest { span } => HirPattern::Rest { span: span.clone() },
-        }
-    }
-
-    pub(super) fn register_pattern_bindings(
-        &mut self,
-        pattern: &ast::Pattern,
-        mutable: bool,
-        span: &Span,
-    ) {
-        match pattern {
-            ast::Pattern::Identifier { name, .. } => {
-                // Already handled in resolve_pattern_with_type for let-bindings,
-                // but for match/for patterns we need to register too
-                if self.scopes.lookup(name).is_none() {
-                    let ty = self.type_context.fresh_type_var();
-                    let def_id = self.symbols.define(
-                        name.clone(),
-                        DefKind::Variable { mutable, ty },
-                        Visibility::Private,
-                        span.clone(),
-                    );
-                    self.scopes.insert(name.clone(), def_id);
-                }
-            }
-            ast::Pattern::Tuple { elements, .. } => {
-                for elem in elements {
-                    self.register_pattern_bindings(elem, mutable, span);
-                }
-            }
-            ast::Pattern::Enum { fields, .. } => {
-                for field in fields {
-                    self.register_pattern_bindings(field, mutable, span);
-                }
-            }
-            ast::Pattern::Struct { fields, .. } => {
-                for field in fields {
-                    self.register_pattern_bindings(&field.pattern, mutable, span);
-                }
-            }
-            ast::Pattern::Or { patterns, .. } => {
-                // All alternatives must bind the same names
-                if let Some(first) = patterns.first() {
-                    self.register_pattern_bindings(first, mutable, span);
-                }
-            }
-            ast::Pattern::Ref {
-                name, mutable: m, ..
-            } => {
-                if self.scopes.lookup(name).is_none() {
-                    let ty = self.type_context.fresh_type_var();
-                    let def_id = self.symbols.define(
-                        name.clone(),
-                        DefKind::Variable { mutable: *m, ty },
-                        Visibility::Private,
-                        span.clone(),
-                    );
-                    self.scopes.insert(name.clone(), def_id);
-                }
-            }
-            _ => {}
         }
     }
 

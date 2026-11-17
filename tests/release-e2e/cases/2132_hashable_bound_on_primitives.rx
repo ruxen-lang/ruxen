@@ -1,0 +1,27 @@
+# `Int` and `String` satisfy a `[T: Hashable]` bound, so a generic body's
+# `a.hash_code` must have a body to call for them.
+#
+# The bound was accepted but nothing defined `Int_hash_code` or
+# `String_hash_code`, so the program failed to link. Both are now `.rx`
+# methods: an Int hashes to itself and a String by value, the same
+# contributions their fields make to a derived `hash_code`.
+def hash_it[T: Hashable](a: &T) -> Int
+  a.hash_code
+end
+
+struct Pair
+  n: Int
+  s: String
+end
+
+def main
+  puts "int_stable=#{hash_it(&42) == hash_it(&42)}"
+  puts "int_differs=#{hash_it(&1) != hash_it(&2)}"
+  puts "int_direct=#{7.hash_code}"
+  let s1 = "ab"
+  let s2 = "a" + "b"
+  puts "string_by_value=#{hash_it(&s1) == hash_it(&s2)}"
+  puts "string_differs=#{hash_it(&"ab") != hash_it(&"ba")}"
+  puts "string_direct=#{"ab".hash_code == s2.hash_code}"
+  puts "struct=#{hash_it(&Pair.new(1, "x")) == hash_it(&Pair.new(1, "x"))}"
+end

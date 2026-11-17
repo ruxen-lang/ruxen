@@ -1,31 +1,28 @@
-//! Phase 4 — both-backends observable-parity tripwire.
-//!
-//! Compiles a fixed integer-arithmetic MIR fixture through BOTH the batch
-//! `CodeGen` (ObjectModule, via `ruxen_core::codegen::cranelift::clif_for_test`)
-//! and the REPL `JITCodeGen` (JITModule, via `crate::jit::clif_for_test`),
-//! asserting the two backends emit BYTE-IDENTICAL CLIF — the same observable on
-//! both sides, not "batch IR vs JIT runtime number". A behavioural cross-check
-//! (`run_int_fn_for_test`) confirms the JIT also executes correctly. This is the
-//! re-fork tripwire: it must stay GREEN through the share, proving the share
-//! changed nothing in the emitted IR. If a future edit re-diverges the two
-//! backends' integer lowering, the CLIF equality assertion fails.
+//! The batch `CodeGen` and the REPL JIT are one driver
+//! (`ruxen_core::codegen::cranelift::CodeGen<M>`, F-29 P2), so their CLIF
+//! is identical by construction. What stays checked here: the integer
+//! fixture's CLIF structure (`clif_for_test`), the JIT running it, and
+//! string `+` reaching codegen as a call.
 //!
 //! Lives in `ruxen_repl` (not `ruxen_core/tests/`) because the JIT half needs
 //! the `ruxen_*` C runtime (`libruxenrt.a`) force-loaded into the test binary,
-//! which only `ruxen_repl`'s build script provides. `ruxen_repl` depends on
-//! `ruxen_core`, so the batch half is still reachable here — one test, both
-//! backends.
-//!
-//! Integer arithmetic ONLY — deliberately avoids string `+`, whose lowering
-//! legitimately differs between the batch backend (Call ruxen_string_concat
-//! emitted by the MIR lowerer) and the still-forked REPL JIT (inlined at
-//! BinOp::Add) pre-Task-4.
+//! which only `ruxen_repl`'s build script provides.
 
 use ruxen_core::hir::types::Ty;
+use ruxen_core::mir::abi::CalleeIndex;
 use ruxen_core::mir::nodes::{
-    BasicBlock, Literal, MirFunction, MirInst, MirLocal, MirValue, Terminator,
+    BasicBlock, Literal, LocalKind, MirFunction, MirInst, MirLocal, MirProgram, MirValue,
+    Terminator,
 };
 use ruxen_core::parser::ast::BinOp;
+
+/// A program of the one function `func`, with its callee index.
+fn program_of(func: MirFunction) -> MirProgram {
+    let mut program = MirProgram::new();
+    program.functions.push(func);
+    program.callees = CalleeIndex::for_program(&program);
+    program
+}
 
 /// Hand-built MIR for `def add3(a: Int, b: Int) -> Int = (a + b) + 3`.
 ///
@@ -38,24 +35,28 @@ fn fixture_add3() -> MirFunction {
             name: "a".into(),
             ty: Ty::Int,
             mutable: false,
+            kind: LocalKind::User,
         },
         MirLocal {
             id: 1,
             name: "b".into(),
             ty: Ty::Int,
             mutable: false,
+            kind: LocalKind::User,
         },
         MirLocal {
             id: 2,
             name: "_t0".into(),
             ty: Ty::Int,
             mutable: false,
+            kind: LocalKind::User,
         },
         MirLocal {
             id: 3,
             name: "_t1".into(),
             ty: Ty::Int,
             mutable: false,
+            kind: LocalKind::User,
         },
     ];
 
@@ -101,18 +102,21 @@ fn fixture_cat() -> MirFunction {
             name: "a".into(),
             ty: Ty::String,
             mutable: false,
+            kind: LocalKind::User,
         },
         MirLocal {
             id: 1,
             name: "b".into(),
             ty: Ty::String,
             mutable: false,
+            kind: LocalKind::User,
         },
         MirLocal {
             id: 2,
             name: "_t0".into(),
             ty: Ty::String,
             mutable: false,
+            kind: LocalKind::User,
         },
     ];
 
@@ -154,35 +158,26 @@ fn repl_string_concat_after_share() {
 }
 
 #[test]
-fn both_backends_agree_on_integer_fixture() {
-    let mir = fixture_add3();
+fn integer_fixture_lowers_and_runs() {
+    let program = program_of(fixture_add3());
 
-    // Batch path: compile through CodeGen(ObjectModule) and read back the CLIF.
-    let batch_clif = ruxen_core::codegen::cranelift::clif_for_test(&mir).expect("batch CLIF");
-    // JIT path: compile through JITCodeGen(JITModule) and read back the CLIF
-    // (same translate-into-ctx → display() seam as the batch side).
-    let jit_clif = crate::jit::clif_for_test(&mir).expect("jit CLIF");
-
-    // Structural parity: the two backends must emit byte-identical IR for the
-    // same MIR. This is the real re-fork tripwire — comparing the SAME
-    // observable (CLIF text) on both sides, not "batch IR vs JIT runtime".
+    // Pin the structure so a drift in the shared lowering trips: exactly
+    // two iadd, no call.
+    let clif = ruxen_core::codegen::cranelift::clif_for_test(&program, "add3").expect("CLIF");
     assert_eq!(
-        jit_clif, batch_clif,
-        "JIT and batch backends must emit identical CLIF for add3.\n\
-         === BATCH ===\n{batch_clif}\n=== JIT ===\n{jit_clif}"
-    );
-
-    // Pin the expected structure so a future edit that drifts BOTH backends
-    // in lockstep (identical-but-wrong) still trips: exactly two iadd, no call.
-    assert_eq!(
-        batch_clif.matches("iadd").count(),
+        clif.matches("iadd").count(),
         2,
-        "add3 should lower to exactly 2 iadd, got CLIF:\n{batch_clif}"
+        "add3 should lower to exactly 2 iadd, got CLIF:\n{clif}"
     );
 
-    // Behavioural cross-check: the JIT actually runs the fixture correctly.
-    let result = crate::jit::run_int_fn_for_test(&mir, &[7, 5]).expect("jit run");
-    assert_eq!(result, 15, "JIT add3(7,5) should be 15");
+    // The JIT runs it.
+    let mut jit = crate::jit::JITCodeGen::new().expect("create JIT");
+    jit.compile_program(&program).expect("JIT-compile add3");
+    let code_ptr = jit.function_ptr("add3").expect("add3 address");
+    // SAFETY: `code_ptr` is the finalized entry of `add3`, an
+    // `fn(Int, Int) -> Int`; `jit` owns the code and outlives the call.
+    let add3: extern "C" fn(i64, i64) -> i64 = unsafe { std::mem::transmute(code_ptr) };
+    assert_eq!(add3(7, 5), 15, "JIT add3(7,5) should be 15");
 }
 
 /// IR-level proof that string `+` is a `Call`, not an inlined add: the dead
@@ -191,8 +186,9 @@ fn both_backends_agree_on_integer_fixture() {
 /// `String + String` to a `Call ruxen_string_concat` BEFORE codegen.
 #[test]
 fn string_concat_is_a_call_not_an_iadd() {
-    let mir = fixture_cat();
-    let batch_clif = ruxen_core::codegen::cranelift::clif_for_test(&mir).expect("batch CLIF");
+    let program = program_of(fixture_cat());
+    let batch_clif =
+        ruxen_core::codegen::cranelift::clif_for_test(&program, "cat").expect("batch CLIF");
 
     // Zero integer adds — a string `+` never reaches codegen as a BinOp::Add,
     // so there is no `iadd` for any inline to have produced.

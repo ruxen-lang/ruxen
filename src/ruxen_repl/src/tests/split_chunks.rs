@@ -172,3 +172,19 @@ fn trailing_open_def_is_flushed_at_eof() {
     assert_eq!(chunks.len(), 1);
     assert_eq!(chunks[0], src);
 }
+
+#[test]
+fn trailing_if_modifier_does_not_open_a_block() {
+    // The old token-balance splitter counted the modifier `if` as a block
+    // opener and swallowed the next line into the same chunk.
+    let chunks = split_repl_chunks("puts 1 if true\nputs 2\n");
+    assert_eq!(chunks, vec!["puts 1 if true\n", "puts 2\n"]);
+}
+
+#[test]
+fn mixin_with_bodyless_signatures_is_single_chunk() {
+    // `def area -> Int` inside a mixin has no body and no `end`.
+    let src = "mixin Shape\n  def area -> Int\n  def name -> String\nend\n";
+    let chunks = split_repl_chunks(src);
+    assert_eq!(chunks, vec![src]);
+}

@@ -1,0 +1,230 @@
+use std.net.{TcpListener, TcpStream, Shutdown}
+
+# Both ends run in this process: on loopback, connect completes against the
+# listen backlog before accept is called, so one thread can drive a client
+# and its accepted server stream.
+
+def listen -> TcpListener
+  TcpListener.bind(&"127.0.0.1:0").expect!("bind")
+end
+
+def address_of(l: &TcpListener) -> String
+  l.local_addr().expect!("local_addr")
+end
+
+def would_block?(e: IoError) -> Bool
+  match e.kind()
+    IoErrorKind.WouldBlock -> true
+    _                      -> false
+  end
+end
+
+def same_bytes?(a: &Array[Int], b: &Array[Int]) -> Bool
+  if a.size != b.size
+    return false
+  end
+  var i = 0
+  while i < a.size
+    if a[i] != b[i]
+      return false
+    end
+    i = i + 1
+  end
+  true
+end
+
+# Reads until `want` bytes arrived, the peer closed, or a read failed.
+def read_bytes(s: &TcpStream, want: Int) -> Array[Int]
+  var buf: Array[Int] = Array.new
+  var attempts = 0
+  while buf.size < want && attempts < 8
+    match s.read(&var buf)
+      Ok(n)  ->
+        if n == 0
+          attempts = 8
+        end
+      Err(_) -> attempts = 8
+    end
+    attempts = attempts + 1
+  end
+  buf
+end
+
+Tester.describe("TcpListener") do |t: &var Tester|
+  t.it("binds to port 0 and reports a 127.0.0.1 local_addr") do
+    let l = listen()
+    t.expect(address_of(&l).starts_with("127.0.0.1:")).to_eq(true)
+  end
+
+  t.it("returns Err from bind for a malformed address") do
+    let failed = match TcpListener.bind(&"not an address at all")
+      Ok(_)  -> false
+      Err(_) -> true
+    end
+    t.expect(failed).to_eq(true)
+  end
+
+  t.it("closes idempotently, then local_addr is Err") do
+    let l = listen()
+    let first = match l.close()
+      Ok(_)  -> true
+      Err(_) -> false
+    end
+    let second = match l.close()
+      Ok(_)  -> true
+      Err(_) -> false
+    end
+    t.expect(first).to_eq(true)
+    t.expect(second).to_eq(true)
+    let after = match l.local_addr()
+      Ok(_)  -> false
+      Err(_) -> true
+    end
+    t.expect(after).to_eq(true)
+  end
+
+  t.it("returns WouldBlock from accept when nonblocking and idle") do
+    let l = listen()
+    l.set_nonblocking(true).expect!("set_nonblocking")
+    let blocked = match l.accept()
+      Ok(_)  -> false
+      Err(e) -> would_block?(e)
+    end
+    t.expect(blocked).to_eq(true)
+  end
+
+  t.it("releases the fd on drop across 200 binds") do
+    var i = 0
+    var bound = 0
+    while i < 200
+      match TcpListener.bind(&"127.0.0.1:0")
+        Ok(_l) -> bound = bound + 1
+        Err(_) -> nil
+      end
+      i = i + 1
+    end
+    t.expect(bound).to_eq(200)
+  end
+end
+
+Tester.describe("TcpStream") do |t: &var Tester|
+  t.it("returns Err from connect when nothing listens") do
+    let failed = match TcpStream.connect(&"127.0.0.1:1")
+      Ok(_)  -> false
+      Err(_) -> true
+    end
+    t.expect(failed).to_eq(true)
+  end
+
+  t.it("delivers written bytes to the accepted peer, then EOF after close") do
+    let l = listen()
+    let client: TcpStream = TcpStream.connect(&address_of(&l)).expect!("connect")
+    let server: TcpStream = l.accept().expect!("accept")
+    let sent = "hello world".bytes()
+    let written: Int = client.write(&sent).expect!("write")
+    t.expect(written).to_eq(11)
+    client.close().expect!("close")
+    let got = read_bytes(&server, 64)
+    t.expect(same_bytes?(&got, &sent)).to_eq(true)
+  end
+
+  t.it("reads embedded zero bytes") do
+    let l = listen()
+    let client: TcpStream = TcpStream.connect(&address_of(&l)).expect!("connect")
+    let server: TcpStream = l.accept().expect!("accept")
+    var sent: Array[Int] = Array.new
+    sent.push(255)
+    sent.push(0)
+    sent.push(65)
+    sent.push(0)
+    sent.push(66)
+    server.write(&sent).expect!("write")
+    let got = read_bytes(&client, 5)
+    t.expect(same_bytes?(&got, &sent)).to_eq(true)
+  end
+
+  t.it("reports the listener as peer_addr") do
+    let l = listen()
+    let addr = address_of(&l)
+    let client: TcpStream = TcpStream.connect(&addr).expect!("connect")
+    let peer: String = client.peer_addr().expect!("peer_addr")
+    t.expect(peer).to_eq(addr.clone)
+  end
+
+  t.it("shows EOF to the peer after shutdown(Write)") do
+    let l = listen()
+    let client: TcpStream = TcpStream.connect(&address_of(&l)).expect!("connect")
+    let server: TcpStream = l.accept().expect!("accept")
+    client.shutdown(Shutdown.Write).expect!("shutdown")
+    var buf: Array[Int] = Array.new
+    let n: Int = server.read(&var buf).expect!("read")
+    t.expect(n).to_eq(0)
+  end
+
+  t.it("shuts down both directions") do
+    let l = listen()
+    let client: TcpStream = TcpStream.connect(&address_of(&l)).expect!("connect")
+    let done = match client.shutdown(Shutdown.Both)
+      Ok(_)  -> true
+      Err(_) -> false
+    end
+    t.expect(done).to_eq(true)
+  end
+
+  t.it("closes idempotently") do
+    let l = listen()
+    let client: TcpStream = TcpStream.connect(&address_of(&l)).expect!("connect")
+    let first = match client.close()
+      Ok(_)  -> true
+      Err(_) -> false
+    end
+    let second = match client.close()
+      Ok(_)  -> true
+      Err(_) -> false
+    end
+    t.expect(first).to_eq(true)
+    t.expect(second).to_eq(true)
+  end
+
+  t.it("returns WouldBlock from read after the read timeout on an idle peer") do
+    let l = listen()
+    let client: TcpStream = TcpStream.connect(&address_of(&l)).expect!("connect")
+    let _server: TcpStream = l.accept().expect!("accept")
+    client.set_read_timeout(&Duration.from_millis(50)).expect!("set_read_timeout")
+    var buf: Array[Int] = Array.new
+    let blocked = match client.read(&var buf)
+      Ok(_)  -> false
+      Err(e) -> would_block?(e)
+    end
+    t.expect(blocked).to_eq(true)
+  end
+
+  t.it("accepts a write timeout") do
+    let l = listen()
+    let client: TcpStream = TcpStream.connect(&address_of(&l)).expect!("connect")
+    let set = match client.set_write_timeout(&Duration.from_millis(50))
+      Ok(_)  -> true
+      Err(_) -> false
+    end
+    t.expect(set).to_eq(true)
+  end
+
+  t.it("releases the fd on drop across 200 connections") do
+    let l = listen()
+    let addr = address_of(&l)
+    var i = 0
+    var connected = 0
+    while i < 200
+      match TcpStream.connect(&addr)
+        Ok(_s) -> connected = connected + 1
+        Err(_) -> nil
+      end
+      match l.accept()
+        Ok(_peer) -> nil
+        Err(_)    -> nil
+      end
+      i = i + 1
+    end
+    t.expect(connected).to_eq(200)
+  end
+end

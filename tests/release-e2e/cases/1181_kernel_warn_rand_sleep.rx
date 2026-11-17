@@ -1,0 +1,30 @@
+# Pins Kernel's `warn` / `rand` / `sleep`.
+#
+# `warn` writes to STDERR, so this fixture asserts that it leaves STDOUT
+# alone (the harness diffs stdout only). `rand(n)` is checked by RANGE
+# rather than by value, since it draws from OS entropy. `sleep` is checked
+# for its non-negative-seconds contract at 0 seconds so the fixture stays
+# fast.
+def main
+  warn("this goes to stderr, not stdout")
+  puts "after warn"
+
+  var in_range: Bool = true
+  var i: Int = 0
+  while i < 200
+    let r = rand(6)
+    if r < 0 || r > 5
+      in_range = false
+    end
+    i = i + 1
+  end
+  puts "rand in range #{in_range}"
+
+  # Ruby's `rand(0)` returns a float in [0.0, 1.0); with no usable Float
+  # ABI yet this form yields 0, and so does a negative bound.
+  puts "rand zero #{rand(0)}"
+  puts "rand neg #{rand(-5)}"
+
+  sleep(0)
+  puts "slept"
+end

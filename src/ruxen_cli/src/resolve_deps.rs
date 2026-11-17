@@ -80,8 +80,7 @@ fn validate_git_ref(r: &str) -> Result<(), String> {
 /// (`apps/foo` depending on `../../libs/bar`) need them and the
 /// project_dir-confined check that would block those is too strict for
 /// real layouts.
-#[allow(dead_code)] // referenced from resolve_path_dep behind an env-var gate
-fn validate_path_dep(name: &str, raw: &str, _project_dir: &Path) -> Result<(), String> {
+fn validate_path_dep(name: &str, raw: &str) -> Result<(), String> {
     if Path::new(raw).is_absolute() {
         return Err(format!(
             "path dependency `{}` uses absolute path `{}` — only relative paths are allowed by default (set `RUXEN_ALLOW_EXTERNAL_PATH=1` to override)",
@@ -335,7 +334,7 @@ fn resolve_path_dep(
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
     if !allow_external {
-        validate_path_dep(name, path, project_dir)?;
+        validate_path_dep(name, path)?;
     }
 
     let dep_dir = if Path::new(path).is_absolute() {

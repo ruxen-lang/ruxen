@@ -1,0 +1,44 @@
+# B85 — chaining off a USER-DEFINED collection method. `where_matching` was the
+# third name `lower_vec_source` peeled through, and peeling it on a user class
+# handed the class struct itself to the iteration loop rather than the returned
+# Array. Pinned so the chaining mechanism stays type-agnostic: the receiver of
+# an inlined combinator is whatever the previous link returned, full stop.
+class Repo
+  items: Array[Int]
+
+  def init
+    self.items = [1, 2, 3, 4, 5]
+  end
+
+  def where_matching(&block: Block(Int) -> Bool) -> Array[Int]
+    var out: Array[Int] = []
+    for x in self.items
+      if yield x
+        out.push(x)
+      end
+    end
+    out
+  end
+end
+
+def main
+  let r = Repo.new
+
+  var chained = 0
+  r.where_matching { |x| x > 3 }.each { |x| chained = chained + 1 }
+  puts("chained=#{chained}")
+
+  let matched = r.where_matching { |x| x > 3 }
+  var counted = 0
+  matched.each { |x| counted = counted + 1 }
+  puts("bound=#{counted}")
+
+  var chained_sum = 0
+  r.where_matching { |x| x > 3 }.each { |x| chained_sum = chained_sum + x }
+  puts("chained-sum=#{chained_sum}")
+
+  # Chained onward into a second combinator.
+  var onward = 0
+  r.where_matching { |x| x > 1 }.select { |x| x < 5 }.each { |x| onward = onward + 1 }
+  puts("onward=#{onward}")
+end

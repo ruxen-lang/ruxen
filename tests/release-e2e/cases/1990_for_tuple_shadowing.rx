@@ -1,0 +1,12 @@
+## F-12: a `for (i, x) in ...` tuple pattern binds fresh names even when an
+## outer `i` is already in scope. The loop's `i` used to resolve to the outer
+## binding, so the loop saw the outer value (and the outer type).
+
+def main
+  let i = "outer"
+  let pairs: Array[(Int, Int)] = [(1, 10), (2, 20)]
+  for (i, x) in pairs
+    puts "#{i + 1}:#{x}"
+  end
+  puts i
+end

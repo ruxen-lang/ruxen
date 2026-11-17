@@ -1,0 +1,22 @@
+mixin Ordered
+def <=>(other:&Self)->Int
+def ==(other:&Self)->Bool
+(self<=>other)==0
+end
+def <(other:&Self)->Bool
+(self<=>other)<0
+end
+def <=(other:&Self)->Bool
+(self<=>other)<=0
+end
+def >(other:&Self)->Bool
+(self<=>other)>0
+end
+def >=(other:&Self)->Bool
+(self<=>other)>=0
+end
+end
+
+def compare(a:some Ordered,b:some Ordered)->Int
+a.<=>(b)
+end

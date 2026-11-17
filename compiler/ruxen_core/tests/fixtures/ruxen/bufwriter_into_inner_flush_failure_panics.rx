@@ -1,0 +1,12 @@
+# `BufWriter.File#into_inner` flushes first and panics when the flush fails,
+# rather than handing back a File whose buffered bytes were lost. The inner
+# File here is open read-only, so the flush cannot write. Runs in a scratch
+# working directory the test chooses.
+path = "bufwriter_into_inner_flush_failure.txt"
+seed = File.create(path).expect!("create")
+seed.write_str("seed").expect!("seed")
+reader = File.open(path).expect!("open")
+bw = BufWriter.File.new(reader)
+bw.write_str("lost").expect!("write_str")
+inner = bw.into_inner()
+puts "unreachable"

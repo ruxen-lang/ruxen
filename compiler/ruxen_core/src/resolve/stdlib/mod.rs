@@ -17,12 +17,10 @@
 //!
 //! - Phase D-3 of #06.95: the 16 builtin mixins (Displayable / Error /
 //!   Comparable / Iterable / Copy / Clone / Send / Sync / PartialEq /
-//!   Eq / Hash / Default / Ord / PartialOrd / Drop / Future / Into[T])
+//!   Eq / Default / Ord / PartialOrd / Drop / Future / Into[T])
 //!   moved to `library/std/core/src/lib.rx` as self-hosted `mixin Foo`
 //!   declarations. The bootstrap merge picks them up as
-//!   `DefKind::Trait` entries. The `Hash → Hashable` deprecation alias
-//!   is re-established by `fixup_bootstrapped_stdlib_modules` via its
-//!   TYPE_ALIASES table.
+//!   `DefKind::Trait` entries. `Hashable` lives in `library/std/hash/`.
 //!
 //! - Wave 2 (#06.8): every historical stdlib class/enum shell (IoError,
 //!   IoErrorKind, Stdin/Stdout/Stderr, Metadata, Command/ExitStatus/

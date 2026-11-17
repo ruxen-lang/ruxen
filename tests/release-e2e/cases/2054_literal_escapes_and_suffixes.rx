@@ -1,0 +1,15 @@
+# String escapes and numeric literal forms (suffixes, radix prefixes, separators).
+def main
+  puts "tab[\t] quote[\"] backslash[\\]"
+  puts "line1\nline2"
+  puts "hash \#{not interpolated}"
+  puts "#{1 + 2} interpolated"
+
+  let a: UInt8 = 200u8
+  let small: Int8 = 7i8
+  let sum: UInt32 = 200u32 + 50u32
+  let big: Int64 = 1_234_567_890i64
+  puts "#{a} #{small} #{sum} #{big}"
+  puts "#{0x1F} #{0b1010} #{1_000}"
+  puts "#{(255u8 as UInt32) << 24 | ((1u8 as UInt32) << 16) | ((2u8 as UInt32) << 8) | (3u8 as UInt32)}"
+end

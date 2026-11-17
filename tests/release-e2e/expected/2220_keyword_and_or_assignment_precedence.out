@@ -1,0 +1,9 @@
+eval x-rhs
+x=true
+eval y-rhs
+y=false
+z=false
+eval w
+eval w-rhs
+eval w-rhs2
+w=true

@@ -1,0 +1,12 @@
+# Blocks, procs and lambdas: a lambda passed to an ordinary `Fn(...)`
+# parameter is borrowed for the call. The caller keeps the closure pair and
+# frees it, with the String the lambda owns, at scope exit.
+
+def apply(f: Fn(Int) -> Int, x: Int) -> Int
+  f.(x)
+end
+
+base = "abc"
+f = ->(x: Int) { x + (base.size as Int) }
+puts apply(f, 1)
+puts apply(f, 2)

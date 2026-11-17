@@ -1,0 +1,158 @@
+Tester.describe("Integer") do |t: &var Tester|
+  t.it("predicates and sign") do
+    let neg = -7
+    let pos = 7
+    t.expect("#{neg.abs} #{pos.abs} #{0.abs}").to_eq("7 7 0")
+    t.expect("#{neg.magnitude} #{pos.magnitude}").to_eq("7 7")
+    t.expect("#{neg.even?} #{pos.even?} #{0.even?} #{4.even?}").to_eq("false false true true")
+    t.expect("#{neg.odd?} #{pos.odd?} #{0.odd?} #{4.odd?}").to_eq("true true false false")
+    t.expect("#{0.zero?} #{pos.zero?} #{neg.zero?}").to_eq("true false false")
+    t.expect("#{pos.positive?} #{neg.positive?} #{0.positive?}").to_eq("true false false")
+    t.expect("#{pos.negative?} #{neg.negative?} #{0.negative?}").to_eq("false true false")
+    t.expect("#{pos.integer?} #{0.integer?}").to_eq("true true")
+  end
+
+  t.it("succ, next, pred, clamp and between?") do
+    let neg = -7
+    let pos = 7
+    t.expect("#{pos.succ} #{neg.succ} #{0.succ}").to_eq("8 -6 1")
+    t.expect("#{pos.next} #{neg.next}").to_eq("8 -6")
+    t.expect("#{pos.pred} #{neg.pred} #{0.pred}").to_eq("6 -8 -1")
+    t.expect("#{15.clamp(1, 10)} #{0.clamp(1, 10)} #{5.clamp(1, 10)} #{neg.clamp(-10, -8)}").to_eq("10 1 5 -8")
+    t.expect("#{5.between?(1, 10)} #{0.between?(1, 10)} #{1.between?(1, 10)} #{10.between?(1, 10)}").to_eq("true false true true")
+  end
+
+  t.it("ceil, floor, round and truncate with ndigits") do
+    let a = -1234
+    let b = -25
+    let c = -24
+    t.expect("#{1234.ceil} #{1234.floor} #{1234.round} #{1234.truncate}").to_eq("1234 1234 1234 1234")
+    t.expect("#{1234.ceil(2)} #{1234.floor(2)} #{1234.round(2)} #{1234.truncate(2)}").to_eq("1234 1234 1234 1234")
+    t.expect("#{1234.ceil(-2)} #{a.ceil(-2)} #{25.ceil(-1)} #{b.ceil(-1)}").to_eq("1300 -1200 30 -20")
+    t.expect("#{1234.floor(-2)} #{a.floor(-2)} #{25.floor(-1)} #{b.floor(-1)}").to_eq("1200 -1300 20 -30")
+    t.expect("#{1234.round(-2)} #{a.round(-2)} #{25.round(-1)} #{b.round(-1)} #{24.round(-1)} #{c.round(-1)}").to_eq("1200 -1200 30 -30 20 -20")
+    t.expect("#{1234.truncate(-2)} #{a.truncate(-2)} #{25.truncate(-1)} #{b.truncate(-1)}").to_eq("1200 -1200 20 -20")
+    t.expect("#{0.ceil(-3)} #{0.floor(-3)} #{0.round(-3)} #{0.truncate(-3)}").to_eq("0 0 0 0")
+    let max = 9223372036854775807
+    t.expect("#{max.round(-18)} #{max.floor(-18)} #{max.truncate(-18)}").to_eq("9000000000000000000 9000000000000000000 9000000000000000000")
+  end
+
+  t.it("division and modulo signs") do
+    let a = -7
+    let b = -2
+    t.expect("#{7 / 2} #{a / 2} #{7 / b} #{a / b}").to_eq("3 -3 -3 3")
+    t.expect("#{7 % 2} #{a % 2} #{7 % b} #{a % b}").to_eq("1 -1 1 -1")
+    t.expect("#{13.div(4)} #{a.div(2)} #{13.div(b)} #{a.div(b)}").to_eq("3 -4 -7 3")
+    t.expect("#{13.modulo(4)} #{a.modulo(2)} #{13.modulo(b)} #{a.modulo(b)}").to_eq("1 1 -1 -1")
+    t.expect("#{13.remainder(4)} #{a.remainder(2)} #{13.remainder(b)} #{a.remainder(b)}").to_eq("1 -1 1 -1")
+    let q1 = 13.divmod(4)
+    let q2 = a.divmod(2)
+    let q3 = 13.divmod(b)
+    let q4 = a.divmod(b)
+    t.expect("#{q1[0]},#{q1[1]} #{q2[0]},#{q2[1]} #{q3[0]},#{q3[1]} #{q4[0]},#{q4[1]}").to_eq("3,1 -4,1 -7,-1 3,-1")
+    t.expect("#{q2[0] * 2 + q2[1]} #{q4[0] * -2 + q4[1]}").to_eq("-7 -7")
+    t.expect("#{7.fdiv(2)} #{a.fdiv(2)} #{8.fdiv(4)}").to_eq("3.5 -3.5 2")
+    t.expect("#{8.div(4)} #{8.modulo(4)} #{0.div(4)} #{0.modulo(4)}").to_eq("2 0 0 0")
+  end
+
+  t.it("number theory") do
+    let a = -7
+    let b = -2
+    t.expect("#{12.gcd(18)} #{0.gcd(0)} #{0.gcd(5)} #{5.gcd(0)} #{a.gcd(21)} #{a.gcd(b)}").to_eq("6 0 5 5 7 1")
+    t.expect("#{4.lcm(6)} #{0.lcm(5)} #{5.lcm(0)} #{a.lcm(3)} #{a.lcm(b)}").to_eq("12 0 0 21 14")
+    let gl = 12.gcdlcm(18)
+    t.expect("#{gl[0]},#{gl[1]}").to_eq("6,36")
+    t.expect("#{2.pow(10)} #{2.pow(1)} #{2.pow(0)} #{b.pow(3)} #{b.pow(2)} #{0.pow(0)}").to_eq("1024 2 1 -8 4 1")
+    t.expect("#{2.pow(10, 1000)} #{5.pow(3, 13)} #{b.pow(3, 5)} #{7.pow(0, 5)}").to_eq("24 8 2 1")
+    t.expect("#{255.bit_length} #{256.bit_length} #{0.bit_length} #{1.bit_length} #{a.bit_length}").to_eq("8 9 0 1 3")
+    t.expect("#{5.bit(0)} #{5.bit(1)} #{5.bit(2)} #{5.bit(3)} #{b.bit(0)} #{b.bit(1)} #{b.bit(100)}").to_eq("1 0 1 0 0 1 1")
+  end
+
+  t.it("digits, sqrt and complement") do
+    let d1 = 1234.digits
+    let d2 = 0.digits
+    let d3 = 255.digits(16)
+    t.expect("#{d1[0]},#{d1[1]},#{d1[2]},#{d1[3]} len=#{d1.size}").to_eq("4,3,2,1 len=4")
+    t.expect("#{d2[0]} len=#{d2.size}").to_eq("0 len=1")
+    t.expect("#{d3[0]},#{d3[1]} len=#{d3.size}").to_eq("15,15 len=2")
+    t.expect("#{Int.sqrt(0)} #{Int.sqrt(1)} #{Int.sqrt(2)} #{Int.sqrt(15)} #{Int.sqrt(16)} #{Int.sqrt(1000000)}").to_eq("0 1 1 3 4 1000")
+    let max = 9223372036854775807
+    t.expect("#{Int.sqrt(max)} #{Int.sqrt(4611686018427387904)}").to_eq("3037000499 2147483648")
+    t.expect("#{~5} #{~0} #{~-1}").to_eq("-6 -1 0")
+  end
+
+  t.it("upto, downto, times and step") do
+    var seen = ""
+    1.upto(4) do |i|
+      seen = seen + "u#{i} "
+    end
+    4.downto(1) do |i|
+      seen = seen + "d#{i} "
+    end
+    3.times do |i|
+      seen = seen + "t#{i} "
+    end
+    1.step(10, 3) do |i|
+      seen = seen + "s#{i} "
+    end
+    10.step(1, -4) do |i|
+      seen = seen + "b#{i} "
+    end
+    1.step(4) do |i|
+      seen = seen + "o#{i} "
+    end
+    t.expect(seen).to_eq("u1 u2 u3 u4 d4 d3 d2 d1 t0 t1 t2 s1 s4 s7 s10 b10 b6 b2 o1 o2 o3 o4 ")
+  end
+
+  t.it("empty ranges yield nothing and a single range yields once") do
+    var seen = ""
+    let three = 3
+    three.upto(1) do |i|
+      seen = seen + "eu#{i} "
+    end
+    1.downto(3) do |i|
+      seen = seen + "ed#{i} "
+    end
+    0.times do |i|
+      seen = seen + "et#{i} "
+    end
+    5.step(1, 2) do |i|
+      seen = seen + "es#{i} "
+    end
+    5.step(1, 0) do |i|
+      seen = seen + "zs#{i} "
+    end
+    2.upto(2) do |i|
+      seen = seen + "single#{i} "
+    end
+    t.expect(seen).to_eq("single2 ")
+  end
+
+  t.it("times accumulates") do
+    var total = 0
+    5.times do |i|
+      total += i
+    end
+    t.expect(total).to_eq(10)
+  end
+
+  t.it("to_s in a base, and the conversion methods") do
+    let neg = -255
+    let min = -9223372036854775807 - 1
+    t.expect("#{42.to_s} #{0.to_s} #{neg.to_s}").to_eq("42 0 -255")
+    t.expect("#{255.to_s(2)} #{0.to_s(2)} #{1.to_s(2)}").to_eq("11111111 0 1")
+    t.expect("#{255.to_s(8)} #{8.to_s(8)}").to_eq("377 10")
+    t.expect("#{255.to_s(16)} #{4095.to_s(16)} #{16.to_s(16)}").to_eq("ff fff 10")
+    t.expect("#{255.to_s(36)} #{35.to_s(36)} #{36.to_s(36)}").to_eq("73 z 10")
+    t.expect("#{neg.to_s(16)} #{neg.to_s(2)} #{neg.to_s(10)}").to_eq("-ff -11111111 -255")
+    t.expect("#{min.to_s(10)} #{min.to_s(16)}").to_eq("-9223372036854775808 -8000000000000000")
+    t.expect("#{255.to_s(1)} #{255.to_s(99)} #{255.to_s(0)}").to_eq("255 255 255")
+    t.expect("#{42.to_i} #{neg.to_i} #{0.to_i}").to_eq("42 -255 0")
+    t.expect("#{42.to_int} #{neg.to_int}").to_eq("42 -255")
+    t.expect("#{65.ord} #{0.ord} #{neg.ord}").to_eq("65 0 -255")
+    let a = 65.chr
+    let z = 122.chr
+    let digit = 55.chr
+    t.expect("#{a} #{z} #{digit}").to_eq("A z 7")
+  end
+end

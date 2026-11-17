@@ -2,7 +2,7 @@
 
 **Source docs:**
 [docs/requirements/tier2_02_const_generics.md](../../requirements/tier2_02_const_generics.md),
-[docs/prompts/v1/07_phase3_const_generics.md](../../prompts/v1/07_phase3_const_generics.md).
+`docs/prompts/v1/07_phase3_const_generics.md`.
 
 **Status:** in flight.  Stages tracked individually below.
 
@@ -12,8 +12,9 @@ canonical examples are `Array[T, N: Int]`, `BitSet[N: USize]`, and
 `SmallVec[T, N: USize]` — fixed-size collections whose layout
 depends on a numeric parameter known at compile time.
 
-Ruxen's design follows Rust's `min_const_generics` plus simple
-arithmetic on const expressions.  No general `const fn` evaluation;
+Ruxen's design is a minimal const-generics subset plus simple
+arithmetic on const expressions.  No general compile-time function
+evaluation;
 no recursion or branching at the const level.
 
 The `const` keyword appears **only** as a generic-parameter prefix
@@ -33,15 +34,15 @@ syntax.  Ruxen user-level paths use `.` (`Color.Red`, `Array.new`).
 
 | Stage | Scope                                                            | Status      |
 |-------|------------------------------------------------------------------|-------------|
-| S1    | Parser accepts `const N: Type` in generic-param positions        | shipped (b8a371c) |
-| S2    | Parser accepts integer literals as generic args at use sites     | shipped (bde3e1f) |
-| S3    | Resolver records `DefKind::ConstParam { ty }`; brings `N` into scope inside the type / fn body | shipped (3d2d7ac) |
-| S4    | HIR: `Ty::Array(Box<Ty>, ConstExpr)` + `ConstExpr` enum          | shipped (e2d073b) |
-| S5    | Typeck: const args participate in unification; distinct const args produce distinct types | shipped (afac3fc) |
-| S6    | Monomorphization (M2): one MIR fn per `(type-args, const-args)` key | shipped (a9fcb19 — `Ty::ConstArg` distinguishes instantiations; runtime construction `Type[N].new(...)` works for bodies that don't reference the const param; per-instantiation MIR lowering for const-using bodies is a v1.next follow-up) |
-| S7    | Codegen layout: arrays evaluate `ConstExpr` to a concrete size; `alloca` honours it | shipped (bc6cca3 — evaluator + `layout_of` integration; per-instantiation binding threading is a follow-up) |
-| S8    | Arithmetic in const exprs (`+ - * /`), normal-form rewriter, overflow + div-zero diagnostics | shipped: S8.S1 evaluator (c0ea652), S8.S2 array-size resolve fold (5fd2c6d), S8.S3 const-arg position parser+resolve (ae22ed5), S8.S4 normal-form rewriter — overflow / div-zero E0703 surfacing is the monomorphization-side follow-up |
-| S9    | `where` clause const predicates (`where N > 0`, `where N == M`)  | in flight: parser cut shipped — captures `> < >= <= == != + - * /` predicates on `WhereClause::const_predicates` as raw Expr trees; per-instantiation eval + `E-CONST-WHERE-FALSE` diagnostic still pending the S7 binding-threading prep |
+| S1    | Parser accepts `const N: Type` in generic-param positions        | [implemented], shipped (b8a371c) |
+| S2    | Parser accepts integer literals as generic args at use sites     | [implemented], shipped (bde3e1f) |
+| S3    | Resolver records `DefKind::ConstParam { ty }`; brings `N` into scope inside the type / fn body | [implemented], shipped (3d2d7ac) |
+| S4    | HIR: `Ty::Array(Box<Ty>, ConstExpr)` + `ConstExpr` enum          | [implemented], shipped (e2d073b) |
+| S5    | Typeck: const args participate in unification; distinct const args produce distinct types | [implemented], shipped (afac3fc) |
+| S6    | Monomorphization (M2): one MIR fn per `(type-args, const-args)` key | [implemented], shipped (a9fcb19 — `Ty::ConstArg` distinguishes instantiations; runtime construction `Type[N].new(...)` works for bodies that don't reference the const param; per-instantiation MIR lowering for const-using bodies is a v1.next follow-up) |
+| S7    | Codegen layout: arrays evaluate `ConstExpr` to a concrete size; `alloca` honours it | [implemented], shipped (bc6cca3 — evaluator + `layout_of` integration; per-instantiation binding threading is a follow-up) |
+| S8    | Arithmetic in const exprs (`+ - * /`), normal-form rewriter, overflow + div-zero diagnostics | [implemented], shipped: S8.S1 evaluator (c0ea652), S8.S2 array-size resolve fold (5fd2c6d), S8.S3 const-arg position parser+resolve (ae22ed5), S8.S4 normal-form rewriter — overflow / div-zero E0703 surfacing is the monomorphization-side follow-up |
+| S9    | `where` clause const predicates (`where N > 0`, `where N == M`)  | parser cut [implemented] — captures `> < >= <= == != + - * /` predicates on `WhereClause::const_predicates` as raw Expr trees; per-instantiation eval and a diagnostic for a false predicate are not built yet (the `const_predicates` leftover is re-verified under [planned](../../../TODO.md#t-d23); the draft name `E-CONST-WHERE-FALSE` was never registered) |
 
 ### S7 follow-up — per-instantiation bindings through layout
 
@@ -57,9 +58,9 @@ are tagged with the stage that lands them.
 Generic-param brackets `[...]` accept a new form `const NAME: TYPE`
 alongside the existing type and lifetime params.
 
-**Given** the source
-```ruxen
-struct Vector[T, const N: USize]
+**Given** the source, [implemented] (fixed arrays and const generics are kept for now, OQ-8 in the naming spec):
+```ruby
+class Vector[T, const N: USize]
   data: [T; N]
 end
 ```
@@ -69,11 +70,12 @@ two entries: a `GenericParam::Type { name: "T", … }` followed by a
 `GenericParam::Const { name: "N", ty: <TypeExpr USize>, … }`.
 
 The same form is accepted on:
-- `class T[..., const N: Type]`
-- `enum T[..., const N: Type]`
-- `def name[..., const N: Type](args)`
-- `extension T[..., const N: Type]`
-- `mixin T[..., const N: Type]`
+- `class T[..., const N: Type]` [implemented]
+- `struct T[..., const N: Type]` ([deprecated] `struct`, replacement `class` or `Data.define`)
+- `enum T[..., const N: Type]` ([deprecated] `enum`, replacement `Data` variants)
+- `def name[..., const N: Type](args)` [implemented]
+- `extension T[..., const N: Type]` ([deprecated] `extension`, replacement reopening the class)
+- `mixin T[..., const N: Type]` ([deprecated] `mixin`, replacement `module`)
 
 Multiple const params and arbitrary ordering are accepted at the
 parser layer (canonical style — types first, consts after — is a
@@ -160,7 +162,7 @@ monomorphization; failing predicate emits E-CONST-WHERE-FALSE.
 > validator predates the spec and already squats on E0700.  The
 > spec was amended to use E0704 for kind mismatch; iterator-sum
 > retains E0700.  All current emit sites have been updated to the
-> new code (see `crates/ruxen-core/src/resolve/mod.rs` and the
+> new code (see `compiler/ruxen_core/src/resolve/mod.rs` and the
 > `const_lit_against_type_param_emits_e0704` pin test).
 
 (Specific E-CONST-* names from §B8 will map to the E07xx slot once
@@ -174,11 +176,11 @@ reserved in the registry.)
 
 | Behaviour | Test fn                                                  | File                                  |
 |-----------|----------------------------------------------------------|---------------------------------------|
-| B1 struct | `parse_const_generic_param_on_struct`                    | `crates/ruxen-core/tests/const_generics.rs` |
-| B1 class  | `parse_const_generic_param_on_class`                     | `crates/ruxen-core/tests/const_generics.rs` |
-| B1 fn     | `parse_const_generic_param_on_fn`                        | `crates/ruxen-core/tests/const_generics.rs` |
-| B1 multi  | `parse_multiple_const_generic_params_typecheck_position` | `crates/ruxen-core/tests/const_generics.rs` |
-| B1 mixed  | `parse_mixed_type_and_const_generic_params`              | `crates/ruxen-core/tests/const_generics.rs` |
+| B1 struct | `parse_const_generic_param_on_struct`                    | `compiler/ruxen_core/tests/const_generics.rs` |
+| B1 class  | `parse_const_generic_param_on_class`                     | `compiler/ruxen_core/tests/const_generics.rs` |
+| B1 fn     | `parse_const_generic_param_on_fn`                        | `compiler/ruxen_core/tests/const_generics.rs` |
+| B1 multi  | `parse_multiple_const_generic_params_typecheck_position` | `compiler/ruxen_core/tests/const_generics.rs` |
+| B1 mixed  | `parse_mixed_type_and_const_generic_params`              | `compiler/ruxen_core/tests/const_generics.rs` |
 
 ### Stages 2-9
 
@@ -188,13 +190,13 @@ Pin tests added as each stage lands; see prompt-07 phasing notes.
 
 ## Out of scope (NG = non-goal from requirements §3)
 
-- Arbitrary compile-time functions (`const fn`).  This is Zig's
+- Arbitrary compile-time functions.  This is Zig's
   `comptime` and is a different feature entirely. (NG1)
 - Floating-point const generics.  `NaN != NaN` breaks type equality. (NG2)
-- `String` / `&str` const generics. (NG3)
+- `String` / `&String` const generics. (NG3)
 - Const-generic type parameters (`def foo[const T: Type]`). (NG4)
 - Const-generic specialization (`extension SmallVec[T, 0]` overriding the
   generic extension). (NG5)
 - Default values for const generics (`const N: USize = 4`). (NG6)
 - Inference of const arguments — must always be written explicitly
-  at the use site, matching Rust's `min_const_generics`. (OQ-3)
+  at the use site. (OQ-3)

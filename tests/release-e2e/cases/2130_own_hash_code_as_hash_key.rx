@@ -1,0 +1,47 @@
+# A type that writes its own `def hash_code` keys a Hash with it.
+#
+# The derive synthesis emitted a second `{Type}_hash_code` next to the
+# user's, and codegen failed with `DuplicateDefinition("Ticket_hash_code")`.
+# A user-written derived method is now the body: the synthesis skips it,
+# and the key descriptor points the runtime at the user's function.
+#
+# `Ticket.hash_code` buckets every id by `id % 3`, so ids 1 and 4 collide
+# and only the derived `eq` tells them apart.
+class Ticket
+  id: Int
+
+  def init(@id: Int)
+  end
+
+  def hash_code -> Int
+    self.id % 3
+  end
+end
+
+struct Slot
+  n: Int
+
+  def hash_code -> Int
+    7
+  end
+end
+
+def main
+  var h: Hash[Ticket, String] = Hash.new
+  h.insert(Ticket.new(1), "one")
+  h.insert(Ticket.new(4), "four")
+  h.insert(Ticket.new(1), "uno")
+  puts "size=#{h.size}"
+  puts "own_hash=#{Ticket.new(4).hash_code}"
+  match h.get(Ticket.new(1))
+    Some(v) -> puts "got #{v}"
+    nil -> puts "missing"
+  end
+  puts "miss=#{h.key?(Ticket.new(7))}"
+
+  var s: Set[Slot] = Set.new
+  s.insert(Slot.new(1))
+  s.insert(Slot.new(2))
+  s.insert(Slot.new(1))
+  puts "set_size=#{s.size} slot_hash=#{Slot.new(9).hash_code}"
+end

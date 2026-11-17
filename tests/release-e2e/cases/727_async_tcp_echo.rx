@@ -42,14 +42,14 @@ def server_run(listener: AsyncTcpListener) -> Int
   end
 end
 
-## Destructure the (stream, peer) tuple and read+echo one chunk.
+## The (stream, peer) tuple keeps owning the stream, so the server
+## reads and echoes one chunk through a borrow of it.
 def server_handle_pair(pair: (AsyncTcpStream, String)) -> Int
-  let stream = pair.0
-  server_echo_once(stream)
+  var p = pair
+  server_echo_once(&var p.0)
 end
 
-def server_echo_once(stream: AsyncTcpStream) -> Int
-  var s = stream
+def server_echo_once(s: &var AsyncTcpStream) -> Int
   let read_result = block_on(s.read(64))
   match read_result
     Ok(payload) -> server_write_back(s, payload)
@@ -57,8 +57,7 @@ def server_echo_once(stream: AsyncTcpStream) -> Int
   end
 end
 
-def server_write_back(stream: AsyncTcpStream, payload: String) -> Int
-  var s = stream
+def server_write_back(s: &var AsyncTcpStream, payload: String) -> Int
   let write_result = block_on(s.write(payload))
   match write_result
     Ok(_)  -> 1

@@ -1,0 +1,89 @@
+Tester.describe("Hash mutation") do |t: &var Tester|
+  t.it("insert and get") do
+    var h: Hash[String, Int] = Hash.new
+    h.insert("alpha", 10)
+    h.insert("beta", 20)
+    h.insert("gamma", 30)
+    t.expect(h.size).to_eq(3)
+    t.expect(h.get("alpha").unwrap_or(-1)).to_eq(10)
+    t.expect(h.get("missing").unwrap_or(-1)).to_eq(-1)
+  end
+
+  t.it("with_capacity, clear and empty?") do
+    var c: Hash[Int, Int] = Hash.with_capacity(8)
+    c.insert(1, 10)
+    c.insert(2, 20)
+    t.expect(c.size).to_eq(2)
+    var h: Hash[Int, Int] = Hash.new
+    h.insert(1, 10)
+    h.insert(2, 20)
+    h.insert(3, 30)
+    t.expect(h.size).to_eq(3)
+    h.clear
+    t.expect(h.size).to_eq(0)
+    t.expect(h.empty?).to_eq(true)
+  end
+
+  t.it("remove returns the removed value") do
+    var h: Hash[Int, Int] = Hash.new
+    h.insert(1, 10)
+    h.insert(2, 20)
+    t.expect(h.remove(1).unwrap_or(-1)).to_eq(10)
+    t.expect(h.remove(99).unwrap_or(-1)).to_eq(-1)
+    t.expect(h.size).to_eq(1)
+  end
+
+  t.it("entry.or_insert keeps the first value") do
+    var m: Hash[String, Int] = Hash.new
+    m.entry("a").or_insert(10)
+    m.entry("a").or_insert(99)
+    m.entry("b").or_insert(20)
+    t.expect(m.size).to_eq(2)
+    t.expect(m["a"]).to_eq(10)
+    t.expect(m["b"]).to_eq(20)
+  end
+
+  t.it("entry.or_insert_with runs the block only for a new key") do
+    var m: Hash[String, Int] = Hash.new
+    m.entry("first").or_insert_with { || 100 }
+    m.entry("first").or_insert_with { || 999 }
+    m.entry("second").or_insert_with { || 200 + 50 }
+    t.expect(m.size).to_eq(2)
+    t.expect(m["first"]).to_eq(100)
+    t.expect(m["second"]).to_eq(250)
+  end
+
+  t.it("subscript assignment with String keys inserts and overwrites") do
+    var h: Hash[String, Int] = Hash.new
+    h["a"] = 42
+    t.expect(h.size).to_eq(1)
+    t.expect(h.key?("a")).to_eq(true)
+    t.expect(h["a"]).to_eq(42)
+    h["b"] = 7
+    h.insert("c", 9)
+    t.expect(h.size).to_eq(3)
+    t.expect(h["b"]).to_eq(7)
+    t.expect(h["c"]).to_eq(9)
+    h["a"] = 100
+    t.expect(h.size).to_eq(3)
+    t.expect(h["a"]).to_eq(100)
+    t.expect(h.key?("zz")).to_eq(false)
+  end
+
+  t.it("subscript assignment with Int keys inserts and overwrites") do
+    var h: Hash[Int, String] = Hash.new
+    h[1] = "one"
+    t.expect(h.size).to_eq(1)
+    t.expect(h.key?(1)).to_eq(true)
+    t.expect(h[1]).to_eq("one")
+    h[42] = "forty-two"
+    h[4095] = "edge"
+    t.expect(h.size).to_eq(3)
+    t.expect(h[42]).to_eq("forty-two")
+    t.expect(h[4095]).to_eq("edge")
+    h[1] = "uno"
+    t.expect(h.size).to_eq(3)
+    t.expect(h[1]).to_eq("uno")
+    t.expect(h.key?(2)).to_eq(false)
+  end
+end

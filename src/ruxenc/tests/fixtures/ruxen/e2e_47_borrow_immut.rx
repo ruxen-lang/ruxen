@@ -1,9 +1,0 @@
-def print_name(name: &String)
-  puts "#{name}"
-end
-
-def main
-  let s = "Ruxen"
-  print_name(&s)
-  puts "#{s}"
-end

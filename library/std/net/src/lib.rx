@@ -6,18 +6,10 @@
 ## rewrites the MIR-mangled callee (`TcpListener_bind` →
 ## `ruxen_tcp_listener_bind`) BEFORE codegen consults runtime_table.
 ##
-## Three method surfaces stay on runtime_table dispatch for now:
-##   - `TcpStream.set_read_timeout(&Duration)` /
-##     `.set_write_timeout(&Duration)` — Duration is declared in
-##     `library/std/time/src/lib.rx`, which loads AFTER net.rx in
-##     BOOTSTRAP_FILES. Forward-referencing Duration here fails at
-##     net.rx parse time. Migrating needs Duration to land in a
-##     package that loads before net, or net to load after time
-##     (which would break time-uses-no-net).
-##   - `TcpListener.set_nonblocking(Bool)` — the C runtime takes
-##     `int8_t` for the Bool arg; the cranelift verifier rejects
-##     the typed Bool→int8_t coercion through the FFI alias path.
-##     Same OpenOptions setter ABI mismatch.
+## `TcpStream.set_read_timeout(&Duration)` / `.set_write_timeout(&Duration)`
+## declare their argument as `Int`: Duration is declared in
+## `library/std/time/src/lib.rx`, which net does not depend on, so it
+## cannot be named here (see the comment after TcpStream).
 ##
 ## The Shutdown variant order is the load-bearing contract: tag
 ## indices must match `RUXEN_SHUTDOWN_{READ,WRITE,BOTH}` in
@@ -53,7 +45,7 @@ class TcpStream
     def read as "ruxen_tcp_stream_read"(buf: &var Array[Int]) -> Result[Int, IoError]
     def write as "ruxen_tcp_stream_write"(bytes: &Array[Int]) -> Result[Int, IoError]
     def peer_addr as "ruxen_tcp_stream_peer_addr" -> Result[String, IoError]
-    def shutdown as "ruxen_tcp_stream_shutdown"(how: Shutdown) -> Result[nil, IoError]
+    def shutdown as "ruxen_tcp_stream_shutdown"(how: &Shutdown) -> Result[nil, IoError]
     def set_read_timeout as "ruxen_tcp_stream_set_read_timeout"(d: Int) -> Result[nil, IoError]
     def set_write_timeout as "ruxen_tcp_stream_set_write_timeout"(d: Int) -> Result[nil, IoError]
     def set_read_timeout_ns as "ruxen_tcp_stream_set_read_timeout_ns"(ns: Int) -> Result[
@@ -95,7 +87,7 @@ class TcpListener
     def self.bind as "ruxen_tcp_listener_bind"(addr: &String) -> Result[TcpListener, IoError]
     def accept as "ruxen_tcp_listener_accept" -> Result[TcpStream, IoError]
     def local_addr as "ruxen_tcp_listener_local_addr" -> Result[String, IoError]
-    def set_nonblocking as "ruxen_tcp_listener_set_nonblocking"(value: Int) -> Result[nil, IoError]
+    def set_nonblocking as "ruxen_tcp_listener_set_nonblocking"(value: Bool) -> Result[nil, IoError]
     def close as "ruxen_tcp_listener_close" -> Result[nil, IoError]
     def drop as "ruxen_tcp_listener_drop" -> nil
   end

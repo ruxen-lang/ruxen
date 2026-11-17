@@ -1,0 +1,7 @@
+filled 3
+drop 1
+drop 2
+drop 3
+table 1 points 3 sum 7
+drop 10
+done

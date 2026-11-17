@@ -1,3 +1,9 @@
+## An opaque identifier for a running thread (`Thread.current.id`,
+## `JoinHandle#thread_id`).
 class ThreadId
+  raw: Int
 
+  def init(raw: Int)
+    self.raw = raw
+  end
 end

@@ -10,16 +10,32 @@ Blocks: nothing on the tier-1 critical path; unblocks `SmallArray`,
 ## 1. Summary & Motivation
 
 A *const generic* is a generic parameter whose value is a compile-time
-constant rather than a type. The canonical example:
+constant rather than a type. The canonical example, in the Ruby form
+(`initialize` is [planned](../../TODO.md#t-initialize)):
 
-```ruxen
-struct Matrix[T, const M: USize, const N: USize]
+```ruby
+class Matrix[T, const M: USize, const N: USize]
   data: [T; M * N]
-  def init(@data: [T; M * N]) end
+
+  def initialize(@data: [T; M * N])
+  end
 end
 
 def transpose[T, const M: USize, const N: USize](m: &Matrix[T, M, N]) -> Matrix[T, N, M]
   ...
+end
+```
+
+The declaration type-checks today (const generics are [implemented],
+OQ-8); whether every instantiation gets its own concrete size (G2, G4)
+is this doc's work, [planned](../../TODO.md#t-const-generics). Works today, [deprecated] (`def init` is replaced by `def initialize`):
+
+```ruby
+class Matrix[T, const M: USize, const N: USize]
+  data: [T; M * N]
+
+  def init(@data: [T; M * N])
+  end
 end
 ```
 
@@ -55,12 +71,14 @@ the quagmire of general const-fn evaluation.
 
 `hir/types.rs:73`:
 
+<!-- compiler-rust -->
 ```rust
 Array(Box<Ty>, usize),
 ```
 
 The size is a concrete number baked at resolve time. `resolve/mod.rs:2470`:
 
+<!-- compiler-rust -->
 ```rust
 let n = if let Some(expr) = size {
     match &expr.kind {
@@ -91,6 +109,7 @@ There is no way to pass `3` as a generic argument.
 Every generic `Ty::Array(T, 0)` — because resolve gave up on the
 expression — produces wrong layout at codegen. `codegen/layout.rs:312-319`:
 
+<!-- compiler-rust -->
 ```rust
 Ty::Array(elem, n) => {
     let elem_layout = layout_of(elem, symbols);
@@ -135,7 +154,7 @@ new surface.**
   and is a different feature entirely.
 - **NG2.** Floating-point const generics. Rust omits them because
   `NaN != NaN` breaks type equality. Ruxen follows suit.
-- **NG3.** `String` or `&str` const generics. Rust is moving toward
+- **NG3.** `String` const generics. Rust is moving toward
   this slowly; not in tier 2.
 - **NG4.** Const-generic type parameters: `def foo[const T: Type]`.
   That's Scala's type functions, a separate feature.
@@ -149,18 +168,23 @@ new surface.**
 
 ### 4.1 Declaration
 
-```ruxen
-struct Vector[T, const N: USize]
+In the Ruby form, `initialize` is [planned](../../TODO.md#t-initialize) and a mixin
+declared with `module` is [planned](../../TODO.md#t-module-mixins):
+
+```ruby
+class Vector[T, const N: USize]
   data: [T; N]
 end
 
 class Matrix[T, const M: USize, const N: USize]
   data: [[T; N]; M]
-  def init(@data: [[T; N]; M]) end
+
+  def initialize(@data: [[T; N]; M])
+  end
 end
 
-mixin FixedBuffer[const CAP: USize]
-  def capacity -> USize { CAP }
+module FixedBuffer[const CAP: USize]
+  def capacity -> USize = CAP
 end
 
 def rotate[const K: USize](arr: &[Int; 8]) -> [Int; 8] ...
@@ -179,10 +203,20 @@ Rules:
 
 ### 4.2 Instantiation
 
-```ruxen
-let v: Vector[Int, 4] = Vector.new([1, 2, 3, 4])
-let m: Matrix[Float, 3, 3] = Matrix.zero
-let r = rotate[3](&buf)
+Typed locals are [planned](../../TODO.md#t-typed-local):
+
+```ruby
+v: Vector[Int, 4] = Vector.new([1, 2, 3, 4])
+m: Matrix[Float, 3, 3] = Matrix.zero
+r = rotate[3](&buf)
+```
+
+Works today inside a method, [deprecated] (`let` is replaced by a typed local):
+
+```ruby
+def build
+  let v: Vector[Int, 4] = Vector.new([1, 2, 3, 4])
+end
 ```
 
 Rules:
@@ -197,29 +231,29 @@ Rules:
 
 ### 4.3 In signatures
 
-```ruxen
-struct SmallArray[T, const N: USize]
+In the Ruby form, `initialize` is [planned](../../TODO.md#t-initialize). `push` hands the
+item back when the buffer is full (the draft returned `Err(item)` from a
+[deprecated] `Result[nil, T]`); per-instantiation sizes are [planned](../../TODO.md#t-const-generics):
+
+```ruby
+class SmallArray[T, const N: USize]
   data: [T; N]
-  len: USize
-end
+  count: USize
 
-extension SmallArray[T, const N: USize]
-  def init
-    self.data = [T.default; N]
-    self.len = 0
+  def initialize(fill: T)
+    @data = [fill; N]
+    @count = 0
   end
 
-  def var push(item: T) -> Result[Unit, T]
-    if self.len == N
-      return Err(item)
-    end
-    self.data[self.len] = item
-    self.len = self.len + 1
-    Ok(())
+  def var push(item: T) -> T?
+    return item if @count == N   # full: hand the item back
+    @data[@count] = item
+    @count += 1
+    nil
   end
 
-  def len -> USize { self.len }
-  def capacity -> USize { N }
+  def size -> USize = @count
+  def capacity -> USize = N
 end
 ```
 
@@ -231,8 +265,10 @@ Rules:
 
 ### 4.4 Arithmetic in array sizes
 
-```ruxen
-struct MatMul[const M: USize, const N: USize, const K: USize]
+Sizes computed from const parameters are this doc's work, [planned](../../TODO.md#t-const-generics):
+
+```ruby
+class MatMul[const M: USize, const N: USize, const K: USize]
   out: [[Float; K]; M]
 end
 
@@ -246,7 +282,7 @@ end
 The grammar allowed in const expressions at type positions is the
 subset:
 
-```
+```text
 const_expr := INT_LITERAL
             | CONST_PARAM_NAME
             | const_expr ('+' | '-' | '*' | '/') const_expr
@@ -264,6 +300,7 @@ Phase 02a supports only `literal` and `param`. Phase 02b adds `+ - * /`.
 
 Replace the concrete size with a const expression:
 
+<!-- compiler-rust -->
 ```rust
 pub enum ConstExpr {
     Lit(u64),                  // integer literal (generalise when needed)
@@ -295,6 +332,7 @@ expression trees after a normal-form rewrite (see §5.4).
 
 A new module `hir/const_eval.rs`:
 
+<!-- compiler-rust -->
 ```rust
 pub fn eval(expr: &ConstExpr, bindings: &HashMap<String, u64>)
     -> Result<u64, ConstEvalError>;
@@ -326,6 +364,7 @@ Used in:
   `Bool` primitive — enforce at resolve, not parser).
 - Build a new AST variant:
 
+<!-- compiler-rust -->
 ```rust
 pub enum GenericParam {
     Lifetime { name: String, span: Span },

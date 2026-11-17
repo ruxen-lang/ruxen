@@ -1,0 +1,11 @@
+# Pins the `<=>` three-way comparison (returns -1 / 0 / 1) for Int, Float,
+# and String operands.
+def main
+  puts 2 <=> 3
+  puts 5 <=> 5
+  puts 9 <=> 4
+  puts 1.5 <=> 2.5
+  puts "apple" <=> "banana"
+  puts "cat" <=> "cat"
+  puts "dog" <=> "ant"
+end

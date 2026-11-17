@@ -1,0 +1,5 @@
+mixin Boxed[T]
+  lib "ruxen_runtime"
+    def self.wrap as "ruxen_test_boxed_wrap"(x: T) -> T
+  end
+end
