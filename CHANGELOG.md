@@ -8,6 +8,13 @@ once 1.0.0 ships.
 ## [Unreleased]
 
 ### Changed
+- Tests run several times faster. Test builds find the prebuilt `libruxenrt.a` with
+  any cargo layout (cargo 1.100 moved test binaries to `build/<crate>/<hash>/out/`,
+  so every test program recompiled all 69 runtime C files) and skip a copy older
+  than the runtime sources; compiled runtime objects are cached by content in
+  `$TMPDIR/ruxen-runtime-objects/`; the dev profile builds at `opt-level = 1`;
+  CI runs the test binaries in parallel with cargo-nextest. The core `it` binary
+  goes from 132 s to 54 s locally. `E0710.md` gets its missing `## Fix` section.
 - What a call result borrows is one fact per call, read by both the borrow check
   and drop elaboration: what it points into, and whose references it carries
   (F-2 rethink, I-87, I-77, I-88, P-32). `r = h.remove(&key)` or `v = h.get(&key)`

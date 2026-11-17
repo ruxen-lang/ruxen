@@ -52,7 +52,8 @@ jobs:
 
       # Build the runtime archive ONCE up front. `ruxen_repl`'s build
       # script compiles every `library/std/*/runtime/*.c` (incl. the
-      # vendored PCRE2 tree) into `libruxenrt.a`. The e2e harness's
+      # vendored PCRE2 tree) into `libruxenrt.a`, and `ruxen_cli`'s copies
+      # it to target/debug/, where the e2e harness's
       # `find_prebuilt_runtime_archive()` then auto-detects it and takes
       # the whole-archive fast-path link, so each of the 318 fixtures
       # links against the prebuilt archive instead of re-forking ~180
@@ -62,7 +63,7 @@ jobs:
       # to a few minutes and the per-fixture work is just Ruxen codegen
       # plus one link.
       - name: Build runtime archive (fast-path link)
-        run: cargo build -p ruxen_repl
+        run: cargo build -p ruxen_cli
 
       - name: cargo test (release-e2e fixtures)
         run: cargo test -p ruxen_core --test release_e2e_smoke -- --ignored --nocapture

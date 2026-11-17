@@ -1617,6 +1617,7 @@ dependencies = [
  "libc",
  "proptest",
  "regex-syntax",
+ "sha2",
  "target-lexicon",
 ]
 

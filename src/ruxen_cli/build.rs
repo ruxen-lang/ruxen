@@ -46,13 +46,18 @@ fn main() {
     // (target/<profile>/libruxenrt.a) so the compiler's
     // `find_prebuilt_runtime_archive()` auto-discovers it in dev builds,
     // and so `install.sh --from-source` has a known path to stage into
-    // `~/.ruxen/lib/`. OUT_DIR = target/<profile>/build/ruxen_cli-<hash>/out,
-    // so the profile dir is its 3rd ancestor (out -> ruxen_cli-* -> build).
+    // `~/.ruxen/lib/`. OUT_DIR is target/<profile>/build/ruxen_cli-<hash>/out,
+    // or target/<profile>/build/ruxen_cli/<hash>/out with newer cargo, so the
+    // profile dir is the parent of the nearest `build` ancestor.
     {
         let src = std::path::Path::new(&archive_dir).join("libruxenrt.a");
         if src.is_file() {
             if let Ok(out_dir) = env::var("OUT_DIR") {
-                if let Some(profile_dir) = std::path::Path::new(&out_dir).ancestors().nth(3) {
+                let profile_dir = std::path::Path::new(&out_dir)
+                    .ancestors()
+                    .find(|dir| dir.file_name().is_some_and(|name| name == "build"))
+                    .and_then(|build| build.parent());
+                if let Some(profile_dir) = profile_dir {
                     let dest = profile_dir.join("libruxenrt.a");
                     let _ = std::fs::copy(&src, &dest);
                 }

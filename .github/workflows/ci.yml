@@ -47,10 +47,20 @@ jobs:
       - name: cargo check (benches)
         run: cargo check --workspace --benches
 
-      # Unit tests plus each crate's `it` binary. release_e2e_smoke is
-      # #[ignore]d here; the next step runs a filtered slice of it.
-      - name: cargo test
-        run: cargo test --workspace --no-fail-fast
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      # Unit tests plus each crate's `it` binary, all binaries in parallel
+      # (cargo test runs them one after another). release_e2e_smoke is
+      # #[ignore]d here; a later step runs a filtered slice of it.
+      - name: cargo nextest
+        run: cargo nextest run --workspace --no-fail-fast
+
+      # nextest does not run doc-tests.
+      - name: doc-tests
+        run: cargo test --workspace --doc
 
       # One fixture per area; the full sweep runs in pr-ready.yml.
       - name: release-e2e smoke (filtered)
@@ -58,7 +68,7 @@ jobs:
           RUXEN_E2E_CASES: 01_hello,14_classes,19_enums_data,21_mixins,28_closures,134_user_drop_runs,2052_async_enum_variant_tail_local,2057_todo_manager_sample_program,2079_basic_features_smoke
         run: cargo test -p ruxen_core --test release_e2e_smoke -- --ignored --nocapture
 
-      # `cargo test` above built target/debug/ruxen.
+      # The nextest step above built target/debug/ruxen.
       - name: stdlib package tests
         env:
           RUXEN_BIN: ${{ github.workspace }}/target/debug/ruxen

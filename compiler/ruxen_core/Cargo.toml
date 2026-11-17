@@ -61,6 +61,10 @@ target-lexicon = "0.13"
 # bumps don't silently drop the import.
 regex-syntax = "0.8"
 
+# Keys the compiled runtime object cache (`codegen::object::object_cache`).
+# Already in the workspace through ruxenc's build cache.
+sha2 = "0.10"
+
 # LLVM backend (optional, requires LLVM 18 installed)
 [dependencies.inkwell]
 version = "0.5"

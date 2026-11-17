@@ -85,9 +85,8 @@ pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf,
         COUNTER.fetch_add(1, Ordering::Relaxed),
     ));
 
+    // The compile flags; the object cache key hashes them too.
     let mut cmd = Command::new("cc");
-    cmd.arg("-c").arg(runtime_c_path).arg("-o").arg(&runtime_o);
-
     // Pin the macOS deployment target to match libruxenrt.a's prebuilt
     // objects (ruxen_repl/build.rs), the Cranelift LC_BUILD_VERSION, and
     // the link — all 11.0 — so ld never reports a version skew.
@@ -104,6 +103,14 @@ pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf,
 
     apply_pcre2_flags(&mut cmd, runtime_c_path);
 
+    let cache = object_cache::lookup(&cmd, runtime_c_path);
+    if let Some(cached) = cache.as_ref().and_then(|entry| entry.hit()) {
+        if std::fs::copy(&cached, &runtime_o).is_ok() {
+            return Ok(runtime_o);
+        }
+    }
+
+    cmd.arg("-c").arg(runtime_c_path).arg("-o").arg(&runtime_o);
     let status = cmd.status().map_err(|e| {
         format!(
             "Failed to invoke cc for {}: {}",
@@ -116,7 +123,122 @@ pub fn compile_runtime(runtime_c_path: &Path, sanitize: bool) -> Result<PathBuf,
         return Err(format!("Failed to compile {}", runtime_c_path.display()));
     }
 
+    if let Some(entry) = cache {
+        entry.store(&runtime_o);
+    }
     Ok(runtime_o)
+}
+
+/// A content-addressed cache of compiled runtime objects, so a runtime `.c`
+/// that did not change is compiled once, not once per link: the leak-tracking
+/// test runtime, sanitizer builds, and every link that has no prebuilt
+/// `libruxenrt.a`. The key is a SHA-256 of the `cc` version, the compiler
+/// flags, the source's bytes and every header (`.h`) beside it or in a stdlib
+/// runtime folder, so an edited header changes the key too. The source's path
+/// is not part of the key: the same runtime written to different temporary
+/// files shares one entry. Any cache failure falls back to a plain compile.
+mod object_cache {
+    use sha2::{Digest, Sha256};
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::sync::OnceLock;
+
+    pub(super) struct Entry {
+        path: PathBuf,
+    }
+
+    impl Entry {
+        /// The cached object, when an earlier compile stored one.
+        pub(super) fn hit(&self) -> Option<PathBuf> {
+            self.path.is_file().then(|| self.path.clone())
+        }
+
+        /// Store a freshly compiled object. Written beside the entry and
+        /// renamed into place, so a concurrent reader never sees half a file.
+        pub(super) fn store(&self, object: &Path) {
+            let partial = self
+                .path
+                .with_extension(format!("{}.partial", std::process::id()));
+            if std::fs::copy(object, &partial).is_ok()
+                && std::fs::rename(&partial, &self.path).is_err()
+            {
+                let _ = std::fs::remove_file(&partial);
+            }
+        }
+    }
+
+    /// The entry for compiling `source` with `cmd`'s flags (no `-c`/`-o` yet).
+    pub(super) fn lookup(cmd: &Command, source: &Path) -> Option<Entry> {
+        let mut hasher = Sha256::new();
+        hasher.update(cc_version()?);
+        for arg in cmd.get_args() {
+            hasher.update(arg.as_encoded_bytes());
+            hasher.update([0]);
+        }
+        hasher.update(std::fs::read(source).ok()?);
+        hasher.update(headers_in(source.parent()?)?);
+        hasher.update(stdlib_headers()?);
+        let key: String = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+
+        let dir = std::env::temp_dir().join("ruxen-runtime-objects");
+        std::fs::create_dir_all(&dir).ok()?;
+        Some(Entry {
+            path: dir.join(format!("{key}.o")),
+        })
+    }
+
+    /// `cc --version`, read once per process.
+    fn cc_version() -> Option<&'static [u8]> {
+        static VERSION: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+        VERSION
+            .get_or_init(|| {
+                let out = Command::new("cc").arg("--version").output().ok()?;
+                out.status.success().then_some(out.stdout)
+            })
+            .as_deref()
+    }
+
+    /// The names and bytes of every header in the stdlib runtime folders,
+    /// read once per process.
+    fn stdlib_headers() -> Option<&'static [u8]> {
+        static HEADERS: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+        HEADERS
+            .get_or_init(|| {
+                let sources = super::super::find_runtime_sources().ok()?;
+                let dirs: std::collections::BTreeSet<PathBuf> = sources
+                    .iter()
+                    .filter_map(|c| c.parent())
+                    .map(Path::to_path_buf)
+                    .collect();
+                let mut all = Vec::new();
+                for dir in dirs {
+                    all.extend(headers_in(&dir)?);
+                }
+                Some(all)
+            })
+            .as_deref()
+    }
+
+    /// The names and bytes of every `.h` file directly in `dir`, in name order.
+    fn headers_in(dir: &Path) -> Option<Vec<u8>> {
+        let mut headers: Vec<PathBuf> = std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "h"))
+            .collect();
+        headers.sort();
+        let mut bytes = Vec::new();
+        for header in headers {
+            bytes.extend(header.file_name()?.as_encoded_bytes());
+            bytes.extend(std::fs::read(&header).ok()?);
+        }
+        Some(bytes)
+    }
 }
 
 /// Compile each C source in `sources` with `compile_one` (the host
